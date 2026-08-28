@@ -15,6 +15,8 @@ export type Neo4jHarness = {
   driver: Driver;
   uri: string;
   containerName: string;
+  /** For a test that builds its own connection from config rather than reusing `driver`. */
+  password: string;
 };
 
 async function runDocker(args: readonly string[]): Promise<string> {
@@ -72,7 +74,7 @@ export async function startNeo4jHarness(): Promise<Neo4jHarness> {
   }
 
   const driver = neo4j.driver(uri, neo4j.auth.basic(NEO4J_DEFAULT_USER, NEO4J_TEST_PASSWORD));
-  return { driver, uri, containerName };
+  return { driver, uri, containerName, password: NEO4J_TEST_PASSWORD };
 }
 
 /** Closes the driver, then force-removes the container and its anonymous volumes in one step. */
