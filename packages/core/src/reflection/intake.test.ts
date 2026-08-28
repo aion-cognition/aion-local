@@ -2,9 +2,11 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { LOCK_PROPERTY } from '../graph/locks.js';
 import { openLogger } from '../logging/logger.js';
 import type { Vector } from '../providers/types.js';
 import { SessionManager } from '../session/session-manager.js';
+import { ReflectionQueueClaimant } from '../sqlite/claim.js';
 import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
 import { listReflectionJobs } from '../sqlite/reflection-queue.js';
 import { ReflectionDispatch, type ReflectionJobSignal } from './dispatch.js';
@@ -204,6 +206,37 @@ describe('reflection intake dedupe', () => {
     expect(listReflectionJobs(db)).toHaveLength(1);
     expect(signals).toHaveLength(1);
     expect(embed).toHaveBeenCalledTimes(1);
+  });
+
+  it('takes the session write lock before the episode lands', async () => {
+    await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+
+    const lockIndex = graph.statements.findIndex(
+      (statement) =>
+        statement.cypher.includes(`SET n.${LOCK_PROPERTY}`) && statement.parameters.id === 'session-a',
+    );
+    const episodeIndex = graph.statements.findIndex((statement) =>
+      statement.cypher.includes('MERGE (n:Episode'),
+    );
+
+    expect(graph.locked).toContain('session-a');
+    expect(lockIndex).toBeGreaterThanOrEqual(0);
+    expect(episodeIndex).toBeGreaterThan(lockIndex);
+  });
+
+  it('queues the episode again when its job row is gone but the episode is not', async () => {
+    const first = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+
+    // The job ran to completion, which discards the row. The episode is still the record.
+    const claimant = new ReflectionQueueClaimant();
+    const claimed = claimant.claimNext(db);
+    expect(claimant.complete(db, claimed?.id ?? '')).toBe(true);
+
+    const second = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+
+    expect(second.episode_id).toBe(first.episode_id);
+    expect(listReflectionJobs(db)).toHaveLength(1);
+    expect(signals).toHaveLength(2);
   });
 
   it('stores the same payload again when it arrives in a different session', async () => {
