@@ -305,6 +305,7 @@ export { ContextVectorStage } from './reflection/application/stages/context-vect
 
 export {
   NARRATIVE_EXTRACTION_METHOD,
+  NARRATIVE_STAGE_NAME,
   SessionNarrativeCloser,
   SessionNarrativeStage,
   closeSessionNarrative,
@@ -318,6 +319,9 @@ export type {
   NarrativeStatus,
   SessionNarrativeOptions,
 } from './reflection/application/narratives.js';
+
+export { IdleNarrativeSweeper, sweepIntervalMs } from './reflection/application/narrative-sweeper.js';
+export type { IdleNarrativeSweeperOptions } from './reflection/application/narrative-sweeper.js';
 
 export { loadEpisodeContext } from './infrastructure/graph/episode-context.js';
 export type { EpisodeContext, EpisodeTurnContext } from './infrastructure/graph/episode-context.js';

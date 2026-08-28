@@ -10,6 +10,7 @@ import {
   GraphConnection,
   handleRecall,
   handleReflection,
+  IdleNarrativeSweeper,
   latestAppliedGraphMigration,
   loadConfig,
   openLogger,
@@ -23,6 +24,7 @@ import {
   SemanticRelationshipStage,
   SessionManager,
   SessionNarrativeCloser,
+  SessionNarrativeStage,
   SqliteStore,
   SupersessionStage,
   type Config,
@@ -56,9 +58,11 @@ const MINUTE_MS = 60 * 1000;
  * judges are the Decision and Insight nodes that stage writes. Context vectors run last:
  * they aggregate over whatever the rest of the run just changed.
  *
- * Algorithm 4's step 9, narrative evaluation, is deliberately not here. A session is still
- * open when its episodes reflect, so the narrative belongs to the transport close and the
- * idle sweep instead; `SessionNarrativeCloser` below is that wiring.
+ * Algorithm 4's step 9, narrative evaluation, is last. It carries the idle rule rather than
+ * the close: a session whose episodes are reflecting seconds after they arrived is still
+ * open, and the stage skips it, leaving the narrative to `SessionNarrativeCloser`. What it
+ * catches is the other case — a backlog drained hours late, a retry that landed after the
+ * client was gone — where no close hook will ever fire again.
  *
  * An empty list would leave the worker down: an orchestrator with nothing to run enriches
  * nothing, which reads to the worker as a failed job and spends the episode's retries on it.
@@ -98,6 +102,7 @@ export function reflectionStages(config: Config): readonly ReflectionStage[] {
     }),
     new ReinforcementEnqueueStage(),
     new ContextVectorStage(),
+    new SessionNarrativeStage(narrativeOptions(config)),
   ];
 }
 
@@ -237,9 +242,16 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       logger.warn('reflection worker idle: no pipeline stages are registered');
     }
 
-    // Whitepaper §6.10's session boundary. The transport close is the trigger the substrate
-    // can actually observe; a session nobody closed cleanly falls to the idle sweep instead.
-    const narratives = new SessionNarrativeCloser({ driver, provider, logger }, narrativeOptions(config));
+    // Whitepaper §6.10's session boundary, both halves of the pinned trigger. The transport
+    // close is the boundary the substrate can observe; the sweep is what a client that
+    // disconnects without a DELETE — an editor that exits — leaves behind.
+    const narrativeDeps = { driver, provider, logger };
+    const narratives = new SessionNarrativeCloser(narrativeDeps, narrativeOptions(config));
+    const idleNarratives = new IdleNarrativeSweeper(narrativeDeps, {
+      ...narrativeOptions(config),
+      limit: config.reflection.narrativeSweepLimit,
+    });
+    idleNarratives.start();
 
     const backend: ToolBackend = {
       recall: (args, identity) => handleRecall(recall, args, { identity }),
@@ -262,6 +274,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
         member: memberName,
         models: config.models,
         stages: stages.map((stage) => stage.name),
+        narrativeSweepMs: idleNarratives.intervalMs,
       },
       'mcp service ready',
     );
@@ -275,6 +288,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
         // the closer is awaited; the driver goes last, since both are still writing to it.
         await service.close();
         await narratives.whenIdle();
+        await idleNarratives.stop();
         await worker.stop();
         await connection.close();
         store.close();
