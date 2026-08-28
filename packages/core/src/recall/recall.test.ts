@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULTS } from '../config/defaults.js';
+import { buildAdjacencyStatement } from '../graph/adjacency.js';
+import { withCurrency } from '../graph/read-modes.js';
 import { openLogger, type Logger } from '../logging/logger.js';
 import type { Provider } from '../providers/types.js';
 import { FakeGraph } from '../reflection/test-support/fake-graph.fixture.js';
@@ -130,7 +132,12 @@ describe('recall against an empty substrate', () => {
   it('skips activation when no strategy found a seed', async () => {
     await handleRecall(deps(), { query: 'why webhooks' }, { identity: IDENTITY, now: NOW });
 
-    expect(statementsMatching('UNWIND $frontier AS frontierId')).toBe(0);
+    const adjacency = buildAdjacencyStatement({
+      frontier: ['any'],
+      visited: [],
+      mode: withCurrency(),
+    });
+    expect(statementsMatching(adjacency.cypher.split('\n')[0] ?? '')).toBe(0);
   });
 
   it('spends exactly one generate call and one embed call', async () => {
