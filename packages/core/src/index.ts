@@ -154,7 +154,7 @@ export type {
   SupersedeResult,
 } from './graph/bitemporal.js';
 
-export { bootstrapBackbone, GLOBAL_WORKSPACE_NAME } from './graph/backbone.js';
+export { bootstrapBackbone, GLOBAL_WORKSPACE_NAME, readMemberName } from './graph/backbone.js';
 export type { BootstrapBackboneInput, BootstrapBackboneResult } from './graph/backbone.js';
 
 export {

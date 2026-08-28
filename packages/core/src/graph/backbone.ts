@@ -50,6 +50,26 @@ async function resolveSingletonId(
 }
 
 /**
+ * The stored Member's display name, undefined before the backbone exists. `bootstrapBackbone`
+ * merges the name it is given on every call, so a process that did not create the backbone —
+ * the long-lived MCP service, which never prompts — reads the name back and passes it in
+ * rather than renaming the Member to whatever its own environment happened to carry.
+ */
+export async function readMemberName(driver: Driver): Promise<string | undefined> {
+  const rows = await runRead(
+    driver,
+    `MATCH (n:Member) RETURN n.name AS name ORDER BY n.${BITEMPORAL_PROPERTIES.txFrom}, n.id LIMIT 1`,
+    {},
+    (row) => row.name as string | null,
+  );
+  const name = rows[0];
+  if (name === undefined || name === null || name === '') {
+    return undefined;
+  }
+  return name;
+}
+
+/**
  * Whitepaper §4.2 / PRD §5.3: the single-user shadow of the structural backbone, created
  * at init. A changed member name renames the one node rather than superseding it: the
  * Member is an identity that every session edge points at, and its name is a label on
