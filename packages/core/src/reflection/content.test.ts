@@ -65,6 +65,20 @@ describe('renderEpisodeText', () => {
     expect(text).toContain('output: {"code":200}');
   });
 
+  it('omits what a tool execution did not carry rather than rendering it empty', () => {
+    const text = renderEpisodeText({ tool_executions: [{ tool: 'bash', status: 'ok' }] });
+
+    expect(text).toBe('tool bash [ok]');
+  });
+
+  it('keeps the fields a partial tool execution did carry', () => {
+    const text = renderEpisodeText({
+      tool_executions: [{ tool: 'read', input: 'src/index.ts', status: 'ok' }],
+    });
+
+    expect(text).toBe(['tool read [ok]', 'input: src/index.ts'].join('\n'));
+  });
+
   it('renders an observations-only payload, which carries no turns at all', () => {
     expect(renderEpisodeText({ observations: ['ship it'] })).toBe('observation: ship it');
   });

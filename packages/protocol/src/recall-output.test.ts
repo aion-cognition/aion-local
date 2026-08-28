@@ -13,6 +13,18 @@ describe('MemoryPackSchema valid fixtures', () => {
     expect(MemoryPackSchema.parse(pack)).toEqual(pack);
   });
 
+  it('parses a degraded pack: the ladder names itself and the cue carries the raw query', () => {
+    const pack = {
+      rendered_text: 'No relevant memories found.',
+      metadata: {
+        ...baseMetadata,
+        cues: [{ text: 'why did we pick webhooks', source: 'raw_query', weight: 3 }],
+        degraded: { stage: 'cues', reason: 'timeout' },
+      },
+    };
+    expect(MemoryPackSchema.parse(pack)).toEqual(pack);
+  });
+
   it('parses a pack with a direct-hit item and no path in its rationale', () => {
     const pack = {
       episodes: [

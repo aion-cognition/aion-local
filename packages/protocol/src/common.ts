@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 /**
  * ISO 8601, date-only ("2026-03-01") or full datetime with offset. PRD §3.1's `as_of`/
- * `knew_at` examples are date-only; reflection per-item timestamps (PLAN P1-4) may carry
+ * `knew_at` examples are date-only; reflection per-item timestamps may carry
  * time-of-day. Handlers parse this to a `Date` at the substrate boundary; the wire stays
  * a plain string.
  */

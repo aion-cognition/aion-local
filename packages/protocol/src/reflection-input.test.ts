@@ -51,6 +51,16 @@ describe('ReflectionInputSchema valid fixtures', () => {
     expect(ReflectionInputSchema.parse(input)).toEqual(input);
   });
 
+  it('parses a tool_execution carrying only what the agent captured', () => {
+    const input = { tool_executions: [{ tool: 'bash', status: 'ok' }] };
+    expect(ReflectionInputSchema.parse(input)).toEqual(input);
+  });
+
+  it('parses a tool_execution with an input but no output and no timing', () => {
+    const input = { tool_executions: [{ tool: 'read', input: 'src/index.ts', status: 'ok' }] };
+    expect(ReflectionInputSchema.parse(input)).toEqual(input);
+  });
+
   it('accepts a non-standard tool_execution status, since the PRD pins no closed vocabulary', () => {
     const input = {
       tool_executions: [
@@ -88,13 +98,6 @@ describe('ReflectionInputSchema at-least-one rule', () => {
 describe('ReflectionInputSchema invalid shapes', () => {
   it('rejects a turn missing text', () => {
     const result = ReflectionInputSchema.safeParse({ turns: [{ role: 'user' }] });
-    expect(result.success).toBe(false);
-  });
-
-  it('rejects a tool_execution missing duration_ms', () => {
-    const result = ReflectionInputSchema.safeParse({
-      tool_executions: [{ tool: 'bash', input: 'x', status: 'error', output: 'x' }],
-    });
     expect(result.success).toBe(false);
   });
 
