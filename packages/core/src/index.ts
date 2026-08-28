@@ -70,6 +70,78 @@ export {
 } from './graph/migrations.js';
 export type { GraphMigration, MigrationContext } from './graph/migrations.js';
 
+export { GraphConnection, GraphTransaction, inWriteTransaction, runRead, runWrite, runWriteWithCounters } from './graph/connection.js';
+export type { GraphHealth, GraphStatement, WriteOutcome } from './graph/connection.js';
+
+export { GraphNodeNotFoundError, GraphWriteError } from './graph/errors.js';
+
+export { NODE_LABELS, isContentBearing, isNodeLabel, resolveLabels } from './graph/labels.js';
+export type { NodeLabel } from './graph/labels.js';
+
+export {
+  DIRECTED_RELATIONSHIP_TYPES,
+  RELATIONSHIP_TYPES,
+  SUPERSEDES_TYPE,
+  UNDIRECTED_RELATIONSHIP_TYPES,
+  isRelationshipType,
+  isUndirectedRelationshipType,
+  normalizeEndpoints,
+} from './graph/relationships.js';
+export type {
+  DirectedRelationshipType,
+  Endpoints,
+  RelationshipType,
+  UndirectedRelationshipType,
+} from './graph/relationships.js';
+
+export {
+  coerceGraphValue,
+  coerceRow,
+  fromGraphDateTime,
+  fromGraphVector,
+  identityRow,
+  toGraphDateTime,
+  toGraphParameters,
+  toGraphVector,
+} from './graph/values.js';
+export type { GraphProperties, GraphWritable, Row, RowMapper } from './graph/values.js';
+
+export { buildEdgeUpsert, upsertEdge, upsertEdgeInTransaction } from './graph/edges.js';
+export type { EdgeUpsert, UpsertedEdge } from './graph/edges.js';
+
+export {
+  BITEMPORAL_PROPERTIES,
+  buildStampedNodeWrite,
+  stampNew,
+  supersede,
+  writeStampedNode,
+} from './graph/bitemporal.js';
+export type {
+  StampNewInput,
+  StampedNode,
+  StampedNodeResult,
+  StampedNodeWrite,
+  SupersedeInput,
+  SupersedeResult,
+} from './graph/bitemporal.js';
+
+export {
+  asOf,
+  bitemporalAt,
+  isTimeTravel,
+  knewAt,
+  readCurrencyAnnotation,
+  readModeFragment,
+  withCurrency,
+} from './graph/read-modes.js';
+export type {
+  Currency,
+  CurrencyAnnotation,
+  ReadFragment,
+  ReadMode,
+  SupersededBy,
+} from './graph/read-modes.js';
+
 export type { ChatMessage, ChatRole, JsonSchema, Provider, StructuredRequest, Vector } from './providers/types.js';
 export {
   EmbedDimensionMismatchError,
