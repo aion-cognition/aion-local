@@ -1,4 +1,3 @@
-import { supersede } from '../../../infrastructure/graph/bitemporal.js';
 import {
   clearEntityVectors,
   findSimilarCurrentEntities,
@@ -154,11 +153,11 @@ export class EntityDedupStage implements ReflectionStage {
   }
 
   /**
-   * Edges move first, in one transaction (`redirectAndAbsorb`); the merged nodes close after,
-   * one `supersede` call each. That order means a crash between the two leaves the merged
-   * node still current — re-discoverable and re-mergeable on the next run — rather than
-   * closed with edges nothing ever redirected. Vector cleanup is best-effort and never fails
-   * the stage; the ledger is written only once every graph write above has committed.
+   * §6.5's atomic merge: redirect, absorb and close all commit together in
+   * `redirectAndAbsorb`, so the group is never observable half-merged. Vector cleanup is the
+   * one part deliberately outside it — §6.5 puts index cleanup post-commit with best-effort
+   * semantics — and it never fails the stage. The ledger is written only once every graph
+   * write above has committed.
    */
   async #mergeGroup(
     ctx: StageContext,
@@ -173,18 +172,10 @@ export class EntityDedupStage implements ReflectionStage {
       aliases: mergeAliases(canonical.name, members),
       accessCount: mergeAccessCount(members),
       lastAccessed: mergeLastAccessed(members),
+      supersedeSignals: ['entity_merge'],
+      supersedeProvenance: [ENTITY_DEDUP_METHOD],
       now: ctx.now,
     });
-
-    for (const mergedId of mergedIds) {
-      await supersede(ctx.driver, {
-        oldId: mergedId,
-        newId: canonical.id,
-        now: ctx.now,
-        signals: ['entity_merge'],
-        provenance: [ENTITY_DEDUP_METHOD],
-      });
-    }
 
     try {
       await clearEntityVectors(ctx.driver, mergedIds);

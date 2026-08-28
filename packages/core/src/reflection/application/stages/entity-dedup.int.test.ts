@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
+import { redirectAndAbsorb } from '../../../infrastructure/graph/entity-dedup-queries.js';
 import {
   findEpisodeEntities,
   linkEntityMentions,
@@ -343,5 +344,84 @@ describe('what a merge has to stay merged against', () => {
 
     expect((await storedEntity(harness.driver, mergedAwayId))?.nameVectorLength).toBe(0);
     expect(pending.map((node) => node.id)).not.toContain(mergedAwayId);
+  }, 60_000);
+});
+
+describe('merge atomicity', () => {
+  const atomicEpisodeId = 'live-episode-atomic';
+  let survivorId: string;
+  let doomedId: string;
+
+  beforeAll(async () => {
+    await seedEpisode(atomicEpisodeId);
+    survivorId = await seedEntity(
+      {
+        name: 'Valkey',
+        nameNorm: 'valkey',
+        type: 'tool',
+        text: 'Valkey (tool): the cache',
+        sourceEpisodeId: atomicEpisodeId,
+        extractionMethod: 'test',
+        confidence: 0.8,
+      },
+      unitVector(0),
+    );
+    doomedId = await seedEntity(
+      {
+        name: 'Valkey Server',
+        nameNorm: 'valkey server',
+        type: 'tool',
+        text: 'Valkey Server (tool): the same cache',
+        sourceEpisodeId: atomicEpisodeId,
+        extractionMethod: 'test',
+        confidence: 0.8,
+      },
+      nearDuplicateVector(),
+    );
+    await linkEntityMentions(harness.driver, {
+      episodeId: atomicEpisodeId,
+      entityIds: [survivorId, doomedId],
+      now: NOW,
+      confidence: 0.8,
+      provenance: ['test'],
+    });
+  }, 120_000);
+
+  it('closes each merged node in the transaction that moved its edges', async () => {
+    const result = await redirectAndAbsorb(harness.driver, {
+      canonicalId: survivorId,
+      mergedIds: [doomedId],
+      aliases: ['Valkey Server'],
+      accessCount: 2,
+      now: NOW,
+    });
+
+    expect(result.superseded).toEqual([doomedId]);
+    expect(result.edgesRedirected).toBeGreaterThan(0);
+
+    // One call, both halves: the closed node has its lineage and the canonical has its edges.
+    const doomed = await storedEntity(harness.driver, doomedId);
+    expect(doomed?.validUntil).not.toBeNull();
+    expect(await supersedingNodeIds(harness.driver, doomedId)).toEqual([survivorId]);
+    expect(await participatingEpisodeIds(harness.driver, survivorId)).toContain(atomicEpisodeId);
+  }, 60_000);
+
+  it('rolls the redirect back when any member of the group cannot be closed', async () => {
+    const before = await storedEntity(harness.driver, survivorId);
+
+    await expect(
+      redirectAndAbsorb(harness.driver, {
+        canonicalId: survivorId,
+        mergedIds: ['an-id-no-node-answers-to'],
+        aliases: ['rolled back'],
+        accessCount: 99,
+        now: NOW,
+      }),
+    ).rejects.toThrow();
+
+    // The alias and salience write is in the same transaction as the close, so neither landed.
+    const after = await storedEntity(harness.driver, survivorId);
+    expect(after?.aliases).toEqual(before?.aliases);
+    expect(after?.accessCount).toBe(before?.accessCount);
   }, 60_000);
 });
