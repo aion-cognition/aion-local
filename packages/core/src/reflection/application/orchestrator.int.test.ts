@@ -139,10 +139,28 @@ describe('reflection orchestrator against a live graph', () => {
     expect(await loadEpisodeContext(harness.driver, 'episode-that-never-existed')).toBeUndefined();
   });
 
-  it('enriches once: the run records its summary and the re-run is gated', async () => {
+  it('leaves the ledger open when a stage throws, so the episode keeps its retry', async () => {
     const pipeline = [
       stage('entities', { status: 'ok', summary: 'extracted 2 entities', counts: { entities: 2 } }),
       poisoned('cognitive', 'the model returned nonsense'),
+      stage('associations', { status: 'ok', summary: 'linked 3 pairs', counts: { associations: 3 } }),
+    ];
+
+    const run = await orchestrator(pipeline).run(episodeId);
+
+    // Isolation still holds: the stages after the throw ran and their counts stand.
+    expect(entered).toEqual(['entities', 'cognitive', 'associations']);
+    expect(run.status).toBe('completed');
+    expect(run.summary.counts).toEqual({ entities: 2, associations: 3 });
+    expect(run.applied).toBe(false);
+    expect(getLedgerEntry(db, orchestratorLedgerKey(episodeId))).toBeUndefined();
+    entered = [];
+  });
+
+  it('enriches once: the run records its summary and the re-run is gated', async () => {
+    const pipeline = [
+      stage('entities', { status: 'ok', summary: 'extracted 2 entities', counts: { entities: 2 } }),
+      stage('cognitive', { status: 'ok', summary: 'extracted 1 decision' }),
       stage('associations', { status: 'ok', summary: 'linked 3 pairs', counts: { associations: 3 } }),
     ];
 
