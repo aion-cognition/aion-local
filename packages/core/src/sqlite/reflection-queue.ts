@@ -38,7 +38,7 @@ function toReflectionJob(row: ReflectionJobRow): ReflectionJob {
 
 /**
  * Insert only. Atomic claiming (UPDATE ... RETURNING, per-process claimant id, stale-
- * claim recovery) is P1-5's concern, built on this table.
+ * claim recovery) arrives with the dispatcher and builds on this table.
  */
 export function enqueueReflectionJob(db: SqliteHandle, jobType: string, payload: unknown): string {
   const id = randomUUID();

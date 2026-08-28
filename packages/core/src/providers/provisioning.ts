@@ -179,9 +179,9 @@ async function verifyEmbedModel(
 }
 
 /**
- * 5-token generate per PLAN P0-4. Some chat models (qwen3's thinking variants) spend
- * a token budget that small on `thinking` and return empty `content`, so this checks
- * that the model produced a completed message, not that `content` itself is non-empty.
+ * A 5-token generate. Some chat models (qwen3's thinking variants) spend a budget that
+ * small on `thinking` and return empty `content`, so this checks that the model produced
+ * a completed message, not that `content` itself is non-empty.
  */
 async function verifyChatModel(
   baseUrl: string,
@@ -214,7 +214,7 @@ async function verifyChatModel(
  * Init-time provisioning (PRD §11 step 2): reachability, then pull the three
  * configured models (deduped — cue and reflect may name the same model) via
  * `/api/pull`, then one round-trip verification per model. Throws the first named
- * error encountered; the CLI (P0-9) surfaces it and exits.
+ * error encountered; the CLI surfaces it and exits.
  */
 export async function provisionOllama(target: OllamaProvisionTarget, options: ProvisionOptions = {}): Promise<void> {
   const fetchImpl = options.fetchImpl ?? fetch;

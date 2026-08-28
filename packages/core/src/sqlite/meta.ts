@@ -1,8 +1,8 @@
 import type { SqliteHandle } from './database.js';
 
 /**
- * Generic key/value store. Graph schema migration versions (P0-5) live here under
- * their own keys; this module makes no assumption about what those keys are.
+ * Generic key/value store. Graph schema migration versions live here under their own
+ * keys; this module makes no assumption about what those keys are.
  */
 export function getMeta(db: SqliteHandle, key: string): string | undefined {
   const row = db.prepare('SELECT value FROM meta WHERE key = ?').get(key) as
