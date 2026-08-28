@@ -48,6 +48,20 @@ export type { LastPack } from './sqlite/last-pack.js';
 export { ConfigSchema, DEFAULTS, KNOB_REGISTRY, knownEnvVars, envVarForPath, loadConfig, ConfigError } from './config/index.js';
 export type { Config, Knob, KnobKind, ConfigPath } from './config/index.js';
 
+export {
+  MANAGED_NEO4J_URI,
+  NEO4J_DEFAULT_USER,
+  Neo4jGdsUnavailableError,
+  Neo4jNotReadyError,
+  ensureNeo4jPassword,
+  generateStrongPassword,
+  isManagedNeo4jUri,
+  validateNeo4jEndpoint,
+  verifyGdsAvailable,
+  waitForBoltReady,
+} from './graph/provision.js';
+export type { Neo4jEndpoint, ReadinessOptions } from './graph/provision.js';
+
 export type { ChatMessage, ChatRole, JsonSchema, Provider, StructuredRequest, Vector } from './providers/types.js';
 export {
   EmbedDimensionMismatchError,
