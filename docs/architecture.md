@@ -80,9 +80,10 @@ cannot until intake writes the durable record before it embeds. Naming the drop 
 interim honest answer, not the fix.
 
 No generation call happens after step 7. Extraction, turning an episode into entities,
-associations, and narratives, is a separate pipeline that subscribes to the dispatch
-signal. It is P3 work and does not exist yet, so today's `integrate` jobs are written and
-never claimed.
+associations, cognitive structure and narratives, is a separate pipeline that subscribes to
+the dispatch signal. `ReflectionWorker` claims the queue row the signal announces and runs
+`ReflectionOrchestrator` over the stage list `packages/mcp/src/bootstrap.ts` registers. The
+queue row is the durable truth; the signal is best-effort.
 
 ## Read path: recall
 
@@ -124,9 +125,9 @@ independently for the pack's `stage_timings_ms`:
    defaults to 20, a deliberate deviation from whitepaper Appendix E's 5: the cap cuts the
    fused list, so on a populated substrate a five-item cut is filled by near-tie vector hits
    before any traversal-reached item can land. The token budget is what actually bounds a
-   pack's size. `narratives`, `preferences`, and `resonant`
-   have no producer yet (P3 and P4 work), so they are structurally absent rather than
-   empty: a P2 pack can never contain them.
+   pack's size. `preferences` and `resonant` have no producer yet (P4 work), so they are
+   structurally absent rather than empty. `narratives` gained one in P3: a session's close,
+   or the idle sweep, compresses its episodes into a `Narrative` node.
 
 Both paths inherit the driver timeouts `GraphConnection` sets: 5s to connect, 10s to acquire
 a pooled connection, 10s of transaction retries. The driver's defaults (60s and 30s) meet or
@@ -203,8 +204,11 @@ and the entity-resolution seed strategy both apply to them.
   `FOR (n:Memory)`. They serve the bounded half of a time-travel filter
   (`valid_until > t`); the open-interval half (`IS NULL`) has no index to seek and is a
   scan by construction.
-- One fulltext index, `content_fts`, `FOR (n:Episode|Turn|Entity) ON [summary, text,
-  name]`, the target of the `bm25` seed strategy.
+- One fulltext index, `memory_content_fts`, over `Episode|Turn|Entity` plus every P3
+  cognitive label and `Narrative`, `ON [summary, text, name]`, the target of the `bm25` seed
+  strategy. It replaced migration 001's narrower `content_fts` under a new name rather than
+  by a drop-and-recreate: `runGraphMigrations` replays every statement on every `aion init`,
+  so a rename is what keeps a re-init from destroying and repopulating a healthy index.
 
 **Edge merge policy** (`infrastructure/graph/edges.ts`). Every relationship write goes
 through one `MERGE`, matched on endpoint ids resolved through `AionNode`: on create it
