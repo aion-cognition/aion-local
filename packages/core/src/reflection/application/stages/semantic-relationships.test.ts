@@ -174,13 +174,31 @@ describe('SemanticRelationshipStage', () => {
     seedEntity('entity-1', 'Ryan', 'person');
     seedEntity('entity-2', 'Aion', 'project');
     const generate = async (): Promise<unknown> => ({
-      relationships: [{ source: 'E1', target: 'E2', type: 'CONTRADICTS', confidence: 0.7 }],
+      relationships: [{ source: 'E1', target: 'E2', type: 'BEFRIENDS', confidence: 0.7 }],
     });
     const stage = new SemanticRelationshipStage();
 
     const outcome = await stage.run(buildContext(stubProvider(generate)));
 
     expect(outcome.counts).toEqual({ relationships: 0 });
+  });
+
+  it('writes the two types whitepaper §6.8 names that the catalog had no path for', async () => {
+    seedEntity('entity-1', 'Ryan', 'person');
+    seedEntity('entity-2', 'Aion', 'project');
+    const generate = async (): Promise<unknown> => ({
+      relationships: [
+        { source: 'E1', target: 'E2', type: 'CONTRADICTS', confidence: 0.7 },
+        { source: 'E2', target: 'E1', type: 'SIMILAR', confidence: 0.8 },
+      ],
+    });
+    const stage = new SemanticRelationshipStage();
+
+    const outcome = await stage.run(buildContext(stubProvider(generate)));
+
+    expect(outcome.counts).toEqual({ relationships: 2 });
+    expect(graph.edgesOfType('CONTRADICTS')).toHaveLength(1);
+    expect(graph.edgesOfType('SIMILAR')).toHaveLength(1);
   });
 
   it('dedupes a repeated (type, source, target) proposal within one run', async () => {

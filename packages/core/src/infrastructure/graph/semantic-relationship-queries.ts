@@ -14,16 +14,23 @@ import type { RelationshipType } from './relationships.js';
  */
 
 /**
- * The sanctioned subset of `RelationshipType` this stage may propose. `CONTRADICTS` and
- * `SIMILAR_TO` from whitepaper §6.8's prose are deliberately absent: contradiction is P3-10's
- * supersession judgment, not an edge, and `SIMILAR` already covers embedding similarity from
- * association inference (P3-7). `satisfies` fails to compile if a name here drifts from the
- * catalog `edges.ts` validates against.
+ * Whitepaper §6.8's five, plus the two this build already had names for. `SIMILAR_TO` is
+ * written under the catalog's existing `SIMILAR`, which is the same relation under the other
+ * name — forking a second type would split one claim across two edges and two activation
+ * weights. `CONTRADICTS` is its own type: P3-10's supersession judgment only compares fact
+ * nodes against same-label neighbours and only acts above the auto-apply threshold, so
+ * without it nothing in the graph can say that this Decision is in tension with that
+ * Insight. `RELATED_TO` and `ANALOGOUS_TO` stay for the connections none of the five name.
+ *
+ * `satisfies` fails to compile if a name here drifts from the catalog `edges.ts` validates
+ * against.
  */
 export const SEMANTIC_RELATIONSHIP_TYPES = [
   'CAUSES',
   'ENABLES',
   'PRECEDES',
+  'CONTRADICTS',
+  'SIMILAR',
   'RELATED_TO',
   'ANALOGOUS_TO',
 ] as const satisfies readonly RelationshipType[];
