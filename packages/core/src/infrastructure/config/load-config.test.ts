@@ -12,6 +12,15 @@ describe('loadConfig defaults', () => {
     expect(loadConfig({ PATH: '/usr/bin', HOME: '/root' })).toEqual(DEFAULTS);
   });
 
+  // Both depart from the value their doc pins, so each is pinned here: a silent drift back
+  // to 5 hides traversal-reached items again, and back to 2000 degrades a warm recall.
+  it('serves the raised episode cap and cue budget, not the values the docs pin', () => {
+    const config = loadConfig({});
+
+    expect(config.recall.maxEpisodes).toBe(20);
+    expect(config.recall.cueBudgetMs).toBe(8000);
+  });
+
   it('never mutates the shared DEFAULTS object across calls', () => {
     const before = DEFAULTS.recall.maxHops;
 
