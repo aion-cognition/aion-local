@@ -9,6 +9,7 @@ import {
   latestAppliedGraphMigration,
   runGraphMigrations,
 } from './migrations.js';
+import { CONTENT_FULLTEXT_INDEX } from './seed-queries.js';
 import { startNeo4jHarness, stopNeo4jHarness, type Neo4jHarness } from './test-support/neo4j-harness.fixture.js';
 import { getMeta } from '../sqlite/meta.js';
 import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
@@ -43,7 +44,7 @@ const EXPECTED_NON_LOOKUP_INDEXES = [
   { name: 'memory_valid_until_idx', type: 'RANGE', labelsOrTypes: ['Memory'], properties: ['valid_until'] },
   { name: 'memory_tx_until_idx', type: 'RANGE', labelsOrTypes: ['Memory'], properties: ['tx_until'] },
   {
-    name: 'content_fts',
+    name: CONTENT_FULLTEXT_INDEX,
     type: 'FULLTEXT',
     labelsOrTypes: [
       'Episode',
@@ -65,7 +66,7 @@ const EXPECTED_NON_LOOKUP_INDEXES = [
 ].sort((a, b) => a.name.localeCompare(b.name));
 
 type ConstraintRow = { name: string; labelsOrTypes: string[]; properties: string[] };
-type IndexRow = { name: string; type: string; labelsOrTypes: string[] | null; properties: string[] | null; options: { indexConfig?: Record<string, unknown> } };
+type IndexRow = { name: string; id: number; type: string; labelsOrTypes: string[] | null; properties: string[] | null; options: { indexConfig?: Record<string, unknown> } };
 
 async function fetchConstraints(harness: Neo4jHarness): Promise<ConstraintRow[]> {
   const result = await harness.driver.executeQuery('SHOW CONSTRAINTS YIELD name, labelsOrTypes, properties RETURN name, labelsOrTypes, properties');
@@ -80,11 +81,12 @@ async function fetchConstraints(harness: Neo4jHarness): Promise<ConstraintRow[]>
 
 async function fetchNonLookupIndexes(harness: Neo4jHarness): Promise<IndexRow[]> {
   const result = await harness.driver.executeQuery(
-    "SHOW INDEXES YIELD name, type, labelsOrTypes, properties, options WHERE type <> 'LOOKUP' RETURN name, type, labelsOrTypes, properties, options",
+    "SHOW INDEXES YIELD name, id, type, labelsOrTypes, properties, options WHERE type <> 'LOOKUP' RETURN name, id, type, labelsOrTypes, properties, options",
   );
   return result.records
     .map((r) => ({
       name: r.get('name') as string,
+      id: (r.get('id') as { toNumber(): number }).toNumber(),
       type: r.get('type') as string,
       labelsOrTypes: r.get('labelsOrTypes') as string[] | null,
       properties: r.get('properties') as string[] | null,
@@ -119,7 +121,7 @@ describe('graph schema migrations 001 + 002', () => {
     expect(created).toContain('content_vec_idx');
     expect(created).toContain('aion_node_id_unique');
     expect(created).toContain('goal_id_unique');
-    expect(created).toContain('content_fts');
+    expect(created).toContain(CONTENT_FULLTEXT_INDEX);
     expect(getMeta(db, graphMigrationMetaKey(1))).toBeDefined();
     expect(getMeta(db, graphMigrationMetaKey(2))).toBeDefined();
     expect(latestAppliedGraphMigration(db)).toBe(2);
@@ -130,7 +132,7 @@ describe('graph schema migrations 001 + 002', () => {
     expect(constraints).toEqual(EXPECTED_CONSTRAINTS);
   });
 
-  it('creates exactly the pinned non-lookup indexes, with content_fts widened to the new labels', async () => {
+  it('creates exactly the pinned non-lookup indexes, the fulltext one over every memory label', async () => {
     const indexes = await fetchNonLookupIndexes(harness);
 
     expect(indexes.map(({ name, type, labelsOrTypes, properties }) => ({ name, type, labelsOrTypes, properties }))).toEqual(
@@ -156,7 +158,21 @@ describe('graph schema migrations 001 + 002', () => {
     expect(applied).toEqual([]);
     expect(created).toEqual([]);
     expect(await fetchConstraints(harness)).toEqual(constraintsBefore);
+    // Index ids are compared too: a drop-and-recreate reaches the same end state under a new
+    // id, which is exactly the churn PRD §11's "touches nothing that is healthy" forbids.
     expect(await fetchNonLookupIndexes(harness)).toEqual(indexesBefore);
+  });
+
+  it('leaves the fulltext index itself untouched across three inits', async () => {
+    const idOf = async (): Promise<number | undefined> =>
+      (await fetchNonLookupIndexes(harness)).find((index) => index.name === CONTENT_FULLTEXT_INDEX)?.id;
+    const before = await idOf();
+
+    await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
+    await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
+
+    expect(before).toBeDefined();
+    expect(await idOf()).toBe(before);
   });
 
   it('repairs a graph that lost schema objects from both migrations while the meta table survived', async () => {
@@ -184,7 +200,7 @@ describe('graph schema migrations 001 + 002', () => {
   });
 });
 
-describe('migration 002 content_fts rebuild', () => {
+describe('migration 002 fulltext retirement', () => {
   let harness: Neo4jHarness;
   let db: SqliteHandle;
   let dir: string;
@@ -194,9 +210,9 @@ describe('migration 002 content_fts rebuild', () => {
     dir = mkdtempSync(join(tmpdir(), 'aion-graph-migrations-002-'));
     db = openSqliteHandle({ filePath: join(dir, 'aion.sqlite') });
 
-    // Simulate a graph that predates migration 002: apply migration 001 alone (the
-    // runner always applies the full registered list, so a partial state has to be
-    // built by hand) and write an Episode under that narrower content_fts.
+    // Simulate a graph that predates migration 002: migration 001's own statements, plus the
+    // narrow `content_fts` it used to declare, which is what a substrate built before this
+    // change is carrying. An Episode is written under that old index.
     const migration001 = GRAPH_MIGRATIONS[0];
     if (migration001 === undefined) {
       throw new Error('migration 001 is not registered');
@@ -204,6 +220,9 @@ describe('migration 002 content_fts rebuild', () => {
     for (const statement of migration001.statements({ embedDimension: EMBED_DIMENSION })) {
       await harness.driver.executeQuery(statement);
     }
+    await harness.driver.executeQuery(
+      'CREATE FULLTEXT INDEX content_fts IF NOT EXISTS FOR (n:Episode|Turn|Entity) ON EACH [n.summary, n.text, n.name]',
+    );
     await harness.driver.executeQuery(
       `CREATE (n:Episode:Memory:${BASE_NODE_LABEL} {id: $id, summary: $summary})`,
       { id: 'pre-002-episode', summary: 'the migration 002 rebuild must not lose glorbanite content' },
@@ -217,23 +236,28 @@ describe('migration 002 content_fts rebuild', () => {
     await stopNeo4jHarness(harness);
   });
 
-  async function fulltextIds(term: string): Promise<string[]> {
+  async function fulltextIds(term: string, index = CONTENT_FULLTEXT_INDEX): Promise<string[]> {
     const result = await harness.driver.executeQuery(
-      'CALL db.index.fulltext.queryNodes("content_fts", $term) YIELD node RETURN node.id AS id',
-      { term },
+      'CALL db.index.fulltext.queryNodes($index, $term) YIELD node RETURN node.id AS id',
+      { index, term },
     );
     return result.records.map((r) => r.get('id') as string);
   }
 
-  it('an episode written under migration 001 alone still fulltext-matches after the rebuild', async () => {
-    // Episode was already in migration 001's narrower content_fts, so this is the
-    // pre-rebuild baseline, not a negative check — the point is it survives the rebuild.
-    expect(await fulltextIds('glorbanite')).toContain('pre-002-episode');
+  async function indexNames(): Promise<string[]> {
+    const result = await harness.driver.executeQuery('SHOW INDEXES YIELD name RETURN name');
+    return result.records.map((r) => r.get('name') as string);
+  }
+
+  it('an episode written under the legacy index still fulltext-matches after the move', async () => {
+    // Baseline under the old index, so the assertion after the move is about survival.
+    expect(await fulltextIds('glorbanite', 'content_fts')).toContain('pre-002-episode');
 
     await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
     await harness.driver.executeQuery('CALL db.awaitIndexes(60)');
 
     expect(await fulltextIds('glorbanite')).toContain('pre-002-episode');
+    expect(await indexNames()).not.toContain('content_fts');
   });
 
   it('covers Narrative.summary and the cognitive types shared text property', async () => {

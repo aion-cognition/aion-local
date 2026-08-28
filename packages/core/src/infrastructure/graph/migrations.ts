@@ -2,6 +2,7 @@ import type { Driver } from 'neo4j-driver';
 import type { SqliteHandle } from '../sqlite/database.js';
 import { getMeta, setMeta } from '../sqlite/meta.js';
 import { BASE_NODE_LABEL } from './labels.js';
+import { CONTENT_FULLTEXT_INDEX } from './seed-queries.js';
 
 /**
  * Backbone nodes (the single Member and the global Workspace) must carry BOTH their
@@ -44,7 +45,11 @@ const MIGRATION_001_BACKBONE_SCHEMA: GraphMigration = {
     // is a scan by construction and every read anchors on a seek before it applies.
     'CREATE RANGE INDEX memory_valid_until_idx IF NOT EXISTS FOR (n:Memory) ON (n.valid_until)',
     'CREATE RANGE INDEX memory_tx_until_idx IF NOT EXISTS FOR (n:Memory) ON (n.tx_until)',
-    'CREATE FULLTEXT INDEX content_fts IF NOT EXISTS FOR (n:Episode|Turn|Entity) ON EACH [n.summary, n.text, n.name]',
+    // Migration 002 owns the fulltext index. It was declared here first, over the three
+    // labels that existed then; widening it needed a drop, and a drop that runs on every
+    // `aion init` destroys a healthy index and its contents. The name moved instead, so the
+    // retirement below is a no-op from the second run onward.
+    'DROP INDEX content_fts IF EXISTS',
   ],
 };
 
@@ -56,16 +61,18 @@ const MIGRATION_001_BACKBONE_SCHEMA: GraphMigration = {
  * already declared `FOR (n:Memory)` cover them once `labels.ts`'s `COMPANION_LABELS`
  * carries them into `resolveLabels`, so no per-label index statement is needed here.
  *
- * `content_fts` is dropped and recreated under its existing name rather than replaced
- * with a new index, so the label set can widen without leaving a stale `content_fts`
- * behind: `IF NOT EXISTS` alone cannot redefine an index that already exists under that
- * name. The property list is unchanged — `summary` already covers `Narrative.summary`
- * and `text` already covers the cognitive types' text property (canonical name `text`
- * across all nine types, chosen here since none had one yet) — only the label set grows.
+ * The fulltext index moves to a new name rather than being dropped and recreated under
+ * the old one. `IF NOT EXISTS` cannot redefine an index that already exists, so widening
+ * the label set needs a drop — and `runGraphMigrations` replays every statement on every
+ * `aion init`, which would make that drop destroy and repopulate a healthy index each time
+ * a user reran init. Under a new name both statements are no-ops from the second run on,
+ * which is what PRD §11's "touches nothing that is healthy" asks for. The property list is
+ * unchanged: `summary` already covers `Narrative.summary` and `text` already covers the
+ * cognitive types' text property (canonical name `text` across all nine).
  */
 const MIGRATION_002_COGNITIVE_SCHEMA: GraphMigration = {
   version: 2,
-  name: 'cognitive node labels, id constraints, content_fts rebuild',
+  name: 'cognitive node labels, id constraints, fulltext index over every memory label',
   statements: (_ctx) => [
     'CREATE CONSTRAINT narrative_id_unique IF NOT EXISTS FOR (n:Narrative) REQUIRE n.id IS UNIQUE',
     'CREATE CONSTRAINT goal_id_unique IF NOT EXISTS FOR (n:Goal) REQUIRE n.id IS UNIQUE',
@@ -78,8 +85,7 @@ const MIGRATION_002_COGNITIVE_SCHEMA: GraphMigration = {
     'CREATE CONSTRAINT pattern_id_unique IF NOT EXISTS FOR (n:Pattern) REQUIRE n.id IS UNIQUE',
     'CREATE CONSTRAINT trend_id_unique IF NOT EXISTS FOR (n:Trend) REQUIRE n.id IS UNIQUE',
     'CREATE CONSTRAINT bridge_id_unique IF NOT EXISTS FOR (n:Bridge) REQUIRE n.id IS UNIQUE',
-    'DROP INDEX content_fts IF EXISTS',
-    `CREATE FULLTEXT INDEX content_fts IF NOT EXISTS FOR (n:Episode|Turn|Entity|Narrative|Goal|Plan|Decision|Insight|Concept|Context|Event|Pattern|Trend) ON EACH [n.summary, n.text, n.name]`,
+    `CREATE FULLTEXT INDEX ${CONTENT_FULLTEXT_INDEX} IF NOT EXISTS FOR (n:Episode|Turn|Entity|Narrative|Goal|Plan|Decision|Insight|Concept|Context|Event|Pattern|Trend) ON EACH [n.summary, n.text, n.name]`,
   ],
 };
 

@@ -25,7 +25,7 @@ import { fromGraphVector, toGraphVector, type Row } from './values.js';
 export const CONTENT_VECTOR_INDEX = 'content_vec_idx';
 
 /** Migration 001's fulltext index over `Episode.summary`, `Turn.text`, `Entity.name`. */
-export const CONTENT_FULLTEXT_INDEX = 'content_fts';
+export const CONTENT_FULLTEXT_INDEX = 'memory_content_fts';
 
 /** The shared label migration 001 hangs the vector and range indexes on. */
 const MEMORY_LABEL = 'Memory';
