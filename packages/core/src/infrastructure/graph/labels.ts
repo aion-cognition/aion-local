@@ -59,12 +59,18 @@ export const NODE_LABELS: readonly NodeLabel[] = [
  * table) all carry `Memory`: they are content-bearing, so `content_vec_idx`/
  * `context_vec_idx` and the currency range indexes, all declared `FOR (n:Memory)` in
  * migration 001, cover them without a new index per label.
+ *
+ * `Entity` joins them once reflection writes entity content vectors: whitepaper §4.1 makes
+ * entities recall citizens, and §6.9 has the recency strategy biasing toward recently
+ * mentioned ones, which is `Memory` in both cases.
  */
 const COMPANION_LABELS: Record<NodeLabel, readonly string[]> = {
   Session: [],
   Episode: ['Memory'],
   Turn: ['Memory'],
-  Entity: [],
+  Entity: ['Memory'],
+  // The backbone stays out of `Memory`: the Member and the global Workspace are connectivity,
+  // not content, and the recency strategy reads `Memory` directly.
   Member: ['Entity'],
   Workspace: ['Entity'],
   Narrative: ['Memory'],
