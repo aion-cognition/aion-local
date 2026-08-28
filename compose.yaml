@@ -25,7 +25,9 @@ services:
     image: aion-local:latest
     build:
       context: .
-    command: ["node", "/app/packages/mcp/dist/main.js"]
+    # The image entrypoint is the CLI. Compose appends `command` to an entrypoint rather
+    # than replacing it, so the server has to override the entrypoint itself.
+    entrypoint: ["node", "/app/packages/mcp/dist/main.js"]
     env_file:
       - path: .env
         required: false
