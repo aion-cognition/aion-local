@@ -184,41 +184,53 @@ const CLOSE_SUPERSEDED_NODE = [
  * never deleted: it stays recall-eligible and time-travel-visible.
  */
 export async function supersede(driver: Driver, input: SupersedeInput): Promise<SupersedeResult> {
+  return inWriteTransaction(driver, async (tx) => supersedeInTransaction(tx, input));
+}
+
+/**
+ * The same close-and-link, joined to a transaction the caller already holds. Entity dedup
+ * needs it: §6.5 requires the merge to be atomic, so redirecting a duplicate's edges and
+ * closing the duplicate have to commit or roll back together. Splitting them leaves a window
+ * where the node is stripped of its relationships and still marked current — a live-looking
+ * entity with nothing attached, which name and KNN search both still return.
+ */
+export async function supersedeInTransaction(
+  tx: GraphTransaction,
+  input: SupersedeInput,
+): Promise<SupersedeResult> {
   const now = input.now ?? new Date();
 
-  return inWriteTransaction(driver, async (tx) => {
-    const closed = await tx.run(
-      CLOSE_SUPERSEDED_NODE,
-      { oldId: input.oldId, now: toGraphDateTime(now) },
-      (row) => ({
-        id: row.id as string,
-        validUntil: row.validUntil as Date,
-        txUntil: row.txUntil as Date,
-      }),
-    );
-    const old = closed[0];
-    if (old === undefined) {
-      throw new GraphNodeNotFoundError([input.oldId], 'supersede');
-    }
+  const closed = await tx.run(
+    CLOSE_SUPERSEDED_NODE,
+    { oldId: input.oldId, now: toGraphDateTime(now) },
+    (row) => ({
+      id: row.id as string,
+      validUntil: row.validUntil as Date,
+      txUntil: row.txUntil as Date,
+    }),
+  );
+  const old = closed[0];
+  if (old === undefined) {
+    throw new GraphNodeNotFoundError([input.oldId], 'supersede');
+  }
 
-    const edge = await upsertEdgeInTransaction(tx, {
-      type: SUPERSEDES_TYPE,
-      sourceId: input.newId,
-      targetId: input.oldId,
-      strength: 1,
-      confidence: 1,
-      signals: input.signals ?? ['bitemporal'],
-      provenance: input.provenance ?? ['supersede'],
-      count: 0,
-      now,
-    });
-
-    return {
-      oldId: old.id,
-      newId: input.newId,
-      validUntil: old.validUntil,
-      txUntil: old.txUntil,
-      edge,
-    };
+  const edge = await upsertEdgeInTransaction(tx, {
+    type: SUPERSEDES_TYPE,
+    sourceId: input.newId,
+    targetId: input.oldId,
+    strength: 1,
+    confidence: 1,
+    signals: input.signals ?? ['bitemporal'],
+    provenance: input.provenance ?? ['supersede'],
+    count: 0,
+    now,
   });
+
+  return {
+    oldId: old.id,
+    newId: input.newId,
+    validUntil: old.validUntil,
+    txUntil: old.txUntil,
+    edge,
+  };
 }

@@ -1,7 +1,11 @@
 import neo4j, { type Driver } from 'neo4j-driver';
 import type { Vector } from '../providers/types.js';
 import { ACCESS_COUNT_PROPERTY } from './access-tracking.js';
-import { BITEMPORAL_PROPERTIES, writeStampedNodeInTransaction } from './bitemporal.js';
+import {
+  BITEMPORAL_PROPERTIES,
+  supersedeInTransaction,
+  writeStampedNodeInTransaction,
+} from './bitemporal.js';
 import { type GraphTransaction, inWriteTransaction, runRead, runWrite } from './connection.js';
 import { upsertEdgeInTransaction } from './edges.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
@@ -218,22 +222,31 @@ export type MergeEntityGroupInput = {
   readonly aliases: readonly string[];
   readonly accessCount: number;
   readonly lastAccessed?: Date;
+  /** Carried onto the `SUPERSEDES` edge each merged node gets, so lineage names the merge. */
+  readonly supersedeSignals?: readonly string[];
+  readonly supersedeProvenance?: readonly string[];
   readonly now: Date;
 };
 
 export type MergeEntityGroupResult = {
   readonly edgesRedirected: number;
+  readonly superseded: readonly string[];
 };
 
 /**
- * One transaction: lock canonical and every merged node (stable order, so two concurrent
- * merges cannot deadlock on each other), read the merged nodes' relationships, and redirect
- * each through the ordinary edge-upsert, which is what makes a collision with an edge
- * canonical already holds sum and max rather than overwrite. An edge whose other endpoint is
- * itself part of this group — including a direct canonical/merged edge — is dropped rather
- * than redirected: after the merge both ends are the same node, and a self-loop records
- * nothing. Bitemporal closure is a separate call (`supersede`, which owns its own
- * transaction); this one only moves what the merged nodes were connected to.
+ * Whitepaper §6.5's "the merge executes inside a graph transaction to ensure atomicity", as
+ * one transaction: lock canonical and every merged node (stable order, so two concurrent
+ * merges cannot deadlock on each other), read the merged nodes' relationships, redirect each
+ * through the ordinary edge-upsert — which is what makes a collision with an edge canonical
+ * already holds sum and max rather than overwrite — absorb the aliases and salience, and
+ * close each merged node with its lineage edge. An edge whose other endpoint is itself part
+ * of this group, including a direct canonical/merged edge, is dropped rather than redirected:
+ * after the merge both ends are the same node, and a self-loop records nothing.
+ *
+ * Redirect and close belong to the same commit because either alone is an invalid state. A
+ * crash between them used to leave the duplicate stripped of every relationship and still
+ * marked current: a live-looking entity with no edges, returned by name lookup and by the
+ * dedup KNN search alike.
  */
 export async function redirectAndAbsorb(
   driver: Driver,
@@ -241,7 +254,7 @@ export async function redirectAndAbsorb(
 ): Promise<MergeEntityGroupResult> {
   const mergedIds = [...new Set(input.mergedIds)].sort();
   if (mergedIds.length === 0) {
-    return { edgesRedirected: 0 };
+    return { edgesRedirected: 0, superseded: [] };
   }
   const absorbed = new Set([input.canonicalId, ...mergedIds]);
 
@@ -290,7 +303,19 @@ export async function redirectAndAbsorb(
       },
     });
 
-    return { edgesRedirected: redirected };
+    const superseded: string[] = [];
+    for (const mergedId of mergedIds) {
+      const result = await supersedeInTransaction(tx, {
+        oldId: mergedId,
+        newId: input.canonicalId,
+        now: input.now,
+        signals: input.supersedeSignals,
+        provenance: input.supersedeProvenance,
+      });
+      superseded.push(result.oldId);
+    }
+
+    return { edgesRedirected: redirected, superseded };
   });
 }
 
