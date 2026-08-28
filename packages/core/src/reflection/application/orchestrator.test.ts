@@ -214,14 +214,17 @@ describe('ReflectionOrchestrator', () => {
 
     expect(entered).toEqual(['entities', 'cognitive', 'associations']);
     expect(run.status).toBe('completed');
-    expect(run.applied).toBe(true);
     expect(run.summary.counts).toEqual({ entities: 2, associations: 3 });
 
     const failure = run.summary.stages[1];
     expect(failure?.name).toBe('cognitive');
     expect(failure?.status).toBe('failed');
     expect(failure?.error).toBe('the model returned nonsense');
-    expect(isLedgerApplied(store.db, orchestratorLedgerKey(EPISODE_ID))).toBe(true);
+
+    // Isolation is about the run, not the gate: the stages after the throw did their work,
+    // and the episode stays retryable so the one that threw gets another attempt.
+    expect(run.applied).toBe(false);
+    expect(isLedgerApplied(store.db, orchestratorLedgerKey(EPISODE_ID))).toBe(false);
   });
 
   it('records a stage that reports failure without throwing, and keeps its explanation', async () => {
@@ -234,7 +237,7 @@ describe('ReflectionOrchestrator', () => {
 
     expect(run.summary.stages[0]?.summary).toBe('the circuit breaker is open');
     expect(run.summary.stages[0]?.error).toBeUndefined();
-    expect(run.applied).toBe(true);
+    expect(run.applied).toBe(false);
   });
 
   it('leaves the ledger unmarked when every stage failed, so the job retries', async () => {
@@ -249,6 +252,32 @@ describe('ReflectionOrchestrator', () => {
     expect(run.applied).toBe(false);
     expect(run.summary.stages.map((entry) => entry.status)).toEqual(['failed', 'failed']);
     expect(isLedgerApplied(store.db, orchestratorLedgerKey(EPISODE_ID))).toBe(false);
+  });
+
+  it('gives a transiently failed stage another attempt: the second run re-enters the pipeline', async () => {
+    let attempts = 0;
+    const flaky = {
+      name: 'entities',
+      run: async () => {
+        entered.push('entities');
+        attempts += 1;
+        if (attempts === 1) {
+          throw new Error('the reflect model timed out');
+        }
+        return { status: 'ok' as const, summary: 'extracted 2 entities', counts: { entities: 2 } };
+      },
+    };
+    const stages = [flaky, stage('cognitive', { status: 'ok', summary: 'extracted 1 decision' })];
+
+    const first = await new ReflectionOrchestrator(deps, stages).run(EPISODE_ID, { now: NOW });
+    const second = await new ReflectionOrchestrator(deps, stages).run(EPISODE_ID, { now: NOW });
+
+    expect(first.applied).toBe(false);
+    expect(second.status).toBe('completed');
+    expect(second.applied).toBe(true);
+    expect(second.summary.counts).toEqual({ entities: 2 });
+    expect(entered).toEqual(['entities', 'cognitive', 'entities', 'cognitive']);
+    expect(isLedgerApplied(store.db, orchestratorLedgerKey(EPISODE_ID))).toBe(true);
   });
 
   it('leaves the ledger unmarked when no stages are registered', async () => {
