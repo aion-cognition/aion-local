@@ -30,6 +30,25 @@ describe('OllamaProvider.embed', () => {
     ]);
   });
 
+  it('folds case before the request, so a proper noun is not sent as an out-of-vocabulary token', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      expect(JSON.parse(String(init?.body)).input).toEqual([
+        'redis',
+        'thandiwe baptiste',
+        'postgres (tool): the graph store',
+      ]);
+      return jsonResponse({ embeddings: [[1], [2], [3]] });
+    });
+    const provider = new OllamaProvider({
+      baseUrl: 'http://localhost:11434',
+      embedModel: 'nomic-embed-text',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    await provider.embed(['Redis', 'Thandiwe Baptiste', 'Postgres (tool): the graph store']);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
   it('returns an empty array without a network call for no texts', async () => {
     const fetchImpl = vi.fn();
     const provider = new OllamaProvider({
