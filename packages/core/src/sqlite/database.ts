@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
 
+/** Name for the config registry, which is the only place the variable is read. */
 export const SQLITE_PATH_ENV_VAR = 'AION_SQLITE_PATH';
 
 /** In-container path on the aion-data volume. Host-run tests override it. */
@@ -52,15 +53,6 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     ts TEXT NOT NULL
   )`,
 ];
-
-/**
- * Bootstrap resolution for the one SQLite knob, used before the config module is
- * available. The config module owns the rest of the AION_* catalog and passes a
- * SqliteTarget in directly, mirroring logging's logTargetFromEnv.
- */
-export function sqlitePathFromEnv(env: NodeJS.ProcessEnv = process.env): string {
-  return env[SQLITE_PATH_ENV_VAR] ?? DEFAULT_SQLITE_PATH;
-}
 
 function ensureDirectoryExists(filePath: string): void {
   if (filePath === ':memory:') {

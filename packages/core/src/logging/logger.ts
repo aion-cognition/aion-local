@@ -3,6 +3,7 @@ import type { Logger } from 'pino';
 
 export type { Logger } from 'pino';
 
+/** Names for the config registry, which is the only place either variable is read. */
 export const LOG_FILE_ENV_VAR = 'AION_LOG_FILE';
 export const LOG_LEVEL_ENV_VAR = 'AION_LOG_LEVEL';
 
@@ -19,23 +20,6 @@ export type LogTarget = {
   level: LogLevel;
   name?: string;
 };
-
-export function isLogLevel(value: string): value is LogLevel {
-  return (LOG_LEVELS as readonly string[]).includes(value);
-}
-
-/**
- * Bootstrap resolution for the two logging knobs, used before the config module is
- * available. The config module owns the rest of the AION_* catalog and passes a
- * LogTarget in directly.
- */
-export function logTargetFromEnv(env: NodeJS.ProcessEnv = process.env): LogTarget {
-  const level = env[LOG_LEVEL_ENV_VAR];
-  return {
-    filePath: env[LOG_FILE_ENV_VAR] ?? DEFAULT_LOG_FILE,
-    level: level !== undefined && isLogLevel(level) ? level : DEFAULT_LOG_LEVEL,
-  };
-}
 
 /**
  * Opens the JSONL log destination and returns the logger bound to it. Writes are

@@ -4,8 +4,6 @@ export {
   LOG_FILE_ENV_VAR,
   LOG_LEVEL_ENV_VAR,
   LOG_LEVELS,
-  isLogLevel,
-  logTargetFromEnv,
   openLogger,
 } from './logging/logger.js';
 export type { LogLevel, LogTarget, Logger } from './logging/logger.js';
@@ -16,7 +14,6 @@ export {
   SQLITE_PATH_ENV_VAR,
   SqliteStore,
   openSqliteHandle,
-  sqlitePathFromEnv,
 } from './sqlite/database.js';
 export type { SqliteHandle, SqliteTarget } from './sqlite/database.js';
 
@@ -77,7 +74,7 @@ export {
   latestAppliedGraphMigration,
   runGraphMigrations,
 } from './graph/migrations.js';
-export type { GraphMigration, MigrationContext } from './graph/migrations.js';
+export type { GraphMigration, GraphMigrationOutcome, MigrationContext } from './graph/migrations.js';
 
 export { GraphConnection, GraphTransaction, inWriteTransaction, runRead, runWrite, runWriteWithCounters } from './graph/connection.js';
 export type { GraphHealth, GraphStatement, WriteOutcome } from './graph/connection.js';
@@ -97,7 +94,7 @@ export {
 } from './graph/introspection.js';
 export type { GraphCounts, VectorIndexInfo } from './graph/introspection.js';
 
-export { NODE_LABELS, isContentBearing, isNodeLabel, resolveLabels } from './graph/labels.js';
+export { BASE_NODE_LABEL, NODE_LABELS, isContentBearing, isNodeLabel, resolveLabels } from './graph/labels.js';
 export type { NodeLabel } from './graph/labels.js';
 
 export {

@@ -2,24 +2,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import {
-  DEFAULT_BUSY_TIMEOUT_MS,
-  DEFAULT_SQLITE_PATH,
-  SqliteStore,
-  sqlitePathFromEnv,
-} from './database.js';
-
-describe('sqlitePathFromEnv', () => {
-  it('falls back to the in-container default', () => {
-    expect(sqlitePathFromEnv({})).toBe(DEFAULT_SQLITE_PATH);
-  });
-
-  it('takes the path from the AION_SQLITE_PATH override', () => {
-    expect(sqlitePathFromEnv({ AION_SQLITE_PATH: '/tmp/somewhere/aion.sqlite' })).toBe(
-      '/tmp/somewhere/aion.sqlite',
-    );
-  });
-});
+import { DEFAULT_BUSY_TIMEOUT_MS, SqliteStore } from './database.js';
 
 describe('SqliteStore', () => {
   let dir: string;

@@ -1,4 +1,3 @@
-import { logTargetFromEnv, openLogger } from '@aion/core';
 import { runDoctor } from './doctor.js';
 import { runInit } from './init.js';
 import { runStatus } from './status.js';
@@ -49,11 +48,14 @@ function usage(): string {
   ].join('\n');
 }
 
+/**
+ * Dispatch only. Each command opens its own logger from validated config, which is what
+ * keeps the config module the one reader of AION_* vars: a second env read here would
+ * take a bad log level silently and miss the unknown-variable check entirely.
+ */
 export async function run(argv: readonly string[]): Promise<number> {
-  const logger = openLogger({ ...logTargetFromEnv(), name: CLI_NAME });
   const [first = 'help', ...rest] = argv;
   const name = first === '--help' || first === '-h' ? 'help' : first;
-  logger.debug({ command: name, args: rest }, 'cli invoked');
 
   const command = commands[name];
   if (command === undefined) {
