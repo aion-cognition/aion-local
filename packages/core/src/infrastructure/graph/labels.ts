@@ -7,7 +7,24 @@
  * P3's cognitive node types extend this table rather than writing their labels by hand.
  */
 
-export type NodeLabel = 'Session' | 'Episode' | 'Turn' | 'Entity' | 'Member' | 'Workspace';
+export type NodeLabel =
+  | 'Session'
+  | 'Episode'
+  | 'Turn'
+  | 'Entity'
+  | 'Member'
+  | 'Workspace'
+  | 'Narrative'
+  | 'Goal'
+  | 'Plan'
+  | 'Decision'
+  | 'Insight'
+  | 'Concept'
+  | 'Context'
+  | 'Event'
+  | 'Pattern'
+  | 'Trend'
+  | 'Bridge';
 
 /**
  * Carried by every node, whatever its type, so a lookup by id alone can seek an index:
@@ -24,8 +41,25 @@ export const NODE_LABELS: readonly NodeLabel[] = [
   'Entity',
   'Member',
   'Workspace',
+  'Narrative',
+  'Goal',
+  'Plan',
+  'Decision',
+  'Insight',
+  'Concept',
+  'Context',
+  'Event',
+  'Pattern',
+  'Trend',
+  'Bridge',
 ];
 
+/**
+ * The nine whitepaper §6.7 cognitive types plus Narrative and Bridge (P3's pinned label
+ * table) all carry `Memory`: they are content-bearing, so `content_vec_idx`/
+ * `context_vec_idx` and the currency range indexes, all declared `FOR (n:Memory)` in
+ * migration 001, cover them without a new index per label.
+ */
 const COMPANION_LABELS: Record<NodeLabel, readonly string[]> = {
   Session: [],
   Episode: ['Memory'],
@@ -33,6 +67,17 @@ const COMPANION_LABELS: Record<NodeLabel, readonly string[]> = {
   Entity: [],
   Member: ['Entity'],
   Workspace: ['Entity'],
+  Narrative: ['Memory'],
+  Goal: ['Memory'],
+  Plan: ['Memory'],
+  Decision: ['Memory'],
+  Insight: ['Memory'],
+  Concept: ['Memory'],
+  Context: ['Memory'],
+  Event: ['Memory'],
+  Pattern: ['Memory'],
+  Trend: ['Memory'],
+  Bridge: ['Memory'],
 };
 
 /** Primary label first, then its companions, then the base label. Used verbatim in the Cypher label list. */
