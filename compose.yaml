@@ -1,12 +1,19 @@
 name: aion
 
 services:
-  # Placeholder tag: P0-3 pins the exact Community CalVer release and its env.
+  # Pinned Community CalVer release (verified 2026-08-28: latest published tag,
+  # GDS 2026.07.0 loads, 471 gds.* procedures, native CREATE VECTOR INDEX works).
+  # Bump by hand. Nothing regenerates this from the Docker Hub tag list.
   neo4j:
     image: neo4j:2026.07.1-community
     environment:
       NEO4J_AUTH: neo4j/${AION_NEO4J_PASSWORD:-aion}
       NEO4J_PLUGINS: '["graph-data-science"]'
+      # Modest laptop tuning, not a capacity plan: one user, one graph, JVM default
+      # heuristics otherwise over-claim RAM on a shared dev machine.
+      NEO4J_server_memory_heap_initial__size: 512m
+      NEO4J_server_memory_heap_max__size: 1G
+      NEO4J_server_memory_pagecache_size: 512m
     ports:
       - "127.0.0.1:7474:7474"
       - "127.0.0.1:7687:7687"
