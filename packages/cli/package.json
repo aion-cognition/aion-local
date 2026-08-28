@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@aion/core": "*",
+    "@aion/mcp": "*",
     "@aion/protocol": "*"
   }
 }

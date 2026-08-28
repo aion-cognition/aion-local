@@ -7,5 +7,5 @@
   },
   "include": ["src/**/*.ts"],
   "exclude": ["src/**/*.test.ts"],
-  "references": [{ "path": "../core" }, { "path": "../protocol" }]
+  "references": [{ "path": "../core" }, { "path": "../mcp" }, { "path": "../protocol" }]
 }
