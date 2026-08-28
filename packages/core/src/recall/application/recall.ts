@@ -7,26 +7,26 @@ import {
   type StageTimingsMs,
 } from '@aion/protocol';
 import type { Driver } from 'neo4j-driver';
-import type { Config } from '../config/schema.js';
-import { fetchAdjacency } from '../graph/adjacency.js';
-import { asOf, bitemporalAt, knewAt, withCurrency, type ReadMode } from '../graph/read-modes.js';
-import { contentVectors, nodeCandidates, type SeedCandidate } from '../graph/seed-queries.js';
-import type { Logger } from '../logging/logger.js';
-import type { Provider, Vector } from '../providers/types.js';
-import type { SessionManager } from '../session/session-manager.js';
-import type { SqliteHandle } from '../sqlite/database.js';
-import { saveLastPack } from '../sqlite/last-pack.js';
+import type { Config } from '../../infrastructure/config/schema.js';
+import { fetchAdjacency } from '../../infrastructure/graph/adjacency.js';
+import { asOf, bitemporalAt, knewAt, withCurrency, type ReadMode } from '../../infrastructure/graph/read-modes.js';
+import { contentVectors, nodeCandidates, type SeedCandidate } from '../../infrastructure/graph/seed-queries.js';
+import type { Logger } from '../../infrastructure/logging/logger.js';
+import type { Provider, Vector } from '../../infrastructure/providers/types.js';
+import type { SessionManager } from '../../session/session-manager.js';
+import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { saveLastPack } from '../../infrastructure/sqlite/last-pack.js';
 import {
   spreadActivation,
   type ActivatedNode,
   type ActivationBudget,
   type ActivationRun,
   type AdjacencyFetch,
-} from './activation.js';
+} from '../domain/activation.js';
 import { buildRankedLists, toActivationSeed } from './candidates.js';
 import { extractCues, type CueCache, type CueExtractionResult } from './cues.js';
-import { fuse, type FusedItem, type RankedList } from './fusion.js';
-import { assemblePack, type BucketCaps } from './pack.js';
+import { fuse, type FusedItem, type RankedList } from '../domain/fusion.js';
+import { assemblePack, type BucketCaps } from '../domain/pack.js';
 import { selectSeeds, type Seed, type SeedCue } from './seeds.js';
 
 /**

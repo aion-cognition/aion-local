@@ -4,12 +4,12 @@ import { join } from 'node:path';
 import type { MemoryPack } from '@aion/protocol';
 import type { Driver } from 'neo4j-driver';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { asOf, knewAt, withCurrency } from '../graph/read-modes.js';
-import { openLogger, type Logger } from '../logging/logger.js';
-import { SqliteStore } from '../sqlite/database.js';
-import { listReinforcementSignals } from '../sqlite/reinforcement-queue.js';
-import type { ActivatedNode } from './activation.js';
-import type { FusedItem } from './fusion.js';
+import { asOf, knewAt, withCurrency } from '../../infrastructure/graph/read-modes.js';
+import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
+import { SqliteStore } from '../../infrastructure/sqlite/database.js';
+import { listReinforcementSignals } from '../../infrastructure/sqlite/reinforcement-queue.js';
+import type { ActivatedNode } from '../domain/activation.js';
+import type { FusedItem } from '../domain/fusion.js';
 import type { RecallCompletion } from './recall.js';
 import {
   RecallSideEffects,

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULTS } from '../config/defaults.js';
-import type { Config } from '../config/schema.js';
-import type { SeedCandidate } from '../graph/seed-queries.js';
-import type { ActivatedNode } from './activation.js';
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import type { Config } from '../../infrastructure/config/schema.js';
+import type { SeedCandidate } from '../../infrastructure/graph/seed-queries.js';
+import type { ActivatedNode } from '../domain/activation.js';
 import {
   buildRankedLists,
   seedCandidate,

@@ -1,6 +1,6 @@
 import type { RecallMethod } from '@aion/protocol';
 import { describe, expect, it } from 'vitest';
-import type { Vector } from '../providers/types.js';
+import type { Vector } from '../../infrastructure/providers/types.js';
 import {
   cosineSimilarity,
   fuse,

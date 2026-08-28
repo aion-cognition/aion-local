@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ScoredSeedCandidate, SeedCandidate } from '../graph/seed-queries.js';
+import type { ScoredSeedCandidate, SeedCandidate } from '../../infrastructure/graph/seed-queries.js';
 import {
   SEED_STRATEGIES,
   RECENCY_RELEVANCE,

@@ -2,27 +2,27 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { DEFAULTS } from '../config/defaults.js';
-import { fetchAdjacency } from '../graph/adjacency.js';
-import { bootstrapBackbone } from '../graph/backbone.js';
-import { supersede, writeStampedNode } from '../graph/bitemporal.js';
-import { upsertEdge } from '../graph/edges.js';
-import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../graph/episodes.js';
-import { runGraphMigrations } from '../graph/migrations.js';
-import { withCurrency } from '../graph/read-modes.js';
-import { ensureGraphSession } from '../graph/sessions.js';
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import { fetchAdjacency } from '../../infrastructure/graph/adjacency.js';
+import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
+import { supersede, writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
+import { upsertEdge } from '../../infrastructure/graph/edges.js';
+import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
+import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
+import { withCurrency } from '../../infrastructure/graph/read-modes.js';
+import { ensureGraphSession } from '../../infrastructure/graph/sessions.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
   type Neo4jHarness,
-} from '../graph/test-support/neo4j-harness.fixture.js';
-import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
+} from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
+import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   spreadActivation,
   SUPERSEDED_ACTIVATION_WEIGHT,
   type ActivationBudget,
   type AdjacencyFetch,
-} from './activation.js';
+} from '../domain/activation.js';
 
 const EMBED_DIMENSION = 8;
 const SEEDED_AT = new Date('2026-06-01T00:00:00.000Z');

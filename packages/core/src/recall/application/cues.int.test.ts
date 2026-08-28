@@ -3,9 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CueSchema, DegradationSchema } from '@aion/protocol';
 import { afterAll, describe, expect, it } from 'vitest';
-import { DEFAULTS } from '../config/defaults.js';
-import { openLogger } from '../logging/logger.js';
-import { OllamaProvider } from '../providers/ollama-provider.js';
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import { openLogger } from '../../infrastructure/logging/logger.js';
+import { OllamaProvider } from '../../infrastructure/providers/ollama-provider.js';
 import { CUE_FIXTURES } from './cues.fixtures.js';
 import { CueCache, extractCues, type CueExtractionDeps } from './cues.js';
 

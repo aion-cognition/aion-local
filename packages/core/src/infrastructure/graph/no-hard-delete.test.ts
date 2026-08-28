@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
  * to hold that line, because the rule has to survive every future task that writes Cypher.
  * This file is the sole exception, since it has to name the patterns it forbids.
  */
-const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
+const REPO_ROOT = fileURLToPath(new URL('../../../../../', import.meta.url));
 const PACKAGES_DIR = join(REPO_ROOT, 'packages');
 const THIS_FILE = fileURLToPath(import.meta.url);
 

@@ -1,7 +1,7 @@
 import type { Rationale } from '@aion/protocol';
-import type { Currency, SupersededBy } from '../graph/read-modes.js';
-import type { Vector } from '../providers/types.js';
-import { hashContent } from '../reflection/content.js';
+import type { Currency, SupersededBy } from '../../infrastructure/graph/read-modes.js';
+import type { Vector } from '../../infrastructure/providers/types.js';
+import { hashContent } from '../../reflection/domain/content.js';
 
 /**
  * Whitepaper §5.3 and §5.5. Each retrieval leg hands over its own ranked list; this module

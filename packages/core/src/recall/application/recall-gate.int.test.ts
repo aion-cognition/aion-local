@@ -2,24 +2,24 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { DEFAULTS } from '../config/defaults.js';
-import type { Config } from '../config/schema.js';
-import { bootstrapBackbone, GLOBAL_WORKSPACE_NAME } from '../graph/backbone.js';
-import { supersede } from '../graph/bitemporal.js';
-import { runGraphMigrations } from '../graph/migrations.js';
-import { withCurrency } from '../graph/read-modes.js';
-import { fulltextSeeds, vectorSeeds } from '../graph/seed-queries.js';
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import type { Config } from '../../infrastructure/config/schema.js';
+import { bootstrapBackbone, GLOBAL_WORKSPACE_NAME } from '../../infrastructure/graph/backbone.js';
+import { supersede } from '../../infrastructure/graph/bitemporal.js';
+import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
+import { withCurrency } from '../../infrastructure/graph/read-modes.js';
+import { fulltextSeeds, vectorSeeds } from '../../infrastructure/graph/seed-queries.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
   type Neo4jHarness,
-} from '../graph/test-support/neo4j-harness.fixture.js';
-import { openLogger, type Logger } from '../logging/logger.js';
-import type { Provider, Vector } from '../providers/types.js';
-import { ReflectionDispatch } from '../reflection/dispatch.js';
-import { handleReflection } from '../reflection/intake.js';
-import { SessionManager } from '../session/session-manager.js';
-import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
+} from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
+import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
+import type { Provider, Vector } from '../../infrastructure/providers/types.js';
+import { ReflectionDispatch } from '../../reflection/application/dispatch.js';
+import { handleReflection } from '../../reflection/application/intake.js';
+import { SessionManager } from '../../session/session-manager.js';
+import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { CueCache } from './cues.js';
 import { handleRecall, type RecallDeps } from './recall.js';
 

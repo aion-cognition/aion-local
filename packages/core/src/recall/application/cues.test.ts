@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CueSchema, DegradationSchema } from '@aion/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { openLogger } from '../logging/logger.js';
-import type { Provider } from '../providers/types.js';
+import { openLogger } from '../../infrastructure/logging/logger.js';
+import type { Provider } from '../../infrastructure/providers/types.js';
 import { CueCache, extractCues, type CueExtractionDeps } from './cues.js';
 
 const MODEL = 'qwen3:1.7b';

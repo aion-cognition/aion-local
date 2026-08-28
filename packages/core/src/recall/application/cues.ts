@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import type { Cue, CueSource, CueWeight, Degradation, RecallTurn } from '@aion/protocol';
 import { z } from 'zod';
-import type { Logger } from '../logging/logger.js';
-import type { ChatMessage, JsonSchema, Provider } from '../providers/types.js';
+import type { Logger } from '../../infrastructure/logging/logger.js';
+import type { ChatMessage, JsonSchema, Provider } from '../../infrastructure/providers/types.js';
 
 /**
  * Whitepaper Algorithm 1, minus the keyword fallback this build deletes by design
