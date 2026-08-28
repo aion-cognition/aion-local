@@ -48,8 +48,46 @@ const MIGRATION_001_BACKBONE_SCHEMA: GraphMigration = {
   ],
 };
 
+/**
+ * The nine whitepaper §6.7 cognitive types (Goal, Plan, Decision, Insight, Concept,
+ * Context, Event, Pattern, Trend) plus Narrative and Bridge — P3's pinned label table.
+ * Each gets its own id uniqueness constraint, matching Episode/Turn/Session/Member/
+ * Workspace in migration 001; the vector, currency-range, and `Memory`-scoped indexes
+ * already declared `FOR (n:Memory)` cover them once `labels.ts`'s `COMPANION_LABELS`
+ * carries them into `resolveLabels`, so no per-label index statement is needed here.
+ *
+ * `content_fts` is dropped and recreated under its existing name rather than replaced
+ * with a new index, so the label set can widen without leaving a stale `content_fts`
+ * behind: `IF NOT EXISTS` alone cannot redefine an index that already exists under that
+ * name. The property list is unchanged — `summary` already covers `Narrative.summary`
+ * and `text` already covers the cognitive types' text property (canonical name `text`
+ * across all nine types, chosen here since none had one yet) — only the label set grows.
+ */
+const MIGRATION_002_COGNITIVE_SCHEMA: GraphMigration = {
+  version: 2,
+  name: 'cognitive node labels, id constraints, content_fts rebuild',
+  statements: (_ctx) => [
+    'CREATE CONSTRAINT narrative_id_unique IF NOT EXISTS FOR (n:Narrative) REQUIRE n.id IS UNIQUE',
+    'CREATE CONSTRAINT goal_id_unique IF NOT EXISTS FOR (n:Goal) REQUIRE n.id IS UNIQUE',
+    'CREATE CONSTRAINT plan_id_unique IF NOT EXISTS FOR (n:Plan) REQUIRE n.id IS UNIQUE',
+    'CREATE CONSTRAINT decision_id_unique IF NOT EXISTS FOR (n:Decision) REQUIRE n.id IS UNIQUE',
+    'CREATE CONSTRAINT insight_id_unique IF NOT EXISTS FOR (n:Insight) REQUIRE n.id IS UNIQUE',
+    'CREATE CONSTRAINT concept_id_unique IF NOT EXISTS FOR (n:Concept) REQUIRE n.id IS UNIQUE',
+    'CREATE CONSTRAINT context_id_unique IF NOT EXISTS FOR (n:Context) REQUIRE n.id IS UNIQUE',
+    'CREATE CONSTRAINT event_id_unique IF NOT EXISTS FOR (n:Event) REQUIRE n.id IS UNIQUE',
+    'CREATE CONSTRAINT pattern_id_unique IF NOT EXISTS FOR (n:Pattern) REQUIRE n.id IS UNIQUE',
+    'CREATE CONSTRAINT trend_id_unique IF NOT EXISTS FOR (n:Trend) REQUIRE n.id IS UNIQUE',
+    'CREATE CONSTRAINT bridge_id_unique IF NOT EXISTS FOR (n:Bridge) REQUIRE n.id IS UNIQUE',
+    'DROP INDEX content_fts IF EXISTS',
+    `CREATE FULLTEXT INDEX content_fts IF NOT EXISTS FOR (n:Episode|Turn|Entity|Narrative|Goal|Plan|Decision|Insight|Concept|Context|Event|Pattern|Trend) ON EACH [n.summary, n.text, n.name]`,
+  ],
+};
+
 /** Ordered oldest-first; the runner applies whichever versions the meta table has no record of yet. */
-export const GRAPH_MIGRATIONS: readonly GraphMigration[] = [MIGRATION_001_BACKBONE_SCHEMA];
+export const GRAPH_MIGRATIONS: readonly GraphMigration[] = [
+  MIGRATION_001_BACKBONE_SCHEMA,
+  MIGRATION_002_COGNITIVE_SCHEMA,
+];
 
 const META_KEY_PREFIX = 'graph:migration:';
 
