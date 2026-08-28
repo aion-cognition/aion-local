@@ -29,6 +29,7 @@ type ItemOverrides = {
   readonly occurredAt?: Date;
   readonly path?: string;
   readonly superseded?: boolean;
+  readonly sourceEpisodeId?: string;
 };
 
 function item(id: string, overrides: ItemOverrides = {}): FusedItem {
@@ -45,6 +46,9 @@ function item(id: string, overrides: ItemOverrides = {}): FusedItem {
     },
     relevance: 0.8,
     score: overrides.score ?? 0.02,
+    ...(overrides.sourceEpisodeId === undefined
+      ? {}
+      : { sourceEpisodeId: overrides.sourceEpisodeId }),
     ...(overrides.superseded === true
       ? {
           currency: 'superseded' as const,
@@ -113,6 +117,38 @@ describe('per-category caps', () => {
 
     expect(pack.episodes).toBeUndefined();
     expect(pack.rendered_text).toContain('No memories matched this query.');
+  });
+});
+
+describe('turns fold into the episode they came from', () => {
+  function turnOf(episodeId: string, index: number): FusedItem {
+    return item(`${episodeId}-t${String(index)}`, {
+      labels: ['Turn', 'Memory', 'AionNode'],
+      content: `line ${String(index)} of ${episodeId}`,
+      sourceEpisodeId: episodeId,
+    });
+  }
+
+  it('spends one episode slot on an episode and its own turns', () => {
+    const pack = assemble([item('e1'), turnOf('e1', 0), turnOf('e1', 1), item('e2')]);
+
+    expect(pack.episodes?.map((entry) => entry.id)).toEqual(['e1', 'e2']);
+  });
+
+  it('keeps a chatty episode from filling the bucket by itself', () => {
+    const turns = [0, 1, 2, 3, 4].map((index) => turnOf('e1', index));
+
+    const pack = assemble([...turns, item('e2'), item('e3')], {
+      caps: { ...CAPS, episodes: 3 },
+    });
+
+    expect(pack.episodes?.map((entry) => entry.id)).toEqual(['e1-t0', 'e2', 'e3']);
+  });
+
+  it('packs a turn whose episode never surfaced, so an exact-token hit is not lost', () => {
+    const pack = assemble([turnOf('e1', 2), item('e2')]);
+
+    expect(pack.episodes?.map((entry) => entry.id)).toEqual(['e1-t2', 'e2']);
   });
 });
 

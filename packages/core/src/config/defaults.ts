@@ -7,7 +7,16 @@ import type { Config } from './schema.js';
  * `redaction.entropyThreshold` and `operational.dataDir` are not pinned by either doc;
  * they follow common secret-scanner practice (4.5 bits/char) and the compose data
  * volume mount point respectively. `operational.workerCount` is pinned at 1 by PRD §7
- * ("one worker by default").
+ * ("one worker by default"). Two values depart from their pinned defaults; each says why
+ * at the line.
+ *
+ * Reserved knobs: `recall.useContextResonance`, `recall.compressionThreshold`,
+ * `contextResonance.{resonantLimit,maxHops,activationThreshold,contextSearchThreshold}`,
+ * `hebbian.*` and `maintenance.tier3` are declared and overridable but have no reader until
+ * the phase that produces them (context resonance, narrative compression, plasticity flush,
+ * tier-3 maintenance). They are declared now because the catalog is one document and a knob
+ * that appears late is a knob whose name and range were never reviewed; setting one today
+ * changes nothing.
  */
 export const DEFAULTS: Config = {
   neo4j: {
@@ -28,7 +37,11 @@ export const DEFAULTS: Config = {
     apiKey: '',
   },
   recall: {
-    maxHops: 2,
+    // Appendix E pins 2. Raised because P2's graph routes every cross-session path through a
+    // Session hub — Episode -PARTICIPATES_IN-> Session -FOLLOWS-> Session -PARTICIPATES_IN->
+    // Episode is three hops — so at 2 the FOLLOWS chain reaches nothing but a contentless
+    // Session node. Appendix E's own resonance spread uses 3 for the same reason.
+    maxHops: 3,
     vectorLimit: 5,
     maxFacts: 15,
     maxEpisodes: 5,
@@ -45,6 +58,7 @@ export const DEFAULTS: Config = {
     cueBudgetMs: 5000,
     tokenBudget: 1200,
     minRelevance: 0.35,
+    entityMatchThreshold: 0.7,
   },
   search: {
     methods: ['vector', 'bm25', 'graph_traversal'],

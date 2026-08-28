@@ -25,6 +25,9 @@ type CandidateOverrides = {
   readonly method?: RecallMethod;
   readonly relevance?: number;
   readonly superseded?: boolean;
+  readonly activation?: number;
+  readonly structural?: boolean;
+  readonly labels?: readonly string[];
 };
 
 function candidate(id: string, overrides: CandidateOverrides = {}): FusionCandidate {
@@ -32,10 +35,12 @@ function candidate(id: string, overrides: CandidateOverrides = {}): FusionCandid
   const relevance = overrides.relevance ?? 0.8;
   const base = {
     id,
-    labels: ['Episode', 'Memory'],
+    labels: overrides.labels ?? ['Episode', 'Memory'],
     content: overrides.content ?? `content of ${id}`,
-    rationale: { method, score: relevance },
+    rationale: { method, score: overrides.activation ?? relevance },
     relevance,
+    ...(overrides.activation === undefined ? {} : { activation: overrides.activation }),
+    ...(overrides.structural === undefined ? {} : { isStructural: overrides.structural }),
   };
   if (overrides.superseded !== true) {
     return { ...base, currency: 'current' as const };
@@ -132,6 +137,71 @@ describe('the minimum relevance floor', () => {
     // The RRF score is ~0.016; a floor read against it would empty every pack.
     expect(fused[0]?.score).toBeLessThan(0.35);
     expect(ids(fused)).toEqual(['strong']);
+  });
+});
+
+describe('traversal admission', () => {
+  /** The gate-scale shape: a strong direct hit, plus a node only the spread reached. */
+  function anchoredRun(anchorRelevance: number) {
+    return fuse(
+      [
+        list('vector', [candidate('anchor', { relevance: anchorRelevance })]),
+        list('graph_traversal', [
+          candidate('anchor', { relevance: anchorRelevance }),
+          candidate('reached', { method: 'activation', relevance: 0, activation: 0.29 }),
+        ]),
+      ],
+      { ...RRF, minRelevance: 0.35 },
+    );
+  }
+
+  it('surfaces a node only traversal found, under an activation score the floor would reject', () => {
+    const fused = anchoredRun(0.8);
+
+    expect(ids(fused)).toEqual(['anchor', 'reached']);
+    expect(fused[1]?.rationale.method).toBe('activation');
+  });
+
+  it('surfaces nothing when no hit cleared the floor, so traversal cannot fill an empty pack', () => {
+    expect(anchoredRun(0.2)).toEqual([]);
+  });
+
+  it('still drops a seed whose only strategy measured nothing', () => {
+    const fused = fuse(
+      [
+        list('vector', [candidate('anchor', { relevance: 0.8 })]),
+        list('graph_traversal', [
+          candidate('anchor', { relevance: 0.8 }),
+          candidate('recent', { method: 'recency', relevance: 0 }),
+        ]),
+      ],
+      { ...RRF, minRelevance: 0.35 },
+    );
+
+    expect(ids(fused)).toEqual(['anchor']);
+  });
+});
+
+describe('structural nodes', () => {
+  it('never packs the backbone, however strongly the spread activated it', () => {
+    const fused = fuse(
+      [
+        list('vector', [candidate('episode', { relevance: 0.8 })]),
+        list('graph_traversal', [
+          candidate('member', {
+            method: 'activation',
+            labels: ['Member', 'Entity'],
+            relevance: 0,
+            activation: 1.71,
+            structural: true,
+          }),
+          candidate('episode', { relevance: 0.8 }),
+        ]),
+      ],
+      { ...RRF, minRelevance: 0.35 },
+    );
+
+    expect(ids(fused)).toEqual(['episode']);
   });
 });
 

@@ -13,8 +13,12 @@ describe('loadConfig defaults', () => {
   });
 
   it('never mutates the shared DEFAULTS object across calls', () => {
+    const before = DEFAULTS.recall.maxHops;
+
     loadConfig({ AION_RECALL_MAX_HOPS: '9' });
-    expect(DEFAULTS.recall.maxHops).toBe(2);
+
+    expect(DEFAULTS.recall.maxHops).toBe(before);
+    expect(DEFAULTS.recall.maxHops).not.toBe(9);
   });
 });
 

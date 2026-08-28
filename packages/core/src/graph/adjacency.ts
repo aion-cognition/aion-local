@@ -1,6 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 import { runRead, type GraphStatement } from './connection.js';
 import { BASE_NODE_LABEL } from './labels.js';
+import { STRUCTURAL_PROPERTY } from './seed-queries.js';
 import {
   readCurrencyAnnotation,
   readModeFragment,
@@ -24,12 +25,18 @@ export type AdjacencyNeighbor = {
   readonly confidence: number;
   readonly degree: number;
   readonly currency: CurrencyAnnotation;
+  /** The Member and the global Workspace. Traversed like any node, never packed or reinforced. */
+  readonly isStructural: boolean;
 };
 
 export type AdjacencyRequest = {
   /** The whole frontier batch: spreading activation fetches per iteration, never per node. */
   readonly frontier: readonly string[];
-  /** Already-expanded ids, excluded server-side so a visited node never rides back over the wire. */
+  /**
+   * Expanded in an *earlier* ring. Algorithm 2 propagates to any neighbour not yet in V, and a
+   * peer selected in this same batch is still in the frontier at that moment, so excluding the
+   * batch here would drop exactly the intra-ring edges multi-path accumulation is built on.
+   */
   readonly visited: readonly string[];
   readonly mode: ReadMode;
 };
@@ -70,6 +77,7 @@ export function buildAdjacencyStatement(request: AdjacencyRequest): GraphStateme
     `       coalesce(r.strength, ${ABSENT_PROPORTION}) AS strength,`,
     `       coalesce(r.confidence, ${ABSENT_PROPORTION}) AS confidence,`,
     '       COUNT { (m)--() } AS degree,',
+    `       m.${STRUCTURAL_PROPERTY} AS is_structural,`,
     `       ${fragment.projection}`,
   ].join('\n');
 
@@ -92,6 +100,7 @@ function mapNeighbor(row: Row): AdjacencyNeighbor {
     confidence: row.confidence as number,
     degree: row.degree as number,
     currency: readCurrencyAnnotation(row),
+    isStructural: row.is_structural === true,
   };
 }
 

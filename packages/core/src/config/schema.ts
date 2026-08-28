@@ -44,6 +44,12 @@ export const ConfigSchema = z.object({
     cueBudgetMs: positiveInt,
     tokenBudget: positiveInt,
     minRelevance: proportion,
+    /**
+     * Not an Appendix E parameter. Entity resolution's fuzzy leg needs a name-similarity floor
+     * of its own; borrowing `contextResonance.contextSearchThreshold` would make one env var
+     * mean two unrelated things once Algorithm 3 lands.
+     */
+    entityMatchThreshold: proportion,
   }),
   search: z.object({
     methods: z.array(searchMethod).min(1),

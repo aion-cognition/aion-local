@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { MemoryPack } from '@aion/protocol';
 import type { Driver } from 'neo4j-driver';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { asOf, knewAt, withCurrency } from '../graph/read-modes.js';
 import { openLogger, type Logger } from '../logging/logger.js';
 import { SqliteStore } from '../sqlite/database.js';
 import { listReinforcementSignals } from '../sqlite/reinforcement-queue.js';
@@ -28,8 +29,15 @@ const EMPTY_PACK: MemoryPack = {
   },
 };
 
-function activatedNode(nodeId: string, score = 1): ActivatedNode {
-  return { nodeId, score, hops: 0, pathSummary: nodeId, currency: { currency: 'current' } };
+function activatedNode(nodeId: string, score = 1, isStructural = false): ActivatedNode {
+  return {
+    nodeId,
+    score,
+    hops: 0,
+    pathSummary: nodeId,
+    currency: { currency: 'current' },
+    isStructural,
+  };
 }
 
 function fusedItem(id: string): FusedItem {
@@ -52,6 +60,7 @@ function completion(overrides: Partial<RecallCompletion> = {}): RecallCompletion
     items: [],
     pack: EMPTY_PACK,
     now: NOW,
+    mode: withCurrency(),
     ...overrides,
   };
 }
@@ -82,6 +91,26 @@ describe('reinforcementPairs', () => {
     for (let index = REINFORCEMENT_TOP_N; index < activated.length; index += 1) {
       expect(involved.has(`n${String(index)}`)).toBe(false);
     }
+  });
+
+  it('leaves the backbone out of the fan-out entirely', () => {
+    const pairs = reinforcementPairs([
+      activatedNode('member', 1.7, true),
+      activatedNode('workspace', 1.6, true),
+      activatedNode('episode-a', 0.9),
+      activatedNode('episode-b', 0.8),
+    ]);
+
+    expect(pairs).toEqual([['episode-a', 'episode-b']]);
+  });
+
+  it('does not spend the top-N budget on structural nodes', () => {
+    const structural = Array.from({ length: REINFORCEMENT_TOP_N }, (_, index) =>
+      activatedNode(`s${String(index)}`, 2 - index * 0.01, true),
+    );
+    const pairs = reinforcementPairs([...structural, activatedNode('a', 0.9), activatedNode('b', 0.8)]);
+
+    expect(pairs).toEqual([['a', 'b']]);
   });
 });
 
@@ -164,6 +193,22 @@ describe('RecallSideEffects', () => {
     sideEffects.onRecalled(completion({ items: [] }));
     await sideEffects.whenIdle();
 
+    expect(calls).toHaveLength(0);
+  });
+
+  it('writes nothing at all on a time-travel recall', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const sideEffects = new RecallSideEffects(fakeDriver(calls), store.db, logger);
+    const surfaced = {
+      activated: [activatedNode('a'), activatedNode('b')],
+      items: [fusedItem('a')],
+    };
+
+    sideEffects.onRecalled(completion({ ...surfaced, mode: asOf(new Date('2026-03-01T00:00:00.000Z')) }));
+    sideEffects.onRecalled(completion({ ...surfaced, mode: knewAt(new Date('2026-03-01T00:00:00.000Z')) }));
+    await sideEffects.whenIdle();
+
+    expect(listReinforcementSignals(store.db)).toEqual([]);
     expect(calls).toHaveLength(0);
   });
 

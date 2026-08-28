@@ -25,6 +25,7 @@ type Fixture = {
   readonly superseded?: Readonly<Record<string, string>>;
   /** Overrides the degree the fixture would otherwise derive, for hub cases. */
   readonly degrees?: Readonly<Record<string, number>>;
+  readonly structural?: readonly string[];
 };
 
 type FetchRequest = {
@@ -41,6 +42,8 @@ const BASE_BUDGET: ActivationBudget = {
   maxNodesVisited: 500,
   hubThreshold: 10,
   maxHops: 2,
+  associationStrength: 0.5,
+  maxActivated: 50,
 };
 
 function withBudget(overrides: Partial<ActivationBudget>): ActivationBudget {
@@ -90,6 +93,7 @@ function neighborsFor(fixture: Fixture, request: FetchRequest): AdjacencyNeighbo
         confidence: edge.confidence ?? 1,
         degree: degreeOf(fixture, nodeId),
         currency: annotationFor(fixture, nodeId),
+        isStructural: fixture.structural?.includes(nodeId) === true,
       });
     }
   }
@@ -157,7 +161,14 @@ describe('spreadActivation', () => {
     });
 
     expect(run.activated).toEqual([
-      { nodeId: 'seed-a', score: 1, hops: 0, pathSummary: 'seed-a', currency: { currency: 'current' } },
+      {
+        nodeId: 'seed-a',
+        score: 1,
+        hops: 0,
+        pathSummary: 'seed-a',
+        currency: { currency: 'current' },
+        isStructural: false,
+      },
     ]);
     expect(run.termination).toBe('frontier_exhausted');
   });
@@ -187,6 +198,66 @@ describe('spreadActivation', () => {
 
     expect(scoreOf(onlyPath, 'shared')).toBeCloseTo(0.9 * 0.7, 10);
     expect(scoreOf(twoPaths, 'shared')).toBeCloseTo(scoreOf(onlyPath, 'shared') * 2, 10);
+  });
+
+  it('counts an edge between two nodes of the same frontier ring, once, in selection order', async () => {
+    // Both seeds expand in one batch. Algorithm 2 moves one node into V at a time, so the peer
+    // still in the frontier receives activation and does not send it back.
+    const run = await spreadActivation(
+      fetchOver({ edges: [{ from: 'seed-a', to: 'seed-b', type: 'PARTICIPATES_IN' }] }),
+      { seeds: [{ nodeId: 'seed-a' }, { nodeId: 'seed-b' }], budget: withBudget({ maxHops: 1 }) },
+    );
+
+    expect(scoreOf(run, 'seed-a')).toBe(1);
+    expect(scoreOf(run, 'seed-b')).toBeCloseTo(1 + 0.9 * 0.7, 10);
+  });
+
+  it('does not traverse an association weaker than the strength floor', async () => {
+    const fixture: Fixture = {
+      edges: [
+        { from: 'seed', to: 'faded', type: 'RELATED_TO', strength: 0.2 },
+        { from: 'seed', to: 'held', type: 'RELATED_TO', strength: 0.9 },
+      ],
+    };
+
+    const run = await spreadActivation(fetchOver(fixture), {
+      seeds: [{ nodeId: 'seed' }],
+      budget: withBudget({ maxHops: 1, associationStrength: 0.5 }),
+    });
+
+    expect(run.activated.map((node) => node.nodeId)).toEqual(['seed', 'held']);
+  });
+
+  it('cuts the activated set to the configured limit, keeping the strongest', async () => {
+    const fixture: Fixture = {
+      edges: [0, 1, 2, 3].map((index) => ({
+        from: 'seed',
+        to: `n${String(index)}`,
+        type: index === 0 ? 'PARTICIPATES_IN' : 'MENTIONS',
+      })),
+    };
+
+    const run = await spreadActivation(fetchOver(fixture), {
+      seeds: [{ nodeId: 'seed' }],
+      budget: withBudget({ maxHops: 1, maxActivated: 2 }),
+    });
+
+    expect(run.activated.map((node) => node.nodeId)).toEqual(['seed', 'n0']);
+  });
+
+  it('carries the structural flag off the adjacency read', async () => {
+    const fixture: Fixture = {
+      edges: [{ from: 'seed', to: 'member', type: 'INITIATED_BY' }],
+      structural: ['member'],
+    };
+
+    const run = await spreadActivation(fetchOver(fixture), {
+      seeds: [{ nodeId: 'seed' }],
+      budget: withBudget({ maxHops: 1 }),
+    });
+
+    expect(run.activated.find((node) => node.nodeId === 'member')?.isStructural).toBe(true);
+    expect(run.activated.find((node) => node.nodeId === 'seed')?.isStructural).toBe(false);
   });
 
   it('inhibits a hub in proportion to its connectivity', async () => {
@@ -363,6 +434,7 @@ function neighbor(overrides: Partial<AdjacencyNeighbor>): AdjacencyNeighbor {
     confidence: 1,
     degree: 1,
     currency: { currency: 'current' },
+    isStructural: false,
     ...overrides,
   };
 }
