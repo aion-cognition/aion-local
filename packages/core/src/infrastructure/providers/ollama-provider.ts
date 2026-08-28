@@ -11,6 +11,22 @@ function normalizeBaseUrl(url: string): string {
 }
 
 /**
+ * Measured against Ollama 0.24.0 + `nomic-embed-text`: every word carrying an uppercase
+ * letter tokenizes to one out-of-vocabulary token, so `Redis`, `Dog`, `Apple` and
+ * `Thandiwe Baptiste` all return the same 768 floats, byte for byte, while their lowercase
+ * forms embed distinctly. The model's vocabulary is uncased and nothing lowercases ahead of
+ * it, which silently collapses every proper noun — exactly what entity identity, dedup, and
+ * recall need to tell apart.
+ *
+ * Folding here rather than at a call site is what keeps stored and query vectors on the same
+ * footing: an asymmetric fold would score a document against a differently-tokenized query.
+ * Case folding on whole text, not term derivation — nothing is split, stemmed, or dropped.
+ */
+function foldForEmbedding(text: string): string {
+  return text.toLowerCase();
+}
+
+/**
  * Local-only implementation of `Provider` over Ollama's HTTP API. `generate` always
  * sets the chat `format` field to the caller's JSON Schema (structured output), kept
  * generic here because the cue pipeline that drives it lands in P2.
@@ -34,7 +50,7 @@ export class OllamaProvider implements Provider {
     const response = await this.fetchImpl(`${this.baseUrl}/api/embed`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ model: this.embedModel, input: texts }),
+      body: JSON.stringify({ model: this.embedModel, input: texts.map(foldForEmbedding) }),
     });
     if (!response.ok) {
       throw new Error(`Ollama embed request failed: ${response.status} ${await response.text()}`);
