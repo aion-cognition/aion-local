@@ -9,6 +9,7 @@ import { ReflectionQueueClaimant } from '../../infrastructure/sqlite/claim.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { listReflectionJobs } from '../../infrastructure/sqlite/reflection-queue.js';
 import { ReflectionDispatch, type ReflectionJobSignal } from './dispatch.js';
+import { ReflectionNotStoredError } from './errors.js';
 import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
 import { FakeGraph } from '../test-support/fake-graph.fixture.js';
 
@@ -248,5 +249,90 @@ describe('reflection intake dedupe', () => {
     );
 
     expect(second.episode_id).not.toBe(first.episode_id);
+  });
+});
+
+/**
+ * The probe that produced these: with Ollama dead, intake failed with a bare `TypeError`
+ * and the caller was told nothing about what happened to the experience it handed over.
+ * Nothing is stored in either outage — the episode is embedded before the write opens, and
+ * the queue row is keyed on an episode id that is never minted — so the report has to say
+ * so, or an agent will assume its reflection is pending and never send it again.
+ */
+describe('reflection intake when a dependency is down', () => {
+  function unreachableDriver(error: Error): ReflectionIntakeDeps['driver'] {
+    return {
+      executeQuery: () => Promise.reject(error),
+      session: () => {
+        throw error;
+      },
+    } as unknown as ReflectionIntakeDeps['driver'];
+  }
+
+  function depsWith(driver: ReflectionIntakeDeps['driver']): ReflectionIntakeDeps {
+    return {
+      ...deps,
+      driver,
+      sessions: new SessionManager(driver, { memberId: MEMBER_ID, workspaceId: WORKSPACE_ID }),
+    };
+  }
+
+  async function failureOf(intake: ReflectionIntakeDeps): Promise<unknown> {
+    return handleReflection(intake, PAYLOAD, { identity: 'session-a' }).then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+  }
+
+  it('names the embedding call and reports that nothing was stored or queued', async () => {
+    embed.mockRejectedValueOnce(new Error('fetch failed'));
+
+    const error = await failureOf(deps);
+
+    expect(error).toBeInstanceOf(ReflectionNotStoredError);
+    expect((error as ReflectionNotStoredError).stage).toBe('embed');
+    expect((error as Error).message).toContain('nothing was queued');
+    expect((error as Error).cause).toBeInstanceOf(Error);
+    expect(graph.nodesWithLabel('Episode')).toEqual([]);
+    expect(listReflectionJobs(db)).toEqual([]);
+    expect(signals).toEqual([]);
+  });
+
+  it('names the graph when no query could reach it', async () => {
+    const unreachable = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:7687'), {
+      code: 'ServiceUnavailable',
+    });
+
+    const error = await failureOf(depsWith(unreachableDriver(unreachable)));
+
+    expect(error).toBeInstanceOf(ReflectionNotStoredError);
+    expect((error as ReflectionNotStoredError).stage).toBe('graph');
+    expect((error as Error).message).toContain('nothing was queued');
+    expect(listReflectionJobs(db)).toEqual([]);
+  });
+
+  it('names the graph when the connection pool timed out rather than refusing', async () => {
+    const timedOut = Object.assign(
+      new Error('Connection acquisition timed out in 10000 ms. Pool status: Active conn count = 0'),
+      { code: 'N/A' },
+    );
+
+    const error = await failureOf(depsWith(unreachableDriver(timedOut)));
+
+    expect((error as ReflectionNotStoredError).stage).toBe('graph');
+  });
+
+  // A statement the server answered and refused is a defect in this build, not an outage,
+  // and relabelling it "send it again once the service is back" would send the caller in
+  // circles.
+  it('passes a rejection the graph itself made through unchanged', async () => {
+    const rejected = Object.assign(new Error('constraint violated'), {
+      code: 'Neo.ClientError.Schema.ConstraintValidationFailed',
+    });
+
+    const error = await failureOf(depsWith(unreachableDriver(rejected)));
+
+    expect(error).toBe(rejected);
+    expect(error).not.toBeInstanceOf(ReflectionNotStoredError);
   });
 });

@@ -1,7 +1,14 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { assemblePack, openLogger, type BucketCaps, type FusedItem, type Logger } from '@aion/core';
+import {
+  assemblePack,
+  openLogger,
+  ReflectionNotStoredError,
+  type BucketCaps,
+  type FusedItem,
+  type Logger,
+} from '@aion/core';
 import { MemoryPackSchema, type Cue, type MemoryPack, type StageTimingsMs } from '@aion/protocol';
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
@@ -164,6 +171,23 @@ describe('error mapping', () => {
 
     expect((err as McpError).code).toBe(ErrorCode.InternalError);
     expect((err as McpError).message).toContain('TypeError');
+    expect((err as McpError).message).not.toContain(SECRET_QUERY);
+  });
+
+  // The class name is all the caller used to get, and "reflection failed (TypeError)" does
+  // not say whether the experience was kept. This one message does.
+  it('carries the reflection-not-stored message through to the caller', async () => {
+    const err = await callTool(
+      backendThrowing(new ReflectionNotStoredError('embed', new TypeError('fetch failed'))),
+      logger,
+      'reflection',
+      { observations: [SECRET_QUERY] },
+      'session-a',
+    ).catch((caught: unknown) => caught);
+
+    expect((err as McpError).code).toBe(ErrorCode.InternalError);
+    expect((err as McpError).message).toContain('reflection not stored');
+    expect((err as McpError).message).toContain('nothing was queued');
     expect((err as McpError).message).not.toContain(SECRET_QUERY);
   });
 

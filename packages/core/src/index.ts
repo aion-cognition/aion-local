@@ -91,6 +91,7 @@ export {
   GraphWriteError,
   VectorIndexDimensionMismatchError,
   VectorIndexMissingError,
+  isGraphUnavailable,
 } from './infrastructure/graph/errors.js';
 
 export {
@@ -222,6 +223,9 @@ export {
   handleReflection,
 } from './reflection/application/intake.js';
 export type { ReflectionIntakeDeps, ReflectionIntakeOptions } from './reflection/application/intake.js';
+
+export { ReflectionNotStoredError } from './reflection/application/errors.js';
+export type { ReflectionFailureStage } from './reflection/application/errors.js';
 
 export { ReflectionDispatch } from './reflection/application/dispatch.js';
 export type {
