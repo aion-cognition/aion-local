@@ -1,0 +1,121 @@
+import type { Driver } from 'neo4j-driver';
+import { recordAccess } from '../graph/access-tracking.js';
+import type { Logger } from '../logging/logger.js';
+import type { SqliteHandle } from '../sqlite/database.js';
+import { enqueueReinforcementSignal } from '../sqlite/reinforcement-queue.js';
+import type { ActivatedNode } from './activation.js';
+import type { RecallCompletion, RecallListener } from './recall.js';
+
+/**
+ * Whitepaper §5.8's two recall-hot-path side effects, wired through `RecallDeps.onRecalled`
+ * so `handleRecall` itself stays free of a second Neo4j round trip. Reinforcement rows are
+ * cheap local SQLite inserts and are written inline from the listener; the access-tracking
+ * write is a real network round trip, so it is deferred and never awaited by the listener —
+ * `whenIdle()` is the only way to observe it finishing, and only tests should call it.
+ * Construct one instance per process, the same lifetime as `SessionManager` and `CueCache`.
+ */
+
+/**
+ * Only the top-ranked slice of the co-activated set enters the pairwise fan-out. The
+ * activated set can run into the hundreds on a well-populated graph, and pairing all of it
+ * is O(n^2) queue rows for a signal whose value is "these few things fired strongly
+ * together" — nodes far down the activation curve barely co-fired at all.
+ */
+export const REINFORCEMENT_TOP_N = 10;
+
+/** Whitepaper §7.3's name for this trigger source, distinct from reflection's co-occurrence signal. */
+export const REINFORCEMENT_TRIGGER = 'recall_co_activation';
+
+/**
+ * Every pair among the top-N activated nodes, ordered by rank so the same activation result
+ * enqueues the same pairs in the same order. `activated` arrives score-descending
+ * (`activation.ts`'s `collect`), so slicing to `REINFORCEMENT_TOP_N` first keeps the
+ * strongest co-activations and drops the long tail rather than sampling it arbitrarily.
+ */
+export function reinforcementPairs(
+  activated: readonly ActivatedNode[],
+): ReadonlyArray<readonly [string, string]> {
+  const top = activated.slice(0, REINFORCEMENT_TOP_N);
+  const pairs: Array<readonly [string, string]> = [];
+  for (let i = 0; i < top.length; i += 1) {
+    for (let j = i + 1; j < top.length; j += 1) {
+      const source = top[i];
+      const target = top[j];
+      if (source === undefined || target === undefined) {
+        continue;
+      }
+      pairs.push([source.nodeId, target.nodeId]);
+    }
+  }
+  return pairs;
+}
+
+export class RecallSideEffects {
+  readonly #driver: Driver;
+  readonly #db: SqliteHandle;
+  readonly #logger: Logger;
+  /** Chained so `whenIdle()` waits for every write scheduled so far, not just the latest. */
+  #pending: Promise<void> = Promise.resolve();
+
+  constructor(driver: Driver, db: SqliteHandle, logger: Logger) {
+    this.#driver = driver;
+    this.#db = db;
+    this.#logger = logger;
+  }
+
+  /** Bound as a class field so it can be assigned directly to `RecallDeps.onRecalled`. */
+  readonly onRecalled: RecallListener = (completion) => {
+    this.#enqueueReinforcement(completion);
+    this.#scheduleAccessTracking(completion);
+  };
+
+  /**
+   * Resolves once every access-tracking write scheduled so far has settled. Production
+   * wiring never calls this — `onRecalled` is fire-and-forget by `recall.ts`'s own
+   * contract. Tests call it after `handleRecall` returns to observe the deferred write
+   * without a sleep: `await handleRecall(...); await sideEffects.whenIdle();`.
+   */
+  async whenIdle(): Promise<void> {
+    await this.#pending;
+  }
+
+  #enqueueReinforcement(completion: RecallCompletion): void {
+    try {
+      const ts = completion.now.toISOString();
+      for (const [sourceId, targetId] of reinforcementPairs(completion.activated)) {
+        enqueueReinforcementSignal(this.#db, sourceId, targetId, REINFORCEMENT_TRIGGER, ts);
+      }
+    } catch (err) {
+      this.#logger.warn({ err }, 'recall reinforcement enqueue failed');
+    }
+  }
+
+  /**
+   * Deferred with `setImmediate` so the write genuinely starts after `handleRecall`'s
+   * caller has already received the pack, not merely after this synchronous listener
+   * returns — `recall.ts`'s `notify` invokes `onRecalled` without awaiting it, but a
+   * synchronous listener body still runs to completion before `handleRecall`'s `return`.
+   * Ids come from the fused, surfaced set (`completion.items`), not the trimmed pack: a
+   * memory recall judged relevant enough to rank counts as accessed even when the token
+   * budget cut it from the rendered text.
+   */
+  #scheduleAccessTracking(completion: RecallCompletion): void {
+    const ids = [...new Set(completion.items.map((item) => item.id))];
+    if (ids.length === 0) {
+      return;
+    }
+    const { now } = completion;
+    this.#pending = this.#pending.then(
+      () =>
+        new Promise<void>((resolve) => {
+          setImmediate(() => {
+            recordAccess(this.#driver, { ids, now })
+              .catch((err: unknown) => {
+                this.#logger.warn({ err }, 'recall access-tracking write failed');
+              })
+              .finally(resolve);
+          });
+        }),
+    );
+  }
+}
