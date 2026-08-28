@@ -5,8 +5,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
 import { BITEMPORAL_PROPERTIES, supersede, writeStampedNode } from './bitemporal.js';
 import { GraphConnection, runRead, runWrite } from './connection.js';
-import { upsertEdge } from './edges.js';
+import { buildEdgeUpsert, upsertEdge } from './edges.js';
 import { GraphNodeNotFoundError } from './errors.js';
+import { BASE_NODE_LABEL } from './labels.js';
 import { runGraphMigrations } from './migrations.js';
 import {
   asOf,
@@ -75,6 +76,22 @@ async function countEdges(type: string, a: string, b: string): Promise<number> {
   return rows[0] ?? 0;
 }
 
+type PlanNode = { operatorType: string; children: readonly PlanNode[] };
+
+/** The driver suffixes each operator with the database it planned against (`Projection@neo4j`). */
+function planOperators(plan: PlanNode): string[] {
+  return [plan.operatorType.split('@')[0] ?? plan.operatorType, ...plan.children.flatMap(planOperators)];
+}
+
+async function explainOperators(cypher: string, parameters: Record<string, unknown>): Promise<string[]> {
+  const result = await harness.driver.executeQuery(`EXPLAIN ${cypher}`, parameters);
+  const plan = result.summary.plan as unknown as PlanNode | false;
+  if (plan === false) {
+    throw new Error('the server returned no plan for the statement');
+  }
+  return planOperators(plan);
+}
+
 async function nodeProperty(id: string, property: string): Promise<unknown> {
   const rows = await runRead(
     harness.driver,
@@ -122,8 +139,8 @@ describe('node writes', () => {
       properties: { name_norm: 'ryan', type: 'member' },
       mergeProperties: { is_structural: true },
     });
-    expect([...episode.labels].sort()).toEqual(['Episode', 'Memory']);
-    expect([...member.labels].sort()).toEqual(['Entity', 'Member']);
+    expect([...episode.labels].sort()).toEqual([BASE_NODE_LABEL, 'Episode', 'Memory'].sort());
+    expect([...member.labels].sort()).toEqual([BASE_NODE_LABEL, 'Entity', 'Member'].sort());
     expect(await nodeProperty('node-labels-member', 'is_structural')).toBe(true);
   });
 
@@ -250,6 +267,23 @@ describe('edge merge policy', () => {
     expect(await countEdges('SIMILAR', 'edge-b', 'edge-c')).toBe(1);
   });
 
+  it('seeks an index for both endpoints rather than scanning every node twice', async () => {
+    const statement = buildEdgeUpsert({
+      type: 'MENTIONS',
+      sourceId: 'edge-a',
+      targetId: 'edge-b',
+      strength: 0.5,
+      confidence: 0.5,
+      signals: ['episodic'],
+      provenance: ['intake'],
+    });
+
+    const operators = await explainOperators(statement.cypher, statement.parameters);
+
+    expect(operators).not.toContain('AllNodesScan');
+    expect(operators.filter((operator) => operator.startsWith('NodeUniqueIndexSeek'))).toHaveLength(2);
+  });
+
   it('names the missing endpoint instead of silently writing nothing', async () => {
     await expect(
       upsertEdge(harness.driver, {
@@ -348,6 +382,15 @@ describe('supersession', () => {
 
     const afterBoth = await readEpisodes(knewAt(new Date('2026-04-01T00:00:00.000Z')), ['sup-old', 'sup-new']);
     expect(afterBoth.map((row) => row.id)).toEqual(['sup-new']);
+  });
+
+  it('marks what the substrate then believed as current, with no lineage it did not have yet', async () => {
+    const midway = await readEpisodes(knewAt(new Date('2026-02-01T00:00:00.000Z')), ['sup-old']);
+    expect(midway[0]?.currency).toBe('current');
+    expect(midway[0]?.supersededBy).toBeUndefined();
+
+    const afterBoth = await readEpisodes(knewAt(new Date('2026-04-01T00:00:00.000Z')), ['sup-new']);
+    expect(afterBoth[0]?.currency).toBe('current');
   });
 });
 

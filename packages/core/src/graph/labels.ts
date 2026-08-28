@@ -9,6 +9,14 @@
 
 export type NodeLabel = 'Session' | 'Episode' | 'Turn' | 'Entity' | 'Member' | 'Workspace';
 
+/**
+ * Carried by every node, whatever its type, so a lookup by id alone can seek an index:
+ * Neo4j indexes are label-scoped and there is no label-free property index, so the
+ * type-agnostic id matches (both edge endpoints, the supersession close) would otherwise
+ * plan as all-nodes scans. Migration 001 declares the uniqueness constraint behind it.
+ */
+export const BASE_NODE_LABEL = 'AionNode';
+
 export const NODE_LABELS: readonly NodeLabel[] = [
   'Session',
   'Episode',
@@ -27,9 +35,9 @@ const COMPANION_LABELS: Record<NodeLabel, readonly string[]> = {
   Workspace: ['Entity'],
 };
 
-/** Primary label first, then its companions. Used verbatim in the Cypher label list. */
+/** Primary label first, then its companions, then the base label. Used verbatim in the Cypher label list. */
 export function resolveLabels(primary: NodeLabel): readonly string[] {
-  return [primary, ...COMPANION_LABELS[primary]];
+  return [primary, ...COMPANION_LABELS[primary], BASE_NODE_LABEL];
 }
 
 /** True when the label's nodes carry `Memory` and therefore land in the vector and currency indexes. */

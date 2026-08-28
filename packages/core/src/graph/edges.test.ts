@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildEdgeUpsert, type EdgeUpsert } from './edges.js';
 import { GraphWriteError } from './errors.js';
+import { BASE_NODE_LABEL } from './labels.js';
 import { UNDIRECTED_RELATIONSHIP_TYPES } from './relationships.js';
 
 function clause(cypher: string, keyword: string): string {
@@ -23,6 +24,12 @@ const BASE: EdgeUpsert = {
 };
 
 describe('buildEdgeUpsert policy clauses', () => {
+  it('resolves both endpoints through the indexed base label', () => {
+    const { cypher } = buildEdgeUpsert(BASE);
+    expect(cypher).toContain(`MATCH (a:${BASE_NODE_LABEL} { id: $sourceId })`);
+    expect(cypher).toContain(`MATCH (b:${BASE_NODE_LABEL} { id: $targetId })`);
+  });
+
   it('takes the maximum of strength and confidence on collision', () => {
     const { cypher } = buildEdgeUpsert(BASE);
     expect(cypher).toContain(

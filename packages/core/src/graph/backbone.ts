@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Driver } from 'neo4j-driver';
-import { writeStampedNode, type StampedNodeResult } from './bitemporal.js';
+import { BITEMPORAL_PROPERTIES, writeStampedNode, type StampedNodeResult } from './bitemporal.js';
 import { runRead } from './connection.js';
 
 /** PRD §5.3: the workspace is a fixed singleton, not a user-supplied name. */
@@ -19,56 +19,73 @@ export type BootstrapBackboneResult = {
   readonly workspace: StampedNodeResult;
 };
 
+/** Collapses whitespace and trims, keeping the case the user typed. */
+function displayName(name: string): string {
+  return name.trim().replace(/\s+/g, ' ');
+}
+
 function normalizeEntityName(name: string): string {
-  return name.trim().toLowerCase().replace(/\s+/g, ' ');
+  return displayName(name).toLowerCase();
 }
 
 /**
  * Member and Workspace are true singletons: at most one of each will ever exist.
  * `writeStampedNode` merges on (label, id), so a fresh `randomUUID()` every call would
- * create a second node instead of finding the first; resolving the id by the same
- * `name_norm` the `entity_name_type_unique` constraint keys on is what makes a repeat
- * bootstrap land on the existing node.
+ * create a second node instead of finding the first. The label alone identifies the
+ * singleton — resolving by name would fork the backbone the first time a name changes
+ * (a corrected git identity, a typo at the init prompt), leaving prior sessions hanging
+ * off an orphaned Member. Earliest-stamped wins so the choice is stable across runs.
  */
 async function resolveSingletonId(
   driver: Driver,
   label: 'Member' | 'Workspace',
-  nameNorm: string,
 ): Promise<string | undefined> {
   const rows = await runRead(
     driver,
-    `MATCH (n:${label} { name_norm: $nameNorm }) RETURN n.id AS id`,
-    { nameNorm },
+    `MATCH (n:${label}) RETURN n.id AS id ORDER BY n.${BITEMPORAL_PROPERTIES.txFrom}, n.id LIMIT 1`,
+    {},
     (row) => row.id as string,
   );
   return rows[0];
 }
 
-/** Whitepaper §4.2 / PRD §5.3: the single-user shadow of the structural backbone, created at init. */
+/**
+ * Whitepaper §4.2 / PRD §5.3: the single-user shadow of the structural backbone, created
+ * at init. A changed member name renames the one node rather than superseding it: the
+ * Member is an identity that every session edge points at, and its name is a label on
+ * that identity, not a fact about the world that can be current or stale.
+ */
 export async function bootstrapBackbone(
   driver: Driver,
   input: BootstrapBackboneInput,
 ): Promise<BootstrapBackboneResult> {
   const now = input.now ?? new Date();
 
-  const memberNameNorm = normalizeEntityName(input.memberName);
-  const memberId = (await resolveSingletonId(driver, 'Member', memberNameNorm)) ?? randomUUID();
+  const memberName = displayName(input.memberName);
+  const memberId = (await resolveSingletonId(driver, 'Member')) ?? randomUUID();
   const member = await writeStampedNode(driver, {
     label: 'Member',
     id: memberId,
     now,
-    properties: { name: input.memberName, name_norm: memberNameNorm, type: MEMBER_ENTITY_TYPE },
-    mergeProperties: { is_structural: true },
+    properties: { type: MEMBER_ENTITY_TYPE },
+    mergeProperties: {
+      is_structural: true,
+      name: memberName,
+      name_norm: normalizeEntityName(memberName),
+    },
   });
 
-  const workspaceNameNorm = normalizeEntityName(GLOBAL_WORKSPACE_NAME);
-  const workspaceId = (await resolveSingletonId(driver, 'Workspace', workspaceNameNorm)) ?? randomUUID();
+  const workspaceId = (await resolveSingletonId(driver, 'Workspace')) ?? randomUUID();
   const workspace = await writeStampedNode(driver, {
     label: 'Workspace',
     id: workspaceId,
     now,
-    properties: { name: GLOBAL_WORKSPACE_NAME, name_norm: workspaceNameNorm, type: WORKSPACE_ENTITY_TYPE },
-    mergeProperties: { is_structural: true },
+    properties: { type: WORKSPACE_ENTITY_TYPE },
+    mergeProperties: {
+      is_structural: true,
+      name: GLOBAL_WORKSPACE_NAME,
+      name_norm: normalizeEntityName(GLOBAL_WORKSPACE_NAME),
+    },
   });
 
   return { member, workspace };
