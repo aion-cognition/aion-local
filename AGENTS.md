@@ -11,7 +11,12 @@ Conventions and commands for agents working in this repo.
 - No factory functions.
 - Comments state a constraint, not a narration. No plan or task IDs in comments.
 - All Cypher lives in `packages/core/src/infrastructure/graph/`. This is a review-time
-  rule, not tool-enforced: no test scans for Cypher outside that directory.
+  rule, not tool-enforced: no test scans for Cypher outside that directory. It covers every
+  statement that runs — including the assertion queries integration tests make, which belong
+  in `infrastructure/graph/test-support/graph-queries.fixture.ts`. It does not cover a fake
+  driver recognising a statement production code generated (`cypher.includes('MATCH …')`):
+  that is a string predicate about the adapter's output, and moving it into `graph/` would
+  make the adapter depend on the stage shapes it is supposed to know nothing about.
 - Every graph write is idempotent and bitemporal, with one deliberate exception: see
   "no node hard-deletes" below and `docs/architecture.md`'s note on access-tracking.
 - No node hard-deletes, ever. Correcting or removing a fact supersedes it.
