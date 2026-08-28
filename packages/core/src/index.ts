@@ -259,6 +259,13 @@ export type {
   SeedCandidate,
 } from './graph/seed-queries.js';
 
+export {
+  ACCESS_COUNT_PROPERTY,
+  buildRecordAccessStatement,
+  recordAccess,
+} from './graph/access-tracking.js';
+export type { RecordAccessInput } from './graph/access-tracking.js';
+
 export { CueCache, extractCues } from './recall/cues.js';
 export type { CueExtractionDeps, CueExtractionInput, CueExtractionResult } from './recall/cues.js';
 
@@ -320,3 +327,10 @@ export type { AssemblePackInput, BucketCaps, PackBucket } from './recall/pack.js
 
 export { handleRecall, readModeFor } from './recall/recall.js';
 export type { RecallCompletion, RecallDeps, RecallListener, RecallOptions } from './recall/recall.js';
+
+export {
+  REINFORCEMENT_TOP_N,
+  REINFORCEMENT_TRIGGER,
+  RecallSideEffects,
+  reinforcementPairs,
+} from './recall/side-effects.js';
