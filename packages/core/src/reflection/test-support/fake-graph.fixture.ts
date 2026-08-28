@@ -137,6 +137,9 @@ export class FakeGraph {
     if (cypher.includes(`SET n.${MEMORY_PROPERTIES.contentVector} = entry.vector`)) {
       return toResult(this.#writeContentVectors(parameters));
     }
+    if (cypher.includes(`n.${MEMORY_PROPERTIES.contentVector} IS NOT NULL AND`)) {
+      return toResult(this.#contentVectorsById(parameters));
+    }
     if (cypher.includes(`n.${MEMORY_PROPERTIES.contentVector} IS NULL`)) {
       return toResult(this.#pendingVectorNodes(parameters));
     }
@@ -148,6 +151,10 @@ export class FakeGraph {
     ) {
       const result = this.#coExtractedNodeIds(parameters);
       return toResult(result);
+    }
+
+    if (cypher.includes('-[:MENTIONS]->(n:Entity)')) {
+      return toResult(this.#episodeEntities(parameters));
     }
 
     if (cypher.includes('MATCH (e:Episode { id: $episodeId })')) {
@@ -249,6 +256,36 @@ export class FakeGraph {
       }
     }
     return written;
+  }
+
+  /** The entities an episode mentions, read the same way `findEpisodeEntities` does: via the `MENTIONS` edge, ordered by name_norm then id. */
+  #episodeEntities(parameters: Record<string, unknown>): Row[] {
+    const episodeId = parameters.episodeId as string;
+    return this.nodesWithLabel('Entity')
+      .filter((node) => this.edges.has(`MENTIONS:${episodeId}:${node.id}`))
+      .map((node) => ({
+        id: node.id,
+        name: node.properties.name,
+        name_norm: node.properties.name_norm,
+        type: node.properties.type,
+      }))
+      .sort((left, right) => {
+        const byName = String(left.name_norm).localeCompare(String(right.name_norm));
+        return byName !== 0 ? byName : String(left.id).localeCompare(String(right.id));
+      });
+  }
+
+  /** Content vectors for a set of ids, modeled the same way `contentVectors` reads them: only nodes that carry one. */
+  #contentVectorsById(parameters: Record<string, unknown>): Row[] {
+    const ids = (parameters.ids ?? []) as string[];
+    const rows: Row[] = [];
+    for (const id of ids) {
+      const vector = this.nodes.get(id)?.properties[MEMORY_PROPERTIES.contentVector];
+      if (vector !== undefined) {
+        rows.push({ id, vector });
+      }
+    }
+    return rows;
   }
 
   /** The pending-vector marker, modeled exactly as the real query reads it: `:Memory`, text, no vector. */
