@@ -7,7 +7,7 @@ import type { Config } from './schema.js';
  * `redaction.entropyThreshold` and `operational.dataDir` are not pinned by either doc;
  * they follow common secret-scanner practice (4.5 bits/char) and the compose data
  * volume mount point respectively. `operational.workerCount` is pinned at 1 by PRD §7
- * ("one worker by default"). Two values depart from their pinned defaults; each says why
+ * ("one worker by default"). Three values depart from their pinned defaults; each says why
  * at the line.
  *
  * Reserved knobs: `recall.useContextResonance`, `recall.compressionThreshold`,
@@ -44,7 +44,13 @@ export const DEFAULTS: Config = {
     maxHops: 3,
     vectorLimit: 5,
     maxFacts: 15,
-    maxEpisodes: 5,
+    // Appendix E pins 5. Raised because the cap cuts the fused list, so it decides what
+    // survives fusion competition rather than how big a pack gets: on a populated substrate
+    // (~40 episodes) near-tie vector hits fill the first five and the one traversal-reached
+    // item ranked 13th, absent at 5, 8, and 12 and present at 20. Activation runs on every
+    // recall either way; the cap is what decides whether the caller sees what it found. The
+    // token budget, not this number, is what actually bounds a pack.
+    maxEpisodes: 20,
     maxNarratives: 5,
     maxPreferences: 3,
     maxResonant: 5,
@@ -54,8 +60,11 @@ export const DEFAULTS: Config = {
     // PRD §14 pins 2000. Raised because that is under the pinned cue model's cold-start
     // round trip (2288ms measured on host Ollama against 527-937ms warm), and a guard that
     // fires on the first recall after a model eviction degrades the stage it exists to
-    // protect. Still a hang guard: the failure this catches is a call that never returns.
-    cueBudgetMs: 5000,
+    // protect. Raised again to 8000 after a live gate rerun busted 2000 at 2030ms on an
+    // ordinary recall: warm cue latency runs 558-811ms, so the headroom a cold start needs
+    // is several multiples of the warm case. Still a hang guard: the failure this catches
+    // is a call that never returns.
+    cueBudgetMs: 8000,
     tokenBudget: 1200,
     minRelevance: 0.35,
     entityMatchThreshold: 0.7,
