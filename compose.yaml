@@ -1,0 +1,69 @@
+name: aion
+
+services:
+  # Placeholder tag: P0-3 pins the exact Community CalVer release and its env.
+  neo4j:
+    image: neo4j:2026.07.1-community
+    environment:
+      NEO4J_AUTH: neo4j/${AION_NEO4J_PASSWORD:-aion}
+      NEO4J_PLUGINS: '["graph-data-science"]'
+    ports:
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
+    volumes:
+      - aion-neo4j:/data
+
+  aion-mcp:
+    profiles: ["mcp"]
+    image: aion-local:latest
+    build:
+      context: .
+    command: ["node", "/app/packages/mcp/dist/main.js"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - AION_NEO4J_URI=${AION_NEO4J_URI:-bolt://neo4j:7687}
+      - AION_OLLAMA_URL=${AION_OLLAMA_URL:-http://host.docker.internal:11434}
+      - AION_MCP_PORT=${AION_MCP_PORT:-8765}
+      - AION_LOG_FILE
+      - AION_LOG_LEVEL
+    ports:
+      - "127.0.0.1:${AION_MCP_PORT:-8765}:${AION_MCP_PORT:-8765}"
+    volumes:
+      - aion-data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - neo4j
+
+  # No profile: a bare `docker compose build` must produce the shared image. The
+  # entrypoint is the CLI, so a stray `up` prints usage and exits.
+  aion-cli:
+    image: aion-local:latest
+    build:
+      context: .
+    working_dir: /repo
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - COMPOSE_PROJECT_NAME
+      - AION_REPO_PATH
+      - AION_GIT_USER_NAME
+      - AION_NEO4J_URI=${AION_NEO4J_URI:-bolt://neo4j:7687}
+      - AION_OLLAMA_URL=${AION_OLLAMA_URL:-http://host.docker.internal:11434}
+      - AION_MCP_PORT=${AION_MCP_PORT:-8765}
+      - AION_LOG_FILE
+      - AION_LOG_LEVEL
+    volumes:
+      # The repo bind carries .env writes and compose.yaml; data never uses a bind mount.
+      - ${AION_REPO_PATH:-.}:/repo
+      - /var/run/docker.sock:/var/run/docker.sock
+      - aion-data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  aion-data:
+  aion-neo4j:
