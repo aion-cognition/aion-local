@@ -47,6 +47,15 @@ const SERVER_INFO = { name: 'aion', version: '0.0.0' } as const;
  */
 const MAX_SESSIONS = 512;
 
+/**
+ * How long shutdown waits for tool calls already running. Compose's default `stop_grace_period`
+ * is 10s before SIGKILL, and the rest of shutdown — closing sessions, the driver, SQLite — has
+ * to fit in what is left, so this is deliberately shorter than a recall's own worst case. A
+ * call still running at the deadline loses its socket, which is the old behaviour for every
+ * call; the drain is what keeps the ordinary one from meeting it.
+ */
+export const DRAIN_TIMEOUT_MS = 7000;
+
 type McpSession = {
   readonly transport: StreamableHTTPServerTransport;
   readonly server: Server;
@@ -57,6 +66,8 @@ export type AionMcpServiceOptions = {
   readonly logger: Logger;
   readonly host: string;
   readonly port: number;
+  /** Overridable for tests, which cannot afford to wait out the real deadline. */
+  readonly drainTimeoutMs?: number;
 };
 
 export class AionMcpService {
@@ -66,12 +77,17 @@ export class AionMcpService {
   readonly #configuredPort: number;
   readonly #sessions = new Map<string, McpSession>();
   readonly #http: HttpServer;
+  readonly #drainTimeoutMs: number;
+  /** Tool calls that have started and not yet settled. Shutdown waits on these. */
+  readonly #inFlight = new Set<Promise<unknown>>();
+  #stopping = false;
 
   constructor(options: AionMcpServiceOptions) {
     this.#backend = options.backend;
     this.#logger = options.logger;
     this.#host = options.host;
     this.#configuredPort = options.port;
+    this.#drainTimeoutMs = options.drainTimeoutMs ?? DRAIN_TIMEOUT_MS;
     this.#http = createServer((req, res) => {
       void this.#route(req, res);
     });
@@ -88,6 +104,10 @@ export class AionMcpService {
 
   get sessionCount(): number {
     return this.#sessions.size;
+  }
+
+  get inFlightCount(): number {
+    return this.#inFlight.size;
   }
 
   async listen(): Promise<number> {
@@ -109,12 +129,49 @@ export class AionMcpService {
   }
 
   /**
+   * Resolves once every tool call running at the moment shutdown began has settled, or once
+   * the deadline passes — whichever comes first. Calls that arrive while draining are refused
+   * rather than admitted, so the set cannot keep refilling.
+   */
+  async #drain(): Promise<void> {
+    if (this.#inFlight.size === 0) {
+      return;
+    }
+    this.#logger.info({ inFlight: this.#inFlight.size }, 'mcp service draining tool calls');
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), this.#drainTimeoutMs);
+      timer.unref();
+    });
+    try {
+      const settled = Promise.allSettled([...this.#inFlight]).then(() => 'drained' as const);
+      const outcome = await Promise.race([settled, deadline]);
+      if (outcome === 'timeout') {
+        this.#logger.warn(
+          { inFlight: this.#inFlight.size, timeoutMs: this.#drainTimeoutMs },
+          'mcp service drain timed out; remaining tool calls lose their connection',
+        );
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * A tool call in flight when compose sends SIGTERM used to have its socket destroyed
+   * mid-response and then hit a closed driver pool, so the client learned nothing until its
+   * own request timeout fired. Shutdown now stops the listener, lets what is running finish,
+   * and only then tears the transports and sockets down.
+   *
    * Closing each MCP server closes the transport it owns, which ends that client's SSE
    * stream. `closeAllConnections` follows because a keep-alive socket with no stream on it
    * would otherwise hold the HTTP close callback open until the client noticed.
    */
   async close(): Promise<void> {
     const port = this.port;
+    this.#stopping = true;
+    await this.#drain();
+
     for (const session of [...this.#sessions.values()]) {
       try {
         await session.server.close();
@@ -271,6 +328,20 @@ export class AionMcpService {
     }
   }
 
+  /** The tracked promise never rejects, so registering it cannot produce an unhandled rejection. */
+  async #track<T>(call: Promise<T>): Promise<T> {
+    const tracked = call.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.#inFlight.add(tracked);
+    try {
+      return await call;
+    } finally {
+      this.#inFlight.delete(tracked);
+    }
+  }
+
   #forget(sessionId: string): void {
     if (this.#sessions.delete(sessionId)) {
       this.#logger.info({ sessionId, sessions: this.#sessions.size }, 'mcp session closed');
@@ -290,12 +361,19 @@ export class AionMcpService {
       if (identity === undefined) {
         throw new McpError(ErrorCode.InternalError, 'tool call arrived without a transport session id');
       }
-      return callTool(
-        this.#backend,
-        this.#logger,
-        request.params.name,
-        request.params.arguments,
-        identity,
+      // Refused rather than started: the substrate this call would touch is about to close,
+      // and a named error now beats a socket that dies mid-response.
+      if (this.#stopping) {
+        throw new McpError(ErrorCode.InternalError, 'aion-mcp is shutting down; retry once it is back');
+      }
+      return this.#track(
+        callTool(
+          this.#backend,
+          this.#logger,
+          request.params.name,
+          request.params.arguments,
+          identity,
+        ),
       );
     });
 

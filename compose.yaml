@@ -25,6 +25,10 @@ services:
     profiles: ["mcp"]
     image: aion-local:latest
     restart: unless-stopped
+    # The service drains tool calls already running before it closes the driver and SQLite.
+    # Compose's 10s default would SIGKILL it partway through that, which is the failure the
+    # drain exists to prevent.
+    stop_grace_period: 20s
     build:
       context: .
     # The image entrypoint is the CLI. Compose appends `command` to an entrypoint rather
