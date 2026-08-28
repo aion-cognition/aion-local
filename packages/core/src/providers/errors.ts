@@ -32,7 +32,7 @@ export class ModelVerificationError extends Error {
   }
 }
 
-/** `aion doctor` (P0-9) surfaces this distinctly: a mismatch means the vector index needs a reindex, not a retry. */
+/** `aion doctor` surfaces this distinctly: a mismatch means the vector index needs a reindex, not a retry. */
 export class EmbedDimensionMismatchError extends Error {
   constructor(model: string, expected: number, actual: number) {
     super(
