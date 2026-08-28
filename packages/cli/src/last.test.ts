@@ -64,7 +64,10 @@ const EMPTY_PACK: MemoryPack = {
     token_estimate: 6,
     stage_timings_ms: { cues: 0, embed: 0, seeds: 0, activation: 0, fusion: 0 },
     cues: [],
-    degraded: { stage: 'cues', reason: 'timeout' },
+    degraded: [
+      { stage: 'cues', reason: 'timeout' },
+      { stage: 'graph', reason: 'unavailable' },
+    ],
   },
 };
 
@@ -133,7 +136,9 @@ describe('renderPack', () => {
     renderPack({ sessionId: 'sess-2', ts: '2026-06-02T09:00:00.000Z', pack: EMPTY_PACK }, write);
 
     const text = lines.join('\n');
+    // One line per rung: an empty pack that also lost the graph is an outage, not a miss.
     expect(text).toContain('degraded  cues: timeout');
+    expect(text).toContain('degraded  graph: unavailable');
     expect(text).toContain('(empty pack)');
     expect(text).toContain('cues\n  none');
   });

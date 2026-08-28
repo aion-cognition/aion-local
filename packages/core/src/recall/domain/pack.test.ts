@@ -194,9 +194,27 @@ describe('the explicitly empty pack', () => {
   });
 
   it('names the degradation ladder when the cue model failed', () => {
-    const pack = assemble([], { degraded: { stage: 'cues', reason: 'timeout' } });
+    const pack = assemble([], { degraded: [{ stage: 'cues', reason: 'timeout' }] });
 
-    expect(pack.metadata.degraded).toEqual({ stage: 'cues', reason: 'timeout' });
+    expect(pack.metadata.degraded).toEqual([{ stage: 'cues', reason: 'timeout' }]);
+  });
+
+  it('names every rung that fired, in stage order', () => {
+    const pack = assemble([], {
+      degraded: [
+        { stage: 'cues', reason: 'model_error' },
+        { stage: 'embed', reason: 'model_error' },
+      ],
+    });
+
+    expect(pack.metadata.degraded).toEqual([
+      { stage: 'cues', reason: 'model_error' },
+      { stage: 'embed', reason: 'model_error' },
+    ]);
+  });
+
+  it('leaves the marker absent rather than empty when no rung fired', () => {
+    expect(assemble([], { degraded: [] }).metadata.degraded).toBeUndefined();
   });
 
   it('leaves the degraded marker absent on a normal recall', () => {

@@ -19,10 +19,41 @@ describe('MemoryPackSchema valid fixtures', () => {
       metadata: {
         ...baseMetadata,
         cues: [{ text: 'why did we pick webhooks', source: 'raw_query', weight: 3 }],
-        degraded: { stage: 'cues', reason: 'timeout' },
+        degraded: [{ stage: 'cues', reason: 'timeout' }],
       },
     };
     expect(MemoryPackSchema.parse(pack)).toEqual(pack);
+  });
+
+  it('parses a pack naming two rungs at once, which is what a full Ollama outage is', () => {
+    const pack = {
+      rendered_text: 'No relevant memories found.',
+      metadata: {
+        ...baseMetadata,
+        cues: [{ text: 'why did we pick webhooks', source: 'raw_query', weight: 3 }],
+        degraded: [
+          { stage: 'cues', reason: 'model_error' },
+          { stage: 'embed', reason: 'model_error' },
+        ],
+      },
+    };
+    expect(MemoryPackSchema.parse(pack)).toEqual(pack);
+  });
+
+  it('parses the graph rung, which is an outage rather than an empty substrate', () => {
+    const pack = {
+      rendered_text: 'No relevant memories found.',
+      metadata: { ...baseMetadata, degraded: [{ stage: 'graph', reason: 'unavailable' }] },
+    };
+    expect(MemoryPackSchema.parse(pack)).toEqual(pack);
+  });
+
+  it('rejects an empty degraded list: present means at least one rung fired', () => {
+    const pack = {
+      rendered_text: 'No relevant memories found.',
+      metadata: { ...baseMetadata, degraded: [] },
+    };
+    expect(() => MemoryPackSchema.parse(pack)).toThrow();
   });
 
   it('parses a pack with a direct-hit item and no path in its rationale', () => {

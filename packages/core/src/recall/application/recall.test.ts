@@ -28,10 +28,16 @@ const NO_CHANGES = { nodesCreated: 0, relationshipsCreated: 0, propertiesSet: 0 
  * has no model for fall through to the empty answer.
  */
 class EmptySubstrateGraph extends FakeGraph {
+  /** Flipped mid-test to model the server going away under a process that is already warm. */
+  offline = false;
+
   override async executeQuery(
     cypher: string,
     parameters: Record<string, unknown> = {},
   ): Promise<unknown> {
+    if (this.offline) {
+      throw new Error('ServiceUnavailable: connect ECONNREFUSED');
+    }
     try {
       return await super.executeQuery(cypher, parameters);
     } catch {
@@ -193,14 +199,14 @@ describe('degradation', () => {
       now: NOW,
     });
 
-    expect(pack.metadata.degraded).toEqual({ stage: 'cues', reason: 'model_error' });
+    expect(pack.metadata.degraded).toEqual([{ stage: 'cues', reason: 'model_error' }]);
     expect(pack.metadata.cues).toEqual([
       { text: 'why did we pick webhooks', source: 'raw_query', weight: 3 },
     ]);
     expect(embed).toHaveBeenCalledWith(['why did we pick webhooks']);
   });
 
-  it('still serves a pack when embedding is unavailable', async () => {
+  it('still serves a pack when embedding is unavailable, and says the vector leg is gone', async () => {
     embed.mockRejectedValueOnce(new Error('ollama is down'));
 
     const pack = await handleRecall(deps(), { query: 'why webhooks' }, {
@@ -208,7 +214,54 @@ describe('degradation', () => {
       now: NOW,
     });
 
+    expect(pack.metadata.degraded).toEqual([{ stage: 'embed', reason: 'model_error' }]);
     expect(pack.metadata.cues).toHaveLength(1);
+    expect(pack.rendered_text).toContain('No memories matched this query.');
+  });
+
+  // PRD §10's deeper rung. Both inference calls are gone, and a pack that named only the
+  // cue rung would read as "vectors are fine, the cue model broke".
+  it('names both inference rungs when the whole model host is gone', async () => {
+    generate.mockRejectedValueOnce(new Error('fetch failed'));
+    embed.mockRejectedValueOnce(new Error('fetch failed'));
+
+    const pack = await handleRecall(deps(), { query: 'why webhooks' }, {
+      identity: IDENTITY,
+      now: NOW,
+    });
+
+    expect(pack.metadata.degraded).toEqual([
+      { stage: 'cues', reason: 'model_error' },
+      { stage: 'embed', reason: 'model_error' },
+    ]);
+  });
+
+  /**
+   * The failure this closes: with the graph gone, every seed leg is isolated into silence
+   * and the caller is handed an empty pack that is byte-identical to a genuine miss. The
+   * session resolves from the manager's cache, which is what keeps recall answering at all.
+   */
+  it('names the graph rung rather than reporting an outage as an empty substrate', async () => {
+    const shared = deps();
+    await handleRecall(shared, { query: 'why webhooks' }, { identity: IDENTITY, now: NOW });
+
+    graph.offline = true;
+    const pack = await handleRecall(shared, { query: 'why webhooks' }, {
+      identity: IDENTITY,
+      now: NOW,
+    });
+
+    expect(pack.metadata.degraded).toEqual([{ stage: 'graph', reason: 'unavailable' }]);
+    expect(pack.rendered_text).toContain('No memories matched this query.');
+  });
+
+  it('leaves the marker absent when the substrate is simply empty', async () => {
+    const pack = await handleRecall(deps(), { query: 'why webhooks' }, {
+      identity: IDENTITY,
+      now: NOW,
+    });
+
+    expect(pack.metadata.degraded).toBeUndefined();
     expect(pack.rendered_text).toContain('No memories matched this query.');
   });
 });

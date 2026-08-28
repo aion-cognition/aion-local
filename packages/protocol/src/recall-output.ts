@@ -97,23 +97,32 @@ export const StageTimingsMsSchema = z.strictObject({
 export type StageTimingsMs = z.infer<typeof StageTimingsMsSchema>;
 
 /**
- * PRD §6.1: when the cue model fails or busts its budget, recall answers from raw-query
- * embedding plus BM25 instead. A consumer cannot tell that from the items alone — a
- * degraded pack looks like a thin one — so the ladder names itself here and stays absent
- * on a normal run.
+ * PRD §6.1 and §10's ladder. Recall has three legs that can drop out without failing the
+ * call — the cue model, the embedding call, and the graph — and a consumer cannot tell any
+ * of them from the items alone, because a pack thinned by an outage reads exactly like a
+ * pack thinned by a query nothing matches. Each rung that fired names itself here and the
+ * field stays absent on a normal run.
+ *
+ * `timeout`, `model_error` and `invalid_output` are the inference stages' reasons;
+ * `unavailable` is the graph's, and means no seed strategy could reach it.
  */
 export const DegradationSchema = z.strictObject({
-  stage: z.literal('cues'),
-  reason: z.enum(['timeout', 'model_error', 'invalid_output']),
+  stage: z.enum(['cues', 'embed', 'graph']),
+  reason: z.enum(['timeout', 'model_error', 'invalid_output', 'unavailable']),
 });
 
 export type Degradation = z.infer<typeof DegradationSchema>;
 
+/**
+ * A list, because the rungs are independent: a full Ollama outage takes the cue and embed
+ * legs together, and reporting only the worse of the two understates how thin the answer
+ * is. Present means at least one rung fired.
+ */
 export const MemoryPackMetadataSchema = z.strictObject({
   token_estimate: z.number().int().nonnegative(),
   stage_timings_ms: StageTimingsMsSchema,
   cues: z.array(CueSchema),
-  degraded: DegradationSchema.optional(),
+  degraded: z.array(DegradationSchema).min(1).optional(),
 });
 
 export type MemoryPackMetadata = z.infer<typeof MemoryPackMetadataSchema>;

@@ -103,8 +103,8 @@ export type LastPackEntry = {
 export function renderPack(entry: LastPackEntry, write: Writer): void {
   write(`session  ${entry.sessionId}`);
   write(`served   ${entry.ts}`);
-  if (entry.pack.metadata.degraded !== undefined) {
-    write(`degraded  ${entry.pack.metadata.degraded.stage}: ${entry.pack.metadata.degraded.reason}`);
+  for (const rung of entry.pack.metadata.degraded ?? []) {
+    write(`degraded  ${rung.stage}: ${rung.reason}`);
   }
   write('');
 
