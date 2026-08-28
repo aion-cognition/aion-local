@@ -1,4 +1,4 @@
-import { findHighEntropyTokens, shannonEntropy, type TextSpan } from './entropy.js';
+import { findHighEntropyTokens, type TextSpan } from './entropy.js';
 import { buildFingerprint } from './fingerprint.js';
 import { HIGH_ENTROPY_RULE_ID, REDACTION_RULES, type RedactionRule } from './rules.js';
 
@@ -58,9 +58,10 @@ function isClaimed(start: number, end: number, claimed: readonly TextSpan[]): bo
 /**
  * Deterministic by design (PRD §12): secret detection cannot depend on a model being
  * up, so this runs regex rules in priority order, then a high-entropy scan over
- * whatever the rules left unclaimed. `entropyThreshold` is the caller's
- * `config.redaction.entropyThreshold` (defaulted here so the function stays callable
- * as `redact(text)` in isolation, e.g. from tests).
+ * whatever the rules left unclaimed. `entropyThreshold` governs that backstop alone —
+ * no rule is gated on it, since entropy over a short string measures length more than
+ * randomness. It is the caller's `config.redaction.entropyThreshold`, defaulted here so
+ * the function stays callable as `redact(text)` in isolation.
  */
 export function redact(
   text: string,
@@ -76,9 +77,6 @@ export function redact(
   for (const rule of REDACTION_RULES) {
     for (const occurrence of occurrencesForRule(rule, text)) {
       if (isClaimed(occurrence.start, occurrence.end, claimed)) {
-        continue;
-      }
-      if (rule.gateByEntropy === true && shannonEntropy(occurrence.material) < entropyThreshold) {
         continue;
       }
       claimed.push({ start: occurrence.start, end: occurrence.end });
