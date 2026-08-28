@@ -1,6 +1,8 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadConfig } from '../../../infrastructure/config/load-config.js';
+import type { Config } from '../../../infrastructure/config/schema.js';
 import { OllamaProvider } from '../../../infrastructure/providers/ollama-provider.js';
 import { AnthropicHaikuClient } from './anthropic-client.js';
 import { extractCognitiveViaProvider, extractEntitiesViaProvider } from './provider-extractor.js';
@@ -8,9 +10,13 @@ import { renderJsonReport, renderMarkdownReport } from './report.js';
 import { runQualityHarness, type RouteConfig } from './runner.js';
 import type { SkippedRoute } from './report.js';
 
-/** Matches `config.models.reflect` / `config.models.embed` in `infrastructure/config/defaults.ts`. */
-const DEFAULT_LOCAL_MODEL = 'qwen3:8b';
-const DEFAULT_EMBED_MODEL = 'nomic-embed-text';
+/**
+ * The one knob the config schema does not carry yet: P5-4 owns the Anthropic provider and
+ * registers its model there. Everything else this harness needs — the Ollama URL, the
+ * reflect model, the embed model, the API key — comes from the loader, so the harness
+ * measures the models the service would actually route to rather than a second copy of
+ * their names that drifts.
+ */
 const DEFAULT_ANTHROPIC_MODEL = 'claude-haiku-4-5';
 
 // This module runs compiled, from `dist/`; reports belong next to the source that reads
@@ -19,10 +25,12 @@ const COMPILED_DIR = dirname(fileURLToPath(import.meta.url));
 const SOURCE_DIR = COMPILED_DIR.replace(`${sep}dist${sep}`, `${sep}src${sep}`);
 const REPORTS_DIR = join(SOURCE_DIR, 'reports');
 
-function buildLocalRoute(): RouteConfig {
-  const baseUrl = process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434';
-  const model = process.env.AION_REFLECT_MODEL ?? DEFAULT_LOCAL_MODEL;
-  const provider = new OllamaProvider({ baseUrl, embedModel: DEFAULT_EMBED_MODEL });
+function buildLocalRoute(config: Config): RouteConfig {
+  const model = config.models.reflect;
+  const provider = new OllamaProvider({
+    baseUrl: config.ollama.url,
+    embedModel: config.models.embed,
+  });
 
   return {
     route: 'local',
@@ -45,11 +53,12 @@ function buildAnthropicRoute(apiKey: string): RouteConfig {
 }
 
 async function main(): Promise<void> {
-  const routes: RouteConfig[] = [buildLocalRoute()];
+  const config = loadConfig(process.env);
+  const routes: RouteConfig[] = [buildLocalRoute(config)];
   const skippedRoutes: SkippedRoute[] = [];
 
-  const apiKey = process.env.AION_ANTHROPIC_API_KEY;
-  if (apiKey !== undefined && apiKey.trim().length > 0) {
+  const apiKey = config.anthropic.apiKey;
+  if (apiKey.trim().length > 0) {
     routes.push(buildAnthropicRoute(apiKey));
   } else {
     skippedRoutes.push({ route: 'anthropic', reason: 'AION_ANTHROPIC_API_KEY not set' });
