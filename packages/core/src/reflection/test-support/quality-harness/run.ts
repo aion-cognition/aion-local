@@ -11,8 +11,8 @@ import { runQualityHarness, type RouteConfig } from './runner.js';
 import type { SkippedRoute } from './report.js';
 
 /**
- * The one knob the config schema does not carry yet: P5-4 owns the Anthropic provider and
- * registers its model there. Everything else this harness needs — the Ollama URL, the
+ * The one knob the config schema does not carry yet: the Anthropic provider work owns
+ * registering its model there. Everything else this harness needs — the Ollama URL, the
  * reflect model, the embed model, the API key — comes from the loader, so the harness
  * measures the models the service would actually route to rather than a second copy of
  * their names that drifts.

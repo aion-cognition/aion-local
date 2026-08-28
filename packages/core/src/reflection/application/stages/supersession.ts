@@ -21,7 +21,7 @@ import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/s
  *
  * Entities are deliberately out of scope: extraction merges them on `(name_norm, type)`, so a
  * second episode naming the same entity reuses the same node and there is no new node to
- * supersede it with. Near-duplicate identities are the dedup stage's job (P3-6).
+ * supersede it with. Near-duplicate identities are the dedup stage's job.
  */
 
 export const SUPERSESSION_STAGE_NAME = 'supersession';

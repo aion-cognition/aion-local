@@ -1,7 +1,7 @@
 /**
  * Whitepaper §6.4's closed set: "person, organization, project, tool, concept, location,
  * event". The harness's own copy of the taxonomy, not a shared source with the real
- * extraction stage (P3-5), which is free to diverge.
+ * extraction stage, which is free to diverge.
  */
 export const ENTITY_TYPES = [
   'person',
