@@ -1,0 +1,91 @@
+import type { z } from 'zod';
+import type { ChatMessage, JsonSchema, Provider } from '../../../infrastructure/providers/types.js';
+import {
+  buildCognitiveExtractionMessages,
+  buildEntityExtractionMessages,
+  COGNITIVE_EXTRACTION_JSON_SCHEMA,
+  CognitiveExtractionOutputSchema,
+  ENTITY_EXTRACTION_JSON_SCHEMA,
+  EntityExtractionOutputSchema,
+} from './prompts.js';
+import type { CognitiveExtractionResult, EntityExtractionResult, ExtractorOutcome } from './types.js';
+
+/**
+ * qwen3:8b with thinking on measured 10-44s with occasional non-returns; reflection's
+ * latency regime is relaxed but not unbounded, so every call still carries a hang guard.
+ */
+export const DEFAULT_GENERATE_TIMEOUT_MS = 60_000;
+
+export type ProviderGenerateDeps = {
+  readonly generate: Provider['generate'];
+  readonly model: string;
+  readonly timeoutMs?: number;
+};
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+}
+
+function formatZodError(error: z.ZodError): string {
+  return error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ');
+}
+
+/**
+ * One structured-output call, timed and guarded. Reasoning buys nothing for extraction and
+ * costs the budget (mirrors `recall/application/cues.ts`'s cue-model call), so `think` stays
+ * off for both routes; the Anthropic client ignores the field, since Haiku 4.5 has no
+ * comparable toggle.
+ */
+async function runStructuredExtraction<T>(
+  deps: ProviderGenerateDeps,
+  messages: readonly ChatMessage[],
+  schema: JsonSchema,
+  outputSchema: z.ZodType<T>,
+): Promise<ExtractorOutcome<T>> {
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), deps.timeoutMs ?? DEFAULT_GENERATE_TIMEOUT_MS);
+  try {
+    const data = await deps.generate({
+      model: deps.model,
+      messages,
+      schema,
+      think: false,
+      signal: controller.signal,
+    });
+    const parsed = outputSchema.safeParse(data);
+    const latencyMs = Date.now() - startedAt;
+    if (!parsed.success) {
+      return { ok: false, error: `invalid extraction output: ${formatZodError(parsed.error)}`, latencyMs };
+    }
+    return { ok: true, value: parsed.data, latencyMs };
+  } catch (error) {
+    return { ok: false, error: describeError(error), latencyMs: Date.now() - startedAt };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export function extractEntitiesViaProvider(
+  deps: ProviderGenerateDeps,
+  text: string,
+): Promise<ExtractorOutcome<EntityExtractionResult>> {
+  return runStructuredExtraction(
+    deps,
+    buildEntityExtractionMessages(text),
+    ENTITY_EXTRACTION_JSON_SCHEMA,
+    EntityExtractionOutputSchema,
+  );
+}
+
+export function extractCognitiveViaProvider(
+  deps: ProviderGenerateDeps,
+  text: string,
+): Promise<ExtractorOutcome<CognitiveExtractionResult>> {
+  return runStructuredExtraction(
+    deps,
+    buildCognitiveExtractionMessages(text),
+    COGNITIVE_EXTRACTION_JSON_SCHEMA,
+    CognitiveExtractionOutputSchema,
+  );
+}

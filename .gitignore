@@ -4,3 +4,4 @@ dist/
 *.tsbuildinfo
 coverage/
 .DS_Store
+packages/core/src/reflection/test-support/quality-harness/reports/
