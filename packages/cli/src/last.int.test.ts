@@ -17,10 +17,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runLast } from './last.js';
 
 /**
- * PLAN P2-9's own verify: `aion last --json` must reproduce, byte-for-byte on content, the
- * pack the MCP client actually received. This drives a real client against a real
- * `bootstrapService` over loopback HTTP, then points the CLI's own code path at the same
- * SQLite file the service wrote to, so both readers agree with what is really on disk.
+ * `aion last --json` must reproduce, byte-for-byte on content, the pack the MCP client
+ * actually received. This drives a real client against a real `bootstrapService` over
+ * loopback HTTP, then points the CLI's own code path at the same SQLite file the service
+ * wrote to, so both readers agree with what is really on disk.
  */
 
 const EMBED_DIMENSION = 768;

@@ -26,7 +26,7 @@ import { handleRecall, type RecallDeps } from './recall.js';
 import { RecallSideEffects, REINFORCEMENT_TRIGGER } from './side-effects.js';
 
 /**
- * Covers P2-5's two side effects end to end: this reuses `recall.int.test.ts`'s fixture
+ * Covers recall's two side effects end to end: this reuses `recall.int.test.ts`'s fixture
  * shape (one episode reachable directly, one reachable only through the session it shares
  * with the first) because that same co-activated pair is exactly what reinforcement and
  * access-tracking need to prove themselves against.
