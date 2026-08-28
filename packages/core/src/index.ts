@@ -28,6 +28,7 @@ export type { OpsLedgerEntry } from './sqlite/ops-ledger.js';
 
 export {
   enqueueReflectionJob,
+  findPendingReflectionJob,
   getReflectionJob,
   listReflectionJobs,
 } from './sqlite/reflection-queue.js';
@@ -134,12 +135,15 @@ export type { GraphProperties, GraphWritable, Row, RowMapper } from './graph/val
 export { buildEdgeUpsert, upsertEdge, upsertEdgeInTransaction } from './graph/edges.js';
 export type { EdgeUpsert, UpsertedEdge } from './graph/edges.js';
 
+export { LOCK_PROPERTY, lockNodeInTransaction } from './graph/locks.js';
+
 export {
   BITEMPORAL_PROPERTIES,
   buildStampedNodeWrite,
   stampNew,
   supersede,
   writeStampedNode,
+  writeStampedNodeInTransaction,
 } from './graph/bitemporal.js';
 export type {
   StampNewInput,
@@ -153,7 +157,12 @@ export type {
 export { bootstrapBackbone, GLOBAL_WORKSPACE_NAME } from './graph/backbone.js';
 export type { BootstrapBackboneInput, BootstrapBackboneResult } from './graph/backbone.js';
 
-export { CONTAINMENT_TYPE, MEMORY_PROPERTIES, findEpisodeByContentHash } from './graph/episodes.js';
+export {
+  CONTAINMENT_TYPE,
+  MEMORY_PROPERTIES,
+  findEpisodeByContentHash,
+  findEpisodeByContentHashInTransaction,
+} from './graph/episodes.js';
 export type { FindEpisodeByContentHashInput } from './graph/episodes.js';
 
 export { ensureGraphSession } from './graph/sessions.js';

@@ -46,6 +46,30 @@ export function enqueueReflectionJob(db: SqliteHandle, jobType: string, payload:
   return id;
 }
 
+/**
+ * The pending job whose payload carries `field = value`, for writers that must converge on
+ * "exactly one job for this thing" after a crash between the durable write and the enqueue.
+ * Only pending rows are visible: a completed job's row is gone (claim.ts), so absence means
+ * nothing is queued, not that nothing ever ran. Re-enqueueing an already-processed job is
+ * the safe direction — the pipeline's ledger key makes the re-run a no-op — while leaving a
+ * missing one missing is permanent.
+ */
+export function findPendingReflectionJob(
+  db: SqliteHandle,
+  jobType: string,
+  field: string,
+  value: string,
+): ReflectionJob | undefined {
+  const row = db
+    .prepare(
+      `SELECT * FROM reflection_queue
+       WHERE job_type = ? AND json_extract(payload_json, ?) = ?
+       ORDER BY rowid ASC LIMIT 1`,
+    )
+    .get(jobType, `$.${field}`, value) as ReflectionJobRow | undefined;
+  return row === undefined ? undefined : toReflectionJob(row);
+}
+
 export function getReflectionJob(db: SqliteHandle, id: string): ReflectionJob | undefined {
   const row = db.prepare('SELECT * FROM reflection_queue WHERE id = ?').get(id) as
     | ReflectionJobRow

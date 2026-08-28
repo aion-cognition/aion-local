@@ -1,6 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
-import { runRead } from './connection.js';
+import { runRead, type GraphTransaction } from './connection.js';
 
 /**
  * Property names shared between the writer in `core/reflection/` and the Cypher here, so
@@ -38,18 +38,41 @@ export type FindEpisodeByContentHashInput = {
  * wins, which is what makes a re-pushed payload resolve to the original episode instead
  * of whichever duplicate the planner happened to reach first.
  */
+const FIND_EPISODE_BY_CONTENT_HASH = [
+  `MATCH (:Session { id: $sessionId })<-[:${CONTAINMENT_TYPE}]-(e:Episode)`,
+  `WHERE e.${MEMORY_PROPERTIES.contentHash} = $contentHash`,
+  `RETURN e.id AS id ORDER BY e.${BITEMPORAL_PROPERTIES.txFrom}, e.id LIMIT 1`,
+].join('\n');
+
+function contentHashParameters(input: FindEpisodeByContentHashInput): Record<string, unknown> {
+  return { sessionId: input.sessionId, contentHash: input.contentHash };
+}
+
 export async function findEpisodeByContentHash(
   driver: Driver,
   input: FindEpisodeByContentHashInput,
 ): Promise<string | undefined> {
   const rows = await runRead(
     driver,
-    [
-      `MATCH (:Session { id: $sessionId })<-[:${CONTAINMENT_TYPE}]-(e:Episode)`,
-      `WHERE e.${MEMORY_PROPERTIES.contentHash} = $contentHash`,
-      `RETURN e.id AS id ORDER BY e.${BITEMPORAL_PROPERTIES.txFrom}, e.id LIMIT 1`,
-    ].join('\n'),
-    { sessionId: input.sessionId, contentHash: input.contentHash },
+    FIND_EPISODE_BY_CONTENT_HASH,
+    contentHashParameters(input),
+    (row) => row.id as string,
+  );
+  return rows[0];
+}
+
+/**
+ * The same read inside a caller's transaction. Intake uses this one: outside a transaction
+ * that holds the session's lock, the answer is stale the instant it returns, because a peer
+ * may be writing the very episode it looked for.
+ */
+export async function findEpisodeByContentHashInTransaction(
+  tx: GraphTransaction,
+  input: FindEpisodeByContentHashInput,
+): Promise<string | undefined> {
+  const rows = await tx.run(
+    FIND_EPISODE_BY_CONTENT_HASH,
+    contentHashParameters(input),
     (row) => row.id as string,
   );
   return rows[0];

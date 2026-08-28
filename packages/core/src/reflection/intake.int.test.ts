@@ -16,7 +16,7 @@ import { openLogger } from '../logging/logger.js';
 import { OllamaProvider } from '../providers/ollama-provider.js';
 import { SessionManager } from '../session/session-manager.js';
 import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
-import { listReflectionJobs } from '../sqlite/reflection-queue.js';
+import { listReflectionJobs, type ReflectionJob } from '../sqlite/reflection-queue.js';
 import { ReflectionDispatch, type ReflectionJobSignal } from './dispatch.js';
 import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
 
@@ -25,6 +25,7 @@ const SESSION_IDENTITY = 'mcp-transport-session-1';
 
 const AWS_KEY = 'AKIAIOSFODNN7EXAMPLE';
 const GITHUB_TOKEN = 'ghp_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8';
+const SLACK_TOKEN = 'xoxb-123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx';
 
 const MIXED_PAYLOAD = {
   turns: [
@@ -40,7 +41,9 @@ const MIXED_PAYLOAD = {
       tool: 'bash',
       input: 'npm run deploy',
       status: 'error',
-      output: { stderr: `remote auth failed for ${GITHUB_TOKEN}` },
+      // The slack token sits in key position: a credential arrives as a map key whenever
+      // tool output is keyed by it, and the walk has to reach that too.
+      output: { stderr: `remote auth failed for ${GITHUB_TOKEN}`, [SLACK_TOKEN]: 'revoked' },
       duration_ms: 8200,
       occurred_at: '2026-03-01T10:00:02Z',
     },
@@ -103,6 +106,41 @@ async function everyStoredProperty(): Promise<string> {
 
 function ledgerRowCount(): number {
   return (db.prepare('SELECT count(*) AS c FROM ops_ledger').get() as { c: number }).c;
+}
+
+async function episodesInSession(sessionId: string): Promise<number> {
+  return (
+    (await readOne(
+      'MATCH (e:Episode { session_id: $sessionId }) RETURN count(e) AS c',
+      { sessionId },
+      (row) => row.c as number,
+    )) ?? 0
+  );
+}
+
+async function turnsInSession(sessionId: string): Promise<number> {
+  return (
+    (await readOne(
+      'MATCH (t:Turn { session_id: $sessionId }) RETURN count(t) AS c',
+      { sessionId },
+      (row) => row.c as number,
+    )) ?? 0
+  );
+}
+
+/** Queue rows whose episode belongs to this session, matched through the graph. */
+async function jobsForSession(sessionId: string): Promise<ReflectionJob[]> {
+  const episodeIds = new Set(
+    await runRead(
+      harness.driver,
+      'MATCH (e:Episode { session_id: $sessionId }) RETURN e.id AS id',
+      { sessionId },
+      (row) => row.id as string,
+    ),
+  );
+  return listReflectionJobs(db).filter((job) =>
+    episodeIds.has((job.payload as { episode_id: string }).episode_id),
+  );
 }
 
 beforeAll(async () => {
@@ -243,8 +281,10 @@ describe('reflection intake against a live graph and live Ollama', () => {
 
     expect(stored).not.toContain(AWS_KEY);
     expect(stored).not.toContain(GITHUB_TOKEN);
+    expect(stored).not.toContain(SLACK_TOKEN);
     expect(stored).toContain('⟨secret:aws-access-key:');
     expect(stored).toContain('⟨secret:github-token:');
+    expect(stored).toContain('⟨secret:slack-token:');
   });
 
   it('returns the original episode id for a repeat push, writing no new nodes, edges, or jobs', async () => {
@@ -272,5 +312,93 @@ describe('reflection intake against a live graph and live Ollama', () => {
       `MATCH (:Session { id: "mcp-transport-session-2" })-[r:FOLLOWS]->(:Session { id: "${SESSION_IDENTITY}" }) RETURN count(r) AS c`,
     );
     expect(follows).toBe(1);
+  });
+});
+
+describe('reflection intake under failure and concurrency', () => {
+  const PAYLOAD = {
+    turns: [
+      { role: 'user', text: 'why did the ingestion service pick webhooks' },
+      { role: 'assistant', text: 'because the vendor has no bulk export' },
+    ],
+    observations: ['webhooks were the only option with the vendor we had'],
+  };
+
+  it('writes nothing at all when a write fails partway through the episode', async () => {
+    const identity = 'partial-write-session';
+
+    // One vector for an episode that needs three: the turn write throws inside the
+    // transaction, after the Episode node and its containment edge have been written.
+    const starved = {
+      ...deps,
+      provider: {
+        embed: (texts: readonly string[]) => deps.provider.embed(texts).then((vectors) => vectors.slice(0, 1)),
+        generate: () => Promise.reject(new Error('intake must never call generate')),
+      } as ReflectionIntakeDeps['provider'],
+    };
+
+    await expect(handleReflection(starved, PAYLOAD, { identity })).rejects.toThrow(/expected at least/);
+
+    expect(await episodesInSession(identity)).toBe(0);
+    expect(await turnsInSession(identity)).toBe(0);
+    expect(await jobsForSession(identity)).toHaveLength(0);
+
+    // A clean retry starts from nothing, so the episode lands whole.
+    const retry = await handleReflection(deps, PAYLOAD, { identity });
+    expect(await episodesInSession(identity)).toBe(1);
+    expect(await turnsInSession(identity)).toBe(2);
+    expect(await jobsForSession(identity)).toHaveLength(1);
+    expect(retry.queued).toBe(true);
+  });
+
+  it('queues the job on retry when the episode committed but the enqueue did not', async () => {
+    const identity = 'orphan-episode-session';
+
+    // The graph write commits, then the queue insert fails: the window a crash between the
+    // two stores opens. Nothing repairs it later, so intake has to repair it on the retry.
+    const closed = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
+    closed.close();
+
+    await expect(handleReflection({ ...deps, db: closed }, PAYLOAD, { identity })).rejects.toThrow();
+
+    expect(await episodesInSession(identity)).toBe(1);
+    expect(await jobsForSession(identity)).toHaveLength(0);
+
+    const retry = await handleReflection(deps, PAYLOAD, { identity });
+    const queued = await jobsForSession(identity);
+
+    expect(await episodesInSession(identity)).toBe(1);
+    expect(queued).toHaveLength(1);
+    expect(queued[0]?.payload).toEqual({ episode_id: retry.episode_id });
+    expect(retry.queued).toBe(true);
+  });
+
+  it('stores one episode when the same payload arrives concurrently in one session', async () => {
+    const identity = 'concurrent-intake-session';
+
+    // A stub embedder, not live Ollama: Ollama serializes requests for one model, which
+    // staggers the callers enough that they never reach the graph together. The race this
+    // test exists for is in the graph, and it only happens if they arrive at once.
+    const vector = Array.from({ length: EMBED_DIMENSION }, () => 0.01);
+    const instant = {
+      ...deps,
+      provider: {
+        embed: (texts: readonly string[]) => Promise.resolve(texts.map(() => vector)),
+        generate: () => Promise.reject(new Error('intake must never call generate')),
+      } as ReflectionIntakeDeps['provider'],
+    };
+
+    const results = await Promise.all([
+      handleReflection(instant, PAYLOAD, { identity }),
+      handleReflection(instant, PAYLOAD, { identity }),
+      handleReflection(instant, PAYLOAD, { identity }),
+      handleReflection(instant, PAYLOAD, { identity }),
+    ]);
+
+    const ids = new Set(results.map((result) => result.episode_id));
+    expect(ids.size).toBe(1);
+    expect(await episodesInSession(identity)).toBe(1);
+    expect(await turnsInSession(identity)).toBe(2);
+    expect(await jobsForSession(identity)).toHaveLength(1);
   });
 });
