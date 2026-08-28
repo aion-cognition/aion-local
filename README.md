@@ -125,10 +125,10 @@ A few examples:
 ## Status
 
 P0 through P2 are built and gated: substrate provisioning (`init`, schema migrations, the
-backbone), experience capture (reflection intake: validate, redact, store bitemporally,
-dedupe), and recall with the full MCP surface (four seed strategies, spreading activation,
-RRF fusion, MemoryPack assembly). 643/643 tests pass; `aion doctor` runs 8 checks, all green
-against a live stack.
+backbone), experience capture (reflection intake: validate, redact, dedupe, store
+bitemporally), and recall with the full MCP surface (four seed strategies, spreading
+activation, RRF fusion, MemoryPack assembly). 643/643 tests pass; `aion doctor` runs 8
+checks, all green against a live stack.
 
 P3 and later are not yet built: the reflection extraction pipeline (entities, associations,
 narratives), Hebbian edge plasticity, and maintenance passes. Their config knobs are
