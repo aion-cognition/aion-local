@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Host wrapper. Builds the image once, then runs the CLI in the aion-cli container,
+# which is itself the orchestrator of the compose services.
+set -eo pipefail
+
+REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+COMPOSE_FILE="$REPO_DIR/compose.yaml"
+IMAGE="aion-local:latest"
+
+COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-aion}"
+AION_GIT_USER_NAME="${AION_GIT_USER_NAME:-$(git -C "$REPO_DIR" config user.name 2>/dev/null || true)}"
+export COMPOSE_PROJECT_NAME AION_GIT_USER_NAME
+export AION_REPO_PATH="$REPO_DIR"
+
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  echo "aion: building $IMAGE (first run)" >&2
+  docker compose -f "$COMPOSE_FILE" build aion-cli
+fi
+
+exec docker compose -f "$COMPOSE_FILE" run --rm aion-cli "$@"

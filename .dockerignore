@@ -1,0 +1,8 @@
+.git
+node_modules
+packages/*/node_modules
+packages/*/dist
+.env
+coverage
+*.tsbuildinfo
+docs
