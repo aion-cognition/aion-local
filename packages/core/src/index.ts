@@ -62,6 +62,14 @@ export {
 } from './graph/provision.js';
 export type { Neo4jEndpoint, ReadinessOptions } from './graph/provision.js';
 
+export {
+  GRAPH_MIGRATIONS,
+  graphMigrationMetaKey,
+  latestAppliedGraphMigration,
+  runGraphMigrations,
+} from './graph/migrations.js';
+export type { GraphMigration, MigrationContext } from './graph/migrations.js';
+
 export type { ChatMessage, ChatRole, JsonSchema, Provider, StructuredRequest, Vector } from './providers/types.js';
 export {
   EmbedDimensionMismatchError,
