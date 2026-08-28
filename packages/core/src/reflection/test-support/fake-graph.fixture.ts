@@ -141,6 +141,15 @@ export class FakeGraph {
       return toResult(this.#pendingVectorNodes(parameters));
     }
 
+    if (
+      cypher.includes('MATCH (e:Episode { id: $episodeId })') &&
+      cypher.includes('MATCH (n:AionNode)') &&
+      cypher.includes('MENTIONS')
+    ) {
+      const result = this.#coExtractedNodeIds(parameters);
+      return toResult(result);
+    }
+
     if (cypher.includes('MATCH (e:Episode { id: $episodeId })')) {
       return toResult(this.#episodeContext(parameters));
     }
@@ -327,5 +336,36 @@ export class FakeGraph {
       (node) => node.id !== sessionId && !followed.has(node.id),
     );
     return tail === undefined ? [] : [{ id: tail.id }];
+  }
+
+  /** Find all node IDs extracted from or mentioned in an episode. */
+  #coExtractedNodeIds(parameters: Record<string, unknown>): Row[] {
+    const episodeId = parameters.episodeId as string;
+    const nodeIds = new Set<string>();
+
+    // Find nodes with edges related to this episode:
+    // - MENTIONS: episode -> node (sourceId = episodeId, targetId = node)
+    // - PARTICIPATES_IN: node -> episode (sourceId = node, targetId = episodeId)
+    // - EXTRACTED_FROM: node -> episode (sourceId = node, targetId = episodeId)
+    for (const edge of this.edges.values()) {
+      if (edge.type === 'MENTIONS' && edge.sourceId === episodeId) {
+        const node = this.nodes.get(edge.targetId);
+        // Only include AionNode types (skip episode itself)
+        if (node !== undefined && node.labels.includes('AionNode') && !node.labels.includes('Episode')) {
+          nodeIds.add(edge.targetId);
+        }
+      } else if (
+        edge.targetId === episodeId &&
+        (edge.type === 'PARTICIPATES_IN' || edge.type === 'EXTRACTED_FROM')
+      ) {
+        const node = this.nodes.get(edge.sourceId);
+        if (node !== undefined && node.labels.includes('AionNode') && !node.labels.includes('Episode')) {
+          nodeIds.add(edge.sourceId);
+        }
+      }
+    }
+
+    // Return results in the format expected by the query.
+    return [...nodeIds].map((id) => ({ id }));
   }
 }
