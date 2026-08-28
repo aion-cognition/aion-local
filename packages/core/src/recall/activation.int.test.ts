@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { DEFAULTS } from '../config/defaults.js';
 import { fetchAdjacency } from '../graph/adjacency.js';
 import { bootstrapBackbone } from '../graph/backbone.js';
 import { supersede, writeStampedNode } from '../graph/bitemporal.js';
@@ -27,10 +28,10 @@ const EMBED_DIMENSION = 8;
 const SEEDED_AT = new Date('2026-06-01T00:00:00.000Z');
 
 /**
- * `config.activation` defaults with `config.recall.maxHops`, which is what makes the
- * assertion below meaningful: the prior session is exactly two hops out, and the episode
- * inside it is three, so a node that only traversal can reach is separated from one that
- * traversal cannot reach at all.
+ * `config.activation` defaults, with `maxHops` pinned per case rather than taken from the
+ * shipped default. The fixture is built so the distance matters: the prior session is exactly
+ * two hops from the seed and the episode inside it is three, which is the shape that separates
+ * "the bound held it back" from "the graph could not reach it".
  */
 const BUDGET: ActivationBudget = {
   maxIterations: 100,
@@ -39,6 +40,8 @@ const BUDGET: ActivationBudget = {
   maxNodesVisited: 500,
   hubThreshold: 10,
   maxHops: 2,
+  associationStrength: DEFAULTS.recall.associationStrength,
+  maxActivated: DEFAULTS.contextResonance.activationLimit,
 };
 
 let harness: Neo4jHarness;
@@ -140,13 +143,25 @@ describe('spreading activation over a live graph', () => {
     expect(priorSession?.score).toBeCloseTo(0.9 * 0.7 * 0.8 * 0.7, 10);
     expect(priorSession?.currency).toEqual({ currency: 'current' });
 
-    // Three hops out, so the hop bound holds it back: reachability here is real, not a
+    // Three hops out, so a bound of two holds it back: reachability here is real, not a
     // side effect of a small graph where everything reaches everything.
     expect(run.activated.map((node) => node.nodeId)).not.toContain(episodeAlpha);
 
     // One round-trip per frontier ring, not one per node.
     expect(counted).toHaveBeenCalledTimes(run.iterations);
     expect(run.iterations).toBe(2);
+  });
+
+  it('reaches the prior session’s episode at the shipped hop bound', async () => {
+    const run = await spreadActivation(fetch, {
+      seeds: [{ nodeId: episodeBeta }],
+      budget: { ...BUDGET, maxHops: DEFAULTS.recall.maxHops },
+    });
+
+    const priorEpisode = run.activated.find((node) => node.nodeId === episodeAlpha);
+    expect(priorEpisode).toBeDefined();
+    expect(priorEpisode?.hops).toBe(3);
+    expect(priorEpisode?.pathSummary).toContain('-[FOLLOWS]->');
   });
 
   it('carries the backbone into the activated set', async () => {

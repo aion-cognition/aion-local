@@ -45,6 +45,17 @@ const BUCKET_BY_LABEL: Readonly<Record<string, PackBucket>> = {
 };
 
 /**
+ * The episodes cap counts episodes, so a `Turn` folds into the episode it came from. P1 writes
+ * one content-bearing, separately indexed Turn per turn, which makes a five-turn episode able
+ * to fill the whole bucket by itself and crowd out every other episode. Whichever of the two
+ * ranked higher represents that episode; the loser is skipped rather than packed, since an
+ * Episode's text is the render of its own turns and packing both says the same thing twice.
+ */
+function episodeKey(item: FusedItem): string {
+  return item.sourceEpisodeId ?? item.id;
+}
+
+/**
  * Tokens per character for the budget estimate. Four is the long-standing rule of thumb for
  * English text under BPE vocabularies and it is deliberately crude: the budget is a cap on
  * what recall hands back, and a real tokenizer on the recall path would be both a
@@ -147,6 +158,7 @@ type Selection = Map<PackBucket, MemoryPackItem[]>;
  */
 function select(input: AssemblePackInput): Selection {
   const selection: Selection = new Map();
+  const packedEpisodes = new Set<string>();
   let tokens = estimateTokens(PACK_HEADING);
 
   for (const item of input.items) {
@@ -157,6 +169,10 @@ function select(input: AssemblePackInput): Selection {
 
     const held = selection.get(bucket) ?? [];
     if (held.length >= input.caps[bucket]) {
+      continue;
+    }
+    const key = bucket === 'episodes' ? episodeKey(item) : undefined;
+    if (key !== undefined && packedEpisodes.has(key)) {
       continue;
     }
 
@@ -171,6 +187,9 @@ function select(input: AssemblePackInput): Selection {
     tokens += cost;
     held.push(packItem);
     selection.set(bucket, held);
+    if (key !== undefined) {
+      packedEpisodes.add(key);
+    }
   }
 
   return selection;

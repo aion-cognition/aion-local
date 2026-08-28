@@ -107,11 +107,13 @@ export type ActivationSeed = {
   readonly nodeId: string;
   /** From seed selection's currency-annotated read; absent is treated as current. */
   readonly currency?: CurrencyAnnotation;
+  readonly isStructural?: boolean;
 };
 
 /**
- * `config.activation` plus `config.recall.maxHops`, which bounds traversal depth for the
- * whole recall pipeline rather than for this stage alone.
+ * `config.activation`, plus `config.recall.maxHops` and `config.recall.associationStrength`,
+ * which bound traversal for the whole recall pipeline rather than for this stage alone, plus
+ * `config.contextResonance.activationLimit`, the cap on the set this stage hands downstream.
  */
 export type ActivationBudget = {
   readonly maxIterations: number;
@@ -120,6 +122,14 @@ export type ActivationBudget = {
   readonly maxNodesVisited: number;
   readonly hubThreshold: number;
   readonly maxHops: number;
+  /**
+   * Whitepaper Appendix E's "minimum association strength for traversal". Edges are stored
+   * with strength 1.0 unless a writer lowers one, and Hebbian decay (P4) is what lowers them,
+   * so this is the knob that stops recall from walking associations that have faded out.
+   */
+  readonly associationStrength: number;
+  /** Appendix E's "maximum nodes from spreading activation": how much of the spread survives. */
+  readonly maxActivated: number;
 };
 
 export type ActivatedNode = {
@@ -130,6 +140,8 @@ export type ActivatedNode = {
   /** `<seed> -[TYPE]-> <node> -[TYPE]-> <node>`; a seed's own summary is its id. */
   readonly pathSummary: string;
   readonly currency: CurrencyAnnotation;
+  /** The Member and the global Workspace: traversed, never packed, never reinforced. */
+  readonly isStructural: boolean;
 };
 
 /**
@@ -201,6 +213,7 @@ type SpreadState = {
   readonly hops: Map<string, number>;
   readonly paths: Map<string, string>;
   readonly currency: Map<string, CurrencyAnnotation>;
+  readonly structural: Set<string>;
   /** The strongest single contribution seen per node; decides which path is reported. */
   readonly strongest: Map<string, number>;
   readonly seeds: Set<string>;
@@ -214,6 +227,7 @@ function initialize(seeds: readonly ActivationSeed[]): SpreadState {
     hops: new Map(),
     paths: new Map(),
     currency: new Map(),
+    structural: new Set(),
     strongest: new Map(),
     seeds: new Set(),
     visited: new Set(),
@@ -234,6 +248,9 @@ function initialize(seeds: readonly ActivationSeed[]): SpreadState {
     state.hops.set(seed.nodeId, 0);
     state.paths.set(seed.nodeId, seed.nodeId);
     state.currency.set(seed.nodeId, annotation);
+    if (seed.isStructural === true) {
+      state.structural.add(seed.nodeId);
+    }
     state.frontier.add(seed.nodeId);
   }
 
@@ -246,6 +263,12 @@ function initialize(seeds: readonly ActivationSeed[]): SpreadState {
  * the evidence-reinforces-relevance principle of whitepaper §5.4, not double counting.
  */
 function propagate(state: SpreadState, neighbor: AdjacencyNeighbor, budget: ActivationBudget): void {
+  // Appendix E's association-strength floor. An edge the merge policy left unweighted reads
+  // back as 1.0, so this bites only associations something has actively weakened.
+  if (neighbor.strength < budget.associationStrength) {
+    return;
+  }
+
   const sourceScore = state.scores.get(neighbor.sourceId) ?? 0;
   const superseded = neighbor.currency.currency === 'superseded';
   const propagated =
@@ -261,6 +284,9 @@ function propagate(state: SpreadState, neighbor: AdjacencyNeighbor, budget: Acti
 
   state.scores.set(neighbor.nodeId, (state.scores.get(neighbor.nodeId) ?? 0) + propagated);
   state.currency.set(neighbor.nodeId, neighbor.currency);
+  if (neighbor.isStructural) {
+    state.structural.add(neighbor.nodeId);
+  }
 
   // A seed's origin is where the spread began; no later path rewrites it, however strong.
   if (state.seeds.has(neighbor.nodeId)) {
@@ -283,10 +309,10 @@ function propagate(state: SpreadState, neighbor: AdjacencyNeighbor, budget: Acti
   }
 }
 
-function collect(state: SpreadState, minActivation: number): ActivatedNode[] {
+function collect(state: SpreadState, budget: ActivationBudget): ActivatedNode[] {
   const activated: ActivatedNode[] = [];
   for (const [nodeId, score] of state.scores) {
-    if (score < minActivation) {
+    if (score < budget.minActivation) {
       continue;
     }
     activated.push({
@@ -295,12 +321,16 @@ function collect(state: SpreadState, minActivation: number): ActivatedNode[] {
       hops: state.hops.get(nodeId) ?? 0,
       pathSummary: state.paths.get(nodeId) ?? nodeId,
       currency: state.currency.get(nodeId) ?? CURRENT,
+      isStructural: state.structural.has(nodeId),
     });
   }
   // Ties break on id so a run over the same graph produces the same order twice.
-  return activated.sort(
+  activated.sort(
     (left, right) => right.score - left.score || left.nodeId.localeCompare(right.nodeId),
   );
+  // Cut after the sort, so the cap keeps the strongest of the spread rather than whatever
+  // the traversal happened to reach first.
+  return activated.slice(0, Math.max(0, budget.maxActivated));
 }
 
 type BatchSelection =
@@ -319,7 +349,11 @@ function selectBatch(state: SpreadState, budget: ActivationBudget): BatchSelecti
 
   const eligible = [...state.frontier]
     .filter((nodeId) => (state.scores.get(nodeId) ?? 0) >= budget.minActivation)
-    .sort((left, right) => (state.scores.get(right) ?? 0) - (state.scores.get(left) ?? 0));
+    .sort(
+      (left, right) =>
+        (state.scores.get(right) ?? 0) - (state.scores.get(left) ?? 0) ||
+        left.localeCompare(right),
+    );
   if (eligible.length === 0) {
     return { kind: 'stop', termination: 'below_min_activation' };
   }
@@ -331,6 +365,37 @@ function selectBatch(state: SpreadState, budget: ActivationBudget): BatchSelecti
 
   const room = budget.maxNodesVisited - state.visited.size;
   return { kind: 'batch', nodeIds: expandable.slice(0, room) };
+}
+
+/**
+ * Restores Algorithm 2's ordering inside a batch. The literal algorithm expands one node at a
+ * time, so by the time the second-strongest node in a ring propagates, the strongest is
+ * already in V and receives nothing back: an edge between two ring peers fires once, in the
+ * direction of decreasing activation. Propagating both ways instead would double-count the
+ * edge and make the result depend on the order the graph happened to return its rows.
+ */
+function orderWithinRing(
+  neighbors: readonly AdjacencyNeighbor[],
+  batch: readonly string[],
+): AdjacencyNeighbor[] {
+  const position = new Map(batch.map((nodeId, index) => [nodeId, index]));
+  const ordered: AdjacencyNeighbor[] = [];
+
+  for (const sourceId of batch) {
+    const sourcePosition = position.get(sourceId) ?? 0;
+    for (const neighbor of neighbors) {
+      if (neighbor.sourceId !== sourceId) {
+        continue;
+      }
+      const neighborPosition = position.get(neighbor.nodeId);
+      if (neighborPosition !== undefined && neighborPosition <= sourcePosition) {
+        continue;
+      }
+      ordered.push(neighbor);
+    }
+  }
+
+  return ordered;
 }
 
 /**
@@ -369,6 +434,11 @@ export async function spreadActivation(
     }
 
     iterations += 1;
+    // Captured before the batch joins `visited`: Algorithm 2 step 3 propagates to every
+    // neighbour "not in V", and a peer selected in this same batch has not been moved into V
+    // at the moment the real algorithm would reach it. Excluding it here would silently
+    // discard every edge inside a frontier ring.
+    const alreadyExpanded = [...state.visited];
     for (const nodeId of selection.nodeIds) {
       state.visited.add(nodeId);
       state.frontier.delete(nodeId);
@@ -376,15 +446,15 @@ export async function spreadActivation(
 
     const neighbors = await fetch({
       frontier: selection.nodeIds,
-      visited: [...state.visited],
+      visited: alreadyExpanded,
     });
-    for (const neighbor of neighbors) {
+    for (const neighbor of orderWithinRing(neighbors, selection.nodeIds)) {
       propagate(state, neighbor, budget);
     }
   }
 
   return {
-    activated: collect(state, budget.minActivation),
+    activated: collect(state, budget),
     iterations,
     nodesVisited: state.visited.size,
     termination,

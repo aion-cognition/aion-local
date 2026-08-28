@@ -15,11 +15,16 @@ const SUPERSEDED_AT = new Date('2026-08-10T00:00:00.000Z');
 
 function seed(id: string, provenance: readonly SeedProvenance[], superseded = false): Seed {
   const best = provenance[0];
+  let relevance = 0;
+  for (const entry of provenance) {
+    relevance = Math.max(relevance, entry.relevance);
+  }
   const base = {
     id,
     labels: ['Episode', 'Memory', 'AionNode'],
     content: `content of ${id}`,
     score: best?.score ?? 0,
+    relevance,
     provenance,
   };
   if (!superseded) {
@@ -39,6 +44,7 @@ function activated(nodeId: string, score: number, pathSummary: string): Activate
     hops: pathSummary === nodeId ? 0 : 2,
     pathSummary,
     currency: { currency: 'current' },
+    isStructural: false,
   };
 }
 
@@ -55,8 +61,8 @@ describe('a seed as a fusion candidate', () => {
   it('is explained by the strategy that found it at that strategy own score', () => {
     const candidate = seedCandidate(
       seed('e1', [
-        { strategy: 'bm25', score: 0.9, cue: 'SQLITE_BUSY' },
-        { strategy: 'recency', score: 0.5 },
+        { strategy: 'bm25', score: 0.9, relevance: 0.9, cue: 'SQLITE_BUSY' },
+        { strategy: 'recency', score: 0.5, relevance: 0 },
       ]),
     );
 
@@ -65,14 +71,14 @@ describe('a seed as a fusion candidate', () => {
   });
 
   it('carries the lineage annotation through to the item', () => {
-    const candidate = seedCandidate(seed('old', [{ strategy: 'vector', score: 0.7 }], true));
+    const candidate = seedCandidate(seed('old', [{ strategy: 'vector', score: 0.7, relevance: 0.7 }], true));
 
     expect(candidate?.currency).toBe('superseded');
     expect(candidate?.supersededBy).toEqual({ id: 'old-successor', at: SUPERSEDED_AT });
   });
 
   it('enters the spread at its own currency, so a superseded seed starts down-weighted', () => {
-    expect(toActivationSeed(seed('old', [{ strategy: 'vector', score: 0.7 }], true))).toEqual({
+    expect(toActivationSeed(seed('old', [{ strategy: 'vector', score: 0.7, relevance: 0.7 }], true))).toEqual({
       nodeId: 'old',
       currency: { currency: 'superseded', supersededBy: { id: 'old-successor', at: SUPERSEDED_AT } },
     });
@@ -80,7 +86,7 @@ describe('a seed as a fusion candidate', () => {
 });
 
 describe('the traversal list', () => {
-  const found = seed('found', [{ strategy: 'vector', score: 0.9, cue: 'webhooks' }]);
+  const found = seed('found', [{ strategy: 'vector', score: 0.9, relevance: 0.9, cue: 'webhooks' }]);
 
   it('explains a traversal-only node by activation, with the path that reached it', () => {
     const path = 'found -[PARTICIPATES_IN]-> session -[PARTICIPATES_IN]-> reached';
@@ -97,7 +103,7 @@ describe('the traversal list', () => {
 
   it('keeps a seed that fell under the activation threshold', () => {
     const candidates = traversalCandidates({
-      seeds: [found, seed('quiet', [{ strategy: 'recency', score: 0.5 }])],
+      seeds: [found, seed('quiet', [{ strategy: 'recency', score: 0.5, relevance: 0 }])],
       activated: [activated('found', 1, 'found')],
       hydrated: new Map(),
     });
@@ -117,8 +123,8 @@ describe('the traversal list', () => {
 });
 
 describe('the ranked lists fusion receives', () => {
-  const vectorSeed = seed('v1', [{ strategy: 'vector', score: 0.9 }]);
-  const bm25Seed = seed('b1', [{ strategy: 'bm25', score: 0.6 }]);
+  const vectorSeed = seed('v1', [{ strategy: 'vector', score: 0.9, relevance: 0.9 }]);
+  const bm25Seed = seed('b1', [{ strategy: 'bm25', score: 0.6, relevance: 0.6 }]);
 
   function lists(config: Config) {
     return buildRankedLists(config, {

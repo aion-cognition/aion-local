@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ScoredSeedCandidate, SeedCandidate } from '../graph/seed-queries.js';
 import {
   SEED_STRATEGIES,
+  RECENCY_RELEVANCE,
   mergeSeeds,
   normalizeToBest,
   recencyScore,
@@ -23,8 +24,9 @@ function contribution(
   strategy: SeedStrategy,
   score: number,
   cue?: string,
+  relevance = strategy === 'recency' ? RECENCY_RELEVANCE : score,
 ): SeedContribution {
-  const base = { candidate: candidate(id), strategy, score };
+  const base = { candidate: candidate(id), strategy, score, relevance };
   return cue === undefined ? base : { ...base, cue };
 }
 
@@ -63,6 +65,41 @@ describe('recencyScore', () => {
   });
 });
 
+describe('the two numbers a seed carries', () => {
+  it('scales the ranking score by the cue weight and leaves the measurement alone', () => {
+    const cosine = 0.9;
+    const [seed] = mergeSeeds(
+      [contribution('a', 'vector', scaleByCueWeight(cosine, 1), 'a recent turn', cosine)],
+      10,
+    );
+
+    // A perfect match found by a 1x recent-turn cue: ranked last, still well clear of the
+    // 0.35 floor. Scaling the two together would put it at 0.333 and delete the bucket.
+    expect(seed?.score).toBeCloseTo(0.3);
+    expect(seed?.relevance).toBe(cosine);
+  });
+
+  it('takes the strongest measurement any strategy made, not the one that ranked best', () => {
+    const [seed] = mergeSeeds(
+      [
+        contribution('a', 'vector', scaleByCueWeight(0.6, 3), 'the query', 0.6),
+        contribution('a', 'bm25', scaleByCueWeight(0.95, 1), 'a recent turn', 0.95),
+      ],
+      10,
+    );
+
+    expect(seed?.score).toBeCloseTo(0.6);
+    expect(seed?.relevance).toBe(0.95);
+  });
+
+  it('measures nothing for recency, so a merely recent node cannot carry itself into a pack', () => {
+    const [seed] = mergeSeeds([contribution('a', 'recency', recencyScore(0))], 10);
+
+    expect(seed?.score).toBe(1);
+    expect(seed?.relevance).toBe(0);
+  });
+});
+
 describe('mergeSeeds', () => {
   it('dedupes by node id and keeps every strategy that found the node, best score first', () => {
     const [seed] = mergeSeeds(
@@ -77,9 +114,9 @@ describe('mergeSeeds', () => {
     expect(seed?.id).toBe('a');
     expect(seed?.score).toBe(0.82);
     expect(seed?.provenance).toEqual([
-      { strategy: 'vector', score: 0.82, cue: 'reflection queue' },
-      { strategy: 'bm25', score: 0.4, cue: 'reflection queue' },
-      { strategy: 'recency', score: 0.25 },
+      { strategy: 'vector', score: 0.82, relevance: 0.82, cue: 'reflection queue' },
+      { strategy: 'bm25', score: 0.4, relevance: 0.4, cue: 'reflection queue' },
+      { strategy: 'recency', score: 0.25, relevance: RECENCY_RELEVANCE },
     ]);
   });
 

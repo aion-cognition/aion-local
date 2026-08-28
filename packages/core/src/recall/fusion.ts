@@ -20,15 +20,28 @@ export type FusionCandidate = {
   readonly occurredAt?: Date;
   readonly currency: Currency;
   readonly supersededBy?: SupersededBy;
+  /** The Member and the global Workspace: real traversal hits, but not memories to hand back. */
+  readonly isStructural?: boolean;
+  /** A Turn's parent episode, so the episodes bucket can hold one item per episode. */
+  readonly sourceEpisodeId?: string;
   /** Whitepaper §5.7's impression of why the item surfaced. Its score is the method's own. */
   readonly rationale: Rationale;
   /**
-   * The method score on a comparable [0,1] scale, which is what the floor is measured
+   * A similarity measurement on a comparable [0,1] scale, which is what the floor is measured
    * against. The fused score is a rank statistic — an RRF sum sits near 1/k whatever the
    * retrieval quality behind it — so a floor applied to it would either drop everything or
    * nothing.
+   *
+   * Zero when the method that produced the candidate measures nothing: a recency hit says
+   * "touched lately", not "matches the query". Such a candidate still ranks and corroborates;
+   * it just cannot carry itself into a pack.
    */
   readonly relevance: number;
+  /**
+   * Set only for a node no retrieval leg found, reached by spreading activation alone. Its
+   * own floor is Algorithm 2's `min_activation`, already applied by the time it gets here.
+   */
+  readonly activation?: number;
 };
 
 export type RankedList = {
@@ -93,6 +106,7 @@ type Accumulator = {
   best: FusionCandidate;
   score: number;
   relevance: number;
+  activation?: number;
 };
 
 /**
@@ -218,7 +232,15 @@ export function mmrOrder(
  *
  * A candidate with no content is counted for rank and then dropped — it was a real hit, so
  * removing its rank would promote everything under it, but a memory the pack cannot render
- * (a Session node, say) has nothing to hand the agent.
+ * (a Session node, say) has nothing to hand the agent. A structural node — the Member, the
+ * global Workspace — is dropped the same way and for the same reason: it is the graph's
+ * connectivity, not something the user ever told the substrate.
+ *
+ * Two admission rules, because two different things can put a candidate here. A retrieval hit
+ * is admitted on its own measurement against the floor (PRD §3.1, "empty beats noisy"). A node
+ * reached only by traversal has no measurement to offer, so it is admitted when the recall
+ * found an anchor — at least one hit that did clear the floor. Traversal extends a pack that
+ * something answered; it never fills one nothing answered.
  */
 export function fuse(
   lists: readonly RankedList[],
@@ -231,7 +253,7 @@ export function fuse(
     for (const candidate of list.candidates) {
       const contribution = list.weight * reciprocalRank(rank, options.rrfConstant);
       rank += 1;
-      if (candidate.content.trim().length === 0) {
+      if (candidate.content.trim().length === 0 || candidate.isStructural === true) {
         continue;
       }
 
@@ -241,6 +263,7 @@ export function fuse(
           best: candidate,
           score: contribution,
           relevance: candidate.relevance,
+          ...(candidate.activation === undefined ? {} : { activation: candidate.activation }),
         });
         continue;
       }
@@ -250,12 +273,19 @@ export function fuse(
         held.best = candidate;
       }
       held.relevance = Math.max(held.relevance, candidate.relevance);
+      if (candidate.activation !== undefined) {
+        held.activation = Math.max(held.activation ?? 0, candidate.activation);
+      }
     }
   }
 
+  const anchored = [...merged.values()].some((entry) => entry.relevance >= options.minRelevance);
+
   const items: FusedItem[] = [];
   for (const entry of merged.values()) {
-    if (entry.relevance < options.minRelevance) {
+    const measured = entry.relevance >= options.minRelevance;
+    const traversed = anchored && entry.activation !== undefined;
+    if (!measured && !traversed) {
       continue;
     }
     const superseded = entry.best.currency === 'superseded';

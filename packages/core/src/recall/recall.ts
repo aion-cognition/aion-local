@@ -48,6 +48,12 @@ export type RecallCompletion = {
   readonly items: readonly FusedItem[];
   readonly pack: MemoryPack;
   readonly now: Date;
+  /**
+   * The bitemporal vantage point the whole run read from. A listener that writes consults it:
+   * inspecting the past is a question, not a use, so it must not stamp `last_accessed` on
+   * historical nodes or strengthen edges as though the memory had just fired (PRD §5.5).
+   */
+  readonly mode: ReadMode;
 };
 
 /**
@@ -181,7 +187,12 @@ async function hydrate(
 }
 
 function activationBudget(config: Config): ActivationBudget {
-  return { ...config.activation, maxHops: config.recall.maxHops };
+  return {
+    ...config.activation,
+    maxHops: config.recall.maxHops,
+    associationStrength: config.recall.associationStrength,
+    maxActivated: config.contextResonance.activationLimit,
+  };
 }
 
 function notify(deps: RecallDeps, completion: RecallCompletion): void {
@@ -318,6 +329,7 @@ export async function handleRecall(
     items: fusion.value,
     pack,
     now,
+    mode,
   });
 
   return pack;

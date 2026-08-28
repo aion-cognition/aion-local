@@ -39,8 +39,28 @@ export const ENTITY_NAME_VECTOR_PROPERTY = 'name_vec';
 /** Written by recall's own access-tracking side effects; absent on a substrate that has served no recall yet. */
 export const LAST_ACCESSED_PROPERTY = 'last_accessed';
 
+/**
+ * Set by `bootstrapBackbone` on the Member and the global Workspace. Those two are the graph's
+ * connectivity backbone, not memories, so every read that feeds a MemoryPack carries the flag
+ * and the pack drops them.
+ */
+export const STRUCTURAL_PROPERTY = 'is_structural';
+
 /** An exact identity match is the strongest signal a seed can carry, so it enters the merge at the ceiling. */
 export const EXACT_NAME_MATCH_SCORE = 1;
+
+/**
+ * Neo4j reports cosine similarity rescaled onto [0,1] as `(1 + cos) / 2` — both the vector
+ * index and `vector.similarity.cosine` — so two unrelated memories come back at 0.5 rather
+ * than at 0. Every score this module returns is converted back to a true cosine, because the
+ * thresholds it is measured against (`AION_MIN_RELEVANCE`, `AION_RECALL_ENTITY_MATCH_THRESHOLD`)
+ * are cosines: read raw, a floor of 0.35 would admit every row the index cared to return.
+ */
+const RESCALED_COSINE_TO_COSINE = '2.0 * %s - 1.0';
+
+function asCosine(scoreExpression: string): string {
+  return RESCALED_COSINE_TO_COSINE.replace('%s', scoreExpression);
+}
 
 export type SeedCandidate = CurrencyAnnotation & {
   readonly id: string;
@@ -48,6 +68,13 @@ export type SeedCandidate = CurrencyAnnotation & {
   /** Whichever of `summary`, `text`, `name` the node carries — the same three the fulltext index covers. */
   readonly content: string;
   readonly occurredAt?: Date;
+  /**
+   * `is_structural` from the backbone bootstrap. Absent on every node but the Member and the
+   * global Workspace, which mirrors how the property is stored: written only where true.
+   */
+  readonly isStructural?: boolean;
+  /** A Turn's parent episode. Absent on everything else, including the Episode itself. */
+  readonly sourceEpisodeId?: string;
 };
 
 export type ScoredSeedCandidate = SeedCandidate & {
@@ -96,17 +123,22 @@ function candidateProjection(nodeVar: string, fragment: ReadFragment): string {
     `coalesce(${nodeVar}.${MEMORY_PROPERTIES.summary}, ${nodeVar}.${MEMORY_PROPERTIES.text},` +
       ` ${nodeVar}.${ENTITY_NAME_PROPERTY}, '') AS content`,
     `${nodeVar}.${BITEMPORAL_PROPERTIES.occurredAt} AS occurred_at`,
+    `${nodeVar}.${STRUCTURAL_PROPERTY} AS is_structural`,
+    `${nodeVar}.${MEMORY_PROPERTIES.sourceEpisodeId} AS source_episode_id`,
     fragment.projection,
   ].join(', ');
 }
 
 function mapCandidate(row: Row): SeedCandidate {
   const occurredAt = row.occurred_at;
+  const sourceEpisodeId = row.source_episode_id;
   return {
     id: row.id as string,
     labels: (row.labels as string[] | null) ?? [],
     content: typeof row.content === 'string' ? row.content : '',
     ...(occurredAt instanceof Date ? { occurredAt } : {}),
+    ...(row.is_structural === true ? { isStructural: true } : {}),
+    ...(typeof sourceEpisodeId === 'string' ? { sourceEpisodeId } : {}),
     ...readCurrencyAnnotation(row),
   };
 }
@@ -132,8 +164,8 @@ export async function vectorSeeds(
 ): Promise<ScoredSeedCandidate[]> {
   const fragment = readModeFragment(input.mode, 'n');
   const cypher = [
-    'CALL db.index.vector.queryNodes($index, $limit, $vector) YIELD node AS n, score',
-    `WITH n, score WHERE ${fragment.where}`,
+    'CALL db.index.vector.queryNodes($index, $limit, $vector) YIELD node AS n, score AS rescaled',
+    `WITH n, ${asCosine('rescaled')} AS score WHERE ${fragment.where}`,
     `RETURN ${candidateProjection('n', fragment)}, score`,
     'ORDER BY score DESC',
   ].join('\n');
@@ -241,7 +273,7 @@ export async function entitySimilaritySeeds(
     `WHERE n.${ENTITY_NAME_VECTOR_PROPERTY} IS NOT NULL`,
     `  AND size(n.${ENTITY_NAME_VECTOR_PROPERTY}) = $dimension`,
     `  AND ${fragment.where}`,
-    `WITH n, vector.similarity.cosine(n.${ENTITY_NAME_VECTOR_PROPERTY}, $vector) AS score`,
+    `WITH n, ${asCosine(`vector.similarity.cosine(n.${ENTITY_NAME_VECTOR_PROPERTY}, $vector)`)} AS score`,
     'WHERE score >= $threshold',
     `RETURN ${candidateProjection('n', fragment)}, score`,
     'ORDER BY score DESC',

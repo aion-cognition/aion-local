@@ -47,9 +47,21 @@ export type SeedCue = {
   readonly vector?: Vector;
 };
 
+/**
+ * Two numbers, because Algorithm 1's bucket weights and the relevance floor answer different
+ * questions. `score` is the ranking number: the method's score scaled by the weight of the cue
+ * that found it, which is how a query cue outranks a recent-turn cue. `relevance` is the
+ * method's own measurement on its own comparable scale, which is what `AION_MIN_RELEVANCE`
+ * is measured against.
+ *
+ * Composing the two — measuring a weighted score against an absolute floor — deletes whole
+ * buckets: at the pinned floor of 0.35 no 1x recent-turn cue could ever contribute an item,
+ * however perfect its match, because 1.0 scaled to a third of itself is 0.333.
+ */
 export type SeedProvenance = {
   readonly strategy: SeedStrategy;
   readonly score: number;
+  readonly relevance: number;
   /** The cue text behind the hit; absent for recency, which no cue drives. */
   readonly cue?: string;
 };
@@ -57,6 +69,8 @@ export type SeedProvenance = {
 export type Seed = SeedCandidate & {
   /** The best of `provenance`, which is ordered to match. */
   readonly score: number;
+  /** The strongest measurement any strategy made of this node, unscaled. */
+  readonly relevance: number;
   readonly provenance: readonly SeedProvenance[];
 };
 
@@ -64,6 +78,7 @@ export type SeedContribution = {
   readonly candidate: SeedCandidate;
   readonly strategy: SeedStrategy;
   readonly score: number;
+  readonly relevance: number;
   readonly cue?: string;
 };
 
@@ -118,10 +133,17 @@ export function normalizeToBest(
  * Reciprocal rank, so the bias stays a bias: the most recently touched node competes with a
  * strong content hit and the tail falls away fast, rather than a flat recency list crowding
  * out everything the cues found.
+ *
+ * A rank, never a relevance. Whitepaper §5.2 calls recency a weighting of the seed selection,
+ * and "this was touched recently" is not a measurement of how well a node answers the query,
+ * so a recency contribution carries `relevance: 0` (`RECENCY_RELEVANCE`). It seeds the spread
+ * and it corroborates a node another strategy also found; on its own it never fills a pack.
  */
 export function recencyScore(rank: number): number {
   return 1 / (1 + rank);
 }
+
+export const RECENCY_RELEVANCE = 0;
 
 function compareProvenance(a: SeedProvenance, b: SeedProvenance): number {
   if (a.score !== b.score) {
@@ -142,14 +164,15 @@ function compareSeeds(a: Seed, b: Seed): number {
 }
 
 function toProvenance(contribution: SeedContribution): SeedProvenance {
-  if (contribution.cue === undefined) {
-    return { strategy: contribution.strategy, score: contribution.score };
-  }
-  return {
+  const base = {
     strategy: contribution.strategy,
     score: contribution.score,
-    cue: contribution.cue,
+    relevance: contribution.relevance,
   };
+  if (contribution.cue === undefined) {
+    return base;
+  }
+  return { ...base, cue: contribution.cue };
 }
 
 /**
@@ -179,6 +202,10 @@ export function mergeSeeds(
   for (const { candidate, provenance } of merged.values()) {
     provenance.sort(compareProvenance);
     const best = provenance[0];
+    let relevance = 0;
+    for (const entry of provenance) {
+      relevance = Math.max(relevance, entry.relevance);
+    }
     // Absent optionals stay absent rather than becoming explicit `undefined` keys, so a pack
     // item built by spreading a seed carries only the fields the seed actually has.
     seeds.push({
@@ -186,9 +213,14 @@ export function mergeSeeds(
       labels: candidate.labels,
       content: candidate.content,
       ...(candidate.occurredAt === undefined ? {} : { occurredAt: candidate.occurredAt }),
+      ...(candidate.isStructural === undefined ? {} : { isStructural: candidate.isStructural }),
+      ...(candidate.sourceEpisodeId === undefined
+        ? {}
+        : { sourceEpisodeId: candidate.sourceEpisodeId }),
       currency: candidate.currency,
       ...(candidate.supersededBy === undefined ? {} : { supersededBy: candidate.supersededBy }),
       score: best === undefined ? 0 : best.score,
+      relevance,
       provenance,
     });
   }
@@ -203,12 +235,13 @@ function contribute(
   cue: SeedCue | undefined,
 ): SeedContribution {
   if (cue === undefined) {
-    return { candidate, strategy, score: candidate.score };
+    return { candidate, strategy, score: candidate.score, relevance: candidate.score };
   }
   return {
     candidate,
     strategy,
     score: scaleByCueWeight(candidate.score, cue.weight),
+    relevance: candidate.score,
     cue: cue.text,
   };
 }
@@ -295,6 +328,12 @@ async function bm25Contributions(
 /**
  * Identity first, similarity second. One name can be carried by several cues; the heaviest
  * one owns the hit, since the weight is what the match is scaled by.
+ *
+ * The fuzzy leg is a per-cue KNN like the vector leg, so it takes the same per-cue cap
+ * (`recall.vectorLimit`) and its own threshold (`recall.entityMatchThreshold`). Neither is
+ * `contextResonance.*`: that group is Algorithm 3's, and one knob cannot mean both "how close
+ * two names have to be to be the same entity" and "how close two context vectors have to be
+ * to resonate" without silently retuning one while tuning the other.
  */
 async function entityContributions(
   deps: SelectSeedsDeps,
@@ -328,8 +367,8 @@ async function entityContributions(
       (async () => {
         const rows = await entitySimilaritySeeds(deps.driver, {
           vector: cue.vector,
-          threshold: deps.config.contextResonance.contextSearchThreshold,
-          limit: deps.config.contextResonance.seedLimit,
+          threshold: deps.config.recall.entityMatchThreshold,
+          limit: deps.config.recall.vectorLimit,
           mode,
         });
         return rows.map((row) => contribute('entity_resolution', row, cue));
@@ -353,6 +392,7 @@ async function recencyContributions(
       candidate: row,
       strategy: 'recency' as const,
       score: recencyScore(rank),
+      relevance: RECENCY_RELEVANCE,
     }));
   })();
   return settle(deps.logger, 'recency', 'recently accessed nodes', [task]);

@@ -178,6 +178,22 @@ describe('per-strategy hits', () => {
     expect(selection.byStrategy.vector[0]?.score).toBeCloseTo(1, 5);
   });
 
+  it('reports a true cosine, so the relevance floor is measured against what it names', async () => {
+    const rows = await vectorSeeds(harness.driver, {
+      vector: VECTORS.activation,
+      limit: 50,
+      mode: withCurrency(),
+    });
+
+    // Neo4j hands back `(1 + cos) / 2`, which would put every orthogonal memory at 0.5 —
+    // above `AION_MIN_RELEVANCE`, and so no floor at all.
+    expect(rows.find((row) => row.id === ids.activation)?.score).toBeCloseTo(1, 5);
+    expect(rows.find((row) => row.id === ids.claimPath)?.score).toBeCloseTo(0, 5);
+    expect(rows.find((row) => row.id === ids.claimPath)?.score).toBeLessThan(
+      DEFAULTS.recall.minRelevance,
+    );
+  });
+
   it('BM25 finds the exact token a paraphrase would miss', async () => {
     const selection = await selectSeeds(deps(), { cues: [cue('SQLITE_BUSY', 3)] });
     const seed = find(selection.byStrategy.bm25, ids.claimPath);
@@ -213,7 +229,7 @@ describe('entity resolution before P3 writes name embeddings', () => {
   it('returns nothing from the similarity leg and raises no error when no entity carries a name embedding', async () => {
     const rows = await entitySimilaritySeeds(harness.driver, {
       vector: VECTORS.entityName,
-      threshold: DEFAULTS.contextResonance.contextSearchThreshold,
+      threshold: DEFAULTS.recall.entityMatchThreshold,
       limit: 10,
       mode: withCurrency(),
     });
@@ -296,9 +312,11 @@ describe('merge', () => {
     expect(seed?.provenance).toContainEqual({
       strategy: 'entity_resolution',
       score: 1,
+      relevance: 1,
       cue: 'global',
     });
     expect(seed?.provenance.map((entry) => entry.strategy)).toContain('bm25');
+    expect(seed?.isStructural).toBe(true);
   });
 });
 
@@ -318,15 +336,15 @@ describe('entity name similarity once name embeddings exist', () => {
 
     const rows = await entitySimilaritySeeds(harness.driver, {
       vector: VECTORS.entityName,
-      threshold: DEFAULTS.contextResonance.contextSearchThreshold,
+      threshold: DEFAULTS.recall.entityMatchThreshold,
       limit: 10,
       mode: withCurrency(),
     });
 
     expect(rows.map((row) => row.id)).toEqual([entity.id]);
-    expect(rows[0]?.score).toBeGreaterThanOrEqual(
-      DEFAULTS.contextResonance.contextSearchThreshold,
-    );
+    // An identical vector is cosine 1, not Neo4j's rescaled 1; the conversion is what makes
+    // the threshold a cosine.
+    expect(rows[0]?.score).toBeCloseTo(1, 5);
 
     const selection = await selectSeeds(deps(), {
       cues: [cue('the aion substrate', 3, VECTORS.entityName)],
@@ -338,7 +356,7 @@ describe('entity name similarity once name embeddings exist', () => {
   it('leaves an entity below the threshold out', async () => {
     const rows = await entitySimilaritySeeds(harness.driver, {
       vector: VECTORS.turn,
-      threshold: DEFAULTS.contextResonance.contextSearchThreshold,
+      threshold: DEFAULTS.recall.entityMatchThreshold,
       limit: 10,
       mode: withCurrency(),
     });

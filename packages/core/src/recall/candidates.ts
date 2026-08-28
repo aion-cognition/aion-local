@@ -34,7 +34,11 @@ function annotationOf(candidate: SeedCandidate): CurrencyAnnotation {
 }
 
 export function toActivationSeed(seed: Seed): ActivationSeed {
-  return { nodeId: seed.id, currency: annotationOf(seed) };
+  return {
+    nodeId: seed.id,
+    currency: annotationOf(seed),
+    ...(seed.isStructural === undefined ? {} : { isStructural: seed.isStructural }),
+  };
 }
 
 function baseCandidate(candidate: SeedCandidate): Omit<FusionCandidate, 'rationale' | 'relevance'> {
@@ -43,6 +47,10 @@ function baseCandidate(candidate: SeedCandidate): Omit<FusionCandidate, 'rationa
     labels: candidate.labels,
     content: candidate.content,
     ...(candidate.occurredAt === undefined ? {} : { occurredAt: candidate.occurredAt }),
+    ...(candidate.isStructural === undefined ? {} : { isStructural: candidate.isStructural }),
+    ...(candidate.sourceEpisodeId === undefined
+      ? {}
+      : { sourceEpisodeId: candidate.sourceEpisodeId }),
     ...annotationOf(candidate),
   };
 }
@@ -51,6 +59,10 @@ function baseCandidate(candidate: SeedCandidate): Omit<FusionCandidate, 'rationa
  * A seed is explained by the strategy that found it, at that strategy's own score — never
  * by the activation pass, which re-encounters every seed at 1.0 and would otherwise
  * flatten four distinct retrieval stories into one.
+ *
+ * The rationale carries the ranking score (weighted by the cue's Algorithm 1 bucket, so the
+ * reader sees why it sits where it sits); `relevance` carries the unweighted measurement the
+ * floor reads. A recent-turn cue that matched perfectly ranks last and still surfaces.
  */
 export function seedCandidate(seed: Seed): FusionCandidate | undefined {
   const best = seed.provenance[0];
@@ -60,7 +72,7 @@ export function seedCandidate(seed: Seed): FusionCandidate | undefined {
   return {
     ...baseCandidate(seed),
     rationale: { method: best.strategy, score: seed.score },
-    relevance: seed.score,
+    relevance: seed.relevance,
   };
 }
 
@@ -69,7 +81,8 @@ function activatedCandidate(node: ActivatedNode, candidate: SeedCandidate): Fusi
   return {
     ...baseCandidate(candidate),
     rationale: { method: 'activation', score: node.score, path: node.pathSummary },
-    relevance: node.score,
+    relevance: 0,
+    activation: node.score,
   };
 }
 

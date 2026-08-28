@@ -59,6 +59,11 @@ export const KNOB_REGISTRY: readonly Knob[] = [
   { envVar: 'AION_CUE_BUDGET_MS', path: ['recall', 'cueBudgetMs'], kind: 'number' },
   { envVar: 'AION_RECALL_TOKEN_BUDGET', path: ['recall', 'tokenBudget'], kind: 'number' },
   { envVar: 'AION_MIN_RELEVANCE', path: ['recall', 'minRelevance'], kind: 'number' },
+  {
+    envVar: 'AION_RECALL_ENTITY_MATCH_THRESHOLD',
+    path: ['recall', 'entityMatchThreshold'],
+    kind: 'number',
+  },
 
   { envVar: 'AION_SEARCH_METHODS', path: ['search', 'methods'], kind: 'stringList' },
   { envVar: 'AION_SEARCH_RERANKER', path: ['search', 'reranker'], kind: 'string' },

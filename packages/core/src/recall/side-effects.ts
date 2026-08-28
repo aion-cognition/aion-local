@@ -1,5 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 import { recordAccess } from '../graph/access-tracking.js';
+import { isTimeTravel } from '../graph/read-modes.js';
 import type { Logger } from '../logging/logger.js';
 import type { SqliteHandle } from '../sqlite/database.js';
 import { enqueueReinforcementSignal } from '../sqlite/reinforcement-queue.js';
@@ -31,11 +32,16 @@ export const REINFORCEMENT_TRIGGER = 'recall_co_activation';
  * enqueues the same pairs in the same order. `activated` arrives score-descending
  * (`activation.ts`'s `collect`), so slicing to `REINFORCEMENT_TOP_N` first keeps the
  * strongest co-activations and drops the long tail rather than sampling it arbitrarily.
+ *
+ * Structural nodes are dropped before the slice. Every session hangs off the Member and the
+ * global Workspace, so those two co-activate with everything by construction; reinforcing them
+ * would teach the graph a fact about its own wiring and crowd the queue with pairs no amount
+ * of use should make stronger.
  */
 export function reinforcementPairs(
   activated: readonly ActivatedNode[],
 ): ReadonlyArray<readonly [string, string]> {
-  const top = activated.slice(0, REINFORCEMENT_TOP_N);
+  const top = activated.filter((node) => !node.isStructural).slice(0, REINFORCEMENT_TOP_N);
   const pairs: Array<readonly [string, string]> = [];
   for (let i = 0; i < top.length; i += 1) {
     for (let j = i + 1; j < top.length; j += 1) {
@@ -63,8 +69,18 @@ export class RecallSideEffects {
     this.#logger = logger;
   }
 
-  /** Bound as a class field so it can be assigned directly to `RecallDeps.onRecalled`. */
+  /**
+   * Bound as a class field so it can be assigned directly to `RecallDeps.onRecalled`.
+   *
+   * Both effects are writes shaped by "this memory just fired", which an `as_of` or `knew_at`
+   * recall did not do: it asked what the substrate held at another moment. Bumping access
+   * metadata there would rewrite the recency signal the seed strategy reads back and feed
+   * plasticity (§5.8) an event that never happened, so time travel is read-only.
+   */
   readonly onRecalled: RecallListener = (completion) => {
+    if (isTimeTravel(completion.mode)) {
+      return;
+    }
     this.#enqueueReinforcement(completion);
     this.#scheduleAccessTracking(completion);
   };
