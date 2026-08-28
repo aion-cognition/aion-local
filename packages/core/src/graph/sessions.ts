@@ -1,7 +1,8 @@
 import type { Driver } from 'neo4j-driver';
-import { BITEMPORAL_PROPERTIES, writeStampedNode } from './bitemporal.js';
-import { runRead } from './connection.js';
-import { upsertEdge } from './edges.js';
+import { writeStampedNodeInTransaction } from './bitemporal.js';
+import { inWriteTransaction, type GraphTransaction } from './connection.js';
+import { upsertEdgeInTransaction } from './edges.js';
+import { lockNodeInTransaction } from './locks.js';
 
 /**
  * Whitepaper §4.2 / PRD §3.3, §5.3: a session's node id is the caller-supplied identity
@@ -29,22 +30,26 @@ const STRUCTURAL_SIGNALS = ['structural'];
 const STRUCTURAL_PROVENANCE = ['session'];
 
 /**
- * The member's most recent other session in this workspace, by write order (`tx_from`).
+ * The tail of the member's chain in this workspace: the one session nothing else FOLLOWS.
+ * Read from the chain's own shape rather than by ordering on `tx_from`, which ties at
+ * millisecond resolution — two sessions created in the same millisecond would order by id
+ * and the younger could be handed the older's prior, forking the chain. A path has exactly
+ * one tail, so this has no tie to break.
+ *
  * Only ever called at true node creation (see `ensureGraphSession`), never on a repeat
- * call: re-deriving "most recent other session" after later sessions exist would point an
- * older session's FOLLOWS edge at one created after it, cross-linking the chain.
+ * call: re-deriving the tail after later sessions exist would point an older session's
+ * FOLLOWS edge at one created after it, cross-linking the chain.
  */
 async function findPriorSessionId(
-  driver: Driver,
+  tx: GraphTransaction,
   input: { sessionId: string; memberId: string; workspaceId: string },
 ): Promise<string | undefined> {
-  const rows = await runRead(
-    driver,
+  const rows = await tx.run(
     [
       'MATCH (s:Session)-[:INITIATED_BY]->(:Member { id: $memberId })',
       'MATCH (s)-[:WITHIN_WORKSPACE]->(:Workspace { id: $workspaceId })',
-      'WHERE s.id <> $sessionId',
-      `RETURN s.id AS id ORDER BY s.${BITEMPORAL_PROPERTIES.txFrom} DESC, s.id DESC LIMIT 1`,
+      'WHERE s.id <> $sessionId AND NOT EXISTS { (:Session)-[:FOLLOWS]->(s) }',
+      'RETURN s.id AS id LIMIT 1',
     ].join('\n'),
     { memberId: input.memberId, workspaceId: input.workspaceId, sessionId: input.sessionId },
     (row) => row.id as string,
@@ -53,9 +58,11 @@ async function findPriorSessionId(
 }
 
 /** Reads back an already-linked session's FOLLOWS target; undefined for the member's first session. */
-async function readFollowsTarget(driver: Driver, sessionId: string): Promise<string | undefined> {
-  const rows = await runRead(
-    driver,
+async function readFollowsTarget(
+  tx: GraphTransaction,
+  sessionId: string,
+): Promise<string | undefined> {
+  const rows = await tx.run(
     'MATCH (:Session { id: $sessionId })-[:FOLLOWS]->(prior:Session) RETURN prior.id AS id',
     { sessionId },
     (row) => row.id as string,
@@ -70,8 +77,13 @@ async function readFollowsTarget(driver: Driver, sessionId: string): Promise<str
  * call for the same `sessionId` resolves and reports the existing chain instead of
  * re-deriving it, which is both truer to "resolve without writing" and what keeps a
  * repeat call for an older session from ever cross-linking to a session created after it.
- * The manager in `core/session/` adds an in-memory shortcut on top of this for the common
- * case, but this function is safe to call directly and repeatedly.
+ *
+ * One transaction, and the Member locked inside it before the chain is derived. The tail
+ * of the chain is a read ("the member's most recent other session") that decides a write,
+ * which is the shape a concurrent peer breaks: unserialized, two sessions created at once
+ * either both point at the same prior session, forking the chain, or point at each other,
+ * cycling it. This is the ordinary regime, not an edge case — one service multiplexes many
+ * agent sessions (PRD §3.3), and each new connection creates its session on its first call.
  */
 export async function ensureGraphSession(
   driver: Driver,
@@ -79,52 +91,30 @@ export async function ensureGraphSession(
 ): Promise<EnsureGraphSessionResult> {
   const now = input.now ?? new Date();
 
-  const node = await writeStampedNode(driver, {
-    label: 'Session',
-    id: input.sessionId,
-    now,
-  });
+  return inWriteTransaction(driver, async (tx) => {
+    const node = await writeStampedNodeInTransaction(tx, {
+      label: 'Session',
+      id: input.sessionId,
+      now,
+    });
 
-  if (!node.created) {
-    const follows = await readFollowsTarget(driver, node.id);
-    return { sessionId: node.id, created: false, follows };
-  }
+    if (!node.created) {
+      const follows = await readFollowsTarget(tx, node.id);
+      return { sessionId: node.id, created: false, follows };
+    }
 
-  await upsertEdge(driver, {
-    type: 'INITIATED_BY',
-    sourceId: node.id,
-    targetId: input.memberId,
-    strength: 1,
-    confidence: 1,
-    signals: STRUCTURAL_SIGNALS,
-    provenance: STRUCTURAL_PROVENANCE,
-    count: 0,
-    now,
-  });
+    await lockNodeInTransaction(tx, input.memberId, now);
 
-  await upsertEdge(driver, {
-    type: 'WITHIN_WORKSPACE',
-    sourceId: node.id,
-    targetId: input.workspaceId,
-    strength: 1,
-    confidence: 1,
-    signals: STRUCTURAL_SIGNALS,
-    provenance: STRUCTURAL_PROVENANCE,
-    count: 0,
-    now,
-  });
+    const priorSessionId = await findPriorSessionId(tx, {
+      sessionId: node.id,
+      memberId: input.memberId,
+      workspaceId: input.workspaceId,
+    });
 
-  const priorSessionId = await findPriorSessionId(driver, {
-    sessionId: node.id,
-    memberId: input.memberId,
-    workspaceId: input.workspaceId,
-  });
-
-  if (priorSessionId !== undefined) {
-    await upsertEdge(driver, {
-      type: 'FOLLOWS',
+    await upsertEdgeInTransaction(tx, {
+      type: 'INITIATED_BY',
       sourceId: node.id,
-      targetId: priorSessionId,
+      targetId: input.memberId,
       strength: 1,
       confidence: 1,
       signals: STRUCTURAL_SIGNALS,
@@ -132,7 +122,33 @@ export async function ensureGraphSession(
       count: 0,
       now,
     });
-  }
 
-  return { sessionId: node.id, created: true, follows: priorSessionId };
+    await upsertEdgeInTransaction(tx, {
+      type: 'WITHIN_WORKSPACE',
+      sourceId: node.id,
+      targetId: input.workspaceId,
+      strength: 1,
+      confidence: 1,
+      signals: STRUCTURAL_SIGNALS,
+      provenance: STRUCTURAL_PROVENANCE,
+      count: 0,
+      now,
+    });
+
+    if (priorSessionId !== undefined) {
+      await upsertEdgeInTransaction(tx, {
+        type: 'FOLLOWS',
+        sourceId: node.id,
+        targetId: priorSessionId,
+        strength: 1,
+        confidence: 1,
+        signals: STRUCTURAL_SIGNALS,
+        provenance: STRUCTURAL_PROVENANCE,
+        count: 0,
+        now,
+      });
+    }
+
+    return { sessionId: node.id, created: true, follows: priorSessionId };
+  });
 }

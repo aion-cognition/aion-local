@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type { Driver } from 'neo4j-driver';
 import {
   type GraphStatement,
+  type GraphTransaction,
+  type WriteOutcome,
   inWriteTransaction,
   runWriteWithCounters,
 } from './connection.js';
@@ -116,17 +118,34 @@ export function buildStampedNodeWrite(input: StampedNodeWrite): GraphStatement {
   };
 }
 
+function toStampedNodeResult(
+  statement: GraphStatement,
+  outcome: WriteOutcome<{ id: string; labels: readonly string[] }>,
+): StampedNodeResult {
+  const row = outcome.rows[0];
+  if (row === undefined) {
+    throw new GraphNodeNotFoundError([String(statement.parameters.id)], 'stamped node write');
+  }
+  return { id: row.id, labels: row.labels, created: outcome.nodesCreated > 0 };
+}
+
 export async function writeStampedNode(
   driver: Driver,
   input: StampedNodeWrite,
 ): Promise<StampedNodeResult> {
   const statement = buildStampedNodeWrite(input);
   const outcome = await runWriteWithCounters(driver, statement.cypher, statement.parameters, mapNodeRow);
-  const row = outcome.rows[0];
-  if (row === undefined) {
-    throw new GraphNodeNotFoundError([String(statement.parameters.id)], 'stamped node write');
-  }
-  return { id: row.id, labels: row.labels, created: outcome.nodesCreated > 0 };
+  return toStampedNodeResult(statement, outcome);
+}
+
+/** Same write inside a caller's transaction, for the paths that must stamp several nodes atomically. */
+export async function writeStampedNodeInTransaction(
+  tx: GraphTransaction,
+  input: StampedNodeWrite,
+): Promise<StampedNodeResult> {
+  const statement = buildStampedNodeWrite(input);
+  const outcome = await tx.runWithCounters(statement.cypher, statement.parameters, mapNodeRow);
+  return toStampedNodeResult(statement, outcome);
 }
 
 function mapNodeRow(row: Row): { id: string; labels: readonly string[] } {

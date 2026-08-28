@@ -49,6 +49,21 @@ async function countEdges(type: string, sourceId: string, targetId: string): Pro
   return rows[0] ?? 0;
 }
 
+type FollowsEdge = { from: string; to: string };
+
+async function allSessionIds(): Promise<string[]> {
+  return runRead(harness.driver, 'MATCH (s:Session) RETURN s.id AS id', {}, (row) => row.id as string);
+}
+
+async function allFollowsEdges(): Promise<FollowsEdge[]> {
+  return runRead(
+    harness.driver,
+    'MATCH (a:Session)-[:FOLLOWS]->(b:Session) RETURN a.id AS from, b.id AS to',
+    {},
+    (row) => ({ from: row.from as string, to: row.to as string }),
+  );
+}
+
 describe('ensureGraphSession', () => {
   it('creates the Session node with backbone edges and no FOLLOWS for the member’s first session', async () => {
     const result = await ensureGraphSession(harness.driver, {
@@ -115,5 +130,46 @@ describe('ensureGraphSession', () => {
       (row) => row.txFrom as Date,
     );
     expect(after[0]).toEqual(original[0]);
+  });
+
+  // The regime PRD §3.3 describes: one service, many agent sessions, each creating its
+  // Session node on its first tool call. Unserialized, concurrent first calls cross-link
+  // (two sessions pointing at each other) or fork (two sessions claiming the same prior).
+  it('keeps the chain a single unbroken path when many identities arrive at once', async () => {
+    const identities = Array.from({ length: 8 }, (_, index) => `burst-session-${String(index)}`);
+
+    const results = await Promise.all(
+      identities.map((sessionId) =>
+        ensureGraphSession(harness.driver, { sessionId, memberId, workspaceId }),
+      ),
+    );
+    expect(results.every((result) => result.created)).toBe(true);
+
+    const sessions = await allSessionIds();
+    const edges = await allFollowsEdges();
+
+    expect(sessions).toHaveLength(identities.length + 3);
+    expect(edges).toHaveLength(sessions.length - 1);
+    // One FOLLOWS out of each linked session, and no two sessions claiming one prior.
+    expect(new Set(edges.map((edge) => edge.from)).size).toBe(edges.length);
+    expect(new Set(edges.map((edge) => edge.to)).size).toBe(edges.length);
+
+    const next = new Map(edges.map((edge) => [edge.from, edge.to]));
+    const followed = new Set(edges.map((edge) => edge.to));
+    const heads = sessions.filter((id) => !followed.has(id));
+    expect(heads).toEqual([expect.any(String)]);
+
+    // Walking the chain from its newest end reaches every session exactly once, which no
+    // cycle and no fork can satisfy. The bound is what keeps a cycle from hanging the test.
+    const visited: string[] = [];
+    let cursor = heads[0];
+    while (cursor !== undefined && visited.length <= sessions.length) {
+      visited.push(cursor);
+      cursor = next.get(cursor);
+    }
+
+    expect(visited).toHaveLength(sessions.length);
+    expect(new Set(visited).size).toBe(sessions.length);
+    expect(visited[visited.length - 1]).toBe('first-session');
   });
 });

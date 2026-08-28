@@ -1,4 +1,5 @@
 import type { Driver } from 'neo4j-driver';
+import { LOCK_PROPERTY } from '../../graph/locks.js';
 import type { Row } from '../../graph/values.js';
 
 /**
@@ -56,10 +57,27 @@ export class FakeGraph {
   readonly nodes = new Map<string, FakeNode>();
   readonly edges = new Map<string, FakeEdge>();
   readonly statements: RecordedStatement[] = [];
+  /** Node ids a caller took a write lock on, in order. */
+  readonly locked: string[] = [];
 
-  /** The fake answers `executeQuery`, which is the whole surface the adapter's helpers use. */
+  /** The fake answers `executeQuery` and `session`, which is the whole surface the adapter's helpers use. */
   get driver(): Driver {
     return this as unknown as Driver;
+  }
+
+  /**
+   * Transactions run their statements through the same dispatcher and always commit: the
+   * fake models what reaches the graph, not isolation. Atomicity and locking are proven
+   * against a real server in the integration suites.
+   */
+  session(): unknown {
+    const run = async (cypher: string, parameters: Record<string, unknown> = {}): Promise<unknown> =>
+      this.executeQuery(cypher, parameters);
+    return {
+      executeWrite: async (work: (tx: { run: typeof run }) => Promise<unknown>): Promise<unknown> =>
+        work({ run }),
+      close: async (): Promise<void> => {},
+    };
   }
 
   seedNode(id: string, labels: readonly string[], properties: Record<string, unknown> = {}): void {
@@ -90,6 +108,10 @@ export class FakeGraph {
     const edgeMerge = /MERGE \(a\)-\[r:(\w+)\]->\(b\)/.exec(cypher);
     if (edgeMerge !== null) {
       return this.#mergeEdge(edgeMerge[1] as string, parameters);
+    }
+
+    if (cypher.includes(`SET n.${LOCK_PROPERTY}`)) {
+      return this.#lockNode(parameters);
     }
 
     if (cypher.includes('(e:Episode)')) {
@@ -167,6 +189,16 @@ export class FakeGraph {
     return toResult([{ ...edge, rationale: null }]);
   }
 
+  /** Records that the lock was taken and on which node; the fake serializes nothing. */
+  #lockNode(parameters: Record<string, unknown>): unknown {
+    const id = parameters.id as string;
+    const node = this.nodes.get(id);
+    if (node !== undefined) {
+      this.locked.push(id);
+    }
+    return toResult([]);
+  }
+
   #findEpisodeByContentHash(parameters: Record<string, unknown>): Row[] {
     const sessionId = parameters.sessionId as string;
     const contentHash = parameters.contentHash as string;
@@ -192,10 +224,15 @@ export class FakeGraph {
     return [];
   }
 
+  /** The chain's tail: the member's session that no other session FOLLOWS. */
   #priorSession(parameters: Record<string, unknown>): Row[] {
     const sessionId = parameters.sessionId as string;
-    const sessions = this.nodesWithLabel('Session').filter((node) => node.id !== sessionId);
-    const latest = sessions[sessions.length - 1];
-    return latest === undefined ? [] : [{ id: latest.id }];
+    const followed = new Set(
+      [...this.edges.values()].filter((edge) => edge.type === 'FOLLOWS').map((edge) => edge.targetId),
+    );
+    const tail = this.nodesWithLabel('Session').find(
+      (node) => node.id !== sessionId && !followed.has(node.id),
+    );
+    return tail === undefined ? [] : [{ id: tail.id }];
   }
 }

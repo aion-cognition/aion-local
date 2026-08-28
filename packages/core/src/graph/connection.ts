@@ -86,11 +86,30 @@ export class GraphTransaction {
     const result = await this.#tx.run(cypher, parameters);
     return mapRecords(result.records, map);
   }
+
+  /** The transaction-scoped twin of `runWriteWithCounters`; `MERGE` reports create versus match the same way. */
+  async runWithCounters<T>(
+    cypher: string,
+    parameters: Record<string, unknown>,
+    map: RowMapper<T>,
+  ): Promise<WriteOutcome<T>> {
+    const result = await this.#tx.run(cypher, parameters);
+    const counters = result.summary.counters.updates();
+    return {
+      rows: mapRecords(result.records, map),
+      nodesCreated: counters.nodesCreated,
+      relationshipsCreated: counters.relationshipsCreated,
+      propertiesSet: counters.propertiesSet,
+    };
+  }
 }
 
 /**
  * Multi-statement atomicity: `supersede` closes a node and writes its lineage edge here so
  * a crash between the two cannot leave a closed node with no replacement pointing at it.
+ * Session creation and reflection intake use it for the same reason, and additionally for
+ * isolation — both derive a write from a read, so both take a node lock inside the
+ * transaction to keep a peer from landing between the two (`locks.ts`).
  */
 export async function inWriteTransaction<T>(
   driver: Driver,
