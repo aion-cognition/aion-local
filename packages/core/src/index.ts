@@ -34,6 +34,12 @@ export {
 export type { ReflectionJob } from './sqlite/reflection-queue.js';
 
 export {
+  DEFAULT_STALE_CLAIM_TIMEOUT_MS,
+  ReflectionQueueClaimant,
+  reclaimStaleReflectionJobs,
+} from './sqlite/claim.js';
+
+export {
   enqueueReinforcementSignal,
   listReinforcementSignals,
 } from './sqlite/reinforcement-queue.js';
@@ -147,6 +153,12 @@ export type {
 export { bootstrapBackbone, GLOBAL_WORKSPACE_NAME } from './graph/backbone.js';
 export type { BootstrapBackboneInput, BootstrapBackboneResult } from './graph/backbone.js';
 
+export { CONTAINMENT_TYPE, MEMORY_PROPERTIES, findEpisodeByContentHash } from './graph/episodes.js';
+export type { FindEpisodeByContentHashInput } from './graph/episodes.js';
+
+export { ensureGraphSession } from './graph/sessions.js';
+export type { EnsureGraphSessionInput, EnsureGraphSessionResult } from './graph/sessions.js';
+
 export {
   asOf,
   bitemporalAt,
@@ -177,3 +189,37 @@ export { OllamaProvider } from './providers/ollama-provider.js';
 export type { OllamaProviderOptions } from './providers/ollama-provider.js';
 export { checkOllamaReachable, listOllamaModels, provisionOllama } from './providers/provisioning.js';
 export type { OllamaProvisionTarget, ProvisionEvent, ProvisionOptions } from './providers/provisioning.js';
+
+export { DEFAULT_ENTROPY_THRESHOLD, redact } from './redact/redact.js';
+export type { RedactionMatch, RedactionResult } from './redact/redact.js';
+export { redactPayload } from './redact/deep-walk.js';
+export type { DeepRedactionResult } from './redact/deep-walk.js';
+export { HIGH_ENTROPY_RULE_ID, REDACTION_RULES, REDACTION_RULE_IDS } from './redact/rules.js';
+export type { RedactionRule } from './redact/rules.js';
+export { buildFingerprint } from './redact/fingerprint.js';
+export { findHighEntropyTokens, shannonEntropy } from './redact/entropy.js';
+export type { TextSpan } from './redact/entropy.js';
+
+export { SessionManager } from './session/session-manager.js';
+export type {
+  EnsureSessionInput,
+  EnsureSessionResult,
+  SessionManagerBackbone,
+} from './session/session-manager.js';
+
+export {
+  INTAKE_EXTRACTION_METHOD,
+  INTEGRATE_JOB_TYPE,
+  handleReflection,
+} from './reflection/intake.js';
+export type { ReflectionIntakeDeps, ReflectionIntakeOptions } from './reflection/intake.js';
+
+export { ReflectionDispatch } from './reflection/dispatch.js';
+export type {
+  ReflectionDispatchOptions,
+  ReflectionJobListener,
+  ReflectionJobSignal,
+} from './reflection/dispatch.js';
+
+export { hashContent, prepareEpisode, renderEpisodeText, stableStringify } from './reflection/content.js';
+export type { PreparedEpisode, PreparedTurn, ReflectionContent } from './reflection/content.js';
