@@ -11,6 +11,7 @@ import { listReflectionJobs } from '../../infrastructure/sqlite/reflection-queue
 import { ReflectionDispatch, type ReflectionJobSignal } from './dispatch.js';
 import { ReflectionNotStoredError } from './errors.js';
 import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
+import { attachContentVectors, findPendingVectorNodes } from './vectors.js';
 import { FakeGraph } from '../test-support/fake-graph.fixture.js';
 
 const MEMBER_ID = 'member-1';
@@ -252,12 +253,43 @@ describe('reflection intake dedupe', () => {
   });
 });
 
+describe('reflection intake store-before-embed order', () => {
+  it('has the episode committed and the job queued before it embeds anything', async () => {
+    let jobsAtEmbedTime = -1;
+    let episodesAtEmbedTime = -1;
+    embed.mockImplementationOnce((texts: readonly string[]) => {
+      jobsAtEmbedTime = listReflectionJobs(db).length;
+      episodesAtEmbedTime = graph.nodesWithLabel('Episode').length;
+      return Promise.resolve(fakeVectors(texts));
+    });
+
+    await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+
+    expect(episodesAtEmbedTime).toBe(1);
+    expect(jobsAtEmbedTime).toBe(1);
+    expect(signals).toHaveLength(1);
+  });
+
+  it('attaches a vector to the episode and to every turn', async () => {
+    const result = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+
+    const vectored = graph
+      .nodesWithLabel('Memory')
+      .filter((node) => Array.isArray(node.properties.content_vec));
+
+    expect(vectored.map((node) => node.id)).toContain(result.episode_id);
+    expect(vectored).toHaveLength(3);
+  });
+});
+
 /**
- * The probe that produced these: with Ollama dead, intake failed with a bare `TypeError`
- * and the caller was told nothing about what happened to the experience it handed over.
- * Nothing is stored in either outage — the episode is embedded before the write opens, and
- * the queue row is keyed on an episode id that is never minted — so the report has to say
- * so, or an agent will assume its reflection is pending and never send it again.
+ * A dead embedder no longer costs the experience: the write transaction commits and the
+ * queue row lands before anything is embedded, so the outage costs the vectors alone and
+ * the caller is told the reflection is queued, because it is. A `:Memory` node without its
+ * `content_vec` is the pending marker the worker's drain resolves later.
+ *
+ * An unreachable graph still refuses. There is nowhere to put the experience, so an agent
+ * told "queued" would never send it again.
  */
 describe('reflection intake when a dependency is down', () => {
   function unreachableDriver(error: Error): ReflectionIntakeDeps['driver'] {
@@ -284,18 +316,37 @@ describe('reflection intake when a dependency is down', () => {
     );
   }
 
-  it('names the embedding call and reports that nothing was stored or queued', async () => {
+  it('stores, queues, and answers normally when the embedder is down, with vectors pending', async () => {
     embed.mockRejectedValueOnce(new Error('fetch failed'));
 
-    const error = await failureOf(deps);
+    const result = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
 
-    expect(error).toBeInstanceOf(ReflectionNotStoredError);
-    expect((error as ReflectionNotStoredError).stage).toBe('embed');
-    expect((error as Error).message).toContain('nothing was queued');
-    expect((error as Error).cause).toBeInstanceOf(Error);
-    expect(graph.nodesWithLabel('Episode')).toEqual([]);
-    expect(listReflectionJobs(db)).toEqual([]);
-    expect(signals).toEqual([]);
+    expect(result.queued).toBe(true);
+
+    const episode = graph.nodes.get(result.episode_id);
+    expect(episode?.properties.content_vec).toBeUndefined();
+    expect(graph.nodesWithLabel('Turn')).toHaveLength(2);
+    expect(graph.edgesOfType('PARTICIPATES_IN')).toHaveLength(3);
+    expect(listReflectionJobs(db)).toHaveLength(1);
+    expect(signals).toHaveLength(1);
+  });
+
+  it('leaves every pending node findable, so a later drain can backfill it', async () => {
+    embed.mockRejectedValueOnce(new Error('fetch failed'));
+
+    const result = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+    const pending = await findPendingVectorNodes(graph.driver, 10);
+
+    expect(pending.map((node) => node.id)).toContain(result.episode_id);
+    expect(pending).toHaveLength(3);
+
+    const attached = await attachContentVectors(graph.driver, deps.provider, pending);
+
+    expect(attached).toHaveLength(3);
+    expect(await findPendingVectorNodes(graph.driver, 10)).toEqual([]);
+    expect((graph.nodes.get(result.episode_id)?.properties.content_vec as number[]).length).toBe(
+      EMBED_DIMENSION,
+    );
   });
 
   it('names the graph when no query could reach it', async () => {

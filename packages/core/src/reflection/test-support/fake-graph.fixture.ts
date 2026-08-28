@@ -1,4 +1,5 @@
 import type { Driver } from 'neo4j-driver';
+import { MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
 import { LOCK_PROPERTY } from '../../infrastructure/graph/locks.js';
 import type { Row } from '../../infrastructure/graph/values.js';
 
@@ -114,6 +115,13 @@ export class FakeGraph {
       return this.#lockNode(parameters);
     }
 
+    if (cypher.includes(`SET n.${MEMORY_PROPERTIES.contentVector} = entry.vector`)) {
+      return toResult(this.#writeContentVectors(parameters));
+    }
+    if (cypher.includes(`n.${MEMORY_PROPERTIES.contentVector} IS NULL`)) {
+      return toResult(this.#pendingVectorNodes(parameters));
+    }
+
     if (cypher.includes('(e:Episode)')) {
       return toResult(this.#findEpisodeByContentHash(parameters));
     }
@@ -197,6 +205,33 @@ export class FakeGraph {
       this.locked.push(id);
     }
     return toResult([]);
+  }
+
+  #writeContentVectors(parameters: Record<string, unknown>): Row[] {
+    const entries = (parameters.entries ?? []) as Array<{ id: string; vector: number[] }>;
+    const written: Row[] = [];
+    for (const entry of entries) {
+      const node = this.nodes.get(entry.id);
+      if (node !== undefined) {
+        node.properties[MEMORY_PROPERTIES.contentVector] = entry.vector;
+        written.push({ id: entry.id });
+      }
+    }
+    return written;
+  }
+
+  /** The pending-vector marker, modeled exactly as the real query reads it: `:Memory`, text, no vector. */
+  #pendingVectorNodes(parameters: Record<string, unknown>): Row[] {
+    const raw = parameters.limit as { toNumber?: () => number } | number;
+    const limit = typeof raw === 'number' ? raw : (raw.toNumber?.() ?? 0);
+    return this.nodesWithLabel('Memory')
+      .filter(
+        (node) =>
+          node.properties[MEMORY_PROPERTIES.contentVector] === undefined &&
+          typeof node.properties[MEMORY_PROPERTIES.text] === 'string',
+      )
+      .slice(0, limit)
+      .map((node) => ({ id: node.id, text: node.properties[MEMORY_PROPERTIES.text] }));
   }
 
   #findEpisodeByContentHash(parameters: Record<string, unknown>): Row[] {

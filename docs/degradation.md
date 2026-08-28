@@ -74,32 +74,45 @@ in the same request. `aion last` prints two `degraded` lines.
 
 ### Full Ollama outage — reflection
 
-**Trigger.** Same outage, on the write path. `resolveEpisode` needs one embedding call
-before any graph write happens (`packages/core/src/reflection/application/intake.ts:188-207`).
+**Trigger.** Same outage, on the write path. Intake makes one embedding call, and it makes
+it after the write transaction has already committed
+(`packages/core/src/reflection/application/intake.ts:254-267`).
 
-**What happens.** The embed call throws; `resolveEpisode` (`intake.ts:188-207`) wraps it in
-`ReflectionNotStoredError('embed', err)` (`intake.ts:207`) before any transaction opens.
-Nothing is written: no `Episode` node, and no queue row, because the row is keyed on an
-episode id that was never minted (`packages/core/src/reflection/application/errors.ts:1-9`).
-`toMcpError`
-(`packages/mcp/src/tools.ts:105-116`) passes the error's own message through unchanged
-rather than collapsing it to a class name.
+**What happens.** Nothing, to the experience. The write transaction commits the `Episode`,
+its `Turn` nodes, and every backbone edge with no `content_vec` property at all
+(`intake.ts:123-169`); the integrate job is inserted and the dispatcher signalled
+(`intake.ts:312-321`); only then does `attachVectors` embed. The call throws, it is logged
+as `content vectors deferred; the episode is stored and queued`, and intake returns
+normally (`intake.ts:254-267`). A `:Memory` node without `content_vec` is itself the
+pending marker — there is no flag property to keep in sync with it
+(`packages/core/src/infrastructure/graph/pending-vectors.ts`).
 
-**What the caller sees.** An MCP `InternalError` (-32603):
-`reflection not stored: the embedding call failed (TypeError). Nothing was written and
-nothing was queued; send this reflection again once the service is back.`
+**What the caller sees.** The ordinary ack, `{episode_id, queued: true}`. No MCP error.
+`ReflectionNotStoredError` no longer has an `embed` stage at all: the only way intake can
+refuse is an unreachable graph.
 
-Re-verified live: the call failed in 614ms. `Episode` count in the graph was 0 before and
-0 after (`MATCH (e:Episode) RETURN count(e)`), so the refusal is clean, not partial. This
-replaces the pre-fix behavior, where the same outage surfaced as
-`reflection failed (TypeError)` with no indication of cause or of what to do next.
+Until the backfill runs, the episode is reachable by BM25, entity resolution, recency, and
+traversal, and invisible to vector search — the same shape as the recall-side outage above,
+and for the same reason. It is ranking that is missing, not the memory.
 
-**Diagnose.** `aion doctor`'s `ollama-round-trip` check, run before the call is attempted.
-Live, the service logs the tool failure at `packages/mcp/src/tools.ts:109` (`tool call
-failed`, with the error and tool name) before mapping it to the MCP error above.
+**Diagnose.** `aion doctor`'s `ollama-round-trip` check. Live, the warn line above names the
+episode id and how many nodes are waiting. `findPendingVectorNodes(driver, limit)` returns
+the outstanding set directly.
 
-**Recovers.** Not automatically. Nothing was queued, so the caller has to resend the same
-reflection once Ollama is back.
+**Recovers.** Automatically, once Ollama answers. `attachContentVectors` over
+`findPendingVectorNodes` is the backfill (`reflection/application/vectors.ts`); the
+reflection worker runs it in its startup drain (P3) and `vector_backfill` schedules it as a
+maintenance operation (P5). Re-running it over already-vectorized nodes is a no-op, so a
+partial drain simply resumes.
+
+Verified against a throwaway Neo4j plus an Ollama pointed at the discard port
+(`reflection/application/intake-vectors.int.test.ts`, 9/9 pass): the episode, both turns,
+`PARTICIPATES_IN`, and the turn `FOLLOWS` chain all present, the queue row present, the
+dispatcher signalled, and `content_vec` absent on all three nodes.
+`findPendingVectorNodes` then returned exactly those three ids, `attachContentVectors`
+against live Ollama filled all three at 768 dimensions, a second pass wrote the same
+vectors and left the pending set empty. The failing embed call itself costs 12ms
+(`TypeError: fetch failed`), measured against `http://127.0.0.1:9`.
 
 ### Neo4j down — recall
 
@@ -153,10 +166,12 @@ for that identity). `SessionManager.ensureSession` caches resolved identities in
 is unaffected by the outage.
 
 **What happens.** `ensureGraphSession` issues a write inside `storeDurably`
-(`intake.ts:224-238`). It fails; `isGraphUnavailable` recognizes the driver's
+(`intake.ts:207-223`). It fails; `isGraphUnavailable` recognizes the driver's
 `ServiceUnavailable`/`SessionExpired` codes (or an unlabeled connection-acquisition
 timeout) and `storeDurably` wraps it in `ReflectionNotStoredError('graph', err)`
-(`intake.ts:235-236`) rather than letting the raw `Neo4jError` escape.
+(`intake.ts:219`) rather than letting the raw `Neo4jError` escape. This is the one refusal
+the write path still makes: an unreachable graph has nowhere to put the experience, so
+answering `queued: true` would lose it for good.
 
 **What the caller sees.** An MCP `InternalError` (-32603):
 `reflection not stored: the graph is unavailable (Neo4jError). Nothing was written and
@@ -174,6 +189,11 @@ log line carries the same message the caller received.
 **Recovers.** Not automatically. Nothing was written or queued; resend once Neo4j is back.
 The identity that failed is still unresolved, so the retry pays for `ensureSession` again,
 this time against a healthy graph.
+
+Re-verified against a live harness with a second driver pointed at a dead Bolt port
+(`intake-vectors.int.test.ts`): the call raised `ReflectionNotStoredError` with stage
+`graph`, and the healthy graph held zero `Episode` and zero `Turn` nodes for that session
+with no queue row and no dispatcher signal.
 
 ### Driver timeouts, underneath both Neo4j modes
 
@@ -259,16 +279,6 @@ Every knob below is `AION_*`-overridable; the catalog is
 
 ## Deferred gaps
 
-**Reflection does not queue through an outage, contrary to PRD §10.** The PRD says
-"reflection jobs queue until service returns." They do not: `resolveEpisode` embeds before
-any write transaction opens (`intake.ts:188-207`), so an inference or graph outage leaves
-no `Episode` node and, because the queue row is keyed on an episode id, no queue row
-either. The fix pass made the refusal honest, an explicit `ReflectionNotStoredError` naming
-what to do, instead of a bare `TypeError`, but the underlying promise stays broken. Making
-it true means storing the episode durably before the embedding call, which is a change to
-the write path's order of operations, not to error handling, and was out of scope for this
-pass.
-
 **`rendered_text` carries no degradation signal.** `metadata.degraded` names every rung
 that fired, but `render()` (`pack.ts:198-211`) never reads it: the text block an agent
 drops straight into its own reasoning looks identical whether a query legitimately matched
@@ -276,9 +286,14 @@ nothing or the graph was unreachable for the whole call. Verified live in the Ne
 recall re-run above. An agent (or a harness) that inspects only the tool's text content,
 not `structuredContent.metadata`, still cannot tell the two apart.
 
-**Two bounded, non-lossy artifacts, not tracked as gaps.** A reflection that fails on the
-embed step still creates its Session node first, since `ensureSession` runs before the
-embed call; an outage during reflection intake leaves orphan Session nodes with no Episode
-attached. And a client that disconnects without a clean MCP shutdown leaves its server-side
-session in the map until the 512-session cap evicts it. Neither loses data or grows
-unbounded.
+**Two bounded, non-lossy artifacts, not tracked as gaps.** `ensureSession` runs before the
+episode write, so a graph outage that lands between the two leaves a Session node with no
+Episode attached. And a client that disconnects without a clean MCP shutdown leaves its
+server-side session in the map until the 512-session cap evicts it. Neither loses data or
+grows unbounded.
+
+**A pending-vector node is a degraded state with no expiry of its own.** Nothing in the
+graph ages one out: it stays vectorless until a drain reaches it. That is deliberate — the
+marker is the absence of the property, so there is no flag to go stale — but it means an
+outage that outlives the service process is cleared by the worker's startup drain rather
+than by anything in the write path.

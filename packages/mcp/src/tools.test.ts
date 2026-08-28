@@ -178,7 +178,7 @@ describe('error mapping', () => {
   // not say whether the experience was kept. This one message does.
   it('carries the reflection-not-stored message through to the caller', async () => {
     const err = await callTool(
-      backendThrowing(new ReflectionNotStoredError('embed', new TypeError('fetch failed'))),
+      backendThrowing(new ReflectionNotStoredError('graph', new TypeError('connect ECONNREFUSED'))),
       logger,
       'reflection',
       { observations: [SECRET_QUERY] },

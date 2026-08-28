@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Driver } from 'neo4j-driver';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
@@ -171,7 +172,7 @@ describe('reflection intake against a live graph and live Ollama', () => {
     );
   });
 
-  it('embeds the episode and every turn at intake, at the configured dimension', async () => {
+  it('attaches a vector to the episode and every turn after the commit, at the configured dimension', async () => {
     const episodeVector = (await nodeProperties(harness.driver, episodeId)).content_vec as number[];
     const turns = await turnsOfEpisode(harness.driver, episodeId);
 
@@ -234,6 +235,37 @@ describe('reflection intake against a live graph and live Ollama', () => {
   });
 });
 
+/**
+ * The real driver with a fuse in its write transactions: statement `allowed + 1` onward
+ * rejects. Atomicity is a property of the transaction, so proving it needs a failure that
+ * lands inside one, and after store-before-embed no dependency of intake can produce one.
+ */
+function driverFailingAfter(driver: Driver, allowed: number): Driver {
+  const executeQuery = driver.executeQuery.bind(driver);
+  return {
+    executeQuery,
+    session: () => {
+      const session = driver.session();
+      return {
+        executeWrite: (work: (tx: unknown) => Promise<unknown>) =>
+          session.executeWrite((tx) => {
+            let seen = 0;
+            return work({
+              run: async (cypher: string, parameters: Record<string, unknown>) => {
+                seen += 1;
+                if (seen > allowed) {
+                  throw new Error('severed mid-transaction');
+                }
+                return tx.run(cypher, parameters);
+              },
+            });
+          }),
+        close: () => session.close(),
+      };
+    },
+  } as unknown as Driver;
+}
+
 describe('reflection intake under failure and concurrency', () => {
   const PAYLOAD = {
     turns: [
@@ -246,17 +278,13 @@ describe('reflection intake under failure and concurrency', () => {
   it('writes nothing at all when a write fails partway through the episode', async () => {
     const identity = 'partial-write-session';
 
-    // One vector for an episode that needs three: the turn write throws inside the
-    // transaction, after the Episode node and its containment edge have been written.
-    const starved = {
-      ...deps,
-      provider: {
-        embed: (texts: readonly string[]) => deps.provider.embed(texts).then((vectors) => vectors.slice(0, 1)),
-        generate: () => Promise.reject(new Error('intake must never call generate')),
-      } as ReflectionIntakeDeps['provider'],
-    };
+    // The lock, the dedupe read, the Episode node, its containment edge, and the first
+    // Turn go through; the sixth statement throws. Nothing embedded can force this any
+    // more — the embed call now happens after the commit — so the failure is injected at
+    // the statement the transaction is on when it lands.
+    const severed = { ...deps, driver: driverFailingAfter(harness.driver, 5) };
 
-    await expect(handleReflection(starved, PAYLOAD, { identity })).rejects.toThrow(/expected at least/);
+    await expect(handleReflection(severed, PAYLOAD, { identity })).rejects.toThrow(/severed/);
 
     expect(await countNodesInSession(harness.driver, 'Episode', identity)).toBe(0);
     expect(await countNodesInSession(harness.driver, 'Turn', identity)).toBe(0);

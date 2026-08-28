@@ -11,9 +11,10 @@ import {
   MEMORY_PROPERTIES,
 } from '../../infrastructure/graph/episodes.js';
 import { lockNodeInTransaction } from '../../infrastructure/graph/locks.js';
-import { toGraphVector, type GraphProperties } from '../../infrastructure/graph/values.js';
+import type { PendingVectorNode } from '../../infrastructure/graph/pending-vectors.js';
+import type { GraphProperties } from '../../infrastructure/graph/values.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
-import type { Provider, Vector } from '../../infrastructure/providers/types.js';
+import type { Provider } from '../../infrastructure/providers/types.js';
 import { redactPayload } from '../../redaction/deep-walk.js';
 import type { SessionManager } from '../../session/session-manager.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
@@ -21,6 +22,7 @@ import { enqueueReflectionJob, findPendingReflectionJob } from '../../infrastruc
 import { prepareEpisode, type PreparedEpisode, type PreparedTurn } from '../domain/content.js';
 import type { ReflectionDispatch } from './dispatch.js';
 import { ReflectionNotStoredError } from './errors.js';
+import { attachContentVectors } from './vectors.js';
 
 /** The one job intake enqueues. P3's pipeline stages fan out from it; intake never runs them. */
 export const INTEGRATE_JOB_TYPE = 'integrate';
@@ -51,24 +53,11 @@ export type ReflectionIntakeOptions = {
   readonly now?: Date;
 };
 
-function requireVector(vectors: readonly Vector[], index: number): Vector {
-  const vector = vectors[index];
-  if (vector === undefined) {
-    throw new Error(`embed returned ${String(vectors.length)} vectors, expected at least ${String(index + 1)}`);
-  }
-  return vector;
-}
-
-function episodeProperties(
-  prepared: PreparedEpisode,
-  sessionId: string,
-  vector: Vector,
-): GraphProperties {
+function episodeProperties(prepared: PreparedEpisode, sessionId: string): GraphProperties {
   return {
     [MEMORY_PROPERTIES.text]: prepared.text,
     [MEMORY_PROPERTIES.summary]: prepared.summary,
     [MEMORY_PROPERTIES.contentHash]: prepared.contentHash,
-    [MEMORY_PROPERTIES.contentVector]: toGraphVector(vector),
     [MEMORY_PROPERTIES.sessionId]: sessionId,
     [MEMORY_PROPERTIES.extractionMethod]: INTAKE_EXTRACTION_METHOD,
     [MEMORY_PROPERTIES.turnCount]: prepared.turnCount,
@@ -77,18 +66,12 @@ function episodeProperties(
   };
 }
 
-function turnProperties(
-  turn: PreparedTurn,
-  episodeId: string,
-  sessionId: string,
-  vector: Vector,
-): GraphProperties {
+function turnProperties(turn: PreparedTurn, episodeId: string, sessionId: string): GraphProperties {
   return {
     [MEMORY_PROPERTIES.text]: turn.text,
     [MEMORY_PROPERTIES.role]: turn.role,
     [MEMORY_PROPERTIES.sequence]: turn.sequence,
     [MEMORY_PROPERTIES.contentHash]: turn.contentHash,
-    [MEMORY_PROPERTIES.contentVector]: toGraphVector(vector),
     [MEMORY_PROPERTIES.sessionId]: sessionId,
     [MEMORY_PROPERTIES.sourceEpisodeId]: episodeId,
     [MEMORY_PROPERTIES.extractionMethod]: INTAKE_EXTRACTION_METHOD,
@@ -118,12 +101,18 @@ async function linkStructural(
 type StoredEpisode = {
   readonly episodeId: string;
   readonly created: boolean;
+  /** The nodes this call committed without a `content_vec`; empty for a duplicate. */
+  readonly pending: readonly PendingVectorNode[];
 };
 
 /**
  * Every graph write of one intake, in one transaction: the episode, its turns, and the
  * edges that reach them. Nothing here is separately visible, so a failure at any point
  * leaves the graph exactly as it was and a retry starts clean.
+ *
+ * No embedding is involved. The nodes commit without `content_vec` and the caller attaches
+ * vectors afterward, which is what makes an inference outage cost the vectors rather than
+ * the experience.
  *
  * The session is locked first. Dedupe is a read that decides a write, and the read alone
  * is not enough — two concurrent pushes of the same payload would each find no duplicate
@@ -135,7 +124,6 @@ async function storeEpisode(
   driver: Driver,
   prepared: PreparedEpisode,
   sessionId: string,
-  vectors: readonly Vector[],
   now: Date,
 ): Promise<StoredEpisode> {
   return inWriteTransaction(driver, async (tx) => {
@@ -146,15 +134,16 @@ async function storeEpisode(
       contentHash: prepared.contentHash,
     });
     if (duplicate !== undefined) {
-      return { episodeId: duplicate, created: false };
+      return { episodeId: duplicate, created: false, pending: [] };
     }
 
     const episode = await writeStampedNodeInTransaction(tx, {
       label: 'Episode',
       now,
       occurredAt: prepared.occurredAt,
-      properties: episodeProperties(prepared, sessionId, requireVector(vectors, 0)),
+      properties: episodeProperties(prepared, sessionId),
     });
+    const pending: PendingVectorNode[] = [{ id: episode.id, text: prepared.text }];
 
     await linkStructural(tx, CONTAINMENT_TYPE, episode.id, sessionId, now);
 
@@ -164,8 +153,9 @@ async function storeEpisode(
         label: 'Turn',
         now,
         occurredAt: turn.occurredAt,
-        properties: turnProperties(turn, episode.id, sessionId, requireVector(vectors, turn.sequence + 1)),
+        properties: turnProperties(turn, episode.id, sessionId),
       });
+      pending.push({ id: node.id, text: turn.text });
 
       await linkStructural(tx, CONTAINMENT_TYPE, node.id, episode.id, now);
       if (previousTurnId !== undefined) {
@@ -174,16 +164,14 @@ async function storeEpisode(
       previousTurnId = node.id;
     }
 
-    return { episodeId: episode.id, created: true };
+    return { episodeId: episode.id, created: true, pending };
   });
 }
 
 /**
- * The episode this payload belongs to: the one already stored, or a newly written one.
- * The cheap read comes first so a re-pushed payload never pays for an embedding it would
- * discard, and the embedding itself stays outside the transaction — it is the one
- * network-dependent step, and a write transaction must not be held open across it. The
- * authoritative dedupe is the one `storeEpisode` runs under the session's lock.
+ * The episode this payload belongs to: the one already stored, or a newly written one. The
+ * cheap read comes first so a re-pushed payload never opens a write transaction or takes
+ * the session's lock. The authoritative dedupe is the one `storeEpisode` runs under it.
  */
 async function resolveEpisode(
   deps: ReflectionIntakeDeps,
@@ -196,17 +184,9 @@ async function resolveEpisode(
     contentHash: prepared.contentHash,
   });
   if (known !== undefined) {
-    return { episodeId: known, created: false };
+    return { episodeId: known, created: false, pending: [] };
   }
-
-  const texts = [prepared.text, ...prepared.turns.map((turn) => turn.text)];
-  let vectors: readonly Vector[];
-  try {
-    vectors = await deps.provider.embed(texts);
-  } catch (err) {
-    throw new ReflectionNotStoredError('embed', err);
-  }
-  return storeEpisode(deps.driver, prepared, sessionId, vectors, now);
+  return storeEpisode(deps.driver, prepared, sessionId, now);
 }
 
 type DurableWrite = {
@@ -217,9 +197,12 @@ type DurableWrite = {
 /**
  * Everything between a validated payload and a committed episode, wrapped as one region
  * because every failure inside it leaves the same state: nothing written, nothing queued.
- * That fact is what the caller has to act on, and a raw `TypeError` from a dead Ollama
- * does not carry it. A statement the graph itself rejected is a defect here, not an
- * outage, and passes through unchanged.
+ * That fact is what the caller has to act on, and a raw `Neo4jError` does not carry it. A
+ * statement the graph itself rejected is a defect here, not an outage, and passes through
+ * unchanged.
+ *
+ * Only the graph can put intake in that state now. Inference happens after this region
+ * commits, so an Ollama outage never reaches it.
  */
 async function storeDurably(
   deps: ReflectionIntakeDeps,
@@ -262,14 +245,40 @@ function ensureIntegrateJob(db: SqliteHandle, episodeId: string): { jobId: strin
 }
 
 /**
- * PRD §3.2, whitepaper §4.1–4.2: the write path. Validate, redact, resolve the session,
- * store the episode and its turns with a full bitemporal stamp, link the backbone, enqueue
- * the integrate job, signal the dispatcher, return.
+ * The last step, and the only one allowed to fail without failing the call. Everything the
+ * caller was promised is already durable: a node that ends this function without its
+ * `content_vec` is a pending-vector marker the worker's drain resolves later, and until it
+ * does, the episode is reachable by BM25, entity resolution, recency, and traversal — it is
+ * ranking that is missing, not the memory.
+ */
+async function attachVectors(
+  deps: ReflectionIntakeDeps,
+  stored: StoredEpisode,
+  sessionId: string,
+): Promise<void> {
+  try {
+    await attachContentVectors(deps.driver, deps.provider, stored.pending);
+  } catch (err) {
+    deps.logger.warn(
+      { err, episodeId: stored.episodeId, sessionId, pending: stored.pending.length },
+      'content vectors deferred; the episode is stored and queued',
+    );
+  }
+}
+
+/**
+ * PRD §3.2, whitepaper §4.1–4.2: the write path. Validate, redact, store the episode and
+ * its turns with a full bitemporal stamp, link the backbone, enqueue the integrate job,
+ * signal the dispatcher, then embed.
  *
  * Redaction runs on the parsed payload before anything reads a content field, so no raw
  * credential reaches the hash, the embedder, or the graph. The graph then takes every write
  * as one transaction, and the queue row is repaired rather than assumed, so the two stores
  * converge on a retry instead of leaving an episode nothing will ever process.
+ *
+ * Embedding comes last on purpose (PRD §10: "reflection jobs queue until service returns").
+ * The durable record is the episode and its queue row; vectors are an enrichment of it, so
+ * an inference outage costs ranking signal until the backfill runs, never the experience.
  *
  * No generation call happens anywhere here. Extraction is the pipeline's job (whitepaper
  * §6.1) and intake is what makes the experience durable.
@@ -310,6 +319,8 @@ export async function handleReflection(
       enqueuedAt: now,
     });
   }
+
+  await attachVectors(deps, stored, sessionId);
 
   if (!stored.created) {
     deps.logger.debug(
