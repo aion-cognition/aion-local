@@ -43,6 +43,22 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     trigger TEXT NOT NULL,
     ts TEXT NOT NULL
   )`,
+  /**
+   * Sub-threshold contradiction judgments from reflection's supersession stage. They are
+   * never applied: `aion why` surfaces them and a person decides. `UNIQUE (old_id, new_id)`
+   * is what makes a re-judged pair one row rather than a growing pile.
+   */
+  `CREATE TABLE IF NOT EXISTS supersession_proposals (
+    id TEXT PRIMARY KEY,
+    old_id TEXT NOT NULL,
+    new_id TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    rationale TEXT,
+    episode_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    resolved_at TEXT,
+    UNIQUE (old_id, new_id)
+  )`,
   `CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
