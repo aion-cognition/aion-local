@@ -17,7 +17,7 @@ import type { RelationshipType } from './relationships.js';
  * Whitepaper §6.8's five, plus the two this build already had names for. `SIMILAR_TO` is
  * written under the catalog's existing `SIMILAR`, which is the same relation under the other
  * name — forking a second type would split one claim across two edges and two activation
- * weights. `CONTRADICTS` is its own type: P3-10's supersession judgment only compares fact
+ * weights. `CONTRADICTS` is its own type: the supersession judgment only compares fact
  * nodes against same-label neighbours and only acts above the auto-apply threshold, so
  * without it nothing in the graph can say that this Decision is in tension with that
  * Insight. `RELATED_TO` and `ANALOGOUS_TO` stay for the connections none of the five name.
@@ -66,9 +66,9 @@ function episodeCognitiveNodesStatement(): GraphStatement {
 
 /**
  * The cognitive half of this stage's candidate set; `findEpisodeEntities` (entity-
- * queries.ts) covers the entity half. Returns `[]` exactly when P3-8 has not run for this
- * episode yet, the same not-assumed-to-have-run contract every stage after extraction
- * follows.
+ * queries.ts) covers the entity half. Returns `[]` exactly when cognitive extraction has
+ * not run for this episode yet, the same not-assumed-to-have-run contract every stage
+ * after extraction follows.
  */
 export async function findEpisodeCognitiveNodes(
   driver: Driver,
@@ -100,7 +100,7 @@ export type SemanticRelationshipWrite = {
 /**
  * `count: 0`: one proposal is a single inferred claim, not an observation to tally on
  * replay. A claim repeated across episodes strengthening is reflection reinforcement's job
- * (P3-13, `reinforcement_queue`), a separate mechanism — this edge's own count staying at
+ * (`reinforcement_queue`), a separate mechanism — this edge's own count staying at
  * zero is what keeps a same-episode re-run (the orchestrator's crash-before-ledger-mark
  * case) a total no-op beyond `updated_at` and the merge policy's max(strength, confidence).
  */
