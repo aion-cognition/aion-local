@@ -71,6 +71,14 @@ import in the codebase.
    immediately; the SQLite row is what a restart replays from regardless.
 10. Return `{ episode_id, queued: true }`.
 
+An outage in step 6 or 7 leaves nothing behind. The embedding call happens before the write
+transaction opens, so a dead Ollama or an unreachable Neo4j produces no episode, and
+therefore no queue row either, since the row is keyed on an episode id. The call fails with
+`ReflectionNotStoredError`, whose message says the experience was not kept and has to be
+sent again. PRD §10 says reflection jobs queue until the service returns; they do not, and
+cannot until intake writes the durable record before it embeds. Naming the drop is the
+interim honest answer, not the fix.
+
 No generation call happens after step 7. Extraction, turning an episode into entities,
 associations, and narratives, is a separate pipeline that subscribes to the dispatch
 signal. It is P3 work and does not exist yet, so today's `integrate` jobs are written and
@@ -85,14 +93,21 @@ independently for the pack's `stage_timings_ms`:
    and recent turns, into weighted cues: query text weighs 3x, summary 2x, recent-turn
    text 1x. If the call times out, errors, or returns something unparseable, recall falls
    back to a raw-query/raw-summary cue instead of failing, and the pack records that
-   degradation.
+   degradation. `AION_CUE_BUDGET_MS` guards the call at 8000ms, a deliberate deviation from
+   PRD §14's 2000: the pinned cue model answers in 558-811ms warm and a measured 2030ms on
+   the run after an eviction, so the pinned value fires on ordinary recalls.
 2. **Embed.** Every cue is embedded in one batched call. A failure here costs recall its
-   vector leg only; BM25 and exact entity resolution still run on cue text.
+   vector leg only; BM25 and exact entity resolution still run on cue text. The pack records
+   that rung too, so a full Ollama outage (cues and embeddings both gone) is legible as more
+   than a cue-model failure.
 3. **Seeds.** Four strategies run together: `vector` (nearest neighbors in the two content
    vector indexes), `bm25` (the fulltext index), `entity_resolution` (exact and
    fuzzy name match against `Entity` nodes), and `recency` (a `tx_from`-ordered fallback
    for a substrate with no access history yet). Candidates merge by node id; a node found
-   by more than one strategy keeps every strategy that found it.
+   by more than one strategy keeps every strategy that found it. A rejected query costs its
+   own leg and nothing else, but the rejections are counted: when every query issued was
+   rejected the graph is gone, and the pack says so (`degraded: [{stage: graph, reason:
+   unavailable}]`) instead of reporting an outage as an empty substrate.
 4. **Activation.** Every seed enters at full activation. Spreading runs in TypeScript over
    batched adjacency reads: the graph answers one question per frontier iteration, and
    everything else (per-relationship-type weighting, decay, the minimum-activation floor,
@@ -105,9 +120,19 @@ independently for the pack's `stage_timings_ms`:
    higher-ranked instance.
 6. **Pack assembly.** Fused items route to a bucket by node label: `Episode`/`Turn` to
    `episodes`, `Entity` to `facts`. Each bucket is capped, trimmed to the token budget,
-   and rendered into the pack's text block. `narratives`, `preferences`, and `resonant`
+   and rendered into the pack's text block. The episode cap (`AION_RECALL_MAX_EPISODES`)
+   defaults to 20, a deliberate deviation from whitepaper Appendix E's 5: the cap cuts the
+   fused list, so on a populated substrate a five-item cut is filled by near-tie vector hits
+   before any traversal-reached item can land. The token budget is what actually bounds a
+   pack's size. `narratives`, `preferences`, and `resonant`
    have no producer yet (P3 and P4 work), so they are structurally absent rather than
    empty: a P2 pack can never contain them.
+
+Both paths inherit the driver timeouts `GraphConnection` sets: 5s to connect, 10s to acquire
+a pooled connection, 10s of transaction retries. The driver's defaults (60s and 30s) meet or
+exceed the MCP client's 60s request timeout, which is how a call against a stopped Neo4j
+reached the caller as a client-side timeout with the server's own error lost. A healthy pool
+answers in microseconds, so these bite only during an outage.
 
 The pack is saved to SQLite's `last_pack` table (what `aion last` renders) and returned. A
 registered listener, access-tracking today and eventually Hebbian reinforcement, fires

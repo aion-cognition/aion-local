@@ -111,7 +111,8 @@ One honest caveat: the live traversal demonstration needed `AION_RECALL_MAX_EPIS
 raised from 5 to 20 for the run (a config knob, restored after), because the dev substrate
 was full of semantically adjacent review-test episodes that outcompete a deliberately
 irrelevant traversal-only item. The machinery itself is proven at gate scale on a clean
-substrate by `recall-gate.int.test.ts`.
+substrate by `recall-gate.int.test.ts`. A later gate rerun reproduced the same result at 5,
+8, and 12 and made 20 the default; see below.
 
 ## Post-P2: reorganization and docs
 
@@ -122,6 +123,46 @@ strings only; a reviewer extracted all 522 changed diff lines and confirmed ever
 path or import specifier. The suite held at exactly 70 files / 643 tests, and the live
 service was rebuilt and re-verified from the new layout. README, docs/architecture.md, and
 AGENTS.md were written against the code as it exists and fact-checked claim by claim.
+
+## Gate rerun: expansions, and what the degradation probe found
+
+A second pass at the live stack re-ran the six gate checkpoints and put the service through
+eight failure modes against throwaway instances. Five checkpoints passed at committed
+defaults. The probe recorded six graceful modes, four gaps, and no crash: the service never
+died, never corrupted data, and never leaked an unhandled rejection.
+
+Two defaults moved, each a deviation from the value its doc pins, each stated at the line in
+`defaults.ts`:
+
+- `recall.maxEpisodes` 5 to 20 (Appendix E pins 5). The traversal-only item the gate looks
+  for ranked 13th on a ~40-episode substrate and was truncated away at 5, 8, and 12. The cap
+  cuts the fused list, so it decides what survives fusion competition rather than how large a
+  pack gets; the token budget is what actually bounds a pack.
+- `recall.cueBudgetMs` 5000 to 8000 (PRD §14 pins 2000). One ordinary recall in the rerun
+  busted 2000ms at 2030ms against warm latencies of 558-811ms.
+
+Three fixes, all inside error handling:
+
+- **The ladder can name three stages.** `metadata.degraded` was a single entry pinned to
+  `stage: 'cues'`, so a full Ollama outage was indistinguishable from a broken cue model, and
+  a stopped Neo4j was indistinguishable from an empty substrate: recall returned HTTP 200, a
+  valid pack, no marker, and "No memories matched this query." It is now a list over
+  `cues | embed | graph`, and `selectSeeds` counts its rejections so all-legs-failed reports
+  `{stage: graph, reason: unavailable}` instead of silence.
+- **Reflection says what happened to the experience.** An outage used to surface as
+  `reflection failed (TypeError)`. It now raises `ReflectionNotStoredError`, whose message
+  reaches the caller intact and states that nothing was written and nothing was queued.
+- **Driver timeouts are bounded** (5s connect, 10s acquisition, 10s transaction retry). The
+  driver's defaults are 60s and 30s, which meet or exceed the MCP client's own 60s timeout;
+  that is why a recall against a stopped Neo4j took 62s to answer and a reflection surfaced
+  as a client-side timeout rather than the server's named error.
+
+Deferred, with the reason: PRD §10 promises reflection jobs queue until the service returns,
+and they do not. Intake embeds before the write transaction opens, so with Ollama down no
+episode is minted and no queue row (keyed on the episode id) is written. Making that promise
+true means storing the episode without its vectors and embedding later, which is a change to
+the write path, not to error handling. Until then the caller is told the reflection was
+dropped rather than left to assume it is pending.
 
 ## Decisions made in flight
 
