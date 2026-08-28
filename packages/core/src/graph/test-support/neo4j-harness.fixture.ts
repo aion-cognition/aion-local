@@ -62,23 +62,30 @@ export async function startNeo4jHarness(): Promise<Neo4jHarness> {
     NEO4J_TEST_IMAGE,
   ]);
 
-  const boltPort = await resolveMappedPort(containerName, 7687);
-  const uri = `bolt://127.0.0.1:${boltPort}`;
-  const endpoint = { uri, password: NEO4J_TEST_PASSWORD };
-
+  // Everything after `docker run` is inside the guard: a port lookup can fail as readily as
+  // readiness can, and either way the container is already up and must not be left behind.
   try {
-    await waitForBoltReady(endpoint, { timeoutMs: READY_TIMEOUT_MS });
+    const boltPort = await resolveMappedPort(containerName, 7687);
+    const uri = `bolt://127.0.0.1:${boltPort}`;
+    await waitForBoltReady({ uri, password: NEO4J_TEST_PASSWORD }, { timeoutMs: READY_TIMEOUT_MS });
+    const driver = neo4j.driver(uri, neo4j.auth.basic(NEO4J_DEFAULT_USER, NEO4J_TEST_PASSWORD));
+    return { driver, uri, containerName, password: NEO4J_TEST_PASSWORD };
   } catch (err) {
     await runDocker(['rm', '-f', '-v', containerName]);
     throw err;
   }
-
-  const driver = neo4j.driver(uri, neo4j.auth.basic(NEO4J_DEFAULT_USER, NEO4J_TEST_PASSWORD));
-  return { driver, uri, containerName, password: NEO4J_TEST_PASSWORD };
 }
 
-/** Closes the driver, then force-removes the container and its anonymous volumes in one step. */
-export async function stopNeo4jHarness(harness: Neo4jHarness): Promise<void> {
+/**
+ * Closes the driver, then force-removes the container and its anonymous volumes in one step.
+ *
+ * Undefined is a normal argument: `afterAll` still runs when `beforeAll` threw, and a teardown
+ * that throws on the missing harness reports a second failure that buries the first one.
+ */
+export async function stopNeo4jHarness(harness: Neo4jHarness | undefined): Promise<void> {
+  if (harness === undefined) {
+    return;
+  }
   await harness.driver.close();
   await runDocker(['rm', '-f', '-v', harness.containerName]);
 }
