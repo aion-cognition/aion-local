@@ -124,6 +124,18 @@ export async function inWriteTransaction<T>(
 }
 
 /**
+ * Every timeout the driver applies while the server is gone. The driver's own defaults
+ * (60s to acquire a connection, 30s of transaction retries) exceed or brush the MCP
+ * client's 60s request timeout, so a tool call against a dead Neo4j either answered after
+ * a minute or died on the client before the server's own named error arrived. These bound
+ * the wait at the tool boundary; a healthy pool hands out a connection in microseconds, so
+ * they only bite during an outage.
+ */
+const CONNECTION_TIMEOUT_MS = 5000;
+const CONNECTION_ACQUISITION_TIMEOUT_MS = 10_000;
+const MAX_TRANSACTION_RETRY_TIME_MS = 10_000;
+
+/**
  * Owns one driver for the process. Construction performs no I/O — the driver connects
  * lazily — so `health()` is the only call that reports whether the server is actually
  * there, and it is the same check `aion doctor` and `aion status` run.
@@ -137,6 +149,11 @@ export class GraphConnection {
     this.#driver = neo4j.driver(
       endpoint.uri,
       neo4j.auth.basic(NEO4J_DEFAULT_USER, endpoint.password),
+      {
+        connectionTimeout: CONNECTION_TIMEOUT_MS,
+        connectionAcquisitionTimeout: CONNECTION_ACQUISITION_TIMEOUT_MS,
+        maxTransactionRetryTime: MAX_TRANSACTION_RETRY_TIME_MS,
+      },
     );
   }
 
