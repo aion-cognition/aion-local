@@ -132,7 +132,8 @@ Both paths inherit the driver timeouts `GraphConnection` sets: 5s to connect, 10
 a pooled connection, 10s of transaction retries. The driver's defaults (60s and 30s) meet or
 exceed the MCP client's 60s request timeout, which is how a call against a stopped Neo4j
 reached the caller as a client-side timeout with the server's own error lost. A healthy pool
-answers in microseconds, so these bite only during an outage.
+answers in microseconds, so these bite only during an outage. See `docs/degradation.md` for
+every failure mode this pipeline degrades through, mode by mode, with live evidence.
 
 The pack is saved to SQLite's `last_pack` table (what `aion last` renders) and returned. A
 registered listener, access-tracking today and eventually Hebbian reinforcement, fires

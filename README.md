@@ -96,7 +96,8 @@ Inside `core`, four guarantees hold everywhere:
   deterministic exception: a credential leak cannot wait on a model's judgment.
 
 See `docs/architecture.md` for the bounded contexts, the read and write pipelines, and the
-graph schema.
+graph schema. See `docs/degradation.md` for what happens when Ollama or Neo4j is down or
+slow, and how each failure surfaces to the caller.
 
 ## Development
 
