@@ -62,18 +62,22 @@ function renderValue(value: unknown): string {
   if (typeof value === 'string') {
     return value;
   }
-  if (value === undefined) {
-    return '';
-  }
   return stableStringify(value);
 }
 
+/** What the agent did not capture is left out, not rendered as an empty line or "undefined". */
 function renderToolExecution(execution: ToolExecution): string[] {
-  return [
-    `tool ${execution.tool} [${execution.status}, ${String(execution.duration_ms)}ms]`,
-    `input: ${renderValue(execution.input)}`,
-    `output: ${renderValue(execution.output)}`,
-  ];
+  const duration = execution.duration_ms === undefined ? '' : `, ${String(execution.duration_ms)}ms`;
+  const lines = [`tool ${execution.tool} [${execution.status}${duration}]`];
+
+  if (execution.input !== undefined) {
+    lines.push(`input: ${renderValue(execution.input)}`);
+  }
+  if (execution.output !== undefined) {
+    lines.push(`output: ${renderValue(execution.output)}`);
+  }
+
+  return lines;
 }
 
 /**

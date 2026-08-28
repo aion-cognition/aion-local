@@ -50,7 +50,7 @@ export class ReflectionQueueClaimant {
 
   /**
    * Atomically claims the oldest unclaimed job, or undefined if none. Ordered by
-   * `rowid`, not `id`: ids are random UUIDs (P0-6), and enqueued_at alone ties on
+   * `rowid`, not `id`: ids are random UUIDs, and enqueued_at alone ties on
    * same-millisecond bursts. The UPDATE's subquery and assignment run as one SQLite
    * statement, so concurrent claimants (any process, any thread) never select the
    * same row — the file-level write lock plus busy_timeout serializes them.

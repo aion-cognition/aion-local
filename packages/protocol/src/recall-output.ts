@@ -56,8 +56,13 @@ export type MemoryPackItem = z.infer<typeof MemoryPackItemSchema>;
  */
 const memoryPackBucket = z.array(MemoryPackItemSchema).min(1);
 
-/** PRD §6.1 / whitepaper Algorithm 1: query cues weigh 3x, summary 2x, recent turns 1x. */
-export const CueSourceSchema = z.enum(['query', 'summary', 'recent_turns']);
+/**
+ * PRD §6.1 / whitepaper Algorithm 1: query cues weigh 3x, summary 2x, recent turns 1x.
+ * `raw_query` is the degradation ladder's own source — when the cue model is down, recall
+ * proceeds on the raw query text, and that cue has to be distinguishable from one the
+ * model extracted from the query.
+ */
+export const CueSourceSchema = z.enum(['query', 'summary', 'recent_turns', 'raw_query']);
 
 export type CueSource = z.infer<typeof CueSourceSchema>;
 
@@ -73,7 +78,7 @@ export const CueSchema = z.strictObject({
 
 export type Cue = z.infer<typeof CueSchema>;
 
-/** PLAN P2-6's five recall stages, each timed independently. */
+/** The five recall stages, each timed independently. */
 export const StageTimingsMsSchema = z.strictObject({
   embed: z.number().nonnegative(),
   cues: z.number().nonnegative(),
@@ -84,10 +89,24 @@ export const StageTimingsMsSchema = z.strictObject({
 
 export type StageTimingsMs = z.infer<typeof StageTimingsMsSchema>;
 
+/**
+ * PRD §6.1: when the cue model fails or busts its budget, recall answers from raw-query
+ * embedding plus BM25 instead. A consumer cannot tell that from the items alone — a
+ * degraded pack looks like a thin one — so the ladder names itself here and stays absent
+ * on a normal run.
+ */
+export const DegradationSchema = z.strictObject({
+  stage: z.literal('cues'),
+  reason: z.enum(['timeout', 'model_error', 'invalid_output']),
+});
+
+export type Degradation = z.infer<typeof DegradationSchema>;
+
 export const MemoryPackMetadataSchema = z.strictObject({
   token_estimate: z.number().int().nonnegative(),
   stage_timings_ms: StageTimingsMsSchema,
   cues: z.array(CueSchema),
+  degraded: DegradationSchema.optional(),
 });
 
 export type MemoryPackMetadata = z.infer<typeof MemoryPackMetadataSchema>;
