@@ -1,12 +1,13 @@
+import { fork } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Worker } from 'node:worker_threads';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openSqliteHandle } from './database.js';
 import { enqueueReflectionJob, listReflectionJobs } from './reflection-queue.js';
 
-const fixtureUrl = new URL('./claim-worker.fixture.ts', import.meta.url);
+const fixturePath = fileURLToPath(new URL('./claim-worker.fixture.ts', import.meta.url));
 
 type WorkerResult = { claimantId: string; claimedIds: string[] };
 
@@ -16,33 +17,48 @@ type WorkerHandle = {
   go: () => void;
 };
 
+/**
+ * Real child processes, not worker threads. Within one process SQLite serializes
+ * connections through its own in-process mutex, which is not the mechanism that gates the
+ * deployment this claim path exists for: the CLI container claiming beside the service, or
+ * a restarted service meeting the previous instance's rows. Only separate processes
+ * contend through the POSIX file locks that do.
+ */
 function spawnClaimant(filePath: string): WorkerHandle {
-  const worker = new Worker(fixtureUrl, {
-    workerData: { filePath },
-    execArgv: ['--experimental-strip-types'],
+  const child = fork(fixturePath, [filePath], { execArgv: ['--experimental-strip-types'] });
+
+  const failed = new Promise<never>((_, reject) => {
+    child.once('error', reject);
+    child.once('exit', (code) => {
+      if (code !== 0) {
+        reject(new Error(`claimant exited with code ${String(code)}`));
+      }
+    });
   });
 
   const ready = new Promise<void>((resolve, reject) => {
-    worker.once('message', (msg: unknown) => {
+    child.once('message', (msg: unknown) => {
       if (msg === 'ready') {
         resolve();
       } else {
         reject(new Error(`unexpected message before ready: ${String(msg)}`));
       }
     });
-    worker.once('error', reject);
   });
 
-  const result = new Promise<WorkerResult>((resolve, reject) => {
-    worker.on('message', (msg: unknown) => {
+  const result = new Promise<WorkerResult>((resolve) => {
+    child.on('message', (msg: unknown) => {
       if (msg !== 'ready') {
         resolve(msg as WorkerResult);
       }
     });
-    worker.on('error', reject);
   });
 
-  return { ready, result, go: () => worker.postMessage('go') };
+  return {
+    ready: Promise.race([ready, failed]),
+    result: Promise.race([result, failed]),
+    go: () => child.send('go'),
+  };
 }
 
 describe('two processes claiming against one substrate', () => {
@@ -75,8 +91,8 @@ describe('two processes claiming against one substrate', () => {
     b.go();
     const [resultA, resultB] = await Promise.all([a.result, b.result]);
 
-    // No SQLITE_BUSY escaped: both workers' claim loops ran to completion above, or
-    // this test would have already rejected on the worker's 'error' event.
+    // No SQLITE_BUSY escaped: both claim loops ran to completion above, or the child
+    // would have died on the throw and this test would already have rejected.
     expect(resultA.claimantId).not.toBe(resultB.claimantId);
 
     const claimedByA = new Set(resultA.claimedIds);

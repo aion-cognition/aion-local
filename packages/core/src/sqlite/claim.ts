@@ -18,8 +18,8 @@ type ReflectionJobRow = {
 
 /**
  * Row mapping duplicated from reflection-queue.ts rather than imported: the
- * claim-two-process test loads this file directly via native ESM in a worker
- * thread, which (unlike the project's tsc/vitest resolvers) does not map a
+ * claim-two-process test loads this file directly via native ESM in a forked
+ * child process, which (unlike the project's tsc/vitest resolvers) does not map a
  * relative `.js` specifier back to its sibling `.ts` source, so claim.ts cannot
  * take a runtime (non-type-only) import from reflection-queue.ts.
  */
