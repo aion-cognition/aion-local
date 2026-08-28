@@ -1,5 +1,6 @@
 import type { Driver } from 'neo4j-driver';
-import { MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
+import { BITEMPORAL_PROPERTIES } from '../../infrastructure/graph/bitemporal.js';
+import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
 import { LOCK_PROPERTY } from '../../infrastructure/graph/locks.js';
 import type { Row } from '../../infrastructure/graph/values.js';
 
@@ -85,6 +86,24 @@ export class FakeGraph {
     this.nodes.set(id, { id, labels, properties: { ...properties, id } });
   }
 
+  /** The structural edges a test needs to already exist, without replaying the write that made them. */
+  seedEdge(type: string, sourceId: string, targetId: string): void {
+    const key = `${type}:${sourceId}:${targetId}`;
+    this.edges.set(key, {
+      id: key,
+      type,
+      sourceId,
+      targetId,
+      strength: 1,
+      confidence: 1,
+      signals: [],
+      provenance: [],
+      count: 0,
+      createdAt: undefined,
+      updatedAt: undefined,
+    });
+  }
+
   nodesWithLabel(label: string): FakeNode[] {
     return [...this.nodes.values()].filter((node) => node.labels.includes(label));
   }
@@ -122,6 +141,9 @@ export class FakeGraph {
       return toResult(this.#pendingVectorNodes(parameters));
     }
 
+    if (cypher.includes('MATCH (e:Episode { id: $episodeId })')) {
+      return toResult(this.#episodeContext(parameters));
+    }
     if (cypher.includes('(e:Episode)')) {
       return toResult(this.#findEpisodeByContentHash(parameters));
     }
@@ -232,6 +254,42 @@ export class FakeGraph {
       )
       .slice(0, limit)
       .map((node) => ({ id: node.id, text: node.properties[MEMORY_PROPERTIES.text] }));
+  }
+
+  /** The reflection run's one read: the episode, plus its turns in the order they were spoken. */
+  #episodeContext(parameters: Record<string, unknown>): Row[] {
+    const episodeId = parameters.episodeId as string;
+    const episode = this.nodes.get(episodeId);
+    if (
+      episode === undefined ||
+      !episode.labels.includes('Episode') ||
+      episode.properties[BITEMPORAL_PROPERTIES.forgottenAt] !== undefined
+    ) {
+      return [];
+    }
+
+    const turns = this.nodesWithLabel('Turn')
+      .filter((node) => this.edges.has(`${CONTAINMENT_TYPE}:${node.id}:${episodeId}`))
+      .filter((node) => node.properties[BITEMPORAL_PROPERTIES.forgottenAt] === undefined)
+      .map((node) => ({
+        id: node.id,
+        role: node.properties[MEMORY_PROPERTIES.role],
+        sequence: node.properties[MEMORY_PROPERTIES.sequence],
+        text: node.properties[MEMORY_PROPERTIES.text],
+        occurred_at: node.properties[BITEMPORAL_PROPERTIES.occurredAt],
+      }))
+      .sort((left, right) => Number(left.sequence) - Number(right.sequence));
+
+    return [
+      {
+        id: episodeId,
+        session_id: episode.properties[MEMORY_PROPERTIES.sessionId],
+        text: episode.properties[MEMORY_PROPERTIES.text],
+        summary: episode.properties[MEMORY_PROPERTIES.summary],
+        occurred_at: episode.properties[BITEMPORAL_PROPERTIES.occurredAt],
+        turns,
+      },
+    ];
   }
 
   #findEpisodeByContentHash(parameters: Record<string, unknown>): Row[] {
