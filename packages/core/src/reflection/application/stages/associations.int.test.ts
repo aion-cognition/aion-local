@@ -14,6 +14,10 @@ import {
 import { loadEpisodeContext } from '../../../infrastructure/graph/episode-context.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import {
+  coOccurrencePairs,
+  similarPairsAmong,
+} from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
+import {
   startNeo4jHarness,
   stopNeo4jHarness,
   type Neo4jHarness,
@@ -115,45 +119,6 @@ async function runStage(episodeId: string): Promise<StageOutcome> {
   return new AssociationInferenceStage().run(context);
 }
 
-/**
- * Matched undirected and ordered by name, not by stored direction: CO_OCCURS is one of the
- * undirected types, so the edge upsert normalizes its endpoints by id, and entity ids are
- * random per run. Reading the stored direction would name either entity `a` from one run to
- * the next. The `a.name < b.name` filter is what keeps the undirected match to one row.
- */
-async function coOccursCounts(): Promise<Array<{ a: string; b: string; count: number }>> {
-  return runRead(
-    harness.driver,
-    [
-      'MATCH (a:Entity)-[r:CO_OCCURS]-(b:Entity)',
-      'WHERE a.name < b.name',
-      'RETURN a.name AS a, b.name AS b, r.count AS count ORDER BY a.name, b.name',
-    ].join('\n'),
-    {},
-    (row) => ({ a: row.a as string, b: row.b as string, count: row.count as number }),
-  );
-}
-
-/**
- * Scoped to entities named in `names`: the graph is shared across every `it` in this file, so
- * an unscoped read would also see `SIMILAR` edges an earlier test in the same describe block
- * already wrote.
- */
-async function similarPairsAmong(
-  names: readonly string[],
-): Promise<Array<{ a: string; b: string; strength: number }>> {
-  return runRead(
-    harness.driver,
-    [
-      'MATCH (a:Entity)-[r:SIMILAR]->(b:Entity)',
-      'WHERE a.name IN $names AND b.name IN $names',
-      'RETURN a.name AS a, b.name AS b, r.strength AS strength ORDER BY a.name, b.name',
-    ].join('\n'),
-    { names: [...names] },
-    (row) => ({ a: row.a as string, b: row.b as string, strength: row.strength as number }),
-  );
-}
-
 beforeAll(async () => {
   harness = await startNeo4jHarness();
   dataDir = mkdtempSync(join(tmpdir(), 'aion-associations-int-'));
@@ -192,13 +157,13 @@ describe('co-occurrence', () => {
     expect(first.status).toBe('ok');
     expect(first.counts?.associations).toBe(3);
 
-    let pairs = await coOccursCounts();
+    let pairs = await coOccurrencePairs(harness.driver);
     expect(pairs).toHaveLength(3);
     expect(pairs.every((pair) => pair.count === 1)).toBe(true);
 
     const rerun = await runStage(episodeOne);
     expect(rerun.counts?.associations).toBe(0);
-    pairs = await coOccursCounts();
+    pairs = await coOccurrencePairs(harness.driver);
     expect(pairs.every((pair) => pair.count === 1)).toBe(true);
 
     const episodeTwo = await newEpisode('co-occurrence fixture two');
@@ -208,7 +173,7 @@ describe('co-occurrence', () => {
     const second = await runStage(episodeTwo);
     expect(second.counts?.associations).toBe(1);
 
-    pairs = await coOccursCounts();
+    pairs = await coOccurrencePairs(harness.driver);
     const priyaAion = pairs.find((pair) => pair.a === 'Aion' && pair.b === 'Priya');
     expect(priyaAion?.count).toBe(2);
   }, 180_000);
@@ -224,7 +189,7 @@ describe('semantic similarity', () => {
     const outcome = await runStage(episode);
 
     expect(outcome.status).toBe('ok');
-    const similar = await similarPairsAmong(['Postgres', 'PostgresAlias', 'Unrelated']);
+    const similar = await similarPairsAmong(harness.driver, ['Postgres', 'PostgresAlias', 'Unrelated']);
     // SIMILAR is undirected; the edge-upsert normalizes endpoints by id, not by name, so
     // either entity can land on either side.
     expect(similar).toHaveLength(1);
@@ -243,7 +208,7 @@ describe('semantic similarity', () => {
 
     expect(first.counts?.associations).toBeGreaterThan(0);
     expect(second.counts?.associations).toBe(0);
-    const similar = await similarPairsAmong(['Kubernetes', 'K8s']);
+    const similar = await similarPairsAmong(harness.driver, ['Kubernetes', 'K8s']);
     expect(similar).toHaveLength(1);
   }, 180_000);
 });

@@ -4,18 +4,21 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
-import { runRead } from '../../../infrastructure/graph/connection.js';
-import { ENTITY_ALIASES_PROPERTY } from '../../../infrastructure/graph/entity-dedup-queries.js';
 import {
-  ENTITY_MENTION_TYPE,
-  ENTITY_PARTICIPATION_TYPE,
+  findEpisodeEntities,
   linkEntityMentions,
   mergeEntities,
   writeEntityVectors,
   type EntityMergeInput,
 } from '../../../infrastructure/graph/entity-queries.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
-import { SUPERSEDES_TYPE } from '../../../infrastructure/graph/relationships.js';
+import { findPendingVectorNodes } from '../../../infrastructure/graph/pending-vectors.js';
+import {
+  mentionCounts,
+  participatingEpisodeIds,
+  storedEntity,
+  supersedingNodeIds,
+} from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
@@ -92,35 +95,6 @@ function context(): StageContext {
   };
 }
 
-type StoredEntity = {
-  readonly id: string;
-  readonly aliases: readonly string[];
-  readonly accessCount: number;
-  readonly validUntil: Date | null;
-  readonly nameVectorLength: number;
-};
-
-async function storedEntity(id: string): Promise<StoredEntity | undefined> {
-  const rows = await runRead(
-    harness.driver,
-    [
-      'MATCH (n:Entity { id: $id })',
-      `RETURN n.id AS id, coalesce(n.${ENTITY_ALIASES_PROPERTY}, []) AS aliases,`,
-      '       coalesce(n.access_count, 0) AS access_count, n.valid_until AS valid_until,',
-      '       size(coalesce(n.name_vec, [])) AS name_vec_length',
-    ].join('\n'),
-    { id },
-    (row) => ({
-      id: row.id as string,
-      aliases: row.aliases as string[],
-      accessCount: row.access_count as number,
-      validUntil: (row.valid_until ?? null) as Date | null,
-      nameVectorLength: row.name_vec_length as number,
-    }),
-  );
-  return rows[0];
-}
-
 beforeAll(async () => {
   harness = await startNeo4jHarness();
   dataDir = mkdtempSync(join(tmpdir(), 'aion-entity-dedup-int-'));
@@ -195,8 +169,8 @@ describe('entity dedup against a live graph', () => {
     expect(outcome.status).toBe('ok');
     expect(outcome.counts).toEqual({ merges: 1 });
 
-    const canonical = await storedEntity(canonicalId);
-    const duplicate = await storedEntity(duplicateId);
+    const canonical = await storedEntity(harness.driver, canonicalId);
+    const duplicate = await storedEntity(harness.driver, duplicateId);
     expect(canonical?.validUntil).toBeNull();
     expect(duplicate?.validUntil).not.toBeNull();
     expect(canonical?.aliases).toEqual(['The Aion Substrate']);
@@ -206,36 +180,15 @@ describe('entity dedup against a live graph', () => {
     // Best-effort post-commit cleanup: the closed node's vectors are gone.
     expect(duplicate?.nameVectorLength).toBe(0);
 
-    const lineage = await runRead(
-      harness.driver,
-      `MATCH (a)-[r:${SUPERSEDES_TYPE}]->(b) WHERE b.id = $duplicateId RETURN a.id AS newId`,
-      { duplicateId },
-      (row) => row.newId as string,
-    );
-    expect(lineage).toEqual([canonicalId]);
+    expect(await supersedingNodeIds(harness.driver, duplicateId)).toEqual([canonicalId]);
 
     // PARTICIPATES_IN moved: the duplicate's episode is now claimed by the canonical too.
-    const participations = await runRead(
-      harness.driver,
-      [
-        `MATCH (n:Entity { id: $canonicalId })-[:${ENTITY_PARTICIPATION_TYPE}]->(e:Episode)`,
-        'RETURN e.id AS episodeId ORDER BY e.id',
-      ].join('\n'),
-      { canonicalId },
-      (row) => row.episodeId as string,
+    expect(await participatingEpisodeIds(harness.driver, canonicalId)).toEqual(
+      [episodeId, otherEpisodeId].sort(),
     );
-    expect(participations).toEqual([episodeId, otherEpisodeId].sort());
 
     // MENTIONS moved too, in the opposite direction, and the old edge off the closed node survives.
-    const mentionsFromOther = await runRead(
-      harness.driver,
-      [
-        `MATCH (:Episode { id: $otherEpisodeId })-[r:${ENTITY_MENTION_TYPE}]->(n:Entity)`,
-        'RETURN n.id AS id, r.count AS count ORDER BY n.id',
-      ].join('\n'),
-      { otherEpisodeId },
-      (row) => ({ id: row.id as string, count: row.count as number }),
-    );
+    const mentionsFromOther = await mentionCounts(harness.driver, otherEpisodeId);
     expect(mentionsFromOther).toEqual(
       expect.arrayContaining([
         { id: duplicateId, count: 1 },
@@ -248,13 +201,7 @@ describe('entity dedup against a live graph', () => {
 
     const rerun = await new EntityDedupStage().run(context());
     expect(rerun.counts).toEqual({ merges: 0 });
-    const supersedesAfterRerun = await runRead(
-      harness.driver,
-      `MATCH (:Entity)-[r:${SUPERSEDES_TYPE}]->(:Entity { id: $duplicateId }) RETURN count(r) AS total`,
-      { duplicateId },
-      (row) => row.total as number,
-    );
-    expect(supersedesAfterRerun).toEqual([1]);
+    expect(await supersedingNodeIds(harness.driver, duplicateId)).toEqual([canonicalId]);
   }, 120_000);
 
   it('leaves an unrelated entity of the same type untouched', async () => {
@@ -297,7 +244,104 @@ describe('entity dedup against a live graph', () => {
     const outcome = await new EntityDedupStage().run(context());
 
     expect(outcome.counts).toEqual({ merges: 0 });
-    const unrelated = await storedEntity(unrelatedId);
+    const unrelated = await storedEntity(harness.driver, unrelatedId);
     expect(unrelated?.validUntil).toBeNull();
+  }, 60_000);
+});
+
+describe('what a merge has to stay merged against', () => {
+  const laterEpisodeId = 'live-episode-after-merge';
+  let canonicalId: string;
+  let mergedAwayId: string;
+
+  beforeAll(async () => {
+    episodeId = 'live-episode-merge-holds';
+    await seedEpisode(episodeId);
+    await seedEpisode(laterEpisodeId);
+
+    canonicalId = await seedEntity(
+      {
+        name: 'Postgres',
+        nameNorm: 'postgres',
+        type: 'tool',
+        text: 'Postgres (tool): the relational store',
+        sourceEpisodeId: episodeId,
+        extractionMethod: 'test',
+        confidence: 0.8,
+      },
+      unitVector(0),
+    );
+    mergedAwayId = await seedEntity(
+      {
+        name: 'PostgreSQL',
+        nameNorm: 'postgresql',
+        type: 'tool',
+        text: 'PostgreSQL (tool): the same relational store',
+        sourceEpisodeId: episodeId,
+        extractionMethod: 'test',
+        confidence: 0.8,
+      },
+      nearDuplicateVector(),
+    );
+    await linkEntityMentions(harness.driver, {
+      episodeId,
+      entityIds: [canonicalId, mergedAwayId],
+      now: NOW,
+      confidence: 0.8,
+      provenance: ['test'],
+    });
+
+    const outcome = await new EntityDedupStage().run(context());
+    expect(outcome.counts).toEqual({ merges: 1 });
+    expect((await storedEntity(harness.driver, mergedAwayId))?.validUntil).not.toBeNull();
+  }, 120_000);
+
+  it('resolves a later episode naming the merged-away surface form onto the canonical', async () => {
+    const [resolved] = await mergeEntities(
+      harness.driver,
+      [
+        {
+          name: 'PostgreSQL',
+          nameNorm: 'postgresql',
+          type: 'tool',
+          text: 'PostgreSQL (tool): named again a week later',
+          sourceEpisodeId: laterEpisodeId,
+          extractionMethod: 'test',
+          confidence: 0.8,
+        },
+      ],
+      NOW,
+    );
+
+    expect(resolved?.id).toBe(canonicalId);
+    expect(resolved?.created).toBe(false);
+
+    await linkEntityMentions(harness.driver, {
+      episodeId: laterEpisodeId,
+      entityIds: [resolved?.id ?? ''],
+      now: NOW,
+      confidence: 0.8,
+      provenance: ['test'],
+    });
+
+    // The closed node gains nothing: the later episode's mention lands on the identity that
+    // still answers, which is what keeps dedup from being undone one episode at a time.
+    expect(await mentionCounts(harness.driver, laterEpisodeId)).toEqual([
+      { id: canonicalId, count: 1 },
+    ]);
+    expect((await storedEntity(harness.driver, mergedAwayId))?.validUntil).not.toBeNull();
+  }, 60_000);
+
+  it('hands the merged-away entity to no downstream stage', async () => {
+    const mentioned = await findEpisodeEntities(harness.driver, episodeId);
+
+    expect(mentioned.map((entity) => entity.id)).toEqual([canonicalId]);
+  }, 60_000);
+
+  it('leaves the merged-away entity out of the pending-vector drain', async () => {
+    const pending = await findPendingVectorNodes(harness.driver, 64);
+
+    expect((await storedEntity(harness.driver, mergedAwayId))?.nameVectorLength).toBe(0);
+    expect(pending.map((node) => node.id)).not.toContain(mergedAwayId);
   }, 60_000);
 });

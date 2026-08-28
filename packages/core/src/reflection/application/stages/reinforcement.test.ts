@@ -125,7 +125,7 @@ describe('ReinforcementEnqueueStage', () => {
     expect(actualPairs).toEqual(expectedPairs);
   });
 
-  it('re-running enqueues the same pairs again (queue is not idempotent by design)', async () => {
+  it('re-running the same episode enqueues nothing further', async () => {
     const episodeId = 'episode-1';
     const nodeIds = ['node-1', 'node-2'];
 
@@ -146,13 +146,14 @@ describe('ReinforcementEnqueueStage', () => {
       now: new Date('2025-01-15T10:00:00Z'),
     };
 
-    // First run.
     await stage.run(ctx);
     expect(listReinforcementSignals(store.db)).toHaveLength(1);
 
-    // Second run (idempotency not applied by design; flush dedupes).
-    await stage.run(ctx);
-    expect(listReinforcementSignals(store.db)).toHaveLength(2);
+    // The orchestrator's crash-before-ledger-mark window: the stage runs a second time for
+    // the same episode and must not double what P4's flush will apply.
+    const second = await stage.run(ctx);
+    expect(second.status).toBe('skipped');
+    expect(listReinforcementSignals(store.db)).toHaveLength(1);
   });
 
   it('handles mixed entity and cognitive nodes', async () => {

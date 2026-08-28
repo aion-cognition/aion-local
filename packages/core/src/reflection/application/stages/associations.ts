@@ -91,31 +91,32 @@ export class AssociationInferenceStage implements ReflectionStage {
   }
 
   /**
-   * Every co-occurring pair, gated per (episode, pair): a pair already recorded for this
-   * episode is skipped without a graph call, which is what makes a stage re-run — the
-   * orchestrator's crash-before-ledger-mark case — leave the edge's `count` untouched instead
-   * of double-observing the same episode.
+   * Every co-occurring pair, gated once for the episode: a re-run — the orchestrator's
+   * crash-before-ledger-mark case — leaves the edges' `count` untouched instead of
+   * double-observing the same episode. The key is marked only after the last pair lands, so
+   * an interrupted loop stays retryable rather than half-recorded and closed.
    */
   async #linkCoOccurrences(
     ctx: StageContext,
     entityIds: readonly string[],
   ): Promise<{ status: 'ok'; written: number } | { status: 'failed'; summary: string; counts: { associations: number } }> {
+    const key = coOccursLedgerKey(ctx.episodeId);
+    if (isLedgerApplied(ctx.db, key)) {
+      return { status: 'ok', written: 0 };
+    }
+
     const pairs = coOccurringPairs(entityIds);
     let written = 0;
     try {
       for (const pair of pairs) {
-        const key = coOccursLedgerKey(ctx.episodeId, pair.sourceId, pair.targetId);
-        if (isLedgerApplied(ctx.db, key)) {
-          continue;
-        }
         await linkCoOccurrence(ctx.driver, {
           sourceId: pair.sourceId,
           targetId: pair.targetId,
           now: ctx.now,
         });
-        markLedgerApplied(ctx.db, key, 'co-occurrence recorded');
         written += 1;
       }
+      markLedgerApplied(ctx.db, key, { pairs: written });
       return { status: 'ok', written };
     } catch (err) {
       return {

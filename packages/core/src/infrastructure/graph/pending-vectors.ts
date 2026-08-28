@@ -36,10 +36,18 @@ function toGraphInteger(value: number): unknown {
  * leave the first experience of the window waiting behind the last. `text` is what gets
  * embedded, so a node without one is not pending — it is a memory type that carries no
  * body, and no later call can give it a vector.
+ *
+ * A closed node is never pending. Entity dedup clears a merged-away node's vectors on
+ * purpose (§6.5), and in Neo4j clearing a property removes it, which is the same state a
+ * node awaiting its first embed is in. Without the currency filter the drain reads that
+ * cleanup as a backlog and re-vectorizes every duplicate the pipeline has ever merged,
+ * putting it back in `content_vec_idx` on the next service start.
  */
 const FIND_PENDING_VECTOR_NODES = [
   `MATCH (n:${MEMORY_LABEL})`,
   `WHERE n.${MEMORY_PROPERTIES.contentVector} IS NULL AND n.${MEMORY_PROPERTIES.text} IS NOT NULL`,
+  `  AND n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
+  `  AND n.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
   `RETURN n.id AS id, n.${MEMORY_PROPERTIES.text} AS text`,
   `ORDER BY n.${BITEMPORAL_PROPERTIES.txFrom}, n.id`,
   'LIMIT $limit',

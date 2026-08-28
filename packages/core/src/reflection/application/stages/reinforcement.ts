@@ -1,5 +1,6 @@
-import { enqueueReinforcementSignal } from '../../../infrastructure/sqlite/reinforcement-queue.js';
 import { findCoExtractedNodeIds } from '../../../infrastructure/graph/reinforcement-queries.js';
+import { isLedgerApplied, markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
+import { enqueueReinforcementSignal } from '../../../infrastructure/sqlite/reinforcement-queue.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
 
 /**
@@ -21,10 +22,25 @@ export const REFLECTION_CO_EXTRACTION_TRIGGER = 'reflection:co-extraction';
  * rows without applying the factor; the factor contract lives in the flush operation.
  */
 
+/**
+ * The episode-scoped gate, in the shape association inference already uses. A queue row is a
+ * fresh uuid with no uniqueness constraint behind it, so without this the orchestrator's
+ * crash-before-ledger-mark window doubles every pair the episode produced, and P4's flush
+ * reinforces each of them twice.
+ */
+export function coExtractionLedgerKey(episodeId: string): string {
+  return `reinforcement.co_extraction:${episodeId}`;
+}
+
 export class ReinforcementEnqueueStage implements ReflectionStage {
   readonly name = REINFORCEMENT_STAGE_NAME;
 
   async run(ctx: StageContext): Promise<StageOutcome> {
+    const key = coExtractionLedgerKey(ctx.episodeId);
+    if (isLedgerApplied(ctx.db, key)) {
+      return { status: 'skipped', summary: 'co-extraction signals already enqueued' };
+    }
+
     const nodeIds = await findCoExtractedNodeIds(ctx.driver, ctx.episodeId);
 
     if (nodeIds.length === 0) {
@@ -60,6 +76,8 @@ export class ReinforcementEnqueueStage implements ReflectionStage {
         count += 1;
       }
     }
+
+    markLedgerApplied(ctx.db, key, { pairs: count });
 
     return {
       status: 'ok',
