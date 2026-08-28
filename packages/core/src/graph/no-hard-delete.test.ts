@@ -14,14 +14,17 @@ const PACKAGES_DIR = join(REPO_ROOT, 'packages');
 const THIS_FILE = fileURLToPath(import.meta.url);
 
 /**
- * Cypher keywords are case-insensitive, so the scan has to be too. The DELETE clause
- * pattern excludes JavaScript's own `delete` operator, which is always followed by a
- * property access (`delete obj.key`, `delete map[key]`) and is a syntax error without
- * one under ESM's implicit strict mode.
+ * Cypher keywords are case-insensitive, so the scan has to be too. Two exclusions keep
+ * the pattern on its subject, which is graph nodes. JavaScript's own `delete` operator
+ * is always followed by a property access (`delete obj.key`, `delete map[key]`) and is a
+ * syntax error without one under ESM's implicit strict mode. SQL's `DELETE FROM <table>`
+ * is not Cypher at all — `FROM` is not a Cypher keyword — and a SQLite row is not a node:
+ * the reflection queue row is retry durability, discarded once its job succeeds, while
+ * the durable record of that job is the ops-ledger key.
  */
 const FORBIDDEN = [
   { name: 'DETACH DELETE', pattern: /\bDETACH\s+DELETE\b/i },
-  { name: 'DELETE clause', pattern: /\bDELETE\s+[A-Za-z_][A-Za-z0-9_]*\s*(?![.[\w])/i },
+  { name: 'DELETE clause', pattern: /\bDELETE\s+(?!FROM\b)[A-Za-z_][A-Za-z0-9_]*\s*(?![.[\w])/i },
 ];
 
 /** Comments discuss deletion in prose; only executable text is scanned. */
@@ -71,6 +74,16 @@ describe('no code path hard-deletes a node', () => {
 
     const bare = stripComments("await tx.run('match (n) delete n');\n");
     expect(FORBIDDEN.some(({ pattern }) => pattern.test(bare))).toBe(true);
+  });
+
+  it('still catches a Cypher delete that names a table-shaped variable', () => {
+    const cypher = stripComments("await tx.run('MATCH (n:Session) DELETE from_node');\n");
+    expect(FORBIDDEN.some(({ pattern }) => pattern.test(cypher))).toBe(true);
+  });
+
+  it('leaves a SQL row delete alone, since a queue row is not a node', () => {
+    const sql = stripComments("db.prepare('DELETE FROM reflection_queue WHERE id = ?');\n");
+    expect(FORBIDDEN.some(({ pattern }) => pattern.test(sql))).toBe(false);
   });
 
   it('leaves the JavaScript delete operator and prose about deletion alone', () => {
