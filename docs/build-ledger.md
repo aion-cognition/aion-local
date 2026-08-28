@@ -185,9 +185,11 @@ decisions rather than accidents:
 
 ## What is not built yet
 
-P3 and beyond, deliberately unplanned until the P2 substrate had passed its gate: the
-reflection pipeline (entity extraction, dedup, associations, cognitive structures,
-narratives, context vectors), the event-driven dispatcher, Hebbian reinforcement flush and
-decay, context resonance in recall, the maintenance scheduler, and the remaining CLI
-surface (stats, why, search, forget). Recall today operates over episodes and session
-structure, which is the documented cold-start posture.
+P4 and beyond. Hebbian reinforcement flush and decay (recall and reflection both queue the
+signals; nothing applies them yet), context resonance in recall, the maintenance scheduler
+and its operation catalog, the Anthropic provider and its routing, and the remaining CLI
+surface (`stats`, `why`, `search`, `forget`). Recall serves `facts`, `episodes` and
+`narratives`; `preferences` and `resonant` stay structurally absent until they have a
+producer.
+
+P3's own ledger section is deferred to P5-6, which writes the P3-P5 history in one pass.

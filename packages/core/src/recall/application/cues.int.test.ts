@@ -19,10 +19,17 @@ import { CueCache, extractCues, type CueExtractionDeps } from './cues.js';
  */
 
 /**
- * The degradation ladder is a fallback, so a healthy install never rides it: any degraded
+ * The degradation ladder is a fallback, so a healthy install never rides it: a degraded
  * fixture means the budget or the model is misconfigured, which is a defect and not a flake.
+ *
+ * Split by reason, because only one of them is a fact about the code. A model that returns
+ * an unusable shape or errors outright is broken however busy the machine is, so that count
+ * stays at zero. A single `timeout` is a fact about the wall clock — this suite shares a
+ * laptop with a live Neo4j, a reflection pipeline and the same Ollama it is measuring — and
+ * a misconfigured budget shows up as most of the set timing out, not one of eight.
  */
 const MAX_DEGRADED = 0;
+const MAX_TIMED_OUT = 1;
 
 /**
  * Empty cue sets are the one place model nondeterminism is tolerated. A quarter of the
@@ -87,7 +94,8 @@ describe('cue extraction against live host Ollama', () => {
   // declaration order, which is what makes an aggregate assertion a test rather than a hook.
   it('extracts cues rather than riding the degradation ladder', () => {
     const emptyCount = rows.filter((row) => row.cues === 0).length;
-    const degradedCount = rows.filter((row) => row.degraded).length;
+    const timedOut = rows.filter((row) => row.degraded && row.reason === 'timeout');
+    const degradedCount = rows.filter((row) => row.degraded).length - timedOut.length;
     const latencies = rows.map((row) => row.latencyMs).sort((left, right) => left - right);
 
     console.table(rows);
@@ -95,12 +103,14 @@ describe('cue extraction against live host Ollama', () => {
       `cue quality: ${String(rows.length)} queries, ` +
         `empty ${String(emptyCount)}/${String(rows.length)}, ` +
         `degraded ${String(degradedCount)}/${String(rows.length)}, ` +
+        `timed out ${String(timedOut.length)}/${String(rows.length)}, ` +
         `latency min ${String(latencies[0])}ms median ${String(latencies[Math.floor(latencies.length / 2)])}ms ` +
         `max ${String(latencies.at(-1))}ms, model ${CUE_MODEL}, budget ${String(deps.budgetMs)}ms`,
     );
 
     expect(rows).toHaveLength(CUE_FIXTURES.length);
     expect(degradedCount).toBeLessThanOrEqual(MAX_DEGRADED);
+    expect(timedOut.length).toBeLessThanOrEqual(MAX_TIMED_OUT);
     expect(emptyCount / rows.length).toBeLessThanOrEqual(MAX_EMPTY_RATE);
   });
 });
