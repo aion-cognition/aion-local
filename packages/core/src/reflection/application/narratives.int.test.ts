@@ -1,0 +1,270 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import { BITEMPORAL_PROPERTIES } from '../../infrastructure/graph/bitemporal.js';
+import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
+import { MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
+import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
+import {
+  DERIVES_FROM_TYPE,
+  findIdleSessions,
+  findSessionNarratives,
+  loadSessionEpisodes,
+  NARRATIVE_PROPERTIES,
+  SUMMARIZED_BY_TYPE,
+} from '../../infrastructure/graph/narrative-queries.js';
+import { escapeLuceneQuery, fulltextSeeds, vectorSeeds } from '../../infrastructure/graph/seed-queries.js';
+import { withCurrency } from '../../infrastructure/graph/read-modes.js';
+import {
+  countEdges,
+  countOutgoingEdges,
+  edgeTargetId,
+  episodeIdsInSession,
+  nodeLabels,
+  nodeProperties,
+} from '../../infrastructure/graph/test-support/graph-queries.fixture.js';
+import {
+  startNeo4jHarness,
+  stopNeo4jHarness,
+  type Neo4jHarness,
+} from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
+import { openLogger } from '../../infrastructure/logging/logger.js';
+import { OllamaProvider } from '../../infrastructure/providers/ollama-provider.js';
+import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { SessionManager } from '../../session/session-manager.js';
+import { ReflectionDispatch } from './dispatch.js';
+import { handleReflection, type ReflectionIntakeDeps } from './intake.js';
+import {
+  closeSessionNarrative,
+  DEFAULT_SESSION_IDLE_MS,
+  sweepIdleSessions,
+  type NarrativeDeps,
+} from './narratives.js';
+
+/**
+ * The whole boundary against a live substrate: episodes pushed through a session, the close
+ * compressing them with the reflect model, and the narrative that results reachable by both
+ * retrieval legs. What only a real server proves here is the Cypher — the idle-session
+ * aggregation, the version read, and `content_fts` actually covering `Narrative`.
+ */
+
+const SESSION_IDENTITY = 'mcp-transport-session-narratives';
+const IDLE_SESSION_IDENTITY = 'mcp-transport-session-narratives-idle';
+const OLLAMA_URL = process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434';
+
+const EPISODES = [
+  {
+    summary: 'planning the Ariadne rollout',
+    turns: [
+      { role: 'user', text: 'we need the Ariadne rollout staged behind a flag', occurred_at: '2026-04-02T09:00:00Z' },
+      { role: 'assistant', text: 'staging it behind AION_ARIADNE and defaulting it off', occurred_at: '2026-04-02T09:00:30Z' },
+    ],
+  },
+  {
+    summary: 'the Ariadne migration ran',
+    turns: [
+      { role: 'user', text: 'run the Ariadne migration against the staging substrate', occurred_at: '2026-04-02T09:20:00Z' },
+      { role: 'assistant', text: 'migration applied, every constraint came back green', occurred_at: '2026-04-02T09:21:00Z' },
+    ],
+    observations: ['The migration is idempotent: the second run created nothing'],
+  },
+  {
+    summary: 'we decided to hold the Ariadne launch',
+    turns: [
+      { role: 'user', text: 'hold the launch until the backfill finishes', occurred_at: '2026-04-02T09:40:00Z' },
+      { role: 'assistant', text: 'holding it; the backfill has about a day left', occurred_at: '2026-04-02T09:41:00Z' },
+    ],
+  },
+];
+
+const LATE_EPISODE = {
+  summary: 'the backfill finished and Ariadne launched',
+  turns: [
+    { role: 'user', text: 'backfill is done, launch Ariadne', occurred_at: '2026-04-02T18:00:00Z' },
+    { role: 'assistant', text: 'flag flipped on, launch is live', occurred_at: '2026-04-02T18:01:00Z' },
+  ],
+};
+
+let harness: Neo4jHarness;
+let db: SqliteHandle;
+let dataDir: string;
+let intake: ReflectionIntakeDeps;
+let deps: NarrativeDeps;
+let firstNarrativeId: string;
+
+function provider(): OllamaProvider {
+  return new OllamaProvider({ baseUrl: OLLAMA_URL, embedModel: DEFAULTS.models.embed });
+}
+
+async function push(payload: unknown, identity: string): Promise<string> {
+  const stored = await handleReflection(intake, payload, { identity });
+  return stored.episode_id;
+}
+
+/** The sweep measures idleness against its own clock, so a session written seconds ago looks quiet from here. */
+function afterTheIdleWindow(): Date {
+  return new Date(Date.now() + DEFAULT_SESSION_IDLE_MS + 60_000);
+}
+
+beforeAll(async () => {
+  harness = await startNeo4jHarness();
+  dataDir = mkdtempSync(join(tmpdir(), 'aion-narratives-int-'));
+  db = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
+  await runGraphMigrations(harness.driver, db, { embedDimension: DEFAULTS.models.embedDimension });
+
+  const backbone = await bootstrapBackbone(harness.driver, { memberName: 'Test User' });
+  const logger = openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' });
+
+  intake = {
+    driver: harness.driver,
+    db,
+    sessions: new SessionManager(harness.driver, {
+      memberId: backbone.member.id,
+      workspaceId: backbone.workspace.id,
+    }),
+    provider: provider(),
+    dispatch: new ReflectionDispatch(),
+    logger,
+    entropyThreshold: DEFAULTS.redaction.entropyThreshold,
+  };
+  deps = { driver: harness.driver, provider: provider(), logger };
+
+  for (const payload of EPISODES) {
+    await push(payload, SESSION_IDENTITY);
+  }
+  await push(EPISODES[0], IDLE_SESSION_IDENTITY);
+}, 300_000);
+
+afterAll(async () => {
+  await stopNeo4jHarness(harness);
+  db.close();
+  rmSync(dataDir, { recursive: true, force: true });
+});
+
+describe('session close against a live substrate', () => {
+  it('reads the session back in the order it happened', async () => {
+    const episodes = await loadSessionEpisodes(harness.driver, SESSION_IDENTITY);
+
+    expect(episodes).toHaveLength(3);
+    expect(episodes.map((episode) => episode.summary)).toEqual(EPISODES.map((e) => e.summary));
+    expect(episodes[0]?.writtenAt).toBeInstanceOf(Date);
+  });
+
+  it('compresses the session into a narrative with provenance and a vector', async () => {
+    const result = await closeSessionNarrative(deps, SESSION_IDENTITY);
+
+    expect(result.status).toBe('created');
+    expect(result.version).toBe(1);
+    expect(result.episodes).toBe(3);
+    firstNarrativeId = result.narrativeId as string;
+
+    expect(await nodeLabels(harness.driver, firstNarrativeId)).toEqual([
+      'AionNode',
+      'Memory',
+      'Narrative',
+    ]);
+
+    const properties = await nodeProperties(harness.driver, firstNarrativeId);
+    expect(properties[NARRATIVE_PROPERTIES.scope]).toBe('session');
+    expect(properties[NARRATIVE_PROPERTIES.version]).toBe(1);
+    expect(properties[NARRATIVE_PROPERTIES.coverageCount]).toBe(3);
+    expect(properties[NARRATIVE_PROPERTIES.coverage]).toBe(1);
+    expect(String(properties[MEMORY_PROPERTIES.summary] ?? '').length).toBeGreaterThan(0);
+    expect(String(properties[MEMORY_PROPERTIES.text] ?? '').length).toBeGreaterThan(0);
+    expect(properties[MEMORY_PROPERTIES.contentVector]).toHaveLength(
+      DEFAULTS.models.embedDimension,
+    );
+
+    const episodeIds = await episodeIdsInSession(harness.driver, SESSION_IDENTITY);
+    expect(episodeIds).toHaveLength(3);
+    for (const episodeId of episodeIds) {
+      expect(await countEdges(harness.driver, SUMMARIZED_BY_TYPE, episodeId, firstNarrativeId)).toBe(
+        1,
+      );
+    }
+    expect(await countOutgoingEdges(harness.driver, DERIVES_FROM_TYPE, firstNarrativeId)).toBe(1);
+    expect(await edgeTargetId(harness.driver, DERIVES_FROM_TYPE, firstNarrativeId)).toBe(
+      SESSION_IDENTITY,
+    );
+  }, 120_000);
+
+  it('is found by a broad recall, by vector and by fulltext', async () => {
+    const [query] = await deps.provider.embed(['what has this session been working on']);
+    const byVector = await vectorSeeds(harness.driver, {
+      vector: query ?? [],
+      limit: 10,
+      mode: withCurrency(),
+    });
+    expect(byVector.map((seed) => seed.id)).toContain(firstNarrativeId);
+
+    // The query is the narrative's own summary line, escaped, because the wording the model
+    // chose is not predictable: what this proves is that `content_fts` covers `Narrative` at
+    // all, which is the half a migration can get wrong.
+    const summary = byVector.find((seed) => seed.id === firstNarrativeId)?.content ?? '';
+    const byText = await fulltextSeeds(harness.driver, {
+      query: escapeLuceneQuery(summary),
+      limit: 10,
+      mode: withCurrency(),
+    });
+    expect(byText.map((seed) => seed.id)).toContain(firstNarrativeId);
+  }, 120_000);
+
+  it('writes nothing on a re-close over the same episodes', async () => {
+    const result = await closeSessionNarrative(deps, SESSION_IDENTITY);
+
+    expect(result.status).toBe('skipped');
+    expect(await findSessionNarratives(harness.driver, SESSION_IDENTITY)).toHaveLength(1);
+  });
+
+  it('mints version 2 and supersedes version 1 once the session grew', async () => {
+    await push(LATE_EPISODE, SESSION_IDENTITY);
+
+    const result = await closeSessionNarrative(deps, SESSION_IDENTITY);
+
+    expect(result.status).toBe('created');
+    expect(result.version).toBe(2);
+
+    const versions = await findSessionNarratives(harness.driver, SESSION_IDENTITY);
+    expect(versions.map((version) => [version.version, version.open, version.coverageCount])).toEqual([
+      [2, true, 4],
+      [1, false, 3],
+    ]);
+
+    expect(await edgeTargetId(harness.driver, 'SUPERSEDES', result.narrativeId as string)).toBe(
+      firstNarrativeId,
+    );
+    const closed = await nodeProperties(harness.driver, firstNarrativeId);
+    expect(closed[BITEMPORAL_PROPERTIES.validUntil]).toBeInstanceOf(Date);
+    expect(closed[BITEMPORAL_PROPERTIES.txUntil]).toBeInstanceOf(Date);
+  }, 120_000);
+});
+
+describe('idle sweep against a live substrate', () => {
+  it('offers only the session that has gone quiet and is not yet covered', async () => {
+    const idle = await findIdleSessions(harness.driver, {
+      idleBefore: new Date(Date.now() + 60_000),
+      limit: 10,
+    });
+
+    expect(idle.map((session) => session.sessionId)).toEqual([IDLE_SESSION_IDENTITY]);
+    expect(idle[0]?.episodeCount).toBe(1);
+    expect(idle[0]?.lastActivityAt).toBeInstanceOf(Date);
+  });
+
+  it('narrates it, and then stops offering it', async () => {
+    const results = await sweepIdleSessions(deps, { now: afterTheIdleWindow() });
+
+    expect(results.map((result) => [result.sessionId, result.status])).toEqual([
+      [IDLE_SESSION_IDENTITY, 'created'],
+    ]);
+
+    const covered = await findSessionNarratives(harness.driver, IDLE_SESSION_IDENTITY);
+    expect(covered).toHaveLength(1);
+    expect(covered[0]?.open).toBe(true);
+
+    const again = await sweepIdleSessions(deps, { now: afterTheIdleWindow() });
+    expect(again).toEqual([]);
+  }, 120_000);
+});

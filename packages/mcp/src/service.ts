@@ -68,6 +68,14 @@ export type AionMcpServiceOptions = {
   readonly port: number;
   /** Overridable for tests, which cannot afford to wait out the real deadline. */
   readonly drainTimeoutMs?: number;
+  /**
+   * The session-close boundary (whitepaper §6.10): the transport ended, so the session's
+   * experience is complete and its narrative can be compressed. The id handed over is the
+   * transport session id, which is the Session node's id. Best-effort and fire-and-forget —
+   * a hook that throws or rejects never affects teardown, and a client that vanishes without
+   * a DELETE never reaches it at all, which is what the idle sweep exists for.
+   */
+  readonly onSessionClosed?: (sessionId: string) => void;
 };
 
 export class AionMcpService {
@@ -78,6 +86,7 @@ export class AionMcpService {
   readonly #sessions = new Map<string, McpSession>();
   readonly #http: HttpServer;
   readonly #drainTimeoutMs: number;
+  readonly #onSessionClosed: ((sessionId: string) => void) | undefined;
   /** Tool calls that have started and not yet settled. Shutdown waits on these. */
   readonly #inFlight = new Set<Promise<unknown>>();
   #stopping = false;
@@ -88,6 +97,7 @@ export class AionMcpService {
     this.#host = options.host;
     this.#configuredPort = options.port;
     this.#drainTimeoutMs = options.drainTimeoutMs ?? DRAIN_TIMEOUT_MS;
+    this.#onSessionClosed = options.onSessionClosed;
     this.#http = createServer((req, res) => {
       void this.#route(req, res);
     });
@@ -343,8 +353,19 @@ export class AionMcpService {
   }
 
   #forget(sessionId: string): void {
-    if (this.#sessions.delete(sessionId)) {
-      this.#logger.info({ sessionId, sessions: this.#sessions.size }, 'mcp session closed');
+    if (!this.#sessions.delete(sessionId)) {
+      return;
+    }
+    this.#logger.info({ sessionId, sessions: this.#sessions.size }, 'mcp session closed');
+    if (this.#onSessionClosed === undefined) {
+      return;
+    }
+    // Teardown is not the hook's to fail: a close that threw would leave the transport half
+    // dismantled over work that is recoverable by the idle sweep anyway.
+    try {
+      this.#onSessionClosed(sessionId);
+    } catch (err) {
+      this.#logger.error({ err, sessionId }, 'session close hook failed');
     }
   }
 
