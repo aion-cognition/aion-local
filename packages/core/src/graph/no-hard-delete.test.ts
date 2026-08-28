@@ -13,10 +13,21 @@ const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 const PACKAGES_DIR = join(REPO_ROOT, 'packages');
 const THIS_FILE = fileURLToPath(import.meta.url);
 
+/**
+ * Cypher keywords are case-insensitive, so the scan has to be too. The DELETE clause
+ * pattern excludes JavaScript's own `delete` operator, which is always followed by a
+ * property access (`delete obj.key`, `delete map[key]`) and is a syntax error without
+ * one under ESM's implicit strict mode.
+ */
 const FORBIDDEN = [
-  { name: 'DETACH DELETE', pattern: /\bDETACH\s+DELETE\b/ },
-  { name: 'DELETE clause', pattern: /\bDELETE\s+[A-Za-z_]/ },
+  { name: 'DETACH DELETE', pattern: /\bDETACH\s+DELETE\b/i },
+  { name: 'DELETE clause', pattern: /\bDELETE\s+[A-Za-z_][A-Za-z0-9_]*\s*(?![.[\w])/i },
 ];
+
+/** Comments discuss deletion in prose; only executable text is scanned. */
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+}
 
 function collectSourceFiles(dir: string): string[] {
   const found: string[] = [];
@@ -44,7 +55,7 @@ describe('no code path hard-deletes a node', () => {
   it('finds no Cypher delete anywhere outside this test', () => {
     const offenders: string[] = [];
     for (const file of files) {
-      const source = readFileSync(file, 'utf8');
+      const source = stripComments(readFileSync(file, 'utf8'));
       for (const { name, pattern } of FORBIDDEN) {
         if (pattern.test(source)) {
           offenders.push(`${relative(REPO_ROOT, file)}: ${name}`);
@@ -52,5 +63,21 @@ describe('no code path hard-deletes a node', () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it('catches a lowercase delete, since Cypher keywords are case-insensitive', () => {
+    const lowercase = stripComments('const q = `MATCH (n:Probe) detach delete n`;\n');
+    expect(FORBIDDEN.some(({ pattern }) => pattern.test(lowercase))).toBe(true);
+
+    const bare = stripComments("await tx.run('match (n) delete n');\n");
+    expect(FORBIDDEN.some(({ pattern }) => pattern.test(bare))).toBe(true);
+  });
+
+  it('leaves the JavaScript delete operator and prose about deletion alone', () => {
+    const operator = stripComments("delete process.env['AION_LOG_FILE'];\ndelete cache[key];\n");
+    expect(FORBIDDEN.some(({ pattern }) => pattern.test(operator))).toBe(false);
+
+    const prose = stripComments('// never delete a node; supersession closes it instead\nconst x = 1;\n');
+    expect(FORBIDDEN.some(({ pattern }) => pattern.test(prose))).toBe(false);
   });
 });
