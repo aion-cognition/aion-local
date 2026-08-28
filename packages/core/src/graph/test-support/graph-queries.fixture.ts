@@ -1,6 +1,8 @@
 import type { Driver } from 'neo4j-driver';
+import { ACCESS_COUNT_PROPERTY } from '../access-tracking.js';
 import { runRead } from '../connection.js';
 import { BASE_NODE_LABEL } from '../labels.js';
+import { LAST_ACCESSED_PROPERTY } from '../seed-queries.js';
 import type { Row } from '../values.js';
 
 /**
@@ -135,6 +137,28 @@ export async function turnsOfEpisode(
     { episodeId },
     (row) => row.props as Record<string, unknown>,
   );
+}
+
+export type AccessMetadata = {
+  readonly lastAccessed?: Date;
+  readonly accessCount?: number;
+};
+
+/** Both properties are absent until recall's access-tracking write lands, so both are optional. */
+export async function accessMetadata(driver: Driver, id: string): Promise<AccessMetadata> {
+  const row = await readFirst(
+    driver,
+    [
+      `MATCH (n:${BASE_NODE_LABEL} { id: $id })`,
+      `RETURN n.${LAST_ACCESSED_PROPERTY} AS lastAccessed, n.${ACCESS_COUNT_PROPERTY} AS accessCount`,
+    ].join('\n'),
+    { id },
+    (row) => ({
+      ...(row.lastAccessed instanceof Date ? { lastAccessed: row.lastAccessed } : {}),
+      ...(typeof row.accessCount === 'number' ? { accessCount: row.accessCount } : {}),
+    }),
+  );
+  return row ?? {};
 }
 
 export async function countChainedTurns(driver: Driver, episodeId: string): Promise<number> {

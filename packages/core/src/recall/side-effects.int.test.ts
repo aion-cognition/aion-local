@@ -1,17 +1,14 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Driver } from 'neo4j-driver';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULTS } from '../config/defaults.js';
 import type { Config } from '../config/schema.js';
-import { ACCESS_COUNT_PROPERTY } from '../graph/access-tracking.js';
 import { bootstrapBackbone, type BootstrapBackboneResult } from '../graph/backbone.js';
-import { runRead } from '../graph/connection.js';
-import { BASE_NODE_LABEL } from '../graph/labels.js';
 import { runGraphMigrations } from '../graph/migrations.js';
 import { withCurrency } from '../graph/read-modes.js';
-import { LAST_ACCESSED_PROPERTY, fulltextSeeds, vectorSeeds } from '../graph/seed-queries.js';
+import { fulltextSeeds, vectorSeeds } from '../graph/seed-queries.js';
+import { accessMetadata } from '../graph/test-support/graph-queries.fixture.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
@@ -119,24 +116,6 @@ async function push(observation: string, now: Date): Promise<string> {
     { identity: WRITE_SESSION, now },
   );
   return result.episode_id;
-}
-
-type AccessMetadata = { readonly lastAccessed?: Date; readonly accessCount?: number };
-
-async function accessMetadata(driver: Driver, id: string): Promise<AccessMetadata> {
-  const rows = await runRead(
-    driver,
-    [
-      `MATCH (n:${BASE_NODE_LABEL} { id: $id })`,
-      `RETURN n.${LAST_ACCESSED_PROPERTY} AS lastAccessed, n.${ACCESS_COUNT_PROPERTY} AS accessCount`,
-    ].join('\n'),
-    { id },
-    (row) => ({
-      ...(row.lastAccessed instanceof Date ? { lastAccessed: row.lastAccessed } : {}),
-      ...(typeof row.accessCount === 'number' ? { accessCount: row.accessCount } : {}),
-    }),
-  );
-  return rows[0] ?? {};
 }
 
 function sortedPair(a: string, b: string): string {

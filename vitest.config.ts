@@ -32,6 +32,11 @@ export default defineConfig({
           environment: 'node',
           testTimeout: 120_000,
           hookTimeout: 300_000,
+          // Every integration file starts its own throwaway Neo4j container, each asking for
+          // 1G heap plus 512m pagecache. Run them concurrently and a developer-sized Docker VM
+          // cannot boot Bolt inside the readiness timeout, so the suite fails on resource
+          // contention rather than on the code under test.
+          fileParallelism: false,
         },
       },
     ],
