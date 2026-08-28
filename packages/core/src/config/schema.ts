@@ -1,0 +1,101 @@
+import { z } from 'zod';
+import { LOG_LEVELS } from '../logging/logger.js';
+
+/**
+ * Range constraints below come from PRD §14 and whitepaper Appendix E where a value
+ * is pinned; the rest (int/positive/0-1) are defensive shape checks, not tuned limits.
+ */
+const proportion = z.number().min(0).max(1);
+const positiveInt = z.number().int().positive();
+const nonNegativeInt = z.number().int().nonnegative();
+
+const searchMethod = z.enum(['vector', 'bm25', 'graph_traversal']);
+
+export const ConfigSchema = z.object({
+  neo4j: z.object({
+    uri: z.string().min(1),
+    password: z.string(),
+  }),
+  ollama: z.object({
+    url: z.string().min(1),
+    mode: z.enum(['baremetal', 'docker']),
+  }),
+  models: z.object({
+    embed: z.string().min(1),
+    embedDimension: positiveInt,
+    cue: z.string().min(1),
+    reflect: z.string().min(1),
+  }),
+  anthropic: z.object({
+    /** Empty string means fully local; a non-empty key opts a call class into a remote provider. */
+    apiKey: z.string(),
+  }),
+  recall: z.object({
+    maxHops: nonNegativeInt,
+    vectorLimit: positiveInt,
+    maxFacts: nonNegativeInt,
+    maxEpisodes: nonNegativeInt,
+    maxNarratives: nonNegativeInt,
+    maxPreferences: nonNegativeInt,
+    maxResonant: nonNegativeInt,
+    useContextResonance: z.boolean(),
+    associationStrength: proportion,
+    compressionThreshold: positiveInt,
+    cueBudgetMs: positiveInt,
+    tokenBudget: positiveInt,
+    minRelevance: proportion,
+  }),
+  search: z.object({
+    methods: z.array(searchMethod).min(1),
+    reranker: z.enum(['rrf', 'mmr']),
+    rrfConstant: positiveInt,
+    mmrLambda: proportion,
+    weights: z.object({
+      vector: proportion,
+      bm25: proportion,
+      graph: proportion,
+    }),
+  }),
+  activation: z.object({
+    maxIterations: positiveInt,
+    decayFactor: proportion,
+    minActivation: proportion,
+    maxNodesVisited: positiveInt,
+    hubThreshold: positiveInt,
+  }),
+  hebbian: z.object({
+    weightFloor: proportion,
+    learningRate: proportion,
+    decayRate: proportion,
+    decayPeakDays: positiveInt,
+    decaySigma: z.number().positive(),
+    batchSize: positiveInt,
+    flushIntervalMs: positiveInt,
+  }),
+  contextResonance: z.object({
+    seedLimit: positiveInt,
+    activationLimit: positiveInt,
+    resonantLimit: positiveInt,
+    maxHops: nonNegativeInt,
+    activationThreshold: proportion,
+    contextSearchThreshold: proportion,
+  }),
+  redaction: z.object({
+    /** Shannon entropy in bits/char above which an unmatched token is still flagged as a likely secret. */
+    entropyThreshold: z.number().positive(),
+  }),
+  maintenance: z.object({
+    tier3: z.boolean(),
+  }),
+  operational: z.object({
+    dataDir: z.string().min(1),
+    mcpPort: z.number().int().min(1).max(65535),
+    workerCount: positiveInt,
+  }),
+  logging: z.object({
+    filePath: z.string().min(1),
+    level: z.enum(LOG_LEVELS),
+  }),
+});
+
+export type Config = z.infer<typeof ConfigSchema>;
