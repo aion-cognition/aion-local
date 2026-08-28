@@ -390,3 +390,55 @@ describe('stop', () => {
     expect(runner.episodeIds).toHaveLength(1);
   });
 });
+
+/** The reaper's interval floor is one second, so a real-clock wait is the honest way to reach it. */
+async function afterOneSweep(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 1_300));
+}
+
+describe('stale-claim reaper', () => {
+  it('reclaims a dead process claim without a restart, and runs the job', async () => {
+    const abandoned = enqueue();
+    new ReflectionQueueClaimant('a-process-that-died').claimNext(store.db);
+
+    const runner = new StubRunner();
+    // Zero stale window, so the claim is stale the moment the reaper looks; the interval
+    // floor keeps the sweep off the event loop's hot path either way.
+    const started = build(runner, { staleTimeoutMs: 0 });
+    const drain = await started.start();
+
+    // The startup drain is what a restart already covers; this test is about the sweep that
+    // follows it, so the claim is planted after start() returns.
+    expect(drain.ran).toBe(0);
+    const stranded = enqueue();
+    new ReflectionQueueClaimant('a-second-dead-process').claimNext(store.db);
+    expect(getReflectionJob(store.db, stranded)?.claimedBy).toBe('a-second-dead-process');
+
+    await afterOneSweep();
+    await started.whenIdle();
+
+    expect(runner.episodeIds.length).toBeGreaterThan(0);
+    expect(getReflectionJob(store.db, stranded)).toBeUndefined();
+    expect(getReflectionJob(store.db, abandoned)).toBeUndefined();
+  });
+
+  it('never takes back a claim it is holding through a backoff', async () => {
+    const runner = new StubRunner();
+    runner.outcome = (): never => {
+      throw new Error('the reflect model timed out');
+    };
+    const started = build(runner, { staleTimeoutMs: 0, retryBaseMs: 60_000 });
+    await started.start();
+
+    const jobId = enqueue();
+    signal(jobId);
+    await started.whenIdle();
+    expect(started.retrying).toBe(1);
+
+    await afterOneSweep();
+
+    // Still parked on its backoff under this worker's own name: the sweep skipped it.
+    expect(getReflectionJob(store.db, jobId)?.claimedBy).toBe(started.claimantId);
+    expect(runner.episodeIds).toHaveLength(1);
+  });
+});

@@ -119,19 +119,25 @@ export class ReflectionQueueClaimant {
  * id, so ownership scoping (as in release/complete) would defeat the point. Attempts
  * and last_error are left untouched: a stale reclaim isn't a known failure, just an
  * interrupted one: the eventual release() or complete() records the real outcome.
+ *
+ * `exceptClaimant` is for a live caller sweeping on a timer rather than at startup: it is
+ * still holding claims of its own, for a run in flight or a retry parked on a backoff, and
+ * taking those back from itself would run the same episode twice concurrently.
  */
 export function reclaimStaleReflectionJobs(
   db: SqliteHandle,
   timeoutMs: number = DEFAULT_STALE_CLAIM_TIMEOUT_MS,
   now: Date = new Date(),
+  exceptClaimant?: string,
 ): number {
   const threshold = new Date(now.getTime() - timeoutMs).toISOString();
-  const result = db
-    .prepare(
-      `UPDATE reflection_queue
+  const ownership = exceptClaimant === undefined ? '' : ' AND claimed_by IS NOT ?';
+  const statement = db.prepare(
+    `UPDATE reflection_queue
        SET claimed_at = NULL, claimed_by = NULL
-       WHERE claimed_at IS NOT NULL AND claimed_at < ?`,
-    )
-    .run(threshold);
+       WHERE claimed_at IS NOT NULL AND claimed_at < ?${ownership}`,
+  );
+  const result =
+    exceptClaimant === undefined ? statement.run(threshold) : statement.run(threshold, exceptClaimant);
   return result.changes;
 }

@@ -12,8 +12,12 @@ import { attachContentVectors, findPendingVectorNodes } from './vectors.js';
 /**
  * PRD §4 and §7: reflection is event-driven. A signal from intake starts a claim-and-run
  * cycle immediately; the queue row exists so a restart or a crash does not lose the job, not
- * so a loop can watch it. Nothing here polls, and the only timers the worker installs are the
- * backoff delay of one failed job and the circuit breaker's cooldown.
+ * so a loop can watch it. Nothing here polls for work: the worker's timers are the backoff
+ * delay of one failed job, the circuit breaker's cooldown, and the stale-claim sweep, which
+ * is not a poll for work but a reaper for another process's abandoned claims. A crash and the
+ * automatic restart that follows it land seconds apart, well inside the stale window, so a
+ * sweep that only ran at startup would find nothing and the episode would sit claimed by a
+ * dead process until some later restart happened to fall more than one window after it.
  */
 
 /** Pinned P3 defaults. The integration task threads config over the ones config carries. */
@@ -107,6 +111,7 @@ export class ReflectionWorker {
   /** Jobs whose claim this instance holds through a backoff delay, keyed by job id. */
   readonly #retries = new Map<string, HeldRetry>();
   #cooldown: NodeJS.Timeout | undefined;
+  #reaper: NodeJS.Timeout | undefined;
   #consecutiveFailures = 0;
   #paused = false;
   #unsubscribe: (() => void) | undefined;
@@ -163,6 +168,7 @@ export class ReflectionWorker {
     });
 
     const reclaimed = reclaimStaleReflectionJobs(this.#deps.db, this.#staleTimeoutMs);
+    this.#startReaper();
     const vectored = await this.#drainPendingVectors();
     const ran = await this.#drainQueue();
 
@@ -189,6 +195,10 @@ export class ReflectionWorker {
       clearTimeout(this.#cooldown);
       this.#cooldown = undefined;
     }
+    if (this.#reaper !== undefined) {
+      clearInterval(this.#reaper);
+      this.#reaper = undefined;
+    }
     this.#paused = false;
 
     // Twice: a run still in flight can fail while the first pass is waiting on it, and the
@@ -197,6 +207,42 @@ export class ReflectionWorker {
     await this.whenIdle();
     this.#releaseHeld();
     this.#started = false;
+  }
+
+  /**
+   * Half the stale window, so an abandoned claim waits at most one and a half windows rather
+   * than for the next restart. Unreferenced: a reaper that has nothing to reap must not be
+   * the reason the process stays alive.
+   */
+  #startReaper(): void {
+    const everyMs = Math.max(1_000, Math.floor(this.#staleTimeoutMs / 2));
+    this.#reaper = setInterval(() => {
+      this.#reapStaleClaims();
+    }, everyMs);
+    this.#reaper.unref();
+  }
+
+  #reapStaleClaims(): void {
+    if (this.#stopped) {
+      return;
+    }
+    let reclaimed = 0;
+    try {
+      reclaimed = reclaimStaleReflectionJobs(
+        this.#deps.db,
+        this.#staleTimeoutMs,
+        new Date(),
+        this.#claimant.id,
+      );
+    } catch (err) {
+      this.#deps.logger.error({ err }, 'reflection worker could not sweep stale claims');
+      return;
+    }
+    if (reclaimed === 0) {
+      return;
+    }
+    this.#deps.logger.info({ reclaimed }, 'reflection worker reclaimed abandoned claims');
+    this.#pump();
   }
 
   #releaseHeld(): void {
