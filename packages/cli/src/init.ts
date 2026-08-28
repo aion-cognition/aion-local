@@ -15,7 +15,8 @@ import {
   type Logger,
   type ProvisionEvent,
 } from '@aion/core';
-import { composeRunner, NEO4J_SERVICE, startService } from './compose.js';
+import { USAGE_PROTOCOL } from '@aion/mcp';
+import { composeRunner, MCP_PROFILE, MCP_SERVICE, NEO4J_SERVICE, startService, waitForMcpHealth } from './compose.js';
 import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
 import { envFilePath, envTemplatePath, resolveRepoDir } from './paths.js';
 
@@ -133,6 +134,41 @@ function provisionReporter(write: Writer, logger: Logger): (event: ProvisionEven
   };
 }
 
+/** PRD §11 step 5. The one-time command that writes the server into Claude's user config; every future session then connects with no per-session setup. */
+export function registrationCommand(port: number): string {
+  return `claude mcp add -s user --transport http aion http://127.0.0.1:${String(port)}/mcp`;
+}
+
+/** Same registration, as the raw JSON Claude Code's own config uses for an HTTP MCP server — for manual edits and other harnesses. */
+export function registrationJson(port: number): string {
+  return JSON.stringify(
+    { mcpServers: { aion: { type: 'http', url: `http://127.0.0.1:${String(port)}/mcp` } } },
+    null,
+    2,
+  );
+}
+
+function renderRegistration(port: number, write: Writer): void {
+  write('');
+  write('MCP registration (one time; every future Claude Code session connects automatically):');
+  write(`  ${registrationCommand(port)}`);
+  write('');
+  write('Equivalent raw JSON, for manual config or other harnesses:');
+  write(registrationJson(port));
+  write('');
+  write('Add to your CLAUDE.md so the agent knows when to call recall and reflection:');
+  write('');
+  write(USAGE_PROTOCOL);
+}
+
+async function provisionMcpService(config: Config, write: Writer, repoDir: string): Promise<void> {
+  write(`starting compose service ${MCP_SERVICE}`);
+  await startService(composeRunner(repoDir), MCP_SERVICE, MCP_PROFILE);
+  write(`waiting for aion-mcp health on port ${String(config.operational.mcpPort)}`);
+  await waitForMcpHealth(config.operational.mcpPort);
+  write('  aion-mcp healthy');
+}
+
 async function provisionGraph(config: Config, password: string, write: Writer, repoDir: string): Promise<void> {
   if (isManagedNeo4jUri(config.neo4j.uri)) {
     write(`starting compose service ${NEO4J_SERVICE}`);
@@ -206,6 +242,9 @@ async function initialize(config: Config, flags: InitFlags, write: Writer, logge
     await connection.close();
     store.close();
   }
+
+  await provisionMcpService(config, write, repoDir);
+  renderRegistration(config.operational.mcpPort, write);
 }
 
 export async function runInit(argv: readonly string[] = [], write: Writer = stdoutWriter): Promise<number> {

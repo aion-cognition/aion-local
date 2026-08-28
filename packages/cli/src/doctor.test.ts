@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runChecks, summarize, type Check, type CheckReport } from './doctor.js';
+import { probeMcpHttp, runChecks, summarize, type Check, type CheckReport } from './doctor.js';
 
 function collector(): { lines: string[]; write: (line: string) => void } {
   const lines: string[] = [];
@@ -71,6 +71,37 @@ describe('runChecks', () => {
 
     expect(reports[0]?.ok).toBe(false);
     expect(reports[0]?.detail).toContain('VectorIndexDimensionMismatchError:');
+  });
+});
+
+describe('probeMcpHttp', () => {
+  it('reports ok with the session count from a healthy response', async () => {
+    const fetchImpl = async (url: string | URL) => {
+      expect(String(url)).toBe('http://127.0.0.1:8765/health');
+      return new Response(JSON.stringify({ status: 'ok', sessions: 3, descriptions_version: 1 }), { status: 200 });
+    };
+
+    const result = await probeMcpHttp(8765, fetchImpl as unknown as typeof fetch);
+
+    expect(result).toEqual({ ok: true, detail: 'http://127.0.0.1:8765/health, 3 sessions' });
+  });
+
+  it('fails on a non-2xx response', async () => {
+    const fetchImpl = async () => new Response('not found', { status: 404 });
+
+    const result = await probeMcpHttp(8765, fetchImpl as unknown as typeof fetch);
+
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain('404');
+  });
+
+  it('fails on an unexpected health payload', async () => {
+    const fetchImpl = async () => new Response(JSON.stringify({ status: 'degraded' }), { status: 200 });
+
+    const result = await probeMcpHttp(8765, fetchImpl as unknown as typeof fetch);
+
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain('unexpected health payload');
   });
 });
 

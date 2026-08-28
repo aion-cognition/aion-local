@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { MemberNameUnavailableError, parseInitFlags, resolveMemberName, UnknownOptionError } from './init.js';
+import {
+  MemberNameUnavailableError,
+  parseInitFlags,
+  registrationCommand,
+  registrationJson,
+  resolveMemberName,
+  UnknownOptionError,
+} from './init.js';
 
 const never = async (): Promise<string> => {
   throw new Error('prompt must not run');
@@ -65,5 +72,21 @@ describe('resolveMemberName', () => {
     await expect(
       resolveMemberName({ envName: undefined, assumeYes: false, interactive: true, ask: async () => '' }),
     ).rejects.toBeInstanceOf(MemberNameUnavailableError);
+  });
+});
+
+describe('registrationCommand', () => {
+  it('writes the exact one-time command PRD §11 specifies', () => {
+    expect(registrationCommand(8765)).toBe(
+      'claude mcp add -s user --transport http aion http://127.0.0.1:8765/mcp',
+    );
+  });
+});
+
+describe('registrationJson', () => {
+  it('matches the shape Claude Code writes for an HTTP MCP server', () => {
+    expect(JSON.parse(registrationJson(8765))).toEqual({
+      mcpServers: { aion: { type: 'http', url: 'http://127.0.0.1:8765/mcp' } },
+    });
   });
 });

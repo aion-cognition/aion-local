@@ -16,6 +16,8 @@ import {
   type Config,
   type SqliteHandle,
 } from '@aion/core';
+import { HEALTH_PATH } from '@aion/mcp';
+import { mcpBaseUrl } from './compose.js';
 import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
 
 export type CheckResult = {
@@ -40,6 +42,23 @@ export type DoctorDeps = {
   readonly connection: GraphConnection;
   readonly db: SqliteHandle;
 };
+
+/**
+ * `/health` is liveness-only (never touches Neo4j or Ollama), so a 200 here means the
+ * process is up and nothing more; substrate health is the other checks' job.
+ */
+export async function probeMcpHttp(port: number, fetchImpl: typeof fetch = fetch): Promise<CheckResult> {
+  const url = `${mcpBaseUrl(port)}${HEALTH_PATH}`;
+  const response = await fetchImpl(url);
+  if (!response.ok) {
+    return { ok: false, detail: `${String(response.status)} from ${url}` };
+  }
+  const body = (await response.json()) as { status?: unknown; sessions?: unknown };
+  if (body.status !== 'ok') {
+    return { ok: false, detail: `unexpected health payload from ${url}: ${JSON.stringify(body)}` };
+  }
+  return { ok: true, detail: `${url}, ${String(body.sessions)} sessions` };
+}
 
 function writableDirectories(config: Config): readonly string[] {
   return [
@@ -71,6 +90,11 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
         const version = await verifyGdsAvailable(connection.driver, connection.uri);
         return { ok: true, detail: `graph-data-science ${version}` };
       },
+    },
+    {
+      name: 'mcp-http',
+      dependsOn: NEO4J_BOLT,
+      run: () => probeMcpHttp(config.operational.mcpPort),
     },
     {
       name: GRAPH_SCHEMA,

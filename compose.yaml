@@ -6,6 +6,7 @@ services:
   # Bump by hand. Nothing regenerates this from the Docker Hub tag list.
   neo4j:
     image: neo4j:2026.07.1-community
+    restart: unless-stopped
     environment:
       NEO4J_AUTH: neo4j/${AION_NEO4J_PASSWORD:-aion}
       NEO4J_PLUGINS: '["graph-data-science"]'
@@ -23,6 +24,7 @@ services:
   aion-mcp:
     profiles: ["mcp"]
     image: aion-local:latest
+    restart: unless-stopped
     build:
       context: .
     # The image entrypoint is the CLI. Compose appends `command` to an entrypoint rather
