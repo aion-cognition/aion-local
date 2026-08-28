@@ -3,6 +3,7 @@ import type { Driver } from 'neo4j-driver';
 import { writeStampedNodeInTransaction } from '../../infrastructure/graph/bitemporal.js';
 import { inWriteTransaction, type GraphTransaction } from '../../infrastructure/graph/connection.js';
 import { upsertEdgeInTransaction } from '../../infrastructure/graph/edges.js';
+import { isGraphUnavailable } from '../../infrastructure/graph/errors.js';
 import {
   CONTAINMENT_TYPE,
   findEpisodeByContentHash,
@@ -19,6 +20,7 @@ import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { enqueueReflectionJob, findPendingReflectionJob } from '../../infrastructure/sqlite/reflection-queue.js';
 import { prepareEpisode, type PreparedEpisode, type PreparedTurn } from '../domain/content.js';
 import type { ReflectionDispatch } from './dispatch.js';
+import { ReflectionNotStoredError } from './errors.js';
 
 /** The one job intake enqueues. P3's pipeline stages fan out from it; intake never runs them. */
 export const INTEGRATE_JOB_TYPE = 'integrate';
@@ -198,8 +200,43 @@ async function resolveEpisode(
   }
 
   const texts = [prepared.text, ...prepared.turns.map((turn) => turn.text)];
-  const vectors = await deps.provider.embed(texts);
+  let vectors: readonly Vector[];
+  try {
+    vectors = await deps.provider.embed(texts);
+  } catch (err) {
+    throw new ReflectionNotStoredError('embed', err);
+  }
   return storeEpisode(deps.driver, prepared, sessionId, vectors, now);
+}
+
+type DurableWrite = {
+  readonly sessionId: string;
+  readonly stored: StoredEpisode;
+};
+
+/**
+ * Everything between a validated payload and a committed episode, wrapped as one region
+ * because every failure inside it leaves the same state: nothing written, nothing queued.
+ * That fact is what the caller has to act on, and a raw `TypeError` from a dead Ollama
+ * does not carry it. A statement the graph itself rejected is a defect here, not an
+ * outage, and passes through unchanged.
+ */
+async function storeDurably(
+  deps: ReflectionIntakeDeps,
+  prepared: PreparedEpisode,
+  identity: string,
+  now: Date,
+): Promise<DurableWrite> {
+  try {
+    const { sessionId } = await deps.sessions.ensureSession({ identity, now });
+    const stored = await resolveEpisode(deps, prepared, sessionId, now);
+    return { sessionId, stored };
+  } catch (err) {
+    if (isGraphUnavailable(err)) {
+      throw new ReflectionNotStoredError('graph', err);
+    }
+    throw err;
+  }
 }
 
 /**
@@ -256,13 +293,13 @@ export async function handleReflection(
     );
   }
 
-  const { sessionId } = await deps.sessions.ensureSession({
-    identity: suppliedIdentity ?? options.identity,
-    now,
-  });
-
   const prepared = prepareEpisode(redacted.value, now);
-  const stored = await resolveEpisode(deps, prepared, sessionId, now);
+  const { sessionId, stored } = await storeDurably(
+    deps,
+    prepared,
+    suppliedIdentity ?? options.identity,
+    now,
+  );
   const job = ensureIntegrateJob(deps.db, stored.episodeId);
   if (job.enqueued) {
     deps.dispatch.signal({

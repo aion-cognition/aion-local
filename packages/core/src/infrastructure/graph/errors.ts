@@ -1,3 +1,31 @@
+/**
+ * The two driver codes for "the server is not there", plus the pool's own acquisition
+ * timeout, which the driver raises with no code at all (`N/A`) and so can only be told
+ * apart by its message. Codes the server itself assigns start with `Neo.` and mean the
+ * opposite: the graph answered, and the answer was a rejection.
+ */
+const UNAVAILABLE_CODES = new Set(['ServiceUnavailable', 'SessionExpired']);
+const UNCODED = 'N/A';
+const ACQUISITION_TIMEOUT_PREFIX = 'Connection acquisition timed out';
+
+/**
+ * Whether a rejected graph call means the graph could not be reached, as opposed to a query
+ * it reached and refused. Callers that must tell an outage from a defect branch on this.
+ */
+export function isGraphUnavailable(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const code = (error as { code?: unknown }).code;
+  if (typeof code !== 'string') {
+    return false;
+  }
+  if (UNAVAILABLE_CODES.has(code)) {
+    return true;
+  }
+  return code === UNCODED && error.message.startsWith(ACQUISITION_TIMEOUT_PREFIX);
+}
+
 /** A write was rejected before it reached the server: an unknown relationship type, an out-of-range score. */
 export class GraphWriteError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {

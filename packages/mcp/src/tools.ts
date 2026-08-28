@@ -1,4 +1,4 @@
-import type { Logger } from '@aion/core';
+import { ReflectionNotStoredError, type Logger } from '@aion/core';
 import {
   MemoryPackSchema,
   RecallInputSchema,
@@ -97,12 +97,19 @@ function ackText(output: ReflectionOutput): string {
  * invalid-params carrying the zod message. Anything else is ours: it is logged with its
  * stack and reported as an internal error naming the failure class, never the payload —
  * tool arguments carry the conversation and never reach the log or the wire.
+ *
+ * One class carries its own message through: `ReflectionNotStoredError` states what
+ * happened to the experience the caller just handed over, which no class name can, and an
+ * agent that is not told its reflection was dropped will not send it again.
  */
 function toMcpError(tool: string, err: unknown, logger: Logger): McpError {
   if (err instanceof z.ZodError) {
     return new McpError(ErrorCode.InvalidParams, `${tool}: ${z.prettifyError(err)}`);
   }
   logger.error({ err, tool }, 'tool call failed');
+  if (err instanceof ReflectionNotStoredError) {
+    return new McpError(ErrorCode.InternalError, err.message);
+  }
   const name = err instanceof Error ? err.name : typeof err;
   return new McpError(ErrorCode.InternalError, `${tool} failed (${name}); see the aion service log`);
 }
