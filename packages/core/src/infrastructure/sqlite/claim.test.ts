@@ -73,6 +73,18 @@ describe('reflection job claiming', () => {
     expect(reclaimed?.attempts).toBe(1);
   });
 
+  it('skips a row that has spent the attempts the caller allows, and still claims it unbounded', () => {
+    const id = enqueueReflectionJob(store.db, 'integrate', {});
+    const claimant = new ReflectionQueueClaimant();
+    claimant.claimNext(store.db, 2);
+    claimant.release(store.db, id, 'boom');
+    claimant.claimNext(store.db, 2);
+    claimant.release(store.db, id, 'boom again');
+
+    expect(claimant.claimNext(store.db, 2)).toBeUndefined();
+    expect(claimant.claimNext(store.db)?.attempts).toBe(2);
+  });
+
   it('release no-ops for a claim this instance does not hold', () => {
     const id = enqueueReflectionJob(store.db, 'integrate', {});
     const owner = new ReflectionQueueClaimant();

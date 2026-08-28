@@ -1,0 +1,392 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
+import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
+import type { Provider, Vector } from '../../infrastructure/providers/types.js';
+import { ReflectionQueueClaimant } from '../../infrastructure/sqlite/claim.js';
+import { SqliteStore } from '../../infrastructure/sqlite/database.js';
+import { enqueueReflectionJob, getReflectionJob } from '../../infrastructure/sqlite/reflection-queue.js';
+import { FakeGraph } from '../test-support/fake-graph.fixture.js';
+import { ReflectionDispatch } from './dispatch.js';
+import { INTEGRATE_JOB_TYPE } from './intake.js';
+import type { ReflectionRun } from './orchestrator.js';
+import { backoffDelayMs, ReflectionWorker, type ReflectionWorkerOptions } from './worker.js';
+
+const EPISODE_ID = 'episode-under-reflection';
+
+/** Resolves once the runner has been entered `target` times, so no test waits on a clock. */
+class RunLatch {
+  readonly reached: Promise<void>;
+  #resolve: () => void = () => {};
+  #entered = 0;
+
+  constructor(private readonly target: number) {
+    this.reached = new Promise<void>((resolve) => {
+      this.#resolve = resolve;
+    });
+  }
+
+  tick(): void {
+    this.#entered += 1;
+    if (this.#entered >= this.target) {
+      this.#resolve();
+    }
+  }
+}
+
+function completedRun(episodeId: string, applied: boolean): ReflectionRun {
+  return {
+    episodeId,
+    status: 'completed',
+    applied,
+    summary: { episodeId, durationMs: 1, stages: [], counts: {} },
+  };
+}
+
+class StubRunner {
+  readonly episodeIds: string[] = [];
+  outcome: (episodeId: string, call: number) => ReflectionRun = (episodeId) =>
+    completedRun(episodeId, true);
+
+  constructor(private readonly latch?: RunLatch) {}
+
+  /** Yields first, so the worker has registered the run before the outcome is decided. */
+  async run(episodeId: string): Promise<ReflectionRun> {
+    await Promise.resolve();
+    this.episodeIds.push(episodeId);
+    this.latch?.tick();
+    return this.outcome(episodeId, this.episodeIds.length);
+  }
+}
+
+class StubProvider implements Provider {
+  readonly embedded: string[][] = [];
+
+  async embed(texts: string[]): Promise<Vector[]> {
+    this.embedded.push([...texts]);
+    return texts.map((_, index) => [index, 0.5, 0.25]);
+  }
+
+  async generate(): Promise<unknown> {
+    throw new Error('the worker never generates');
+  }
+}
+
+let dir: string;
+let store: SqliteStore;
+let graph: FakeGraph;
+let dispatch: ReflectionDispatch;
+let provider: StubProvider;
+let logger: Logger;
+let worker: ReflectionWorker | undefined;
+
+function build(runner: StubRunner, options: ReflectionWorkerOptions = {}): ReflectionWorker {
+  worker = new ReflectionWorker(
+    { driver: graph.driver, db: store.db, provider, dispatch, runner, logger },
+    options,
+  );
+  return worker;
+}
+
+function enqueue(episodeId: string = EPISODE_ID): string {
+  return enqueueReflectionJob(store.db, INTEGRATE_JOB_TYPE, { episode_id: episodeId });
+}
+
+function signal(jobId: string, episodeId: string = EPISODE_ID): void {
+  dispatch.signal({
+    jobId,
+    jobType: INTEGRATE_JOB_TYPE,
+    episodeId,
+    sessionId: 'session-1',
+    enqueuedAt: new Date(),
+  });
+}
+
+/** A crashed process's row: claimed, and old enough that the drain's timeout has passed. */
+function backdateClaim(jobId: string, ageMs: number): void {
+  store.db
+    .prepare('UPDATE reflection_queue SET claimed_at = ? WHERE id = ?')
+    .run(new Date(Date.now() - ageMs).toISOString(), jobId);
+}
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'aion-worker-'));
+  store = new SqliteStore({ filePath: join(dir, 'aion.sqlite') });
+  graph = new FakeGraph();
+  dispatch = new ReflectionDispatch();
+  provider = new StubProvider();
+  logger = openLogger({ filePath: join(dir, 'aion.jsonl'), level: 'fatal' });
+});
+
+afterEach(async () => {
+  await worker?.stop();
+  worker = undefined;
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+describe('retry backoff curve', () => {
+  it('doubles from the base and never passes the cap', () => {
+    expect(backoffDelayMs(1, 5000, 300_000)).toBe(5000);
+    expect(backoffDelayMs(2, 5000, 300_000)).toBe(10_000);
+    expect(backoffDelayMs(3, 5000, 300_000)).toBe(20_000);
+    expect(backoffDelayMs(4, 5000, 300_000)).toBe(40_000);
+    expect(backoffDelayMs(20, 5000, 300_000)).toBe(300_000);
+  });
+});
+
+describe('signal-driven execution', () => {
+  it('runs the job the signal announces and installs no timer to find it', async () => {
+    const runner = new StubRunner();
+    const started = build(runner);
+    await started.start();
+
+    const interval = vi.spyOn(globalThis, 'setInterval');
+    const timeout = vi.spyOn(globalThis, 'setTimeout');
+    const jobId = enqueue();
+    signal(jobId);
+    await started.whenIdle();
+
+    expect(runner.episodeIds).toEqual([EPISODE_ID]);
+    expect(getReflectionJob(store.db, jobId)).toBeUndefined();
+    expect(interval).not.toHaveBeenCalled();
+    expect(timeout).not.toHaveBeenCalled();
+
+    interval.mockRestore();
+    timeout.mockRestore();
+  });
+
+  it('runs one job at a time at the default worker count', async () => {
+    const runner = new StubRunner();
+    let peak = 0;
+    const started = build(runner);
+    runner.outcome = (episodeId): ReflectionRun => {
+      peak = Math.max(peak, started.inFlight);
+      return completedRun(episodeId, true);
+    };
+    await started.start();
+
+    const first = enqueue('episode-a');
+    enqueue('episode-b');
+    signal(first, 'episode-a');
+    await started.whenIdle();
+
+    expect(runner.episodeIds).toEqual(['episode-a', 'episode-b']);
+    expect(peak).toBe(1);
+  });
+
+  it('completes a terminal run that enriched nothing rather than retrying it', async () => {
+    const runner = new StubRunner();
+    runner.outcome = (episodeId): ReflectionRun => ({
+      episodeId,
+      status: 'already_applied',
+      applied: false,
+      summary: { episodeId, durationMs: 1, stages: [], counts: {} },
+    });
+    const started = build(runner);
+    await started.start();
+
+    const jobId = enqueue();
+    signal(jobId);
+    await started.whenIdle();
+
+    expect(getReflectionJob(store.db, jobId)).toBeUndefined();
+    expect(started.retrying).toBe(0);
+  });
+});
+
+describe('startup drain', () => {
+  it('reclaims a dead process claim, attaches pending vectors, then runs the queue empty', async () => {
+    graph.seedNode('mem-pending', ['Episode', 'AionNode', 'Memory'], {
+      [MEMORY_PROPERTIES.text]: 'an episode the outage left unvectorized',
+    });
+    const abandoned = enqueue();
+    new ReflectionQueueClaimant('dead-process').claimNext(store.db);
+    backdateClaim(abandoned, 11 * 60 * 1000);
+
+    const runner = new StubRunner();
+    const drain = await build(runner).start();
+
+    expect(drain).toEqual({ reclaimed: 1, vectored: 1, ran: 1 });
+    expect(provider.embedded).toEqual([['an episode the outage left unvectorized']]);
+    expect(graph.nodes.get('mem-pending')?.properties[MEMORY_PROPERTIES.contentVector]).toEqual([
+      0, 0.5, 0.25,
+    ]);
+    expect(runner.episodeIds).toEqual([EPISODE_ID]);
+    expect(getReflectionJob(store.db, abandoned)).toBeUndefined();
+  });
+
+  it('runs a never-claimed legacy row that no signal will ever arrive for', async () => {
+    const legacy = enqueue('legacy-episode');
+    const runner = new StubRunner();
+
+    const drain = await build(runner).start();
+
+    expect(drain.ran).toBe(1);
+    expect(runner.episodeIds).toEqual(['legacy-episode']);
+    expect(getReflectionJob(store.db, legacy)).toBeUndefined();
+  });
+
+  it('runs the queue even when the pending vectors cannot be embedded', async () => {
+    graph.seedNode('mem-pending', ['Episode', 'AionNode', 'Memory'], {
+      [MEMORY_PROPERTIES.text]: 'still unvectorized',
+    });
+    vi.spyOn(provider, 'embed').mockRejectedValue(new Error('ollama is down'));
+    const jobId = enqueue();
+    const runner = new StubRunner();
+
+    const drain = await build(runner).start();
+
+    expect(drain.vectored).toBe(0);
+    expect(drain.ran).toBe(1);
+    expect(getReflectionJob(store.db, jobId)).toBeUndefined();
+  });
+
+  it('leaves a claim younger than the timeout with its owner', async () => {
+    const held = enqueue();
+    new ReflectionQueueClaimant('live-process').claimNext(store.db);
+    const runner = new StubRunner();
+
+    const drain = await build(runner).start();
+
+    expect(drain).toEqual({ reclaimed: 0, vectored: 0, ran: 0 });
+    expect(getReflectionJob(store.db, held)?.claimedBy).toBe('live-process');
+  });
+});
+
+describe('retry with backoff', () => {
+  it('holds the claim through the delay, then releases it and runs again', async () => {
+    const latch = new RunLatch(2);
+    const runner = new StubRunner(latch);
+    runner.outcome = (episodeId, call): ReflectionRun => {
+      if (call === 1) {
+        throw new Error('the reflect model timed out');
+      }
+      return completedRun(episodeId, true);
+    };
+    const started = build(runner, { retryBaseMs: 5 });
+
+    const jobId = enqueue();
+    await started.start();
+
+    const held = getReflectionJob(store.db, jobId);
+    expect(held?.claimedBy).toBe(started.claimantId);
+    expect(held?.attempts).toBe(0);
+    expect(started.retrying).toBe(1);
+
+    await latch.reached;
+    await started.whenIdle();
+
+    expect(runner.episodeIds).toEqual([EPISODE_ID, EPISODE_ID]);
+    expect(getReflectionJob(store.db, jobId)).toBeUndefined();
+    expect(started.retrying).toBe(0);
+  });
+
+  it('treats a completed run that enriched nothing as a failure worth retrying', async () => {
+    const runner = new StubRunner();
+    runner.outcome = (episodeId): ReflectionRun => completedRun(episodeId, false);
+    const started = build(runner, { retryBaseMs: 60_000 });
+
+    const jobId = enqueue();
+    await started.start();
+
+    expect(started.retrying).toBe(1);
+    expect(getReflectionJob(store.db, jobId)?.claimedBy).toBe(started.claimantId);
+  });
+
+  it('parks a job that spent its attempts and never claims it again', async () => {
+    const latch = new RunLatch(2);
+    const runner = new StubRunner(latch);
+    runner.outcome = (): ReflectionRun => {
+      throw new Error('the graph rejected the write');
+    };
+    const started = build(runner, { retryBaseMs: 1, maxAttempts: 2 });
+
+    const jobId = enqueue();
+    await started.start();
+    await latch.reached;
+    await started.whenIdle();
+
+    const parked = getReflectionJob(store.db, jobId);
+    expect(parked?.attempts).toBe(2);
+    expect(parked?.claimedAt).toBeNull();
+    expect(parked?.lastError).toBe('the graph rejected the write');
+    expect(started.retrying).toBe(0);
+
+    signal(jobId);
+    await started.whenIdle();
+
+    expect(runner.episodeIds).toHaveLength(2);
+  });
+
+  it('fails a job whose payload names no episode', async () => {
+    const runner = new StubRunner();
+    const started = build(runner, { retryBaseMs: 60_000 });
+    const jobId = enqueueReflectionJob(store.db, INTEGRATE_JOB_TYPE, { nothing: true });
+
+    await started.start();
+
+    expect(runner.episodeIds).toEqual([]);
+    expect(started.retrying).toBe(1);
+    expect(getReflectionJob(store.db, jobId)?.claimedBy).toBe(started.claimantId);
+  });
+});
+
+describe('circuit breaker', () => {
+  it('pauses claiming after five consecutive failures and resumes after the cooldown', async () => {
+    const latch = new RunLatch(6);
+    const runner = new StubRunner(latch);
+    let failing = true;
+    runner.outcome = (episodeId): ReflectionRun => {
+      if (failing) {
+        throw new Error('ollama refused the connection');
+      }
+      return completedRun(episodeId, true);
+    };
+    const started = build(runner, { retryBaseMs: 60_000, breakerCooldownMs: 10 });
+
+    const jobIds = [1, 2, 3, 4, 5, 6].map((n) => enqueue(`episode-${n}`));
+    await started.start();
+
+    expect(runner.episodeIds).toHaveLength(5);
+    expect(started.paused).toBe(true);
+    expect(getReflectionJob(store.db, jobIds[5] as string)?.claimedAt).toBeNull();
+
+    failing = false;
+    await latch.reached;
+    await started.whenIdle();
+
+    expect(started.paused).toBe(false);
+    expect(runner.episodeIds[5]).toBe('episode-6');
+    expect(getReflectionJob(store.db, jobIds[5] as string)).toBeUndefined();
+  });
+});
+
+describe('stop', () => {
+  it('hands back every claim it holds and stops answering signals', async () => {
+    const runner = new StubRunner();
+    runner.outcome = (): ReflectionRun => {
+      throw new Error('the reflect model timed out');
+    };
+    const started = build(runner, { retryBaseMs: 60_000 });
+
+    const jobId = enqueue();
+    await started.start();
+    expect(started.retrying).toBe(1);
+
+    await started.stop();
+
+    const released = getReflectionJob(store.db, jobId);
+    expect(released?.claimedAt).toBeNull();
+    expect(released?.attempts).toBe(1);
+    expect(released?.lastError).toBe('the reflect model timed out');
+    expect(started.retrying).toBe(0);
+
+    signal(jobId);
+    await started.whenIdle();
+
+    expect(runner.episodeIds).toHaveLength(1);
+  });
+});
