@@ -130,7 +130,7 @@ backbone), experience capture (reflection intake: validate, redact, dedupe, stor
 bitemporally), recall with the full MCP surface (four seed strategies, spreading activation,
 RRF fusion, MemoryPack assembly), and the reflection pipeline that turns a stored episode
 into entities, associations, cognitive structure, typed relationships, supersession
-judgments, and a session narrative. 948/948 tests pass; `aion doctor` runs 8 checks,
+judgments, and a session narrative. 974/974 tests pass; `aion doctor` runs 8 checks,
 all green against a live stack. The full build history, including what review found in each
 phase, is in [docs/build-ledger.md](docs/build-ledger.md).
 
