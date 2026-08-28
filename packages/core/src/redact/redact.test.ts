@@ -80,13 +80,49 @@ describe('redact — true positives, one per rule', () => {
     expect(result.text).toContain('@db.example.com:5432/mydb');
   });
 
-  it('redacts a generic key=value secret only when the value is high-entropy', () => {
+  it('redacts a generic key=value secret', () => {
     const text = 'password=Zt7pQ4mX9wL2vR8kY5nB3hC6jF1sD0g';
     const result = redact(text);
     const match = result.matches.find((m) => m.rule === 'generic-secret-assignment');
     expect(match).toBeDefined();
     expect(result.text).not.toContain('Zt7pQ4mX9wL2vR8kY5nB3hC6jF1sD0g');
   });
+});
+
+// The 8-22 character band is where most real API keys, DB passwords, and client secrets
+// live, and it is unreachable for any entropy threshold above log2(22) = 4.46 bits/char.
+describe('redact — short generic secrets, the band an entropy gate cannot reach', () => {
+  const cases: Array<{ label: string; text: string; secret: string }> = [
+    { label: 'a shell password', text: 'password=hunter2secret', secret: 'hunter2secret' },
+    { label: 'a password with symbols', text: 'password: Tr0ub4dor&3', secret: 'Tr0ub4dor&3' },
+    { label: 'a quoted api key', text: 'api_key="abcd1234efgh"', secret: 'abcd1234efgh' },
+    {
+      label: 'a prefixed vendor key',
+      text: 'API_KEY=sk_live_51H8xYzAbCdEf',
+      secret: 'sk_live_51H8xYzAbCdEf',
+    },
+    { label: 'a short client secret', text: 'client_secret=shortish123', secret: 'shortish123' },
+    { label: 'an eight-character token', text: 'token=abc12345', secret: 'abc12345' },
+    {
+      label: 'an underscore-prefixed env name',
+      text: 'DB_PASSWORD=P@ssw0rd123',
+      secret: 'P@ssw0rd123',
+    },
+    {
+      label: 'a spaced assignment',
+      text: 'secret = correcthorsebatterystaple',
+      secret: 'correcthorsebatterystaple',
+    },
+    { label: 'a low-entropy assignment', text: 'password=abcdefgh', secret: 'abcdefgh' },
+  ];
+
+  for (const { label, text, secret } of cases) {
+    it(`redacts ${label}`, () => {
+      const result = redact(text);
+      expect(result.matches.some((m) => m.rule === 'generic-secret-assignment')).toBe(true);
+      expect(result.text).not.toContain(secret);
+    });
+  }
 });
 
 describe('redact — false positives that must survive unredacted', () => {
@@ -96,7 +132,10 @@ describe('redact — false positives that must survive unredacted', () => {
     'normal prose': 'the quick brown fox jumps over the lazy dog near the river',
     'file path': 'see packages/core/src/redact/redact.ts for the implementation',
     'short base64': 'the flag value was dGVzdA== after decoding',
-    'low-entropy key=value': 'password=abcdefgh',
+    'a code reference in key position': 'api_key: process.env.API_KEY',
+    'a zod schema declaration': 'password: z.string().min(8)',
+    'an absent value': 'client_secret: undefined',
+    'a shell interpolation': 'client_secret=${CLIENT_SECRET}',
   };
 
   for (const [label, text] of Object.entries(survivors)) {
@@ -131,16 +170,18 @@ describe('redact — fingerprint stability', () => {
 });
 
 describe('redact — entropy threshold behavior', () => {
-  const text = 'password=abcdefgh';
+  // 20 chars over 5 distinct symbols: log2(5) = 2.32 bits/char, so the backstop claims it
+  // below that threshold and leaves it alone above.
+  const text = 'the token is abcdeabcdeabcdeabcde here';
 
-  it('leaves a low-entropy assignment unredacted at the default threshold', () => {
+  it('leaves a repetitive token unredacted at the default threshold', () => {
     expect(redact(text).matches).toEqual([]);
   });
 
-  it('redacts the same assignment when the threshold is lowered below its entropy', () => {
+  it('redacts the same token when the threshold is lowered below its entropy', () => {
     const result = redact(text, 2.0);
-    expect(result.matches.some((m) => m.rule === 'generic-secret-assignment')).toBe(true);
-    expect(result.text).not.toContain('abcdefgh');
+    expect(result.matches.some((m) => m.rule === 'high-entropy')).toBe(true);
+    expect(result.text).not.toContain('abcdeabcdeabcdeabcde');
   });
 });
 
