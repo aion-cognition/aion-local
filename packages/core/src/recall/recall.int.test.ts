@@ -1,0 +1,249 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { DEFAULTS } from '../config/defaults.js';
+import type { Config } from '../config/schema.js';
+import { bootstrapBackbone } from '../graph/backbone.js';
+import { runGraphMigrations } from '../graph/migrations.js';
+import { withCurrency } from '../graph/read-modes.js';
+import { fulltextSeeds, vectorSeeds } from '../graph/seed-queries.js';
+import {
+  startNeo4jHarness,
+  stopNeo4jHarness,
+  type Neo4jHarness,
+} from '../graph/test-support/neo4j-harness.fixture.js';
+import { openLogger, type Logger } from '../logging/logger.js';
+import type { Provider, Vector } from '../providers/types.js';
+import { ReflectionDispatch } from '../reflection/dispatch.js';
+import { handleReflection } from '../reflection/intake.js';
+import { SessionManager } from '../session/session-manager.js';
+import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
+import { getLastPack } from '../sqlite/last-pack.js';
+import { CueCache } from './cues.js';
+import { handleRecall, type RecallDeps } from './recall.js';
+
+const EMBED_DIMENSION = 8;
+const WRITE_SESSION = 'recall-int-write-session';
+const READ_SESSION = 'recall-int-read-session';
+
+const UNRELATED_AT = new Date('2026-06-01T10:00:00.000Z');
+const WEBHOOKS_AT = new Date('2026-06-01T11:00:00.000Z');
+const RECALLED_AT = new Date('2026-06-02T09:00:00.000Z');
+/** Before either episode was recorded, so a knowledge-time read sees the substrate empty. */
+const BEFORE_ANYTHING = '2026-05-01T00:00:00.000Z';
+
+const WEBHOOKS_OBSERVATION =
+  'we picked webhooks for the ingestion service because polling was too slow';
+const UNRELATED_OBSERVATION = 'the standup moved to nine thirty on tuesdays';
+
+const QUERY = 'why did we pick webhooks for ingestion';
+const CUE = 'webhooks';
+
+function axis(index: number): Vector {
+  const vector = new Array<number>(EMBED_DIMENSION).fill(0);
+  vector[index] = 1;
+  return vector;
+}
+
+/**
+ * Deterministic stand-in for the embedding model: the topic decides the axis, so "reachable
+ * only by traversal" is a property of the fixture graph rather than of whatever a live
+ * model happened to score. Cue extraction is stubbed for the same reason — unit and
+ * integration tests here prove the pipeline, never the model's judgment.
+ */
+function vectorFor(text: string): Vector {
+  const lowered = text.toLowerCase();
+  if (lowered.includes('webhook')) {
+    return axis(0);
+  }
+  if (lowered.includes('standup')) {
+    return axis(1);
+  }
+  return axis(2);
+}
+
+const provider: Provider = {
+  embed: (texts) => Promise.resolve(texts.map(vectorFor)),
+  generate: () =>
+    Promise.resolve({ query_cues: [CUE], summary_cues: [], recent_turn_cues: [] }),
+};
+
+/**
+ * One seed and one vector hit per cue. The narrow budget is the point: a wide one would let
+ * every fixture node in as a direct hit and there would be nothing left for traversal to be
+ * the only path to.
+ */
+function config(): Config {
+  return {
+    ...DEFAULTS,
+    models: { ...DEFAULTS.models, embedDimension: EMBED_DIMENSION },
+    recall: { ...DEFAULTS.recall, vectorLimit: 1 },
+    contextResonance: { ...DEFAULTS.contextResonance, seedLimit: 1 },
+  };
+}
+
+let harness: Neo4jHarness;
+let db: SqliteHandle;
+let dataDir: string;
+let logger: Logger;
+let sessions: SessionManager;
+let deps: RecallDeps;
+let webhooksEpisodeId: string;
+let unrelatedEpisodeId: string;
+
+async function waitFor(label: string, ready: () => Promise<boolean>): Promise<void> {
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    if (await ready()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`timed out waiting for ${label}`);
+}
+
+async function push(observation: string, now: Date): Promise<string> {
+  const result = await handleReflection(
+    {
+      driver: harness.driver,
+      db,
+      sessions,
+      provider,
+      dispatch: new ReflectionDispatch(),
+      logger,
+      entropyThreshold: DEFAULTS.redaction.entropyThreshold,
+    },
+    { observations: [observation] },
+    { identity: WRITE_SESSION, now },
+  );
+  return result.episode_id;
+}
+
+beforeAll(async () => {
+  harness = await startNeo4jHarness();
+  dataDir = mkdtempSync(join(tmpdir(), 'aion-recall-int-'));
+  db = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
+  logger = openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'debug' });
+  await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
+
+  const backbone = await bootstrapBackbone(harness.driver, { memberName: 'Ryan Huber' });
+  sessions = new SessionManager(harness.driver, {
+    memberId: backbone.member.id,
+    workspaceId: backbone.workspace.id,
+  });
+
+  deps = {
+    driver: harness.driver,
+    db,
+    sessions,
+    provider,
+    config: config(),
+    cueCache: new CueCache(),
+    logger,
+  };
+
+  // The unrelated episode is stored first so the recency strategy ranks the webhooks one
+  // ahead of it, which keeps the unrelated episode out of every seed list.
+  unrelatedEpisodeId = await push(UNRELATED_OBSERVATION, UNRELATED_AT);
+  webhooksEpisodeId = await push(WEBHOOKS_OBSERVATION, WEBHOOKS_AT);
+
+  await waitFor('the vector index to cover both episodes', async () => {
+    const rows = await vectorSeeds(harness.driver, {
+      vector: axis(0),
+      limit: 10,
+      mode: withCurrency(),
+    });
+    return rows.length >= 2;
+  });
+
+  await waitFor('the fulltext index to cover the webhooks episode', async () => {
+    const rows = await fulltextSeeds(harness.driver, {
+      query: CUE,
+      limit: 10,
+      mode: withCurrency(),
+    });
+    return rows.some((row) => row.id === webhooksEpisodeId);
+  });
+}, 300_000);
+
+afterAll(async () => {
+  await stopNeo4jHarness(harness);
+  db.close();
+  rmSync(dataDir, { recursive: true, force: true });
+});
+
+describe('recall over a substrate written by the real intake path', () => {
+  it('returns the episode the query is about, explained by the strategy that found it', async () => {
+    const pack = await handleRecall(deps, { query: QUERY }, {
+      identity: READ_SESSION,
+      now: RECALLED_AT,
+    });
+
+    const hit = pack.episodes?.find((item) => item.id === webhooksEpisodeId);
+    expect(hit?.content).toContain(WEBHOOKS_OBSERVATION);
+    expect(['vector', 'bm25', 'recency']).toContain(hit?.rationale.method);
+    expect(hit?.currency).toBe('current');
+  });
+
+  it('surfaces an episode no retrieval leg found, reached only by traversal', async () => {
+    const pack = await handleRecall(deps, { query: QUERY }, {
+      identity: READ_SESSION,
+      now: RECALLED_AT,
+    });
+
+    const reached = pack.episodes?.find((item) => item.id === unrelatedEpisodeId);
+    expect(reached?.content).toContain(UNRELATED_OBSERVATION);
+    expect(reached?.rationale.method).toBe('activation');
+    // Out of the seed, through the session both episodes participate in, and back down.
+    expect(reached?.rationale.path).toBe(
+      `${webhooksEpisodeId} -[PARTICIPATES_IN]-> ${WRITE_SESSION} -[PARTICIPATES_IN]-> ${unrelatedEpisodeId}`,
+    );
+
+    // The claim only means something if no direct leg could have produced it.
+    const direct = await vectorSeeds(harness.driver, {
+      vector: axis(0),
+      limit: 1,
+      mode: withCurrency(),
+    });
+    expect(direct.map((row) => row.id)).toEqual([webhooksEpisodeId]);
+    const lexical = await fulltextSeeds(harness.driver, {
+      query: CUE,
+      limit: 10,
+      mode: withCurrency(),
+    });
+    expect(lexical.map((row) => row.id)).not.toContain(unrelatedEpisodeId);
+  });
+
+  it('renders what it served and persists it under the reading session', async () => {
+    const pack = await handleRecall(deps, { query: QUERY }, {
+      identity: READ_SESSION,
+      now: RECALLED_AT,
+    });
+
+    expect(pack.rendered_text).toContain('## Episodes');
+    expect(pack.rendered_text).toContain(WEBHOOKS_OBSERVATION);
+    expect(pack.metadata.cues).toEqual([{ text: CUE, source: 'query', weight: 3 }]);
+    expect(pack.metadata.token_estimate).toBeGreaterThan(0);
+    for (const stage of ['cues', 'embed', 'seeds', 'activation', 'fusion'] as const) {
+      expect(pack.metadata.stage_timings_ms[stage]).toBeGreaterThanOrEqual(0);
+    }
+
+    expect(getLastPack(db, READ_SESSION)?.pack).toEqual(pack);
+  });
+
+  it('returns an explicitly empty pack when the substrate held nothing yet', async () => {
+    const pack = await handleRecall(deps, { query: QUERY, knew_at: BEFORE_ANYTHING }, {
+      identity: READ_SESSION,
+      now: RECALLED_AT,
+    });
+
+    expect(pack.facts).toBeUndefined();
+    expect(pack.episodes).toBeUndefined();
+    expect(pack.narratives).toBeUndefined();
+    expect(pack.preferences).toBeUndefined();
+    expect(pack.resonant).toBeUndefined();
+    expect(pack.rendered_text).toContain('No memories matched this query.');
+    expect(pack.metadata.cues).toHaveLength(1);
+  });
+});

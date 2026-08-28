@@ -232,3 +232,91 @@ export type {
 
 export { hashContent, prepareEpisode, renderEpisodeText, stableStringify } from './reflection/content.js';
 export type { PreparedEpisode, PreparedTurn, ReflectionContent } from './reflection/content.js';
+
+export { buildAdjacencyStatement, fetchAdjacency } from './graph/adjacency.js';
+export type { AdjacencyNeighbor, AdjacencyRequest } from './graph/adjacency.js';
+
+export {
+  CONTENT_FULLTEXT_INDEX,
+  CONTENT_VECTOR_INDEX,
+  EXACT_NAME_MATCH_SCORE,
+  LAST_ACCESSED_PROPERTY,
+  contentVectors,
+  entityNameSeeds,
+  entitySimilaritySeeds,
+  escapeLuceneQuery,
+  fulltextSeeds,
+  nodeCandidates,
+  normalizeSeedName,
+  recencySeeds,
+  vectorSeeds,
+} from './graph/seed-queries.js';
+export type {
+  EntityNameMatch,
+  NodeContentVector,
+  NodesByIdInput,
+  ScoredSeedCandidate,
+  SeedCandidate,
+} from './graph/seed-queries.js';
+
+export { CueCache, extractCues } from './recall/cues.js';
+export type { CueExtractionDeps, CueExtractionInput, CueExtractionResult } from './recall/cues.js';
+
+export {
+  SEED_STRATEGIES,
+  mergeSeeds,
+  normalizeToBest,
+  recencyScore,
+  scaleByCueWeight,
+  selectSeeds,
+} from './recall/seeds.js';
+export type {
+  Seed,
+  SeedContribution,
+  SeedCue,
+  SeedProvenance,
+  SeedSelection,
+  SeedStrategy,
+  SelectSeedsDeps,
+  SelectSeedsInput,
+} from './recall/seeds.js';
+
+export {
+  SEED_ACTIVATION,
+  SUPERSEDED_ACTIVATION_WEIGHT,
+  edgeWeight,
+  hubInhibition,
+  spreadActivation,
+} from './recall/activation.js';
+export type {
+  ActivatedNode,
+  ActivationBudget,
+  ActivationRun,
+  ActivationSeed,
+  ActivationTermination,
+  AdjacencyFetch,
+  SpreadActivationInput,
+} from './recall/activation.js';
+
+export {
+  buildRankedLists,
+  seedCandidate,
+  toActivationSeed,
+  traversalCandidates,
+} from './recall/candidates.js';
+export type { RankedListInput, TraversalInput } from './recall/candidates.js';
+
+export { SUPERSEDED_RANK_WEIGHT, cosineSimilarity, fuse, mmrOrder, reciprocalRank } from './recall/fusion.js';
+export type {
+  FusedItem,
+  FusionCandidate,
+  FusionLeg,
+  FusionOptions,
+  RankedList,
+} from './recall/fusion.js';
+
+export { CHARS_PER_TOKEN, PACK_BUCKETS, assemblePack, bucketFor, estimateTokens } from './recall/pack.js';
+export type { AssemblePackInput, BucketCaps, PackBucket } from './recall/pack.js';
+
+export { handleRecall, readModeFor } from './recall/recall.js';
+export type { RecallCompletion, RecallDeps, RecallListener, RecallOptions } from './recall/recall.js';
