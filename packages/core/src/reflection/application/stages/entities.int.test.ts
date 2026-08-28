@@ -4,16 +4,16 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../../infrastructure/graph/backbone.js';
-import { runRead } from '../../../infrastructure/graph/connection.js';
-import {
-  ENTITY_MENTION_TYPE,
-  ENTITY_PARTICIPATION_TYPE,
-  findEpisodeEntities,
-} from '../../../infrastructure/graph/entity-queries.js';
+import { findEpisodeEntities } from '../../../infrastructure/graph/entity-queries.js';
 import { loadEpisodeContext } from '../../../infrastructure/graph/episode-context.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import { withCurrency } from '../../../infrastructure/graph/read-modes.js';
 import { entitySimilaritySeeds } from '../../../infrastructure/graph/seed-queries.js';
+import {
+  mentionCounts,
+  participationCount,
+  storedEntities,
+} from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
@@ -98,73 +98,6 @@ async function runStage(episodeId: string, stageProvider: Provider): Promise<Sta
   return new EntityExtractionStage().run(context);
 }
 
-type StoredEntity = {
-  readonly id: string;
-  readonly name: string;
-  readonly nameNorm: string;
-  readonly type: string;
-  readonly labels: readonly string[];
-  readonly text: string | null;
-  readonly nameVectorLength: number;
-  readonly contentVectorLength: number;
-  readonly accessCount: number;
-  readonly structural: boolean;
-};
-
-async function storedEntities(): Promise<StoredEntity[]> {
-  return runRead(
-    harness.driver,
-    [
-      'MATCH (n:Entity)',
-      'RETURN n.id AS id, n.name AS name, n.name_norm AS name_norm, n.type AS type,',
-      '       labels(n) AS labels, n.text AS text,',
-      '       size(coalesce(n.name_vec, [])) AS name_vec_length,',
-      '       size(coalesce(n.content_vec, [])) AS content_vec_length,',
-      '       coalesce(n.access_count, 0) AS access_count,',
-      '       coalesce(n.is_structural, false) AS is_structural',
-      'ORDER BY n.name_norm, n.type',
-    ].join('\n'),
-    {},
-    (row) => ({
-      id: row.id as string,
-      name: row.name as string,
-      nameNorm: row.name_norm as string,
-      type: row.type as string,
-      labels: row.labels as string[],
-      text: (row.text ?? null) as string | null,
-      nameVectorLength: row.name_vec_length as number,
-      contentVectorLength: row.content_vec_length as number,
-      accessCount: row.access_count as number,
-      structural: row.is_structural === true,
-    }),
-  );
-}
-
-async function mentionCounts(episodeId: string): Promise<Array<{ id: string; count: number }>> {
-  return runRead(
-    harness.driver,
-    [
-      `MATCH (:Episode { id: $episodeId })-[r:${ENTITY_MENTION_TYPE}]->(n:Entity)`,
-      'RETURN n.id AS id, r.count AS count ORDER BY n.name_norm',
-    ].join('\n'),
-    { episodeId },
-    (row) => ({ id: row.id as string, count: row.count as number }),
-  );
-}
-
-async function participationCount(episodeId: string): Promise<number> {
-  const rows = await runRead(
-    harness.driver,
-    [
-      `MATCH (n:Entity)-[:${ENTITY_PARTICIPATION_TYPE}]->(:Episode { id: $episodeId })`,
-      'RETURN count(n) AS total',
-    ].join('\n'),
-    { episodeId },
-    (row) => row.total as number,
-  );
-  return rows[0] ?? 0;
-}
-
 beforeAll(async () => {
   harness = await startNeo4jHarness();
   dataDir = mkdtempSync(join(tmpdir(), 'aion-entities-int-'));
@@ -212,7 +145,7 @@ describe('canonicalization against the live constraint', () => {
     // Four rows in, three identities out: the duplicate collapses, the second type does not.
     expect(outcome.counts).toEqual({ entities: 2, mentions: 3 });
 
-    const entities = await storedEntities();
+    const entities = await storedEntities(harness.driver);
     const member = entities.find((entity) => entity.id === memberId);
     expect(member?.structural).toBe(true);
     expect(member?.type).toBe('member');
@@ -229,7 +162,7 @@ describe('canonicalization against the live constraint', () => {
   });
 
   it('gives every extracted entity the Memory label, its text, and both vectors', async () => {
-    const extracted = (await storedEntities()).filter((entity) => !entity.structural);
+    const extracted = (await storedEntities(harness.driver)).filter((entity) => !entity.structural);
 
     expect(extracted.length).toBeGreaterThan(0);
     for (const entity of extracted) {
@@ -241,24 +174,24 @@ describe('canonicalization against the live constraint', () => {
   });
 
   it('links the episode to every entity it mentioned, both ways', async () => {
-    const mentions = await mentionCounts(stubEpisodeId);
+    const mentions = await mentionCounts(harness.driver, stubEpisodeId);
     const entities = await findEpisodeEntities(harness.driver, stubEpisodeId);
 
     expect(mentions).toHaveLength(3);
     expect(entities.map((entity) => entity.nameNorm)).toEqual(['aion', 'aion', 'ryan huber']);
-    expect(await participationCount(stubEpisodeId)).toBe(3);
+    expect(await participationCount(harness.driver, stubEpisodeId)).toBe(3);
   });
 
   it('converges on a re-run: no new node, no second edge, one summed mention count', async () => {
-    const before = await storedEntities();
+    const before = await storedEntities(harness.driver);
     const outcome = await runStage(stubEpisodeId, stubProvider());
 
     expect(outcome.counts).toEqual({ entities: 0, mentions: 3 });
 
-    const after = await storedEntities();
+    const after = await storedEntities(harness.driver);
     expect(after.map((entity) => entity.id)).toEqual(before.map((entity) => entity.id));
 
-    const mentions = await mentionCounts(stubEpisodeId);
+    const mentions = await mentionCounts(harness.driver, stubEpisodeId);
     expect(mentions.map((mention) => mention.count)).toEqual([2, 2, 2]);
     expect(new Set(mentions.map((mention) => mention.id))).toEqual(
       new Set(before.filter((entity) => entity.accessCount > 0).map((entity) => entity.id)),
@@ -281,13 +214,13 @@ describe('entity extraction against a live model', () => {
       expect(ENTITY_TYPES as readonly string[]).toContain(entity.type);
     }
 
-    const stored = await storedEntities();
+    const stored = await storedEntities(harness.driver);
     const mentioned = new Set(entities.map((entity) => entity.id));
     for (const entity of stored.filter((row) => mentioned.has(row.id) && !row.structural)) {
       expect(entity.nameVectorLength).toBe(DEFAULTS.models.embedDimension);
       expect(entity.contentVectorLength).toBe(DEFAULTS.models.embedDimension);
     }
-    expect(await participationCount(liveEpisodeId)).toBe(entities.length);
+    expect(await participationCount(harness.driver, liveEpisodeId)).toBe(entities.length);
   }, 180_000);
 
   it('writes the name embedding the entity-resolution seed strategy searches', async () => {
@@ -306,9 +239,9 @@ describe('entity extraction against a live model', () => {
   }, 120_000);
 
   it('adds no duplicate identity when the same episode is extracted twice', async () => {
-    const before = await storedEntities();
+    const before = await storedEntities(harness.driver);
     const outcome = await runStage(liveEpisodeId, provider);
-    const after = await storedEntities();
+    const after = await storedEntities(harness.driver);
 
     // Whatever the model names the second time, every node it lands on is one the graph
     // already had or one this run reports creating.
@@ -316,7 +249,7 @@ describe('entity extraction against a live model', () => {
     const identities = after.map((entity) => `${entity.nameNorm} ${entity.type}`);
     expect(new Set(identities).size).toBe(identities.length);
 
-    const mentions = await mentionCounts(liveEpisodeId);
+    const mentions = await mentionCounts(harness.driver, liveEpisodeId);
     expect(new Set(mentions.map((mention) => mention.id)).size).toBe(mentions.length);
   }, 180_000);
 });

@@ -146,11 +146,9 @@ export class FakeGraph {
 
     if (
       cypher.includes('MATCH (e:Episode { id: $episodeId })') &&
-      cypher.includes('MATCH (n:AionNode)') &&
-      cypher.includes('MENTIONS')
+      cypher.includes('MENTIONS|EXTRACTED_FROM')
     ) {
-      const result = this.#coExtractedNodeIds(parameters);
-      return toResult(result);
+      return toResult(this.#coExtractedNodeIds(parameters));
     }
 
     if (cypher.includes('-[:MENTIONS]->(n:Entity)')) {
@@ -376,33 +374,34 @@ export class FakeGraph {
   }
 
   /** Find all node IDs extracted from or mentioned in an episode. */
+  /** The two provenance types the real statement expands, in either direction, current only. */
   #coExtractedNodeIds(parameters: Record<string, unknown>): Row[] {
     const episodeId = parameters.episodeId as string;
     const nodeIds = new Set<string>();
 
-    // Find nodes with edges related to this episode:
-    // - MENTIONS: episode -> node (sourceId = episodeId, targetId = node)
-    // - PARTICIPATES_IN: node -> episode (sourceId = node, targetId = episodeId)
-    // - EXTRACTED_FROM: node -> episode (sourceId = node, targetId = episodeId)
     for (const edge of this.edges.values()) {
-      if (edge.type === 'MENTIONS' && edge.sourceId === episodeId) {
-        const node = this.nodes.get(edge.targetId);
-        // Only include AionNode types (skip episode itself)
-        if (node !== undefined && node.labels.includes('AionNode') && !node.labels.includes('Episode')) {
-          nodeIds.add(edge.targetId);
-        }
-      } else if (
-        edge.targetId === episodeId &&
-        (edge.type === 'PARTICIPATES_IN' || edge.type === 'EXTRACTED_FROM')
-      ) {
-        const node = this.nodes.get(edge.sourceId);
-        if (node !== undefined && node.labels.includes('AionNode') && !node.labels.includes('Episode')) {
-          nodeIds.add(edge.sourceId);
-        }
+      if (edge.type !== 'MENTIONS' && edge.type !== 'EXTRACTED_FROM') {
+        continue;
       }
+      const otherId =
+        edge.sourceId === episodeId
+          ? edge.targetId
+          : edge.targetId === episodeId
+            ? edge.sourceId
+            : undefined;
+      if (otherId === undefined) {
+        continue;
+      }
+      const node = this.nodes.get(otherId);
+      if (node === undefined || !node.labels.includes('AionNode')) {
+        continue;
+      }
+      if (node.properties[BITEMPORAL_PROPERTIES.validUntil] != null) {
+        continue;
+      }
+      nodeIds.add(otherId);
     }
 
-    // Return results in the format expected by the query.
     return [...nodeIds].map((id) => ({ id }));
   }
 }

@@ -27,14 +27,19 @@ export function coOccurringPairs(entityIds: readonly string[]): readonly EntityP
 }
 
 /**
- * Scopes co-occurrence idempotency to one (episode, pair): the stage checks this key before
- * writing a `CO_OCCURS` edge and marks it after, so re-running the same episode's pipeline
- * (the crash-before-ledger-mark case the orchestrator contract calls out) replays as a no-op,
- * while a second, different episode sharing the pair still bumps the edge's observation count.
- * Pair order does not affect the key: the ids are sorted the same way `coOccurringPairs` sorts
- * them.
+ * Scopes co-occurrence idempotency to the episode: the stage checks this key before writing
+ * any `CO_OCCURS` edge and marks it once every pair has landed, so re-running the same
+ * episode's pipeline (the crash-before-ledger-mark case the orchestrator contract calls out)
+ * replays as a no-op, while a second, different episode sharing a pair still bumps the edge's
+ * observation count.
+ *
+ * One row per episode, not one per pair. A per-pair key is n²: at the pinned `maxEntities`
+ * of 32 a single rich episode writes 496 ledger rows, nothing prunes the ops ledger, and the
+ * family outgrows every other key in it by an order of magnitude. What the coarser key gives
+ * up is the interrupted run: a crash partway through the pair loop replays the pairs already
+ * written and counts them a second time, which is the same re-observation semantics
+ * `MENTIONS` already carries by design and is bounded by the worker's attempt limit.
  */
-export function coOccursLedgerKey(episodeId: string, sourceId: string, targetId: string): string {
-  const [a, b] = sourceId <= targetId ? [sourceId, targetId] : [targetId, sourceId];
-  return `association.co_occurs:${episodeId}:${a}:${b}`;
+export function coOccursLedgerKey(episodeId: string): string {
+  return `association.co_occurs:${episodeId}`;
 }

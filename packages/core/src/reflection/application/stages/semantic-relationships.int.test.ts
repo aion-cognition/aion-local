@@ -10,6 +10,7 @@ import { loadEpisodeContext } from '../../../infrastructure/graph/episode-contex
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import { withCurrency } from '../../../infrastructure/graph/read-modes.js';
 import { SEMANTIC_RELATIONSHIP_METHOD } from '../../../infrastructure/graph/semantic-relationship-queries.js';
+import { relationshipsByProvenance } from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
@@ -59,21 +60,6 @@ function ollamaProvider(): OllamaProvider {
     baseUrl: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
     embedModel: DEFAULTS.models.embed,
   });
-}
-
-type WrittenRelationship = { readonly type: string; readonly sourceId: string; readonly targetId: string };
-
-async function writtenSemanticRelationships(): Promise<WrittenRelationship[]> {
-  return runRead(
-    harness.driver,
-    [
-      'MATCH (a)-[r]->(b)',
-      'WHERE $method IN r.provenance',
-      'RETURN type(r) AS type, a.id AS sourceId, b.id AS targetId',
-    ].join('\n'),
-    { method: SEMANTIC_RELATIONSHIP_METHOD },
-    (row) => ({ type: row.type as string, sourceId: row.sourceId as string, targetId: row.targetId as string }),
-  );
 }
 
 const BUDGET: ActivationBudget = {
@@ -163,7 +149,7 @@ describe('SemanticRelationshipStage against a live graph and Ollama', () => {
     expect(outcome.status).toBe('ok');
     expect(outcome.counts?.relationships).toBeGreaterThan(0);
 
-    const written = await writtenSemanticRelationships();
+    const written = await relationshipsByProvenance(harness.driver, SEMANTIC_RELATIONSHIP_METHOD);
     const causal = written.find((edge) => DIRECTED_CAUSAL_TYPES.has(edge.type));
     expect(causal, `expected a CAUSES/ENABLES edge among ${JSON.stringify(written)}`).toBeDefined();
 

@@ -6,6 +6,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CONTEXT_VECTOR_PROPERTY } from '../../../infrastructure/graph/context-vector-queries.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import {
+  contextVector,
+  vectorIndexNeighbors,
+} from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
+import {
   startNeo4jHarness,
   stopNeo4jHarness,
   type Neo4jHarness,
@@ -174,14 +178,6 @@ function buildContext(): StageContext {
   };
 }
 
-async function readContextVector(id: string): Promise<readonly number[] | undefined> {
-  const result = await harness.driver.executeQuery(
-    `MATCH (n { id: $id }) RETURN n.${CONTEXT_VECTOR_PROPERTY} AS vec`,
-    { id },
-  );
-  return fromGraphVector(result.records[0]?.get('vec'));
-}
-
 describe('ContextVectorStage against a live graph', () => {
   it('recomputes context_vec for the episode and its mentioned entities, and skips the rest of the graph', async () => {
     const outcome = await new ContextVectorStage().run(buildContext());
@@ -191,31 +187,24 @@ describe('ContextVectorStage against a live graph', () => {
 
     // entity-b's only neighbor category is the episode: the weighted mean of one distinct
     // vector is that vector, exactly.
-    const entityB = await readContextVector('entity-b');
+    const entityB = await contextVector(harness.driver, 'entity-b');
     expect(entityB).toHaveLength(EMBED_DIMENSION);
     expect(entityB).toEqual(EPISODE_VECTOR);
 
     // The episode's neighbors are entity-a and entity-b in equal total weight (two edges
     // each): the mean sits at the componentwise midpoint of their two vectors.
-    const episode = await readContextVector(EPISODE_ID);
+    const episode = await contextVector(harness.driver, EPISODE_ID);
     for (let i = 0; i < EMBED_DIMENSION; i += 1) {
       expect(episode?.[i]).toBeCloseTo((ENTITY_A_VECTOR[i]! + ENTITY_B_VECTOR[i]!) / 2, 5);
     }
 
     // entity-c was never touched by this episode, so this run must not recompute it.
-    const entityC = await readContextVector('entity-c');
+    const entityC = await contextVector(harness.driver, 'entity-c');
     expect(entityC).toBeUndefined();
   });
 
   it('makes the recomputed node findable by KNN over context_vec_idx', async () => {
-    const result = await harness.driver.executeQuery(
-      'CALL db.index.vector.queryNodes($index, $limit, $vector) YIELD node, score RETURN node.id AS id, score',
-      { index: 'context_vec_idx', limit: 3, vector: toGraphVector(EPISODE_VECTOR) },
-    );
-    const rows = result.records.map((record) => ({
-      id: record.get('id') as string,
-      score: record.get('score') as number,
-    }));
+    const rows = await vectorIndexNeighbors(harness.driver, 'context_vec_idx', 3, EPISODE_VECTOR);
 
     // entity-b's context_vec equals the episode's own content_vec exactly: a query with that
     // same vector should return entity-b as its top (or tied-top) hit.

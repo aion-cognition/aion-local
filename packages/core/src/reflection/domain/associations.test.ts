@@ -30,15 +30,16 @@ describe('coOccurringPairs', () => {
 });
 
 describe('coOccursLedgerKey', () => {
-  it('is stable regardless of which id is passed first', () => {
-    expect(coOccursLedgerKey('episode-1', 'a', 'b')).toBe(coOccursLedgerKey('episode-1', 'b', 'a'));
+  it('scopes the key to the episode, and to nothing finer', () => {
+    const key = coOccursLedgerKey('episode-1');
+
+    expect(key).toBe('association.co_occurs:episode-1');
+    expect(coOccursLedgerKey('episode-2')).not.toBe(key);
   });
 
-  it('scopes the key to both the episode and the pair', () => {
-    const key = coOccursLedgerKey('episode-1', 'a', 'b');
+  it('is one row per episode however many entities the episode named', () => {
+    const keys = new Set(coOccurringPairs(['a', 'b', 'c', 'd']).map(() => coOccursLedgerKey('e')));
 
-    expect(key).toBe('association.co_occurs:episode-1:a:b');
-    expect(coOccursLedgerKey('episode-2', 'a', 'b')).not.toBe(key);
-    expect(coOccursLedgerKey('episode-1', 'a', 'c')).not.toBe(key);
+    expect(keys.size).toBe(1);
   });
 });
