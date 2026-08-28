@@ -6,6 +6,7 @@ import {
   runWrite,
 } from './connection.js';
 import { GraphNodeNotFoundError, GraphWriteError } from './errors.js';
+import { BASE_NODE_LABEL } from './labels.js';
 import {
   isRelationshipType,
   normalizeEndpoints,
@@ -62,6 +63,9 @@ function uniqueStrings(values: readonly string[]): string[] {
  * max(strength), max(confidence), set-union(signals), set-union(provenance), sum(count),
  * earliest created_at preserved, updated_at refreshed. The unions are list comprehensions
  * rather than APOC, which is not installed and is not a dependency this build takes on.
+ *
+ * Endpoints resolve through `BASE_NODE_LABEL` because an unlabelled `{ id: … }` match has
+ * no index to seek: every relationship write would scan the whole graph twice.
  */
 export function buildEdgeUpsert(input: EdgeUpsert): GraphStatement {
   if (!isRelationshipType(input.type)) {
@@ -108,8 +112,8 @@ export function buildEdgeUpsert(input: EdgeUpsert): GraphStatement {
   ];
 
   const cypher = [
-    'MATCH (a { id: $sourceId })',
-    'MATCH (b { id: $targetId })',
+    `MATCH (a:${BASE_NODE_LABEL} { id: $sourceId })`,
+    `MATCH (b:${BASE_NODE_LABEL} { id: $targetId })`,
     `MERGE (a)-[r:${input.type}]->(b)`,
     `ON CREATE SET ${onCreate.join(', ')}`,
     `ON MATCH SET ${onMatch.join(', ')}`,

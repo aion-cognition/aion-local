@@ -7,7 +7,7 @@ import {
 } from './connection.js';
 import { upsertEdgeInTransaction, type UpsertedEdge } from './edges.js';
 import { GraphNodeNotFoundError } from './errors.js';
-import { resolveLabels, type NodeLabel } from './labels.js';
+import { BASE_NODE_LABEL, resolveLabels, type NodeLabel } from './labels.js';
 import { SUPERSEDES_TYPE } from './relationships.js';
 import { toGraphDateTime, toGraphParameters, type GraphProperties, type Row } from './values.js';
 
@@ -70,9 +70,9 @@ export function stampNew(input: StampNewInput): StampedNode {
 
 export type StampedNodeWrite = StampNewInput & {
   /**
-   * Applied on create and on match alike. Reserved for values that are constant for the
-   * node's identity (the structural-entity upgrade of whitepaper §4.2); anything derived
-   * from the clock belongs in `properties`, which only a creation writes.
+   * Applied on create and on match alike: the structural-entity upgrade of whitepaper §4.2,
+   * and singleton attributes a later run may correct. Anything derived from the clock
+   * belongs in `properties`, which only a creation writes.
    */
   readonly mergeProperties?: GraphProperties;
 };
@@ -150,7 +150,7 @@ export type SupersedeResult = {
 };
 
 const CLOSE_SUPERSEDED_NODE = [
-  'MATCH (old { id: $oldId })',
+  `MATCH (old:${BASE_NODE_LABEL} { id: $oldId })`,
   `SET old.${BITEMPORAL_PROPERTIES.validUntil} = coalesce(old.${BITEMPORAL_PROPERTIES.validUntil}, $now),`,
   `    old.${BITEMPORAL_PROPERTIES.txUntil} = coalesce(old.${BITEMPORAL_PROPERTIES.txUntil}, $now)`,
   `RETURN old.id AS id, old.${BITEMPORAL_PROPERTIES.validUntil} AS validUntil,`,

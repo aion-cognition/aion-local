@@ -187,13 +187,13 @@ async function initialize(config: Config, flags: InitFlags, write: Writer, logge
   const store = new SqliteStore({ filePath: config.sqlite.path });
   const connection = new GraphConnection({ uri: config.neo4j.uri, password });
   try {
-    const { applied } = await runGraphMigrations(connection.driver, store.db, {
+    const { applied, created } = await runGraphMigrations(connection.driver, store.db, {
       embedDimension: config.models.embedDimension,
     });
     write(
-      applied.length === 0
+      created.length === 0
         ? 'graph schema already current'
-        : `applied graph migrations: ${applied.join(', ')}`,
+        : `graph schema: created ${created.join(', ')}`,
     );
 
     const backbone = await bootstrapBackbone(connection.driver, { memberName });
@@ -201,7 +201,7 @@ async function initialize(config: Config, flags: InitFlags, write: Writer, logge
       `backbone: Member "${memberName}" ${backbone.member.created ? 'created' : 'present'}, ` +
         `global Workspace ${backbone.workspace.created ? 'created' : 'present'}`,
     );
-    logger.info({ applied, backbone, memberName }, 'init finished');
+    logger.info({ applied, created, backbone, memberName }, 'init finished');
   } finally {
     await connection.close();
     store.close();

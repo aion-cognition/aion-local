@@ -48,6 +48,10 @@ describe('asOf', () => {
     expect(fragment.currency).toContain('$rm_reference');
     expect(fromGraphDateTime(fragment.parameters.rm_reference)).toEqual(VALID_AT);
   });
+
+  it('keeps the whole lineage, since a later supersession is world knowledge', () => {
+    expect(readModeFragment(asOf(VALID_AT), 'n').lineage).not.toContain('WHERE');
+  });
 });
 
 describe('knewAt', () => {
@@ -58,6 +62,16 @@ describe('knewAt', () => {
     );
     expect(fromGraphDateTime(fragment.parameters.rm_known_at)).toEqual(KNOWN_AT);
   });
+
+  it('judges currency against the knowledge time rather than the wall clock', () => {
+    const fragment = readModeFragment(knewAt(KNOWN_AT), 'n');
+    expect(fromGraphDateTime(fragment.parameters.rm_reference)).toEqual(KNOWN_AT);
+  });
+
+  it('reports only the lineage the substrate had recorded by then', () => {
+    const fragment = readModeFragment(knewAt(KNOWN_AT), 'n');
+    expect(fragment.lineage).toContain('WHERE rm_sup_rel.created_at <= $rm_known_at');
+  });
 });
 
 describe('composition', () => {
@@ -66,6 +80,11 @@ describe('composition', () => {
     expect(fragment.where).toContain('n.valid_from <= $rm_reference');
     expect(fragment.where).toContain('n.tx_from <= $rm_known_at');
     expect(fragment.where).toContain(' AND ');
+  });
+
+  it('judges currency by world time when both timelines are pinned', () => {
+    const fragment = readModeFragment(bitemporalAt(VALID_AT, KNOWN_AT), 'n');
+    expect(fromGraphDateTime(fragment.parameters.rm_reference)).toEqual(VALID_AT);
   });
 
   it('namespaces parameters and comprehension variables so two fragments coexist', () => {

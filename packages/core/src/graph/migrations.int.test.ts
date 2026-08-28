@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { BASE_NODE_LABEL } from './labels.js';
 import {
   GRAPH_MIGRATIONS,
   graphMigrationMetaKey,
@@ -15,6 +16,7 @@ import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
 const EMBED_DIMENSION = 768;
 
 const EXPECTED_CONSTRAINTS = [
+  { name: 'aion_node_id_unique', labelsOrTypes: [BASE_NODE_LABEL], properties: ['id'] },
   { name: 'entity_name_type_unique', labelsOrTypes: ['Entity'], properties: ['name_norm', 'type'] },
   { name: 'episode_id_unique', labelsOrTypes: ['Episode'], properties: ['id'] },
   { name: 'member_id_unique', labelsOrTypes: ['Member'], properties: ['id'] },
@@ -81,9 +83,11 @@ describe('graph schema migration 001', () => {
   it('applies migration 001 on first run and records it in the meta table', async () => {
     expect(latestAppliedGraphMigration(db)).toBeUndefined();
 
-    const { applied } = await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
+    const { applied, created } = await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
 
     expect(applied).toEqual([1]);
+    expect(created).toContain('content_vec_idx');
+    expect(created).toContain('aion_node_id_unique');
     expect(getMeta(db, graphMigrationMetaKey(1))).toBeDefined();
     expect(latestAppliedGraphMigration(db)).toBe(1);
   });
@@ -110,15 +114,35 @@ describe('graph schema migration 001', () => {
     expect(dimensionsOf(contextVec)).toBe(EMBED_DIMENSION);
   });
 
-  it('re-running is a no-op: nothing reported applied, and the schema is unchanged', async () => {
+  it('re-running is a no-op: nothing applied, nothing created, and the schema is unchanged', async () => {
     const constraintsBefore = await fetchConstraints(harness);
     const indexesBefore = await fetchNonLookupIndexes(harness);
 
-    const { applied } = await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
+    const { applied, created } = await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
 
     expect(applied).toEqual([]);
+    expect(created).toEqual([]);
     expect(await fetchConstraints(harness)).toEqual(constraintsBefore);
     expect(await fetchNonLookupIndexes(harness)).toEqual(indexesBefore);
+  });
+
+  it('repairs a graph that lost schema objects while the meta table survived', async () => {
+    await harness.driver.executeQuery('DROP CONSTRAINT episode_id_unique');
+    await harness.driver.executeQuery('DROP INDEX content_vec_idx');
+
+    const { applied, created } = await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
+
+    expect(applied).toEqual([]);
+    expect([...created].sort()).toEqual(['content_vec_idx', 'episode_id_unique']);
+    expect(await fetchConstraints(harness)).toEqual(EXPECTED_CONSTRAINTS);
+    expect(
+      (await fetchNonLookupIndexes(harness)).map(({ name, type, labelsOrTypes, properties }) => ({
+        name,
+        type,
+        labelsOrTypes,
+        properties,
+      })),
+    ).toEqual(EXPECTED_NON_LOOKUP_INDEXES);
   });
 
   it('the pinned migration list is exactly migration 001 for P0', () => {

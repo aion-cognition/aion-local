@@ -83,8 +83,14 @@ export function readModeFragment(mode: ReadMode, nodeVar: string, prefix = 'rm')
 
   const referenceParam = `${prefix}_reference`;
   const knownAtParam = `${prefix}_known_at`;
+  /**
+   * Currency is judged from the read's own vantage point: the pinned world time, else the
+   * pinned knowledge time, else now. Judging a `knew_at` read against the wall clock marks
+   * rows superseded by facts the substrate did not hold yet at that moment.
+   */
+  const reference = mode.validAt ?? mode.knownAt ?? new Date();
   const parameters: Record<string, unknown> = {
-    [referenceParam]: toGraphDateTime(mode.validAt ?? new Date()),
+    [referenceParam]: toGraphDateTime(reference),
   };
 
   const predicates: string[] = [];
@@ -114,8 +120,11 @@ export function readModeFragment(mode: ReadMode, nodeVar: string, prefix = 'rm')
 
   const successor = `${prefix}_sup`;
   const successorEdge = `${prefix}_sup_rel`;
+  /** A knowledge-time read reports only the lineage the substrate had recorded by then. */
+  const lineageFilter =
+    mode.knownAt === undefined ? '' : ` WHERE ${successorEdge}.created_at <= $${knownAtParam}`;
   const lineage =
-    `head([ (${successor})-[${successorEdge}:${SUPERSEDES_TYPE}]->(${nodeVar})` +
+    `head([ (${successor})-[${successorEdge}:${SUPERSEDES_TYPE}]->(${nodeVar})${lineageFilter}` +
     ` | { id: ${successor}.id, at: ${successorEdge}.created_at } ])`;
 
   return {

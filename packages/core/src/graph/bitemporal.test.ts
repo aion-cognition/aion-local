@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import neo4j from 'neo4j-driver';
 import { BITEMPORAL_PROPERTIES, buildStampedNodeWrite, stampNew } from './bitemporal.js';
-import { isContentBearing, NODE_LABELS, resolveLabels } from './labels.js';
+import { BASE_NODE_LABEL, isContentBearing, NODE_LABELS, resolveLabels } from './labels.js';
 import { fromGraphDateTime } from './values.js';
 
 const NOW = new Date('2026-02-03T04:05:06.000Z');
@@ -50,20 +50,26 @@ describe('stampNew', () => {
 
 describe('labels', () => {
   it('gives content-bearing nodes the shared Memory label', () => {
-    expect(resolveLabels('Episode')).toEqual(['Episode', 'Memory']);
-    expect(resolveLabels('Turn')).toEqual(['Turn', 'Memory']);
+    expect(resolveLabels('Episode')).toEqual(['Episode', 'Memory', BASE_NODE_LABEL]);
+    expect(resolveLabels('Turn')).toEqual(['Turn', 'Memory', BASE_NODE_LABEL]);
     expect(isContentBearing('Episode')).toBe(true);
     expect(isContentBearing('Session')).toBe(false);
   });
 
   it('gives backbone nodes the Entity label the composite constraint needs', () => {
-    expect(resolveLabels('Member')).toEqual(['Member', 'Entity']);
-    expect(resolveLabels('Workspace')).toEqual(['Workspace', 'Entity']);
+    expect(resolveLabels('Member')).toEqual(['Member', 'Entity', BASE_NODE_LABEL]);
+    expect(resolveLabels('Workspace')).toEqual(['Workspace', 'Entity', BASE_NODE_LABEL]);
   });
 
   it('lists the primary label first for every known label', () => {
     for (const label of NODE_LABELS) {
       expect(resolveLabels(label)[0]).toBe(label);
+    }
+  });
+
+  it('gives every node the base label, so an id lookup has an index to seek', () => {
+    for (const label of NODE_LABELS) {
+      expect(resolveLabels(label)).toContain(BASE_NODE_LABEL);
     }
   });
 });
@@ -72,8 +78,8 @@ describe('buildStampedNodeWrite', () => {
   it('merges on the primary label and id and applies companions on both branches', () => {
     const { cypher } = buildStampedNodeWrite({ label: 'Episode', id: 'e1', now: NOW });
     expect(cypher).toContain('MERGE (n:Episode { id: $id })');
-    expect(cypher).toContain('ON CREATE SET n:Memory, n += $properties');
-    expect(cypher).toContain('ON MATCH SET n:Memory');
+    expect(cypher).toContain(`ON CREATE SET n:Memory:${BASE_NODE_LABEL}, n += $properties`);
+    expect(cypher).toContain(`ON MATCH SET n:Memory:${BASE_NODE_LABEL}`);
   });
 
   it('writes no stamp on match, so a repeat write cannot move history', () => {
@@ -83,9 +89,10 @@ describe('buildStampedNodeWrite', () => {
     expect(onMatch).not.toContain(BITEMPORAL_PROPERTIES.txFrom);
   });
 
-  it('omits ON MATCH entirely for a label with no companions and no merge properties', () => {
+  it('applies the base label on both branches even where there is nothing else to set', () => {
     const { cypher } = buildStampedNodeWrite({ label: 'Session', id: 's1', now: NOW });
-    expect(cypher).not.toContain('ON MATCH SET');
+    expect(cypher).toContain(`ON MATCH SET n:${BASE_NODE_LABEL}`);
+    expect(cypher.slice(cypher.indexOf('ON MATCH SET'))).not.toContain('$properties');
   });
 
   it('applies merge properties on both branches for the structural upgrade path', () => {
@@ -95,8 +102,10 @@ describe('buildStampedNodeWrite', () => {
       now: NOW,
       mergeProperties: { is_structural: true },
     });
-    expect(built.cypher).toContain('ON CREATE SET n:Entity, n += $properties, n += $mergeProperties');
-    expect(built.cypher).toContain('ON MATCH SET n:Entity, n += $mergeProperties');
+    expect(built.cypher).toContain(
+      `ON CREATE SET n:Entity:${BASE_NODE_LABEL}, n += $properties, n += $mergeProperties`,
+    );
+    expect(built.cypher).toContain(`ON MATCH SET n:Entity:${BASE_NODE_LABEL}, n += $mergeProperties`);
     expect(built.parameters.mergeProperties).toEqual({ is_structural: true });
   });
 

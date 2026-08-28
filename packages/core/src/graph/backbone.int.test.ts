@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { bootstrapBackbone, GLOBAL_WORKSPACE_NAME } from './backbone.js';
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { runRead } from './connection.js';
+import { BASE_NODE_LABEL } from './labels.js';
 import { runGraphMigrations } from './migrations.js';
 import { startNeo4jHarness, stopNeo4jHarness, type Neo4jHarness } from './test-support/neo4j-harness.fixture.js';
 import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
@@ -39,12 +40,17 @@ async function nodeProperty(label: 'Member' | 'Workspace', property: string): Pr
   return rows[0];
 }
 
+async function memberId(): Promise<string | undefined> {
+  const rows = await runRead(harness.driver, 'MATCH (n:Member) RETURN n.id AS id', {}, (row) => row.id as string);
+  return rows[0];
+}
+
 describe('backbone bootstrap', () => {
   it('creates exactly one Member and one Workspace, labeled, structural, and bitemporally stamped', async () => {
     const result = await bootstrapBackbone(harness.driver, { memberName: 'Ryan Huber', now: NOW });
 
-    expect([...result.member.labels].sort()).toEqual(['Entity', 'Member']);
-    expect([...result.workspace.labels].sort()).toEqual(['Entity', 'Workspace']);
+    expect([...result.member.labels].sort()).toEqual([BASE_NODE_LABEL, 'Entity', 'Member'].sort());
+    expect([...result.workspace.labels].sort()).toEqual([BASE_NODE_LABEL, 'Entity', 'Workspace'].sort());
     expect(result.member.created).toBe(true);
     expect(result.workspace.created).toBe(true);
     expect(await countLabel('Member')).toBe(1);
@@ -75,11 +81,25 @@ describe('backbone bootstrap', () => {
     expect(await nodeProperty('Member', BITEMPORAL_PROPERTIES.txFrom)).toEqual(NOW);
   });
 
-  it('resolves the same member across a differently-cased, differently-spaced name', async () => {
+  it('collapses whitespace in the stored name and keeps the case the user typed', async () => {
     const rerun = await bootstrapBackbone(harness.driver, { memberName: '  RYAN   Huber ' });
 
     expect(rerun.member.created).toBe(false);
     expect(await countLabel('Member')).toBe(1);
-    expect(await nodeProperty('Member', 'name')).toBe('Ryan Huber');
+    expect(await nodeProperty('Member', 'name')).toBe('RYAN Huber');
+    expect(await nodeProperty('Member', 'name_norm')).toBe('ryan huber');
+  });
+
+  it('renames the one Member on a corrected name instead of forking the backbone', async () => {
+    const before = await memberId();
+
+    const renamed = await bootstrapBackbone(harness.driver, { memberName: 'rhuber' });
+
+    expect(renamed.member.created).toBe(false);
+    expect(renamed.member.id).toBe(before);
+    expect(await countLabel('Member')).toBe(1);
+    expect(await nodeProperty('Member', 'name')).toBe('rhuber');
+    expect(await nodeProperty('Member', 'name_norm')).toBe('rhuber');
+    expect(await nodeProperty('Member', BITEMPORAL_PROPERTIES.txFrom)).toEqual(NOW);
   });
 });
