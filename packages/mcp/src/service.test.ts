@@ -242,3 +242,102 @@ describe('health', () => {
     expect(response.status).toBe(404);
   });
 });
+
+describe('graceful shutdown', () => {
+  /**
+   * Its own service on its own port: closing is terminal, so this cannot share the one the
+   * rest of the file connects to.
+   */
+  async function openDrainable(): Promise<{
+    readonly service: AionMcpService;
+    readonly client: Client;
+    readonly release: () => void;
+    readonly started: Promise<void>;
+  }> {
+    let release = (): void => undefined;
+    let started = (): void => undefined;
+    const startedPromise = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const gated: ToolBackend = {
+      recall: async () => {
+        started();
+        await gate;
+        return emptyPack();
+      },
+      reflection: () => Promise.resolve({ episode_id: 'episode-1', queued: true } as const),
+    };
+
+    const drainable = new AionMcpService({
+      backend: gated,
+      logger,
+      host: '127.0.0.1',
+      port: 0,
+      // Short enough that the deadline case does not stall the suite, long enough that the
+      // two cases which do finish are never racing it.
+      drainTimeoutMs: 1500,
+    });
+    const port = await drainable.listen();
+    const client = new Client({ name: 'aion-drain-test', version: '0.0.0' });
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${String(port)}${MCP_PATH}`)),
+    );
+    return { service: drainable, client, release, started: startedPromise };
+  }
+
+  it('answers a tool call that was already running when shutdown began', async () => {
+    const { service: drainable, client, release, started } = await openDrainable();
+
+    const call = client.callTool({ name: 'recall', arguments: { query: 'in flight' } });
+    await started;
+    expect(drainable.inFlightCount).toBe(1);
+
+    const closing = drainable.close();
+    release();
+
+    const result = (await call) as { structuredContent?: MemoryPack };
+    expect(MemoryPackSchema.parse(result.structuredContent)).toBeDefined();
+    await closing;
+    expect(drainable.inFlightCount).toBe(0);
+  });
+
+  it('refuses a tool call that arrives after shutdown began', async () => {
+    const { service: drainable, client, release, started } = await openDrainable();
+
+    const inFlight = client.callTool({ name: 'recall', arguments: { query: 'in flight' } });
+    await started;
+    const closing = drainable.close();
+
+    await expect(
+      client.callTool({ name: 'reflection', arguments: { observations: ['too late'] } }),
+    ).rejects.toThrow(/shutting down/);
+
+    release();
+    await inFlight;
+    await closing;
+  });
+
+  it('gives up at the drain deadline rather than hanging the shutdown', async () => {
+    const { service: drainable, client, release, started } = await openDrainable();
+
+    // Never released before the deadline. Its socket dies with the service and the client
+    // learns nothing, which is exactly the outcome the drain exists to make rare.
+    void client
+      .callTool({ name: 'recall', arguments: { query: 'never finishes' } })
+      .catch(() => undefined);
+    await started;
+
+    const begun = Date.now();
+    await drainable.close();
+    const elapsed = Date.now() - begun;
+
+    expect(elapsed).toBeGreaterThanOrEqual(1000);
+    expect(elapsed).toBeLessThan(10_000);
+
+    release();
+  }, 30_000);
+});
