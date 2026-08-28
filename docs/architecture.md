@@ -187,7 +187,7 @@ sets strength, confidence, signal and provenance lists, and a count; on match it
 `sum(count)`, and refreshes `updated_at` while leaving `created_at` alone. Undirected
 relationship types (`SIMILAR`, `CO_OCCURS`, `RELATED_TO`, `ANALOGOUS_TO`) normalize their
 endpoint order before the merge, so writing an edge from node A to node B and later from B
-to A lands on one edge, not two. Twenty-one directed types cover containment
+to A lands on one edge, not two. Twenty-two directed types cover containment
 (`PARTICIPATES_IN`), temporal chaining (`FOLLOWS`, `PRECEDES`), provenance
 (`DERIVES_FROM`, `EVIDENCES`, `EXTRACTED_FROM`), the backbone (`HAS_MEMBER`,
 `HAS_WORKSPACE`), and this build's bitemporal extension, `SUPERSEDES`.
