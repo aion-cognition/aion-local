@@ -9,3 +9,6 @@ export {
   openLogger,
 } from './logging/logger.js';
 export type { LogLevel, LogTarget, Logger } from './logging/logger.js';
+
+export { ConfigSchema, DEFAULTS, KNOB_REGISTRY, knownEnvVars, envVarForPath, loadConfig, ConfigError } from './config/index.js';
+export type { Config, Knob, KnobKind, ConfigPath } from './config/index.js';
