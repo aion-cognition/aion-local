@@ -2,9 +2,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { DEFAULTS } from '../config/defaults.js';
-import { bootstrapBackbone } from '../graph/backbone.js';
-import { runGraphMigrations } from '../graph/migrations.js';
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
+import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
 import {
   countChainedTurns,
   countEdges,
@@ -17,17 +17,17 @@ import {
   nodeLabels,
   nodeProperties,
   turnsOfEpisode,
-} from '../graph/test-support/graph-queries.fixture.js';
+} from '../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
   type Neo4jHarness,
-} from '../graph/test-support/neo4j-harness.fixture.js';
-import { openLogger } from '../logging/logger.js';
-import { OllamaProvider } from '../providers/ollama-provider.js';
-import { SessionManager } from '../session/session-manager.js';
-import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
-import { listReflectionJobs, type ReflectionJob } from '../sqlite/reflection-queue.js';
+} from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
+import { openLogger } from '../../infrastructure/logging/logger.js';
+import { OllamaProvider } from '../../infrastructure/providers/ollama-provider.js';
+import { SessionManager } from '../../session/session-manager.js';
+import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { listReflectionJobs, type ReflectionJob } from '../../infrastructure/sqlite/reflection-queue.js';
 import { ReflectionDispatch, type ReflectionJobSignal } from './dispatch.js';
 import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
 

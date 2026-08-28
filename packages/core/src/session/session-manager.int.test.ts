@@ -2,16 +2,16 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { bootstrapBackbone } from '../graph/backbone.js';
-import { runGraphMigrations } from '../graph/migrations.js';
+import { bootstrapBackbone } from '../infrastructure/graph/backbone.js';
+import { runGraphMigrations } from '../infrastructure/graph/migrations.js';
 import {
   countEdges,
   countNodesWithId,
   countOutgoingEdges,
   edgeTargetId,
-} from '../graph/test-support/graph-queries.fixture.js';
-import { startNeo4jHarness, stopNeo4jHarness, type Neo4jHarness } from '../graph/test-support/neo4j-harness.fixture.js';
-import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
+} from '../infrastructure/graph/test-support/graph-queries.fixture.js';
+import { startNeo4jHarness, stopNeo4jHarness, type Neo4jHarness } from '../infrastructure/graph/test-support/neo4j-harness.fixture.js';
+import { openSqliteHandle, type SqliteHandle } from '../infrastructure/sqlite/database.js';
 import { SessionManager } from './session-manager.js';
 
 const EMBED_DIMENSION = 8;

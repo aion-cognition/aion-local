@@ -2,20 +2,20 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { DEFAULTS } from '../config/defaults.js';
-import type { Config } from '../config/schema.js';
-import { supersede, writeStampedNode } from '../graph/bitemporal.js';
-import { bootstrapBackbone } from '../graph/backbone.js';
-import { runGraphMigrations } from '../graph/migrations.js';
-import { asOf, withCurrency } from '../graph/read-modes.js';
-import { entitySimilaritySeeds, fulltextSeeds, vectorSeeds } from '../graph/seed-queries.js';
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import type { Config } from '../../infrastructure/config/schema.js';
+import { supersede, writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
+import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
+import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
+import { asOf, withCurrency } from '../../infrastructure/graph/read-modes.js';
+import { entitySimilaritySeeds, fulltextSeeds, vectorSeeds } from '../../infrastructure/graph/seed-queries.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
   type Neo4jHarness,
-} from '../graph/test-support/neo4j-harness.fixture.js';
-import { openLogger, type Logger } from '../logging/logger.js';
-import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
+} from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
+import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
+import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { selectSeeds, type Seed, type SeedCue, type SelectSeedsDeps } from './seeds.js';
 
 const EMBED_DIMENSION = 8;

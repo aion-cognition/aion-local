@@ -1,7 +1,7 @@
 import type { CueSource, CueWeight, RecallMethod } from '@aion/protocol';
 import type { Driver } from 'neo4j-driver';
-import type { Config } from '../config/schema.js';
-import { withCurrency, type ReadMode } from '../graph/read-modes.js';
+import type { Config } from '../../infrastructure/config/schema.js';
+import { withCurrency, type ReadMode } from '../../infrastructure/graph/read-modes.js';
 import {
   entityNameSeeds,
   entitySimilaritySeeds,
@@ -12,9 +12,9 @@ import {
   vectorSeeds,
   type ScoredSeedCandidate,
   type SeedCandidate,
-} from '../graph/seed-queries.js';
-import type { Logger } from '../logging/logger.js';
-import type { Vector } from '../providers/types.js';
+} from '../../infrastructure/graph/seed-queries.js';
+import type { Logger } from '../../infrastructure/logging/logger.js';
+import type { Vector } from '../../infrastructure/providers/types.js';
 
 /**
  * Whitepaper §5.2: four strategies run together, their candidates merge, and each surviving

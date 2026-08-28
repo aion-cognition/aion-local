@@ -1,10 +1,10 @@
 import type { Driver } from 'neo4j-driver';
-import { recordAccess } from '../graph/access-tracking.js';
-import { isTimeTravel } from '../graph/read-modes.js';
-import type { Logger } from '../logging/logger.js';
-import type { SqliteHandle } from '../sqlite/database.js';
-import { enqueueReinforcementSignal } from '../sqlite/reinforcement-queue.js';
-import type { ActivatedNode } from './activation.js';
+import { recordAccess } from '../../infrastructure/graph/access-tracking.js';
+import { isTimeTravel } from '../../infrastructure/graph/read-modes.js';
+import type { Logger } from '../../infrastructure/logging/logger.js';
+import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { enqueueReinforcementSignal } from '../../infrastructure/sqlite/reinforcement-queue.js';
+import type { ActivatedNode } from '../domain/activation.js';
 import type { RecallCompletion, RecallListener } from './recall.js';
 
 /**

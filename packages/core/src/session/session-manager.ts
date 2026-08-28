@@ -1,5 +1,5 @@
 import type { Driver } from 'neo4j-driver';
-import { ensureGraphSession } from '../graph/sessions.js';
+import { ensureGraphSession } from '../infrastructure/graph/sessions.js';
 
 /** The backbone ids every session links to. Resolve once via `bootstrapBackbone` at startup. */
 export type SessionManagerBackbone = {

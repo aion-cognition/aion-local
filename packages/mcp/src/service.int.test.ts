@@ -18,7 +18,7 @@ import {
   startNeo4jHarness,
   stopNeo4jHarness,
   type Neo4jHarness,
-} from '@aion/core/graph/test-support/neo4j-harness.fixture.js';
+} from '@aion/core/infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { MemoryPackSchema, ReflectionOutputSchema } from '@aion/protocol';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';

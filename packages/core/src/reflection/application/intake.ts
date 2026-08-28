@@ -1,23 +1,23 @@
 import { ReflectionInputSchema, type ReflectionOutput } from '@aion/protocol';
 import type { Driver } from 'neo4j-driver';
-import { writeStampedNodeInTransaction } from '../graph/bitemporal.js';
-import { inWriteTransaction, type GraphTransaction } from '../graph/connection.js';
-import { upsertEdgeInTransaction } from '../graph/edges.js';
+import { writeStampedNodeInTransaction } from '../../infrastructure/graph/bitemporal.js';
+import { inWriteTransaction, type GraphTransaction } from '../../infrastructure/graph/connection.js';
+import { upsertEdgeInTransaction } from '../../infrastructure/graph/edges.js';
 import {
   CONTAINMENT_TYPE,
   findEpisodeByContentHash,
   findEpisodeByContentHashInTransaction,
   MEMORY_PROPERTIES,
-} from '../graph/episodes.js';
-import { lockNodeInTransaction } from '../graph/locks.js';
-import { toGraphVector, type GraphProperties } from '../graph/values.js';
-import type { Logger } from '../logging/logger.js';
-import type { Provider, Vector } from '../providers/types.js';
-import { redactPayload } from '../redact/deep-walk.js';
-import type { SessionManager } from '../session/session-manager.js';
-import type { SqliteHandle } from '../sqlite/database.js';
-import { enqueueReflectionJob, findPendingReflectionJob } from '../sqlite/reflection-queue.js';
-import { prepareEpisode, type PreparedEpisode, type PreparedTurn } from './content.js';
+} from '../../infrastructure/graph/episodes.js';
+import { lockNodeInTransaction } from '../../infrastructure/graph/locks.js';
+import { toGraphVector, type GraphProperties } from '../../infrastructure/graph/values.js';
+import type { Logger } from '../../infrastructure/logging/logger.js';
+import type { Provider, Vector } from '../../infrastructure/providers/types.js';
+import { redactPayload } from '../../redaction/deep-walk.js';
+import type { SessionManager } from '../../session/session-manager.js';
+import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { enqueueReflectionJob, findPendingReflectionJob } from '../../infrastructure/sqlite/reflection-queue.js';
+import { prepareEpisode, type PreparedEpisode, type PreparedTurn } from '../domain/content.js';
 import type { ReflectionDispatch } from './dispatch.js';
 
 /** The one job intake enqueues. P3's pipeline stages fan out from it; intake never runs them. */

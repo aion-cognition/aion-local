@@ -1,6 +1,6 @@
 import type { Driver } from 'neo4j-driver';
-import { LOCK_PROPERTY } from '../../graph/locks.js';
-import type { Row } from '../../graph/values.js';
+import { LOCK_PROPERTY } from '../../infrastructure/graph/locks.js';
+import type { Row } from '../../infrastructure/graph/values.js';
 
 /**
  * An in-memory stand-in for the statements intake and the session manager issue, so unit

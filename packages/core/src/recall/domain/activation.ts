@@ -1,6 +1,6 @@
-import type { AdjacencyNeighbor } from '../graph/adjacency.js';
-import type { CurrencyAnnotation } from '../graph/read-modes.js';
-import { isRelationshipType, type RelationshipType } from '../graph/relationships.js';
+import type { AdjacencyNeighbor } from '../../infrastructure/graph/adjacency.js';
+import type { CurrencyAnnotation } from '../../infrastructure/graph/read-modes.js';
+import { isRelationshipType, type RelationshipType } from '../../infrastructure/graph/relationships.js';
 
 /**
  * Whitepaper §5.4, Algorithm 2, run in TypeScript over batched adjacency reads. The graph

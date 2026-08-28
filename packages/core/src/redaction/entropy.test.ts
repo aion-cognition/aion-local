@@ -44,7 +44,7 @@ describe('findHighEntropyTokens', () => {
 
   it('lets a realistic kebab-case file path survive', () => {
     const text =
-      'at /Users/rhuber/Documents/not-solace-code/aion_code/aion-local/packages/core/src/redact/redact.ts';
+      'at /Users/rhuber/Documents/not-solace-code/aion_code/aion-local/packages/core/src/redaction/redact.ts';
     expect(findHighEntropyTokens(text, threshold, [])).toEqual([]);
   });
 });

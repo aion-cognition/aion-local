@@ -130,7 +130,7 @@ describe('redact — false positives that must survive unredacted', () => {
     'git SHA': 'commit d2468bb14fd54d4d74a5f06c89961257ab5399d fixed the deadlock',
     UUID: 'session id 550e8400-e29b-41d4-a716-446655440000 was created',
     'normal prose': 'the quick brown fox jumps over the lazy dog near the river',
-    'file path': 'see packages/core/src/redact/redact.ts for the implementation',
+    'file path': 'see packages/core/src/redaction/redact.ts for the implementation',
     'short base64': 'the flag value was dGVzdA== after decoding',
     'a code reference in key position': 'api_key: process.env.API_KEY',
     'a zod schema declaration': 'password: z.string().min(8)',

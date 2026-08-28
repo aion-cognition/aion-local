@@ -1,8 +1,8 @@
-import type { Config } from '../config/schema.js';
-import type { CurrencyAnnotation } from '../graph/read-modes.js';
-import type { SeedCandidate } from '../graph/seed-queries.js';
-import type { ActivatedNode, ActivationSeed } from './activation.js';
-import type { FusionCandidate, RankedList } from './fusion.js';
+import type { Config } from '../../infrastructure/config/schema.js';
+import type { CurrencyAnnotation } from '../../infrastructure/graph/read-modes.js';
+import type { SeedCandidate } from '../../infrastructure/graph/seed-queries.js';
+import type { ActivatedNode, ActivationSeed } from '../domain/activation.js';
+import type { FusionCandidate, RankedList } from '../domain/fusion.js';
 import type { Seed } from './seeds.js';
 
 /**

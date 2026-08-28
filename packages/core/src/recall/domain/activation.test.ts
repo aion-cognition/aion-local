@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AdjacencyNeighbor } from '../graph/adjacency.js';
-import type { CurrencyAnnotation } from '../graph/read-modes.js';
+import type { AdjacencyNeighbor } from '../../infrastructure/graph/adjacency.js';
+import type { CurrencyAnnotation } from '../../infrastructure/graph/read-modes.js';
 import {
   edgeWeight,
   hubInhibition,
