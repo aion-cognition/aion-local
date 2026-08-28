@@ -1,44 +1,62 @@
 import { describe, expect, it } from 'vitest';
-import { OllamaProvider } from './ollama-provider.js';
-import { checkOllamaReachable } from './provisioning.js';
+import { DEFAULTS } from '../config/defaults.js';
+import { ModelPullError } from './errors.js';
+import { provisionOllama, type OllamaProvisionTarget, type ProvisionEvent } from './provisioning.js';
 
-const BASE_URL = process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434';
-const EMBED_MODEL = 'nomic-embed-text';
-const EMBED_DIMENSION = 768;
-const CHAT_MODEL = 'qwen3:1.7b';
+/** The models come from the config defaults, so a default change is exercised here too. */
+const TARGET: OllamaProvisionTarget = {
+  baseUrl: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
+  embedModel: DEFAULTS.models.embed,
+  embedDimension: DEFAULTS.models.embedDimension,
+  cueModel: DEFAULTS.models.cue,
+  reflectModel: DEFAULTS.models.reflect,
+};
 
-describe('provisioning against live host Ollama', () => {
-  it('confirms reachability, round-trips an embed call, and chat-verifies when the model is present', async () => {
-    await expect(checkOllamaReachable(BASE_URL)).resolves.toBeUndefined();
-
-    const provider = new OllamaProvider({ baseUrl: BASE_URL, embedModel: EMBED_MODEL });
-    const [vector] = await provider.embed(['aion-local P0-4 integration check']);
-    expect(vector).toHaveLength(EMBED_DIMENSION);
-
-    const tagsResponse = await fetch(`${BASE_URL}/api/tags`);
-    const tags = (await tagsResponse.json()) as { models?: { name: string }[] };
-    const chatModelPresent = tags.models?.some((m) => m.name === CHAT_MODEL) ?? false;
-
-    if (!chatModelPresent) {
-      // qwen3:1.7b may still be pulling in the background on this machine (see task handoff).
-      console.info(`[provisioning.int] skipping chat round-trip: ${CHAT_MODEL} not yet pulled`);
-      return;
+function collect(events: readonly ProvisionEvent[], type: ProvisionEvent['type']): string[] {
+  return events.flatMap((event) => {
+    if (event.type !== type) {
+      return [];
     }
-
-    const chatResponse = await fetch(`${BASE_URL}/api/chat`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model: CHAT_MODEL,
-        messages: [{ role: 'user', content: 'reply with one word' }],
-        stream: false,
-        options: { num_predict: 5 },
-      }),
-    });
-    expect(chatResponse.ok).toBe(true);
-
-    const chatBody = (await chatResponse.json()) as { done?: boolean; message?: unknown };
-    expect(chatBody.done).toBe(true);
-    expect(chatBody.message).toBeDefined();
+    if (event.type === 'verify_done') {
+      return [`${event.model}:${event.kind}`];
+    }
+    return event.type === 'reachable' ? ['reachable'] : [event.model];
   });
+}
+
+describe('provisionOllama against live host Ollama', () => {
+  it(
+    'streams a pull and a round-trip verification for every configured model',
+    async () => {
+      const events: ProvisionEvent[] = [];
+
+      await expect(
+        provisionOllama(TARGET, { onEvent: (event) => events.push(event) }),
+      ).resolves.toBeUndefined();
+
+      expect(events[0]).toEqual({ type: 'reachable' });
+      expect(collect(events, 'pull_done')).toEqual([
+        TARGET.embedModel,
+        TARGET.cueModel,
+        TARGET.reflectModel,
+      ]);
+      expect(collect(events, 'pull_progress').length).toBeGreaterThan(0);
+      expect(collect(events, 'verify_done')).toEqual([
+        `${TARGET.embedModel}:embed`,
+        `${TARGET.cueModel}:chat`,
+        `${TARGET.reflectModel}:chat`,
+      ]);
+    },
+    600_000,
+  );
+
+  it(
+    'names the model when a pull cannot be satisfied',
+    async () => {
+      await expect(
+        provisionOllama({ ...TARGET, embedModel: 'aion-no-such-model:v0' }),
+      ).rejects.toBeInstanceOf(ModelPullError);
+    },
+    120_000,
+  );
 });
