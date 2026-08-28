@@ -1,5 +1,12 @@
 import { DEFAULTS } from './defaults.js';
-import { envVarForPath, knownEnvVars, KNOB_REGISTRY, type Knob, type KnobKind } from './registry.js';
+import {
+  envVarForPath,
+  knownEnvVars,
+  KNOB_REGISTRY,
+  RESERVED_ENV_VARS,
+  type Knob,
+  type KnobKind,
+} from './registry.js';
 import { ConfigSchema, type Config } from './schema.js';
 
 const AION_PREFIX = 'AION_';
@@ -72,7 +79,12 @@ function collectUnknownVars(env: NodeJS.ProcessEnv): string[] {
   const known = knownEnvVars();
   const unknown: string[] = [];
   for (const key of Object.keys(env)) {
-    if (key.startsWith(AION_PREFIX) && env[key] !== undefined && !known.has(key)) {
+    if (
+      key.startsWith(AION_PREFIX) &&
+      env[key] !== undefined &&
+      !known.has(key) &&
+      !RESERVED_ENV_VARS.has(key)
+    ) {
       unknown.push(key);
     }
   }

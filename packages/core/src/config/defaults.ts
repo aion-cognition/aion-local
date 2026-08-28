@@ -1,4 +1,5 @@
 import { DEFAULT_LOG_FILE, DEFAULT_LOG_LEVEL } from '../logging/logger.js';
+import { DEFAULT_SQLITE_PATH } from '../sqlite/database.js';
 import type { Config } from './schema.js';
 
 /**
@@ -81,6 +82,9 @@ export const DEFAULTS: Config = {
   },
   maintenance: {
     tier3: false,
+  },
+  sqlite: {
+    path: DEFAULT_SQLITE_PATH,
   },
   operational: {
     dataDir: '/data',

@@ -131,4 +131,20 @@ describe('loadConfig unknown vars', () => {
   it('does not flag AION_-prefixed vars that are merely undefined', () => {
     expect(() => loadConfig({ AION_NEO4J_URI: undefined })).not.toThrow();
   });
+
+  it('accepts the wrapper transport vars bin/aion passes into the container', () => {
+    expect(() =>
+      loadConfig({ AION_REPO_PATH: '/Users/x/aion-local', AION_GIT_USER_NAME: 'Ryan Huber' }),
+    ).not.toThrow();
+  });
+});
+
+describe('loadConfig sqlite', () => {
+  it('defaults the database to the aion-data volume', () => {
+    expect(loadConfig({}).sqlite.path).toBe('/data/aion.sqlite');
+  });
+
+  it('takes AION_SQLITE_PATH as an override', () => {
+    expect(loadConfig({ AION_SQLITE_PATH: '/tmp/aion.sqlite' }).sqlite.path).toBe('/tmp/aion.sqlite');
+  });
 });

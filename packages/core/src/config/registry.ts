@@ -1,4 +1,5 @@
 import { LOG_FILE_ENV_VAR, LOG_LEVEL_ENV_VAR } from '../logging/logger.js';
+import { SQLITE_PATH_ENV_VAR } from '../sqlite/database.js';
 
 export type KnobKind = 'string' | 'number' | 'boolean' | 'weights' | 'stringList';
 
@@ -114,6 +115,8 @@ export const KNOB_REGISTRY: readonly Knob[] = [
 
   { envVar: 'AION_MAINTENANCE_TIER3', path: ['maintenance', 'tier3'], kind: 'boolean' },
 
+  { envVar: SQLITE_PATH_ENV_VAR, path: ['sqlite', 'path'], kind: 'string' },
+
   { envVar: 'AION_DATA_DIR', path: ['operational', 'dataDir'], kind: 'string' },
   { envVar: 'AION_MCP_PORT', path: ['operational', 'mcpPort'], kind: 'number' },
   { envVar: 'AION_WORKER_COUNT', path: ['operational', 'workerCount'], kind: 'number' },
@@ -121,6 +124,14 @@ export const KNOB_REGISTRY: readonly Knob[] = [
   { envVar: LOG_FILE_ENV_VAR, path: ['logging', 'filePath'], kind: 'string' },
   { envVar: LOG_LEVEL_ENV_VAR, path: ['logging', 'level'], kind: 'string' },
 ];
+
+/**
+ * AION_*-prefixed variables that `bin/aion` passes through to the container for compose
+ * and the CLI, not for config: the host repo path compose interpolates its bind mount
+ * from, and the `git config user.name` the backbone bootstrap confirms. They are listed
+ * here so the unknown-variable check keeps catching typos in real knobs.
+ */
+export const RESERVED_ENV_VARS: ReadonlySet<string> = new Set(['AION_REPO_PATH', 'AION_GIT_USER_NAME']);
 
 const registryByEnvVar = new Map(KNOB_REGISTRY.map((knob) => [knob.envVar, knob]));
 

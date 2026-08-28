@@ -56,6 +56,22 @@ export async function checkOllamaReachable(
   }
 }
 
+/** Installed model names, newest-first as Ollama returns them. `aion status` renders this. */
+export async function listOllamaModels(
+  baseUrl: string,
+  options: Pick<ProvisionOptions, 'fetchImpl'> = {},
+): Promise<readonly string[]> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const response = await fetchImpl(`${normalizeBaseUrl(baseUrl)}/api/tags`);
+  if (!response.ok) {
+    throw new OllamaUnreachableError(baseUrl, new Error(`${response.status} ${await response.text()}`));
+  }
+  const body = (await response.json()) as { models?: { name?: unknown }[] };
+  return (body.models ?? [])
+    .map((model) => model.name)
+    .filter((name): name is string => typeof name === 'string');
+}
+
 /**
  * Ollama's pull/chat streams are newline-delimited JSON over a single HTTP
  * response body; this has no framing beyond "split on \n", so a stalled or
