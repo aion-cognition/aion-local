@@ -54,21 +54,28 @@ export class ReflectionQueueClaimant {
    * same-millisecond bursts. The UPDATE's subquery and assignment run as one SQLite
    * statement, so concurrent claimants (any process, any thread) never select the
    * same row — the file-level write lock plus busy_timeout serializes them.
+   *
+   * `maxAttempts` bounds retrying: a row that has already failed that many times is
+   * left in the queue with its last error and never claimed again. Skipping it here,
+   * rather than in the caller, is what keeps the selection atomic — a claimant that
+   * claimed the row first and then declined it would have to release it, and release
+   * counts another attempt.
    */
-  claimNext(db: SqliteHandle): ReflectionJob | undefined {
+  claimNext(db: SqliteHandle, maxAttempts?: number): ReflectionJob | undefined {
+    const attemptBound = maxAttempts ?? Number.MAX_SAFE_INTEGER;
     const row = db
       .prepare(
         `UPDATE reflection_queue
          SET claimed_at = ?, claimed_by = ?
          WHERE id = (
            SELECT id FROM reflection_queue
-           WHERE claimed_at IS NULL
+           WHERE claimed_at IS NULL AND attempts < ?
            ORDER BY rowid ASC
            LIMIT 1
          )
          RETURNING *`,
       )
-      .get(new Date().toISOString(), this.id) as ReflectionJobRow | undefined;
+      .get(new Date().toISOString(), this.id, attemptBound) as ReflectionJobRow | undefined;
     return row === undefined ? undefined : toReflectionJob(row);
   }
 

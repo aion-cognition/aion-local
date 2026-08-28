@@ -12,12 +12,15 @@ import {
   readMemberName,
   RecallSideEffects,
   ReflectionDispatch,
+  ReflectionOrchestrator,
+  ReflectionWorker,
   SessionManager,
   SqliteStore,
   type Config,
   type Logger,
   type RecallDeps,
   type ReflectionIntakeDeps,
+  type ReflectionStage,
 } from '@aion/core';
 import { bindHost, runningInContainer } from './http.js';
 import { AionMcpService } from './service.js';
@@ -31,6 +34,13 @@ import type { ToolBackend } from './tools.js';
  */
 
 export const GIT_USER_NAME_ENV_VAR = 'AION_GIT_USER_NAME';
+
+/**
+ * The pipeline, in the one place its order lives. An empty list means no stage exists yet,
+ * and the worker stays down: an orchestrator with nothing to run enriches nothing, which
+ * reads to the worker as a failed job and spends the episode's retries on it.
+ */
+const REFLECTION_STAGES: readonly ReflectionStage[] = [];
 
 export class GraphUnreachableError extends Error {
   constructor(uri: string, detail: string) {
@@ -123,6 +133,27 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       entropyThreshold: config.redaction.entropyThreshold,
     };
 
+    const worker = new ReflectionWorker(
+      {
+        driver,
+        db: store.db,
+        provider,
+        dispatch,
+        runner: new ReflectionOrchestrator({ driver, db: store.db, provider, logger }, REFLECTION_STAGES),
+        logger,
+      },
+      { workerCount: config.operational.workerCount },
+    );
+    if (REFLECTION_STAGES.length > 0) {
+      // The drain runs alongside the first tool calls rather than in front of them: a long
+      // backlog would otherwise hold the service off the port it is supposed to be answering.
+      void worker.start().catch((err: unknown) => {
+        logger.error({ err }, 'reflection worker drain failed');
+      });
+    } else {
+      logger.warn('reflection worker idle: no pipeline stages are registered');
+    }
+
     const backend: ToolBackend = {
       recall: (args, identity) => handleRecall(recall, args, { identity }),
       reflection: (args, identity) => handleReflection(intake, args, { identity }),
@@ -152,6 +183,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       logger,
       close: async () => {
         await service.close();
+        await worker.stop();
         await connection.close();
         store.close();
       },

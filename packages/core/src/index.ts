@@ -234,6 +234,47 @@ export type {
   ReflectionJobSignal,
 } from './reflection/application/dispatch.js';
 
+export { mergeStageCounts, shouldMarkApplied, summarizeRun } from './reflection/domain/stage.js';
+export type {
+  ReflectionStage,
+  ReflectionSummary,
+  StageContext,
+  StageCounts,
+  StageOutcome,
+  StageRecord,
+  StageStatus,
+} from './reflection/domain/stage.js';
+
+export { ReflectionOrchestrator, orchestratorLedgerKey } from './reflection/application/orchestrator.js';
+export type {
+  ReflectionOrchestratorDeps,
+  ReflectionRun,
+  ReflectionRunOptions,
+  ReflectionRunStatus,
+} from './reflection/application/orchestrator.js';
+
+export {
+  DEFAULT_BREAKER_COOLDOWN_MS,
+  DEFAULT_BREAKER_THRESHOLD,
+  DEFAULT_DRAIN_STALE_TIMEOUT_MS,
+  DEFAULT_MAX_ATTEMPTS,
+  DEFAULT_RETRY_BASE_MS,
+  DEFAULT_RETRY_CAP_MS,
+  DEFAULT_VECTOR_BATCH_SIZE,
+  DEFAULT_WORKER_COUNT,
+  ReflectionWorker,
+  backoffDelayMs,
+} from './reflection/application/worker.js';
+export type {
+  ReflectionDrain,
+  ReflectionRunner,
+  ReflectionWorkerDeps,
+  ReflectionWorkerOptions,
+} from './reflection/application/worker.js';
+
+export { attachContentVectors, findPendingVectorNodes } from './reflection/application/vectors.js';
+export type { PendingVectorNode } from './reflection/application/vectors.js';
+
 export { hashContent, prepareEpisode, renderEpisodeText, stableStringify } from './reflection/domain/content.js';
 export type { PreparedEpisode, PreparedTurn, ReflectionContent } from './reflection/domain/content.js';
 
