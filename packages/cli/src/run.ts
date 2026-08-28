@@ -1,4 +1,7 @@
 import { logTargetFromEnv, openLogger } from '@aion/core';
+import { runDoctor } from './doctor.js';
+import { runInit } from './init.js';
+import { runStatus } from './status.js';
 
 export const CLI_NAME = 'aion';
 
@@ -8,6 +11,18 @@ type Command = {
 };
 
 const commands: Record<string, Command> = {
+  init: {
+    summary: 'provision the substrate: neo4j, models, schema, backbone',
+    run: (argv) => runInit(argv),
+  },
+  status: {
+    summary: 'services, models, and graph counts',
+    run: (argv) => runStatus(argv),
+  },
+  doctor: {
+    summary: 'check every substrate invariant and name what is broken',
+    run: (argv) => runDoctor(argv),
+  },
   help: {
     summary: 'show this message',
     run: async () => {

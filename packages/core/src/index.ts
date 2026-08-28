@@ -45,7 +45,16 @@ export type { ReinforcementSignal } from './sqlite/reinforcement-queue.js';
 export { getLastPack, saveLastPack } from './sqlite/last-pack.js';
 export type { LastPack } from './sqlite/last-pack.js';
 
-export { ConfigSchema, DEFAULTS, KNOB_REGISTRY, knownEnvVars, envVarForPath, loadConfig, ConfigError } from './config/index.js';
+export {
+  ConfigSchema,
+  DEFAULTS,
+  KNOB_REGISTRY,
+  RESERVED_ENV_VARS,
+  knownEnvVars,
+  envVarForPath,
+  loadConfig,
+  ConfigError,
+} from './config/index.js';
 export type { Config, Knob, KnobKind, ConfigPath } from './config/index.js';
 
 export {
@@ -73,7 +82,20 @@ export type { GraphMigration, MigrationContext } from './graph/migrations.js';
 export { GraphConnection, GraphTransaction, inWriteTransaction, runRead, runWrite, runWriteWithCounters } from './graph/connection.js';
 export type { GraphHealth, GraphStatement, WriteOutcome } from './graph/connection.js';
 
-export { GraphNodeNotFoundError, GraphWriteError } from './graph/errors.js';
+export {
+  GraphNodeNotFoundError,
+  GraphWriteError,
+  VectorIndexDimensionMismatchError,
+  VectorIndexMissingError,
+} from './graph/errors.js';
+
+export {
+  VECTOR_INDEX_NAMES,
+  assertVectorIndexDimensions,
+  countGraphElements,
+  readVectorIndexes,
+} from './graph/introspection.js';
+export type { GraphCounts, VectorIndexInfo } from './graph/introspection.js';
 
 export { NODE_LABELS, isContentBearing, isNodeLabel, resolveLabels } from './graph/labels.js';
 export type { NodeLabel } from './graph/labels.js';
@@ -156,5 +178,5 @@ export { CircuitBreaker, CircuitOpenError } from './providers/circuit-breaker.js
 export type { CircuitBreakerOptions } from './providers/circuit-breaker.js';
 export { OllamaProvider } from './providers/ollama-provider.js';
 export type { OllamaProviderOptions } from './providers/ollama-provider.js';
-export { checkOllamaReachable, provisionOllama } from './providers/provisioning.js';
+export { checkOllamaReachable, listOllamaModels, provisionOllama } from './providers/provisioning.js';
 export type { OllamaProvisionTarget, ProvisionEvent, ProvisionOptions } from './providers/provisioning.js';

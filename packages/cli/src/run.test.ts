@@ -35,6 +35,17 @@ describe('run', () => {
     expect(stdout.mock.calls[0]?.[0]).toContain('commands:');
   });
 
+  it('lists init, status, and doctor in the usage text', async () => {
+    const stdout = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+
+    await run(['help']);
+
+    const text = String(stdout.mock.calls[0]?.[0]);
+    for (const command of ['init', 'status', 'doctor']) {
+      expect(text).toContain(command);
+    }
+  });
+
   it('reports an unknown command on stderr and exits 1', async () => {
     const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
 

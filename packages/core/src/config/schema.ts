@@ -87,6 +87,9 @@ export const ConfigSchema = z.object({
   maintenance: z.object({
     tier3: z.boolean(),
   }),
+  sqlite: z.object({
+    path: z.string().min(1),
+  }),
   operational: z.object({
     dataDir: z.string().min(1),
     mcpPort: z.number().int().min(1).max(65535),
