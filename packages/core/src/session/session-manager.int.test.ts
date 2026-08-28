@@ -3,8 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { bootstrapBackbone } from '../graph/backbone.js';
-import { runRead } from '../graph/connection.js';
 import { runGraphMigrations } from '../graph/migrations.js';
+import {
+  countEdges,
+  countNodesWithId,
+  countOutgoingEdges,
+  edgeTargetId,
+} from '../graph/test-support/graph-queries.fixture.js';
 import { startNeo4jHarness, stopNeo4jHarness, type Neo4jHarness } from '../graph/test-support/neo4j-harness.fixture.js';
 import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
 import { SessionManager } from './session-manager.js';
@@ -33,36 +38,6 @@ afterAll(async () => {
   rmSync(dataDir, { recursive: true, force: true });
 });
 
-async function countFollowsEdges(fromId: string, toId: string): Promise<number> {
-  const rows = await runRead(
-    harness.driver,
-    'MATCH (a:Session { id: $fromId })-[r:FOLLOWS]->(b:Session { id: $toId }) RETURN count(r) AS c',
-    { fromId, toId },
-    (row) => row.c as number,
-  );
-  return rows[0] ?? 0;
-}
-
-async function outgoingFollowsCount(sessionId: string): Promise<number> {
-  const rows = await runRead(
-    harness.driver,
-    'MATCH (:Session { id: $sessionId })-[r:FOLLOWS]->(:Session) RETURN count(r) AS c',
-    { sessionId },
-    (row) => row.c as number,
-  );
-  return rows[0] ?? 0;
-}
-
-async function backboneEdgeTarget(sessionId: string, type: 'INITIATED_BY' | 'WITHIN_WORKSPACE'): Promise<string | undefined> {
-  const rows = await runRead(
-    harness.driver,
-    `MATCH (:Session { id: $sessionId })-[:${type}]->(target) RETURN target.id AS id`,
-    { sessionId },
-    (row) => row.id as string,
-  );
-  return rows[0];
-}
-
 describe('SessionManager.ensureSession', () => {
   it('drives two interleaved session identities through one process without cross-linking', async () => {
     const manager = new SessionManager(harness.driver, { memberId, workspaceId });
@@ -85,17 +60,17 @@ describe('SessionManager.ensureSession', () => {
     expect(a2).toEqual({ sessionId: 'session-A', created: false });
 
     // Separate nodes, each linked to the one backbone Member and global Workspace.
-    expect(await backboneEdgeTarget('session-A', 'INITIATED_BY')).toBe(memberId);
-    expect(await backboneEdgeTarget('session-A', 'WITHIN_WORKSPACE')).toBe(workspaceId);
-    expect(await backboneEdgeTarget('session-B', 'INITIATED_BY')).toBe(memberId);
-    expect(await backboneEdgeTarget('session-B', 'WITHIN_WORKSPACE')).toBe(workspaceId);
+    expect(await edgeTargetId(harness.driver, 'INITIATED_BY', 'session-A')).toBe(memberId);
+    expect(await edgeTargetId(harness.driver, 'WITHIN_WORKSPACE', 'session-A')).toBe(workspaceId);
+    expect(await edgeTargetId(harness.driver, 'INITIATED_BY', 'session-B')).toBe(memberId);
+    expect(await edgeTargetId(harness.driver, 'WITHIN_WORKSPACE', 'session-B')).toBe(workspaceId);
 
     // session-B FOLLOWS session-A (created second, chains to the prior session); session-A
     // was first and has no FOLLOWS edge at all; interleaving the repeat calls did not
     // invert the chain or link session-A back to session-B.
-    expect(await countFollowsEdges('session-B', 'session-A')).toBe(1);
-    expect(await outgoingFollowsCount('session-A')).toBe(0);
-    expect(await outgoingFollowsCount('session-B')).toBe(1);
+    expect(await countEdges(harness.driver, 'FOLLOWS', 'session-B', 'session-A')).toBe(1);
+    expect(await countOutgoingEdges(harness.driver, 'FOLLOWS', 'session-A')).toBe(0);
+    expect(await countOutgoingEdges(harness.driver, 'FOLLOWS', 'session-B')).toBe(1);
   });
 
   it('resolves a known identity from the manager cache without writing again', async () => {
@@ -130,13 +105,7 @@ describe('SessionManager.ensureSession', () => {
     expect(second).toEqual(first);
     expect(third).toEqual(first);
 
-    const rows = await runRead(
-      harness.driver,
-      'MATCH (n:Session { id: $id }) RETURN count(n) AS c',
-      { id: 'session-concurrent' },
-      (row) => row.c as number,
-    );
-    expect(rows[0]).toBe(1);
+    expect(await countNodesWithId(harness.driver, 'Session', 'session-concurrent')).toBe(1);
   });
 
   it('rejects an empty identity', async () => {

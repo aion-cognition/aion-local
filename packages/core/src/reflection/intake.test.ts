@@ -2,7 +2,6 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { LOCK_PROPERTY } from '../graph/locks.js';
 import { openLogger } from '../logging/logger.js';
 import type { Vector } from '../providers/types.js';
 import { SessionManager } from '../session/session-manager.js';
@@ -208,20 +207,13 @@ describe('reflection intake dedupe', () => {
     expect(embed).toHaveBeenCalledTimes(1);
   });
 
-  it('takes the session write lock before the episode lands', async () => {
+  // The member lock serializes session creation, the session lock serializes intake for
+  // that session; the ordering that makes each work is proven against a real server in the
+  // integration suites.
+  it('takes the session write lock while storing the episode', async () => {
     await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
 
-    const lockIndex = graph.statements.findIndex(
-      (statement) =>
-        statement.cypher.includes(`SET n.${LOCK_PROPERTY}`) && statement.parameters.id === 'session-a',
-    );
-    const episodeIndex = graph.statements.findIndex((statement) =>
-      statement.cypher.includes('MERGE (n:Episode'),
-    );
-
-    expect(graph.locked).toContain('session-a');
-    expect(lockIndex).toBeGreaterThanOrEqual(0);
-    expect(episodeIndex).toBeGreaterThan(lockIndex);
+    expect(graph.locked).toEqual([MEMBER_ID, 'session-a']);
   });
 
   it('queues the episode again when its job row is gone but the episode is not', async () => {
