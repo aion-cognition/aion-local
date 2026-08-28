@@ -275,6 +275,102 @@ export type {
 export { attachContentVectors, findPendingVectorNodes } from './reflection/application/vectors.js';
 export type { PendingVectorNode } from './reflection/application/vectors.js';
 
+export {
+  ENTITY_EXTRACTION_METHOD,
+  EntityExtractionStage,
+} from './reflection/application/stages/entities.js';
+export type { EntityStageOptions } from './reflection/application/stages/entities.js';
+
+export { ENTITY_DEDUP_METHOD, EntityDedupStage } from './reflection/application/stages/entity-dedup.js';
+export type { EntityDedupStageOptions } from './reflection/application/stages/entity-dedup.js';
+
+export { AssociationInferenceStage } from './reflection/application/stages/associations.js';
+export type { AssociationStageOptions } from './reflection/application/stages/associations.js';
+
+export { CognitiveExtractionStage } from './reflection/application/stages/cognitive.js';
+export type { CognitiveExtractionStageOptions } from './reflection/application/stages/cognitive.js';
+
+export { SemanticRelationshipStage } from './reflection/application/stages/semantic-relationships.js';
+export type { SemanticRelationshipStageOptions } from './reflection/application/stages/semantic-relationships.js';
+
+export { SupersessionStage } from './reflection/application/stages/supersession.js';
+export type { SupersessionStageOptions } from './reflection/application/stages/supersession.js';
+
+export {
+  REFLECTION_CO_EXTRACTION_TRIGGER,
+  ReinforcementEnqueueStage,
+} from './reflection/application/stages/reinforcement.js';
+
+export { ContextVectorStage } from './reflection/application/stages/context-vectors.js';
+
+export {
+  NARRATIVE_EXTRACTION_METHOD,
+  SessionNarrativeCloser,
+  SessionNarrativeStage,
+  closeSessionNarrative,
+  sweepIdleSessions,
+} from './reflection/application/narratives.js';
+export type {
+  IdleSweepOptions,
+  NarrativeDeps,
+  NarrativeOptions,
+  NarrativeResult,
+  NarrativeStatus,
+  SessionNarrativeOptions,
+} from './reflection/application/narratives.js';
+
+export { loadEpisodeContext } from './infrastructure/graph/episode-context.js';
+export type { EpisodeContext, EpisodeTurnContext } from './infrastructure/graph/episode-context.js';
+
+export {
+  DERIVES_FROM_TYPE,
+  NARRATIVE_PROPERTIES,
+  SUMMARIZED_BY_TYPE,
+  findIdleSessions,
+  findSessionNarratives,
+  loadSessionEpisodes,
+} from './infrastructure/graph/narrative-queries.js';
+export type { IdleSession, SessionEpisode, SessionNarrative } from './infrastructure/graph/narrative-queries.js';
+
+export {
+  COGNITIVE_NODE_LABELS,
+  deriveCognitiveNodeId,
+  isCognitiveNodeLabel,
+  normalizeCognitiveText,
+} from './infrastructure/graph/cognitive-queries.js';
+export type { CognitiveNodeLabel } from './infrastructure/graph/cognitive-queries.js';
+
+export {
+  ENTITY_MENTION_TYPE,
+  ENTITY_PARTICIPATION_TYPE,
+  findEpisodeEntities,
+} from './infrastructure/graph/entity-queries.js';
+export type { EpisodeEntity } from './infrastructure/graph/entity-queries.js';
+
+export { CO_OCCURS_TYPE, SIMILAR_TYPE } from './infrastructure/graph/association-queries.js';
+
+export {
+  SEMANTIC_RELATIONSHIP_METHOD,
+  SEMANTIC_RELATIONSHIP_TYPES,
+  findEpisodeCognitiveNodes,
+  isSemanticRelationshipType,
+} from './infrastructure/graph/semantic-relationship-queries.js';
+export type {
+  EpisodeCognitiveNode,
+  SemanticRelationshipType,
+} from './infrastructure/graph/semantic-relationship-queries.js';
+
+export { CONTEXT_VECTOR_PROPERTY } from './infrastructure/graph/context-vector-queries.js';
+
+export {
+  findSupersessionProposalsForNode,
+  getSupersessionProposal,
+  listSupersessionProposals,
+  recordSupersessionProposal,
+  resolveSupersessionProposal,
+} from './infrastructure/sqlite/supersession-proposals.js';
+export type { SupersessionProposal } from './infrastructure/sqlite/supersession-proposals.js';
+
 export { hashContent, prepareEpisode, renderEpisodeText, stableStringify } from './reflection/domain/content.js';
 export type { PreparedEpisode, PreparedTurn, ReflectionContent } from './reflection/domain/content.js';
 

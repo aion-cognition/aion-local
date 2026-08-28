@@ -19,6 +19,11 @@ export type Knob = {
  * AION_NEO4J_PASSWORD, AION_OLLAMA_URL, AION_OLLAMA_MODE, AION_ANTHROPIC_API_KEY,
  * AION_MAINTENANCE_TIER3, AION_MCP_PORT) keep those exact names; the rest follow
  * AION_<GROUP>_<LEAF> for consistency.
+ *
+ * P3's two plan-pinned names (AION_SUPERSEDE_AUTO_CONFIDENCE, AION_ASSOC_SEMANTIC_THRESHOLD)
+ * are the same case and keep their pinned spelling inside the `reflection` group. The
+ * worker's knobs live under `operational` and read AION_WORKER_*, which is where
+ * AION_WORKER_COUNT already was.
  */
 export const KNOB_REGISTRY: readonly Knob[] = [
   { envVar: 'AION_NEO4J_URI', path: ['neo4j', 'uri'], kind: 'string' },
@@ -116,6 +121,103 @@ export const KNOB_REGISTRY: readonly Knob[] = [
     kind: 'number',
   },
 
+  {
+    envVar: 'AION_REFLECTION_ENTITY_TIMEOUT_MS',
+    path: ['reflection', 'entityTimeoutMs'],
+    kind: 'number',
+  },
+  { envVar: 'AION_REFLECTION_MAX_ENTITIES', path: ['reflection', 'maxEntities'], kind: 'number' },
+  {
+    envVar: 'AION_REFLECTION_ENTITY_DEDUP_THRESHOLD',
+    path: ['reflection', 'entityDedupThreshold'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_ASSOC_SEMANTIC_THRESHOLD',
+    path: ['reflection', 'associationSemanticThreshold'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_REFLECTION_ASSOCIATION_SIMILAR_LIMIT',
+    path: ['reflection', 'associationSimilarLimit'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_REFLECTION_COGNITIVE_TIMEOUT_MS',
+    path: ['reflection', 'cognitiveTimeoutMs'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_REFLECTION_MAX_COGNITIVE_NODES',
+    path: ['reflection', 'maxCognitiveNodes'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_REFLECTION_SEMANTIC_TIMEOUT_MS',
+    path: ['reflection', 'semanticTimeoutMs'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_REFLECTION_MAX_RELATIONSHIPS',
+    path: ['reflection', 'maxRelationships'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_SUPERSEDE_AUTO_CONFIDENCE',
+    path: ['reflection', 'supersedeAutoConfidence'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_REFLECTION_SUPERSEDE_NEIGHBOR_THRESHOLD',
+    path: ['reflection', 'supersedeNeighborThreshold'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_REFLECTION_SUPERSEDE_TIMEOUT_MS',
+    path: ['reflection', 'supersedeTimeoutMs'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_REFLECTION_MAX_SUPERSESSION_SUBJECTS',
+    path: ['reflection', 'maxSupersessionSubjects'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_REFLECTION_MAX_CONTRADICTION_NEIGHBORS',
+    path: ['reflection', 'maxContradictionNeighbors'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_REFLECTION_MAX_CONTRADICTION_JUDGMENTS',
+    path: ['reflection', 'maxContradictionJudgments'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_REFLECTION_NARRATIVE_IDLE_MINUTES',
+    path: ['reflection', 'narrativeIdleMinutes'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_REFLECTION_NARRATIVE_TIMEOUT_MS',
+    path: ['reflection', 'narrativeTimeoutMs'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_REFLECTION_MAX_NARRATIVE_EPISODES',
+    path: ['reflection', 'maxNarrativeEpisodes'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_REFLECTION_MAX_NARRATIVE_EPISODE_CHARS',
+    path: ['reflection', 'maxNarrativeEpisodeChars'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_REFLECTION_NARRATIVE_SWEEP_LIMIT',
+    path: ['reflection', 'narrativeSweepLimit'],
+    kind: 'number',
+  },
+
   { envVar: 'AION_REDACTION_ENTROPY_THRESHOLD', path: ['redaction', 'entropyThreshold'], kind: 'number' },
 
   { envVar: 'AION_MAINTENANCE_TIER3', path: ['maintenance', 'tier3'], kind: 'boolean' },
@@ -125,6 +227,29 @@ export const KNOB_REGISTRY: readonly Knob[] = [
   { envVar: 'AION_DATA_DIR', path: ['operational', 'dataDir'], kind: 'string' },
   { envVar: 'AION_MCP_PORT', path: ['operational', 'mcpPort'], kind: 'number' },
   { envVar: 'AION_WORKER_COUNT', path: ['operational', 'workerCount'], kind: 'number' },
+  {
+    envVar: 'AION_WORKER_STALE_CLAIM_TIMEOUT_MS',
+    path: ['operational', 'workerStaleClaimTimeoutMs'],
+    kind: 'number',
+  },
+  { envVar: 'AION_WORKER_RETRY_BASE_MS', path: ['operational', 'workerRetryBaseMs'], kind: 'number' },
+  { envVar: 'AION_WORKER_RETRY_CAP_MS', path: ['operational', 'workerRetryCapMs'], kind: 'number' },
+  { envVar: 'AION_WORKER_MAX_ATTEMPTS', path: ['operational', 'workerMaxAttempts'], kind: 'number' },
+  {
+    envVar: 'AION_WORKER_BREAKER_THRESHOLD',
+    path: ['operational', 'workerBreakerThreshold'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_WORKER_BREAKER_COOLDOWN_MS',
+    path: ['operational', 'workerBreakerCooldownMs'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_WORKER_VECTOR_BATCH_SIZE',
+    path: ['operational', 'workerVectorBatchSize'],
+    kind: 'number',
+  },
 
   { envVar: LOG_FILE_ENV_VAR, path: ['logging', 'filePath'], kind: 'string' },
   { envVar: LOG_LEVEL_ENV_VAR, path: ['logging', 'level'], kind: 'string' },

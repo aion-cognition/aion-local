@@ -1,7 +1,12 @@
 import { userInfo } from 'node:os';
 import {
+  AssociationInferenceStage,
   bootstrapBackbone,
+  CognitiveExtractionStage,
+  ContextVectorStage,
   CueCache,
+  EntityDedupStage,
+  EntityExtractionStage,
   GraphConnection,
   handleRecall,
   handleReflection,
@@ -14,13 +19,19 @@ import {
   ReflectionDispatch,
   ReflectionOrchestrator,
   ReflectionWorker,
+  ReinforcementEnqueueStage,
+  SemanticRelationshipStage,
   SessionManager,
+  SessionNarrativeCloser,
   SqliteStore,
+  SupersessionStage,
   type Config,
   type Logger,
   type RecallDeps,
   type ReflectionIntakeDeps,
   type ReflectionStage,
+  type ReflectionWorkerOptions,
+  type SessionNarrativeOptions,
 } from '@aion/core';
 import { bindHost, runningInContainer } from './http.js';
 import { AionMcpService } from './service.js';
@@ -35,12 +46,83 @@ import type { ToolBackend } from './tools.js';
 
 export const GIT_USER_NAME_ENV_VAR = 'AION_GIT_USER_NAME';
 
+const MINUTE_MS = 60 * 1000;
+
 /**
- * The pipeline, in the one place its order lives. An empty list means no stage exists yet,
- * and the worker stays down: an orchestrator with nothing to run enriches nothing, which
- * reads to the worker as a failed job and spends the episode's retries on it.
+ * The pipeline, in the one place its order lives, and the order is whitepaper Algorithm 4's.
+ * Identity is resolved before anything reads it — extraction, then deduplication — because a
+ * later stage that pairs, links, or judges duplicate entities writes the duplication into the
+ * graph as structure (§6.5). Supersession follows cognitive extraction, since the facts it
+ * judges are the Decision and Insight nodes that stage writes. Context vectors run last:
+ * they aggregate over whatever the rest of the run just changed.
+ *
+ * Algorithm 4's step 9, narrative evaluation, is deliberately not here. A session is still
+ * open when its episodes reflect, so the narrative belongs to the transport close and the
+ * idle sweep instead; `SessionNarrativeCloser` below is that wiring.
+ *
+ * An empty list would leave the worker down: an orchestrator with nothing to run enriches
+ * nothing, which reads to the worker as a failed job and spends the episode's retries on it.
  */
-const REFLECTION_STAGES: readonly ReflectionStage[] = [];
+export function reflectionStages(config: Config): readonly ReflectionStage[] {
+  const model = config.models.reflect;
+  const reflection = config.reflection;
+  return [
+    new EntityExtractionStage({
+      model,
+      timeoutMs: reflection.entityTimeoutMs,
+      maxEntities: reflection.maxEntities,
+    }),
+    new EntityDedupStage({ similarityThreshold: reflection.entityDedupThreshold }),
+    new AssociationInferenceStage({
+      semanticThreshold: reflection.associationSemanticThreshold,
+      similarLimit: reflection.associationSimilarLimit,
+    }),
+    new CognitiveExtractionStage({
+      model,
+      timeoutMs: reflection.cognitiveTimeoutMs,
+      maxNodes: reflection.maxCognitiveNodes,
+    }),
+    new SemanticRelationshipStage({
+      model,
+      timeoutMs: reflection.semanticTimeoutMs,
+      maxRelationships: reflection.maxRelationships,
+    }),
+    new SupersessionStage({
+      model,
+      timeoutMs: reflection.supersedeTimeoutMs,
+      autoConfidence: reflection.supersedeAutoConfidence,
+      neighborThreshold: reflection.supersedeNeighborThreshold,
+      maxSubjects: reflection.maxSupersessionSubjects,
+      maxNeighbors: reflection.maxContradictionNeighbors,
+      maxJudgments: reflection.maxContradictionJudgments,
+    }),
+    new ReinforcementEnqueueStage(),
+    new ContextVectorStage(),
+  ];
+}
+
+export function narrativeOptions(config: Config): SessionNarrativeOptions {
+  return {
+    model: config.models.reflect,
+    idleMs: config.reflection.narrativeIdleMinutes * MINUTE_MS,
+    timeoutMs: config.reflection.narrativeTimeoutMs,
+    maxSourceEpisodes: config.reflection.maxNarrativeEpisodes,
+    maxEpisodeChars: config.reflection.maxNarrativeEpisodeChars,
+  };
+}
+
+export function workerOptions(config: Config): ReflectionWorkerOptions {
+  return {
+    workerCount: config.operational.workerCount,
+    staleTimeoutMs: config.operational.workerStaleClaimTimeoutMs,
+    retryBaseMs: config.operational.workerRetryBaseMs,
+    retryCapMs: config.operational.workerRetryCapMs,
+    maxAttempts: config.operational.workerMaxAttempts,
+    breakerThreshold: config.operational.workerBreakerThreshold,
+    breakerCooldownMs: config.operational.workerBreakerCooldownMs,
+    vectorBatchSize: config.operational.workerVectorBatchSize,
+  };
+}
 
 export class GraphUnreachableError extends Error {
   constructor(uri: string, detail: string) {
@@ -133,18 +215,19 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       entropyThreshold: config.redaction.entropyThreshold,
     };
 
+    const stages = reflectionStages(config);
     const worker = new ReflectionWorker(
       {
         driver,
         db: store.db,
         provider,
         dispatch,
-        runner: new ReflectionOrchestrator({ driver, db: store.db, provider, logger }, REFLECTION_STAGES),
+        runner: new ReflectionOrchestrator({ driver, db: store.db, provider, logger }, stages),
         logger,
       },
-      { workerCount: config.operational.workerCount },
+      workerOptions(config),
     );
-    if (REFLECTION_STAGES.length > 0) {
+    if (stages.length > 0) {
       // The drain runs alongside the first tool calls rather than in front of them: a long
       // backlog would otherwise hold the service off the port it is supposed to be answering.
       void worker.start().catch((err: unknown) => {
@@ -153,6 +236,10 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
     } else {
       logger.warn('reflection worker idle: no pipeline stages are registered');
     }
+
+    // Whitepaper §6.10's session boundary. The transport close is the trigger the substrate
+    // can actually observe; a session nobody closed cleanly falls to the idle sweep instead.
+    const narratives = new SessionNarrativeCloser({ driver, provider, logger }, narrativeOptions(config));
 
     const backend: ToolBackend = {
       recall: (args, identity) => handleRecall(recall, args, { identity }),
@@ -164,6 +251,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       logger,
       host: bindHost(runningInContainer()),
       port: config.operational.mcpPort,
+      onSessionClosed: narratives.onSessionClosed,
     });
 
     logger.info(
@@ -173,6 +261,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
         sqlite: config.sqlite.path,
         member: memberName,
         models: config.models,
+        stages: stages.map((stage) => stage.name),
       },
       'mcp service ready',
     );
@@ -182,7 +271,10 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       config,
       logger,
       close: async () => {
+        // The service first, so every transport closes and its narrative is scheduled before
+        // the closer is awaited; the driver goes last, since both are still writing to it.
         await service.close();
+        await narratives.whenIdle();
         await worker.stop();
         await connection.close();
         store.close();

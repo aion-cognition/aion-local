@@ -33,15 +33,32 @@ export type BucketCaps = Readonly<Record<PackBucket, number>>;
  * facts and conversational memory in episodes; `Member` and `Workspace` carry the
  * companion `Entity` label, so the backbone resolves through the same row.
  *
- * Narratives, preferences, and the resonant bucket have no producer yet — narratives and
- * preferences arrive with P3's reflection pipeline, resonance with P4's context vectors —
- * so those buckets are structurally absent from a P2 pack rather than empty. A label with
- * no bucket cannot be packed and its item is dropped.
+ * The nine §6.7 cognitive types answer in facts alongside entities. §5.7's own example of a
+ * fact is "the API redesign was decided in Sprint 12" — a Decision node, not an entity — so
+ * the interpretive layer belongs where a reader looks for what is known rather than for what
+ * was said. Leaving them unrouted would be worse than a taxonomy quibble: they carry content
+ * vectors and sit in `content_fts`, so retrieval finds them and assembly would then drop
+ * every one.
+ *
+ * Preferences and the resonant bucket still have no producer — preference extraction is
+ * unbuilt and resonance arrives with P4's Algorithm 3 — so those two are structurally absent
+ * from a pack rather than empty. A label with no bucket cannot be packed and its item is
+ * dropped.
  */
 const BUCKET_BY_LABEL: Readonly<Record<string, PackBucket>> = {
   Episode: 'episodes',
   Turn: 'episodes',
   Entity: 'facts',
+  Narrative: 'narratives',
+  Goal: 'facts',
+  Plan: 'facts',
+  Decision: 'facts',
+  Insight: 'facts',
+  Concept: 'facts',
+  Context: 'facts',
+  Event: 'facts',
+  Pattern: 'facts',
+  Trend: 'facts',
 };
 
 /**
