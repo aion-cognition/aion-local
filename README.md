@@ -128,7 +128,8 @@ P0 through P2 are built and gated: substrate provisioning (`init`, schema migrat
 backbone), experience capture (reflection intake: validate, redact, dedupe, store
 bitemporally), and recall with the full MCP surface (four seed strategies, spreading
 activation, RRF fusion, MemoryPack assembly). 643/643 tests pass; `aion doctor` runs 8
-checks, all green against a live stack.
+checks, all green against a live stack. The full build history, including what review
+found in each phase, is in [docs/build-ledger.md](docs/build-ledger.md).
 
 P3 and later are not yet built: the reflection extraction pipeline (entities, associations,
 narratives), Hebbian edge plasticity, and maintenance passes. Their config knobs are
