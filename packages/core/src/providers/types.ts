@@ -21,6 +21,14 @@ export type StructuredRequest = {
   maxTokens?: number;
   temperature?: number;
   signal?: AbortSignal;
+  /**
+   * Hybrid reasoning models (the qwen3 family this build pins) emit a reasoning block ahead
+   * of the structured answer unless it is switched off, and that block dominates the call:
+   * measured on host Ollama, `qwen3:1.7b` runs 527-937ms warm with reasoning off against a
+   * 1.9-11.3s spread with it on, plus calls that never return at all. Extraction tasks set
+   * this false; a caller that wants the model to reason leaves it unset.
+   */
+  think?: boolean;
 };
 
 /**

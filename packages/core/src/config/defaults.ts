@@ -38,7 +38,11 @@ export const DEFAULTS: Config = {
     useContextResonance: true,
     associationStrength: 0.5,
     compressionThreshold: 512,
-    cueBudgetMs: 2000,
+    // PRD §14 pins 2000. Raised because that is under the pinned cue model's cold-start
+    // round trip (2288ms measured on host Ollama against 527-937ms warm), and a guard that
+    // fires on the first recall after a model eviction degrades the stage it exists to
+    // protect. Still a hang guard: the failure this catches is a call that never returns.
+    cueBudgetMs: 5000,
     tokenBudget: 1200,
     minRelevance: 0.35,
   },

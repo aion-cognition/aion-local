@@ -58,11 +58,18 @@ const memoryPackBucket = z.array(MemoryPackItemSchema).min(1);
 
 /**
  * PRD §6.1 / whitepaper Algorithm 1: query cues weigh 3x, summary 2x, recent turns 1x.
- * `raw_query` is the degradation ladder's own source — when the cue model is down, recall
- * proceeds on the raw query text, and that cue has to be distinguishable from one the
- * model extracted from the query.
+ * `raw_query` and `raw_summary` are the degradation ladder's own sources — when the cue
+ * model is down, recall proceeds on the caller's own text ("query and summary embeddings
+ * plus BM25 over the raw query text"), and those cues have to be distinguishable from ones
+ * the model extracted from the same material.
  */
-export const CueSourceSchema = z.enum(['query', 'summary', 'recent_turns', 'raw_query']);
+export const CueSourceSchema = z.enum([
+  'query',
+  'summary',
+  'recent_turns',
+  'raw_query',
+  'raw_summary',
+]);
 
 export type CueSource = z.infer<typeof CueSourceSchema>;
 

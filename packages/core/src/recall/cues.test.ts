@@ -12,6 +12,7 @@ const BUDGET_MS = 2000;
 
 let dataDir: string;
 let generate: ReturnType<typeof vi.fn>;
+let embed: ReturnType<typeof vi.fn>;
 let deps: CueExtractionDeps;
 
 function fullOutput(overrides: Partial<Record<'query_cues' | 'summary_cues' | 'recent_turn_cues', string[]>> = {}) {
@@ -25,8 +26,9 @@ function fullOutput(overrides: Partial<Record<'query_cues' | 'summary_cues' | 'r
 beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), 'aion-cues-test-'));
   generate = vi.fn();
+  embed = vi.fn(() => Promise.reject(new Error('cue extraction must never call embed')));
   const provider: Provider = {
-    embed: () => Promise.reject(new Error('cue extraction must never call embed')),
+    embed: embed as Provider['embed'],
     generate,
   };
   deps = {
@@ -182,6 +184,34 @@ describe('degradation ladder', () => {
     expect(CueSchema.parse(result.cues[0])).toEqual(result.cues[0]);
   });
 
+  it('carries the caller-supplied summary through the ladder at its 2x weight', async () => {
+    generate.mockRejectedValue(new Error('ollama unreachable'));
+
+    const result = await extractCues(deps, {
+      query: 'why did we pick webhooks',
+      summary: '  debugging the ingestion service rollout  ',
+      recentTurns: [{ role: 'user', text: 'did the dry run come back clean' }],
+    });
+
+    expect(result.cues).toEqual([
+      { text: 'why did we pick webhooks', source: 'raw_query', weight: 3 },
+      { text: 'debugging the ingestion service rollout', source: 'raw_summary', weight: 2 },
+    ]);
+    for (const cue of result.cues) {
+      expect(CueSchema.parse(cue)).toEqual(cue);
+    }
+  });
+
+  it('emits only the raw-query cue when the summary is absent or blank', async () => {
+    generate.mockRejectedValue(new Error('ollama unreachable'));
+
+    const blank = await extractCues(deps, { query: 'why did we pick webhooks', summary: '   ' });
+
+    expect(blank.cues).toEqual([
+      { text: 'why did we pick webhooks', source: 'raw_query', weight: 3 },
+    ]);
+  });
+
   it('degrades with reason invalid_output when the response fails schema validation', async () => {
     generate.mockResolvedValue({ cues: ['not', 'the', 'right', 'shape'] });
 
@@ -237,9 +267,12 @@ describe('degradation ladder', () => {
 describe('the one generate() call', () => {
   it('never calls embed', async () => {
     generate.mockResolvedValue(fullOutput());
+
     await extractCues(deps, { query: 'why did the migration deadlock' });
-    // `deps.provider.embed` rejecting (set up in beforeEach) proves this: a call would
-    // have surfaced as an unhandled rejection or a thrown error above.
+
+    // Asserted rather than inferred from the rejecting mock: `callCueModel` catches every
+    // throw, so an embed call inside it would degrade silently instead of failing the test.
+    expect(embed).not.toHaveBeenCalled();
   });
 
   it('sends the configured cue model and the JSON-schema format on the single call', async () => {

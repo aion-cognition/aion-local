@@ -64,6 +64,7 @@ export class OllamaProvider implements Provider {
         messages: req.messages,
         format: req.schema,
         stream: false,
+        ...(req.think === undefined ? {} : { think: req.think }),
         ...(Object.keys(modelOptions).length > 0 ? { options: modelOptions } : {}),
       }),
       ...(req.signal === undefined ? {} : { signal: req.signal }),

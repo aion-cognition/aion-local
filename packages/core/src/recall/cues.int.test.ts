@@ -11,10 +11,25 @@ import { CueCache, extractCues, type CueExtractionDeps } from './cues.js';
 
 /**
  * Live smoke test against host Ollama: proves the one `generate` call round-trips against
- * the real cue model and records latency, not a quality gate. Assertions stay structural
+ * the real cue model, records latency, and gates the two aggregate quality numbers that
+ * decide whether Algorithm 1 is running at all. Per-fixture assertions stay structural
  * (protocol shape, not cue content) so the suite never flakes on what a real model happens
- * to return — the spot table printed in `afterAll` is what a human reads for quality.
+ * to return; the aggregates are what would have caught a config whose every extraction
+ * degraded while every structural assertion still passed.
  */
+
+/**
+ * The degradation ladder is a fallback, so a healthy install never rides it: any degraded
+ * fixture means the budget or the model is misconfigured, which is a defect and not a flake.
+ */
+const MAX_DEGRADED = 0;
+
+/**
+ * Empty cue sets are the one place model nondeterminism is tolerated. A quarter of the
+ * fixture set is loose enough that a single unlucky generation passes and tight enough that
+ * an extraction which has stopped working does not.
+ */
+const MAX_EMPTY_RATE = 0.25;
 
 const OLLAMA_URL = process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434';
 const CUE_MODEL = process.env.AION_CUE_MODEL ?? DEFAULTS.models.cue;
@@ -39,13 +54,6 @@ const deps: CueExtractionDeps = {
 };
 
 afterAll(() => {
-  console.table(rows);
-  const emptyCount = rows.filter((row) => row.cues === 0).length;
-  const degradedCount = rows.filter((row) => row.degraded).length;
-  console.log(
-    `cue quality: ${String(rows.length)} queries, empty rate ${((emptyCount / rows.length) * 100).toFixed(0)}%, ` +
-      `degraded ${String(degradedCount)}/${String(rows.length)}, model ${CUE_MODEL}, budget ${String(deps.budgetMs)}ms`,
-  );
   rmSync(dataDir, { recursive: true, force: true });
 });
 
@@ -74,4 +82,25 @@ describe('cue extraction against live host Ollama', () => {
       expect(result.degradation).toBeUndefined();
     }
   }, 30_000);
+
+  // Last, so every fixture above has already pushed its row. Vitest runs a file's tests in
+  // declaration order, which is what makes an aggregate assertion a test rather than a hook.
+  it('extracts cues rather than riding the degradation ladder', () => {
+    const emptyCount = rows.filter((row) => row.cues === 0).length;
+    const degradedCount = rows.filter((row) => row.degraded).length;
+    const latencies = rows.map((row) => row.latencyMs).sort((left, right) => left - right);
+
+    console.table(rows);
+    console.log(
+      `cue quality: ${String(rows.length)} queries, ` +
+        `empty ${String(emptyCount)}/${String(rows.length)}, ` +
+        `degraded ${String(degradedCount)}/${String(rows.length)}, ` +
+        `latency min ${String(latencies[0])}ms median ${String(latencies[Math.floor(latencies.length / 2)])}ms ` +
+        `max ${String(latencies.at(-1))}ms, model ${CUE_MODEL}, budget ${String(deps.budgetMs)}ms`,
+    );
+
+    expect(rows).toHaveLength(CUE_FIXTURES.length);
+    expect(degradedCount).toBeLessThanOrEqual(MAX_DEGRADED);
+    expect(emptyCount / rows.length).toBeLessThanOrEqual(MAX_EMPTY_RATE);
+  });
 });
