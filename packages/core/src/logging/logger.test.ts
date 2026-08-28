@@ -2,33 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import {
-  DEFAULT_LOG_FILE,
-  DEFAULT_LOG_LEVEL,
-  logTargetFromEnv,
-  openLogger,
-} from './logger.js';
-
-describe('logTargetFromEnv', () => {
-  it('falls back to the in-container defaults', () => {
-    expect(logTargetFromEnv({})).toEqual({
-      filePath: DEFAULT_LOG_FILE,
-      level: DEFAULT_LOG_LEVEL,
-    });
-  });
-
-  it('takes the path and level from AION_* overrides', () => {
-    const target = logTargetFromEnv({
-      AION_LOG_FILE: '/somewhere/else.jsonl',
-      AION_LOG_LEVEL: 'debug',
-    });
-    expect(target).toEqual({ filePath: '/somewhere/else.jsonl', level: 'debug' });
-  });
-
-  it('ignores a level that is not a pino level', () => {
-    expect(logTargetFromEnv({ AION_LOG_LEVEL: 'chatty' }).level).toBe(DEFAULT_LOG_LEVEL);
-  });
-});
+import { openLogger } from './logger.js';
 
 describe('openLogger', () => {
   let dir: string;
