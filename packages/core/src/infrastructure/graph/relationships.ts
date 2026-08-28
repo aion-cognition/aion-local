@@ -10,6 +10,9 @@ export const UNDIRECTED_RELATIONSHIP_TYPES = [
   'CO_OCCURS',
   'RELATED_TO',
   'ANALOGOUS_TO',
+  // Undirected because tension is mutual: whitepaper §6.8 reads it as "two entities or
+  // claims are in tension", which is the same claim whichever end it is written from.
+  'CONTRADICTS',
 ] as const;
 
 export const DIRECTED_RELATIONSHIP_TYPES = [

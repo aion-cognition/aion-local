@@ -69,6 +69,11 @@ const ACTIVATION_WEIGHTS: Record<RelationshipType, number> = {
   CO_OCCURS: 0.5,
   ANALOGOUS_TO: 0.45,
 
+  // Tension, which is the one semantic type a query almost always wants both ends of: a
+  // claim and what argues against it are read together or the pack is misleading. Held at
+  // the causal tier for that reason, above every other inferred link.
+  CONTRADICTS: 0.7,
+
   // Lineage. A superseded node is reachable from its replacement — that is what makes the
   // old truth recallable — but the path is deliberately weak, and the node at the far end
   // is down-weighted again by SUPERSEDED_ACTIVATION_WEIGHT.
