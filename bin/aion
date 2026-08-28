@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Host wrapper. Builds the image once, then runs the CLI in the aion-cli container,
-# which is itself the orchestrator of the compose services.
+# Host wrapper. Keeps the image in step with the working tree, then runs the CLI in the
+# aion-cli container, which is itself the orchestrator of the compose services.
 set -eo pipefail
 
 REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -12,8 +12,42 @@ AION_GIT_USER_NAME="${AION_GIT_USER_NAME:-$(git -C "$REPO_DIR" config user.name 
 export COMPOSE_PROJECT_NAME AION_GIT_USER_NAME
 export AION_REPO_PATH="$REPO_DIR"
 
+# Epoch seconds of the newest tracked source file, or empty when git cannot answer.
+# `git ls-files` rather than `find`, so node_modules and build output never count.
+newest_source_mtime() {
+  git -C "$REPO_DIR" ls-files -z -- \
+      'packages/*' 'Dockerfile' 'package.json' 'package-lock.json' 'tsconfig*.json' 2>/dev/null |
+    xargs -0 stat -f '%m' 2>/dev/null |
+    sort -rn |
+    head -1
+}
+
+image_created_epoch() {
+  local created
+  created="$(docker image inspect "$IMAGE" --format '{{.Created}}' 2>/dev/null)" || return 1
+  # Docker reports UTC. BSD date needs the fractional seconds and the zone stripped and would
+  # otherwise read the stamp as local time, putting the image hours into the future; GNU date
+  # parses the whole timestamp. Try each, and treat "cannot tell" as stale rather than fresh.
+  TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%S' "${created%%.*}" '+%s' 2>/dev/null ||
+    date -d "$created" '+%s' 2>/dev/null
+}
+
+# A `git pull` that lands new CLI or server code must not leave the user running the old
+# image with no warning: the container is the only thing that ever executes this repo.
+needs_build() {
+  local built source
+  built="$(image_created_epoch)" || return 0
+  [ -n "$built" ] || return 0
+  source="$(newest_source_mtime)"
+  [ -n "$source" ] || return 1
+  [ "$source" -gt "$built" ]
+}
+
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   echo "aion: building $IMAGE (first run)" >&2
+  docker compose -f "$COMPOSE_FILE" build aion-cli
+elif [ "${AION_SKIP_IMAGE_CHECK:-}" != "1" ] && needs_build; then
+  echo "aion: sources are newer than $IMAGE, rebuilding" >&2
   docker compose -f "$COMPOSE_FILE" build aion-cli
 fi
 
