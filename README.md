@@ -42,8 +42,8 @@ The result is a `MemoryPack`: up to five buckets (`facts`, `episodes`, `narrativ
 `preferences`, `resonant`), each present only when it has content. Every item carries its
 content, a rationale (which method found it, its score, and the graph path when one
 applies), and a currency marker (`current` or `superseded`, with the superseding item's id
-and timestamp when applicable). The pack also carries `rendered_text` — a block ready to
-drop straight into agent reasoning — and metadata: the cues extracted from the query, a
+and timestamp when applicable). The pack also carries `rendered_text` (a block ready to
+drop straight into agent reasoning) and metadata: the cues extracted from the query, a
 per-stage timing breakdown, and a token estimate.
 
 `as_of` asks what was true at a past date (world time). `knew_at` asks what the substrate
@@ -65,16 +65,16 @@ the graph, so the call never blocks the work it describes.
 Run through `./bin/aion <command>`, which builds the image when sources are newer than it
 and then runs the command in the `aion-cli` container.
 
-- `init` — provision the substrate: neo4j, models, schema, backbone
-- `status` — services, models, and graph counts
-- `doctor` — check every substrate invariant and name what is broken
-- `last` — the last MemoryPack served per session, with rationale
+- `init`: provision the substrate (neo4j, models, schema, backbone)
+- `status`: services, models, and graph counts
+- `doctor`: check every substrate invariant and name what is broken
+- `last`: the last MemoryPack served per session, with rationale
 
 ## Architecture
 
 ```
 packages/
-  protocol/   Zod wire schemas for both tools — the leaf contract
+  protocol/   Zod wire schemas for both tools (the leaf contract)
   core/       recall, reflection, session, redaction, and the infrastructure they run on
   mcp/        the MCP server: tool definitions, HTTP transport
   cli/        the aion command and compose orchestration
@@ -118,14 +118,14 @@ Every runtime knob is an `AION_*` environment variable, cataloged in
 `packages/core/src/infrastructure/config/registry.ts` with typed defaults in `defaults.ts`.
 A few examples:
 
-- `AION_NEO4J_URI` — Bolt endpoint (`bolt://neo4j:7687` by default)
-- `AION_MIN_RELEVANCE` — the relevance floor a fused item must clear to reach a pack (`0.35`)
-- `AION_MCP_PORT` — the port the MCP server listens on (`8765`)
+- `AION_NEO4J_URI`: Bolt endpoint (`bolt://neo4j:7687` by default)
+- `AION_MIN_RELEVANCE`: the relevance floor a fused item must clear to reach a pack (`0.35`)
+- `AION_MCP_PORT`: the port the MCP server listens on (`8765`)
 
 ## Status
 
 P0 through P2 are built and gated: substrate provisioning (`init`, schema migrations, the
-backbone), experience capture (reflection intake — validate, redact, store bitemporally,
+backbone), experience capture (reflection intake: validate, redact, store bitemporally,
 dedupe), and recall with the full MCP surface (four seed strategies, spreading activation,
 RRF fusion, MemoryPack assembly). 643/643 tests pass; `aion doctor` runs 8 checks, all green
 against a live stack.

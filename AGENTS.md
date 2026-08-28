@@ -11,13 +11,13 @@ Conventions and commands for agents working in this repo.
 - No factory functions.
 - Comments state a constraint, not a narration. No plan or task IDs in comments.
 - All Cypher lives in `packages/core/src/infrastructure/graph/`. This is a review-time
-  rule, not tool-enforced — no test scans for Cypher outside that directory.
+  rule, not tool-enforced: no test scans for Cypher outside that directory.
 - Every graph write is idempotent and bitemporal, with one deliberate exception: see
   "no node hard-deletes" below and `docs/architecture.md`'s note on access-tracking.
 - No node hard-deletes, ever. Correcting or removing a fact supersedes it.
-- No heuristic text machinery (regex, keyword lists) in the cognitive path — cue
+- No heuristic text machinery (regex, keyword lists) in the cognitive path: cue
   extraction, ranking, and activation are model-driven or graph-structural. Redaction is
-  the deliberate exception: secret detection is deterministic by design.
+  the deliberate exception, since secret detection is deterministic by design.
 
 ## Layout
 
@@ -46,8 +46,8 @@ bin/aion                                host wrapper: rebuilds the image, runs t
 ```
 npm run build             # tsc -b, whole workspace
 npm test                   # both vitest projects: unit, then integration
-npm run test:unit          # packages/*/src/**/*.test.ts — no external services
-npm run test:integration   # packages/*/src/**/*.int.test.ts — needs Docker + host Ollama
+npm run test:unit          # packages/*/src/**/*.test.ts, no external services
+npm run test:integration   # packages/*/src/**/*.int.test.ts, needs Docker + host Ollama
 npm run test:watch         # unit project, watch mode
 ```
 
@@ -58,12 +58,12 @@ CLI container needs it set explicitly:
 export AION_OLLAMA_URL=http://127.0.0.1:11434
 ```
 
-`./bin/aion <init|status|doctor|last>` runs the built CLI against the real compose stack —
-use it to exercise the actual binary, not as a test runner.
+`./bin/aion <init|status|doctor|last>` runs the built CLI against the real compose stack.
+Use it to exercise the actual binary, not as a test runner.
 
 ## Guard tests
 
-- `packages/core/src/infrastructure/graph/no-hard-delete.test.ts` — scans every `.ts` file
+- `packages/core/src/infrastructure/graph/no-hard-delete.test.ts`: scans every `.ts` file
   under `packages/` for a Cypher `DETACH DELETE` or bare `DELETE` clause (SQL's `DELETE
   FROM` and JavaScript's `delete` operator are excluded by the pattern), and fails if it
   finds one anywhere but itself. This is the only convention enforced by a repo-wide scan.
@@ -72,8 +72,8 @@ use it to exercise the actual binary, not as a test runner.
 
 ## Live-stack cautions
 
-- Never point tests at the live `aion` compose project — the `neo4j` / `aion-mcp` /
-  `aion-cli` services `./bin/aion` drives. Integration tests spin up their own throwaway
+- Never point tests at the live `aion` compose project (the `neo4j` / `aion-mcp` /
+  `aion-cli` services `./bin/aion` drives). Integration tests spin up their own throwaway
   Neo4j container per test file with a bare `docker run`
   (`infrastructure/graph/test-support/neo4j-harness.fixture.ts`) and remove it after; that
   harness is the only Neo4j integration tests may touch.
