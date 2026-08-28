@@ -1,7 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 import { runRead, type GraphStatement } from './connection.js';
 import { readModeFragment, withCurrency } from './read-modes.js';
-import type { Row } from './values.js';
 
 /**
  * Finds all entity and cognitive node IDs extracted from an episode, used to enqueue

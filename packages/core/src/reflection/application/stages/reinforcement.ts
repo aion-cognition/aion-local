@@ -38,17 +38,26 @@ export class ReinforcementEnqueueStage implements ReflectionStage {
     // Deterministic pair order: sort so (a,b) never also enqueues (b,a). For each pair [i, j]
     // where i < j (after sorting), enqueue one signal from i to j.
     const sorted = [...nodeIds].sort();
+    const enqueuedAt = ctx.now.toISOString();
     let count = 0;
-    for (let i = 0; i < sorted.length; i++) {
-      for (let j = i + 1; j < sorted.length; j++) {
+    for (let index = 0; index < sorted.length; index += 1) {
+      const source = sorted[index];
+      if (source === undefined) {
+        continue;
+      }
+      for (let other = index + 1; other < sorted.length; other += 1) {
+        const target = sorted[other];
+        if (target === undefined) {
+          continue;
+        }
         enqueueReinforcementSignal(
           ctx.db,
-          sorted[i],
-          sorted[j],
+          source,
+          target,
           REFLECTION_CO_EXTRACTION_TRIGGER,
-          ctx.now.toISOString(),
+          enqueuedAt,
         );
-        count++;
+        count += 1;
       }
     }
 

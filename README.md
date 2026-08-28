@@ -125,15 +125,17 @@ A few examples:
 
 ## Status
 
-P0 through P2 are built and gated: substrate provisioning (`init`, schema migrations, the
+P0 through P3 are built and gated: substrate provisioning (`init`, schema migrations, the
 backbone), experience capture (reflection intake: validate, redact, dedupe, store
-bitemporally), and recall with the full MCP surface (four seed strategies, spreading
-activation, RRF fusion, MemoryPack assembly). 666/666 tests pass; `aion doctor` runs 8
-checks, all green against a live stack. The full build history, including what review
-found in each phase, is in [docs/build-ledger.md](docs/build-ledger.md).
+bitemporally), recall with the full MCP surface (four seed strategies, spreading activation,
+RRF fusion, MemoryPack assembly), and the reflection pipeline that turns a stored episode
+into entities, associations, cognitive structure, typed relationships, supersession
+judgments, and a session narrative. 948/948 tests pass; `aion doctor` runs 8 checks,
+all green against a live stack. The full build history, including what review found in each
+phase, is in [docs/build-ledger.md](docs/build-ledger.md).
 
-P3 and later are not yet built: the reflection extraction pipeline (entities, associations,
-narratives), Hebbian edge plasticity, and maintenance passes. Their config knobs are
-declared and validated but unread. Recall today serves the `episodes` and `facts` buckets
-from episode, turn, and session structure; `narratives`, `preferences`, and `resonant` have
-no producer yet and stay structurally absent from a pack rather than empty.
+P4 and later are not yet built: Hebbian edge plasticity (recall and reflection both queue
+the signals; nothing flushes them yet), context resonance, and maintenance passes. Their
+config knobs are declared and validated but unread. Recall serves `facts`, `episodes`, and
+`narratives`; `preferences` and `resonant` have no producer yet and stay structurally absent
+from a pack rather than empty.

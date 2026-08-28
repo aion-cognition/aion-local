@@ -104,6 +104,35 @@ export const DEFAULTS: Config = {
     activationThreshold: 0.1,
     contextSearchThreshold: 0.7,
   },
+  /**
+   * Every value is the pinned default its stage already carries as a module constant, and
+   * `reflection-defaults.test.ts` asserts the two agree: config is where a knob is named and
+   * ranged, the stage is where it is used, and a silent divergence between them would ship a
+   * pipeline nobody configured. Two are pinned by the plan rather than by a stage author,
+   * `supersedeAutoConfidence` (0.85) and `associationSemanticThreshold` (0.75).
+   */
+  reflection: {
+    entityTimeoutMs: 60_000,
+    maxEntities: 32,
+    entityDedupThreshold: 0.85,
+    associationSemanticThreshold: 0.75,
+    associationSimilarLimit: 5,
+    cognitiveTimeoutMs: 60_000,
+    maxCognitiveNodes: 20,
+    semanticTimeoutMs: 60_000,
+    maxRelationships: 40,
+    supersedeAutoConfidence: 0.85,
+    supersedeNeighborThreshold: 0.75,
+    supersedeTimeoutMs: 60_000,
+    maxSupersessionSubjects: 6,
+    maxContradictionNeighbors: 3,
+    maxContradictionJudgments: 8,
+    narrativeIdleMinutes: 30,
+    narrativeTimeoutMs: 60_000,
+    maxNarrativeEpisodes: 40,
+    maxNarrativeEpisodeChars: 2_000,
+    narrativeSweepLimit: 20,
+  },
   redaction: {
     entropyThreshold: 4.5,
   },
@@ -117,6 +146,13 @@ export const DEFAULTS: Config = {
     dataDir: '/data',
     mcpPort: 8765,
     workerCount: 1,
+    workerStaleClaimTimeoutMs: 600_000,
+    workerRetryBaseMs: 5_000,
+    workerRetryCapMs: 300_000,
+    workerMaxAttempts: 5,
+    workerBreakerThreshold: 5,
+    workerBreakerCooldownMs: 60_000,
+    workerVectorBatchSize: 64,
   },
   logging: {
     filePath: DEFAULT_LOG_FILE,

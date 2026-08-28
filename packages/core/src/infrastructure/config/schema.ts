@@ -86,6 +86,37 @@ export const ConfigSchema = z.object({
     activationThreshold: proportion,
     contextSearchThreshold: proportion,
   }),
+  /**
+   * The reflection pipeline's per-stage knobs. Each stage owns its own thresholds and caps as
+   * an options type and carries the pinned default as a module constant; these are what the
+   * service threads over them at construction, so the shipped values live in one catalog
+   * rather than in nine files. The three timeouts are hang guards on `provider.generate`,
+   * not latency targets: reflection is asynchronous and the value that matters is that a
+   * model which never answers cannot hold the worker forever.
+   */
+  reflection: z.object({
+    entityTimeoutMs: positiveInt,
+    maxEntities: positiveInt,
+    entityDedupThreshold: proportion,
+    associationSemanticThreshold: proportion,
+    associationSimilarLimit: positiveInt,
+    cognitiveTimeoutMs: positiveInt,
+    maxCognitiveNodes: positiveInt,
+    semanticTimeoutMs: positiveInt,
+    maxRelationships: positiveInt,
+    supersedeAutoConfidence: proportion,
+    supersedeNeighborThreshold: proportion,
+    supersedeTimeoutMs: positiveInt,
+    maxSupersessionSubjects: positiveInt,
+    maxContradictionNeighbors: positiveInt,
+    maxContradictionJudgments: positiveInt,
+    /** Minutes, because that is the unit the pinned trigger is stated in (30 min idle). */
+    narrativeIdleMinutes: positiveInt,
+    narrativeTimeoutMs: positiveInt,
+    maxNarrativeEpisodes: positiveInt,
+    maxNarrativeEpisodeChars: positiveInt,
+    narrativeSweepLimit: positiveInt,
+  }),
   redaction: z.object({
     /** Shannon entropy in bits/char above which an unmatched token is still flagged as a likely secret. */
     entropyThreshold: z.number().positive(),
@@ -100,6 +131,14 @@ export const ConfigSchema = z.object({
     dataDir: z.string().min(1),
     mcpPort: z.number().int().min(1).max(65535),
     workerCount: positiveInt,
+    /** How long a claim outlives the process that took it before the next drain reclaims it. */
+    workerStaleClaimTimeoutMs: positiveInt,
+    workerRetryBaseMs: positiveInt,
+    workerRetryCapMs: positiveInt,
+    workerMaxAttempts: positiveInt,
+    workerBreakerThreshold: positiveInt,
+    workerBreakerCooldownMs: positiveInt,
+    workerVectorBatchSize: positiveInt,
   }),
   logging: z.object({
     filePath: z.string().min(1),

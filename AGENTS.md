@@ -33,8 +33,9 @@ packages/core/src/
   recall/domain/                        pure: activation, fusion (RRF/MMR), pack assembly
   recall/application/                   cue extraction, seed strategies, the recall pipeline
   redaction/                            deterministic secret detection
-  reflection/domain/                    pure: episode/turn shaping, content hashing
-  reflection/application/               intake (the write path), dispatch (signal emitter)
+  reflection/domain/                    pure: episode/turn shaping, content hashing, stage contract
+  reflection/application/               intake (the write path), dispatch, orchestrator, worker
+  reflection/application/stages/        the pipeline, in the order bootstrap.ts registers them
   session/                              identity-to-session-id resolution
 packages/mcp/src/                       MCP server: tool definitions, HTTP transport
 packages/cli/src/                       aion command: init, status, doctor, last

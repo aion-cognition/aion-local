@@ -77,6 +77,16 @@ describe('bucket routing', () => {
     expect(bucketFor(['Member', 'Entity', 'AionNode'])).toBe('facts');
   });
 
+  it('routes a narrative to its own bucket rather than folding it into episodes', () => {
+    expect(bucketFor(['Narrative', 'Memory', 'AionNode'])).toBe('narratives');
+  });
+
+  it('routes every cognitive type to facts, which is where §5.7 puts a decision', () => {
+    for (const label of ['Goal', 'Plan', 'Decision', 'Insight', 'Concept', 'Context', 'Event', 'Pattern', 'Trend']) {
+      expect(bucketFor([label, 'Memory', 'AionNode'])).toBe('facts');
+    }
+  });
+
   it('has no bucket for a node type nothing packs yet', () => {
     expect(bucketFor(['Session', 'AionNode'])).toBeUndefined();
   });

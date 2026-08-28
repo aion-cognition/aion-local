@@ -115,10 +115,20 @@ async function runStage(episodeId: string): Promise<StageOutcome> {
   return new AssociationInferenceStage().run(context);
 }
 
+/**
+ * Matched undirected and ordered by name, not by stored direction: CO_OCCURS is one of the
+ * undirected types, so the edge upsert normalizes its endpoints by id, and entity ids are
+ * random per run. Reading the stored direction would name either entity `a` from one run to
+ * the next. The `a.name < b.name` filter is what keeps the undirected match to one row.
+ */
 async function coOccursCounts(): Promise<Array<{ a: string; b: string; count: number }>> {
   return runRead(
     harness.driver,
-    'MATCH (a:Entity)-[r:CO_OCCURS]->(b:Entity) RETURN a.name AS a, b.name AS b, r.count AS count ORDER BY a.name, b.name',
+    [
+      'MATCH (a:Entity)-[r:CO_OCCURS]-(b:Entity)',
+      'WHERE a.name < b.name',
+      'RETURN a.name AS a, b.name AS b, r.count AS count ORDER BY a.name, b.name',
+    ].join('\n'),
     {},
     (row) => ({ a: row.a as string, b: row.b as string, count: row.count as number }),
   );
