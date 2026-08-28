@@ -177,6 +177,32 @@ async function storeEpisode(
 }
 
 /**
+ * The episode this payload belongs to: the one already stored, or a newly written one.
+ * The cheap read comes first so a re-pushed payload never pays for an embedding it would
+ * discard, and the embedding itself stays outside the transaction — it is the one
+ * network-dependent step, and a write transaction must not be held open across it. The
+ * authoritative dedupe is the one `storeEpisode` runs under the session's lock.
+ */
+async function resolveEpisode(
+  deps: ReflectionIntakeDeps,
+  prepared: PreparedEpisode,
+  sessionId: string,
+  now: Date,
+): Promise<StoredEpisode> {
+  const known = await findEpisodeByContentHash(deps.driver, {
+    sessionId,
+    contentHash: prepared.contentHash,
+  });
+  if (known !== undefined) {
+    return { episodeId: known, created: false };
+  }
+
+  const texts = [prepared.text, ...prepared.turns.map((turn) => turn.text)];
+  const vectors = await deps.provider.embed(texts);
+  return storeEpisode(deps.driver, prepared, sessionId, vectors, now);
+}
+
+/**
  * The queue row is derived from the graph, so it is repaired rather than assumed: a crash
  * between the episode's commit and this insert would otherwise strand the episode forever,
  * since every retry then matches it by content hash, answers `queued: true`, and never
@@ -203,16 +229,10 @@ function ensureIntegrateJob(db: SqliteHandle, episodeId: string): { jobId: strin
  * store the episode and its turns with a full bitemporal stamp, link the backbone, enqueue
  * the integrate job, signal the dispatcher, return.
  *
- * Three ordering choices are load-bearing. Redaction runs on the parsed payload before
- * anything reads a content field, so no raw credential reaches the hash, the embedder, or
- * the graph. Embedding runs before the transaction opens, because it is the one
- * network-dependent step and a write transaction must not be held open across it. The
- * graph writes then land as one transaction, and the queue row is repaired rather than
- * assumed, so the two stores converge on a retry instead of stranding the episode.
- *
- * The dedupe read happens twice on purpose: once here, cheaply, so a re-pushed payload does
- * not pay for an embedding it will discard, and again inside the transaction under the
- * session's lock, where it is the authoritative one.
+ * Redaction runs on the parsed payload before anything reads a content field, so no raw
+ * credential reaches the hash, the embedder, or the graph. The graph then takes every write
+ * as one transaction, and the queue row is repaired rather than assumed, so the two stores
+ * converge on a retry instead of leaving an episode nothing will ever process.
  *
  * No generation call happens anywhere here. Extraction is the pipeline's job (whitepaper
  * §6.1) and intake is what makes the experience durable.
@@ -242,22 +262,7 @@ export async function handleReflection(
   });
 
   const prepared = prepareEpisode(redacted.value, now);
-  const known = await findEpisodeByContentHash(deps.driver, {
-    sessionId,
-    contentHash: prepared.contentHash,
-  });
-
-  const stored =
-    known === undefined
-      ? await storeEpisode(
-          deps.driver,
-          prepared,
-          sessionId,
-          await deps.provider.embed([prepared.text, ...prepared.turns.map((turn) => turn.text)]),
-          now,
-        )
-      : { episodeId: known, created: false };
-
+  const stored = await resolveEpisode(deps, prepared, sessionId, now);
   const job = ensureIntegrateJob(deps.db, stored.episodeId);
   if (job.enqueued) {
     deps.dispatch.signal({
