@@ -1,5 +1,8 @@
+import type { Driver } from 'neo4j-driver';
 import { describe, expect, it } from 'vitest';
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { ScoredSeedCandidate, SeedCandidate } from '../../infrastructure/graph/seed-queries.js';
+import type { Logger } from '../../infrastructure/logging/logger.js';
 import {
   SEED_STRATEGIES,
   RECENCY_RELEVANCE,
@@ -7,7 +10,9 @@ import {
   normalizeToBest,
   recencyScore,
   scaleByCueWeight,
+  selectSeeds,
   type SeedContribution,
+  type SeedSelection,
   type SeedStrategy,
 } from './seeds.js';
 
@@ -194,5 +199,55 @@ describe('mergeSeeds', () => {
 describe('SEED_STRATEGIES', () => {
   it('names the whitepaper §5.2 four, each a RecallMethod fusion can put in a rationale', () => {
     expect([...SEED_STRATEGIES]).toEqual(['vector', 'bm25', 'entity_resolution', 'recency']);
+  });
+});
+
+const NO_ROWS = { records: [], summary: { counters: { updates: () => ({}) } } };
+
+function silentLogger(): Logger {
+  const noop = (): void => {};
+  return { debug: noop, info: noop, warn: noop, error: noop } as unknown as Logger;
+}
+
+function driverAnswering(answer: (cypher: string) => Promise<unknown>): Driver {
+  return { executeQuery: (cypher: string) => answer(cypher) } as unknown as Driver;
+}
+
+function selectFrom(driver: Driver): Promise<SeedSelection> {
+  return selectSeeds(
+    { driver, config: DEFAULTS, logger: silentLogger() },
+    { cues: [{ text: 'webhook ingestion', source: 'query', weight: 3, vector: [1, 0, 0] }] },
+  );
+}
+
+describe('selectSeeds when the graph is not answering', () => {
+  it('flags the graph unavailable when every query it issued was rejected', async () => {
+    const selection = await selectFrom(
+      driverAnswering(() => Promise.reject(new Error('ServiceUnavailable: connect ECONNREFUSED'))),
+    );
+
+    expect(selection.graphUnavailable).toBe(true);
+    expect(selection.seeds).toEqual([]);
+  });
+
+  // The state this separates from the one above: a live graph that holds nothing produces
+  // the same empty seed list, and calling that an outage would be the opposite lie.
+  it('leaves the flag down when the queries answered with no rows', async () => {
+    const selection = await selectFrom(driverAnswering(() => Promise.resolve(NO_ROWS)));
+
+    expect(selection.graphUnavailable).toBe(false);
+    expect(selection.seeds).toEqual([]);
+  });
+
+  it('leaves the flag down when one leg failed and the rest answered', async () => {
+    const selection = await selectFrom(
+      driverAnswering((cypher) =>
+        cypher.includes('db.index.fulltext.queryNodes')
+          ? Promise.reject(new Error('lucene parse error'))
+          : Promise.resolve(NO_ROWS),
+      ),
+    );
+
+    expect(selection.graphUnavailable).toBe(false);
   });
 });

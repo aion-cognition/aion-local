@@ -142,8 +142,8 @@ export type AssemblePackInput = {
   readonly tokenBudget: number;
   readonly cues: readonly Cue[];
   readonly timings: StageTimingsMs;
-  /** Present when the cue ladder ran (PRD §6.1); absent on a normal recall. */
-  readonly degraded?: Degradation;
+  /** Every rung of the ladder that fired (PRD §6.1, §10); absent on a normal recall. */
+  readonly degraded?: readonly Degradation[];
 };
 
 type Selection = Map<PackBucket, MemoryPackItem[]>;
@@ -235,7 +235,9 @@ export function assemblePack(input: AssemblePackInput): MemoryPack {
       token_estimate: estimateTokens(renderedText),
       stage_timings_ms: input.timings,
       cues: [...input.cues],
-      ...(input.degraded === undefined ? {} : { degraded: input.degraded }),
+      ...(input.degraded === undefined || input.degraded.length === 0
+        ? {}
+        : { degraded: [...input.degraded] }),
     },
   });
 }

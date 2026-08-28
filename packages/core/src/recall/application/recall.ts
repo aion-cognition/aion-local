@@ -1,6 +1,7 @@
 import {
   RecallInputSchema,
   type Cue,
+  type Degradation,
   type MemoryPack,
   type RecallInput,
   type RecallOutput,
@@ -116,33 +117,38 @@ export function readModeFor(input: RecallInput): ReadMode {
   return withCurrency();
 }
 
+type EmbeddedCues = {
+  readonly cues: readonly SeedCue[];
+  readonly degradation?: Degradation;
+};
+
 /**
  * One batched `embed` for every cue, including the degradation ladder's raw-query cue.
  * An embedding outage costs recall its vector leg and nothing else: BM25, exact entity
  * resolution, recency, and traversal all run on cue text or on graph structure, which is
- * PRD §10's deeper rung of degradation.
+ * PRD §10's deeper rung of degradation. The rung is reported, because a pack answered
+ * without its semantic leg is a thinner answer than the caller has any other way to see.
  */
-async function embedCues(
-  deps: RecallDeps,
-  cues: readonly Cue[],
-): Promise<readonly SeedCue[]> {
+async function embedCues(deps: RecallDeps, cues: readonly Cue[]): Promise<EmbeddedCues> {
   if (cues.length === 0) {
-    return [];
+    return { cues: [] };
   }
   let vectors: readonly Vector[] = [];
   try {
     vectors = await deps.provider.embed(cues.map((cue) => cue.text));
   } catch (err) {
     deps.logger.warn({ err, model: deps.config.models.embed }, 'cue embedding failed');
-    return cues;
+    return { cues, degradation: { stage: 'embed', reason: 'model_error' } };
   }
-  return cues.map((cue, index) => {
-    const vector = vectors[index];
-    if (vector === undefined || vector.length === 0) {
-      return cue;
-    }
-    return { ...cue, vector };
-  });
+  return {
+    cues: cues.map((cue, index) => {
+      const vector = vectors[index];
+      if (vector === undefined || vector.length === 0) {
+        return cue;
+      }
+      return { ...cue, vector };
+    }),
+  };
 }
 
 function capsFor(config: Config): BucketCaps {
@@ -255,10 +261,24 @@ export async function handleRecall(
   const selection = await timed(() =>
     selectSeeds(
       { driver: deps.driver, config: deps.config, logger: deps.logger },
-      { cues: embedded.value, mode },
+      { cues: embedded.value.cues, mode },
     ),
   );
   const seeds = selection.value.seeds;
+
+  // Every rung that fired, in the order the stages run. A pack with no items and no entries
+  // here is a real miss; the same pack with a `graph` entry is an outage, and the caller
+  // reads the two differently.
+  const degradations: Degradation[] = [];
+  if (cues.value.degradation !== undefined) {
+    degradations.push(cues.value.degradation);
+  }
+  if (embedded.value.degradation !== undefined) {
+    degradations.push(embedded.value.degradation);
+  }
+  if (selection.value.graphUnavailable) {
+    degradations.push({ stage: 'graph', reason: 'unavailable' });
+  }
 
   const adjacency: AdjacencyFetch = (request) => fetchAdjacency(deps.driver, { ...request, mode });
   const activation = await timed(() =>
@@ -302,7 +322,7 @@ export async function handleRecall(
     tokenBudget: payload.budget?.max_tokens ?? deps.config.recall.tokenBudget,
     cues: cues.value.cues,
     timings,
-    ...(cues.value.degradation === undefined ? {} : { degraded: cues.value.degradation }),
+    ...(degradations.length === 0 ? {} : { degraded: degradations }),
   });
 
   saveLastPack(deps.db, sessionId, pack, now.toISOString());
@@ -311,7 +331,8 @@ export async function handleRecall(
     {
       sessionId,
       cues: cues.value.cues.length,
-      degraded: cues.value.degraded,
+      degraded: degradations.length > 0,
+      degradations,
       seeds: seeds.length,
       activated: activation.value.activated.length,
       termination: activation.value.termination,

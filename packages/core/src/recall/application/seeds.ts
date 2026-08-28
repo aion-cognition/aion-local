@@ -86,6 +86,12 @@ export type SeedSelection = {
   /** Merged, deduped, and cut to `contextResonance.seedLimit`. What activation starts from. */
   readonly seeds: readonly Seed[];
   /**
+   * Every query the selection issued was rejected, which is the graph being gone rather
+   * than a query nothing matched. Per-leg isolation cannot tell the two apart on its own,
+   * and a caller that cannot tell either reads a total outage as an empty substrate.
+   */
+  readonly graphUnavailable: boolean;
+  /**
    * Each strategy's own candidates, deduped and ranked but not cut, because RRF fuses ranked
    * lists and the top-k merge discards the ranks below the cut.
    */
@@ -257,34 +263,46 @@ function embeddedCues(cues: readonly SeedCue[]): ReadonlyArray<SeedCue & { vecto
   return embedded;
 }
 
+/** What a leg produced, plus how many of its queries were issued and how many were rejected. */
+type SettledLeg = {
+  readonly contributions: SeedContribution[];
+  readonly attempted: number;
+  readonly failed: number;
+};
+
 /**
  * A query that fails contributes nothing rather than failing recall; degradation is less
  * evidence. Only a rejection is logged — a leg that legitimately finds nothing, which is
  * every entity-similarity call until entity name embeddings exist, is silent.
+ *
+ * The counts are what keeps the isolation from lying: one rejected query is a leg down,
+ * every rejected query is the graph down, and only the caller sees both numbers.
  */
 async function settle(
   logger: Logger,
   strategy: SeedStrategy,
   detail: string,
   tasks: ReadonlyArray<Promise<readonly SeedContribution[]>>,
-): Promise<SeedContribution[]> {
+): Promise<SettledLeg> {
   const settled = await Promise.allSettled(tasks);
   const contributions: SeedContribution[] = [];
+  let failed = 0;
   for (const result of settled) {
     if (result.status === 'rejected') {
+      failed += 1;
       logger.warn({ strategy, detail, err: result.reason }, 'seed query failed');
       continue;
     }
     contributions.push(...result.value);
   }
-  return contributions;
+  return { contributions, attempted: settled.length, failed };
 }
 
 async function vectorContributions(
   deps: SelectSeedsDeps,
   cues: readonly SeedCue[],
   mode: ReadMode,
-): Promise<SeedContribution[]> {
+): Promise<SettledLeg> {
   const tasks = embeddedCues(cues).map(async (cue) => {
     const rows = await vectorSeeds(deps.driver, {
       vector: cue.vector,
@@ -304,7 +322,7 @@ async function bm25Contributions(
   deps: SelectSeedsDeps,
   cues: readonly SeedCue[],
   mode: ReadMode,
-): Promise<SeedContribution[]> {
+): Promise<SettledLeg> {
   const tasks: Array<Promise<readonly SeedContribution[]>> = [];
   for (const cue of cues) {
     const query = escapeLuceneQuery(cue.text);
@@ -339,7 +357,7 @@ async function entityContributions(
   deps: SelectSeedsDeps,
   cues: readonly SeedCue[],
   mode: ReadMode,
-): Promise<SeedContribution[]> {
+): Promise<SettledLeg> {
   const byName = new Map<string, SeedCue>();
   for (const cue of cues) {
     const name = normalizeSeedName(cue.text);
@@ -382,7 +400,7 @@ async function entityContributions(
 async function recencyContributions(
   deps: SelectSeedsDeps,
   mode: ReadMode,
-): Promise<SeedContribution[]> {
+): Promise<SettledLeg> {
   const task = (async () => {
     const rows = await recencySeeds(deps.driver, {
       limit: deps.config.contextResonance.seedLimit,
@@ -406,6 +424,10 @@ function emptyByStrategy(): Record<SeedStrategy, readonly Seed[]> {
  * All four strategies run together; each one's failure is isolated to itself. The top-k cut is
  * `contextResonance.seedLimit`, which is the whitepaper's seed budget and the only place the
  * candidate set is narrowed.
+ *
+ * Isolation is per leg, so the all-legs-failed case is counted rather than inferred from an
+ * empty result: the recency leg always issues one query, which makes "nothing was attempted"
+ * and "everything was rejected" different states.
  */
 export async function selectSeeds(
   deps: SelectSeedsDeps,
@@ -423,18 +445,28 @@ export async function selectSeeds(
 
   const byStrategy = emptyByStrategy();
   const contributions: SeedContribution[] = [];
-  for (const [strategy, produced] of [
+  let attempted = 0;
+  let failed = 0;
+  for (const [strategy, leg] of [
     ['vector', vector],
     ['bm25', bm25],
     ['entity_resolution', entity],
     ['recency', recency],
-  ] as ReadonlyArray<[SeedStrategy, SeedContribution[]]>) {
-    byStrategy[strategy] = mergeSeeds(produced, produced.length);
-    contributions.push(...produced);
+  ] as ReadonlyArray<[SeedStrategy, SettledLeg]>) {
+    byStrategy[strategy] = mergeSeeds(leg.contributions, leg.contributions.length);
+    contributions.push(...leg.contributions);
+    attempted += leg.attempted;
+    failed += leg.failed;
+  }
+
+  const graphUnavailable = attempted > 0 && failed === attempted;
+  if (graphUnavailable) {
+    deps.logger.error({ attempted }, 'every seed query failed; treating the graph as unavailable');
   }
 
   return {
     seeds: mergeSeeds(contributions, deps.config.contextResonance.seedLimit),
+    graphUnavailable,
     byStrategy,
   };
 }
