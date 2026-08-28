@@ -82,13 +82,23 @@ export function mergeStageCounts(stages: readonly StageRecord[]): StageCounts {
 }
 
 /**
- * The ledger records that an episode has been enriched, so it is written only when
- * something was. A run whose every stage failed leaves the key unmarked and stays
- * retryable, and so does a run with no stages at all: an unconfigured pipeline has enriched
+ * Whitepaper §6.1: a job is re-enqueued after a transient failure and the entry gate is what
+ * makes that safe. The key therefore closes only on a run that had nothing left to retry —
+ * every stage either did its work or had none to do. One failed stage keeps it open, because
+ * a model timeout on extraction is exactly the transient the retry exists for, and marking
+ * the run applied would gate the episode out of the pipeline forever with the failed stage's
+ * structure permanently missing and no operation that re-extracts it.
+ *
+ * Isolation (§12.2) is unaffected: the stages after a failure still run and their writes
+ * still stand. What the retry re-runs is idempotent by construction — MERGE on identity, the
+ * edge merge policy, and the per-episode operation keys — except the salience counters,
+ * which count a re-observation on purpose and are bounded by the worker's attempt limit.
+ *
+ * A run with no stages at all stays retryable too: an unconfigured pipeline has enriched
  * nothing, and marking it would gate the episode out of the pipeline that follows.
  */
 export function shouldMarkApplied(stages: readonly StageRecord[]): boolean {
-  return stages.length > 0 && stages.some((stage) => stage.status !== 'failed');
+  return stages.length > 0 && stages.every((stage) => stage.status !== 'failed');
 }
 
 export function summarizeRun(

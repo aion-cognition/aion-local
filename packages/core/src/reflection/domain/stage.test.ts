@@ -47,9 +47,30 @@ describe('mergeStageCounts', () => {
 });
 
 describe('shouldMarkApplied', () => {
-  it('marks a run where any stage did not fail', () => {
-    expect(shouldMarkApplied([record('a', 'failed'), record('b', 'ok')])).toBe(true);
-    expect(shouldMarkApplied([record('a', 'failed'), record('b', 'skipped')])).toBe(true);
+  it('marks a run where no stage failed', () => {
+    expect(shouldMarkApplied([record('a', 'ok'), record('b', 'ok')])).toBe(true);
+    expect(shouldMarkApplied([record('a', 'ok'), record('b', 'skipped')])).toBe(true);
+    expect(shouldMarkApplied([record('a', 'skipped'), record('b', 'skipped')])).toBe(true);
+  });
+
+  it('leaves a run with one failed stage retryable, whatever the rest did', () => {
+    expect(shouldMarkApplied([record('a', 'failed'), record('b', 'ok')])).toBe(false);
+    expect(shouldMarkApplied([record('a', 'ok'), record('b', 'failed')])).toBe(false);
+  });
+
+  it('leaves the model-outage shape retryable: generation fails, everything downstream skips', () => {
+    expect(
+      shouldMarkApplied([
+        record('entities', 'failed'),
+        record('entity-dedup', 'skipped'),
+        record('associations', 'skipped'),
+        record('cognitive', 'failed'),
+        record('semantic-relationships', 'skipped'),
+        record('supersession', 'skipped'),
+        record('reinforcement', 'skipped'),
+        record('context-vectors', 'ok'),
+      ]),
+    ).toBe(false);
   });
 
   it('leaves a run whose every stage failed retryable', () => {
