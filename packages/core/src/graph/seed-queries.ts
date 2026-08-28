@@ -3,6 +3,7 @@ import type { Vector } from '../providers/types.js';
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { runRead } from './connection.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
+import { BASE_NODE_LABEL } from './labels.js';
 import {
   readCurrencyAnnotation,
   readModeFragment,
@@ -10,12 +11,14 @@ import {
   type ReadFragment,
   type ReadMode,
 } from './read-modes.js';
-import { toGraphVector, type Row } from './values.js';
+import { fromGraphVector, toGraphVector, type Row } from './values.js';
 
 /**
- * Whitepaper §5.2's four seed strategies, one query each. They all splice the same
- * `readModeFragment` in, so currency annotation and forget suppression have exactly one
- * definition behind every entry point into recall.
+ * Whitepaper §5.2's four seed strategies, one query each, plus the two reads recall makes
+ * against ids it already holds: hydrating an activated node into a candidate, and pulling
+ * content vectors for MMR. They all splice the same `readModeFragment` in, so currency
+ * annotation and forget suppression have exactly one definition behind every entry point
+ * into recall.
  */
 
 /** Declared by migration 001 on `:Memory`; a node written without that label is invisible to it. */
@@ -257,6 +260,71 @@ export async function entitySimilaritySeeds(
     },
     mapScoredCandidate,
   );
+}
+
+export type NodesByIdInput = {
+  readonly ids: readonly string[];
+  readonly mode: ReadMode;
+};
+
+/**
+ * Spreading activation returns node ids and nothing else, so an activated node reaches the
+ * pack through this. The read mode is spliced in a second time rather than inherited from
+ * the traversal: currency is re-judged on the row that actually reaches the agent, and a
+ * node forgotten between the two reads is suppressed here.
+ */
+export async function nodeCandidates(
+  driver: Driver,
+  input: NodesByIdInput,
+): Promise<SeedCandidate[]> {
+  if (input.ids.length === 0) {
+    return [];
+  }
+  const fragment = readModeFragment(input.mode, 'n');
+  const cypher = [
+    'UNWIND $ids AS wantedId',
+    `MATCH (n:${BASE_NODE_LABEL} { id: wantedId })`,
+    `WHERE ${fragment.where}`,
+    `RETURN ${candidateProjection('n', fragment)}`,
+  ].join('\n');
+
+  return runRead(
+    driver,
+    cypher,
+    { ...fragment.parameters, ids: [...new Set(input.ids)] },
+    mapCandidate,
+  );
+}
+
+export type NodeContentVector = {
+  readonly id: string;
+  readonly vector: number[];
+};
+
+/**
+ * Content embeddings for ids already ranked. Read only when the reranker is MMR, which is
+ * off by default: 768 floats per row is the reason recall does not carry vectors through
+ * the ordinary path.
+ */
+export async function contentVectors(
+  driver: Driver,
+  input: NodesByIdInput,
+): Promise<NodeContentVector[]> {
+  if (input.ids.length === 0) {
+    return [];
+  }
+  const fragment = readModeFragment(input.mode, 'n');
+  const cypher = [
+    'UNWIND $ids AS wantedId',
+    `MATCH (n:${BASE_NODE_LABEL} { id: wantedId })`,
+    `WHERE n.${MEMORY_PROPERTIES.contentVector} IS NOT NULL AND ${fragment.where}`,
+    `RETURN n.id AS id, n.${MEMORY_PROPERTIES.contentVector} AS vector`,
+  ].join('\n');
+
+  return runRead(driver, cypher, { ...fragment.parameters, ids: [...new Set(input.ids)] }, (row) => ({
+    id: row.id as string,
+    vector: fromGraphVector(row.vector) ?? [],
+  }));
 }
 
 export type RecencySeedInput = {
