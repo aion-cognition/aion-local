@@ -3,6 +3,13 @@ import type { SqliteHandle } from './database.js';
 export type LastPack = {
   sessionId: string;
   pack: unknown;
+  /** The stored row's JSON exactly as written, for callers that must reproduce it byte-for-byte. */
+  packJson: string;
+  ts: string;
+};
+
+export type LastPackSession = {
+  sessionId: string;
   ts: string;
 };
 
@@ -35,6 +42,15 @@ export function getLastPack(db: SqliteHandle, sessionId: string): LastPack | und
   return {
     sessionId: row.session_id,
     pack: JSON.parse(row.pack_json) as unknown,
+    packJson: row.pack_json,
     ts: row.ts,
   };
+}
+
+/** Every session with a saved pack, most recently served first (ISO timestamps sort lexicographically). */
+export function listLastPackSessions(db: SqliteHandle): LastPackSession[] {
+  const rows = db
+    .prepare('SELECT session_id, ts FROM last_pack ORDER BY ts DESC')
+    .all() as Array<{ session_id: string; ts: string }>;
+  return rows.map((row) => ({ sessionId: row.session_id, ts: row.ts }));
 }

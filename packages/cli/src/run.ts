@@ -1,5 +1,6 @@
 import { runDoctor } from './doctor.js';
 import { runInit } from './init.js';
+import { runLast } from './last.js';
 import { runStatus } from './status.js';
 
 export const CLI_NAME = 'aion';
@@ -21,6 +22,10 @@ const commands: Record<string, Command> = {
   doctor: {
     summary: 'check every substrate invariant and name what is broken',
     run: (argv) => runDoctor(argv),
+  },
+  last: {
+    summary: 'the last MemoryPack served per session, with rationale',
+    run: (argv) => runLast(argv),
   },
   help: {
     summary: 'show this message',

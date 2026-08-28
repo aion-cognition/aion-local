@@ -46,8 +46,8 @@ export {
 } from './sqlite/reinforcement-queue.js';
 export type { ReinforcementSignal } from './sqlite/reinforcement-queue.js';
 
-export { getLastPack, saveLastPack } from './sqlite/last-pack.js';
-export type { LastPack } from './sqlite/last-pack.js';
+export { getLastPack, listLastPackSessions, saveLastPack } from './sqlite/last-pack.js';
+export type { LastPack, LastPackSession } from './sqlite/last-pack.js';
 
 export {
   ConfigSchema,
