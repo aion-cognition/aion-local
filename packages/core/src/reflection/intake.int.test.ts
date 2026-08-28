@@ -4,14 +4,25 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULTS } from '../config/defaults.js';
 import { bootstrapBackbone } from '../graph/backbone.js';
-import { runRead } from '../graph/connection.js';
 import { runGraphMigrations } from '../graph/migrations.js';
+import {
+  countChainedTurns,
+  countEdges,
+  countNodes,
+  countNodesInSession,
+  countRelationships,
+  edgeTargetId,
+  episodeIdsInSession,
+  everyStoredProperty,
+  nodeLabels,
+  nodeProperties,
+  turnsOfEpisode,
+} from '../graph/test-support/graph-queries.fixture.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
   type Neo4jHarness,
 } from '../graph/test-support/neo4j-harness.fixture.js';
-import type { Row } from '../graph/values.js';
 import { openLogger } from '../logging/logger.js';
 import { OllamaProvider } from '../providers/ollama-provider.js';
 import { SessionManager } from '../session/session-manager.js';
@@ -60,84 +71,13 @@ let signals: ReflectionJobSignal[];
 let backboneIds: { memberId: string; workspaceId: string };
 let episodeId: string;
 
-async function readOne<T>(cypher: string, parameters: Record<string, unknown>, map: (row: Row) => T): Promise<T | undefined> {
-  const rows = await runRead(harness.driver, cypher, parameters, map);
-  return rows[0];
-}
-
-async function nodeProperties(id: string): Promise<Record<string, unknown>> {
-  const props = await readOne(
-    'MATCH (n:AionNode { id: $id }) RETURN properties(n) AS props',
-    { id },
-    (row) => row.props as Record<string, unknown>,
-  );
-  return props ?? {};
-}
-
-async function nodeLabels(id: string): Promise<string[]> {
-  const labels = await readOne(
-    'MATCH (n:AionNode { id: $id }) RETURN labels(n) AS labels',
-    { id },
-    (row) => row.labels as string[],
-  );
-  return [...(labels ?? [])].sort();
-}
-
-async function countAll(cypher: string): Promise<number> {
-  return (await readOne(cypher, {}, (row) => row.c as number)) ?? 0;
-}
-
-async function turnsOfEpisode(): Promise<Array<Record<string, unknown>>> {
-  return runRead(
-    harness.driver,
-    [
-      'MATCH (t:Turn)-[:PARTICIPATES_IN]->(e:Episode { id: $episodeId })',
-      'RETURN properties(t) AS props ORDER BY t.sequence',
-    ].join('\n'),
-    { episodeId },
-    (row) => row.props as Record<string, unknown>,
-  );
-}
-
-async function everyStoredProperty(): Promise<string> {
-  const rows = await runRead(harness.driver, 'MATCH (n) RETURN properties(n) AS props', {}, (row) => row.props);
-  return JSON.stringify(rows);
-}
-
 function ledgerRowCount(): number {
   return (db.prepare('SELECT count(*) AS c FROM ops_ledger').get() as { c: number }).c;
 }
 
-async function episodesInSession(sessionId: string): Promise<number> {
-  return (
-    (await readOne(
-      'MATCH (e:Episode { session_id: $sessionId }) RETURN count(e) AS c',
-      { sessionId },
-      (row) => row.c as number,
-    )) ?? 0
-  );
-}
-
-async function turnsInSession(sessionId: string): Promise<number> {
-  return (
-    (await readOne(
-      'MATCH (t:Turn { session_id: $sessionId }) RETURN count(t) AS c',
-      { sessionId },
-      (row) => row.c as number,
-    )) ?? 0
-  );
-}
-
 /** Queue rows whose episode belongs to this session, matched through the graph. */
 async function jobsForSession(sessionId: string): Promise<ReflectionJob[]> {
-  const episodeIds = new Set(
-    await runRead(
-      harness.driver,
-      'MATCH (e:Episode { session_id: $sessionId }) RETURN e.id AS id',
-      { sessionId },
-      (row) => row.id as string,
-    ),
-  );
+  const episodeIds = new Set(await episodeIdsInSession(harness.driver, sessionId));
   return listReflectionJobs(db).filter((job) =>
     episodeIds.has((job.payload as { episode_id: string }).episode_id),
   );
@@ -184,9 +124,9 @@ afterAll(async () => {
 
 describe('reflection intake against a live graph and live Ollama', () => {
   it('stores the episode with its labels, content, provenance, and a full bitemporal stamp', async () => {
-    const props = await nodeProperties(episodeId);
+    const props = await nodeProperties(harness.driver, episodeId);
 
-    expect(await nodeLabels(episodeId)).toEqual(['AionNode', 'Episode', 'Memory']);
+    expect(await nodeLabels(harness.driver, episodeId)).toEqual(['AionNode', 'Episode', 'Memory']);
     expect(props.summary).toBe(MIXED_PAYLOAD.summary);
     expect(props.session_id).toBe(SESSION_IDENTITY);
     expect(props.extraction_method).toBe('reflection_intake');
@@ -204,7 +144,7 @@ describe('reflection intake against a live graph and live Ollama', () => {
   });
 
   it('folds tool executions and observations into the episode body', async () => {
-    const text = (await nodeProperties(episodeId)).text as string;
+    const text = (await nodeProperties(harness.driver, episodeId)).text as string;
 
     expect(text).toContain('tool bash [error, 8200ms]');
     expect(text).toContain('observation: We keyed the sync on id_slug');
@@ -212,7 +152,7 @@ describe('reflection intake against a live graph and live Ollama', () => {
   });
 
   it('stores every turn in order, linked to the episode and chained to its predecessor', async () => {
-    const turns = await turnsOfEpisode();
+    const turns = await turnsOfEpisode(harness.driver, episodeId);
 
     expect(turns.map((turn) => turn.sequence)).toEqual([0, 1]);
     expect(turns.map((turn) => turn.role)).toEqual(['user', 'assistant']);
@@ -220,38 +160,20 @@ describe('reflection intake against a live graph and live Ollama', () => {
     expect(turns.every((turn) => turn.occurred_at instanceof Date)).toBe(true);
     expect(turns.every((turn) => turn.valid_until === undefined)).toBe(true);
 
-    const chained = await countAll(
-      'MATCH (:Turn { sequence: 1 })-[r:FOLLOWS]->(:Turn { sequence: 0 }) RETURN count(r) AS c',
-    );
-    expect(chained).toBe(1);
+    expect(await countChainedTurns(harness.driver, episodeId)).toBe(1);
   });
 
   it('links the episode into the session and the session into the backbone', async () => {
-    const sessionOfEpisode = await readOne(
-      'MATCH (:Episode { id: $episodeId })-[:PARTICIPATES_IN]->(s:Session) RETURN s.id AS id',
-      { episodeId },
-      (row) => row.id as string,
+    expect(await edgeTargetId(harness.driver, 'PARTICIPATES_IN', episodeId)).toBe(SESSION_IDENTITY);
+    expect(await edgeTargetId(harness.driver, 'INITIATED_BY', SESSION_IDENTITY)).toBe(backboneIds.memberId);
+    expect(await edgeTargetId(harness.driver, 'WITHIN_WORKSPACE', SESSION_IDENTITY)).toBe(
+      backboneIds.workspaceId,
     );
-    expect(sessionOfEpisode).toBe(SESSION_IDENTITY);
-
-    const member = await readOne(
-      'MATCH (:Session { id: $sessionId })-[:INITIATED_BY]->(m:Member) RETURN m.id AS id',
-      { sessionId: SESSION_IDENTITY },
-      (row) => row.id as string,
-    );
-    const workspace = await readOne(
-      'MATCH (:Session { id: $sessionId })-[:WITHIN_WORKSPACE]->(w:Workspace) RETURN w.id AS id',
-      { sessionId: SESSION_IDENTITY },
-      (row) => row.id as string,
-    );
-
-    expect(member).toBe(backboneIds.memberId);
-    expect(workspace).toBe(backboneIds.workspaceId);
   });
 
   it('embeds the episode and every turn at intake, at the configured dimension', async () => {
-    const episodeVector = (await nodeProperties(episodeId)).content_vec as number[];
-    const turns = await turnsOfEpisode();
+    const episodeVector = (await nodeProperties(harness.driver, episodeId)).content_vec as number[];
+    const turns = await turnsOfEpisode(harness.driver, episodeId);
 
     expect(episodeVector).toHaveLength(EMBED_DIMENSION);
     expect(episodeVector.every((value) => Number.isFinite(value))).toBe(true);
@@ -277,7 +199,7 @@ describe('reflection intake against a live graph and live Ollama', () => {
   });
 
   it('never stores the raw secret in any node property, only its fingerprint', async () => {
-    const stored = await everyStoredProperty();
+    const stored = await everyStoredProperty(harness.driver);
 
     expect(stored).not.toContain(AWS_KEY);
     expect(stored).not.toContain(GITHUB_TOKEN);
@@ -288,14 +210,14 @@ describe('reflection intake against a live graph and live Ollama', () => {
   });
 
   it('returns the original episode id for a repeat push, writing no new nodes, edges, or jobs', async () => {
-    const nodesBefore = await countAll('MATCH (n) RETURN count(n) AS c');
-    const edgesBefore = await countAll('MATCH ()-[r]->() RETURN count(r) AS c');
+    const nodesBefore = await countNodes(harness.driver);
+    const edgesBefore = await countRelationships(harness.driver);
 
     const repeat = await handleReflection(deps, MIXED_PAYLOAD, { identity: SESSION_IDENTITY });
 
     expect(repeat).toEqual({ episode_id: episodeId, queued: true });
-    expect(await countAll('MATCH (n) RETURN count(n) AS c')).toBe(nodesBefore);
-    expect(await countAll('MATCH ()-[r]->() RETURN count(r) AS c')).toBe(edgesBefore);
+    expect(await countNodes(harness.driver)).toBe(nodesBefore);
+    expect(await countRelationships(harness.driver)).toBe(edgesBefore);
     expect(listReflectionJobs(db)).toHaveLength(1);
     expect(signals).toHaveLength(1);
     expect(ledgerRowCount()).toBe(0);
@@ -308,10 +230,7 @@ describe('reflection intake against a live graph and live Ollama', () => {
     expect(listReflectionJobs(db)).toHaveLength(2);
     expect(signals).toHaveLength(2);
 
-    const follows = await countAll(
-      `MATCH (:Session { id: "mcp-transport-session-2" })-[r:FOLLOWS]->(:Session { id: "${SESSION_IDENTITY}" }) RETURN count(r) AS c`,
-    );
-    expect(follows).toBe(1);
+    expect(await countEdges(harness.driver, 'FOLLOWS', 'mcp-transport-session-2', SESSION_IDENTITY)).toBe(1);
   });
 });
 
@@ -339,14 +258,14 @@ describe('reflection intake under failure and concurrency', () => {
 
     await expect(handleReflection(starved, PAYLOAD, { identity })).rejects.toThrow(/expected at least/);
 
-    expect(await episodesInSession(identity)).toBe(0);
-    expect(await turnsInSession(identity)).toBe(0);
+    expect(await countNodesInSession(harness.driver, 'Episode', identity)).toBe(0);
+    expect(await countNodesInSession(harness.driver, 'Turn', identity)).toBe(0);
     expect(await jobsForSession(identity)).toHaveLength(0);
 
     // A clean retry starts from nothing, so the episode lands whole.
     const retry = await handleReflection(deps, PAYLOAD, { identity });
-    expect(await episodesInSession(identity)).toBe(1);
-    expect(await turnsInSession(identity)).toBe(2);
+    expect(await countNodesInSession(harness.driver, 'Episode', identity)).toBe(1);
+    expect(await countNodesInSession(harness.driver, 'Turn', identity)).toBe(2);
     expect(await jobsForSession(identity)).toHaveLength(1);
     expect(retry.queued).toBe(true);
   });
@@ -361,13 +280,13 @@ describe('reflection intake under failure and concurrency', () => {
 
     await expect(handleReflection({ ...deps, db: closed }, PAYLOAD, { identity })).rejects.toThrow();
 
-    expect(await episodesInSession(identity)).toBe(1);
+    expect(await countNodesInSession(harness.driver, 'Episode', identity)).toBe(1);
     expect(await jobsForSession(identity)).toHaveLength(0);
 
     const retry = await handleReflection(deps, PAYLOAD, { identity });
     const queued = await jobsForSession(identity);
 
-    expect(await episodesInSession(identity)).toBe(1);
+    expect(await countNodesInSession(harness.driver, 'Episode', identity)).toBe(1);
     expect(queued).toHaveLength(1);
     expect(queued[0]?.payload).toEqual({ episode_id: retry.episode_id });
     expect(retry.queued).toBe(true);
@@ -397,8 +316,8 @@ describe('reflection intake under failure and concurrency', () => {
 
     const ids = new Set(results.map((result) => result.episode_id));
     expect(ids.size).toBe(1);
-    expect(await episodesInSession(identity)).toBe(1);
-    expect(await turnsInSession(identity)).toBe(2);
+    expect(await countNodesInSession(harness.driver, 'Episode', identity)).toBe(1);
+    expect(await countNodesInSession(harness.driver, 'Turn', identity)).toBe(2);
     expect(await jobsForSession(identity)).toHaveLength(1);
   });
 });
