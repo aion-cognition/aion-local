@@ -9,10 +9,16 @@ Conventions and commands for agents working in this repo.
 - No single-line control flow: every `if`, `for`, `while` body is a block, even one line.
 - Files stay under 500 lines.
 - No factory functions.
-- Comments state a constraint, not a narration. No plan or task IDs in comments.
+- Comments state the why or a constraint in plain register: simple tenses, no em-dashes.
+  Never cite the whitepaper, the PRD, plans, phases, findings, reviews, or the build
+  process; inline the reason itself. No plan or task IDs, no self-referential narration.
+  Test titles describe behavior, never findings.
+- Docs (README, docs/) follow the same register: no em-dashes anywhere (use period, comma,
+  colon, or parentheses), plain words, front-load the verdict, one piece of evidence per
+  claim. `docs/degradation.md` models the register.
 - All Cypher lives in `packages/core/src/infrastructure/graph/`. This is a review-time
   rule, not tool-enforced: no test scans for Cypher outside that directory. It covers every
-  statement that runs — including the assertion queries integration tests make, which belong
+  statement that runs, including the assertion queries integration tests make, which belong
   in `infrastructure/graph/test-support/graph-queries.fixture.ts`. It does not cover a fake
   driver recognising a statement production code generated (`cypher.includes('MATCH …')`):
   that is a string predicate about the adapter's output, and moving it into `graph/` would
