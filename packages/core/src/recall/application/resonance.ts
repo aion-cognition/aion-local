@@ -23,11 +23,25 @@ import { contextCentroid, resonantItem } from '../domain/resonance.js';
  * the other, so the honest bar is the one the algorithm specifies, and 0.7 sits above the
  * content floor rather than under it. The bucket is a second way in, not a lower one.
  *
+ * WHAT THE CENTROID IS BUILT FROM. Only the activated nodes the first pass actually admitted,
+ * weighted by activation. The rest of the activated set is whatever the seed legs reached,
+ * recency included, and a mean over all of it lands near the substrate's centre of mass, where
+ * cosine to the busiest nodes in the graph is high by construction and says nothing.
+ *
+ * Measured on the live substrate. A centroid over forty arbitrary context vectors returns
+ * Postgres, Datadog, psql and a preference about squash merges at 0.95 to 0.98, and it returns
+ * them for a nonsense query as readily as for a real one. The centroid of the one node a
+ * nonsense query did admit returns that node's own neighborhood: the Unicode and multilingual
+ * test memories around it, at 0.996 and up. Same threshold, same query, opposite answers. The
+ * threshold was never the discriminator; the source of the centroid is.
+ *
  * WHAT IT REFUSES TO RUN ON. The centroid is only meaningful when the first pass found
- * something. If nothing cleared admission on its own evidence, the activated set is whatever
- * the recency leg happened to return, and resonating from it would hand back memories related
- * to the shape of nothing at all. That is the failure the floors exist to prevent, so the stage
- * declines the query instead.
+ * something. If nothing cleared admission on its own evidence there is nothing to take a mean
+ * of, and resonating from the rest would hand back memories related to the shape of nothing at
+ * all. That is the failure the floors exist to prevent, so the stage declines the query
+ * instead. For the same reason the bucket is capped at how many items the first pass admitted:
+ * resonance elaborates an answer and may not become one, and a pack that admitted a single
+ * marginal fact has no business carrying five associations behind it.
  */
 
 export type ResonanceDeps = {
@@ -45,8 +59,11 @@ export type ResonanceInput = {
    * twice under two rationales explains itself with neither.
    */
   readonly exclude: ReadonlySet<string>;
-  /** `admission.anchored`: at least one candidate cleared the gate on its own evidence. */
-  readonly anchored: boolean;
+  /**
+   * What the first pass admitted: the ids of the items in the pack. These are the centroid's
+   * whole input, and how many there are caps how many resonant hits may sit behind them.
+   */
+  readonly anchoredIds: ReadonlySet<string>;
   readonly mode: ReadMode;
 };
 
@@ -79,17 +96,22 @@ function skip(skipped: ResonanceSkip, activated: number, covered = 0): Resonance
   return { items: [], skipped, covered, activated };
 }
 
-/** The centroid, or `undefined` when no activated node has been through reflection's last stage. */
+/**
+ * The centroid over the anchored part of the activated set, or `undefined` when none of those
+ * nodes has been through reflection's last stage. `covered` counts the same restricted set, so
+ * a quiet stage still reports coverage of what it actually tried to average.
+ */
 async function centroidOf(
   deps: ResonanceDeps,
-  input: ResonanceInput,
+  anchored: readonly ActivatedNode[],
+  mode: ReadMode,
 ): Promise<{ centroid?: Vector; covered: number }> {
   const rows = await contextVectors(deps.driver, {
-    ids: input.activated.map((node) => node.nodeId),
-    mode: input.mode,
+    ids: anchored.map((node) => node.nodeId),
+    mode,
   });
   const vectors = new Map<string, Vector>(rows.map((row) => [row.id, row.vector]));
-  const centroid = contextCentroid(input.activated, vectors);
+  const centroid = contextCentroid(anchored, vectors);
   return { ...(centroid === undefined ? {} : { centroid }), covered: vectors.size };
 }
 
@@ -133,13 +155,14 @@ export async function resonate(
   if (activated === 0) {
     return skip('no_activation', activated);
   }
-  if (!input.anchored) {
+  const anchored = input.activated.filter((node) => input.anchoredIds.has(node.nodeId));
+  if (anchored.length === 0) {
     deps.logger.debug({ activated }, 'context resonance skipped: the first pass anchored nothing');
     return skip('no_anchor', activated);
   }
 
   try {
-    const { centroid, covered } = await centroidOf(deps, input);
+    const { centroid, covered } = await centroidOf(deps, anchored, input.mode);
     if (centroid === undefined) {
       deps.logger.debug(
         { activated, covered },
@@ -151,13 +174,13 @@ export async function resonate(
     const hits = await resonantNodes(deps.driver, {
       centroid,
       threshold: deps.config.contextResonance.contextSearchThreshold,
-      limit: deps.config.contextResonance.resonantLimit,
+      limit: Math.min(deps.config.contextResonance.resonantLimit, anchored.length),
       exclude: input.exclude,
       mode: input.mode,
     });
     const items = await hydrateHits(deps, hits, input.mode);
     deps.logger.debug(
-      { activated, covered, hits: hits.length, items: items.length },
+      { activated, anchored: anchored.length, covered, hits: hits.length, items: items.length },
       'context resonance ran',
     );
     return { items, covered, activated };

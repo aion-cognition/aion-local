@@ -318,16 +318,16 @@ export async function handleRecall(
     });
   });
 
-  // The second pass, after fusion rather than straight after activation: it needs to know
-  // whether the first pass anchored, and excluding what fusion admitted is what keeps a
-  // resonant discovery out of every other bucket.
+  // The second pass, after fusion rather than straight after activation: the items fusion
+  // admitted are what the centroid averages and what caps the bucket, and excluding them is
+  // also what keeps a resonant discovery out of every other bucket.
   const resonance = await timed<ResonanceResult>(() =>
     resonate(
       { driver: deps.driver, config: deps.config, logger: deps.logger },
       {
         activated: activation.value.activated,
         exclude: firstPassIds(seeds, activation.value.activated, fusion.value.items),
-        anchored: fusion.value.admission.anchored,
+        anchoredIds: new Set(fusion.value.items.map((item) => item.id)),
         mode,
       },
     ),
