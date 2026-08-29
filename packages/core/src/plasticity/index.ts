@@ -47,3 +47,6 @@ export type {
   HebbianDecayOptions,
   HebbianDecayReport,
 } from './application/decay.js';
+
+export { plasticityCounters, plasticitySnapshot } from './application/metrics.js';
+export type { PlasticityCounters, PlasticitySnapshot } from './application/metrics.js';
