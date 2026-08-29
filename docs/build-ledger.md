@@ -247,6 +247,14 @@ neither a harness-boot regression:
 - The fifteenth, `cognitive.int.test.ts`'s "mints no Goal from a decision-light closing
   episode" assertion, is unrelated: the file never calls `loadConfig`. It failed in both
   full-context runs recorded here and passed 3 of 3 isolated reruns of the same file alone.
+
+The round closed clean: 1466 of 1469 passing (3 documented skips), zero failures, 7:12
+wall. Getting there fixed the two causes above (test variables renamed out of the
+validator's namespace; test inference pinned to temperature 0) plus two more latencies the
+faster infrastructure exposed: a deferred-write test asserting the batch was unwritten at
+a racy instant, and the test Anthropic client feeding 429 throttling into the reflection
+worker's minutes-scale backoff (it now absorbs throttling with a short honor-retry-after
+wait).
   Neither route pins a temperature for this stage, and the Anthropic test client drops any
   `temperature` a caller does supply, so Haiku runs it at the API default. Existing
   nondeterminism the faster pass surfaced, not a regression from the routing switch.
