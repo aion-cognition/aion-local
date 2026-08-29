@@ -20,10 +20,10 @@
     "lint:fix": "eslint . --fix",
     "lint:conflicts": "eslint-config-prettier packages/core/src/index.ts",
     "format": "prettier --write .",
-    "format:check": "prettier --check .",
-    "lint:preset-drift": "node eslint/check-preset-drift.js"
+    "format:check": "prettier --check ."
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^22.20.1",
     "eslint": "^10.9.1",
     "eslint-config-prettier": "^10.1.8",
