@@ -74,17 +74,27 @@ const CognitiveExtractionOutputSchema = z.object({
 const SYSTEM_PROMPT = [
   'You extract cognitive structure from a memory episode recorded by an AI coding agent:',
   'goals, plans, decisions, insights, concepts, contexts, events, patterns, and trends the episode actually contains.',
+  'Most episodes do not contain all nine kinds, and many contain only one or two of them.',
+  'Extract a type only when the episode gives it real, distinct content; return nothing at',
+  'all for a type the episode has no content for. Returning fewer than nine nodes, or zero,',
+  'is the normal and expected outcome — do not add a node merely to cover a type, and do not',
+  'add a second node restating one you already extracted under a different type.',
   'Give each node a type from that list and a one-sentence text grounded in the episode.',
   'For a goal, add status (active, completed, or abandoned) and priority (low, medium, or high) when the episode states them.',
   'For a plan, add status (active, completed, or abandoned) when the episode states it.',
   'For a decision, add a one-sentence rationale when the episode gives one.',
-  'Skip a type with no evidence in the episode; do not pad the output to cover every type.',
+  'A goal or plan must state something beyond the episode\'s own summary line; if it would',
+  'only restate that summary in different words, leave it out.',
 ].join(' ');
 
-function buildMessages(text: string): ChatMessage[] {
+function buildMessages(text: string, summary: string | undefined): ChatMessage[] {
+  const summaryLine =
+    summary === undefined || summary.length === 0
+      ? ''
+      : `\n\nEpisode summary (for the goal/plan restatement check only, not a source to extract from):\n${summary}`;
   return [
     { role: 'system', content: SYSTEM_PROMPT },
-    { role: 'user', content: `Episode:\n${text}` },
+    { role: 'user', content: `Episode:\n${text}${summaryLine}` },
   ];
 }
 
@@ -101,6 +111,55 @@ function metadataFor(node: ExtractedNode): CognitiveNodeMetadata {
   }
   return {};
 }
+
+/**
+ * A second, independent judgment on exactly the Goal and Plan candidates the first call
+ * proposed: does this state something the episode's own summary does not already say? The
+ * in-prompt instruction on the first call is the primary defense; this call exists because
+ * an instruction alone measurably did not stop the padding it asked the model not to do, so
+ * whether a candidate survives is still the model's call — never a text comparison here —
+ * just asked a second time, on a narrower question, with a chance to reconsider.
+ */
+const RESTATEMENT_SYSTEM_PROMPT = [
+  "You check candidate Goal and Plan nodes extracted from one episode against that episode's",
+  'own summary line, looking for restatements to drop. A candidate is a restatement when it',
+  'says the same thing the summary already says, even in different words or as a completed',
+  'goal instead of a summary sentence.',
+  'Example: the summary is "closed out the duplicate remittance investigation" and a',
+  'candidate Goal reads "Close the duplicate remittance investigation" or "Close out the',
+  'duplicate remittance investigation" — that candidate is a restatement. Completing the same',
+  'thing the summary already says was completed adds no information, no matter how the goal',
+  'text words it.',
+  'Return the keys of every candidate that is a restatement by this test; return an empty',
+  'list only when none of them are.',
+].join(' ');
+
+type RestatementCandidate = {
+  readonly key: string;
+  readonly nodeIndex: number;
+  readonly type: 'Goal' | 'Plan';
+  readonly text: string;
+};
+
+function buildRestatementSchema(candidates: readonly RestatementCandidate[]): JsonSchema {
+  return {
+    type: 'object',
+    properties: {
+      restated: { type: 'array', items: { type: 'string', enum: candidates.map((candidate) => candidate.key) } },
+    },
+    required: ['restated'],
+  };
+}
+
+function buildRestatementMessages(summary: string, candidates: readonly RestatementCandidate[]): ChatMessage[] {
+  const items = candidates.map((candidate) => `${candidate.key} [${candidate.type}]: ${candidate.text}`).join('\n');
+  return [
+    { role: 'system', content: RESTATEMENT_SYSTEM_PROMPT },
+    { role: 'user', content: `Episode summary:\n${summary}\n\nCandidates:\n${items}` },
+  ];
+}
+
+const RestatementOutputSchema = z.object({ restated: z.array(z.string()) });
 
 function describeError(error: unknown): string {
   return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
@@ -138,7 +197,7 @@ export class CognitiveExtractionStage implements ReflectionStage {
     try {
       raw = await ctx.provider.generate({
         model: this.#model,
-        messages: buildMessages(text),
+        messages: buildMessages(text, ctx.episode.summary),
         schema: COGNITIVE_JSON_SCHEMA,
         // Reasoning buys nothing for extraction and costs the budget (mirrors cues.ts / the quality harness).
         think: false,
@@ -161,11 +220,24 @@ export class CognitiveExtractionStage implements ReflectionStage {
       };
     }
 
-    const nodes = parsed.data.nodes
+    const extracted = parsed.data.nodes
       .slice(0, this.#maxNodes)
       .filter((node) => node.text.trim().length > 0);
-    if (nodes.length === 0) {
+    if (extracted.length === 0) {
       return { status: 'skipped', summary: 'no cognitive structure found in the episode' };
+    }
+
+    const summary = ctx.episode.summary?.trim();
+    const nodes =
+      summary === undefined || summary.length === 0
+        ? extracted
+        : await this.#dropRestatements(ctx, extracted, summary);
+    if (nodes.length === 0) {
+      return {
+        status: 'ok',
+        summary: 'every extracted node restated the episode summary and was dropped',
+        counts: { cognitive: 0 },
+      };
     }
 
     // Absent vectors leave the written nodes as pending-vector `:Memory` markers rather than
@@ -217,5 +289,72 @@ export class CognitiveExtractionStage implements ReflectionStage {
       summary: `extracted ${nodes.length} cognitive node(s), ${created} new`,
       counts: { cognitive: nodes.length },
     };
+  }
+
+  /** Keeps every non-Goal/Plan node untouched; Goal/Plan candidates pass through validation. */
+  async #dropRestatements(
+    ctx: StageContext,
+    nodes: readonly ExtractedNode[],
+    summary: string,
+  ): Promise<readonly ExtractedNode[]> {
+    const candidates: RestatementCandidate[] = [];
+    nodes.forEach((node, nodeIndex) => {
+      if (node.type === 'Goal' || node.type === 'Plan') {
+        candidates.push({ key: `R${candidates.length + 1}`, nodeIndex, type: node.type, text: node.text });
+      }
+    });
+    if (candidates.length === 0) {
+      return nodes;
+    }
+
+    const restated = await this.#validateRestatements(ctx, summary, candidates);
+    if (restated === undefined) {
+      ctx.logger.warn(
+        { episodeId: ctx.episodeId, candidates: candidates.length },
+        'cognitive extraction: restatement validation unusable twice, dropping the candidate goal/plan node(s)',
+      );
+      const dropped = new Set(candidates.map((candidate) => candidate.nodeIndex));
+      return nodes.filter((_, index) => !dropped.has(index));
+    }
+
+    const restatedKeys = new Set(restated);
+    const dropped = new Set(
+      candidates.filter((candidate) => restatedKeys.has(candidate.key)).map((candidate) => candidate.nodeIndex),
+    );
+    return nodes.filter((_, index) => !dropped.has(index));
+  }
+
+  /** One call, then one retry of the same question on an unusable answer; `undefined` on both. */
+  async #validateRestatements(
+    ctx: StageContext,
+    summary: string,
+    candidates: readonly RestatementCandidate[],
+  ): Promise<readonly string[] | undefined> {
+    const first = await this.#restatementCall(ctx, summary, candidates);
+    return first ?? this.#restatementCall(ctx, summary, candidates);
+  }
+
+  async #restatementCall(
+    ctx: StageContext,
+    summary: string,
+    candidates: readonly RestatementCandidate[],
+  ): Promise<readonly string[] | undefined> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.#timeoutMs);
+    try {
+      const raw = await ctx.provider.generate({
+        model: this.#model,
+        messages: buildRestatementMessages(summary, candidates),
+        schema: buildRestatementSchema(candidates),
+        think: false,
+        signal: controller.signal,
+      });
+      const parsed = RestatementOutputSchema.safeParse(raw);
+      return parsed.success ? parsed.data.restated : undefined;
+    } catch {
+      return undefined;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }

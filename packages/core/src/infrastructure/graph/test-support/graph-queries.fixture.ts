@@ -380,6 +380,7 @@ export type WrittenRelationship = {
   readonly type: string;
   readonly sourceId: string;
   readonly targetId: string;
+  readonly rationale?: string;
 };
 
 /** Every edge one pipeline path wrote, found by the provenance it stamps. */
@@ -392,13 +393,14 @@ export async function relationshipsByProvenance(
     [
       'MATCH (a)-[r]->(b)',
       'WHERE $method IN r.provenance',
-      'RETURN type(r) AS type, a.id AS sourceId, b.id AS targetId',
+      'RETURN type(r) AS type, a.id AS sourceId, b.id AS targetId, r.rationale AS rationale',
     ].join('\n'),
     { method },
     (row) => ({
       type: row.type as string,
       sourceId: row.sourceId as string,
       targetId: row.targetId as string,
+      ...(typeof row.rationale === 'string' ? { rationale: row.rationale } : {}),
     }),
   );
 }

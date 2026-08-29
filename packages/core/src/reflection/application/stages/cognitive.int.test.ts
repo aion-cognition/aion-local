@@ -8,6 +8,7 @@ import { loadEpisodeContext } from '../../../infrastructure/graph/episode-contex
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import { contentVectors, escapeLuceneQuery, fulltextSeeds, vectorSeeds } from '../../../infrastructure/graph/seed-queries.js';
 import { withCurrency } from '../../../infrastructure/graph/read-modes.js';
+import { findEpisodeCognitiveNodes } from '../../../infrastructure/graph/semantic-relationship-queries.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
@@ -148,5 +149,54 @@ describe('CognitiveExtractionStage against a live graph and Ollama', () => {
       mode: withCurrency(),
     });
     expect(vectorHits[0]?.id).toBe(cognitiveHit!.id);
+  }, 120_000);
+
+  it('mints no Goal from a decision-light closing episode, without failing the stage', async () => {
+    const identity = 'mcp-transport-session-cognitive-decision-light';
+    const payload = {
+      turns: [
+        { role: 'user', text: 'That covers everything on the list.' },
+        { role: 'assistant', text: "Sounds good, that's a wrap for today." },
+      ],
+      summary: 'closed out the duplicate remittance investigation',
+    };
+
+    const backbone = await bootstrapBackbone(harness.driver, { memberName: 'Test User' });
+    const intake: ReflectionIntakeDeps = {
+      driver: harness.driver,
+      db,
+      sessions: new SessionManager(harness.driver, {
+        memberId: backbone.member.id,
+        workspaceId: backbone.workspace.id,
+      }),
+      provider: ollamaProvider(),
+      dispatch: new ReflectionDispatch(),
+      logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
+      entropyThreshold: DEFAULTS.redaction.entropyThreshold,
+      lanes: new LaneAssigner(DEFAULTS.lanes),
+    };
+
+    const stored = await handleReflection(intake, payload, { identity });
+    const lightEpisodeId = stored.episode_id;
+    const episode = await loadEpisodeContext(harness.driver, lightEpisodeId);
+    if (episode === undefined) {
+      throw new Error(`no episode ${lightEpisodeId}`);
+    }
+
+    const ctx: StageContext = {
+      driver: harness.driver,
+      db,
+      provider: ollamaProvider(),
+      episodeId: lightEpisodeId,
+      episode,
+      logger: intake.logger,
+      now: new Date(),
+    };
+
+    const outcome = await new CognitiveExtractionStage({ model: DEFAULTS.models.reflect }).run(ctx);
+
+    expect(outcome.status).not.toBe('failed');
+    const nodes = await findEpisodeCognitiveNodes(harness.driver, lightEpisodeId);
+    expect(nodes.filter((node) => node.label === 'Goal')).toHaveLength(0);
   }, 120_000);
 });

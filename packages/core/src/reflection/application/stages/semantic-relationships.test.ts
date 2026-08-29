@@ -12,6 +12,9 @@ import { SemanticRelationshipStage } from './semantic-relationships.js';
 
 const EPISODE_ID = 'episode-1';
 const NOW = new Date('2026-08-28T09:05:00.000Z');
+const DEFAULT_TEXT = 'user: ship it\nassistant: shipping now';
+/** A verbatim span of DEFAULT_TEXT, so a proposal referencing it clears the quote check. */
+const VALID_QUOTE = 'ship it';
 
 type GenerateFn = (req: StructuredRequest) => Promise<unknown>;
 
@@ -46,7 +49,7 @@ function seedCognitive(id: string, label: string, text: string): void {
   graph.seedEdge('EXTRACTED_FROM', id, EPISODE_ID);
 }
 
-function buildContext(provider: Provider, text = 'user: ship it\nassistant: shipping now'): StageContext {
+function buildContext(provider: Provider, text = DEFAULT_TEXT): StageContext {
   return {
     driver: graph.driver,
     db: undefined as unknown as SqliteHandle,
@@ -83,18 +86,38 @@ describe('SemanticRelationshipStage', () => {
     });
   });
 
-  it('keys the prompt schema off the candidate list and writes a clamped edge', async () => {
+  it('excludes a Goal from the candidate set, leaving too few to relate', async () => {
+    seedEntity('entity-1', 'Aion', 'project');
+    seedCognitive('goal-1', 'Goal', 'ship the worker');
+    const stage = new SemanticRelationshipStage();
+
+    const outcome = await stage.run(buildContext(stubProvider(async () => ({ relationships: [] }))));
+
+    // Only Decision, Insight, and Concept are claim-bearing; the Goal never reaches the
+    // candidate list, so one entity is all that remains.
+    expect(outcome).toEqual({
+      status: 'skipped',
+      summary: 'fewer than two entities or cognitive nodes to relate',
+    });
+  });
+
+  it('keys the prompt schema off the candidate list and writes a clamped edge with its quote as rationale', async () => {
     seedEntity('entity-1', 'Ryan', 'person');
     seedCognitive('cog-1', 'Decision', 'use SQLite for the queue');
     const generate = async (req: StructuredRequest): Promise<unknown> => {
       expect(req.schema).toMatchObject({
         properties: {
-          relationships: { items: { properties: { source: { enum: ['E1', 'C1'] } } } },
+          relationships: {
+            items: {
+              properties: { source: { enum: ['E1', 'C1'] } },
+              required: ['source', 'target', 'type', 'confidence', 'quote'],
+            },
+          },
         },
       });
       return {
         relationships: [
-          { source: 'E1', target: 'C1', type: 'CAUSES', confidence: 1.4, rationale: 'Ryan decided it' },
+          { source: 'E1', target: 'C1', type: 'CAUSES', confidence: 1.4, quote: VALID_QUOTE },
         ],
       };
     };
@@ -110,15 +133,48 @@ describe('SemanticRelationshipStage', () => {
     // Confidence 1.4 clamps to 1, and strength rides the same clamped value.
     expect(edge?.strength).toBe(1);
     expect(edge?.confidence).toBe(1);
+    expect(edge?.rationale).toBe(VALID_QUOTE);
     expect(edge?.provenance).toEqual(['reflection_semantic_relationships']);
     expect(edge?.count).toBe(0);
+  });
+
+  it('drops a proposal whose quote does not appear in the episode text', async () => {
+    seedEntity('entity-1', 'Ryan', 'person');
+    seedEntity('entity-2', 'Aion', 'project');
+    const generate = async (): Promise<unknown> => ({
+      relationships: [
+        { source: 'E1', target: 'E2', type: 'RELATED_TO', confidence: 0.7, quote: 'words nowhere in the episode' },
+      ],
+    });
+    const stage = new SemanticRelationshipStage();
+
+    const outcome = await stage.run(buildContext(stubProvider(generate)));
+
+    expect(outcome.counts).toEqual({ relationships: 0 });
+    expect(graph.edgesOfType('RELATED_TO')).toHaveLength(0);
+  });
+
+  it('drops a proposal with a missing or empty quote', async () => {
+    seedEntity('entity-1', 'Ryan', 'person');
+    seedEntity('entity-2', 'Aion', 'project');
+    const generate = async (): Promise<unknown> => ({
+      relationships: [
+        { source: 'E1', target: 'E2', type: 'RELATED_TO', confidence: 0.7 },
+        { source: 'E1', target: 'E2', type: 'SIMILAR', confidence: 0.7, quote: '   ' },
+      ],
+    });
+    const stage = new SemanticRelationshipStage();
+
+    const outcome = await stage.run(buildContext(stubProvider(generate)));
+
+    expect(outcome.counts).toEqual({ relationships: 0 });
   });
 
   it('applies a fallback confidence when the model omits the optional field', async () => {
     seedEntity('entity-1', 'Ryan', 'person');
     seedCognitive('cog-1', 'Decision', 'use SQLite for the queue');
     const generate = async (): Promise<unknown> => ({
-      relationships: [{ source: 'E1', target: 'C1', type: 'ENABLES' }],
+      relationships: [{ source: 'E1', target: 'C1', type: 'ENABLES', quote: VALID_QUOTE }],
     });
     const stage = new SemanticRelationshipStage();
 
@@ -133,7 +189,7 @@ describe('SemanticRelationshipStage', () => {
     seedEntity('entity-1', 'Ryan', 'person');
     seedEntity('entity-2', 'Aion', 'project');
     const generate = async (): Promise<unknown> => ({
-      relationships: [{ source: 'E1', target: 'E2', type: 'RELATED_TO', confidence: -0.5 }],
+      relationships: [{ source: 'E1', target: 'E2', type: 'RELATED_TO', confidence: -0.5, quote: VALID_QUOTE }],
     });
     const stage = new SemanticRelationshipStage();
 
@@ -147,7 +203,7 @@ describe('SemanticRelationshipStage', () => {
     seedEntity('entity-1', 'Ryan', 'person');
     seedEntity('entity-2', 'Aion', 'project');
     const generate = async (): Promise<unknown> => ({
-      relationships: [{ source: 'E1', target: 'E9', type: 'RELATED_TO', confidence: 0.7 }],
+      relationships: [{ source: 'E1', target: 'E9', type: 'RELATED_TO', confidence: 0.7, quote: VALID_QUOTE }],
     });
     const stage = new SemanticRelationshipStage();
 
@@ -161,7 +217,7 @@ describe('SemanticRelationshipStage', () => {
     seedEntity('entity-1', 'Ryan', 'person');
     seedEntity('entity-2', 'Aion', 'project');
     const generate = async (): Promise<unknown> => ({
-      relationships: [{ source: 'E1', target: 'E1', type: 'RELATED_TO', confidence: 0.7 }],
+      relationships: [{ source: 'E1', target: 'E1', type: 'RELATED_TO', confidence: 0.7, quote: VALID_QUOTE }],
     });
     const stage = new SemanticRelationshipStage();
 
@@ -174,7 +230,7 @@ describe('SemanticRelationshipStage', () => {
     seedEntity('entity-1', 'Ryan', 'person');
     seedEntity('entity-2', 'Aion', 'project');
     const generate = async (): Promise<unknown> => ({
-      relationships: [{ source: 'E1', target: 'E2', type: 'BEFRIENDS', confidence: 0.7 }],
+      relationships: [{ source: 'E1', target: 'E2', type: 'BEFRIENDS', confidence: 0.7, quote: VALID_QUOTE }],
     });
     const stage = new SemanticRelationshipStage();
 
@@ -188,8 +244,8 @@ describe('SemanticRelationshipStage', () => {
     seedEntity('entity-2', 'Aion', 'project');
     const generate = async (): Promise<unknown> => ({
       relationships: [
-        { source: 'E1', target: 'E2', type: 'CONTRADICTS', confidence: 0.7 },
-        { source: 'E2', target: 'E1', type: 'SIMILAR', confidence: 0.8 },
+        { source: 'E1', target: 'E2', type: 'CONTRADICTS', confidence: 0.7, quote: VALID_QUOTE },
+        { source: 'E2', target: 'E1', type: 'SIMILAR', confidence: 0.8, quote: VALID_QUOTE },
       ],
     });
     const stage = new SemanticRelationshipStage();
@@ -206,8 +262,8 @@ describe('SemanticRelationshipStage', () => {
     seedEntity('entity-2', 'Aion', 'project');
     const generate = async (): Promise<unknown> => ({
       relationships: [
-        { source: 'E1', target: 'E2', type: 'RELATED_TO', confidence: 0.6 },
-        { source: 'E1', target: 'E2', type: 'RELATED_TO', confidence: 0.9 },
+        { source: 'E1', target: 'E2', type: 'RELATED_TO', confidence: 0.6, quote: VALID_QUOTE },
+        { source: 'E1', target: 'E2', type: 'RELATED_TO', confidence: 0.9, quote: VALID_QUOTE },
       ],
     });
     const stage = new SemanticRelationshipStage();
@@ -222,7 +278,7 @@ describe('SemanticRelationshipStage', () => {
     seedEntity('entity-a', 'Alpha', 'concept');
     seedEntity('entity-z', 'Zulu', 'concept');
     const generate = async (): Promise<unknown> => ({
-      relationships: [{ source: 'E2', target: 'E1', type: 'ANALOGOUS_TO', confidence: 0.5 }],
+      relationships: [{ source: 'E2', target: 'E1', type: 'ANALOGOUS_TO', confidence: 0.5, quote: VALID_QUOTE }],
     });
     const stage = new SemanticRelationshipStage();
 
@@ -269,8 +325,8 @@ describe('SemanticRelationshipStage', () => {
     seedCognitive('cog-1', 'Decision', 'use SQLite for the queue');
     const generate = async (): Promise<unknown> => ({
       relationships: [
-        { source: 'E1', target: 'E2', type: 'RELATED_TO', confidence: 0.6 },
-        { source: 'E1', target: 'C1', type: 'CAUSES', confidence: 0.6 },
+        { source: 'E1', target: 'E2', type: 'RELATED_TO', confidence: 0.6, quote: VALID_QUOTE },
+        { source: 'E1', target: 'C1', type: 'CAUSES', confidence: 0.6, quote: VALID_QUOTE },
       ],
     });
     const stage = new SemanticRelationshipStage();

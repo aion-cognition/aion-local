@@ -36,6 +36,15 @@ export type SemanticRelationshipStageOptions = {
   readonly maxRelationships?: number;
 };
 
+/**
+ * The cognitive labels a typed edge may end on. A Goal or Plan is frequently a restatement
+ * of the episode's own question or summary (D3 refuses the worst of these at mint time, but
+ * older Goals predate that refusal), and Context, Event, Pattern, and Trend are observations
+ * about the episode rather than claims one item can cause, enable, or contradict another
+ * with. Entity is separate and always eligible — it is not a cognitive label.
+ */
+const CLAIM_BEARING_COGNITIVE_LABELS: ReadonlySet<string> = new Set(['Decision', 'Insight', 'Concept']);
+
 /** One entity or cognitive node, keyed for the prompt so the model never has to spell a name back. */
 type Candidate = {
   readonly key: string;
@@ -51,9 +60,11 @@ function buildCandidates(
   entities.forEach((entity, index) => {
     candidates.push({ key: `E${index + 1}`, id: entity.id, label: `${entity.name} (${entity.type})` });
   });
-  cognitive.forEach((node, index) => {
-    candidates.push({ key: `C${index + 1}`, id: node.id, label: `[${node.label}] ${node.text}` });
-  });
+  cognitive
+    .filter((node) => CLAIM_BEARING_COGNITIVE_LABELS.has(node.label))
+    .forEach((node, index) => {
+      candidates.push({ key: `C${index + 1}`, id: node.id, label: `[${node.label}] ${node.text}` });
+    });
   return candidates;
 }
 
@@ -61,15 +72,34 @@ const SYSTEM_PROMPT = [
   'You infer typed relationships between the entities and cognitive structures already',
   'extracted from one episode. Each item below carries a key; refer to items only by that',
   'key, never by its label, and never relate an item to itself.',
-  'Use CAUSES when one item caused another, ENABLES when one item made another possible,',
-  'PRECEDES when one item happened before another in a way that matters, CONTRADICTS when',
-  'two items are in tension and cannot both hold, SIMILAR when two items mean close to the',
-  'same thing, RELATED_TO when two items are meaningfully connected but no other type fits,',
-  'and ANALOGOUS_TO when two items are similar in kind without one causing, enabling, or',
-  'preceding the other.',
-  'Give each relationship a confidence between 0 and 1 for how sure the episode makes you,',
-  'and a one-clause rationale grounded in the episode. Propose only relationships the episode',
-  'actually supports; return an empty list rather than a weak guess.',
+  'Use CAUSES when one item caused another and ENABLES when one item made another possible.',
+  'For both, source is the cause and target is the effect — re-read the quote and identify',
+  'which item is the cause before you choose source and target; do not default to the order',
+  'the items happen to appear in the episode text, and do not put the effect first because it',
+  'was mentioned first. Example: the episode says "the shared transaction caused the',
+  'deadlock" — the transaction is the cause, so it is source, and the deadlock is the effect,',
+  'so it is target, even though "deadlock" appears earlier in that sentence than "the shared',
+  'transaction" did.',
+  'Use PRECEDES when one item happened before another in a way that matters.',
+  'Use CONTRADICTS only when the episode states an explicit contradiction: one item directly',
+  'negates, rejects, or reverses the other in the episode\'s own words. Two items that agree,',
+  'restate the same fact in different words, or are simply unrelated do not contradict. A',
+  'reason for rejecting or choosing against something is not a contradiction with the thing',
+  'itself, or with a restatement of the same reason — that is not a relationship this stage',
+  'names at all, so leave it out rather than forcing it into CONTRADICTS. Example: the episode',
+  'says "we rejected the queue tool because it is incompatible with our cache" — the queue',
+  'tool and the cache do not contradict each other, incompatibility between two tools is not',
+  'one of this stage\'s types, so no relationship between them belongs in the answer at all.',
+  'When unsure, do not use CONTRADICTS.',
+  'Use SIMILAR when two items mean close to the same thing, RELATED_TO when two items are',
+  'meaningfully connected but no other type fits, and ANALOGOUS_TO when two items are',
+  'similar in kind without one causing, enabling, or preceding the other.',
+  'For every relationship, quote the exact words from the episode that justify it — copy the',
+  'span verbatim, do not paraphrase or summarize it. A relationship you cannot quote does not',
+  'go in the answer.',
+  'Give each relationship a confidence between 0 and 1 for how sure the episode makes you.',
+  'Propose only relationships the episode actually supports; return an empty list rather than',
+  'a weak guess.',
 ].join(' ');
 
 function buildMessages(text: string, candidates: readonly Candidate[]): ChatMessage[] {
@@ -99,9 +129,9 @@ function buildJsonSchema(candidates: readonly Candidate[]): JsonSchema {
             target: { type: 'string', enum: keys },
             type: { type: 'string', enum: [...SEMANTIC_RELATIONSHIP_TYPES] },
             confidence: { type: 'number' },
-            rationale: { type: 'string' },
+            quote: { type: 'string' },
           },
-          required: ['source', 'target', 'type', 'confidence'],
+          required: ['source', 'target', 'type', 'confidence', 'quote'],
         },
       },
     },
@@ -115,7 +145,7 @@ const ProposalSchema = z.object({
   target: z.string(),
   type: z.string(),
   confidence: z.number().optional(),
-  rationale: z.string().optional(),
+  quote: z.string().optional(),
 });
 
 type Proposal = z.infer<typeof ProposalSchema>;
@@ -140,19 +170,24 @@ type ResolvedProposal = {
   readonly sourceId: string;
   readonly targetId: string;
   readonly confidence: number;
-  readonly rationale?: string;
+  /** The verbatim episode span that justifies this edge; never empty once resolved. */
+  readonly quote: string;
 };
 
 /**
  * Every drop here is a hallucination guard: a key the candidate list never issued, a
- * self-loop, a type outside the sanctioned five, or a pair this same run already proposed.
- * Nothing here fails the stage — a hallucinated proposal is exactly what §6.8 asks this
- * validation to catch, not a reason to discard the proposals that check out.
+ * self-loop, a type outside the sanctioned seven, a pair this same run already proposed, or
+ * a quote that is missing or does not appear verbatim in the episode. The last of those is
+ * validation of the model's own output — an exact substring check against text this stage
+ * already has — not a text heuristic judging what the relationship means. Nothing here fails
+ * the stage — a hallucinated proposal is exactly what §6.8 asks this validation to catch, not
+ * a reason to discard the proposals that check out.
  */
 function resolveProposals(
   raw: readonly Proposal[],
   byKey: ReadonlyMap<string, Candidate>,
   maxRelationships: number,
+  episodeText: string,
 ): ResolvedProposal[] {
   const seenPairs = new Set<string>();
   const resolved: ResolvedProposal[] = [];
@@ -173,19 +208,23 @@ function resolveProposals(
       continue;
     }
 
+    const quote = proposal.quote?.trim();
+    if (quote === undefined || quote.length === 0 || !episodeText.includes(quote)) {
+      continue;
+    }
+
     const pairKey = `${type}:${source.id}:${target.id}`;
     if (seenPairs.has(pairKey)) {
       continue;
     }
     seenPairs.add(pairKey);
 
-    const rationale = proposal.rationale?.trim();
     resolved.push({
       type,
       sourceId: source.id,
       targetId: target.id,
       confidence: clampConfidence(proposal.confidence),
-      ...(rationale === undefined || rationale.length === 0 ? {} : { rationale }),
+      quote,
     });
   }
 
@@ -239,8 +278,11 @@ export class SemanticRelationshipStage implements ReflectionStage {
         model: this.#model,
         messages: buildMessages(text, candidates),
         schema: buildJsonSchema(candidates),
-        // Reasoning buys nothing on a structured relation call and costs the budget (mirrors
-        // the entity and cognitive stages).
+        // Thinking measurably fixes neither the direction nor the CONTRADICTS false
+        // positives this stage is disciplined against below, and costs enough latency to
+        // blow the timeout guard outright (qwen3:8b's documented "occasional non-returns").
+        // Reasoning buys nothing worth that price, so it stays off (mirrors the entity and
+        // cognitive stages).
         think: false,
         signal: controller.signal,
       });
@@ -262,7 +304,7 @@ export class SemanticRelationshipStage implements ReflectionStage {
     }
 
     const byKey = new Map(candidates.map((candidate) => [candidate.key, candidate]));
-    const proposals = resolveProposals(parsed.data.relationships, byKey, this.#maxRelationships);
+    const proposals = resolveProposals(parsed.data.relationships, byKey, this.#maxRelationships, text);
     if (proposals.length === 0) {
       return {
         status: 'ok',
@@ -280,8 +322,8 @@ export class SemanticRelationshipStage implements ReflectionStage {
           sourceId: proposal.sourceId,
           targetId: proposal.targetId,
           confidence: proposal.confidence,
+          rationale: proposal.quote,
           now: ctx.now,
-          ...(proposal.rationale === undefined ? {} : { rationale: proposal.rationale }),
         });
         written += 1;
       } catch (error) {
