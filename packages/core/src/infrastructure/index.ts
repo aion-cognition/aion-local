@@ -34,6 +34,20 @@ export {
 export type { OpsLedgerEntry } from './sqlite/ops-ledger.js';
 
 export {
+  claimOperationBucket,
+  clearPendingMeasure,
+  introspectionCycle,
+  listOperationStats,
+  nextIntrospectionCycle,
+  operationStats,
+  recordOperationResolution,
+  recordOperationRun,
+  recordOperationSelected,
+  setPendingMeasure,
+} from './sqlite/introspection-counters.js';
+export type { OperationResolution, OperationStats } from './sqlite/introspection-counters.js';
+
+export {
   DEFAULT_REFLECTION_LANE,
   REFLECTION_LANES,
   enqueueReflectionJob,
@@ -150,6 +164,14 @@ export {
   readVectorIndexes,
 } from './graph/introspection.js';
 export type { GraphCounts, VectorIndexInfo } from './graph/introspection.js';
+
+export {
+  DEFAULT_HEALTH_SCAN_LIMIT,
+  countEpisodesWithoutSession,
+  countOrphanNodes,
+  countVectorParity,
+} from './graph/introspection-health.js';
+export type { OrphanCounts, VectorParityCounts } from './graph/introspection-health.js';
 
 export { BASE_NODE_LABEL, NODE_LABELS, isContentBearing, isNodeLabel, resolveLabels } from './graph/labels.js';
 export type { NodeLabel } from './graph/labels.js';
