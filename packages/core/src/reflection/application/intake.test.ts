@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { openLogger } from '../../infrastructure/logging/logger.js';
 import type { Vector } from '../../infrastructure/providers/types.js';
 import { SessionManager } from '../../session/session-manager.js';
@@ -88,6 +89,7 @@ beforeEach(() => {
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: 4.5,
     lanes: new LaneAssigner(LANE_LIMITS),
+    workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
   };
 });
 

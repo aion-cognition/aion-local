@@ -54,6 +54,8 @@ export type ReflectionIntakeDeps = {
   readonly entropyThreshold: number;
   /** Per-process arrival counters behind the lane backstop; one instance for the service's life. */
   readonly lanes: LaneAssigner;
+  /** `operational.workerMaxAttempts`, so `pending_ahead` counts only rows a worker will claim. */
+  readonly workerMaxAttempts: number;
 };
 
 export type ReflectionIntakeOptions = {
@@ -250,14 +252,18 @@ type IntegrateJob = {
 };
 
 /**
- * Unclaimed interactive-lane rows already in the queue, measured before this call's own job
+ * Claimable interactive-lane rows already in the queue, measured before this call's own job
  * lands. Interactive is served strictly first (the lanes pin), so this is exactly how many
  * jobs sit ahead of a fresh interactive enqueue and, for a caller demoted to bulk, how many
- * interactive jobs it queues behind either way (EX-10: the ack always said `queued: true`
- * with no sense of how far behind that queue actually was).
+ * interactive jobs it queues behind either way — the ack used to say `queued: true` with no
+ * sense of how far behind that queue actually was.
+ *
+ * Bounded by the attempt limit, so a row the claim path will never take again is not reported
+ * as something to wait for: one exhausted job made every ack in the exercise say "1 job ahead"
+ * against an empty queue.
  */
-function pendingAhead(db: SqliteHandle): number {
-  return countQueueJobs(db, { lane: DEFAULT_REFLECTION_LANE }).unclaimed;
+function pendingAhead(db: SqliteHandle, maxAttempts: number): number {
+  return countQueueJobs(db, { lane: DEFAULT_REFLECTION_LANE }, maxAttempts).pending;
 }
 
 function ensureIntegrateJob(
@@ -352,7 +358,7 @@ export async function handleReflection(
   );
   // Measured before this call's own row lands, so a fresh enqueue is not counted against
   // itself; a duplicate payload reads the same figure the already-queued job would.
-  const ahead = pendingAhead(deps.db);
+  const ahead = pendingAhead(deps.db, deps.workerMaxAttempts);
   const job = ensureIntegrateJob(deps, stored.episodeId, sessionId, requestedLane, now);
   if (job.enqueued) {
     deps.dispatch.signal({
