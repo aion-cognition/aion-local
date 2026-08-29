@@ -298,6 +298,11 @@ export const KNOB_REGISTRY: readonly Knob[] = [
     path: ['operational', 'lagQueueDepthWarnThreshold'],
     kind: 'number',
   },
+  {
+    envVar: 'AION_SESSION_IDLE_EXPIRY_MINUTES',
+    path: ['operational', 'sessionIdleExpiryMinutes'],
+    kind: 'number',
+  },
 
   { envVar: LOG_FILE_ENV_VAR, path: ['logging', 'filePath'], kind: 'string' },
   { envVar: LOG_LEVEL_ENV_VAR, path: ['logging', 'level'], kind: 'string' },

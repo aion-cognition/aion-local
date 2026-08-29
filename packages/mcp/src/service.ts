@@ -59,6 +59,8 @@ export const DRAIN_TIMEOUT_MS = 7000;
 type McpSession = {
   readonly transport: StreamableHTTPServerTransport;
   readonly server: Server;
+  /** Last time this session handled a request. What `closeIdleSessions` measures against. */
+  lastActivityAt: number;
 };
 
 export type AionMcpServiceOptions = {
@@ -320,7 +322,7 @@ export class AionMcpService {
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (id) => {
-        this.#sessions.set(id, { transport, server });
+        this.#sessions.set(id, { transport, server, lastActivityAt: Date.now() });
         this.#logger.info({ sessionId: id, sessions: this.#sessions.size }, 'mcp session opened');
         this.#evictOverflow();
       },
@@ -339,7 +341,7 @@ export class AionMcpService {
     };
 
     await server.connect(transport);
-    return { transport, server };
+    return { transport, server, lastActivityAt: Date.now() };
   }
 
   /** Re-inserting keeps the map in least-recently-used order, which is what `#evictOverflow` reads. */
@@ -349,8 +351,32 @@ export class AionMcpService {
       return undefined;
     }
     this.#sessions.delete(sessionId);
+    session.lastActivityAt = Date.now();
     this.#sessions.set(sessionId, session);
     return session;
+  }
+
+  /**
+   * EX-32's backstop: a session past `idleMs` since its last request closes the way a DELETE
+   * would (`session.server.close()` runs the same transport-close chain `#forget` reaches
+   * from), independent of whether the client ever sends one. `SessionIdleSweeper` is what
+   * puts this on a clock; this method only decides which sessions qualify at the given
+   * instant, which is what keeps it a synchronous, deterministic thing to test.
+   */
+  closeIdleSessions(idleMs: number, now: number = Date.now()): readonly string[] {
+    const cutoff = now - idleMs;
+    const closed: string[] = [];
+    for (const [sessionId, session] of this.#sessions) {
+      if (session.lastActivityAt > cutoff) {
+        continue;
+      }
+      closed.push(sessionId);
+      this.#logger.info({ sessionId, idleMs }, 'mcp session idle-expired');
+      void session.server.close().catch((err: unknown) => {
+        this.#logger.warn({ err, sessionId }, 'mcp session close failed');
+      });
+    }
+    return closed;
   }
 
   #evictOverflow(): void {

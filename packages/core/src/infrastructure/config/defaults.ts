@@ -188,6 +188,9 @@ export const DEFAULTS: Config = {
     // judgment by depth instead of age.
     lagOldestUnclaimedWarnMs: 600_000,
     lagQueueDepthWarnThreshold: 200,
+    // Plan-pinned default (EX-32): well past any real tool-call gap, short enough that a
+    // transport a client forgot to close does not sit in the session map for a whole shift.
+    sessionIdleExpiryMinutes: 30,
   },
   logging: {
     filePath: DEFAULT_LOG_FILE,

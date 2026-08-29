@@ -243,23 +243,28 @@ aion-mcp`.
 `reflection` call is in flight, or afterward with no clean shutdown.
 
 **What happens.** The in-flight call keeps running to completion server-side; nothing
-cancels it. A client-side `transport.close()` sends no MCP `DELETE`, so the server-side
-session for that client stays in the session map
-(`packages/mcp/src/service.ts:105-109, 284`) rather than closing. It is bounded, not
-leaked: the map evicts down to `MAX_SESSIONS = 512` on every new session past the cap
-(`service.ts:48, 317-324`, logged as `mcp session evicted`).
+cancels it. A client-side `transport.close()` sends no MCP `DELETE` (verified against the
+SDK: `Client.close()` aborts the local transport and never issues the request
+`onsessionclosed` depends on — EX-32), so the server-side session for that client stays in
+the session map (`packages/mcp/src/service.ts`) rather than closing right away. Two
+backstops bound it instead of a leak: the map evicts down to `MAX_SESSIONS = 512` on every
+new session past the cap (logged as `mcp session evicted`), and `SessionIdleSweeper`
+(`packages/mcp/src/session-idle-sweeper.ts`) closes any session with no request in
+`AION_SESSION_IDLE_EXPIRY_MINUTES` (default 30), independent of the count. Closing a
+session either way runs the same teardown as an explicit DELETE: the narrative-close hook
+fires and the session leaves the map, so a request that arrives after gets the same clean
+`unknown session` 404 a never-opened one would.
 
 **What the caller sees.** Nothing; it disconnected. Its own in-flight promise rejects
 locally (`McpError -32000 Connection closed`) once its socket is gone. Other clients are
 unaffected; the service does not restart.
 
-**Diagnose.** `GET /health` returns `{status: "ok", sessions: <n>}`
-(`service.ts:203-206`); a session count that only grows across many short-lived clients
-without settling points at abandoned transports rather than a leak in the handlers
-themselves.
+**Diagnose.** `GET /health` returns `{status: "ok", sessions: <n>}`; a session count that
+only grows across many short-lived clients without settling points at abandoned transports
+rather than a leak in the handlers themselves.
 
-**Recovers.** Automatically. The stale session is either evicted under the 512 cap or
-simply sits idle at negligible cost.
+**Recovers.** Automatically. The stale session is evicted under the 512 cap, closed by the
+idle sweep, or sits idle at negligible cost until one of the two catches it.
 
 ## Budgets and caps
 
@@ -286,6 +291,7 @@ Every knob below is `AION_*`-overridable; the catalog is
 | `AION_RECONCILE_WARN_THRESHOLD` (`operational.reconcileWarnThreshold`) | 50 | Unenriched episodes `aion doctor` tolerates before it warns. | Raised past a real backlog, doctor goes back to reporting all-green over a substrate hours behind, which is the state EX-41 was filed for. | New in the fix round. |
 | `AION_LAG_OLDEST_UNCLAIMED_WARN_MS` (`operational.lagOldestUnclaimedWarnMs`) | 600000 | Age of the oldest unclaimed job `aion doctor`'s `queue-lag` check tolerates before it warns. | Raised past a real backlog, doctor stops naming a queue that has gone stale. Ten minutes is inside the 1.9 to 6.7 episodes/min drain rate EX-10 measured. | New in the fix round. |
 | `AION_LAG_QUEUE_DEPTH_WARN_THRESHOLD` (`operational.lagQueueDepthWarnThreshold`) | 200 | Total unclaimed jobs, either lane, `aion doctor`'s `queue-lag` check tolerates before it warns. | Raised past a real backlog, the same silence as above but by depth instead of age — either alone can miss a starved-then-drained queue the other catches. | New in the fix round. |
+| `AION_SESSION_IDLE_EXPIRY_MINUTES` (`operational.sessionIdleExpiryMinutes`) | 30 | How long an MCP transport session may sit with no request before `SessionIdleSweeper` closes it — the backstop for a `client.close()` that never sends DELETE (EX-32). | Lowered, a client that legitimately pauses (an editor idle between edits) loses its session and its next call gets `unknown session` instead of resuming one. | New in the fix round. |
 
 Raising `AION_WORKER_COUNT` past 1 buys nothing on its own: the reflection worker, the
 recall cue model, and the idle narrative sweeper all share one host Ollama endpoint
