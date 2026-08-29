@@ -3,10 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
-import { runRead } from '../../infrastructure/graph/connection.js';
 import { upsertEdge } from '../../infrastructure/graph/edges.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
 import type { RelationshipType } from '../../infrastructure/graph/relationships.js';
+import { edgeStrength as edgeStrengthBetween } from '../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
@@ -79,19 +79,12 @@ async function seedEdge(
   });
 }
 
-async function edgeStrength(
+function edgeStrength(
   type: RelationshipType,
   sourceId: string,
   targetId: string,
 ): Promise<number | undefined> {
-  const rows = await runRead(
-    harness.driver,
-    `MATCH (a:AionNode { id: $sourceId })-[r:${type}]-(b:AionNode { id: $targetId })
-     RETURN r.strength AS strength`,
-    { sourceId, targetId },
-    (row) => row.strength as number,
-  );
-  return rows[0];
+  return edgeStrengthBetween(harness.driver, type, sourceId, targetId);
 }
 
 function sweep(batchSize = 100) {

@@ -10,12 +10,12 @@ import type { Config } from './schema.js';
  * per process. Three values below depart from a smaller candidate default; each says why
  * at the line.
  *
- * Reserved knobs: `recall.useContextResonance`, `recall.compressionThreshold`,
- * `contextResonance.{resonantLimit,maxHops,activationThreshold,contextSearchThreshold}`,
- * `hebbian.*` and `maintenance.tier3` are declared and overridable but have no reader yet:
- * context resonance, narrative compression, plasticity flush, and tier-3 maintenance land
+ * Reserved knobs: `recall.compressionThreshold` and `maintenance.tier3` are declared and
+ * overridable but have no reader yet: narrative compression and tier-3 maintenance land
  * later. They are declared now because the catalog is one document, and a knob added late
  * is a knob whose name and range were never reviewed; setting one today changes nothing.
+ * The context resonance and `hebbian.*` knobs were reserved the same way and now have
+ * readers: the recall second pass, the reinforcement flush, and the decay sweep.
  */
 export const DEFAULTS: Config = {
   neo4j: {

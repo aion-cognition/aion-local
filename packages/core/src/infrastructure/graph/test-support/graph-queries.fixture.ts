@@ -346,6 +346,41 @@ export async function similarPairsAmong(
   );
 }
 
+/**
+ * The weight on the edge of one type between two nodes, whichever way it points, which is
+ * what the plasticity operations move. Undirected for the reason reinforcement is: the
+ * signal says two memories fired together and nothing about endpoint order.
+ */
+export async function edgeStrength(
+  driver: Driver,
+  type: string,
+  sourceId: string,
+  targetId: string,
+): Promise<number | undefined> {
+  return readFirst(
+    driver,
+    `MATCH ({ id: $sourceId })-[r:${type}]-({ id: $targetId }) RETURN r.strength AS strength`,
+    { sourceId, targetId },
+    (row) => row.strength as number,
+  );
+}
+
+/**
+ * Nodes carrying their own stated reason, the property a pack renders as `why`. What it
+ * separates: a battery whose packs print no reasons because selection dropped them, and one
+ * whose packs print none because extraction stored none to print.
+ */
+export async function countStatedReasons(driver: Driver): Promise<number> {
+  return count(
+    driver,
+    [
+      `MATCH (n:${BASE_NODE_LABEL})`,
+      "WHERE n.rationale IS NOT NULL AND trim(n.rationale) <> ''",
+      'RETURN count(n) AS c',
+    ].join('\n'),
+  );
+}
+
 export async function contextVector(driver: Driver, id: string): Promise<Vector | undefined> {
   const raw = await readFirst(
     driver,
