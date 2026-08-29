@@ -1,9 +1,7 @@
+import { DEFAULT_ANTHROPIC_MODEL } from '../anthropic-provider.js';
 import { OllamaProvider, type OllamaProviderOptions } from '../ollama-provider.js';
 import type { Provider, StructuredRequest, Vector } from '../types.js';
 import { AnthropicHaikuClient } from './anthropic-client.js';
-
-/** The model every remote-route test generation goes to. */
-const DEFAULT_MODEL = 'claude-haiku-4-5';
 
 export type AnthropicTestProviderOptions = {
   readonly apiKey: string;
@@ -27,7 +25,7 @@ export class AnthropicTestProvider implements Provider {
       schemaDelivery: 'system_prompt',
     });
     this.#embedder = options.embedder;
-    this.#model = options.model ?? DEFAULT_MODEL;
+    this.#model = options.model ?? DEFAULT_ANTHROPIC_MODEL;
   }
 
   embed(texts: readonly string[]): Promise<Vector[]> {

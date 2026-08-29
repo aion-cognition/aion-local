@@ -21,7 +21,8 @@ cues, or memory packs, only nodes, edges, and rows.
 
 - **`infrastructure/`**: `graph/` (every Cypher statement in the workspace), `sqlite/`
   (the reflection queue, last-pack cache, ops ledger, claim locking), `providers/` (the
-  Ollama client and its circuit breaker), `config/` (schema, defaults, the `AION_*`
+  Ollama and Anthropic clients, the circuit breaker, the per-role routing layer and the
+  model reconciliation that follows it), `config/` (schema, defaults, the `AION_*`
   registry, the loader), `logging/`.
 - **`recall/domain/`**: `activation.ts` (spreading activation over adjacency),
   `activation-weights.ts` (the per-relationship-type propagation table),

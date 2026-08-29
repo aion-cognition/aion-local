@@ -1,4 +1,5 @@
 import { DEFAULT_LOG_FILE, DEFAULT_LOG_LEVEL } from '../logging/logger.js';
+import { DEFAULT_ANTHROPIC_MODEL } from '../providers/anthropic-provider.js';
 import { DEFAULT_SQLITE_PATH } from '../sqlite/database.js';
 import { DEFAULT_REINFORCEMENT_QUEUE_CAP } from '../sqlite/reinforcement-queue.js';
 import type { Config } from './schema.js';
@@ -36,6 +37,11 @@ export const DEFAULTS: Config = {
   },
   anthropic: {
     apiKey: '',
+    model: DEFAULT_ANTHROPIC_MODEL,
+  },
+  routing: {
+    cue: 'auto',
+    reflect: 'auto',
   },
   recall: {
     // Raised from 2 to 3: the cross-session graph routes every path through a Session hub.

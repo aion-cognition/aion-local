@@ -17,21 +17,24 @@ import {
   latestAppliedGraphMigration,
   loadConfig,
   openLogger,
-  OllamaProvider,
   plasticityCounters,
+  ProviderRouter,
   queueLagSnapshot,
   readMemberName,
   RecallSideEffects,
+  reconcileResidentModels,
   ReflectionDispatch,
   ReflectionOrchestrator,
   ReflectionWorker,
   ReinforcementEnqueueStage,
+  routingSummary,
   SemanticRelationshipStage,
   SessionManager,
   SessionNarrativeCloser,
   SessionNarrativeStage,
   SqliteStore,
   SupersessionStage,
+  unbackedPins,
   type Config,
   type Logger,
   type RecallDeps,
@@ -159,6 +162,26 @@ export type AionService = {
 };
 
 /**
+ * Boot's half of model reconciliation: a local model no role still routes to leaves memory,
+ * so a key-covered install does not hold instruct weights it will never call. `aion init` runs
+ * the other half. Failures are logged and nothing else: the service does not depend on this,
+ * and a machine with Ollama down has nothing resident to unload.
+ */
+async function reconcileModels(config: Config, router: ProviderRouter, logger: Logger): Promise<void> {
+  try {
+    const report = await reconcileResidentModels({
+      baseUrl: config.ollama.url,
+      routing: router.routing,
+    });
+    if (report.checked) {
+      logger.info({ reconciliation: report }, `model reconciliation: ${report.detail}`);
+    }
+  } catch (err) {
+    logger.warn({ err }, 'model reconciliation failed');
+  }
+}
+
+/**
  * Only used when the substrate has no Member yet, which the schema check above makes nearly
  * unreachable: an initialized substrate always has one, and its stored name wins.
  */
@@ -197,10 +220,24 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       workspaceId: backbone.workspace.id,
     });
 
-    const provider = new OllamaProvider({
-      baseUrl: config.ollama.url,
-      embedModel: config.models.embed,
+    const router = new ProviderRouter({
+      config,
+      onGeneration: (event) => {
+        logger.debug({ generation: event }, 'generation routed');
+      },
     });
+    // Both roles embed through the same local model; only `generate` differs between them.
+    const cueProvider = router.forRole('cue');
+    const reflectProvider = router.forRole('reflect');
+    logger.info({ routing: router.routing.roles }, `provider routing: ${routingSummary(router.routing)}`);
+    for (const route of unbackedPins(router.routing)) {
+      logger.warn(
+        { role: route.role },
+        `${route.role} is pinned to anthropic with no AION_ANTHROPIC_API_KEY set; routing it to ${route.localModel} instead`,
+      );
+    }
+    await reconcileModels(config, router, logger);
+
     const dispatch = new ReflectionDispatch({
       onListenerError: (err, signal) => {
         logger.error({ err, jobId: signal.jobId }, 'reflection dispatch listener failed');
@@ -217,7 +254,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       driver,
       db: store.db,
       sessions,
-      provider,
+      provider: cueProvider,
       config,
       cueCache: new CueCache(),
       logger,
@@ -227,7 +264,8 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       driver,
       db: store.db,
       sessions,
-      provider,
+      // Intake only embeds, so the role it borrows changes nothing about where its calls go.
+      provider: reflectProvider,
       dispatch,
       logger,
       entropyThreshold: config.redaction.entropyThreshold,
@@ -242,9 +280,12 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       {
         driver,
         db: store.db,
-        provider,
+        provider: reflectProvider,
         dispatch,
-        runner: new ReflectionOrchestrator({ driver, db: store.db, provider, logger }, stages),
+        runner: new ReflectionOrchestrator(
+          { driver, db: store.db, provider: reflectProvider, logger },
+          stages,
+        ),
         logger,
       },
       workerOptions(config),
@@ -262,7 +303,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
     // Both halves of the pinned trigger. The transport close is the boundary the substrate
     // can observe; the sweep is what a client that disconnects without a DELETE (an editor
     // that exits) leaves behind.
-    const narrativeDeps = { driver, provider, logger };
+    const narrativeDeps = { driver, provider: reflectProvider, logger };
     const narratives = new SessionNarrativeCloser(narrativeDeps, narrativeOptions(config));
     const idleNarratives = new IdleNarrativeSweeper(narrativeDeps, {
       ...narrativeOptions(config),
@@ -314,6 +355,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
         sqlite: config.sqlite.path,
         member: memberName,
         models: config.models,
+        routing: routingSummary(router.routing),
         stages: stages.map((stage) => stage.name),
         narrativeSweepMs: idleNarratives.intervalMs,
         sessionIdleSweepMs: idleSessions.intervalMs,
