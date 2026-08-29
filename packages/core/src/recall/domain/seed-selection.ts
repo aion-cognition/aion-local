@@ -175,6 +175,7 @@ export function mergeSeeds(
       ...(candidate.sourceEpisodeId === undefined
         ? {}
         : { sourceEpisodeId: candidate.sourceEpisodeId }),
+      ...(candidate.why === undefined ? {} : { why: candidate.why }),
       currency: candidate.currency,
       ...(candidate.supersededBy === undefined ? {} : { supersededBy: candidate.supersededBy }),
       score: best === undefined ? 0 : best.score,

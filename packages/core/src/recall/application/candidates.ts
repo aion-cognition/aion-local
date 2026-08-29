@@ -58,6 +58,7 @@ function baseCandidate(candidate: SeedCandidate): Omit<FusionCandidate, 'rationa
     ...(candidate.sourceEpisodeId === undefined
       ? {}
       : { sourceEpisodeId: candidate.sourceEpisodeId }),
+    ...(candidate.why === undefined ? {} : { why: candidate.why }),
     ...annotationOf(candidate),
   };
 }

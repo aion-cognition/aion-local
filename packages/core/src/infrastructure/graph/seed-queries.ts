@@ -76,6 +76,13 @@ export type SeedCandidate = CurrencyAnnotation & {
   readonly isStructural?: boolean;
   /** A Turn's parent episode. Absent on everything else, including the Episode itself. */
   readonly sourceEpisodeId?: string;
+  /**
+   * The node's own `rationale` property (a Decision today; `cognitive-queries.ts` lets any
+   * cognitive type carry one). Named `why` rather than `rationale` on purpose: `rationale` is
+   * already the retrieval rationale (method, score, path) on a pack item, and the two would
+   * collide under one name from here on.
+   */
+  readonly why?: string;
 };
 
 export type ScoredSeedCandidate = SeedCandidate & {
@@ -144,6 +151,10 @@ function candidateProjection(nodeVar: string, fragment: ReadFragment): string {
     `${nodeVar}.${BITEMPORAL_PROPERTIES.occurredAt} AS occurred_at`,
     `${nodeVar}.${STRUCTURAL_PROPERTY} AS is_structural`,
     `${nodeVar}.${MEMORY_PROPERTIES.sourceEpisodeId} AS source_episode_id`,
+    // `rationale` is only ever written by `cognitive-queries.ts`, so this reads `null` for
+    // every node type that never carries it; the property name stays `rationale` in the
+    // graph, `why` is the wire name that keeps it distinct from a retrieval rationale.
+    `${nodeVar}.rationale AS why`,
     fragment.projection,
   ].join(', ');
 }
@@ -151,6 +162,7 @@ function candidateProjection(nodeVar: string, fragment: ReadFragment): string {
 function mapCandidate(row: Row): SeedCandidate {
   const occurredAt = row.occurred_at;
   const sourceEpisodeId = row.source_episode_id;
+  const why = row.why;
   return {
     id: row.id as string,
     labels: (row.labels as string[] | null) ?? [],
@@ -158,6 +170,7 @@ function mapCandidate(row: Row): SeedCandidate {
     ...(occurredAt instanceof Date ? { occurredAt } : {}),
     ...(row.is_structural === true ? { isStructural: true } : {}),
     ...(typeof sourceEpisodeId === 'string' ? { sourceEpisodeId } : {}),
+    ...(typeof why === 'string' && why.trim().length > 0 ? { why } : {}),
     ...readCurrencyAnnotation(row),
   };
 }

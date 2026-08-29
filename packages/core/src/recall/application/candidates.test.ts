@@ -13,7 +13,12 @@ import type { Seed, SeedProvenance } from './seeds.js';
 
 const SUPERSEDED_AT = new Date('2026-08-10T00:00:00.000Z');
 
-function seed(id: string, provenance: readonly SeedProvenance[], superseded = false): Seed {
+function seed(
+  id: string,
+  provenance: readonly SeedProvenance[],
+  superseded = false,
+  why?: string,
+): Seed {
   const best = provenance[0];
   let relevance = 0;
   for (const entry of provenance) {
@@ -26,6 +31,7 @@ function seed(id: string, provenance: readonly SeedProvenance[], superseded = fa
     score: best?.score ?? 0,
     relevance,
     provenance,
+    ...(why === undefined ? {} : { why }),
   };
   if (!superseded) {
     return { ...base, currency: 'current' };
@@ -48,12 +54,13 @@ function activated(nodeId: string, score: number, pathSummary: string): Activate
   };
 }
 
-function hydratedNode(id: string): SeedCandidate {
+function hydratedNode(id: string, why?: string): SeedCandidate {
   return {
     id,
     labels: ['Episode', 'Memory', 'AionNode'],
     content: `content of ${id}`,
     currency: 'current',
+    ...(why === undefined ? {} : { why }),
   };
 }
 
@@ -93,6 +100,20 @@ describe('a seed as a fusion candidate', () => {
     expect(candidate?.supersededBy).toEqual({ id: 'old-successor', at: SUPERSEDED_AT });
   });
 
+  it('carries the node\'s own reason through when the seed has one', () => {
+    const candidate = seedCandidate(
+      seed('d1', [{ strategy: 'vector', score: 0.7, relevance: 0.7 }], false, 'because Postgres already owns the lock'),
+    );
+
+    expect(candidate?.why).toBe('because Postgres already owns the lock');
+  });
+
+  it('leaves why absent for a seed whose node stores no rationale', () => {
+    const candidate = seedCandidate(seed('e1', [{ strategy: 'vector', score: 0.7, relevance: 0.7 }]));
+
+    expect(candidate?.why).toBeUndefined();
+  });
+
   it('enters the spread at its own currency, so a superseded seed starts down-weighted', () => {
     expect(toActivationSeed(seed('old', [{ strategy: 'vector', score: 0.7, relevance: 0.7 }], true))).toEqual({
       nodeId: 'old',
@@ -115,6 +136,18 @@ describe('the traversal list', () => {
     expect(candidates.map((candidate) => candidate.id)).toEqual(['found', 'reached']);
     expect(candidates[0]?.rationale).toEqual({ method: 'vector', score: 0.9 });
     expect(candidates[1]?.rationale).toEqual({ method: 'activation', score: 0.39, path });
+  });
+
+  it('carries the node\'s own reason through hydration for an activation-only node', () => {
+    const path = 'found -[PARTICIPATES_IN]-> session -[PARTICIPATES_IN]-> reached';
+    const candidates = traversalCandidates({
+      seeds: [found],
+      activated: [activated('found', 1, 'found'), activated('reached', 0.39, path)],
+      hydrated: new Map([['reached', hydratedNode('reached', 'the migration had already shipped')]]),
+    });
+
+    const reached = candidates.find((candidate) => candidate.id === 'reached');
+    expect(reached?.why).toBe('the migration had already shipped');
   });
 
   it('keeps a seed that fell under the activation threshold', () => {

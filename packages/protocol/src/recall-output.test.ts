@@ -139,6 +139,25 @@ describe('MemoryPackSchema valid fixtures', () => {
     expect(MemoryPackSchema.parse(pack)).toEqual(pack);
   });
 
+  it('parses a fact carrying the node\'s own reason alongside the retrieval rationale', () => {
+    const pack = {
+      facts: [
+        {
+          id: 'decision-1',
+          content: "Rejecting the Redis mutex approach in favor of PostgreSQL's row-level lock.",
+          rank: 1,
+          confidence: 0.67,
+          rationale: { method: 'bm25', score: 0.67 },
+          why: 'PostgreSQL already owns the ledger row, so the lock lives where the data does.',
+          currency: 'current',
+        },
+      ],
+      rendered_text: 'decision-1: rejecting the redis mutex approach',
+      metadata: baseMetadata,
+    };
+    expect(MemoryPackSchema.parse(pack)).toEqual(pack);
+  });
+
   it('parses every bucket populated at once', () => {
     const item = (id: string) => ({
       rank: 1,
@@ -205,6 +224,19 @@ describe('MemoryPackSchema invalid shapes', () => {
 
   it('rejects a cue weight outside the pinned 3x/2x/1x set', () => {
     const result = CueSchema.safeParse({ text: 'x', source: 'query', weight: 4 });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an empty why: absence is how an item with no stored reason says so', () => {
+    const result = MemoryPackItemSchema.safeParse({
+      id: 'x',
+      content: 'x',
+      rank: 1,
+      confidence: 1,
+      rationale: { method: 'vector', score: 1 },
+      why: '',
+      currency: 'current',
+    });
     expect(result.success).toBe(false);
   });
 });

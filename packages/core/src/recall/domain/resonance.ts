@@ -69,6 +69,7 @@ export function resonantItem(candidate: SeedCandidate, similarity: number): Fuse
     ...(candidate.sourceEpisodeId === undefined
       ? {}
       : { sourceEpisodeId: candidate.sourceEpisodeId }),
+    ...(candidate.why === undefined ? {} : { why: candidate.why }),
     currency: candidate.currency,
     ...(candidate.supersededBy === undefined ? {} : { supersededBy: candidate.supersededBy }),
     rationale: { method: 'resonance', score: similarity, path: RESONANCE_PATH },
