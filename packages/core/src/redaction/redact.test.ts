@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { redact } from './redact.js';
+import { redact, redactKeyedValue } from './redact.js';
 
 describe('redact — true positives, one per rule', () => {
   const cases: Array<{ rule: string; secret: string; text: string }> = [
@@ -182,6 +182,57 @@ describe('redact — entropy threshold behavior', () => {
     const result = redact(text, 2.0);
     expect(result.matches.some((m) => m.rule === 'high-entropy')).toBe(true);
     expect(result.text).not.toContain('abcdeabcdeabcdeabcde');
+  });
+});
+
+describe('redact — secrets carried by their own alphabet and casing', () => {
+  it('redacts a 40-char AWS secret key pasted in prose, slashes and all', () => {
+    const secret = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY';
+    const result = redact(`the runbook still has ${secret} pasted beside it`);
+
+    expect(result.text).not.toContain(secret);
+    expect(result.matches.map((match) => match.rule)).toEqual(['high-entropy']);
+  });
+
+  it('reaches the same verdict for an env assignment in either casing', () => {
+    const value = 'AKIAABCDEFGHIJ23456';
+    const upper = redact(`AWS_ACCESS_KEY_ID=${value}`);
+    const lower = redact(`aws_access_key_id=${value}`);
+
+    expect(upper.text).not.toContain(value);
+    expect(lower.text).not.toContain(value);
+    expect(upper.matches).toEqual(lower.matches);
+  });
+});
+
+describe('redactKeyedValue — the same rules over a structured pair', () => {
+  it('fingerprints a value its key names, and returns the value alone', () => {
+    const result = redactKeyedValue('password', 'hunter2secret');
+
+    expect(result.text).toBe(result.matches[0]?.fingerprint);
+    expect(result.matches.map((match) => match.rule)).toEqual(['generic-secret-assignment']);
+  });
+
+  it('gives a secret the same fingerprint whether it arrived embedded or structured', () => {
+    const secret = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY';
+    const embedded = redact(`aws_secret_access_key = ${secret}`);
+    const structured = redactKeyedValue('aws_secret_access_key', secret);
+
+    expect(structured.matches).toEqual(embedded.matches);
+  });
+
+  it('never claims the key it was given as context', () => {
+    const result = redactKeyedValue('AWS_ACCESS_KEY_ID', 'AKIAABCDEFGHIJ23456');
+
+    expect(result.text).toBe(result.matches[0]?.fingerprint);
+    expect(result.text).not.toContain('AWS_ACCESS_KEY_ID');
+  });
+
+  it('leaves a placeholder value alone', () => {
+    expect(redactKeyedValue('api_key', 'process.env.API_KEY')).toEqual({
+      text: 'process.env.API_KEY',
+      matches: [],
+    });
   });
 });
 

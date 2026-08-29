@@ -47,4 +47,44 @@ describe('findHighEntropyTokens', () => {
       'at /Users/rhuber/Documents/not-solace-code/aion_code/aion-local/packages/core/src/redaction/redact.ts';
     expect(findHighEntropyTokens(text, threshold, [])).toEqual([]);
   });
+
+  it('scans base64 material through its slashes instead of splitting on them', () => {
+    const secret = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY';
+    const text = `the runbook still has ${secret} pasted beside it`;
+    const spans = findHighEntropyTokens(text, threshold, []);
+
+    expect(spans).toHaveLength(1);
+    expect(text.slice(spans[0]?.start, spans[0]?.end)).toBe(secret);
+  });
+
+  it('reaches the same verdict whichever case the name in an assignment was written in', () => {
+    const value = 'AKIAABCDEFGHIJ23456';
+    const upper = findHighEntropyTokens(`AWS_ACCESS_KEY_ID=${value}`, threshold, []);
+    const lower = findHighEntropyTokens(`aws_access_key_id=${value}`, threshold, []);
+
+    expect(upper).toEqual(lower);
+    expect(upper).toHaveLength(1);
+  });
+
+  it('claims the value of an assignment and leaves the name it was keyed under', () => {
+    const text = `AWS_ACCESS_KEY_ID=AKIAABCDEFGHIJ23456`;
+    const spans = findHighEntropyTokens(text, threshold, []);
+
+    expect(text.slice(spans[0]?.start, spans[0]?.end)).toBe('AKIAABCDEFGHIJ23456');
+  });
+
+  it('claims the whole token when it carries no assignment to split', () => {
+    const secret = 'xK9mQ2vN8pL4wR7tY1zB6cH3jF5nS0dQ9wE2r';
+    const text = `leaked value: ${secret}`;
+    const spans = findHighEntropyTokens(text, threshold, []);
+
+    expect(text.slice(spans[0]?.start, spans[0]?.end)).toBe(secret);
+  });
+
+  it('flags an assignment whose name is in no credential vocabulary', () => {
+    const text = 'SHELL_SESSION_ID=0123456789abcdef0123';
+    const spans = findHighEntropyTokens(text, threshold, []);
+
+    expect(text.slice(spans[0]?.start, spans[0]?.end)).toBe('0123456789abcdef0123');
+  });
 });
