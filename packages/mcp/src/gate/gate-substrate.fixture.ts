@@ -41,9 +41,9 @@ import { reflectionStages, workerOptions } from '../bootstrap.js';
  * for a model, and no stage list is written twice: a battery that passed against a pipeline
  * wired only in a test would say nothing about the thing that ships.
  *
- * The gate files share this rather than one another's substrate: each holds a container for
- * its own batteries, so a battery that writes (corrections, supersession) cannot move the
- * floor another battery measures.
+ * The gate files share this rather than one another's substrate: each takes its own lease on
+ * the harness for its own batteries, clearing the graph on the way in, so a battery that
+ * writes (corrections, supersession) cannot move the floor another battery measures.
  */
 
 const MEMBER_NAME = 'Ryan Huber';
