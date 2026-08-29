@@ -183,8 +183,8 @@ are known to flake under Ollama's sampling rather than the pipeline under test. 
 runs 13 checks against a live stack. The full build history, including what review found in
 each phase, is in [docs/build-ledger.md](docs/build-ledger.md).
 
-P4 and later are not yet built: Hebbian edge plasticity (recall and reflection both queue
-the signals; nothing flushes them yet), context resonance, and maintenance passes. Their
-config knobs are declared and validated but unread. Recall serves `facts`, `episodes`, and
-`narratives`; `preferences` and `resonant` have no producer yet and stay structurally absent
-from a pack rather than empty.
+P5 and later are not yet built: the maintenance passes that schedule plasticity, Anthropic
+routing, and the rest of the CLI surface. P4 landed the retrieval core, so recall serves
+`facts`, `episodes`, `narratives` and `resonant`; Hebbian reinforcement and decay run as
+callable operations with no scheduler in front of them yet. `preferences` has no producer
+and stays structurally absent from a pack rather than empty.
