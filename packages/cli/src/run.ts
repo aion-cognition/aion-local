@@ -1,9 +1,13 @@
 import { runDoctor } from './doctor.js';
+import { runForget } from './forget.js';
 import { runInit } from './init.js';
 import { runLast } from './last.js';
 import { runProposals } from './proposals.js';
 import { runQueue } from './queue.js';
+import { runSearch } from './search.js';
+import { runStats } from './stats.js';
 import { runStatus } from './status.js';
+import { runWhy } from './why.js';
 
 export const CLI_NAME = 'aion';
 
@@ -36,6 +40,22 @@ const commands: Record<string, Command> = {
   proposals: {
     summary: 'review judged contradictions and duplicate entities: ls | apply | dismiss',
     run: (argv) => runProposals(argv),
+  },
+  stats: {
+    summary: 'substrate counts, queue and plasticity health, cadence, per-method pack shares',
+    run: (argv) => runStats(argv),
+  },
+  why: {
+    summary: 'provenance, lineage, and open proposals for one node',
+    run: (argv) => runWhy(argv),
+  },
+  search: {
+    summary: 'direct hybrid search through the seed layer, bypassing pack assembly',
+    run: (argv) => runSearch(argv),
+  },
+  forget: {
+    summary: 'bitemporal close of a node by id or query: nothing is deleted',
+    run: (argv) => runForget(argv),
   },
   help: {
     summary: 'show this message',

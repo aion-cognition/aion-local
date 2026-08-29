@@ -160,6 +160,7 @@ export {
   VECTOR_INDEX_NAMES,
   assertVectorIndexDimensions,
   countGraphElements,
+  countNodesByLabel,
   readStoredText,
   readVectorIndexes,
 } from './graph/introspection.js';
@@ -172,6 +173,9 @@ export {
   countVectorParity,
 } from './graph/introspection-health.js';
 export type { OrphanCounts, VectorParityCounts } from './graph/introspection-health.js';
+
+export { fetchNodeEdges, fetchNodeProvenance } from './graph/node-provenance.js';
+export type { NodeEdge, NodeProvenance } from './graph/node-provenance.js';
 
 export { BASE_NODE_LABEL, NODE_LABELS, isContentBearing, isNodeLabel, resolveLabels } from './graph/labels.js';
 export type { NodeLabel } from './graph/labels.js';
@@ -231,12 +235,15 @@ export { LOCK_PROPERTY, lockNodeInTransaction } from './graph/locks.js';
 export {
   BITEMPORAL_PROPERTIES,
   buildStampedNodeWrite,
+  forgetNode,
   stampNew,
   supersede,
   writeStampedNode,
   writeStampedNodeInTransaction,
 } from './graph/bitemporal.js';
 export type {
+  ForgetNodeInput,
+  ForgetNodeResult,
   StampNewInput,
   StampedNode,
   StampedNodeResult,
@@ -480,4 +487,7 @@ export type {
   EdgeWeightDistributionType,
   EdgeWeightStats,
 } from './graph/edge-weight-distribution.js';
+
+export { recallCadenceCounters, recordRecallOutcome } from './sqlite/recall-cadence.js';
+export type { RecallCadenceCounters, RecallOutcome } from './sqlite/recall-cadence.js';
 
