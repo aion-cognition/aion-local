@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { countQueueJobs } from '@aion/core';
+import { countQueueJobs, findEpisodeCognitiveNodes } from '@aion/core';
+import { nodeProperties } from '@aion/core/infrastructure/graph/test-support/graph-queries.fixture.js';
 import { GateSubstrate, waitFor } from './gate-substrate.fixture.js';
 import { heldOutCase } from './held-out-recall.fixture.js';
 
@@ -8,6 +9,11 @@ import { heldOutCase } from './held-out-recall.fixture.js';
  * actually extracts, recalled by a question that asks for the reason rather than the choice
  * itself. The check is the rendered `why:` line, since a pack that carries the decision but
  * drops its own stated reason reads exactly like one that never selected the property at all.
+ *
+ * The decision is found by its node id rather than by its words. Half the substrate this
+ * episode produces mentions the row-level lock, only the Decision carries a reason for it,
+ * and which of them a pack ranks first moves from run to run: matching on the text passes or
+ * fails on the ranking rather than on the property under test.
  *
  * Forced onto the local model rather than the default routing: the Anthropic route's
  * system-prompt schema delivery returns a `type` value cognitive extraction's schema rejects
@@ -27,6 +33,12 @@ const ENRICH_DEADLINE_MS = 300_000;
 
 const substrate = new GateSubstrate('rationale-rendering');
 let episodeId = '';
+let decisionId = '';
+/**
+ * The reason as the graph holds it. This one sits under the pack's character cap, so the
+ * rendered line carries the same string the property does.
+ */
+let storedReason = '';
 let previousGenerationRoute: string | undefined;
 
 beforeAll(async () => {
@@ -51,6 +63,14 @@ beforeAll(async () => {
     return Promise.resolve(queue.pending === 0 && queue.claimed === 0);
   });
   await worker.stop();
+
+  const cognitive = await findEpisodeCognitiveNodes(substrate.driver, episodeId);
+  const decision = cognitive.find((node) => node.label === 'Decision');
+  decisionId = decision?.id ?? '';
+  if (decisionId !== '') {
+    const properties = await nodeProperties(substrate.driver, decisionId);
+    storedReason = String(properties.rationale ?? '');
+  }
 }, 600_000);
 
 afterAll(async () => {
@@ -69,9 +89,23 @@ describe('a decision node renders the reason behind it', () => {
       { identity: READ_SESSION, now: RECALLED_AT },
     );
 
-    const decision = result.items.find((item) => item.content.toLowerCase().includes('row-level'));
+    console.log(
+      `decision ${decisionId.slice(0, 8)} stored reason: ${storedReason}\n` +
+        result.items
+          .map(
+            (item) =>
+              `    rank ${String(item.rank)} why=${String(item.why)} ${item.content.slice(0, 60)}`,
+          )
+          .join('\n'),
+    );
+
+    // Extraction wrote a reason for the choice, so the pack has to carry that node and the
+    // reason with it. An empty stored reason means this run's extraction produced no decision
+    // to render, which is a different failure and says so here rather than passing quietly.
+    expect(storedReason).not.toBe('');
+    const decision = result.items.find((item) => item.id === decisionId);
     expect(decision).toBeDefined();
-    expect(decision?.why).toBeTruthy();
-    expect(result.pack.rendered_text).toContain(`why: ${decision?.why ?? ''}`);
+    expect(decision?.why).toBe(storedReason);
+    expect(result.pack.rendered_text).toContain(`why: ${storedReason}`);
   }, 180_000);
 });

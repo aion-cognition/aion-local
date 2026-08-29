@@ -63,6 +63,14 @@ export type GateStoreOptions = {
   readonly now?: Date;
 };
 
+export type GateSubstrateOptions = {
+  /**
+   * Applied to the shipped defaults once, at construction. A battery narrows a knob only when
+   * the shipped value makes its own claim untestable, and says which claim in its own file.
+   */
+  readonly tune?: (config: Config) => Config;
+};
+
 export class GateSubstrate {
   readonly label: string;
   readonly config: Config;
@@ -75,15 +83,16 @@ export class GateSubstrate {
   #provider: Provider | undefined;
   #dataDir = '';
 
-  constructor(label: string) {
+  constructor(label: string, options: GateSubstrateOptions = {}) {
     this.label = label;
-    this.config = {
+    const shipped: Config = {
       ...DEFAULTS,
       ollama: {
         ...DEFAULTS.ollama,
         url: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
       },
     };
+    this.config = options.tune === undefined ? shipped : options.tune(shipped);
     this.#lanes = new LaneAssigner(this.config.lanes);
   }
 

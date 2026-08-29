@@ -8,7 +8,8 @@ import {
   vectorSeeds,
   withCurrency,
 } from '@aion/core';
-import { GateSubstrate, waitFor } from './gate-substrate.fixture.js';
+import { countStatedReasons } from '@aion/core/infrastructure/graph/test-support/graph-queries.fixture.js';
+import { GateSubstrate, waitFor, type GateRecallResult } from './gate-substrate.fixture.js';
 import { DISTRACTORS, HELD_OUT_CASES, HELD_OUT_PROBES } from './held-out-recall.fixture.js';
 
 /**
@@ -41,6 +42,18 @@ const TOP_N = 5;
  */
 const MIN_ANSWERING_NODE_RATE = 0.8;
 
+/**
+ * Share of judged candidates that may reach the gate unmeasured beyond the ones that are
+ * unmeasurable by construction. A recency hit and a plain BM25 hit are ranks rather than
+ * measurements, so a seed found by nothing else is counted out of this rate; what is left is
+ * a node the spread reached whose content vector has not been written yet, and after arrival
+ * scoring that is the only way an arrival reaches the gate with nothing said about it.
+ *
+ * Measured at 1.1% across this battery (15 of 1,344 judged candidates), against 14.4% before
+ * the unmeasurable seeds are counted out. The cap sits at roughly three times the measurement.
+ */
+const MAX_UNEXPLAINED_UNMEASURED_RATE = 0.03;
+
 const substrate = new GateSubstrate('held-out');
 const storedIds = new Map<string, string>();
 const derivedIds = new Map<string, string[]>();
@@ -52,14 +65,48 @@ type ProbeRow = {
   /** 1-based rank across the whole pack, or 0 when the pack does not carry the answer at all. */
   readonly rank: number;
   readonly statesTheAnswer: boolean;
+  /** Items the traversal leg put in the pack, and how many of those printed their path. */
+  readonly activation: number;
+  readonly activationPaths: number;
+  /** Candidates the gate judged, and those it dropped because nothing had measured them. */
+  readonly considered: number;
+  readonly unmeasured: number;
+  /** Seeds a cosine method never touched: a recency rank or a plain BM25 hit and nothing else. */
+  readonly unmeasurableSeeds: number;
+  /** Items carrying a stated reason, and how many of those reasons reached the rendered text. */
+  readonly whys: number;
+  readonly whysRendered: number;
 };
 
 const rows: ProbeRow[] = [];
 const methods = new Map<string, number>();
 
+/** Nodes the enriched substrate stores a stated reason on, read once the pipeline has drained. */
+let storedReasons = 0;
+
 function rankOf(items: readonly MemoryPackItem[], expected: ReadonlySet<string>): number {
   const hit = items.find((item) => expected.has(item.id));
   return hit === undefined ? 0 : hit.rank;
+}
+
+/**
+ * Seeds no cosine method ever touched. A recency hit is a rank and a plain BM25 hit is a
+ * corpus-relative score, so a seed found only that way reaches the gate with nothing a floor
+ * can read. Counting them apart is what turns the gate's unmeasured tally into a statement
+ * about the traversal leg rather than about the two legs that never measure anything.
+ */
+function unmeasurableSeeds(seeds: GateRecallResult['seeds']): number {
+  return seeds.filter(
+    (seed) =>
+      seed.isStructural !== true &&
+      seed.content.trim().length > 0 &&
+      !seed.provenance.some(
+        (entry) =>
+          entry.exact === true ||
+          entry.strategy === 'vector' ||
+          entry.strategy === 'entity_resolution',
+      ),
+  ).length;
 }
 
 function statesTheAnswer(
@@ -121,6 +168,8 @@ beforeAll(async () => {
     derivedIds.set(held.key, [episodeId, ...nodes.map((node) => node.id)]);
   }
 
+  storedReasons = await countStatedReasons(substrate.driver);
+
   // Both indexes are eventually consistent; a probe that runs while one is catching up
   // measures index lag rather than retrieval.
   await waitFor('the fulltext index to cover every stored claim', 120_000, async () => {
@@ -169,12 +218,22 @@ describe('a claim stored in one session answers the natural question asked in an
     for (const item of result.items) {
       methods.set(item.rationale.method, (methods.get(item.rationale.method) ?? 0) + 1);
     }
+    const activated = result.items.filter((item) => item.rationale.method === 'activation');
+    const whys = result.items.filter((item) => item.why !== undefined);
     rows.push({
       key: probe.key,
       question: probe.question,
       items: result.items.length,
       rank,
       statesTheAnswer: answered,
+      activation: activated.length,
+      activationPaths: activated.filter((item) => (item.rationale.path ?? '') !== '').length,
+      considered: result.admission.considered,
+      unmeasured: result.admission.droppedUnmeasured,
+      unmeasurableSeeds: unmeasurableSeeds(result.seeds),
+      whys: whys.length,
+      whysRendered: whys.filter((item) => result.pack.rendered_text.includes(`why: ${item.why ?? ''}`))
+        .length,
     });
 
     console.log(
@@ -207,6 +266,57 @@ describe('a claim stored in one session answers the natural question asked in an
 
     expect(rows).toHaveLength(HELD_OUT_PROBES.length);
     expect(found / rows.length).toBeGreaterThanOrEqual(MIN_ANSWERING_NODE_RATE);
+  });
+
+  // The traversal leg, from the reader's side. An activation item is one no seed strategy
+  // found: the graph reached it and something then measured it against the question. A battery
+  // with none of them is a vector search with a graph attached, whatever the graph cost to keep.
+  it('answers partly out of memories no seed strategy found, and prints the path to each', () => {
+    const contributed = rows.reduce((total, row) => total + row.activation, 0);
+    const withPath = rows.reduce((total, row) => total + row.activationPaths, 0);
+    const probes = rows.filter((row) => row.activation > 0).length;
+    console.log(
+      `activation contribution: ${String(contributed)} item(s) across ` +
+        `${String(probes)}/${String(rows.length)} probes, ${String(withPath)} with a path`,
+    );
+
+    expect(contributed).toBeGreaterThan(0);
+    expect(withPath).toBe(contributed);
+  });
+
+  // The other half of the same leg: what it costs. An arrival the spread reached is scored
+  // against the cues, so on an enriched substrate almost nothing should reach the gate with
+  // no measurement at all. A rate that climbs is arrival scoring falling back to a refusal.
+  it('judges what the spread reached rather than dropping it unmeasured', () => {
+    const considered = rows.reduce((total, row) => total + row.considered, 0);
+    const unmeasured = rows.reduce((total, row) => total + row.unmeasured, 0);
+    const unmeasurable = rows.reduce((total, row) => total + row.unmeasurableSeeds, 0);
+    const unexplained = Math.max(0, unmeasured - unmeasurable);
+    console.log(
+      `unmeasured candidates: ${String(unmeasured)}/${String(considered)} considered, ` +
+        `${String(unmeasurable)} of them seeds no cosine method touched, ` +
+        `${String(unexplained)} left unexplained ` +
+        `(${(considered === 0 ? 0 : (unexplained / considered) * 100).toFixed(1)}%)`,
+    );
+
+    expect(considered).toBeGreaterThan(0);
+    expect(unexplained / considered).toBeLessThanOrEqual(MAX_UNEXPLAINED_UNMEASURED_RATE);
+  });
+
+  // A decision the pack carries without its stated reason reads like a decision nobody argued
+  // for, and a structured field the rendered text drops is the same loss for a text-only
+  // consumer. How many reasons the substrate holds at all is extraction's business and moves
+  // run to run, so it is logged beside the count rather than asserted here; that the answering
+  // pack keeps every one it selected is this battery's to hold.
+  it('renders every stated reason its packs carry, not only the structured field', () => {
+    const carried = rows.reduce((total, row) => total + row.whys, 0);
+    const rendered = rows.reduce((total, row) => total + row.whysRendered, 0);
+    console.log(
+      `stated reasons: ${String(storedReasons)} stored on the substrate, ${String(carried)} ` +
+        `carried by the battery's packs, ${String(rendered)} rendered`,
+    );
+
+    expect(rendered).toBe(carried);
   });
 
   // The census that says whether retrieval is measuring meaning or matching tokens. A pack set
