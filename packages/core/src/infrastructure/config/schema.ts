@@ -120,6 +120,13 @@ export const ConfigSchema = z.object({
     maxCognitiveNodes: positiveInt,
     semanticTimeoutMs: positiveInt,
     maxRelationships: positiveInt,
+    /**
+     * `propose` writes every detection to `supersession_proposals` and never closes a node;
+     * `auto` restores the confidence split. Auto returns only once the quality harness
+     * measures precision on the contradiction battery, so the default is the safe one.
+     */
+    supersedeMode: z.enum(['propose', 'auto']),
+    /** The auto path's threshold only. In `propose` mode nothing reads it. */
     supersedeAutoConfidence: proportion,
     supersedeNeighborThreshold: proportion,
     supersedeTimeoutMs: positiveInt,

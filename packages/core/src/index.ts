@@ -185,6 +185,17 @@ export type {
   SupersedeResult,
 } from './infrastructure/graph/bitemporal.js';
 
+export {
+  EPISODE_PROPAGATION_METHOD,
+  propagateEpisodeSupersession,
+  supersedeEpisode,
+} from './infrastructure/graph/episode-supersession.js';
+export type {
+  EpisodePropagationResult,
+  SupersedeEpisodeInput,
+  SupersedeEpisodeResult,
+} from './infrastructure/graph/episode-supersession.js';
+
 export { bootstrapBackbone, GLOBAL_WORKSPACE_NAME, readMemberName } from './infrastructure/graph/backbone.js';
 export type { BootstrapBackboneInput, BootstrapBackboneResult } from './infrastructure/graph/backbone.js';
 
@@ -343,7 +354,10 @@ export { SemanticRelationshipStage } from './reflection/application/stages/seman
 export type { SemanticRelationshipStageOptions } from './reflection/application/stages/semantic-relationships.js';
 
 export { SupersessionStage } from './reflection/application/stages/supersession.js';
-export type { SupersessionStageOptions } from './reflection/application/stages/supersession.js';
+export type {
+  SupersessionMode,
+  SupersessionStageOptions,
+} from './reflection/application/stages/supersession.js';
 
 export {
   REFLECTION_CO_EXTRACTION_TRIGGER,

@@ -133,6 +133,7 @@ export const DEFAULTS: Config = {
     maxCognitiveNodes: 20,
     semanticTimeoutMs: 60_000,
     maxRelationships: 40,
+    supersedeMode: 'propose',
     supersedeAutoConfidence: 0.85,
     supersedeNeighborThreshold: 0.75,
     supersedeTimeoutMs: 60_000,

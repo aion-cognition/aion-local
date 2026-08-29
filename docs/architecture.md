@@ -172,6 +172,14 @@ by `supersede`:
 `(new)-[:SUPERSEDES]->(old)` in the same transaction. A closed node with no lineage edge
 is not a state the substrate can reach.
 
+`supersedeEpisode(driver, { oldId, newId })` is the Episode form
+(`infrastructure/graph/episode-supersession.ts`). It does the same close, then in the same
+transaction closes every node whose only open `EXTRACTED_FROM` source was that episode and
+links each to the new episode with provenance `supersession_episode_propagation`. Closing an
+episode alone leaves its facts open, and recall then serves the corrected value as `current`.
+`propagateEpisodeSupersession` runs the second half over an episode something else already
+closed.
+
 Four read modes, all built from one composable fragment
 (`infrastructure/graph/read-modes.ts`) so every seed strategy and the traversal share one
 definition of currency:

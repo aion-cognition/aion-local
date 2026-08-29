@@ -32,6 +32,7 @@ import {
   DEFAULT_MAX_CONTRADICTION_NEIGHBORS,
   DEFAULT_MAX_SUPERSESSION_SUBJECTS,
   DEFAULT_SUPERSEDE_AUTO_CONFIDENCE,
+  DEFAULT_SUPERSEDE_MODE,
   DEFAULT_SUPERSESSION_TIMEOUT_MS,
 } from './stages/supersession.js';
 
@@ -57,6 +58,7 @@ describe('reflection config defaults', () => {
     expect(reflection.maxCognitiveNodes).toBe(DEFAULT_MAX_COGNITIVE_NODES);
     expect(reflection.semanticTimeoutMs).toBe(DEFAULT_SEMANTIC_RELATIONSHIP_TIMEOUT_MS);
     expect(reflection.maxRelationships).toBe(DEFAULT_MAX_RELATIONSHIPS);
+    expect(reflection.supersedeMode).toBe(DEFAULT_SUPERSEDE_MODE);
     expect(reflection.supersedeAutoConfidence).toBe(DEFAULT_SUPERSEDE_AUTO_CONFIDENCE);
     expect(reflection.supersedeNeighborThreshold).toBe(DEFAULT_CONTRADICTION_NEIGHBOR_THRESHOLD);
     expect(reflection.supersedeTimeoutMs).toBe(DEFAULT_SUPERSESSION_TIMEOUT_MS);
