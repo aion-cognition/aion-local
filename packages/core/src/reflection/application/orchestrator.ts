@@ -69,7 +69,7 @@ function errorMessage(err: unknown): string {
  * so a failed extraction does not cost the run its deduplication (§12.2); the run-level
  * ledger is marked last, with the per-stage record of what the run actually did.
  *
- * Underneath that sits the per-stage ledger (EX-4): each stage is also gated on its own key,
+ * Underneath that sits the per-stage ledger: each stage is also gated on its own key,
  * marked as it finishes rather than at the end, so a retry after a partial failure re-enters
  * only the stages that have not yet applied instead of re-running the whole pipeline.
  *
@@ -148,7 +148,7 @@ export class ReflectionOrchestrator {
   }
 
   /**
-   * The per-stage ledger gate (EX-4). A stage whose key is already applied is not entered —
+   * The per-stage ledger gate. A stage whose key is already applied is not entered —
    * `run` is never called — so a retry cannot re-mint what an earlier attempt already wrote.
    * The key is set the moment the stage finishes without failing, `ok` or `skipped` alike,
    * mirroring `shouldMarkApplied`'s view that only `failed` leaves something to retry.

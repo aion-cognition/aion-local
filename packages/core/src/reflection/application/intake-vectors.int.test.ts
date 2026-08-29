@@ -107,6 +107,7 @@ beforeAll(async () => {
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
+    workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
   };
 
   live = {

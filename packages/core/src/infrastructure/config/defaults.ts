@@ -67,18 +67,26 @@ export const DEFAULTS: Config = {
     // is a call that never returns.
     cueBudgetMs: 8000,
     tokenBudget: 1200,
-    // Measured, not pinned. Against nomic-embed-text on 23 unrelated pairs and 10 genuine
-    // matches (`floors.fixtures.ts`): unrelated p95 0.474, related p05 0.513, so 0.50 is the
-    // separating point. 0.60 would starve real matches — the weakest genuine pair measured
-    // 0.588 and the exercise measured one at 0.631. `floor-calibration.int.test.ts` re-measures
-    // both distributions and fails if these stop separating them.
-    vectorAdmissionFloor: 0.5,
-    corroborationFloor: 0.45,
+    // Measured, not pinned. Against nomic-embed-text on 28 unrelated pairs and 10 genuine
+    // matches (`floors.fixtures.ts`): unrelated p50 0.408, p95 0.530, max 0.547; related min
+    // 0.451, p50 0.773. The tails overlap, so no floor separates them, and the pin's answer to
+    // an overlap is corroboration rather than a lower floor: the floor sits above the whole
+    // noise sample and the two genuine matches inside the band (0.451, 0.588) are admitted by
+    // two agreeing legs instead. A floor at 0.50 sat inside that band and admitted off-topic
+    // text on one leg, which is what filled the exercise's miss packs to budget.
+    vectorAdmissionFloor: 0.6,
+    // Above the noise sample's whole range (max 0.547), not merely above its median. A
+    // corroborating measurement is still a measurement, and two of them at 0.46 and 0.51 are
+    // two readings of the same noise, not two legs agreeing: on the gate's off-topic probes
+    // that is exactly what admitted every surviving item, each one under the floor on its own.
+    // What the band between this and the floor buys is a genuine match no single cue phrased
+    // well enough, admitted when two independent cues both put it above the noise.
+    corroborationFloor: 0.55,
     bm25AdmissionMode: 'exact',
     entityMatchThreshold: 0.7,
     // Plan-pinned default. Two survivors keeps a cluster's best-ranked content visible
     // (a pack that answers "did we ever discuss X" still gets one example) without one
-    // burst shape eating the bucket the way EX-22 measured.
+    // burst shape eating the bucket the way the exercise measured.
     clusterCap: 2,
     // The plan pins "at most 3 or 4". Four, because a pack that answers "who is involved in X"
     // needs room for more than one name while still leaving eleven of fifteen fact slots to
@@ -198,12 +206,12 @@ export const DEFAULTS: Config = {
     workerBreakerCooldownMs: 60_000,
     workerVectorBatchSize: 64,
     reconcileWarnThreshold: 50,
-    // Plan-pinned defaults (EX-10): ten minutes past the drain rate this exercise measured
+    // Plan-pinned defaults: ten minutes past the drain rate this exercise measured
     // (1.9 to 6.7 episodes/min) is a real backlog, not noise; 200 unclaimed is the same
     // judgment by depth instead of age.
     lagOldestUnclaimedWarnMs: 600_000,
     lagQueueDepthWarnThreshold: 200,
-    // Plan-pinned default (EX-32): well past any real tool-call gap, short enough that a
+    // Plan-pinned default: well past any real tool-call gap, short enough that a
     // transport a client forgot to close does not sit in the session map for a whole shift.
     sessionIdleExpiryMinutes: 30,
   },

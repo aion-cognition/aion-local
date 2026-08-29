@@ -134,6 +134,7 @@ function intakeDeps(deps: { provider: Provider; dispatch: ReflectionDispatch }):
     logger,
     entropyThreshold: config.redaction.entropyThreshold,
     lanes: new LaneAssigner(config.lanes),
+    workerMaxAttempts: config.operational.workerMaxAttempts,
   };
 }
 

@@ -190,6 +190,52 @@ describe('battery 7: a bulk load queued ahead of one live turn', () => {
 });
 
 /**
+ * The half of battery 7 the explicit flag hides. The live incident was four harnesses that
+ * never declared themselves bulk, so the flag path would have caught none of it: the
+ * arrival-rate backstop is what had to fire, and a battery that always sets `lane: 'bulk'`
+ * stays green with that backstop switched off entirely.
+ */
+describe('battery 7b: a flood that never says it is one', () => {
+  const acks: ReflectionOutput[] = [];
+  const UNDECLARED_SESSION = 'gate-undeclared-flood';
+
+  beforeAll(async () => {
+    dropUnclaimedJobs(substrate.db);
+    const allowance = substrate.config.lanes.sessionArrivalMax;
+    for (let index = 0; index < allowance + 3; index += 1) {
+      acks.push(
+        await substrate.store(
+          {
+            observations: [`undeclared record ${String(index)} pushed as fast as the client can`],
+            summary: `undeclared flood ${String(index)}`,
+          },
+          { identity: UNDECLARED_SESSION },
+        ),
+      );
+    }
+  }, 900_000);
+
+  it('demotes on arrival rate alone, with no lane field in any payload', () => {
+    const allowance = substrate.config.lanes.sessionArrivalMax;
+    const lanes = acks.map((ack) => ack.lane);
+    console.log(`undeclared flood lanes: ${lanes.join(' ')}`);
+
+    // The session's own allowance is generous on purpose, so a legitimate session-end flush of
+    // ten episodes at once is served interactive and only a real flood crosses.
+    expect(lanes.slice(0, allowance)).toEqual(new Array<string>(allowance).fill('interactive'));
+    expect(lanes.slice(allowance)).toEqual(
+      new Array<string>(lanes.length - allowance).fill('bulk'),
+    );
+  });
+
+  it('counts the demoted rows as bulk depth, which is where an operator would look', () => {
+    const snapshot = queueLagSnapshot(substrate.db, substrate.config.operational.workerMaxAttempts);
+
+    expect(snapshot.depthByLane.bulk).toBe(acks.length - substrate.config.lanes.sessionArrivalMax);
+  });
+});
+
+/**
  * EX-28, recorded as a measurement rather than closed as a fix. The entity stage misses proper
  * nouns the cognitive stage names in the same run, and the one fix that would close it —
  * batching the two extractions into one pass — is deliberately out of this round (plan §4.5,

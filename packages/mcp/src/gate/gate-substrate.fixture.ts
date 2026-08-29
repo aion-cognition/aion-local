@@ -163,6 +163,7 @@ export class GateSubstrate {
       // One assigner for the substrate's life, as the service holds one: its counters are the
       // arrival rate the backstop reads.
       lanes: new LaneAssigner(this.config.lanes),
+      workerMaxAttempts: this.config.operational.workerMaxAttempts,
     };
   }
 

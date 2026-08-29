@@ -89,7 +89,7 @@ export const CUE_FIXTURES: readonly CueFixtureScenario[] = [
 ];
 
 /**
- * EX-1's own miss queries as bare recall calls: no summary, no turns, and a topic the
+ * The exercise's own miss queries as bare recall calls: no summary, no turns, and a topic the
  * substrate has never held. Every one came back a full, budget-saturated pack, and the report
  * notes for the quantum query that "its cues were correct, so the failure is downstream of cue
  * extraction". These fixtures hold that line: a hardened prompt must not start inventing
@@ -104,13 +104,13 @@ export const BARE_QUERY_FIXTURES: readonly CueFixtureScenario[] = OFF_TOPIC_BATT
 );
 
 /**
- * EX-20's four summaries against one query, verbatim, with the rank the answer came back at.
+ * The exercise's four summaries against one query, verbatim, with the rank the answer came back at.
  * The summary never improved on having none, and one destroyed the answer outright — which is
  * why summary cues are damped to 1x whatever they say (`cues.ts`, `SUMMARY_CUE_WEIGHT`).
  */
 export type SummaryToneFixture = {
   readonly summary: string;
-  /** What EX-20 measured for `SUMMARY_TONE_QUERY` under this summary. */
+  /** What the exercise measured for `SUMMARY_TONE_QUERY` under this summary. */
   readonly measured: string;
 };
 
@@ -122,10 +122,10 @@ export const SUMMARY_TONE_FIXTURES: readonly SummaryToneFixture[] = [
     summary:
       'Debugging a production deploy blocked by a Neo4j migration deadlock: read-only joins ' +
       'were colliding with a multi-table single-transaction DDL statement.',
-    measured: 'not in EX-20; a summary that names its subject, for contrast',
+    measured: 'not in the exercise; a summary that names its subject, for contrast',
   },
 ];
 
-/** The query EX-20 ran under each of those summaries, which HIT at rank 7 of 21 with none. */
+/** The query the exercise ran under each of those summaries, which HIT at rank 7 of 21 with none. */
 export const SUMMARY_TONE_QUERY =
   'how long does the split migration take on a production sized copy';

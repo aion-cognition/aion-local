@@ -5,7 +5,7 @@ import type { Measurement } from './admission.js';
  * What may sit in the facts bucket, and in what order. The admission gate decides whether a
  * candidate is a memory at all; this decides whether it is an *answer*.
  *
- * EX-19 measured the gap: over 168 fact slots on an entirely decision-oriented workload,
+ * The exercise measured the gap: over 168 fact slots on an entirely decision-oriented workload,
  * Entity glosses took 58% and Decision nodes took 3%, and the item that ranked first for
  * "what did we decide about the remittance ingest transport" was a Goal restating the
  * question. Three rules, each measured rather than asserted:
@@ -31,7 +31,7 @@ export const DECISION_INTENT_LABELS: readonly string[] = ['Decision', 'Insight']
 
 /**
  * The label whose content is a gloss: a name and a one-line description, 60 to 130 characters,
- * lexically dense and cheap against the token budget, which is how EX-19's entity glosses won
+ * lexically dense and cheap against the token budget, which is how the measured entity glosses won
  * both the lexical score and the budget-fit check at once.
  */
 export const GLOSS_LABEL = 'Entity';
