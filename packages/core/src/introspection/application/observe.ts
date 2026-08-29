@@ -9,6 +9,7 @@ import {
 import { findStaleNarratives } from '../../infrastructure/graph/narrative-queries.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { countDeadLetterAttention } from '../../infrastructure/sqlite/dead-letter-queue.js';
 import { listEntityMergeProposals } from '../../infrastructure/sqlite/entity-merge-proposals.js';
 import { listOperationStats } from '../../infrastructure/sqlite/introspection-counters.js';
 import { listSupersessionProposals } from '../../infrastructure/sqlite/supersession-proposals.js';
@@ -125,6 +126,7 @@ function readQueue(db: SqliteHandle, config: Config, now: Date): QueueHealth {
     oldestUnclaimedMs: snapshot.oldestUnclaimedMs,
     exhausted: snapshot.exhausted,
     p95EnrichmentLagMs: snapshot.p95EnrichmentLagMs,
+    deadLetterAttentionCount: countDeadLetterAttention(db, config.operational.workerMaxAttempts),
   };
 }
 
