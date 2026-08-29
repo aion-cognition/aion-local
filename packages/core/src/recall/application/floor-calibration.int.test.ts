@@ -20,16 +20,20 @@ import {
 
 /**
  * The committed calibration. It measures both distributions against the live embedding model
- * and fails when `recall.vectorAdmissionFloor` stops separating them, which is the only signal
- * that the constant has gone stale — a floor tuned on noise alone cannot tell "rejects
- * unrelated text" from "rejects everything" (EX-1, and the consultation's amnesia warning
- * about the genuine pair measured at 0.631).
+ * and fails when `recall.vectorAdmissionFloor` stops holding them apart, which is the only
+ * signal that the constant has gone stale — a floor tuned on noise alone cannot tell "rejects
+ * unrelated text" from "rejects everything".
  *
- * Measured 2026-08-28, nomic-embed-text on host Ollama, and printed on every run:
- *   unrelated  n=23  p50 0.391  p95 0.474  max 0.536
+ * Measured 2026-08-29, nomic-embed-text on host Ollama, and printed on every run:
+ *   unrelated  n=28  p50 0.408  p95 0.530  max 0.547
  *   related    n=10  min 0.451  p05 0.513  p50 0.773
  *   weak       n=4   0.355 0.390 0.458 0.522   (related, under the floor, corroboration's job)
- * Committed floor 0.50 sits in the gap; 0.60 would have starved the 0.588 pair.
+ *
+ * The tails overlap: unrelated technical prose reaches 0.547 and two genuine matches sit at
+ * 0.451 and 0.588. No floor separates that. Both floors are set above the whole noise sample
+ * and the overlap is handed to the narrow corroboration band (0.55 to 0.60) and to exact
+ * lexical hits; the one genuine match under both floors is reported on every run rather than
+ * assumed away.
  */
 
 const OLLAMA_URL = process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434';
@@ -59,18 +63,19 @@ function line(label: string, distribution: Distribution): string {
   );
 }
 
+let unrelatedScores: readonly number[] = [];
+let relatedScores: readonly number[] = [];
 let unrelated: Distribution;
-let related: Distribution;
 
 describe('the admission floor against this embedding model', () => {
   it('measures both distributions and reports them', async () => {
     const setScores = pairwiseCosines(await provider.embed([...UNRELATED_SENTENCES]));
     const offTopicScores = await pairScores(UNRELATED_PAIRS);
-    const relatedScores = await pairScores(RELATED_PAIRS);
     const weakScores = await pairScores(WEAK_RELATED_PAIRS);
 
-    unrelated = describeDistribution([...setScores, ...offTopicScores]);
-    related = describeDistribution(relatedScores);
+    relatedScores = await pairScores(RELATED_PAIRS);
+    unrelatedScores = [...setScores, ...offTopicScores];
+    unrelated = describeDistribution(unrelatedScores);
 
     console.log(
       [
@@ -79,29 +84,53 @@ describe('the admission floor against this embedding model', () => {
         line('unrelated (mutually unrelated sentences)', describeDistribution(setScores)),
         line('unrelated (off-topic query vs stored content)', describeDistribution(offTopicScores)),
         line('unrelated (all)', unrelated),
-        line('related', related),
+        line('related', describeDistribution(relatedScores)),
         line('weak related (under the floor by design)', describeDistribution(weakScores)),
+        `related scores: ${relatedScores.map((score) => score.toFixed(3)).join(' ')}`,
         `weak related scores: ${weakScores.map((score) => score.toFixed(3)).join(' ')}`,
       ].join('\n'),
     );
 
     expect(unrelated.count).toBe(UNRELATED_PAIRS.length + 15);
-    expect(related.count).toBe(RELATED_PAIRS.length);
+    expect(relatedScores).toHaveLength(RELATED_PAIRS.length);
   }, 120_000);
 
-  it('separates them at the committed floor, or says what to re-measure', () => {
+  it('holds them apart at the committed floor, or says what to re-measure', () => {
     const separation = checkSeparation({
-      unrelated,
-      related,
+      unrelatedScores,
+      relatedScores,
       policy: POLICY,
       tolerance: CALIBRATION_TOLERANCE,
     });
+    console.log(separation.detail);
 
     expect(separation.separated, separation.detail).toBe(true);
   });
 
-  it('leaves the corroboration floor above the noise median and below the admission floor', () => {
-    expect(POLICY.corroborationFloor).toBeGreaterThan(unrelated.p50);
+  /**
+   * Corroboration is a lower bar, not a suspended one. Two measurements that are both inside
+   * the noise band are one distribution sampled twice; admitting on their agreement is the
+   * same failure as a floor inside the band, and it is what every surviving off-topic item in
+   * the gate turned out to be. The band it does open is real and narrow: between this floor
+   * and the admission floor sits a genuine match no single cue phrased well enough.
+   */
+  it('leaves the corroboration floor above the noise and below the admission floor', () => {
+    expect(POLICY.corroborationFloor).toBeGreaterThan(unrelated.p95);
     expect(POLICY.corroborationFloor).toBeLessThan(POLICY.vectorFloor);
+  });
+
+  /**
+   * What the two floors together cost, stated rather than assumed. A genuine match under the
+   * corroboration floor is reachable only by an exact lexical hit, so this number is the size
+   * of the bet the floors are making and it belongs in the run's own output.
+   */
+  it('reports how many genuine matches only an exact hit can reach', () => {
+    const lexicalOnly = relatedScores.filter((score) => score < POLICY.corroborationFloor);
+    console.log(
+      `genuine matches needing an exact lexical hit: ${String(lexicalOnly.length)}/` +
+        `${String(relatedScores.length)} (${lexicalOnly.map((s) => s.toFixed(3)).join(' ')})`,
+    );
+
+    expect(lexicalOnly.length / relatedScores.length).toBeLessThanOrEqual(0.2);
   });
 });

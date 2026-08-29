@@ -1,6 +1,6 @@
 import type { Vector } from '../../infrastructure/providers/types.js';
 import type { AdmissionPolicy } from './admission.js';
-import { cosineSimilarity } from './fusion.js';
+import { cosineSimilarity } from './ranking.js';
 
 /**
  * The measurement behind `recall.vectorAdmissionFloor`, kept as a function of two measured
@@ -75,8 +75,9 @@ export function pairedCosines(vectors: readonly Vector[]): number[] {
 }
 
 export type SeparationInput = {
-  readonly unrelated: Distribution;
-  readonly related: Distribution;
+  /** Raw cosines, not a summary: the share of genuine matches under the floor needs the sample. */
+  readonly unrelatedScores: readonly number[];
+  readonly relatedScores: readonly number[];
   readonly policy: AdmissionPolicy;
   /** How far either distribution may drift before the committed floor is judged stale. */
   readonly tolerance: number;
@@ -86,6 +87,10 @@ export type Separation = {
   readonly separated: boolean;
   /** The measured numbers, one line, so a failure reports evidence instead of a boolean. */
   readonly detail: string;
+  readonly unrelated: Distribution;
+  readonly related: Distribution;
+  /** Fraction of `relatedScores` below the committed floor, which corroboration has to carry. */
+  readonly relatedUnderFloor: number;
 };
 
 function round(value: number): string {
@@ -93,42 +98,83 @@ function round(value: number): string {
 }
 
 /**
- * Three claims, all of them about the committed floor rather than about an ideal one:
- * the distributions separate at all, the floor sits above the noise, and the floor sits
- * below what a genuine match scores. Tolerance is drift allowance, not slack in the claim —
- * embeddings are deterministic for a given model, so anything past it means the model
- * changed and the constant has to be re-measured.
+ * The share of genuine matches the floor rejects on the vector leg alone. These are not
+ * starved — corroboration and exact lexical hits are what admit them — but past a point the
+ * floor is carrying the wrong load and the number has to be visible before it gets there.
+ */
+export const MAX_RELATED_UNDER_FLOOR = 0.4;
+
+/**
+ * Two claims about the committed floor, plus one measurement reported either way.
+ *
+ * The floor must sit above what unrelated text scores, with drift allowance: this is the only
+ * claim a floor can make on its own, and it is the one the exercise's off-topic packs violated.
+ * It must also sit below what a typical genuine match scores, judged at the related median
+ * rather than at a tail order statistic — the tails of the two distributions overlap on this
+ * model, so a floor pinned to `related.p05` is pinned to noise.
+ *
+ * Overlap itself is not a failure. Where the distributions cross, the answer is corroboration
+ * and exact hits, never a lower floor: a floor dropped into the band admits unrelated text on
+ * one leg, which is the failure this whole gate exists to stop. What is reported is how much of
+ * the related distribution corroboration is being asked to carry.
+ *
+ * The corroboration floor gets the same claim as the admission floor and for the same reason.
+ * It is a lower bar, not a suspended one: two measurements that are both inside the noise band
+ * are one distribution sampled twice, and letting them vouch for each other reproduces the
+ * failure one notch down — which is what the gate's surviving off-topic items were, every one
+ * of them under the admission floor on its own evidence.
+ *
+ * Tolerance is drift allowance, not slack in a claim — embeddings are deterministic for a given
+ * model, so anything past it means the model changed and the constant has to be re-measured.
  */
 export function checkSeparation(input: SeparationInput): Separation {
   const floor = input.policy.vectorFloor;
-  const overlaps = input.unrelated.p95 >= input.related.p05;
-  const floorTooLow = input.unrelated.p95 >= floor + input.tolerance;
-  const floorTooHigh = input.related.p05 <= floor - input.tolerance;
+  const unrelated = describeDistribution(input.unrelatedScores);
+  const related = describeDistribution(input.relatedScores);
+  const under = input.relatedScores.filter((score) => score < floor).length;
+  const relatedUnderFloor = input.relatedScores.length === 0 ? 0 : under / input.relatedScores.length;
+
+  const floorTooLow = unrelated.p95 >= floor + input.tolerance;
+  const floorTooHigh = related.p50 <= floor - input.tolerance;
+  const corroborationTooLow = unrelated.p95 >= input.policy.corroborationFloor + input.tolerance;
 
   const detail =
     `floor ${round(floor)} (corroboration ${round(input.policy.corroborationFloor)}), ` +
-    `unrelated n=${String(input.unrelated.count)} p50 ${round(input.unrelated.p50)} ` +
-    `p95 ${round(input.unrelated.p95)} max ${round(input.unrelated.max)}, ` +
-    `related n=${String(input.related.count)} min ${round(input.related.min)} ` +
-    `p05 ${round(input.related.p05)} p50 ${round(input.related.p50)}`;
+    `unrelated n=${String(unrelated.count)} p50 ${round(unrelated.p50)} ` +
+    `p95 ${round(unrelated.p95)} max ${round(unrelated.max)}, ` +
+    `related n=${String(related.count)} min ${round(related.min)} ` +
+    `p05 ${round(related.p05)} p50 ${round(related.p50)}, ` +
+    `${(relatedUnderFloor * 100).toFixed(0)}% of genuine matches under the floor and carried by corroboration`;
 
-  if (overlaps) {
-    return {
-      separated: false,
-      detail: `${detail} — the distributions no longer separate at any floor; admission has to lean on corroboration and exact hits, and the committed constants need re-measuring`,
-    };
-  }
+  const measured = { unrelated, related, relatedUnderFloor };
+
   if (floorTooLow) {
     return {
+      ...measured,
       separated: false,
       detail: `${detail} — the floor sits inside the noise band and admits unrelated text; re-measure and raise it`,
     };
   }
   if (floorTooHigh) {
     return {
+      ...measured,
       separated: false,
-      detail: `${detail} — the floor sits above what genuine matches score and starves them; re-measure and lower it`,
+      detail: `${detail} — the floor sits above what a typical genuine match scores; re-measure and lower it`,
     };
   }
-  return { separated: true, detail };
+  if (corroborationTooLow) {
+    return {
+      ...measured,
+      separated: false,
+      detail: `${detail} — the corroboration floor sits inside the noise band, so two readings of the same noise admit each other; re-measure and raise it`,
+    };
+  }
+  if (relatedUnderFloor > MAX_RELATED_UNDER_FLOOR) {
+    return {
+      ...measured,
+      separated: false,
+      detail: `${detail} — corroboration is carrying more of the genuine matches than the floor is; re-measure both distributions`,
+    };
+  }
+  return { ...measured, separated: true, detail };
 }

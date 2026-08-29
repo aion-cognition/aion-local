@@ -4,7 +4,12 @@
  * Two distributions decide a floor and both have to be measured: what unrelated text scores
  * against this embedding model, and what a genuine match scores. The exercise measured the
  * first and nearly missed the second — a real match at 0.631 sits close enough to a naive 0.60
- * floor that the floor would have starved it (EX-1 plus the consultation's amnesia warning).
+ * floor that the floor would have starved it.
+ *
+ * The two distributions overlap, and that is a property of the model rather than a defect in
+ * the corpus: unrelated technical prose reaches 0.55 while a vaguely-worded genuine match can
+ * sit at 0.45. A floor cannot resolve an overlap, so the floor is set above the noise and the
+ * genuine matches inside the band are carried by corroboration and exact hits instead.
  *
  * `floor-calibration.int.test.ts` embeds every pair here against live Ollama and asserts the
  * committed floors still separate the two distributions. `floor-battery.int.test.ts` runs the
@@ -33,7 +38,7 @@ export type ScoredPair = {
 
 /**
  * The shape the floor actually faces: an off-topic query against stored engineering content.
- * Every entry pairs one of EX-1's own miss queries with the substrate text that surfaced for
+ * Every entry pairs one of the exercise's own miss queries with the substrate text that surfaced for
  * it, so the noise distribution is measured on the real failure rather than on abstract
  * sentence pairs.
  */
@@ -69,6 +74,33 @@ export const UNRELATED_PAIRS: readonly ScoredPair[] = [
   {
     cue: 'monsoon rainfall variability across Tamil Nadu districts',
     content: 'Barrel exports can hide circular dependencies until re-exports are removed.',
+  },
+  // The noise ceiling the first eight pairs miss. Every one of these was measured against the
+  // live substrate as a served item on an off-topic query, and each scores above the whole
+  // fixture set's maximum: an entity gloss or a rephrased operational note answers nothing and
+  // still lands near a genuine match, because both are technical prose about a named thing.
+  // A floor calibrated without them is calibrated against text simpler than what is stored.
+  {
+    cue: 'zzqxwv plortnak vugglesnorf',
+    content:
+      'ZWJ sequences (concept): Zero Width Joiner sequences are tested for emoji rendering.',
+  },
+  {
+    cue: 'what is the Grimble sprocket calibration for the Vondish array',
+    content: 'Key the ZORNAX9931 dedupe on the vendor slug rather than on the display name.',
+  },
+  {
+    cue: 'how do I re-tension a bicycle wheel spoke',
+    content:
+      'rollback tooling (tool): A set of tools designed to revert a release to its previous version.',
+  },
+  {
+    cue: 'monsoon rainfall variability across Tamil Nadu districts',
+    content: 'Duplicate storm probe observations are being sent repeatedly.',
+  },
+  {
+    cue: 'zzqxwv plortnak vugglesnorf',
+    content: 'Unicode supports multiple writing systems in one document.',
   },
 ];
 
@@ -179,7 +211,7 @@ export const BATTERY_SUBSTRATE: readonly BatteryEpisode[] = [
 ];
 
 /**
- * EX-1's own miss queries, verbatim where the report quotes them. Every one returned a full,
+ * The exercise's own miss queries, verbatim where the report quotes them. Every one returned a full,
  * budget-saturated pack of confident items; the floor's job is to make them thin or empty.
  */
 export const OFF_TOPIC_BATTERY: readonly string[] = [

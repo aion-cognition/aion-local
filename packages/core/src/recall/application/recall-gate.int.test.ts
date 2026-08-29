@@ -118,6 +118,7 @@ async function push(input: PushInput): Promise<string> {
       logger,
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
       lanes: new LaneAssigner(DEFAULTS.lanes),
+      workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
     },
     {
       observations: [input.observation],

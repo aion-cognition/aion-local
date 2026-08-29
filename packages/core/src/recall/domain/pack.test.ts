@@ -1,5 +1,6 @@
 import { MemoryPackSchema, type Cue, type StageTimingsMs } from '@aion/protocol';
 import { describe, expect, it } from 'vitest';
+import type { AdmissionReport } from './admission.js';
 import type { FusedItem } from './fusion.js';
 import {
   assemblePack,
@@ -30,6 +31,8 @@ type ItemOverrides = {
   readonly path?: string;
   readonly superseded?: boolean;
   readonly sourceEpisodeId?: string;
+  /** The absolute cosine behind admission; zero for an item a literal match let in. */
+  readonly measured?: number;
 };
 
 function item(id: string, overrides: ItemOverrides = {}): FusedItem {
@@ -45,6 +48,7 @@ function item(id: string, overrides: ItemOverrides = {}): FusedItem {
       ...(path === undefined ? {} : { path }),
     },
     relevance: 0.8,
+    measured: overrides.measured ?? 0.8,
     score: overrides.score ?? 0.02,
     ...(overrides.sourceEpisodeId === undefined
       ? {}
@@ -58,9 +62,24 @@ function item(id: string, overrides: ItemOverrides = {}): FusedItem {
   };
 }
 
+/** A gate that judged exactly the items handed over and dropped nothing, unless a test says otherwise. */
+function report(items: readonly FusedItem[]): AdmissionReport {
+  return {
+    policy: { vectorFloor: 0.6, corroborationFloor: 0.45, bm25Mode: 'exact' },
+    considered: items.length,
+    admitted: items.length,
+    droppedBelowFloor: 0,
+    droppedUnmeasured: 0,
+    droppedDuplicateContent: 0,
+    droppedNearDuplicate: 0,
+    anchored: items.length > 0,
+  };
+}
+
 function assemble(items: readonly FusedItem[], overrides: Partial<AssemblePackInput> = {}) {
   return assemblePack({
     items,
+    admission: report(items),
     caps: CAPS,
     tokenBudget: 1200,
     cues: CUES,
@@ -383,9 +402,13 @@ describe('rank and confidence', () => {
   });
 
   it('carries the absolute measurement the floor read, not the method score', () => {
+    // The exact shape the lexical leg produces: BM25 normalizes to the best hit of its cue, so
+    // `relevance` is 1.00 for the top hit of any query while the cosine behind admission is
+    // 0.62. Printing the first is what made a lexical hit read as the strongest item in a pack.
     const measured: FusedItem = {
       ...item('e1'),
-      relevance: 0.62,
+      relevance: 1,
+      measured: 0.62,
       rationale: { method: 'bm25', score: 1 },
     };
 
@@ -393,13 +416,23 @@ describe('rank and confidence', () => {
 
     expect(pack.episodes?.[0]?.confidence).toBe(0.62);
     expect(pack.rendered_text).toContain('bm25 | confidence 0.62');
-    expect(pack.rendered_text).not.toContain('bm25 1.00');
+    expect(pack.rendered_text).not.toContain('confidence 1.00');
   });
 
-  it('says zero for an item nothing measured', () => {
-    const traversed: FusedItem = { ...item('reached', { path: 'a -[X]-> b' }), relevance: 0 };
+  it('says zero for an item a literal match admitted and no cosine measured', () => {
+    const exact: FusedItem = {
+      ...item('reached'),
+      relevance: 1,
+      measured: 0,
+      rationale: { method: 'bm25', score: 1 },
+    };
 
-    expect(assemble([traversed]).episodes?.[0]?.confidence).toBe(0);
+    const pack = assemble([exact]);
+
+    expect(pack.episodes?.[0]?.confidence).toBe(0);
+    // Rendered as what it is. "confidence 0.00" beside a verbatim match reads as no answer.
+    expect(pack.rendered_text).toContain('bm25 | exact match');
+    expect(pack.rendered_text).not.toContain('confidence 0.00');
   });
 });
 

@@ -1,5 +1,6 @@
 import {
   MemoryPackSchema,
+  type AdmissionReportOutput,
   type Cue,
   type Degradation,
   type MemoryPack,
@@ -7,6 +8,7 @@ import {
   type PackTruncation,
   type StageTimingsMs,
 } from '@aion/protocol';
+import type { AdmissionReport } from './admission.js';
 import { GLOSS_LABEL } from './facts.js';
 import type { FusedItem } from './fusion.js';
 
@@ -124,7 +126,10 @@ function toPackItem(item: FusedItem, rank: number): MemoryPackItem {
     content: item.content,
     ...(item.occurredAt === undefined ? {} : { occurred_at: item.occurredAt.toISOString() }),
     rank,
-    confidence: item.relevance,
+    // `measured`, not `relevance`: relevance is the producing method's own number, and the
+    // BM25 leg normalizes to the best hit of its cue, so the top lexical hit of any query
+    // would print 1.00 beside a cosine of 0.62.
+    confidence: item.measured,
     rationale: item.rationale,
     currency: item.currency,
     ...(item.supersededBy === undefined
@@ -152,15 +157,20 @@ function renderDay(timestamp: string): string {
  * The list number is the item's rank across the whole pack rather than its position in its
  * own bucket, so the reader can order two items in different buckets. `rationale.score` is
  * deliberately not printed: it is the producing method's own number and comparing two of
- * them says nothing (EX-30).
+ * them says nothing.
  *
  * An entity gloss is annotated with the date of its first mention. The description was
- * written once, by the episode that first named the entity, and is never revised (EX-18), so
+ * written once, by the episode that first named the entity, and is never revised, so
  * rendering it without its age serves a year-old sentence as a current fact.
  */
 function renderItem(entry: PackEntry): string {
   const { item } = entry;
-  const facts = [`[${item.id}]`, item.rationale.method, `confidence ${item.confidence.toFixed(2)}`];
+  // Zero is not low confidence, it is no measurement: the item was admitted on a literal
+  // match, and printing "confidence 0.00" beside a memory that answered exactly would read
+  // as the opposite of what the gate decided.
+  const measurement =
+    item.confidence === 0 ? 'exact match' : `confidence ${item.confidence.toFixed(2)}`;
+  const facts = [`[${item.id}]`, item.rationale.method, measurement];
   if (item.occurred_at !== undefined) {
     facts.push(
       entry.gloss
@@ -185,25 +195,27 @@ function renderBucket(bucket: PackBucket, entries: readonly PackEntry[]): string
 export type AssemblePackInput = {
   /** Fused and ranked, best first. Bucket routing, caps, and the budget are applied here. */
   readonly items: readonly FusedItem[];
+  /** What the floors judged and refused, so a thin pack can say which of the two it is. */
+  readonly admission: AdmissionReport;
   readonly caps: BucketCaps;
   readonly tokenBudget: number;
   readonly cues: readonly Cue[];
   readonly timings: StageTimingsMs;
   /** Every rung of the ladder that fired (PRD §6.1, §10); absent on a normal recall. */
   readonly degraded?: readonly Degradation[];
-  /** The calling session's own episodes with no orchestrator ledger key yet (EX-11). */
+  /** The calling session's own episodes with no orchestrator ledger key yet. */
   readonly pendingEnrichment?: number;
-  /** Set when spreading activation stopped on its budget rather than converging (EX-21). */
+  /** Set when spreading activation stopped on its budget rather than converging. */
   readonly truncated?: PackTruncation;
   /**
    * Goal and Plan nodes whose text is the query said back (`facts.ts`). Kept out of facts
    * entirely rather than ranked down: a restatement carries no answer at any rank, and it is
-   * maximally similar to the query, so ranking alone puts it first (EX-19).
+   * maximally similar to the query, so ranking alone puts it first.
    */
   readonly restating?: ReadonlySet<string>;
   /**
    * How many entity glosses the facts bucket may hold. Absent leaves it uncapped; the
-   * pipeline always supplies it, because uncapped is what EX-19 measured at 58% of slots.
+   * pipeline always supplies it, because uncapped is what the exercise measured at 58% of slots.
    */
   readonly entityGlossCap?: number;
 };
@@ -224,7 +236,7 @@ const TRUNCATION_PHRASES: Readonly<Record<PackTruncation, string>> = {
  * The honesty signals as one plain line at the top of the rendered block. A client reading
  * only `content` from an MCP tool result sees the rendered text and nothing else, so a pack
  * whose metadata says "degraded" reads to that client exactly like a confident answer — one
- * exercise angle lost a full baseline run to precisely that (EX-39). The same three signals
+ * exercise angle lost a full baseline run to precisely that. The same three signals
  * stay in `metadata` for a structured consumer; this is the copy that reaches everyone.
  */
 function honestyNote(input: AssemblePackInput): string | undefined {
@@ -329,6 +341,21 @@ function render(selection: Selection, note: string | undefined): string {
   return `${PACK_HEADING}\n\n${sections.join('\n\n')}`;
 }
 
+/** Snake_case on the wire, and the policy flattened alongside the counts it explains. */
+function toAdmissionOutput(report: AdmissionReport): AdmissionReportOutput {
+  return {
+    considered: report.considered,
+    admitted: report.admitted,
+    dropped_below_floor: report.droppedBelowFloor,
+    dropped_unmeasured: report.droppedUnmeasured,
+    dropped_duplicate_content: report.droppedDuplicateContent,
+    dropped_near_duplicate: report.droppedNearDuplicate,
+    vector_floor: report.policy.vectorFloor,
+    corroboration_floor: report.policy.corroborationFloor,
+    bm25_mode: report.policy.bm25Mode,
+  };
+}
+
 /**
  * The pack is parsed against its own schema on the way out. Its invariants — a present
  * bucket is never empty, an item always carries content and a rationale — are this
@@ -355,6 +382,7 @@ export function assemblePack(input: AssemblePackInput): MemoryPack {
       token_estimate: estimateTokens(renderedText),
       stage_timings_ms: input.timings,
       cues: [...input.cues],
+      admission: toAdmissionOutput(input.admission),
       ...(input.degraded === undefined || input.degraded.length === 0
         ? {}
         : { degraded: [...input.degraded] }),

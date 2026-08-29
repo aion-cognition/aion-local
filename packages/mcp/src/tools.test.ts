@@ -9,6 +9,7 @@ import {
   type FusedItem,
   type Logger,
 } from '@aion/core';
+import { admittedAll } from '@aion/core/recall/domain/test-support/admission.fixture.js';
 import { MemoryPackSchema, type Cue, type MemoryPack, type StageTimingsMs } from '@aion/protocol';
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
@@ -28,6 +29,7 @@ const EPISODE: FusedItem = {
   occurredAt: new Date('2026-06-01T11:00:00.000Z'),
   rationale: { method: 'vector', score: 0.81 },
   relevance: 0.81,
+  measured: 0.81,
   score: 0.02,
   currency: 'current',
 };
@@ -40,7 +42,7 @@ let logger: Logger;
 let logPath: string;
 
 function pack(): MemoryPack {
-  return assemblePack({ items: [EPISODE], caps: CAPS, tokenBudget: 1200, cues: CUES, timings: TIMINGS });
+  return assemblePack({ items: [EPISODE], admission: admittedAll(1), caps: CAPS, tokenBudget: 1200, cues: CUES, timings: TIMINGS });
 }
 
 function backendReturning(): ToolBackend {

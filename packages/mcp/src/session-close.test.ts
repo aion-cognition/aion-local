@@ -5,6 +5,7 @@ import { assemblePack, openLogger, type BucketCaps, type Logger } from '@aion/co
 import type { MemoryPack } from '@aion/protocol';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { admittedAll } from '@aion/core/recall/domain/test-support/admission.fixture.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MCP_PATH } from './http.js';
 import { AionMcpService } from './service.js';
@@ -20,6 +21,7 @@ const CAPS: BucketCaps = { facts: 15, episodes: 5, narratives: 5, preferences: 3
 
 function emptyPack(): MemoryPack {
   return assemblePack({
+    admission: admittedAll(0),
     items: [],
     caps: CAPS,
     tokenBudget: 1200,

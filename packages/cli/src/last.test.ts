@@ -61,6 +61,17 @@ const FIXTURE_PACK: MemoryPack = {
       { text: 'webhooks ingestion', source: 'query', weight: 3 },
       { text: 'standup', source: 'summary', weight: 2 },
     ],
+    admission: {
+      considered: 0,
+      admitted: 0,
+      dropped_below_floor: 0,
+      dropped_unmeasured: 0,
+      dropped_duplicate_content: 0,
+      dropped_near_duplicate: 0,
+      vector_floor: 0.6,
+      corroboration_floor: 0.45,
+      bm25_mode: 'exact',
+    },
   },
 };
 
@@ -70,6 +81,17 @@ const EMPTY_PACK: MemoryPack = {
     token_estimate: 6,
     stage_timings_ms: { cues: 0, embed: 0, seeds: 0, activation: 0, fusion: 0 },
     cues: [],
+    admission: {
+      considered: 0,
+      admitted: 0,
+      dropped_below_floor: 0,
+      dropped_unmeasured: 0,
+      dropped_duplicate_content: 0,
+      dropped_near_duplicate: 0,
+      vector_floor: 0.6,
+      corroboration_floor: 0.45,
+      bm25_mode: 'exact',
+    },
     degraded: [
       { stage: 'cues', reason: 'timeout' },
       { stage: 'graph', reason: 'unavailable' },
