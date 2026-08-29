@@ -29,7 +29,14 @@ export type ReflectionQueueCounts = {
   readonly claimed: number;
   /** Unclaimed rows the claim path skips forever because they spent their attempts. */
   readonly exhausted: number;
-  readonly oldestUnclaimedAt: string | undefined;
+  /**
+   * Unclaimed and still claimable: `unclaimed` minus `exhausted`. This is the backlog, and it
+   * is what every freshness gauge reads. Counting a permanently dead row as pending is how one
+   * wedged job made a drained queue report an eight-hour backlog.
+   */
+  readonly pending: number;
+  /** Oldest row that will actually be claimed. An exhausted row's age is not a wait time. */
+  readonly oldestPendingAt: string | undefined;
 };
 
 type Conditions = {
@@ -79,10 +86,10 @@ export function countQueueJobs(
          COUNT(*) AS total,
          SUM(CASE WHEN claimed_at IS NULL THEN 1 ELSE 0 END) AS unclaimed,
          SUM(CASE WHEN claimed_at IS NULL AND attempts >= ? THEN 1 ELSE 0 END) AS exhausted,
-         MIN(CASE WHEN claimed_at IS NULL THEN enqueued_at ELSE NULL END) AS oldest
+         MIN(CASE WHEN claimed_at IS NULL AND attempts < ? THEN enqueued_at ELSE NULL END) AS oldest
        FROM reflection_queue${where.sql}`,
     )
-    .get(attemptBound, ...where.parameters) as {
+    .get(attemptBound, attemptBound, ...where.parameters) as {
     total: number;
     unclaimed: number | null;
     exhausted: number | null;
@@ -90,23 +97,32 @@ export function countQueueJobs(
   };
 
   const unclaimed = row.unclaimed ?? 0;
+  const exhausted = row.exhausted ?? 0;
   return {
     total: row.total,
     unclaimed,
     claimed: row.total - unclaimed,
-    exhausted: row.exhausted ?? 0,
-    oldestUnclaimedAt: row.oldest ?? undefined,
+    exhausted,
+    pending: unclaimed - exhausted,
+    oldestPendingAt: row.oldest ?? undefined,
   };
 }
 
-/** Depth per lane, for the surfaces that report where the backlog actually sits. */
-export function countQueueJobsByLane(db: SqliteHandle): Map<ReflectionLane, number> {
+/**
+ * Depth per lane, for the surfaces that report where the backlog actually sits. Exhausted rows
+ * are excluded for the same reason they are excluded from `pending`: the claim path skips them,
+ * so counting them as depth reports work nobody will do.
+ */
+export function countQueueJobsByLane(
+  db: SqliteHandle,
+  maxAttempts: number = Number.MAX_SAFE_INTEGER,
+): Map<ReflectionLane, number> {
   const rows = db
     .prepare(
       `SELECT lane, COUNT(*) AS pending FROM reflection_queue
-       WHERE claimed_at IS NULL GROUP BY lane`,
+       WHERE claimed_at IS NULL AND attempts < ? GROUP BY lane`,
     )
-    .all() as { lane: string | null; pending: number }[];
+    .all(maxAttempts) as { lane: string | null; pending: number }[];
   const counts = new Map<ReflectionLane, number>();
   for (const row of rows) {
     const lane: ReflectionLane = row.lane === 'bulk' ? 'bulk' : DEFAULT_REFLECTION_LANE;

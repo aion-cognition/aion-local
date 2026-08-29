@@ -85,6 +85,26 @@ function errorMessage(err: unknown): string {
   return String(err);
 }
 
+/**
+ * What actually went wrong, in the one field an operator reads: the queue row's `last_error`.
+ * The old message claimed nothing enriched, which was false the first time it was measured —
+ * eight of nine stages had applied and one had timed out — and is further from true now that
+ * the ledger is per stage, since a retry re-enters only what failed and every other stage is
+ * already applied before the run starts.
+ */
+export function describeFailedRun(episodeId: string, run: ReflectionRun): string {
+  const failed = run.summary.stages.filter((stage) => stage.status === 'failed');
+  if (failed.length === 0) {
+    return `no stage enriched ${episodeId}`;
+  }
+  const named = failed
+    .map((stage) => `${stage.name}: ${stage.error ?? stage.summary}`)
+    .join('; ');
+  const skipped = run.summary.skippedStages;
+  const context = skipped.length === 0 ? '' : ` (${String(skipped.length)} stages already applied)`;
+  return `${String(failed.length)} stage(s) failed for ${episodeId}${context} — ${named}`;
+}
+
 /** Intake writes `{ episode_id }` and nothing else enqueues an integrate job. */
 function episodeIdOf(job: ReflectionJob): string | undefined {
   const payload = job.payload as { episode_id?: unknown } | null | undefined;
@@ -317,7 +337,7 @@ export class ReflectionWorker {
         this.#succeed(job, episodeId, run);
         return;
       }
-      this.#fail(job, `no stage enriched ${episodeId}`);
+      this.#fail(job, describeFailedRun(episodeId, run));
     } catch (err) {
       this.#fail(job, errorMessage(err));
     }
@@ -328,7 +348,7 @@ export class ReflectionWorker {
     this.#claimant.complete(this.#deps.db, job.id);
     // Only a run that actually enriched something is the freshness pin's "intake to
     // enriched": `already_applied` and `episode_unavailable` measured nothing new, and
-    // recording them would understate the lag the p95 exists to catch (EX-10).
+    // recording them would understate the lag the p95 exists to catch.
     if (run.applied && run.status === 'completed') {
       recordEnrichmentLagMs(this.#deps.db, Date.now() - Date.parse(job.enqueuedAt));
     }

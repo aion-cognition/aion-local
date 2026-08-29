@@ -17,7 +17,7 @@ export type StatusSnapshot = {
   readonly neo4j: { readonly uri: string; readonly reachable: boolean; readonly detail: string };
   readonly ollama: { readonly url: string; readonly reachable: boolean; readonly models: readonly string[]; readonly detail?: string };
   readonly graph?: { readonly nodes: number; readonly relationships: number };
-  /** SQLite-only, so this is present whether or not Neo4j answered (EX-10). */
+  /** SQLite-only, so this is present whether or not Neo4j answered. */
   readonly queue: QueueLagSnapshot;
 };
 
@@ -88,8 +88,17 @@ export function renderStatus(snapshot: StatusSnapshot, config: Config, write: Wr
   const oldest = queue.oldestUnclaimedMs === undefined ? 'none unclaimed' : ageOf(queue.oldestUnclaimedMs);
   const p95 = queue.p95EnrichmentLagMs === undefined ? 'no samples yet' : ageOf(queue.p95EnrichmentLagMs);
   const depth = `interactive=${String(queue.depthByLane.interactive)} bulk=${String(queue.depthByLane.bulk)}`;
+  const degraded =
+    queue.cueDegradedRate === undefined
+      ? 'no recalls yet'
+      : `${(queue.cueDegradedRate * 100).toFixed(1)}% of recent recalls degraded on cues`;
   write(`queue    ${depth}, oldest unclaimed ${oldest}, ${String(queue.exhausted)} exhausted`);
   write(`lag      p95 intake-to-enriched ${p95}, ${String(queue.reinforcementDropped)} reinforcement rows dropped`);
+  write(`recall   ${degraded}`);
+  write(
+    `review   ${String(queue.supersessionProposalsOpen)} supersession, ` +
+      `${String(queue.entityMergeProposalsOpen)} entity-merge proposals open — aion proposals ls`,
+  );
 }
 
 export async function runStatus(
