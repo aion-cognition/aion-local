@@ -12,8 +12,8 @@ import {
   type ReadFragment,
   type ReadMode,
 } from './read-modes.js';
-import { CONTEXT_VECTOR_INDEX } from './resonance-queries.js';
 import { fromGraphVector, toGraphVector, type Row } from './values.js';
+import { CONTENT_VECTOR_INDEX, CONTEXT_VECTOR_INDEX } from './vector-indexes.js';
 
 /**
  * Four seed strategies, one query each, plus the two reads recall makes against ids it
@@ -22,8 +22,7 @@ import { fromGraphVector, toGraphVector, type Row } from './values.js';
  * forget suppression have exactly one definition behind every entry point into recall.
  */
 
-/** Declared by migration 001 on `:Memory`; a node written without that label is invisible to it. */
-export const CONTENT_VECTOR_INDEX = 'content_vec_idx';
+export { CONTENT_VECTOR_INDEX } from './vector-indexes.js';
 
 /** Migration 001's fulltext index over `Episode.summary`, `Turn.text`, `Entity.name`. */
 export const CONTENT_FULLTEXT_INDEX = 'memory_content_fts';

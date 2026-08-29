@@ -1,9 +1,10 @@
 import neo4j, { type Driver } from 'neo4j-driver';
 import { runRead } from './connection.js';
 import { VectorIndexDimensionMismatchError, VectorIndexMissingError } from './errors.js';
+import { CONTENT_VECTOR_INDEX, CONTEXT_VECTOR_INDEX } from './vector-indexes.js';
 
 /** The two vector indexes migration 001 declares; both are built at the embedding model's dimension. */
-export const VECTOR_INDEX_NAMES = ['content_vec_idx', 'context_vec_idx'] as const;
+export const VECTOR_INDEX_NAMES = [CONTENT_VECTOR_INDEX, CONTEXT_VECTOR_INDEX] as const;
 
 export type VectorIndexInfo = {
   readonly name: string;
