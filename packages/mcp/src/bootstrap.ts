@@ -11,6 +11,8 @@ import {
   handleRecall,
   handleReflection,
   IdleNarrativeSweeper,
+  Introspector,
+  introspectionOperations,
   LaneAssigner,
   latestAppliedGraphMigration,
   loadConfig,
@@ -268,6 +270,20 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
     });
     idleNarratives.start();
 
+    // The introspection loop. The catalog is a plain ordered list rather than a lookup the
+    // engine owns, so an operation joins maintenance by being registered here and nowhere
+    // else. The two plasticity operations are first because they already existed as callable,
+    // bounded functions waiting on a scheduler.
+    const maintenanceOperations = introspectionOperations();
+    const introspector = new Introspector({
+      driver,
+      db: store.db,
+      config,
+      logger,
+      operations: maintenanceOperations,
+    });
+    introspector.start();
+
     const backend: ToolBackend = {
       recall: (args, identity) => handleRecall(recall, args, { identity }),
       reflection: (args, identity) => handleReflection(intake, args, { identity }),
@@ -301,6 +317,8 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
         stages: stages.map((stage) => stage.name),
         narrativeSweepMs: idleNarratives.intervalMs,
         sessionIdleSweepMs: idleSessions.intervalMs,
+        maintenanceTickMs: introspector.tickMs,
+        maintenanceOperations: maintenanceOperations.map((operation) => operation.name),
       },
       'mcp service ready',
     );
@@ -313,6 +331,9 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
         // Stop the idle sweep before the service closes its own transports, so shutdown
         // cannot race a sweep tick into closing a session the drain is already tearing down.
         idleSessions.stop();
+        // Maintenance stops before the driver does: a tick that started can still be holding
+        // a graph write, and its own abort signal is what lets an operation cut that short.
+        await introspector.stop();
         // The service first, so every transport closes and its narrative is scheduled before
         // the closer is awaited; the driver goes last, since both are still writing to it.
         await service.close();

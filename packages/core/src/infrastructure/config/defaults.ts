@@ -10,12 +10,14 @@ import type { Config } from './schema.js';
  * per process. Three values below depart from a smaller candidate default; each says why
  * at the line.
  *
- * Reserved knobs: `recall.compressionThreshold` and `maintenance.tier3` are declared and
- * overridable but have no reader yet: narrative compression and tier-3 maintenance land
- * later. They are declared now because the catalog is one document, and a knob added late
- * is a knob whose name and range were never reviewed; setting one today changes nothing.
- * The context resonance and `hebbian.*` knobs were reserved the same way and now have
- * readers: the recall second pass, the reinforcement flush, and the decay sweep.
+ * Reserved knobs: `recall.compressionThreshold` is declared and overridable but has no
+ * reader yet, since narrative compression lands later. It is declared now because the
+ * catalog is one document, and a knob added late is a knob whose name and range were never
+ * reviewed; setting one today changes nothing. The context resonance and `hebbian.*` knobs
+ * were reserved the same way and now have readers: the recall second pass, the reinforcement
+ * flush, and the decay sweep. `maintenance.tier3` now gates the introspector's tier-3 seam,
+ * which consults the advisor and records what it would have been asked; the model call
+ * itself is still unbuilt, so turning it on changes what is logged and nothing that runs.
  */
 export const DEFAULTS: Config = {
   neo4j: {
@@ -198,6 +200,16 @@ export const DEFAULTS: Config = {
   },
   maintenance: {
     tier3: false,
+    // Fifteen minutes is one bucket of the finest granularity an operation can declare, so
+    // every operation gets at least one chance per window it is allowed to run in.
+    tickMinutes: 15,
+    // Two hours of ticks. An operation with real but small relevance reaches the threshold
+    // inside a working session rather than inside a week.
+    starvationCycles: 8,
+    urgencyThreshold: 0.2,
+    // The whitepaper's deprioritization line: at or above it an operation scores at full
+    // weight, under it at half, and starvation still eventually runs it either way.
+    effectivenessFloor: 0.5,
   },
   sqlite: {
     path: DEFAULT_SQLITE_PATH,

@@ -38,6 +38,15 @@ cues, or memory packs, only nodes, edges, and rows.
   that apply them, `flush.ts` (bounded reinforcement of the nominated pairs) and `decay.ts`
   (weight decay against staleness, the protected relationship types exempt), plus
   `metrics.ts`. Both operations are called, never scheduled: cadence belongs to the caller.
+- **`introspection/domain/`**: `health.ts` (the snapshot every phase reads), `decide.ts`
+  (the pure three-tier decision, starvation protection, effectiveness weighting),
+  `operation.ts` (the contract a maintenance operation implements), `buckets.ts`
+  (calendar-aligned idempotency keys), `tier3.ts` (the model-guided seam, opt-in and
+  propose-only).
+- **`introspection/application/`**: `observe.ts` (one health reading, assembled from the
+  surfaces `doctor` and `/health` already use, every collector caught), `engine.ts` (the
+  tick loop: bucket claim, run, learn, backoff), `catalog.ts` (the registration seam),
+  `plasticity-operations.ts` (the flush and the decay sweep, adapted to the contract).
 - **`reflection/domain/`**: `content.ts`, episode/turn shaping and content hashing.
 - **`reflection/application/`**: `intake.ts` (the write path), `dispatch.ts` (the event
   emitter intake signals), `worker.ts` (the subscriber: claims queue rows and runs the

@@ -265,6 +265,26 @@ export const KNOB_REGISTRY: readonly Knob[] = [
   { envVar: 'AION_REDACTION_ENTROPY_THRESHOLD', path: ['redaction', 'entropyThreshold'], kind: 'number' },
 
   { envVar: 'AION_MAINTENANCE_TIER3', path: ['maintenance', 'tier3'], kind: 'boolean' },
+  {
+    envVar: 'AION_MAINTENANCE_TICK_MINUTES',
+    path: ['maintenance', 'tickMinutes'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_MAINTENANCE_STARVATION_CYCLES',
+    path: ['maintenance', 'starvationCycles'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_MAINTENANCE_URGENCY_THRESHOLD',
+    path: ['maintenance', 'urgencyThreshold'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_MAINTENANCE_EFFECTIVENESS_FLOOR',
+    path: ['maintenance', 'effectivenessFloor'],
+    kind: 'number',
+  },
 
   { envVar: SQLITE_PATH_ENV_VAR, path: ['sqlite', 'path'], kind: 'string' },
   {

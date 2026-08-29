@@ -175,6 +175,14 @@ export const ConfigSchema = z.object({
   }),
   maintenance: z.object({
     tier3: z.boolean(),
+    /** How often the introspection loop observes, decides, and runs at most one operation. */
+    tickMinutes: positiveInt,
+    /** Cycles of being passed over that double an operation's urgency; the anti-starvation span. */
+    starvationCycles: positiveInt,
+    /** Urgency a routine operation must reach before the loop will run it at all. */
+    urgencyThreshold: proportion,
+    /** Effectiveness under which an operation is weighted down, never excluded. */
+    effectivenessFloor: proportion,
   }),
   sqlite: z.object({
     path: z.string().min(1),
