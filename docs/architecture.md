@@ -24,6 +24,7 @@ cues, or memory packs, only nodes, edges, and rows.
   Ollama client and its circuit breaker), `config/` (schema, defaults, the `AION_*`
   registry, the loader), `logging/`.
 - **`recall/domain/`**: `activation.ts` (spreading activation over adjacency),
+  `activation-weights.ts` (the per-relationship-type propagation table),
   `admission.ts` (the evidence rules and the floors), `arrival-scoring.ts` (cosines for what
   the spread reached), `seed-selection.ts` (the budget curve and the per-leg reservations),
   `fusion.ts` (RRF/MMR ranking and the currency policy), `resonance.ts` (the centroid and the
