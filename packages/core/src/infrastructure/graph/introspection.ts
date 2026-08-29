@@ -89,3 +89,27 @@ export async function countGraphElements(driver: Driver): Promise<GraphCounts> {
   );
   return rows[0] ?? { nodes: 0, relationships: 0 };
 }
+
+/**
+ * Every string property of every node, in pages. The redaction residue check is the only
+ * caller: secret detection is deterministic, so re-running the current rules over what is
+ * already stored is the one way to find material an older, leakier ruleset wrote. Paged and
+ * bounded because this reads the whole substrate and runs from `aion doctor`.
+ */
+export async function readStoredText(
+  driver: Driver,
+  limit: number,
+): Promise<readonly { readonly id: string; readonly text: string }[]> {
+  return runRead(
+    driver,
+    [
+      'MATCH (n)',
+      'WITH n, [k IN keys(n) WHERE n[k] IS :: STRING | n[k]] AS strings',
+      'WHERE size(strings) > 0',
+      'RETURN n.id AS id, reduce(joined = \'\', s IN strings | joined + \' \' + s) AS text',
+      'LIMIT $limit',
+    ].join('\n'),
+    { limit },
+    (row) => ({ id: String(row.id ?? ''), text: String(row.text ?? '') }),
+  );
+}

@@ -4,7 +4,7 @@ import {
   supersedeInTransaction,
   type SupersedeResult,
 } from './bitemporal.js';
-import { inWriteTransaction, type GraphTransaction } from './connection.js';
+import { inWriteTransaction, runRead, type GraphTransaction } from './connection.js';
 import { upsertEdgeInTransaction } from './edges.js';
 import { BASE_NODE_LABEL } from './labels.js';
 import { SUPERSEDES_TYPE } from './relationships.js';
@@ -57,6 +57,26 @@ const SUCCESSOR_OF_EPISODE = [
   'ORDER BY next.id',
   'LIMIT 1',
 ].join('\n');
+
+/** The open Episode a derived node was extracted from; the review path needs it to widen a
+ * node-level judgment into the episode-level correction that closes the whole family. */
+const SOURCE_EPISODE_OF_NODE = [
+  'MATCH (n { id: $nodeId })-[:EXTRACTED_FROM]->(e:Episode)',
+  `WHERE e.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
+  `  AND e.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  'RETURN e.id AS id',
+  'ORDER BY e.id',
+  'LIMIT 1',
+].join('\n');
+
+/** `undefined` when the node is an Episode itself, was never extracted, or its source is closed. */
+export async function findSourceEpisodeId(
+  driver: Driver,
+  nodeId: string,
+): Promise<string | undefined> {
+  const rows = await runRead(driver, SOURCE_EPISODE_OF_NODE, { nodeId }, (row) => row.id as string);
+  return rows[0];
+}
 
 export type EpisodePropagationResult = {
   readonly episodeId: string;

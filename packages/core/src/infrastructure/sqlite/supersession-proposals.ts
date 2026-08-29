@@ -132,3 +132,11 @@ export function resolveSupersessionProposal(
     .run(resolvedAt, id);
   return result.changes > 0;
 }
+
+/** Open proposals only: a resolved row is a decision already made, not a queue for anyone. */
+export function countOpenSupersessionProposals(db: SqliteHandle): number {
+  const row = db
+    .prepare('SELECT COUNT(*) AS count FROM supersession_proposals WHERE resolved_at IS NULL')
+    .get() as { count: number };
+  return row.count;
+}
