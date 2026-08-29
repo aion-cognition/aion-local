@@ -22,6 +22,8 @@ export {
 } from './domain/reinforcement.js';
 export type { AggregatedPair, QueuedSignal, TriggerPolicy } from './domain/reinforcement.js';
 
+export { boundedDecay, decayFactor } from './domain/decay.js';
+
 export {
   DEFAULT_HEBBIAN_BATCH_SIZE,
   DEFAULT_HEBBIAN_LEARNING_RATE,
@@ -33,3 +35,15 @@ export type {
   HebbianFlushOptions,
   HebbianFlushReport,
 } from './application/flush.js';
+
+export {
+  DEFAULT_HEBBIAN_DECAY_PEAK_DAYS,
+  DEFAULT_HEBBIAN_DECAY_RATE,
+  DEFAULT_HEBBIAN_DECAY_SIGMA,
+  sweepEdgeDecay,
+} from './application/decay.js';
+export type {
+  HebbianDecayDeps,
+  HebbianDecayOptions,
+  HebbianDecayReport,
+} from './application/decay.js';

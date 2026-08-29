@@ -1,10 +1,19 @@
+import neo4j from 'neo4j-driver';
 import { describe, expect, it } from 'vitest';
-import { buildEdgeWeightReinforcement } from './edge-weights.js';
+import { buildEdgeWeightDecay, buildEdgeWeightReinforcement } from './edge-weights.js';
 import { GraphWriteError } from './errors.js';
 import { BASE_NODE_LABEL } from './labels.js';
 import { PROTECTED_RELATIONSHIP_TYPES } from './protected-relationships.js';
 
 const PAIRS = [{ sourceId: 'a', targetId: 'b', learningRate: 0.1 }];
+
+const DECAY_INPUT = {
+  batchSize: 100,
+  decayRate: 0.05,
+  peakDays: 30,
+  sigma: 15,
+  weightFloor: 0.1,
+};
 
 describe('bounded edge weight reinforcement', () => {
   it('resolves both endpoints through the indexed base label', () => {
@@ -77,5 +86,85 @@ describe('bounded edge weight reinforcement', () => {
         weightFloor: 0.1,
       }),
     ).toThrow(GraphWriteError);
+  });
+});
+
+describe('bell curve edge weight decay', () => {
+  it('scans the graph for its own candidates rather than taking named pairs', () => {
+    const { cypher } = buildEdgeWeightDecay(DECAY_INPUT);
+    expect(cypher).toContain(`MATCH (a:${BASE_NODE_LABEL})-[r]->(b:${BASE_NODE_LABEL})`);
+    expect(cypher).not.toContain('UNWIND');
+  });
+
+  it('orders candidates by staleness and bounds them to the batch size', () => {
+    const { cypher, parameters } = buildEdgeWeightDecay(DECAY_INPUT);
+    expect(cypher).toContain('duration.inDays(r.updated_at, $now).days AS daysSinceAccess');
+    expect(cypher).toContain('ORDER BY daysSinceAccess DESC');
+    expect(cypher).toContain('LIMIT $batchSize');
+    // LIMIT rejects a float, so this crosses the driver as a Neo4j Integer, not a plain number.
+    expect(parameters['batchSize']).toEqual(neo4j.int(100));
+  });
+
+  it('applies the bell curve as one read-and-write statement', () => {
+    const { cypher } = buildEdgeWeightDecay(DECAY_INPUT);
+    expect(cypher).toContain(
+      'WITH r, exp(-1.0 * ((daysSinceAccess - $peakDays) ^ 2.0) / (2.0 * ($sigma ^ 2.0))) AS decay',
+    );
+    expect(cypher).toContain('before - $decayRate * decay < $weightFloor');
+  });
+
+  it('clamps at the floor rather than only bounding from below', () => {
+    const { cypher } = buildEdgeWeightDecay(DECAY_INPUT);
+    expect(cypher).toContain('THEN $weightFloor');
+    expect(cypher).not.toContain('raw > 1.0');
+  });
+
+  it('excludes the protected types by the same parameter reinforcement uses', () => {
+    const { cypher, parameters } = buildEdgeWeightDecay(DECAY_INPUT);
+    expect(cypher).toContain('WHERE NOT type(r) IN $protected');
+    expect(parameters['protected']).toEqual([...PROTECTED_RELATIONSHIP_TYPES]);
+  });
+
+  it('skips an edge onto a forgotten node at either end', () => {
+    const { cypher } = buildEdgeWeightDecay(DECAY_INPUT);
+    expect(cypher).toContain('a.forgotten_at IS NULL');
+    expect(cypher).toContain('b.forgotten_at IS NULL');
+  });
+
+  it('refreshes updated_at so the next run advances past what this one touched', () => {
+    const { cypher } = buildEdgeWeightDecay(DECAY_INPUT);
+    expect(cypher).toContain('r.updated_at = $now');
+  });
+
+  it('returns the weight before the step alongside the result', () => {
+    const { cypher } = buildEdgeWeightDecay(DECAY_INPUT);
+    expect(cypher).toContain('before AS previousStrength');
+  });
+
+  it('rejects a decay rate outside zero to one', () => {
+    expect(() => buildEdgeWeightDecay({ ...DECAY_INPUT, decayRate: 1.5 })).toThrow(
+      GraphWriteError,
+    );
+  });
+
+  it('rejects a weight floor outside zero to one', () => {
+    expect(() => buildEdgeWeightDecay({ ...DECAY_INPUT, weightFloor: -0.1 })).toThrow(
+      GraphWriteError,
+    );
+  });
+
+  it('rejects a batch size that is not a positive integer', () => {
+    expect(() => buildEdgeWeightDecay({ ...DECAY_INPUT, batchSize: 0 })).toThrow(GraphWriteError);
+    expect(() => buildEdgeWeightDecay({ ...DECAY_INPUT, batchSize: 1.5 })).toThrow(
+      GraphWriteError,
+    );
+  });
+
+  it('rejects a peak that is not a positive integer', () => {
+    expect(() => buildEdgeWeightDecay({ ...DECAY_INPUT, peakDays: 0 })).toThrow(GraphWriteError);
+  });
+
+  it('rejects a non-positive sigma', () => {
+    expect(() => buildEdgeWeightDecay({ ...DECAY_INPUT, sigma: 0 })).toThrow(GraphWriteError);
   });
 });

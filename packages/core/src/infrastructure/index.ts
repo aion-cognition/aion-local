@@ -84,6 +84,9 @@ export type {
   ReinforcementSignal,
 } from './sqlite/reinforcement-queue.js';
 
+export { decaySweepCounters, recordDecaySweep } from './sqlite/decay-counters.js';
+export type { DecaySweepCounters, DecaySweepCounts } from './sqlite/decay-counters.js';
+
 export {
   DEFAULT_LAG_SAMPLE_WINDOW,
   listEnrichmentLagSamplesMs,
@@ -182,10 +185,17 @@ export type { GraphProperties, GraphWritable, Row, RowMapper } from './graph/val
 export { buildEdgeUpsert, upsertEdge, upsertEdgeInTransaction } from './graph/edges.js';
 export type { EdgeUpsert, UpsertedEdge } from './graph/edges.js';
 
-export { buildEdgeWeightReinforcement, reinforceEdgeWeights } from './graph/edge-weights.js';
+export {
+  buildEdgeWeightDecay,
+  buildEdgeWeightReinforcement,
+  decayEdgeWeights,
+  reinforceEdgeWeights,
+} from './graph/edge-weights.js';
 export type {
+  DecayedEdge,
   ReinforceEdgeWeightsInput,
   ReinforcedEdge,
+  WeightDecayInput,
   WeightReinforcement,
 } from './graph/edge-weights.js';
 
