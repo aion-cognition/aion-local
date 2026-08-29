@@ -105,15 +105,15 @@ export {
 
 export {
   DESCRIPTION_FRESHNESS_OPERATION,
+  DESCRIPTION_FRESHNESS_STANDING_RELEVANCE,
   descriptionFreshnessOperation,
-  descriptionFreshnessRelevance,
 } from './application/operations/description-freshness-operation.js';
 export type { DescriptionFreshnessOverrides } from './application/operations/description-freshness-operation.js';
 export {
   NARRATIVE_CLEANUP_OPERATION,
+  NARRATIVE_CLEANUP_STANDING_RELEVANCE,
   NARRATIVE_DUPLICATE_METHOD,
   narrativeCleanupOperation,
-  narrativeCleanupRelevance,
 } from './application/operations/narrative-cleanup-operation.js';
 export {
   RETRO_JUDGMENT_SWEEP_OPERATION,
