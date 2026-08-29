@@ -52,6 +52,12 @@ export type AdmissionReport = {
   /** Reached by traversal alone in a recall where nothing anchored the pack. */
   readonly droppedUnanchored: number;
   readonly droppedDuplicateContent: number;
+  /**
+   * Admitted, but bumped from a near-identical cluster that already filled its cap (EX-22:
+   * a burst of near-duplicate episodes took 29.5% of a pack's slots). Distinct from
+   * `droppedDuplicateContent`, which is exact text; this is the cluster crowding cap.
+   */
+  readonly droppedNearDuplicate: number;
   /** At least one item was admitted on its own evidence, which is what lets traversal extend it. */
   readonly anchored: boolean;
 };

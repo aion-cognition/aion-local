@@ -61,6 +61,7 @@ const NOTHING_ADMITTED: AdmissionReport = {
   droppedBelowFloor: 0,
   droppedUnanchored: 0,
   droppedDuplicateContent: 0,
+  droppedNearDuplicate: 0,
   anchored: false,
 };
 

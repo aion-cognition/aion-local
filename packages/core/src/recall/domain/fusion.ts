@@ -8,6 +8,7 @@ import {
   type AdmissionReport,
   type Measurement,
 } from './admission.js';
+import { bucketFor } from './pack.js';
 
 /**
  * Whitepaper §5.3 and §5.5. Each retrieval leg hands over its own ranked list; this module
@@ -78,10 +79,13 @@ export type FusionOptions = {
   readonly admission: AdmissionPolicy;
   readonly reranker: 'rrf' | 'mmr';
   readonly mmrLambda: number;
+  /** How many members of one near-duplicate cluster a bucket may hold (`AION_PACK_CLUSTER_CAP`). */
+  readonly clusterCap: number;
   /**
    * Content vectors by node id, fetched only when the reranker is MMR. An id with no
    * vector is treated as maximally distinct, so a partial map degrades toward relevance
-   * order rather than toward an arbitrary one.
+   * order rather than toward an arbitrary one. The cluster cap's cosine leg reuses this
+   * same map rather than fetching its own — see `clusterRoots`.
    */
   readonly vectors?: ReadonlyMap<string, Vector>;
 };
@@ -175,6 +179,143 @@ function dedupeByContent(items: readonly FusedItem[]): FusedItem[] {
     kept.push(item);
   }
   return kept;
+}
+
+/**
+ * Sixteen characters is `"restart burst 0/"` — EX-22's own burst-record shape, a one-line
+ * template that varies only in a trailing count. Long enough to be a real coincidence for
+ * two unrelated short memories to share verbatim, short enough that the template's fixed
+ * part survives even when the whole record is barely longer than the prefix itself; a
+ * longer prefix would swallow the varying suffix on records this short and stop clustering
+ * them at all. Case-folded so a casing variant of the same template still keys the same.
+ */
+const CLUSTER_PREFIX_CHARS = 16;
+
+/** Cosine above which two items are the same content by vector rather than by text. */
+const CLUSTER_COSINE_THRESHOLD = 0.95;
+
+function clusterPrefixKey(content: string): string {
+  return hashContent(content.trim().toLowerCase().slice(0, CLUSTER_PREFIX_CHARS));
+}
+
+/**
+ * Union-find over the post-dedupe set, grouped by pack bucket first: a Concept and an
+ * Episode never share a cluster even if their content coincidentally collided, since they
+ * were never competing for the same slot to begin with (`pack.ts`'s bucket caps are per
+ * bucket already). Within a bucket, two items join a cluster when their content shares the
+ * prefix key above, or — only when the caller already fetched embeddings for MMR — when
+ * their vectors clear `CLUSTER_COSINE_THRESHOLD`. A run with no vectors in hand (the
+ * default RRF reranker) relies on the prefix leg alone, which is what EX-22's own repro
+ * needs: the burst records it measured are one-line and share their opening verbatim.
+ */
+function clusterRoots(
+  items: readonly FusedItem[],
+  vectors: ReadonlyMap<string, Vector> | undefined,
+): ReadonlyMap<string, string> {
+  const parent = new Map<string, string>();
+  for (const item of items) {
+    parent.set(item.id, item.id);
+  }
+
+  function find(id: string): string {
+    let root = id;
+    let next = parent.get(root);
+    while (next !== undefined && next !== root) {
+      root = next;
+      next = parent.get(root);
+    }
+    parent.set(id, root);
+    return root;
+  }
+
+  function union(left: string, right: string): void {
+    const leftRoot = find(left);
+    const rightRoot = find(right);
+    if (leftRoot !== rightRoot) {
+      parent.set(rightRoot, leftRoot);
+    }
+  }
+
+  const byBucket = new Map<string, FusedItem[]>();
+  for (const item of items) {
+    const bucket = bucketFor(item.labels) ?? '';
+    const grouped = byBucket.get(bucket) ?? [];
+    grouped.push(item);
+    byBucket.set(bucket, grouped);
+  }
+
+  for (const grouped of byBucket.values()) {
+    const byPrefix = new Map<string, string>();
+    for (const item of grouped) {
+      const key = clusterPrefixKey(item.content);
+      const first = byPrefix.get(key);
+      if (first === undefined) {
+        byPrefix.set(key, item.id);
+        continue;
+      }
+      union(first, item.id);
+    }
+
+    if (vectors === undefined) {
+      continue;
+    }
+    for (let i = 0; i < grouped.length; i += 1) {
+      const left = grouped[i];
+      const leftVector = left === undefined ? undefined : vectors.get(left.id);
+      if (left === undefined || leftVector === undefined) {
+        continue;
+      }
+      for (let j = i + 1; j < grouped.length; j += 1) {
+        const right = grouped[j];
+        const rightVector = right === undefined ? undefined : vectors.get(right.id);
+        if (right === undefined || rightVector === undefined) {
+          continue;
+        }
+        if (cosineSimilarity(leftVector, rightVector) > CLUSTER_COSINE_THRESHOLD) {
+          union(left.id, right.id);
+        }
+      }
+    }
+  }
+
+  const roots = new Map<string, string>();
+  for (const item of items) {
+    roots.set(item.id, find(item.id));
+  }
+  return roots;
+}
+
+/**
+ * PRD §3.1's floor keeps noise out; this keeps one shape from crowding out everything else
+ * that cleared it (EX-22). Items arrive best-first, so the first member of a cluster this
+ * loop keeps is already its best-ranked one — `keptByRoot` enforces the cap and
+ * `droppedNearDuplicate` counts what it declined, so the report can say why a bucket held
+ * fewer distinct memories than it admitted candidates for.
+ */
+function applyClusterCap(
+  items: readonly FusedItem[],
+  cap: number,
+  vectors: ReadonlyMap<string, Vector> | undefined,
+): FusedItem[] {
+  if (items.length <= 1) {
+    return [...items];
+  }
+
+  const roots = clusterRoots(items, vectors);
+  const keptByRoot = new Map<string, number>();
+  const survivors: FusedItem[] = [];
+
+  for (const item of items) {
+    const root = roots.get(item.id) ?? item.id;
+    const kept = keptByRoot.get(root) ?? 0;
+    if (kept >= cap) {
+      continue;
+    }
+    keptByRoot.set(root, kept + 1);
+    survivors.push(item);
+  }
+
+  return survivors;
 }
 
 function redundancy(
@@ -341,8 +482,9 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
 
   items.sort(compareFused);
   const deduped = dedupeByContent(items);
+  const capped = applyClusterCap(deduped, options.clusterCap, options.vectors);
   const ordered =
-    options.reranker === 'mmr' ? mmrOrder(deduped, options.mmrLambda, options.vectors) : deduped;
+    options.reranker === 'mmr' ? mmrOrder(capped, options.mmrLambda, options.vectors) : capped;
 
   return {
     items: ordered,
@@ -353,6 +495,7 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
       droppedBelowFloor,
       droppedUnanchored,
       droppedDuplicateContent: items.length - deduped.length,
+      droppedNearDuplicate: deduped.length - capped.length,
       anchored,
     },
   };

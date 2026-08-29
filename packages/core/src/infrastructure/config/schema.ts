@@ -60,6 +60,12 @@ export const ConfigSchema = z.object({
      * mean two unrelated things once Algorithm 3 lands.
      */
     entityMatchThreshold: proportion,
+    /**
+     * A near-duplicate cluster's cap on how many of its members one bucket may hold (EX-22:
+     * a burst of near-identical episodes took 29.5% of a pack's slots). Not an Appendix E
+     * parameter; the plan pins the default at 2 and the env var name at `AION_PACK_CLUSTER_CAP`.
+     */
+    clusterCap: positiveInt,
   }),
   search: z.object({
     methods: z.array(searchMethod).min(1),
