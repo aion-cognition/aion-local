@@ -315,7 +315,7 @@ describe('a substrate with no context vectors written yet', () => {
       {
         activated: activationOf(ANCHOR_ID, ACTIVE_TEAM_ID),
         exclude: new Set([ANCHOR_ID, ACTIVE_TEAM_ID]),
-        anchored: true,
+        anchoredIds: new Set([ANCHOR_ID, ACTIVE_TEAM_ID]),
         mode: withCurrency(),
       },
     );
@@ -412,7 +412,7 @@ describe('once reflection has summarized every neighborhood', () => {
       {
         activated: activationOf(ANCHOR_ID, ACTIVE_TEAM_ID, SIBLING_ID),
         exclude: new Set([ANCHOR_ID, ACTIVE_TEAM_ID, SIBLING_ID]),
-        anchored: true,
+        anchoredIds: new Set([ANCHOR_ID, ACTIVE_TEAM_ID, SIBLING_ID]),
         mode: withCurrency(),
       },
     );
