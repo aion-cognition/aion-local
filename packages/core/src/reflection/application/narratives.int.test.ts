@@ -33,7 +33,8 @@ import {
   type Neo4jHarness,
 } from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger } from '../../infrastructure/logging/logger.js';
-import { OllamaProvider } from '../../infrastructure/providers/ollama-provider.js';
+import { testGenerationProvider } from '../../infrastructure/providers/test-support/generation-provider.js';
+import type { Provider } from '../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { SessionManager } from '../../session/session-manager.js';
 import { ReflectionDispatch } from './dispatch.js';
@@ -48,7 +49,7 @@ import {
 
 // The structural describes (versioning, provenance edges, idle-sweep bookkeeping) prove
 // Cypher and orchestration, not prose quality, and the suite must never depend on model
-// output quality. A live 8B pass occasionally grounds zero sentences, which reads as
+// output quality. A live pass occasionally grounds zero sentences, which reads as
 // status 'failed' and would hold those structural assertions hostage, so they run on a
 // deterministic provider that always cites the first source node the prompt offers. The
 // grounding describe below keeps the live model: grounding quality is its actual subject.
@@ -69,7 +70,7 @@ function deterministicNarrativeProvider(): NarrativeDeps['provider'] {
   };
 }
 
-// The grounding describe asserts live-model behavior on purpose, and a saturated Ollama can
+// The grounding describe asserts live-model behavior on purpose, and a saturated host can
 // fail one pass without saying anything about grounding. One retry absorbs contention; a
 // double failure is a real grounding result and should fail the test.
 async function closeWithGroundingRetry(
@@ -173,8 +174,8 @@ let deps: NarrativeDeps;
 let structuralDeps: NarrativeDeps;
 let firstNarrativeId: string;
 
-function provider(): OllamaProvider {
-  return new OllamaProvider({ baseUrl: OLLAMA_URL, embedModel: DEFAULTS.models.embed });
+function provider(): Provider {
+  return testGenerationProvider({ baseUrl: OLLAMA_URL, embedModel: DEFAULTS.models.embed });
 }
 
 async function push(payload: unknown, identity: string): Promise<string> {

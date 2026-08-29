@@ -17,7 +17,8 @@ import {
   type Neo4jHarness,
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger } from '../../../infrastructure/logging/logger.js';
-import { OllamaProvider } from '../../../infrastructure/providers/ollama-provider.js';
+import { testGenerationProvider } from '../../../infrastructure/providers/test-support/generation-provider.js';
+import type { Provider } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { spreadActivation, type ActivationBudget, type AdjacencyFetch } from '../../../recall/domain/activation.js';
 import { SessionManager } from '../../../session/session-manager.js';
@@ -56,8 +57,8 @@ let db: SqliteHandle;
 let dataDir: string;
 let episodeId: string;
 
-function ollamaProvider(): OllamaProvider {
-  return new OllamaProvider({
+function provider(): Provider {
+  return testGenerationProvider({
     baseUrl: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
     embedModel: DEFAULTS.models.embed,
   });
@@ -91,7 +92,7 @@ beforeAll(async () => {
       memberId: backbone.member.id,
       workspaceId: backbone.workspace.id,
     }),
-    provider: ollamaProvider(),
+    provider: provider(),
     dispatch: new ReflectionDispatch(),
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
@@ -111,7 +112,7 @@ beforeAll(async () => {
   const setupCtx: StageContext = {
     driver: harness.driver,
     db,
-    provider: ollamaProvider(),
+    provider: provider(),
     episodeId,
     episode,
     logger: intake.logger,
@@ -130,7 +131,7 @@ afterAll(async () => {
   rmSync(dataDir, { recursive: true, force: true });
 });
 
-describe('SemanticRelationshipStage against a live graph and Ollama', () => {
+describe('SemanticRelationshipStage against a live graph and a live model', () => {
   // Whether the live 8B judges a sentence as CAUSES rather than RELATED_TO, and which way it
   // points the edge, is model judgment. The suite pins structure, never model output quality:
   // these two measurements live in the quality harness, and the mocked unit tests hold the
@@ -142,7 +143,7 @@ describe('SemanticRelationshipStage against a live graph and Ollama', () => {
     const ctx: StageContext = {
       driver: harness.driver,
       db,
-      provider: ollamaProvider(),
+      provider: provider(),
       episodeId,
       episode: episode!,
       logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
@@ -227,7 +228,7 @@ describe('SemanticRelationshipStage against a live graph and Ollama', () => {
         memberId: backbone.member.id,
         workspaceId: backbone.workspace.id,
       }),
-      provider: ollamaProvider(),
+      provider: provider(),
       dispatch: new ReflectionDispatch(),
       logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
@@ -244,7 +245,7 @@ describe('SemanticRelationshipStage against a live graph and Ollama', () => {
     const setupCtx: StageContext = {
       driver: harness.driver,
       db,
-      provider: ollamaProvider(),
+      provider: provider(),
       episodeId: baitEpisodeId,
       episode,
       logger: intake.logger,

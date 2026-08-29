@@ -9,7 +9,6 @@ import {
   handleRecall,
   handleReflection,
   LaneAssigner,
-  OllamaProvider,
   openLogger,
   openSqliteHandle,
   ReflectionDispatch,
@@ -33,10 +32,11 @@ import {
   stopNeo4jHarness,
   type Neo4jHarness,
 } from '@aion/core/infrastructure/graph/test-support/neo4j-harness.fixture.js';
+import { testGenerationProvider } from '@aion/core/infrastructure/providers/test-support/generation-provider.js';
 import { reflectionStages, workerOptions } from '../bootstrap.js';
 
 /**
- * The substrate every gate battery runs on: a throwaway Neo4j, its own SQLite, live Ollama,
+ * The substrate every gate battery runs on: a throwaway Neo4j, its own SQLite, a live model,
  * and the pipeline `bootstrap.ts` assembles for the shipped service. Nothing here stands in
  * for a model, and no stage list is written twice: a battery that passed against a pipeline
  * wired only in a test would say nothing about the thing that ships.
@@ -101,7 +101,7 @@ export class GateSubstrate {
       memberId: backbone.member.id,
       workspaceId: backbone.workspace.id,
     });
-    this.#provider = new OllamaProvider({
+    this.#provider = testGenerationProvider({
       baseUrl: this.config.ollama.url,
       embedModel: this.config.models.embed,
     });

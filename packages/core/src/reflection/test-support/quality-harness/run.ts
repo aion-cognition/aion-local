@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../../../infrastructure/config/load-config.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import { OllamaProvider } from '../../../infrastructure/providers/ollama-provider.js';
-import { AnthropicHaikuClient } from './anthropic-client.js';
+import { AnthropicHaikuClient } from '../../../infrastructure/providers/test-support/anthropic-client.js';
 import { extractCognitiveViaProvider, extractEntitiesViaProvider } from './provider-extractor.js';
 import { renderJsonReport, renderMarkdownReport } from './report.js';
 import { runQualityHarness, type RouteConfig } from './runner.js';

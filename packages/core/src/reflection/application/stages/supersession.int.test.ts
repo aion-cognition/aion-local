@@ -19,7 +19,7 @@ import {
   type Neo4jHarness,
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger } from '../../../infrastructure/logging/logger.js';
-import { OllamaProvider } from '../../../infrastructure/providers/ollama-provider.js';
+import { testGenerationProvider } from '../../../infrastructure/providers/test-support/generation-provider.js';
 import type { Provider, StructuredRequest } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { listSupersessionProposals } from '../../../infrastructure/sqlite/supersession-proposals.js';
@@ -91,12 +91,19 @@ type SeededPair = {
 let harness: Neo4jHarness;
 let db: SqliteHandle;
 let dataDir: string;
-let ollama: OllamaProvider;
+let live: Provider;
 let distractorId: string;
 const pairs = new Map<string, SeededPair>();
 
-function ollamaProvider(): OllamaProvider {
-  return new OllamaProvider({
+/**
+ * Every assertion here is about behavior: propose rather than close, which neighbor the
+ * judgment is spent on, and which rows land. That holds on whichever model answers, so the
+ * default route is the fast one. The published precision number for this battery is not a
+ * behavior claim and was measured on the local judge, so re-measuring it means running this
+ * file with `AION_TEST_GENERATION=local`.
+ */
+function liveModelProvider(): Provider {
+  return testGenerationProvider({
     baseUrl: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
     embedModel: DEFAULTS.models.embed,
   });
@@ -115,10 +122,10 @@ function stubProvider(confidence: number, calls: StructuredRequest[]): Provider 
 
 function liveProvider(calls: StructuredRequest[]): Provider {
   return {
-    embed: async (texts) => ollama.embed(texts),
+    embed: async (texts) => live.embed(texts),
     generate: async (req: StructuredRequest) => {
       calls.push(req);
-      return ollama.generate(req);
+      return live.generate(req);
     },
   };
 }
@@ -142,7 +149,7 @@ beforeAll(async () => {
   dataDir = mkdtempSync(join(tmpdir(), 'aion-supersession-int-'));
   db = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
   await runGraphMigrations(harness.driver, db, { embedDimension: DEFAULTS.models.embedDimension });
-  ollama = ollamaProvider();
+  live = liveModelProvider();
 
   const backbone = await bootstrapBackbone(harness.driver, { memberName: 'Test User' });
   const intake: ReflectionIntakeDeps = {
@@ -152,7 +159,7 @@ beforeAll(async () => {
       memberId: backbone.member.id,
       workspaceId: backbone.workspace.id,
     }),
-    provider: ollama,
+    provider: live,
     dispatch: new ReflectionDispatch(),
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
@@ -201,7 +208,7 @@ beforeAll(async () => {
       });
     }
 
-    const [priorVector, nextVector] = await ollama.embed([pair.prior, pair.next]);
+    const [priorVector, nextVector] = await live.embed([pair.prior, pair.next]);
     const prior = await writeCognitiveNode(harness.driver, {
       episodeId: priorEpisode.episode_id,
       label: 'Concept',
@@ -229,7 +236,7 @@ beforeAll(async () => {
     { turns: [{ role: 'assistant', text: DISTRACTOR }], summary: 'payments worker backoff' },
     { identity: 'mcp-supersession-distractor' },
   );
-  const [distractorVector] = await ollama.embed([DISTRACTOR]);
+  const [distractorVector] = await live.embed([DISTRACTOR]);
   const distractor = await writeCognitiveNode(harness.driver, {
     episodeId: distractorEpisode.episode_id,
     label: 'Decision',

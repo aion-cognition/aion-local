@@ -19,7 +19,6 @@ import {
   LaneAssigner,
   listReflectionJobs,
   listReinforcementSignals,
-  OllamaProvider,
   openLogger,
   openSqliteHandle,
   orchestratorLedgerKey,
@@ -43,6 +42,7 @@ import {
   stopNeo4jHarness,
   type Neo4jHarness,
 } from '@aion/core/infrastructure/graph/test-support/neo4j-harness.fixture.js';
+import { testGenerationProvider } from '@aion/core/infrastructure/providers/test-support/generation-provider.js';
 import { narrativeOptions, reflectionStages, workerOptions } from './bootstrap.js';
 
 /**
@@ -185,7 +185,7 @@ beforeAll(async () => {
     memberId: backbone.member.id,
     workspaceId: backbone.workspace.id,
   });
-  provider = new OllamaProvider({ baseUrl: config.ollama.url, embedModel: config.models.embed });
+  provider = testGenerationProvider({ baseUrl: config.ollama.url, embedModel: config.models.embed });
 
   dispatch = new ReflectionDispatch({
     onListenerError: (err, signal) => {

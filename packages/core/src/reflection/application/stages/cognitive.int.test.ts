@@ -15,7 +15,8 @@ import {
   type Neo4jHarness,
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger } from '../../../infrastructure/logging/logger.js';
-import { OllamaProvider } from '../../../infrastructure/providers/ollama-provider.js';
+import { testGenerationProvider } from '../../../infrastructure/providers/test-support/generation-provider.js';
+import type { Provider } from '../../../infrastructure/providers/types.js';
 import { SessionManager } from '../../../session/session-manager.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import type { StageContext } from '../../domain/stage.js';
@@ -58,8 +59,8 @@ let db: SqliteHandle;
 let dataDir: string;
 let episodeId: string;
 
-function ollamaProvider(): OllamaProvider {
-  return new OllamaProvider({
+function provider(): Provider {
+  return testGenerationProvider({
     baseUrl: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
     embedModel: DEFAULTS.models.embed,
   });
@@ -79,7 +80,7 @@ beforeAll(async () => {
       memberId: backbone.member.id,
       workspaceId: backbone.workspace.id,
     }),
-    provider: ollamaProvider(),
+    provider: provider(),
     dispatch: new ReflectionDispatch(),
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
@@ -97,7 +98,7 @@ afterAll(async () => {
   rmSync(dataDir, { recursive: true, force: true });
 });
 
-describe('CognitiveExtractionStage against a live graph and Ollama', () => {
+describe('CognitiveExtractionStage against a live graph and a live model', () => {
   it('extracts Decision/Insight nodes findable by both content_vec_idx and content_fts', async () => {
     const episode = await loadEpisodeContext(harness.driver, episodeId);
     expect(episode).toBeDefined();
@@ -105,7 +106,7 @@ describe('CognitiveExtractionStage against a live graph and Ollama', () => {
     const ctx: StageContext = {
       driver: harness.driver,
       db,
-      provider: ollamaProvider(),
+      provider: provider(),
       episodeId,
       episode: episode!,
       logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
@@ -170,7 +171,7 @@ describe('CognitiveExtractionStage against a live graph and Ollama', () => {
         memberId: backbone.member.id,
         workspaceId: backbone.workspace.id,
       }),
-      provider: ollamaProvider(),
+      provider: provider(),
       dispatch: new ReflectionDispatch(),
       logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
@@ -188,7 +189,7 @@ describe('CognitiveExtractionStage against a live graph and Ollama', () => {
     const ctx: StageContext = {
       driver: harness.driver,
       db,
-      provider: ollamaProvider(),
+      provider: provider(),
       episodeId: lightEpisodeId,
       episode,
       logger: intake.logger,
