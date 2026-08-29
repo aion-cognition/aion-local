@@ -191,19 +191,22 @@ describe('recall over a substrate written by the real intake path', () => {
     expect(hit?.currency).toBe('current');
   });
 
-  it('surfaces an episode no retrieval leg found, reached only by traversal', async () => {
+  /**
+   * The spread still reaches it and reinforcement still counts it; what changed is that
+   * reaching a node is no longer a reason to serve it. This episode shares a session with the
+   * one the query is about and nothing else, which is exactly the shape that filled the
+   * exercise's off-topic packs to budget: one hit clears the floor and the whole activation
+   * spread rides in behind it.
+   */
+  it('refuses an episode no retrieval leg measured, however well anchored the pack is', async () => {
     const pack = await handleRecall(deps, { query: QUERY }, {
       identity: READ_SESSION,
       now: RECALLED_AT,
     });
 
-    const reached = pack.episodes?.find((item) => item.id === unrelatedEpisodeId);
-    expect(reached?.content).toContain(UNRELATED_OBSERVATION);
-    expect(reached?.rationale.method).toBe('activation');
-    // Out of the seed, through the session both episodes participate in, and back down.
-    expect(reached?.rationale.path).toBe(
-      `${webhooksEpisodeId} -[PARTICIPATES_IN]-> ${WRITE_SESSION} -[PARTICIPATES_IN]-> ${unrelatedEpisodeId}`,
-    );
+    expect(pack.episodes?.map((item) => item.id)).toEqual([webhooksEpisodeId]);
+    // Refused, and said so: a pack this thin has to be readable as a floor doing its job.
+    expect(pack.metadata.admission.dropped_unmeasured).toBeGreaterThan(0);
 
     // The claim only means something if no direct leg could have produced it.
     const direct = await vectorSeeds(harness.driver, {

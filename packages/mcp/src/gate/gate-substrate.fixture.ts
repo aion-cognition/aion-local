@@ -66,6 +66,7 @@ export type GateStoreOptions = {
 export class GateSubstrate {
   readonly label: string;
   readonly config: Config;
+  readonly #lanes: LaneAssigner;
   readonly dispatch = new ReflectionDispatch();
   #harness: Neo4jHarness | undefined;
   #db: SqliteHandle | undefined;
@@ -83,6 +84,7 @@ export class GateSubstrate {
         url: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
       },
     };
+    this.#lanes = new LaneAssigner(this.config.lanes);
   }
 
   async open(): Promise<void> {
@@ -160,9 +162,10 @@ export class GateSubstrate {
       dispatch: this.dispatch,
       logger: this.logger,
       entropyThreshold: this.config.redaction.entropyThreshold,
-      // One assigner for the substrate's life, as the service holds one: its counters are the
-      // arrival rate the backstop reads.
-      lanes: new LaneAssigner(this.config.lanes),
+      // One assigner for the substrate's life, as the service holds one. Constructed per call
+      // it would see one arrival per window and never demote anything, which would leave the
+      // rate backstop untestable here and the starvation battery covering the flag path only.
+      lanes: this.#lanes,
       workerMaxAttempts: this.config.operational.workerMaxAttempts,
     };
   }

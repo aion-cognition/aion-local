@@ -192,9 +192,9 @@ describe('recall side effects over a substrate written by the real intake path',
     const signals = listReinforcementSignals(db);
     expect(signals.length).toBeGreaterThan(0);
 
-    // The reading session's own node is fair game too: `handleRecall` creates it before
-    // seed selection runs, and it shares the same Member/Workspace backbone the write
-    // session does, so activation reaches it back through that hub.
+    // Every id the spread could have co-activated. The reading session's node is not among
+    // them any more -- recall produces no content, so it mints nothing -- but the write
+    // session's is, since both episodes participate in it.
     const knownIds = new Set([
       webhooksEpisodeId,
       unrelatedEpisodeId,
@@ -219,8 +219,11 @@ describe('recall side effects over a substrate written by the real intake path',
 
     await sideEffects.whenIdle();
 
+    // One episode surfaces, not two: the spread reached the other and nothing measured it,
+    // so it is co-activated for reinforcement and refused for the pack. Access tracking
+    // follows what was served, which is the narrower of the two sets.
     const surfacedIds = (pack.episodes ?? []).map((item) => item.id).sort();
-    expect(surfacedIds).toEqual([unrelatedEpisodeId, webhooksEpisodeId].sort());
+    expect(surfacedIds).toEqual([webhooksEpisodeId]);
 
     for (const id of surfacedIds) {
       const after = await accessMetadata(harness.driver, id);
