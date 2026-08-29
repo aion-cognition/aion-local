@@ -43,7 +43,7 @@ afterAll(async () => {
 type AnnotatedRow = CurrencyAnnotation & { id: string };
 
 /**
- * The composition pattern P2's seed strategies and traversal follow: build the fragment,
+ * The composition pattern the seed strategies and traversal follow: build the fragment,
  * AND its predicate into the WHERE, splice its projection into the RETURN, spread its
  * parameters alongside the query's own.
  */

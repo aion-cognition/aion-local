@@ -49,7 +49,7 @@ import {
 /**
  * The whole boundary against a live substrate: episodes pushed through a session, the close
  * compressing them with the reflect model, and the narrative that results reachable by both
- * retrieval legs. What only a real server proves here is the Cypher — the idle-session
+ * retrieval legs. What only a real server proves here is the Cypher: the idle-session
  * aggregation, the version read, and `content_fts` actually covering `Narrative`.
  */
 
@@ -82,7 +82,7 @@ const EPISODES = [
   },
 ];
 
-/** The exercise's fabrication fixture, verbatim: 27 words that became eight invented sentences. */
+/** A thin fixture: 27 words that produced eight invented sentences when compressed. */
 const THIN_SESSION_IDENTITY = 'mcp-transport-session-narratives-thin';
 const THIN_EPISODE = {
   summary: 'close-mode probe terminate',
@@ -312,8 +312,8 @@ describe('idle sweep against a live substrate', () => {
 });
 
 /**
- * Grounding, against the model that fabricated. The assertions are structural — how many
- * sentences survived and which node ids they cited — because a string match against the
+ * Grounding, against the model that fabricated. The assertions are structural: how many
+ * sentences survived and which node ids they cited, because a string match against the
  * source would only prove the model echoed wording, not that the claim is sourced.
  */
 describe('grounding against a live substrate', () => {

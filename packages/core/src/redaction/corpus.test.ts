@@ -8,7 +8,7 @@ import {
   SURVIVING_TEXT,
 } from './test-support/leaked-shapes.fixture.js';
 
-describe('redaction corpus — the shapes the P3 exercise stored in plaintext', () => {
+describe('redaction corpus: shapes that reached storage as plaintext', () => {
   for (const shape of LEAKED_SHAPES) {
     it(`fingerprints ${shape.label}`, () => {
       const result = redactPayload(shape.payload);
@@ -30,7 +30,7 @@ describe('redaction corpus — the shapes the P3 exercise stored in plaintext', 
   });
 });
 
-describe('redaction corpus — material that must survive untouched', () => {
+describe('redaction corpus: material that must survive untouched', () => {
   for (const [label, text] of Object.entries(SURVIVING_TEXT)) {
     it(`leaves ${label} alone`, () => {
       const result = redactPayload({ observations: [text] });

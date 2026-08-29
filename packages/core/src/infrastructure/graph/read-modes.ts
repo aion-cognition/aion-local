@@ -4,10 +4,10 @@ import { SUPERSEDES_TYPE } from './relationships.js';
 import { toGraphDateTime, type Row } from './values.js';
 
 /**
- * The read side of PRD §5.5. A mode with neither time set is the default: currency-aware,
- * not currency-filtered. Superseded knowledge stays eligible and comes back annotated,
- * and only an explicit forget suppresses a row. Setting a time switches the row set to a
- * temporal slice; both times may be set at once for a full bitemporal point.
+ * The read side of the bitemporal model. A mode with neither time set is the default:
+ * currency-aware, not currency-filtered. Superseded knowledge stays eligible and comes back
+ * annotated, and only an explicit forget suppresses a row. Setting a time switches the row
+ * set to a temporal slice; both times may be set at once for a full bitemporal point.
  */
 export type ReadMode = {
   /** World time: what was true then. */
@@ -70,7 +70,7 @@ function assertIdentifier(name: string, value: string): void {
 }
 
 /**
- * Composable pieces rather than a finished query: P2's four seed strategies and the
+ * Composable pieces rather than a finished query: the four seed strategies and the
  * traversal each build their own MATCH and splice the same predicate and annotation in,
  * which is what keeps one definition of currency behind every read path.
  *

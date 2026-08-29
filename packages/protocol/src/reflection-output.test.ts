@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ReflectionOutputSchema } from './reflection-output.js';
 
 describe('ReflectionOutputSchema valid fixtures', () => {
-  it('parses the PRD §3.2 shape with the assigned lane', () => {
+  it('parses the shape with the assigned lane', () => {
     const output = { episode_id: 'episode-1', queued: true, lane: 'interactive' };
     expect(ReflectionOutputSchema.parse(output)).toEqual(output);
   });

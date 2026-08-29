@@ -1,5 +1,5 @@
 /**
- * Whitepaper §6.5: the pure half of entity deduplication. A similarity search only ever
+ * The pure half of entity deduplication. A similarity search only ever
  * compares two nodes at a time, so this module turns the pairs one run found into connected
  * groups, picks the canonical member of each, and computes what the canonical keeps. None of
  * it touches the graph, which is what makes the selection rule testable without a server.
@@ -81,11 +81,11 @@ export function groupDuplicates(pairs: readonly DuplicatePair[]): string[][] {
 }
 
 /**
- * §4.2's merge-on-collision: a structural node is never the absorbed side, so it wins
- * whenever the group has one (there should be at most one, since duplicate structural
- * identities of the same type cannot arise from `bootstrapBackbone`). Otherwise the stronger
- * identity wins: more episodes have mentioned it, or — tied — it is the older of the two. `id`
- * breaks anything still tied, so the choice is always deterministic.
+ * Merge on collision: a structural node is never the absorbed side, so it wins whenever the
+ * group has one (there should be at most one, since duplicate structural identities of the
+ * same type cannot arise from `bootstrapBackbone`). Otherwise the stronger identity wins:
+ * more episodes have mentioned it, or, on a tie, it is the older of the two. `id` breaks
+ * anything still tied, so the choice is always deterministic.
  */
 export function selectCanonical<T extends DedupCandidate>(members: readonly T[]): T {
   const structural = members.filter((member) => member.isStructural);
@@ -141,9 +141,9 @@ export function mergeLastAccessed(members: readonly DedupCandidate[]): Date | un
 }
 
 /**
- * §6.3's operation-level idempotency key, exactly as pinned: `entity.merge:{canonicalId}:
- * {sortedMergedIds}`. Sorted and de-duplicated so the same group produces the same key
- * regardless of discovery order.
+ * The operation-level idempotency key: `entity.merge:{canonicalId}:{sortedMergedIds}`.
+ * Sorted and de-duplicated so the same group produces the same key regardless of discovery
+ * order.
  */
 export function entityMergeLedgerKey(canonicalId: string, mergedIds: readonly string[]): string {
   return `entity.merge:${canonicalId}:${[...new Set(mergedIds)].sort().join(',')}`;

@@ -405,7 +405,7 @@ describe('summary cues are damped by weight, not by wording', () => {
   });
 
   it.each(SUMMARY_TONE_FIXTURES)(
-    'damps rather than drops or rewords, on EX-20\'s own summary: $summary',
+    'damps rather than drops or rewords the summary: $summary',
     async (fixture) => {
       generate.mockResolvedValue(fullOutput({ summary_cues: ['first cue', 'second cue'] }));
 

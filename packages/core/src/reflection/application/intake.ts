@@ -31,13 +31,13 @@ import { ReflectionNotStoredError } from './errors.js';
 import type { LaneAssigner, LaneDecision } from './lanes.js';
 import { attachContentVectors } from './vectors.js';
 
-/** The one job intake enqueues. P3's pipeline stages fan out from it; intake never runs them. */
+/** The one job intake enqueues. The reflection pipeline's stages fan out from it; intake never runs them. */
 export const INTEGRATE_JOB_TYPE = 'integrate';
 
 /** The payload field the integrate job is keyed on, and how a queued job is matched back to its episode. */
 const EPISODE_ID_FIELD = 'episode_id';
 
-/** Appendix B provenance: how the node got into the graph, as opposed to what extracted it later. */
+/** Provenance: how the node got into the graph, as opposed to what extracted it later. */
 export const INTAKE_EXTRACTION_METHOD = 'reflection_intake';
 
 const STRUCTURAL_SIGNALS = ['structural'];
@@ -57,7 +57,7 @@ export type ReflectionIntakeDeps = {
 };
 
 export type ReflectionIntakeOptions = {
-  /** The transport's session identity. `session_id` in the payload overrides it (PRD §3.3). */
+  /** The transport's session identity. `session_id` in the payload overrides it. */
   readonly identity: string;
   readonly now?: Date;
 };
@@ -124,7 +124,7 @@ type StoredEpisode = {
  * the experience.
  *
  * The session is locked first. Dedupe is a read that decides a write, and the read alone
- * is not enough — two concurrent pushes of the same payload would each find no duplicate
+ * is not enough: two concurrent pushes of the same payload would each find no duplicate
  * and each store one. Locking the session serializes intake for that session, which is the
  * grain that matters: it is one agent conversation, and different sessions still run in
  * parallel.
@@ -235,12 +235,12 @@ async function storeDurably(
  * The queue row is derived from the graph, so it is repaired rather than assumed: a crash
  * between the episode's commit and this insert would otherwise strand the episode forever,
  * since every retry then matches it by content hash, answers `queued: true`, and never
- * reaches the enqueue. Checking for the pending row instead converges — the retry finds the
+ * reaches the enqueue. Checking for the pending row instead converges: the retry finds the
  * episode and the missing job, and queues it.
  *
  * better-sqlite3 is synchronous and this function awaits nothing, so the check and the
  * insert cannot interleave with another intake in this process. The long-lived service is
- * the single writer of this table (PRD §4); the CLI container claims, it does not enqueue.
+ * the single writer of this table; the CLI container claims, it does not enqueue.
  */
 type IntegrateJob = {
   readonly jobId: string;
@@ -253,8 +253,8 @@ type IntegrateJob = {
  * Unclaimed interactive-lane rows already in the queue, measured before this call's own job
  * lands. Interactive is served strictly first (the lanes pin), so this is exactly how many
  * jobs sit ahead of a fresh interactive enqueue and, for a caller demoted to bulk, how many
- * interactive jobs it queues behind either way (EX-10: the ack always said `queued: true`
- * with no sense of how far behind that queue actually was).
+ * interactive jobs it queues behind either way. Without it, the ack only ever said
+ * `queued: true`, with no sense of how far behind the queue actually was.
  */
 function pendingAhead(db: SqliteHandle): number {
   return countQueueJobs(db, { lane: DEFAULT_REFLECTION_LANE }).unclaimed;
@@ -288,7 +288,7 @@ function ensureIntegrateJob(
  * The last step, and the only one allowed to fail without failing the call. Everything the
  * caller was promised is already durable: a node that ends this function without its
  * `content_vec` is a pending-vector marker the worker's drain resolves later, and until it
- * does, the episode is reachable by BM25, entity resolution, recency, and traversal — it is
+ * does, the episode is reachable by BM25, entity resolution, recency, and traversal: it is
  * ranking that is missing, not the memory.
  */
 async function attachVectors(
@@ -307,21 +307,21 @@ async function attachVectors(
 }
 
 /**
- * PRD §3.2, whitepaper §4.1–4.2: the write path. Validate, redact, store the episode and
- * its turns with a full bitemporal stamp, link the backbone, enqueue the integrate job,
- * signal the dispatcher, then embed.
+ * The write path. Validate, redact, store the episode and its turns with a full bitemporal
+ * stamp, link the backbone, enqueue the integrate job, signal the dispatcher, then embed.
  *
  * Redaction runs on the parsed payload before anything reads a content field, so no raw
  * credential reaches the hash, the embedder, or the graph. The graph then takes every write
  * as one transaction, and the queue row is repaired rather than assumed, so the two stores
  * converge on a retry instead of leaving an episode nothing will ever process.
  *
- * Embedding comes last on purpose (PRD §10: "reflection jobs queue until service returns").
- * The durable record is the episode and its queue row; vectors are an enrichment of it, so
- * an inference outage costs ranking signal until the backfill runs, never the experience.
+ * Embedding comes last on purpose: the episode and its queue row are already durable before
+ * anything embeds, so reflection jobs still queue while the embedding service is down. The
+ * durable record is the episode and its queue row; vectors are an enrichment of it, so an
+ * inference outage costs ranking signal until the backfill runs, never the experience.
  *
- * No generation call happens anywhere here. Extraction is the pipeline's job (whitepaper
- * §6.1) and intake is what makes the experience durable.
+ * No generation call happens anywhere here. Extraction is the pipeline's job, and intake is
+ * what makes the experience durable.
  */
 export async function handleReflection(
   deps: ReflectionIntakeDeps,

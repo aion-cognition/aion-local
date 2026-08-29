@@ -1,9 +1,9 @@
 import type { RecallMethod } from '@aion/protocol';
 
 /**
- * PRD §3.1's "empty beats noisy", as an absolute rule rather than a rank one. What a
- * retrieval leg measured decides whether an item may reach a pack at all; where it ranks
- * once admitted is fusion's business.
+ * Empty beats noisy, as an absolute rule rather than a rank one. What a retrieval leg
+ * measured decides whether an item may reach a pack at all; where it ranks once admitted is
+ * fusion's business.
  *
  * The floors are calibrated against the embedding model's own measured noise, both
  * distributions of it: unrelated text and genuine matches (`floors.fixtures.ts`,
@@ -53,8 +53,8 @@ export type AdmissionReport = {
   readonly droppedUnanchored: number;
   readonly droppedDuplicateContent: number;
   /**
-   * Admitted, but bumped from a near-identical cluster that already filled its cap (EX-22:
-   * a burst of near-duplicate episodes took 29.5% of a pack's slots). Distinct from
+   * Admitted, but bumped from a near-identical cluster that already filled its cap. A burst
+   * of near-duplicate episodes measured 29.5% of a pack's slots. Distinct from
    * `droppedDuplicateContent`, which is exact text; this is the cluster crowding cap.
    */
   readonly droppedNearDuplicate: number;
@@ -82,14 +82,14 @@ function measurementKey(measurement: Measurement): string {
  * Three ways in, and a rank is not one of them:
  *
  *  - a cosine at or above the calibrated floor, which is one method vouching alone;
- *  - a literal match — Lucene on the verbatim cue, or an exact entity name — which is
- *    evidence rather than a measurement, so no floor applies to it;
+ *  - a literal match, Lucene on the verbatim cue or an exact entity name, which is evidence
+ *    rather than a measurement, so no floor applies to it;
  *  - corroboration: two independent measurements, each at or above the lower corroboration
  *    floor, where independence is by method and by cue.
  *
  * A plain BM25 hit is none of them. Sharing one term with a cue at an uncalibrated score is
- * what filled every off-topic pack in the exercise, and normalizing that score to the best
- * hit of the same query made the top of every list read 1.00.
+ * what filled the off-topic packs measured before this gate, and normalizing that score to
+ * the best hit of the same query made the top of every list read 1.00.
  *
  * Traversal is judged by the caller: a node the spread reached has no measurement of its own
  * and extends a pack something else anchored.

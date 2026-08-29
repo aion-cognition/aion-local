@@ -2,9 +2,9 @@ import { z } from 'zod';
 import { IsoTimestampSchema } from './common.js';
 
 /**
- * PRD §3.1's example shows only `{ role: "user", text }`. The PRD pins no closed role
- * vocabulary, so this stays a plain string rather than an enum that could reject a
- * legitimate role (e.g. "system") the spec never ruled out.
+ * The example shows only `{ role: "user", text }`. No closed role vocabulary is pinned,
+ * so this stays a plain string rather than an enum that could reject a legitimate role
+ * (e.g. "system") the spec never ruled out.
  */
 export const RecallTurnSchema = z.strictObject({
   role: z.string().min(1),
@@ -27,9 +27,8 @@ export const RecallBudgetSchema = z.strictObject({
 export type RecallBudget = z.infer<typeof RecallBudgetSchema>;
 
 /**
- * PRD §3.1 exactly: `query` is the only required field. `as_of` is the world-time read
- * mode, `knew_at` the system-time one (PRD §5.5); both are recall inputs, not mutually
- * exclusive.
+ * `query` is the only required field. `as_of` is the world-time read mode; `knew_at` is
+ * the system-time one. Both are recall inputs, not mutually exclusive.
  */
 export const RecallInputSchema = z.strictObject({
   query: z.string().min(1),

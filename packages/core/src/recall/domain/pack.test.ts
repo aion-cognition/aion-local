@@ -81,7 +81,7 @@ describe('bucket routing', () => {
     expect(bucketFor(['Narrative', 'Memory', 'AionNode'])).toBe('narratives');
   });
 
-  it('routes every cognitive type to facts, which is where §5.7 puts a decision', () => {
+  it('routes every cognitive type to facts, which is where a decision belongs', () => {
     for (const label of ['Goal', 'Plan', 'Decision', 'Insight', 'Concept', 'Context', 'Event', 'Pattern', 'Trend']) {
       expect(bucketFor([label, 'Memory', 'AionNode'])).toBe('facts');
     }
@@ -278,7 +278,7 @@ describe('the rendered text block', () => {
       pack.rendered_text.indexOf('## Episodes'),
     );
     // The list number is the item's rank across the whole pack, so f1 at facts rank 1 is
-    // globally 2 and the reader can order it against the two episodes (EX-30).
+    // globally 2 and the reader can order it against the two episodes.
     expect(pack.rendered_text).toContain('1. content of e1');
     expect(pack.rendered_text).toContain('2. content of f1');
     expect(pack.rendered_text).toContain('3. content of e2');

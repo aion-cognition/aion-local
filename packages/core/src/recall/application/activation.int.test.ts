@@ -98,7 +98,7 @@ beforeAll(async () => {
   const backbone = await bootstrapBackbone(harness.driver, { memberName: 'Activation Test' });
   memberId = backbone.member.id;
 
-  // The FOLLOWS chain P1 writes: alpha first, so beta follows it.
+  // The FOLLOWS chain session capture writes: alpha first, so beta follows it.
   for (const sessionId of [SESSION_ALPHA, SESSION_BETA]) {
     await ensureGraphSession(harness.driver, {
       sessionId,

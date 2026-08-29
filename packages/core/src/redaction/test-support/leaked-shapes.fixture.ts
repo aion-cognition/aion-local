@@ -1,18 +1,18 @@
 import type { ReflectionInput } from '@aion/protocol';
 
 /**
- * The shapes that reached Neo4j in plaintext during the P3 exercise, verbatim, plus the
- * material that has to survive beside them. One corpus, so the unit tests, the intake
- * integration test, and the gate harness's redaction battery all assert against the same
- * strings rather than three drifting copies.
+ * The shapes that reached Neo4j in plaintext, verbatim, plus the material that has to
+ * survive beside them. One corpus, so the unit tests, the intake integration test, and the
+ * gate harness's redaction battery all assert against the same strings rather than three
+ * drifting copies.
  *
  * Every secret here is a published example value (AWS documentation) or synthetic.
  */
 
-/** Standard base64, so it carries `/`: the character that split it below the entropy floor. */
+/** Standard base64, so it carries `/`: excluding that character splits it below the entropy floor. */
 export const AWS_SECRET_WITH_SLASH = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY';
 
-/** The A/B control: the same key with `/` replaced, which was redacted while the real one was not. */
+/** The A/B control: the same key with `/` replaced, so a divergence isolates the slash as the cause. */
 export const AWS_SECRET_SLASH_FREE = 'wJalrXUtnFEMIxK7MDENGxbPxRfiCYEXAMPLEKEY';
 
 /** The env-dump value whose verdict swung on the casing of the name beside it. */
@@ -35,7 +35,7 @@ export type LeakedShape = {
   readonly material: string;
   /** The rule that claims it. */
   readonly rule: string;
-  /** A standalone reflection payload carrying the shape as the exercise delivered it. */
+  /** A standalone reflection payload carrying the shape in the position it arrived in. */
   readonly payload: ReflectionInput;
 };
 
@@ -142,9 +142,9 @@ export const LEAKED_SHAPES: readonly LeakedShape[] = [
 
 /**
  * Text that must pass through untouched. The near-threshold entries are deliberate: the
- * widened token class means a path or an env assignment is now scanned as one long run, and
- * `NODE_OPTIONS` (4.47 bits/char) and `GITHUB_REPOSITORY` (4.45) are the closest real shapes
- * to the 4.5 floor. A change that redacts them has moved the floor, not fixed a leak.
+ * token class scans a path or an env assignment as one long run, and `NODE_OPTIONS`
+ * (4.47 bits/char) and `GITHUB_REPOSITORY` (4.45) are the closest real shapes to the 4.5
+ * floor. A change that redacts them has moved the floor, not fixed a leak.
  */
 export const SURVIVING_TEXT: Readonly<Record<string, string>> = {
   'a short git SHA': 'commit d2468bb14fd54d4d74a5f06c89961257ab5399d fixed the deadlock',

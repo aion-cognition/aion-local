@@ -7,9 +7,9 @@ import {
 } from './descriptions.js';
 
 /**
- * PRD §3.4: the descriptions are the cadence mechanism, so the invocation moments the PRD
- * names are asserted rather than left to a future edit's judgment. A rewrite that drops one
- * fails here, which is the point — the text is product surface, not documentation.
+ * The descriptions are the cadence mechanism, so the invocation moments they pin are
+ * asserted rather than left to a future edit's judgment. A rewrite that drops one fails
+ * here, which is the point: the text is product surface, not documentation.
  */
 
 describe('recall description', () => {
@@ -30,7 +30,7 @@ describe('recall description', () => {
 });
 
 describe('reflection description', () => {
-  it('names the three moments PRD §3.4 pins', () => {
+  it('names the three moments the description pins', () => {
     expect(REFLECTION_DESCRIPTION).toContain('after completing meaningful work');
     expect(REFLECTION_DESCRIPTION).toContain('before a context switch');
     expect(REFLECTION_DESCRIPTION).toContain('at the end of a session');

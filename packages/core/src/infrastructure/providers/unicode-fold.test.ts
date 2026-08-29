@@ -20,7 +20,7 @@ describe('foldForIdentity', () => {
     expect(foldForIdentity('ΟΔΟΣ')).toBe(foldForIdentity('οδος'));
   });
 
-  it('keeps the non-ASCII names the exercise measured apart', () => {
+  it('keeps distinct non-ASCII names apart after folding', () => {
     // The embedding model returned one constant vector for both. The fold must not be what
     // makes them equal on top of that.
     expect(foldForIdentity('Zoë Müller')).toBe('zoë müller');

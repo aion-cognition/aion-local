@@ -7,7 +7,7 @@ import { readModeFragment, withCurrency, type ReadMode } from './read-modes.js';
  * Property names shared between the writer in `core/reflection/` and the Cypher here, so
  * a rename cannot drift the two apart. `content_vec` is the property migration 001's
  * vector index is declared on, and `text`/`summary` are two of the three the `content_fts`
- * fulltext index covers — a memory node written under other names is invisible to both.
+ * fulltext index covers: a memory node written under other names is invisible to both.
  */
 export const MEMORY_PROPERTIES = {
   text: 'text',
@@ -24,7 +24,7 @@ export const MEMORY_PROPERTIES = {
   observationCount: 'observation_count',
 } as const;
 
-/** Whitepaper Appendix C: `PARTICIPATES_IN` is member-to-container for Turn→Episode and Episode→Session alike. */
+/** `PARTICIPATES_IN` is member-to-container for Turn→Episode and Episode→Session alike. */
 export const CONTAINMENT_TYPE = 'PARTICIPATES_IN';
 
 export type FindEpisodeByContentHashInput = {
@@ -89,8 +89,8 @@ export type StoredEpisodeRef = {
  * and the queue. Superseded episodes are included and forgotten ones are not: a corrected
  * episode still deserves enrichment, an explicitly forgotten one never will.
  *
- * Newest first because that is the order the answer matters in — an episode written minutes
- * ago and never enqueued is a live freshness bug, one from last month is history — and it
+ * Newest first because that is the order the answer matters in: an episode written minutes
+ * ago and never enqueued is a live freshness bug, one from last month is history. This
  * makes `limit` cut the tail rather than the head.
  */
 const LIST_STORED_EPISODES = [

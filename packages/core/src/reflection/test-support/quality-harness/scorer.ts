@@ -71,7 +71,7 @@ export function nameOverlap(a: readonly { readonly name: string }[], b: readonly
 }
 
 /**
- * Agreement is defined only when exactly two routes both ran successfully — the harness
+ * Agreement is defined only when exactly two routes both ran successfully. The harness
  * compares local against Anthropic, not N-way. Any other count leaves it unset rather than
  * picking an arbitrary pair.
  */

@@ -71,7 +71,7 @@ export async function probeMcpHttp(port: number, fetchImpl: typeof fetch = fetch
 
 /**
  * Pure SQLite, no Neo4j: `aion doctor` printed "8 checks passed" with 4,000+ jobs pending
- * and again with one permanently wedged job (EX-10). Warn, never fail — a backlog is a
+ * and again with one permanently wedged job. Warn, never fail. A backlog is a
  * thing that is behind, not a thing that is broken.
  */
 export function queueLagCheck(db: SqliteHandle, config: Config, now: Date = new Date()): CheckResult {
@@ -172,7 +172,7 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
       /**
        * Informational: it re-measures the two distributions the admission floors were
        * calibrated against and warns when this machine's model no longer separates them.
-       * It never adjusts a floor — the committed constants are the runtime source of truth,
+       * It never adjusts a floor. The committed constants are the runtime source of truth,
        * and a floor that drifted per machine would make two installs remember differently.
        * `floor-calibration.int.test.ts` is where a floor is re-committed.
        */
@@ -206,9 +206,9 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
     },
     {
       /**
-       * Informational: it counts episodes the substrate stored and nothing will ever enrich
-       * — no orchestrator ledger key and no queue row — which is the state a queue purge, a
-       * crash between the graph write and the enqueue, or an exhausted job leaves behind.
+       * Informational: it counts episodes the substrate stored and nothing will ever enrich.
+       * This is the state a queue purge, a crash between the graph write and the enqueue,
+       * or an exhausted job leaves behind (no orchestrator ledger key and no queue row).
        * `aion doctor` passed 8 of 8 checks with 95% of the substrate in it.
        */
       name: 'enrichment-reconcile',

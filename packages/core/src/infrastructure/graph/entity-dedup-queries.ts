@@ -23,14 +23,14 @@ import {
 import { fromGraphVector, toGraphVector, type Row } from './values.js';
 
 /**
- * Whitepaper §6.5: the graph side of entity deduplication. Everything that decides who is
- * canonical lives in `reflection/domain/entity-merge.ts`; this module only reads the
- * candidates a similarity search needs and writes the merge once the stage has decided one.
+ * The graph side of entity deduplication. Everything that decides who is canonical lives in
+ * `reflection/domain/entity-merge.ts`; this module only reads the candidates a similarity
+ * search needs and writes the merge once the stage has decided one.
  */
 
 const ENTITY_LABEL = 'Entity';
 
-/** The property the merged names land in. Read back by `aion why` (P5) as the identity's history. */
+/** The property the merged names land in. Read back by `aion why` as the identity's history. */
 export const ENTITY_ALIASES_PROPERTY = 'aliases';
 
 /** Procedure arguments and `LIMIT` are Cypher INTEGER; a plain JS number arrives as FLOAT and is rejected. */
@@ -120,7 +120,7 @@ export type SimilarCurrentEntityMatch = {
 /**
  * Current Entity nodes near a name vector, of any type. Unlike `entitySimilaritySeeds`
  * (recall's read, which stays currency-aware rather than currency-filtered), a merge candidate
- * must still hold currency, or the search would propose absorbing into — or out of — an
+ * must still hold currency, or the search would propose absorbing into (or out of) an
  * identity a previous run already closed.
  *
  * The search used to filter on the subject's own type, which made a cross-type duplicate
@@ -221,7 +221,7 @@ async function findMergedNodeEdgesInTransaction(
   return tx.run(FIND_MERGED_NODE_EDGES, { mergedIds: [...mergedIds] }, mapRedirectableEdge);
 }
 
-/** The property carrying one JSON record per absorbed identity. Read by the P5 unmerge op. */
+/** The property carrying one JSON record per absorbed identity. Read by the unmerge operation. */
 export const MERGE_PROVENANCE_PROPERTY = 'merge_provenance';
 
 /** What the caller knows about an absorbed node that the graph will no longer answer for. */
@@ -236,7 +236,7 @@ export type MergedEntityRecord = {
 export type MergeEntityGroupInput = {
   readonly canonicalId: string;
   readonly mergedIds: readonly string[];
-  /** The full, final alias list — this call sets the property, it does not append to it. */
+  /** The full, final alias list: this call sets the property, it does not append to it. */
   readonly aliases: readonly string[];
   readonly accessCount: number;
   readonly lastAccessed?: Date;
@@ -247,8 +247,8 @@ export type MergeEntityGroupInput = {
    * Identity of each absorbed node, keyed by id. A merge is not reversible from the graph
    * alone: `upsertEdgeInTransaction` sums counts and takes the max strength, so once a
    * redirected edge collides with one the canonical already held, nothing on the surviving
-   * edge says what the merge contributed. The unmerge operation is P5 maintenance; the record
-   * it will need can only be written here, at merge time.
+   * edge says what the merge contributed. The unmerge operation is maintenance tooling; the
+   * record it will need can only be written here, at merge time.
    */
   readonly mergedRecords?: readonly MergedEntityRecord[];
   /** The `entity.merge:` ledger key this merge is idempotent on, stored with the record. */
@@ -262,9 +262,9 @@ export type MergeEntityGroupResult = {
 };
 
 /**
- * One edge as it stood on the absorbed node. `redirected` is false for the edges a merge drops
- * — a relationship whose other endpoint is also in the group becomes a self-loop and is never
- * written — and an unmerge has to put those back too, so they are recorded either way.
+ * One edge as it stood on the absorbed node. `redirected` is false for the edges a merge
+ * drops: a relationship whose other endpoint is also in the group becomes a self-loop and is
+ * never written. An unmerge has to put those back too, so they are recorded either way.
  */
 type ProvenanceEdge = {
   readonly edge_id: string;
@@ -349,14 +349,14 @@ function buildMergeProvenance(
 }
 
 /**
- * Whitepaper §6.5's "the merge executes inside a graph transaction to ensure atomicity", as
- * one transaction: lock canonical and every merged node (stable order, so two concurrent
- * merges cannot deadlock on each other), read the merged nodes' relationships, redirect each
- * through the ordinary edge-upsert — which is what makes a collision with an edge canonical
- * already holds sum and max rather than overwrite — absorb the aliases and salience, and
- * close each merged node with its lineage edge. An edge whose other endpoint is itself part
- * of this group, including a direct canonical/merged edge, is dropped rather than redirected:
- * after the merge both ends are the same node, and a self-loop records nothing.
+ * The merge executes inside a graph transaction for atomicity, as one transaction: lock
+ * canonical and every merged node (stable order, so two concurrent merges cannot deadlock on
+ * each other), read the merged nodes' relationships, redirect each through the ordinary
+ * edge-upsert (which is what makes a collision with an edge canonical already holds sum and
+ * max rather than overwrite), absorb the aliases and salience, and close each merged node
+ * with its lineage edge. An edge whose other endpoint is itself part of this group, including
+ * a direct canonical/merged edge, is dropped rather than redirected: after the merge both
+ * ends are the same node, and a self-loop records nothing.
  *
  * Redirect and close belong to the same commit because either alone is an invalid state. A
  * crash between them used to leave the duplicate stripped of every relationship and still
@@ -450,9 +450,9 @@ const CLEAR_ENTITY_VECTORS = [
 ].join('\n');
 
 /**
- * §6.5: "vector index cleanup ... runs post-commit with best-effort semantics." A merged
- * node stays queryable (superseded, not deleted), so its vectors are cleared rather than the
- * node — otherwise it would keep answering `entitySimilaritySeeds`, which is currency-aware
+ * Vector index cleanup runs post-commit with best-effort semantics. A merged node stays
+ * queryable (superseded, not deleted), so its vectors are cleared rather than the node:
+ * otherwise it would keep answering `entitySimilaritySeeds`, which is currency-aware
  * rather than currency-filtered by design and does not exclude a superseded row on its own.
  */
 export async function clearEntityVectors(driver: Driver, ids: readonly string[]): Promise<string[]> {

@@ -41,10 +41,10 @@ import { SessionIdleSweeper } from './session-idle-sweeper.js';
 import type { ToolBackend } from './tools.js';
 
 /**
- * EX-32/EX-33 end to end: the transport, the graph, and the two triggers together, over a
- * real MCP client and a throwaway Neo4j. The provider is stubbed (`generate` answers every
- * schema with a narrative-shaped object, `embed` returns a fixed vector) so the narrative
- * half runs on the harness's own clock instead of a live model's.
+ * Both session-close triggers end to end: the transport, the graph, and the two triggers
+ * together, over a real MCP client and a throwaway Neo4j. The provider is stubbed
+ * (`generate` answers every schema with a narrative-shaped object, `embed` returns a fixed
+ * vector) so the narrative half runs on the harness's own clock instead of a live model's.
  */
 
 const MEMBER_NAME = 'Session Lifecycle Test';
@@ -55,7 +55,7 @@ const FIXED_VECTOR = [1, 0, 0, 0, 0, 0, 0, 0];
 
 /**
  * Matches `NarrativeOutputSchema` (`{sentences: [{text, source_ids}]}`), citing the first
- * rendered source item (`S1`, always the session's own first episode — see
+ * rendered source item (`S1`, always the session's own first episode; see
  * `renderNarrativeSource`) so the grounding filter keeps the sentence rather than dropping it.
  */
 const provider: Provider = {
@@ -223,7 +223,7 @@ describe('reliable close', () => {
     });
     const sessionId = transport.sessionId ?? '';
 
-    // A bare close(): no DELETE, so onSessionClosed cannot fire server-side on its own (EX-32).
+    // A bare close(): no DELETE, so onSessionClosed cannot fire server-side on its own.
     await client.close();
     expect(await sessionExists(sessionId)).toBe(true);
 

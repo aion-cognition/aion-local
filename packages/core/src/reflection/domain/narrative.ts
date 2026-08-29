@@ -3,13 +3,12 @@ import type { ChatMessage, JsonSchema } from '../../infrastructure/providers/typ
 import { hashContent } from './content.js';
 
 /**
- * Whitepaper §6.10, with this build's pinned trigger: a session's close — the MCP transport
- * ending, or 30 minutes of silence — is the boundary that warrants a narrative. Everything
- * here is pure, so the boundary rule, the versioning rule, and the identity of an episode
- * set are all assertable without a graph.
+ * A session's close (the MCP transport ending, or 30 minutes of silence) is the boundary
+ * that warrants a narrative. Everything here is pure, so the boundary rule, the versioning
+ * rule, and the identity of an episode set are all assertable without a graph.
  */
 
-/** The only scope P3 produces. Day and week scopes are maintenance operations (P5). */
+/** The only scope produced here. Day and week scopes belong to maintenance operations. */
 export const SESSION_NARRATIVE_SCOPE = 'session';
 
 export type NarrativeEpisode = {
@@ -123,7 +122,7 @@ function skip(
  * The versioning rule: a close that covers more episodes than the standing narrative mints
  * version n+1 and supersedes n, so the lineage of what the session was understood to be is
  * preserved rather than overwritten. A close that covers the same set writes nothing, and
- * one that covers fewer — every case of it is an episode forgotten after the fact — leaves
+ * one that covers fewer (every case of it is an episode forgotten after the fact) leaves
  * the standing narrative alone rather than regressing it.
  */
 export type NarrativeDecisionOptions = {
@@ -224,8 +223,8 @@ export type NarrativeSource = {
 };
 
 /**
- * A ceiling, not a target. Eight sentences over one thin episode is how the free-prose
- * narrative filled its length quota with invention.
+ * A ceiling, not a target. Eight sentences over one thin episode is how a length quota gets
+ * filled with invention.
  */
 export const NARRATIVE_MAX_SENTENCES = 6;
 
@@ -278,7 +277,7 @@ export function narrativeMaxTokens(sentenceBudget: number): number {
 /**
  * The compression input. A long session is rendered from its most recent episodes rather
  * than truncated mid-history, and the ratio it saw is recorded as the narrative's coverage
- * score — the node then says how much of what it claims to cover actually reached the model.
+ * score, so the node says how much of what it claims to cover actually reached the model.
  * Every item carries a tag the answer must cite, and an extracted node follows the episode it
  * came from so the model reads the session as an arc rather than two lists. Clipping is a
  * byte slice, not term selection: nothing here decides what an episode means.

@@ -121,7 +121,7 @@ describe('edgeWeight', () => {
     expect(mentions).toBeLessThan(participates);
   });
 
-  it('scales SIMILAR and RELATED_TO by strength × confidence, per whitepaper §5.4', () => {
+  it('scales SIMILAR and RELATED_TO by strength × confidence', () => {
     // SIMILAR's base weight carries MODEL_INFERRED_PENALTY (0.6 tuned x 0.5 discount = 0.3).
     expect(edgeWeight(neighbor({ relationshipType: 'SIMILAR', strength: 0.5, confidence: 0.5 }))).toBeCloseTo(0.075, 10);
     expect(edgeWeight(neighbor({ relationshipType: 'RELATED_TO', strength: 0.4, confidence: 0.5 }))).toBeCloseTo(0.1, 10);
@@ -209,8 +209,8 @@ describe('spreadActivation', () => {
   });
 
   it('counts an edge between two nodes of the same frontier ring, once, in selection order', async () => {
-    // Both seeds expand in one batch. Algorithm 2 moves one node into V at a time, so the peer
-    // still in the frontier receives activation and does not send it back.
+    // Both seeds expand in one batch. One-at-a-time expansion visits one node at a time, so
+    // the peer still in the frontier receives activation and does not send it back.
     const run = await spreadActivation(
       fetchOver({ edges: [{ from: 'seed-a', to: 'seed-b', type: 'PARTICIPATES_IN' }] }),
       { seeds: [{ nodeId: 'seed-a' }, { nodeId: 'seed-b' }], budget: withBudget({ maxHops: 1 }) },

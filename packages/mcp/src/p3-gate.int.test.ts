@@ -46,10 +46,10 @@ import {
 import { narrativeOptions, reflectionStages, workerOptions } from './bootstrap.js';
 
 /**
- * The P3 exit gate, assembled the way the service assembles itself: the stage list, the
- * worker options, and the narrative settings all come from `bootstrap.ts`, so a pipeline
- * wired only in this file could not pass. Everything below runs against a live Ollama and a
- * throwaway Neo4j; nothing here stands in for a model.
+ * The reflection pipeline's exit gate, assembled the way the service assembles itself: the
+ * stage list, the worker options, and the narrative settings all come from `bootstrap.ts`,
+ * so a pipeline wired only in this file could not pass. Everything below runs against a
+ * live Ollama and a throwaway Neo4j; nothing here stands in for a model.
  *
  * Item 1 is the one this file exists for. Reflection is called, and nothing else: the worker
  * hears the dispatch signal, claims the row, and runs the pipeline on its own. No test drives

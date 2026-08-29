@@ -25,13 +25,13 @@ import { CueCache } from './cues.js';
 import { handleRecall, type RecallDeps } from './recall.js';
 
 /**
- * The P2 exit gate's own substrate scale: 21 episodes across 3 chained sessions, most of them
- * carrying turns, written through the real intake path and read through `handleRecall` at the
- * shipped defaults. Stage-level tests can pass on a two-node fixture while the assembled
- * pipeline returns nothing at this size, which is the gap this file closes.
+ * A realistic substrate scale: 21 episodes across 3 chained sessions, most of them carrying
+ * turns, written through the real intake path and read through `handleRecall` at the shipped
+ * defaults. Stage-level tests can pass on a two-node fixture while the assembled pipeline
+ * returns nothing at this size, which is the gap this file closes.
  *
- * Gate item 2 (an item reachable only through FOLLOWS/backbone traversal) and gate item 5
- * (supersession lineage and `as_of`) are the two the stage tests could not answer.
+ * Two behaviours the stage tests could not answer: an item reachable only through
+ * FOLLOWS/backbone traversal, and supersession lineage under `as_of`.
  */
 
 const EMBED_DIMENSION = 8;

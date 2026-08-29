@@ -24,11 +24,10 @@ import type { StageContext } from '../../domain/stage.js';
 import { ReinforcementEnqueueStage } from './reinforcement.js';
 
 /**
- * Whitepaper §7.1's trigger is entities and cognitive structures extracted from one episode.
- * The episode this file builds also carries the three turns intake writes, which link to it
- * with the same containment type the entity stage uses — so a read that follows containment
- * pairs every turn with every other and the queue stops being about extracted structure at
- * all.
+ * The trigger is entities and cognitive structures extracted from one episode. The episode
+ * this file builds also carries the three turns intake writes, which link to it with the same
+ * containment type the entity stage uses, so a read that follows containment pairs every turn
+ * with every other and the queue stops being about extracted structure at all.
  */
 
 const NOW = new Date('2026-08-28T12:00:00.000Z');

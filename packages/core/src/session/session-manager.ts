@@ -19,12 +19,12 @@ export type EnsureSessionResult = {
 };
 
 /**
- * PRD §3.3, whitepaper §4.2: one instance per long-lived service process, holding the
- * identity→session-id resolutions it has already made. A repeated `ensureSession` call for
- * a known identity returns from that cache without a graph round trip at all, which is
- * distinct from (and cheaper than) `ensureGraphSession`'s own MERGE-level idempotency. The
- * in-flight map collapses concurrent first calls for the same brand-new identity into one
- * write instead of a race between duplicate creates.
+ * One instance per long-lived service process, holding the identity→session-id resolutions
+ * it has already made. A repeated `ensureSession` call for a known identity returns from
+ * that cache without a graph round trip at all, which is distinct from (and cheaper than)
+ * `ensureGraphSession`'s own MERGE-level idempotency. The in-flight map collapses concurrent
+ * first calls for the same brand-new identity into one write instead of a race between
+ * duplicate creates.
  */
 export class SessionManager {
   readonly #driver: Driver;

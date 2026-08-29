@@ -5,10 +5,10 @@ import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../infrastructure/providers/types.js';
 
 /**
- * Whitepaper Algorithm 1, minus the keyword fallback this build deletes by design
- * (PRD §6.1). Exactly one `generate` call per invocation (provider hot-path rule, PRD
- * §10); a failure, a busted budget, or a response that fails validation degrades to the
- * caller's own query and summary text verbatim, never to lexical extraction over it.
+ * One model call produces the cues: exactly one `generate` per invocation, which is all the
+ * recall hot path allows. A failure, a busted budget, or a response that fails validation
+ * degrades to the caller's own query and summary text verbatim, never to keyword extraction
+ * over it.
  */
 
 export type CueExtractionInput = {
@@ -86,7 +86,7 @@ const CUE_OUTPUT_JSON_SCHEMA: JsonSchema = {
 /**
  * `query_intent` is optional here and required in the JSON schema above. A provider that
  * constrains generation to the schema always fills it; one that does not should cost recall a
- * ranking hint, never the whole extraction — degrading to the raw query because one enum was
+ * ranking hint, never the whole extraction. Degrading to the raw query because one enum was
  * missing would be a worse answer than ignoring the enum.
  */
 const CueModelOutputSchema = z.object({
@@ -104,8 +104,8 @@ const CueModelOutputSchema = z.object({
  * as an instruction to return nothing rather than guess.
  *
  * Intent: whether a query asks what was chosen is a judgment, and the alternative to asking
- * for it is a keyword list, which the cognitive path does not get (PRD §2). Every clause after
- * "query_intent" is here because the model got that case wrong without it — a recommendation
+ * for it is a keyword list, which the cognitive path does not get. Every clause after
+ * "query_intent" is here because the model got that case wrong without it: a recommendation
  * read as a decision, a bug report read as a decision, and "why did we reject X" read as a
  * cause rather than as the choice it names. With them, the judgment was right on 11 of 12
  * probe queries and identical across three runs; without them, on 8 of 12. The survivor is
@@ -166,7 +166,7 @@ function buildMessages(input: CueExtractionInput): ChatMessage[] {
   ];
 }
 
-/** Deterministic key over exactly the fields Algorithm 1 takes as input, plus the model. */
+/** Deterministic key over exactly the fields cue extraction takes as input, plus the model. */
 function cacheKey(input: CueExtractionInput, model: string): string {
   const turns = (input.recentTurns ?? []).map((turn) => `${turn.role}\u0000${turn.text}`).join('\u0001');
   const raw = [model, input.query, input.summary ?? '', turns].join('\u0002');
@@ -203,13 +203,12 @@ async function callCueModel(deps: CueExtractionDeps, input: CueExtractionInput):
 }
 
 /**
- * PRD §6.1's ladder: "recall proceeds on query and summary embeddings plus BM25 over the raw
- * query text." Both of the caller's own text buckets carry through — the summary at the same
- * damped weight the healthy path gives it — because the summary is context the caller already
+ * The degraded rung: recall proceeds on query and summary embeddings plus BM25 over the raw
+ * query text. Both of the caller's own text buckets carry through, the summary at the same
+ * damped weight the healthy path gives it, because the summary is context the caller already
  * extracted and dropping it costs signal the degraded path has no other way to recover. The
- * recent-turns bucket does not carry: it is the procedural bucket Algorithm 1 weights lowest,
- * and a verbatim turn is a transcript line rather than a cue. Nothing here derives terms from
- * the text.
+ * recent-turns bucket does not carry: it is the lowest-weighted bucket, and a verbatim turn
+ * is a transcript line rather than a cue. Nothing here derives terms from the text.
  */
 function degradedResult(
   input: CueExtractionInput,
@@ -228,9 +227,9 @@ function degradedResult(
 }
 
 /**
- * Algorithm 1 weighs a summary cue 2x. It is damped to 1x here, which is EX-20's finding
- * applied by weight rather than by wording: nothing rewrites or drops the caller's summary,
- * so its cues still seed and still corroborate, they just stop outranking the question.
+ * A summary cue would otherwise weigh 2x. Damping it to 1x applies the finding below by
+ * weight rather than by wording: nothing rewrites or drops the caller's summary, so its cues
+ * still seed and still corroborate, they just stop outranking the question.
  *
  * Measured, on one query against one substrate under four summaries: no context put the
  * answer at rank 7 of 21, "checking a specific measured number" at 9 of 23, "reviewing the
@@ -253,10 +252,10 @@ const SUMMARY_CUE_WEIGHT: CueWeight = 1;
  * anyway (a hallucinated summary cue with no summary in the input is not a summary cue).
  *
  * The raw query leads every list, whatever the model returned. A cue set is the model's
- * reading of the question and the question itself is not negotiable: EX-20 measured a
- * lexically precise query missing entirely because the model split it into single words, and
- * the same run measured the raw-query path attributing 75 to 100% of its items to the right
- * episode against 30% for the model's own cues on a bare query.
+ * reading of the question and the question itself is not negotiable: a lexically precise
+ * query went missing entirely because the model split it into single words, and the same run
+ * measured the raw-query path attributing 75 to 100% of its items to the right episode
+ * against 30% for the model's own cues on a bare query.
  */
 function toCues(
   input: CueExtractionInput,
@@ -291,9 +290,8 @@ function toCues(
 }
 
 /**
- * PRD §6.1 / whitepaper Algorithm 1. Checks the cache, makes the one budgeted `generate`
- * call, validates the result, and maps it to weighted cues — or degrades to a single
- * raw-query cue on any failure along the way.
+ * Checks the cache, makes the one budgeted `generate` call, validates the result, and maps it
+ * to weighted cues, or degrades to a single raw-query cue on any failure along the way.
  */
 export async function extractCues(deps: CueExtractionDeps, input: CueExtractionInput): Promise<CueExtractionResult> {
   const key = cacheKey(input, deps.model);

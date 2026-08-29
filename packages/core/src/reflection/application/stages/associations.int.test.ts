@@ -36,7 +36,7 @@ const NOW = new Date('2026-08-28T12:00:00.000Z');
 const DIMENSION = DEFAULTS.models.embedDimension;
 
 /**
- * This stage never calls a model — it reads entities and content vectors already in the
+ * This stage never calls a model: it reads entities and content vectors already in the
  * graph. Intake still needs a `Provider` to embed episode/turn text, so it gets a fully
  * synthetic one: deterministic, dependency-free, and irrelevant to what this suite verifies.
  */

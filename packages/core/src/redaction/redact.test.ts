@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { redact, redactKeyedValue } from './redact.js';
 
-describe('redact — true positives, one per rule', () => {
+describe('redact: true positives, one per rule', () => {
   const cases: Array<{ rule: string; secret: string; text: string }> = [
     {
       rule: 'aws-access-key',
@@ -91,7 +91,7 @@ describe('redact — true positives, one per rule', () => {
 
 // The 8-22 character band is where most real API keys, DB passwords, and client secrets
 // live, and it is unreachable for any entropy threshold above log2(22) = 4.46 bits/char.
-describe('redact — short generic secrets, the band an entropy gate cannot reach', () => {
+describe('redact: short generic secrets, the band an entropy gate cannot reach', () => {
   const cases: Array<{ label: string; text: string; secret: string }> = [
     { label: 'a shell password', text: 'password=hunter2secret', secret: 'hunter2secret' },
     { label: 'a password with symbols', text: 'password: Tr0ub4dor&3', secret: 'Tr0ub4dor&3' },
@@ -125,7 +125,7 @@ describe('redact — short generic secrets, the band an entropy gate cannot reac
   }
 });
 
-describe('redact — false positives that must survive unredacted', () => {
+describe('redact: false positives that must survive unredacted', () => {
   const survivors: Record<string, string> = {
     'git SHA': 'commit d2468bb14fd54d4d74a5f06c89961257ab5399d fixed the deadlock',
     UUID: 'session id 550e8400-e29b-41d4-a716-446655440000 was created',
@@ -147,7 +147,7 @@ describe('redact — false positives that must survive unredacted', () => {
   }
 });
 
-describe('redact — fingerprint stability', () => {
+describe('redact: fingerprint stability', () => {
   it('produces the same fingerprint for the same secret across separate calls', () => {
     const text = 'export AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE';
     const first = redact(text);
@@ -169,7 +169,7 @@ describe('redact — fingerprint stability', () => {
   });
 });
 
-describe('redact — entropy threshold behavior', () => {
+describe('redact: entropy threshold behavior', () => {
   // 20 chars over 5 distinct symbols: log2(5) = 2.32 bits/char, so the backstop claims it
   // below that threshold and leaves it alone above.
   const text = 'the token is abcdeabcdeabcdeabcde here';
@@ -185,7 +185,7 @@ describe('redact — entropy threshold behavior', () => {
   });
 });
 
-describe('redact — secrets carried by their own alphabet and casing', () => {
+describe('redact: secrets carried by their own alphabet and casing', () => {
   it('redacts a 40-char AWS secret key pasted in prose, slashes and all', () => {
     const secret = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY';
     const result = redact(`the runbook still has ${secret} pasted beside it`);
@@ -205,7 +205,7 @@ describe('redact — secrets carried by their own alphabet and casing', () => {
   });
 });
 
-describe('redactKeyedValue — the same rules over a structured pair', () => {
+describe('redactKeyedValue: the same rules over a structured pair', () => {
   it('fingerprints a value its key names, and returns the value alone', () => {
     const result = redactKeyedValue('password', 'hunter2secret');
 
@@ -236,7 +236,7 @@ describe('redactKeyedValue — the same rules over a structured pair', () => {
   });
 });
 
-describe('redact — mixed payload with several rule classes at once', () => {
+describe('redact: mixed payload with several rule classes at once', () => {
   it('redacts every credential and preserves ordering left to right', () => {
     const text = [
       'AWS key AKIAIOSFODNN7EXAMPLE was pasted next to',

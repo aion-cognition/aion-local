@@ -65,7 +65,7 @@ export function writeJsonRpcError(
 
 /**
  * Docker publishes the port to the host's loopback (`127.0.0.1:8765:8765`), which forwards
- * to the container's own address — a server bound to loopback *inside* the container would
+ * to the container's own address: a server bound to loopback *inside* the container would
  * be unreachable through it. Loopback stays the bind for a bare-metal run, where nothing
  * else confines the port.
  */

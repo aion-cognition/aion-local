@@ -54,21 +54,21 @@ const MIGRATION_001_BACKBONE_SCHEMA: GraphMigration = {
 };
 
 /**
- * The nine whitepaper §6.7 cognitive types (Goal, Plan, Decision, Insight, Concept,
- * Context, Event, Pattern, Trend) plus Narrative and Bridge — P3's pinned label table.
- * Each gets its own id uniqueness constraint, matching Episode/Turn/Session/Member/
- * Workspace in migration 001; the vector, currency-range, and `Memory`-scoped indexes
- * already declared `FOR (n:Memory)` cover them once `labels.ts`'s `COMPANION_LABELS`
- * carries them into `resolveLabels`, so no per-label index statement is needed here.
+ * The nine cognitive types (Goal, Plan, Decision, Insight, Concept, Context, Event,
+ * Pattern, Trend) plus Narrative and Bridge: the pinned label table. Each gets its own
+ * id uniqueness constraint, matching Episode/Turn/Session/Member/Workspace in migration
+ * 001; the vector, currency-range, and `Memory`-scoped indexes already declared
+ * `FOR (n:Memory)` cover them once `labels.ts`'s `COMPANION_LABELS` carries them into
+ * `resolveLabels`, so no per-label index statement is needed here.
  *
  * The fulltext index moves to a new name rather than being dropped and recreated under
  * the old one. `IF NOT EXISTS` cannot redefine an index that already exists, so widening
- * the label set needs a drop — and `runGraphMigrations` replays every statement on every
+ * the label set needs a drop, and `runGraphMigrations` replays every statement on every
  * `aion init`, which would make that drop destroy and repopulate a healthy index each time
  * a user reran init. Under a new name both statements are no-ops from the second run on,
- * which is what PRD §11's "touches nothing that is healthy" asks for. The property list is
- * unchanged: `summary` already covers `Narrative.summary` and `text` already covers the
- * cognitive types' text property (canonical name `text` across all nine).
+ * leaving a healthy index untouched. The property list is unchanged: `summary` already
+ * covers `Narrative.summary` and `text` already covers the cognitive types' text property
+ * (canonical name `text` across all nine).
  */
 const MIGRATION_002_COGNITIVE_SCHEMA: GraphMigration = {
   version: 2,

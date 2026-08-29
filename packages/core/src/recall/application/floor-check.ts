@@ -12,7 +12,7 @@ import { RELATED_PAIRS, UNRELATED_PAIRS, type ScoredPair } from './floors.fixtur
 /**
  * The doctor's re-measurement of the committed floors: one embed call over a subset of the
  * calibration fixtures, on whatever model this machine actually has. It reports drift and
- * stops there — the committed constants stay the only runtime source of truth, and a floor
+ * stops there: the committed constants stay the only runtime source of truth, and a floor
  * that moved per machine would make two installs disagree about what they remember.
  *
  * The full two-distribution calibration lives in `floor-calibration.int.test.ts`, which is

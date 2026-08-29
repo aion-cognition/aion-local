@@ -23,17 +23,16 @@ import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite
 import { fuse, type FusionCandidate, type RankedList } from './fusion.js';
 
 /**
- * EX-22's own repro against a live substrate: a burst cluster written with a real Ollama
- * vector each, fetched back through the same `contentVectors` path production MMR uses.
- * `fusion.test.ts` already isolates the cosine leg against a hand-picked vector; measuring
- * it here against this embedding model's real output on EX-22's own burst-record shape
- * found moderately-varied full sentences do NOT collapse the way EX-13's degenerate short
- * strings did (a first pass at 12-word sentences left 7 of 8 distinct above 0.95), so this
- * fixture keeps the one-line template shape the exercise actually measured — short enough
- * that the model's own noise floor, not deliberate paraphrase, is what would separate two
- * burst records. `fuse` is a pure domain function, so nothing here needs a session or
- * containment edge; the graph exists only to round-trip a real vector through the real
- * read path.
+ * The near-duplicate repro against a live substrate: a burst cluster written with a real
+ * Ollama vector each, fetched back through the same `contentVectors` path production MMR
+ * uses. `fusion.test.ts` already isolates the cosine leg against a hand-picked vector;
+ * measuring it here against this embedding model's real output on the burst-record shape
+ * found that moderately-varied full sentences do NOT collapse the way degenerate short
+ * strings do (a first pass at 12-word sentences left 7 of 8 distinct above 0.95), so this
+ * fixture keeps the one-line template shape that was actually measured: short enough that
+ * the model's own noise floor, not deliberate paraphrase, is what would separate two burst
+ * records. `fuse` is a pure domain function, so nothing here needs a session or containment
+ * edge; the graph exists only to round-trip a real vector through the real read path.
  */
 
 const OLLAMA_URL = process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434';

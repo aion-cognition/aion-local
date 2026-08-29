@@ -14,7 +14,7 @@ export {
 /**
  * The embed-and-write half of the write path, split out because it runs in two places: at
  * the end of intake, on the nodes that call just committed, and in the worker's startup
- * drain, on whatever an earlier outage left pending. Both are the same operation — the
+ * drain, on whatever an earlier outage left pending. Both are the same operation: the
  * only difference is who found the nodes.
  *
  * The provider call is not guarded here. Intake treats a failure as "vectors stay pending"

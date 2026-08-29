@@ -86,7 +86,7 @@ const SCHEMA_STATEMENTS: readonly string[] = [
    * Near-duplicate entities of different types, which dedup detects and never applies: one
    * real thing typed two ways is a type mistake, and merging on the type key would pick a
    * winner the extraction never justified. Its own table rather than a `kind` column on
-   * `supersession_proposals` because the columns do not overlap — no contradiction judgment,
+   * `supersession_proposals` because the columns do not overlap: no contradiction judgment,
    * no model confidence, and a pair of names and types the reviewer has to see to decide.
    * The pair is stored id-sorted, so discovery from either side is one row.
    */
@@ -155,7 +155,7 @@ function sleepSync(ms: number): void {
  * that specific window (SQLite issues SQLITE_BUSY for it immediately, no wait), so
  * bootstrap retries the whole open-and-migrate step itself instead of surfacing the
  * race to the caller. Once a file is already in WAL mode, re-opening it never hits
- * this path — verified with two connections racing a fresh file in test.
+ * this path; verified with two connections racing a fresh file in test.
  */
 export function openSqliteHandle(target: SqliteTarget): SqliteHandle {
   const busyTimeoutMs = target.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS;

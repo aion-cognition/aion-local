@@ -72,7 +72,7 @@ function toEntityMergeProposal(row: EntityMergeProposalRow): EntityMergeProposal
  * Idempotent on the id-sorted pair: the same two entities detected again from either side
  * refresh the row rather than adding one, so a stage re-run after a crash before the ledger
  * mark leaves the queue exactly as long as it was. `created_at` and `resolved_at` survive the
- * refresh — a proposal a person already resolved stays resolved.
+ * refresh: a proposal a person already resolved stays resolved.
  */
 export function recordEntityMergeProposal(
   db: SqliteHandle,

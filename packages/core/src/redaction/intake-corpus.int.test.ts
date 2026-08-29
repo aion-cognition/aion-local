@@ -24,9 +24,8 @@ import { LEAKED_SHAPES, SURVIVING_TEXT } from './test-support/leaked-shapes.fixt
 
 /**
  * Redaction is verified where it has to hold: on what Neo4j and the queue actually hold
- * after a real intake. The exercise's own redaction pass read pack output instead and
- * reported PASS while three of these shapes sat in the substrate in plaintext, permanently,
- * since nothing is ever hard-deleted.
+ * after a real intake. Checking pack output instead can report clean while these shapes sit
+ * in the substrate in plaintext, permanently, since nothing is ever hard-deleted.
  */
 
 const SURVIVORS = Object.values(SURVIVING_TEXT);

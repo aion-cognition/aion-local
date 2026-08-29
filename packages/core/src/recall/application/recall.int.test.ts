@@ -52,7 +52,7 @@ function axis(index: number): Vector {
 /**
  * Deterministic stand-in for the embedding model: the topic decides the axis, so "reachable
  * only by traversal" is a property of the fixture graph rather than of whatever a live
- * model happened to score. Cue extraction is stubbed for the same reason — unit and
+ * model happened to score. Cue extraction is stubbed for the same reason: unit and
  * integration tests here prove the pipeline, never the model's judgment.
  */
 function vectorFor(text: string): Vector {
@@ -256,7 +256,7 @@ describe('recall over a substrate written by the real intake path', () => {
   });
 });
 
-describe('pending_enrichment metadata (EX-11)', () => {
+describe('pending_enrichment metadata', () => {
   const PENDING_SESSION = 'recall-int-pending-session';
   const PENDING_AT = new Date('2026-06-03T09:00:00.000Z');
 

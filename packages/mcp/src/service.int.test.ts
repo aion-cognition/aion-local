@@ -31,8 +31,8 @@ import { HEALTH_PATH, MCP_PATH } from './http.js';
  * The whole surface at once: the real assembly from `bootstrapService`, a throwaway Neo4j,
  * a temp SQLite, and the host's live Ollama, driven by the MCP SDK's own client over a
  * loopback socket. Two clients connect at the same time and each stores then recalls, which
- * is PRD §3.3's claim under test — one service, one substrate, one memory session per
- * connected client.
+ * puts the claim under test: one service, one substrate, one memory session per connected
+ * client.
  */
 
 const MEMBER_NAME = 'Ryan Huber';

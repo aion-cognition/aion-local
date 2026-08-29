@@ -2,10 +2,10 @@ import { randomUUID } from 'node:crypto';
 import type { SqliteHandle } from './database.js';
 
 /**
- * The pinned supersession policy's low-confidence half. A contradiction judgment the
- * reflection model is not sure enough about never touches the graph; it lands here and is
- * surfaced by `aion why` (P5) for a person to act on. Nothing in the pipeline reads these
- * rows back to apply them — that is the whole point of the split.
+ * The supersession policy's low-confidence half. A contradiction judgment the reflection
+ * model is not sure enough about never touches the graph; it lands here for a person to
+ * act on via `aion why`. Nothing in the pipeline reads these rows back to apply them:
+ * that is the whole point of the split.
  */
 
 export type SupersessionProposal = {
@@ -59,7 +59,7 @@ function toSupersessionProposal(row: SupersessionProposalRow): SupersessionPropo
  * Idempotent on the pair: a second judgment of the same (old, new) refreshes the confidence,
  * rationale, and episode rather than adding a row, so the orchestrator's re-run after a crash
  * before the ledger mark leaves the queue exactly as long as it was. `created_at` and
- * `resolved_at` survive the refresh — a proposal a person already resolved stays resolved.
+ * `resolved_at` survive the refresh: a proposal a person already resolved stays resolved.
  */
 export function recordSupersessionProposal(
   db: SqliteHandle,

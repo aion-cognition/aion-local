@@ -59,10 +59,10 @@ function uniqueStrings(values: readonly string[]): string[] {
 }
 
 /**
- * Whitepaper §4.1 / Appendix C, the one merge policy every relationship write goes through:
- * max(strength), max(confidence), set-union(signals), set-union(provenance), sum(count),
- * earliest created_at preserved, updated_at refreshed. The unions are list comprehensions
- * rather than APOC, which is not installed and is not a dependency this build takes on.
+ * The one merge policy every relationship write goes through: max(strength),
+ * max(confidence), set-union(signals), set-union(provenance), sum(count), earliest
+ * created_at preserved, updated_at refreshed. The unions are list comprehensions rather
+ * than APOC, which is not installed and is not a dependency this project takes on.
  *
  * Endpoints resolve through `BASE_NODE_LABEL` because an unlabelled `{ id: … }` match has
  * no index to seek: every relationship write would scan the whole graph twice.

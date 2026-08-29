@@ -31,13 +31,13 @@ import { LaneAssigner } from '../lanes.js';
 import { SupersessionStage } from './supersession.js';
 
 /**
- * The exercise's contradiction battery against a live judge: one blatant reversal that must
+ * The contradiction battery against a live judge: one blatant reversal that must
  * produce a proposal and nothing else, and two baits that must produce nothing at all. Intake
  * and the cognitive-node writes are deterministic (embedding only, no generation), so the
  * model's part in this file is exactly the judgment under test.
  *
  * `subject` seeds an Entity both episodes mention, which is the leg the stage tries first.
- * `DISTRACTOR` is the exercise's first false closure, kept as a node no entity ties to the
+ * `DISTRACTOR` is a measured false closure, kept as a node no entity ties to the
  * Stripe claim: it is what the KNN widener reaches when the subject leg leaves a slot.
  */
 const PAIRS = [
@@ -298,8 +298,8 @@ describe('SupersessionStage against a live graph', () => {
 
   /**
    * The judge still answers "contradicts" on this pair, measured against qwen3:8b with the
-   * discipline rules in the prompt. That is the finding the propose-only default exists for:
-   * a false positive costs a review row, and the node it names stays current and served.
+   * discipline rules in the prompt. That is why the propose-only default exists: a false
+   * positive costs a review row, and the node it names stays current and served.
    */
   it('contains a false positive as a proposal when the widener does reach one', async () => {
     const pair = pairs.get('stripe')!;

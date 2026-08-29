@@ -15,11 +15,10 @@ import {
 import { fromGraphVector, toGraphVector, type Row } from './values.js';
 
 /**
- * Whitepaper §5.2's four seed strategies, one query each, plus the two reads recall makes
- * against ids it already holds: hydrating an activated node into a candidate, and pulling
- * content vectors for MMR. They all splice the same `readModeFragment` in, so currency
- * annotation and forget suppression have exactly one definition behind every entry point
- * into recall.
+ * Four seed strategies, one query each, plus the two reads recall makes against ids it
+ * already holds: hydrating an activated node into a candidate, and pulling content vectors
+ * for MMR. They all splice the same `readModeFragment` in, so currency annotation and
+ * forget suppression have exactly one definition behind every entry point into recall.
  */
 
 /** Declared by migration 001 on `:Memory`; a node written without that label is invisible to it. */
@@ -34,7 +33,7 @@ const MEMORY_LABEL = 'Memory';
 export const ENTITY_NAME_PROPERTY = 'name';
 export const ENTITY_NAME_NORM_PROPERTY = 'name_norm';
 
-/** Written by P3's entity extraction. Absent through P2, which the similarity leg handles as a normal state. */
+/** Written by entity extraction. Absent when extraction has not produced it yet, which the similarity leg handles as a normal state. */
 export const ENTITY_NAME_VECTOR_PROPERTY = 'name_vec';
 
 /** Written by recall's own access-tracking side effects; absent on a substrate that has served no recall yet. */
@@ -51,8 +50,8 @@ export const STRUCTURAL_PROPERTY = 'is_structural';
 export const EXACT_NAME_MATCH_SCORE = 1;
 
 /**
- * Neo4j reports cosine similarity rescaled onto [0,1] as `(1 + cos) / 2` — both the vector
- * index and `vector.similarity.cosine` — so two unrelated memories come back at 0.5 rather
+ * Neo4j reports cosine similarity rescaled onto [0,1] as `(1 + cos) / 2` (both the vector
+ * index and `vector.similarity.cosine`), so two unrelated memories come back at 0.5 rather
  * than at 0. Every score this module returns is converted back to a true cosine, because the
  * thresholds it is measured against (`AION_VECTOR_ADMISSION_FLOOR`,
  * `AION_RECALL_ENTITY_MATCH_THRESHOLD`) are cosines: read raw, a floor of 0.5 would admit
@@ -67,7 +66,7 @@ function asCosine(scoreExpression: string): string {
 export type SeedCandidate = CurrencyAnnotation & {
   readonly id: string;
   readonly labels: readonly string[];
-  /** Whichever of `summary`, `text`, `name` the node carries — the same three the fulltext index covers. */
+  /** Whichever of `summary`, `text`, `name` the node carries: the same three the fulltext index covers. */
   readonly content: string;
   readonly occurredAt?: Date;
   /**
@@ -106,8 +105,8 @@ const LUCENE_SYNTAX = /([+\-!(){}[\]^"~*?:\\/&|])/g;
 /**
  * Syntax safety only. Each metacharacter is escaped so the parser hands the cue to the
  * index analyzer as literal text; no cue is tokenized, stemmed, or reduced to terms here.
- * Bare uppercase `AND`/`OR`/`NOT` stay operators — escaping their letters would not change
- * that — so a cue that trips the parser is caught by the caller and contributes nothing.
+ * Bare uppercase `AND`/`OR`/`NOT` stay operators (escaping their letters would not change
+ * that), so a cue that trips the parser is caught by the caller and contributes nothing.
  */
 export function escapeLuceneQuery(text: string): string {
   return text.trim().replace(LUCENE_SYNTAX, '\\$1');
@@ -275,12 +274,12 @@ export type EntitySimilaritySeedInput = {
 };
 
 /**
- * P3's entity extraction is what writes `name_vec`, so through P2 the `IS NOT NULL` predicate
- * matches nothing and the leg returns empty. That is the same state a cold-start substrate is
- * in (whitepaper §13.2), which is why it is shipped behaviour rather than a stub.
+ * Entity extraction is what writes `name_vec`, so before it has run the `IS NOT NULL`
+ * predicate matches nothing and the leg returns empty. That is the same state a cold-start
+ * substrate is in, which is why it is shipped behaviour rather than a stub.
  *
- * No index covers `name_vec` — `Entity` is not `:Memory`, and the vector indexes are declared
- * on that label — so this scans entities carrying one. The dimension guard is required:
+ * No index covers `name_vec` (`Entity` is not `:Memory`, and the vector indexes are declared
+ * on that label), so this scans entities carrying one. The dimension guard is required:
  * `vector.similarity.cosine` errors on mismatched lengths rather than returning null.
  */
 export async function entitySimilaritySeeds(
@@ -391,7 +390,7 @@ export type RecencySeedInput = {
  * Two-tier ordering rather than a coalesce: nodes that have actually been recalled outrank
  * nodes that are merely new. On a substrate that has served no recalls nothing carries
  * `last_accessed`, the first tier is empty, and the whole ordering degrades to `tx_from`
- * DESC. Ranking policy, not text machinery — both tiers answer "recently relevant".
+ * DESC. Ranking policy, not text machinery: both tiers answer "recently relevant".
  *
  * No index covers either ordering key, so this sorts a `:Memory` scan. Bounded by `LIMIT` and
  * by a single-user graph; it is the one seed strategy whose cost grows with total memory.

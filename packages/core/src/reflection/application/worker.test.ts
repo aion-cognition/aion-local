@@ -223,7 +223,7 @@ describe('enrichment lag', () => {
   });
 
   // `already_applied` and `episode_unavailable` are terminal but enriched nothing new; a
-  // sample here would understate the lag the p95 exists to catch (EX-10).
+  // sample here would understate the lag the p95 exists to catch.
   it('records nothing for a terminal run that enriched nothing', async () => {
     const runner = new StubRunner();
     runner.outcome = (episodeId): ReflectionRun => ({

@@ -32,10 +32,10 @@ import { LaneAssigner } from './lanes.js';
 import { attachContentVectors, findPendingVectorNodes } from './vectors.js';
 
 /**
- * PRD §10's promise, live: a reflection pushed through a total inference outage is stored
- * and queued, and its vectors arrive later. The outage is real — an Ollama pointed at the
- * discard port — not a stubbed rejection, because the guarantee is about what the write
- * path does when the network call actually fails.
+ * The episode commits before anything embeds, so a reflection pushed through a total
+ * inference outage is still stored and queued, with its vectors arriving later. The outage
+ * here is real: an Ollama pointed at the discard port, not a stubbed rejection, because the
+ * guarantee is about what the write path does when the network call actually fails.
  */
 const EMBED_DIMENSION = DEFAULTS.models.embedDimension;
 const DEAD_OLLAMA_URL = 'http://127.0.0.1:9';

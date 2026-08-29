@@ -342,10 +342,10 @@ describe('idempotency', () => {
 });
 
 /**
- * Vector proximity is held constant at 1.0 — the degenerate case the embedding model actually
- * produced for these inputs — so each of these asserts on the name-form leg alone.
+ * Vector proximity is held constant at 1.0 (the degenerate case the embedding model actually
+ * produces for these inputs) so each of these asserts on the name-form leg alone.
  */
-describe('what a vector alone can no longer merge', () => {
+describe('what a vector alone cannot merge', () => {
   const IDENTICAL = [1, 0];
 
   function seedPair(subject: string, candidate: string, type = 'tool'): void {

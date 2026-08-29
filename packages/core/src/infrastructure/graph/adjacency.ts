@@ -11,10 +11,10 @@ import {
 import type { Row } from './values.js';
 
 /**
- * One edge out of the activation frontier, carrying everything whitepaper §5.4 needs to
- * weight it: the relationship type, the two proportions SIMILAR and RELATED_TO scale by,
+ * One edge out of the activation frontier, carrying everything spreading activation needs
+ * to weight it: the relationship type, the two proportions SIMILAR and RELATED_TO scale by,
  * the neighbour's degree for hub inhibition, and the neighbour's currency annotation so a
- * superseded node arrives down-weightable rather than hidden (PRD §5.5).
+ * superseded node arrives down-weightable rather than hidden.
  */
 export type AdjacencyNeighbor = {
   /** The frontier node this edge was traversed from; activation propagates from its score. */
@@ -33,9 +33,10 @@ export type AdjacencyRequest = {
   /** The whole frontier batch: spreading activation fetches per iteration, never per node. */
   readonly frontier: readonly string[];
   /**
-   * Expanded in an *earlier* ring. Algorithm 2 propagates to any neighbour not yet in V, and a
-   * peer selected in this same batch is still in the frontier at that moment, so excluding the
-   * batch here would drop exactly the intra-ring edges multi-path accumulation is built on.
+   * Expanded in an *earlier* ring. Spreading activation propagates to any neighbour not yet
+   * visited, and a peer selected in this same batch is still in the frontier at that moment,
+   * so excluding the batch here would drop exactly the intra-ring edges multi-path
+   * accumulation is built on.
    */
   readonly visited: readonly string[];
   readonly mode: ReadMode;
@@ -46,7 +47,7 @@ const NEIGHBOUR_PREFIX = 'nb';
 
 /**
  * An edge written without the merge policy's proportions is traversed unweighted rather
- * than at zero, which would silently sever a path. Every writer in this build sets both.
+ * than at zero, which would silently sever a path. Every writer sets both.
  * A float literal, so a coalesced value has the same type as a stored proportion.
  */
 const ABSENT_PROPORTION = '1.0';
@@ -54,7 +55,7 @@ const ABSENT_PROPORTION = '1.0';
 /**
  * One round-trip per frontier batch. `UNWIND` fans the batch out so each frontier node
  * seeks the `AionNode.id` constraint index, and the relationship pattern is undirected
- * because activation spreads both ways along an edge — direction is the semantics of the
+ * because activation spreads both ways along an edge: direction is the semantics of the
  * relationship, not of the association it implies.
  *
  * Degree is counted per neighbour rather than joined in, since hub inhibition needs the

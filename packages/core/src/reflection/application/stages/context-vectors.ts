@@ -7,12 +7,11 @@ import { computeContextVectors } from '../../domain/context-vector.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
 
 /**
- * Whitepaper §6.11 / Algorithm 4 step 10, the pipeline's last stage: recompute `context_vec`
- * on every `:Memory` node this run's enrichment touched, from the current strength-weighted
- * neighborhood of each. Deliberately the only stage with a top-level `try`/`catch` around its
- * whole body — this operation is defined as eventually consistent, so a failure here leaves
- * affected nodes with stale context vectors for the next successful run rather than costing
- * the run its ledger mark.
+ * The pipeline's last stage: recompute `context_vec` on every `:Memory` node this run's
+ * enrichment touched, from the current strength-weighted neighborhood of each. Deliberately
+ * the only stage with a top-level `try`/`catch` around its whole body, because this operation
+ * is eventually consistent: a failure here leaves affected nodes with stale context vectors
+ * for the next successful run rather than costing the run its ledger mark.
  */
 export class ContextVectorStage implements ReflectionStage {
   readonly name = 'context-vectors';

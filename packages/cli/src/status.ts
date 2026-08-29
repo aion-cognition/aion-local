@@ -17,7 +17,7 @@ export type StatusSnapshot = {
   readonly neo4j: { readonly uri: string; readonly reachable: boolean; readonly detail: string };
   readonly ollama: { readonly url: string; readonly reachable: boolean; readonly models: readonly string[]; readonly detail?: string };
   readonly graph?: { readonly nodes: number; readonly relationships: number };
-  /** SQLite-only, so this is present whether or not Neo4j answered (EX-10). */
+  /** SQLite-only, so this is present whether or not Neo4j answered. */
   readonly queue: QueueLagSnapshot;
 };
 

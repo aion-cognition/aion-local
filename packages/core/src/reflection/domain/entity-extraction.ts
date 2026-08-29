@@ -3,15 +3,15 @@ import type { JsonSchema } from '../../infrastructure/providers/types.js';
 import { foldName } from '../../infrastructure/providers/unicode-fold.js';
 
 /**
- * Whitepaper §6.4: the model names entities and their types, and this module is everything
- * that happens to that answer before it reaches the graph — nothing here reads the episode
- * text. Names are folded to a canonical key and the list is deduplicated on `(name_norm,
- * type)`, which is the pair the graph's uniqueness constraint is declared on: two rows the
- * model returned separately would otherwise race each other into the same MERGE.
+ * The model names entities and their types, and this module is everything that happens to
+ * that answer before it reaches the graph. Nothing here reads the episode text. Names are
+ * folded to a canonical key and the list is deduplicated on `(name_norm, type)`, which is
+ * the pair the graph's uniqueness constraint is declared on: two rows the model returned
+ * separately would otherwise race each other into the same MERGE.
  */
 
 /**
- * §6.4's taxonomy, fixed because `type` is half of the identity key. A type the model
+ * A fixed taxonomy, because `type` is half of the identity key. A type the model
  * invents forks an identity the graph has no way to merge back together, so structured
  * output constrains the field and anything off-taxonomy still lands on a known type
  * rather than dropping an entity the episode really named.
@@ -99,9 +99,9 @@ function collapse(value: string): string {
 
 /**
  * A separator no normalized name can hold: `normalizeEntityName` collapses whitespace, so a
- * space cannot appear twice in a row and the two halves stay unambiguous. It used to be a
- * literal NUL byte, which works at runtime and makes git treat this whole file as binary,
- * so every diff of it renders as "Binary files differ" instead of the source.
+ * space cannot appear twice in a row and the two halves stay unambiguous. Not a literal NUL
+ * byte: that works at runtime but makes git treat this whole file as binary, so every diff
+ * of it renders as "Binary files differ" instead of the source.
  */
 const IDENTITY_SEPARATOR = '  ';
 

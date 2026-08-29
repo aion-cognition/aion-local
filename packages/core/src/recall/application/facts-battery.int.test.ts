@@ -32,15 +32,15 @@ import { OFF_TOPIC_BATTERY } from './floors.fixtures.js';
 import { handleRecall, type RecallDeps } from './recall.js';
 
 /**
- * EX-19's own scenario, end to end on real embeddings. The substrate holds the Decision that
- * answers "what did we decide about the remittance ingest transport and why", the Goal that
- * restated the question, and the entity glosses that took 58% of the exercise's fact slots.
- * The exercise served the Goal at facts rank 1 and the Decision in none of the five queries
- * that asked for the transport decision.
+ * The measured facts-bucket scenario, end to end on real embeddings. The substrate holds the
+ * Decision that answers "what did we decide about the remittance ingest transport and why",
+ * the Goal that restated the question, and the entity glosses that took 58% of the fact slots.
+ * The measured run served the Goal at facts rank 1 and the Decision in none of the five
+ * queries that asked for the transport decision.
  *
  * Claims that have to hold together, because thinning the bucket is only progress if the
  * answer survives it: the Decision reaches the top three, the restating Goal is served at no
- * rank, the glosses stay under their cap, and EX-1's off-topic battery still comes back empty.
+ * rank, the glosses stay under their cap, and the off-topic battery still comes back empty.
  *
  * Cue extraction is stubbed to the cue set the pinned model returns for this query, recorded
  * from three identical live runs, so the measurement is the facts rules rather than the
@@ -51,7 +51,8 @@ import { handleRecall, type RecallDeps } from './recall.js';
  * and a restating Goal takes one of those five on every cue. Excluding it from the bucket
  * frees a pack slot, never a retrieval slot. On a first pass this fixture carried a second
  * query-shaped Goal and the Decision sat sixth on all four cues, so no bucket rule could
- * reach it. Reserving retrieval slots is EX-20's finding, not this one's.
+ * reach it. Reserving retrieval slots is a separate problem, the one `cues.ts`'s
+ * `SUMMARY_CUE_WEIGHT` measures.
  */
 
 const OLLAMA_URL = process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434';
@@ -218,7 +219,7 @@ afterAll(async () => {
   rmSync(dataDir, { recursive: true, force: true });
 });
 
-describe("EX-19's decision query", () => {
+describe('the decision query', () => {
   it('puts the Decision in the top three of the facts bucket', async () => {
     const pack = await decisionProbe();
     const facts = pack.facts ?? [];
@@ -260,8 +261,8 @@ describe("EX-19's decision query", () => {
     for (const item of allItems(pack)) {
       expect(pack.rendered_text).toContain(`confidence ${item.confidence.toFixed(2)}`);
     }
-    // Within a bucket the rank is monotonic by construction, which is the ordering defect
-    // EX-30 measured on 27% of adjacent pairs.
+    // Within a bucket the rank is monotonic by construction. The ordering defect this guards
+    // against measured 27% of adjacent pairs out of order.
     for (const bucket of [pack.facts ?? [], pack.episodes ?? []]) {
       const bucketRanks = bucket.map((item) => item.rank);
       expect(bucketRanks).toEqual([...bucketRanks].sort((left, right) => left - right));

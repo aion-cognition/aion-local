@@ -1,6 +1,6 @@
 /**
- * Whitepaper §6.6: the pure half of association inference. No graph, no SQLite — just the
- * combinatorics and the idempotency key an episode's entity list reduces to. The Cypher lives
+ * The pure half of association inference. No graph, no SQLite: just the combinatorics and
+ * the idempotency key an episode's entity list reduces to. The Cypher lives
  * in `infrastructure/graph/association-queries.ts`; the SQLite gate lives in the stage that
  * calls this.
  */

@@ -1,5 +1,5 @@
 /**
- * Whitepaper Appendix C, plus `SUPERSEDES` — this build's bitemporal extension (PRD §5.5).
+ * Relationship type catalog, including `SUPERSEDES` for the bitemporal extension.
  * A relationship type cannot be a Cypher parameter, so it is interpolated into the query
  * text; every write path validates against this catalog first, which is what keeps the
  * interpolation injection-free.
@@ -10,8 +10,8 @@ export const UNDIRECTED_RELATIONSHIP_TYPES = [
   'CO_OCCURS',
   'RELATED_TO',
   'ANALOGOUS_TO',
-  // Undirected because tension is mutual: whitepaper §6.8 reads it as "two entities or
-  // claims are in tension", which is the same claim whichever end it is written from.
+  // Undirected because tension is mutual: two entities or claims in tension state the
+  // same claim whichever end it is written from.
   'CONTRADICTS',
 ] as const;
 

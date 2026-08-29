@@ -239,7 +239,7 @@ describe('SemanticRelationshipStage', () => {
     expect(outcome.counts).toEqual({ relationships: 0 });
   });
 
-  it('writes the two types whitepaper §6.8 names that the catalog had no path for', async () => {
+  it('writes the two relationship types the catalog had no path for', async () => {
     seedEntity('entity-1', 'Ryan', 'person');
     seedEntity('entity-2', 'Aion', 'project');
     const generate = async (): Promise<unknown> => ({

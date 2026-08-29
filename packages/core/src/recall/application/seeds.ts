@@ -18,8 +18,8 @@ import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Vector } from '../../infrastructure/providers/types.js';
 
 /**
- * Whitepaper §5.2: four strategies run together, their candidates merge, and each surviving
- * seed keeps every strategy that found it. The strategies themselves are Cypher and live in
+ * Four strategies run together, their candidates merge, and each surviving seed keeps every
+ * strategy that found it. The strategies themselves are Cypher and live in
  * `graph/seed-queries.ts`; this file is scoring, merging, and the order they run in.
  */
 
@@ -33,7 +33,7 @@ export const SEED_STRATEGIES = [
 
 export type SeedStrategy = (typeof SEED_STRATEGIES)[number];
 
-/** Whitepaper Algorithm 1's top bucket. Every cue-driven score is expressed as a fraction of it. */
+/** The heaviest cue bucket. Every cue-driven score is expressed as a fraction of it. */
 const MAX_CUE_WEIGHT = 3;
 
 export type SeedCue = {
@@ -42,20 +42,20 @@ export type SeedCue = {
   readonly weight: CueWeight;
   /**
    * Embedded by the caller, never here: recall's generation budget is spent once on cue
-   * extraction (PRD §10), and the embedding pass belongs with it. A cue that arrives without
-   * a vector still drives BM25 and exact entity resolution.
+   * extraction, and the embedding pass belongs with it. A cue that arrives without a vector
+   * still drives BM25 and exact entity resolution.
    */
   readonly vector?: Vector;
 };
 
 /**
- * Two numbers, because Algorithm 1's bucket weights and the admission floor answer different
+ * Two numbers, because the cue bucket weights and the admission floor answer different
  * questions. `score` is the ranking number: the method's score scaled by the weight of the cue
  * that found it, which is how a query cue outranks a recent-turn cue. `relevance` is the
  * method's own measurement on its own comparable scale, which is what
  * `AION_VECTOR_ADMISSION_FLOOR` is measured against.
  *
- * Composing the two — measuring a weighted score against an absolute floor — deletes whole
+ * Composing the two, measuring a weighted score against an absolute floor, deletes whole
  * buckets: at a floor of 0.5 no 1x recent-turn cue could ever contribute an item, however
  * perfect its match, because 1.0 scaled to a third of itself is 0.333.
  */
@@ -123,8 +123,8 @@ export function scaleByCueWeight(score: number, weight: CueWeight): number {
 }
 
 /**
- * A Lucene score has no fixed range — it moves with the corpus and the query — so a raw BM25
- * number is not comparable with a cosine similarity in the merge. Dividing by the best hit for
+ * A Lucene score has no fixed range, since it moves with the corpus and the query, so a raw
+ * BM25 number is not comparable with a cosine similarity in the merge. Dividing by the best hit for
  * the same cue puts the leg on (0, 1] and leaves its internal ranking untouched. Vector and
  * entity scores are left alone; those are already cosine similarities.
  */
@@ -148,10 +148,10 @@ export function normalizeToBest(
  * strong content hit and the tail falls away fast, rather than a flat recency list crowding
  * out everything the cues found.
  *
- * A rank, never a relevance. Whitepaper §5.2 calls recency a weighting of the seed selection,
- * and "this was touched recently" is not a measurement of how well a node answers the query,
- * so a recency contribution carries `relevance: 0` (`RECENCY_RELEVANCE`). It seeds the spread,
- * and that is all: admission never counts it, as evidence or as corroboration.
+ * A rank, never a relevance. Recency weights the seed selection, and "this was touched
+ * recently" is not a measurement of how well a node answers the query, so a recency
+ * contribution carries `relevance: 0` (`RECENCY_RELEVANCE`). It seeds the spread, and that is
+ * all: admission never counts it, as evidence or as corroboration.
  */
 export function recencyScore(rank: number): number {
   return 1 / (1 + rank);
@@ -279,8 +279,8 @@ type SettledLeg = {
 
 /**
  * A query that fails contributes nothing rather than failing recall; degradation is less
- * evidence. Only a rejection is logged — a leg that legitimately finds nothing, which is
- * every entity-similarity call until entity name embeddings exist, is silent.
+ * evidence. Only a rejection is logged: a leg that legitimately finds nothing, which is every
+ * entity-similarity call until entity name embeddings exist, is silent.
  *
  * The counts are what keeps the isolation from lying: one rejected query is a leg down,
  * every rejected query is the graph down, and only the caller sees both numbers.
@@ -372,9 +372,9 @@ async function bm25Contributions(
  *
  * The fuzzy leg is a per-cue KNN like the vector leg, so it takes the same per-cue cap
  * (`recall.vectorLimit`) and its own threshold (`recall.entityMatchThreshold`). Neither is
- * `contextResonance.*`: that group is Algorithm 3's, and one knob cannot mean both "how close
- * two names have to be to be the same entity" and "how close two context vectors have to be
- * to resonate" without silently retuning one while tuning the other.
+ * `contextResonance.*`: that group belongs to context resonance, and one knob cannot mean both
+ * "how close two names have to be to be the same entity" and "how close two context vectors
+ * have to be to resonate" without silently retuning one while tuning the other.
  */
 async function entityContributions(
   deps: SelectSeedsDeps,
@@ -447,8 +447,8 @@ function emptyByStrategy(): Record<SeedStrategy, readonly Seed[]> {
 
 /**
  * All four strategies run together; each one's failure is isolated to itself. The top-k cut is
- * `contextResonance.seedLimit`, which is the whitepaper's seed budget and the only place the
- * candidate set is narrowed.
+ * `contextResonance.seedLimit`, the seed budget and the only place the candidate set is
+ * narrowed.
  *
  * Isolation is per leg, so the all-legs-failed case is counted rather than inferred from an
  * empty result: the recency leg always issues one query, which makes "nothing was attempted"

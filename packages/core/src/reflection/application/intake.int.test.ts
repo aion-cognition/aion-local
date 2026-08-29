@@ -284,8 +284,8 @@ describe('reflection intake under failure and concurrency', () => {
 
     // The lock, the dedupe read, the Episode node, its containment edge, and the first
     // Turn go through; the sixth statement throws. Nothing embedded can force this any
-    // more — the embed call now happens after the commit — so the failure is injected at
-    // the statement the transaction is on when it lands.
+    // more, since the embed call now happens after the commit, so the failure is injected
+    // at the statement the transaction is on when it lands.
     const severed = { ...deps, driver: driverFailingAfter(harness.driver, 5) };
 
     await expect(handleReflection(severed, PAYLOAD, { identity })).rejects.toThrow(/severed/);

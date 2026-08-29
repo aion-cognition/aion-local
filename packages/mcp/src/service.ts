@@ -25,15 +25,14 @@ import {
 import { callTool, TOOL_DEFINITIONS, type ToolBackend } from './tools.js';
 
 /**
- * PRD §3.3, §4: one long-lived streamable-HTTP service multiplexing every connected agent
- * session. Each client gets its own transport, its own MCP `Server`, and its own transport
- * session id; that id is the identity `SessionManager` keys a Session node on, which is
- * what lets many concurrent sessions share one process and one substrate without sharing a
- * memory session.
+ * One long-lived streamable-HTTP service multiplexing every connected agent session. Each
+ * client gets its own transport, its own MCP `Server`, and its own transport session id;
+ * that id is the identity `SessionManager` keys a Session node on, which is what lets many
+ * concurrent sessions share one process and one substrate without sharing a memory session.
  *
  * The MCP `Server` is per-connection because `Protocol.connect` takes ownership of the
- * transport it is given. Everything expensive — the driver, the SQLite handle, the session
- * cache, the cue cache — lives in `ToolBackend` and is shared across all of them.
+ * transport it is given. Everything expensive (the driver, the SQLite handle, the session
+ * cache, the cue cache) lives in `ToolBackend` and is shared across all of them.
  */
 
 const SERVER_INFO = { name: 'aion', version: '0.0.0' } as const;
@@ -49,7 +48,7 @@ const MAX_SESSIONS = 512;
 
 /**
  * How long shutdown waits for tool calls already running. Compose's default `stop_grace_period`
- * is 10s before SIGKILL, and the rest of shutdown — closing sessions, the driver, SQLite — has
+ * is 10s before SIGKILL, and the rest of shutdown (closing sessions, the driver, SQLite) has
  * to fit in what is left, so this is deliberately shorter than a recall's own worst case. A
  * call still running at the deadline loses its socket, which is the old behaviour for every
  * call; the drain is what keeps the ordinary one from meeting it.
@@ -71,19 +70,20 @@ export type AionMcpServiceOptions = {
   /** Overridable for tests, which cannot afford to wait out the real deadline. */
   readonly drainTimeoutMs?: number;
   /**
-   * The session-close boundary (whitepaper §6.10): the transport ended, so the session's
-   * experience is complete and its narrative can be compressed. The id handed over is the
-   * transport session id, which is the Session node's id. Best-effort and fire-and-forget —
-   * a hook that throws or rejects never affects teardown, and a client that vanishes without
-   * a DELETE never reaches it at all, which is what the idle sweep exists for.
+   * The session-close boundary: the transport ended, so the session's experience is complete
+   * and its narrative can be compressed. The id handed over is the transport session id,
+   * which is the Session node's id. Best-effort and fire-and-forget: a hook that throws or
+   * rejects never affects teardown, and a client that vanishes without a DELETE never
+   * reaches it at all, which is what the idle sweep exists for.
    */
   readonly onSessionClosed?: (sessionId: string) => void;
   /**
-   * EX-10: `/health` reported only `{status, sessions, descriptions_version}` while 4,000+
-   * jobs sat pending. `queueLagSnapshot` (`@aion/core`) is SQLite-only — no Neo4j, no Ollama
-   * — so calling it on every liveness probe stays cheap; the check the doctor.ts comment
-   * documents (never touching the graph or the model) is unchanged. Absent, the fields it
-   * would fill are simply omitted, which is what every construction that predates it gets.
+   * `/health` used to report only `{status, sessions, descriptions_version}` while 4,000+
+   * jobs sat pending. `queueLagSnapshot` (`@aion/core`) is SQLite-only, no Neo4j and no
+   * Ollama, so calling it on every liveness probe stays cheap; the check the doctor.ts
+   * comment documents (never touching the graph or the model) is unchanged. Absent, the
+   * fields it would fill are simply omitted, which is what every construction that
+   * predates it gets.
    */
   readonly queueLag?: () => QueueLagSnapshot;
 };
@@ -152,7 +152,7 @@ export class AionMcpService {
 
   /**
    * Resolves once every tool call running at the moment shutdown began has settled, or once
-   * the deadline passes — whichever comes first. Calls that arrive while draining are refused
+   * the deadline passes, whichever comes first. Calls that arrive while draining are refused
    * rather than admitted, so the set cannot keep refilling.
    */
   async #drain(): Promise<void> {
@@ -220,9 +220,9 @@ export class AionMcpService {
   }
 
   /**
-   * Flat, snake_case keys alongside `/health`'s existing ones (PRD wire convention). Depth
-   * is per lane rather than a bare total, since a starved interactive lane behind a bulk
-   * flood and an evenly-loaded queue report the same total but need opposite responses.
+   * Flat, snake_case keys alongside `/health`'s existing ones. Depth is per lane rather
+   * than a bare total, since a starved interactive lane behind a bulk flood and an
+   * evenly-loaded queue report the same total but need opposite responses.
    */
   #queueLagFields(): Record<string, unknown> {
     if (this.#queueLag === undefined) {
@@ -357,7 +357,7 @@ export class AionMcpService {
   }
 
   /**
-   * EX-32's backstop: a session past `idleMs` since its last request closes the way a DELETE
+   * The backstop: a session past `idleMs` since its last request closes the way a DELETE
    * would (`session.server.close()` runs the same transport-close chain `#forget` reaches
    * from), independent of whether the client ever sends one. `SessionIdleSweeper` is what
    * puts this on a clock; this method only decides which sessions qualify at the given

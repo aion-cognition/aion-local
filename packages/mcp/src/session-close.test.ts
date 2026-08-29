@@ -11,9 +11,9 @@ import { AionMcpService } from './service.js';
 import type { ToolBackend } from './tools.js';
 
 /**
- * The session-close boundary whitepaper §6.10 narrates on. What matters here is that the
- * hook fires exactly once per closed transport, carries the identity the Session node is
- * keyed on, and cannot take the service down with it.
+ * The session-close boundary. What matters here is that the hook fires exactly once per
+ * closed transport, carries the identity the Session node is keyed on, and cannot take the
+ * service down with it.
  */
 
 const CAPS: BucketCaps = { facts: 15, episodes: 5, narratives: 5, preferences: 3, resonant: 5 };

@@ -21,35 +21,35 @@ import { nameFormMatches } from '../../domain/entity-identity.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
 
 /**
- * Whitepaper §6.5: after extraction, an entity is checked against the rest of the graph for a
- * near-duplicate identity — a name typed differently, a nickname, a casing extraction missed —
- * and duplicates collapse into one canonical node. Grouping and canonical selection are pure
+ * After extraction, an entity is checked against the rest of the graph for a near-duplicate
+ * identity (a name typed differently, a nickname, a casing extraction missed) and duplicates
+ * collapse into one canonical node. Grouping and canonical selection are pure
  * (`reflection/domain/entity-merge.ts`); this stage does the graph reads that feed them and
  * the writes their decision requires.
  *
- * Scope is this episode's mentioned entities against the whole graph, matching §6.5's "newly
- * created entities are checked against existing graph residents" — not a full graph sweep,
- * which the maintenance operation catalog (P5) owns instead.
+ * Scope is this episode's mentioned entities against the whole graph: newly created entities
+ * are checked against existing graph residents, not a full graph sweep, which maintenance
+ * operations own instead.
  *
  * A merge needs two independent pieces of evidence, vector proximity and name form
- * (`reflection/domain/entity-identity.ts`), because either alone was measurably wrong: prose
- * similarity merged `gitlab-token` into `github-token`, and one constant embedding for whole
- * classes of out-of-vocabulary text collapsed eight distinct emoji entities into one.
+ * (`reflection/domain/entity-identity.ts`), because either alone is measurably wrong: prose
+ * similarity merges `gitlab-token` into `github-token`, and one constant embedding for whole
+ * classes of out-of-vocabulary text collapses eight distinct emoji entities into one.
  */
 
 export const ENTITY_DEDUP_STAGE_NAME = 'entity-dedup';
 
-/** §6.5's pinned default. The Integration task threads a configured value into this field. */
+/** The default threshold. Callers thread a configured value into this field. */
 export const DEFAULT_ENTITY_DEDUP_SIMILARITY_THRESHOLD = 0.85;
 
 /**
  * Enough to catch a genuine near-duplicate without turning one entity into a graph-wide scan.
- * Wider than the same-type search it replaced: the candidates now span every type, and one
- * real thing has been seen wearing four of them at once.
+ * The candidates span every type, because one real thing has been seen wearing four of them
+ * at once.
  */
 const CANDIDATE_SEARCH_LIMIT = 8;
 
-/** Appendix C provenance for the merge edge `supersede` writes and the aliasing signal. */
+/** Provenance for the merge edge `supersede` writes and the aliasing signal. */
 export const ENTITY_DEDUP_METHOD = 'reflection_entity_dedup';
 
 export type EntityDedupStageOptions = {
@@ -199,7 +199,7 @@ export class EntityDedupStage implements ReflectionStage {
   /**
    * A cross-type near-duplicate is never merged. Uniqueness is on `(name_norm, type)`, so the
    * two nodes are separate identities and joining them means deciding which type the extraction
-   * got wrong — a judgment about the world, not about strings. The pair lands as a proposal a
+   * got wrong, a judgment about the world, not about strings. The pair lands as a proposal a
    * person resolves; nothing in the pipeline reads it back.
    */
   #recordCrossTypeProposals(
@@ -227,16 +227,16 @@ export class EntityDedupStage implements ReflectionStage {
   }
 
   /**
-   * §6.5's atomic merge: redirect, absorb and close all commit together in
-   * `redirectAndAbsorb`, so the group is never observable half-merged. Vector cleanup is the
-   * one part deliberately outside it — §6.5 puts index cleanup post-commit with best-effort
-   * semantics — and it never fails the stage. The ledger is written only once every graph
-   * write above has committed.
+   * An atomic merge: redirect, absorb and close all commit together in `redirectAndAbsorb`,
+   * so the group is never observable half-merged. Vector cleanup is the one part deliberately
+   * outside it, since index cleanup runs post-commit with best-effort semantics, and it never
+   * fails the stage. The ledger is written only once every graph write above has committed.
    *
    * `mergedRecords` is what makes the merge reversible: the absorbed node's own identity, and
    * (built inside the transaction) the edges it carried, land on the canonical. The unmerge
-   * operation is P5 maintenance and the data has to be written now, because a redirected edge
-   * that collides with one the canonical already held sums into it and stops being separable.
+   * operation runs later as maintenance and the data has to be written now, because a
+   * redirected edge that collides with one the canonical already held sums into it and stops
+   * being separable.
    */
   async #mergeGroup(
     ctx: StageContext,

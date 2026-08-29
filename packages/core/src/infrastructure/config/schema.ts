@@ -2,8 +2,8 @@ import { z } from 'zod';
 import { LOG_LEVELS } from '../logging/logger.js';
 
 /**
- * Range constraints below come from PRD §14 and whitepaper Appendix E where a value
- * is pinned; the rest (int/positive/0-1) are defensive shape checks, not tuned limits.
+ * Range constraints below match a specific pinned value where one exists; the rest
+ * (int/positive/0-1) are defensive shape checks, not tuned limits.
  */
 const proportion = z.number().min(0).max(1);
 const positiveInt = z.number().int().positive();
@@ -44,35 +44,35 @@ export const ConfigSchema = z.object({
     cueBudgetMs: positiveInt,
     tokenBudget: positiveInt,
     /**
-     * Absolute cosine floors, calibrated against the embedding model's measured noise rather
-     * than pinned by either doc: `floor-calibration.int.test.ts` measures both distributions
-     * and fails when the committed value stops separating them. `vectorAdmissionFloor` admits
-     * one measurement alone; `corroborationFloor` is the lower bar a measurement has to clear
-     * to count as one of the two an item can be corroborated in on.
+     * Absolute cosine floors, measured against the embedding model's noise rather than pinned
+     * defaults. `floor-calibration.int.test.ts` measures both distributions and fails when the
+     * committed value stops separating them. `vectorAdmissionFloor` admits one measurement
+     * alone; `corroborationFloor` is the lower bar a measurement has to clear to count as one
+     * of the two an item can be corroborated in on.
      */
     vectorAdmissionFloor: proportion,
     corroborationFloor: proportion,
     /** A Lucene score is corpus-relative, so the lexical leg admits by rule, not by number. */
     bm25AdmissionMode: z.enum(['exact', 'corroborated', 'any']),
     /**
-     * Not an Appendix E parameter. Entity resolution's fuzzy leg needs a name-similarity floor
-     * of its own; borrowing `contextResonance.contextSearchThreshold` would make one env var
-     * mean two unrelated things once Algorithm 3 lands.
+     * Entity resolution's fuzzy leg needs a name-similarity floor of its own; borrowing
+     * `contextResonance.contextSearchThreshold` would make one env var mean two unrelated
+     * things once the fuzzy matcher lands.
      */
     entityMatchThreshold: proportion,
     /**
-     * A near-duplicate cluster's cap on how many of its members one bucket may hold (EX-22:
-     * a burst of near-identical episodes took 29.5% of a pack's slots). Not an Appendix E
-     * parameter; the plan pins the default at 2 and the env var name at `AION_PACK_CLUSTER_CAP`.
+     * A near-duplicate cluster's cap on how many of its members one bucket may hold: a
+     * measured burst of near-identical episodes took 29.5% of a pack's slots. The env var
+     * is `AION_PACK_CLUSTER_CAP`.
      */
     clusterCap: positiveInt,
     /**
-     * The facts bucket's own three rules (EX-19: Entity glosses took 58% of fact slots and
-     * Decision nodes 3% on a decision-oriented workload). `entityGlossCap` bounds the glosses;
-     * `restatementFloor` is the cosine at or above which a Goal or Plan is judged to be the
-     * query said back rather than answered, measured in `facts-calibration.int.test.ts`;
+     * The facts bucket's own three rules. A measured decision-oriented workload showed entity
+     * glosses taking 58% of fact slots and Decision nodes 3%. `entityGlossCap` bounds the
+     * glosses; `restatementFloor` is the cosine at or above which a Goal or Plan is judged to
+     * be the query said back rather than answered, measured in `facts-calibration.int.test.ts`;
      * `decisionBoost` multiplies the fused score of Decision and Insight when the cue model
-     * judged the query decision-shaped. None of the three is an Appendix E parameter.
+     * judged the query decision-shaped.
      */
     entityGlossCap: positiveInt,
     restatementFloor: proportion,
@@ -171,7 +171,7 @@ export const ConfigSchema = z.object({
   }),
   sqlite: z.object({
     path: z.string().min(1),
-    /** Rows past this are dropped oldest-first at enqueue; the table has no consumer until P4. */
+    /** Rows past this are dropped oldest-first at enqueue; the table has no consumer yet. */
     reinforcementQueueCap: positiveInt,
   }),
   operational: z.object({
@@ -188,13 +188,13 @@ export const ConfigSchema = z.object({
     workerVectorBatchSize: positiveInt,
     /** Unenriched episodes `aion doctor` reports as a warning rather than a count. */
     reconcileWarnThreshold: nonNegativeInt,
-    /** `aion doctor`'s `queue-lag` check warns past this age (EX-10: no gauge existed at all). */
+    /** `aion doctor`'s `queue-lag` check warns past this age; no gauge existed before this. */
     lagOldestUnclaimedWarnMs: positiveInt,
     /** `aion doctor`'s `queue-lag` check warns past this total unclaimed depth. */
     lagQueueDepthWarnThreshold: nonNegativeInt,
     /**
-     * EX-32: a client's `close()` tears down its transport locally without a DELETE, so the
-     * server-side session-close hook is best-effort. This is the backstop — an MCP transport
+     * A client's `close()` tears down its transport locally without a DELETE, so the
+     * server-side session-close hook is best-effort. This is the backstop: an MCP transport
      * session with no request in this many minutes closes on its own, independent of DELETE.
      */
     sessionIdleExpiryMinutes: positiveInt,

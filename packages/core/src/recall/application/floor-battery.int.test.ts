@@ -29,14 +29,13 @@ import { BATTERY_SUBSTRATE, OFF_TOPIC_BATTERY, ON_TOPIC_BATTERY } from './floors
 import { handleRecall, type RecallDeps } from './recall.js';
 
 /**
- * The paired gate, end to end on real embeddings: the floor has to starve EX-1's off-topic
- * battery without starving the exercise's own on-topic hits. Half of it alone proves nothing —
- * a floor at 1.0 passes the first half and fails everything a user would ask.
+ * The paired gate, end to end on real embeddings: the floor has to starve the off-topic
+ * battery without starving the on-topic hits. Half of it alone proves nothing, since a floor
+ * at 1.0 passes the first half and fails everything a user would ask.
  *
  * Embeddings are the live model, because the floor is calibrated against that model and a
  * fixture vector would test arithmetic instead. Cue extraction is stubbed to the raw query so
- * the measurement is the floor rather than the cue model's judgment on the day; the harness
- * that runs this battery against the live stack exercises the model path.
+ * the measurement is the floor rather than the cue model's judgment on the day.
  */
 
 const OLLAMA_URL = process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434';
@@ -79,7 +78,7 @@ type PackShape = {
 
 /**
  * How many of the on-topic probes have to come back ranked first. Rank is RRF's job rather
- * than the floor's — the floor decides what may compete at all — so the per-probe assertion
+ * than the floor's, which decides only what may compete at all, so the per-probe assertion
  * is that the answer is in the pack, and this is the aggregate that catches a floor which
  * kept the answer but buried it.
  */
@@ -206,7 +205,7 @@ afterAll(async () => {
   rmSync(dataDir, { recursive: true, force: true });
 });
 
-describe('the off-topic battery EX-1 filled to budget', () => {
+describe('the off-topic battery that used to fill a pack to budget', () => {
   it.each(OFF_TOPIC_BATTERY)('returns a thin or empty pack for: %s', async (query) => {
     const shape = await probe(query);
     console.log(`off-topic "${query}": ${String(shape.items)} items`);

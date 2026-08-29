@@ -5,18 +5,18 @@ import type { Measurement } from './admission.js';
  * What may sit in the facts bucket, and in what order. The admission gate decides whether a
  * candidate is a memory at all; this decides whether it is an *answer*.
  *
- * EX-19 measured the gap: over 168 fact slots on an entirely decision-oriented workload,
- * Entity glosses took 58% and Decision nodes took 3%, and the item that ranked first for
- * "what did we decide about the remittance ingest transport" was a Goal restating the
- * question. Three rules, each measured rather than asserted:
+ * The gap is measured: over 168 fact slots on an entirely decision-oriented workload, Entity
+ * glosses took 58% and Decision nodes took 3%, and the item that ranked first for "what did
+ * we decide about the remittance ingest transport" was a Goal restating the question. Three
+ * rules, each measured rather than asserted:
  *
  *  - a Goal or Plan whose text is the query said back is not an answer (`queryRestatements`);
  *  - a decision-shaped query wants Decision and Insight over everything else (`labelBoosts`);
  *  - one pack may hold only so many entity glosses (`pack.ts`'s gloss cap).
  *
  * Nothing here reads words. A restatement is judged by the cosine between the node's content
- * vector and the query's own cue — a measurement the vector leg already made — and the
- * intent behind the boost is the cue model's judgment, carried on the cue itself.
+ * vector and the query's own cue, a measurement the vector leg already made, and the intent
+ * behind the boost is the cue model's judgment, carried on the cue itself.
  */
 
 /**
@@ -31,8 +31,8 @@ export const DECISION_INTENT_LABELS: readonly string[] = ['Decision', 'Insight']
 
 /**
  * The label whose content is a gloss: a name and a one-line description, 60 to 130 characters,
- * lexically dense and cheap against the token budget, which is how EX-19's entity glosses won
- * both the lexical score and the budget-fit check at once.
+ * lexically dense and cheap against the token budget, which is how entity glosses win both
+ * the lexical score and the budget-fit check at once.
  */
 export const GLOSS_LABEL = 'Entity';
 
@@ -110,9 +110,9 @@ export function hasDecisionIntent(cues: readonly Cue[]): boolean {
  * The thumb on the scale for a decision-shaped query, empty for every other query. RRF sums
  * are rank statistics clustered near `1/k`, so a multiplier translates directly into ranks:
  * at the shipped `rrfConstant` of 60 a factor of 1.25 lifts an item about fifteen places,
- * which is the facts cap. That is the size of the effect the boost is for — a Decision any
- * leg ranked reaches the bucket — and it is deliberately not larger, since an item no leg
- * ranked should not displace the top hit however well its label fits the question.
+ * which is the facts cap. That is the size of the effect the boost is for (a Decision any leg
+ * ranked reaches the bucket) and it is deliberately not larger, since an item no leg ranked
+ * should not displace the top hit however well its label fits the question.
  */
 export function labelBoosts(
   cues: readonly Cue[],

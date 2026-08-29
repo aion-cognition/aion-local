@@ -1,6 +1,6 @@
 /**
- * The evidence behind `recall.restatementFloor` and behind EX-19's own scenario, as fixtures
- * rather than as lore, in the shape `floors.fixtures.ts` established.
+ * The evidence behind `recall.restatementFloor`, as fixtures rather than as lore, in the shape
+ * `floors.fixtures.ts` established.
  *
  * Two distributions decide the floor, and both are Goal and Plan text scored against the query
  * that would retrieve it. The one that has to be caught is a node whose text is the question
@@ -9,8 +9,7 @@
  *
  * `facts-calibration.int.test.ts` embeds both against live Ollama and asserts the committed
  * floor still separates them. `facts-battery.int.test.ts` runs `DECISION_PROBE` through the
- * whole pipeline against `DECISION_SUBSTRATE`. Both are exported for the round's re-exercise
- * harness.
+ * whole pipeline against `DECISION_SUBSTRATE`.
  */
 
 export type FactsPair = {
@@ -21,9 +20,9 @@ export type FactsPair = {
 };
 
 /**
- * Goals and Plans that restate the query and carry no answer — EX-19's own shape, where facts
- * rank 1 for "what did we decide about the remittance ingest transport and why" was the Goal
- * "Select an appropriate transport mechanism for remittance ingest."
+ * Goals and Plans that restate the query and carry no answer. The measured shape: facts rank 1
+ * for "what did we decide about the remittance ingest transport and why" was the Goal "Select
+ * an appropriate transport mechanism for remittance ingest."
  */
 export const RESTATING_GOALS: readonly FactsPair[] = [
   {
@@ -59,8 +58,8 @@ export const RESTATING_GOALS: readonly FactsPair[] = [
 
 /**
  * Goals and Plans that answer the query: they name a target, a number, a state, or a date.
- * These are what the floor is not allowed to swallow, and the exercise judged their extraction
- * faithful ("Get the Halyard ledger onto the new PostgreSQL primary", status completed).
+ * These are what the floor is not allowed to swallow, and their extraction was judged faithful
+ * ("Get the Halyard ledger onto the new PostgreSQL primary", status completed).
  */
 export const ANSWERING_GOALS: readonly FactsPair[] = [
   {
@@ -105,11 +104,11 @@ export type SubstrateNode = {
 };
 
 /**
- * EX-19's measured pack, rebuilt as a substrate: the Decision that answers the question, the
- * query-shaped Goals that outranked it, and the entity glosses that took 58% of the exercise's
- * fact slots. The Decision and the leading Goal are quoted verbatim from the report; the rest
- * is what an extraction of that episode mints. The exercise served the Goal at facts rank 1 and
- * the Decision in none of the five queries that asked for the transport decision.
+ * A measured pack, rebuilt as a substrate: the Decision that answers the question, the
+ * query-shaped Goals that outranked it, and the entity glosses that took 58% of the fact
+ * slots. The Decision and the leading Goal are quoted verbatim; the rest is what an extraction
+ * of that episode mints. The measured run served the Goal at facts rank 1 and the Decision in
+ * none of the five queries that asked for the transport decision.
  */
 export const DECISION_SUBSTRATE: readonly SubstrateNode[] = [
   {
@@ -161,7 +160,7 @@ export const DECISION_SUBSTRATE: readonly SubstrateNode[] = [
 ];
 
 /**
- * EX-19's own query, and the cue set the pinned cue model returns for it, recorded from three
+ * The measured query, and the cue set the pinned cue model returns for it, recorded from three
  * identical live runs. Recorded rather than invented so the battery measures the facts rules
  * against the cues the pipeline actually produces, and recorded rather than called live so a
  * ranking assertion does not move with the model's mood.

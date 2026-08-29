@@ -8,9 +8,7 @@ import {
 } from './reflection-queue.js';
 
 /**
- * The operator's view of `reflection_queue`. The live incident was triaged with hand-written
- * SQL inside the container because nothing here existed; every statement below is one of the
- * ones that had to be typed by hand that night.
+ * The operator's view of `reflection_queue`.
  *
  * Reads are unrestricted. Writes only ever touch unclaimed rows: a claimed row belongs to a
  * worker that is running it right now, and deleting it under that worker would strand the
@@ -118,8 +116,8 @@ export function countQueueJobsByLane(db: SqliteHandle): Map<ReflectionLane, numb
 /**
  * Drops matching unclaimed rows and answers how many went. The episodes stay in the graph,
  * stored and vectored: what is dropped is the intent to enrich them, which `reconcile`
- * counts and can hand back. Dropping everything with no filter is allowed — a flood is
- * sometimes the whole queue — so the caller is the one that must confirm the count first.
+ * counts and can hand back. Dropping everything with no filter is allowed, since a flood
+ * is sometimes the whole queue, so the caller is the one that must confirm the count first.
  */
 export function dropUnclaimedJobs(db: SqliteHandle, filter: ReflectionQueueFilter = {}): number {
   const where = conditions(filter, ['claimed_at IS NULL']);

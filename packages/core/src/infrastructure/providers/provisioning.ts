@@ -211,10 +211,10 @@ async function verifyChatModel(
 }
 
 /**
- * Init-time provisioning (PRD §11 step 2): reachability, then pull the three
- * configured models (deduped — cue and reflect may name the same model) via
- * `/api/pull`, then one round-trip verification per model. Throws the first named
- * error encountered; the CLI surfaces it and exits.
+ * Init-time provisioning: reachability, then pull the three configured models
+ * (deduped, since cue and reflect may name the same model) via `/api/pull`, then one
+ * round-trip verification per model. Throws the first named error encountered; the
+ * CLI surfaces it and exits.
  */
 export async function provisionOllama(target: OllamaProvisionTarget, options: ProvisionOptions = {}): Promise<void> {
   const fetchImpl = options.fetchImpl ?? fetch;

@@ -8,7 +8,7 @@ import { toGraphVector } from './values.js';
 /**
  * A `:Memory` node whose `content_vec` is absent is the pending-vector marker: intake
  * commits the episode before it embeds, so between the commit and the follow-up write the
- * node is durable and unvectorized. There is no flag property to keep in sync with it —
+ * node is durable and unvectorized. There is no flag property to keep in sync with it:
  * the missing vector is the state, and writing the vector clears it.
  *
  * `:Memory` is the label migration 001 declares `content_vec_idx` on, so it is also the
@@ -34,14 +34,14 @@ function toGraphInteger(value: number): unknown {
 /**
  * Oldest first, so a backlog drains in the order it accumulated and a long outage does not
  * leave the first experience of the window waiting behind the last. `text` is what gets
- * embedded, so a node without one is not pending — it is a memory type that carries no
+ * embedded, so a node without one is not pending: it is a memory type that carries no
  * body, and no later call can give it a vector.
  *
  * A closed node is never pending. Entity dedup clears a merged-away node's vectors on
- * purpose (§6.5), and in Neo4j clearing a property removes it, which is the same state a
- * node awaiting its first embed is in. Without the currency filter the drain reads that
- * cleanup as a backlog and re-vectorizes every duplicate the pipeline has ever merged,
- * putting it back in `content_vec_idx` on the next service start.
+ * purpose, and in Neo4j clearing a property removes it, which is the same state a node
+ * awaiting its first embed is in. Without the currency filter the drain reads that cleanup
+ * as a backlog and re-vectorizes every duplicate the pipeline has ever merged, putting it
+ * back in `content_vec_idx` on the next service start.
  */
 const FIND_PENDING_VECTOR_NODES = [
   `MATCH (n:${MEMORY_LABEL})`,

@@ -5,13 +5,13 @@ import { countQueueJobs, countQueueJobsByLane } from '../../infrastructure/sqlit
 import { REFLECTION_LANES, type ReflectionLane } from '../../infrastructure/sqlite/reflection-queue.js';
 
 /**
- * EX-10's four blind spots in one read: `aion doctor` passed 8 of 8 checks with 4,000+ jobs
- * pending because nothing here existed. Every field is a SQLite read — no Neo4j, no Ollama —
+ * The blind spots `aion doctor` could not see: it passed 8 of 8 checks with 4,000+ jobs
+ * pending because nothing here existed. Every field is a SQLite read, no Neo4j and no Ollama,
  * so this is cheap enough for `/health` to compute on every liveness probe.
  */
 export type QueueLagSnapshot = {
   readonly depthByLane: Readonly<Record<ReflectionLane, number>>;
-  /** `undefined` when nothing is unclaimed, not zero — there is no age to report. */
+  /** `undefined` when nothing is unclaimed, not zero: there is no age to report. */
   readonly oldestUnclaimedMs: number | undefined;
   /** Unclaimed rows past `workerMaxAttempts`; claiming skips them forever without maintenance. */
   readonly exhausted: number;

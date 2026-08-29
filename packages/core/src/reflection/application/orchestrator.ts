@@ -15,7 +15,7 @@ import {
   type StageRecord,
 } from '../domain/stage.js';
 
-/** Whitepaper §6.3 and §12.1, verbatim: the key that gates one episode's whole pipeline. */
+/** The key that gates one episode's whole pipeline. */
 export function orchestratorLedgerKey(episodeId: string): string {
   return `reflection:orchestrator:${episodeId}`;
 }
@@ -23,7 +23,7 @@ export function orchestratorLedgerKey(episodeId: string): string {
 /**
  * `completed` ran the stages, whatever each of them made of the episode. The other two ran
  * none and are not failures: the episode was already enriched, or there is nothing readable
- * left to enrich. Both are terminal — retrying either returns the same answer — so a caller
+ * left to enrich. Both are terminal, retrying either returns the same answer, so a caller
  * finishes the job rather than backing off. An outage throws instead, because that one is
  * worth retrying.
  */
@@ -64,12 +64,12 @@ function errorMessage(err: unknown): string {
 }
 
 /**
- * Whitepaper §6 and Algorithm 4. The run-level gate comes first so a re-enqueued job costs
- * one SQLite read; the episode loads once and every stage shares it; each stage is isolated,
- * so a failed extraction does not cost the run its deduplication (§12.2); the run-level
- * ledger is marked last, with the per-stage record of what the run actually did.
+ * The run-level gate comes first so a re-enqueued job costs one SQLite read; the episode
+ * loads once and every stage shares it; each stage is isolated, so a failed extraction does
+ * not cost the run its deduplication; the run-level ledger is marked last, with the
+ * per-stage record of what the run actually did.
  *
- * Underneath that sits the per-stage ledger (EX-4): each stage is also gated on its own key,
+ * Underneath that sits the per-stage ledger: each stage is also gated on its own key,
  * marked as it finishes rather than at the end, so a retry after a partial failure re-enters
  * only the stages that have not yet applied instead of re-running the whole pipeline.
  *
@@ -148,8 +148,8 @@ export class ReflectionOrchestrator {
   }
 
   /**
-   * The per-stage ledger gate (EX-4). A stage whose key is already applied is not entered —
-   * `run` is never called — so a retry cannot re-mint what an earlier attempt already wrote.
+   * The per-stage ledger gate. A stage whose key is already applied is not entered: `run` is
+   * never called, so a retry cannot re-mint what an earlier attempt already wrote.
    * The key is set the moment the stage finishes without failing, `ok` or `skipped` alike,
    * mirroring `shouldMarkApplied`'s view that only `failed` leaves something to retry.
    */
@@ -166,9 +166,9 @@ export class ReflectionOrchestrator {
   }
 
   /**
-   * One stage's blast radius. A throw is caught and recorded rather than propagated, which
-   * is the whole of §12.2: the stages after it still run, and the run still enriches the
-   * episode with whatever the rest of the pipeline can extract.
+   * One stage's blast radius. A throw is caught and recorded rather than propagated: the
+   * stages after it still run, and the run still enriches the episode with whatever the
+   * rest of the pipeline can extract.
    */
   async #runStage(stage: ReflectionStage, context: StageContext): Promise<StageRecord> {
     const started = performance.now();

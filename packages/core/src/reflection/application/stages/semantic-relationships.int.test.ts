@@ -102,8 +102,7 @@ beforeAll(async () => {
   episodeId = stored.episode_id;
 
   // Entity and cognitive extraction populate the candidate set this stage reads; running
-  // them first is production stage order (Algorithm 4 steps 3 and 6 precede step 7), not a
-  // test-only shortcut.
+  // them first is production stage order, not a test-only shortcut.
   const episode = await loadEpisodeContext(harness.driver, episodeId);
   if (episode === undefined) {
     throw new Error(`no episode ${episodeId}`);
@@ -168,16 +167,16 @@ describe('SemanticRelationshipStage against a live graph and Ollama', () => {
     // activation, not the raw 1.0.
     expect(target?.score).toBeGreaterThan(0);
     expect(target?.score).toBeLessThan(1);
-    // The edge is written with a quoted justification (D2), stored as its rationale.
+    // The edge is written with a quoted justification, stored as its rationale.
     expect(causal!.rationale).toBeDefined();
     expect(causal!.rationale?.length).toBeGreaterThan(0);
 
     // Direction, checked across every CAUSES/ENABLES edge this run wrote rather than only
     // the one `spreadActivation` happened to seed from: a live, sampling model proposes
-    // several candidate edges of varying quality in one call, and the fix this stage makes
+    // several candidate edges of varying quality in one call, and what this stage guarantees
     // is that a correctly-directed edge is there to find, not that every edge it proposes is
-    // one. The inversion the exercise measured put the effect entity on the source end and
-    // the cause entity on the target end; guard against that shape on each edge.
+    // one. The measured inversion put the effect entity on the source end and the cause
+    // entity on the target end; guard against that shape on each edge.
     const causalEdges = written.filter((edge) => DIRECTED_CAUSAL_TYPES.has(edge.type));
     const directions = await Promise.all(
       causalEdges.map(async (edge) => {
@@ -255,7 +254,7 @@ describe('SemanticRelationshipStage against a live graph and Ollama', () => {
     const outcome = await stage.run(setupCtx);
     expect(outcome.status).toBe('ok');
 
-    // Scoped by provenance across the whole test database rather than this episode alone —
+    // Scoped by provenance across the whole test database rather than this episode alone:
     // the causal-prose test above writes the same provenance and asserts its own edges are
     // CAUSES/ENABLES, never CONTRADICTS, so a global zero is exactly what both tests expect.
     const written = await relationshipsByProvenance(harness.driver, SEMANTIC_RELATIONSHIP_METHOD);

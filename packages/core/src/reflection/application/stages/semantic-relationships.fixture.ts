@@ -7,7 +7,7 @@ import { FakeGraph } from '../../test-support/fake-graph.fixture.js';
 /**
  * This stage's own statements on top of the shared `FakeGraph`: the entity-mention read
  * `entities.fixture.ts` already models for its own stage, and the `EXTRACTED_FROM` read this
- * stage adds on top of it. Everything else — node merge, edge merge, episode context — falls
+ * stage adds on top of it. Everything else (node merge, edge merge, episode context) falls
  * through to the shared fake unchanged. Live behaviour is proven in the `.int.test.ts`.
  */
 

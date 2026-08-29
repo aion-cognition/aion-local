@@ -24,7 +24,7 @@ function foldForEmbedding(text: string): string {
 /**
  * Local-only implementation of `Provider` over Ollama's HTTP API. `generate` always
  * sets the chat `format` field to the caller's JSON Schema (structured output), kept
- * generic here because the cue pipeline that drives it lands in P2.
+ * generic here since the caller that drives it belongs to a later stage of the pipeline.
  */
 export class OllamaProvider implements Provider {
   private readonly baseUrl: string;

@@ -7,7 +7,7 @@ describe('RecallInputSchema valid fixtures', () => {
     expect(result).toEqual({ query: 'why did we pick webhooks?' });
   });
 
-  it('parses the full PRD §3.1 example', () => {
+  it('parses all fields', () => {
     const input = {
       query: 'why did we pick webhooks for the ingestion service?',
       context: {
@@ -31,7 +31,7 @@ describe('RecallInputSchema valid fixtures', () => {
     expect(RecallInputSchema.parse(input)).toEqual(input);
   });
 
-  it('accepts a non-standard role string, since the PRD pins no closed vocabulary', () => {
+  it('accepts a non-standard role string', () => {
     const input = {
       query: 'q',
       context: { recent_turns: [{ role: 'system', text: 'grounding note' }] },

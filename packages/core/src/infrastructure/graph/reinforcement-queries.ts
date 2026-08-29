@@ -6,16 +6,16 @@ import { BASE_NODE_LABEL } from './labels.js';
 import { readModeFragment, withCurrency } from './read-modes.js';
 
 /**
- * Whitepaper §7.1: the structure one episode produced, which is the set reflection
- * co-occurrence reinforces pairwise.
+ * The structure one episode produced, which is the set reflection co-occurrence reinforces
+ * pairwise.
  *
  * The two edge types are the provenance the extraction stages write, and they are the whole
  * definition of "extracted from this episode": `MENTIONS` for entities, `EXTRACTED_FROM` for
  * cognitive nodes. `PARTICIPATES_IN` is deliberately not among them even though the entity
- * stage writes it — it is the containment type, so intake's Turn→Episode links match it too,
+ * stage writes it: it is the containment type, so intake's Turn→Episode links match it too,
  * and reading it here sweeps every turn of the episode into the pair set. That makes the
- * queue quadratic in turn count rather than in extracted structure, and §7.1 names neither
- * Turn↔Turn nor Turn↔Entity as a reinforcement trigger. Nothing is lost by dropping it: the
+ * queue quadratic in turn count rather than in extracted structure, and Turn↔Turn and
+ * Turn↔Entity pairs are not reinforcement triggers. Nothing is lost by dropping it: the
  * entity stage writes both edges in one transaction, so `MENTIONS` covers the same entities.
  */
 const CO_EXTRACTED_EDGE_TYPES = `${ENTITY_MENTION_TYPE}|EXTRACTED_FROM`;
@@ -41,7 +41,7 @@ function coExtractedNodesStatement(episodeId: string): GraphStatement {
 
 /**
  * The current entities and cognitive nodes this episode produced. A node a later stage
- * closed — a merged-away duplicate, a superseded fact — is excluded: reinforcing an edge
+ * closed (a merged-away duplicate, a superseded fact) is excluded: reinforcing an edge
  * onto it would strengthen a path recall no longer treats as the identity.
  */
 export async function findCoExtractedNodeIds(

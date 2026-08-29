@@ -3,7 +3,7 @@ import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import neo4j, { type Driver } from 'neo4j-driver';
 import { DEFAULTS } from '../config/defaults.js';
 
-/** Compose's in-container service name (PRD §14). Anything else is a bring-your-own Neo4j the CLI must not try to start or stop. */
+/** Compose's in-container service name. Anything else is a bring-your-own Neo4j the CLI must not try to start or stop. */
 export const MANAGED_NEO4J_URI = DEFAULTS.neo4j.uri;
 
 /** NEO4J_AUTH in compose.yaml is always `neo4j/<password>`; the build has no multi-user story. */

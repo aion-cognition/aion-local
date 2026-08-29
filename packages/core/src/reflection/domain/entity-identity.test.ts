@@ -8,8 +8,8 @@ import {
 } from './entity-identity.js';
 
 /**
- * The pairs are the ones the P3 exercise measured, with its own cosines noted: a single vector
- * threshold separated none of them, which is why the name form is a second, independent leg.
+ * The pairs carry their measured cosines: no single vector threshold separates them, which is
+ * why the name form is a second, independent leg.
  */
 describe('nameFormMatches', () => {
   it.each([
@@ -42,7 +42,7 @@ describe('nameFormMatches', () => {
       NAME_FORM_OVERLAP_THRESHOLD,
     );
     expect(nameFormMatches('beta episode 1', 'beta episode 2')).toBe(false);
-    expect(nameFormMatches('P4', 'P5')).toBe(false);
+    expect(nameFormMatches('A4', 'A5')).toBe(false);
   });
 
   it('lets a digit through when both names carry it', () => {

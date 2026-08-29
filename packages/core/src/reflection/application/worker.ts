@@ -11,17 +11,20 @@ import type { ReflectionRun, ReflectionRunOptions } from './orchestrator.js';
 import { attachContentVectors, findPendingVectorNodes } from './vectors.js';
 
 /**
- * PRD §4 and §7: reflection is event-driven. A signal from intake starts a claim-and-run
- * cycle immediately; the queue row exists so a restart or a crash does not lose the job, not
- * so a loop can watch it. Nothing here polls for work: the worker's timers are the backoff
- * delay of one failed job, the circuit breaker's cooldown, and the stale-claim sweep, which
- * is not a poll for work but a reaper for another process's abandoned claims. A crash and the
- * automatic restart that follows it land seconds apart, well inside the stale window, so a
- * sweep that only ran at startup would find nothing and the episode would sit claimed by a
- * dead process until some later restart happened to fall more than one window after it.
+ * Reflection is event-driven. A signal from intake starts a claim-and-run cycle immediately;
+ * the queue row exists so a restart or a crash does not lose the job, not so a loop can
+ * watch it. Nothing here polls for work: the worker's timers are the backoff delay of one
+ * failed job, the circuit breaker's cooldown, and the stale-claim sweep, which is not a poll
+ * for work but a reaper for another process's abandoned claims. A crash and the automatic
+ * restart that follows it land seconds apart, well inside the stale window, so a sweep that
+ * only ran at startup would find nothing and the episode would sit claimed by a dead process
+ * until some later restart happened to fall more than one window after it.
  */
 
-/** Pinned P3 defaults. The integration task threads config over the ones config carries. */
+/**
+ * Pinned defaults for the reflection pipeline. The integration task threads config over the
+ * ones config carries.
+ */
 export const DEFAULT_WORKER_COUNT = 1;
 export const DEFAULT_DRAIN_STALE_TIMEOUT_MS = 10 * 60 * 1000;
 export const DEFAULT_RETRY_BASE_MS = 5_000;
@@ -154,7 +157,7 @@ export class ReflectionWorker {
   /**
    * Subscribes first, then drains, so a reflection that arrives mid-drain is not lost: the
    * signal pumps the same claim loop the drain is already running. The order of the drain
-   * itself is fixed — a dead process's claims come back before anything is claimed, and
+   * itself is fixed: a dead process's claims come back before anything is claimed, and
    * pending vectors are attached before the pipeline reads the nodes that need them.
    */
   async start(): Promise<ReflectionDrain> {
@@ -328,7 +331,7 @@ export class ReflectionWorker {
     this.#claimant.complete(this.#deps.db, job.id);
     // Only a run that actually enriched something is the freshness pin's "intake to
     // enriched": `already_applied` and `episode_unavailable` measured nothing new, and
-    // recording them would understate the lag the p95 exists to catch (EX-10).
+    // recording them would understate the lag the p95 exists to catch.
     if (run.applied && run.status === 'completed') {
       recordEnrichmentLagMs(this.#deps.db, Date.now() - Date.parse(job.enqueuedAt));
     }
@@ -371,9 +374,9 @@ export class ReflectionWorker {
   }
 
   /**
-   * PRD §10: five consecutive failures pause claiming for a cooldown. The pause is the whole
-   * of the degradation — no lexical extractor stands in for the model, because late structure
-   * beats bad structure and the queue is durable enough to wait.
+   * Five consecutive failures pause claiming for a cooldown. The pause is the whole of the
+   * degradation: no lexical extractor stands in for the model, because late structure beats
+   * bad structure and the queue is durable enough to wait.
    */
   #noteFailure(): void {
     this.#consecutiveFailures += 1;

@@ -229,8 +229,8 @@ describe('reflection orchestrator against a live graph', () => {
   it(
     'a real entity and cognitive stage do not re-mint nodes when a later stage fails and the job retries',
     async () => {
-      // EX-4, against a live graph: the two stages that actually write nodes run for real;
-      // the stage after them fails so the run stays retryable, and the retry must not touch
+      // Against a live graph: the two stages that actually write nodes run for real; the
+      // stage after them fails so the run stays retryable, and the retry must not touch
       // the graph through the stages that already applied.
       const remintEpisodeId = await freshEpisode('remint');
 
