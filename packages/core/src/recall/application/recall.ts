@@ -315,6 +315,7 @@ export async function handleRecall(
       admission: admissionFor(deps.config),
       reranker: deps.config.search.reranker,
       mmrLambda: deps.config.search.mmrLambda,
+      clusterCap: deps.config.recall.clusterCap,
       ...(vectors === undefined ? {} : { vectors }),
     });
   });

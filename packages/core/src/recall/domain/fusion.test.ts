@@ -33,6 +33,7 @@ const RRF: FusionOptions = {
   admission: ADMIT_ALL,
   reranker: 'rrf',
   mmrLambda: 0.5,
+  clusterCap: 2,
 };
 
 type CandidateOverrides = {
@@ -224,6 +225,7 @@ describe('the admission report', () => {
       droppedBelowFloor: 1,
       droppedUnanchored: 0,
       droppedDuplicateContent: 1,
+      droppedNearDuplicate: 0,
       anchored: true,
     });
   });
@@ -380,6 +382,83 @@ describe('MMR reranking behind the flag', () => {
     });
 
     expect(ids(fused)).toEqual(['a', 'a-twin', 'c']);
+  });
+});
+
+describe('near-duplicate crowding cap', () => {
+  /** EX-22's own shape: a one-line burst record that varies only in its trailing count. */
+  const BURST_CLUSTER = Array.from({ length: 20 }, (_, index) =>
+    candidate(`burst-${String(index)}`, { content: `restart burst 0/${String(index)}` }),
+  );
+
+  const DISTINCT = [
+    candidate('distinct-a', { content: 'the migration deadlocked on a read-only join' }),
+    candidate('distinct-b', { content: 'redis backs the session cache' }),
+    candidate('distinct-c', { content: 'the cue model is qwen3 1.7b' }),
+    candidate('distinct-d', { content: 'entity dedup folds case before embedding' }),
+    candidate('distinct-e', { content: 'the ledger key is per stage now' }),
+  ];
+
+  it('holds two of a twenty-item burst cluster plus every distinct item', () => {
+    const fused = items([list('vector', [...BURST_CLUSTER, ...DISTINCT])]);
+
+    expect(fused.filter((item) => item.id.startsWith('burst-'))).toHaveLength(2);
+    expect(ids(fused)).toEqual(expect.arrayContaining(DISTINCT.map((item) => item.id)));
+    expect(fused).toHaveLength(2 + DISTINCT.length);
+  });
+
+  it('keeps the best-ranked members of the cluster, since RRF rank order decides who survives', () => {
+    const fused = items([list('vector', BURST_CLUSTER)]);
+    expect(ids(fused)).toEqual(['burst-0', 'burst-1']);
+  });
+
+  it('counts what the cap declined, distinct from exact-content dedupe', () => {
+    const result = fuse([list('vector', BURST_CLUSTER)], RRF);
+    expect(result.admission.admitted).toBe(2);
+    expect(result.admission.droppedNearDuplicate).toBe(18);
+    expect(result.admission.droppedDuplicateContent).toBe(0);
+  });
+
+  it('honors a configured cap other than the default', () => {
+    expect(items([list('vector', BURST_CLUSTER)], { ...RRF, clusterCap: 1 })).toHaveLength(1);
+    expect(items([list('vector', BURST_CLUSTER)], { ...RRF, clusterCap: 5 })).toHaveLength(5);
+  });
+
+  it('never merges two clusters across pack buckets, even on a matching prefix', () => {
+    const fused = items(
+      [
+        list('vector', [
+          candidate('episode-burst', { content: 'restart burst 0/1a', labels: ['Episode', 'Memory'] }),
+          candidate('concept-burst', { content: 'restart burst 0/1b', labels: ['Concept', 'Memory'] }),
+        ]),
+      ],
+      { ...RRF, clusterCap: 1 },
+    );
+
+    expect(ids(fused).sort()).toEqual(['concept-burst', 'episode-burst']);
+  });
+
+  it('clusters by cosine when embeddings are already in hand, even across differing wording', () => {
+    const vectors: ReadonlyMap<string, Vector> = new Map([
+      ['near-a', [1, 0, 0]],
+      ['near-b', [0.99, 0.01, 0]],
+      ['near-c', [0.98, 0.02, 0]],
+      ['far', [0, 1, 0]],
+    ]);
+    const fused = items(
+      [
+        list('vector', [
+          candidate('near-a', { content: 'Redis serves as the session cache for the platform.' }),
+          candidate('near-b', { content: 'Redis is used as the session cache.' }),
+          candidate('near-c', { content: 'The session cache is Redis.' }),
+          candidate('far', { content: 'The cue model times out past eight seconds.' }),
+        ]),
+      ],
+      { ...RRF, clusterCap: 2, vectors },
+    );
+
+    expect(ids(fused).filter((id) => id.startsWith('near-'))).toHaveLength(2);
+    expect(ids(fused)).toContain('far');
   });
 });
 

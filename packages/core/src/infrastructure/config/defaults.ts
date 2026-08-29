@@ -76,6 +76,10 @@ export const DEFAULTS: Config = {
     corroborationFloor: 0.45,
     bm25AdmissionMode: 'exact',
     entityMatchThreshold: 0.7,
+    // Plan-pinned default. Two survivors keeps a cluster's best-ranked content visible
+    // (a pack that answers "did we ever discuss X" still gets one example) without one
+    // burst shape eating the bucket the way EX-22 measured.
+    clusterCap: 2,
   },
   search: {
     methods: ['vector', 'bm25', 'graph_traversal'],

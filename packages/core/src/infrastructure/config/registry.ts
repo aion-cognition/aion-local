@@ -27,8 +27,9 @@ export type Knob = {
  * P3's two plan-pinned names (AION_SUPERSEDE_AUTO_CONFIDENCE, AION_ASSOC_SEMANTIC_THRESHOLD)
  * are the same case and keep their pinned spelling inside the `reflection` group. The
  * worker's knobs live under `operational` and read AION_WORKER_*, which is where
- * AION_WORKER_COUNT already was. AION_REINFORCEMENT_QUEUE_CAP is the fix-round plan's pinned
- * name and keeps that spelling rather than AION_SQLITE_REINFORCEMENT_QUEUE_CAP.
+ * AION_WORKER_COUNT already was. AION_REINFORCEMENT_QUEUE_CAP and AION_PACK_CLUSTER_CAP are
+ * the fix-round plan's pinned names and keep that spelling rather than
+ * AION_SQLITE_REINFORCEMENT_QUEUE_CAP / AION_RECALL_CLUSTER_CAP.
  */
 export const KNOB_REGISTRY: readonly Knob[] = [
   { envVar: 'AION_NEO4J_URI', path: ['neo4j', 'uri'], kind: 'string' },
@@ -80,6 +81,7 @@ export const KNOB_REGISTRY: readonly Knob[] = [
     path: ['recall', 'entityMatchThreshold'],
     kind: 'number',
   },
+  { envVar: 'AION_PACK_CLUSTER_CAP', path: ['recall', 'clusterCap'], kind: 'number' },
 
   { envVar: 'AION_SEARCH_METHODS', path: ['search', 'methods'], kind: 'stringList' },
   { envVar: 'AION_SEARCH_RERANKER', path: ['search', 'reranker'], kind: 'string' },
