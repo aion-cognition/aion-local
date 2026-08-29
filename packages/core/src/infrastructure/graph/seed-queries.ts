@@ -12,6 +12,7 @@ import {
   type ReadFragment,
   type ReadMode,
 } from './read-modes.js';
+import { CONTEXT_VECTOR_INDEX } from './resonance-queries.js';
 import { fromGraphVector, toGraphVector, type Row } from './values.js';
 
 /**
@@ -209,6 +210,60 @@ export async function vectorSeeds(
       ...fragment.parameters,
       index: CONTENT_VECTOR_INDEX,
       limit: toGraphInteger(input.limit),
+      vector: toGraphVector(input.vector),
+    },
+    mapScoredCandidate,
+  );
+}
+
+/**
+ * The same input the content-index leg takes; the difference is which index is searched, not
+ * what the caller has to hand it.
+ */
+export type ContextVectorSeedInput = VectorSeedInput;
+
+/**
+ * The second index the vector leg searches: `context_vec_idx`, whose vectors describe a node's
+ * neighborhood rather than its own text.
+ *
+ * Two indexes, one measurement. The search finds candidates by neighborhood, and the score
+ * returned is the ordinary query-against-content cosine, so a row from here is admitted, ranked
+ * and corroborated on exactly the number a row from the content index carries. Scoring on the
+ * context cosine instead would put a second distribution in front of a floor calibrated on the
+ * first.
+ *
+ * The leg exists because the two indexes disagree about rank in a way that matters. Measured on
+ * the live substrate for "how did we fix the checkout latency": the nodes stating the fix sit at
+ * ranks 1 to 5 in the context index and at 12, 15, 19, 44 and 55 in the content index, all with
+ * content cosines at or above the admission floor. They were admissible all along and never
+ * became candidates, which is what left the round's "how did we fix" questions answerless.
+ *
+ * A node with no content vector is skipped rather than scored at zero: it has no measurement to
+ * be admitted on, and the traversal leg already carries nodes whose embeddings are pending.
+ */
+export async function contextVectorSeeds(
+  driver: Driver,
+  input: ContextVectorSeedInput,
+): Promise<ScoredSeedCandidate[]> {
+  const fragment = readModeFragment(input.mode, 'n');
+  const contentVector = `n.${MEMORY_PROPERTIES.contentVector}`;
+  const cypher = [
+    'CALL db.index.vector.queryNodes($index, $limit, $vector) YIELD node AS n',
+    `WHERE ${contentVector} IS NOT NULL AND size(${contentVector}) = $dimension`,
+    `  AND ${fragment.where}`,
+    `WITH n, ${asCosine(`vector.similarity.cosine(${contentVector}, $vector)`)} AS score`,
+    `RETURN ${candidateProjection('n', fragment)}, score`,
+    'ORDER BY score DESC',
+  ].join('\n');
+
+  return runRead(
+    driver,
+    cypher,
+    {
+      ...fragment.parameters,
+      index: CONTEXT_VECTOR_INDEX,
+      limit: toGraphInteger(input.limit),
+      dimension: toGraphInteger(input.vector.length),
       vector: toGraphVector(input.vector),
     },
     mapScoredCandidate,

@@ -46,7 +46,7 @@ function seed(id: string, strategy: SeedStrategy, score: number, cue?: string): 
 function byStrategy(
   overrides: Partial<Record<SeedStrategy, readonly Seed[]>>,
 ): Readonly<Record<SeedStrategy, readonly Seed[]>> {
-  return { vector: [], bm25: [], entity_resolution: [], recency: [], ...overrides };
+  return { vector: [], context_vector: [], bm25: [], entity_resolution: [], recency: [], ...overrides };
 }
 
 function ranked(...lists: ReadonlyArray<readonly Seed[]>): readonly Seed[] {
@@ -108,8 +108,8 @@ describe('legReservations', () => {
   });
 
   it('stands down when the budget cannot seat every leg, rather than favouring the first named', () => {
-    const slots = legReservations(3);
-    expect(SEED_STRATEGIES.map((strategy) => slots[strategy])).toEqual([0, 0, 0, 0]);
+    const slots = legReservations(SEED_STRATEGIES.length - 1);
+    expect(SEED_STRATEGIES.map((strategy) => slots[strategy]).every((count) => count === 0)).toBe(true);
   });
 
   it('leaves part of the budget for whatever scored best overall', () => {
@@ -222,6 +222,29 @@ describe('selectWithReservations', () => {
       budget: 8,
     });
     expect(chosen).toHaveLength(8);
+  });
+
+  it('keeps a node only the context index ranked well, which the content leg buries', () => {
+    // Both legs score on the query-against-content cosine, so a node the content index ranks
+    // outside its own reserved rows loses to every row above it in a merged list, however
+    // highly the context index ranked it. Measured live: the nodes stating a fix sat at ranks
+    // 1 to 5 by neighborhood and 12, 15 and 19 by content, all above the admission floor.
+    const buriedByContent = Array.from({ length: 12 }, (_, index) =>
+      seed(`content-${String(index)}`, 'vector', 0.82 - index * 0.005, 'how did we fix it'),
+    );
+    const foundByContext = [
+      seed('states-the-fix', 'context_vector', 0.73, 'how did we fix it'),
+      seed('states-the-outcome', 'context_vector', 0.72, 'how did we fix it'),
+    ];
+
+    const chosen = selectWithReservations({
+      ranked: ranked(buriedByContent, foundByContext),
+      byStrategy: byStrategy({ vector: [...buriedByContent, ...foundByContext], context_vector: foundByContext }),
+      budget: 12,
+    }).map((entry) => entry.id);
+
+    expect(chosen).toContain('states-the-fix');
+    expect(chosen).toContain('states-the-outcome');
   });
 
   it('takes the best-scoring seeds when the budget cannot seat every leg', () => {

@@ -4,6 +4,7 @@ import type { SeedCandidate } from '../../infrastructure/graph/seed-queries.js';
 import type { ActivatedNode, ActivationSeed } from '../domain/activation.js';
 import type { Measurement } from '../domain/admission.js';
 import type { FusionCandidate, RankedList } from '../domain/fusion.js';
+import { SEED_STRATEGY_METHODS } from '../domain/seed-selection.js';
 import type { Seed, SeedProvenance } from './seeds.js';
 
 /**
@@ -65,7 +66,7 @@ function baseCandidate(candidate: SeedCandidate): Omit<FusionCandidate, 'rationa
 
 function toMeasurement(provenance: SeedProvenance): Measurement {
   return {
-    method: provenance.strategy,
+    method: SEED_STRATEGY_METHODS[provenance.strategy],
     relevance: provenance.relevance,
     ...(provenance.exact === undefined ? {} : { exact: provenance.exact }),
     ...(provenance.cue === undefined ? {} : { cue: provenance.cue }),
@@ -88,7 +89,7 @@ export function seedCandidate(seed: Seed): FusionCandidate | undefined {
   }
   return {
     ...baseCandidate(seed),
-    rationale: { method: best.strategy, score: seed.score },
+    rationale: { method: SEED_STRATEGY_METHODS[best.strategy], score: seed.score },
     relevance: seed.relevance,
     // Every strategy that found it, not just the strongest: the admission gate counts
     // independent measurements, and a maximum cannot tell one hit from three.
