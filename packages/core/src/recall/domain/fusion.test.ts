@@ -305,6 +305,7 @@ describe('the admission report', () => {
       admitted: 1,
       droppedBelowFloor: 1,
       droppedUnmeasured: 1,
+      droppedUnmeasuredArrival: 1,
       droppedDuplicateContent: 1,
       droppedNearDuplicate: 0,
       anchored: true,
@@ -336,7 +337,28 @@ describe('the admission report', () => {
 
     expect(result.items).toEqual([]);
     expect(result.admission.droppedUnmeasured).toBe(1);
+    expect(result.admission.droppedUnmeasuredArrival).toBe(1);
     expect(result.admission.droppedBelowFloor).toBe(0);
+  });
+
+  /**
+   * A recency seed and a plain BM25 seed are unmeasured by construction, so a caller reading
+   * the whole unmeasured tally cannot tell ordinary lexical seeding from a traversal leg whose
+   * every arrival is waiting on a vector. Only the arrival count answers that.
+   */
+  it('counts an unmeasured seed apart from an unmeasured arrival', () => {
+    const result = fuse(
+      [
+        list('bm25', [candidate('lexical', { method: 'bm25', relevance: 0.9, evidence: [] })]),
+        list('graph_traversal', [
+          candidate('reached', { method: 'activation', relevance: 0, activation: 0.4, evidence: [] }),
+        ]),
+      ],
+      { ...RRF, admission: CALIBRATED },
+    );
+
+    expect(result.admission.droppedUnmeasured).toBe(2);
+    expect(result.admission.droppedUnmeasuredArrival).toBe(1);
   });
 
   /**

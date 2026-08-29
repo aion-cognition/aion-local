@@ -189,8 +189,14 @@ export const AdmissionReportSchema = z.strictObject({
   admitted: z.number().int().nonnegative(),
   /** Measured by at least one method, and no measurement, exact hit or corroboration cleared. */
   dropped_below_floor: z.number().int().nonnegative(),
-  /** Reached by spreading activation alone, so no method measured it against the query. */
+  /** No method measured it against the query: a recency or plain-BM25 seed, or a pending vector. */
   dropped_unmeasured: z.number().int().nonnegative(),
+  /**
+   * The part of `dropped_unmeasured` no seed leg found: reached by spreading activation and
+   * never scored. A caller watching whether traversal contributes anything reads this one,
+   * since the whole tally is mostly the two legs that measure nothing by construction.
+   */
+  dropped_unmeasured_arrival: z.number().int().nonnegative(),
   dropped_duplicate_content: z.number().int().nonnegative(),
   /** Admitted, then bumped from a near-identical cluster that had already filled its cap. */
   dropped_near_duplicate: z.number().int().nonnegative(),

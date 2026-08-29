@@ -61,8 +61,10 @@ export type FusionCandidate = {
   /**
    * Set only for a node no retrieval leg found, reached by spreading activation alone. Its
    * own floor is the spread's `min_activation`, already applied by the time it gets here.
-   * Admission never reads it: what admits such a node is the cosine arrival scoring measured
-   * for it, carried in `evidence` like any other measurement.
+   * Admission never reads it as evidence: what admits such a node is the cosine arrival
+   * scoring measured for it, carried in `evidence` like any other measurement. What the gate
+   * does read it for is the tally: an unmeasured arrival and an unmeasured recency seed are
+   * different failures, and this is the only field that tells them apart.
    */
   readonly activation?: number;
 };
@@ -252,17 +254,24 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
   const items: FusedItem[] = [];
   let droppedBelowFloor = 0;
   let droppedUnmeasured = 0;
+  let droppedUnmeasuredArrival = 0;
   let anchored = false;
   for (const entry of merged.values()) {
     if (!admitsOnEvidence(entry.evidence, options.admission)) {
-      // Two counters, because they are two different answers to "why is this pack thin".
-      // Something measured the first and the measurement fell short; nothing measured the
-      // second at all, which for a node the spread reached means a pending content vector.
+      // Three counters, because they are three different answers to "why is this pack thin".
+      // Something measured the first and the measurement fell short. Nothing measured the
+      // second at all, which is ordinary for a seed the recency or plain-BM25 leg found, since
+      // neither measures anything against the query. The third is the one worth alarming on:
+      // a node the spread reached on its own, whose content vector is still pending, so the
+      // traversal leg is contributing reach that no floor can ever judge.
       if (wasMeasured(entry.evidence)) {
         droppedBelowFloor += 1;
         continue;
       }
       droppedUnmeasured += 1;
+      if (entry.activation !== undefined) {
+        droppedUnmeasuredArrival += 1;
+      }
       continue;
     }
     anchored = true;
@@ -293,6 +302,7 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
       admitted: ordered.length,
       droppedBelowFloor,
       droppedUnmeasured,
+      droppedUnmeasuredArrival,
       droppedDuplicateContent: items.length - deduped.length,
       droppedNearDuplicate: deduped.length - capped.length,
       anchored,

@@ -10,6 +10,7 @@ const baseMetadata = {
     admitted: 0,
     dropped_below_floor: 0,
     dropped_unmeasured: 0,
+      dropped_unmeasured_arrival: 0,
     dropped_duplicate_content: 0,
     dropped_near_duplicate: 0,
     vector_floor: 0.6,

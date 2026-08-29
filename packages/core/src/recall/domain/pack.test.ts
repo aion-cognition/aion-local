@@ -74,6 +74,7 @@ function report(items: readonly FusedItem[]): AdmissionReport {
     admitted: items.length,
     droppedBelowFloor: 0,
     droppedUnmeasured: 0,
+    droppedUnmeasuredArrival: 0,
     droppedDuplicateContent: 0,
     droppedNearDuplicate: 0,
     anchored: items.length > 0,

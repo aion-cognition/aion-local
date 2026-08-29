@@ -55,6 +55,12 @@ export type AdmissionReport = {
    * something other than relevance.
    */
   readonly droppedUnmeasured: number;
+  /**
+   * The subset of the above that no seed leg found at all: reached by spreading activation and
+   * never scored against the query. The whole tally cannot say whether traversal is admitting
+   * nothing, because ordinary recency and plain-BM25 seeds are the bulk of it; this can.
+   */
+  readonly droppedUnmeasuredArrival: number;
   readonly droppedDuplicateContent: number;
   /**
    * Admitted, but bumped from a near-identical cluster that already filled its cap. Near-duplicate
