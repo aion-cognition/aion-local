@@ -129,7 +129,15 @@ export const DEFAULTS: Config = {
     flushIntervalMs: 5000,
   },
   contextResonance: {
-    seedLimit: 10,
+    // The cap on the scaled seed budget, raised from 10, which used to be the whole budget.
+    // Ten seeds are the entire candidate set, so on a substrate of several thousand memories
+    // a node that answers the query above the admission floor was never measured, because it
+    // was never a candidate. The curve below reaches this ceiling near sixty thousand memory
+    // nodes and stays under `activationLimit`, so the spread still has room to return
+    // something the seeds did not already carry.
+    seedLimit: 32,
+    seedBudgetBase: 10,
+    seedBudgetGrowth: 2,
     activationLimit: 50,
     resonantLimit: 20,
     maxHops: 3,

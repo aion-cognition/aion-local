@@ -28,7 +28,9 @@ export type Knob = {
  * which took over the gating role the confidence knob had. The worker's knobs live under
  * `operational` and read AION_WORKER_*, which is where AION_WORKER_COUNT already was.
  * AION_REINFORCEMENT_QUEUE_CAP and AION_PACK_CLUSTER_CAP keep their existing spelling
- * rather than AION_SQLITE_REINFORCEMENT_QUEUE_CAP / AION_RECALL_CLUSTER_CAP.
+ * rather than AION_SQLITE_REINFORCEMENT_QUEUE_CAP / AION_RECALL_CLUSTER_CAP, and
+ * AION_SEED_BUDGET_BASE / AION_SEED_BUDGET_GROWTH are named for the budget they shape rather
+ * than for the group that holds them alongside the cap.
  */
 export const KNOB_REGISTRY: readonly Knob[] = [
   { envVar: 'AION_NEO4J_URI', path: ['neo4j', 'uri'], kind: 'string' },
@@ -113,9 +115,18 @@ export const KNOB_REGISTRY: readonly Knob[] = [
   { envVar: 'AION_HEBBIAN_BATCH_SIZE', path: ['hebbian', 'batchSize'], kind: 'number' },
   { envVar: 'AION_HEBBIAN_FLUSH_INTERVAL_MS', path: ['hebbian', 'flushIntervalMs'], kind: 'number' },
 
+  // Keeps its spelling and its group. Its meaning narrowed: it is now the ceiling on a seed
+  // budget that scales with the substrate, not the budget. A deployment that pinned it low
+  // still gets exactly that many seeds, which is why it was not renamed.
   {
     envVar: 'AION_CONTEXT_RESONANCE_SEED_LIMIT',
     path: ['contextResonance', 'seedLimit'],
+    kind: 'number',
+  },
+  { envVar: 'AION_SEED_BUDGET_BASE', path: ['contextResonance', 'seedBudgetBase'], kind: 'number' },
+  {
+    envVar: 'AION_SEED_BUDGET_GROWTH',
+    path: ['contextResonance', 'seedBudgetGrowth'],
     kind: 'number',
   },
   {

@@ -1,4 +1,4 @@
-import type { CueSource, CueWeight, RecallMethod } from '@aion/protocol';
+import type { CueSource, CueWeight } from '@aion/protocol';
 import type { Driver } from 'neo4j-driver';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { withCurrency, type ReadMode } from '../../infrastructure/graph/read-modes.js';
@@ -8,33 +8,51 @@ import {
   escapeLuceneQuery,
   fulltextSeeds,
   lucenePhraseQuery,
+  memoryPopulation,
   normalizeSeedName,
   recencySeeds,
   vectorSeeds,
   type ScoredSeedCandidate,
-  type SeedCandidate,
 } from '../../infrastructure/graph/seed-queries.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Vector } from '../../infrastructure/providers/types.js';
+import {
+  RECENCY_RELEVANCE,
+  legReservations,
+  mergeSeeds,
+  normalizeToBest,
+  recencyScore,
+  scaleByCueWeight,
+  seedBudget,
+  selectWithReservations,
+  type Seed,
+  type SeedBudgetCurve,
+  type SeedContribution,
+  type SeedStrategy,
+} from '../domain/seed-selection.js';
 
 /**
  * Four strategies run together, their candidates merge, and each surviving seed keeps every
  * strategy that found it. The strategies themselves are Cypher and live in
- * `graph/seed-queries.ts`; this file is scoring, merging, and the order they run in.
+ * `graph/seed-queries.ts`, the merge and the budget arithmetic in `domain/seed-selection.ts`;
+ * this file is the order they run in and the sizes they run at.
  */
 
-/** Also `RecallMethod` values, so fusion carries a provenance entry into an item rationale unchanged. */
-export const SEED_STRATEGIES = [
-  'vector',
-  'bm25',
-  'entity_resolution',
-  'recency',
-] as const satisfies readonly RecallMethod[];
-
-export type SeedStrategy = (typeof SEED_STRATEGIES)[number];
-
-/** The heaviest cue bucket. Every cue-driven score is expressed as a fraction of it. */
-const MAX_CUE_WEIGHT = 3;
+export {
+  SEED_STRATEGIES,
+  RECENCY_RELEVANCE,
+  mergeSeeds,
+  normalizeToBest,
+  recencyScore,
+  scaleByCueWeight,
+} from '../domain/seed-selection.js';
+export type {
+  Seed,
+  SeedBudgetCurve,
+  SeedContribution,
+  SeedProvenance,
+  SeedStrategy,
+} from '../domain/seed-selection.js';
 
 export type SeedCue = {
   readonly text: string;
@@ -48,51 +66,11 @@ export type SeedCue = {
   readonly vector?: Vector;
 };
 
-/**
- * Two numbers, because the cue bucket weights and the admission floor answer different
- * questions. `score` is the ranking number: the method's score scaled by the weight of the cue
- * that found it, which is how a query cue outranks a recent-turn cue. `relevance` is the
- * method's own measurement on its own comparable scale, which is what
- * `AION_VECTOR_ADMISSION_FLOOR` is measured against.
- *
- * Composing the two, measuring a weighted score against an absolute floor, deletes whole
- * buckets: at a floor of 0.5 no 1x recent-turn cue could ever contribute an item, however
- * perfect its match, because 1.0 scaled to a third of itself is 0.333.
- */
-export type SeedProvenance = {
-  readonly strategy: SeedStrategy;
-  readonly score: number;
-  readonly relevance: number;
-  /**
-   * A literal match on the cue as written: Lucene matched the whole cue as a phrase, or the
-   * cue resolved an entity name exactly. A cosine is a measurement that has to clear a floor;
-   * a literal match is evidence of its own, so admission reads the two differently.
-   */
-  readonly exact?: true;
-  /** The cue text behind the hit; absent for recency, which no cue drives. */
-  readonly cue?: string;
-};
-
-export type Seed = SeedCandidate & {
-  /** The best of `provenance`, which is ordered to match. */
-  readonly score: number;
-  /** The strongest measurement any strategy made of this node, unscaled. */
-  readonly relevance: number;
-  readonly provenance: readonly SeedProvenance[];
-};
-
-export type SeedContribution = {
-  readonly candidate: SeedCandidate;
-  readonly strategy: SeedStrategy;
-  readonly score: number;
-  readonly relevance: number;
-  readonly exact?: true;
-  readonly cue?: string;
-};
-
 export type SeedSelection = {
-  /** Merged, deduped, and cut to `contextResonance.seedLimit`. What activation starts from. */
+  /** Merged, deduped, and cut to the seed budget. What activation starts from. */
   readonly seeds: readonly Seed[];
+  /** The budget this run computed from the substrate's size, for a caller that reports it. */
+  readonly budget: number;
   /**
    * Every query the selection issued was rejected, which is the graph being gone rather
    * than a query nothing matched. Per-leg isolation cannot tell the two apart on its own,
@@ -118,127 +96,43 @@ export type SelectSeedsInput = {
   readonly mode?: ReadMode;
 };
 
-export function scaleByCueWeight(score: number, weight: CueWeight): number {
-  return score * (weight / MAX_CUE_WEIGHT);
-}
-
-/**
- * A Lucene score has no fixed range, since it moves with the corpus and the query, so a raw
- * BM25 number is not comparable with a cosine similarity in the merge. Dividing by the best hit for
- * the same cue puts the leg on (0, 1] and leaves its internal ranking untouched. Vector and
- * entity scores are left alone; those are already cosine similarities.
- */
-export function normalizeToBest(
-  rows: readonly ScoredSeedCandidate[],
-): readonly ScoredSeedCandidate[] {
-  let best = 0;
-  for (const row of rows) {
-    if (row.score > best) {
-      best = row.score;
-    }
-  }
-  if (best <= 0) {
-    return rows;
-  }
-  return rows.map((row) => ({ ...row, score: row.score / best }));
-}
-
-/**
- * Reciprocal rank, so the bias stays a bias: the most recently touched node competes with a
- * strong content hit and the tail falls away fast, rather than a flat recency list crowding
- * out everything the cues found.
- *
- * A rank, never a relevance. Recency weights the seed selection, and "this was touched
- * recently" is not a measurement of how well a node answers the query, so a recency
- * contribution carries `relevance: 0` (`RECENCY_RELEVANCE`). It seeds the spread, and that is
- * all: admission never counts it, as evidence or as corroboration.
- */
-export function recencyScore(rank: number): number {
-  return 1 / (1 + rank);
-}
-
-export const RECENCY_RELEVANCE = 0;
-
-function compareProvenance(a: SeedProvenance, b: SeedProvenance): number {
-  if (a.score !== b.score) {
-    return b.score - a.score;
-  }
-  return a.strategy.localeCompare(b.strategy);
-}
-
-/** Best score wins; corroboration by more strategies breaks a tie, then id for a stable order. */
-function compareSeeds(a: Seed, b: Seed): number {
-  if (a.score !== b.score) {
-    return b.score - a.score;
-  }
-  if (a.provenance.length !== b.provenance.length) {
-    return b.provenance.length - a.provenance.length;
-  }
-  return a.id.localeCompare(b.id);
-}
-
-function toProvenance(contribution: SeedContribution): SeedProvenance {
+function budgetCurve(config: Config): SeedBudgetCurve {
   return {
-    strategy: contribution.strategy,
-    score: contribution.score,
-    relevance: contribution.relevance,
-    ...(contribution.exact === undefined ? {} : { exact: contribution.exact }),
-    ...(contribution.cue === undefined ? {} : { cue: contribution.cue }),
+    base: config.contextResonance.seedBudgetBase,
+    growth: config.contextResonance.seedBudgetGrowth,
+    cap: config.contextResonance.seedLimit,
   };
 }
 
 /**
- * Dedupe is by node id across every strategy, and a node found several ways keeps all of it:
- * the provenance list is what lets fusion explain the item and what makes corroboration
- * visible instead of collapsed into one number.
+ * The substrate's size, or the base budget when it cannot be read. A count that fails is a
+ * reason to seed conservatively, never a reason to fail a recall, and the base is the budget
+ * a graph with nothing in it would get anyway.
  */
-export function mergeSeeds(
-  contributions: readonly SeedContribution[],
-  limit: number,
-): readonly Seed[] {
-  const merged = new Map<string, { candidate: SeedCandidate; provenance: SeedProvenance[] }>();
-
-  for (const contribution of contributions) {
-    const entry = merged.get(contribution.candidate.id);
-    if (entry === undefined) {
-      merged.set(contribution.candidate.id, {
-        candidate: contribution.candidate,
-        provenance: [toProvenance(contribution)],
-      });
-      continue;
-    }
-    entry.provenance.push(toProvenance(contribution));
+async function budgetFor(deps: SelectSeedsDeps): Promise<number> {
+  const curve = budgetCurve(deps.config);
+  try {
+    return seedBudget(await memoryPopulation(deps.driver), curve);
+  } catch (err) {
+    deps.logger.warn({ err }, 'memory population count failed; seeding at the base budget');
+    return seedBudget(0, curve);
   }
+}
 
-  const seeds: Seed[] = [];
-  for (const { candidate, provenance } of merged.values()) {
-    provenance.sort(compareProvenance);
-    const best = provenance[0];
-    let relevance = 0;
-    for (const entry of provenance) {
-      relevance = Math.max(relevance, entry.relevance);
-    }
-    // Absent optionals stay absent rather than becoming explicit `undefined` keys, so a pack
-    // item built by spreading a seed carries only the fields the seed actually has.
-    seeds.push({
-      id: candidate.id,
-      labels: candidate.labels,
-      content: candidate.content,
-      ...(candidate.occurredAt === undefined ? {} : { occurredAt: candidate.occurredAt }),
-      ...(candidate.isStructural === undefined ? {} : { isStructural: candidate.isStructural }),
-      ...(candidate.sourceEpisodeId === undefined
-        ? {}
-        : { sourceEpisodeId: candidate.sourceEpisodeId }),
-      currency: candidate.currency,
-      ...(candidate.supersededBy === undefined ? {} : { supersededBy: candidate.supersededBy }),
-      score: best === undefined ? 0 : best.score,
-      relevance,
-      provenance,
-    });
-  }
-
-  seeds.sort(compareSeeds);
-  return seeds.slice(0, Math.max(0, limit));
+/**
+ * How many rows each leg asks for. A per-cue fetch smaller than the leg's reserved slots
+ * cannot fill them, and the cue that names the subject is usually one cue rather than all of
+ * them, so every leg asks for at least as many rows as it is allowed to keep. The recency leg
+ * is one query rather than one per cue, so it reads the whole budget.
+ */
+function legLimits(config: Config, budget: number): Readonly<Record<SeedStrategy, number>> {
+  const reservations = legReservations(budget);
+  return {
+    vector: Math.max(config.recall.vectorLimit, reservations.vector),
+    bm25: Math.max(config.recall.vectorLimit, reservations.bm25),
+    entity_resolution: Math.max(config.recall.vectorLimit, reservations.entity_resolution),
+    recency: budget,
+  };
 }
 
 function contribute(
@@ -309,13 +203,10 @@ async function vectorContributions(
   deps: SelectSeedsDeps,
   cues: readonly SeedCue[],
   mode: ReadMode,
+  limit: number,
 ): Promise<SettledLeg> {
   const tasks = embeddedCues(cues).map(async (cue) => {
-    const rows = await vectorSeeds(deps.driver, {
-      vector: cue.vector,
-      limit: deps.config.recall.vectorLimit,
-      mode,
-    });
+    const rows = await vectorSeeds(deps.driver, { vector: cue.vector, limit, mode });
     return rows.map((row) => contribute('vector', row, cue));
   });
   return settle(deps.logger, 'vector', 'cue vector search', tasks);
@@ -326,7 +217,8 @@ async function vectorContributions(
  * the ranked list RRF fuses; the phrase query is the only admission evidence BM25 can offer,
  * since normalizing a corpus-relative Lucene score to the best hit of the same cue puts the
  * top of every list at 1.00 whatever it matched. The phrase leg runs separately rather than
- * being read off the loose one: an exact hit ranked below `vectorLimit` there is never seen.
+ * being read off the loose one: an exact hit ranked below the leg's own limit there is never
+ * seen.
  *
  * Per-cue rather than one combined query, so one cue that trips the Lucene parser costs only
  * its own contribution. The cue text reaches the index escaped but otherwise verbatim.
@@ -335,6 +227,7 @@ async function bm25Contributions(
   deps: SelectSeedsDeps,
   cues: readonly SeedCue[],
   mode: ReadMode,
+  limit: number,
 ): Promise<SettledLeg> {
   const tasks: Array<Promise<readonly SeedContribution[]>> = [];
   for (const cue of cues) {
@@ -344,11 +237,7 @@ async function bm25Contributions(
     }
     tasks.push(
       (async () => {
-        const rows = await fulltextSeeds(deps.driver, {
-          query,
-          limit: deps.config.recall.vectorLimit,
-          mode,
-        });
+        const rows = await fulltextSeeds(deps.driver, { query, limit, mode });
         return normalizeToBest(rows).map((row) => contribute('bm25', row, cue));
       })(),
     );
@@ -356,7 +245,7 @@ async function bm25Contributions(
       (async () => {
         const rows = await fulltextSeeds(deps.driver, {
           query: lucenePhraseQuery(cue.text),
-          limit: deps.config.recall.vectorLimit,
+          limit,
           mode,
         });
         return normalizeToBest(rows).map((row) => contribute('bm25', row, cue, true));
@@ -370,8 +259,8 @@ async function bm25Contributions(
  * Identity first, similarity second. One name can be carried by several cues; the heaviest
  * one owns the hit, since the weight is what the match is scaled by.
  *
- * The fuzzy leg is a per-cue KNN like the vector leg, so it takes the same per-cue cap
- * (`recall.vectorLimit`) and its own threshold (`recall.entityMatchThreshold`). Neither is
+ * The fuzzy leg is a per-cue KNN like the vector leg, so it takes the same per-cue limit and
+ * its own threshold (`recall.entityMatchThreshold`). The threshold is not
  * `contextResonance.*`: that group belongs to context resonance, and one knob cannot mean both
  * "how close two names have to be to be the same entity" and "how close two context vectors
  * have to be to resonate" without silently retuning one while tuning the other.
@@ -380,6 +269,7 @@ async function entityContributions(
   deps: SelectSeedsDeps,
   cues: readonly SeedCue[],
   mode: ReadMode,
+  limit: number,
 ): Promise<SettledLeg> {
   const byName = new Map<string, SeedCue>();
   for (const cue of cues) {
@@ -411,7 +301,7 @@ async function entityContributions(
         const rows = await entitySimilaritySeeds(deps.driver, {
           vector: cue.vector,
           threshold: deps.config.recall.entityMatchThreshold,
-          limit: deps.config.recall.vectorLimit,
+          limit,
           mode,
         });
         return rows.map((row) => contribute('entity_resolution', row, cue));
@@ -425,12 +315,10 @@ async function entityContributions(
 async function recencyContributions(
   deps: SelectSeedsDeps,
   mode: ReadMode,
+  limit: number,
 ): Promise<SettledLeg> {
   const task = (async () => {
-    const rows = await recencySeeds(deps.driver, {
-      limit: deps.config.contextResonance.seedLimit,
-      mode,
-    });
+    const rows = await recencySeeds(deps.driver, { limit, mode });
     return rows.map((row, rank) => ({
       candidate: row,
       strategy: 'recency' as const,
@@ -446,13 +334,14 @@ function emptyByStrategy(): Record<SeedStrategy, readonly Seed[]> {
 }
 
 /**
- * All four strategies run together; each one's failure is isolated to itself. The top-k cut is
- * `contextResonance.seedLimit`, the seed budget and the only place the candidate set is
- * narrowed.
+ * All four strategies run together; each one's failure is isolated to itself. The seed budget
+ * is the only place the candidate set is narrowed, and it is sized from the substrate before
+ * the legs run, because a leg that fetches fewer rows than its reservation cannot fill it.
  *
  * Isolation is per leg, so the all-legs-failed case is counted rather than inferred from an
  * empty result: the recency leg always issues one query, which makes "nothing was attempted"
- * and "everything was rejected" different states.
+ * and "everything was rejected" different states. The population count sits outside that
+ * tally: it reads no candidates, so a failure there is a smaller budget rather than a leg down.
  */
 export async function selectSeeds(
   deps: SelectSeedsDeps,
@@ -460,12 +349,14 @@ export async function selectSeeds(
 ): Promise<SeedSelection> {
   const mode = input.mode ?? withCurrency();
   const cues = input.cues.filter((cue) => cue.text.trim().length > 0);
+  const budget = await budgetFor(deps);
+  const limits = legLimits(deps.config, budget);
 
   const [vector, bm25, entity, recency] = await Promise.all([
-    vectorContributions(deps, cues, mode),
-    bm25Contributions(deps, cues, mode),
-    entityContributions(deps, cues, mode),
-    recencyContributions(deps, mode),
+    vectorContributions(deps, cues, mode, limits.vector),
+    bm25Contributions(deps, cues, mode, limits.bm25),
+    entityContributions(deps, cues, mode, limits.entity_resolution),
+    recencyContributions(deps, mode, limits.recency),
   ]);
 
   const byStrategy = emptyByStrategy();
@@ -490,7 +381,12 @@ export async function selectSeeds(
   }
 
   return {
-    seeds: mergeSeeds(contributions, deps.config.contextResonance.seedLimit),
+    seeds: selectWithReservations({
+      ranked: mergeSeeds(contributions, contributions.length),
+      byStrategy,
+      budget,
+    }),
+    budget,
     graphUnavailable,
     byStrategy,
   };
