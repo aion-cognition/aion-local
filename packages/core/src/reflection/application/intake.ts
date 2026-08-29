@@ -255,12 +255,12 @@ type IntegrateJob = {
  * Claimable interactive-lane rows already in the queue, measured before this call's own job
  * lands. Interactive is served strictly first (the lanes pin), so this is exactly how many
  * jobs sit ahead of a fresh interactive enqueue and, for a caller demoted to bulk, how many
- * interactive jobs it queues behind either way — the ack used to say `queued: true` with no
+ * interactive jobs it queues behind either way. The ack used to say `queued: true` with no
  * sense of how far behind that queue actually was.
  *
  * Bounded by the attempt limit, so a row the claim path will never take again is not reported
- * as something to wait for: one exhausted job made every ack in the exercise say "1 job ahead"
- * against an empty queue.
+ * as something to wait for: one exhausted job once made every ack say "1 job ahead" against an
+ * empty queue.
  */
 function pendingAhead(db: SqliteHandle, maxAttempts: number): number {
   return countQueueJobs(db, { lane: DEFAULT_REFLECTION_LANE }, maxAttempts).pending;

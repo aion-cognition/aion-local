@@ -30,10 +30,10 @@ import {
 
 /**
  * The path a correction takes once a person agrees with the judge. Propose mode closes
- * nothing on its own, which is the point, so this is the only thing in the build that can
- * make a stored correction change what recall answers — and before it existed the proposal
- * table was write-only and the correction battery could only be passed by a test calling the
- * graph primitive directly.
+ * nothing on its own, which is the point, so this is the only path that can make a stored
+ * correction change what recall answers. Before it existed the proposal table was write-only
+ * and the correction battery could only be passed by a test calling the graph primitive
+ * directly.
  */
 
 const EMBED_DIMENSION = 8;
@@ -114,7 +114,7 @@ describe('applying a supersession proposal', () => {
 
   /**
    * The wider blade. A claim's siblings were extracted from the same observation, so closing
-   * the claim alone leaves them answering as current — which is the compounding half of "a
+   * the claim alone leaves them answering as current, which is the compounding half of "a
    * correction does not change what recall answers".
    */
   it('closes the source episode and its derived family under --episode', async () => {

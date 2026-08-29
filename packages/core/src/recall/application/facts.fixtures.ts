@@ -1,6 +1,6 @@
 /**
- * The evidence behind `recall.restatementFloor` and behind the exercise's own facts-bucket scenario, as fixtures
- * rather than as lore, in the shape `floors.fixtures.ts` established.
+ * The evidence behind `recall.restatementFloor` and the measured facts-bucket scenario, as
+ * fixtures rather than as lore, in the shape `floors.fixtures.ts` established.
  *
  * Two distributions decide the floor, and both are Goal and Plan text scored against the query
  * that would retrieve it. The one that has to be caught is a node whose text is the question
@@ -20,9 +20,9 @@ export type FactsPair = {
 };
 
 /**
- * Goals and Plans that restate the query and carry no answer — the exercise's own shape, where facts
- * rank 1 for "what did we decide about the remittance ingest transport and why" was the Goal
- * "Select an appropriate transport mechanism for remittance ingest."
+ * Goals and Plans that restate the query and carry no answer. The measured shape: facts rank 1
+ * for "what did we decide about the remittance ingest transport and why" was the Goal "Select
+ * an appropriate transport mechanism for remittance ingest."
  */
 export const RESTATING_GOALS: readonly FactsPair[] = [
   {
@@ -104,11 +104,11 @@ export type SubstrateNode = {
 };
 
 /**
- * The exercise's measured pack, rebuilt as a substrate: the Decision that answers the question, the
- * query-shaped Goals that outranked it, and the entity glosses that took 58% of the exercise's
- * fact slots. The Decision and the leading Goal are quoted verbatim from the report; the rest
- * is what an extraction of that episode mints. The exercise served the Goal at facts rank 1 and
- * the Decision in none of the five queries that asked for the transport decision.
+ * The measured pack, rebuilt as a substrate: the Decision that answers the question, the
+ * query-shaped Goals that outranked it, and the entity glosses that took 58% of the fact slots.
+ * The Decision and the leading Goal are quoted verbatim; the rest is what an extraction of that
+ * episode mints. The measured run served the Goal at facts rank 1 and the Decision in none of
+ * the five queries that asked for the transport decision.
  */
 export const DECISION_SUBSTRATE: readonly SubstrateNode[] = [
   {
@@ -160,7 +160,7 @@ export const DECISION_SUBSTRATE: readonly SubstrateNode[] = [
 ];
 
 /**
- * The exercise's own query, and the cue set the pinned cue model returns for it, recorded from three
+ * The measured query, and the cue set the pinned cue model returns for it, recorded from three
  * identical live runs. Recorded rather than invented so the battery measures the facts rules
  * against the cues the pipeline actually produces, and recorded rather than called live so a
  * ranking assertion does not move with the model's mood.

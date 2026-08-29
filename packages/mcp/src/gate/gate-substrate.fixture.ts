@@ -36,10 +36,10 @@ import {
 import { reflectionStages, workerOptions } from '../bootstrap.js';
 
 /**
- * The substrate every re-exercise battery runs on: a throwaway Neo4j, its own SQLite, live
- * Ollama, and the pipeline `bootstrap.ts` assembles for the shipped service. Nothing here
- * stands in for a model, and no stage list is written twice — a battery that passed against a
- * pipeline wired only in a test would say nothing about the thing that ships.
+ * The substrate every gate battery runs on: a throwaway Neo4j, its own SQLite, live Ollama,
+ * and the pipeline `bootstrap.ts` assembles for the shipped service. Nothing here stands in
+ * for a model, and no stage list is written twice: a battery that passed against a pipeline
+ * wired only in a test would say nothing about the thing that ships.
  *
  * The gate files share this rather than one another's substrate: each holds a container for
  * its own batteries, so a battery that writes (corrections, supersession) cannot move the

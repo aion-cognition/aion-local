@@ -8,15 +8,15 @@ import { countQueueJobs, countQueueJobsByLane } from '../../infrastructure/sqlit
 import { REFLECTION_LANES, type ReflectionLane } from '../../infrastructure/sqlite/reflection-queue.js';
 
 /**
- * The operator's read of everything the exercise had no gauge for, in one SQLite pass: `aion
- * doctor` passed 8 of 8 checks with 4,000+ jobs pending because none of this existed. Every
- * field is a SQLite read — no Neo4j, no Ollama — so this is cheap enough for `/health` to
- * compute on every liveness probe.
+ * The operator's read of everything that had no gauge, in one SQLite pass: `aion doctor`
+ * passed 8 of 8 checks with 4,000+ jobs pending because none of this existed. Every field is
+ * a SQLite read, no Neo4j and no Ollama, so this is cheap enough for `/health` to compute on
+ * every liveness probe.
  */
 export type QueueLagSnapshot = {
   /** Claimable rows only. An exhausted row is not depth: no worker will ever take it. */
   readonly depthByLane: Readonly<Record<ReflectionLane, number>>;
-  /** `undefined` when nothing is waiting, not zero — there is no age to report. */
+  /** `undefined` when nothing is waiting, not zero: there is no age to report. */
   readonly oldestUnclaimedMs: number | undefined;
   /** Unclaimed rows past `workerMaxAttempts`; claiming skips them forever without maintenance. */
   readonly exhausted: number;

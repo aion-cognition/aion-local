@@ -11,8 +11,9 @@ import { describe, expect, it } from 'vitest';
  * says nothing about the constraint the code is holding. The constraint goes in the comment;
  * the id goes in the commit.
  *
- * Fixtures and tests are exempt on purpose: a fixture's whole job is to be the evidence a
- * finding recorded, and naming which one it re-runs is what makes it auditable.
+ * Fixtures and tests are exempt from this scan because fixture data strings may legitimately
+ * carry recorded evidence verbatim. Their comments and titles still follow the same register:
+ * describe the behavior or the constraint, and keep the id in the commit that introduced it.
  */
 
 const HERE = dirname(fileURLToPath(import.meta.url));

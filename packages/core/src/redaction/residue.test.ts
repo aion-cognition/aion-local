@@ -7,7 +7,7 @@ import { DEFAULT_ENTROPY_THRESHOLD, redact } from './redact.js';
  * The graph half is a read and is covered by the doctor check that calls it.
  */
 describe('what a residue scan would find', () => {
-  it('recognises the exact shapes the exercise found stored in plaintext', () => {
+  it('recognises credential and secret patterns stored in plaintext', () => {
     const stored = [
       'pasted into the runbook: AKIAIOSFODNN7EXAMPLE with secret wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY.',
       '{"input":{"command":"env","context":{"nested":{"aws_secret_access_key":"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"}}}}',

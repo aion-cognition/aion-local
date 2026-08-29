@@ -62,8 +62,8 @@ export const ConfigSchema = z.object({
     entityMatchThreshold: proportion,
     /**
      * A near-duplicate cluster's cap on how many of its members one bucket may hold (
-     * a burst of near-identical episodes took 29.5% of a pack's slots). Not an Appendix E
-     * parameter; the plan pins the default at 2 and the env var name at `AION_PACK_CLUSTER_CAP`.
+     * a burst of near-identical episodes took 29.5% of a pack's slots). Defaults to 2 and is
+     * set by `AION_PACK_CLUSTER_CAP`.
      */
     clusterCap: positiveInt,
     /**
@@ -195,8 +195,8 @@ export const ConfigSchema = z.object({
     /**
      * A client's `close()` tears down its transport locally without a DELETE, so the
      * server-side session-close hook fires only when a client sends one. This is the trigger
-     * that does not depend on that — an MCP transport
-     * session with no request in this many minutes closes on its own, independent of DELETE.
+     * that does not depend on that: an MCP transport session with no request in this many
+     * minutes closes on its own, independent of DELETE.
      */
     sessionIdleExpiryMinutes: positiveInt,
   }),

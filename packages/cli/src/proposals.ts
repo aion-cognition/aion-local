@@ -17,9 +17,9 @@ import {
 import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
 
 /**
- * Where a judged contradiction gets decided. Supersession is propose-only — the judge emits
- * 1.0 on every firing and three of three live firings were false — so nothing in the pipeline
- * closes a claim any more. Without a command the proposal tables are write-only, and a stored
+ * Where a judged contradiction gets decided. Supersession is propose-only, because the judge
+ * emits 1.0 on every firing and three of three live firings were false, so nothing in the
+ * pipeline closes a claim any more. Without a command the proposal tables are write-only, and a stored
  * correction can never change what recall answers, which was the user-visible failure the
  * posture change was meant to fix.
  *

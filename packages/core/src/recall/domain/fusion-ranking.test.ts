@@ -212,7 +212,7 @@ describe('MMR reranking behind the flag', () => {
 });
 
 describe('near-duplicate crowding cap', () => {
-  /** EX-22's own shape: a one-line burst record that varies only in its trailing count. */
+  /** The measured burst shape: a one-line record that varies only in its trailing count. */
   const BURST_CLUSTER = Array.from({ length: 20 }, (_, index) =>
     candidate(`burst-${String(index)}`, { content: `restart burst 0/${String(index)}` }),
   );

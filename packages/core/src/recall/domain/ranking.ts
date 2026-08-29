@@ -3,7 +3,7 @@ import { hashContent } from '../../reflection/domain/content.js';
 import { bucketFor } from './pack.js';
 
 /**
- * Whitepaper §5.5's ordering machinery, split out of `fusion.ts` so that file holds the
+ * The ordering machinery, split out of `fusion.ts` so that file holds the
  * admission decision alone. Nothing here admits or refuses an item: by the time a list
  * reaches these functions the floors have already run, and reordering or capping a set is a
  * question about what the reader sees first, never about what the reader may see at all.
@@ -38,7 +38,7 @@ export type RankableItem = {
 };
 
 /**
- * Sixteen characters is `"restart burst 0/"` — the burst-record shape the exercise measured, a
+ * Sixteen characters is `"restart burst 0/"`, the measured burst-record shape: a
  * one-line template that varies only in a trailing count. Long enough to be a real coincidence
  * for two unrelated short memories to share verbatim, short enough that the template's fixed
  * part survives even when the whole record is barely longer than the prefix itself; a longer
@@ -59,7 +59,7 @@ function clusterPrefixKey(content: string): string {
  * Episode never share a cluster even if their content coincidentally collided, since they
  * were never competing for the same slot to begin with (`pack.ts`'s bucket caps are per
  * bucket already). Within a bucket, two items join a cluster when their content shares the
- * prefix key above, or — only when the caller already fetched embeddings for MMR — when
+ * prefix key above, or (only when the caller already fetched embeddings for MMR) when
  * their vectors clear `CLUSTER_COSINE_THRESHOLD`. A run with no vectors in hand (the
  * default RRF reranker) relies on the prefix leg alone, which is what the burst repro needs:
  * the records it measured are one-line and share their opening verbatim.
@@ -144,7 +144,7 @@ function clusterRoots<T extends RankableItem>(
 /**
  * The floor keeps noise out; this keeps one shape from crowding out everything else that
  * cleared it. Items arrive best-first, so the first member of a cluster this loop keeps is
- * already its best-ranked one — `keptByRoot` enforces the cap and the caller counts what it
+ * already its best-ranked one. `keptByRoot` enforces the cap and the caller counts what it
  * declined, so the report can say why a bucket held fewer distinct memories than it admitted
  * candidates for.
  */
@@ -195,11 +195,11 @@ function redundancy<T extends RankableItem>(
 }
 
 /**
- * Whitepaper §5.5's diversity-aware alternative: `lambda * relevance - (1 - lambda) *
+ * The diversity-aware alternative: `lambda * relevance - (1 - lambda) *
  * redundancy`, selected greedily. Redundancy is cosine distance between content vectors
- * rather than the whitepaper's Jaccard word overlap, because word overlap needs a
- * tokenizer and this build keeps text machinery out of the cognitive path entirely
- * (PRD §2) — the embedding is the redundancy signal the substrate already holds.
+ * rather than Jaccard word overlap, because word overlap needs a tokenizer and text
+ * machinery stays out of the cognitive path entirely. The embedding is the redundancy
+ * signal the substrate already holds.
  *
  * Relevance is normalized against the top fused score first. Raw RRF sums cluster near
  * `1/k` while cosine similarity spans [0,1], so mixing them unnormalized would make lambda

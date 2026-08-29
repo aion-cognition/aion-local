@@ -53,9 +53,9 @@ export type AdmissionReport = {
   readonly droppedUnmeasured: number;
   readonly droppedDuplicateContent: number;
   /**
-   * Admitted, but bumped from a near-identical cluster that already filled its cap: the
-   * exercise measured a burst of near-duplicate episodes taking 29.5% of a pack's slots.
-   * Distinct from `droppedDuplicateContent`, which is exact text; this is the crowding cap.
+   * Admitted, but bumped from a near-identical cluster that already filled its cap. Near-duplicate
+   * episodes can take up to 29.5% of a pack's slots. Distinct from `droppedDuplicateContent`,
+   * which is exact text; this is the crowding cap.
    */
   readonly droppedNearDuplicate: number;
   /** At least one candidate cleared admission on its own evidence. */
@@ -87,9 +87,9 @@ function measurementKey(measurement: Measurement): string {
  *  - corroboration: two independent measurements, each at or above the lower corroboration
  *    floor, where independence is by method and by cue.
  *
- * A plain BM25 hit is none of them. Sharing one term with a cue at an uncalibrated score is
- * what filled the off-topic packs measured before this gate, and normalizing that score to
- * the best hit of the same query made the top of every list read 1.00.
+ * A plain BM25 hit is none of them. Sharing one term with a cue at an uncalibrated score fills
+ * result packs with unrelated content. Normalizing that score to the best hit of the same query
+ * makes the top of every list read 1.00.
  *
  * Traversal is none of them either, and no caller may make it one. A node the spread reached
  * carries no measurement against the query, so it cannot be admitted on what a different node

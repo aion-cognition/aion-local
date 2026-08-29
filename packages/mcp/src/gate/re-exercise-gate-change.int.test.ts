@@ -26,13 +26,13 @@ import {
 import { GateSubstrate, waitFor } from './gate-substrate.fixture.js';
 
 /**
- * Batteries 3, 4 and 5: what the substrate does when the world changes under it, and what it
- * writes about a session when nobody is watching. One substrate, because the correction
- * battery and the supersession battery are two readings of the same six-case set — four
- * genuine corrections and two baits, exactly as the exercise ran it.
+ * What the substrate does when the world changes under it, and what it writes about a session
+ * when nobody is watching. One substrate, because the correction battery and the supersession
+ * battery are two readings of the same six-case set: four genuine corrections and two baits.
  *
- * Order matters here. Battery 4 reads the graph the pipeline left; battery 3 then applies the
- * corrections through `supersedeEpisode`, which closes nodes, so it has to run second.
+ * Order matters here. The supersession set reads the graph the pipeline left; the correction
+ * set then applies the corrections through `supersedeEpisode`, which closes nodes, so it has
+ * to run second.
  */
 
 const READ_SESSION = 'gate-change-read';
@@ -44,8 +44,8 @@ const ENRICH_DEADLINE_MS = 1_500_000;
 
 /**
  * The judge is a model, so the count of genuine reversals it catches is a measurement rather
- * than a guarantee. What is a guarantee is the mode: nothing may close. This floor is what the
- * exercise measured zero of — 0 true positives across two designed batteries (EX-6).
+ * than a guarantee. What is a guarantee is the mode: nothing may close. The last measurement
+ * caught none at all, 0 true positives across two designed batteries, so this floor is one.
  */
 const MIN_CORRECTIONS_PROPOSED = 1;
 
@@ -130,7 +130,7 @@ beforeAll(async () => {
   await enrichAll(baselineIds, 'the six baselines to enrich');
 
   // The corrections land only once the baselines are enriched, which is what gives the
-  // supersession stage current claims to judge against. The exercise ran it in this order too.
+  // supersession stage current claims to judge against. Measured in this order too.
   for (const held of cases) {
     const stored = await substrate.store(
       { observations: [held.entry.next], summary: `${held.entry.subject}, revised` },
@@ -154,7 +154,7 @@ afterAll(async () => {
   await substrate.close();
 });
 
-describe('battery 4: the six-case supersession set in propose mode', () => {
+describe('the six-case supersession set in propose mode', () => {
   it('closes nothing, whatever the judge said', async () => {
     const written = await relationshipsByProvenance(substrate.driver, SUPERSESSION_METHOD);
     expect(written).toEqual([]);
@@ -193,7 +193,7 @@ describe('battery 4: the six-case supersession set in propose mode', () => {
   });
 });
 
-describe('battery 3: the four corrections, read back', () => {
+describe('the four corrections, read back', () => {
   const corrections = CHANGE_BATTERY.filter((entry) => entry.kind === 'correction');
 
   function held(entry: ChangeCase): StoredCase {
@@ -235,8 +235,8 @@ describe('battery 3: the four corrections, read back', () => {
   /**
    * Measured, not gated. In propose mode a judged contradiction is a review row and nothing
    * else, so an enriched correction on its own leaves the earlier claim open and competing.
-   * These are EX-5's own numbers, re-measured against this round's pipeline; the gate is the
-   * assertion below, on what recall answers once the correction has actually been applied.
+   * These numbers are re-measured against the current pipeline; the gate is the assertion
+   * below, on what recall answers once the correction has actually been applied.
    */
   it.each(corrections)('records where $key ranks before the correction is applied', async (entry) => {
     const before = await ask(entry, 'before');
@@ -252,8 +252,8 @@ describe('battery 3: the four corrections, read back', () => {
     });
     expect(applied.supersession.newId).toBe(row.correctionEpisodeId);
 
-    // The derived family closes with its episode: C1's propagation, and what stops a stale
-    // extracted fact from answering as `current` long after its episode was corrected (EX-17).
+    // The derived family closes with its episode, which is what stops a stale extracted fact
+    // from answering as `current` long after its episode was corrected.
     const closed = new Set(applied.propagation.closedIds);
     for (const id of row.baselineNodeIds) {
       const properties = await nodeProperties(substrate.driver, id);
@@ -263,9 +263,9 @@ describe('battery 3: the four corrections, read back', () => {
 
     const after = await ask(entry, 'after ');
     expect(after.corrected).toBeGreaterThan(0);
-    // A superseded memory is still served, with its lineage — currency-aware, not
-    // currency-filtered — but it may no longer outrank the correction, and it may no longer
-    // claim to be current. EX-5 measured the reverse on three of four questions.
+    // A superseded memory is still served, with its lineage: currency-aware, not
+    // currency-filtered. It may no longer outrank the correction, and it may no longer claim
+    // to be current. The reverse was measured on three of four questions.
     if (after.stale > 0) {
       expect(after.corrected).toBeLessThan(after.stale);
     }
@@ -279,7 +279,7 @@ describe('battery 3: the four corrections, read back', () => {
   }, 180_000);
 });
 
-describe('battery 5: narrative grounding on the fabrication fixtures', () => {
+describe('narrative grounding on the fabrication fixtures', () => {
   type Narration = {
     readonly sentences: number;
     readonly chars: number;
@@ -334,7 +334,7 @@ describe('battery 5: narrative grounding on the fabrication fixtures', () => {
   it('turns the 27-word probe into one grounded sentence, not eight invented ones', async () => {
     const thin = await narrate(THIN_NARRATIVE);
     expect(thin.sentences).toBe(1);
-    // EX-8's own numbers for this exact source: 8 sentences, 493 characters, a 12x expansion.
+    // The measured numbers for this exact source: 8 sentences, 493 characters, a 12x expansion.
     expect(thin.chars).toBeLessThan(493);
   }, 600_000);
 

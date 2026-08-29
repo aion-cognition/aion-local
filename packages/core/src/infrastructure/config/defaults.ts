@@ -71,7 +71,7 @@ export const DEFAULTS: Config = {
     // an overlap is corroboration rather than a lower floor: the floor sits above the whole
     // noise sample and the two genuine matches inside the band (0.451, 0.588) are admitted by
     // two agreeing legs instead. A floor at 0.50 sat inside that band and admitted off-topic
-    // text on one leg, which is what filled the exercise's miss packs to budget.
+    // text on one leg, which would fill result packs beyond their capacity.
     vectorAdmissionFloor: 0.6,
     // Above the noise sample's whole range (max 0.547), not merely above its median. A
     // corroborating measurement is still a measurement, and two of them at 0.46 and 0.51 are
@@ -84,7 +84,7 @@ export const DEFAULTS: Config = {
     entityMatchThreshold: 0.7,
     // Plan-pinned default. Two survivors keeps a cluster's best-ranked content visible
     // (a pack that answers "did we ever discuss X" still gets one example) without one
-    // burst shape eating the bucket the way the exercise measured.
+    // burst shape consuming the entire bucket.
     clusterCap: 2,
     // Four: a pack that answers "who is involved in X" needs room for more than one name
     // while still leaving eleven of fifteen fact slots to content that states something.
@@ -203,7 +203,7 @@ export const DEFAULTS: Config = {
     workerBreakerCooldownMs: 60_000,
     workerVectorBatchSize: 64,
     reconcileWarnThreshold: 50,
-    // Plan-pinned defaults: ten minutes past the drain rate this exercise measured
+    // Plan-pinned defaults: ten minutes past the drain rate measured against the live substrate
     // (1.9 to 6.7 episodes/min) is a real backlog, not noise; 200 unclaimed is the same
     // judgment by depth instead of age.
     lagOldestUnclaimedWarnMs: 600_000,

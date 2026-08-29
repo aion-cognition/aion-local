@@ -16,7 +16,7 @@ import {
 
 /**
  * The doctor's re-measurement of the committed floors, on whatever model this machine actually
- * has. It reports drift and stops there — the committed constants stay the only runtime source
+ * has. It reports drift and stops there: the committed constants stay the only runtime source
  * of truth, and a floor that moved per machine would make two installs disagree about what they
  * remember.
  *
