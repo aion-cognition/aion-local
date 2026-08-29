@@ -18,6 +18,13 @@ type ReinforcementSignalRow = {
   ts: string;
 };
 
+type SignalBurstRow = {
+  trigger: string;
+  ts: string;
+  lo: number;
+  n: number;
+};
+
 function toReinforcementSignal(row: ReinforcementSignalRow): ReinforcementSignal {
   return {
     id: row.id,
@@ -31,7 +38,8 @@ function toReinforcementSignal(row: ReinforcementSignalRow): ReinforcementSignal
 /**
  * Matches `sqlite.reinforcementQueueCap`'s default (`config/defaults.ts`, parity asserted in
  * `stage-defaults.test.ts`). A rolling window is closer to Hebbian semantics than an
- * unbounded log, since nothing drains this table yet.
+ * unbounded log: signals older than the window stand for co-activations the graph has
+ * already moved on from.
  */
 export const DEFAULT_REINFORCEMENT_QUEUE_CAP = 50_000;
 
@@ -72,10 +80,9 @@ function trimToCapacity(db: SqliteHandle, cap: number): void {
 }
 
 /**
- * Enqueue only; flushing into Hebbian reinforcement comes later. Past `cap` the oldest
- * rows are dropped to make room, counted in `meta` under
- * `reinforcement_queue:dropped_count`: the table has no consumer yet, so an unbounded
- * insert rate has nowhere else to go but disk.
+ * Past `cap` the oldest rows are dropped to make room, counted in `meta` under
+ * `reinforcement_queue:dropped_count`. The flush drains the table on the introspector's
+ * cadence, and the cap is what keeps a burst of writes between two flushes off the disk.
  */
 export function enqueueReinforcementSignal(
   db: SqliteHandle,
@@ -99,4 +106,128 @@ export function listReinforcementSignals(db: SqliteHandle): ReinforcementSignal[
     .prepare('SELECT * FROM reinforcement_queue ORDER BY rowid ASC')
     .all() as ReinforcementSignalRow[];
   return rows.map(toReinforcementSignal);
+}
+
+export function countReinforcementSignals(db: SqliteHandle): number {
+  const row = db.prepare('SELECT count(*) AS n FROM reinforcement_queue').get() as { n: number };
+  return row.n;
+}
+
+/**
+ * The oldest bursts, whole. A burst is the set of rows one producer wrote in one go, which it
+ * stamps with a single trigger and timestamp: an episode's co-extraction pairs, or one
+ * recall's co-activated pairs.
+ *
+ * Batching by burst rather than by row is what makes the clique discount computable. The
+ * discount needs to know how many nodes the burst touched, and that is only readable from a
+ * burst that arrives whole; half an episode's pairs read as a smaller, less discounted clique
+ * and would apply more weight than the whole episode does. So `batchSize` is a floor the claim
+ * rounds up to the end of a burst, and one flush can exceed it by at most the size of the last
+ * burst it took.
+ *
+ * The grouping pass scans the table, which the row-level path deliberately never does. The
+ * flush runs on the introspector's cadence rather than on the recall hot path, so a scan of a
+ * capped table is the cheap side of this trade.
+ */
+export function claimReinforcementSignals(
+  db: SqliteHandle,
+  batchSize: number,
+): ReinforcementSignal[] {
+  if (batchSize <= 0) {
+    return [];
+  }
+
+  const bursts = db
+    .prepare(
+      `SELECT trigger, ts, MIN(rowid) AS lo, count(*) AS n
+       FROM reinforcement_queue
+       GROUP BY trigger, ts
+       ORDER BY lo ASC
+       LIMIT ?`,
+    )
+    .all(batchSize) as SignalBurstRow[];
+
+  const claimed: SignalBurstRow[] = [];
+  let rows = 0;
+  for (const burst of bursts) {
+    if (rows >= batchSize) {
+      break;
+    }
+    claimed.push(burst);
+    rows += burst.n;
+  }
+  if (claimed.length === 0) {
+    return [];
+  }
+
+  const predicate = claimed.map(() => '(trigger = ? AND ts = ?)').join(' OR ');
+  const parameters = claimed.flatMap((burst) => [burst.trigger, burst.ts]);
+  const selected = db
+    .prepare(`SELECT * FROM reinforcement_queue WHERE ${predicate} ORDER BY rowid ASC`)
+    .all(...parameters) as ReinforcementSignalRow[];
+  return selected.map(toReinforcementSignal);
+}
+
+/**
+ * Chunked because the id list is unbounded in principle: a claim rounds up to a whole burst,
+ * and nothing caps how many pairs one producer writes at once.
+ */
+const DELETE_CHUNK_SIZE = 500;
+
+/** Applied signals leave the queue. A row is a nomination, and the durable record of it is the edge weight. */
+export function deleteReinforcementSignals(db: SqliteHandle, ids: readonly string[]): number {
+  let removed = 0;
+  for (let start = 0; start < ids.length; start += DELETE_CHUNK_SIZE) {
+    const chunk = ids.slice(start, start + DELETE_CHUNK_SIZE);
+    const placeholders = chunk.map(() => '?').join(', ');
+    removed += db
+      .prepare(`DELETE FROM reinforcement_queue WHERE id IN (${placeholders})`)
+      .run(...chunk).changes;
+  }
+  return removed;
+}
+
+const FLUSH_META_KEYS = {
+  signals: 'hebbian_flush:signals_applied',
+  pairs: 'hebbian_flush:pairs_applied',
+  edges: 'hebbian_flush:edges_updated',
+  lastRunAt: 'hebbian_flush:last_run_at',
+} as const;
+
+export type ReinforcementFlushCounters = {
+  /** Cumulative across the store's lifetime, like the dropped counter beside them. */
+  readonly signalsApplied: number;
+  readonly pairsApplied: number;
+  readonly edgesUpdated: number;
+  readonly lastRunAt?: string;
+};
+
+export function reinforcementFlushCounters(db: SqliteHandle): ReinforcementFlushCounters {
+  const lastRunAt = getMeta(db, FLUSH_META_KEYS.lastRunAt);
+  return {
+    signalsApplied: Number(getMeta(db, FLUSH_META_KEYS.signals) ?? '0'),
+    pairsApplied: Number(getMeta(db, FLUSH_META_KEYS.pairs) ?? '0'),
+    edgesUpdated: Number(getMeta(db, FLUSH_META_KEYS.edges) ?? '0'),
+    ...(lastRunAt === undefined ? {} : { lastRunAt }),
+  };
+}
+
+export type ReinforcementFlushCounts = {
+  readonly signalsApplied: number;
+  readonly pairsApplied: number;
+  readonly edgesUpdated: number;
+  readonly at: string;
+};
+
+/**
+ * Counters `status` and the introspector read to tell reinforcement outrunning decay from
+ * a flush that has stopped running at all. `lastRunAt` moves on an empty flush too, which is
+ * what separates a quiet queue from a stalled operation.
+ */
+export function recordReinforcementFlush(db: SqliteHandle, counts: ReinforcementFlushCounts): void {
+  const current = reinforcementFlushCounters(db);
+  setMeta(db, FLUSH_META_KEYS.signals, String(current.signalsApplied + counts.signalsApplied));
+  setMeta(db, FLUSH_META_KEYS.pairs, String(current.pairsApplied + counts.pairsApplied));
+  setMeta(db, FLUSH_META_KEYS.edges, String(current.edgesUpdated + counts.edgesUpdated));
+  setMeta(db, FLUSH_META_KEYS.lastRunAt, counts.at);
 }
