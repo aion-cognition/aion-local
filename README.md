@@ -40,11 +40,19 @@ add conversation context, a token budget, and time travel.
 
 The result is a `MemoryPack`: up to five buckets (`facts`, `episodes`, `narratives`,
 `preferences`, `resonant`), each present only when it has content. Every item carries its
-content, a rationale (which method found it, its score, and the graph path when one
-applies), and a currency marker (`current` or `superseded`, with the superseding item's id
-and timestamp when applicable). The pack also carries `rendered_text` (a block ready to
-drop straight into agent reasoning) and metadata: the cues extracted from the query, a
-per-stage timing breakdown, and a token estimate.
+content, its rank across the whole pack, the absolute confidence behind its admission, a
+rationale (which method found it, its score, and the graph path when one applies), and a
+currency marker (`current` or `superseded`, with the superseding item's id and timestamp
+when applicable). The pack also carries `rendered_text` (a block ready to drop straight
+into agent reasoning) and metadata: the cues extracted from the query, a per-stage timing
+breakdown, and a token estimate.
+
+A pack says what it is short of. When cue extraction, embedding, or the graph degraded,
+when spreading activation stopped on its budget, or when the calling session has episodes
+that are stored but not yet enriched, `rendered_text` opens with one plain line naming all
+of it — `note: degraded cue extraction (timeout); 2 recent episodes not yet enriched` — so
+a client reading only the text block sees the same honesty a client reading the metadata
+does.
 
 `as_of` asks what was true at a past date (world time). `knew_at` asks what the substrate
 believed at a past date (system time). Both can be set together. An empty pack is a valid,

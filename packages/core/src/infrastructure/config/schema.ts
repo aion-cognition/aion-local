@@ -66,6 +66,17 @@ export const ConfigSchema = z.object({
      * parameter; the plan pins the default at 2 and the env var name at `AION_PACK_CLUSTER_CAP`.
      */
     clusterCap: positiveInt,
+    /**
+     * The facts bucket's own three rules (EX-19: Entity glosses took 58% of fact slots and
+     * Decision nodes 3% on a decision-oriented workload). `entityGlossCap` bounds the glosses;
+     * `restatementFloor` is the cosine at or above which a Goal or Plan is judged to be the
+     * query said back rather than answered, measured in `facts-calibration.int.test.ts`;
+     * `decisionBoost` multiplies the fused score of Decision and Insight when the cue model
+     * judged the query decision-shaped. None of the three is an Appendix E parameter.
+     */
+    entityGlossCap: positiveInt,
+    restatementFloor: proportion,
+    decisionBoost: z.number().min(1),
   }),
   search: z.object({
     methods: z.array(searchMethod).min(1),

@@ -78,6 +78,8 @@ describe('MemoryPackSchema valid fixtures', () => {
         {
           id: 'episode-1',
           content: 'decided to key the sync on id_slug',
+          rank: 1,
+          confidence: 0.82,
           rationale: { method: 'vector', score: 0.82 },
           currency: 'current',
         },
@@ -94,6 +96,8 @@ describe('MemoryPackSchema valid fixtures', () => {
         {
           id: 'fact-1',
           content: 'Alice works on the API',
+          rank: 1,
+          confidence: 0,
           occurred_at: '2026-02-14T09:00:00Z',
           rationale: { method: 'graph_traversal', score: 0.41, path: 'Episode-[MENTIONS]->Entity' },
           currency: 'current',
@@ -111,6 +115,8 @@ describe('MemoryPackSchema valid fixtures', () => {
         {
           id: 'fact-2',
           content: 'the API redesign targets Q3',
+          rank: 2,
+          confidence: 0.55,
           rationale: { method: 'bm25', score: 0.55 },
           currency: 'superseded',
           superseded_by: { id: 'fact-9', at: '2026-03-01T00:00:00Z' },
@@ -124,6 +130,8 @@ describe('MemoryPackSchema valid fixtures', () => {
 
   it('parses every bucket populated at once', () => {
     const item = (id: string) => ({
+      rank: 1,
+      confidence: 0.3,
       id,
       content: id,
       rationale: { method: 'resonance', score: 0.3 },
@@ -166,6 +174,8 @@ describe('MemoryPackSchema invalid shapes', () => {
     const result = MemoryPackItemSchema.safeParse({
       id: 'x',
       content: 'x',
+      rank: 1,
+      confidence: 1,
       rationale: { method: 'vector', score: 1 },
       currency: 'stale',
     });

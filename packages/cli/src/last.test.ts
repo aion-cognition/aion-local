@@ -24,12 +24,16 @@ const FIXTURE_PACK: MemoryPack = {
       id: 'ep-1',
       content: 'we picked webhooks for ingestion because polling was too slow',
       occurred_at: '2026-06-01T11:00:00.000Z',
+      rank: 1,
+      confidence: 0.834,
       rationale: { method: 'vector', score: 0.834 },
       currency: 'current',
     },
     {
       id: 'ep-2',
       content: 'standup moved to nine thirty on tuesdays',
+      rank: 3,
+      confidence: 0,
       rationale: {
         method: 'activation',
         score: 0.412,
@@ -43,6 +47,8 @@ const FIXTURE_PACK: MemoryPack = {
     {
       id: 'fact-1',
       content: 'prefers async standups',
+      rank: 2,
+      confidence: 0.62,
       rationale: { method: 'bm25', score: 0.62 },
       currency: 'current',
     },
@@ -110,11 +116,13 @@ describe('renderPack', () => {
     expect(text).toContain('## Episodes');
     expect(text).toContain('## Facts');
     expect(text).toContain('1. we picked webhooks for ingestion because polling was too slow');
-    expect(text).toContain('id=ep-1 method=vector score=0.834 currency=current occurred=2026-06-01T11:00:00.000Z');
     expect(text).toContain(
-      'id=ep-2 method=activation score=0.412 path=session-1 -[PARTICIPATES_IN]-> ep-2 currency=superseded superseded_by=ep-3@2026-06-02T09:00:00.000Z',
+      'id=ep-1 rank=1 method=vector confidence=0.834 score=0.834 currency=current occurred=2026-06-01T11:00:00.000Z',
     );
-    expect(text).toContain('id=fact-1 method=bm25 score=0.620 currency=current');
+    expect(text).toContain(
+      'id=ep-2 rank=3 method=activation confidence=0.000 score=0.412 path=session-1 -[PARTICIPATES_IN]-> ep-2 currency=superseded superseded_by=ep-3@2026-06-02T09:00:00.000Z',
+    );
+    expect(text).toContain('id=fact-1 rank=2 method=bm25 confidence=0.620 score=0.620 currency=current');
   });
 
   it('lists the cue set, stage timings, and token estimate', () => {

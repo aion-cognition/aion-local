@@ -78,24 +78,62 @@ const CUE_OUTPUT_JSON_SCHEMA: JsonSchema = {
     query_cues: { type: 'array', items: { type: 'string' } },
     summary_cues: { type: 'array', items: { type: 'string' } },
     recent_turn_cues: { type: 'array', items: { type: 'string' } },
+    query_intent: { type: 'string', enum: ['decision', 'other'] },
   },
-  required: ['query_cues', 'summary_cues', 'recent_turn_cues'],
+  required: ['query_cues', 'summary_cues', 'recent_turn_cues', 'query_intent'],
 };
 
+/**
+ * `query_intent` is optional here and required in the JSON schema above. A provider that
+ * constrains generation to the schema always fills it; one that does not should cost recall a
+ * ranking hint, never the whole extraction — degrading to the raw query because one enum was
+ * missing would be a worse answer than ignoring the enum.
+ */
 const CueModelOutputSchema = z.object({
   query_cues: z.array(z.string()),
   summary_cues: z.array(z.string()),
   recent_turn_cues: z.array(z.string()),
+  query_intent: z.enum(['decision', 'other']).optional(),
 });
 
+/**
+ * Two things this prompt has to hold, both measured against the pinned cue model.
+ *
+ * Invention: a query naming a topic the substrate has never held still produced confident,
+ * on-topic-looking cues, so the ban on leaving the section is stated as a rule and repeated
+ * as an instruction to return nothing rather than guess.
+ *
+ * Intent: whether a query asks what was chosen is a judgment, and the alternative to asking
+ * for it is a keyword list, which the cognitive path does not get (PRD §2). Every clause after
+ * "query_intent" is here because the model got that case wrong without it — a recommendation
+ * read as a decision, a bug report read as a decision, and "why did we reject X" read as a
+ * cause rather than as the choice it names. With them, the judgment was right on 11 of 12
+ * probe queries and identical across three runs; without them, on 8 of 12. The survivor is
+ * "what was that bug in the barrel exports", read as a decision; an over-fired boost lifts
+ * Decision and Insight and admits nothing, so it costs ranking rather than honesty.
+ */
 const CUE_SYSTEM_PROMPT =
   'You extract short semantic search cues from an AI agent memory-recall query. ' +
   'A cue is a concept, entity, or theme worth searching a memory graph for, not ' +
   'necessarily an exact word from the input. The user message has three sections: ' +
   'the query, the conversation summary, and the recent turns. Extract cues separately ' +
   'for each section. Return an empty array for a section marked "(none provided)". ' +
-  'Do not invent a cue that needs information outside the section it comes from. Keep ' +
-  'each cue to a few words and do not repeat one within its own section.';
+  'Every cue must be about something the section itself names. Never introduce a topic, ' +
+  'domain, or entity the section does not mention, and never guess what the user might ' +
+  'have meant: if a section names nothing worth searching for, return an empty array for ' +
+  'it. Fewer, well-grounded cues are better than more. Keep each cue to a few words and ' +
+  'do not repeat one within its own section. ' +
+  'Then judge the query. ' +
+  'query_intent is "decision" only when the query asks which choice was already made or why ' +
+  'it was made, as in "what did we decide about X", "did we decide to X", "why did we reject ' +
+  'X". Everything else is "other", including a question asking for a fact, a number, a ' +
+  'measurement, a bug, or a recommendation. "what is the best anchovy brand for puttanesca" ' +
+  'is "other", because it asks for a recommendation rather than a choice already made. ' +
+  '"what was that bug in the barrel exports" is "other", because it asks what happened ' +
+  'rather than what was ' +
+  'chosen. "why did we reject the Kafka proposal" is "decision", because a rejection is a ' +
+  'choice that was already made, even though the question opens with "why". ' +
+  'Judge the query alone: the summary never changes this answer.';
 
 function hasSummary(input: CueExtractionInput): boolean {
   return input.summary !== undefined && input.summary.trim().length > 0;
@@ -166,11 +204,12 @@ async function callCueModel(deps: CueExtractionDeps, input: CueExtractionInput):
 
 /**
  * PRD §6.1's ladder: "recall proceeds on query and summary embeddings plus BM25 over the raw
- * query text." Both of the caller's own text buckets carry through at their Algorithm 1
- * weights, because the summary is context the caller already extracted and dropping it costs
- * signal the degraded path has no other way to recover. The recent-turns bucket does not
- * carry: it is the procedural bucket Algorithm 1 weights lowest, and a verbatim turn is a
- * transcript line rather than a cue. Nothing here derives terms from the text.
+ * query text." Both of the caller's own text buckets carry through — the summary at the same
+ * damped weight the healthy path gives it — because the summary is context the caller already
+ * extracted and dropping it costs signal the degraded path has no other way to recover. The
+ * recent-turns bucket does not carry: it is the procedural bucket Algorithm 1 weights lowest,
+ * and a verbatim turn is a transcript line rather than a cue. Nothing here derives terms from
+ * the text.
  */
 function degradedResult(
   input: CueExtractionInput,
@@ -179,7 +218,7 @@ function degradedResult(
   const cues: Cue[] = [{ text: input.query.trim(), source: 'raw_query', weight: 3 }];
   const summary = input.summary?.trim();
   if (summary !== undefined && summary.length > 0) {
-    cues.push({ text: summary, source: 'raw_summary', weight: 2 });
+    cues.push({ text: summary, source: 'raw_summary', weight: SUMMARY_CUE_WEIGHT });
   }
   return {
     degraded: true,
@@ -189,19 +228,48 @@ function degradedResult(
 }
 
 /**
+ * Algorithm 1 weighs a summary cue 2x. It is damped to 1x here, which is EX-20's finding
+ * applied by weight rather than by wording: nothing rewrites or drops the caller's summary,
+ * so its cues still seed and still corroborate, they just stop outranking the question.
+ *
+ * Measured, on one query against one substrate under four summaries: no context put the
+ * answer at rank 7 of 21, "checking a specific measured number" at 9 of 23, "reviewing the
+ * on-call handoff for Frankfurt" at 7 of 24, and "recalling my own recent work" MISSED, 4 of 4
+ * across fresh sessions. No summary improved on no summary at all, and one destroyed the
+ * answer, because summary cues compete with query cues for a seed budget that was exactly
+ * full on all 1,480 logged recalls.
+ *
+ * Unconditional rather than model-judged. The pinned cue model was asked to judge whether a
+ * summary named any specific thing, and could not hold that judgment and the intent judgment
+ * in one prompt: across four prompt shapes it either inverted, collapsed to a constant, or
+ * flipped run to run on the same input, and the shapes that kept it honest cost the intent
+ * judgment instead. A weight that moves with the weather is worse than a lower weight.
+ */
+const SUMMARY_CUE_WEIGHT: CueWeight = 1;
+
+/**
  * Buckets in weight order so a duplicate (case-insensitive) surfaces once, at its highest
  * weight. A bucket the caller never populated is dropped even if the model filled it in
  * anyway (a hallucinated summary cue with no summary in the input is not a summary cue).
+ *
+ * The raw query leads every list, whatever the model returned. A cue set is the model's
+ * reading of the question and the question itself is not negotiable: EX-20 measured a
+ * lexically precise query missing entirely because the model split it into single words, and
+ * the same run measured the raw-query path attributing 75 to 100% of its items to the right
+ * episode against 30% for the model's own cues on a bare query.
  */
 function toCues(
+  input: CueExtractionInput,
   output: z.infer<typeof CueModelOutputSchema>,
   presence: { readonly summary: boolean; readonly recentTurns: boolean },
 ): Cue[] {
+  const query = input.query.trim();
   const buckets: readonly [readonly string[], CueSource, CueWeight][] = [
-    [output.query_cues, 'query', 3],
-    [presence.summary ? output.summary_cues : [], 'summary', 2],
+    [query.length === 0 ? output.query_cues : [query, ...output.query_cues], 'query', 3],
+    [presence.summary ? output.summary_cues : [], 'summary', SUMMARY_CUE_WEIGHT],
     [presence.recentTurns ? output.recent_turn_cues : [], 'recent_turns', 1],
   ];
+  const intent = output.query_intent === 'decision' ? { intent: 'decision' as const } : {};
 
   const seen = new Set<string>();
   const cues: Cue[] = [];
@@ -216,7 +284,7 @@ function toCues(
         continue;
       }
       seen.add(key);
-      cues.push({ text, source, weight });
+      cues.push({ text, source, weight, ...(source === 'query' ? intent : {}) });
     }
   }
   return cues;
@@ -248,7 +316,10 @@ export async function extractCues(deps: CueExtractionDeps, input: CueExtractionI
 
   const result: CueExtractionResult = {
     degraded: false,
-    cues: toCues(parsed.data, { summary: hasSummary(input), recentTurns: hasRecentTurns(input) }),
+    cues: toCues(input, parsed.data, {
+      summary: hasSummary(input),
+      recentTurns: hasRecentTurns(input),
+    }),
   };
   deps.cache.set(key, result);
   return result;

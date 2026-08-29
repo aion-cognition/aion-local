@@ -3,6 +3,7 @@ import {
   type Cue,
   type Degradation,
   type MemoryPack,
+  type PackTruncation,
   type RecallInput,
   type RecallOutput,
   type StageTimingsMs,
@@ -25,8 +26,10 @@ import {
   type ActivatedNode,
   type ActivationBudget,
   type ActivationRun,
+  type ActivationTermination,
   type AdjacencyFetch,
 } from '../domain/activation.js';
+import { labelBoosts, queryCueTexts, queryRestatements } from '../domain/facts.js';
 import { buildRankedLists, toActivationSeed } from './candidates.js';
 import { extractCues, type CueCache, type CueExtractionResult } from './cues.js';
 import type { AdmissionPolicy, AdmissionReport } from '../domain/admission.js';
@@ -228,6 +231,19 @@ async function pendingEnrichment(deps: RecallDeps, sessionId: string, mode: Read
   }
 }
 
+/**
+ * Which terminations mean the answer was cut short. `hop_limit` is not one of them: PRD §6.3
+ * bounds traversal depth by design, so stopping there is the spread finishing its job. The
+ * other two are budgets — EX-21 measured `node_budget` on 60.2% of recalls against a
+ * populated substrate, invisible to every caller.
+ */
+function truncationFor(termination: ActivationTermination): PackTruncation | undefined {
+  if (termination === 'node_budget' || termination === 'max_iterations') {
+    return 'activation_budget';
+  }
+  return undefined;
+}
+
 function activationBudget(config: Config): ActivationBudget {
   return {
     ...config.activation,
@@ -346,6 +362,7 @@ export async function handleRecall(
       reranker: deps.config.search.reranker,
       mmrLambda: deps.config.search.mmrLambda,
       clusterCap: deps.config.recall.clusterCap,
+      labelBoosts: labelBoosts(cues.value.cues, deps.config.recall.decisionBoost),
       ...(vectors === undefined ? {} : { vectors }),
     });
   });
@@ -362,6 +379,7 @@ export async function handleRecall(
     fusion: fusion.ms,
   };
 
+  const truncated = truncationFor(activation.value.termination);
   const pack = assemblePack({
     items: fusion.value.items,
     caps: capsFor(deps.config),
@@ -370,6 +388,12 @@ export async function handleRecall(
     timings,
     ...(degradations.length === 0 ? {} : { degraded: degradations }),
     pendingEnrichment: pendingEnrichmentCount,
+    ...(truncated === undefined ? {} : { truncated }),
+    restating: queryRestatements(fusion.value.items, {
+      floor: deps.config.recall.restatementFloor,
+      queryCues: queryCueTexts(cues.value.cues),
+    }),
+    entityGlossCap: deps.config.recall.entityGlossCap,
   });
 
   saveLastPack(deps.db, sessionId, pack, now.toISOString());

@@ -227,7 +227,11 @@ describe('recall over a substrate written by the real intake path', () => {
 
     expect(pack.rendered_text).toContain('## Episodes');
     expect(pack.rendered_text).toContain(WEBHOOKS_OBSERVATION);
-    expect(pack.metadata.cues).toEqual([{ text: CUE, source: 'query', weight: 3 }]);
+    // The caller's own question leads the cue set, ahead of whatever the model extracted.
+    expect(pack.metadata.cues).toEqual([
+      { text: QUERY, source: 'query', weight: 3 },
+      { text: CUE, source: 'query', weight: 3 },
+    ]);
     expect(pack.metadata.token_estimate).toBeGreaterThan(0);
     for (const stage of ['cues', 'embed', 'seeds', 'activation', 'fusion'] as const) {
       expect(pack.metadata.stage_timings_ms[stage]).toBeGreaterThanOrEqual(0);
@@ -248,7 +252,7 @@ describe('recall over a substrate written by the real intake path', () => {
     expect(pack.preferences).toBeUndefined();
     expect(pack.resonant).toBeUndefined();
     expect(pack.rendered_text).toContain('No memories matched this query.');
-    expect(pack.metadata.cues).toHaveLength(1);
+    expect(pack.metadata.cues).toHaveLength(2);
   });
 });
 

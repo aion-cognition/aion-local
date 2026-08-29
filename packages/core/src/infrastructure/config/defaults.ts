@@ -80,6 +80,21 @@ export const DEFAULTS: Config = {
     // (a pack that answers "did we ever discuss X" still gets one example) without one
     // burst shape eating the bucket the way EX-22 measured.
     clusterCap: 2,
+    // The plan pins "at most 3 or 4". Four, because a pack that answers "who is involved in X"
+    // needs room for more than one name while still leaving eleven of fifteen fact slots to
+    // content that states something.
+    entityGlossCap: 4,
+    // Measured against nomic-embed-text on two distributions of Goal/Plan text, both scored
+    // against the query that would retrieve them (`facts.fixtures.ts`): nodes that restate the
+    // query min 0.841 p50 0.909, nodes that answer it p50 0.552 max 0.729. 0.80 sits in the gap
+    // between them and caught 8 of 8
+    // restatements with 0 of 8 misfires. `facts-calibration.int.test.ts` re-measures both and
+    // fails if they stop separating.
+    restatementFloor: 0.8,
+    // At rrfConstant 60 a factor of 1.25 is worth about fifteen ranks, which is the facts cap:
+    // enough to bring a Decision any leg ranked into the bucket, not enough to let one no leg
+    // ranked displace the top hit.
+    decisionBoost: 1.25,
   },
   search: {
     methods: ['vector', 'bm25', 'graph_traversal'],

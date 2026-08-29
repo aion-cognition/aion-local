@@ -82,6 +82,12 @@ export type FusionOptions = {
   /** How many members of one near-duplicate cluster a bucket may hold (`AION_PACK_CLUSTER_CAP`). */
   readonly clusterCap: number;
   /**
+   * Per-label multipliers on the fused score, empty on a query with no judged intent. Ranking
+   * only: a boost cannot admit an item the floors rejected, since admission has already run
+   * on evidence by the time this applies. `facts.ts`'s `labelBoosts` builds the map.
+   */
+  readonly labelBoosts?: Readonly<Record<string, number>>;
+  /**
    * Content vectors by node id, fetched only when the reranker is MMR. An id with no
    * vector is treated as maximally distinct, so a partial map degrades toward relevance
    * order rather than toward an arbitrary one. The cluster cap's cosine leg reuses this
@@ -149,6 +155,21 @@ function prefer(held: Accumulator, candidate: FusionCandidate): boolean {
     return candidate.relevance > held.relevance;
   }
   return candidate.rationale.method.localeCompare(held.best.rationale.method) < 0;
+}
+
+/** The strongest boost any of the item's labels carries; 1 when none of them carries one. */
+function boostFor(
+  labels: readonly string[],
+  boosts: Readonly<Record<string, number>> | undefined,
+): number {
+  if (boosts === undefined) {
+    return 1;
+  }
+  let factor = 1;
+  for (const label of labels) {
+    factor = Math.max(factor, boosts[label] ?? 1);
+  }
+  return factor;
 }
 
 /** Current before superseded on an exact tie; id last, so one graph produces one order. */
@@ -473,10 +494,14 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
       }
     }
     const superseded = entry.best.currency === 'superseded';
+    const ranked = entry.score * boostFor(entry.best.labels, options.labelBoosts);
     items.push({
       ...entry.best,
       relevance: entry.relevance,
-      score: superseded ? entry.score * SUPERSEDED_RANK_WEIGHT : entry.score,
+      // The merged evidence, not the winning candidate's own: the gate counted every
+      // measurement, and a reader of the item downstream has to see the same set.
+      evidence: [...entry.evidence],
+      score: superseded ? ranked * SUPERSEDED_RANK_WEIGHT : ranked,
     });
   }
 
