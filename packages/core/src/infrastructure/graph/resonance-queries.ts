@@ -5,6 +5,7 @@ import { CONTEXT_VECTOR_PROPERTY } from './context-vector-queries.js';
 import { BASE_NODE_LABEL } from './labels.js';
 import { readModeFragment, type ReadMode } from './read-modes.js';
 import { fromGraphVector, toGraphVector } from './values.js';
+import { CONTEXT_VECTOR_INDEX } from './vector-indexes.js';
 
 /**
  * The two reads context resonance makes: the activated set's context vectors, which the
@@ -17,8 +18,7 @@ import { fromGraphVector, toGraphVector } from './values.js';
  * transferable to the other.
  */
 
-/** Declared by migration 001 on `:Memory`, alongside `content_vec_idx`. */
-export const CONTEXT_VECTOR_INDEX = 'context_vec_idx';
+export { CONTEXT_VECTOR_INDEX } from './vector-indexes.js';
 
 /** The same rescaling `seed-queries.ts` documents: Neo4j reports `(1 + cos) / 2`, thresholds are cosines. */
 function asCosine(scoreExpression: string): string {
