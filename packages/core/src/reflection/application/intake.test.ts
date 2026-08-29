@@ -7,7 +7,7 @@ import type { Vector } from '../../infrastructure/providers/types.js';
 import { SessionManager } from '../../session/session-manager.js';
 import { ReflectionQueueClaimant } from '../../infrastructure/sqlite/claim.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { listReflectionJobs } from '../../infrastructure/sqlite/reflection-queue.js';
+import { enqueueReflectionJob, listReflectionJobs } from '../../infrastructure/sqlite/reflection-queue.js';
 import { ReflectionDispatch, type ReflectionJobSignal } from './dispatch.js';
 import { ReflectionNotStoredError } from './errors.js';
 import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
@@ -268,6 +268,44 @@ describe('reflection intake lanes', () => {
 
     expect(bulk.episode_id).toBe(interactive.episode_id);
     expect(listReflectionJobs(db)).toHaveLength(1);
+  });
+});
+
+describe('reflection intake pending_ahead', () => {
+  it('reports zero ahead of the first job into an empty queue', async () => {
+    const result = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+
+    expect(result.pending_ahead).toBe(0);
+  });
+
+  it('counts unclaimed interactive rows already queued, measured before this job lands', async () => {
+    for (let index = 0; index < 3; index += 1) {
+      enqueueReflectionJob(db, INTEGRATE_JOB_TYPE, { episode_id: `seed-${String(index)}` }, { lane: 'interactive' });
+    }
+
+    const result = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+
+    expect(result.pending_ahead).toBe(3);
+    // The count excludes this call's own row: four jobs now queued, three were ahead of it.
+    expect(listReflectionJobs(db)).toHaveLength(4);
+  });
+
+  it('ignores unclaimed bulk rows: only the interactive lane can be ahead of a caller', async () => {
+    enqueueReflectionJob(db, INTEGRATE_JOB_TYPE, { episode_id: 'bulk-seed' }, { lane: 'bulk' });
+
+    const result = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+
+    expect(result.pending_ahead).toBe(0);
+  });
+
+  it('still counts the interactive backlog when this call itself queues in bulk', async () => {
+    enqueueReflectionJob(db, INTEGRATE_JOB_TYPE, { episode_id: 'seed-0' }, { lane: 'interactive' });
+    enqueueReflectionJob(db, INTEGRATE_JOB_TYPE, { episode_id: 'seed-1' }, { lane: 'interactive' });
+
+    const result = await handleReflection(deps, { ...PAYLOAD, lane: 'bulk' }, { identity: 'session-a' });
+
+    expect(result.lane).toBe('bulk');
+    expect(result.pending_ahead).toBe(2);
   });
 });
 
