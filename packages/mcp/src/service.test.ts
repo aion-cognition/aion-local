@@ -143,6 +143,76 @@ describe('session multiplexing', () => {
   });
 });
 
+describe('closeIdleSessions', () => {
+  /**
+   * Its own service on its own port: the shared one accumulates sessions across every other
+   * test in this file, and every one of them would read as idle against a synthetic cutoff.
+   */
+  async function openIsolated(): Promise<{
+    readonly service: AionMcpService;
+    readonly url: URL;
+  }> {
+    const isolated = new AionMcpService({ backend, logger, host: '127.0.0.1', port: 0 });
+    const port = await isolated.listen();
+    return { service: isolated, url: new URL(`http://127.0.0.1:${String(port)}${MCP_PATH}`) };
+  }
+
+  it('closes only the session idle past the cutoff, leaving one just touched', async () => {
+    const { service: isolated, url: isolatedUrl } = await openIsolated();
+    try {
+      const idleClient = new Client({ name: 'aion-idle-test', version: '0.0.0' });
+      const idleTransport = new StreamableHTTPClientTransport(isolatedUrl);
+      await idleClient.connect(idleTransport);
+      await idleClient.callTool({ name: 'recall', arguments: { query: 'about to go quiet' } });
+      const idleTouchedAt = Date.now();
+
+      // A real gap, not a synthetic one: the cutoff below sits inside it, so the two calls'
+      // actual wall-clock order (not their names) is what the assertion below trusts.
+      await new Promise((resolve) => setTimeout(resolve, 25));
+
+      const activeClient = new Client({ name: 'aion-active-test', version: '0.0.0' });
+      const activeTransport = new StreamableHTTPClientTransport(isolatedUrl);
+      await activeClient.connect(activeTransport);
+      await activeClient.callTool({ name: 'recall', arguments: { query: 'still talking' } });
+
+      const closed = isolated.closeIdleSessions(1000, idleTouchedAt + 1000 + 10);
+
+      expect(closed).toEqual([idleTransport.sessionId]);
+      await activeClient.close();
+    } finally {
+      await isolated.close();
+    }
+  });
+
+  it('answers a late call on an idle-expired session with the same unknown-session error a never-opened one gets', async () => {
+    const { service: isolated, url: isolatedUrl } = await openIsolated();
+    try {
+      const client = new Client({ name: 'aion-idle-test', version: '0.0.0' });
+      const transport = new StreamableHTTPClientTransport(isolatedUrl);
+      await client.connect(transport);
+      await client.callTool({ name: 'recall', arguments: { query: 'about to go quiet' } });
+      const sessionId = transport.sessionId;
+      expect(sessionId).toBeDefined();
+
+      isolated.closeIdleSessions(0, Date.now() + 1);
+
+      const response = await fetch(isolatedUrl, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          'mcp-session-id': sessionId ?? '',
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'tools/list', id: 1 }),
+      });
+
+      expect(response.status).toBe(404);
+    } finally {
+      await isolated.close();
+    }
+  });
+});
+
 describe('results', () => {
   it('returns the rendered text and the structured pack over the wire', async () => {
     const client = await connect();

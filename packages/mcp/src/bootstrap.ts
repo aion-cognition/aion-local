@@ -39,6 +39,7 @@ import {
 } from '@aion/core';
 import { bindHost, runningInContainer } from './http.js';
 import { AionMcpService } from './service.js';
+import { SessionIdleSweeper } from './session-idle-sweeper.js';
 import type { ToolBackend } from './tools.js';
 
 /**
@@ -278,6 +279,13 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       queueLag: () => queueLagSnapshot(store.db, config.operational.workerMaxAttempts),
     });
 
+    // EX-32's backstop: a client's close() never sends the DELETE `onSessionClosed` above
+    // depends on, so a session with no request in this long closes on its own instead.
+    const idleSessions = new SessionIdleSweeper(service, {
+      idleMs: config.operational.sessionIdleExpiryMinutes * MINUTE_MS,
+    });
+    idleSessions.start();
+
     logger.info(
       {
         neo4j: connection.uri,
@@ -287,6 +295,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
         models: config.models,
         stages: stages.map((stage) => stage.name),
         narrativeSweepMs: idleNarratives.intervalMs,
+        sessionIdleSweepMs: idleSessions.intervalMs,
       },
       'mcp service ready',
     );
@@ -296,6 +305,9 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       config,
       logger,
       close: async () => {
+        // Stop the idle sweep before the service closes its own transports, so shutdown
+        // cannot race a sweep tick into closing a session the drain is already tearing down.
+        idleSessions.stop();
         // The service first, so every transport closes and its narrative is scheduled before
         // the closer is awaited; the driver goes last, since both are still writing to it.
         await service.close();

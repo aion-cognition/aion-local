@@ -181,6 +181,12 @@ export const ConfigSchema = z.object({
     lagOldestUnclaimedWarnMs: positiveInt,
     /** `aion doctor`'s `queue-lag` check warns past this total unclaimed depth. */
     lagQueueDepthWarnThreshold: nonNegativeInt,
+    /**
+     * EX-32: a client's `close()` tears down its transport locally without a DELETE, so the
+     * server-side session-close hook is best-effort. This is the backstop — an MCP transport
+     * session with no request in this many minutes closes on its own, independent of DELETE.
+     */
+    sessionIdleExpiryMinutes: positiveInt,
   }),
   logging: z.object({
     filePath: z.string().min(1),
