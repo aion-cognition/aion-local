@@ -1,7 +1,7 @@
 import type { AionMcpService } from './service.js';
 
 /**
- * EX-32's backstop on a clock. `AionMcpService.closeIdleSessions` decides which sessions
+ * The missing-DELETE backstop on a clock. `AionMcpService.closeIdleSessions` decides which sessions
  * qualify; this only keeps a tick reaching it, the same split `IdleNarrativeSweeper` (core)
  * uses for the idle narrative rule. Sweeping at half the idle window bounds how stale a
  * session can get past its deadline before something notices; the floor keeps a small

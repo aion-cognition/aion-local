@@ -220,6 +220,7 @@ beforeAll(async () => {
     logger,
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
+    workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
   };
   deadOllama = {
     ...live,

@@ -228,7 +228,7 @@ function degradedResult(
 }
 
 /**
- * Algorithm 1 weighs a summary cue 2x. It is damped to 1x here, which is EX-20's finding
+ * Algorithm 1 weighs a summary cue 2x. It is damped to 1x here, which is the measured finding
  * applied by weight rather than by wording: nothing rewrites or drops the caller's summary,
  * so its cues still seed and still corroborate, they just stop outranking the question.
  *
@@ -253,7 +253,7 @@ const SUMMARY_CUE_WEIGHT: CueWeight = 1;
  * anyway (a hallucinated summary cue with no summary in the input is not a summary cue).
  *
  * The raw query leads every list, whatever the model returned. A cue set is the model's
- * reading of the question and the question itself is not negotiable: EX-20 measured a
+ * reading of the question and the question itself is not negotiable: the exercise measured a
  * lexically precise query missing entirely because the model split it into single words, and
  * the same run measured the raw-query path attributing 75 to 100% of its items to the right
  * episode against 30% for the model's own cues on a bare query.

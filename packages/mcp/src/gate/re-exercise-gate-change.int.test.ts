@@ -87,12 +87,25 @@ async function cognitiveIds(episodeId: string): Promise<readonly string[]> {
   return nodes.map((node) => node.id);
 }
 
-/** Best rank in the pack for anything the episode is or produced; -1 when it carried none. */
+/**
+ * Best rank in the pack for anything the episode is or produced; -1 when it carried none.
+ *
+ * Ids alone are not enough. The enrichment that answers a corrected question may be an entity
+ * gloss or a node minted outside `findEpisodeCognitiveNodes`'s reach, so a run where the pack
+ * answered correctly at rank 1 has read as a miss purely on id bookkeeping. The answer's own
+ * text is the second key: it is what the question was asked to get back.
+ */
 function bestRank(
-  items: readonly { readonly id: string; readonly rank: number }[],
+  items: readonly { readonly id: string; readonly rank: number; readonly content: string }[],
   owned: ReadonlySet<string>,
+  answer?: string,
 ): number {
-  const hit = items.find((item) => owned.has(item.id));
+  const needle = answer?.toLowerCase();
+  const hit = items.find(
+    (item) =>
+      owned.has(item.id) ||
+      (needle !== undefined && item.content.toLowerCase().includes(needle)),
+  );
   return hit === undefined ? -1 : hit.rank;
 }
 
@@ -198,7 +211,11 @@ describe('battery 3: the four corrections, read back', () => {
       now: RECALLED_AT,
     });
     const ranks: Ranks = {
-      corrected: bestRank(result.items, new Set([row.correctionEpisodeId, ...row.correctionNodeIds])),
+      corrected: bestRank(
+        result.items,
+        new Set([row.correctionEpisodeId, ...row.correctionNodeIds]),
+        entry.answer,
+      ),
       stale: bestRank(result.items, new Set([row.baselineEpisodeId, ...row.baselineNodeIds])),
       items: result.items.length,
       served: result.items,

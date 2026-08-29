@@ -170,6 +170,7 @@ beforeAll(async () => {
     logger,
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
+    workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
   };
   deps = { driver: harness.driver, provider: provider(), logger };
 

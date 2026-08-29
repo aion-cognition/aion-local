@@ -43,7 +43,7 @@ packages/core/src/
   reflection/application/stages/        the pipeline, in the order bootstrap.ts registers them
   session/                              identity-to-session-id resolution
 packages/mcp/src/                       MCP server: tool definitions, HTTP transport
-packages/cli/src/                       aion command: init, status, doctor, last
+packages/cli/src/                       aion command: init, status, doctor, last, queue, proposals
 bin/aion                                host wrapper: rebuilds the image, runs the CLI container
 ```
 
@@ -64,7 +64,8 @@ CLI container needs it set explicitly:
 export AION_OLLAMA_URL=http://127.0.0.1:11434
 ```
 
-`./bin/aion <init|status|doctor|last>` runs the built CLI against the real compose stack.
+`./bin/aion <init|status|doctor|last|queue|proposals>` runs the built CLI against the real
+compose stack.
 Use it to exercise the actual binary, not as a test runner.
 
 ## Guard tests

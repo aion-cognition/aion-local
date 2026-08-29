@@ -74,7 +74,7 @@ export type ReflectionSummary = {
 };
 
 /**
- * The whitepaper's per-episode ledger key only ever gated the whole pipeline. EX-4: a stage
+ * The whitepaper's per-episode ledger key only ever gated the whole pipeline. A stage
  * with no ledger of its own (`cognitive`, historically) re-runs its full extraction on every
  * retry of the run it belongs to, and each pass MERGEs a fresh set of near-duplicate nodes
  * because its only idempotency is a content hash over LLM output that never collides twice.

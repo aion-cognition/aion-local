@@ -154,18 +154,35 @@ describe('battery 1: the unrelated-query battery EX-1 filled to budget', () => {
         `(${String(unmeasured)} with no measurement of their own), ` +
         `considered ${String(result.admission.considered)}, ` +
         `below floor ${String(result.admission.droppedBelowFloor)}, ` +
-        `unanchored ${String(result.admission.droppedUnanchored)}, ` +
+        `unmeasured ${String(result.admission.droppedUnmeasured)}, ` +
         `anchored ${String(result.admission.anchored)}, ` +
-        `${String(result.pack.metadata.token_estimate)} tokens`,
+        `${String(result.pack.metadata.token_estimate)} tokens` +
+        // What got in, and on what evidence. A count alone cannot tell a floor that is one
+        // notch too low from a leg admitting on something that is not a measurement at all,
+        // and those need opposite fixes.
+        result.items
+          .map(
+            (item) =>
+              `\n    [${item.rationale.method} ${item.confidence.toFixed(2)}] ` +
+              `${item.content.slice(0, 70)}`,
+          )
+          .join(''),
     );
 
     expect(result.items.length).toBeLessThanOrEqual(THIN_PACK_ITEMS);
     // The pack has to say what it refused, not merely be short: EX-1's packs were full and
     // silent, and a thin pack with an empty report would be the same silence one size down.
-    expect(result.admission.droppedBelowFloor + result.admission.droppedUnanchored).toBeGreaterThan(
+    expect(result.admission.droppedBelowFloor + result.admission.droppedUnmeasured).toBeGreaterThan(
       0,
     );
     expect(result.admission.admitted).toBe(result.items.length);
+    // The same counts reach the wire, not only the in-process result: a consumer reading the
+    // MCP pack has to be able to tell a floor doing its job from an empty substrate.
+    expect(result.pack.metadata.admission.considered).toBe(result.admission.considered);
+    expect(result.pack.metadata.admission.dropped_below_floor).toBe(
+      result.admission.droppedBelowFloor,
+    );
+    expect(result.pack.metadata.admission.vector_floor).toBe(result.admission.policy.vectorFloor);
   }, 120_000);
 
   // Last, so every probe above has already pushed its row. Stated as its own check because it
