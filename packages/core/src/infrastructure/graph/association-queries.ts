@@ -8,18 +8,18 @@ import { CONTENT_VECTOR_INDEX, type NodeContentVector } from './seed-queries.js'
 import { toGraphVector } from './values.js';
 
 /**
- * Whitepaper §6.6: co-occurrence and semantic association edges between entities. Both flow
- * through `edges.ts`'s merge policy, so this module only ever builds one `EdgeUpsert` per
+ * Co-occurrence and semantic association edges between entities. Both flow through
+ * `edges.ts`'s merge policy, so this module only ever builds one `EdgeUpsert` per
  * call; the accumulation, the endpoint normalization, and the signal/provenance union all
  * live there already.
  *
  * The two association types differ in what "the same fact again" means. Co-occurrence is an
- * episodic observation — the whitepaper's "count accumulates per shared episode" — so the
- * caller (the stage) gates each pair through an SQLite ledger key before calling
- * `linkCoOccurrence`, the same way the pipeline's own `reflection:orchestrator:{episodeId}`
- * key gates the whole run. Semantic similarity is a standing fact about two entities'
- * embeddings, true independent of which episode triggered the check, so `linkSimilarity`
- * carries `count: 0` and needs no such gate: MERGE alone makes a repeat call a no-op.
+ * episodic observation: the count accumulates per shared episode, so the caller (the stage)
+ * gates each pair through an SQLite ledger key before calling `linkCoOccurrence`, the same
+ * way the pipeline's own `reflection:orchestrator:{episodeId}` key gates the whole run.
+ * Semantic similarity is a standing fact about two entities' embeddings, true independent of
+ * which episode triggered the check, so `linkSimilarity` carries `count: 0` and needs no such
+ * gate: MERGE alone makes a repeat call a no-op.
  */
 
 export const CO_OCCURS_TYPE: RelationshipType = 'CO_OCCURS';
@@ -60,7 +60,7 @@ export type LinkSimilarityInput = {
 };
 
 export type LinkSimilarityResult = {
-  /** False when the edge already existed — the same pair surfaced again, by this run or an earlier one. */
+  /** False when the edge already existed: the same pair surfaced again, by this run or an earlier one. */
   readonly created: boolean;
 };
 
@@ -108,7 +108,7 @@ export type FindSimilarEntityCandidatesInput = {
 /**
  * `content_vec_idx` spans every `:Memory` label, not just `Entity`, so the index is asked for
  * more neighbours than the per-entity limit before the `Entity` filter and the threshold
- * narrow it down — otherwise a seed whose nearest neighbours in the raw index are mostly
+ * narrow it down: otherwise a seed whose nearest neighbours in the raw index are mostly
  * episodes or turns would come back with too few (or zero) entity candidates.
  */
 const KNN_OVERSAMPLE_FACTOR = 5;
@@ -119,9 +119,9 @@ function toGraphInteger(value: number): unknown {
 }
 
 /**
- * Whitepaper §6.6's semantic leg, batched across every entity the caller passes in one round
- * trip: `UNWIND` the seeds, query the vector index once per seed, group back down to the
- * seed's own top matches. Neo4j's index reports cosine rescaled onto [0,1] the same way
+ * The semantic leg of association-building, batched across every entity the caller passes in
+ * one round trip: `UNWIND` the seeds, query the vector index once per seed, group back down
+ * to the seed's own top matches. Neo4j's index reports cosine rescaled onto [0,1] the same way
  * `seed-queries.ts` documents; it is converted back to a true cosine here so `threshold`
  * compares like against like.
  */

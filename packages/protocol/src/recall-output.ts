@@ -2,10 +2,10 @@ import { z } from 'zod';
 import { CurrencySchema, IsoTimestampSchema, SupersededBySchema } from './common.js';
 
 /**
- * Every method that can produce a recalled item: whitepaper §5.2's four seed strategies,
- * §5.3's hybrid-search vector/bm25/graph_traversal trio, §5.4's spreading activation, and
- * §5.6's context resonance. Fixed rather than a plain string because P2's stages are a
- * closed, spec'd set (whitepaper §5) and every consumer branches on this value.
+ * Every method that can produce a recalled item: four seed strategies, hybrid-search
+ * (vector, bm25, graph traversal), spreading activation, and context resonance. Fixed
+ * rather than a plain string because the stages are a closed, specified set and every
+ * consumer branches on this value.
  */
 export const RecallMethodSchema = z.enum([
   'vector',
@@ -20,9 +20,9 @@ export const RecallMethodSchema = z.enum([
 export type RecallMethod = z.infer<typeof RecallMethodSchema>;
 
 /**
- * Whitepaper §5.7: "which method produced it, through which path, with what activation
- * score." `path` is present for traversal- and activation-sourced items; direct hits from
- * vector/bm25 have none.
+ * Which method produced it, through which path, and with what activation score.
+ * `path` is present for traversal- and activation-sourced items; direct hits from
+ * vector and bm25 have none.
  */
 export const RationaleSchema = z.strictObject({
   method: RecallMethodSchema,
@@ -33,16 +33,15 @@ export const RationaleSchema = z.strictObject({
 export type Rationale = z.infer<typeof RationaleSchema>;
 
 /**
- * One recalled memory, shaped identically across every bucket. `currency`/`superseded_by`
- * carry PRD §5.5's lineage annotation on every item, not just facts: default recall is
- * currency-aware, not currency-filtered, so any bucket may surface a superseded node.
- * `occurred_at` is whitepaper §5.7's "temporal context" for episodes; other buckets omit it.
+ * One recalled memory, shaped identically across every bucket. `currency` and
+ * `superseded_by` carry lineage annotation on every item, not just facts. Default recall
+ * is currency-aware, not currency-filtered, so any bucket may surface a superseded node.
+ * `occurred_at` is the temporal context for episodes; other buckets omit it.
  *
- * `rank` and `confidence` are what let a reader compare two items. `rationale.score` cannot:
- * it is the producing method's own number, so a BM25 hit normalized to the best hit of its
- * cue prints 1.00 next to a cosine of 0.62 and the list reads as though the lexical hit were
- * the stronger one (EX-30 measured the printed score rising as the list went down on 27% of
- * adjacent pairs).
+ * `rank` and `confidence` let a reader compare two items. `rationale.score` cannot.
+ * It is the producing method's own number. A BM25 hit normalized to the best hit of its
+ * cue prints 1.00 next to a cosine of 0.62. The list reads as though the lexical hit
+ * were the stronger one (on 27% of adjacent pairs, the printed score rose as the list went down).
  */
 export const MemoryPackItemSchema = z.strictObject({
   id: z.string().min(1),
@@ -56,7 +55,7 @@ export const MemoryPackItemSchema = z.strictObject({
   rank: z.number().int().positive(),
   /**
    * The absolute measurement admission read: a cosine on [0,1], comparable between queries.
-   * Zero where nothing measured the item — a node reached by traversal alone rides in on the
+   * Zero where nothing measured the item. A node reached by traversal alone rides in on the
    * pack's anchor rather than on a measurement of its own, and says so.
    */
   confidence: z.number(),
@@ -68,20 +67,18 @@ export const MemoryPackItemSchema = z.strictObject({
 export type MemoryPackItem = z.infer<typeof MemoryPackItemSchema>;
 
 /**
- * A present bucket always has content; an empty category is omitted rather than sent as
- * `[]` (PRD §3.1, whitepaper §5.7). `.min(1)` makes that invariant part of the schema, not
- * just a convention P2 has to remember.
+ * A present bucket always has content. An empty category is omitted rather than sent as
+ * an empty array. `.min(1)` makes that invariant part of the schema, not just a convention.
  */
 const memoryPackBucket = z.array(MemoryPackItemSchema).min(1);
 
 /**
- * PRD §6.1 / whitepaper Algorithm 1: query cues weigh 3x, summary and recent turns 1x.
- * Algorithm 1 puts the summary at 2x; recall damps it, because a summary cue competes with
- * a query cue for a seed budget that is always exactly full and never once improved the
- * answer's rank in the measurement that caught it.
- * `raw_query` and `raw_summary` are the degradation ladder's own sources — when the cue
+ * Query cues weigh 3x; summary and recent turns 1x. The algorithm puts the summary at
+ * 2x. Recall damps it because a summary cue competes with a query cue for a seed budget
+ * that is always exactly full and never once improved the answer's rank.
+ * `raw_query` and `raw_summary` are the degradation ladder's own sources. When the cue
  * model is down, recall proceeds on the caller's own text ("query and summary embeddings
- * plus BM25 over the raw query text"), and those cues have to be distinguishable from ones
+ * plus BM25 over the raw query text"). Those cues have to be distinguishable from ones
  * the model extracted from the same material.
  */
 export const CueSourceSchema = z.enum([
@@ -99,10 +96,10 @@ export const CueWeightSchema = z.union([z.literal(3), z.literal(2), z.literal(1)
 export type CueWeight = z.infer<typeof CueWeightSchema>;
 
 /**
- * What the caller is asking for, judged by the cue model rather than read off the words. One
- * member, because a decision-shaped query is the only intent the exercise measured a ranking
- * failure for: on an entirely decision-oriented workload the bucket meant to answer "what did
- * we decide" gave Decision nodes 3% of its slots (EX-19). A second intent is an addition here,
+ * What the caller is asking for, judged by the cue model rather than read off the words.
+ * One member because a decision-shaped query is the only intent that showed a ranking
+ * failure. On an entirely decision-oriented workload the bucket meant to answer "what did
+ * we decide" gave Decision nodes 3% of its slots. A second intent is an addition here,
  * not a redesign.
  */
 export const CueIntentSchema = z.enum(['decision']);
@@ -131,14 +128,14 @@ export const StageTimingsMsSchema = z.strictObject({
 export type StageTimingsMs = z.infer<typeof StageTimingsMsSchema>;
 
 /**
- * PRD §6.1 and §10's ladder. Recall has three legs that can drop out without failing the
- * call — the cue model, the embedding call, and the graph — and a consumer cannot tell any
- * of them from the items alone, because a pack thinned by an outage reads exactly like a
- * pack thinned by a query nothing matches. Each rung that fired names itself here and the
- * field stays absent on a normal run.
+ * Recall has three legs that can drop out without failing the call: the cue model,
+ * the embedding call, and the graph. A consumer cannot tell any of them from the items
+ * alone because a pack thinned by an outage reads exactly like a pack thinned by a
+ * query nothing matches. Each rung that fired names itself here. The field stays absent
+ * on a normal run.
  *
- * `timeout`, `model_error` and `invalid_output` are the inference stages' reasons;
- * `unavailable` is the graph's, and means no seed strategy could reach it.
+ * `timeout`, `model_error`, and `invalid_output` are the inference stages' reasons.
+ * `unavailable` is the graph's reason and means no seed strategy could reach it.
  */
 export const DegradationSchema = z.strictObject({
   stage: z.enum(['cues', 'embed', 'graph']),
@@ -149,9 +146,9 @@ export type Degradation = z.infer<typeof DegradationSchema>;
 
 /**
  * Why the pack is smaller than the substrate could have answered with. `activation_budget`
- * means spreading activation stopped on its visit budget rather than converging, so the
- * traversal leg was cut off mid-spread: EX-21 measured that on 60.2% of recalls against a
- * populated substrate, logged and never told to the caller.
+ * means spreading activation stopped on its visit budget rather than converging. The
+ * traversal leg was cut off mid-spread (on 60.2% of recalls against a populated substrate,
+ * this was logged but never told to the caller).
  */
 export const PackTruncationSchema = z.enum(['activation_budget']);
 
@@ -168,10 +165,10 @@ export const MemoryPackMetadataSchema = z.strictObject({
   cues: z.array(CueSchema),
   degraded: z.array(DegradationSchema).min(1).optional(),
   /**
-   * The calling session's own episodes with no orchestrator ledger key: real, stored, and
+   * The calling session's own episodes with no orchestrator ledger key. Real, stored, and
    * reachable by raw text, but not yet reachable by entity resolution, traversal, or context
-   * vectors (EX-11: a memory was not fully recallable for 20 to 25 minutes and the pack never
-   * said so). Optional and omitted at zero — a healthy pack states nothing extra.
+   * vectors. (A memory was not fully recallable for 20 to 25 minutes and the pack never said so.)
+   * Optional and omitted at zero. A healthy pack states nothing extra.
    */
   pending_enrichment: z.number().int().positive().optional(),
   /** Absent on a spread that converged; present means the pack is a cut-off answer. */
@@ -181,9 +178,9 @@ export const MemoryPackMetadataSchema = z.strictObject({
 export type MemoryPackMetadata = z.infer<typeof MemoryPackMetadataSchema>;
 
 /**
- * Whitepaper §5.7. Every bucket is optional and, when present, non-empty (PRD §3.1's
- * empty-category omission). `rendered_text` is the text block dropped straight into agent
- * reasoning; `metadata` is never omitted, even for an explicitly empty pack.
+ * Every bucket is optional and, when present, non-empty (empty categories are omitted).
+ * `rendered_text` is the text block dropped straight into agent reasoning. `metadata`
+ * is never omitted, even for an explicitly empty pack.
  */
 export const MemoryPackSchema = z.strictObject({
   facts: memoryPackBucket.optional(),
@@ -197,7 +194,7 @@ export const MemoryPackSchema = z.strictObject({
 
 export type MemoryPack = z.infer<typeof MemoryPackSchema>;
 
-/** The `recall` tool's output is the MemoryPack itself (PRD §3.1). */
+/** The `recall` tool's output is the MemoryPack itself. */
 export const RecallOutputSchema = MemoryPackSchema;
 
 export type RecallOutput = MemoryPack;

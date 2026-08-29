@@ -108,7 +108,7 @@ export class GraphTransaction {
  * Multi-statement atomicity: `supersede` closes a node and writes its lineage edge here so
  * a crash between the two cannot leave a closed node with no replacement pointing at it.
  * Session creation and reflection intake use it for the same reason, and additionally for
- * isolation — both derive a write from a read, so both take a node lock inside the
+ * isolation: both derive a write from a read, so both take a node lock inside the
  * transaction to keep a peer from landing between the two (`locks.ts`).
  */
 export async function inWriteTransaction<T>(
@@ -136,8 +136,8 @@ const CONNECTION_ACQUISITION_TIMEOUT_MS = 10_000;
 const MAX_TRANSACTION_RETRY_TIME_MS = 10_000;
 
 /**
- * Owns one driver for the process. Construction performs no I/O — the driver connects
- * lazily — so `health()` is the only call that reports whether the server is actually
+ * Owns one driver for the process. Construction performs no I/O (the driver connects
+ * lazily), so `health()` is the only call that reports whether the server is actually
  * there, and it is the same check `aion doctor` and `aion status` run.
  */
 export class GraphConnection {

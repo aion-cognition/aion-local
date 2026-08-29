@@ -10,12 +10,12 @@ import { FakeGraph, type FakeNode } from './fake-graph.fixture.js';
 
 /**
  * The narrative reads on top of the intake fake, so one unit test can drive a whole session
- * close without a server: the three statements `narrative-queries.ts` issues, plus the
- * supersession close, which the intake path never writes. Everything else — the stamped node
- * write, the edge upserts, the content-vector write — is already modeled by `FakeGraph` and
- * delegates to it. The live behaviour is proven by `narratives.int.test.ts`.
+ * close without a server. The three statements `narrative-queries.ts` issues plus the
+ * supersession close (which the intake path never writes) are modeled here. The stamped node
+ * write, edge upserts, and content-vector write are already modeled by `FakeGraph` and
+ * delegate to it. The live behaviour is proven by `narratives.int.test.ts`.
  *
- * Interception comes before the base dispatcher on purpose: the session-episode and
+ * Interception comes before the base dispatcher on purpose. The session-episode and
  * idle-session queries both mention `(e:Episode)`, which the base class reads as its
  * content-hash lookup.
  */

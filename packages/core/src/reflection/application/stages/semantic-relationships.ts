@@ -12,16 +12,16 @@ import type { ChatMessage, JsonSchema } from '../../../infrastructure/providers/
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
 
 /**
- * Whitepaper §6.8 / Algorithm 4 step 7: one structured-output call per episode proposing
- * typed edges between the entities and cognitive structures the two prior stages already
- * extracted. This stage reads both sets fresh from the graph rather than assuming either
- * stage ran in this pass — an episode enriched before entity or cognitive extraction landed,
- * or one where either stage failed in isolation, simply has fewer candidates to relate.
+ * One structured-output call per episode proposing typed edges between the entities and
+ * cognitive structures the two prior stages already extracted. This stage reads both sets
+ * fresh from the graph rather than assuming either stage ran in this pass: an episode
+ * enriched before entity or cognitive extraction landed, or one where either stage failed in
+ * isolation, simply has fewer candidates to relate.
  */
 
 export const SEMANTIC_RELATIONSHIP_STAGE_NAME = 'semantic-relationships';
 
-/** `config.models.reflect`'s pinned default; the Integration task threads the configured value in. */
+/** `config.models.reflect`'s default; callers thread the configured value in. */
 export const DEFAULT_SEMANTIC_RELATIONSHIP_MODEL = 'qwen3:8b';
 
 /** qwen3:8b with thinking on measured 10-44s with occasional non-returns; the guard, not a target. */
@@ -38,10 +38,11 @@ export type SemanticRelationshipStageOptions = {
 
 /**
  * The cognitive labels a typed edge may end on. A Goal or Plan is frequently a restatement
- * of the episode's own question or summary (D3 refuses the worst of these at mint time, but
- * older Goals predate that refusal), and Context, Event, Pattern, and Trend are observations
- * about the episode rather than claims one item can cause, enable, or contradict another
- * with. Entity is separate and always eligible — it is not a cognitive label.
+ * of the episode's own question or summary (the cognitive stage refuses the worst of these
+ * at mint time, but older Goals predate that refusal), and Context, Event, Pattern, and Trend
+ * are observations about the episode rather than claims one item can cause, enable, or
+ * contradict another with. Entity is separate and always eligible: it is not a cognitive
+ * label.
  */
 const CLAIM_BEARING_COGNITIVE_LABELS: ReadonlySet<string> = new Set(['Decision', 'Insight', 'Concept']);
 
@@ -178,10 +179,10 @@ type ResolvedProposal = {
  * Every drop here is a hallucination guard: a key the candidate list never issued, a
  * self-loop, a type outside the sanctioned seven, a pair this same run already proposed, or
  * a quote that is missing or does not appear verbatim in the episode. The last of those is
- * validation of the model's own output — an exact substring check against text this stage
- * already has — not a text heuristic judging what the relationship means. Nothing here fails
- * the stage — a hallucinated proposal is exactly what §6.8 asks this validation to catch, not
- * a reason to discard the proposals that check out.
+ * validation of the model's own output, an exact substring check against text this stage
+ * already has, not a text heuristic judging what the relationship means. Nothing here fails
+ * the stage: a hallucinated proposal is exactly what this validation exists to catch, not a
+ * reason to discard the proposals that check out.
  */
 function resolveProposals(
   raw: readonly Proposal[],

@@ -82,8 +82,8 @@ function renderToolExecution(execution: ToolExecution): string[] {
 }
 
 /**
- * PRD §3.2: tool executions and observations are episode content, not node types of their
- * own. Assembly is a fixed-order structural render — no summarizing, no keyword work —
+ * Tool executions and observations are episode content, not node types of their own.
+ * Assembly is a fixed-order structural render, with no summarizing and no keyword work,
  * because everything the episode text is for downstream (embedding, fulltext, extraction)
  * routes to inference in the reflection pipeline.
  */

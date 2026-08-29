@@ -9,23 +9,23 @@ import type { ChatMessage, JsonSchema, Vector } from '../../../infrastructure/pr
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
 
 /**
- * Whitepaper §6.7 / Algorithm 4 step 6: one structured-output call per episode extracting
- * the nine cognitive types, each persisted with full bitemporal stamps, a content vector,
- * and `EXTRACTED_FROM` provenance back to the episode. `infrastructure/graph/cognitive-
- * queries.ts` owns the write and the node-identity rule this stage relies on for
- * idempotency; this file owns the model call and the mapping from its output to that write.
+ * One structured-output call per episode extracting the nine cognitive types, each persisted
+ * with full bitemporal stamps, a content vector, and `EXTRACTED_FROM` provenance back to the
+ * episode. `infrastructure/graph/cognitive-queries.ts` owns the write and the node-identity
+ * rule this stage relies on for idempotency; this file owns the model call and the mapping
+ * from its output to that write.
  */
 
-/** `config.models.reflect`'s pinned default; the Integration task threads the configured value in. */
+/** `config.models.reflect`'s default; callers thread the configured value in. */
 export const DEFAULT_COGNITIVE_MODEL = 'qwen3:8b';
 
 /**
- * qwen3:8b with thinking on measured 10-44s with occasional non-returns (binding note).
- * Reflection's latency regime is relaxed, not unbounded, so the call still carries a guard.
+ * qwen3:8b with thinking on measured 10-44s with occasional non-returns. Reflection's
+ * latency regime is relaxed, not unbounded, so the call still carries a guard.
  */
 export const DEFAULT_COGNITIVE_TIMEOUT_MS = 60_000;
 
-/** Section 6.7's "keep it modest" extends to volume: a bound on one episode's extraction. */
+/** A bound on one episode's extraction: the volume stays modest. */
 export const DEFAULT_MAX_COGNITIVE_NODES = 20;
 
 export type CognitiveExtractionStageOptions = {
@@ -98,7 +98,7 @@ function buildMessages(text: string, summary: string | undefined): ChatMessage[]
   ];
 }
 
-/** Section 6.7's per-type fields; every other type carries `text` alone. */
+/** The per-type fields; every other type carries `text` alone. */
 function metadataFor(node: ExtractedNode): CognitiveNodeMetadata {
   if (node.type === 'Goal') {
     return { status: node.status, priority: node.priority };
@@ -116,8 +116,8 @@ function metadataFor(node: ExtractedNode): CognitiveNodeMetadata {
  * A second, independent judgment on exactly the Goal and Plan candidates the first call
  * proposed: does this state something the episode's own summary does not already say? The
  * in-prompt instruction on the first call is the primary defense; this call exists because
- * an instruction alone measurably did not stop the padding it asked the model not to do, so
- * whether a candidate survives is still the model's call — never a text comparison here —
+ * an instruction alone measurably did not stop the padding it asked the model not to do.
+ * Whether a candidate survives is still the model's call, never a text comparison here,
  * just asked a second time, on a narrower question, with a chance to reconsider.
  */
 const RESTATEMENT_SYSTEM_PROMPT = [

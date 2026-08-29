@@ -9,12 +9,12 @@ import type { Seed, SeedProvenance } from './seeds.js';
 /**
  * The adapter between the retrieval stages and fusion: seed selection and spreading
  * activation both produce graph rows, and this is where those rows become the ranked lists
- * whitepaper §5.3 fuses, each candidate carrying the rationale §5.7 will explain it with.
+ * fusion consumes, each candidate carrying the rationale the pack explains it with.
  */
 
 export type TraversalInput = {
   readonly seeds: readonly Seed[];
-  /** Whitepaper Algorithm 2's activated set, which includes the seeds. */
+  /** The spread's activated set, which includes the seeds. */
   readonly activated: readonly ActivatedNode[];
   /** Content for activated ids no seed strategy already carried, keyed by node id. */
   readonly hydrated: ReadonlyMap<string, SeedCandidate>;
@@ -66,13 +66,13 @@ function toMeasurement(provenance: SeedProvenance): Measurement {
 }
 
 /**
- * A seed is explained by the strategy that found it, at that strategy's own score — never
- * by the activation pass, which re-encounters every seed at 1.0 and would otherwise
- * flatten four distinct retrieval stories into one.
+ * A seed is explained by the strategy that found it, at that strategy's own score, never by
+ * the activation pass, which re-encounters every seed at 1.0 and would otherwise flatten
+ * four distinct retrieval stories into one.
  *
- * The rationale carries the ranking score (weighted by the cue's Algorithm 1 bucket, so the
- * reader sees why it sits where it sits); `relevance` carries the unweighted measurement the
- * floor reads. A recent-turn cue that matched perfectly ranks last and still surfaces.
+ * The rationale carries the ranking score (weighted by the cue's bucket, so the reader sees
+ * why it sits where it sits); `relevance` carries the unweighted measurement the floor reads.
+ * A recent-turn cue that matched perfectly ranks last and still surfaces.
  */
 export function seedCandidate(seed: Seed): FusionCandidate | undefined {
   const best = seed.provenance[0];
@@ -103,10 +103,10 @@ function activatedCandidate(node: ActivatedNode, candidate: SeedCandidate): Fusi
 }
 
 /**
- * The graph leg. Activation order is the rank, and because Algorithm 2 returns the seeds
+ * The graph leg. Activation order is the rank, and because the spread returns the seeds
  * inside the activated set, this list is where a seed found only by entity resolution or
  * recency enters fusion at all. A seed that fell under `min_activation` is appended rather
- * than lost — the strategy still found it.
+ * than lost, since the strategy still found it.
  */
 export function traversalCandidates(input: TraversalInput): readonly FusionCandidate[] {
   const bySeedId = new Map(input.seeds.map((seed) => [seed.id, seed]));

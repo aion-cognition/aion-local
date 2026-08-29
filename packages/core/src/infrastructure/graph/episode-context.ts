@@ -6,10 +6,10 @@ import { readModeFragment, withCurrency } from './read-modes.js';
 import type { Row } from './values.js';
 
 /**
- * Algorithm 4 step 2: the episode and its turns, read once at the top of a reflection run
- * and handed to every stage. Reflection reads the present — a forgotten episode is not
- * enriched — so the default read mode applies, which suppresses `forgotten_at` rows and
- * leaves superseded ones eligible.
+ * The episode and its turns, read once at the top of a reflection run and handed to every
+ * stage. Reflection reads the present: a forgotten episode is not enriched, so the default
+ * read mode applies, which suppresses `forgotten_at` rows and leaves superseded ones
+ * eligible.
  */
 
 export type EpisodeTurnContext = {

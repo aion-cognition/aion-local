@@ -64,7 +64,7 @@ describe('MemoryPackSchema valid fixtures', () => {
     expect(MemoryPackSchema.parse(pack)).toEqual(pack);
   });
 
-  it('rejects pending_enrichment: 0 — a healthy pack omits it rather than stating zero', () => {
+  it('rejects pending_enrichment: 0 (a healthy pack omits it rather than stating zero)', () => {
     const pack = {
       rendered_text: 'No relevant memories found.',
       metadata: { ...baseMetadata, pending_enrichment: 0 },

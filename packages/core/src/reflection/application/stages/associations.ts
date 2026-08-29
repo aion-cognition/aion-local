@@ -11,19 +11,19 @@ import { coOccurringPairs, coOccursLedgerKey } from '../../domain/associations.j
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
 
 /**
- * Whitepaper §6.6: entities that shared this episode get a `CO_OCCURS` edge; entities whose
- * content vectors are close, whether or not they ever shared an episode, get a `SIMILAR`
- * edge. Both flow through the edge-upsert merge policy in `association-queries.ts`; this
- * stage is the pairing and the idempotency gate around it, not the Cypher.
+ * Entities that shared this episode get a `CO_OCCURS` edge; entities whose content vectors
+ * are close, whether or not they ever shared an episode, get a `SIMILAR` edge. Both flow
+ * through the edge-upsert merge policy in `association-queries.ts`; this stage is the pairing
+ * and the idempotency gate around it, not the Cypher.
  *
- * Input comes from the graph, keyed on the episode, not from an earlier stage's output —
+ * Input comes from the graph, keyed on the episode, not from an earlier stage's output.
  * `findEpisodeEntities` returns `[]` when entity extraction has not run (or found nothing),
  * and that is simply nothing to associate, not an error.
  */
 
 export const ASSOCIATION_STAGE_NAME = 'associations';
 
-/** `config.AION_ASSOC_SEMANTIC_THRESHOLD`; the Integration task threads the configured value in. */
+/** `config.AION_ASSOC_SEMANTIC_THRESHOLD`; callers thread the configured value in. */
 export const DEFAULT_ASSOCIATION_SEMANTIC_THRESHOLD = 0.75;
 
 /** How many `SIMILAR` candidates one entity can gain in a single run. */
@@ -91,8 +91,8 @@ export class AssociationInferenceStage implements ReflectionStage {
   }
 
   /**
-   * Every co-occurring pair, gated once for the episode: a re-run — the orchestrator's
-   * crash-before-ledger-mark case — leaves the edges' `count` untouched instead of
+   * Every co-occurring pair, gated once for the episode: a re-run, which is the orchestrator's
+   * crash-before-ledger-mark case, leaves the edges' `count` untouched instead of
    * double-observing the same episode. The key is marked only after the last pair lands, so
    * an interrupted loop stays retryable rather than half-recorded and closed.
    */
@@ -131,7 +131,7 @@ export class AssociationInferenceStage implements ReflectionStage {
    * Semantic similarity is not episode-scoped, so it needs no ledger: `linkSimilarity`'s
    * `count: 0` already makes a repeat candidate a no-op, whether the repeat comes from this
    * run or a later one. An entity with no content vector yet (embedding deferred, per the
-   * store-before-embed inversion) simply contributes no seed — this is a normal state, not a
+   * store-before-embed inversion) simply contributes no seed, which is a normal state, not a
    * failure.
    */
   async #linkSimilarities(

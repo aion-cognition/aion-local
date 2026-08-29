@@ -11,10 +11,10 @@ import type { ActivatedNode } from '../domain/activation.js';
 import type { RecallCompletion, RecallListener } from './recall.js';
 
 /**
- * Whitepaper §5.8's two recall-hot-path side effects, wired through `RecallDeps.onRecalled`
- * so `handleRecall` itself stays free of a second Neo4j round trip. Reinforcement rows are
- * cheap local SQLite inserts and are written inline from the listener; the access-tracking
- * write is a real network round trip, so it is deferred and never awaited by the listener —
+ * The two recall-hot-path side effects, wired through `RecallDeps.onRecalled` so
+ * `handleRecall` itself stays free of a second Neo4j round trip. Reinforcement rows are cheap
+ * local SQLite inserts and are written inline from the listener; the access-tracking write is
+ * a real network round trip, so it is deferred and never awaited by the listener.
  * `whenIdle()` is the only way to observe it finishing, and only tests should call it.
  * Construct one instance per process, the same lifetime as `SessionManager` and `CueCache`.
  */
@@ -23,11 +23,11 @@ import type { RecallCompletion, RecallListener } from './recall.js';
  * Only the top-ranked slice of the co-activated set enters the pairwise fan-out. The
  * activated set can run into the hundreds on a well-populated graph, and pairing all of it
  * is O(n^2) queue rows for a signal whose value is "these few things fired strongly
- * together" — nodes far down the activation curve barely co-fired at all.
+ * together". Nodes far down the activation curve barely co-fired at all.
  */
 export const REINFORCEMENT_TOP_N = 10;
 
-/** Whitepaper §7.3's name for this trigger source, distinct from reflection's co-occurrence signal. */
+/** The name for this trigger source, distinct from reflection's co-occurrence signal. */
 export const REINFORCEMENT_TRIGGER = 'recall_co_activation';
 
 /**
@@ -85,7 +85,7 @@ export class RecallSideEffects {
    * Both effects are writes shaped by "this memory just fired", which an `as_of` or `knew_at`
    * recall did not do: it asked what the substrate held at another moment. Bumping access
    * metadata there would rewrite the recency signal the seed strategy reads back and feed
-   * plasticity (§5.8) an event that never happened, so time travel is read-only.
+   * plasticity an event that never happened, so time travel is read-only.
    */
   readonly onRecalled: RecallListener = (completion) => {
     if (isTimeTravel(completion.mode)) {
@@ -97,9 +97,9 @@ export class RecallSideEffects {
 
   /**
    * Resolves once every access-tracking write scheduled so far has settled. Production
-   * wiring never calls this — `onRecalled` is fire-and-forget by `recall.ts`'s own
-   * contract. Tests call it after `handleRecall` returns to observe the deferred write
-   * without a sleep: `await handleRecall(...); await sideEffects.whenIdle();`.
+   * wiring never calls this: `onRecalled` is fire-and-forget by `recall.ts`'s own contract.
+   * Tests call it after `handleRecall` returns to observe the deferred write without a
+   * sleep: `await handleRecall(...); await sideEffects.whenIdle();`.
    */
   async whenIdle(): Promise<void> {
     await this.#pending;
@@ -126,7 +126,7 @@ export class RecallSideEffects {
   /**
    * Deferred with `setImmediate` so the write genuinely starts after `handleRecall`'s
    * caller has already received the pack, not merely after this synchronous listener
-   * returns — `recall.ts`'s `notify` invokes `onRecalled` without awaiting it, but a
+   * returns. `recall.ts`'s `notify` invokes `onRecalled` without awaiting it, but a
    * synchronous listener body still runs to completion before `handleRecall`'s `return`.
    * Ids come from the fused, surfaced set (`completion.items`), not the trimmed pack: a
    * memory recall judged relevant enough to rank counts as accessed even when the token

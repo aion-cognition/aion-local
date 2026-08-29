@@ -3,18 +3,18 @@ import type { CurrencyAnnotation } from '../../infrastructure/graph/read-modes.j
 import { isRelationshipType, type RelationshipType } from '../../infrastructure/graph/relationships.js';
 
 /**
- * Whitepaper §5.4, Algorithm 2, run in TypeScript over batched adjacency reads. The graph
- * is asked one question per frontier iteration; everything else — weighting, accumulation,
- * inhibition, termination — happens here, where it is testable without a server.
+ * Spreading activation over batched adjacency reads. The graph is asked one question per
+ * frontier iteration; everything else (weighting, accumulation, inhibition, termination)
+ * happens here, where it is testable without a server.
  */
 
-/** Whitepaper §5.4: every seed enters the spread at full activation. */
+/** Every seed enters the spread at full activation. */
 export const SEED_ACTIVATION = 1;
 
 /**
  * The semantic-relationships stage's five output types. An audit of its live output found
  * the large majority of CONTRADICTS edges wrong and causal direction inverted on episodes
- * that stated it explicitly, with confidence always the same constant regardless — so
+ * that stated it explicitly, with confidence always the same constant regardless, so
  * confidence cannot stand in for a precision discount. `MODEL_INFERRED_PENALTY` below is
  * applied to exactly these five once, at load, so a wrong edge moves a smaller share of a
  * seed's relevance until a quality harness measures the stage's precision and clears them.
@@ -33,14 +33,14 @@ export const MODEL_INFERRED_PENALTY = 0.5;
 /**
  * Tuned propagation multipliers per relationship type, all in [0,1]. The tiers below are
  * the tuning: a type's multiplier says how much of a node's relevance its neighbour
- * inherits, so containment and provenance — where the neighbour is literally part of the
- * same experience — sit high, mention and semantic association sit in the middle, and
+ * inherits, so containment and provenance (where the neighbour is literally part of the
+ * same experience) sit high, mention and semantic association sit in the middle, and
  * lineage sits low. Typed against the catalog so a new relationship type fails to compile
  * until it is given a weight rather than silently defaulting.
  */
 const ACTIVATION_WEIGHTS: Record<RelationshipType, number> = {
   // Containment. A turn is part of its episode and an episode part of its session, so
-  // relevance transfers almost intact; these are the edges P2's graph is mostly made of.
+  // relevance transfers almost intact; these are most of the edges the graph holds.
   PARTICIPATES_IN: 0.9,
   INCLUDES_EVENT: 0.9,
   BELONGS_TO: 0.7,
@@ -52,10 +52,10 @@ const ACTIVATION_WEIGHTS: Record<RelationshipType, number> = {
   EVIDENCES: 0.8,
   EXTRACTED_FROM: 0.8,
 
-  // Temporal chains. FOLLOWS is the cross-session path (whitepaper §4.2) and the only way
-  // a query about today reaches last week's work, so it stays high; PRECEDES is a weaker
-  // ordering claim between arbitrary nodes, and model-inferred on top of that (tuned value;
-  // MODEL_INFERRED_PENALTY discounts it below).
+  // Temporal chains. FOLLOWS is the cross-session path and the only way a query about today
+  // reaches last week's work, so it stays high; PRECEDES is a weaker ordering claim between
+  // arbitrary nodes, and model-inferred on top of that (tuned value; MODEL_INFERRED_PENALTY
+  // discounts it below).
   FOLLOWS: 0.8,
   PRECEDES: 0.6,
 
@@ -67,10 +67,10 @@ const ACTIVATION_WEIGHTS: Record<RelationshipType, number> = {
   HAS_WORKSPACE: 0.7,
   HAS_MEMBER: 0.7,
 
-  // Causal and cognitive structure (P3's node types). A cause carries more of its effect's
-  // relevance than a mere requirement or example does. CAUSES and ENABLES are also
-  // model-inferred (tuned values; MODEL_INFERRED_PENALTY discounts them below); BASED_ON,
-  // REQUIRES, and EXEMPLIFIES are not this stage's output and keep their un-audited weights.
+  // Causal and cognitive structure. A cause carries more of its effect's relevance than a
+  // mere requirement or example does. CAUSES and ENABLES are also model-inferred (tuned
+  // values; MODEL_INFERRED_PENALTY discounts them below); BASED_ON, REQUIRES, and
+  // EXEMPLIFIES are not this stage's output and keep their un-audited weights.
   CAUSES: 0.7,
   BASED_ON: 0.7,
   ENABLES: 0.6,
@@ -87,7 +87,7 @@ const ACTIVATION_WEIGHTS: Record<RelationshipType, number> = {
   // scaled by strength x confidence (see EVIDENCE_SCALED_TYPES), so these are ceilings
   // rather than fixed weights; CO_OCCURS and ANALOGOUS_TO are weaker claims still. SIMILAR
   // is also model-inferred (tuned value; MODEL_INFERRED_PENALTY discounts it below);
-  // RELATED_TO carries the same provenance but a re-audit is out of this round's scope.
+  // RELATED_TO carries the same provenance but has not been re-audited.
   SIMILAR: 0.6,
   RELATED_TO: 0.5,
   CO_OCCURS: 0.5,
@@ -99,9 +99,9 @@ const ACTIVATION_WEIGHTS: Record<RelationshipType, number> = {
   // MODEL_INFERRED_PENALTY discounts it below).
   CONTRADICTS: 0.7,
 
-  // Lineage. A superseded node is reachable from its replacement — that is what makes the
-  // old truth recallable — but the path is deliberately weak, and the node at the far end
-  // is down-weighted again by SUPERSEDED_ACTIVATION_WEIGHT.
+  // Lineage. A superseded node is reachable from its replacement, which is what makes the
+  // old truth recallable, but the path is deliberately weak, and the node at the far end is
+  // down-weighted again by SUPERSEDED_ACTIVATION_WEIGHT.
   SUPERSEDES: 0.4,
 };
 
@@ -109,12 +109,12 @@ for (const type of MODEL_INFERRED_TYPES) {
   ACTIVATION_WEIGHTS[type] *= MODEL_INFERRED_PENALTY;
 }
 
-/** A type outside the catalog can only come from a writer this build does not own. */
+/** A type outside the catalog can only come from a writer outside this codebase. */
 const DEFAULT_ACTIVATION_WEIGHT = 0.3;
 
 /**
- * Whitepaper §5.4: these two are inferred rather than observed, so their propagation is
- * scaled by the evidence behind them (`strength x confidence`) instead of by type alone.
+ * These two are inferred rather than observed, so their propagation is scaled by the
+ * evidence behind them (`strength x confidence`) instead of by type alone.
  */
 const EVIDENCE_SCALED_TYPES: readonly string[] = ['SIMILAR', 'RELATED_TO'];
 
@@ -127,11 +127,11 @@ const EVIDENCE_SCALED_TYPES: readonly string[] = ['SIMILAR', 'RELATED_TO'];
 const HUB_INHIBITION_ALPHA = 0.5;
 
 /**
- * PRD §5.5: superseded knowledge is down-ranked, never hidden. Half weight keeps a
- * superseded node in the spread and lets it propagate onward — a current node reachable
- * only through superseded lineage still surfaces — while ranking it under its replacement.
- * A constant rather than a knob: the ranking treatment of lineage is a property of the
- * bitemporal contract, not something an operator tunes per install.
+ * Superseded knowledge is down-ranked, never hidden. Half weight keeps a superseded node in
+ * the spread and lets it propagate onward (a current node reachable only through superseded
+ * lineage still surfaces) while ranking it under its replacement. A constant rather than a
+ * knob: the ranking treatment of lineage is a property of the bitemporal contract, not
+ * something an operator tunes per install.
  */
 export const SUPERSEDED_ACTIVATION_WEIGHT = 0.5;
 
@@ -157,12 +157,12 @@ export type ActivationBudget = {
   readonly hubThreshold: number;
   readonly maxHops: number;
   /**
-   * Whitepaper Appendix E's "minimum association strength for traversal". Edges are stored
-   * with strength 1.0 unless a writer lowers one, and Hebbian decay (P4) is what lowers them,
-   * so this is the knob that stops recall from walking associations that have faded out.
+   * The minimum association strength for traversal. Edges are stored with strength 1.0
+   * unless a writer lowers one, and Hebbian decay is what lowers them, so this is the knob
+   * that stops recall from walking associations that have faded out.
    */
   readonly associationStrength: number;
-  /** Appendix E's "maximum nodes from spreading activation": how much of the spread survives. */
+  /** The cap on nodes carried out of spreading activation: how much of the spread survives. */
   readonly maxActivated: number;
 };
 
@@ -179,9 +179,8 @@ export type ActivatedNode = {
 };
 
 /**
- * Why the spread stopped. Whitepaper §5.4 names three conditions; `hop_limit` is PRD
- * §6.3's bound on traversal depth and `frontier_exhausted` is the small-graph case, which
- * is the ordinary one until P3 fills the graph in.
+ * Why the spread stopped. `hop_limit` is the bound on traversal depth; `frontier_exhausted`
+ * is the small-graph case, which is the ordinary one while the graph is still sparse.
  */
 export type ActivationTermination =
   | 'frontier_exhausted'
@@ -294,11 +293,11 @@ function initialize(seeds: readonly ActivationSeed[]): SpreadState {
 /**
  * `A_neighbour = A_current * w_edge * d`, hub-inhibited on arrival and halved again when
  * the neighbour is superseded. Contributions add: reaching one node down several paths is
- * the evidence-reinforces-relevance principle of whitepaper §5.4, not double counting.
+ * evidence reinforcing relevance, not double counting.
  */
 function propagate(state: SpreadState, neighbor: AdjacencyNeighbor, budget: ActivationBudget): void {
-  // Appendix E's association-strength floor. An edge the merge policy left unweighted reads
-  // back as 1.0, so this bites only associations something has actively weakened.
+  // The association-strength floor. An edge the merge policy left unweighted reads back as
+  // 1.0, so this bites only associations something has actively weakened.
   if (neighbor.strength < budget.associationStrength) {
     return;
   }
@@ -372,9 +371,9 @@ type BatchSelection =
   | { readonly kind: 'stop'; readonly termination: ActivationTermination };
 
 /**
- * Algorithm 2 selects the single highest-activation frontier node per step; batching keeps
- * that order — the whole eligible frontier, strongest first — and expands it in one read,
- * because a round-trip per node is what makes the literal algorithm unusable over Bolt.
+ * Expanding the single highest-activation frontier node per step costs a round trip per
+ * node, which is unusable over Bolt. Batching keeps that order (the whole eligible frontier,
+ * strongest first) and expands it in one read.
  */
 function selectBatch(state: SpreadState, budget: ActivationBudget): BatchSelection {
   if (state.frontier.size === 0) {
@@ -402,9 +401,9 @@ function selectBatch(state: SpreadState, budget: ActivationBudget): BatchSelecti
 }
 
 /**
- * Restores Algorithm 2's ordering inside a batch. The literal algorithm expands one node at a
- * time, so by the time the second-strongest node in a ring propagates, the strongest is
- * already in V and receives nothing back: an edge between two ring peers fires once, in the
+ * Restores one-node-at-a-time ordering inside a batch. Expanding one node at a time means
+ * that by the time the second-strongest node in a ring propagates, the strongest is already
+ * visited and receives nothing back: an edge between two ring peers fires once, in the
  * direction of decreasing activation. Propagating both ways instead would double-count the
  * edge and make the result depend on the order the graph happened to return its rows.
  */
@@ -433,10 +432,10 @@ function orderWithinRing(
 }
 
 /**
- * Whitepaper §5.4 / Algorithm 2. Seeds start activated, activation spreads outward along
- * weighted edges under exponential decay, and the run stops at the first budget it hits.
- * Superseded nodes traverse like any other, carrying their annotation into the result so
- * fusion can rank them beneath current knowledge without losing the lineage (PRD §5.5).
+ * Seeds start activated, activation spreads outward along weighted edges under exponential
+ * decay, and the run stops at the first budget it hits. Superseded nodes traverse like any
+ * other, carrying their annotation into the result so fusion can rank them beneath current
+ * knowledge without losing the lineage.
  *
  * The adjacency fetch is a parameter rather than a driver: this stage is an algorithm, and
  * keeping the graph behind one call is what lets it be tested exhaustively without one.
@@ -468,10 +467,10 @@ export async function spreadActivation(
     }
 
     iterations += 1;
-    // Captured before the batch joins `visited`: Algorithm 2 step 3 propagates to every
-    // neighbour "not in V", and a peer selected in this same batch has not been moved into V
-    // at the moment the real algorithm would reach it. Excluding it here would silently
-    // discard every edge inside a frontier ring.
+    // Captured before the batch joins `visited`: propagation reaches every neighbour not yet
+    // visited, and a peer selected in this same batch is still unvisited at the moment
+    // one-at-a-time expansion would reach it. Excluding it here would silently discard every
+    // edge inside a frontier ring.
     const alreadyExpanded = [...state.visited];
     for (const nodeId of selection.nodeIds) {
       state.visited.add(nodeId);

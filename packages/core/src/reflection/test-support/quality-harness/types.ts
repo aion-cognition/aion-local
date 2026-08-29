@@ -1,7 +1,6 @@
 /**
- * Whitepaper §6.4's closed set: "person, organization, project, tool, concept, location,
- * event". The harness's own copy of the taxonomy, not a shared source with the real
- * extraction stage, which is free to diverge.
+ * Seven entity types: person, organization, project, tool, concept, location, event.
+ * The harness's own copy of the taxonomy, not a shared source with the real extraction stage, which is free to diverge.
  */
 export const ENTITY_TYPES = [
   'person',
@@ -24,7 +23,7 @@ export type EntityExtractionResult = {
   readonly entities: readonly ExtractedEntity[];
 };
 
-/** Whitepaper §6.7's nine cognitive node types, lowercased for schema consistency. */
+/** Nine cognitive node types, lowercased for schema consistency. */
 export const COGNITIVE_TYPES = [
   'goal',
   'plan',
@@ -59,7 +58,7 @@ export type ExtractorOutcome<T> =
  * The injectable seam: given raw episode text, produce one extraction result. The
  * harness's default implementation (`provider-extractor.ts`) goes through its own prompts
  * and a `Provider`; a later caller can point this at the real reflection stage's extraction
- * function instead, and everything downstream — scoring, reporting — is unchanged.
+ * function instead. Scoring and reporting stay unchanged.
  */
 export type EntityExtractorFn = (text: string) => Promise<ExtractorOutcome<EntityExtractionResult>>;
 export type CognitiveExtractorFn = (text: string) => Promise<ExtractorOutcome<CognitiveExtractionResult>>;

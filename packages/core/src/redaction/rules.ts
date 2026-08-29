@@ -49,14 +49,14 @@ const CREDENTIAL_VALUE_BODY = String.raw`(?!(?:undefined|redacted)\b)[^\s"'\x60.
  * The catch-all for credentials with no recognizable shape of their own, which is most
  * of them: DB passwords, internal service keys, vendor keys with no prefix.
  *
- * No word boundary before the key name, so `DB_PASSWORD=` and `OPENAI_API_KEY=` match —
+ * No word boundary before the key name, so `DB_PASSWORD=` and `OPENAI_API_KEY=` match:
  * `_` is a word character, so `\b` never fires between it and the name.
  *
  * No entropy gate. Shannon entropy over a short string is bounded by log2(length), so a
- * 4.5 bits/char threshold is unreachable below 23 characters — the exact band where
- * real passwords and API keys live — and it does not separate `hunter2secret` (3.0)
- * from `process.env.API_KEY` (3.9) anyway. Length plus the delimiter class does that
- * work, and over-redacting a placeholder costs a fingerprint, not a leak.
+ * 4.5 bits/char threshold is unreachable below 23 characters, the exact band where real
+ * passwords and API keys live, and it does not separate `hunter2secret` (3.0) from
+ * `process.env.API_KEY` (3.9) anyway. Length plus the delimiter class does that work,
+ * and over-redacting a placeholder costs a fingerprint, not a leak.
  */
 const GENERIC_SECRET_ASSIGNMENT = new RegExp(
   String.raw`(?:${CREDENTIAL_KEY_WORDS})\s*[:=]\s*["']?(?<secret>${CREDENTIAL_VALUE_BODY})`,
@@ -69,7 +69,7 @@ const GENERIC_SECRET_ASSIGNMENT = new RegExp(
  * credential keys, though neither puts the vocabulary word against the delimiter the way
  * the embedded rule requires.
  *
- * Containment is bounded by name segments — `_`, `-`, a case hump, or either end — with an
+ * Containment is bounded by name segments (`_`, `-`, a case hump, or either end) with an
  * optional plural. Whole words that merely start with a vocabulary word are not credential
  * keys, and the distinction is not cosmetic: `tokenizer` and `secretariat` name ordinary
  * telemetry, and fingerprinting their values would destroy content permanently, since

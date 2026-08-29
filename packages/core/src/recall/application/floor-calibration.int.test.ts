@@ -21,9 +21,9 @@ import {
 /**
  * The committed calibration. It measures both distributions against the live embedding model
  * and fails when `recall.vectorAdmissionFloor` stops separating them, which is the only signal
- * that the constant has gone stale — a floor tuned on noise alone cannot tell "rejects
- * unrelated text" from "rejects everything" (EX-1, and the consultation's amnesia warning
- * about the genuine pair measured at 0.631).
+ * that the constant has gone stale. A floor tuned on noise alone cannot tell "rejects
+ * unrelated text" from "rejects everything", and the genuine pair measured at 0.631 is what
+ * such a floor would have starved.
  *
  * Measured 2026-08-28, nomic-embed-text on host Ollama, and printed on every run:
  *   unrelated  n=23  p50 0.391  p95 0.474  max 0.536

@@ -197,7 +197,7 @@ describe('mergeSeeds', () => {
 });
 
 describe('SEED_STRATEGIES', () => {
-  it('names the whitepaper §5.2 four, each a RecallMethod fusion can put in a rationale', () => {
+  it('names the four strategies, each a RecallMethod fusion can put in a rationale', () => {
     expect([...SEED_STRATEGIES]).toEqual(['vector', 'bm25', 'entity_resolution', 'recency']);
   });
 });

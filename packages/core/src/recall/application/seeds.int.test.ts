@@ -185,7 +185,7 @@ describe('per-strategy hits', () => {
       mode: withCurrency(),
     });
 
-    // Neo4j hands back `(1 + cos) / 2`, which would put every orthogonal memory at 0.5 —
+    // Neo4j hands back `(1 + cos) / 2`, which would put every orthogonal memory at 0.5, right
     // at `AION_VECTOR_ADMISSION_FLOOR`, and so no floor at all.
     expect(rows.find((row) => row.id === ids.activation)?.score).toBeCloseTo(1, 5);
     expect(rows.find((row) => row.id === ids.claimPath)?.score).toBeCloseTo(0, 5);
@@ -224,7 +224,7 @@ describe('per-strategy hits', () => {
   });
 });
 
-describe('entity resolution before P3 writes name embeddings', () => {
+describe('entity resolution before any name embeddings are written', () => {
   /** Runs before the test that writes a `name_vec`, which is the only thing that changes this answer. */
   it('returns nothing from the similarity leg and raises no error when no entity carries a name embedding', async () => {
     const rows = await entitySimilaritySeeds(harness.driver, {
@@ -324,7 +324,7 @@ describe('merge', () => {
 });
 
 describe('entity name similarity once name embeddings exist', () => {
-  it('matches an entity above the similarity threshold, which is what P3 turns on', async () => {
+  it('matches an entity above the similarity threshold once a name embedding exists', async () => {
     const entity = await writeStampedNode(harness.driver, {
       label: 'Entity',
       occurredAt: WRITTEN_AT,

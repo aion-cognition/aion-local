@@ -41,16 +41,19 @@ import type { ReflectionStage, StageContext, StageOutcome } from '../domain/stag
 import { attachContentVectors } from './vectors.js';
 
 /**
- * Whitepaper §6.10 and the pinned trigger: a session's close produces a session-scope
- * narrative. Two entry points reach the same routine — the transport's close hook, which is
- * an explicit boundary, and the idle rule, which is what a client that vanished without a
- * DELETE leaves behind. The reflection stage carries the idle rule for the episodes whose
- * pipeline runs long after their session went quiet.
+ * The pinned trigger: a session's close produces a session-scope narrative. Two entry points
+ * reach the same routine: the transport's close hook, which is an explicit boundary, and the
+ * idle rule, which is what a client that vanished without a DELETE leaves behind. The
+ * reflection stage carries the idle rule for the episodes whose pipeline runs long after
+ * their session went quiet.
  */
 
 export const NARRATIVE_STAGE_NAME = 'narratives';
 
-/** Pinned P3 defaults. The integration task threads config over the ones config carries. */
+/**
+ * Pinned defaults for the reflection pipeline. The integration task threads config over the
+ * ones config carries.
+ */
 export const DEFAULT_NARRATIVE_MODEL = 'qwen3:8b';
 export const DEFAULT_SESSION_IDLE_MS = 30 * 60 * 1000;
 export const DEFAULT_NARRATIVE_TIMEOUT_MS = 60_000;
@@ -58,7 +61,7 @@ export const DEFAULT_MAX_SOURCE_EPISODES = 40;
 export const DEFAULT_MAX_EPISODE_CHARS = 2_000;
 export const DEFAULT_IDLE_SWEEP_LIMIT = 20;
 
-/** Appendix B provenance: what produced the node, as distinct from what later reads it. */
+/** Provenance: what produced the node, as distinct from what later reads it. */
 export const NARRATIVE_EXTRACTION_METHOD = 'reflection_narrative';
 
 const NARRATIVE_SIGNALS = ['compression'];
@@ -421,11 +424,11 @@ export async function sweepIdleSessions(
 export type SessionNarrativeOptions = Omit<NarrativeOptions, 'now'>;
 
 /**
- * Algorithm 4 step 9. The stage carries the idle rule rather than the close: by the time an
- * episode reflects, its session is usually seconds old and still open, and the narrative is
- * the close hook's to write. What the stage catches is the other case — a backlog drained
- * after the fact, a retry that landed hours late — where the session is long gone and no
- * close hook will ever fire for it again.
+ * The stage carries the idle rule rather than the close: by the time an episode reflects,
+ * its session is usually seconds old and still open, and the narrative is the close hook's
+ * to write. What the stage catches is the other case: a backlog drained after the fact, or a
+ * retry that landed hours late, where the session is long gone and no close hook will ever
+ * fire for it again.
  */
 export class SessionNarrativeStage implements ReflectionStage {
   readonly name = NARRATIVE_STAGE_NAME;
@@ -453,7 +456,7 @@ export class SessionNarrativeStage implements ReflectionStage {
 
 /**
  * The transport-close hook in the shape the MCP service takes it: a synchronous callback.
- * Compression is a model call, so it cannot be awaited on a teardown path — the close is
+ * Compression is a model call, so it cannot be awaited on a teardown path: the close is
  * scheduled, a failure is logged rather than raised, and closes queue behind one another so
  * a burst of disconnects does not fire concurrent generations at one local model. Construct
  * one per process, the same lifetime as `SessionManager`.

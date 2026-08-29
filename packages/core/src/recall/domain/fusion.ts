@@ -11,14 +11,14 @@ import {
 import { bucketFor } from './pack.js';
 
 /**
- * Whitepaper §5.3 and §5.5. Each retrieval leg hands over its own ranked list; this module
- * turns them into one ordered candidate set — weighted RRF by default, MMR behind the
- * reranker flag — and applies the two policies that decide what may surface at all:
- * `admission.ts`'s absolute floors (PRD §3.1, "empty beats noisy") and PRD §5.5's currency
- * ranking.
+ * Each retrieval leg hands over its own ranked list. This module turns them into one ordered
+ * candidate set (weighted RRF by default, MMR behind the reranker flag) and applies the two
+ * policies that decide what may surface at all: `admission.ts`'s absolute floors, on the rule
+ * that empty beats noisy, and currency ranking, which keeps superseded knowledge under the
+ * fact that replaced it.
  */
 
-/** Whitepaper §5.3's three legs. The weights they fuse under are `config.search.weights`. */
+/** The three retrieval legs. The weights they fuse under are `config.search.weights`. */
 export type FusionLeg = 'vector' | 'bm25' | 'graph_traversal';
 
 export type FusionResult = {
@@ -37,12 +37,12 @@ export type FusionCandidate = {
   readonly isStructural?: boolean;
   /** A Turn's parent episode, so the episodes bucket can hold one item per episode. */
   readonly sourceEpisodeId?: string;
-  /** Whitepaper §5.7's impression of why the item surfaced. Its score is the method's own. */
+  /** Why the item surfaced, as the pack reports it. Its score is the method's own. */
   readonly rationale: Rationale;
   /**
    * A similarity measurement on a comparable [0,1] scale, which is what the floor is measured
-   * against. The fused score is a rank statistic — an RRF sum sits near 1/k whatever the
-   * retrieval quality behind it — so a floor applied to it would either drop everything or
+   * against. The fused score is a rank statistic (an RRF sum sits near 1/k whatever the
+   * retrieval quality behind it), so a floor applied to it would either drop everything or
    * nothing.
    *
    * Zero when the method that produced the candidate measures nothing: a recency hit says
@@ -57,7 +57,7 @@ export type FusionCandidate = {
   readonly evidence?: readonly Measurement[];
   /**
    * Set only for a node no retrieval leg found, reached by spreading activation alone. Its
-   * own floor is Algorithm 2's `min_activation`, already applied by the time it gets here.
+   * own floor is the spread's `min_activation`, already applied by the time it gets here.
    */
   readonly activation?: number;
 };
@@ -91,20 +91,20 @@ export type FusionOptions = {
    * Content vectors by node id, fetched only when the reranker is MMR. An id with no
    * vector is treated as maximally distinct, so a partial map degrades toward relevance
    * order rather than toward an arbitrary one. The cluster cap's cosine leg reuses this
-   * same map rather than fetching its own — see `clusterRoots`.
+   * same map rather than fetching its own (see `clusterRoots`).
    */
   readonly vectors?: ReadonlyMap<string, Vector>;
 };
 
 /**
- * PRD §5.5: superseded knowledge is ranked, not hidden. The same factor spreading
- * activation applies in traversal is applied again here, so lineage is consistently a
- * half-weight answer wherever it competes with the current fact. A constant rather than a
- * knob: this is the bitemporal contract's ranking treatment, not an install-time taste.
+ * Superseded knowledge is ranked, not hidden. The same factor spreading activation applies
+ * in traversal is applied again here, so lineage is consistently a half-weight answer
+ * wherever it competes with the current fact. A constant rather than a knob: this is the
+ * bitemporal contract's ranking treatment, not an install-time taste.
  */
 export const SUPERSEDED_RANK_WEIGHT = 0.5;
 
-/** Whitepaper §5.5: `1 / (k + rank)`, ranks counted from 1. */
+/** `1 / (k + rank)`, ranks counted from 1. */
 export function reciprocalRank(rank: number, k: number): number {
   return 1 / (k + rank + 1);
 }
@@ -184,9 +184,9 @@ function compareFused(left: FusedItem, right: FusedItem): number {
 }
 
 /**
- * Whitepaper §5.7 dedupes by content hash before packaging: two node ids carrying the same
- * text are one memory to the reader. The higher-ranked one survives with its own rationale;
- * nothing merges, because a rationale that named two paths would explain neither.
+ * Dedupe by content hash before packaging: two node ids carrying the same text are one
+ * memory to the reader. The higher-ranked one survives with its own rationale; nothing
+ * merges, because a rationale that named two paths would explain neither.
  */
 function dedupeByContent(items: readonly FusedItem[]): FusedItem[] {
   const seen = new Set<string>();
@@ -203,12 +203,12 @@ function dedupeByContent(items: readonly FusedItem[]): FusedItem[] {
 }
 
 /**
- * Sixteen characters is `"restart burst 0/"` — EX-22's own burst-record shape, a one-line
- * template that varies only in a trailing count. Long enough to be a real coincidence for
- * two unrelated short memories to share verbatim, short enough that the template's fixed
- * part survives even when the whole record is barely longer than the prefix itself; a
- * longer prefix would swallow the varying suffix on records this short and stop clustering
- * them at all. Case-folded so a casing variant of the same template still keys the same.
+ * Sixteen characters is the length of `"restart burst 0/"`, a one-line record template that
+ * varies only in a trailing count. Long enough that two unrelated short memories sharing it
+ * verbatim is a real coincidence, short enough that the template's fixed part survives even
+ * when the whole record is barely longer than the prefix itself; a longer prefix would
+ * swallow the varying suffix on records this short and stop clustering them at all.
+ * Case-folded so a casing variant of the same template still keys the same.
  */
 const CLUSTER_PREFIX_CHARS = 16;
 
@@ -224,10 +224,10 @@ function clusterPrefixKey(content: string): string {
  * Episode never share a cluster even if their content coincidentally collided, since they
  * were never competing for the same slot to begin with (`pack.ts`'s bucket caps are per
  * bucket already). Within a bucket, two items join a cluster when their content shares the
- * prefix key above, or — only when the caller already fetched embeddings for MMR — when
- * their vectors clear `CLUSTER_COSINE_THRESHOLD`. A run with no vectors in hand (the
- * default RRF reranker) relies on the prefix leg alone, which is what EX-22's own repro
- * needs: the burst records it measured are one-line and share their opening verbatim.
+ * prefix key above, or, only when the caller already fetched embeddings for MMR, when their
+ * vectors clear `CLUSTER_COSINE_THRESHOLD`. A run with no vectors in hand (the default RRF
+ * reranker) relies on the prefix leg alone, which is what repeated one-line records need:
+ * they are short and share their opening verbatim.
  */
 function clusterRoots(
   items: readonly FusedItem[],
@@ -307,9 +307,9 @@ function clusterRoots(
 }
 
 /**
- * PRD §3.1's floor keeps noise out; this keeps one shape from crowding out everything else
- * that cleared it (EX-22). Items arrive best-first, so the first member of a cluster this
- * loop keeps is already its best-ranked one — `keptByRoot` enforces the cap and
+ * The admission floors keep noise out; this keeps one repeated shape from crowding out
+ * everything else that cleared them. Items arrive best-first, so the first member of a
+ * cluster this loop keeps is already its best-ranked one. `keptByRoot` enforces the cap and
  * `droppedNearDuplicate` counts what it declined, so the report can say why a bucket held
  * fewer distinct memories than it admitted candidates for.
  */
@@ -360,11 +360,11 @@ function redundancy(
 }
 
 /**
- * Whitepaper §5.5's diversity-aware alternative: `lambda * relevance - (1 - lambda) *
+ * The diversity-aware alternative to plain rank order: `lambda * relevance - (1 - lambda) *
  * redundancy`, selected greedily. Redundancy is cosine distance between content vectors
- * rather than the whitepaper's Jaccard word overlap, because word overlap needs a
- * tokenizer and this build keeps text machinery out of the cognitive path entirely
- * (PRD §2) — the embedding is the redundancy signal the substrate already holds.
+ * rather than Jaccard word overlap, because word overlap needs a tokenizer and no text
+ * machinery belongs in the cognitive path. The embedding is the redundancy signal the
+ * substrate already holds.
  *
  * Relevance is normalized against the top fused score first. Raw RRF sums cluster near
  * `1/k` while cosine similarity spans [0,1], so mixing them unnormalized would make lambda
@@ -413,21 +413,20 @@ export function mmrOrder(
 }
 
 /**
- * Whitepaper §5.5. Ranks fuse reciprocally so the legs need no score calibration between
- * them, and each leg's contribution is scaled by its §5.3 weight (0.4 vector, 0.3 keyword,
- * 0.3 graph), which is where the two sections meet: RRF decides the shape, the weights
- * decide how much each leg is trusted.
+ * Ranks fuse reciprocally so the legs need no score calibration between them, and each leg's
+ * contribution is scaled by its configured weight (0.4 vector, 0.3 keyword, 0.3 graph): RRF
+ * decides the shape, the weights decide how much each leg is trusted.
  *
- * A candidate with no content is counted for rank and then dropped — it was a real hit, so
+ * A candidate with no content is counted for rank and then dropped. It was a real hit, so
  * removing its rank would promote everything under it, but a memory the pack cannot render
- * (a Session node, say) has nothing to hand the agent. A structural node — the Member, the
- * global Workspace — is dropped the same way and for the same reason: it is the graph's
+ * (a Session node, say) has nothing to hand the agent. A structural node, the Member or the
+ * global Workspace, is dropped the same way and for the same reason: it is the graph's
  * connectivity, not something the user ever told the substrate.
  *
  * Two admission rules, because two different things can put a candidate here. A retrieval hit
  * is admitted on its own evidence against the absolute floors (`admitsOnEvidence`). A node
  * reached only by traversal has no measurement to offer, so it is admitted when the recall
- * found an anchor — at least one hit that did clear admission. Traversal extends a pack that
+ * found an anchor: at least one hit that did clear admission. Traversal extends a pack that
  * something answered; it never fills one nothing answered.
  *
  * The report is what makes a thin pack readable: an empty result with `considered` at zero is

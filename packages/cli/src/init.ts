@@ -134,12 +134,12 @@ function provisionReporter(write: Writer, logger: Logger): (event: ProvisionEven
   };
 }
 
-/** PRD §11 step 5. The one-time command that writes the server into Claude's user config; every future session then connects with no per-session setup. */
+/** The one-time command that writes the server into Claude's user config. Every future session then connects with no per-session setup. */
 export function registrationCommand(port: number): string {
   return `claude mcp add -s user --transport http aion http://127.0.0.1:${String(port)}/mcp`;
 }
 
-/** Same registration, as the raw JSON Claude Code's own config uses for an HTTP MCP server — for manual edits and other harnesses. */
+/** Same registration, as the raw JSON Claude Code's own config uses for an HTTP MCP server. For manual edits and other harnesses. */
 export function registrationJson(port: number): string {
   return JSON.stringify(
     { mcpServers: { aion: { type: 'http', url: `http://127.0.0.1:${String(port)}/mcp` } } },

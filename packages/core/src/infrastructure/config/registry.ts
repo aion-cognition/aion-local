@@ -13,24 +13,22 @@ export type Knob = {
 
 /**
  * The flat AION_* surface, one entry per Config leaf. `weights` covers the three
- * search.weights sub-fields from a single comma-separated var (PRD §14); every other
- * leaf is a 1:1 var. Env var names already pinned by PRD §14 (AION_CUE_BUDGET_MS,
- * AION_RECALL_TOKEN_BUDGET, AION_SEARCH_WEIGHTS, AION_NEO4J_URI,
- * AION_NEO4J_PASSWORD, AION_OLLAMA_URL, AION_OLLAMA_MODE, AION_ANTHROPIC_API_KEY,
- * AION_MAINTENANCE_TIER3, AION_MCP_PORT) keep those exact names; the rest follow
- * AION_<GROUP>_<LEAF> for consistency.
+ * search.weights sub-fields from a single comma-separated var; every other leaf is a
+ * 1:1 var. A fixed set of env var names (AION_CUE_BUDGET_MS, AION_RECALL_TOKEN_BUDGET,
+ * AION_SEARCH_WEIGHTS, AION_NEO4J_URI, AION_NEO4J_PASSWORD, AION_OLLAMA_URL,
+ * AION_OLLAMA_MODE, AION_ANTHROPIC_API_KEY, AION_MAINTENANCE_TIER3, AION_MCP_PORT) keep
+ * their existing spelling; the rest follow AION_<GROUP>_<LEAF> for consistency.
  *
- * PRD §14's AION_MIN_RELEVANCE is gone rather than renamed. It named one floor for every
- * method, which is the shape the fix round removed; a stale 0.35 silently applying to the
- * calibrated cosine floor would be worse than the error an unknown variable raises.
+ * AION_MIN_RELEVANCE is gone rather than renamed. It named one floor for every search
+ * method, and each method now has its own calibrated cosine floor; a stale 0.35 silently
+ * applying to a calibrated floor would be worse than the error an unknown variable raises.
  *
- * P3's two plan-pinned names (AION_SUPERSEDE_AUTO_CONFIDENCE, AION_ASSOC_SEMANTIC_THRESHOLD)
- * are the same case and keep their pinned spelling inside the `reflection` group, as does the
- * fix round's AION_SUPERSEDE_MODE, which took over the gating role the confidence knob had. The
- * worker's knobs live under `operational` and read AION_WORKER_*, which is where
- * AION_WORKER_COUNT already was. AION_REINFORCEMENT_QUEUE_CAP and AION_PACK_CLUSTER_CAP are
- * the fix-round plan's pinned names and keep that spelling rather than
- * AION_SQLITE_REINFORCEMENT_QUEUE_CAP / AION_RECALL_CLUSTER_CAP.
+ * AION_SUPERSEDE_AUTO_CONFIDENCE and AION_ASSOC_SEMANTIC_THRESHOLD are the same case and
+ * keep their existing spelling inside the `reflection` group, as does AION_SUPERSEDE_MODE,
+ * which took over the gating role the confidence knob had. The worker's knobs live under
+ * `operational` and read AION_WORKER_*, which is where AION_WORKER_COUNT already was.
+ * AION_REINFORCEMENT_QUEUE_CAP and AION_PACK_CLUSTER_CAP keep their existing spelling
+ * rather than AION_SQLITE_REINFORCEMENT_QUEUE_CAP / AION_RECALL_CLUSTER_CAP.
  */
 export const KNOB_REGISTRY: readonly Knob[] = [
   { envVar: 'AION_NEO4J_URI', path: ['neo4j', 'uri'], kind: 'string' },

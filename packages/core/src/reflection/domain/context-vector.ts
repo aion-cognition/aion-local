@@ -1,7 +1,7 @@
 /**
- * Whitepaper §4.3 / §6.11: a context vector is the strength-weighted mean of a node's
- * neighbors' content vectors. Pure math, no graph access — the graph read supplies the rows,
- * this module turns them into one vector per affected node.
+ * A context vector is the strength-weighted mean of a node's neighbors' content vectors.
+ * Pure math, no graph access: the graph read supplies the rows, this module turns them into
+ * one vector per affected node.
  */
 
 export type WeightedVector = {
@@ -49,11 +49,11 @@ export type ComputedContextVector = {
 };
 
 /**
- * One row per (affected node, neighbor edge) — not deduplicated by neighbor, so a node
+ * One row per (affected node, neighbor edge), not deduplicated by neighbor, so a node
  * reachable by two relationships contributes twice, weighted by each edge's own strength.
- * A node absent from the result had no positively-weighted vectored neighbor: §6.11's
- * "nodes with no vectored neighbors skip cleanly" is this function returning nothing for
- * them rather than the caller special-casing an empty vector.
+ * A node absent from the result had no positively-weighted vectored neighbor. Nodes with no
+ * vectored neighbors skip cleanly because this function returns nothing for them, rather
+ * than the caller special-casing an empty vector.
  */
 export function computeContextVectors(
   neighbors: readonly NeighborContentVector[],

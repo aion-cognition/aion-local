@@ -2,20 +2,19 @@
  * The evidence behind the admission floors, as fixtures rather than as lore.
  *
  * Two distributions decide a floor and both have to be measured: what unrelated text scores
- * against this embedding model, and what a genuine match scores. The exercise measured the
- * first and nearly missed the second — a real match at 0.631 sits close enough to a naive 0.60
- * floor that the floor would have starved it (EX-1 plus the consultation's amnesia warning).
+ * against this embedding model, and what a genuine match scores. Measuring only the first
+ * nearly starved the second: a real match at 0.631 sits close enough to a naive 0.60 floor
+ * that the floor would have rejected it.
  *
  * `floor-calibration.int.test.ts` embeds every pair here against live Ollama and asserts the
  * committed floors still separate the two distributions. `floor-battery.int.test.ts` runs the
  * query batteries through the whole pipeline: the off-topic battery must come back thin or
- * empty, and the on-topic battery must still hit. Both are exported for the round's
- * re-exercise harness, which runs the same pairs against the live stack.
+ * empty, and the on-topic battery must still hit.
  */
 
 /**
- * Mutually unrelated, one subject each, matching the exercise's own probe: 15 pairwise cosines
- * over six sentences that share nothing.
+ * Mutually unrelated, one subject each: 15 pairwise cosines over six sentences that share
+ * nothing.
  */
 export const UNRELATED_SENTENCES: readonly string[] = [
   'The monsoon rainfall variability across Tamil Nadu districts peaked in October.',
@@ -33,9 +32,9 @@ export type ScoredPair = {
 
 /**
  * The shape the floor actually faces: an off-topic query against stored engineering content.
- * Every entry pairs one of EX-1's own miss queries with the substrate text that surfaced for
- * it, so the noise distribution is measured on the real failure rather than on abstract
- * sentence pairs.
+ * Every entry pairs a measured miss query with the substrate text that surfaced for it, so
+ * the noise distribution is measured on the real failure rather than on abstract sentence
+ * pairs.
  */
 export const UNRELATED_PAIRS: readonly ScoredPair[] = [
   {
@@ -74,8 +73,8 @@ export const UNRELATED_PAIRS: readonly ScoredPair[] = [
 
 /**
  * Genuine matches: the content answers the query and names its subject. These are the pairs a
- * floor is not allowed to starve, and they are lifted from the extraction the exercise judged
- * faithful, including the two rank-1 successes it recorded.
+ * floor is not allowed to starve, lifted from an extraction judged faithful, including the two
+ * recorded rank-1 successes.
  */
 export const RELATED_PAIRS: readonly ScoredPair[] = [
   {
@@ -146,8 +145,8 @@ export type BatteryEpisode = {
 };
 
 /**
- * The substrate both batteries read. Every line is content the exercise actually stored or
- * extracted, so a hit and a miss both mean what they meant there.
+ * The substrate both batteries read. Every line is content that was actually stored or
+ * extracted, so a hit and a miss both mean what they meant when measured.
  */
 export const BATTERY_SUBSTRATE: readonly BatteryEpisode[] = [
   { id: 'shard', observation: 'We will not shard the orders table.' },
@@ -179,8 +178,8 @@ export const BATTERY_SUBSTRATE: readonly BatteryEpisode[] = [
 ];
 
 /**
- * EX-1's own miss queries, verbatim where the report quotes them. Every one returned a full,
- * budget-saturated pack of confident items; the floor's job is to make them thin or empty.
+ * The measured miss queries, verbatim. Every one returned a full, budget-saturated pack of
+ * confident items; the floor's job is to make them thin or empty.
  */
 export const OFF_TOPIC_BATTERY: readonly string[] = [
   'how do I re-tension a bicycle wheel spoke',
@@ -199,7 +198,7 @@ export type OnTopicProbe = {
 
 /**
  * The paired half of the gate: the floor has to starve noise without starving these. Three are
- * the exercise's recorded rank-1 successes; the rest are its other measured hits.
+ * recorded rank-1 successes; the rest are other measured hits.
  */
 export const ON_TOPIC_BATTERY: readonly OnTopicProbe[] = [
   { query: 'did we decide to shard the orders table', expects: 'shard' },

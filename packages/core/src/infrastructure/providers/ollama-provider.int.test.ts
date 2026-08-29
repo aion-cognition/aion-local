@@ -7,7 +7,7 @@ import type { Vector } from './types.js';
  * The one property every embedding-driven decision rests on: two different names must embed
  * differently. Ollama's `nomic-embed-text` collapses any word carrying an uppercase letter
  * onto a single out-of-vocabulary token, so without the provider's case fold this file's
- * first assertion returns a cosine of exactly 1.0 for two unrelated proper nouns — and entity
+ * first assertion returns a cosine of exactly 1.0 for two unrelated proper nouns, and entity
  * dedup, whose threshold is a rescaled cosine over name embeddings, merges every same-typed
  * entity in the graph.
  *

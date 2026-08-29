@@ -45,10 +45,10 @@ function toReflectionJob(row: ReflectionJobRow): ReflectionJob {
  * Which claimable row goes next, as one ordered subquery.
  *
  * `lane_rank` is 0 for interactive and 1 for everything else, and it sorts first, so no bulk
- * row is ever claimed while an interactive one is claimable — the starvation the live
- * incident produced (4,016 bulk jobs ahead of every real episode) cannot recur in that
- * direction. An unrecognised lane sorts with bulk: a lane nobody taught this build about is
- * not a promotion.
+ * row is ever claimed while an interactive one is claimable. That is the starvation the live
+ * incident produced (4,016 bulk jobs ahead of every real episode); it cannot recur in that
+ * direction. An unrecognised lane sorts with bulk: a lane nobody named yet is not a
+ * promotion.
  *
  * `lane_seq` is the row's turn within its own (lane, session) group, stamped at insert
  * (reflection-queue.ts), so ordering by it interleaves the sessions: every session's first
@@ -89,11 +89,11 @@ export class ReflectionQueueClaimant {
    * or `enqueued_at` is what breaks every tie in it: ids are random UUIDs and enqueued_at
    * ties on same-millisecond bursts. The UPDATE's subquery and assignment run as one SQLite
    * statement, so concurrent claimants (any process, any thread) never select the
-   * same row — the file-level write lock plus busy_timeout serializes them.
+   * same row: the file-level write lock plus busy_timeout serializes them.
    *
    * `maxAttempts` bounds retrying: a row that has already failed that many times is
    * left in the queue with its last error and never claimed again. Skipping it here,
-   * rather than in the caller, is what keeps the selection atomic — a claimant that
+   * rather than in the caller, is what keeps the selection atomic. A claimant that
    * claimed the row first and then declined it would have to release it, and release
    * counts another attempt.
    */
@@ -124,11 +124,11 @@ export class ReflectionQueueClaimant {
 
   /**
    * A held job's terminal success: the row is deleted, not marked. The queue row's
-   * only purpose is retry/drain durability (PRD §4 "the queue row is durability");
-   * once a job succeeds there is nothing left to retry. The durable completion
-   * record for pipeline idempotency across re-runs is the ops-ledger key the
-   * dispatcher writes (P3), not this table. Scoped to `id` like release; returns
-   * false if this instance doesn't currently hold the claim.
+   * only purpose is retry and drain durability; once a job succeeds there is nothing
+   * left to retry. The durable completion record for pipeline idempotency across
+   * re-runs is the ops-ledger key the dispatcher writes, not this table. Scoped to
+   * `id` like release; returns false if this instance doesn't currently hold the
+   * claim.
    */
   complete(db: SqliteHandle, jobId: string): boolean {
     const result = db
@@ -139,12 +139,12 @@ export class ReflectionQueueClaimant {
 }
 
 /**
- * Startup-drain support (PRD §4): a claim older than `timeoutMs` is assumed abandoned
- * by a crashed or killed process and returned to the pool. Any claimant can reclaim
- * any other's stale claim — after a crash no live claimant remembers the dead one's
- * id, so ownership scoping (as in release/complete) would defeat the point. Attempts
- * and last_error are left untouched: a stale reclaim isn't a known failure, just an
- * interrupted one: the eventual release() or complete() records the real outcome.
+ * Startup-drain support: a claim older than `timeoutMs` is assumed abandoned by a
+ * crashed or killed process and returned to the pool. Any claimant can reclaim any
+ * other's stale claim: after a crash no live claimant remembers the dead one's id, so
+ * ownership scoping (as in release/complete) would defeat the point. Attempts and
+ * last_error are left untouched: a stale reclaim isn't a known failure, just an
+ * interrupted one; the eventual release() or complete() records the real outcome.
  *
  * `exceptClaimant` is for a live caller sweeping on a timer rather than at startup: it is
  * still holding claims of its own, for a run in flight or a retry parked on a backoff, and

@@ -4,10 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 /**
- * The substrate's second load-bearing guarantee (PRD §5.5): supersession closes a node,
- * forgetting closes a node, and nothing deletes one. A repo-wide scan is the cheapest place
- * to hold that line, because the rule has to survive every future task that writes Cypher.
- * This file is the sole exception, since it has to name the patterns it forbids.
+ * A load-bearing guarantee: supersession closes a node, forgetting closes a node, and
+ * nothing deletes one. A repo-wide scan is the cheapest place to hold that line, because
+ * the rule has to survive every future task that writes Cypher. This file is the sole
+ * exception, since it has to name the patterns it forbids.
  */
 const REPO_ROOT = fileURLToPath(new URL('../../../../../', import.meta.url));
 const PACKAGES_DIR = join(REPO_ROOT, 'packages');
@@ -18,7 +18,7 @@ const THIS_FILE = fileURLToPath(import.meta.url);
  * the pattern on its subject, which is graph nodes. JavaScript's own `delete` operator
  * is always followed by a property access (`delete obj.key`, `delete map[key]`) and is a
  * syntax error without one under ESM's implicit strict mode. SQL's `DELETE FROM <table>`
- * is not Cypher at all — `FROM` is not a Cypher keyword — and a SQLite row is not a node:
+ * is not Cypher at all (`FROM` is not a Cypher keyword), and a SQLite row is not a node:
  * the reflection queue row is retry durability, discarded once its job succeeds, while
  * the durable record of that job is the ops-ledger key.
  */

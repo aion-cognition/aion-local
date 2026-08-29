@@ -30,11 +30,9 @@ function splitSystem(messages: readonly ChatMessage[]): {
 }
 
 /**
- * Minimal structured-output caller for `claude-haiku-4-5` (Messages API, raw HTTP): the
- * quality harness's own comparison route, not the production Anthropic `Provider`, which
- * lands in P5 with routing, reconciliation, and embedding-parity guarantees this harness
- * does not need. `embed` is deliberately absent — PRD §10 keeps embeddings local regardless
- * of key, so nothing here ever calls it.
+ * Minimal structured-output caller for `claude-haiku-4-5` (Messages API, raw HTTP). The
+ * quality harness's own comparison route, not the production Anthropic `Provider`. Embeddings
+ * stay local regardless of route, so the `embed` method is not here.
  */
 export class AnthropicHaikuClient {
   readonly #apiKey: string;

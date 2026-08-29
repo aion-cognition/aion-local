@@ -159,7 +159,7 @@ describe('graph schema migrations 001 + 002', () => {
     expect(created).toEqual([]);
     expect(await fetchConstraints(harness)).toEqual(constraintsBefore);
     // Index ids are compared too: a drop-and-recreate reaches the same end state under a new
-    // id, which is exactly the churn PRD §11's "touches nothing that is healthy" forbids.
+    // id, and that churn on an already-healthy index is what this guards against.
     expect(await fetchNonLookupIndexes(harness)).toEqual(indexesBefore);
   });
 
@@ -195,7 +195,7 @@ describe('graph schema migrations 001 + 002', () => {
     ).toEqual(EXPECTED_NON_LOOKUP_INDEXES);
   });
 
-  it('the pinned migration list is exactly migrations 1 and 2 for P3', () => {
+  it('the pinned migration list is exactly migrations 1 and 2', () => {
     expect(GRAPH_MIGRATIONS.map((m) => m.version)).toEqual([1, 2]);
   });
 });

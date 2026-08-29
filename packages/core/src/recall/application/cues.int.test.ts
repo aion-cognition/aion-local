@@ -17,7 +17,7 @@ import { CueCache, extractCues, type CueExtractionDeps } from './cues.js';
 /**
  * Live smoke test against host Ollama: proves the one `generate` call round-trips against
  * the real cue model, records latency, and gates the two aggregate quality numbers that
- * decide whether Algorithm 1 is running at all. Per-fixture assertions stay structural
+ * decide whether cue extraction is running at all. Per-fixture assertions stay structural
  * (protocol shape, not cue content) so the suite never flakes on what a real model happens
  * to return; the aggregates are what would have caught a config whose every extraction
  * degraded while every structural assertion still passed.
@@ -29,8 +29,8 @@ import { CueCache, extractCues, type CueExtractionDeps } from './cues.js';
  *
  * Split by reason, because only one of them is a fact about the code. A model that returns
  * an unusable shape or errors outright is broken however busy the machine is, so that count
- * stays at zero. A single `timeout` is a fact about the wall clock — this suite shares a
- * laptop with a live Neo4j, a reflection pipeline and the same Ollama it is measuring — and
+ * stays at zero. A single `timeout` is a fact about the wall clock, since this suite shares a
+ * laptop with a live Neo4j, a reflection pipeline and the same Ollama it is measuring, and
  * a misconfigured budget shows up as most of the set timing out, not one of eight.
  */
 const MAX_DEGRADED = 0;
@@ -165,7 +165,7 @@ describe('the hardened prompt against the live cue model', () => {
   }, 60_000);
 
   it.each(SUMMARY_TONE_FIXTURES)(
-    'damps the summary to 1x whatever it says, on EX-20\'s own summaries: $summary',
+    'damps the summary to 1x whatever it says: $summary',
     async (fixture) => {
       const result = await extractCues(deps, {
         query: SUMMARY_TONE_QUERY,

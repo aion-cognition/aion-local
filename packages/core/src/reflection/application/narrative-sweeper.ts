@@ -6,13 +6,13 @@ import {
 } from './narratives.js';
 
 /**
- * The pinned narrative trigger has two halves — "MCP transport session end, or 30 min idle" —
+ * The pinned narrative trigger has two halves: "MCP transport session end, or 30 min idle",
  * and this is the second one. `SessionNarrativeCloser` covers the client that says goodbye;
  * a client that vanishes without a DELETE never reaches it, and an editor that exits is
  * exactly that case. Without something on a clock, the idle rule is code nothing runs.
  *
  * The sweep is bounded per tick and best-effort: a failure is logged and the next tick tries
- * again. Nothing here decides whether a session is idle — `sweepIdleSessions` does, against
+ * again. Nothing here decides whether a session is idle: `sweepIdleSessions` does, against
  * the same window the reflection stage uses.
  */
 

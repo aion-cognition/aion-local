@@ -4,20 +4,18 @@ import { DEFAULT_REINFORCEMENT_QUEUE_CAP } from '../sqlite/reinforcement-queue.j
 import type { Config } from './schema.js';
 
 /**
- * Values are PRD §14 / whitepaper Appendix E defaults where either doc pins one.
- * `redaction.entropyThreshold` and `operational.dataDir` are not pinned by either doc;
+ * `redaction.entropyThreshold` and `operational.dataDir` have no pinned spec default;
  * they follow common secret-scanner practice (4.5 bits/char) and the compose data
- * volume mount point respectively. `operational.workerCount` is pinned at 1 by PRD §7
- * ("one worker by default"). Three values depart from their pinned defaults; each says why
+ * volume mount point respectively. `operational.workerCount` defaults to 1, one worker
+ * per process. Three values below depart from a smaller candidate default; each says why
  * at the line.
  *
  * Reserved knobs: `recall.useContextResonance`, `recall.compressionThreshold`,
  * `contextResonance.{resonantLimit,maxHops,activationThreshold,contextSearchThreshold}`,
- * `hebbian.*` and `maintenance.tier3` are declared and overridable but have no reader until
- * the phase that produces them (context resonance, narrative compression, plasticity flush,
- * tier-3 maintenance). They are declared now because the catalog is one document and a knob
- * that appears late is a knob whose name and range were never reviewed; setting one today
- * changes nothing.
+ * `hebbian.*` and `maintenance.tier3` are declared and overridable but have no reader yet:
+ * context resonance, narrative compression, plasticity flush, and tier-3 maintenance land
+ * later. They are declared now because the catalog is one document, and a knob added late
+ * is a knob whose name and range were never reviewed; setting one today changes nothing.
  */
 export const DEFAULTS: Config = {
   neo4j: {
@@ -38,19 +36,19 @@ export const DEFAULTS: Config = {
     apiKey: '',
   },
   recall: {
-    // Appendix E pins 2. Raised because P2's graph routes every cross-session path through a
-    // Session hub — Episode -PARTICIPATES_IN-> Session -FOLLOWS-> Session -PARTICIPATES_IN->
-    // Episode is three hops — so at 2 the FOLLOWS chain reaches nothing but a contentless
-    // Session node. Appendix E's own resonance spread uses 3 for the same reason.
+    // Raised from 2 to 3: the cross-session graph routes every path through a Session hub.
+    // Episode -PARTICIPATES_IN-> Session -FOLLOWS-> Session -PARTICIPATES_IN-> Episode is
+    // three hops, so at 2 the FOLLOWS chain reaches nothing but a contentless Session node.
+    // The resonance spread elsewhere uses 3 for the same reason.
     maxHops: 3,
     vectorLimit: 5,
     maxFacts: 15,
-    // Appendix E pins 5. Raised because the cap cuts the fused list, so it decides what
-    // survives fusion competition rather than how big a pack gets: on a populated substrate
-    // (~40 episodes) near-tie vector hits fill the first five and the one traversal-reached
-    // item ranked 13th, absent at 5, 8, and 12 and present at 20. Activation runs on every
-    // recall either way; the cap is what decides whether the caller sees what it found. The
-    // token budget, not this number, is what actually bounds a pack.
+    // Raised from 5 to 20. The cap cuts the fused list, so it decides what survives fusion
+    // competition rather than how big a pack gets: on a populated substrate (~40 episodes)
+    // near-tie vector hits fill the first five, and the one traversal-reached item ranked
+    // 13th is absent at 5, 8, and 12 and present at 20. Activation runs on every recall
+    // either way; the cap decides whether the caller sees what it found. The token budget,
+    // not this number, is what actually bounds a pack.
     maxEpisodes: 20,
     maxNarratives: 5,
     maxPreferences: 3,
@@ -58,31 +56,30 @@ export const DEFAULTS: Config = {
     useContextResonance: true,
     associationStrength: 0.5,
     compressionThreshold: 512,
-    // PRD §14 pins 2000. Raised because that is under the pinned cue model's cold-start
-    // round trip (2288ms measured on host Ollama against 527-937ms warm), and a guard that
+    // 8000 because a hang guard must not fire on ordinary calls. The cue model's cold-start
+    // round trip measured 2288ms on host Ollama against 527-937ms warm, and a guard that
     // fires on the first recall after a model eviction degrades the stage it exists to
-    // protect. Raised again to 8000 after a live gate rerun busted 2000 at 2030ms on an
-    // ordinary recall: warm cue latency runs 558-811ms, so the headroom a cold start needs
-    // is several multiples of the warm case. Still a hang guard: the failure this catches
-    // is a call that never returns.
+    // protect. A lower value of 2000 still fired on an ordinary recall at 2030ms: warm cue
+    // latency runs 558-811ms, so the headroom a cold start needs is several multiples of
+    // the warm case. Still a hang guard, not a latency target: the failure this catches is
+    // a call that never returns.
     cueBudgetMs: 8000,
     tokenBudget: 1200,
     // Measured, not pinned. Against nomic-embed-text on 23 unrelated pairs and 10 genuine
     // matches (`floors.fixtures.ts`): unrelated p95 0.474, related p05 0.513, so 0.50 is the
-    // separating point. 0.60 would starve real matches — the weakest genuine pair measured
-    // 0.588 and the exercise measured one at 0.631. `floor-calibration.int.test.ts` re-measures
+    // separating point. 0.60 would starve real matches: the weakest genuine pair measured
+    // 0.588, and another measured 0.631. `floor-calibration.int.test.ts` re-measures
     // both distributions and fails if these stop separating them.
     vectorAdmissionFloor: 0.5,
     corroborationFloor: 0.45,
     bm25AdmissionMode: 'exact',
     entityMatchThreshold: 0.7,
-    // Plan-pinned default. Two survivors keeps a cluster's best-ranked content visible
-    // (a pack that answers "did we ever discuss X" still gets one example) without one
-    // burst shape eating the bucket the way EX-22 measured.
+    // Two survivors keeps a cluster's best-ranked content visible (a pack that answers
+    // "did we ever discuss X" still gets one example) without one burst of near-identical
+    // episodes eating the bucket: a measured burst once took 29.5% of a pack's slots.
     clusterCap: 2,
-    // The plan pins "at most 3 or 4". Four, because a pack that answers "who is involved in X"
-    // needs room for more than one name while still leaving eleven of fifteen fact slots to
-    // content that states something.
+    // Four: a pack that answers "who is involved in X" needs room for more than one name
+    // while still leaving eleven of fifteen fact slots to content that states something.
     entityGlossCap: 4,
     // Measured against nomic-embed-text on two distributions of Goal/Plan text, both scored
     // against the query that would retrieve them (`facts.fixtures.ts`): nodes that restate the
@@ -135,8 +132,8 @@ export const DEFAULTS: Config = {
    * Every value is the pinned default its stage already carries as a module constant, and
    * `reflection-defaults.test.ts` asserts the two agree: config is where a knob is named and
    * ranged, the stage is where it is used, and a silent divergence between them would ship a
-   * pipeline nobody configured. Two are pinned by the plan rather than by a stage author,
-   * `supersedeAutoConfidence` (0.85) and `associationSemanticThreshold` (0.75).
+   * pipeline nobody configured. Two values, `supersedeAutoConfidence` (0.85) and
+   * `associationSemanticThreshold` (0.75), have no stage-owned constant to match against.
    */
   reflection: {
     entityTimeoutMs: 60_000,
@@ -198,13 +195,12 @@ export const DEFAULTS: Config = {
     workerBreakerCooldownMs: 60_000,
     workerVectorBatchSize: 64,
     reconcileWarnThreshold: 50,
-    // Plan-pinned defaults (EX-10): ten minutes past the drain rate this exercise measured
-    // (1.9 to 6.7 episodes/min) is a real backlog, not noise; 200 unclaimed is the same
-    // judgment by depth instead of age.
+    // Ten minutes past the measured drain rate (1.9 to 6.7 episodes/min) is a real backlog,
+    // not noise; 200 unclaimed is the same judgment by depth instead of age.
     lagOldestUnclaimedWarnMs: 600_000,
     lagQueueDepthWarnThreshold: 200,
-    // Plan-pinned default (EX-32): well past any real tool-call gap, short enough that a
-    // transport a client forgot to close does not sit in the session map for a whole shift.
+    // Well past any real tool-call gap, short enough that a transport a client forgot to
+    // close does not sit in the session map for a whole shift.
     sessionIdleExpiryMinutes: 30,
   },
   logging: {

@@ -3,9 +3,9 @@ import { seedEntity, seedFactNode, SupersessionTestBed } from './supersession.fi
 import { SupersessionStage } from './supersession.js';
 
 /**
- * Candidate generation and the exercise's six-case battery. The judgments are mocked, so what
- * these assert is which pairs the stage chooses to spend a judgment on and what it writes
- * afterwards, which is the half of supersession the exercise found broken in both directions.
+ * Candidate generation and the six-case contradiction battery. The judgments are mocked, so
+ * what these assert is which pairs the stage chooses to spend a judgment on and what it
+ * writes afterwards, the half of supersession measured broken in both directions.
  */
 
 const EPISODE_ID = 'episode-2';
@@ -26,7 +26,7 @@ afterEach(() => {
 
 describe('SupersessionStage candidate generation', () => {
   /**
-   * The exercise's first false closure: a payments-worker retry policy closed by a Stripe
+   * A measured false closure: a payments-worker retry policy closed by a Stripe
    * webhook change, on shared vocabulary alone. The claim naming the same subject is the one
    * worth a judgment even when a different subject sits closer in embedding space.
    */
@@ -225,7 +225,7 @@ function axis(index: number, jitter: number): number[] {
 }
 
 /**
- * The exercise's six-case battery with the verdicts mocked, so this asserts the write side:
+ * The six-case battery with the verdicts mocked, so this asserts the write side:
  * four genuine corrections become proposal rows, the different-subject and temporal baits
  * become nothing, and no case closes a node.
  */

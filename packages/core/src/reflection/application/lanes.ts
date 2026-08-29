@@ -8,9 +8,8 @@ import {
  *
  * The explicit flag is primary: a client that says `lane: "bulk"` is taken at its word and
  * nothing here can promote it. Everything else defaults to interactive, and the arrival-rate
- * backstop is the only thing that demotes it — a second line of defence for the client that
- * floods without saying so, which is what the live incident actually was (four exercise
- * harnesses in uncapped store loops, none of them aware they were a load test).
+ * backstop is the only thing that demotes it: a second line of defence for a client that
+ * floods without saying so, rather than asking for the bulk lane outright.
  *
  * The backstop is deliberately hard to trip and easy to escape: a session that stops pushing
  * is back in the interactive lane one window later, because the window slides and the counter
@@ -53,9 +52,9 @@ export type LaneRequest = {
 };
 
 /**
- * Per-process arrival counters. The long-lived service is the single writer of the queue
- * (PRD §4), so one instance sees every arrival; a CLI container claims jobs, it never
- * enqueues them, and has no counter to keep.
+ * Per-process arrival counters. The long-lived service is the single writer of the queue,
+ * so one instance sees every arrival; a CLI container claims jobs, it never enqueues them,
+ * and has no counter to keep.
  *
  * Memory is bounded by the window, not by the flood: timestamps older than the window are
  * dropped from the front on every observation, and a session with nothing left in the window
@@ -83,7 +82,7 @@ export class LaneAssigner {
    * pad the count for the second.
    *
    * Only genuinely new work should be passed here. A re-pushed payload that resolves to an
-   * episode already queued is not an arrival — counting it would let a retrying client demote
+   * episode already queued is not an arrival: counting it would let a retrying client demote
    * itself for repeating work the substrate already holds.
    */
   assign(request: LaneRequest): LaneDecision {

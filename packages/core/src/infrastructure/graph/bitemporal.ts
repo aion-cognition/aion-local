@@ -14,8 +14,8 @@ import { SUPERSEDES_TYPE } from './relationships.js';
 import { toGraphDateTime, toGraphParameters, type GraphProperties, type Row } from './values.js';
 
 /**
- * PRD §5.5. World time is `valid_from`/`valid_until`, system time is `tx_from`/`tx_until`,
- * and `occurred_at` records when the experience itself happened. Open means the property is
+ * World time is `valid_from`/`valid_until`, system time is `tx_from`/`tx_until`, and
+ * `occurred_at` records when the experience itself happened. Open means the property is
  * absent: Cypher has no null property value, so an open interval is written by leaving the
  * field off, and every read predicate tests `IS NULL` accordingly.
  */
@@ -26,7 +26,7 @@ export const BITEMPORAL_PROPERTIES = {
   txFrom: 'tx_from',
   txUntil: 'tx_until',
   /**
-   * The one true suppression. `aion forget` (P5) closes a node and stamps this; default
+   * The one true suppression. `aion forget` closes a node and stamps this; default
    * recall drops those rows while `as_of`/`knew_at` still return them, so the audit trail
    * survives an explicit forget.
    */
@@ -72,9 +72,9 @@ export function stampNew(input: StampNewInput): StampedNode {
 
 export type StampedNodeWrite = StampNewInput & {
   /**
-   * Applied on create and on match alike: the structural-entity upgrade of whitepaper §4.2,
-   * and singleton attributes a later run may correct. Anything derived from the clock
-   * belongs in `properties`, which only a creation writes.
+   * Applied on create and on match alike: the structural-entity upgrade, and singleton
+   * attributes a later run may correct. Anything derived from the clock belongs in
+   * `properties`, which only a creation writes.
    */
   readonly mergeProperties?: GraphProperties;
 };
@@ -189,10 +189,10 @@ export async function supersede(driver: Driver, input: SupersedeInput): Promise<
 
 /**
  * The same close-and-link, joined to a transaction the caller already holds. Entity dedup
- * needs it: §6.5 requires the merge to be atomic, so redirecting a duplicate's edges and
- * closing the duplicate have to commit or roll back together. Splitting them leaves a window
- * where the node is stripped of its relationships and still marked current — a live-looking
- * entity with nothing attached, which name and KNN search both still return.
+ * needs it: the merge must be atomic, so redirecting a duplicate's edges and closing the
+ * duplicate have to commit or roll back together. Splitting them leaves a window where the
+ * node is stripped of its relationships and still marked current, a live-looking entity with
+ * nothing attached, which name and KNN search both still return.
  */
 export async function supersedeInTransaction(
   tx: GraphTransaction,

@@ -7,10 +7,9 @@ export type QualityFixture = {
 };
 
 /**
- * Dev-work episodes, shaped exactly like a real `reflection` payload (PRD §3.2) so
- * `renderEpisodeText` produces the same text the real pipeline would extract from. Varied
- * length and kind on purpose: decisions, debugging, tool output, and observation-only
- * episodes stress different parts of both prompts.
+ * Dev-work episodes shaped like a real `reflection` payload. `renderEpisodeText` produces
+ * the same text the real pipeline would extract. Varied length and kind stress different
+ * parts of both extraction prompts: decisions, debugging, tool output, and observation-only episodes.
  */
 export const QUALITY_FIXTURES: readonly QualityFixture[] = [
   {

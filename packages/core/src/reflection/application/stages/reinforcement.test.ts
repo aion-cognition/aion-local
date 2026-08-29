@@ -108,12 +108,11 @@ describe('ReinforcementEnqueueStage', () => {
     const signals = listReinforcementSignals(store.db);
     expect(signals).toHaveLength(3);
 
-    // Verify all signals have the correct trigger.
     for (const signal of signals) {
       expect(signal.trigger).toBe(REFLECTION_CO_EXTRACTION_TRIGGER);
     }
 
-    // Verify deterministic pair order: sorted node IDs, no (b,a) if (a,b) exists.
+    // Deterministic pair order: sorted node ids, never (b,a) when (a,b) exists.
     const sorted = [...nodeIds].sort();
     const expectedPairs: Array<[string, string]> = [
       [sorted[0], sorted[1]],
@@ -150,7 +149,7 @@ describe('ReinforcementEnqueueStage', () => {
     expect(listReinforcementSignals(store.db)).toHaveLength(1);
 
     // The orchestrator's crash-before-ledger-mark window: the stage runs a second time for
-    // the same episode and must not double what P4's flush will apply.
+    // the same episode and must not double what the flush will apply.
     const second = await stage.run(ctx);
     expect(second.status).toBe('skipped');
     expect(listReinforcementSignals(store.db)).toHaveLength(1);

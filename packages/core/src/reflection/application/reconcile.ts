@@ -9,7 +9,7 @@ import { orchestratorLedgerKey } from './orchestrator.js';
 /**
  * Episodes the substrate stored and will never enrich: no orchestrator ledger key, and no
  * queue row to produce one. Nothing joins the graph against the queue, so this state was
- * invisible — `aion doctor` passed 8 of 8 checks with 95% of episodes in it, and a purge of
+ * invisible: `aion doctor` passed 8 of 8 checks with 95% of episodes in it, and a purge of
  * the queue looked exactly like silent data loss from the outside.
  *
  * The re-enqueue is safe to repeat. Enrichment is ledger-gated per run and per stage, so a

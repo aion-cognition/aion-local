@@ -11,8 +11,8 @@ export const MCP_PROFILE = 'mcp';
 
 /**
  * The CLI itself runs inside `aion-cli`, a container on the same compose network as
- * `aion-mcp` — its published `127.0.0.1:<port>` reaches the *host's* loopback, which is
- * not this container's, so the compose service DNS name is the only address that resolves
+ * `aion-mcp`. Its published `127.0.0.1:<port>` reaches the host's loopback, which is
+ * not this container's. The compose service DNS name is the only address that resolves
  * from in here. A bare-metal CLI run (dev, outside Docker) has no such network and reaches
  * the service the same way a registered `claude` session on the host does.
  */
@@ -84,7 +84,7 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
-/** Polls the liveness endpoint (PRD §4): it never touches Neo4j or Ollama, so a 200 here means the process is up, nothing more. */
+/** Polls the liveness endpoint. It never touches Neo4j or Ollama, so a 200 here means the process is up, nothing more. */
 export async function waitForMcpHealth(port: number, options: McpReadinessOptions = {}): Promise<void> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const timeoutMs = options.timeoutMs ?? DEFAULT_MCP_READY_TIMEOUT_MS;

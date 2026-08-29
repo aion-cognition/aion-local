@@ -11,7 +11,7 @@ import { narrativeOptions, reflectionStages, workerOptions } from './bootstrap.j
 const config = DEFAULTS as Config;
 
 describe('reflectionStages', () => {
-  it('registers Algorithm 4 in order, narrative evaluation last', () => {
+  it('registers the reflection stages in order, narrative evaluation last', () => {
     const names = reflectionStages(config).map((stage) => stage.name);
 
     expect(names).toEqual([

@@ -76,7 +76,7 @@ describe('resolveMemberName', () => {
 });
 
 describe('registrationCommand', () => {
-  it('writes the exact one-time command PRD §11 specifies', () => {
+  it('returns the one-time registration command', () => {
     expect(registrationCommand(8765)).toBe(
       'claude mcp add -s user --transport http aion http://127.0.0.1:8765/mcp',
     );

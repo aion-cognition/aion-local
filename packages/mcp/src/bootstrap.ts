@@ -43,10 +43,10 @@ import { SessionIdleSweeper } from './session-idle-sweeper.js';
 import type { ToolBackend } from './tools.js';
 
 /**
- * PRD §4: the service owns one driver, one SQLite handle, one session cache, and one cue
- * cache for its whole life, and hands them to every tool call. Construction order is the
- * dependency order — config, log, storage, graph, backbone, provider — so a failure names
- * the first thing that was actually wrong rather than a symptom two layers down.
+ * The service owns one driver, one SQLite handle, one session cache, and one cue cache for
+ * its whole life, and hands them to every tool call. Construction order is the dependency
+ * order (config, log, storage, graph, backbone, provider), so a failure names the first
+ * thing that was actually wrong rather than a symptom two layers down.
  */
 
 export const GIT_USER_NAME_ENV_VAR = 'AION_GIT_USER_NAME';
@@ -54,18 +54,18 @@ export const GIT_USER_NAME_ENV_VAR = 'AION_GIT_USER_NAME';
 const MINUTE_MS = 60 * 1000;
 
 /**
- * The pipeline, in the one place its order lives, and the order is whitepaper Algorithm 4's.
- * Identity is resolved before anything reads it — extraction, then deduplication — because a
- * later stage that pairs, links, or judges duplicate entities writes the duplication into the
- * graph as structure (§6.5). Supersession follows cognitive extraction, since the facts it
- * judges are the Decision and Insight nodes that stage writes. Context vectors run last:
- * they aggregate over whatever the rest of the run just changed.
+ * The pipeline, in the one place its order lives. Identity is resolved before anything reads
+ * it: extraction, then deduplication, because a later stage that pairs, links, or judges
+ * duplicate entities writes the duplication into the graph as structure. Supersession
+ * follows cognitive extraction, since the facts it judges are the Decision and Insight nodes
+ * that stage writes. Context vectors run last: they aggregate over whatever the rest of the
+ * run just changed.
  *
- * Algorithm 4's step 9, narrative evaluation, is last. It carries the idle rule rather than
- * the close: a session whose episodes are reflecting seconds after they arrived is still
- * open, and the stage skips it, leaving the narrative to `SessionNarrativeCloser`. What it
- * catches is the other case — a backlog drained hours late, a retry that landed after the
- * client was gone — where no close hook will ever fire again.
+ * Narrative evaluation is last. It carries the idle rule rather than the close: a session
+ * whose episodes are reflecting seconds after they arrived is still open, and the stage
+ * skips it, leaving the narrative to `SessionNarrativeCloser`. What it catches is the other
+ * case: a backlog drained hours late, or a retry that landed after the client was gone,
+ * where no close hook will ever fire again.
  *
  * An empty list would leave the worker down: an orchestrator with nothing to run enriches
  * nothing, which reads to the worker as a failed job and spends the episode's retries on it.
@@ -254,9 +254,9 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       logger.warn('reflection worker idle: no pipeline stages are registered');
     }
 
-    // Whitepaper §6.10's session boundary, both halves of the pinned trigger. The transport
-    // close is the boundary the substrate can observe; the sweep is what a client that
-    // disconnects without a DELETE — an editor that exits — leaves behind.
+    // Both halves of the pinned trigger. The transport close is the boundary the substrate
+    // can observe; the sweep is what a client that disconnects without a DELETE (an editor
+    // that exits) leaves behind.
     const narrativeDeps = { driver, provider, logger };
     const narratives = new SessionNarrativeCloser(narrativeDeps, narrativeOptions(config));
     const idleNarratives = new IdleNarrativeSweeper(narrativeDeps, {
@@ -279,7 +279,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       queueLag: () => queueLagSnapshot(store.db, config.operational.workerMaxAttempts),
     });
 
-    // EX-32's backstop: a client's close() never sends the DELETE `onSessionClosed` above
+    // The backstop: a client's close() never sends the DELETE `onSessionClosed` above
     // depends on, so a session with no request in this long closes on its own instead.
     const idleSessions = new SessionIdleSweeper(service, {
       idleMs: config.operational.sessionIdleExpiryMinutes * MINUTE_MS,

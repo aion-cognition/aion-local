@@ -5,11 +5,11 @@ import { upsertEdgeInTransaction } from './edges.js';
 import { lockNodeInTransaction } from './locks.js';
 
 /**
- * Whitepaper §4.2 / PRD §3.3, §5.3: a session's node id is the caller-supplied identity
- * itself (the MCP transport's session id in production, an explicit id in tests) rather
- * than a freshly minted UUID. Reusing it verbatim keeps the graph node traceable back to
- * the caller with no side table, and it is what makes MERGE-on-id the whole idempotency
- * story: a second `ensureGraphSession` call for the same identity resolves the same node.
+ * A session's node id is the caller-supplied identity itself (the MCP transport's session
+ * id in production, an explicit id in tests) rather than a freshly minted UUID. Reusing it
+ * verbatim keeps the graph node traceable back to the caller with no side table, and it is
+ * what makes MERGE-on-id the whole idempotency story: a second `ensureGraphSession` call
+ * for the same identity resolves the same node.
  */
 export type EnsureGraphSessionInput = {
   readonly sessionId: string;
@@ -32,7 +32,7 @@ const STRUCTURAL_PROVENANCE = ['session'];
 /**
  * The tail of the member's chain in this workspace: the one session nothing else FOLLOWS.
  * Read from the chain's own shape rather than by ordering on `tx_from`, which ties at
- * millisecond resolution — two sessions created in the same millisecond would order by id
+ * millisecond resolution: two sessions created in the same millisecond would order by id
  * and the younger could be handed the older's prior, forking the chain. A path has exactly
  * one tail, so this has no tie to break.
  *
@@ -71,19 +71,19 @@ async function readFollowsTarget(
 }
 
 /**
- * Whitepaper §4.2: lazy Session creation plus the three backbone edges (INITIATED_BY,
- * WITHIN_WORKSPACE, FOLLOWS). The backbone edges and the FOLLOWS chain are established
- * exactly once, on the write that actually creates the node (`node.created`) — a repeat
- * call for the same `sessionId` resolves and reports the existing chain instead of
- * re-deriving it, which is both truer to "resolve without writing" and what keeps a
- * repeat call for an older session from ever cross-linking to a session created after it.
+ * Lazy Session creation plus the three backbone edges (INITIATED_BY, WITHIN_WORKSPACE,
+ * FOLLOWS). The backbone edges and the FOLLOWS chain are established exactly once, on the
+ * write that actually creates the node (`node.created`): a repeat call for the same
+ * `sessionId` resolves and reports the existing chain instead of re-deriving it, which is
+ * both truer to "resolve without writing" and what keeps a repeat call for an older
+ * session from ever cross-linking to a session created after it.
  *
  * One transaction, and the Member locked inside it before the chain is derived. The tail
  * of the chain is a read ("the member's most recent other session") that decides a write,
  * which is the shape a concurrent peer breaks: unserialized, two sessions created at once
  * either both point at the same prior session, forking the chain, or point at each other,
- * cycling it. This is the ordinary regime, not an edge case — one service multiplexes many
- * agent sessions (PRD §3.3), and each new connection creates its session on its first call.
+ * cycling it. This is the ordinary regime, not an edge case: one service multiplexes many
+ * agent sessions, and each new connection creates its session on its first call.
  */
 export async function ensureGraphSession(
   driver: Driver,

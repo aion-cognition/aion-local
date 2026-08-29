@@ -18,11 +18,11 @@ import {
 import { toGraphDateTime, toGraphParameters, toGraphVector, type GraphProperties, type Row } from './values.js';
 
 /**
- * Whitepaper §6.4, §6.9 and §4.2: the writes that turn an extraction into canonical Entity
- * nodes, the edges that tie them to their episode, and the salience those mentions carry.
+ * The writes that turn an extraction into canonical Entity nodes, the edges that tie them
+ * to their episode, and the salience those mentions carry.
  *
  * Canonicalization keys on `(name_norm, type)` rather than on an id, because the identity
- * an extraction produces is the name — the id is this run's proposal, and it survives only
+ * an extraction produces is the name: the id is this run's proposal, and it survives only
  * when nothing already answers to that name. Migration 001's `entity_name_type_unique`
  * constraint is what makes the MERGE a seek and what keeps two concurrent runs from
  * forking one identity.
@@ -34,18 +34,18 @@ const ENTITY_LABEL = 'Entity';
 export const ENTITY_TYPE_PROPERTY = 'type';
 
 /**
- * §6.4: "Each extracted entity is linked to its source episode via a PARTICIPATES_IN
- * relationship." Direction follows this adapter's existing use of the type — member to
- * container, as Turn→Episode and Episode→Session already are — so the entity points at the
- * experience it took part in. It is in the pinned protected set: never pruned, never decayed.
+ * Each extracted entity links to its source episode via a PARTICIPATES_IN relationship.
+ * Direction follows this adapter's existing use of the type: member to container, as
+ * Turn→Episode and Episode→Session already are, so the entity points at the experience it
+ * took part in. It is in the pinned protected set: never pruned, never decayed.
  */
 export const ENTITY_PARTICIPATION_TYPE = CONTAINMENT_TYPE;
 
 /**
- * §6.9: "a MENTIONS relationship is created from the episode to the entity". It is the
- * opposite direction from PARTICIPATES_IN by design — one records that the entity belongs
- * to the experience, the other that this episode is evidence of the entity — and it is the
- * one of the two that carries an observation count and decays.
+ * A MENTIONS relationship is created from the episode to the entity. It is the opposite
+ * direction from PARTICIPATES_IN by design: one records that the entity belongs to the
+ * experience, the other that this episode is evidence of the entity. It is the one of the
+ * two that carries an observation count and decays.
  */
 export const ENTITY_MENTION_TYPE = 'MENTIONS';
 
@@ -67,11 +67,10 @@ export type StructuralEntityMatch = {
 };
 
 /**
- * §4.2's merge-on-collision, read side: a name the backbone already answers to resolves to
- * the structural node instead of forking a second identity under an extracted type. The
- * match is on the name alone — the structural `type` (`member`, `workspace`) is never what
- * an extraction returns, so keying on the pair would miss every collision the rule exists
- * for.
+ * Merge-on-collision, read side: a name the backbone already answers to resolves to the
+ * structural node instead of forking a second identity under an extracted type. The match
+ * is on the name alone: the structural `type` (`member`, `workspace`) is never what an
+ * extraction returns, so keying on the pair would miss every collision the rule exists for.
  */
 function structuralEntitiesStatement(): GraphStatement {
   const fragment = readModeFragment(withCurrency(), 'n');
@@ -110,7 +109,7 @@ export async function findStructuralEntitiesByName(
   );
 }
 
-/** Appendix B's quality dimension, written once by whichever run created the node. */
+/** Confidence score, written once by whichever run created the node. */
 const ENTITY_CONFIDENCE_PROPERTY = 'confidence';
 
 export type EntityMergeInput = {
@@ -162,13 +161,13 @@ const MERGE_CHAIN_DEPTH = 8;
  * the id rather than off a counter, since the batch's counters cannot say which row made a
  * node.
  *
- * The MERGE cannot carry a currency predicate — `entity_name_type_unique` is declared on
+ * The MERGE cannot carry a currency predicate: `entity_name_type_unique` is declared on
  * `(name_norm, type)` alone, so a node dedup closed still owns that key and a MERGE
  * restricted to current nodes would violate the constraint rather than miss it. The chain
  * walk after the MERGE is what makes the merge stick: a surface form a previous run merged
  * away resolves forward to the canonical identity, so a later episode naming "PostgreSQL"
- * reaches the "Postgres" node instead of reviving the closed duplicate and re-forking the
- * identity dedup already collapsed (§6.5).
+ * reaches the "Postgres" node instead of reviving the closed duplicate and re-forking an
+ * identity dedup already collapsed.
  */
 function buildEntityMerge(entities: readonly EntityMergeInput[], now: Date): GraphStatement {
   const companions = companionLabels();
@@ -244,8 +243,8 @@ export type EntityVectorEntry = {
 
 /**
  * Fills a vector that is absent and never replaces one that is present. Both are functions
- * of text this run did not write — the name and `text` belong to whichever run created the
- * node — so overwriting would spend an embed to store the same floats, and a concurrent
+ * of text this run did not write: the name and `text` belong to whichever run created the
+ * node, so overwriting would spend an embed to store the same floats, and a concurrent
  * writer's result is as good as this one's.
  */
 const WRITE_ENTITY_VECTORS = [
@@ -278,7 +277,7 @@ export async function writeEntityVectors(
 }
 
 /**
- * §6.9's salience signals. Deliberately not idempotent, exactly like recall's
+ * Salience signals for mentions. Deliberately not idempotent, exactly like recall's
  * access tracking and the edge merge policy's `count`: each call stands for one episode
  * that mentioned the entity, so a replay of the same run counts twice rather than
  * pretending the mention did not happen. The pipeline's ledger gate is what keeps a
@@ -302,8 +301,8 @@ export type EntityMentionInput = {
 
 /**
  * Both edges and the salience bump for one episode, in one transaction: an entity linked to
- * an episode it is not recorded as mentioned by would misreport §6.9's signals to
- * maintenance, which reads them to decide what to prune.
+ * an episode it is not recorded as mentioned by would misreport the salience signals that
+ * maintenance reads to decide what to prune.
  *
  * PARTICIPATES_IN carries count 0, so a replay is a total no-op on it; MENTIONS carries 1,
  * which the merge policy sums into the observation count.
@@ -367,9 +366,9 @@ export type EpisodeEntity = {
  *
  * Currency-filtered, not merely currency-aware: recall shows a superseded row annotated,
  * but a pipeline stage that pairs, links, or judges one writes the duplication back into
- * the graph as structure — which is the fragmentation §6.5 puts dedup early to prevent.
- * The mention edge onto the closed node stays; it is the record that this episode named
- * that surface form.
+ * the graph as structure, which is the fragmentation that running dedup early is meant to
+ * prevent. The mention edge onto the closed node stays; it is the record that this episode
+ * named that surface form.
  */
 function episodeEntitiesStatement(): GraphStatement {
   const fragment = readModeFragment(withCurrency(), 'n');

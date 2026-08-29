@@ -144,8 +144,8 @@ describe('reflection results', () => {
     expect(result.structuredContent).toEqual({ episode_id: 'episode-1', queued: true, lane: 'interactive' });
   });
 
-  // EX-39's concern applies to the ack too: a text-only client has no other way to see how
-  // far behind live traffic its own memory queued.
+  // Applies to the ack too: a text-only client has no other way to see how far behind
+  // live traffic its own memory queued.
   it('names how many interactive jobs are ahead of it, in the rendered text', async () => {
     const backend: ToolBackend = {
       recall: () => Promise.resolve(pack()),

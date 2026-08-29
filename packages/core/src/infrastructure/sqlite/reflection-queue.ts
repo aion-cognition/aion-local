@@ -4,7 +4,7 @@ import type { SqliteHandle } from './database.js';
 /**
  * The two service classes reflection work is scheduled in. `interactive` is an agent's own
  * turn, which the freshness pin requires to enrich in minutes; `bulk` is anything that can
- * wait behind it — a flagged batch import, a reconcile backfill, or a client the arrival-rate
+ * wait behind it: a flagged batch import, a reconcile backfill, or a client the arrival-rate
  * backstop demoted. Claiming serves interactive strictly first, so a bulk flood can never
  * delay an interactive episode by more than the job already running.
  *
@@ -81,7 +81,7 @@ export type EnqueueReflectionJobOptions = {
  * `lane_seq` is this row's turn within its own (lane, session) group, taken from the group's
  * current high-water mark. Claiming orders by it, so the groups interleave: every session's
  * first queued job, then every session's second, and so on. Stamping it here rather than
- * computing it at claim time is what makes the interleave survive draining — a window
+ * computing it at claim time is what makes the interleave survive draining. A window
  * function over the unclaimed rows renumbers every group the moment one row leaves it.
  *
  * The mark is over queued rows only, so a session whose backlog has drained starts at 1
@@ -113,7 +113,7 @@ export function enqueueReflectionJob(
  * "exactly one job for this thing" after a crash between the durable write and the enqueue.
  * Only pending rows are visible: a completed job's row is gone (claim.ts), so absence means
  * nothing is queued, not that nothing ever ran. Re-enqueueing an already-processed job is
- * the safe direction — the pipeline's ledger key makes the re-run a no-op — while leaving a
+ * the safe direction (the pipeline's ledger key makes the re-run a no-op), while leaving a
  * missing one missing is permanent.
  */
 export function findPendingReflectionJob(

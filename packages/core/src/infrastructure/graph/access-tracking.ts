@@ -5,11 +5,11 @@ import { LAST_ACCESSED_PROPERTY } from './seed-queries.js';
 import { toGraphDateTime } from './values.js';
 
 /**
- * Recall's access-tracking side effect (whitepaper §5.8, PRD §3.1): every node a recall
- * surfaced gets its last-access timestamp bumped and its access count incremented, in one
- * statement for the whole batch. This is what lets `graph/seed-queries.ts`'s recency
- * strategy leave its cold-start `tx_from DESC` ordering once a substrate has served real
- * recalls — before any recall runs, no node carries either property.
+ * Recall's access-tracking side effect: every node a recall surfaced gets its last-access
+ * timestamp bumped and its access count incremented, in one statement for the whole batch.
+ * This is what lets `graph/seed-queries.ts`'s recency strategy leave its cold-start
+ * `tx_from DESC` ordering once a substrate has served real recalls: before any recall runs,
+ * no node carries either property.
  *
  * Unlike the rest of this directory's writes, this one is not idempotent by design: running
  * it twice for the same node doubles `access_count`, the same way the edge upsert's `count`

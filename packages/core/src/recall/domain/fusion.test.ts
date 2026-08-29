@@ -104,7 +104,7 @@ describe('RRF across ranked lists', () => {
     expect(ids(fused)).toEqual(['a', 'c', 'b']);
   });
 
-  it('weights each leg by its whitepaper 5.3 share, so a vector-only hit outranks a bm25-only one', () => {
+  it('weights each leg by its configured share, so a vector-only hit outranks a bm25-only one', () => {
     const fused = items([
       list('vector', [candidate('v')], 0.4),
       list('bm25', [candidate('k', { method: 'bm25' })], 0.3),
@@ -386,7 +386,7 @@ describe('MMR reranking behind the flag', () => {
 });
 
 describe('near-duplicate crowding cap', () => {
-  /** EX-22's own shape: a one-line burst record that varies only in its trailing count. */
+  /** The measured shape: a one-line burst record that varies only in its trailing count. */
   const BURST_CLUSTER = Array.from({ length: 20 }, (_, index) =>
     candidate(`burst-${String(index)}`, { content: `restart burst 0/${String(index)}` }),
   );

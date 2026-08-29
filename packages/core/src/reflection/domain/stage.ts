@@ -6,8 +6,8 @@ import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 
 /**
  * The contract every reflection stage implements, and the pure aggregation the orchestrator
- * records against `reflection:orchestrator:{episodeId}`. Whitepaper §6 and Algorithm 4
- * govern the stages themselves; this file governs how one of them reports.
+ * records against `reflection:orchestrator:{episodeId}`. This file governs how a stage
+ * reports, not what any stage does.
  *
  * A stage takes its inputs from the graph, keyed on the episode, not from the stage before
  * it. Failure isolation is what forces that: a stage runs whether or not its predecessor
@@ -19,9 +19,9 @@ import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 export type StageStatus = 'ok' | 'failed' | 'skipped';
 
 /**
- * What the stage changed, by name — entities, merges, associations. Keys merge across the
- * run by summing, so the whitepaper's flat enrichment tally falls out of the per-stage
- * numbers as long as two stages counting the same thing agree on the key.
+ * What the stage changed, by name: entities, merges, associations. Keys merge across the
+ * run by summing, so a flat enrichment tally falls out of the per-stage numbers as long as
+ * two stages counting the same thing agree on the key.
  */
 export type StageCounts = Readonly<Record<string, number>>;
 
@@ -74,10 +74,10 @@ export type ReflectionSummary = {
 };
 
 /**
- * The whitepaper's per-episode ledger key only ever gated the whole pipeline. EX-4: a stage
- * with no ledger of its own (`cognitive`, historically) re-runs its full extraction on every
- * retry of the run it belongs to, and each pass MERGEs a fresh set of near-duplicate nodes
- * because its only idempotency is a content hash over LLM output that never collides twice.
+ * A per-episode ledger key gates the whole pipeline and nothing smaller. A stage with no
+ * ledger of its own re-runs its full extraction on every retry of the run it belongs to,
+ * and each pass MERGEs a fresh set of near-duplicate nodes, because its only idempotency is
+ * a content hash over LLM output that never collides twice.
  * `reflection:stage:{stageName}:{episodeId}` closes that gap one level down: the orchestrator
  * marks it the moment a stage finishes without failing and skips the stage entirely, without
  * calling `run`, when the key is already there. A retry therefore re-enters only the stages
@@ -110,17 +110,17 @@ export function mergeStageCounts(stages: readonly StageRecord[]): StageCounts {
 }
 
 /**
- * Whitepaper §6.1: a job is re-enqueued after a transient failure and the entry gate is what
- * makes that safe. The key therefore closes only on a run that had nothing left to retry —
- * every stage either did its work or had none to do. One failed stage keeps it open, because
- * a model timeout on extraction is exactly the transient the retry exists for, and marking
- * the run applied would gate the episode out of the pipeline forever with the failed stage's
- * structure permanently missing and no operation that re-extracts it.
+ * A job is re-enqueued after a transient failure and the entry gate is what makes that safe.
+ * The key therefore closes only on a run that had nothing left to retry: every stage either
+ * did its work or had none to do. One failed stage keeps it open, because a model timeout on
+ * extraction is exactly the transient the retry exists for, and marking the run applied would
+ * gate the episode out of the pipeline forever with the failed stage's structure permanently
+ * missing and no operation that re-extracts it.
  *
- * Isolation (§12.2) is unaffected: the stages after a failure still run and their writes
- * still stand. What the retry re-runs is idempotent by construction — MERGE on identity, the
- * edge merge policy, and the per-episode operation keys — except the salience counters,
- * which count a re-observation on purpose and are bounded by the worker's attempt limit.
+ * Stage isolation is unaffected: the stages after a failure still run and their writes still
+ * stand. What the retry re-runs is idempotent by construction (MERGE on identity, the edge
+ * merge policy, and the per-episode operation keys) except the salience counters, which count
+ * a re-observation on purpose and are bounded by the worker's attempt limit.
  *
  * A run with no stages at all stays retryable too: an unconfigured pipeline has enriched
  * nothing, and marking it would gate the episode out of the pipeline that follows.

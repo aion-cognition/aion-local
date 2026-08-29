@@ -5,9 +5,8 @@ import { cosineSimilarity } from './fusion.js';
 /**
  * The measurement behind `recall.vectorAdmissionFloor`, kept as a function of two measured
  * distributions rather than of one. A floor calibrated on noise alone has no way to tell
- * "rejects unrelated text" from "rejects everything", which is the failure mode the
- * consultation flagged: a genuine match measured 0.631, close enough to a naive 0.60 floor
- * that the floor would have starved it.
+ * "rejects unrelated text" from "rejects everything": a genuine match measured 0.631, close
+ * enough to a naive 0.60 floor that the floor would have starved it.
  *
  * Committed constants stay the only runtime source of truth. This module measures; nothing
  * here adjusts a floor, and the doctor check that calls it reports drift and stops there.
@@ -95,9 +94,9 @@ function round(value: number): string {
 /**
  * Three claims, all of them about the committed floor rather than about an ideal one:
  * the distributions separate at all, the floor sits above the noise, and the floor sits
- * below what a genuine match scores. Tolerance is drift allowance, not slack in the claim —
- * embeddings are deterministic for a given model, so anything past it means the model
- * changed and the constant has to be re-measured.
+ * below what a genuine match scores. Tolerance is drift allowance, not slack in the claim:
+ * embeddings are deterministic for a given model, so anything past it means the model changed
+ * and the constant has to be re-measured.
  */
 export function checkSeparation(input: SeparationInput): Separation {
   const floor = input.policy.vectorFloor;

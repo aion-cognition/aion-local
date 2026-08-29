@@ -132,9 +132,9 @@ describe('ensureGraphSession', () => {
     expect(after[0]).toEqual(original[0]);
   });
 
-  // The regime PRD §3.3 describes: one service, many agent sessions, each creating its
-  // Session node on its first tool call. Unserialized, concurrent first calls cross-link
-  // (two sessions pointing at each other) or fork (two sessions claiming the same prior).
+  // One service handles many agent sessions, each creating its Session node on its first
+  // tool call. Unserialized, concurrent first calls cross-link (two sessions pointing at
+  // each other) or fork (two sessions claiming the same prior).
   it('keeps the chain a single unbroken path when many identities arrive at once', async () => {
     const identities = Array.from({ length: 8 }, (_, index) => `burst-session-${String(index)}`);
 

@@ -21,8 +21,8 @@ import {
 } from './descriptions.js';
 
 /**
- * PRD §3.1–3.2's two tools. The wire schemas are the ones the handlers themselves parse
- * (`@aion/protocol`), converted to JSON Schema rather than restated, so a client sees
+ * The two tools this service exposes. The wire schemas are the ones the handlers themselves
+ * parse (`@aion/protocol`), converted to JSON Schema rather than restated, so a client sees
  * exactly the contract the handler enforces and the two cannot drift.
  */
 
@@ -92,8 +92,8 @@ export type ToolBackend = {
  * The lane is named in the text and not only in `structuredContent`: a client that reads the
  * rendered block alone would otherwise never learn that its episode was demoted behind a
  * bulk load, which is the one thing the ack exists to tell it. `pending_ahead` follows the
- * same reasoning (EX-39): a text-only client is exactly the one with no other way to see how
- * far behind live traffic its own memory queued.
+ * same reasoning: a text-only client is exactly the one with no other way to see how far
+ * behind live traffic its own memory queued.
  */
 function ackText(output: ReflectionOutput): string {
   const base = `Stored episode ${output.episode_id}; queued for reflection (${output.lane} lane).`;
@@ -107,8 +107,8 @@ function ackText(output: ReflectionOutput): string {
 /**
  * A payload rejected by the handler's own `parse` is the caller's error and comes back as
  * invalid-params carrying the zod message. Anything else is ours: it is logged with its
- * stack and reported as an internal error naming the failure class, never the payload —
- * tool arguments carry the conversation and never reach the log or the wire.
+ * stack and reported as an internal error naming the failure class, never the payload.
+ * Tool arguments carry the conversation and never reach the log or the wire.
  *
  * One class carries its own message through: `ReflectionNotStoredError` states what
  * happened to the experience the caller just handed over, which no class name can, and an
@@ -127,7 +127,7 @@ function toMcpError(tool: string, err: unknown, logger: Logger): McpError {
 }
 
 /**
- * Structured JSON alongside the rendered text block (PRD §3.1): a client that understands
+ * Structured JSON alongside the rendered text block: a client that understands
  * `structuredContent` gets the pack with its rationale intact, and one that only renders
  * text still gets something the agent can drop into its reasoning.
  */

@@ -13,7 +13,7 @@ import {
 import { MemoryPackSchema, type Cue, type MemoryPack, type MemoryPackItem, type StageTimingsMs } from '@aion/protocol';
 import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
 
-/** PRD §13: "aion last is the trust-builder" -- it renders exactly the pack a session was served, not a recomputed view. */
+/** Render exactly the pack a session was served, not a recomputed view. */
 
 export class UnknownOptionError extends Error {
   constructor(option: string) {
@@ -106,7 +106,7 @@ export type LastPackEntry = {
   readonly pack: MemoryPack;
 };
 
-/** The full per-item, per-stage view PRD §13 calls the trust-builder: what recall served, and why. */
+/** Render the full per-item, per-stage view of what recall served and why. */
 export function renderPack(entry: LastPackEntry, write: Writer): void {
   write(`session  ${entry.sessionId}`);
   write(`served   ${entry.ts}`);

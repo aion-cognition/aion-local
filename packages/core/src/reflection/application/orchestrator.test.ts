@@ -148,7 +148,7 @@ describe('ReflectionOrchestrator', () => {
     }
   });
 
-  it('records the enrichment summary under the whitepaper ledger key', async () => {
+  it('records the enrichment summary under the orchestrator ledger key', async () => {
     const orchestrator = new ReflectionOrchestrator(deps, [
       stage('entities', { status: 'ok', summary: 'extracted 2 entities', counts: { entities: 2 } }),
     ]);
@@ -295,7 +295,7 @@ describe('ReflectionOrchestrator', () => {
     const third = await new ReflectionOrchestrator(deps, stages).run(EPISODE_ID, { now: NOW });
 
     // The node-minting stages ran exactly once each, no matter how many retries the failing
-    // stage cost the run; that bound is what makes re-minting (EX-4) impossible.
+    // stage cost the run; that bound is what makes re-minting impossible.
     expect(entityCalls).toBe(1);
     expect(narrativeCalls).toBe(1);
     expect(semanticAttempts).toBe(3);
@@ -317,8 +317,8 @@ describe('ReflectionOrchestrator', () => {
   });
 
   it('gives a transiently failed stage another attempt: the second run skips the stage that already applied', async () => {
-    // EX-4: `cognitive` succeeded on attempt one, so the per-stage ledger closes it out and
-    // the retry re-enters only `entities`, the stage that actually has something left to do.
+    // `cognitive` succeeded on attempt one, so the per-stage ledger closes it out and the
+    // retry re-enters only `entities`, the stage that actually has something left to do.
     let attempts = 0;
     const flaky = {
       name: 'entities',

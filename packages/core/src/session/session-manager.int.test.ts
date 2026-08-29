@@ -92,7 +92,7 @@ describe('SessionManager.ensureSession', () => {
     const manager = new SessionManager(harness.driver, { memberId, workspaceId });
 
     // All three share the one in-flight write, so all three resolve to the same result
-    // (including `created: true`, since the identity genuinely is new) — the thing this
+    // (including `created: true`, since the identity genuinely is new). The thing this
     // proves is that only one Session node lands in the graph, not that only one caller
     // observes `created`.
     const [first, second, third] = await Promise.all([

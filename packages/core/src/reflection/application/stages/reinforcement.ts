@@ -7,11 +7,12 @@ import {
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
 
 /**
- * Whitepaper §7.1, Algorithm 5 integration: enqueue Hebbian reinforcement signals for
- * entities and cognitive structures co-extracted from the same episode (nodes sharing this
- * episode via MENTIONS, PARTICIPATES_IN, or EXTRACTED_FROM edges). The 0.3× factor against
- * the default Hebbian learning rate (η = 0.1) is applied at flush time (P4), not here —
- * the signal queue row is durable truth, flush determines semantics per trigger string.
+ * Enqueue Hebbian reinforcement signals for entities and cognitive structures co-extracted
+ * from the same episode (nodes sharing this episode via MENTIONS, PARTICIPATES_IN, or
+ * EXTRACTED_FROM edges). The flush applies 0.3× the base Hebbian learning rate against this
+ * stage's trigger string (η_base = 0.1, so η_reflection = 0.03). This stage enqueues rows
+ * without applying the factor: the queue row is durable truth, and flush determines
+ * semantics per trigger string.
  */
 
 export const REINFORCEMENT_STAGE_NAME = 'reinforcement';
@@ -20,15 +21,9 @@ export const REINFORCEMENT_STAGE_NAME = 'reinforcement';
 export const REFLECTION_CO_EXTRACTION_TRIGGER = 'reflection:co-extraction';
 
 /**
- * Constraint: P4's reinforcement flush uses this trigger string to apply 0.3× the base η
- * (η_base = 0.1 → η_reflection = 0.03) from Algorithm 5. The reinforcement stage enqueues
- * rows without applying the factor; the factor contract lives in the flush operation.
- */
-
-/**
  * The episode-scoped gate, in the shape association inference already uses. A queue row is a
  * fresh uuid with no uniqueness constraint behind it, so without this the orchestrator's
- * crash-before-ledger-mark window doubles every pair the episode produced, and P4's flush
+ * crash-before-ledger-mark window doubles every pair the episode produced, and the flush
  * reinforces each of them twice.
  */
 export function coExtractionLedgerKey(episodeId: string): string {
@@ -63,8 +58,7 @@ export class ReinforcementEnqueueStage implements ReflectionStage {
       return { status: 'ok', summary: 'one node extracted; no pairs to reinforce' };
     }
 
-    // Deterministic pair order: sort so (a,b) never also enqueues (b,a). For each pair [i, j]
-    // where i < j (after sorting), enqueue one signal from i to j.
+    // Deterministic pair order: sorted, so (a,b) never also enqueues (b,a).
     const sorted = [...nodeIds].sort();
     const enqueuedAt = ctx.now.toISOString();
     let count = 0;

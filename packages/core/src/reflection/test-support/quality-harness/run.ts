@@ -12,15 +12,14 @@ import type { SkippedRoute } from './report.js';
 
 /**
  * The one knob the config schema does not carry yet: the Anthropic provider work owns
- * registering its model there. Everything else this harness needs — the Ollama URL, the
- * reflect model, the embed model, the API key — comes from the loader, so the harness
- * measures the models the service would actually route to rather than a second copy of
- * their names that drifts.
+ * registering its model there. Everything else this harness needs comes from the loader:
+ * the Ollama URL, the reflect model, the embed model, the API key. The harness measures
+ * the models the service would actually route to, not a second copy that drifts.
  */
 const DEFAULT_ANTHROPIC_MODEL = 'claude-haiku-4-5';
 
-// This module runs compiled, from `dist/`; reports belong next to the source that reads
-// back easily in review, not inside a directory `npm run clean` deletes.
+// This module runs compiled from `dist/`. Reports belong next to the source for easy review,
+// not inside a directory `npm run clean` deletes.
 const COMPILED_DIR = dirname(fileURLToPath(import.meta.url));
 const SOURCE_DIR = COMPILED_DIR.replace(`${sep}dist${sep}`, `${sep}src${sep}`);
 const REPORTS_DIR = join(SOURCE_DIR, 'reports');

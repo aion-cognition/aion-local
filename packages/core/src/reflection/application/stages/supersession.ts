@@ -13,7 +13,7 @@ import { recordSupersessionProposal } from '../../../infrastructure/sqlite/super
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
 
 /**
- * PRD §5.5's detection half. Each fact-bearing node this episode minted is compared against
+ * The detection half of supersession. Each fact-bearing node this episode minted is compared against
  * the current claims that name the same subject, and one structured-output judgment per pair
  * decides whether the new statement reverses the old one.
  *
@@ -30,7 +30,7 @@ import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/s
 
 export const SUPERSESSION_STAGE_NAME = 'supersession';
 
-/** `config.models.reflect`'s pinned default; the Integration task threads the configured value in. */
+/** `config.models.reflect`'s default; callers thread the configured value in. */
 export const DEFAULT_SUPERSESSION_MODEL = 'qwen3:8b';
 
 /** Per judgment, not per run: qwen3:8b with thinking off still owes a guard on every call. */
@@ -93,7 +93,7 @@ const JudgmentSchema = z.object({
 });
 
 /**
- * The four discriminations the exercise's false positives turned on. Each rule names a shape
+ * The four discriminations the measured false positives turned on. Each rule names a shape
  * the judge answered "contradicts" to at confidence 1.0 while both statements stayed true.
  */
 const SYSTEM_PROMPT = [
@@ -229,7 +229,7 @@ export class SupersessionStage implements ReflectionStage {
   /**
    * Subject identity first, embedding proximity only to fill the remaining slots. Both sides
    * of a real reversal name the same subject, and the KNN leg alone both missed those pairs
-   * and supplied every false positive the exercise measured.
+   * and supplied every measured false positive.
    */
   async #findCandidates(
     ctx: StageContext,

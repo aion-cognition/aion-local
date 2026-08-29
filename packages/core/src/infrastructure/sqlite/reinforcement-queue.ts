@@ -31,7 +31,7 @@ function toReinforcementSignal(row: ReinforcementSignalRow): ReinforcementSignal
 /**
  * Matches `sqlite.reinforcementQueueCap`'s default (`config/defaults.ts`, parity asserted in
  * `stage-defaults.test.ts`). A rolling window is closer to Hebbian semantics than an
- * unbounded log, since nothing drains this table until the P4 flush ships.
+ * unbounded log, since nothing drains this table yet.
  */
 export const DEFAULT_REINFORCEMENT_QUEUE_CAP = 50_000;
 
@@ -64,10 +64,10 @@ function trimToCapacity(db: SqliteHandle, cap: number): void {
 }
 
 /**
- * Enqueue only; flushing into Hebbian reinforcement is deferred past P2 (whitepaper §7). Past
- * `cap` the oldest rows are dropped to make room, counted in `meta` under
- * `reinforcement_queue:dropped_count` — the table has no consumer yet, so an unbounded insert
- * rate has nowhere else to go but disk.
+ * Enqueue only; flushing into Hebbian reinforcement comes later. Past `cap` the oldest
+ * rows are dropped to make room, counted in `meta` under
+ * `reinforcement_queue:dropped_count`: the table has no consumer yet, so an unbounded
+ * insert rate has nowhere else to go but disk.
  */
 export function enqueueReinforcementSignal(
   db: SqliteHandle,

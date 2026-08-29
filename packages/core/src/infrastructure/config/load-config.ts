@@ -21,7 +21,7 @@ export class ConfigError extends Error {
 /**
  * Converts one env-var string into the shape its Config leaf expects. Type mismatches
  * (bad numbers, bad booleans) are deliberately passed through as-is rather than
- * rejected here — ConfigSchema.safeParse produces the precise per-field error, and
+ * rejected here: ConfigSchema.safeParse produces the precise per-field error, and
  * loadConfig re-attaches the env var name to it. `weights` is shape-checked here
  * because a wrong part count has no single corresponding zod leaf to blame.
  */

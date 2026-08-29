@@ -53,7 +53,7 @@ describe('lexical evidence', () => {
     ).toBe(true);
   });
 
-  it('admits any hit again under the pre-floor mode, which is what EX-1 measured', () => {
+  it('admits any hit again under the pre-floor mode, the behaviour the floors replaced', () => {
     expect(admits([plain], { ...CALIBRATED, bm25Mode: 'any' })).toBe(true);
   });
 

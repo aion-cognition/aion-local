@@ -38,20 +38,19 @@ import { assemblePack, type BucketCaps } from '../domain/pack.js';
 import { selectSeeds, type Seed, type SeedCue } from './seeds.js';
 
 /**
- * PRD §6, whitepaper §5: the recall pipeline, in the order its stages run. Cue extraction
- * spends the one generation call recall is allowed (PRD §10), every cue is embedded in a
- * single batch, the four seed strategies run, activation spreads from what they found,
- * fusion ranks the union, and the pack is assembled and persisted.
+ * The recall pipeline, in the order its stages run. Cue extraction spends the one generation
+ * call recall is allowed, every cue is embedded in a single batch, the four seed strategies
+ * run, activation spreads from what they found, fusion ranks the union, and the pack is
+ * assembled and persisted.
  *
- * `as_of` / `knew_at` bind one read mode for the whole run: currency is judged from a
- * single vantage point, so seeds, traversal, and hydration cannot disagree about what was
- * true when.
+ * `as_of` / `knew_at` bind one read mode for the whole run: currency is judged from a single
+ * vantage point, so seeds, traversal, and hydration cannot disagree about what was true when.
  */
 
 export type RecallCompletion = {
   readonly sessionId: string;
   readonly seeds: readonly Seed[];
-  /** Whitepaper §5.8's co-activated set, seeds included, for the reinforcement side effects. */
+  /** The co-activated set, seeds included, for the reinforcement side effects. */
   readonly activated: readonly ActivatedNode[];
   readonly items: readonly FusedItem[];
   /** What the admission gate dropped and the floors it used, for a caller that reports honesty signals. */
@@ -61,16 +60,16 @@ export type RecallCompletion = {
   /**
    * The bitemporal vantage point the whole run read from. A listener that writes consults it:
    * inspecting the past is a question, not a use, so it must not stamp `last_accessed` on
-   * historical nodes or strengthen edges as though the memory had just fired (PRD §5.5).
+   * historical nodes or strengthen edges as though the memory had just fired.
    */
   readonly mode: ReadMode;
 };
 
 /**
  * Fired after the pack is persisted and never awaited, so a rejected listener cannot fail
- * a recall that already succeeded. Whitepaper §5.8's reinforcement hooks attach here; a
- * listener that does real work owes it to the caller to schedule it rather than run it
- * inline, since a synchronous listener still runs before the pack returns.
+ * a recall that already succeeded. The reinforcement hooks attach here; a listener that does
+ * real work owes it to the caller to schedule it rather than run it inline, since a
+ * synchronous listener still runs before the pack returns.
  */
 export type RecallListener = (completion: RecallCompletion) => void | Promise<void>;
 
@@ -87,7 +86,7 @@ export type RecallDeps = {
 };
 
 export type RecallOptions = {
-  /** The transport's session identity. `session_id` in the payload overrides it (PRD §3.3). */
+  /** The transport's session identity. `session_id` in the payload overrides it. */
   readonly identity: string;
   readonly now?: Date;
 };
@@ -132,11 +131,11 @@ type EmbeddedCues = {
 };
 
 /**
- * One batched `embed` for every cue, including the degradation ladder's raw-query cue.
- * An embedding outage costs recall its vector leg and nothing else: BM25, exact entity
- * resolution, recency, and traversal all run on cue text or on graph structure, which is
- * PRD §10's deeper rung of degradation. The rung is reported, because a pack answered
- * without its semantic leg is a thinner answer than the caller has any other way to see.
+ * One batched `embed` for every cue, including the degradation ladder's raw-query cue. An
+ * embedding outage costs recall its vector leg and nothing else: BM25, exact entity
+ * resolution, recency, and traversal all run on cue text or on graph structure, which is the
+ * ladder's deeper rung. The rung is reported, because a pack answered without its semantic
+ * leg is a thinner answer than the caller has any other way to see.
  */
 async function embedCues(deps: RecallDeps, cues: readonly Cue[]): Promise<EmbeddedCues> {
   if (cues.length === 0) {
@@ -210,9 +209,9 @@ async function hydrate(
 }
 
 /**
- * The calling session's own episodes with no orchestrator ledger key (EX-11): stored and
- * findable by raw text, but not yet reachable by entity resolution, traversal, or context
- * vectors. Best-effort — a failure here costs the pack one honesty field, never the recall
+ * The calling session's own episodes with no orchestrator ledger key: stored and findable by
+ * raw text, but not yet reachable by entity resolution, traversal, or context vectors.
+ * Best-effort, since a failure here costs the pack one honesty field and never the recall
  * itself, so it is caught and logged rather than allowed to fail the call.
  */
 async function pendingEnrichment(deps: RecallDeps, sessionId: string, mode: ReadMode): Promise<number> {
@@ -232,10 +231,10 @@ async function pendingEnrichment(deps: RecallDeps, sessionId: string, mode: Read
 }
 
 /**
- * Which terminations mean the answer was cut short. `hop_limit` is not one of them: PRD §6.3
- * bounds traversal depth by design, so stopping there is the spread finishing its job. The
- * other two are budgets — EX-21 measured `node_budget` on 60.2% of recalls against a
- * populated substrate, invisible to every caller.
+ * Which terminations mean the answer was cut short. `hop_limit` is not one of them: traversal
+ * depth is bounded by design, so stopping there is the spread finishing its job. The other
+ * two are budgets, and `node_budget` measured 60.2% of recalls against a populated substrate,
+ * invisible to every caller.
  */
 function truncationFor(termination: ActivationTermination): PackTruncation | undefined {
   if (termination === 'node_budget' || termination === 'max_iterations') {
@@ -270,10 +269,10 @@ function notify(deps: RecallDeps, completion: RecallCompletion): void {
 }
 
 /**
- * PRD §3.1's `recall` tool. Returns a MemoryPack, always: an empty substrate, a query
- * nothing matches, or a floor that rejects every candidate all produce an explicitly empty
- * pack rather than padding with weak matches, and the pack served is persisted to
- * `last_pack` either way so `aion last` can show exactly what the agent received.
+ * The `recall` tool. Returns a MemoryPack, always: an empty substrate, a query nothing
+ * matches, or a floor that rejects every candidate all produce an explicitly empty pack
+ * rather than padding with weak matches, and the pack served is persisted to `last_pack`
+ * either way so `aion last` can show exactly what the agent received.
  */
 export async function handleRecall(
   deps: RecallDeps,

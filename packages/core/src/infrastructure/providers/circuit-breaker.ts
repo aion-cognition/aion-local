@@ -12,10 +12,9 @@ export class CircuitOpenError extends Error {
 }
 
 /**
- * PRD §10 / whitepaper §12.4: opens after 5 consecutive failures, fast-fails for a
- * 60s cooldown, then allows one trial call. Generic over the wrapped call so P2 can
- * wrap both `embed` and `generate` with the same instance policy without a second
- * implementation.
+ * Opens after 5 consecutive failures, fast-fails for a 60s cooldown, then allows one
+ * trial call. Generic over the wrapped call so both `embed` and `generate` share one
+ * instance's policy without a second implementation.
  */
 export class CircuitBreaker {
   private readonly failureThreshold: number;

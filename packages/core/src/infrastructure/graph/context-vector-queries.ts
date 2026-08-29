@@ -9,10 +9,10 @@ import { readModeFragment, withCurrency } from './read-modes.js';
 import { fromGraphVector, toGraphVector, type Row } from './values.js';
 
 /**
- * Whitepaper §6.11, Algorithm 4 step 10: reflection's last stage recomputes `context_vec`
- * for every `:Memory` node this run's enrichment touched. This module owns the two batched
- * reads that find that set and its neighborhood, and the batched write that stores the
- * result; `reflection/domain/context-vector.ts` owns the weighted-mean itself.
+ * Reflection's last stage recomputes `context_vec` for every `:Memory` node this run's
+ * enrichment touched. This module owns the two batched reads that find that set and its
+ * neighborhood, and the batched write that stores the result; `reflection/domain/context-vector.ts`
+ * owns the weighted-mean itself.
  */
 
 /** The cognitive types have no shared writer-side constant for the edge back to their episode (`cognitive-queries.ts` inlines it); this module needs the literal too. */
@@ -25,7 +25,7 @@ const MEMORY_LABEL = 'Memory';
 
 /**
  * The episode itself, its turns, the entities it mentions, the cognitive nodes extracted
- * from it, and the narrative it was folded into — every `:Memory` category one reflection
+ * from it, and the narrative it was folded into: every `:Memory` category one reflection
  * run can touch. One `UNION`ed statement rather than five round trips; `UNION` (not `UNION
  * ALL`) also gives id deduplication for free, though no id should ever appear in two
  * branches. The same read-mode fragment, built once against a shared `n`, is spliced into
@@ -59,7 +59,7 @@ export async function findAffectedNodeIds(driver: Driver, episodeId: string): Pr
 }
 
 /**
- * One row per (affected node, edge to a vectored neighbor) — neighbors outside the affected
+ * One row per (affected node, edge to a vectored neighbor): neighbors outside the affected
  * set included, since a node's context is its whole graph neighborhood, not just what this
  * episode touched. Undirected (`-[r]-`) because a neighborhood is not a direction; direction
  * is the relationship's own semantics, the same reasoning `adjacency.ts` documents for

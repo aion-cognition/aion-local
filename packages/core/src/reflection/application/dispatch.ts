@@ -14,14 +14,14 @@ export type ReflectionDispatchOptions = {
 };
 
 /**
- * The seam intake pushes through and the P3 dispatcher subscribes to. Dispatch is
+ * The seam intake pushes through and the reflection worker subscribes to. Dispatch is
  * event-driven rather than polled: the `reflection_queue` row is durability for a restart
  * or a crash, not something a loop watches. One instance per service process, constructed
  * alongside the queue it shadows.
  *
  * A listener never fails an intake. The experience is already durable in the graph and the
  * queue by the time `signal` runs, so a thrown or rejected listener is routed to
- * `onListenerError` and the remaining listeners still run — losing the signal costs the
+ * `onListenerError` and the remaining listeners still run: losing the signal costs the
  * startup drain a job, not the caller their write.
  */
 export class ReflectionDispatch {

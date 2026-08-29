@@ -10,9 +10,9 @@ import { ENTITY_NAME_NORM_PROPERTY } from './seed-queries.js';
 import { fromGraphVector, toGraphVector, type Row } from './values.js';
 
 /**
- * The graph reads behind supersession detection (PRD §5.5). The stage decides what
- * contradicts what; this module knows which nodes carry a fact worth contradicting and how
- * to find the current neighbours of one.
+ * The graph reads behind supersession detection. The stage decides what contradicts what;
+ * this module knows which nodes carry a fact worth contradicting and how to find the
+ * current neighbours of one.
  */
 
 /**
@@ -79,7 +79,7 @@ function episodeFactNodesStatement(): GraphStatement {
 
 /**
  * This episode's fact-bearing nodes, in a stable order so a bounded run always truncates the
- * same way. Returns `[]` when cognitive extraction has not run for the episode — the
+ * same way. Returns `[]` when cognitive extraction has not run for the episode: the
  * not-assumed-to-have-run contract every stage after extraction follows.
  */
 export async function findEpisodeFactNodes(
@@ -150,7 +150,7 @@ function mapVectorCandidate(row: Row): ContradictionCandidate | undefined {
 
 /**
  * The claims that name what this one names. Both sides of a real reversal restate the same
- * subject, and the exercise measured that embedding proximity alone neither finds those pairs
+ * subject, and measured results show embedding proximity alone neither finds those pairs
  * (a concise restatement of a reversal scored 0.67) nor keeps unrelated ones out (three
  * false closures, all near neighbours on shared vocabulary).
  *

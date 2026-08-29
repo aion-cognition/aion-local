@@ -4,7 +4,7 @@
  * span a label union; `Entity` is what puts the backbone nodes under the composite
  * `(name_norm, type)` uniqueness constraint. Migration 001 declares indexes and constraints
  * against those labels, so a node written without them is invisible to both.
- * P3's cognitive node types extend this table rather than writing their labels by hand.
+ * Cognitive node types extend this table rather than writing their labels by hand.
  */
 
 export type NodeLabel =
@@ -55,14 +55,14 @@ export const NODE_LABELS: readonly NodeLabel[] = [
 ];
 
 /**
- * The nine whitepaper §6.7 cognitive types plus Narrative and Bridge (P3's pinned label
- * table) all carry `Memory`: they are content-bearing, so `content_vec_idx`/
- * `context_vec_idx` and the currency range indexes, all declared `FOR (n:Memory)` in
- * migration 001, cover them without a new index per label.
+ * The nine cognitive types plus Narrative and Bridge (the pinned label table) all carry
+ * `Memory`: they are content-bearing, so `content_vec_idx`/`context_vec_idx` and the
+ * currency range indexes, all declared `FOR (n:Memory)` in migration 001, cover them
+ * without a new index per label.
  *
- * `Entity` joins them once reflection writes entity content vectors: whitepaper §4.1 makes
- * entities recall citizens, and §6.9 has the recency strategy biasing toward recently
- * mentioned ones, which is `Memory` in both cases.
+ * `Entity` joins them once reflection writes entity content vectors: entities are recall
+ * citizens, and the recency strategy biases toward recently mentioned ones, which is
+ * `Memory` in both cases.
  */
 const COMPANION_LABELS: Record<NodeLabel, readonly string[]> = {
   Session: [],

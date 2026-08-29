@@ -14,8 +14,8 @@ import type { ToolBackend } from './tools.js';
 /**
  * The scheduler, not the closing logic: `service.test.ts`'s `closeIdleSessions` describe
  * block covers which sessions qualify. What matters here is that something on a clock
- * reaches it (EX-32: without one, a client's close() that never sends DELETE leaves its
- * session behind indefinitely, not just until the next tick).
+ * reaches it: without one, a client's close() that never sends DELETE leaves its session
+ * behind indefinitely, not just until the next tick.
  */
 
 const IDLE_MS = 30 * 60 * 1000;

@@ -20,7 +20,7 @@ import { FakeGraph, type FakeNode } from '../../test-support/fake-graph.fixture.
  * The dedup stage's own statements on top of the shared `FakeGraph`: mention-count
  * hydration, the name-vector similarity search, and the merged-node edge enumeration. Node
  * merges, edge upserts, and node locks are already modeled by the base fake. Vector cosine
- * math is plain JS here — the real function is proven against a live server in
+ * math is plain JS here; the real function is proven against a live server in
  * `entity-dedup.int.test.ts`.
  */
 

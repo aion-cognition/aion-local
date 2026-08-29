@@ -122,7 +122,7 @@ describe('session multiplexing', () => {
       expect(service.sessionCount).toBe(before + 2);
 
       // The identity handed to the handlers is the transport's own session id, which is
-      // what makes one Session node per connected client (PRD §3.3).
+      // what makes one Session node per connected client.
       expect(firstIdentity).toBe(first.transport.sessionId);
       expect(secondIdentity).toBe(second.transport.sessionId);
     } finally {

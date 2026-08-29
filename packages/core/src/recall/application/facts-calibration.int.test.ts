@@ -15,10 +15,10 @@ import { ANSWERING_GOALS, RESTATING_GOALS, type FactsPair } from './facts.fixtur
  * embedding model, and fail when the constant stops separating them.
  *
  * Both distributions are Goal and Plan text scored against the query that retrieves it. One is
- * a node that says the question back and answers nothing (EX-19 served exactly that at facts
- * rank 1); the other is a node that answers. A floor fitted to the first alone would swallow
- * every Goal a user legitimately asked about, which is the same one-sided mistake the floors
- * consultation caught on admission.
+ * a node that says the question back and answers nothing, which a measured run served at facts
+ * rank 1; the other is a node that answers. A floor fitted to the first alone would swallow
+ * every Goal a user legitimately asked about, the same one-sided mistake the admission floors
+ * had to avoid.
  *
  * Measured 2026-08-29, nomic-embed-text on host Ollama, printed on every run:
  *   restating  n=8  min 0.841  p05 0.854  p50 0.909  p95 0.951  max 0.960

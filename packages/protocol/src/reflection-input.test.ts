@@ -21,7 +21,7 @@ describe('ReflectionInputSchema valid fixtures', () => {
     expect(ReflectionInputSchema.parse(input)).toEqual(input);
   });
 
-  it('parses the full PRD §3.2 example, all three buckets plus summary and session_id', () => {
+  it('parses all three buckets plus summary and session_id', () => {
     const input = {
       turns: [{ role: 'user', text: 'hi' }],
       tool_executions: [
@@ -71,7 +71,7 @@ describe('ReflectionInputSchema valid fixtures', () => {
     expect(ReflectionInputSchema.parse(input)).toEqual(input);
   });
 
-  it('accepts a non-standard tool_execution status, since the PRD pins no closed vocabulary', () => {
+  it('accepts a non-standard tool_execution status', () => {
     const input = {
       tool_executions: [
         { tool: 'bash', input: 'x', status: 'timeout', output: null, duration_ms: 1 },

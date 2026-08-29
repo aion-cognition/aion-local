@@ -7,18 +7,18 @@ import { readModeFragment, withCurrency } from './read-modes.js';
 import type { RelationshipType } from './relationships.js';
 
 /**
- * Whitepaper §6.8: typed edges between entities and cognitive structures, inferred once per
- * episode from the extraction the two prior stages already wrote. This module owns the one
- * read `entity-queries.ts`'s `findEpisodeEntities` does not cover (the cognitive half of the
+ * Typed edges between entities and cognitive structures, inferred once per episode from the
+ * extraction the two prior stages already wrote. This module owns the one read
+ * `entity-queries.ts`'s `findEpisodeEntities` does not cover (the cognitive half of the
  * candidate set) and the one write, so the stage never spells either Cypher shape itself.
  */
 
 /**
- * Whitepaper §6.8's five, plus the two this build already had names for. `SIMILAR_TO` is
- * written under the catalog's existing `SIMILAR`, which is the same relation under the other
- * name — forking a second type would split one claim across two edges and two activation
- * weights. `CONTRADICTS` is its own type: the supersession judgment only compares fact
- * nodes against same-label neighbours and only acts above the auto-apply threshold, so
+ * Five semantic relationship types, plus two the catalog already had names for. `SIMILAR_TO`
+ * is written under the catalog's existing `SIMILAR`, which is the same relation under the
+ * other name: forking a second type would split one claim across two edges and two
+ * activation weights. `CONTRADICTS` is its own type: the supersession judgment only compares
+ * fact nodes against same-label neighbours and only acts above the auto-apply threshold, so
  * without it nothing in the graph can say that this Decision is in tension with that
  * Insight. `RELATED_TO` and `ANALOGOUS_TO` stay for the connections none of the five name.
  *
@@ -100,9 +100,9 @@ export type SemanticRelationshipWrite = {
 /**
  * `count: 0`: one proposal is a single inferred claim, not an observation to tally on
  * replay. A claim repeated across episodes strengthening is reflection reinforcement's job
- * (`reinforcement_queue`), a separate mechanism — this edge's own count staying at
- * zero is what keeps a same-episode re-run (the orchestrator's crash-before-ledger-mark
- * case) a total no-op beyond `updated_at` and the merge policy's max(strength, confidence).
+ * (`reinforcement_queue`), a separate mechanism. This edge's own count staying at zero is
+ * what keeps a same-episode re-run (the orchestrator's crash-before-ledger-mark case) a
+ * total no-op beyond `updated_at` and the merge policy's max(strength, confidence).
  */
 export async function writeSemanticRelationship(
   driver: Driver,

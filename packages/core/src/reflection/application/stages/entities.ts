@@ -17,33 +17,33 @@ import {
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
 
 /**
- * Whitepaper §6.4, §6.9 and §4.2, as one stage: the model names the entities in an episode,
- * each name resolves to exactly one node, and the episode records that it mentioned them.
+ * The model names the entities in an episode, each name resolves to exactly one node, and
+ * the episode records that it mentioned them.
  *
  * The extraction is the only judgment call in the pipeline that a heuristic could fake, and
  * it does not get one. A failed or unusable answer is retried once with the first attempt in
- * the prompt (§6.4's coherence refinement, triggered here by an unusable answer rather than
- * by scoring the text the model was given), and a second failure fails the stage — the
- * episode stays queued behind an unmarked ledger key instead of being enriched with
- * regex-shaped entities the rest of the graph would then treat as real.
+ * the prompt, triggered by an unusable answer rather than by scoring the text the model was
+ * given, and a second failure fails the stage: the episode stays queued behind an unmarked
+ * ledger key instead of being enriched with regex-shaped entities the rest of the graph would
+ * then treat as real.
  */
 
 export const ENTITY_STAGE_NAME = 'entities';
 
-/** `config.models.reflect`; the Integration task threads the configured value in. */
+/** `config.models.reflect`; callers thread the configured value in. */
 export const DEFAULT_ENTITY_MODEL = 'qwen3:8b';
 
 /**
  * A hang guard, not a target. Reflection is asynchronous, but `qwen3:8b` occasionally does
- * not return at all, and a stage without its own signal would hold the worker forever — the
- * orchestrator imposes no timeout.
+ * not return at all, and a stage without its own signal would hold the worker forever, since
+ * the orchestrator imposes no timeout.
  */
 export const DEFAULT_ENTITY_TIMEOUT_MS = 60_000;
 
 /** Enough for a long working session; a model that returns more is padding, not reading. */
 export const DEFAULT_MAX_ENTITIES = 32;
 
-/** Appendix B provenance: which pipeline path put the node in the graph. */
+/** Provenance: which pipeline path put the node in the graph. */
 export const ENTITY_EXTRACTION_METHOD = 'reflection_entities';
 
 /**
@@ -129,7 +129,7 @@ function firstAttemptMessages(body: string): ChatMessage[] {
   ];
 }
 
-/** §6.4's refinement: the rejected answer goes back in so the retry corrects rather than repeats. */
+/** The rejected answer goes back into the prompt so the retry corrects it rather than repeating it. */
 function refinementMessages(body: string, rejected: string, reason: string): ChatMessage[] {
   return [
     { role: 'system', content: `${SYSTEM_PROMPT}\n\n${REFINEMENT_PROMPT}` },
@@ -157,10 +157,10 @@ function mergeInput(entity: ExtractedEntity, ctx: StageContext): EntityMergeInpu
 }
 
 /**
- * §4.2's merge-on-collision: a name the backbone already answers to resolves to the
- * structural node. That node keeps its own type and identity properties — every session
- * already hangs off it — and gains only what any mentioned entity gains: a name embedding,
- * the mention edge, and the salience.
+ * Merge on collision: a name the backbone already answers to resolves to the structural
+ * node. That node keeps its own type and identity properties (every session already hangs
+ * off it) and gains only what any mentioned entity gains: a name embedding, the mention
+ * edge, and the salience.
  */
 async function resolveEntities(
   ctx: StageContext,

@@ -22,10 +22,10 @@ const NOW = new Date('2026-08-27T12:00:00.000Z');
 const NO_CHANGES = { nodesCreated: 0, relationshipsCreated: 0, propertiesSet: 0 };
 
 /**
- * The cold-start substrate of whitepaper §13.2: session writes behave, and every recall
- * read answers with nothing because there is nothing stored. `FakeGraph` throws on a
- * statement it does not model, which is what keeps this honest — only the read shapes it
- * has no model for fall through to the empty answer.
+ * The cold-start substrate: session writes behave, and every recall read answers with nothing
+ * because there is nothing stored. `FakeGraph` throws on a statement it does not model, which
+ * is what keeps this honest: only the read shapes it has no model for fall through to the
+ * empty answer.
  */
 class EmptySubstrateGraph extends FakeGraph {
   /** Flipped mid-test to model the server going away under a process that is already warm. */
@@ -130,7 +130,7 @@ describe('recall against an empty substrate', () => {
     expect(pack.preferences).toBeUndefined();
     expect(pack.resonant).toBeUndefined();
     expect(pack.rendered_text).toContain('No memories matched this query.');
-    // The caller's own question leads the cue set whatever the model returned (EX-20).
+    // The caller's own question leads the cue set whatever the model returned.
     expect(pack.metadata.cues).toEqual([
       { text: 'why did we pick webhooks', source: 'query', weight: 3 },
       { text: 'webhook ingestion', source: 'query', weight: 3 },
@@ -222,7 +222,7 @@ describe('degradation', () => {
     expect(pack.rendered_text).toContain('note: degraded embedding (model_error)');
   });
 
-  // PRD §10's deeper rung. Both inference calls are gone, and a pack that named only the
+  // The ladder's deeper rung. Both inference calls are gone, and a pack that named only the
   // cue rung would read as "vectors are fine, the cue model broke".
   it('names both inference rungs when the whole model host is gone', async () => {
     generate.mockRejectedValueOnce(new Error('fetch failed'));

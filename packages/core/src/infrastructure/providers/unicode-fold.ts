@@ -12,13 +12,13 @@
  * A plain `toLowerCase` closed that class and left the rest: `Ａ` (fullwidth), `ﬁ` (ligature)
  * and `ß` still fold to something a lowercase mapping alone does not reach.
  *
- * NFKC first, so a compatibility form reduces to its canonical spelling. Then case folding —
+ * NFKC first, so a compatibility form reduces to its canonical spelling. Then case folding:
  * Unicode's case-insensitive matching operation, which `toLowerCase` implements except for the
  * multi-character mappings in `CASE_FOLD_EXCEPTIONS`. Then NFKC again, because a lowercase
  * mapping can produce a decomposable form.
  *
  * Whole-text folding, not term derivation: nothing is split, stemmed, transliterated, or
- * dropped. Diacritics survive on purpose — `resume` and `résumé` are different names, and the
+ * dropped. Diacritics survive on purpose: `resume` and `résumé` are different names, and the
  * embedding model collapsing them is a model property this fold must not paper over.
  */
 

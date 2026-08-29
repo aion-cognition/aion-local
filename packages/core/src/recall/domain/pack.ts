@@ -11,10 +11,10 @@ import { GLOSS_LABEL } from './facts.js';
 import type { FusedItem } from './fusion.js';
 
 /**
- * Whitepaper §5.7. The ranked candidate set becomes the MemoryPack: routed to buckets,
- * capped per bucket, cut to the token budget, and rendered into the text block the agent
- * drops straight into its reasoning. Empty categories are omitted and an empty pack says
- * so plainly (PRD §3.1) rather than padding itself with what the floor already rejected.
+ * The ranked candidate set becomes the MemoryPack: routed to buckets, capped per bucket, cut
+ * to the token budget, and rendered into the text block the agent drops straight into its
+ * reasoning. Empty categories are omitted and an empty pack says so plainly rather than
+ * padding itself with what the floors already rejected.
  */
 
 export type PackBucket = 'facts' | 'episodes' | 'narratives' | 'preferences' | 'resonant';
@@ -31,21 +31,20 @@ export const PACK_BUCKETS: readonly PackBucket[] = [
 export type BucketCaps = Readonly<Record<PackBucket, number>>;
 
 /**
- * Which bucket a node type answers in. Whitepaper §5.7 puts Entity-derived content in
- * facts and conversational memory in episodes; `Member` and `Workspace` carry the
- * companion `Entity` label, so the backbone resolves through the same row.
+ * Which bucket a node type answers in. Entity-derived content answers in facts and
+ * conversational memory in episodes; `Member` and `Workspace` carry the companion `Entity`
+ * label, so the backbone resolves through the same row.
  *
- * The nine §6.7 cognitive types answer in facts alongside entities. §5.7's own example of a
- * fact is "the API redesign was decided in Sprint 12" — a Decision node, not an entity — so
- * the interpretive layer belongs where a reader looks for what is known rather than for what
- * was said. Leaving them unrouted would be worse than a taxonomy quibble: they carry content
+ * The nine cognitive types answer in facts alongside entities. "The API redesign was decided
+ * in Sprint 12" is a fact, and a Decision node carries it rather than an entity, so the
+ * interpretive layer belongs where a reader looks for what is known rather than for what was
+ * said. Leaving them unrouted would be worse than a taxonomy quibble: they carry content
  * vectors and sit in `content_fts`, so retrieval finds them and assembly would then drop
  * every one.
  *
- * Preferences and the resonant bucket still have no producer — preference extraction is
- * unbuilt and resonance arrives with P4's Algorithm 3 — so those two are structurally absent
- * from a pack rather than empty. A label with no bucket cannot be packed and its item is
- * dropped.
+ * Preferences and the resonant bucket still have no producer, since preference extraction is
+ * unbuilt and resonance is not yet implemented, so those two are structurally absent from a
+ * pack rather than empty. A label with no bucket cannot be packed and its item is dropped.
  */
 const BUCKET_BY_LABEL: Readonly<Record<string, PackBucket>> = {
   Episode: 'episodes',
@@ -64,11 +63,11 @@ const BUCKET_BY_LABEL: Readonly<Record<string, PackBucket>> = {
 };
 
 /**
- * The episodes cap counts episodes, so a `Turn` folds into the episode it came from. P1 writes
- * one content-bearing, separately indexed Turn per turn, which makes a five-turn episode able
- * to fill the whole bucket by itself and crowd out every other episode. Whichever of the two
- * ranked higher represents that episode; the loser is skipped rather than packed, since an
- * Episode's text is the render of its own turns and packing both says the same thing twice.
+ * The episodes cap counts episodes, so a `Turn` folds into the episode it came from. Capture
+ * writes one content-bearing, separately indexed Turn per turn, which makes a five-turn
+ * episode able to fill the whole bucket alone and crowd out every other episode. Whichever of
+ * the two ranked higher represents that episode; the loser is skipped rather than packed,
+ * since an Episode's text is the render of its own turns and packing both says it twice.
  */
 function episodeKey(item: FusedItem): string {
   return item.sourceEpisodeId ?? item.id;
@@ -77,8 +76,8 @@ function episodeKey(item: FusedItem): string {
 /**
  * Tokens per character for the budget estimate. Four is the long-standing rule of thumb for
  * English text under BPE vocabularies and it is deliberately crude: the budget is a cap on
- * what recall hands back, and a real tokenizer on the recall path would be both a
- * dependency on the agent's model and text machinery this build keeps out (PRD §2).
+ * what recall hands back, and a real tokenizer on the recall path would be both a dependency
+ * on the agent's model and text machinery the cognitive path keeps out.
  */
 export const CHARS_PER_TOKEN = 4;
 
@@ -146,16 +145,16 @@ function renderDay(timestamp: string): string {
 /**
  * Content on its own line, then one line of provenance: id, the method that found it, the
  * absolute confidence behind admission, the path for an activated item, and the lineage
- * marker for a superseded one. PRD §5.5 requires the marker wherever superseded knowledge
- * surfaces, so it is part of the rendered block and not only of the structured item.
+ * marker for a superseded one. The marker belongs wherever superseded knowledge surfaces, so
+ * it is part of the rendered block and not only of the structured item.
  *
  * The list number is the item's rank across the whole pack rather than its position in its
  * own bucket, so the reader can order two items in different buckets. `rationale.score` is
  * deliberately not printed: it is the producing method's own number and comparing two of
- * them says nothing (EX-30).
+ * them says nothing.
  *
  * An entity gloss is annotated with the date of its first mention. The description was
- * written once, by the episode that first named the entity, and is never revised (EX-18), so
+ * written once, by the episode that first named the entity, and is never revised, so
  * rendering it without its age serves a year-old sentence as a current fact.
  */
 function renderItem(entry: PackEntry): string {
@@ -189,21 +188,21 @@ export type AssemblePackInput = {
   readonly tokenBudget: number;
   readonly cues: readonly Cue[];
   readonly timings: StageTimingsMs;
-  /** Every rung of the ladder that fired (PRD §6.1, §10); absent on a normal recall. */
+  /** Every rung of the degradation ladder that fired; absent on a normal recall. */
   readonly degraded?: readonly Degradation[];
-  /** The calling session's own episodes with no orchestrator ledger key yet (EX-11). */
+  /** The calling session's own episodes with no orchestrator ledger key yet. */
   readonly pendingEnrichment?: number;
-  /** Set when spreading activation stopped on its budget rather than converging (EX-21). */
+  /** Set when spreading activation stopped on its budget rather than converging. */
   readonly truncated?: PackTruncation;
   /**
    * Goal and Plan nodes whose text is the query said back (`facts.ts`). Kept out of facts
    * entirely rather than ranked down: a restatement carries no answer at any rank, and it is
-   * maximally similar to the query, so ranking alone puts it first (EX-19).
+   * maximally similar to the query, so ranking alone puts it first.
    */
   readonly restating?: ReadonlySet<string>;
   /**
    * How many entity glosses the facts bucket may hold. Absent leaves it uncapped; the
-   * pipeline always supplies it, because uncapped is what EX-19 measured at 58% of slots.
+   * pipeline always supplies it, because uncapped measured 58% of a pack's slots.
    */
   readonly entityGlossCap?: number;
 };
@@ -223,9 +222,9 @@ const TRUNCATION_PHRASES: Readonly<Record<PackTruncation, string>> = {
 /**
  * The honesty signals as one plain line at the top of the rendered block. A client reading
  * only `content` from an MCP tool result sees the rendered text and nothing else, so a pack
- * whose metadata says "degraded" reads to that client exactly like a confident answer — one
- * exercise angle lost a full baseline run to precisely that (EX-39). The same three signals
- * stay in `metadata` for a structured consumer; this is the copy that reaches everyone.
+ * whose metadata says "degraded" reads to that client exactly like a confident answer, which
+ * has already cost a full baseline run. The same three signals stay in `metadata` for a
+ * structured consumer; this is the copy that reaches everyone.
  */
 function honestyNote(input: AssemblePackInput): string | undefined {
   const clauses: string[] = [];
@@ -330,10 +329,10 @@ function render(selection: Selection, note: string | undefined): string {
 }
 
 /**
- * The pack is parsed against its own schema on the way out. Its invariants — a present
- * bucket is never empty, an item always carries content and a rationale — are this
- * module's to hold, so a violation is a defect here and failing loudly beats handing an
- * agent a pack the protocol does not describe.
+ * The pack is parsed against its own schema on the way out. Its invariants (a present bucket
+ * is never empty, an item always carries content and a rationale) are this module's to hold,
+ * so a violation is a defect here and failing loudly beats handing an agent a pack the
+ * protocol does not describe.
  */
 export function assemblePack(input: AssemblePackInput): MemoryPack {
   const note = honestyNote(input);

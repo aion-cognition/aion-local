@@ -55,7 +55,7 @@ export async function nodeLabels(driver: Driver, id: string): Promise<string[]> 
   return [...(labels ?? [])].sort();
 }
 
-/** Every property of every node, serialized — what a "the raw secret is nowhere" assertion scans. */
+/** Every property of every node, serialized: what a "the raw secret is nowhere" assertion scans. */
 export async function everyStoredProperty(driver: Driver): Promise<string> {
   const rows = await runRead(driver, 'MATCH (n) RETURN properties(n) AS props', {}, (row) => row.props);
   return JSON.stringify(rows);
@@ -180,8 +180,8 @@ export async function countChainedTurns(driver: Driver, episodeId: string): Prom
 }
 
 /**
- * Everything below serves P3's stage integration tests. Their assertions read enrichment the
- * pipeline wrote — entities, mentions, associations, typed edges, context vectors — and each
+ * Everything below serves the stage integration tests. Their assertions read enrichment the
+ * pipeline wrote (entities, mentions, associations, typed edges, context vectors), and each
  * one is a place a test could otherwise encode a filter the adapter does not apply.
  */
 

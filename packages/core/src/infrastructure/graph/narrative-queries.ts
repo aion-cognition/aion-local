@@ -8,16 +8,16 @@ import type { RelationshipType } from './relationships.js';
 import { toGraphDateTime, type Row } from './values.js';
 
 /**
- * Whitepaper §6.10. The reads narrative compression needs: the episodes a session
- * accumulated, the claim-bearing nodes extracted from them, the narrative versions the
- * session already carries, and the sessions that have gone quiet. The node and its edges are
- * written through the ordinary stamped-node and edge-upsert adapters; the one write here is
- * the forget stamp, which no other module owns.
+ * The reads narrative compression needs: the episodes a session accumulated, the
+ * claim-bearing nodes extracted from them, the narrative versions the session already
+ * carries, and the sessions that have gone quiet. The node and its edges are written through
+ * the ordinary stamped-node and edge-upsert adapters; the one write here is the forget stamp,
+ * which no other module owns.
  */
 
 /**
  * Beyond the base stamp and `summary`/`text`/`session_id`, which every memory node shares.
- * `coverage_key` is the identity of the episode set this narrative compresses — it is the
+ * `coverage_key` is the identity of the episode set this narrative compresses: it is the
  * idempotency key of the whole operation, held on the node rather than in a side table, and
  * the narrative's own id is derived from it.
  */

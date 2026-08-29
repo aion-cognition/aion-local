@@ -17,8 +17,8 @@ export const LOCK_PROPERTY = 'locked_at';
  * twice. Without APOC the only way to take a node's exclusive lock is to write to it, and
  * the lock is then held until the transaction commits.
  *
- * Lock the node that scopes the decision — the Member whose chain is being extended, the
- * Session whose episodes are being deduped — before the read. Whichever transaction gets
+ * Lock the node that scopes the decision (the Member whose chain is being extended, the
+ * Session whose episodes are being deduped) before the read. Whichever transaction gets
  * the lock second sees everything the first committed, so the two serialize instead of
  * racing. Callers must already be inside `inWriteTransaction`; a lock taken by a statement
  * that commits on its own is released immediately and protects nothing.

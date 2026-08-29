@@ -8,8 +8,8 @@ import { enqueueReflectionJob, type ReflectionJob, type ReflectionLane } from '.
 
 /**
  * The claim order the live incident needed and did not have: 4,016 bulk jobs sat ahead of
- * every real episode in one FIFO queue, and the exercise's wait loops, expecting minutes,
- * would have resolved in days.
+ * every real episode in one FIFO queue, and wait loops expecting minutes would have
+ * resolved in days.
  */
 
 describe('reflection queue claim ordering', () => {
