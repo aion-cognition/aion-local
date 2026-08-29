@@ -1,8 +1,24 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { BITEMPORAL_PROPERTIES } from '../../../infrastructure/graph/bitemporal.js';
 import { MEMORY_PROPERTIES } from '../../../infrastructure/graph/episodes.js';
 import { TEXT_NORM_PROPERTY } from '../../../infrastructure/graph/cognitive-queries.js';
+import { SUPERSEDES_TYPE } from '../../../infrastructure/graph/relationships.js';
 import type { Row } from '../../../infrastructure/graph/values.js';
-import { FakeGraph, type FakeNode } from '../../test-support/fake-graph.fixture.js';
+import { openLogger } from '../../../infrastructure/logging/logger.js';
+import type { StructuredRequest } from '../../../infrastructure/providers/types.js';
+import { SqliteStore, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import {
+  listSupersessionProposals,
+  type SupersessionProposal,
+} from '../../../infrastructure/sqlite/supersession-proposals.js';
+import type { StageContext } from '../../domain/stage.js';
+import {
+  FakeGraph,
+  type FakeNode,
+  type RecordedStatement,
+} from '../../test-support/fake-graph.fixture.js';
 
 /**
  * The supersession stage's own statements on top of the shared `FakeGraph`: this episode's
@@ -43,9 +59,13 @@ export class SupersessionFakeGraph extends FakeGraph {
       this.statements.push({ cypher, parameters });
       return toResult(this.#episodeFactNodes(parameters));
     }
+    if (cypher.includes('$subjectTextNorm CONTAINS')) {
+      this.statements.push({ cypher, parameters });
+      return toResult(this.#subjectIdentityCandidates(parameters));
+    }
     if (cypher.includes('vector.similarity.cosine')) {
       this.statements.push({ cypher, parameters });
-      return toResult(this.#contradictionCandidates(cypher, parameters));
+      return toResult(this.#contradictionCandidates(parameters));
     }
     if (cypher.includes(`SET old.${BITEMPORAL_PROPERTIES.validUntil} = coalesce(`)) {
       this.statements.push({ cypher, parameters });
@@ -75,26 +95,96 @@ export class SupersessionFakeGraph extends FakeGraph {
       });
   }
 
-  #contradictionCandidates(cypher: string, parameters: Record<string, unknown>): Row[] {
-    const label = /MATCH \(n:(\w+)\)/.exec(cypher)?.[1] ?? '';
+  /** Current fact-bearing nodes of any label in `$labels`, which is the label expression's row set. */
+  #currentFactNodes(parameters: Record<string, unknown>): { node: FakeNode; label: string }[] {
+    const labels = (parameters.labels ?? []) as readonly string[];
     const excluded = new Set((parameters.excludeIds ?? []) as readonly string[]);
+    return [...this.nodes.values()]
+      .filter((node) => !excluded.has(node.id))
+      .filter((node) => node.properties[BITEMPORAL_PROPERTIES.validUntil] === undefined)
+      .filter((node) => node.properties[BITEMPORAL_PROPERTIES.forgottenAt] === undefined)
+      .map((node) => ({ node, label: node.labels.find((label) => labels.includes(label)) }))
+      .filter((entry): entry is { node: FakeNode; label: string } => entry.label !== undefined);
+  }
+
+  #contradictionCandidates(parameters: Record<string, unknown>): Row[] {
     const vector = parameters.vector as number[];
     const threshold = parameters.threshold as number;
     const limit = toNumber(parameters.limit);
 
-    return this.nodesWithLabel(label)
-      .filter((node) => !excluded.has(node.id))
-      .filter((node) => node.properties[BITEMPORAL_PROPERTIES.validUntil] === undefined)
-      .filter((node) => node.properties[BITEMPORAL_PROPERTIES.forgottenAt] === undefined)
-      .filter((node) => Array.isArray(node.properties[MEMORY_PROPERTIES.contentVector]))
-      .map((node) => ({
-        id: node.id,
-        text: node.properties[MEMORY_PROPERTIES.text],
-        score: cosine(vector, node.properties[MEMORY_PROPERTIES.contentVector] as number[]),
+    return this.#currentFactNodes(parameters)
+      .filter((entry) => Array.isArray(entry.node.properties[MEMORY_PROPERTIES.contentVector]))
+      .map((entry) => ({
+        id: entry.node.id,
+        label: entry.label,
+        text: entry.node.properties[MEMORY_PROPERTIES.text],
+        score: cosine(vector, entry.node.properties[MEMORY_PROPERTIES.contentVector] as number[]),
+        shared_subject: null,
       }))
       .filter((row) => row.score >= threshold)
-      .sort((left, right) => right.score - left.score)
+      .sort((left, right) => right.score - left.score || String(left.id).localeCompare(String(right.id)))
       .slice(0, limit);
+  }
+
+  /** The subject leg: entities this episode mentions that the subject claim names, then who else names them. */
+  #subjectIdentityCandidates(parameters: Record<string, unknown>): Row[] {
+    const episodeId = parameters.episodeId as string;
+    const subjectTextNorm = parameters.subjectTextNorm as string;
+    const minNameLength = toNumber(parameters.minNameLength);
+    const vector = parameters.vector as number[];
+    const limit = toNumber(parameters.limit);
+
+    const subjects = this.nodesWithLabel('Entity')
+      .filter((node) => this.edges.has(`MENTIONS:${episodeId}:${node.id}`))
+      .filter((node) => node.properties[BITEMPORAL_PROPERTIES.validUntil] === undefined)
+      .filter((node) => node.properties[BITEMPORAL_PROPERTIES.forgottenAt] === undefined)
+      .filter((node) => String(node.properties.name_norm ?? '').length >= minNameLength)
+      .filter((node) => subjectTextNorm.includes(String(node.properties.name_norm)));
+    if (subjects.length === 0) {
+      return [];
+    }
+
+    const names = subjects.map((node) => String(node.properties.name_norm));
+    const subjectIds = new Set(subjects.map((node) => node.id));
+
+    return this.#currentFactNodes(parameters)
+      .map((entry) => ({
+        entry,
+        named: names.find((name) => String(entry.node.properties[TEXT_NORM_PROPERTY]).includes(name)),
+      }))
+      .filter((row) => row.named !== undefined || this.#sharesEpisodeSubject(row.entry.node, subjectIds))
+      .map((row) => ({
+        id: row.entry.node.id,
+        label: row.entry.label,
+        text: row.entry.node.properties[MEMORY_PROPERTIES.text],
+        score: Array.isArray(row.entry.node.properties[MEMORY_PROPERTIES.contentVector])
+          ? cosine(vector, row.entry.node.properties[MEMORY_PROPERTIES.contentVector] as number[])
+          : 0,
+        shared_subject: row.named ?? null,
+      }))
+      .sort((left, right) => right.score - left.score || String(left.id).localeCompare(String(right.id)))
+      .slice(0, limit);
+  }
+
+  #sharesEpisodeSubject(node: FakeNode, subjectIds: ReadonlySet<string>): boolean {
+    return [...this.edges.values()].some(
+      (edge) =>
+        edge.type === 'EXTRACTED_FROM' &&
+        edge.sourceId === node.id &&
+        [...this.edges.values()].some(
+          (mention) =>
+            mention.type === 'MENTIONS' &&
+            mention.sourceId === edge.targetId &&
+            subjectIds.has(mention.targetId),
+        ),
+    );
+  }
+
+  /** Every bitemporal close this graph was asked for: the spy behind "propose mode never supersedes". */
+  closeStatements(): RecordedStatement[] {
+    return this.statements.filter((statement) =>
+      statement.cypher.includes(`SET old.${BITEMPORAL_PROPERTIES.validUntil} = coalesce(`),
+    );
   }
 
   #closeSupersededNode(parameters: Record<string, unknown>): Row[] {
@@ -141,6 +231,127 @@ export function seedFactNode(graph: SupersessionFakeGraph, seed: FactNodeSeed): 
   if (seed.episodeId !== undefined) {
     graph.seedEdge('EXTRACTED_FROM', seed.id, seed.episodeId);
   }
+}
+
+export type EntitySeed = {
+  readonly id: string;
+  readonly name: string;
+  readonly type: string;
+  /** Every episode whose `MENTIONS` edge points at this entity. */
+  readonly mentionedBy: readonly string[];
+};
+
+/** A canonical Entity as the entity stage leaves it, with the mention edges the subject leg walks. */
+export function seedEntity(graph: SupersessionFakeGraph, seed: EntitySeed): void {
+  graph.seedNode(seed.id, ['Entity', 'Memory', 'AionNode'], {
+    name: seed.name,
+    name_norm: seed.name.toLowerCase(),
+    type: seed.type,
+  });
+  for (const episodeId of seed.mentionedBy) {
+    graph.seedEdge('MENTIONS', episodeId, seed.id);
+  }
+}
+
+export type KeyedVerdict = {
+  /** A phrase from one statement of the pair, so a battery does not depend on judgment order. */
+  readonly match: string;
+  readonly verdict: unknown;
+};
+
+/**
+ * Graph, store, and stubbed provider for one test, so the stage's own files and its battery
+ * share one setup rather than two copies of it. Open it in `beforeEach`, close it in
+ * `afterEach`; every field is public because a test bed has no secrets from its tests.
+ */
+export class SupersessionTestBed {
+  readonly sessionId = 'session-1';
+  readonly now = new Date('2026-08-28T09:05:00.000Z');
+  graph = new SupersessionFakeGraph();
+  requests: StructuredRequest[] = [];
+  /** Consumed in order by any judgment no keyed verdict matched. */
+  responses: unknown[] = [];
+  verdicts: KeyedVerdict[] = [];
+  #store: SqliteStore | undefined;
+  #dataDir = '';
+
+  open(): void {
+    this.graph = new SupersessionFakeGraph();
+    this.requests = [];
+    this.responses = [];
+    this.verdicts = [];
+    this.#dataDir = mkdtempSync(join(tmpdir(), 'aion-supersession-stage-'));
+    this.#store = new SqliteStore({ filePath: join(this.#dataDir, 'aion.sqlite') });
+  }
+
+  close(): void {
+    this.#store?.close();
+    rmSync(this.#dataDir, { recursive: true, force: true });
+  }
+
+  get db(): SqliteHandle {
+    if (this.#store === undefined) {
+      throw new Error('test bed is not open');
+    }
+    return this.#store.db;
+  }
+
+  proposals(): SupersessionProposal[] {
+    return listSupersessionProposals(this.db);
+  }
+
+  context(episodeId: string): StageContext {
+    return {
+      driver: this.graph.driver,
+      db: this.db,
+      provider: {
+        embed: async () => [],
+        generate: async (request: StructuredRequest) => {
+          this.requests.push(request);
+          const prompt = promptOf(request);
+          const keyed = this.verdicts.find((entry) => prompt.includes(entry.match));
+          if (keyed !== undefined) {
+            return keyed.verdict;
+          }
+          const next = this.responses.shift();
+          if (next instanceof Error) {
+            throw next;
+          }
+          return next ?? { contradicts: false, confidence: 0 };
+        },
+      },
+      episodeId,
+      episode: { id: episodeId, sessionId: this.sessionId, text: 'episode body', turns: [] },
+      logger: openLogger({ filePath: join(this.#dataDir, 'aion.jsonl'), level: 'fatal' }),
+      now: this.now,
+    };
+  }
+
+  seedEpisode(id: string): void {
+    this.graph.seedNode(id, ['Episode', 'Memory', 'AionNode'], {
+      [MEMORY_PROPERTIES.text]: 'episode body',
+      [MEMORY_PROPERTIES.sessionId]: this.sessionId,
+    });
+  }
+
+  supersedesEdges(): { sourceId: string; targetId: string }[] {
+    return this.graph
+      .edgesOfType(SUPERSEDES_TYPE)
+      .map((edge) => ({ sourceId: edge.sourceId, targetId: edge.targetId }));
+  }
+
+  validUntil(id: string): unknown {
+    return this.graph.nodes.get(id)?.properties[BITEMPORAL_PROPERTIES.validUntil];
+  }
+
+  /** Every prompt the stage sent, flattened, in the order it sent them. */
+  prompts(): string[] {
+    return this.requests.map(promptOf);
+  }
+}
+
+function promptOf(request: StructuredRequest): string {
+  return request.messages.map((message) => message.content).join('\n');
 }
 
 type Counters = {

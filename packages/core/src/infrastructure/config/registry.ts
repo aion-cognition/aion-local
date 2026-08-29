@@ -25,7 +25,8 @@ export type Knob = {
  * calibrated cosine floor would be worse than the error an unknown variable raises.
  *
  * P3's two plan-pinned names (AION_SUPERSEDE_AUTO_CONFIDENCE, AION_ASSOC_SEMANTIC_THRESHOLD)
- * are the same case and keep their pinned spelling inside the `reflection` group. The
+ * are the same case and keep their pinned spelling inside the `reflection` group, as does the
+ * fix round's AION_SUPERSEDE_MODE, which took over the gating role the confidence knob had. The
  * worker's knobs live under `operational` and read AION_WORKER_*, which is where
  * AION_WORKER_COUNT already was. AION_REINFORCEMENT_QUEUE_CAP and AION_PACK_CLUSTER_CAP are
  * the fix-round plan's pinned names and keep that spelling rather than
@@ -174,6 +175,11 @@ export const KNOB_REGISTRY: readonly Knob[] = [
     envVar: 'AION_REFLECTION_MAX_RELATIONSHIPS',
     path: ['reflection', 'maxRelationships'],
     kind: 'number',
+  },
+  {
+    envVar: 'AION_SUPERSEDE_MODE',
+    path: ['reflection', 'supersedeMode'],
+    kind: 'string',
   },
   {
     envVar: 'AION_SUPERSEDE_AUTO_CONFIDENCE',

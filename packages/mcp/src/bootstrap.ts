@@ -96,6 +96,7 @@ export function reflectionStages(config: Config): readonly ReflectionStage[] {
     new SupersessionStage({
       model,
       timeoutMs: reflection.supersedeTimeoutMs,
+      mode: reflection.supersedeMode,
       autoConfidence: reflection.supersedeAutoConfidence,
       neighborThreshold: reflection.supersedeNeighborThreshold,
       maxSubjects: reflection.maxSupersessionSubjects,
