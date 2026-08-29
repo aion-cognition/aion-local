@@ -185,12 +185,11 @@ decisions rather than accidents:
 
 ## What is not built yet
 
-P4 and beyond. Hebbian reinforcement flush and decay (recall and reflection both queue the
-signals; nothing applies them yet), context resonance in recall, the maintenance scheduler
-and its operation catalog, the Anthropic provider and its routing, and the remaining CLI
-surface (`stats`, `why`, `search`, `forget`). Recall serves `facts`, `episodes` and
-`narratives`; `preferences` and `resonant` stay structurally absent until they have a
-producer.
+P5 and beyond, as of P4's gate: the maintenance scheduler and its operation catalog, the
+Anthropic provider and its routing, and the remaining CLI surface (`stats`, `why`, `search`,
+`forget`). Reinforcement and decay exist as callable operations with nothing scheduling them.
+Recall serves `facts`, `episodes`, `narratives` and `resonant`; `preferences` stays
+structurally absent until it has a producer.
 
 P3's own ledger section is deferred to P5-6, which writes the P3-P5 history in one pass.
 
@@ -261,3 +260,137 @@ wait).
 
 Docker teardown held across all five runs taken for this entry: `docker ps -a --filter
 name=aion-test-neo4j` and the matching volume listing came back empty after every one.
+
+## P4: retrieval core, plasticity, resonance
+
+Round 2's verdict was that the write path earns its complexity and the read path does not.
+P4 is the answer, in eight tasks: the two round-2 blockers first, then the cheapest quality
+win, then plasticity, the second pass, and the observability that makes any of it legible.
+
+**Seed budget (P4-1).** The budget is now `round(base + growth * ln(population))` clamped to
+a cap, at base 10 and growth 2: a cold graph keeps the ten seeds it had, a few thousand
+memories get twenty to thirty, and the cap (raised from 10 to 32, the knob's meaning narrowed
+to "the ceiling") comes into reach near sixty thousand nodes. Each leg reserves a share of
+the budget before the merged ranking spends the rest (vector 0.35, BM25 0.2, entity
+resolution 0.15, recency 0.1, a fifth left open), because an exact entity match and a
+normalized BM25 top row both score 1.0 while a cosine that genuinely answers the question
+arrives at 0.6 to 0.8. Population is a cached bare-label count, not a predicate scan.
+
+**Activation admission (P4-2).** A node the spread reached and no strategy seeded is now
+measured against the query cues on its own content vector, in a read that runs alongside
+hydration rather than after it. The rationale stays `activation` with the path it came down,
+because that is still how it was found; the evidence is the cosine, because that is what a
+floor can read. An arrival whose content vector is still pending gets no measurement at all,
+which keeps "nothing measured this" a different answer from "a measurement fell short".
+
+**Stated reasons (P4-3).** A node's own `rationale` property is selected and rendered as an
+optional `why`, capped at 220 characters and printed on its own line under the item. Named
+`why` on the wire because `rationale` already means the retrieval rationale on a pack item.
+
+**Plasticity (P4-4, P4-5).** `flushReinforcementQueue` claims a window of co-activation
+signals, folds them per pair, applies one bounded step (`w' = w + eta * (1 - w)`) in a single
+statement per pair, and deletes the rows after the graph write, so a crash replays a bounded
+step rather than losing the signal. `sweepEdgeDecay` is its opposite number: a bell curve
+against staleness with the same floor, the protected relationship types exempt, one batch per
+call. Both are called and never scheduled; cadence belongs to P5's introspector.
+
+**Context resonance (P4-6).** The second pass runs after fusion, because it needs to know the
+first pass anchored: the activation-weighted mean of the activated set's context vectors
+becomes a query against the context vector index, above 0.7 and excluding every id the first
+pass produced. Hits land in `resonant` under their own rationale, at the context similarity
+that admitted them. The stage is skippable, timed, and declines to run on a query nothing
+anchored, since resonating from an unanchored pack searches the shape of nothing.
+
+**Observability (P4-7a).** Reinforcement and decay counters, the reinforcement queue depth
+and its dropped count, and the edge weight distribution per associative type, behind
+`plasticityCounters` (SQLite only, safe for a liveness probe) and `plasticitySnapshot`.
+Per-method pack contribution is recorded on every recall, which is the raw material for P5's
+spirit metric.
+
+**The batteries (P4-7b).** Three additions to the gate set, all measuring rather than
+counting:
+
+- The held-out battery (24 natural questions against 9 claims stored a day earlier, plus 4
+  near-neighbour distractors) now reports the traversal leg from the reader's side. Measured
+  at the gate: 23 of 24 probes put an answering node of the claim's own episode in the top
+  five, activation contributed 27 items across 9 of the 24 probes and every one printed its
+  path, and the method census came back resonance 107, vector 101, BM25 59, activation 27,
+  entity resolution 1. The unmeasured tally is now split: 191 of 1,351 judged candidates
+  reached the gate with nothing measured, 181 of them recency or plain BM25 seeds that no
+  cosine method ever touches, leaving 10 (0.7%) unexplained, which is the arrival case the
+  battery caps at 3%. A separate run of the same battery measured 1.1% against the same cap.
+- Stated reasons are checked for fidelity rather than existence: every `why` a pack carries
+  has to reach the rendered text. How many reasons extraction writes at all moves run to run,
+  which is the reason for that split and is visible in the two runs taken here: one run of
+  this battery left a single node carrying a stated reason, seven packs carried it and all
+  seven rendered it, and the gate's own run left none at all on the same fixture set. The
+  existence check therefore stays in the rationale-rendering battery, which pins the route
+  that extracts a Decision cleanly. That battery needed a fix
+  of its own, which the gate's first full-suite run turned red and found: it picked its
+  decision out of the pack by searching for "row-level", and half of what that episode
+  produces mentions the row-level lock while only the Decision carries a reason for it, so
+  the check passed or failed on which of them ranked first that run. It now takes the
+  Decision's node id from the graph and asserts the pack's `why` equals the reason the graph
+  holds, which is the property the task built. Green twice standalone after the change.
+- A resonance battery (12 checks, 29s): two pieces of work that share no vocabulary and the
+  same shape of crew around them, plus a third whose crew is shaped differently. The target
+  is unreachable by content (0.394 cosine against a 0.60 floor), by keyword, and by the
+  spread, and comes back in `resonant` at 0.852 context similarity against the 0.70 bar,
+  under `resonance` with the shape-not-keywords path, in that bucket and no other. The
+  differently-shaped neighbour stays out of every bucket and all six off-topic probes get no
+  bucket at all. The seed budget is narrowed to four for this battery alone: at the shipped
+  budget every node in a substrate that size is a seed, the exclusion set swallows the graph,
+  and the run would prove nothing about the second pass.
+
+**The floor revisit.** The plan pinned the floors and caps as static stand-ins for what
+plasticity does organically, and made re-measuring them a P4 gate item. Method: the floors
+battery substrate (10 episodes through the shipped pipeline), a baseline pass over its 8
+on-topic and 6 off-topic probes, then 15 reinforcement cycles (each cycle re-ran the on-topic
+probes, nominated their co-activated pairs through the shipped pairing rule, and drained the
+queue through `flushReinforcementQueue`), then the same probes again. 238 edge updates
+landed. Weights moved: `SIMILAR` p50 0.880 to 0.908 and max 0.931 to 0.973, `RELATED_TO` p50
+0.950 to 0.951, `CO_OCCURS` already pinned at 1.0.
+
+Retrieval did not. Every probe came back with the same items, the same admitted count, the
+same anchored flag and the same top five. One probe of the twelve ("did we decide to shard
+the orders table") moved two candidates between refusal categories, dropped-unmeasured 11 to
+9 and dropped-below-floor 27 to 29, and admitted the same three items either way. No floor
+changed,
+and none should have: admission reads cosines between a query and a memory's own content and
+never an edge weight, so plasticity cannot move it by construction. The measurement is what
+turns that from an argument into a fact, and it says the same about ranking at this weight
+range.
+
+Two caveats belong with the number. The association writers already emit strengths between
+0.85 and 1.0, so a bounded Hebbian step has little room to move anything; the decay sweep is
+what would open that range, and this measurement did not exercise it. Reinforcement alone
+drifts every touched weight upward, which is the runaway-strengthening failure mode the
+plasticity metrics exist to catch, and it is decay's absence that produces it here rather
+than a fault in the update rule. And the substrate is ten episodes, where the seed budget
+covers most of the graph anyway. The right time to re-take this measurement is after the
+introspector has been running both operations against a substrate that has been decaying as
+well as reinforcing.
+
+**Gate.** Full suite green: 1,731 passed and 3 skipped across 169 files in 666s (11:06),
+against 1,466 of 1,469 at round zero. The six gate battery files then ran standalone as
+their own pass, 99 passed and 1 skipped in 435s. The convention sweep moved one thing: the
+two plasticity integration tests each carried the same inline Cypher read for an edge's
+weight, and Cypher lives in `graph/`, tests included. Both now call one helper in
+`graph/test-support`. The image was rebuilt and the service recreated on P4 code, and
+`aion doctor` came back with all 13 checks passing and nothing failed, 2 of them warning on
+pre-existing substrate conditions rather than P4 regressions: 13 of 5,000 nodes still
+carrying secret-shaped text, and 4,014 of 4,315 episodes unenriched and unqueued.
+
+One live recall through a scratch MCP client, on the real substrate, carried all three P4
+surfaces at once ("why did we raise the cue budget", 18 admitted of 67 considered): two items
+explained by `activation` with their `PARTICIPATES_IN` paths printed, a `resonant` bucket of
+four at 0.95 to 0.96 naming cue extraction and its latency, and a rendered `why` line on a
+retry-limit decision. The resonance stage cost 49ms of that call.
+
+The same live check names the P5 work it depends on. `aion doctor` reports 35,769 dropped
+reinforcement rows: recall and reflection have been nominating co-activated pairs into a
+capped queue since P3 with nothing draining it, and the flush that now exists has no
+scheduler in front of it. On a substrate carrying that much exercise debris the second pass
+also resonates with it: a query about admission floors came back with four "bulk import item"
+entities at 0.92, which is shape matching working exactly as specified against a neighborhood
+of near-identical fixtures.

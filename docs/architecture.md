@@ -24,10 +24,19 @@ cues, or memory packs, only nodes, edges, and rows.
   Ollama client and its circuit breaker), `config/` (schema, defaults, the `AION_*`
   registry, the loader), `logging/`.
 - **`recall/domain/`**: `activation.ts` (spreading activation over adjacency),
-  `fusion.ts` (RRF/MMR ranking and the currency policy), `pack.ts` (MemoryPack assembly).
+  `admission.ts` (the evidence rules and the floors), `arrival-scoring.ts` (cosines for what
+  the spread reached), `seed-selection.ts` (the budget curve and the per-leg reservations),
+  `fusion.ts` (RRF/MMR ranking and the currency policy), `resonance.ts` (the centroid and the
+  shape of a resonant item), `pack.ts` (MemoryPack assembly).
 - **`recall/application/`**: `cues.ts` (cue extraction and its cache), `seeds.ts` (the
   four seed strategies' scoring and merge), `candidates.ts` (seeds plus activation into
-  ranked lists), `recall.ts` (the pipeline), `side-effects.ts` (post-recall listeners).
+  ranked lists), `stage-reads.ts` (the pipeline's batched graph reads), `resonance.ts` (the
+  second pass), `recall.ts` (the pipeline), `side-effects.ts` (post-recall listeners).
+- **`plasticity/`**: `domain/` folds a window of co-activation signals into per-pair
+  learning rates and computes the staleness curve; `application/` runs the two operations
+  that apply them, `flush.ts` (bounded reinforcement of the nominated pairs) and `decay.ts`
+  (weight decay against staleness, the protected relationship types exempt), plus
+  `metrics.ts`. Both operations are called, never scheduled: cadence belongs to the caller.
 - **`reflection/domain/`**: `content.ts`, episode/turn shaping and content hashing.
 - **`reflection/application/`**: `intake.ts` (the write path), `dispatch.ts` (the event
   emitter intake signals), `worker.ts` (the subscriber: claims queue rows and runs the
@@ -123,7 +132,10 @@ independently for the pack's `stage_timings_ms`:
    by more than one strategy keeps every strategy that found it. A rejected query costs its
    own leg and nothing else, but the rejections are counted: when every query issued was
    rejected the graph is gone, and the pack says so (`degraded: [{stage: graph, reason:
-   unavailable}]`) instead of reporting an outage as an empty substrate.
+   unavailable}]`) instead of reporting an outage as an empty substrate. The budget scales
+   with the substrate (`base + growth * ln(population)`, capped by
+   `AION_CONTEXT_RESONANCE_SEED_LIMIT`) and reserves a share of it per leg, so a graph of a
+   few thousand memories still measures candidates a fixed ten-seed budget never saw.
 4. **Activation.** Every seed enters at full activation. Spreading runs in TypeScript over
    batched adjacency reads: the graph answers one question per frontier iteration, and
    everything else (per-relationship-type weighting, decay, the minimum-activation floor,
@@ -136,16 +148,27 @@ independently for the pack's `stage_timings_ms`:
    `AION_VECTOR_ADMISSION_FLOOR`, a Lucene match on the verbatim cue, two independent
    measurements at or above `AION_CORROBORATION_FLOOR`, or traversal from a pack something
    else anchored, however well it ranks. Duplicates collapse by content hash, keeping the
-   higher-ranked instance.
-6. **Pack assembly.** Fused items route to a bucket by node label: `Episode`/`Turn` to
+   higher-ranked instance. An item the spread reached and no strategy seeded is scored
+   against the query cues on its own content vector, so traversal supplies candidates and
+   never admission.
+6. **Context resonance.** A second pass, after fusion because it needs to know the first one
+   anchored: the activation-weighted mean of the activated set's context vectors becomes a
+   query against the context vector index, above
+   `AION_CONTEXT_RESONANCE_CONTEXT_SEARCH_THRESHOLD` and excluding every id the first pass
+   already produced. What comes back is related by the shape of its neighborhood rather than
+   by its words, so it lands in `resonant` under its own rationale and never competes with a
+   fused score. The stage is skippable (`AION_RECALL_USE_CONTEXT_RESONANCE`), timed like
+   every other stage, and declines to run at all on a query nothing anchored: resonating from
+   an unanchored pack searches the shape of nothing.
+7. **Pack assembly.** Fused items route to a bucket by node label: `Episode`/`Turn` to
    `episodes`, `Entity` to `facts`. Each bucket is capped, trimmed to the token budget,
    and rendered into the pack's text block. The episode cap (`AION_RECALL_MAX_EPISODES`)
    defaults to 20, a deliberate deviation from whitepaper Appendix E's 5: the cap cuts the
    fused list, so on a populated substrate a five-item cut is filled by near-tie vector hits
    before any traversal-reached item can land. The token budget is what actually bounds a
-   pack's size. `preferences` and `resonant` have no producer yet (P4 work), so they are
-   structurally absent rather than empty. `narratives` gained one in P3: a session's close,
-   or the idle sweep, compresses its episodes into a `Narrative` node.
+   pack's size. `preferences` has no producer yet, so it is structurally absent rather than
+   empty. `narratives` gained one in P3: a session's close, or the idle sweep, compresses its
+   episodes into a `Narrative` node. `resonant` gained one in P4: the second pass above.
 
 Both paths inherit the driver timeouts `GraphConnection` sets: 5s to connect, 10s to acquire
 a pooled connection, 10s of transaction retries. The driver's defaults (60s and 30s) meet or
@@ -155,9 +178,10 @@ answers in microseconds, so these bite only during an outage. See `docs/degradat
 every failure mode this pipeline degrades through, mode by mode, with live evidence.
 
 The pack is saved to SQLite's `last_pack` table (what `aion last` renders) and returned. A
-registered listener, access-tracking today and eventually Hebbian reinforcement, fires
-afterward and is never awaited, so a listener failure cannot fail a recall that already
-succeeded.
+registered listener fires afterward and is never awaited, so a listener failure cannot fail a
+recall that already succeeded: it stamps access metadata and nominates the co-activated pairs
+that the reinforcement flush later folds into edge weights. A time-travel read does neither,
+since asking what the substrate held last month is a question rather than a use.
 
 ## Bitemporal model
 
