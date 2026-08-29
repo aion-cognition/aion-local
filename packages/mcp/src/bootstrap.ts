@@ -84,6 +84,7 @@ export function reflectionStages(config: Config): readonly ReflectionStage[] {
     new AssociationInferenceStage({
       semanticThreshold: reflection.associationSemanticThreshold,
       similarLimit: reflection.associationSimilarLimit,
+      weightFloor: config.hebbian.weightFloor,
     }),
     new CognitiveExtractionStage({
       model,

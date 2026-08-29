@@ -30,6 +30,8 @@ import type { StageContext, StageOutcome } from '../../domain/stage.js';
 import { ReflectionDispatch } from '../dispatch.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../intake.js';
 import { LaneAssigner } from '../lanes.js';
+import { cliqueDiscount } from '../../../plasticity/domain/reinforcement.js';
+import { runWrite } from '../../../infrastructure/graph/connection.js';
 import { AssociationInferenceStage } from './associations.js';
 
 const NOW = new Date('2026-08-28T12:00:00.000Z');
@@ -179,6 +181,71 @@ describe('co-occurrence', () => {
     pairs = await coOccurrencePairs(harness.driver);
     const priyaAion = pairs.find((pair) => pair.a === 'Aion' && pair.b === 'Priya');
     expect(priyaAion?.count).toBe(2);
+  }, 180_000);
+
+  it('writes a wide episode\'s pairs weaker than a focused episode\'s, and grows them on repeat', async () => {
+    const wide = await newEpisode('a wide episode');
+    const wideNames = ['W1', 'W2', 'W3', 'W4', 'W5'];
+    for (const name of wideNames) {
+      await seedEntity({ name, type: 'concept', episodeId: wide });
+    }
+    await runStage(wide);
+
+    const focused = await newEpisode('a focused episode');
+    for (const name of ['F1', 'F2']) {
+      await seedEntity({ name, type: 'concept', episodeId: focused });
+    }
+    await runStage(focused);
+
+    const pairs = await coOccurrencePairs(harness.driver);
+    const widePair = pairs.find((pair) => pair.a === 'W1' && pair.b === 'W2');
+    const focusedPair = pairs.find((pair) => pair.a === 'F1' && pair.b === 'F2');
+
+    // One node's worth of evidence split across the four partners a five-entity episode gave
+    // each of them, against the whole of it for the only pair a two-entity episode names.
+    expect(widePair?.strength).toBeCloseTo(cliqueDiscount(wideNames.length), 10);
+    expect(focusedPair?.strength).toBe(1);
+
+    // Saying it again closes part of the remaining gap rather than jumping to the ceiling.
+    const wideAgain = await newEpisode('the wide episode said again');
+    for (const name of wideNames) {
+      await seedEntity({ name, type: 'concept', episodeId: wideAgain });
+    }
+    await runStage(wideAgain);
+
+    const grown = (await coOccurrencePairs(harness.driver)).find(
+      (pair) => pair.a === 'W1' && pair.b === 'W2',
+    );
+    const eta = cliqueDiscount(wideNames.length);
+    expect(grown?.strength).toBeCloseTo(eta + eta * (1 - eta), 10);
+    expect(grown?.strength).toBeLessThan(1);
+  }, 180_000);
+
+  it('does not restore a decayed pair to full strength on the next co-occurrence', async () => {
+    const first = await newEpisode('a pair that will fade');
+    for (const name of ['D1', 'D2', 'D3'] ) {
+      await seedEntity({ name, type: 'concept', episodeId: first });
+    }
+    await runStage(first);
+
+    await runWrite(
+      harness.driver,
+      "MATCH (a:Entity { name: 'D1' })-[r:CO_OCCURS]-(b:Entity { name: 'D2' }) SET r.strength = 0.2",
+      {},
+      () => undefined,
+    );
+
+    const again = await newEpisode('the faded pair said again');
+    for (const name of ['D1', 'D2', 'D3']) {
+      await seedEntity({ name, type: 'concept', episodeId: again });
+    }
+    await runStage(again);
+
+    const faded = (await coOccurrencePairs(harness.driver)).find(
+      (pair) => pair.a === 'D1' && pair.b === 'D2',
+    );
+    const eta = cliqueDiscount(3);
+    expect(faded?.strength).toBeCloseTo(0.2 + eta * (1 - 0.2), 10);
   }, 180_000);
 });
 
