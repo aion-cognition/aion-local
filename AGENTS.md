@@ -79,7 +79,11 @@ Use it to exercise the actual binary, not as a test runner.
 - `packages/core/src/infrastructure/graph/no-hard-delete.test.ts`: scans every `.ts` file
   under `packages/` for a Cypher `DETACH DELETE` or bare `DELETE` clause (SQL's `DELETE
   FROM` and JavaScript's `delete` operator are excluded by the pattern), and fails if it
-  finds one anywhere but itself. This is the only convention enforced by a repo-wide scan.
+  finds one outside the two files it skips. Those two are itself, which has to name the
+  patterns it forbids, and `test-support/neo4j-harness.fixture.ts`, which clears the test
+  database between files. A test in the same file pins the skip list at exactly those two,
+  so widening it takes a deliberate edit. This is the only convention enforced by a
+  repo-wide scan.
   A grep guard modeled on it would be the cheap way to enforce Cypher confinement to
   `infrastructure/graph/`, if that becomes worth codifying.
 
@@ -87,7 +91,8 @@ Use it to exercise the actual binary, not as a test runner.
 
 `packages/mcp/src/gate/` holds the seven scripted batteries the fix round is gated on, each
 one a finding from `docs/exercise/2026-08-28-p3-exercise.md` re-run against the shipped
-pipeline (`bootstrap.ts`'s own stage list, live Ollama, a throwaway Neo4j per file).
+pipeline (`bootstrap.ts`'s own stage list, live Ollama, the run's throwaway Neo4j cleared for
+each file).
 
 ```
 npx vitest run --project integration --reporter=verbose re-exercise-gate         # all seven
@@ -109,11 +114,17 @@ are shared with the workstream that owns each area (`floors.fixtures.ts`,
 ## Live-stack cautions
 
 - Never point tests at the live `aion` compose project (the `neo4j` / `aion-mcp` /
-  `aion-cli` services `./bin/aion` drives). Integration tests spin up their own throwaway
-  Neo4j container per test file with a bare `docker run`
-  (`infrastructure/graph/test-support/neo4j-harness.fixture.ts`) and remove it after; that
-  harness is the only Neo4j integration tests may touch.
-- The integration vitest project runs with `fileParallelism: false` on purpose: each
-  throwaway Neo4j container asks for a 1G heap plus 512M page cache, and several booting
-  at once can exceed a dev-sized Docker VM and fail on resource contention instead of on
-  the code under test.
+  `aion-cli` services `./bin/aion` drives). The integration project starts one throwaway
+  Neo4j with a bare `docker run` and removes it when the run ends
+  (`infrastructure/graph/test-support/neo4j-global-setup.fixture.ts`); that container is
+  the only Neo4j integration tests may touch. Every container it starts is named
+  `aion-test-neo4j-<uuid>`, so a run killed outright leaves one that is easy to find.
+- `startNeo4jHarness()` leases that container: it connects, clears the database, and hands
+  back the same shape a file used to get from a container of its own. Clearing drops the
+  schema as well as the data, because files declare their own vector dimension and do not
+  agree on one. Run a file outside the integration project and no address is published, so
+  the harness starts a container of its own instead. `startDedicatedNeo4jHarness()` asks for
+  that container outright; the harness lifecycle test is the one caller that needs it, since
+  it asserts on the removal the lease never performs.
+- The integration project runs with `fileParallelism: false` on purpose: files lease one
+  container one at a time, and two files at once would clear each other's graph mid-test.

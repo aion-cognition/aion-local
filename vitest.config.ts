@@ -32,11 +32,17 @@ export default defineConfig({
           environment: 'node',
           testTimeout: 120_000,
           hookTimeout: 300_000,
-          // Every integration file starts its own throwaway Neo4j container, each asking for
-          // 1G heap plus 512m pagecache. Run them concurrently and a developer-sized Docker VM
-          // cannot boot Bolt inside the readiness timeout, so the suite fails on resource
-          // contention rather than on the code under test.
+          // Starts the one throwaway Neo4j the whole run shares and publishes its address to
+          // every file. A file run outside this project finds no address and starts a
+          // container of its own instead.
+          globalSetup: [`${root}packages/core/src/infrastructure/graph/test-support/neo4j-global-setup.fixture.ts`],
+          // Files lease that one container one at a time, and each clears the database on the
+          // way in. Two files at once would wipe each other's graph mid-test, so serial
+          // execution is what makes sharing safe rather than a resource-contention workaround.
           fileParallelism: false,
+          // Removing the container is the last thing the run does, and the ten-second default
+          // is the only thing between a slow `docker rm` and a container left behind.
+          teardownTimeout: 60_000,
         },
       },
     ],

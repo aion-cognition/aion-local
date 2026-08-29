@@ -18,6 +18,7 @@ import {
   type CurrencyAnnotation,
   type ReadMode,
 } from './read-modes.js';
+import { countNodes as countEveryNode } from './test-support/graph-queries.fixture.js';
 import { startNeo4jHarness, stopNeo4jHarness, type Neo4jHarness } from './test-support/neo4j-harness.fixture.js';
 import { toGraphDateTime, toGraphVector } from './values.js';
 
@@ -29,6 +30,9 @@ let dataDir: string;
 
 beforeAll(async () => {
   harness = await startNeo4jHarness();
+  // Every node this file counts is one it wrote. Files share a Neo4j and clear it as they take
+  // it, so a non-zero count here means the previous file's graph is still standing.
+  expect(await countEveryNode(harness.driver)).toBe(0);
   dataDir = mkdtempSync(join(tmpdir(), 'aion-graph-adapter-'));
   db = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
   await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
