@@ -197,6 +197,34 @@ export const ConfigSchema = z.object({
     urgencyThreshold: proportion,
     /** Effectiveness under which an operation is weighted down, never excluded. */
     effectivenessFloor: proportion,
+    /** `vector_backfill`'s content-vector pass: pending `:Memory` nodes embedded in one run. */
+    vectorBackfillBatchSize: positiveInt,
+    /** `vector_backfill`'s context-vector pass: kept small, since a stale context is a quality gap, not an outage. */
+    contextRefreshBatchSize: positiveInt,
+    /** `reconcile_reenqueue`'s bound: orphaned episodes re-enqueued in one run. */
+    reconcileBatchSize: positiveInt,
+    /** `dead_letter`'s bound: attempts-exhausted rows given their one retry cycle in one run. */
+    deadLetterBatchSize: positiveInt,
+    /** `redaction_residue_purge`'s bound: nodes rewritten in one run, kept small since every hit is a live property write. */
+    redactionPurgeBatchSize: positiveInt,
+    /** `narrative_cleanup`'s bound: sessions examined per run, for both the duplicate scan and the stale-grounding sweep. */
+    narrativeCleanupBatch: positiveInt,
+    /** `retro_judgment_sweep`'s bound: fact-bearing episodes judged per run. */
+    retroSupersessionBatch: positiveInt,
+    /** `description_freshness`'s bound: entities re-synthesized per run. */
+    descriptionRefreshBatch: positiveInt,
+    /** Mentions an entity must gain since its description was last written before it qualifies for refresh. */
+    descriptionRefreshMentionGrowth: positiveInt,
+    /** `orphan_cleanup`'s bound: disconnected nodes examined in one run. */
+    orphanCleanupBatch: positiveInt,
+    /** How long an orphan with no relink candidate is left alone before it is forgotten. */
+    orphanForgetAfterDays: positiveInt,
+    /** `community_refresh` declines above this rather than project part of the graph and answer from it. */
+    communityNodeLimit: positiveInt,
+    /** Nodes below which a community answer describes noise rather than structure. */
+    communityMinNodes: positiveInt,
+    /** Members a community needs before `symbiosis_bridge` may use it as an endpoint. */
+    bridgeMinCommunitySize: positiveInt,
   }),
   sqlite: z.object({
     path: z.string().min(1),
