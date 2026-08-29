@@ -27,6 +27,7 @@ export type FakeEdge = {
   signals: string[];
   provenance: string[];
   count: number;
+  rationale?: string;
   createdAt: unknown;
   updatedAt: unknown;
 };
@@ -205,6 +206,7 @@ export class FakeGraph {
     const key = `${type}:${sourceId}:${targetId}`;
     const existing = this.edges.get(key);
     const count = parameters.count as number;
+    const rationale = parameters.rationale as string | undefined;
 
     if (existing === undefined) {
       this.edges.set(key, {
@@ -217,6 +219,7 @@ export class FakeGraph {
         signals: asStrings(parameters.signals),
         provenance: asStrings(parameters.provenance),
         count,
+        ...(rationale === undefined ? {} : { rationale }),
         createdAt: parameters.now,
         updatedAt: parameters.now,
       });
@@ -226,11 +229,13 @@ export class FakeGraph {
       existing.signals = [...new Set([...existing.signals, ...asStrings(parameters.signals)])];
       existing.provenance = [...new Set([...existing.provenance, ...asStrings(parameters.provenance)])];
       existing.count += count;
+      // Matches the real merge policy's `coalesce(r.rationale, $rationale)`: first write wins.
+      existing.rationale = existing.rationale ?? rationale;
       existing.updatedAt = parameters.now;
     }
 
     const edge = this.edges.get(key) as FakeEdge;
-    return toResult([{ ...edge, rationale: null }]);
+    return toResult([{ ...edge }]);
   }
 
   /** Records that the lock was taken and on which node; the fake serializes nothing. */

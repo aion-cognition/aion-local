@@ -45,7 +45,11 @@ afterEach(() => {
   rmSync(dataDir, { recursive: true, force: true });
 });
 
-function buildContext(provider: Provider, text = 'user: ship it\nassistant: shipping now'): StageContext {
+function buildContext(
+  provider: Provider,
+  text = 'user: ship it\nassistant: shipping now',
+  summary?: string,
+): StageContext {
   return {
     driver: graph.driver,
     db: undefined as unknown as SqliteHandle,
@@ -57,6 +61,7 @@ function buildContext(provider: Provider, text = 'user: ship it\nassistant: ship
       text,
       occurredAt: OCCURRED_AT,
       turns: [],
+      ...(summary === undefined ? {} : { summary }),
     },
     logger,
     now: NOW,
@@ -242,5 +247,90 @@ describe('CognitiveExtractionStage', () => {
     expect(outcome.summary).toContain('wrote 1 of 2');
     expect(outcome.counts).toEqual({ cognitive: 1 });
     expect(graph.nodesWithLabel('Concept')).toHaveLength(1);
+  });
+
+  describe('restatement refusal (D3)', () => {
+    const SUMMARY = 'closed out the duplicate remittance investigation';
+
+    it('drops a Goal a second model call judges a restatement of the summary, keeping an unrelated Decision', async () => {
+      let calls = 0;
+      const generate = async (req: StructuredRequest): Promise<unknown> => {
+        calls += 1;
+        if (calls === 1) {
+          return {
+            nodes: [
+              { type: 'Goal', text: 'Close out the duplicate remittance investigation.' },
+              { type: 'Decision', text: 'use SQLite for the queue', rationale: 'no Redis dependency' },
+            ],
+          };
+        }
+        // The one Goal is the only Goal/Plan candidate, so it is the only key on offer.
+        expect(req.schema).toMatchObject({ properties: { restated: { items: { enum: ['R1'] } } } });
+        return { restated: ['R1'] };
+      };
+      const stage = new CognitiveExtractionStage();
+
+      const outcome = await stage.run(buildContext(stubProvider(generate), undefined, SUMMARY));
+
+      expect(calls).toBe(2);
+      expect(outcome.status).toBe('ok');
+      expect(outcome.counts).toEqual({ cognitive: 1 });
+      expect(graph.nodesWithLabel('Goal')).toHaveLength(0);
+      expect(graph.nodesWithLabel('Decision')).toHaveLength(1);
+    });
+
+    it('keeps a Goal the validation call confirms adds information beyond the summary', async () => {
+      let calls = 0;
+      const generate = async (): Promise<unknown> => {
+        calls += 1;
+        if (calls === 1) {
+          return { nodes: [{ type: 'Goal', text: 'Migrate the remaining callers before the flag flips.' }] };
+        }
+        return { restated: [] };
+      };
+      const stage = new CognitiveExtractionStage();
+
+      const outcome = await stage.run(buildContext(stubProvider(generate), undefined, SUMMARY));
+
+      expect(calls).toBe(2);
+      expect(outcome.counts).toEqual({ cognitive: 1 });
+      expect(graph.nodesWithLabel('Goal')).toHaveLength(1);
+    });
+
+    it('never calls the validation model when the episode carries no summary', async () => {
+      let calls = 0;
+      const generate = async (): Promise<unknown> => {
+        calls += 1;
+        return { nodes: [{ type: 'Goal', text: 'ship the worker' }] };
+      };
+      const stage = new CognitiveExtractionStage();
+
+      const outcome = await stage.run(buildContext(stubProvider(generate)));
+
+      expect(calls).toBe(1);
+      expect(outcome.counts).toEqual({ cognitive: 1 });
+      expect(graph.nodesWithLabel('Goal')).toHaveLength(1);
+    });
+
+    it('retries the validation call once on an unusable answer, then drops the candidate on a second failure', async () => {
+      let calls = 0;
+      const generate = async (): Promise<unknown> => {
+        calls += 1;
+        if (calls === 1) {
+          return { nodes: [{ type: 'Plan', text: 'Close out the duplicate remittance investigation.' }] };
+        }
+        // Neither validation attempt matches the RestatementOutputSchema shape.
+        return { restated: 'not-an-array' };
+      };
+      const stage = new CognitiveExtractionStage();
+
+      const outcome = await stage.run(buildContext(stubProvider(generate), undefined, SUMMARY));
+
+      expect(calls).toBe(3);
+      expect(outcome.status).toBe('ok');
+      expect(outcome.summary).toBe('every extracted node restated the episode summary and was dropped');
+      expect(outcome.counts).toEqual({ cognitive: 0 });
+      expect(graph.nodesWithLabel('Plan')).toHaveLength(0);
+    });
   });
 });

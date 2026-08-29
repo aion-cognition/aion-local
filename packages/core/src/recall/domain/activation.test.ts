@@ -122,9 +122,17 @@ describe('edgeWeight', () => {
   });
 
   it('scales SIMILAR and RELATED_TO by strength × confidence, per whitepaper §5.4', () => {
-    expect(edgeWeight(neighbor({ relationshipType: 'SIMILAR', strength: 0.5, confidence: 0.5 }))).toBeCloseTo(0.15, 10);
+    // SIMILAR's base weight carries MODEL_INFERRED_PENALTY (0.6 tuned x 0.5 discount = 0.3).
+    expect(edgeWeight(neighbor({ relationshipType: 'SIMILAR', strength: 0.5, confidence: 0.5 }))).toBeCloseTo(0.075, 10);
     expect(edgeWeight(neighbor({ relationshipType: 'RELATED_TO', strength: 0.4, confidence: 0.5 }))).toBeCloseTo(0.1, 10);
-    expect(edgeWeight(neighbor({ relationshipType: 'SIMILAR', strength: 1, confidence: 1 }))).toBe(0.6);
+    expect(edgeWeight(neighbor({ relationshipType: 'SIMILAR', strength: 1, confidence: 1 }))).toBe(0.3);
+  });
+
+  it('halves CAUSES, ENABLES, PRECEDES, CONTRADICTS, and SIMILAR pending a precision-cleared harness', () => {
+    expect(edgeWeight(neighbor({ relationshipType: 'CAUSES' }))).toBeCloseTo(0.35, 10);
+    expect(edgeWeight(neighbor({ relationshipType: 'ENABLES' }))).toBeCloseTo(0.3, 10);
+    expect(edgeWeight(neighbor({ relationshipType: 'PRECEDES' }))).toBeCloseTo(0.3, 10);
+    expect(edgeWeight(neighbor({ relationshipType: 'CONTRADICTS' }))).toBeCloseTo(0.35, 10);
   });
 
   it('leaves every other type at its type multiplier, whatever the edge carries', () => {

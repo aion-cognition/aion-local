@@ -10,7 +10,7 @@ import { loadEpisodeContext } from '../../../infrastructure/graph/episode-contex
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import { withCurrency } from '../../../infrastructure/graph/read-modes.js';
 import { SEMANTIC_RELATIONSHIP_METHOD } from '../../../infrastructure/graph/semantic-relationship-queries.js';
-import { relationshipsByProvenance } from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
+import { nodeProperties, relationshipsByProvenance } from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
@@ -163,9 +163,110 @@ describe('SemanticRelationshipStage against a live graph and Ollama', () => {
     const target = run.activated.find((node) => node.nodeId === causal!.targetId);
     expect(target).toBeDefined();
     expect(target?.pathSummary).toContain(`-[${causal!.type}]->`);
-    // CAUSES carries 0.7, ENABLES 0.6 (recall/domain/activation.ts); either way the edge
-    // propagates a type-specific fraction of the seed's full activation, not the raw 1.0.
+    // CAUSES carries 0.35, ENABLES 0.3 (recall/domain/activation.ts, MODEL_INFERRED_PENALTY
+    // applied); either way the edge propagates a type-specific fraction of the seed's full
+    // activation, not the raw 1.0.
     expect(target?.score).toBeGreaterThan(0);
     expect(target?.score).toBeLessThan(1);
+    // The edge is written with a quoted justification (D2), stored as its rationale.
+    expect(causal!.rationale).toBeDefined();
+    expect(causal!.rationale?.length).toBeGreaterThan(0);
+
+    // Direction, checked across every CAUSES/ENABLES edge this run wrote rather than only
+    // the one `spreadActivation` happened to seed from: a live, sampling model proposes
+    // several candidate edges of varying quality in one call, and the fix this stage makes
+    // is that a correctly-directed edge is there to find, not that every edge it proposes is
+    // one. The inversion the exercise measured put the effect entity on the source end and
+    // the cause entity on the target end; guard against that shape on each edge.
+    const causalEdges = written.filter((edge) => DIRECTED_CAUSAL_TYPES.has(edge.type));
+    const directions = await Promise.all(
+      causalEdges.map(async (edge) => {
+        const source = await nodeProperties(harness.driver, edge.sourceId);
+        const target = await nodeProperties(harness.driver, edge.targetId);
+        const sourceText = String(source.text ?? source.name ?? '').toLowerCase();
+        const targetText = String(target.text ?? target.name ?? '').toLowerCase();
+        const inverted = sourceText.includes('deadlock') && targetText.includes('transaction');
+        return { type: edge.type, sourceText, targetText, inverted };
+      }),
+    );
+    expect(
+      directions.some((direction) => !direction.inverted),
+      `every causal edge looked inverted: ${JSON.stringify(directions)}`,
+    ).toBe(true);
+  }, 120_000);
+
+  it('does not write CONTRADICTS on agreement restated in different words or on unrelated entities', async () => {
+    const identity = 'mcp-transport-session-semantic-relationships-contradicts-bait';
+    const payload = {
+      turns: [
+        {
+          role: 'user',
+          text:
+            'We evaluated Redix as the queue but rejected it because it lacks compatibility ' +
+            'with our existing Redis deployment.',
+        },
+        {
+          role: 'assistant',
+          text:
+            'Right, Redix was rejected due to its lack of compatibility with Redis. Separately, ' +
+            'the ingest service and the appeals service both read from the same Postgres database.',
+        },
+      ],
+      summary: 'rejected Redix for Redis incompatibility; noted the ingest and appeals services share Postgres',
+    };
+
+    const backbone = await bootstrapBackbone(harness.driver, { memberName: 'Test User' });
+    const intake: ReflectionIntakeDeps = {
+      driver: harness.driver,
+      db,
+      sessions: new SessionManager(harness.driver, {
+        memberId: backbone.member.id,
+        workspaceId: backbone.workspace.id,
+      }),
+      provider: ollamaProvider(),
+      dispatch: new ReflectionDispatch(),
+      logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
+      entropyThreshold: DEFAULTS.redaction.entropyThreshold,
+      lanes: new LaneAssigner(DEFAULTS.lanes),
+    };
+
+    const stored = await handleReflection(intake, payload, { identity });
+    const baitEpisodeId = stored.episode_id;
+    const episode = await loadEpisodeContext(harness.driver, baitEpisodeId);
+    if (episode === undefined) {
+      throw new Error(`no episode ${baitEpisodeId}`);
+    }
+    const setupCtx: StageContext = {
+      driver: harness.driver,
+      db,
+      provider: ollamaProvider(),
+      episodeId: baitEpisodeId,
+      episode,
+      logger: intake.logger,
+      now: new Date(),
+    };
+
+    const entityOutcome = await new EntityExtractionStage({ model: DEFAULTS.models.reflect }).run(setupCtx);
+    expect(entityOutcome.status).toBe('ok');
+    const cognitiveOutcome = await new CognitiveExtractionStage({ model: DEFAULTS.models.reflect }).run(setupCtx);
+    expect(cognitiveOutcome.status).toBe('ok');
+
+    const stage = new SemanticRelationshipStage({ model: DEFAULTS.models.reflect });
+    const outcome = await stage.run(setupCtx);
+    expect(outcome.status).toBe('ok');
+
+    // Scoped by provenance across the whole test database rather than this episode alone —
+    // the causal-prose test above writes the same provenance and asserts its own edges are
+    // CAUSES/ENABLES, never CONTRADICTS, so a global zero is exactly what both tests expect.
+    const written = await relationshipsByProvenance(harness.driver, SEMANTIC_RELATIONSHIP_METHOD);
+    const contradicts = written.filter((edge) => edge.type === 'CONTRADICTS');
+    const described = await Promise.all(
+      contradicts.map(async (edge) => {
+        const source = await nodeProperties(harness.driver, edge.sourceId);
+        const target = await nodeProperties(harness.driver, edge.targetId);
+        return { source: source.text ?? source.name, target: target.text ?? target.name, rationale: edge.rationale };
+      }),
+    );
+    expect(contradicts, `expected no CONTRADICTS; got ${JSON.stringify(described)}`).toHaveLength(0);
   }, 120_000);
 });
