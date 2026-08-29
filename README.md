@@ -142,7 +142,7 @@ Every runtime knob is an `AION_*` environment variable, cataloged in
 A few examples:
 
 - `AION_NEO4J_URI`: Bolt endpoint (`bolt://neo4j:7687` by default)
-- `AION_MIN_RELEVANCE`: the relevance floor a fused item must clear to reach a pack (`0.35`)
+- `AION_VECTOR_ADMISSION_FLOOR`: the calibrated cosine an item must measure to reach a pack on its own (`0.50`)
 - `AION_MCP_PORT`: the port the MCP server listens on (`8765`)
 
 ### Reflection concurrency

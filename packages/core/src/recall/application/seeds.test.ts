@@ -220,6 +220,74 @@ function selectFrom(driver: Driver): Promise<SeedSelection> {
   );
 }
 
+type FakeRow = Record<string, unknown>;
+
+function answeringWith(rows: (cypher: string, parameters: FakeRow) => readonly FakeRow[]): Driver {
+  return {
+    executeQuery: (cypher: string, parameters: FakeRow) =>
+      Promise.resolve({
+        records: rows(cypher, parameters).map((row) => ({ toObject: () => row })),
+        summary: { counters: { updates: () => ({}) } },
+      }),
+  } as unknown as Driver;
+}
+
+function row(id: string, score: number): FakeRow {
+  return {
+    id,
+    labels: ['Episode', 'Memory'],
+    content: `content ${id}`,
+    occurred_at: null,
+    is_structural: null,
+    source_episode_id: null,
+    currency: 'current',
+    superseded_by: null,
+    score,
+    name_norm: 'webhook ingestion',
+  };
+}
+
+describe('what the legs mark as a literal match', () => {
+  it('asks Lucene for the verbatim cue as well, and marks only that hit exact', async () => {
+    const selection = await selectSeeds(
+      { driver: answeringWith(fulltextRows), config: DEFAULTS, logger: silentLogger() },
+      { cues: [{ text: 'webhook ingestion', source: 'query', weight: 3 }] },
+    );
+
+    const exact = selection.byStrategy.bm25.find((seed) => seed.id === 'phrase-hit');
+    const loose = selection.byStrategy.bm25.find((seed) => seed.id === 'term-hit');
+    expect(exact?.provenance[0]).toMatchObject({ strategy: 'bm25', exact: true });
+    expect(loose?.provenance[0]).not.toHaveProperty('exact');
+  });
+
+  it('marks an exact entity-name resolution, which is an identity match rather than a score', async () => {
+    const selection = await selectSeeds(
+      {
+        driver: answeringWith((cypher) => (cypher.includes('MATCH (n:Entity)') ? [row('e', 1)] : [])),
+        config: DEFAULTS,
+        logger: silentLogger(),
+      },
+      { cues: [{ text: 'webhook ingestion', source: 'query', weight: 3 }] },
+    );
+
+    expect(selection.byStrategy.entity_resolution[0]?.provenance[0]).toMatchObject({
+      strategy: 'entity_resolution',
+      exact: true,
+    });
+  });
+});
+
+function fulltextRows(cypher: string, parameters: FakeRow): readonly FakeRow[] {
+  if (!cypher.includes('db.index.fulltext.queryNodes')) {
+    return [];
+  }
+  const query = parameters.query;
+  if (typeof query === 'string' && query.startsWith('"')) {
+    return [row('phrase-hit', 4.2)];
+  }
+  return [row('term-hit', 8.4)];
+}
+
 describe('selectSeeds when the graph is not answering', () => {
   it('flags the graph unavailable when every query it issued was rejected', async () => {
     const selection = await selectFrom(

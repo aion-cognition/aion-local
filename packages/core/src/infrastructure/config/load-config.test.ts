@@ -89,7 +89,7 @@ describe('loadConfig bad values', () => {
   });
 
   it('rejects an out-of-range proportion, naming the var', () => {
-    expect(() => loadConfig({ AION_MIN_RELEVANCE: '1.5' })).toThrow(/AION_MIN_RELEVANCE/);
+    expect(() => loadConfig({ AION_VECTOR_ADMISSION_FLOOR: '1.5' })).toThrow(/AION_VECTOR_ADMISSION_FLOOR/);
   });
 
   it('rejects a value outside its enum, naming the var', () => {
@@ -111,14 +111,14 @@ describe('loadConfig bad values', () => {
   it('reports every bad var in one error when several are invalid', () => {
     let caught: unknown;
     try {
-      loadConfig({ AION_RECALL_MAX_HOPS: 'bad', AION_MIN_RELEVANCE: '9' });
+      loadConfig({ AION_RECALL_MAX_HOPS: 'bad', AION_VECTOR_ADMISSION_FLOOR: '9' });
     } catch (error) {
       caught = error;
     }
     expect(caught).toBeInstanceOf(ConfigError);
     const message = (caught as ConfigError).message;
     expect(message).toMatch(/AION_RECALL_MAX_HOPS/);
-    expect(message).toMatch(/AION_MIN_RELEVANCE/);
+    expect(message).toMatch(/AION_VECTOR_ADMISSION_FLOOR/);
   });
 });
 

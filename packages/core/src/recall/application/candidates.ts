@@ -2,8 +2,9 @@ import type { Config } from '../../infrastructure/config/schema.js';
 import type { CurrencyAnnotation } from '../../infrastructure/graph/read-modes.js';
 import type { SeedCandidate } from '../../infrastructure/graph/seed-queries.js';
 import type { ActivatedNode, ActivationSeed } from '../domain/activation.js';
+import type { Measurement } from '../domain/admission.js';
 import type { FusionCandidate, RankedList } from '../domain/fusion.js';
-import type { Seed } from './seeds.js';
+import type { Seed, SeedProvenance } from './seeds.js';
 
 /**
  * The adapter between the retrieval stages and fusion: seed selection and spreading
@@ -55,6 +56,15 @@ function baseCandidate(candidate: SeedCandidate): Omit<FusionCandidate, 'rationa
   };
 }
 
+function toMeasurement(provenance: SeedProvenance): Measurement {
+  return {
+    method: provenance.strategy,
+    relevance: provenance.relevance,
+    ...(provenance.exact === undefined ? {} : { exact: provenance.exact }),
+    ...(provenance.cue === undefined ? {} : { cue: provenance.cue }),
+  };
+}
+
 /**
  * A seed is explained by the strategy that found it, at that strategy's own score — never
  * by the activation pass, which re-encounters every seed at 1.0 and would otherwise
@@ -73,6 +83,9 @@ export function seedCandidate(seed: Seed): FusionCandidate | undefined {
     ...baseCandidate(seed),
     rationale: { method: best.strategy, score: seed.score },
     relevance: seed.relevance,
+    // Every strategy that found it, not just the strongest: the admission gate counts
+    // independent measurements, and a maximum cannot tell one hit from three.
+    evidence: seed.provenance.map(toMeasurement),
   };
 }
 
@@ -82,6 +95,9 @@ function activatedCandidate(node: ActivatedNode, candidate: SeedCandidate): Fusi
     ...baseCandidate(candidate),
     rationale: { method: 'activation', score: node.score, path: node.pathSummary },
     relevance: 0,
+    // No retrieval leg measured it, so it carries no evidence of its own and reaches a pack
+    // only through the anchor rule.
+    evidence: [],
     activation: node.score,
   };
 }

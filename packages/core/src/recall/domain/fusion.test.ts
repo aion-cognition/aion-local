@@ -1,11 +1,13 @@
 import type { RecallMethod } from '@aion/protocol';
 import { describe, expect, it } from 'vitest';
 import type { Vector } from '../../infrastructure/providers/types.js';
+import type { AdmissionPolicy, Measurement } from './admission.js';
 import {
   cosineSimilarity,
   fuse,
   reciprocalRank,
   SUPERSEDED_RANK_WEIGHT,
+  type FusedItem,
   type FusionCandidate,
   type FusionOptions,
   type RankedList,
@@ -13,9 +15,22 @@ import {
 
 const RRF_CONSTANT = 60;
 
+/**
+ * The ranking tests are about order, not admission, so they run under a policy that admits
+ * everything. Every floor assertion names its own policy.
+ */
+const ADMIT_ALL: AdmissionPolicy = { vectorFloor: 0, corroborationFloor: 0, bm25Mode: 'any' };
+
+/** The shipped shape: a calibrated cosine floor, a lower corroboration floor, exact-only BM25. */
+const CALIBRATED: AdmissionPolicy = {
+  vectorFloor: 0.5,
+  corroborationFloor: 0.45,
+  bm25Mode: 'exact',
+};
+
 const RRF: FusionOptions = {
   rrfConstant: RRF_CONSTANT,
-  minRelevance: 0,
+  admission: ADMIT_ALL,
   reranker: 'rrf',
   mmrLambda: 0.5,
 };
@@ -28,6 +43,7 @@ type CandidateOverrides = {
   readonly activation?: number;
   readonly structural?: boolean;
   readonly labels?: readonly string[];
+  readonly evidence?: readonly Measurement[];
 };
 
 function candidate(id: string, overrides: CandidateOverrides = {}): FusionCandidate {
@@ -39,6 +55,7 @@ function candidate(id: string, overrides: CandidateOverrides = {}): FusionCandid
     content: overrides.content ?? `content of ${id}`,
     rationale: { method, score: overrides.activation ?? relevance },
     relevance,
+    ...(overrides.evidence === undefined ? {} : { evidence: overrides.evidence }),
     ...(overrides.activation === undefined ? {} : { activation: overrides.activation }),
     ...(overrides.structural === undefined ? {} : { isStructural: overrides.structural }),
   };
@@ -60,8 +77,12 @@ function list(
   return { leg, weight, candidates };
 }
 
-function ids(items: readonly { readonly id: string }[]): string[] {
-  return items.map((item) => item.id);
+function items(lists: readonly RankedList[], options: FusionOptions = RRF): readonly FusedItem[] {
+  return fuse(lists, options).items;
+}
+
+function ids(fused: readonly { readonly id: string }[]): string[] {
+  return fused.map((item) => item.id);
 }
 
 describe('reciprocal rank', () => {
@@ -73,23 +94,20 @@ describe('reciprocal rank', () => {
 
 describe('RRF across ranked lists', () => {
   it('ranks an item both lists disagree about above one both rank second', () => {
-    const fused = fuse(
-      [
-        list('vector', [candidate('a'), candidate('b'), candidate('c')]),
-        list('bm25', [candidate('c'), candidate('b'), candidate('a')]),
-      ],
-      RRF,
-    );
+    const fused = items([
+      list('vector', [candidate('a'), candidate('b'), candidate('c')]),
+      list('bm25', [candidate('c'), candidate('b'), candidate('a')]),
+    ]);
 
     // a and c each score 1/61 + 1/63; b scores 2/62, which is lower.
     expect(ids(fused)).toEqual(['a', 'c', 'b']);
   });
 
   it('weights each leg by its whitepaper 5.3 share, so a vector-only hit outranks a bm25-only one', () => {
-    const fused = fuse(
-      [list('vector', [candidate('v')], 0.4), list('bm25', [candidate('k')], 0.3)],
-      RRF,
-    );
+    const fused = items([
+      list('vector', [candidate('v')], 0.4),
+      list('bm25', [candidate('k', { method: 'bm25' })], 0.3),
+    ]);
 
     expect(ids(fused)).toEqual(['v', 'k']);
     expect(fused[0]?.score).toBeCloseTo(0.4 / 61, 10);
@@ -97,61 +115,61 @@ describe('RRF across ranked lists', () => {
   });
 
   it('keeps a contentless hit out of the pack without promoting what ranked under it', () => {
-    const withGap = fuse([list('vector', [candidate('blank', { content: '   ' }), candidate('b')])], RRF);
-    const control = fuse([list('vector', [candidate('a'), candidate('b')])], RRF);
+    const withGap = items([list('vector', [candidate('blank', { content: '   ' }), candidate('b')])]);
+    const control = items([list('vector', [candidate('a'), candidate('b')])]);
 
     expect(ids(withGap)).toEqual(['b']);
     expect(withGap[0]?.score).toBeCloseTo(control[1]?.score ?? 0, 10);
   });
 });
 
-describe('the minimum relevance floor', () => {
+describe('the absolute cosine floor through fusion', () => {
   it('drops an item under the floor even though nothing else competes for the slot', () => {
-    const fused = fuse([list('vector', [candidate('weak', { relevance: 0.2 })])], {
-      ...RRF,
-      minRelevance: 0.35,
-    });
-
-    expect(fused).toEqual([]);
-  });
-
-  it('measures the floor against the best leg, not the last one to find the item', () => {
-    const fused = fuse(
-      [
-        list('vector', [candidate('both', { relevance: 0.5 })]),
-        list('bm25', [candidate('both', { method: 'bm25', relevance: 0.2 })]),
-      ],
-      { ...RRF, minRelevance: 0.35 },
-    );
-
-    expect(ids(fused)).toEqual(['both']);
-    expect(fused[0]?.relevance).toBe(0.5);
+    expect(
+      items([list('vector', [candidate('weak', { relevance: 0.42 })])], {
+        ...RRF,
+        admission: CALIBRATED,
+      }),
+    ).toEqual([]);
   });
 
   it('measures the floor against retrieval scores, not the fused rank score', () => {
-    const fused = fuse([list('vector', [candidate('strong', { relevance: 0.9 })])], {
+    const fused = items([list('vector', [candidate('strong', { relevance: 0.9 })])], {
       ...RRF,
-      minRelevance: 0.35,
+      admission: CALIBRATED,
     });
 
     // The RRF score is ~0.016; a floor read against it would empty every pack.
-    expect(fused[0]?.score).toBeLessThan(0.35);
+    expect(fused[0]?.score).toBeLessThan(0.5);
     expect(ids(fused)).toEqual(['strong']);
+  });
+
+  it('measures each leg on its own, so one strong leg carries an item several legs found', () => {
+    const fused = items(
+      [
+        list('vector', [candidate('both', { relevance: 0.6 })]),
+        list('bm25', [candidate('both', { method: 'bm25', relevance: 0.2 })]),
+      ],
+      { ...RRF, admission: CALIBRATED },
+    );
+
+    expect(ids(fused)).toEqual(['both']);
+    expect(fused[0]?.relevance).toBe(0.6);
   });
 });
 
 describe('traversal admission', () => {
   /** The gate-scale shape: a strong direct hit, plus a node only the spread reached. */
-  function anchoredRun(anchorRelevance: number) {
-    return fuse(
+  function anchoredRun(anchorRelevance: number): readonly FusedItem[] {
+    return items(
       [
         list('vector', [candidate('anchor', { relevance: anchorRelevance })]),
         list('graph_traversal', [
           candidate('anchor', { relevance: anchorRelevance }),
-          candidate('reached', { method: 'activation', relevance: 0, activation: 0.29 }),
+          candidate('reached', { method: 'activation', relevance: 0, activation: 0.29, evidence: [] }),
         ]),
       ],
-      { ...RRF, minRelevance: 0.35 },
+      { ...RRF, admission: CALIBRATED },
     );
   }
 
@@ -163,11 +181,11 @@ describe('traversal admission', () => {
   });
 
   it('surfaces nothing when no hit cleared the floor, so traversal cannot fill an empty pack', () => {
-    expect(anchoredRun(0.2)).toEqual([]);
+    expect(anchoredRun(0.42)).toEqual([]);
   });
 
   it('still drops a seed whose only strategy measured nothing', () => {
-    const fused = fuse(
+    const fused = items(
       [
         list('vector', [candidate('anchor', { relevance: 0.8 })]),
         list('graph_traversal', [
@@ -175,16 +193,73 @@ describe('traversal admission', () => {
           candidate('recent', { method: 'recency', relevance: 0 }),
         ]),
       ],
-      { ...RRF, minRelevance: 0.35 },
+      { ...RRF, admission: CALIBRATED },
     );
 
     expect(ids(fused)).toEqual(['anchor']);
   });
 });
 
+describe('the admission report', () => {
+  it('names the floor it used and counts what it dropped', () => {
+    const result = fuse(
+      [
+        list('vector', [
+          candidate('kept', { relevance: 0.8 }),
+          candidate('weak', { relevance: 0.3 }),
+          candidate('twin', { relevance: 0.7, content: 'content of kept' }),
+        ]),
+        list('graph_traversal', [
+          candidate('kept', { relevance: 0.8 }),
+          candidate('reached', { method: 'activation', relevance: 0, activation: 0.2, evidence: [] }),
+        ]),
+      ],
+      { ...RRF, admission: CALIBRATED },
+    );
+
+    expect(result.admission).toEqual({
+      policy: CALIBRATED,
+      considered: 4,
+      admitted: 2,
+      droppedBelowFloor: 1,
+      droppedUnanchored: 0,
+      droppedDuplicateContent: 1,
+      anchored: true,
+    });
+  });
+
+  it('separates an empty substrate from a floor that rejected everything', () => {
+    const empty = fuse([], { ...RRF, admission: CALIBRATED });
+    const rejected = fuse([list('vector', [candidate('weak', { relevance: 0.2 })])], {
+      ...RRF,
+      admission: CALIBRATED,
+    });
+
+    expect(empty.admission.considered).toBe(0);
+    expect(rejected.admission.considered).toBe(1);
+    expect(rejected.admission.droppedBelowFloor).toBe(1);
+    expect(rejected.admission.anchored).toBe(false);
+  });
+
+  it('counts a traversal-only candidate as unanchored rather than as below the floor', () => {
+    const result = fuse(
+      [
+        list('graph_traversal', [
+          candidate('reached', { method: 'activation', relevance: 0, activation: 0.4, evidence: [] }),
+        ]),
+      ],
+      { ...RRF, admission: CALIBRATED },
+    );
+
+    expect(result.items).toEqual([]);
+    expect(result.admission.droppedUnanchored).toBe(1);
+    expect(result.admission.droppedBelowFloor).toBe(0);
+  });
+});
+
 describe('structural nodes', () => {
   it('never packs the backbone, however strongly the spread activated it', () => {
-    const fused = fuse(
+    const fused = items(
       [
         list('vector', [candidate('episode', { relevance: 0.8 })]),
         list('graph_traversal', [
@@ -198,7 +273,7 @@ describe('structural nodes', () => {
           candidate('episode', { relevance: 0.8 }),
         ]),
       ],
-      { ...RRF, minRelevance: 0.35 },
+      { ...RRF, admission: CALIBRATED },
     );
 
     expect(ids(fused)).toEqual(['episode']);
@@ -207,38 +282,38 @@ describe('structural nodes', () => {
 
 describe('rationale', () => {
   it('explains an item by its strongest leg, not by the activation pass that re-found it', () => {
-    const fused = fuse(
-      [
-        list('vector', [candidate('seed', { method: 'vector', relevance: 0.9 })]),
-        list('graph_traversal', [candidate('seed', { method: 'activation', relevance: 0.4 })]),
-      ],
-      RRF,
-    );
+    const fused = items([
+      list('vector', [candidate('seed', { method: 'vector', relevance: 0.9 })]),
+      list('graph_traversal', [candidate('seed', { method: 'activation', relevance: 0.4 })]),
+    ]);
 
     expect(fused[0]?.rationale).toEqual({ method: 'vector', score: 0.9 });
   });
 
   it('leaves a traversal-only item explained by activation', () => {
-    const fused = fuse(
-      [list('graph_traversal', [candidate('reached', { method: 'activation', relevance: 0.4 })])],
-      RRF,
+    const fused = items(
+      [
+        list('vector', [candidate('anchor', { relevance: 0.8 })]),
+        list('graph_traversal', [
+          candidate('anchor', { relevance: 0.8 }),
+          candidate('reached', { method: 'activation', relevance: 0, activation: 0.4, evidence: [] }),
+        ]),
+      ],
+      { ...RRF, admission: CALIBRATED },
     );
 
-    expect(fused[0]?.rationale.method).toBe('activation');
+    expect(fused[1]?.rationale.method).toBe('activation');
   });
 });
 
 describe('content dedupe', () => {
   it('keeps the higher-ranked of two node ids carrying the same text', () => {
-    const fused = fuse(
-      [
-        list('vector', [
-          candidate('first', { content: 'we keyed the sync on id_slug' }),
-          candidate('second', { content: 'we keyed the sync on id_slug' }),
-        ]),
-      ],
-      RRF,
-    );
+    const fused = items([
+      list('vector', [
+        candidate('first', { content: 'we keyed the sync on id_slug' }),
+        candidate('second', { content: 'we keyed the sync on id_slug' }),
+      ]),
+    ]);
 
     expect(ids(fused)).toEqual(['first']);
   });
@@ -246,20 +321,17 @@ describe('content dedupe', () => {
 
 describe('currency resolution', () => {
   it('ranks the current fact above the superseded one they otherwise tie with', () => {
-    const fused = fuse(
-      [
-        list('vector', [candidate('current-fact')]),
-        list('bm25', [candidate('old-fact', { method: 'bm25', superseded: true })]),
-      ],
-      RRF,
-    );
+    const fused = items([
+      list('vector', [candidate('current-fact')]),
+      list('bm25', [candidate('old-fact', { method: 'bm25', superseded: true })]),
+    ]);
 
     expect(ids(fused)).toEqual(['current-fact', 'old-fact']);
     expect(fused[1]?.score).toBeCloseTo((fused[0]?.score ?? 0) * SUPERSEDED_RANK_WEIGHT, 10);
   });
 
   it('surfaces the superseded item marked with its lineage rather than filtering it out', () => {
-    const fused = fuse([list('vector', [candidate('old-fact', { superseded: true })])], RRF);
+    const fused = items([list('vector', [candidate('old-fact', { superseded: true })])]);
 
     expect(fused[0]?.currency).toBe('superseded');
     expect(fused[0]?.supersededBy?.id).toBe('old-fact-successor');
@@ -276,12 +348,15 @@ describe('MMR reranking behind the flag', () => {
   const candidates = [candidate('a'), candidate('a-twin'), candidate('c')];
 
   it('leaves the RRF order alone when the reranker is not selected', () => {
-    const fused = fuse([list('vector', candidates)], { ...RRF, vectors });
-    expect(ids(fused)).toEqual(['a', 'a-twin', 'c']);
+    expect(ids(items([list('vector', candidates)], { ...RRF, vectors }))).toEqual([
+      'a',
+      'a-twin',
+      'c',
+    ]);
   });
 
   it('pushes the near-duplicate below the distinct item when it is', () => {
-    const fused = fuse([list('vector', candidates)], {
+    const fused = items([list('vector', candidates)], {
       ...RRF,
       reranker: 'mmr',
       mmrLambda: 0.5,
@@ -292,12 +367,12 @@ describe('MMR reranking behind the flag', () => {
   });
 
   it('falls back to relevance order when no vectors are available', () => {
-    const fused = fuse([list('vector', candidates)], { ...RRF, reranker: 'mmr', mmrLambda: 0.5 });
+    const fused = items([list('vector', candidates)], { ...RRF, reranker: 'mmr', mmrLambda: 0.5 });
     expect(ids(fused)).toEqual(['a', 'a-twin', 'c']);
   });
 
   it('keeps relevance order at lambda 1, where diversity counts for nothing', () => {
-    const fused = fuse([list('vector', candidates)], {
+    const fused = items([list('vector', candidates)], {
       ...RRF,
       reranker: 'mmr',
       mmrLambda: 1,
@@ -323,7 +398,7 @@ describe('cosine similarity', () => {
 
 describe('an empty candidate set', () => {
   it('fuses to nothing rather than inventing a floor-passing item', () => {
-    expect(fuse([], RRF)).toEqual([]);
-    expect(fuse([list('vector', [])], RRF)).toEqual([]);
+    expect(items([])).toEqual([]);
+    expect(items([list('vector', [])])).toEqual([]);
   });
 });

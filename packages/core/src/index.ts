@@ -429,6 +429,7 @@ export {
   entitySimilaritySeeds,
   escapeLuceneQuery,
   fulltextSeeds,
+  lucenePhraseQuery,
   nodeCandidates,
   normalizeSeedName,
   recencySeeds,
@@ -451,6 +452,31 @@ export type { RecordAccessInput } from './infrastructure/graph/access-tracking.j
 
 export { CueCache, extractCues } from './recall/application/cues.js';
 export type { CueExtractionDeps, CueExtractionInput, CueExtractionResult } from './recall/application/cues.js';
+
+export {
+  CALIBRATION_TOLERANCE,
+  checkSeparation,
+  describeDistribution,
+  pairedCosines,
+  pairwiseCosines,
+  percentile,
+} from './recall/domain/floor-calibration.js';
+export type { Distribution, Separation, SeparationInput } from './recall/domain/floor-calibration.js';
+export { measureAdmissionFloor } from './recall/application/floor-check.js';
+export {
+  BATTERY_SUBSTRATE,
+  OFF_TOPIC_BATTERY,
+  ON_TOPIC_BATTERY,
+  RELATED_PAIRS,
+  UNRELATED_PAIRS,
+  UNRELATED_SENTENCES,
+  WEAK_RELATED_PAIRS,
+} from './recall/application/floors.fixtures.js';
+export type {
+  BatteryEpisode,
+  OnTopicProbe,
+  ScoredPair,
+} from './recall/application/floors.fixtures.js';
 
 export {
   SEED_STRATEGIES,
@@ -502,8 +528,17 @@ export type {
   FusionCandidate,
   FusionLeg,
   FusionOptions,
+  FusionResult,
   RankedList,
 } from './recall/domain/fusion.js';
+
+export { admitsOnEvidence } from './recall/domain/admission.js';
+export type {
+  AdmissionPolicy,
+  AdmissionReport,
+  Bm25AdmissionMode,
+  Measurement,
+} from './recall/domain/admission.js';
 
 export { CHARS_PER_TOKEN, PACK_BUCKETS, assemblePack, bucketFor, estimateTokens } from './recall/domain/pack.js';
 export type { AssemblePackInput, BucketCaps, PackBucket } from './recall/domain/pack.js';

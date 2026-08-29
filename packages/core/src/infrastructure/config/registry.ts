@@ -15,10 +15,14 @@ export type Knob = {
  * The flat AION_* surface, one entry per Config leaf. `weights` covers the three
  * search.weights sub-fields from a single comma-separated var (PRD §14); every other
  * leaf is a 1:1 var. Env var names already pinned by PRD §14 (AION_CUE_BUDGET_MS,
- * AION_RECALL_TOKEN_BUDGET, AION_MIN_RELEVANCE, AION_SEARCH_WEIGHTS, AION_NEO4J_URI,
+ * AION_RECALL_TOKEN_BUDGET, AION_SEARCH_WEIGHTS, AION_NEO4J_URI,
  * AION_NEO4J_PASSWORD, AION_OLLAMA_URL, AION_OLLAMA_MODE, AION_ANTHROPIC_API_KEY,
  * AION_MAINTENANCE_TIER3, AION_MCP_PORT) keep those exact names; the rest follow
  * AION_<GROUP>_<LEAF> for consistency.
+ *
+ * PRD §14's AION_MIN_RELEVANCE is gone rather than renamed. It named one floor for every
+ * method, which is the shape the fix round removed; a stale 0.35 silently applying to the
+ * calibrated cosine floor would be worse than the error an unknown variable raises.
  *
  * P3's two plan-pinned names (AION_SUPERSEDE_AUTO_CONFIDENCE, AION_ASSOC_SEMANTIC_THRESHOLD)
  * are the same case and keep their pinned spelling inside the `reflection` group. The
@@ -64,7 +68,13 @@ export const KNOB_REGISTRY: readonly Knob[] = [
   },
   { envVar: 'AION_CUE_BUDGET_MS', path: ['recall', 'cueBudgetMs'], kind: 'number' },
   { envVar: 'AION_RECALL_TOKEN_BUDGET', path: ['recall', 'tokenBudget'], kind: 'number' },
-  { envVar: 'AION_MIN_RELEVANCE', path: ['recall', 'minRelevance'], kind: 'number' },
+  {
+    envVar: 'AION_VECTOR_ADMISSION_FLOOR',
+    path: ['recall', 'vectorAdmissionFloor'],
+    kind: 'number',
+  },
+  { envVar: 'AION_CORROBORATION_FLOOR', path: ['recall', 'corroborationFloor'], kind: 'number' },
+  { envVar: 'AION_BM25_ADMISSION_MODE', path: ['recall', 'bm25AdmissionMode'], kind: 'string' },
   {
     envVar: 'AION_RECALL_ENTITY_MATCH_THRESHOLD',
     path: ['recall', 'entityMatchThreshold'],
