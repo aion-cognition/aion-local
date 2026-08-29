@@ -1,17 +1,31 @@
+import js from '@eslint/js';
+import eslintConfigPrettier from 'eslint-config-prettier';
+import tseslint from 'typescript-eslint';
+
 import base from './base.js';
 import importsLayer from './imports.js';
 import tests from './tests.js';
 import typescript from './typescript.js';
 
 /**
- * The composed ruleset. Fully explicit: no preset or shared-config extends
- * anywhere in the chain; every active rule is named in one of the four files
- * below. Plugin packages are imported only for their rule implementations and
- * the parser. Formatting rules are absent by construction (Prettier owns
- * layout), so no conflict-disabling config is needed; the conflict check runs
- * as a script instead (see package.json lint:conflicts).
+ * The composed ruleset. First-party baselines are extended, not duplicated:
+ * @eslint/js recommended and typescript-eslint's strict + stylistic
+ * type-checked presets. Everything a third-party shared config would have
+ * supplied is owned explicitly in the four files here: base.js carries the
+ * Airbnb-guide selections, typescript.js the house tunings and additions,
+ * imports.js and tests.js the rest. The Prettier config comes last so any
+ * formatting-adjacent rule a baseline ever activates is switched off.
  *
  * Portable: no repo paths live here. Consumers supply file scoping, ignores,
  * and the type-aware parser options.
  */
-export default [base, typescript, importsLayer, tests];
+export default [
+  js.configs.recommended,
+  ...tseslint.configs.strictTypeChecked,
+  ...tseslint.configs.stylisticTypeChecked,
+  base,
+  typescript,
+  importsLayer,
+  tests,
+  eslintConfigPrettier,
+];

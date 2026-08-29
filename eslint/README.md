@@ -1,28 +1,31 @@
 # aion eslint ruleset
 
-A fully explicit ruleset in the Airbnb tradition, rebuilt for current
-JavaScript and TypeScript. Every active rule is named in these four files;
-nothing extends a preset or shared config. Plugin packages are imported only
-for rule implementations and the parser. Destined for extraction into its own
-library; nothing here references repo paths.
+A ruleset in the Airbnb tradition, rebuilt for current JavaScript and
+TypeScript. The philosophy: first-party baselines are extended, third-party
+guide content is owned explicitly. `@eslint/js` recommended and
+typescript-eslint's strict + stylistic type-checked presets arrive as
+extends and track their packages across upgrades; everything a shared config
+like eslint-config-airbnb would have supplied is written out in these files
+instead, so no third-party config package is a dependency. Destined for
+extraction into its own library; nothing here references repo paths.
 
 ## Layout
 
-- `base.js`: the JavaScript core. Airbnb's semantic canon, minus formatting
-  (Prettier's job) and minus the rules that aged out.
-- `typescript.js`: the TypeScript layer. The strict-type-checked and
-  stylistic-type-checked rule sets from typescript-eslint 8.68.0, extracted
-  and frozen explicitly, with house tunings replacing preset defaults inline,
-  plus the house additions.
+- `base.js`: the JavaScript core. Airbnb's semantic canon, hand-picked and
+  updated, minus formatting (Prettier's job) and minus the rules that aged
+  out.
+- `typescript.js`: house tunings that override the typescript-eslint preset
+  defaults, plus house additions the presets do not activate.
 - `imports.js`: import discipline via eslint-plugin-import-x.
 - `tests.js`: relaxations for tests, fixtures, and test support.
-- `index.js`: the composition, in order.
+- `index.js`: the composition. Baselines first, our layers after, the
+  Prettier conflict config last.
 
 ## Departures from Airbnb, on purpose
 
-- Formatting rules are absent wholesale: Prettier owns layout. The conflict
-  check runs `eslint-config-prettier`'s CLI as a script rather than importing
-  its config, since there are no formatting rules to disable.
+- Formatting rules are absent wholesale: Prettier owns layout, and
+  eslint-config-prettier closes the chain in case a baseline ever activates a
+  formatting-adjacent rule.
 - The for-of ban is dropped: iterators are the modern default. for-in stays
   banned.
 - `no-plusplus` is dropped.
@@ -46,17 +49,10 @@ library; nothing here references repo paths.
 - The factory-function ban stays a review-time rule: a name heuristic would
   false-positive on legitimate constructors, so it is not automated.
 
-## Regenerating the frozen TypeScript set
+## Upgrading the baselines
 
-```
-node --input-type=module -e "
-import tseslint from 'typescript-eslint';
-const merged = {};
-for (const cfg of [...tseslint.configs.strictTypeChecked, ...tseslint.configs.stylisticTypeChecked]) {
-  Object.assign(merged, cfg.rules ?? {});
-}
-console.log(JSON.stringify(merged, null, 2));"
-```
-
-Diff the output against `typescript.js` after a typescript-eslint upgrade and
-fold changes deliberately, never by re-extending.
+Preset changes arrive automatically with the packages, which is the point of
+extending them. After an eslint or typescript-eslint major upgrade, run the
+lint and read the release notes for preset changes; disagreements with a new
+preset rule get an explicit override in `typescript.js` (or `base.js`) with a
+comment saying why, never a fork of the preset.
