@@ -49,16 +49,16 @@ export type AdmissionReport = {
   readonly admitted: number;
   /** Measured by at least one method, and no measurement, exact hit or corroboration cleared. */
   readonly droppedBelowFloor: number;
-  /** Reached by traversal alone in a recall where nothing anchored the pack. */
-  readonly droppedUnanchored: number;
+  /** Reached by spreading activation alone, so no method measured it against the query. */
+  readonly droppedUnmeasured: number;
   readonly droppedDuplicateContent: number;
   /**
-   * Admitted, but bumped from a near-identical cluster that already filled its cap. A burst
-   * of near-duplicate episodes measured 29.5% of a pack's slots. Distinct from
-   * `droppedDuplicateContent`, which is exact text; this is the cluster crowding cap.
+   * Admitted, but bumped from a near-identical cluster that already filled its cap: the
+   * exercise measured a burst of near-duplicate episodes taking 29.5% of a pack's slots.
+   * Distinct from `droppedDuplicateContent`, which is exact text; this is the crowding cap.
    */
   readonly droppedNearDuplicate: number;
-  /** At least one item was admitted on its own evidence, which is what lets traversal extend it. */
+  /** At least one candidate cleared admission on its own evidence. */
   readonly anchored: boolean;
 };
 
@@ -91,8 +91,10 @@ function measurementKey(measurement: Measurement): string {
  * what filled the off-topic packs measured before this gate, and normalizing that score to
  * the best hit of the same query made the top of every list read 1.00.
  *
- * Traversal is judged by the caller: a node the spread reached has no measurement of its own
- * and extends a pack something else anchored.
+ * Traversal is none of them either, and no caller may make it one. A node the spread reached
+ * carries no measurement against the query, so it cannot be admitted on what a different node
+ * measured: an off-topic pack fills to budget the moment one incidental hit is allowed to
+ * unlock everything activation touched.
  */
 export function admitsOnEvidence(
   measurements: readonly Measurement[],
@@ -127,4 +129,22 @@ export function admitsOnEvidence(
   }
 
   return alone || corroborating.size >= 2;
+}
+
+/**
+ * The strongest cosine any method measured for one item, and zero when none did. This is the
+ * only number about an item that is comparable between queries, so it is the one a pack may
+ * print as a confidence. An item admitted by an exact lexical or entity hit alone reports
+ * zero: a literal match is evidence rather than a measurement, and inventing a number for it
+ * would put it on a scale it was never on.
+ */
+export function absoluteRelevance(measurements: readonly Measurement[]): number {
+  let best = 0;
+  for (const measurement of measurements) {
+    if (!COSINE_METHODS.has(measurement.method)) {
+      continue;
+    }
+    best = Math.max(best, measurement.relevance);
+  }
+  return best;
 }

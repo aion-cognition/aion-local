@@ -1,4 +1,4 @@
-import type { Driver } from 'neo4j-driver';
+import neo4j, { type Driver } from 'neo4j-driver';
 import { runRead } from './connection.js';
 import { VectorIndexDimensionMismatchError, VectorIndexMissingError } from './errors.js';
 
@@ -88,4 +88,29 @@ export async function countGraphElements(driver: Driver): Promise<GraphCounts> {
     (row) => ({ nodes: row['nodes'] as number, relationships: row['relationships'] as number }),
   );
   return rows[0] ?? { nodes: 0, relationships: 0 };
+}
+
+/**
+ * Every string property of every node, in pages. The redaction residue check is the only
+ * caller: secret detection is deterministic, so re-running the current rules over what is
+ * already stored is the one way to find material an older, leakier ruleset wrote. Paged and
+ * bounded because this reads the whole substrate and runs from `aion doctor`.
+ */
+export async function readStoredText(
+  driver: Driver,
+  limit: number,
+): Promise<readonly { readonly id: string; readonly text: string }[]> {
+  return runRead(
+    driver,
+    [
+      'MATCH (n)',
+      'WITH n, [k IN keys(n) WHERE n[k] IS :: STRING | n[k]] AS strings',
+      'WHERE size(strings) > 0',
+      'RETURN n.id AS id, reduce(joined = \'\', s IN strings | joined + \' \' + s) AS text',
+      'LIMIT $limit',
+    ].join('\n'),
+    // Neo4j rejects a JS number here: it arrives as a float and LIMIT wants an integer.
+    { limit: neo4j.int(Math.trunc(limit)) },
+    (row) => ({ id: String(row.id ?? ''), text: String(row.text ?? '') }),
+  );
 }

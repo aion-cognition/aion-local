@@ -118,6 +118,7 @@ async function push(input: PushInput): Promise<string> {
       logger,
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
       lanes: new LaneAssigner(DEFAULTS.lanes),
+      workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
     },
     {
       observations: [input.observation],
@@ -231,19 +232,22 @@ describe('gate item 2: an item only traversal connects to the query', () => {
     };
   }
 
-  it('surfaces prior-session episodes over the FOLLOWS chain, with the path in the rationale', async () => {
+  /**
+   * The FOLLOWS chain is still what makes a prior session reachable; what it no longer does is
+   * admit. A memory the spread reached and no leg measured cannot be told apart from the
+   * activation noise that filled the exercise's off-topic packs, so cross-session reach shows
+   * up in the report rather than in the pack, and an older episode surfaces when a retrieval
+   * leg measured it as well.
+   */
+  it('reaches prior sessions over the FOLLOWS chain without admitting on the reach alone', async () => {
     const pack = await handleRecall(narrowSeeding(), { query: QUERY }, {
       identity: READ_SESSION,
       now: RECALLED_AT,
     });
 
-    const traversed = (pack.episodes ?? []).filter((item) =>
-      priorSessionEpisodeIds.includes(item.id),
-    );
-    expect(traversed.length).toBeGreaterThan(0);
-    for (const item of traversed) {
-      expect(item.rationale.method).toBe('activation');
-      expect(item.rationale.path).toContain('-[FOLLOWS]->');
+    expect(pack.metadata.admission.dropped_unmeasured).toBeGreaterThan(0);
+    for (const item of pack.episodes ?? []) {
+      expect(item.rationale.method).not.toBe('activation');
     }
   });
 

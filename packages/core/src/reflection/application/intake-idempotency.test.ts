@@ -1,0 +1,303 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import { openLogger } from '../../infrastructure/logging/logger.js';
+import type { Vector } from '../../infrastructure/providers/types.js';
+import { SessionManager } from '../../session/session-manager.js';
+import { ReflectionQueueClaimant } from '../../infrastructure/sqlite/claim.js';
+import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { enqueueReflectionJob, listReflectionJobs } from '../../infrastructure/sqlite/reflection-queue.js';
+import { ReflectionDispatch, type ReflectionJobSignal } from './dispatch.js';
+import { ReflectionNotStoredError } from './errors.js';
+import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
+import { LaneAssigner } from './lanes.js';
+import { attachContentVectors, findPendingVectorNodes } from './vectors.js';
+import { FakeGraph } from '../test-support/fake-graph.fixture.js';
+
+const MEMBER_ID = 'member-1';
+const WORKSPACE_ID = 'workspace-1';
+const EMBED_DIMENSION = 8;
+
+/** Small enough that a handful of pushes crosses it, so the backstop is testable in a unit. */
+const LANE_LIMITS = {
+  arrivalWindowMs: 60_000,
+  sessionArrivalMax: 2,
+  globalArrivalMax: 3,
+  hotSessionArrivalMax: 1,
+};
+
+const AWS_KEY = 'AKIAIOSFODNN7EXAMPLE';
+const GITHUB_TOKEN = 'ghp_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8';
+
+const PAYLOAD = {
+  turns: [
+    { role: 'user', text: `deploy the ingestion service with ${AWS_KEY}` },
+    { role: 'assistant', text: 'running the deploy now' },
+  ],
+  tool_executions: [
+    {
+      tool: 'bash',
+      input: 'npm run deploy',
+      status: 'error',
+      output: { stderr: `auth failed for ${GITHUB_TOKEN}` },
+      duration_ms: 8200,
+    },
+  ],
+  observations: ['We keyed the sync on id_slug because the external ids churn'],
+  summary: 'failed deploy of the ingestion service',
+};
+
+let graph: FakeGraph;
+let db: SqliteHandle;
+let dataDir: string;
+let signals: ReflectionJobSignal[];
+let embed: ReturnType<typeof vi.fn>;
+let generate: ReturnType<typeof vi.fn>;
+let deps: ReflectionIntakeDeps;
+
+function fakeVectors(texts: readonly string[]): Vector[] {
+  return texts.map((_, index) =>
+    Array.from({ length: EMBED_DIMENSION }, (__, slot) => (index + 1) / (slot + 1)),
+  );
+}
+
+beforeEach(() => {
+  graph = new FakeGraph();
+  graph.seedNode(MEMBER_ID, ['Member', 'Entity', 'AionNode']);
+  graph.seedNode(WORKSPACE_ID, ['Workspace', 'Entity', 'AionNode']);
+
+  dataDir = mkdtempSync(join(tmpdir(), 'aion-reflection-intake-'));
+  db = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
+
+  signals = [];
+  const dispatch = new ReflectionDispatch();
+  dispatch.subscribe((signal) => {
+    signals.push(signal);
+  });
+
+  embed = vi.fn((texts: readonly string[]) => Promise.resolve(fakeVectors(texts)));
+  generate = vi.fn(() => Promise.reject(new Error('intake must never call generate')));
+
+  deps = {
+    driver: graph.driver,
+    db,
+    sessions: new SessionManager(graph.driver, { memberId: MEMBER_ID, workspaceId: WORKSPACE_ID }),
+    provider: { embed, generate } as unknown as ReflectionIntakeDeps['provider'],
+    dispatch,
+    logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
+    entropyThreshold: 4.5,
+    lanes: new LaneAssigner(LANE_LIMITS),
+    workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+  };
+});
+
+afterEach(() => {
+  db.close();
+  rmSync(dataDir, { recursive: true, force: true });
+});
+
+function embeddedTexts(call: number): string {
+  return (embed.mock.calls[call]?.[0] as readonly string[]).join('\n');
+}
+
+/**
+ * Intake's idempotency and its failure modes: a payload the substrate already holds, the
+ * order a write and its embedding land in, and what happens when a dependency is down.
+ * Validation, redaction, storage and lanes are `intake.test.ts`.
+ */
+
+describe('reflection intake dedupe', () => {
+  it('returns the original episode id for the same payload in the same session', async () => {
+    const first = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+    const nodesAfterFirst = graph.nodes.size;
+
+    const second = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+
+    expect(second.episode_id).toBe(first.episode_id);
+    expect(second.queued).toBe(true);
+    expect(graph.nodes.size).toBe(nodesAfterFirst);
+    expect(listReflectionJobs(db)).toHaveLength(1);
+    expect(signals).toHaveLength(1);
+    expect(embed).toHaveBeenCalledTimes(1);
+  });
+
+  // The member lock serializes session creation, the session lock serializes intake for
+  // that session; the ordering that makes each work is proven against a real server in the
+  // integration suites.
+  it('takes the session write lock while storing the episode', async () => {
+    await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+
+    expect(graph.locked).toEqual([MEMBER_ID, 'session-a']);
+  });
+
+  it('queues the episode again when its job row is gone but the episode is not', async () => {
+    const first = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+
+    // The job ran to completion, which discards the row. The episode is still the record.
+    const claimant = new ReflectionQueueClaimant();
+    const claimed = claimant.claimNext(db);
+    expect(claimant.complete(db, claimed?.id ?? '')).toBe(true);
+
+    const second = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+
+    expect(second.episode_id).toBe(first.episode_id);
+    expect(listReflectionJobs(db)).toHaveLength(1);
+    expect(signals).toHaveLength(2);
+  });
+
+  it('stores the same payload again when it arrives in a different session', async () => {
+    const first = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+    const second = await handleReflection(deps, PAYLOAD, { identity: 'session-b' });
+
+    expect(second.episode_id).not.toBe(first.episode_id);
+    expect(listReflectionJobs(db)).toHaveLength(2);
+  });
+
+  it('stores a new episode when any content field changes', async () => {
+    const first = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+    const second = await handleReflection(
+      deps,
+      { ...PAYLOAD, observations: ['a different conclusion'] },
+      { identity: 'session-a' },
+    );
+
+    expect(second.episode_id).not.toBe(first.episode_id);
+  });
+});
+
+describe('reflection intake store-before-embed order', () => {
+  it('has the episode committed and the job queued before it embeds anything', async () => {
+    let jobsAtEmbedTime = -1;
+    let episodesAtEmbedTime = -1;
+    embed.mockImplementationOnce((texts: readonly string[]) => {
+      jobsAtEmbedTime = listReflectionJobs(db).length;
+      episodesAtEmbedTime = graph.nodesWithLabel('Episode').length;
+      return Promise.resolve(fakeVectors(texts));
+    });
+
+    await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+
+    expect(episodesAtEmbedTime).toBe(1);
+    expect(jobsAtEmbedTime).toBe(1);
+    expect(signals).toHaveLength(1);
+  });
+
+  it('attaches a vector to the episode and to every turn', async () => {
+    const result = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+
+    const vectored = graph
+      .nodesWithLabel('Memory')
+      .filter((node) => Array.isArray(node.properties.content_vec));
+
+    expect(vectored.map((node) => node.id)).toContain(result.episode_id);
+    expect(vectored).toHaveLength(3);
+  });
+});
+
+/**
+ * A dead embedder no longer costs the experience: the write transaction commits and the
+ * queue row lands before anything is embedded, so the outage costs the vectors alone and
+ * the caller is told the reflection is queued, because it is. A `:Memory` node without its
+ * `content_vec` is the pending marker the worker's drain resolves later.
+ *
+ * An unreachable graph still refuses. There is nowhere to put the experience, so an agent
+ * told "queued" would never send it again.
+ */
+describe('reflection intake when a dependency is down', () => {
+  function unreachableDriver(error: Error): ReflectionIntakeDeps['driver'] {
+    return {
+      executeQuery: () => Promise.reject(error),
+      session: () => {
+        throw error;
+      },
+    } as unknown as ReflectionIntakeDeps['driver'];
+  }
+
+  function depsWith(driver: ReflectionIntakeDeps['driver']): ReflectionIntakeDeps {
+    return {
+      ...deps,
+      driver,
+      sessions: new SessionManager(driver, { memberId: MEMBER_ID, workspaceId: WORKSPACE_ID }),
+    };
+  }
+
+  async function failureOf(intake: ReflectionIntakeDeps): Promise<unknown> {
+    return handleReflection(intake, PAYLOAD, { identity: 'session-a' }).then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+  }
+
+  it('stores, queues, and answers normally when the embedder is down, with vectors pending', async () => {
+    embed.mockRejectedValueOnce(new Error('fetch failed'));
+
+    const result = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+
+    expect(result.queued).toBe(true);
+
+    const episode = graph.nodes.get(result.episode_id);
+    expect(episode?.properties.content_vec).toBeUndefined();
+    expect(graph.nodesWithLabel('Turn')).toHaveLength(2);
+    expect(graph.edgesOfType('PARTICIPATES_IN')).toHaveLength(3);
+    expect(listReflectionJobs(db)).toHaveLength(1);
+    expect(signals).toHaveLength(1);
+  });
+
+  it('leaves every pending node findable, so a later drain can backfill it', async () => {
+    embed.mockRejectedValueOnce(new Error('fetch failed'));
+
+    const result = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+    const pending = await findPendingVectorNodes(graph.driver, 10);
+
+    expect(pending.map((node) => node.id)).toContain(result.episode_id);
+    expect(pending).toHaveLength(3);
+
+    const attached = await attachContentVectors(graph.driver, deps.provider, pending);
+
+    expect(attached).toHaveLength(3);
+    expect(await findPendingVectorNodes(graph.driver, 10)).toEqual([]);
+    expect((graph.nodes.get(result.episode_id)?.properties.content_vec as number[]).length).toBe(
+      EMBED_DIMENSION,
+    );
+  });
+
+  it('names the graph when no query could reach it', async () => {
+    const unreachable = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:7687'), {
+      code: 'ServiceUnavailable',
+    });
+
+    const error = await failureOf(depsWith(unreachableDriver(unreachable)));
+
+    expect(error).toBeInstanceOf(ReflectionNotStoredError);
+    expect((error as ReflectionNotStoredError).stage).toBe('graph');
+    expect((error as Error).message).toContain('nothing was queued');
+    expect(listReflectionJobs(db)).toEqual([]);
+  });
+
+  it('names the graph when the connection pool timed out rather than refusing', async () => {
+    const timedOut = Object.assign(
+      new Error('Connection acquisition timed out in 10000 ms. Pool status: Active conn count = 0'),
+      { code: 'N/A' },
+    );
+
+    const error = await failureOf(depsWith(unreachableDriver(timedOut)));
+
+    expect((error as ReflectionNotStoredError).stage).toBe('graph');
+  });
+
+  // A statement the server answered and refused is a defect in this build, not an outage,
+  // and relabelling it "send it again once the service is back" would send the caller in
+  // circles.
+  it('passes a rejection the graph itself made through unchanged', async () => {
+    const rejected = Object.assign(new Error('constraint violated'), {
+      code: 'Neo.ClientError.Schema.ConstraintValidationFailed',
+    });
+
+    const error = await failureOf(depsWith(unreachableDriver(rejected)));
+
+    expect(error).toBe(rejected);
+    expect(error).not.toBeInstanceOf(ReflectionNotStoredError);
+  });
+});

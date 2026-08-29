@@ -1,12 +1,14 @@
 import type { AionMcpService } from './service.js';
 
 /**
- * The backstop on a clock for a client whose close() never sends DELETE.
- * `AionMcpService.closeIdleSessions` decides which sessions qualify; this only keeps a tick
- * reaching it, the same split `IdleNarrativeSweeper` (core) uses for the idle narrative
- * rule. Sweeping at half the idle window bounds how stale a session can get past its
- * deadline before something notices; the floor keeps a small configured window from turning
- * the sweep into a spin.
+ * The session-close trigger that actually fires, on a clock. A standard MCP client's
+ * `close()` aborts its own transport without issuing the DELETE the hook depends on, so this
+ * is the primary path and the hook is the fast case when a client does send one.
+ * `AionMcpService.closeIdleSessions` decides which sessions
+ * qualify; this only keeps a tick reaching it, the same split `IdleNarrativeSweeper` (core)
+ * uses for the idle narrative rule. Sweeping at half the idle window bounds how stale a
+ * session can get past its deadline before something notices; the floor keeps a small
+ * configured window from turning the sweep into a spin.
  */
 
 export const MIN_SESSION_IDLE_SWEEP_INTERVAL_MS = 60_000;

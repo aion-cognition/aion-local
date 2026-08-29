@@ -79,11 +79,10 @@ export type AionMcpServiceOptions = {
   readonly onSessionClosed?: (sessionId: string) => void;
   /**
    * `/health` used to report only `{status, sessions, descriptions_version}` while 4,000+
-   * jobs sat pending. `queueLagSnapshot` (`@aion/core`) is SQLite-only, no Neo4j and no
-   * Ollama, so calling it on every liveness probe stays cheap; the check the doctor.ts
-   * comment documents (never touching the graph or the model) is unchanged. Absent, the
-   * fields it would fill are simply omitted, which is what every construction that
-   * predates it gets.
+   * jobs sat pending. `queueLagSnapshot` (`@aion/core`) is SQLite-only — no Neo4j, no Ollama
+   * — so calling it on every liveness probe stays cheap; the check the doctor.ts comment
+   * documents (never touching the graph or the model) is unchanged. Absent, the fields it
+   * would fill are simply omitted, which is what every construction that predates it gets.
    */
   readonly queueLag?: () => QueueLagSnapshot;
 };
@@ -235,6 +234,9 @@ export class AionMcpService {
       queue_exhausted: snapshot.exhausted,
       reinforcement_dropped: snapshot.reinforcementDropped,
       enrichment_lag_p95_ms: snapshot.p95EnrichmentLagMs ?? null,
+      cue_degraded_rate: snapshot.cueDegradedRate ?? null,
+      supersession_proposals_open: snapshot.supersessionProposalsOpen,
+      entity_merge_proposals_open: snapshot.entityMergeProposalsOpen,
     };
   }
 
@@ -357,7 +359,10 @@ export class AionMcpService {
   }
 
   /**
-   * The backstop: a session past `idleMs` since its last request closes the way a DELETE
+   * The path most sessions actually close by. A client's `close()` aborts its transport
+   * locally and issues no DELETE, so waiting for the hook leaves the session open until the
+   * process ends: a session past `idleMs` since its
+   * last request closes the way a DELETE
    * would (`session.server.close()` runs the same transport-close chain `#forget` reaches
    * from), independent of whether the client ever sends one. `SessionIdleSweeper` is what
    * puts this on a clock; this method only decides which sessions qualify at the given

@@ -50,7 +50,7 @@ breakdown, and a token estimate.
 A pack says what it is short of. When cue extraction, embedding, or the graph degraded,
 when spreading activation stopped on its budget, or when the calling session has episodes
 that are stored but not yet enriched, `rendered_text` opens with one plain line naming all
-of it — `note: degraded cue extraction (timeout); 2 recent episodes not yet enriched` — so
+of it (`note: degraded cue extraction (timeout); 2 recent episodes not yet enriched`), so
 a client reading only the text block sees the same honesty a client reading the metadata
 does.
 
@@ -74,7 +74,7 @@ sets so its episodes stop competing with live turns. Everything else is `interac
 is claimed strictly first. An arrival-rate backstop demotes a session that pushes faster than
 `AION_LANE_SESSION_ARRIVAL_MAX` episodes per `AION_LANE_ARRIVAL_WINDOW_MS`, and tightens
 every session's allowance to `AION_LANE_HOT_SESSION_ARRIVAL_MAX` once arrivals across all
-sessions pass `AION_LANE_GLOBAL_ARRIVAL_MAX` — a flood of fresh sessions is the shape a
+sessions pass `AION_LANE_GLOBAL_ARRIVAL_MAX`: a flood of fresh sessions is the shape a
 per-session counter cannot see. An explicit `interactive` is a preference, not an exemption.
 
 ## CLI
@@ -150,7 +150,7 @@ Every runtime knob is an `AION_*` environment variable, cataloged in
 A few examples:
 
 - `AION_NEO4J_URI`: Bolt endpoint (`bolt://neo4j:7687` by default)
-- `AION_VECTOR_ADMISSION_FLOOR`: the calibrated cosine an item must measure to reach a pack on its own (`0.50`)
+- `AION_VECTOR_ADMISSION_FLOOR`: the calibrated cosine an item must measure to reach a pack on its own (`0.60`)
 - `AION_MCP_PORT`: the port the MCP server listens on (`8765`)
 
 ### Reflection concurrency
@@ -160,7 +160,7 @@ runs at once, sharing one dispatch subscription and one queue claimant. Raising 
 does not raise throughput: the recall cue model, the reflection worker, and the idle
 narrative sweeper all call the same host Ollama, so extra workers just queue behind the one
 model each is waiting on. Set `OLLAMA_NUM_PARALLEL` on the **host** Ollama process (not a
-compose variable — Ollama runs on the host, not in a container) to raise its per-model
+compose variable; Ollama runs on the host, not in a container) to raise its per-model
 request concurrency alongside `AION_WORKER_COUNT`, for example:
 
 ```
@@ -176,9 +176,12 @@ backbone), experience capture (reflection intake: validate, redact, dedupe, stor
 bitemporally), recall with the full MCP surface (four seed strategies, spreading activation,
 RRF fusion, MemoryPack assembly), and the reflection pipeline that turns a stored episode
 into entities, associations, cognitive structure, typed relationships, supersession
-judgments, and a session narrative. 974/974 tests pass; `aion doctor` runs 8 checks,
-all green against a live stack. The full build history, including what review found in each
-phase, is in [docs/build-ledger.md](docs/build-ledger.md).
+judgments, and a session narrative. 1,135 unit tests pass deterministically; the 331-test
+integration suite runs against a live Neo4j and host Ollama, and two tests whose assertion
+turns on the reflect model's live judgment (causal-edge direction, contradiction detection)
+are known to flake under Ollama's sampling rather than the pipeline under test. `aion doctor`
+runs 13 checks against a live stack. The full build history, including what review found in
+each phase, is in [docs/build-ledger.md](docs/build-ledger.md).
 
 P4 and later are not yet built: Hebbian edge plasticity (recall and reflection both queue
 the signals; nothing flushes them yet), context resonance, and maintenance passes. Their

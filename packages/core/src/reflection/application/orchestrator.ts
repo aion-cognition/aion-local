@@ -148,8 +148,8 @@ export class ReflectionOrchestrator {
   }
 
   /**
-   * The per-stage ledger gate. A stage whose key is already applied is not entered: `run` is
-   * never called, so a retry cannot re-mint what an earlier attempt already wrote.
+   * The per-stage ledger gate. A stage whose key is already applied is not entered —
+   * `run` is never called — so a retry cannot re-mint what an earlier attempt already wrote.
    * The key is set the moment the stage finishes without failing, `ok` or `skipped` alike,
    * mirroring `shouldMarkApplied`'s view that only `failed` leaves something to retry.
    */

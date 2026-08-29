@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { assemblePack, openLogger, type BucketCaps, type Logger } from '@aion/core';
+import { admittedAll } from '@aion/core/recall/domain/test-support/admission.fixture.js';
 import { MemoryPackSchema, type Cue, type MemoryPack, type StageTimingsMs } from '@aion/protocol';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -27,7 +28,7 @@ type Call = { readonly tool: string; readonly identity: string };
 const calls: Call[] = [];
 
 function emptyPack(): MemoryPack {
-  return assemblePack({ items: [], caps: CAPS, tokenBudget: 1200, cues: CUES, timings: TIMINGS });
+  return assemblePack({ items: [], admission: admittedAll(0), caps: CAPS, tokenBudget: 1200, cues: CUES, timings: TIMINGS });
 }
 
 const backend: ToolBackend = {

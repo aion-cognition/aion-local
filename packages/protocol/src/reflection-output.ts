@@ -10,8 +10,8 @@ import { ReflectionLaneSchema } from './reflection-input.js';
  * signal that its own memory is now queued behind live traffic.
  *
  * `pending_ahead` is how many unclaimed interactive-lane jobs sat ahead of this one at
- * enqueue time. The ack always said `queued: true` with no sense of queue depth.
- * Optional so an ack from a build that predates it still parses.
+ * enqueue time (the ack always said `queued: true` with no sense of how far behind
+ * that queue actually was). Optional so an ack from a build that predates it still parses.
  */
 export const ReflectionOutputSchema = z.strictObject({
   episode_id: z.string().min(1),

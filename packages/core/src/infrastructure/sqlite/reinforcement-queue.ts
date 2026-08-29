@@ -46,21 +46,29 @@ export function reinforcementQueueDroppedCount(db: SqliteHandle): number {
  * Oldest-first past `cap`. A separate statement from the insert rather than one transaction:
  * a crash between the two leaves the table at most one row over cap, which the next enqueue
  * call trims away, so nothing but a rolling window is at stake.
+ *
+ * The occupancy check is `MAX(rowid) - MIN(rowid)`, two O(1) index lookups, and not
+ * `COUNT(*)`, which is a full scan the caller would pay on every insert: recall enqueues
+ * roughly 45 of these inline, so at a steady-state 50,000 rows that is 45 full scans per
+ * recall on the interactive path. The span equals the count because the only delete in this
+ * module is this one and it always takes the oldest rows; a future arbitrary delete would
+ * make the span an overestimate and cost the window a few extra rows, never correctness.
  */
 function trimToCapacity(db: SqliteHandle, cap: number): void {
-  const { count } = db.prepare('SELECT COUNT(*) AS count FROM reinforcement_queue').get() as {
-    count: number;
-  };
-  const overflow = count - cap;
+  const bounds = db
+    .prepare('SELECT MIN(rowid) AS lo, MAX(rowid) AS hi FROM reinforcement_queue')
+    .get() as { lo: number | null; hi: number | null };
+  if (bounds.lo === null || bounds.hi === null) {
+    return;
+  }
+  const overflow = bounds.hi - bounds.lo + 1 - cap;
   if (overflow <= 0) {
     return;
   }
-  db.prepare(
-    `DELETE FROM reinforcement_queue WHERE rowid IN (
-       SELECT rowid FROM reinforcement_queue ORDER BY rowid ASC LIMIT ?
-     )`,
-  ).run(overflow);
-  setMeta(db, DROPPED_COUNT_META_KEY, String(reinforcementQueueDroppedCount(db) + overflow));
+  const dropped = db
+    .prepare('DELETE FROM reinforcement_queue WHERE rowid < ?')
+    .run(bounds.lo + overflow).changes;
+  setMeta(db, DROPPED_COUNT_META_KEY, String(reinforcementQueueDroppedCount(db) + dropped));
 }
 
 /**

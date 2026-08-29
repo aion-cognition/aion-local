@@ -74,10 +74,10 @@ export type ReflectionSummary = {
 };
 
 /**
- * A per-episode ledger key gates the whole pipeline and nothing smaller. A stage with no
- * ledger of its own re-runs its full extraction on every retry of the run it belongs to,
- * and each pass MERGEs a fresh set of near-duplicate nodes, because its only idempotency is
- * a content hash over LLM output that never collides twice.
+ * The whitepaper's per-episode ledger key only ever gated the whole pipeline. A stage
+ * with no ledger of its own (`cognitive`, historically) re-runs its full extraction on every
+ * retry of the run it belongs to, and each pass MERGEs a fresh set of near-duplicate nodes
+ * because its only idempotency is a content hash over LLM output that never collides twice.
  * `reflection:stage:{stageName}:{episodeId}` closes that gap one level down: the orchestrator
  * marks it the moment a stage finishes without failing and skips the stage entirely, without
  * calling `run`, when the key is already there. A retry therefore re-enters only the stages

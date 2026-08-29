@@ -208,7 +208,7 @@ type QueueDeps = {
 
 function renderCounts(deps: QueueDeps, flags: QueueFlags): void {
   const counts = countQueueJobs(deps.db, filterOf(flags), deps.config.operational.workerMaxAttempts);
-  const byLane = countQueueJobsByLane(deps.db);
+  const byLane = countQueueJobsByLane(deps.db, deps.config.operational.workerMaxAttempts);
   const lanes = REFLECTION_LANES.map((lane) => `${lane}=${String(byLane.get(lane) ?? 0)}`).join(' ');
   deps.write('');
   deps.write(
