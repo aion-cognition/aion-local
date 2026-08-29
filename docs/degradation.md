@@ -169,6 +169,36 @@ every other check depends on. Live, `selectSeeds`' error log line above names it
 process life (`packages/core/src/infrastructure/graph/connection.ts:143-193`); its pool
 reconnects on its own once Neo4j answers again.
 
+### Context resonance failure (graph error on the second pass)
+
+**Trigger.** The second pass's graph reads, the context-vector fetch that builds the centroid
+or the search against the context index, fail after the first pass has already produced a
+pack.
+
+**What happens.** `resonate` (`packages/core/src/recall/application/resonance.ts:147-190`)
+wraps both reads in one try/catch. A graph error there is caught, logged as `context resonance
+failed; the pack keeps its first-pass answer` (`resonance.ts:188`), and returns `{items: [],
+skipped: 'unavailable'}` instead of propagating. `handleRecall` logs the skip reason on its own
+`recall served` line (`recall.ts:392`, field `resonanceSkipped`) but does not add it to
+`degradations` (`recall.ts:275-284`), the list `metadata.degraded` is built from.
+
+**What the caller sees.** The pack the first pass already assembled, with an empty `resonant`
+bucket and no `metadata.degraded` entry naming resonance. This is the one rung on this ladder
+that stays silent to the caller by design: the module comment calls swallowing the error the
+right trade ("losing a whole recall to the associative stage would be the wrong trade every
+time"), and the cost is that the same empty resonant bucket looks identical whether the query
+genuinely had no associative match or the graph read failed underneath it.
+
+**Diagnose.** Not visible over MCP. Live, the service log's `resonanceSkipped: "unavailable"`
+field on the `recall served` line is the only signal; `aion doctor`'s `neo4j-bolt` check
+catches the underlying outage if it is still live when doctor runs.
+
+**Recovers.** Automatically, next call, once the graph answers again. No state to reset.
+
+Verified by the unit suite, not live-induced: `resonance.test.ts:134-143` fails the driver's
+`executeQuery` call and asserts `skipped: 'unavailable'` with an empty item list and nothing
+thrown past `resonate`.
+
 ### Neo4j down: reflection
 
 **Trigger.** Same outage, on the write path, for a session whose identity has not been
