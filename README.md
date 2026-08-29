@@ -150,7 +150,7 @@ Every runtime knob is an `AION_*` environment variable, cataloged in
 A few examples:
 
 - `AION_NEO4J_URI`: Bolt endpoint (`bolt://neo4j:7687` by default)
-- `AION_VECTOR_ADMISSION_FLOOR`: the calibrated cosine an item must measure to reach a pack on its own (`0.50`)
+- `AION_VECTOR_ADMISSION_FLOOR`: the calibrated cosine an item must measure to reach a pack on its own (`0.60`)
 - `AION_MCP_PORT`: the port the MCP server listens on (`8765`)
 
 ### Reflection concurrency
@@ -176,9 +176,12 @@ backbone), experience capture (reflection intake: validate, redact, dedupe, stor
 bitemporally), recall with the full MCP surface (four seed strategies, spreading activation,
 RRF fusion, MemoryPack assembly), and the reflection pipeline that turns a stored episode
 into entities, associations, cognitive structure, typed relationships, supersession
-judgments, and a session narrative. 974/974 tests pass; `aion doctor` runs 8 checks,
-all green against a live stack. The full build history, including what review found in each
-phase, is in [docs/build-ledger.md](docs/build-ledger.md).
+judgments, and a session narrative. 1,135 unit tests pass deterministically; the 331-test
+integration suite runs against a live Neo4j and host Ollama, and two tests whose assertion
+turns on the reflect model's live judgment (causal-edge direction, contradiction detection)
+are known to flake under Ollama's sampling rather than the pipeline under test. `aion doctor`
+runs 13 checks against a live stack. The full build history, including what review found in
+each phase, is in [docs/build-ledger.md](docs/build-ledger.md).
 
 P4 and later are not yet built: Hebbian edge plasticity (recall and reflection both queue
 the signals; nothing flushes them yet), context resonance, and maintenance passes. Their
