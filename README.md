@@ -123,6 +123,22 @@ A few examples:
 - `AION_MIN_RELEVANCE`: the relevance floor a fused item must clear to reach a pack (`0.35`)
 - `AION_MCP_PORT`: the port the MCP server listens on (`8765`)
 
+### Reflection concurrency
+
+`AION_WORKER_COUNT` (default `1`) sets how many episodes the reflection worker claims and
+runs at once, sharing one dispatch subscription and one queue claimant. Raising it alone
+does not raise throughput: the recall cue model, the reflection worker, and the idle
+narrative sweeper all call the same host Ollama, so extra workers just queue behind the one
+model each is waiting on. Set `OLLAMA_NUM_PARALLEL` on the **host** Ollama process (not a
+compose variable — Ollama runs on the host, not in a container) to raise its per-model
+request concurrency alongside `AION_WORKER_COUNT`, for example:
+
+```
+OLLAMA_NUM_PARALLEL=2 ollama serve
+```
+
+See `docs/degradation.md` for the measured cost of shared-Ollama contention.
+
 ## Status
 
 P0 through P3 are built and gated: substrate provisioning (`init`, schema migrations, the

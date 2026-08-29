@@ -100,7 +100,7 @@ export function reflectionStages(config: Config): readonly ReflectionStage[] {
       maxNeighbors: reflection.maxContradictionNeighbors,
       maxJudgments: reflection.maxContradictionJudgments,
     }),
-    new ReinforcementEnqueueStage(),
+    new ReinforcementEnqueueStage({ reinforcementQueueCap: config.sqlite.reinforcementQueueCap }),
     new ContextVectorStage(),
     new SessionNarrativeStage(narrativeOptions(config)),
   ];
@@ -198,7 +198,12 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
         logger.error({ err, jobId: signal.jobId }, 'reflection dispatch listener failed');
       },
     });
-    const sideEffects = new RecallSideEffects(driver, store.db, logger);
+    const sideEffects = new RecallSideEffects(
+      driver,
+      store.db,
+      logger,
+      config.sqlite.reinforcementQueueCap,
+    );
 
     const recall: RecallDeps = {
       driver,

@@ -23,7 +23,8 @@ export type Knob = {
  * P3's two plan-pinned names (AION_SUPERSEDE_AUTO_CONFIDENCE, AION_ASSOC_SEMANTIC_THRESHOLD)
  * are the same case and keep their pinned spelling inside the `reflection` group. The
  * worker's knobs live under `operational` and read AION_WORKER_*, which is where
- * AION_WORKER_COUNT already was.
+ * AION_WORKER_COUNT already was. AION_REINFORCEMENT_QUEUE_CAP is the fix-round plan's pinned
+ * name and keeps that spelling rather than AION_SQLITE_REINFORCEMENT_QUEUE_CAP.
  */
 export const KNOB_REGISTRY: readonly Knob[] = [
   { envVar: 'AION_NEO4J_URI', path: ['neo4j', 'uri'], kind: 'string' },
@@ -223,6 +224,11 @@ export const KNOB_REGISTRY: readonly Knob[] = [
   { envVar: 'AION_MAINTENANCE_TIER3', path: ['maintenance', 'tier3'], kind: 'boolean' },
 
   { envVar: SQLITE_PATH_ENV_VAR, path: ['sqlite', 'path'], kind: 'string' },
+  {
+    envVar: 'AION_REINFORCEMENT_QUEUE_CAP',
+    path: ['sqlite', 'reinforcementQueueCap'],
+    kind: 'number',
+  },
 
   { envVar: 'AION_DATA_DIR', path: ['operational', 'dataDir'], kind: 'string' },
   { envVar: 'AION_MCP_PORT', path: ['operational', 'mcpPort'], kind: 'number' },

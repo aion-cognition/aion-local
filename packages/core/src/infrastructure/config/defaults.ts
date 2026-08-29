@@ -1,5 +1,6 @@
 import { DEFAULT_LOG_FILE, DEFAULT_LOG_LEVEL } from '../logging/logger.js';
 import { DEFAULT_SQLITE_PATH } from '../sqlite/database.js';
+import { DEFAULT_REINFORCEMENT_QUEUE_CAP } from '../sqlite/reinforcement-queue.js';
 import type { Config } from './schema.js';
 
 /**
@@ -141,6 +142,7 @@ export const DEFAULTS: Config = {
   },
   sqlite: {
     path: DEFAULT_SQLITE_PATH,
+    reinforcementQueueCap: DEFAULT_REINFORCEMENT_QUEUE_CAP,
   },
   operational: {
     dataDir: '/data',

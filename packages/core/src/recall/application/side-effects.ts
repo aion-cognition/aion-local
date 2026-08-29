@@ -3,7 +3,10 @@ import { recordAccess } from '../../infrastructure/graph/access-tracking.js';
 import { isTimeTravel } from '../../infrastructure/graph/read-modes.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { enqueueReinforcementSignal } from '../../infrastructure/sqlite/reinforcement-queue.js';
+import {
+  DEFAULT_REINFORCEMENT_QUEUE_CAP,
+  enqueueReinforcementSignal,
+} from '../../infrastructure/sqlite/reinforcement-queue.js';
 import type { ActivatedNode } from '../domain/activation.js';
 import type { RecallCompletion, RecallListener } from './recall.js';
 
@@ -60,13 +63,20 @@ export class RecallSideEffects {
   readonly #driver: Driver;
   readonly #db: SqliteHandle;
   readonly #logger: Logger;
+  readonly #reinforcementQueueCap: number;
   /** Chained so `whenIdle()` waits for every write scheduled so far, not just the latest. */
   #pending: Promise<void> = Promise.resolve();
 
-  constructor(driver: Driver, db: SqliteHandle, logger: Logger) {
+  constructor(
+    driver: Driver,
+    db: SqliteHandle,
+    logger: Logger,
+    reinforcementQueueCap: number = DEFAULT_REINFORCEMENT_QUEUE_CAP,
+  ) {
     this.#driver = driver;
     this.#db = db;
     this.#logger = logger;
+    this.#reinforcementQueueCap = reinforcementQueueCap;
   }
 
   /**
@@ -99,7 +109,14 @@ export class RecallSideEffects {
     try {
       const ts = completion.now.toISOString();
       for (const [sourceId, targetId] of reinforcementPairs(completion.activated)) {
-        enqueueReinforcementSignal(this.#db, sourceId, targetId, REINFORCEMENT_TRIGGER, ts);
+        enqueueReinforcementSignal(
+          this.#db,
+          sourceId,
+          targetId,
+          REINFORCEMENT_TRIGGER,
+          ts,
+          this.#reinforcementQueueCap,
+        );
       }
     } catch (err) {
       this.#logger.warn({ err }, 'recall reinforcement enqueue failed');
