@@ -194,7 +194,8 @@ export const ConfigSchema = z.object({
     lagQueueDepthWarnThreshold: nonNegativeInt,
     /**
      * A client's `close()` tears down its transport locally without a DELETE, so the
-     * server-side session-close hook is best-effort. This is the backstop — an MCP transport
+     * server-side session-close hook fires only when a client sends one. This is the trigger
+     * that does not depend on that — an MCP transport
      * session with no request in this many minutes closes on its own, independent of DELETE.
      */
     sessionIdleExpiryMinutes: positiveInt,
