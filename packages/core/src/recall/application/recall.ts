@@ -21,6 +21,7 @@ import { isLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import { orchestratorLedgerKey } from '../../reflection/application/orchestrator.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { saveLastPack } from '../../infrastructure/sqlite/last-pack.js';
+import { recordCueOutcome } from '../../infrastructure/sqlite/recall-samples.js';
 import {
   spreadActivation,
   type ActivatedNode,
@@ -210,7 +211,7 @@ async function hydrate(
 }
 
 /**
- * The calling session's own episodes with no orchestrator ledger key (EX-11): stored and
+ * The calling session's own episodes with no orchestrator ledger key: stored and
  * findable by raw text, but not yet reachable by entity resolution, traversal, or context
  * vectors. Best-effort — a failure here costs the pack one honesty field, never the recall
  * itself, so it is caught and logged rather than allowed to fail the call.
@@ -234,7 +235,7 @@ async function pendingEnrichment(deps: RecallDeps, sessionId: string, mode: Read
 /**
  * Which terminations mean the answer was cut short. `hop_limit` is not one of them: PRD §6.3
  * bounds traversal depth by design, so stopping there is the spread finishing its job. The
- * other two are budgets — EX-21 measured `node_budget` on 60.2% of recalls against a
+ * other two are budgets — the exercise measured `node_budget` on 60.2% of recalls against a
  * populated substrate, invisible to every caller.
  */
 function truncationFor(termination: ActivationTermination): PackTruncation | undefined {
@@ -284,10 +285,10 @@ export async function handleRecall(
   const payload = RecallInputSchema.parse(input);
   const mode = readModeFor(payload);
 
-  const { sessionId } = await deps.sessions.ensureSession({
-    identity: payload.session_id ?? options.identity,
-    now,
-  });
+  // Resolved, not created. Recall produces no content, so a read-only session mints no
+  // Session node, no INITIATED_BY, no WITHIN_WORKSPACE and no link in the FOLLOWS chain;
+  // intake is what brings the node into existence, on the first thing worth remembering.
+  const sessionId = deps.sessions.sessionIdFor(payload.session_id ?? options.identity);
 
   // Fired here rather than awaited here: it depends only on `sessionId` and `mode`, so
   // starting it now lets it run alongside every stage below instead of adding its own
@@ -382,6 +383,7 @@ export async function handleRecall(
   const truncated = truncationFor(activation.value.termination);
   const pack = assemblePack({
     items: fusion.value.items,
+    admission: fusion.value.admission,
     caps: capsFor(deps.config),
     tokenBudget: payload.budget?.max_tokens ?? deps.config.recall.tokenBudget,
     cues: cues.value.cues,
@@ -397,6 +399,9 @@ export async function handleRecall(
   });
 
   saveLastPack(deps.db, sessionId, pack, now.toISOString());
+  // The cue stage is 60-95% of recall wall time and the first thing contention takes; a
+  // degraded pack is otherwise indistinguishable from a healthy one at the item count.
+  recordCueOutcome(deps.db, cues.value.degradation !== undefined);
 
   deps.logger.info(
     {

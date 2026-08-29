@@ -227,6 +227,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       dispatch,
       logger,
       entropyThreshold: config.redaction.entropyThreshold,
+      workerMaxAttempts: config.operational.workerMaxAttempts,
       // One assigner for the service's life: its counters are the arrival rate, and a fresh
       // instance per call would measure nothing.
       lanes: new LaneAssigner(config.lanes),
@@ -279,7 +280,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       queueLag: () => queueLagSnapshot(store.db, config.operational.workerMaxAttempts),
     });
 
-    // EX-32's backstop: a client's close() never sends the DELETE `onSessionClosed` above
+    // The backstop: a client's close() never sends the DELETE `onSessionClosed` above
     // depends on, so a session with no request in this long closes on its own instead.
     const idleSessions = new SessionIdleSweeper(service, {
       idleMs: config.operational.sessionIdleExpiryMinutes * MINUTE_MS,
