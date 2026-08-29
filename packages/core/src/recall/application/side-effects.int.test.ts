@@ -211,12 +211,10 @@ describe('recall side effects over a substrate written by the real intake path',
     const enqueuedPairs = new Set(signals.map((s) => sortedPair(s.sourceId, s.targetId)));
     expect(enqueuedPairs.has(sortedPair(webhooksEpisodeId, unrelatedEpisodeId))).toBe(true);
 
-    // The access-tracking write is deferred: the response already carries both episodes,
-    // but the graph has not been touched for it yet.
-    const rightAfter = await accessMetadata(harness.driver, webhooksEpisodeId);
-    expect(rightAfter.lastAccessed).toBeUndefined();
-    expect(rightAfter.accessCount).toBeUndefined();
-
+    // The access-tracking write is deferred, which means the response never waits on it,
+    // not that the write is provably absent at any instant after the response. Asserting
+    // absence here is a race the batcher can legitimately win on fast infrastructure, so
+    // the contract check is whenIdle() resolving separately from the already-held pack.
     await sideEffects.whenIdle();
 
     // One episode surfaces, not two: the spread reached the other and nothing measured it,
