@@ -76,6 +76,7 @@ function report(items: readonly FusedItem[]): AdmissionReport {
     admitted: items.length,
     droppedBelowFloor: 0,
     droppedUnmeasured: 0,
+    droppedUnmeasuredArrival: 0,
     droppedDuplicateContent: 0,
     droppedNearDuplicate: 0,
     anchored: items.length > 0,
@@ -246,7 +247,41 @@ describe('the honesty line', () => {
     const pack = assemble([], { degraded: [{ stage: 'graph', reason: 'unavailable' }] });
 
     expect(pack.rendered_text).toBe(
-      '# Memory\n\nnote: degraded graph reads (unavailable)\n\nNo memories matched this query.',
+      '# Memory\n\nnote: degraded graph reads (unavailable)\n\n' +
+        'No memories matched this query. Nothing reached the admission gate.',
+    );
+  });
+
+  /**
+   * The three empty packs a caller has to tell apart. Without the verdict all three render the
+   * same sentence, and a note about a truncated spread standing over it reads as the reason the
+   * pack came back empty when the floor is what actually answered.
+   */
+  it('says which of the empty packs it is', () => {
+    const nothingStored = assemble([]);
+    const floorDidItsJob = assemble([], {
+      admission: { ...report([]), considered: 29, droppedBelowFloor: 29 },
+      truncated: 'activation_budget',
+    });
+    const nothingMeasured = assemble([], {
+      admission: { ...report([]), considered: 15, droppedUnmeasured: 15, droppedUnmeasuredArrival: 15 },
+    });
+
+    expect(nothingStored.rendered_text).toContain('Nothing reached the admission gate.');
+    expect(floorDidItsJob.rendered_text).toContain('Of 29 candidates: 29 measured under the 0.60 floor.');
+    expect(floorDidItsJob.rendered_text).toContain('spread truncated on the activation budget');
+    expect(nothingMeasured.rendered_text).toContain(
+      'Of 15 candidates: 15 that nothing measured against it.',
+    );
+  });
+
+  it('names both refusals when a pack met each of them', () => {
+    const pack = assemble([], {
+      admission: { ...report([]), considered: 52, droppedBelowFloor: 37, droppedUnmeasured: 15 },
+    });
+
+    expect(pack.rendered_text).toContain(
+      'Of 52 candidates: 37 measured under the 0.60 floor, 15 that nothing measured against it.',
     );
   });
 

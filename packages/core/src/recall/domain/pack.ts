@@ -109,6 +109,35 @@ const PACK_HEADING = '# Memory';
 
 const EMPTY_PACK_BODY = 'No memories matched this query.';
 
+/**
+ * What an empty pack says about itself, in the rendered text rather than only in metadata.
+ *
+ * The sentence alone reads the same for three states that call for three different responses:
+ * a substrate with nothing in it, a floor that judged real candidates and refused all of them,
+ * and a set of candidates nothing could measure at all. The counts are in metadata already;
+ * this is the copy that reaches a client reading only the rendered block, which is also the
+ * client most likely to read a note about a truncated spread as the reason the pack is empty.
+ */
+function emptyPackBody(report: AdmissionReport): string {
+  if (report.considered === 0) {
+    return `${EMPTY_PACK_BODY} Nothing reached the admission gate.`;
+  }
+
+  const clauses: string[] = [];
+  if (report.droppedBelowFloor > 0) {
+    clauses.push(
+      `${String(report.droppedBelowFloor)} measured under the ${report.policy.vectorFloor.toFixed(2)} floor`,
+    );
+  }
+  if (report.droppedUnmeasured > 0) {
+    clauses.push(`${String(report.droppedUnmeasured)} that nothing measured against it`);
+  }
+  if (clauses.length === 0) {
+    return EMPTY_PACK_BODY;
+  }
+  return `${EMPTY_PACK_BODY} Of ${String(report.considered)} candidates: ${clauses.join(', ')}.`;
+}
+
 const BUCKET_HEADINGS: Readonly<Record<PackBucket, string>> = {
   facts: '## Facts',
   episodes: '## Episodes',
@@ -377,7 +406,11 @@ function select(input: AssemblePackInput, note: string | undefined): Selection {
   return selection;
 }
 
-function render(selection: Selection, note: string | undefined): string {
+function render(
+  selection: Selection,
+  note: string | undefined,
+  admission: AdmissionReport,
+): string {
   const sections: string[] = [];
   if (note !== undefined) {
     sections.push(note);
@@ -390,7 +423,7 @@ function render(selection: Selection, note: string | undefined): string {
     sections.push(renderBucket(bucket, entries));
   }
   if (sections.length === (note === undefined ? 0 : 1)) {
-    sections.push(EMPTY_PACK_BODY);
+    sections.push(emptyPackBody(admission));
   }
   return `${PACK_HEADING}\n\n${sections.join('\n\n')}`;
 }
@@ -402,6 +435,7 @@ function toAdmissionOutput(report: AdmissionReport): AdmissionReportOutput {
     admitted: report.admitted,
     dropped_below_floor: report.droppedBelowFloor,
     dropped_unmeasured: report.droppedUnmeasured,
+    dropped_unmeasured_arrival: report.droppedUnmeasuredArrival,
     dropped_duplicate_content: report.droppedDuplicateContent,
     dropped_near_duplicate: report.droppedNearDuplicate,
     vector_floor: report.policy.vectorFloor,
@@ -419,7 +453,7 @@ function toAdmissionOutput(report: AdmissionReport): AdmissionReportOutput {
 export function assemblePack(input: AssemblePackInput): MemoryPack {
   const note = honestyNote(input);
   const selection = select(input, note);
-  const renderedText = render(selection, note);
+  const renderedText = render(selection, note, input.admission);
 
   const buckets: Record<string, readonly MemoryPackItem[]> = {};
   for (const bucket of PACK_BUCKETS) {

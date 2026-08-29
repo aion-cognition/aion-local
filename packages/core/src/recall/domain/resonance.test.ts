@@ -25,6 +25,7 @@ const ADMISSION: AdmissionReport = {
   admitted: 1,
   droppedBelowFloor: 3,
   droppedUnmeasured: 0,
+  droppedUnmeasuredArrival: 0,
   droppedDuplicateContent: 0,
   droppedNearDuplicate: 0,
   anchored: true,
