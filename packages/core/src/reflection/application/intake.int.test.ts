@@ -31,6 +31,7 @@ import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite
 import { listReflectionJobs, type ReflectionJob } from '../../infrastructure/sqlite/reflection-queue.js';
 import { ReflectionDispatch, type ReflectionJobSignal } from './dispatch.js';
 import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
+import { LaneAssigner } from './lanes.js';
 
 const EMBED_DIMENSION = DEFAULTS.models.embedDimension;
 const SESSION_IDENTITY = 'mcp-transport-session-1';
@@ -110,6 +111,7 @@ beforeAll(async () => {
     dispatch,
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
+    lanes: new LaneAssigner(DEFAULTS.lanes),
   };
 
   const result = await handleReflection(deps, MIXED_PAYLOAD, { identity: SESSION_IDENTITY });
@@ -216,7 +218,7 @@ describe('reflection intake against a live graph and live Ollama', () => {
 
     const repeat = await handleReflection(deps, MIXED_PAYLOAD, { identity: SESSION_IDENTITY });
 
-    expect(repeat).toEqual({ episode_id: episodeId, queued: true });
+    expect(repeat).toEqual({ episode_id: episodeId, queued: true, lane: 'interactive' });
     expect(await countNodes(harness.driver)).toBe(nodesBefore);
     expect(await countRelationships(harness.driver)).toBe(edgesBefore);
     expect(listReflectionJobs(db)).toHaveLength(1);

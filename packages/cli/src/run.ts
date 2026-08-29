@@ -1,6 +1,7 @@
 import { runDoctor } from './doctor.js';
 import { runInit } from './init.js';
 import { runLast } from './last.js';
+import { runQueue } from './queue.js';
 import { runStatus } from './status.js';
 
 export const CLI_NAME = 'aion';
@@ -26,6 +27,10 @@ const commands: Record<string, Command> = {
   last: {
     summary: 'the last MemoryPack served per session, with rationale',
     run: (argv) => runLast(argv),
+  },
+  queue: {
+    summary: 'inspect the reflection queue: ls | drop | promote | reconcile',
+    run: (argv) => runQueue(argv),
   },
   help: {
     summary: 'show this message',

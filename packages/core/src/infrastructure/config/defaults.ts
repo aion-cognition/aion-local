@@ -134,6 +134,21 @@ export const DEFAULTS: Config = {
     maxNarrativeEpisodeChars: 2_000,
     narrativeSweepLimit: 20,
   },
+  /**
+   * Measured against the live incident: four uncapped harnesses pushed ~4,100 episodes in
+   * ten minutes across eight sessions, roughly 51 arrivals per session per minute and 410
+   * globally. `sessionArrivalMax` is 2 per minute, so that pattern demotes inside the first
+   * few seconds, while a session-end flush of ten episodes at once does not. `globalArrivalMax`
+   * is twelve busy sessions' worth: past it the substrate is hot and each session's allowance
+   * drops to `hotSessionArrivalMax`, which is what stops enough fresh sessions from
+   * reproducing the flood with every per-session counter reading green.
+   */
+  lanes: {
+    arrivalWindowMs: 300_000,
+    sessionArrivalMax: 10,
+    globalArrivalMax: 120,
+    hotSessionArrivalMax: 3,
+  },
   redaction: {
     entropyThreshold: 4.5,
   },
@@ -155,6 +170,7 @@ export const DEFAULTS: Config = {
     workerBreakerThreshold: 5,
     workerBreakerCooldownMs: 60_000,
     workerVectorBatchSize: 64,
+    reconcileWarnThreshold: 50,
   },
   logging: {
     filePath: DEFAULT_LOG_FILE,

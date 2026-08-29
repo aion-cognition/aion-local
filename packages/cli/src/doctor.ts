@@ -11,6 +11,7 @@ import {
   openLogger,
   OllamaProvider,
   readVectorIndexes,
+  reconcileEnrichment,
   SqliteStore,
   verifyGdsAvailable,
   type Config,
@@ -23,6 +24,12 @@ import { describeError, stderrWriter, stdoutWriter, type Writer } from './output
 export type CheckResult = {
   readonly ok: boolean;
   readonly detail: string;
+  /**
+   * An invariant that holds against a number worth acting on. A warning is reported and
+   * counted, and never changes the exit code: doctor's failures are things that are broken,
+   * and a backlog is a thing that is behind.
+   */
+  readonly warn?: boolean;
 };
 
 export type Check = {
@@ -142,6 +149,28 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
       },
     },
     {
+      /**
+       * Informational: it counts episodes the substrate stored and nothing will ever enrich
+       * — no orchestrator ledger key and no queue row — which is the state a queue purge, a
+       * crash between the graph write and the enqueue, or an exhausted job leaves behind.
+       * `aion doctor` passed 8 of 8 checks with 95% of the substrate in it.
+       */
+      name: 'enrichment-reconcile',
+      dependsOn: NEO4J_BOLT,
+      run: async () => {
+        const report = await reconcileEnrichment(connection.driver, db);
+        const scanned = `${String(report.unenriched)} of ${String(report.episodes)} episodes unenriched and unqueued`;
+        if (report.unenriched > config.operational.reconcileWarnThreshold) {
+          return {
+            ok: true,
+            warn: true,
+            detail: `${scanned}; \`aion queue reconcile --re-enqueue --yes\` queues them`,
+          };
+        }
+        return { ok: true, detail: scanned };
+      },
+    },
+    {
       name: 'volumes-writable',
       run: async () => {
         for (const directory of writableDirectories(config)) {
@@ -176,7 +205,7 @@ export async function runChecks(checks: readonly Check[], write: Writer): Promis
         report = { name: check.name, ok: false, detail: describeError(err) };
       }
     }
-    write(`${report.ok ? 'ok  ' : 'FAIL'}  ${report.name}: ${report.detail}`);
+    write(`${label(report)}  ${report.name}: ${report.detail}`);
     reports.push(report);
     byName.set(report.name, report);
   }
@@ -184,13 +213,22 @@ export async function runChecks(checks: readonly Check[], write: Writer): Promis
   return reports;
 }
 
+function label(report: CheckReport): string {
+  if (!report.ok) {
+    return 'FAIL';
+  }
+  return report.warn === true ? 'warn' : 'ok  ';
+}
+
 export function summarize(reports: readonly CheckReport[], write: Writer): number {
   const failed = reports.filter((report) => !report.ok).map((report) => report.name);
+  const warned = reports.filter((report) => report.ok && report.warn === true).map((report) => report.name);
+  const warning = warned.length === 0 ? '' : `, ${warned.length} warning: ${warned.join(', ')}`;
   if (failed.length === 0) {
-    write(`\n${reports.length} checks passed`);
+    write(`\n${reports.length} checks passed${warning}`);
     return 0;
   }
-  write(`\n${failed.length} of ${reports.length} checks failed: ${failed.join(', ')}`);
+  write(`\n${failed.length} of ${reports.length} checks failed: ${failed.join(', ')}${warning}`);
   return 1;
 }
 

@@ -16,6 +16,7 @@ import {
   handleRecall,
   handleReflection,
   isLedgerApplied,
+  LaneAssigner,
   listReflectionJobs,
   listReinforcementSignals,
   OllamaProvider,
@@ -132,6 +133,7 @@ function intakeDeps(deps: { provider: Provider; dispatch: ReflectionDispatch }):
     dispatch: deps.dispatch,
     logger,
     entropyThreshold: config.redaction.entropyThreshold,
+    lanes: new LaneAssigner(config.lanes),
   };
 }
 

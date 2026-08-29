@@ -1,12 +1,19 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_BUSY_TIMEOUT_MS, SqliteStore } from './database.js';
 
 describe('SqliteStore', () => {
   let dir: string;
   let dbPath: string;
+
+  /** The store creates the nested directory itself; a raw connection has to be given one. */
+  function dbPathWithDirectory(): string {
+    mkdirSync(dirname(dbPath), { recursive: true });
+    return dbPath;
+  }
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'aion-sqlite-'));
@@ -56,6 +63,48 @@ describe('SqliteStore', () => {
     } finally {
       store.close();
     }
+  });
+
+  /**
+   * The live substrate was written before the queue had lanes, so the columns arrive by
+   * ALTER on the next open with rows already in the table. SQLite has no `ADD COLUMN IF NOT
+   * EXISTS`, and a second ALTER raises "duplicate column name" and takes the whole open with
+   * it, so the third open below is the assertion that matters.
+   */
+  it('retrofits the lane columns onto a queue table that predates them, keeping its rows', () => {
+    const legacy = new Database(dbPathWithDirectory());
+    legacy.exec(`CREATE TABLE reflection_queue (
+      id TEXT PRIMARY KEY,
+      job_type TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      enqueued_at TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      claimed_at TEXT,
+      claimed_by TEXT,
+      last_error TEXT
+    )`);
+    legacy
+      .prepare(
+        `INSERT INTO reflection_queue (id, job_type, payload_json, enqueued_at)
+         VALUES ('job-1', 'integrate', '{"episode_id":"ep-1"}', '2026-08-01T00:00:00.000Z')`,
+      )
+      .run();
+    legacy.close();
+
+    const store = new SqliteStore({ filePath: dbPath });
+    try {
+      const row = store.db.prepare('SELECT * FROM reflection_queue WHERE id = ?').get('job-1') as {
+        lane: string;
+        session_id: string | null;
+        lane_seq: number;
+      };
+      expect(row).toMatchObject({ lane: 'interactive', session_id: null, lane_seq: 0 });
+    } finally {
+      store.close();
+    }
+
+    const reopened = new SqliteStore({ filePath: dbPath });
+    reopened.close();
   });
 
   it('re-opening the same file is idempotent: no errors, schema unchanged, data preserved', () => {

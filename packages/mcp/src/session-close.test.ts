@@ -30,7 +30,7 @@ function emptyPack(): MemoryPack {
 
 const backend: ToolBackend = {
   recall: () => Promise.resolve(emptyPack()),
-  reflection: () => Promise.resolve({ episode_id: 'episode-1', queued: true } as const),
+  reflection: () => Promise.resolve({ episode_id: 'episode-1', queued: true, lane: 'interactive' } as const),
 };
 
 let dir: string;

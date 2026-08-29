@@ -88,8 +88,13 @@ export type ToolBackend = {
   readonly reflection: (args: unknown, identity: string) => Promise<ReflectionOutput>;
 };
 
+/**
+ * The lane is named in the text and not only in `structuredContent`: a client that reads the
+ * rendered block alone would otherwise never learn that its episode was demoted behind a
+ * bulk load, which is the one thing the ack exists to tell it.
+ */
 function ackText(output: ReflectionOutput): string {
-  return `Stored episode ${output.episode_id}; queued for reflection.`;
+  return `Stored episode ${output.episode_id}; queued for reflection (${output.lane} lane).`;
 }
 
 /**

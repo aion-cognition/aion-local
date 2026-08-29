@@ -52,6 +52,18 @@ describe('runChecks', () => {
     expect(reports[1]?.ok).toBe(true);
   });
 
+  it('marks a warning check without failing it', async () => {
+    const { lines, write } = collector();
+
+    const reports = await runChecks(
+      [{ name: 'enrichment-reconcile', run: async () => ({ ok: true, warn: true, detail: '412 behind' }) }],
+      write,
+    );
+
+    expect(reports[0]?.ok).toBe(true);
+    expect(lines).toEqual(['warn  enrichment-reconcile: 412 behind']);
+  });
+
   it('turns a thrown named error into a failed check keeping the error name', async () => {
     const { write } = collector();
     const failure = new Error('vector index content_vec_idx was created at 768 dimensions');
@@ -127,5 +139,18 @@ describe('summarize', () => {
 
     expect(summarize(reports, write)).toBe(1);
     expect(lines[0]).toContain('2 of 3 checks failed: neo4j-bolt, neo4j-gds');
+  });
+
+  // A backlog is a thing that is behind, not a thing that is broken; naming it in the summary
+  // without changing the exit code is what keeps `aion doctor` usable as a gate.
+  it('names warnings alongside a pass and still exits 0', () => {
+    const { lines, write } = collector();
+    const reports: CheckReport[] = [
+      { name: 'a', ok: true, detail: '' },
+      { name: 'enrichment-reconcile', ok: true, warn: true, detail: '412 behind' },
+    ];
+
+    expect(summarize(reports, write)).toBe(0);
+    expect(lines[0]).toContain('2 checks passed, 1 warning: enrichment-reconcile');
   });
 });

@@ -57,8 +57,17 @@ of `turns`, `tool_executions`, or `observations`; `summary` and `session_id` are
 Credentials are redacted before anything is written, and sending the same payload twice
 returns the original episode id rather than storing a duplicate.
 
-Intake returns `{ episode_id, queued: true }` as soon as the episode is durably stored in
-the graph, so the call never blocks the work it describes.
+Intake returns `{ episode_id, queued: true, lane }` as soon as the episode is durably stored
+in the graph, so the call never blocks the work it describes.
+
+`lane` is the queue the episode was enqueued in, and it is not always the one the caller
+asked for. Reflection takes an optional `lane: "bulk"`, which a client importing a backlog
+sets so its episodes stop competing with live turns. Everything else is `interactive`, which
+is claimed strictly first. An arrival-rate backstop demotes a session that pushes faster than
+`AION_LANE_SESSION_ARRIVAL_MAX` episodes per `AION_LANE_ARRIVAL_WINDOW_MS`, and tightens
+every session's allowance to `AION_LANE_HOT_SESSION_ARRIVAL_MAX` once arrivals across all
+sessions pass `AION_LANE_GLOBAL_ARRIVAL_MAX` — a flood of fresh sessions is the shape a
+per-session counter cannot see. An explicit `interactive` is a preference, not an exemption.
 
 ## CLI
 
@@ -69,6 +78,19 @@ and then runs the command in the `aion-cli` container.
 - `status`: services, models, and graph counts
 - `doctor`: check every substrate invariant and name what is broken
 - `last`: the last MemoryPack served per session, with rationale
+- `queue`: inspect and triage the reflection queue
+
+```
+aion queue ls [--session <id>] [--lane <l>] [--limit <n>]   # depth, age, attempts, per-lane totals
+aion queue promote --session <id>                           # move a session's bulk jobs to interactive
+aion queue drop --session <id> [--yes]                      # unclaimed rows only; prints the count first
+aion queue reconcile [--re-enqueue --yes]                   # episodes with no ledger key and no queue row
+```
+
+`drop` and `reconcile --re-enqueue` report what they would do and stop unless `--yes` is
+passed. `drop` never touches a claimed row: that job is running, and deleting it under its
+worker produces exactly the orphan `reconcile` exists to repair. `aion doctor` runs the same
+reconcile count as an informational check and warns past `AION_RECONCILE_WARN_THRESHOLD`.
 
 ## Architecture
 

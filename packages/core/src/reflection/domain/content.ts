@@ -2,11 +2,12 @@ import { createHash } from 'node:crypto';
 import type { ReflectionInput, ReflectionTurn, ToolExecution } from '@aion/protocol';
 
 /**
- * The payload minus its routing field. `session_id` never reaches content assembly or the
+ * The payload minus its routing fields. `session_id` never reaches content assembly or the
  * content hash: the same experience pushed under two identities is two episodes because
- * the dedupe window is the session, not because the hash differs.
+ * the dedupe window is the session, not because the hash differs. `lane` is scheduling, and
+ * the same experience is the same experience whichever queue it waited in.
  */
-export type ReflectionContent = Omit<ReflectionInput, 'session_id'>;
+export type ReflectionContent = Omit<ReflectionInput, 'session_id' | 'lane'>;
 
 export type PreparedTurn = {
   readonly role: string;

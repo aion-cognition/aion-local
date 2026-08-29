@@ -28,6 +28,7 @@ import { ENTITY_TYPES } from '../../domain/entity-extraction.js';
 import type { StageContext, StageOutcome } from '../../domain/stage.js';
 import { ReflectionDispatch } from '../dispatch.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../intake.js';
+import { LaneAssigner } from '../lanes.js';
 import { EntityExtractionStage } from './entities.js';
 
 const MEMBER_NAME = 'Ryan Huber';
@@ -123,6 +124,7 @@ beforeAll(async () => {
     dispatch: new ReflectionDispatch(),
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
+    lanes: new LaneAssigner(DEFAULTS.lanes),
   };
 
   liveEpisodeId = (await handleReflection(intake, LIVE_PAYLOAD, { identity: 'entities-live' }))

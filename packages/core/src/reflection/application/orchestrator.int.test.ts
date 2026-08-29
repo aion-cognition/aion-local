@@ -24,6 +24,7 @@ import { CognitiveExtractionStage } from './stages/cognitive.js';
 import { EntityExtractionStage } from './stages/entities.js';
 import { ReflectionDispatch } from './dispatch.js';
 import { handleReflection, type ReflectionIntakeDeps } from './intake.js';
+import { LaneAssigner } from './lanes.js';
 import { orchestratorLedgerKey, ReflectionOrchestrator } from './orchestrator.js';
 
 const SESSION_IDENTITY = 'mcp-transport-session-orchestrator';
@@ -137,6 +138,7 @@ beforeAll(async () => {
     dispatch: new ReflectionDispatch(),
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
+    lanes: new LaneAssigner(DEFAULTS.lanes),
   };
 
   const stored = await handleReflection(intake, PAYLOAD, { identity: SESSION_IDENTITY });

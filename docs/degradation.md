@@ -277,6 +277,10 @@ Every knob below is `AION_*`-overridable; the catalog is
 | `activation.maxNodesVisited` / `.hubThreshold` | 500 / 10 | Bounds worst-case traversal cost; the hub threshold keeps one high-degree node from flooding the frontier. | A legitimate multi-hop path through a dense area can be cut before it is explored. | Not flagged as a deviation. |
 | Other bucket caps: `maxFacts` / `maxNarratives` / `maxPreferences` / `maxResonant` / `vectorLimit` | 15 / 5 / 3 / 5 / 5 | Same shape as `maxEpisodes`: each decides what survives fusion for its bucket. | Same cost as `maxEpisodes`, unverified at other values: only the episode cap has a live pass/fail checkpoint behind it. `preferences` and `resonant` have no producer yet (P4), so their caps are inert today. | Not flagged as a deviation. |
 | `AION_WORKER_COUNT` (`operational.workerCount`) | 1 | Concurrent reflection claim-and-run slots on one shared queue claimant, so more than one episode enriches at once. | Every worker still calls the same host Ollama for its model stages (`AION_REFLECT_MODEL`), and nothing prioritizes between them — see the contention note below. | PRD §7 pins 1. |
+| `AION_LANE_SESSION_ARRIVAL_MAX` (`lanes.sessionArrivalMax`) | 10 | Head-room for a legitimate session-end flush of a long conversation, which arrives as several episodes at once and must stay interactive. | Raised far enough, a client flooding from one session keeps priority for longer before the backstop sees it. The measured flood ran 51 arrivals per session per minute. | New in the fix round. |
+| `AION_LANE_GLOBAL_ARRIVAL_MAX` (`lanes.globalArrivalMax`) | 120 | Arrivals across every session inside the window before the substrate counts as hot. Twelve busy sessions' worth. | Below ordinary multi-agent load, every session drops to the hot allowance for no reason. | New in the fix round. |
+| `AION_LANE_HOT_SESSION_ARRIVAL_MAX` (`lanes.hotSessionArrivalMax`) | 3 | The per-session allowance while the substrate is hot; what stops enough fresh sessions from reproducing the flood with every per-session counter reading green. | At 1, a single retry during someone else's flood costs a legitimate session its lane. | New in the fix round. |
+| `AION_RECONCILE_WARN_THRESHOLD` (`operational.reconcileWarnThreshold`) | 50 | Unenriched episodes `aion doctor` tolerates before it warns. | Raised past a real backlog, doctor goes back to reporting all-green over a substrate hours behind, which is the state EX-41 was filed for. | New in the fix round. |
 
 Raising `AION_WORKER_COUNT` past 1 buys nothing on its own: the reflection worker, the
 recall cue model, and the idle narrative sweeper all share one host Ollama endpoint
@@ -286,6 +290,21 @@ the host, not in a container) to raise its per-model concurrency alongside the w
 Measured contention without it: recall wall p50 rose from 945ms to 4,463ms (372%) under a
 busy reflection worker, and the worker itself lost about 9% throughput under concurrent
 recalls (1.98 to 1.80 episodes/min).
+
+### Queue starvation
+
+A backlog is not a degradation rung — nothing is broken and no signal is lost — but it is
+what a caller feels when its own last turn is not recallable yet. The queue serves the
+interactive lane strictly before the bulk one, and round-robins across sessions inside a
+lane, so one session's flood delays another session's next episode by one job rather than by
+the whole flood. Measured, unhandled: 4,016 unclaimed jobs, days of GPU work at 1.9 to 6.7
+episodes/min, with every legitimate episode behind them in insertion order.
+
+Both halves have an operator surface. `aion queue ls` shows depth, age and per-lane totals;
+`aion queue promote --session <id>` pulls one session's jobs to the front; `aion queue drop`
+sheds unclaimed rows after printing the count. Shedding leaves the episodes stored and
+unenriched, which `aion queue reconcile` counts and `--re-enqueue` hands back to the queue in
+the bulk lane.
 
 ## Deferred gaps
 

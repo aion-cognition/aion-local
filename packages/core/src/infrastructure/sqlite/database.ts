@@ -26,6 +26,17 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     applied_at TEXT NOT NULL,
     summary_json TEXT
   )`,
+  /**
+   * `lane`, `session_id` and `lane_seq` are what claiming orders by: interactive before bulk,
+   * and round-robin across sessions inside a lane. They are columns rather than payload fields
+   * so the claim's ORDER BY and the operator's filters read them without decoding JSON per
+   * row, at the queue depths (thousands) where that decides whether triage is possible.
+   *
+   * `lane_seq` is the row's position in its own (lane, session) group, stamped at insert
+   * (see reflection-queue.ts). It cannot be computed at claim time: a window function over the
+   * unclaimed rows renumbers every group as rows leave, which collapses the interleave back
+   * into first-in-first-out after the first claim.
+   */
   `CREATE TABLE IF NOT EXISTS reflection_queue (
     id TEXT PRIMARY KEY,
     job_type TEXT NOT NULL,
@@ -34,7 +45,10 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     attempts INTEGER NOT NULL DEFAULT 0,
     claimed_at TEXT,
     claimed_by TEXT,
-    last_error TEXT
+    last_error TEXT,
+    lane TEXT NOT NULL DEFAULT 'interactive',
+    session_id TEXT,
+    lane_seq INTEGER NOT NULL DEFAULT 0
   )`,
   `CREATE TABLE IF NOT EXISTS reinforcement_queue (
     id TEXT PRIMARY KEY,
@@ -70,6 +84,38 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   )`,
 ];
 
+type ColumnAddition = {
+  readonly table: string;
+  readonly column: string;
+  readonly definition: string;
+};
+
+/**
+ * Columns added to a table that already shipped. SQLite has no `ADD COLUMN IF NOT EXISTS`,
+ * and a second ALTER raises "duplicate column name", so the shape is read first: this runs
+ * on every open of every existing substrate. The literals match the CREATE above, which is
+ * what makes a fresh file and a retrofitted one the same table.
+ */
+const COLUMN_ADDITIONS: readonly ColumnAddition[] = [
+  { table: 'reflection_queue', column: 'lane', definition: "TEXT NOT NULL DEFAULT 'interactive'" },
+  { table: 'reflection_queue', column: 'session_id', definition: 'TEXT' },
+  { table: 'reflection_queue', column: 'lane_seq', definition: 'INTEGER NOT NULL DEFAULT 0' },
+];
+
+function tableColumns(db: SqliteHandle, table: string): ReadonlySet<string> {
+  const rows = db.pragma(`table_info(${table})`) as { name: string }[];
+  return new Set(rows.map((row) => row.name));
+}
+
+function applyColumnAdditions(db: SqliteHandle): void {
+  for (const addition of COLUMN_ADDITIONS) {
+    if (tableColumns(db, addition.table).has(addition.column)) {
+      continue;
+    }
+    db.exec(`ALTER TABLE ${addition.table} ADD COLUMN ${addition.column} ${addition.definition}`);
+  }
+}
+
 function ensureDirectoryExists(filePath: string): void {
   if (filePath === ':memory:') {
     return;
@@ -101,6 +147,7 @@ export function openSqliteHandle(target: SqliteTarget): SqliteHandle {
       for (const statement of SCHEMA_STATEMENTS) {
         db.exec(statement);
       }
+      applyColumnAdditions(db);
       return db;
     } catch (err) {
       db.close();

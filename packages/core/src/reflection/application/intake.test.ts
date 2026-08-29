@@ -11,12 +11,21 @@ import { listReflectionJobs } from '../../infrastructure/sqlite/reflection-queue
 import { ReflectionDispatch, type ReflectionJobSignal } from './dispatch.js';
 import { ReflectionNotStoredError } from './errors.js';
 import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
+import { LaneAssigner } from './lanes.js';
 import { attachContentVectors, findPendingVectorNodes } from './vectors.js';
 import { FakeGraph } from '../test-support/fake-graph.fixture.js';
 
 const MEMBER_ID = 'member-1';
 const WORKSPACE_ID = 'workspace-1';
 const EMBED_DIMENSION = 8;
+
+/** Small enough that a handful of pushes crosses it, so the backstop is testable in a unit. */
+const LANE_LIMITS = {
+  arrivalWindowMs: 60_000,
+  sessionArrivalMax: 2,
+  globalArrivalMax: 3,
+  hotSessionArrivalMax: 1,
+};
 
 const AWS_KEY = 'AKIAIOSFODNN7EXAMPLE';
 const GITHUB_TOKEN = 'ghp_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8';
@@ -78,6 +87,7 @@ beforeEach(() => {
     dispatch,
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: 4.5,
+    lanes: new LaneAssigner(LANE_LIMITS),
   };
 });
 
@@ -191,6 +201,73 @@ describe('reflection intake storage', () => {
     await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
 
     expect(generate).not.toHaveBeenCalled();
+  });
+});
+
+describe('reflection intake lanes', () => {
+  function payload(index: number): Record<string, unknown> {
+    return { observations: [`episode number ${String(index)}`] };
+  }
+
+  it('acks the interactive lane and stamps it on the queue row', async () => {
+    const result = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+
+    expect(result.lane).toBe('interactive');
+    expect(listReflectionJobs(db)[0]).toMatchObject({ lane: 'interactive', sessionId: 'session-a' });
+  });
+
+  it('honours an explicit bulk flag and echoes it', async () => {
+    const result = await handleReflection(deps, { ...PAYLOAD, lane: 'bulk' }, { identity: 'session-a' });
+
+    expect(result.lane).toBe('bulk');
+    expect(listReflectionJobs(db)[0]?.lane).toBe('bulk');
+  });
+
+  // The flag can only ever cost a caller priority. Taking `interactive` at face value would
+  // make the backstop opt-in for exactly the client that will not opt in.
+  it('does not let an explicit interactive flag escape the backstop', async () => {
+    for (let index = 0; index < 2; index += 1) {
+      await handleReflection(deps, payload(index), { identity: 'session-a' });
+    }
+
+    const demoted = await handleReflection(
+      deps,
+      { ...payload(2), lane: 'interactive' },
+      { identity: 'session-a' },
+    );
+
+    expect(demoted.lane).toBe('bulk');
+  });
+
+  it('demotes a session past its arrival threshold and leaves a quiet session alone', async () => {
+    const lanes: string[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      lanes.push((await handleReflection(deps, payload(index), { identity: 'noisy' })).lane);
+    }
+    const quiet = await handleReflection(deps, payload(99), { identity: 'quiet' });
+
+    expect(lanes).toEqual(['interactive', 'interactive', 'bulk']);
+    expect(quiet.lane).toBe('interactive');
+  });
+
+  // Re-pushing a payload the substrate already holds is not new work; counting it would let a
+  // retrying client demote itself for an episode that is already queued.
+  it('does not count a duplicate payload as an arrival', async () => {
+    await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+    await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+    const third = await handleReflection(deps, payload(1), { identity: 'session-a' });
+
+    expect(third.lane).toBe('interactive');
+  });
+
+  // The lane is scheduling metadata. In the content hash it would make one experience two
+  // episodes depending on which queue it waited in.
+  it('keeps the lane out of the content hash', async () => {
+    const interactive = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+    const bulk = await handleReflection(deps, { ...PAYLOAD, lane: 'bulk' }, { identity: 'session-a' });
+
+    expect(bulk.episode_id).toBe(interactive.episode_id);
+    expect(listReflectionJobs(db)).toHaveLength(1);
   });
 });
 

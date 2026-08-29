@@ -11,6 +11,7 @@ import {
   handleRecall,
   handleReflection,
   IdleNarrativeSweeper,
+  LaneAssigner,
   latestAppliedGraphMigration,
   loadConfig,
   openLogger,
@@ -223,6 +224,9 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       dispatch,
       logger,
       entropyThreshold: config.redaction.entropyThreshold,
+      // One assigner for the service's life: its counters are the arrival rate, and a fresh
+      // instance per call would measure nothing.
+      lanes: new LaneAssigner(config.lanes),
     };
 
     const stages = reflectionStages(config);

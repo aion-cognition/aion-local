@@ -28,6 +28,7 @@ import { SessionManager } from '../../session/session-manager.js';
 import { ReflectionDispatch, type ReflectionJobSignal } from './dispatch.js';
 import { ReflectionNotStoredError } from './errors.js';
 import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
+import { LaneAssigner } from './lanes.js';
 import { attachContentVectors, findPendingVectorNodes } from './vectors.js';
 
 /**
@@ -105,6 +106,7 @@ beforeAll(async () => {
     dispatch,
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
+    lanes: new LaneAssigner(DEFAULTS.lanes),
   };
 
   live = {

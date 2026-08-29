@@ -38,12 +38,28 @@ export type ToolExecution = z.infer<typeof ToolExecutionSchema>;
 
 export const ObservationSchema = z.string().min(1);
 
+/**
+ * The service class the episode is enqueued in. Optional and backward compatible: a payload
+ * that says nothing is interactive, which is the freshness pin's default.
+ *
+ * `bulk` is taken at face value — a caller importing a backlog can say so and stop competing
+ * with live turns. `interactive` is a preference rather than a guarantee: intake's
+ * arrival-rate backstop still demotes a client that floods, since a flag any client can
+ * assert on every push cannot also be the thing that exempts it.
+ */
+export const ReflectionLaneSchema = z
+  .enum(['interactive', 'bulk'])
+  .describe('bulk queues this episode behind live turns; omit for interactive');
+
+export type ReflectionLaneInput = z.infer<typeof ReflectionLaneSchema>;
+
 const ReflectionPayloadSchema = z.strictObject({
   turns: z.array(ReflectionTurnSchema).optional(),
   tool_executions: z.array(ToolExecutionSchema).optional(),
   observations: z.array(ObservationSchema).optional(),
   summary: z.string().min(1).optional(),
   session_id: z.string().min(1).optional(),
+  lane: ReflectionLaneSchema.optional(),
 });
 
 /**

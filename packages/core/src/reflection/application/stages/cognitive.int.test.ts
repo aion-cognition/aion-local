@@ -20,6 +20,7 @@ import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sql
 import type { StageContext } from '../../domain/stage.js';
 import { ReflectionDispatch } from '../dispatch.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../intake.js';
+import { LaneAssigner } from '../lanes.js';
 import { CognitiveExtractionStage } from './cognitive.js';
 
 const SESSION_IDENTITY = 'mcp-transport-session-cognitive';
@@ -81,6 +82,7 @@ beforeAll(async () => {
     dispatch: new ReflectionDispatch(),
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
+    lanes: new LaneAssigner(DEFAULTS.lanes),
   };
 
   const stored = await handleReflection(intake, PAYLOAD, { identity: SESSION_IDENTITY });

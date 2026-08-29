@@ -18,10 +18,16 @@ import type { Provider } from '../../infrastructure/providers/types.js';
 import { redactPayload } from '../../redaction/deep-walk.js';
 import type { SessionManager } from '../../session/session-manager.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { enqueueReflectionJob, findPendingReflectionJob } from '../../infrastructure/sqlite/reflection-queue.js';
+import {
+  DEFAULT_REFLECTION_LANE,
+  enqueueReflectionJob,
+  findPendingReflectionJob,
+  type ReflectionLane,
+} from '../../infrastructure/sqlite/reflection-queue.js';
 import { prepareEpisode, type PreparedEpisode, type PreparedTurn } from '../domain/content.js';
 import type { ReflectionDispatch } from './dispatch.js';
 import { ReflectionNotStoredError } from './errors.js';
+import type { LaneAssigner, LaneDecision } from './lanes.js';
 import { attachContentVectors } from './vectors.js';
 
 /** The one job intake enqueues. P3's pipeline stages fan out from it; intake never runs them. */
@@ -45,6 +51,8 @@ export type ReflectionIntakeDeps = {
   readonly logger: Logger;
   /** From `loadConfig(env).redaction.entropyThreshold`; the config module is the only env reader. */
   readonly entropyThreshold: number;
+  /** Per-process arrival counters behind the lane backstop; one instance for the service's life. */
+  readonly lanes: LaneAssigner;
 };
 
 export type ReflectionIntakeOptions = {
@@ -233,15 +241,35 @@ async function storeDurably(
  * insert cannot interleave with another intake in this process. The long-lived service is
  * the single writer of this table (PRD §4); the CLI container claims, it does not enqueue.
  */
-function ensureIntegrateJob(db: SqliteHandle, episodeId: string): { jobId: string; enqueued: boolean } {
-  const pending = findPendingReflectionJob(db, INTEGRATE_JOB_TYPE, EPISODE_ID_FIELD, episodeId);
+type IntegrateJob = {
+  readonly jobId: string;
+  readonly enqueued: boolean;
+  readonly lane: ReflectionLane;
+  readonly decision: LaneDecision | undefined;
+};
+
+function ensureIntegrateJob(
+  deps: ReflectionIntakeDeps,
+  episodeId: string,
+  sessionId: string,
+  requested: ReflectionLane | undefined,
+  now: Date,
+): IntegrateJob {
+  // A payload the substrate already holds is not an arrival: counting a client's own retries
+  // against it would let a repeated push demote the session for work already queued.
+  const pending = findPendingReflectionJob(deps.db, INTEGRATE_JOB_TYPE, EPISODE_ID_FIELD, episodeId);
   if (pending !== undefined) {
-    return { jobId: pending.id, enqueued: false };
+    return { jobId: pending.id, enqueued: false, lane: pending.lane, decision: undefined };
   }
-  return {
-    jobId: enqueueReflectionJob(db, INTEGRATE_JOB_TYPE, { [EPISODE_ID_FIELD]: episodeId }),
-    enqueued: true,
-  };
+
+  const decision = deps.lanes.assign({ sessionId, requested, now });
+  const jobId = enqueueReflectionJob(
+    deps.db,
+    INTEGRATE_JOB_TYPE,
+    { [EPISODE_ID_FIELD]: episodeId },
+    { lane: decision.lane, sessionId },
+  );
+  return { jobId, enqueued: true, lane: decision.lane, decision };
 }
 
 /**
@@ -291,9 +319,10 @@ export async function handleReflection(
   const now = options.now ?? new Date();
   const payload = ReflectionInputSchema.parse(input);
 
-  // `session_id` is routing, not content: redacting an identity would fork the session and
-  // break the FOLLOWS chain, so it is lifted out before the walk and never re-joined.
-  const { session_id: suppliedIdentity, ...content } = payload;
+  // `session_id` and `lane` are routing, not content. Redacting an identity would fork the
+  // session and break the FOLLOWS chain; leaving either in would put scheduling metadata in
+  // the content hash, so the same experience pushed on two lanes would be two episodes.
+  const { session_id: suppliedIdentity, lane: requestedLane, ...content } = payload;
   const redacted = redactPayload(content, deps.entropyThreshold);
   if (redacted.matches.length > 0) {
     deps.logger.warn(
@@ -309,7 +338,7 @@ export async function handleReflection(
     suppliedIdentity ?? options.identity,
     now,
   );
-  const job = ensureIntegrateJob(deps.db, stored.episodeId);
+  const job = ensureIntegrateJob(deps, stored.episodeId, sessionId, requestedLane, now);
   if (job.enqueued) {
     deps.dispatch.signal({
       jobId: job.jobId,
@@ -319,15 +348,27 @@ export async function handleReflection(
       enqueuedAt: now,
     });
   }
+  if (job.decision !== undefined && job.decision.lane !== DEFAULT_REFLECTION_LANE) {
+    deps.logger.warn(
+      {
+        episodeId: stored.episodeId,
+        sessionId,
+        reason: job.decision.reason,
+        sessionArrivals: job.decision.sessionArrivals,
+        globalArrivals: job.decision.globalArrivals,
+      },
+      'reflection queued in the bulk lane',
+    );
+  }
 
   await attachVectors(deps, stored, sessionId);
 
   if (!stored.created) {
     deps.logger.debug(
-      { episodeId: stored.episodeId, sessionId, requeued: job.enqueued },
+      { episodeId: stored.episodeId, sessionId, requeued: job.enqueued, lane: job.lane },
       'reflection payload already stored',
     );
-    return { episode_id: stored.episodeId, queued: true };
+    return { episode_id: stored.episodeId, queued: true, lane: job.lane };
   }
 
   deps.logger.info(
@@ -335,6 +376,7 @@ export async function handleReflection(
       episodeId: stored.episodeId,
       sessionId,
       jobId: job.jobId,
+      lane: job.lane,
       turns: prepared.turnCount,
       toolExecutions: prepared.toolExecutionCount,
       observations: prepared.observationCount,
@@ -342,5 +384,5 @@ export async function handleReflection(
     'reflection stored',
   );
 
-  return { episode_id: stored.episodeId, queued: true };
+  return { episode_id: stored.episodeId, queued: true, lane: job.lane };
 }

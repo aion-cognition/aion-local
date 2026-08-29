@@ -30,6 +30,17 @@ describe('reflection queue accessors', () => {
     expect(job?.claimedAt).toBeNull();
     expect(job?.claimedBy).toBeNull();
     expect(job?.lastError).toBeNull();
+    expect(job?.lane).toBe('interactive');
+    expect(job?.sessionId).toBeNull();
+  });
+
+  it('records the lane and session a job was enqueued for', () => {
+    const id = enqueueReflectionJob(store.db, 'integrate', { episodeId: 'ep-1' }, {
+      lane: 'bulk',
+      sessionId: 'session-a',
+    });
+
+    expect(getReflectionJob(store.db, id)).toMatchObject({ lane: 'bulk', sessionId: 'session-a' });
   });
 
   it('returns undefined for an unknown id', () => {
