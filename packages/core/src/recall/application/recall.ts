@@ -30,10 +30,11 @@ import {
   type ActivationTermination,
   type AdjacencyFetch,
 } from '../domain/activation.js';
+import { scoreArrivals } from '../domain/arrival-scoring.js';
 import { labelBoosts, queryCueTexts, queryRestatements } from '../domain/facts.js';
 import { buildRankedLists, toActivationSeed } from './candidates.js';
 import { extractCues, type CueCache, type CueExtractionResult } from './cues.js';
-import type { AdmissionPolicy, AdmissionReport } from '../domain/admission.js';
+import type { AdmissionPolicy, AdmissionReport, Measurement } from '../domain/admission.js';
 import { fuse, type FusedItem, type FusionResult, type RankedList } from '../domain/fusion.js';
 import { assemblePack, type BucketCaps } from '../domain/pack.js';
 import { selectSeeds, type Seed, type SeedCue } from './seeds.js';
@@ -196,17 +197,40 @@ async function mmrVectors(
   return new Map(rows.map((row) => [row.id, row.vector]));
 }
 
+/** The activated ids no seed strategy found: what the spread reached on its own. */
+function arrivalIds(seeds: readonly Seed[], activated: readonly ActivatedNode[]): string[] {
+  const known = new Set(seeds.map((seed) => seed.id));
+  return activated.map((node) => node.nodeId).filter((id) => !known.has(id));
+}
+
 /** Hydrates the activated ids no seed strategy already carried content for. */
 async function hydrate(
   deps: RecallDeps,
-  seeds: readonly Seed[],
-  activated: readonly ActivatedNode[],
+  ids: readonly string[],
   mode: ReadMode,
 ): Promise<ReadonlyMap<string, SeedCandidate>> {
-  const known = new Set(seeds.map((seed) => seed.id));
-  const ids = activated.map((node) => node.nodeId).filter((id) => !known.has(id));
   const rows = await nodeCandidates(deps.driver, { ids, mode });
   return new Map(rows.map((row) => [row.id, row]));
+}
+
+/**
+ * The cosine every arrival is measured by, from one batched read of the content vectors the
+ * arrivals already carry. It runs beside hydration rather than after it: the two ask the same
+ * driver about the same ids and neither needs the other's answer, so the measurement costs the
+ * fusion stage a round trip it overlaps rather than one it waits for.
+ */
+async function measureArrivals(
+  deps: RecallDeps,
+  ids: readonly string[],
+  cues: readonly SeedCue[],
+  mode: ReadMode,
+): Promise<ReadonlyMap<string, Measurement[]>> {
+  const rows = await contentVectors(deps.driver, { ids, mode });
+  return scoreArrivals({
+    arrivals: ids,
+    vectors: new Map(rows.map((row) => [row.id, row.vector])),
+    cues,
+  });
 }
 
 /**
@@ -348,11 +372,16 @@ export async function handleRecall(
   );
 
   const fusion = await timed<FusionResult>(async () => {
-    const hydrated = await hydrate(deps, seeds, activation.value.activated, mode);
+    const arrivals = arrivalIds(seeds, activation.value.activated);
+    const [hydrated, arrivalEvidence] = await Promise.all([
+      hydrate(deps, arrivals, mode),
+      measureArrivals(deps, arrivals, embedded.value.cues, mode),
+    ]);
     const lists = buildRankedLists(deps.config, {
       seeds,
       activated: activation.value.activated,
       hydrated,
+      arrivalEvidence,
       byStrategy: selection.value.byStrategy,
     });
     const vectors = await mmrVectors(deps, lists, mode);

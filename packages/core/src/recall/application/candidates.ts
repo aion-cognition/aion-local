@@ -18,6 +18,12 @@ export type TraversalInput = {
   readonly activated: readonly ActivatedNode[];
   /** Content for activated ids no seed strategy already carried, keyed by node id. */
   readonly hydrated: ReadonlyMap<string, SeedCandidate>;
+  /**
+   * What arrival scoring measured for the ids the spread reached on its own, keyed by node
+   * id. An id with no entry has no content vector to measure yet; omitting the map entirely
+   * is the same state for every arrival, which is what a run whose cues never embedded gets.
+   */
+  readonly arrivalEvidence?: ReadonlyMap<string, readonly Measurement[]>;
 };
 
 export type RankedListInput = TraversalInput & {
@@ -89,15 +95,25 @@ export function seedCandidate(seed: Seed): FusionCandidate | undefined {
   };
 }
 
-/** An item no seed strategy found: reached by traversal alone, and its path says how. */
-function activatedCandidate(node: ActivatedNode, candidate: SeedCandidate): FusionCandidate {
+/**
+ * An item no seed strategy found: reached by traversal alone, and its path says how.
+ *
+ * The rationale stays activation because that is how the node was found and the activation
+ * score is what ranks it. The evidence is the cosine arrival scoring measured against the
+ * query cues, which is what the gate reads: an arrival is admitted for answering the query,
+ * never for being reachable. `relevance` stays zero for the same reason it does on a recency
+ * hit, since the producing method's own number measures connection rather than relevance.
+ */
+function activatedCandidate(
+  node: ActivatedNode,
+  candidate: SeedCandidate,
+  evidence: readonly Measurement[],
+): FusionCandidate {
   return {
     ...baseCandidate(candidate),
     rationale: { method: 'activation', score: node.score, path: node.pathSummary },
     relevance: 0,
-    // No retrieval leg measured it, so it carries no evidence of its own and reaches a pack
-    // only through the anchor rule.
-    evidence: [],
+    evidence,
     activation: node.score,
   };
 }
@@ -126,7 +142,9 @@ export function traversalCandidates(input: TraversalInput): readonly FusionCandi
     const hit = input.hydrated.get(node.nodeId);
     if (hit !== undefined) {
       placed.add(node.nodeId);
-      candidates.push(activatedCandidate(node, hit));
+      candidates.push(
+        activatedCandidate(node, hit, input.arrivalEvidence?.get(node.nodeId) ?? []),
+      );
     }
   }
 

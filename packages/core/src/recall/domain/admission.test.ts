@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { admitsOnEvidence, type AdmissionPolicy, type Measurement } from './admission.js';
+import {
+  admitsOnEvidence,
+  wasMeasured,
+  type AdmissionPolicy,
+  type Measurement,
+} from './admission.js';
 
 /** The shipped shape: a calibrated cosine floor, a lower corroboration floor, exact-only BM25. */
 const CALIBRATED: AdmissionPolicy = {
@@ -117,7 +122,48 @@ describe('corroboration', () => {
 });
 
 describe('no evidence at all', () => {
-  it('admits nothing, which is what leaves a traversal-only candidate to the anchor rule', () => {
+  it('admits nothing, which is what refuses a node nothing could measure', () => {
     expect(admits([])).toBe(false);
+  });
+});
+
+/**
+ * A node the spread reached is measured against the query cues and enters the gate carrying
+ * that cosine, so the rule it faces is the seed rule. These are the same two floors read from
+ * the arrival side.
+ */
+describe('a node the spread reached', () => {
+  it('is admitted by its own measured cosine at the floor', () => {
+    expect(admits([{ method: 'vector', relevance: 0.63, cue: 'outbox table' }])).toBe(true);
+  });
+
+  it('is refused when the measurement lands under the floor', () => {
+    expect(admits([{ method: 'vector', relevance: 0.31, cue: 'outbox table' }])).toBe(false);
+  });
+
+  it('is refused on the reach itself, however strongly the graph connects it', () => {
+    expect(admits([{ method: 'activation', relevance: 0.98 }])).toBe(false);
+  });
+});
+
+describe('telling a refusal apart from a candidate nothing judged', () => {
+  it('reads a cosine as a measurement, whatever it came out at', () => {
+    expect(wasMeasured([{ method: 'vector', relevance: 0.02, cue: 'monsoon rainfall' }])).toBe(true);
+  });
+
+  it('reads a literal match as a measurement, since the gate judged it', () => {
+    expect(wasMeasured([{ method: 'bm25', relevance: 1, exact: true, cue: 'SQLITE_BUSY' }])).toBe(
+      true,
+    );
+  });
+
+  it('says nothing judged an arrival whose content vector is still pending', () => {
+    expect(wasMeasured([])).toBe(false);
+  });
+
+  it('says nothing judged a hit from a leg that measures something other than relevance', () => {
+    expect(wasMeasured([{ method: 'recency', relevance: 0 }])).toBe(false);
+    expect(wasMeasured([{ method: 'activation', relevance: 0.7 }])).toBe(false);
+    expect(wasMeasured([{ method: 'bm25', relevance: 1, cue: 'outbox' }])).toBe(false);
   });
 });

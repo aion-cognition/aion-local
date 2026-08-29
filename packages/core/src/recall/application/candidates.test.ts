@@ -127,6 +127,36 @@ describe('the traversal list', () => {
     expect(candidates.map((candidate) => candidate.id)).toEqual(['found', 'quiet']);
   });
 
+  it('hands fusion the cosine arrival scoring measured, since that is what the gate reads', () => {
+    const path = 'found -[PARTICIPATES_IN]-> session -[PARTICIPATES_IN]-> reached';
+    const candidates = traversalCandidates({
+      seeds: [found],
+      activated: [activated('found', 1, 'found'), activated('reached', 0.39, path)],
+      hydrated: new Map([['reached', hydratedNode('reached')]]),
+      arrivalEvidence: new Map([
+        ['reached', [{ method: 'vector', relevance: 0.68, cue: 'webhooks' }]],
+      ]),
+    });
+
+    expect(candidates[1]?.evidence).toEqual([
+      { method: 'vector', relevance: 0.68, cue: 'webhooks' },
+    ]);
+    // The measurement admits it; the spread still owns the explanation and the path.
+    expect(candidates[1]?.rationale).toEqual({ method: 'activation', score: 0.39, path });
+    expect(candidates[1]?.activation).toBe(0.39);
+  });
+
+  it('carries no evidence for an arrival whose content vector is still pending', () => {
+    const candidates = traversalCandidates({
+      seeds: [found],
+      activated: [activated('found', 1, 'found'), activated('pending', 0.39, 'found -[X]-> pending')],
+      hydrated: new Map([['pending', hydratedNode('pending')]]),
+      arrivalEvidence: new Map(),
+    });
+
+    expect(candidates[1]?.evidence).toEqual([]);
+  });
+
   it('skips an activated node nothing could hydrate', () => {
     const candidates = traversalCandidates({
       seeds: [found],

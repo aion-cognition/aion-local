@@ -5,6 +5,7 @@ import { hashContent } from '../../reflection/domain/content.js';
 import {
   absoluteRelevance,
   admitsOnEvidence,
+  wasMeasured,
   type AdmissionPolicy,
   type AdmissionReport,
   type Measurement,
@@ -58,6 +59,8 @@ export type FusionCandidate = {
   /**
    * Set only for a node no retrieval leg found, reached by spreading activation alone. Its
    * own floor is the spread's `min_activation`, already applied by the time it gets here.
+   * Admission never reads it: what admits such a node is the cosine arrival scoring measured
+   * for it, carried in `evidence` like any other measurement.
    */
   readonly activation?: number;
 };
@@ -200,9 +203,9 @@ function dedupeByContent(items: readonly FusedItem[]): FusedItem[] {
  *
  * One admission rule, and it is per item: a candidate reaches the pack when its own evidence
  * clears the absolute floors (`admitsOnEvidence`), and never otherwise. A node the spread
- * reached carries no measurement, so it is refused however strongly the rest of the pack
- * measured. Off-topic packs used to fill to budget precisely because one incidental hit
- * unlocked every node activation had touched.
+ * reached faces that rule on its own measured cosine, so it is admitted on what it answers
+ * rather than on what the rest of the pack measured. Off-topic packs used to fill to budget
+ * precisely because one incidental hit unlocked every node activation had touched.
  *
  * The report is what makes a thin pack readable: an empty result with `considered` at zero is
  * a substrate with nothing in it, and the same result with `considered` at forty is a floor
@@ -252,12 +255,12 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
     if (!admitsOnEvidence(entry.evidence, options.admission)) {
       // Two counters, because they are two different answers to "why is this pack thin".
       // Something measured the first and the measurement fell short; nothing measured the
-      // second at all, and the spread alone is not a reason to serve a memory.
-      if (entry.activation !== undefined && entry.relevance === 0) {
-        droppedUnmeasured += 1;
+      // second at all, which for a node the spread reached means a pending content vector.
+      if (wasMeasured(entry.evidence)) {
+        droppedBelowFloor += 1;
         continue;
       }
-      droppedBelowFloor += 1;
+      droppedUnmeasured += 1;
       continue;
     }
     anchored = true;

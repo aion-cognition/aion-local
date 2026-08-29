@@ -353,9 +353,11 @@ export type NodeContentVector = {
 };
 
 /**
- * Content embeddings for ids already ranked. Read only when the reranker is MMR, which is
- * off by default: 768 floats per row is the reason recall does not carry vectors through
- * the ordinary path.
+ * Content embeddings for a set of ids, batched: 768 floats per row is the reason recall does
+ * not carry vectors through the ordinary path and asks for them where it needs them. Two
+ * callers need them, the MMR reranker over the ranked set and arrival scoring over what the
+ * spread reached. A row comes back only for a node that carries a vector, so an id missing
+ * from the answer is a pending embedding rather than a zero.
  */
 export async function contentVectors(
   driver: Driver,
