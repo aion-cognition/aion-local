@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -6,12 +6,23 @@ import { describe, expect, it } from 'vitest';
 /**
  * A load-bearing guarantee: supersession closes a node, forgetting closes a node, and
  * nothing deletes one. A repo-wide scan is the cheapest place to hold that line, because
- * the rule has to survive every future task that writes Cypher. This file is the sole
- * exception, since it has to name the patterns it forbids.
+ * the rule has to survive every future task that writes Cypher.
  */
 const REPO_ROOT = fileURLToPath(new URL('../../../../../', import.meta.url));
 const PACKAGES_DIR = join(REPO_ROOT, 'packages');
 const THIS_FILE = fileURLToPath(import.meta.url);
+const HARNESS_FIXTURE = fileURLToPath(
+  new URL('./test-support/neo4j-harness.fixture.ts', import.meta.url),
+);
+
+/**
+ * The scan skips two files and no others. This one has to name the patterns it forbids. The
+ * harness fixture clears the test database that integration files share, which is the one
+ * deletion in the workspace that is not a write to memory: no product code can reach it, and
+ * correcting a real fact still supersedes it. The test below pins the list, so a third entry
+ * cannot land quietly.
+ */
+const EXEMPT = [THIS_FILE, HARNESS_FIXTURE];
 
 /**
  * Cypher keywords are case-insensitive, so the scan has to be too. Two exclusions keep
@@ -40,7 +51,7 @@ function collectSourceFiles(dir: string): string[] {
       if (entry.name !== 'node_modules' && entry.name !== 'dist') {
         found.push(...collectSourceFiles(path));
       }
-    } else if (entry.name.endsWith('.ts') && path !== THIS_FILE) {
+    } else if (entry.name.endsWith('.ts') && !EXEMPT.includes(path)) {
       found.push(path);
     }
   }
@@ -55,7 +66,18 @@ describe('no code path hard-deletes a node', () => {
     expect(files.some((file) => relative(REPO_ROOT, file).startsWith(`packages${sep}core`))).toBe(true);
   });
 
-  it('finds no Cypher delete anywhere outside this test', () => {
+  it('skips exactly two files: itself and the harness that clears the shared test database', () => {
+    expect(EXEMPT.map((file) => relative(REPO_ROOT, file))).toEqual([
+      join('packages', 'core', 'src', 'infrastructure', 'graph', 'no-hard-delete.test.ts'),
+      join('packages', 'core', 'src', 'infrastructure', 'graph', 'test-support', 'neo4j-harness.fixture.ts'),
+    ]);
+    for (const file of EXEMPT) {
+      expect(existsSync(file)).toBe(true);
+      expect(files).not.toContain(file);
+    }
+  });
+
+  it('finds no Cypher delete anywhere outside the two skipped files', () => {
     const offenders: string[] = [];
     for (const file of files) {
       const source = stripComments(readFileSync(file, 'utf8'));

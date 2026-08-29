@@ -134,7 +134,7 @@ slow, and how each failure surfaces to the caller.
 ```
 npm test              # both vitest projects: unit, then integration
 npm run test:unit      # no external services required
-npm run test:integration  # needs Docker (throwaway Neo4j per test file) and host Ollama
+npm run test:integration  # needs Docker (one throwaway Neo4j per run) and host Ollama
 npm run build          # tsc -b across the workspace
 ```
 
