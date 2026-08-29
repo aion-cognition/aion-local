@@ -82,7 +82,7 @@ export const DEFAULTS: Config = {
     corroborationFloor: 0.55,
     bm25AdmissionMode: 'exact',
     entityMatchThreshold: 0.7,
-    // Plan-pinned default. Two survivors keeps a cluster's best-ranked content visible
+    // Two survivors keeps a cluster's best-ranked content visible
     // (a pack that answers "did we ever discuss X" still gets one example) without one
     // burst shape consuming the entire bucket.
     clusterCap: 2,
@@ -208,7 +208,7 @@ export const DEFAULTS: Config = {
     // judgment by depth instead of age.
     lagOldestUnclaimedWarnMs: 600_000,
     lagQueueDepthWarnThreshold: 200,
-    // Plan-pinned default: well past any real tool-call gap, short enough that a
+    // Well past any real tool-call gap, short enough that a
     // transport a client forgot to close does not sit in the session map for a whole shift.
     sessionIdleExpiryMinutes: 30,
   },

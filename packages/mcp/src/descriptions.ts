@@ -1,5 +1,5 @@
 /**
- * PRD §3.4: the descriptions are tuned artifacts, not documentation. A tool-based memory
+ * The descriptions are tuned artifacts, not documentation. A tool-based memory
  * only works if the agent calls it, so each description states when to invoke as much as
  * what the tool does, and the version travels with every tool definition (`_meta`) so
  * observed cadence can be attributed to the text that produced it.
