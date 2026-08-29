@@ -193,3 +193,10 @@ surface (`stats`, `why`, `search`, `forget`). Recall serves `facts`, `episodes` 
 producer.
 
 P3's own ledger section is deferred to P5-6, which writes the P3-P5 history in one pass.
+
+Between P3 and P4 the system was exercised hard, deliberately, as a user rather than a test
+suite: four angles plus an independent concurrent client, roughly 70 raw findings merged to
+43. The verdict and the full findings live in `docs/exercise/2026-08-28-p3-exercise.md`;
+the short version is that the write path earns its complexity, the read path does not yet,
+and everything that reasons between nodes (supersession, narratives, the relevance floor)
+needs the fix round that report feeds. A fix-planning round gates P4.
