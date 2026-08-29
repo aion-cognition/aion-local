@@ -30,18 +30,27 @@ const ANTHROPIC_API_KEY = /\bsk-ant-[A-Za-z0-9_-]{20,}\b/;
 const OPENAI_API_KEY = /\bsk-(?!ant-)[A-Za-z0-9_-]{20,}\b/;
 
 /**
- * The catch-all for credentials with no recognizable shape of their own, which is most
- * of them: DB passwords, internal service keys, vendor keys with no prefix. Three
- * decisions carry it.
- *
- * No word boundary before the key name, so `DB_PASSWORD=` and `OPENAI_API_KEY=` match —
- * `_` is a word character, so `\b` never fires between it and the name.
+ * The credential-key vocabulary and the value shape that follows one, split out because
+ * three surfaces have to agree on them: the embedded `key=value` rule below, and the two
+ * predicates the deep walk uses to apply that same judgement to a structured JSON field,
+ * where the key and the value are separate strings and no single string ever holds both.
+ * One definition, so the structured path can never drift from the embedded one.
  *
  * The value is any run of 8+ non-delimiter characters, which is wide enough for shell
  * and env passwords (`P@ssw0rd!`) that an alphanumeric class drops on their first
  * symbol. `.` is excluded from that run because it is what separates a real secret from
  * a code reference: `api_key: process.env.API_KEY` truncates to `process`, under the
  * length floor, and survives intact.
+ */
+const CREDENTIAL_KEY_WORDS = String.raw`password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret`;
+const CREDENTIAL_VALUE_BODY = String.raw`(?!(?:undefined|redacted)\b)[^\s"'\x60.,;:<>(){}[\]\\]{8,}`;
+
+/**
+ * The catch-all for credentials with no recognizable shape of their own, which is most
+ * of them: DB passwords, internal service keys, vendor keys with no prefix.
+ *
+ * No word boundary before the key name, so `DB_PASSWORD=` and `OPENAI_API_KEY=` match —
+ * `_` is a word character, so `\b` never fires between it and the name.
  *
  * No entropy gate. Shannon entropy over a short string is bounded by log2(length), so a
  * 4.5 bits/char threshold is unreachable below 23 characters — the exact band where
@@ -49,8 +58,43 @@ const OPENAI_API_KEY = /\bsk-(?!ant-)[A-Za-z0-9_-]{20,}\b/;
  * from `process.env.API_KEY` (3.9) anyway. Length plus the delimiter class does that
  * work, and over-redacting a placeholder costs a fingerprint, not a leak.
  */
-const GENERIC_SECRET_ASSIGNMENT =
-  /(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret)\s*[:=]\s*["']?(?<secret>(?!(?:undefined|redacted)\b)[^\s"'`.,;:<>(){}[\]\\]{8,})/i;
+const GENERIC_SECRET_ASSIGNMENT = new RegExp(
+  String.raw`(?:${CREDENTIAL_KEY_WORDS})\s*[:=]\s*["']?(?<secret>${CREDENTIAL_VALUE_BODY})`,
+  'i',
+);
+
+/**
+ * A structured field name is the whole context a JSON value gets, so the match is on
+ * containment rather than adjacency: `AWS_ACCESS_KEY_ID` and `db_password_prod` are
+ * credential keys, though neither puts the vocabulary word against the delimiter the way
+ * the embedded rule requires.
+ *
+ * Containment is bounded by name segments — `_`, `-`, a case hump, or either end — with an
+ * optional plural. Whole words that merely start with a vocabulary word are not credential
+ * keys, and the distinction is not cosmetic: `tokenizer` and `secretariat` name ordinary
+ * telemetry, and fingerprinting their values would destroy content permanently, since
+ * nothing in the substrate is ever hard-deleted.
+ */
+const CREDENTIAL_KEY_NAME = new RegExp(String.raw`(?:^|_)(?:${CREDENTIAL_KEY_WORDS})s?(?:$|_)`);
+
+/** `apiKeyValue`, `x-api-key`, and `API_KEY` are one name; segment boundaries are all `_`. */
+function segmentKey(key: string): string {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[^A-Za-z0-9]+/g, '_')
+    .toLowerCase();
+}
+
+/** The embedded rule's value class, anchored: what a whole JSON value has to look like. */
+const CREDENTIAL_VALUE = new RegExp(String.raw`^${CREDENTIAL_VALUE_BODY}$`, 'i');
+
+export function isCredentialKey(key: string): boolean {
+  return CREDENTIAL_KEY_NAME.test(segmentKey(key));
+}
+
+export function isCredentialValue(value: string): boolean {
+  return CREDENTIAL_VALUE.test(value);
+}
 
 /**
  * Priority order, not declaration order for its own sake: earlier rules claim their
