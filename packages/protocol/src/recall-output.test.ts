@@ -5,6 +5,17 @@ const baseMetadata = {
   token_estimate: 240,
   stage_timings_ms: { embed: 12, cues: 340, seeds: 55, activation: 80, fusion: 4 },
   cues: [{ text: 'webhooks', source: 'query', weight: 3 }],
+  admission: {
+    considered: 0,
+    admitted: 0,
+    dropped_below_floor: 0,
+    dropped_unmeasured: 0,
+    dropped_duplicate_content: 0,
+    dropped_near_duplicate: 0,
+    vector_floor: 0.6,
+    corroboration_floor: 0.45,
+    bm25_mode: 'exact',
+  },
 };
 
 describe('MemoryPackSchema valid fixtures', () => {

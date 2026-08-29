@@ -38,13 +38,32 @@ describe('queueLagSnapshot', () => {
     enqueueReflectionJob(store.db, 'integrate', { episode_id: 'e2' }, { lane: 'bulk' });
     enqueueReflectionJob(store.db, 'integrate', { episode_id: 'e3' }, { lane: 'bulk' });
     store.db
-      .prepare("UPDATE reflection_queue SET enqueued_at = ?, attempts = 5 WHERE json_extract(payload_json, '$.episode_id') = 'e1'")
+      .prepare("UPDATE reflection_queue SET enqueued_at = ? WHERE json_extract(payload_json, '$.episode_id') = 'e2'")
       .run(new Date(now.getTime() - 90_000).toISOString());
 
     const snapshot = queueLagSnapshot(store.db, 5, now);
 
     expect(snapshot.depthByLane).toEqual({ interactive: 1, bulk: 2 });
     expect(snapshot.oldestUnclaimedMs).toBe(90_000);
+    expect(snapshot.exhausted).toBe(0);
+  });
+
+  /**
+   * The live shape the gauges misread: one job past its attempts, enqueued hours ago, with an
+   * otherwise empty queue. It is not depth and its age is not a wait, because no worker will
+   * ever claim it; the exhausted count is where it belongs and the only place it belongs.
+   */
+  it('keeps an exhausted job out of the depth and out of the oldest-unclaimed age', () => {
+    const now = new Date('2026-08-29T08:00:00.000Z');
+    enqueueReflectionJob(store.db, 'integrate', { episode_id: 'wedged' }, { lane: 'interactive' });
+    store.db
+      .prepare("UPDATE reflection_queue SET enqueued_at = ?, attempts = 5 WHERE json_extract(payload_json, '$.episode_id') = 'wedged'")
+      .run(new Date(now.getTime() - 30_619_503).toISOString());
+
+    const snapshot = queueLagSnapshot(store.db, 5, now);
+
+    expect(snapshot.depthByLane).toEqual({ interactive: 0, bulk: 0 });
+    expect(snapshot.oldestUnclaimedMs).toBeUndefined();
     expect(snapshot.exhausted).toBe(1);
   });
 

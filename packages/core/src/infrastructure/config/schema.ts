@@ -61,16 +61,16 @@ export const ConfigSchema = z.object({
      */
     entityMatchThreshold: proportion,
     /**
-     * A near-duplicate cluster's cap on how many of its members one bucket may hold: a
-     * measured burst of near-identical episodes took 29.5% of a pack's slots. The env var
-     * is `AION_PACK_CLUSTER_CAP`.
+     * A near-duplicate cluster's cap on how many of its members one bucket may hold (
+     * a burst of near-identical episodes took 29.5% of a pack's slots). Not an Appendix E
+     * parameter; the plan pins the default at 2 and the env var name at `AION_PACK_CLUSTER_CAP`.
      */
     clusterCap: positiveInt,
     /**
-     * The facts bucket's own three rules. A measured decision-oriented workload showed entity
-     * glosses taking 58% of fact slots and Decision nodes 3%. `entityGlossCap` bounds the
-     * glosses; `restatementFloor` is the cosine at or above which a Goal or Plan is judged to
-     * be the query said back rather than answered, measured in `facts-calibration.int.test.ts`;
+     * The facts bucket's own three rules (entity glosses took 58% of fact slots and
+     * Decision nodes 3% on a decision-oriented workload). `entityGlossCap` bounds the glosses;
+     * `restatementFloor` is the cosine at or above which a Goal or Plan is judged to be the
+     * query said back rather than answered, measured in `facts-calibration.int.test.ts`;
      * `decisionBoost` multiplies the fused score of Decision and Insight when the cue model
      * judged the query decision-shaped.
      */
@@ -188,13 +188,14 @@ export const ConfigSchema = z.object({
     workerVectorBatchSize: positiveInt,
     /** Unenriched episodes `aion doctor` reports as a warning rather than a count. */
     reconcileWarnThreshold: nonNegativeInt,
-    /** `aion doctor`'s `queue-lag` check warns past this age; no gauge existed before this. */
+    /** `aion doctor`'s `queue-lag` check warns past this age; no gauge existed at all before it. */
     lagOldestUnclaimedWarnMs: positiveInt,
     /** `aion doctor`'s `queue-lag` check warns past this total unclaimed depth. */
     lagQueueDepthWarnThreshold: nonNegativeInt,
     /**
      * A client's `close()` tears down its transport locally without a DELETE, so the
-     * server-side session-close hook is best-effort. This is the backstop: an MCP transport
+     * server-side session-close hook fires only when a client sends one. This is the trigger
+     * that does not depend on that — an MCP transport
      * session with no request in this many minutes closes on its own, independent of DELETE.
      */
     sessionIdleExpiryMinutes: positiveInt,

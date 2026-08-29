@@ -1,5 +1,6 @@
 import {
   MemoryPackSchema,
+  type AdmissionReportOutput,
   type Cue,
   type Degradation,
   type MemoryPack,
@@ -7,6 +8,7 @@ import {
   type PackTruncation,
   type StageTimingsMs,
 } from '@aion/protocol';
+import type { AdmissionReport } from './admission.js';
 import { GLOSS_LABEL } from './facts.js';
 import type { FusedItem } from './fusion.js';
 
@@ -123,7 +125,10 @@ function toPackItem(item: FusedItem, rank: number): MemoryPackItem {
     content: item.content,
     ...(item.occurredAt === undefined ? {} : { occurred_at: item.occurredAt.toISOString() }),
     rank,
-    confidence: item.relevance,
+    // `measured`, not `relevance`: relevance is the producing method's own number, and the
+    // BM25 leg normalizes to the best hit of its cue, so the top lexical hit of any query
+    // would print 1.00 beside a cosine of 0.62.
+    confidence: item.measured,
     rationale: item.rationale,
     currency: item.currency,
     ...(item.supersededBy === undefined
@@ -159,7 +164,12 @@ function renderDay(timestamp: string): string {
  */
 function renderItem(entry: PackEntry): string {
   const { item } = entry;
-  const facts = [`[${item.id}]`, item.rationale.method, `confidence ${item.confidence.toFixed(2)}`];
+  // Zero is not low confidence, it is no measurement: the item was admitted on a literal
+  // match, and printing "confidence 0.00" beside a memory that answered exactly would read
+  // as the opposite of what the gate decided.
+  const measurement =
+    item.confidence === 0 ? 'exact match' : `confidence ${item.confidence.toFixed(2)}`;
+  const facts = [`[${item.id}]`, item.rationale.method, measurement];
   if (item.occurred_at !== undefined) {
     facts.push(
       entry.gloss
@@ -184,6 +194,8 @@ function renderBucket(bucket: PackBucket, entries: readonly PackEntry[]): string
 export type AssemblePackInput = {
   /** Fused and ranked, best first. Bucket routing, caps, and the budget are applied here. */
   readonly items: readonly FusedItem[];
+  /** What the floors judged and refused, so a thin pack can say which of the two it is. */
+  readonly admission: AdmissionReport;
   readonly caps: BucketCaps;
   readonly tokenBudget: number;
   readonly cues: readonly Cue[];
@@ -202,7 +214,7 @@ export type AssemblePackInput = {
   readonly restating?: ReadonlySet<string>;
   /**
    * How many entity glosses the facts bucket may hold. Absent leaves it uncapped; the
-   * pipeline always supplies it, because uncapped measured 58% of a pack's slots.
+   * pipeline always supplies it, because uncapped is what the exercise measured at 58% of slots.
    */
   readonly entityGlossCap?: number;
 };
@@ -222,9 +234,9 @@ const TRUNCATION_PHRASES: Readonly<Record<PackTruncation, string>> = {
 /**
  * The honesty signals as one plain line at the top of the rendered block. A client reading
  * only `content` from an MCP tool result sees the rendered text and nothing else, so a pack
- * whose metadata says "degraded" reads to that client exactly like a confident answer, which
- * has already cost a full baseline run. The same three signals stay in `metadata` for a
- * structured consumer; this is the copy that reaches everyone.
+ * whose metadata says "degraded" reads to that client exactly like a confident answer — one
+ * exercise angle lost a full baseline run to precisely that. The same three signals
+ * stay in `metadata` for a structured consumer; this is the copy that reaches everyone.
  */
 function honestyNote(input: AssemblePackInput): string | undefined {
   const clauses: string[] = [];
@@ -328,6 +340,21 @@ function render(selection: Selection, note: string | undefined): string {
   return `${PACK_HEADING}\n\n${sections.join('\n\n')}`;
 }
 
+/** Snake_case on the wire, and the policy flattened alongside the counts it explains. */
+function toAdmissionOutput(report: AdmissionReport): AdmissionReportOutput {
+  return {
+    considered: report.considered,
+    admitted: report.admitted,
+    dropped_below_floor: report.droppedBelowFloor,
+    dropped_unmeasured: report.droppedUnmeasured,
+    dropped_duplicate_content: report.droppedDuplicateContent,
+    dropped_near_duplicate: report.droppedNearDuplicate,
+    vector_floor: report.policy.vectorFloor,
+    corroboration_floor: report.policy.corroborationFloor,
+    bm25_mode: report.policy.bm25Mode,
+  };
+}
+
 /**
  * The pack is parsed against its own schema on the way out. Its invariants (a present bucket
  * is never empty, an item always carries content and a rationale) are this module's to hold,
@@ -354,6 +381,7 @@ export function assemblePack(input: AssemblePackInput): MemoryPack {
       token_estimate: estimateTokens(renderedText),
       stage_timings_ms: input.timings,
       cues: [...input.cues],
+      admission: toAdmissionOutput(input.admission),
       ...(input.degraded === undefined || input.degraded.length === 0
         ? {}
         : { degraded: [...input.degraded] }),

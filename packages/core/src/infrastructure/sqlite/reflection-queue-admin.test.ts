@@ -55,8 +55,26 @@ describe('reflection queue administration', () => {
 
     const counts = countQueueJobs(store.db, {}, 5);
 
-    expect(counts).toMatchObject({ total: 5, claimed: 1, unclaimed: 4, exhausted: 1 });
-    expect(counts.oldestUnclaimedAt).toEqual(expect.any(String));
+    expect(counts).toMatchObject({ total: 5, claimed: 1, unclaimed: 4, exhausted: 1, pending: 3 });
+    expect(counts.oldestPendingAt).toEqual(expect.any(String));
+  });
+
+  /**
+   * The wedged-job shape, exactly: one row past its attempts and nothing else in the queue.
+   * A worker will never claim it again, so reporting it as a backlog with an age is how a
+   * drained queue came to read as hours behind.
+   */
+  it('leaves an exhausted row out of the backlog and out of its age', () => {
+    const stuck = enqueue('agent', 'interactive', 'stuck');
+    store.db
+      .prepare('UPDATE reflection_queue SET attempts = 5, enqueued_at = ? WHERE id = ?')
+      .run('2026-08-28T00:00:00.000Z', stuck);
+
+    const counts = countQueueJobs(store.db, {}, 5);
+
+    expect(counts).toMatchObject({ total: 1, unclaimed: 1, exhausted: 1, pending: 0 });
+    expect(counts.oldestPendingAt).toBeUndefined();
+    expect(countQueueJobsByLane(store.db, 5)).toEqual(new Map());
   });
 
   it('counts pending depth per lane', () => {

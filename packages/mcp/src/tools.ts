@@ -92,8 +92,8 @@ export type ToolBackend = {
  * The lane is named in the text and not only in `structuredContent`: a client that reads the
  * rendered block alone would otherwise never learn that its episode was demoted behind a
  * bulk load, which is the one thing the ack exists to tell it. `pending_ahead` follows the
- * same reasoning: a text-only client is exactly the one with no other way to see how far
- * behind live traffic its own memory queued.
+ * same reasoning: a text-only client is exactly the one with no other way to see how
+ * far behind live traffic its own memory queued.
  */
 function ackText(output: ReflectionOutput): string {
   const base = `Stored episode ${output.episode_id}; queued for reflection (${output.lane} lane).`;

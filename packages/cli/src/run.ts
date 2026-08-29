@@ -1,6 +1,7 @@
 import { runDoctor } from './doctor.js';
 import { runInit } from './init.js';
 import { runLast } from './last.js';
+import { runProposals } from './proposals.js';
 import { runQueue } from './queue.js';
 import { runStatus } from './status.js';
 
@@ -31,6 +32,10 @@ const commands: Record<string, Command> = {
   queue: {
     summary: 'inspect the reflection queue: ls | drop | promote | reconcile',
     run: (argv) => runQueue(argv),
+  },
+  proposals: {
+    summary: 'review judged contradictions and duplicate entities: ls | apply | dismiss',
+    run: (argv) => runProposals(argv),
   },
   help: {
     summary: 'show this message',

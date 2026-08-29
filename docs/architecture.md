@@ -30,7 +30,9 @@ cues, or memory packs, only nodes, edges, and rows.
   ranked lists), `recall.ts` (the pipeline), `side-effects.ts` (post-recall listeners).
 - **`reflection/domain/`**: `content.ts`, episode/turn shaping and content hashing.
 - **`reflection/application/`**: `intake.ts` (the write path), `dispatch.ts` (the event
-  emitter intake signals). Nothing subscribes to it yet; see Status in the README.
+  emitter intake signals), `worker.ts` (the subscriber: claims queue rows and runs the
+  orchestrator), `orchestrator.ts` and `stages/` (the enrichment pipeline),
+  `narratives.ts`, `lanes.ts`, `vectors.ts` (pending-vector backfill).
 - **`redaction/`**: `entropy.ts`, `rules.ts`, `deep-walk.ts`, `redact.ts`,
   `fingerprint.ts`. Deterministic and rule-based by design: this is the one place inference
   is deliberately not used, because a credential leak cannot wait on a model's judgment.
@@ -57,27 +59,31 @@ import in the codebase.
 5. Shape the payload into one episode and its turns (`prepareEpisode`), each carrying a
    sha256 content hash over a canonically key-sorted JSON encoding.
 6. Check for a duplicate by `(sessionId, contentHash)` outside any transaction. If found,
-   skip straight to step 8: no embedding call, no write.
-7. Otherwise embed the episode text and every turn's text in one batched Ollama call, then
-   open a single write transaction: lock the session node (which serializes intake for
-   that session and closes the race where two concurrent identical payloads both miss the
-   duplicate check), re-check the duplicate under the lock, write the stamped `Episode`
-   node and each stamped `Turn` node, and link `Turn -[:PARTICIPATES_IN]-> Episode`,
+   skip straight to step 8: no write, no new queue row.
+7. Otherwise open a single write transaction and commit the durable record first: lock the
+   session node (which serializes intake for that session and closes the race where two
+   concurrent identical payloads both miss the duplicate check), re-check the duplicate
+   under the lock, write the stamped `Episode` node and each stamped `Turn` node with no
+   vector properties, and link `Turn -[:PARTICIPATES_IN]-> Episode`,
    `Episode -[:PARTICIPATES_IN]-> Session`, and `Turn -[:FOLLOWS]-> <previous Turn>`.
 8. Find or create a pending `integrate` job in the SQLite reflection queue, keyed by
-   episode id. The check is against the queue, not assumed from step 7's outcome, so a
-   crash between the episode commit and the enqueue self-heals on the next identical push.
+   episode id and carrying its lane. The check is against the queue, not assumed from step
+   7's outcome, so a crash between the episode commit and the enqueue self-heals on the
+   next identical push.
 9. If a new job was enqueued, signal `ReflectionDispatch` so a subscribed worker can start
    immediately; the SQLite row is what a restart replays from regardless.
-10. Return `{ episode_id, queued: true }`.
+10. Return `{ episode_id, queued: true }` plus the assigned `lane` and `pending_ahead`
+    (unclaimed interactive jobs ahead at enqueue time).
+11. Embed the episode text and every turn's text in one batched Ollama call and attach the
+    content vectors in a follow-up write. A failure here changes nothing above: the
+    episode, its turns, and the queue row are already committed, and a `:Memory` node
+    without its `content_vec` property is the pending marker the worker's startup drain
+    and the `vector_backfill` path complete when Ollama returns.
 
-An outage in step 6 or 7 leaves nothing behind. The embedding call happens before the write
-transaction opens, so a dead Ollama or an unreachable Neo4j produces no episode, and
-therefore no queue row either, since the row is keyed on an episode id. The call fails with
-`ReflectionNotStoredError`, whose message says the experience was not kept and has to be
-sent again. PRD §10 says reflection jobs queue until the service returns; they do not, and
-cannot until intake writes the durable record before it embeds. Naming the drop is the
-interim honest answer, not the fix.
+A Neo4j outage in step 7 still refuses honestly with `ReflectionNotStoredError`: nothing is
+half-written, and the message says the experience was not kept. An Ollama outage no longer
+loses anything: the record commits, the job queues, and the vectors arrive when the model
+does. `docs/degradation.md` holds the live-verified behavior for both modes.
 
 No generation call happens after step 7. Extraction, turning an episode into entities,
 associations, cognitive structure and narratives, is a separate pipeline that subscribes to
@@ -88,7 +94,7 @@ queue row is the durable truth; the signal is best-effort.
 Which row it claims is a scheduling decision, not insertion order. Every row carries a lane
 (`interactive` by default, `bulk` when the caller flagged it or the arrival-rate backstop
 demoted the session), the session it belongs to, and its turn within that (lane, session)
-group. `claimNext` orders by lane first, then turn, then insertion — so the bulk lane never
+group. `claimNext` orders by lane first, then turn, then insertion, so the bulk lane never
 runs while an interactive job is claimable, and inside a lane the sessions interleave. The
 turn is stamped at enqueue rather than computed at claim time: a window function over the
 unclaimed rows renumbers every group as rows leave it, which collapses the interleave back
@@ -126,10 +132,10 @@ independently for the pack's `stage_timings_ms`:
 5. **Fusion.** Seed and activated candidates are hydrated, then fused: weighted Reciprocal
    Rank Fusion across the vector/bm25/graph_traversal legs by default (`rrf`, k=60), or
    MMR reranking when `AION_SEARCH_RERANKER=mmr`. Ranking and admission are separate:
-   an item reaches the pack only on absolute evidence — a cosine at or above
+   an item reaches the pack only on absolute evidence: a cosine at or above
    `AION_VECTOR_ADMISSION_FLOOR`, a Lucene match on the verbatim cue, two independent
    measurements at or above `AION_CORROBORATION_FLOOR`, or traversal from a pack something
-   else anchored — however well it ranks. Duplicates collapse by content hash, keeping the
+   else anchored, however well it ranks. Duplicates collapse by content hash, keeping the
    higher-ranked instance.
 6. **Pack assembly.** Fused items route to a bucket by node label: `Episode`/`Turn` to
    `episodes`, `Entity` to `facts`. Each bucket is capped, trimmed to the token budget,

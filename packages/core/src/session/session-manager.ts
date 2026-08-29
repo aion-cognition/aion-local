@@ -37,6 +37,20 @@ export class SessionManager {
     this.#backbone = backbone;
   }
 
+  /**
+   * The session id for an identity, with no graph write. A Session node is minted by the
+   * first call that produces content, never by connecting or by reading: half the Session
+   * nodes the exercise measured held zero episodes, and each one still added an edge to both
+   * structural hubs and a link to the FOLLOWS chain. `ensureGraphSession` keys the node on
+   * the identity verbatim, so the id is known before the node exists.
+   */
+  sessionIdFor(identity: string): string {
+    if (identity.length === 0) {
+      throw new Error('session identity must be a non-empty string');
+    }
+    return this.#resolved.get(identity) ?? identity;
+  }
+
   async ensureSession(input: EnsureSessionInput): Promise<EnsureSessionResult> {
     const identity = input.identity;
     if (identity.length === 0) {

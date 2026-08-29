@@ -46,7 +46,7 @@ Verified by the unit suite, not live-induced: `cues.test.ts:144` (a degraded res
 never cached), `:215` and `:224` (both `invalid_output` shapes), `:233` (timeout). 18/18
 pass (`npx vitest run packages/core/src/recall/application/cues.test.ts`).
 
-### Full Ollama outage — recall
+### Full Ollama outage: recall
 
 **Trigger.** `AION_OLLAMA_URL` points at nothing reachable. Both the cue-model call and
 the embedding call fail.
@@ -72,7 +72,7 @@ in the same request. `aion last` prints two `degraded` lines.
 
 **Recovers.** Automatically, next call, once Ollama answers again.
 
-### Full Ollama outage — reflection
+### Full Ollama outage: reflection
 
 **Trigger.** Same outage, on the write path. Intake makes one embedding call, and it makes
 it after the write transaction has already committed
@@ -84,7 +84,7 @@ its `Turn` nodes, and every backbone edge with no `content_vec` property at all
 (`intake.ts:312-321`); only then does `attachVectors` embed. The call throws, it is logged
 as `content vectors deferred; the episode is stored and queued`, and intake returns
 normally (`intake.ts:254-267`). A `:Memory` node without `content_vec` is itself the
-pending marker — there is no flag property to keep in sync with it
+pending marker; there is no flag property to keep in sync with it
 (`packages/core/src/infrastructure/graph/pending-vectors.ts`).
 
 **What the caller sees.** The ordinary ack, `{episode_id, queued: true}`. No MCP error.
@@ -92,7 +92,7 @@ pending marker — there is no flag property to keep in sync with it
 refuse is an unreachable graph.
 
 Until the backfill runs, the episode is reachable by BM25, entity resolution, recency, and
-traversal, and invisible to vector search — the same shape as the recall-side outage above,
+traversal, and invisible to vector search, the same shape as the recall-side outage above,
 and for the same reason. It is ranking that is missing, not the memory.
 
 **Diagnose.** `aion doctor`'s `ollama-round-trip` check. Live, the warn line above names the
@@ -114,7 +114,7 @@ against live Ollama filled all three at 768 dimensions, a second pass wrote the 
 vectors and left the pending set empty. The failing embed call itself costs 12ms
 (`TypeError: fetch failed`), measured against `http://127.0.0.1:9`.
 
-### Neo4j down — recall
+### Neo4j down: recall
 
 **Trigger.** The graph is unreachable mid-service: stopped, network-partitioned, or
 otherwise not answering Bolt.
@@ -169,7 +169,7 @@ every other check depends on. Live, `selectSeeds`' error log line above names it
 process life (`packages/core/src/infrastructure/graph/connection.ts:143-193`); its pool
 reconnects on its own once Neo4j answers again.
 
-### Neo4j down — reflection
+### Neo4j down: reflection
 
 **Trigger.** Same outage, on the write path, for a session whose identity has not been
 resolved to a Session node yet (a fresh MCP connection, or the process's first reflection
@@ -257,7 +257,7 @@ aion-mcp`.
 **What happens.** The in-flight call keeps running to completion server-side; nothing
 cancels it. A client-side `transport.close()` sends no MCP `DELETE` (verified against the
 SDK: `Client.close()` aborts the local transport and never issues the request
-`onsessionclosed` depends on — EX-32), so the server-side session for that client stays in
+`onsessionclosed` depends on (EX-32), so the server-side session for that client stays in
 the session map (`packages/mcp/src/service.ts`) rather than closing right away. Two
 backstops bound it instead of a leak: the map evicts down to `MAX_SESSIONS = 512` on every
 new session past the cap (logged as `mcp session evicted`), and `SessionIdleSweeper`
@@ -288,27 +288,27 @@ Every knob below is `AION_*`-overridable; the catalog is
 | `AION_CUE_BUDGET_MS` (`recall.cueBudgetMs`) | 8000 | Headroom past a cold cue-model start (measured 2288ms cold vs. 558-811ms warm), so the hang guard stays a hang guard instead of firing on ordinary recalls. | A call that has actually hung blocks recall that much longer before the ladder degrades it. | PRD §14 pins 2000. Raised to 5000 in the original build, then to 8000 after a live gate rerun busted 2000 at a measured 2030ms. |
 | `AION_RECALL_MAX_EPISODES` (`recall.maxEpisodes`) | 20 | Room for a graph-traversal item to survive fusion against near-tie vector hits. The checkpoint's one traversal-reached item ranked 13th: absent from the pack at 5, 8, and 12, present at 20. | A bigger `episodes` bucket before the token budget trims it; `episodes` is the pack's largest bucket. | Whitepaper Appendix E pins 5. Checked live at 5/8/12/20; only 20 passed. |
 | `AION_RECALL_TOKEN_BUDGET` (`recall.tokenBudget`) | 1200 | Nothing directly; this is the actual size ceiling on a pack, downstream of every bucket cap. | A pack trimmed harder, regardless of how many items the caps above admitted. | Not flagged as a deviation. |
-| `AION_VECTOR_ADMISSION_FLOOR` (`recall.vectorAdmissionFloor`) | 0.50 | Keeps weak, near-random matches out of a pack. Calibrated against nomic-embed-text: unrelated pairs measure p95 0.474, genuine matches p05 0.513. | Pushed higher, it starves real matches — the weakest genuine pair measured 0.588, and the exercise measured one at 0.631, so 0.60 would drop them. `floor-calibration.int.test.ts` fails if the committed value stops separating the two distributions. | Replaces PRD §14's `AION_MIN_RELEVANCE`, which named one floor for every method. |
-| `AION_CORROBORATION_FLOOR` (`recall.corroborationFloor`) | 0.45 | The lower bar a cosine has to clear to count as one of the two independent measurements that admit an item neither could carry alone. | Lowered toward the noise median (measured 0.391), two unrelated cues start corroborating each other. | New in the fix round. |
+| `AION_VECTOR_ADMISSION_FLOOR` (`recall.vectorAdmissionFloor`) | 0.60 | Keeps weak, near-random matches out of a pack on their own. Calibrated against nomic-embed-text on 28 unrelated pairs and 10 genuine matches: unrelated p50 0.408, p95 0.530, max 0.547; related min 0.451, p50 0.773. The distributions overlap between 0.451 and 0.547, so no floor separates them cleanly; 0.60 sits above the whole noise sample and lets corroboration (below) admit the two genuine matches that fall inside the overlap. | A single-leg match inside the overlap band (measured min 0.451) needs a second corroborating leg to be admitted at all. `floor-calibration.int.test.ts` fails if the committed value stops separating the two distributions. | Replaces PRD §14's `AION_MIN_RELEVANCE`, which named one floor for every method. |
+| `AION_CORROBORATION_FLOOR` (`recall.corroborationFloor`) | 0.55 | The lower bar a cosine has to clear to count as one of the two independent measurements that admit an item neither could carry alone. Set above the noise sample's max (0.547), not merely its median, so two corroborating legs are two readings of signal rather than two readings of the same noise. | Lowered toward the noise ceiling, two unrelated cues start corroborating each other on noise alone. | New in the fix round. |
 | `AION_BM25_ADMISSION_MODE` (`recall.bm25AdmissionMode`) | `exact` | `exact` admits a Lucene match on the verbatim cue and nothing else from the lexical leg; `corroborated` makes even that need a second measurement; `any` restores the pre-floor behaviour, where one shared term admitted anything. | `any` is what EX-1 measured: normalize-to-best put the top hit of every query at 1.00, so five off-topic queries each filled the pack to budget. | New in the fix round. |
 | `AION_RECALL_MAX_HOPS` (`recall.maxHops`) | 3 | Lets activation cross one `FOLLOWS` link between two episodes via the Session hub (`Episode-[:PARTICIPATES_IN]->Session-[:FOLLOWS]->Session-[:PARTICIPATES_IN]->Episode` is 3 hops). At 2, that path reaches only a contentless Session node. | Wider fan-out per iteration, more nodes visited before `maxNodesVisited` caps it. | Whitepaper Appendix E pins 2. |
 | `AION_PACK_CLUSTER_CAP` (`recall.clusterCap`) | 2 | Stops one near-duplicate content cluster from filling a bucket. EX-22 measured a burst of near-identical episodes taking 29.5% of a pack's slots. | Raised, a repeated shape crowds out more of a bucket's real diversity before the cap stops it. | New in the fix round. |
 | `contextResonance.seedLimit` / `.activationLimit` | 10 / 50 | Bounds the seed set and the co-activated set per recall, so activation's cost is predictable. | A true signal ranked past the cap is not considered at all, not degraded. | Not flagged as a deviation; matches the whitepaper's seed budget. |
 | `activation.maxNodesVisited` / `.hubThreshold` | 500 / 10 | Bounds worst-case traversal cost; the hub threshold keeps one high-degree node from flooding the frontier. | A legitimate multi-hop path through a dense area can be cut before it is explored. | Not flagged as a deviation. |
 | Other bucket caps: `maxFacts` / `maxNarratives` / `maxPreferences` / `maxResonant` / `vectorLimit` | 15 / 5 / 3 / 5 / 5 | Same shape as `maxEpisodes`: each decides what survives fusion for its bucket. | Same cost as `maxEpisodes`, unverified at other values: only the episode cap has a live pass/fail checkpoint behind it. `preferences` and `resonant` have no producer yet (P4), so their caps are inert today. | Not flagged as a deviation. |
-| `AION_WORKER_COUNT` (`operational.workerCount`) | 1 | Concurrent reflection claim-and-run slots on one shared queue claimant, so more than one episode enriches at once. | Every worker still calls the same host Ollama for its model stages (`AION_REFLECT_MODEL`), and nothing prioritizes between them — see the contention note below. | PRD §7 pins 1. |
+| `AION_WORKER_COUNT` (`operational.workerCount`) | 1 | Concurrent reflection claim-and-run slots on one shared queue claimant, so more than one episode enriches at once. | Every worker still calls the same host Ollama for its model stages (`AION_REFLECT_MODEL`), and nothing prioritizes between them; see the contention note below. | PRD §7 pins 1. |
 | `AION_LANE_SESSION_ARRIVAL_MAX` (`lanes.sessionArrivalMax`) | 10 | Head-room for a legitimate session-end flush of a long conversation, which arrives as several episodes at once and must stay interactive. | Raised far enough, a client flooding from one session keeps priority for longer before the backstop sees it. The measured flood ran 51 arrivals per session per minute. | New in the fix round. |
 | `AION_LANE_GLOBAL_ARRIVAL_MAX` (`lanes.globalArrivalMax`) | 120 | Arrivals across every session inside the window before the substrate counts as hot. Twelve busy sessions' worth. | Below ordinary multi-agent load, every session drops to the hot allowance for no reason. | New in the fix round. |
 | `AION_LANE_HOT_SESSION_ARRIVAL_MAX` (`lanes.hotSessionArrivalMax`) | 3 | The per-session allowance while the substrate is hot; what stops enough fresh sessions from reproducing the flood with every per-session counter reading green. | At 1, a single retry during someone else's flood costs a legitimate session its lane. | New in the fix round. |
 | `AION_RECONCILE_WARN_THRESHOLD` (`operational.reconcileWarnThreshold`) | 50 | Unenriched episodes `aion doctor` tolerates before it warns. | Raised past a real backlog, doctor goes back to reporting all-green over a substrate hours behind, which is the state EX-41 was filed for. | New in the fix round. |
 | `AION_LAG_OLDEST_UNCLAIMED_WARN_MS` (`operational.lagOldestUnclaimedWarnMs`) | 600000 | Age of the oldest unclaimed job `aion doctor`'s `queue-lag` check tolerates before it warns. | Raised past a real backlog, doctor stops naming a queue that has gone stale. Ten minutes is inside the 1.9 to 6.7 episodes/min drain rate EX-10 measured. | New in the fix round. |
-| `AION_LAG_QUEUE_DEPTH_WARN_THRESHOLD` (`operational.lagQueueDepthWarnThreshold`) | 200 | Total unclaimed jobs, either lane, `aion doctor`'s `queue-lag` check tolerates before it warns. | Raised past a real backlog, the same silence as above but by depth instead of age — either alone can miss a starved-then-drained queue the other catches. | New in the fix round. |
-| `AION_SESSION_IDLE_EXPIRY_MINUTES` (`operational.sessionIdleExpiryMinutes`) | 30 | How long an MCP transport session may sit with no request before `SessionIdleSweeper` closes it — the backstop for a `client.close()` that never sends DELETE (EX-32). | Lowered, a client that legitimately pauses (an editor idle between edits) loses its session and its next call gets `unknown session` instead of resuming one. | New in the fix round. |
+| `AION_LAG_QUEUE_DEPTH_WARN_THRESHOLD` (`operational.lagQueueDepthWarnThreshold`) | 200 | Total unclaimed jobs, either lane, `aion doctor`'s `queue-lag` check tolerates before it warns. | Raised past a real backlog, the same silence as above but by depth instead of age; either alone can miss a starved-then-drained queue the other catches. | New in the fix round. |
+| `AION_SESSION_IDLE_EXPIRY_MINUTES` (`operational.sessionIdleExpiryMinutes`) | 30 | How long an MCP transport session may sit with no request before `SessionIdleSweeper` closes it, the backstop for a `client.close()` that never sends DELETE (EX-32). | Lowered, a client that legitimately pauses (an editor idle between edits) loses its session and its next call gets `unknown session` instead of resuming one. | New in the fix round. |
 
 Raising `AION_WORKER_COUNT` past 1 buys nothing on its own: the reflection worker, the
 recall cue model, and the idle narrative sweeper all share one host Ollama endpoint
 (`AION_OLLAMA_URL`), and by default Ollama itself serializes requests to one model. Set
-`OLLAMA_NUM_PARALLEL` on the **host** Ollama process (not an `AION_*` var — Ollama runs on
+`OLLAMA_NUM_PARALLEL` on the **host** Ollama process (not an `AION_*` var; Ollama runs on
 the host, not in a container) to raise its per-model concurrency alongside the worker count.
 Measured contention without it: recall wall p50 rose from 945ms to 4,463ms (372%) under a
 busy reflection worker, and the worker itself lost about 9% throughput under concurrent
@@ -316,7 +316,7 @@ recalls (1.98 to 1.80 episodes/min).
 
 ### Queue starvation
 
-A backlog is not a degradation rung — nothing is broken and no signal is lost — but it is
+A backlog is not a degradation rung (nothing is broken and no signal is lost), but it is
 what a caller feels when its own last turn is not recallable yet. The queue serves the
 interactive lane strictly before the bulk one, and round-robins across sessions inside a
 lane, so one session's flood delays another session's next episode by one job rather than by
@@ -334,19 +334,12 @@ report queue depth per lane, the oldest unclaimed job's age, the exhausted-attem
 the reinforcement queue's cumulative dropped-row counter, and the p95 of intake-to-enriched
 lag over a rolling window of completed jobs; `aion doctor`'s `queue-lag` check warns (never
 fails) past `AION_LAG_OLDEST_UNCLAIMED_WARN_MS` / `AION_LAG_QUEUE_DEPTH_WARN_THRESHOLD`. The
-reflection ack carries `pending_ahead` — unclaimed interactive-lane jobs ahead of it at
-enqueue time — and a recall pack's metadata carries `pending_enrichment`: the calling
+reflection ack carries `pending_ahead` (unclaimed interactive-lane jobs ahead of it at
+enqueue time), and a recall pack's metadata carries `pending_enrichment`: the calling
 session's own episodes with no orchestrator ledger key yet (EX-11), so an agent can tell its
 own last few turns are still thin before it asks why a fact from them was not found.
 
 ## Deferred gaps
-
-**`rendered_text` carries no degradation signal.** `metadata.degraded` names every rung
-that fired, but `render()` (`pack.ts:198-211`) never reads it: the text block an agent
-drops straight into its own reasoning looks identical whether a query legitimately matched
-nothing or the graph was unreachable for the whole call. Verified live in the Neo4j-down
-recall re-run above. An agent (or a harness) that inspects only the tool's text content,
-not `structuredContent.metadata`, still cannot tell the two apart.
 
 **Two bounded, non-lossy artifacts, not tracked as gaps.** `ensureSession` runs before the
 episode write, so a graph outage that lands between the two leaves a Session node with no
@@ -355,7 +348,7 @@ server-side session in the map until the 512-session cap evicts it. Neither lose
 grows unbounded.
 
 **A pending-vector node is a degraded state with no expiry of its own.** Nothing in the
-graph ages one out: it stays vectorless until a drain reaches it. That is deliberate — the
-marker is the absence of the property, so there is no flag to go stale — but it means an
+graph ages one out: it stays vectorless until a drain reaches it. That is deliberate (the
+marker is the absence of the property, so there is no flag to go stale), but it means an
 outage that outlives the service process is cleared by the worker's startup drain rather
 than by anything in the write path.
