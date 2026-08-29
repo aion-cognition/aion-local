@@ -15,11 +15,21 @@
     "test:integration": "vitest run --project integration",
     "test:watch": "vitest --project unit",
     "quality:extraction": "tsc -b packages/core && node packages/core/dist/reflection/test-support/quality-harness/run.js",
-    "cleanup:narratives": "tsc -b packages/core && node packages/core/dist/reflection/application/narrative-cleanup-run.js"
+    "cleanup:narratives": "tsc -b packages/core && node packages/core/dist/reflection/application/narrative-cleanup-run.js",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "lint:conflicts": "eslint-config-prettier packages/core/src/index.ts",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
+    "eslint": "^10.9.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-import-x": "^4.17.1",
+    "prettier": "^3.9.6",
     "typescript": "^5.9.3",
+    "typescript-eslint": "^8.68.0",
     "vitest": "^4.1.11"
   },
   "engines": {
