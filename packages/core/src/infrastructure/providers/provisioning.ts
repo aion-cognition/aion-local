@@ -9,8 +9,12 @@ export type OllamaProvisionTarget = {
   baseUrl: string;
   embedModel: string;
   embedDimension: number;
-  cueModel: string;
-  reflectModel: string;
+  /**
+   * The chat models routing still runs locally, which is what init pulls. A role routed to
+   * Anthropic contributes nothing here: a key-covered install downloads no instruct weights
+   * it will never call. Empty is a normal value, and means every generation role is remote.
+   */
+  chatModels: readonly string[];
 };
 
 export type ProvisionEvent =
@@ -182,11 +186,13 @@ async function verifyEmbedModel(
  * A 5-token generate. Some chat models (qwen3's thinking variants) spend a budget that
  * small on `thinking` and return empty `content`, so this checks that the model produced
  * a completed message, not that `content` itself is non-empty.
+ *
+ * `aion doctor` calls this directly, for the chat models routing still runs locally.
  */
-async function verifyChatModel(
+export async function verifyOllamaChatModel(
   baseUrl: string,
   model: string,
-  fetchImpl: typeof fetch,
+  fetchImpl: typeof fetch = fetch,
   onEvent?: (event: ProvisionEvent) => void,
 ): Promise<void> {
   const response = await fetchImpl(`${normalizeBaseUrl(baseUrl)}/api/chat`, {
@@ -211,10 +217,9 @@ async function verifyChatModel(
 }
 
 /**
- * Init-time provisioning: reachability, then pull the three configured models
- * (deduped, since cue and reflect may name the same model) via `/api/pull`, then one
- * round-trip verification per model. Throws the first named error encountered; the
- * CLI surfaces it and exits.
+ * Init-time provisioning: reachability, then pull the models routing needs (deduped, since
+ * cue and reflect may name the same model) via `/api/pull`, then one round-trip verification
+ * per model. Throws the first named error encountered; the CLI surfaces it and exits.
  */
 export async function provisionOllama(target: OllamaProvisionTarget, options: ProvisionOptions = {}): Promise<void> {
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -225,7 +230,7 @@ export async function provisionOllama(target: OllamaProvisionTarget, options: Pr
   });
   options.onEvent?.({ type: 'reachable' });
 
-  const chatModels = [...new Set([target.cueModel, target.reflectModel])];
+  const chatModels = [...new Set(target.chatModels)];
   const allModels = [...new Set([target.embedModel, ...chatModels])];
 
   for (const model of allModels) {
@@ -234,6 +239,6 @@ export async function provisionOllama(target: OllamaProvisionTarget, options: Pr
 
   await verifyEmbedModel(target.baseUrl, target.embedModel, target.embedDimension, fetchImpl, options.onEvent);
   for (const model of chatModels) {
-    await verifyChatModel(target.baseUrl, model, fetchImpl, options.onEvent);
+    await verifyOllamaChatModel(target.baseUrl, model, fetchImpl, options.onEvent);
   }
 }

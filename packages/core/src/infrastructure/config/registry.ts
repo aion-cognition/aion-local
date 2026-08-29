@@ -45,6 +45,12 @@ export const KNOB_REGISTRY: readonly Knob[] = [
   { envVar: 'AION_REFLECT_MODEL', path: ['models', 'reflect'], kind: 'string' },
 
   { envVar: 'AION_ANTHROPIC_API_KEY', path: ['anthropic', 'apiKey'], kind: 'string' },
+  { envVar: 'AION_ANTHROPIC_MODEL', path: ['anthropic', 'model'], kind: 'string' },
+
+  // Named for the role they pin rather than AION_ROUTING_*, so they read next to
+  // AION_CUE_MODEL and AION_REFLECT_MODEL, which are the models they route.
+  { envVar: 'AION_CUE_PROVIDER', path: ['routing', 'cue'], kind: 'string' },
+  { envVar: 'AION_REFLECT_PROVIDER', path: ['routing', 'reflect'], kind: 'string' },
 
   { envVar: 'AION_RECALL_MAX_HOPS', path: ['recall', 'maxHops'], kind: 'number' },
   { envVar: 'AION_RECALL_VECTOR_LIMIT', path: ['recall', 'vectorLimit'], kind: 'number' },

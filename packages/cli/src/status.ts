@@ -5,11 +5,16 @@ import {
   edgeWeightDistribution,
   GraphConnection,
   listOllamaModels,
+  listResidentModels,
   loadConfig,
   openLogger,
   plasticityCounters,
   queueLagSnapshot,
+  remoteBannerLines,
+  resolveProviderRouting,
+  routingSummary,
   SqliteStore,
+  unbackedPins,
   type Config,
   type EdgeWeightDistribution,
   type PlasticityCounters,
@@ -21,6 +26,11 @@ import { describeError, stderrWriter, stdoutWriter, type Writer } from './output
 export type StatusSnapshot = {
   readonly neo4j: { readonly uri: string; readonly reachable: boolean; readonly detail: string };
   readonly ollama: { readonly url: string; readonly reachable: boolean; readonly models: readonly string[]; readonly detail?: string };
+  /**
+   * Models Ollama is holding in memory right now, which is the number that matters on a
+   * laptop: `models` above is what is on disk. Absent when Ollama did not answer.
+   */
+  readonly resident?: readonly string[];
   readonly graph?: { readonly nodes: number; readonly relationships: number };
   /** SQLite-only, so this is present whether or not Neo4j answered. */
   readonly queue: QueueLagSnapshot;
@@ -40,9 +50,11 @@ export async function collectStatus(
   const edgeWeights = health.reachable ? await edgeWeightDistribution(connection.driver) : undefined;
 
   let models: readonly string[] = [];
+  let resident: readonly string[] | undefined;
   let ollamaError: string | undefined;
   try {
     models = await listOllamaModels(config.ollama.url);
+    resident = (await listResidentModels(config.ollama.url)).map((model) => model.name);
   } catch (err) {
     ollamaError = describeError(err);
   }
@@ -59,6 +71,7 @@ export async function collectStatus(
       models,
       ...(ollamaError === undefined ? {} : { detail: ollamaError }),
     },
+    ...(resident === undefined ? {} : { resident }),
     ...(graph === undefined ? {} : { graph }),
     queue: queueLagSnapshot(db, config.operational.workerMaxAttempts),
     plasticity: plasticityCounters(db),
@@ -94,9 +107,20 @@ export function renderStatus(snapshot: StatusSnapshot, config: Config, write: Wr
   write(`ollama   ${snapshot.ollama.reachable ? 'up' : 'down'}  ${snapshot.ollama.url}${snapshot.ollama.detail === undefined ? '' : ` — ${snapshot.ollama.detail}`}`);
 
   write('');
+  const routing = resolveProviderRouting(config);
   write(`models   embed=${config.models.embed} cue=${config.models.cue} reflect=${config.models.reflect}`);
+  write(`routing  ${routingSummary(routing)} (embeddings always ${config.models.embed}, local)`);
+  for (const route of unbackedPins(routing)) {
+    write(`         ${route.role} is pinned to anthropic with no key set, so it runs on ${route.localModel}`);
+  }
   if (snapshot.ollama.models.length > 0) {
     write(`installed  ${snapshot.ollama.models.join(', ')}`);
+  }
+  if (snapshot.resident !== undefined) {
+    write(`resident   ${snapshot.resident.length === 0 ? 'nothing loaded in memory' : snapshot.resident.join(', ')}`);
+  }
+  for (const line of remoteBannerLines(routing)) {
+    write(line);
   }
 
   write('');

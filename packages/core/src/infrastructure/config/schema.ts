@@ -10,6 +10,7 @@ const positiveInt = z.number().int().positive();
 const nonNegativeInt = z.number().int().nonnegative();
 
 const searchMethod = z.enum(['vector', 'bm25', 'graph_traversal']);
+const providerPin = z.enum(['auto', 'ollama', 'anthropic']);
 
 export const ConfigSchema = z.object({
   neo4j: z.object({
@@ -29,6 +30,19 @@ export const ConfigSchema = z.object({
   anthropic: z.object({
     /** Empty string means fully local; a non-empty key opts a call class into a remote provider. */
     apiKey: z.string(),
+    /** The model every remote-routed generation names, whatever model the caller asked for. */
+    model: z.string().min(1),
+  }),
+  /**
+   * Per-role provider pins. `auto` follows the key: set, and every generation role goes to
+   * Anthropic; unset, and everything is local. A pin overrides that for one role in either
+   * direction, which is what lets cue extraction stay on the fast local model while reflection
+   * runs remotely, or the reverse. Embeddings are not a role here: one model owns the vector
+   * space for the life of the substrate.
+   */
+  routing: z.object({
+    cue: providerPin,
+    reflect: providerPin,
   }),
   recall: z.object({
     maxHops: nonNegativeInt,

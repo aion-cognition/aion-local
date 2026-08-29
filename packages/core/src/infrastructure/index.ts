@@ -293,7 +293,50 @@ export type {
   SupersededBy,
 } from './graph/read-modes.js';
 
-export type { ChatMessage, ChatRole, JsonSchema, Provider, StructuredRequest, Vector } from './providers/types.js';
+export type {
+  ChatMessage,
+  ChatRole,
+  GenerationBackend,
+  JsonSchema,
+  Provider,
+  StructuredRequest,
+  Vector,
+} from './providers/types.js';
+export {
+  AnthropicProvider,
+  AnthropicRequestError,
+  AnthropicResponseError,
+  DEFAULT_ANTHROPIC_MODEL,
+} from './providers/anthropic-provider.js';
+export type { AnthropicProviderOptions, SchemaDelivery } from './providers/anthropic-provider.js';
+export {
+  GENERATION_ROLES,
+  evictableModels,
+  localChatModels,
+  modelsToPull,
+  remoteBannerLines,
+  remoteRoutes,
+  resolveProviderRouting,
+  routeFor,
+  routingSummary,
+  unbackedPins,
+} from './providers/routing.js';
+export type {
+  GenerationRole,
+  ProviderName,
+  ProviderPin,
+  ProviderRouting,
+  RoleRoute,
+  RouteReason,
+} from './providers/routing.js';
+export { ProviderRouter } from './providers/role-provider.js';
+export type { GenerationEvent, ProviderRouterOptions } from './providers/role-provider.js';
+export { listResidentModels, reconcileResidentModels } from './providers/model-reconciliation.js';
+export type {
+  ReconciliationOptions,
+  ReconciliationReport,
+  ResidentModel,
+} from './providers/model-reconciliation.js';
 export {
   EmbedDimensionMismatchError,
   ModelPullError,
@@ -304,7 +347,12 @@ export { CircuitBreaker, CircuitOpenError } from './providers/circuit-breaker.js
 export type { CircuitBreakerOptions } from './providers/circuit-breaker.js';
 export { OllamaProvider } from './providers/ollama-provider.js';
 export type { OllamaProviderOptions } from './providers/ollama-provider.js';
-export { checkOllamaReachable, listOllamaModels, provisionOllama } from './providers/provisioning.js';
+export {
+  checkOllamaReachable,
+  listOllamaModels,
+  provisionOllama,
+  verifyOllamaChatModel,
+} from './providers/provisioning.js';
 export type { OllamaProvisionTarget, ProvisionEvent, ProvisionOptions } from './providers/provisioning.js';
 
 export { loadEpisodeContext } from './graph/episode-context.js';

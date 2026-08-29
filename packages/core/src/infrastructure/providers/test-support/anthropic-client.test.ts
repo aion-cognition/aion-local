@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { AnthropicResponseError } from '../anthropic-provider.js';
 import { jsonSpans, parseJsonPayload } from './anthropic-client.js';
 
 /**
@@ -51,8 +52,8 @@ describe('parsing a structured-output reply', () => {
   });
 
   it('refuses a reply carrying no complete value', () => {
-    expect(() => parseJsonPayload('I cannot answer that.')).toThrow(SyntaxError);
-    expect(() => parseJsonPayload('{"nodes": [')).toThrow(SyntaxError);
+    expect(() => parseJsonPayload('I cannot answer that.')).toThrow(AnthropicResponseError);
+    expect(() => parseJsonPayload('{"nodes": [')).toThrow(AnthropicResponseError);
   });
 
   it('does not treat a brace inside a string as a delimiter', () => {
