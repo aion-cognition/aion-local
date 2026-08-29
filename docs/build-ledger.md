@@ -213,3 +213,42 @@ and did not buy recall. Round 2's blockers are retrieval-core: a 10-seed budget 
 unmeasured instead of scored, and supersession precision measured 0.400 against the 0.9
 bar, so auto-apply stays closed. Those findings are the input to P4 planning, where
 activation, resonance, and plasticity were always going to be the spirit-critical work.
+
+## P4-0: round zero, test infrastructure
+
+Plan 09 pinned round zero before any P4 agent runs: a shared Neo4j test harness (one
+container leased per file instead of one booted and thrown away per file) and Haiku-routed
+test generation. Two changes landed the same session; this entry measures the result
+against the prior three full-suite passes (1223.92s, 1235.92s, ~1200s).
+
+Full suite (`npm test`, both projects): 479.06s wall, a 2.6x speedup. Two container boots
+for the whole run (`globalSetup` plus the harness lifecycle test's own dedicated container)
+in place of thirty-nine; lease overhead per file is about 1s (clear plus that file's
+migration replay).
+
+Integration alone (`npm run test:integration`): 417.97s wall (6:58), against a prior
+~19-20 minutes. Under the 10-minute exit target with about 3 minutes to spare. The exit
+criterion is met on time.
+
+The pass is not clean at the baseline's 1463/1466 shape. Full run: 15 failed, 1451 passed,
+3 skipped (1469). Integration alone: 3 failed, 327 passed, 3 skipped (333). Two causes,
+neither a harness-boot regression:
+
+- Fourteen of fifteen failures (twelve unit, two integration) are one bug. The shared
+  harness's `globalSetup` publishes `AION_TEST_SHARED_NEO4J_URI`, `_PASSWORD`, and
+  `_CONTAINER` to `process.env` before any worker forks. The config loader's strict
+  validator (`infrastructure/config/registry.ts`'s `RESERVED_ENV_VARS`, checked in
+  `load-config.ts`) rejects any `AION_*` variable it does not recognize, and those three are
+  not in it. Every CLI command that calls `loadConfig(process.env)` against the real
+  environment (`aion queue`, `aion last`, `aion proposals`) throws in both projects, on
+  every combined run. The fix is a one-line allowlist addition in `registry.ts`; not applied
+  in this entry, since it is the harness's config surface, not the measurement task's.
+- The fifteenth, `cognitive.int.test.ts`'s "mints no Goal from a decision-light closing
+  episode" assertion, is unrelated: the file never calls `loadConfig`. It failed in both
+  full-context runs recorded here and passed 3 of 3 isolated reruns of the same file alone.
+  Neither route pins a temperature for this stage, and the Anthropic test client drops any
+  `temperature` a caller does supply, so Haiku runs it at the API default. Existing
+  nondeterminism the faster pass surfaced, not a regression from the routing switch.
+
+Docker teardown held across all five runs taken for this entry: `docker ps -a --filter
+name=aion-test-neo4j` and the matching volume listing came back empty after every one.

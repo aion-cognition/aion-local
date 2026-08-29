@@ -128,3 +128,27 @@ are shared with the workstream that owns each area (`floors.fixtures.ts`,
   it asserts on the removal the lease never performs.
 - The integration project runs with `fileParallelism: false` on purpose: files lease one
   container one at a time, and two files at once would clear each other's graph mid-test.
+
+## Test generation routing
+
+Integration tests that drive enrichment call `testGenerationProvider(options)`
+(`infrastructure/providers/test-support/generation-provider.ts`) instead of constructing an
+`OllamaProvider` directly. With `AION_ANTHROPIC_API_KEY` set and `AION_TEST_GENERATION` unset or
+not `local`, generation runs on Anthropic (`claude-haiku-4-5`, override with
+`AION_ANTHROPIC_MODEL`) and returns in a second or two; embedding always stays on Ollama, since
+the substrate has one embedding space. With no key, or `AION_TEST_GENERATION=local`, generation
+runs on qwen3:8b instead, 35 to 100 seconds an episode. vitest does not load `.env`, so export
+the key before a run that should use it:
+
+```
+export AION_ANTHROPIC_API_KEY="$(grep '^AION_ANTHROPIC_API_KEY=' .env | cut -d= -f2-)"
+```
+
+A file whose subject is the local model itself (`cues.int.test.ts`, `ollama-provider.int.test.ts`)
+builds its own `OllamaProvider` and ignores this switch.
+
+`stages/supersession.int.test.ts` measures a real number this way. The published 0.400
+precision figure (`docs/exercise/2026-08-29-round-2.md`, R2-3) came from a live-stack run on
+the local judge, not from this file, so re-measuring it means running the file with
+`AION_TEST_GENERATION=local`. The file's own assertions (propose not close, which rows land)
+hold on either model and are not what that figure describes.
