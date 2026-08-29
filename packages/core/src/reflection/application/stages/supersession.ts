@@ -8,7 +8,12 @@ import {
   type ContradictionCandidate,
   type EpisodeFactNode,
 } from '../../../infrastructure/graph/supersession-queries.js';
-import type { ChatMessage, JsonSchema, Vector } from '../../../infrastructure/providers/types.js';
+import type {
+  ChatMessage,
+  JsonSchema,
+  Provider,
+  Vector,
+} from '../../../infrastructure/providers/types.js';
 import { recordSupersessionProposal } from '../../../infrastructure/sqlite/supersession-proposals.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
 
@@ -142,6 +147,87 @@ function clampConfidence(value: number | undefined): number {
   return Math.min(1, Math.max(0, raw));
 }
 
+export type ContradictionJudgment = {
+  readonly contradicts: boolean;
+  readonly confidence: number;
+  readonly rationale?: string;
+};
+
+/** Two statements and, when the shared-subject leg found one, the subject they both name. */
+export type ContradictionPair = {
+  readonly priorLabel: string;
+  readonly currentLabel: string;
+  readonly prior: string;
+  readonly current: string;
+  readonly sharedSubject?: string;
+};
+
+export type JudgeContradictionOptions = {
+  readonly model: string;
+  readonly timeoutMs: number;
+};
+
+/**
+ * `failed` is a call that threw or timed out; `unusable` is an answer that came back in a
+ * shape the schema refuses. The stage logs the two differently and a precision battery
+ * scores neither, so the caller needs them apart rather than folded into one `undefined`.
+ */
+export type JudgeOutcome =
+  | { readonly status: 'judged'; readonly judgment: ContradictionJudgment }
+  | { readonly status: 'failed'; readonly error: unknown }
+  | { readonly status: 'unusable' };
+
+/**
+ * One judgment, prompt and schema included. Exported because precision is measured on this
+ * call rather than on the stage around it: a battery that rebuilt the prompt would report a
+ * number for a judge the service does not run.
+ */
+export async function judgeContradiction(
+  provider: Pick<Provider, 'generate'>,
+  pair: ContradictionPair,
+  options: JudgeContradictionOptions,
+): Promise<JudgeOutcome> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs);
+  let raw: unknown;
+  try {
+    raw = await provider.generate({
+      model: options.model,
+      messages: buildMessages(
+        pair.priorLabel,
+        pair.currentLabel,
+        pair.prior,
+        pair.current,
+        pair.sharedSubject,
+      ),
+      schema: JUDGMENT_JSON_SCHEMA,
+      // Reasoning buys nothing on a two-statement judgment and costs the budget (mirrors
+      // the extraction stages).
+      think: false,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    return { status: 'failed', error };
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const parsed = JudgmentSchema.safeParse(raw);
+  if (!parsed.success) {
+    return { status: 'unusable' };
+  }
+
+  const rationale = parsed.data.rationale?.trim();
+  return {
+    status: 'judged',
+    judgment: {
+      contradicts: parsed.data.contradicts,
+      confidence: clampConfidence(parsed.data.confidence),
+      ...(rationale === undefined || rationale.length === 0 ? {} : { rationale }),
+    },
+  };
+}
+
 function describeError(error: unknown): string {
   return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
 }
@@ -152,12 +238,6 @@ function isAbortError(error: unknown): boolean {
 
 /** A fact node that can actually search: text to judge and a vector to search with. */
 type FactSubject = EpisodeFactNode & { readonly contentVector: Vector };
-
-type Judgment = {
-  readonly contradicts: boolean;
-  readonly confidence: number;
-  readonly rationale?: string;
-};
 
 type RunTally = {
   superseded: number;
@@ -291,54 +371,37 @@ export class SupersessionStage implements ReflectionStage {
     subject: EpisodeFactNode,
     candidate: ContradictionCandidate,
     tally: RunTally,
-  ): Promise<Judgment | undefined> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.#options.timeoutMs);
+  ): Promise<ContradictionJudgment | undefined> {
     tally.judgments += 1;
-    let raw: unknown;
-    try {
-      raw = await ctx.provider.generate({
-        model: this.#options.model,
-        messages: buildMessages(
-          candidate.label,
-          subject.label,
-          candidate.text,
-          subject.text,
-          candidate.sharedSubject,
-        ),
-        schema: JUDGMENT_JSON_SCHEMA,
-        // Reasoning buys nothing on a two-statement judgment and costs the budget (mirrors
-        // the extraction stages).
-        think: false,
-        signal: controller.signal,
-      });
-    } catch (error) {
-      tally.judgeErrors += 1;
-      ctx.logger.warn(
-        { err: error, episodeId: ctx.episodeId, subjectId: subject.id, candidateId: candidate.id },
-        `contradiction judgment ${isAbortError(error) ? 'timed out' : 'failed'}`,
-      );
-      return undefined;
-    } finally {
-      clearTimeout(timer);
+    const outcome = await judgeContradiction(
+      ctx.provider,
+      {
+        priorLabel: candidate.label,
+        currentLabel: subject.label,
+        prior: candidate.text,
+        current: subject.text,
+        ...(candidate.sharedSubject === undefined
+          ? {}
+          : { sharedSubject: candidate.sharedSubject }),
+      },
+      { model: this.#options.model, timeoutMs: this.#options.timeoutMs },
+    );
+
+    if (outcome.status === 'judged') {
+      return outcome.judgment;
     }
 
-    const parsed = JudgmentSchema.safeParse(raw);
-    if (!parsed.success) {
-      tally.judgeErrors += 1;
+    tally.judgeErrors += 1;
+    const where = { episodeId: ctx.episodeId, subjectId: subject.id, candidateId: candidate.id };
+    if (outcome.status === 'failed') {
       ctx.logger.warn(
-        { episodeId: ctx.episodeId, subjectId: subject.id, candidateId: candidate.id },
-        'contradiction judgment returned an invalid shape',
+        { err: outcome.error, ...where },
+        `contradiction judgment ${isAbortError(outcome.error) ? 'timed out' : 'failed'}`,
       );
       return undefined;
     }
-
-    const rationale = parsed.data.rationale?.trim();
-    return {
-      contradicts: parsed.data.contradicts,
-      confidence: clampConfidence(parsed.data.confidence),
-      ...(rationale === undefined || rationale.length === 0 ? {} : { rationale }),
-    };
+    ctx.logger.warn(where, 'contradiction judgment returned an invalid shape');
+    return undefined;
   }
 
   /**
@@ -351,7 +414,7 @@ export class SupersessionStage implements ReflectionStage {
     ctx: StageContext,
     subject: EpisodeFactNode,
     candidate: ContradictionCandidate,
-    judgment: Judgment,
+    judgment: ContradictionJudgment,
     tally: RunTally,
   ): Promise<void> {
     if (this.#options.mode === 'auto' && judgment.confidence >= this.#options.autoConfidence) {

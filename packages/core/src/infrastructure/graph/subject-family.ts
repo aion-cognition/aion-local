@@ -1,0 +1,308 @@
+import type { Driver } from 'neo4j-driver';
+import neo4j from 'neo4j-driver';
+import {
+  BITEMPORAL_PROPERTIES,
+  supersedeInTransaction,
+  type SupersedeResult,
+} from './bitemporal.js';
+import { normalizeCognitiveText, TEXT_NORM_PROPERTY } from './cognitive-queries.js';
+import { inWriteTransaction, runRead, type GraphTransaction } from './connection.js';
+import { upsertEdgeInTransaction } from './edges.js';
+import { ENTITY_MENTION_TYPE } from './entity-queries.js';
+import { MEMORY_PROPERTIES } from './episodes.js';
+import { BASE_NODE_LABEL } from './labels.js';
+import { SUPERSEDES_TYPE } from './relationships.js';
+import { ENTITY_NAME_NORM_PROPERTY, ENTITY_NAME_PROPERTY } from './seed-queries.js';
+import { FACT_NODE_LABELS } from './supersession-queries.js';
+import { toGraphDateTime, type Row } from './values.js';
+
+/**
+ * The middle blade between closing one claim and closing a whole observation.
+ *
+ * Closing the judged claim alone leaves its siblings from the same observation answering as
+ * current, which is how an applied correction measured no change in what recall returned.
+ * Closing the whole source episode also closes definitions and historical records that the
+ * correction says nothing about: measured over twenty small two-observation episodes it took
+ * 43 nodes, 2.1 per apply, and a real multi-turn session carries far more.
+ *
+ * A subject family is the third answer: the siblings extracted from the same observation that
+ * name the same subject the judged claim named. A definition of a neighbouring term and a
+ * record of a benchmark stay open, because neither names the subject whose value changed.
+ *
+ * Entities are never closed here or anywhere else: they hang off `MENTIONS` rather than
+ * `EXTRACTED_FROM`, one entity outlives every episode that named it, and closing one would
+ * take the identity every later mention resolves through. Their frozen descriptions are a
+ * different matter, and they are why the measured correction changed nothing: the gloss
+ * written by the first episode to name a subject was still stating the old owner at rank 1,
+ * marked current, after the judged claim closed. A gloss that restates the relation the
+ * correction just closed is retired rather than closed, which leaves the entity, its name and
+ * its edges exactly where they were and stops it answering with a sentence that is no longer
+ * true. The description comes back when something re-derives it from the claims that are open
+ * now.
+ */
+
+/** Appendix B provenance, distinct from an episode-wide propagation so lineage stays readable. */
+export const SUBJECT_PROPAGATION_METHOD = 'supersession_subject_propagation';
+
+const SUBJECT_PROPAGATION_SIGNALS = ['subject_family'];
+
+/** Matches the subject-identity candidate leg: a name this short is inside nearly every claim. */
+const MIN_SUBJECT_NAME_LENGTH = 3;
+
+function toGraphInteger(value: number): unknown {
+  return neo4j.int(Math.trunc(value));
+}
+
+/**
+ * The subjects a claim names: entities its own source episode mentioned whose stored fold
+ * appears inside the claim's stored fold. The same test the detection leg uses to decide two
+ * statements are about one thing, applied to one statement.
+ */
+const SUBJECTS_OF_CLAIM = [
+  `MATCH (claim { id: $claimId })-[:EXTRACTED_FROM]->(source:Episode)`,
+  `WHERE source.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
+  `  AND source.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  `MATCH (source)-[:${ENTITY_MENTION_TYPE}]->(e:Entity)`,
+  `WHERE e.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
+  `  AND e.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  `  AND size(e.${ENTITY_NAME_NORM_PROPERTY}) >= $minNameLength`,
+  `  AND claim.${TEXT_NORM_PROPERTY} CONTAINS e.${ENTITY_NAME_NORM_PROPERTY}`,
+  `RETURN DISTINCT e.id AS id, e.${ENTITY_NAME_PROPERTY} AS name,`,
+  `       e.${ENTITY_NAME_NORM_PROPERTY} AS name_norm, e.${MEMORY_PROPERTIES.text} AS text,`,
+  '       source.id AS source_episode_id',
+  'ORDER BY name_norm, id',
+].join('\n');
+
+export type ClaimSubject = {
+  readonly entityId: string;
+  readonly name: string;
+  readonly nameNorm: string;
+  /** The frozen description, when the entity carries one; this is what a close cannot reach. */
+  readonly gloss?: string;
+  readonly sourceEpisodeId: string;
+};
+
+function mapSubject(row: Row): ClaimSubject {
+  const gloss = String(row.text ?? '').trim();
+  return {
+    entityId: row.id as string,
+    name: String(row.name ?? ''),
+    nameNorm: String(row.name_norm ?? ''),
+    sourceEpisodeId: row.source_episode_id as string,
+    ...(gloss.length === 0 ? {} : { gloss }),
+  };
+}
+
+/** `[]` when the claim was never extracted, its source is closed, or it names no entity. */
+export async function findClaimSubjects(
+  driver: Driver,
+  claimId: string,
+): Promise<readonly ClaimSubject[]> {
+  return runRead(
+    driver,
+    SUBJECTS_OF_CLAIM,
+    { claimId, minNameLength: toGraphInteger(MIN_SUBJECT_NAME_LENGTH) },
+    mapSubject,
+  );
+}
+
+/**
+ * The siblings that close with the claim. Same source episode, still open, naming one of the
+ * claim's subjects, and observed nowhere else: a fact a second open episode also produced is
+ * a fact the substrate saw twice, and one correction is not evidence against both.
+ */
+const SUBJECT_SIBLINGS = [
+  `MATCH (claim { id: $claimId })-[:EXTRACTED_FROM]->(source:Episode)`,
+  `WHERE source.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
+  `  AND source.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  `MATCH (source)-[:${ENTITY_MENTION_TYPE}]->(e:Entity)`,
+  `WHERE e.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
+  `  AND e.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  `  AND size(e.${ENTITY_NAME_NORM_PROPERTY}) >= $minNameLength`,
+  `  AND claim.${TEXT_NORM_PROPERTY} CONTAINS e.${ENTITY_NAME_NORM_PROPERTY}`,
+  `WITH source, collect(DISTINCT e.${ENTITY_NAME_NORM_PROPERTY}) AS names`,
+  'MATCH (sibling)-[:EXTRACTED_FROM]->(source)',
+  'WHERE sibling.id <> $claimId',
+  '  AND any(label IN labels(sibling) WHERE label IN $labels)',
+  `  AND sibling.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
+  `  AND sibling.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  `  AND head([name IN names WHERE sibling.${TEXT_NORM_PROPERTY} CONTAINS name]) IS NOT NULL`,
+  '  AND NOT EXISTS {',
+  '    MATCH (sibling)-[:EXTRACTED_FROM]->(other:Episode)',
+  `    WHERE other.id <> source.id AND other.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
+  '  }',
+  `RETURN sibling.id AS id, sibling.${MEMORY_PROPERTIES.text} AS text,`,
+  '       [label IN labels(sibling) WHERE label IN $labels][0] AS label,',
+  `       head([name IN names WHERE sibling.${TEXT_NORM_PROPERTY} CONTAINS name]) AS subject`,
+  'ORDER BY id',
+].join('\n');
+
+export type SubjectSibling = {
+  readonly id: string;
+  readonly label: string;
+  readonly text: string;
+  /** Which of the claim's subjects this sibling names. */
+  readonly subject: string;
+};
+
+function mapSibling(row: Row): SubjectSibling {
+  return {
+    id: row.id as string,
+    label: String(row.label ?? ''),
+    text: String(row.text ?? ''),
+    subject: String(row.subject ?? ''),
+  };
+}
+
+function siblingParameters(claimId: string): Record<string, unknown> {
+  return {
+    claimId,
+    labels: [...FACT_NODE_LABELS],
+    minNameLength: toGraphInteger(MIN_SUBJECT_NAME_LENGTH),
+  };
+}
+
+/** A read-only preview of what a family close would take, for a caller that wants to look first. */
+export async function findSubjectSiblings(
+  driver: Driver,
+  claimId: string,
+): Promise<readonly SubjectSibling[]> {
+  return runRead(driver, SUBJECT_SIBLINGS, siblingParameters(claimId), mapSibling);
+}
+
+const CLOSE_SIBLING = [
+  `MATCH (n:${BASE_NODE_LABEL} { id: $id })`,
+  `SET n.${BITEMPORAL_PROPERTIES.validUntil} = coalesce(n.${BITEMPORAL_PROPERTIES.validUntil}, $now),`,
+  `    n.${BITEMPORAL_PROPERTIES.txUntil} = coalesce(n.${BITEMPORAL_PROPERTIES.txUntil}, $now)`,
+  'RETURN n.id AS id',
+].join('\n');
+
+/**
+ * The description and its embedding go together: a vector of a sentence the node no longer
+ * states would keep pulling it up the ranking for a question it can no longer answer. With no
+ * text the node is neither a pending vector nor a parity gap, since both populations are
+ * defined on nodes that have text to embed.
+ */
+const RETIRE_GLOSS = [
+  'MATCH (e:Entity { id: $id })',
+  `SET e.${MEMORY_PROPERTIES.text} = null, e.${MEMORY_PROPERTIES.contentVector} = null`,
+  'RETURN e.id AS id',
+].join('\n');
+
+/**
+ * A gloss carries the description written for the entity plus the entity's own name, so a
+ * subject whose name sits inside this one's is no evidence of anything: "Quillon" appears in
+ * the gloss of "Quillon ingest pipeline" whatever that gloss goes on to say.
+ */
+function namesAnother(subject: ClaimSubject, other: ClaimSubject, folded: string): boolean {
+  if (other.entityId === subject.entityId) {
+    return false;
+  }
+  if (subject.nameNorm.includes(other.nameNorm)) {
+    return false;
+  }
+  return folded.includes(other.nameNorm);
+}
+
+/**
+ * A gloss is retired when it names another subject of the judged claim: a description that
+ * repeats a relation between two entities the correction just closed a claim about was written
+ * from that same claim. A gloss naming no other subject is a definition, and a definition
+ * survives a correction about who owns the thing it defines.
+ *
+ * A single-subject claim retires nothing, since there is no second name for a gloss to carry.
+ */
+function glossRestatesClaim(subject: ClaimSubject, subjects: readonly ClaimSubject[]): boolean {
+  if (subject.gloss === undefined) {
+    return false;
+  }
+  const folded = normalizeCognitiveText(subject.gloss);
+  return subjects.some((other) => namesAnother(subject, other, folded));
+}
+
+export type SupersedeSubjectFamilyInput = {
+  /** The judged claim: it closes, and it defines the subject the siblings are matched on. */
+  readonly claimId: string;
+  readonly newId: string;
+  readonly now?: Date;
+  readonly signals?: readonly string[];
+  readonly provenance?: readonly string[];
+};
+
+export type SubjectFamilyResult = {
+  readonly supersession: SupersedeResult;
+  /** The judged claim first, then the siblings that closed with it. */
+  readonly closedIds: readonly string[];
+  readonly siblings: readonly SubjectSibling[];
+  /** The subjects the match ran on; empty means the family degraded to the claim alone. */
+  readonly subjects: readonly string[];
+  /** Descriptions that restated the closed claim and were cleared, entities left in place. */
+  readonly retiredGlosses: readonly ClaimSubject[];
+  /** Descriptions of the same subjects that stand, because they assert something else. */
+  readonly openGlosses: readonly ClaimSubject[];
+};
+
+/**
+ * Closes the judged claim and the siblings that share its subject, in one transaction. The
+ * successor recorded against each sibling is the correction itself rather than a sibling of
+ * the correction: nothing in the new observation restates the closed sentence, and a closed
+ * node with no lineage is a state the substrate forbids.
+ */
+export async function supersedeSubjectFamily(
+  driver: Driver,
+  input: SupersedeSubjectFamilyInput,
+): Promise<SubjectFamilyResult> {
+  const now = input.now ?? new Date();
+
+  // Subjects are read inside the write transaction with everything they decide, so a
+  // concurrent entity write cannot land between the read that chose the family and the writes
+  // that closed it.
+  const closed = await inWriteTransaction(driver, async (tx: GraphTransaction) => {
+    const subjects = await tx.run(
+      SUBJECTS_OF_CLAIM,
+      { claimId: input.claimId, minNameLength: toGraphInteger(MIN_SUBJECT_NAME_LENGTH) },
+      mapSubject,
+    );
+    const retired = subjects.filter((subject) => glossRestatesClaim(subject, subjects));
+
+    const supersession = await supersedeInTransaction(tx, {
+      oldId: input.claimId,
+      newId: input.newId,
+      now,
+      ...(input.signals === undefined ? {} : { signals: input.signals }),
+      ...(input.provenance === undefined ? {} : { provenance: input.provenance }),
+    });
+
+    const siblings = await tx.run(SUBJECT_SIBLINGS, siblingParameters(input.claimId), mapSibling);
+    for (const sibling of siblings) {
+      await tx.run(CLOSE_SIBLING, { id: sibling.id, now: toGraphDateTime(now) }, (row) => row.id);
+      await upsertEdgeInTransaction(tx, {
+        type: SUPERSEDES_TYPE,
+        sourceId: input.newId,
+        targetId: sibling.id,
+        strength: 1,
+        confidence: 1,
+        signals: SUBJECT_PROPAGATION_SIGNALS,
+        provenance: [SUBJECT_PROPAGATION_METHOD],
+        count: 0,
+        now,
+      });
+    }
+    for (const subject of retired) {
+      await tx.run(RETIRE_GLOSS, { id: subject.entityId }, (row) => row.id);
+    }
+    return { supersession, siblings, subjects, retired };
+  });
+
+  const retiredIds = new Set(closed.retired.map((subject) => subject.entityId));
+  return {
+    supersession: closed.supersession,
+    closedIds: [input.claimId, ...closed.siblings.map((sibling) => sibling.id)],
+    siblings: closed.siblings,
+    subjects: closed.subjects.map((subject) => subject.name),
+    retiredGlosses: closed.retired,
+    openGlosses: closed.subjects.filter(
+      (subject) => subject.gloss !== undefined && !retiredIds.has(subject.entityId),
+    ),
+  };
+}

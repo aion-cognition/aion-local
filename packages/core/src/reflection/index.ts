@@ -93,8 +93,12 @@ export type { CognitiveExtractionStageOptions } from './application/stages/cogni
 export { SemanticRelationshipStage } from './application/stages/semantic-relationships.js';
 export type { SemanticRelationshipStageOptions } from './application/stages/semantic-relationships.js';
 
-export { SupersessionStage } from './application/stages/supersession.js';
+export { judgeContradiction, SupersessionStage } from './application/stages/supersession.js';
 export type {
+  ContradictionJudgment,
+  ContradictionPair,
+  JudgeContradictionOptions,
+  JudgeOutcome,
   SupersessionMode,
   SupersessionStageOptions,
 } from './application/stages/supersession.js';
@@ -138,6 +142,7 @@ export {
 
 export {
   applySupersessionProposal,
+  DEFAULT_APPLY_SCOPE,
   dismissSupersessionProposal,
   ProposalAlreadyResolvedError,
   ProposalNotFoundError,
@@ -146,4 +151,5 @@ export {
 export type {
   ApplyProposalInput,
   ApplyProposalResult,
+  ApplyScope,
 } from './application/proposals.js';

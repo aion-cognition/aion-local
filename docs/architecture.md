@@ -221,6 +221,17 @@ episode alone leaves its facts open, and recall then serves the corrected value 
 `propagateEpisodeSupersession` runs the second half over an episode something else already
 closed.
 
+`supersedeSubjectFamily(driver, { claimId, newId })` is the middle blade
+(`infrastructure/graph/subject-family.ts`), and the default an applied proposal takes. It
+closes the judged claim and only those siblings of the same episode that name one of its
+subjects, where a subject is an entity that episode mentioned whose stored fold appears inside
+the claim's, with provenance `supersession_subject_propagation`. A definition of a neighbouring
+term and a record of a benchmark stay open, which is what separates it from closing the
+episode. The same call retires the description of a subject entity whose gloss names another
+subject of the closed claim: an entity is never closed, since one outlives every episode that
+named it, but a frozen sentence restating a claim that just closed is cleared so recall stops
+serving it as a current fact.
+
 Four read modes, all built from one composable fragment
 (`infrastructure/graph/read-modes.ts`) so every seed strategy and the traversal share one
 definition of currency:

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BITEMPORAL_PROPERTIES, writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
 import { writeCognitiveNode } from '../../infrastructure/graph/cognitive-queries.js';
+import { upsertEdge } from '../../infrastructure/graph/edges.js';
 import { findSourceEpisodeId } from '../../infrastructure/graph/episode-supersession.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
 import {
@@ -15,6 +16,10 @@ import {
   stopNeo4jHarness,
   type Neo4jHarness,
 } from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
+import {
+  findClaimSubjects,
+  findSubjectSiblings,
+} from '../../infrastructure/graph/subject-family.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   getSupersessionProposal,
@@ -52,6 +57,41 @@ async function seedEpisode(id: string, text: string): Promise<void> {
   });
 }
 
+/**
+ * An entity the episode named, with the frozen description the extractor writes once. The
+ * subject family is matched on these, so a test without them measures the degraded path.
+ */
+async function mention(
+  episodeId: string,
+  name: string,
+  type: string,
+  description?: string,
+): Promise<string> {
+  const id = `entity-${name.toLowerCase().replace(/\s+/g, '-')}`;
+  await writeStampedNode(harness.driver, {
+    label: 'Entity',
+    id,
+    now: NOW,
+    properties: {
+      name,
+      name_norm: name.toLowerCase(),
+      type,
+      text: `${name} (${type}): ${description ?? 'as first described.'}`,
+    },
+  });
+  await upsertEdge(harness.driver, {
+    type: 'MENTIONS',
+    sourceId: episodeId,
+    targetId: id,
+    strength: 1,
+    confidence: 1,
+    signals: ['test'],
+    provenance: ['test'],
+    now: NOW,
+  });
+  return id;
+}
+
 async function seedClaim(episodeId: string, text: string): Promise<string> {
   const result = await writeCognitiveNode(harness.driver, {
     episodeId,
@@ -81,7 +121,7 @@ afterAll(async () => {
 });
 
 describe('applying a supersession proposal', () => {
-  it('closes the judged claim, records the review as its own provenance, and resolves the row', async () => {
+  it('closes the judged claim under --claim-only, and records the review as its own provenance', async () => {
     await seedEpisode('ep-poll-1', 'The Zephyr ingest worker polls every 45 seconds.');
     await seedEpisode('ep-poll-2', 'We changed the Zephyr ingest worker poll interval to 5 seconds.');
     const stale = await seedClaim('ep-poll-1', 'Zephyr ingest polls every 45 seconds');
@@ -98,6 +138,7 @@ describe('applying a supersession proposal', () => {
 
     const applied = await applySupersessionProposal(harness.driver, db, {
       id: proposalId,
+      scope: 'claim',
       now: NOW,
     });
 
@@ -113,9 +154,137 @@ describe('applying a supersession proposal', () => {
   }, 120_000);
 
   /**
-   * The wider blade. A claim's siblings were extracted from the same observation, so closing
-   * the claim alone leaves them answering as current, which is the compounding half of "a
-   * correction does not change what recall answers".
+   * The default. A claim's siblings were extracted from the same observation, so closing the
+   * claim alone leaves the ones naming the same subject answering as current, which is the
+   * compounding half of "a correction does not change what recall answers". The sibling that
+   * names another subject stays open, which is what separates this from closing the episode.
+   */
+  it('closes the siblings naming the same subject and leaves the rest open', async () => {
+    await seedEpisode('ep-fanout-1', 'The Kestrel exporter publishes to Kafka on the primary broker.');
+    await seedEpisode('ep-fanout-2', 'The Kestrel exporter publishes to Pub/Sub now.');
+    await mention('ep-fanout-1', 'Kestrel exporter', 'service');
+    await mention('ep-fanout-1', 'Alderwood loader', 'service');
+    const stale = await seedClaim('ep-fanout-1', 'the Kestrel exporter publishes to Kafka');
+    const sameSubject = await seedClaim('ep-fanout-1', 'the Kestrel exporter batches every 30 seconds');
+    const otherSubject = await seedClaim('ep-fanout-1', 'the Alderwood loader reads from Kafka');
+    const corrected = await seedClaim('ep-fanout-2', 'the Kestrel exporter publishes to Pub/Sub');
+    const proposalId = recordSupersessionProposal(db, {
+      oldId: stale,
+      newId: corrected,
+      confidence: 1,
+      episodeId: 'ep-fanout-2',
+    });
+
+    // The same read the apply runs, exposed so a caller can show what a close would take
+    // before taking it.
+    const preview = await findSubjectSiblings(harness.driver, stale);
+    expect(preview.map((sibling) => sibling.id)).toEqual([sameSubject]);
+    // The episode mentions both services; only the one the claim itself names is a subject.
+    const subjects = await findClaimSubjects(harness.driver, stale);
+    expect(subjects.map((subject) => subject.name)).toEqual(['Kestrel exporter']);
+
+    const applied = await applySupersessionProposal(harness.driver, db, {
+      id: proposalId,
+      now: NOW,
+    });
+
+    expect(applied.scope).toBe('family');
+    expect(applied.closedIds).toEqual([stale, sameSubject]);
+    expect(applied.subjects).toContain('Kestrel exporter');
+    expect(await isClosed(sameSubject)).toBe(true);
+    expect(await isClosed(otherSubject)).toBe(false);
+    expect(await isClosed('ep-fanout-1')).toBe(false);
+    expect(applied.siblings.map((sibling) => sibling.id)).toEqual([sameSubject]);
+    // A description that asserts something the correction did not touch stands, and the apply
+    // names it rather than leaving the operator to guess what else carries the subject.
+    expect(applied.openGlosses.map((gloss) => gloss.name)).toContain('Kestrel exporter');
+    expect(applied.retiredGlosses).toEqual([]);
+  }, 120_000);
+
+  /**
+   * The carrier that made the measured correction change nothing. A description written the
+   * first time the pipeline saw the name restates the relation the correction just closed, and
+   * it is served as a current fact with no lineage because entities carry none. Clearing the
+   * sentence leaves the entity, its name and every edge through it exactly where they were.
+   */
+  it('retires a description that restates the closed claim, and keeps the entity', async () => {
+    await seedEpisode('ep-owner-1', 'Dmitri Volkov owns the Quillon pipeline.');
+    await seedEpisode('ep-owner-2', 'Anneke Vos owns the Quillon pipeline now.');
+    const person = await mention('ep-owner-1', 'Dmitri Volkov', 'person', 'owns the Quillon pipeline');
+    await mention('ep-owner-1', 'Quillon pipeline', 'project', 'moves claim files into the warehouse');
+    const stale = await seedClaim('ep-owner-1', 'Dmitri Volkov owns the Quillon pipeline');
+    const corrected = await seedClaim('ep-owner-2', 'Anneke Vos owns the Quillon pipeline');
+    const proposalId = recordSupersessionProposal(db, {
+      oldId: stale,
+      newId: corrected,
+      confidence: 1,
+      episodeId: 'ep-owner-2',
+    });
+
+    const applied = await applySupersessionProposal(harness.driver, db, { id: proposalId, now: NOW });
+
+    expect(applied.retiredGlosses.map((gloss) => gloss.name)).toEqual(['Dmitri Volkov']);
+    // The definition of the thing that changed hands says nothing about who owns it, so it
+    // survives a correction about ownership.
+    expect(applied.openGlosses.map((gloss) => gloss.name)).toEqual(['Quillon pipeline']);
+    const entity = await nodeProperties(harness.driver, person);
+    expect(entity.text ?? undefined).toBeUndefined();
+    expect(entity.name).toBe('Dmitri Volkov');
+    expect(entity[BITEMPORAL_PROPERTIES.validUntil] ?? undefined).toBeUndefined();
+  }, 120_000);
+
+  /**
+   * The narrow escape has to stay narrow: with the subject family as the default, an operator
+   * correcting one wrong sentence inside a good observation needs a way to leave the rest.
+   */
+  it('leaves a same-subject sibling open under --claim-only', async () => {
+    await seedEpisode('ep-narrow-1', 'The Bramble worker runs two replicas and logs to stdout.');
+    await seedEpisode('ep-narrow-2', 'The Bramble worker runs eight replicas.');
+    await mention('ep-narrow-1', 'Bramble worker', 'service');
+    const stale = await seedClaim('ep-narrow-1', 'the Bramble worker runs two replicas');
+    const sibling = await seedClaim('ep-narrow-1', 'the Bramble worker logs to stdout');
+    const corrected = await seedClaim('ep-narrow-2', 'the Bramble worker runs eight replicas');
+    const proposalId = recordSupersessionProposal(db, {
+      oldId: stale,
+      newId: corrected,
+      confidence: 1,
+      episodeId: 'ep-narrow-2',
+    });
+
+    const applied = await applySupersessionProposal(harness.driver, db, {
+      id: proposalId,
+      scope: 'claim',
+      now: NOW,
+    });
+
+    expect(applied.closedIds).toEqual([stale]);
+    expect(await isClosed(sibling)).toBe(false);
+  }, 120_000);
+
+  /** With no entity naming the subject there is nothing to widen on, so the family is the claim. */
+  it('degrades to the judged claim when nothing names a subject', async () => {
+    await seedEpisode('ep-bare-1', 'first');
+    await seedEpisode('ep-bare-2', 'second');
+    const stale = await seedClaim('ep-bare-1', 'the first claim');
+    const sibling = await seedClaim('ep-bare-1', 'another first-episode claim');
+    const corrected = await seedClaim('ep-bare-2', 'the second claim');
+    const proposalId = recordSupersessionProposal(db, {
+      oldId: stale,
+      newId: corrected,
+      confidence: 1,
+      episodeId: 'ep-bare-2',
+    });
+
+    const applied = await applySupersessionProposal(harness.driver, db, { id: proposalId, now: NOW });
+
+    expect(applied.closedIds).toEqual([stale]);
+    expect(applied.subjects).toEqual([]);
+    expect(await isClosed(sibling)).toBe(false);
+  }, 120_000);
+
+  /**
+   * The widest blade, and the one that takes definitions and historical records with it. It
+   * stays reachable because an observation that was wrong end to end is a real case.
    */
   it('closes the source episode and its derived family under --episode', async () => {
     await seedEpisode('ep-region-1', 'The billing service deploys to AWS us-east-1.');
@@ -134,7 +303,7 @@ describe('applying a supersession proposal', () => {
 
     const applied = await applySupersessionProposal(harness.driver, db, {
       id: proposalId,
-      episode: true,
+      scope: 'episode',
       now: NOW,
     });
 

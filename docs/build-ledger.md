@@ -460,3 +460,72 @@ both indexes, so the second index does not help them. One held-out probe per run
 its answer term in the top five, always to the same shape: three near-identical items about one
 distractor goal, split across two buckets so the cluster cap groups none of them. That is the
 floors-and-caps re-measurement, not a retrieval regression.
+
+## P5-3: supersession precision under Haiku, and how wide an apply cuts
+
+The auto-mode pin says propose-only stands until precision on the 24-case battery reaches 0.9
+and the confidence behind a judgment can be filtered on. Both halves were re-measured against
+the route the service now runs, and both still fail, so `AION_SUPERSEDE_MODE` keeps its
+`propose` default.
+
+**The battery is a fixture now, not a report.** `packages/mcp/src/gate/supersession-precision.fixture.ts`
+holds 24 designed pairs with ground truth committed in the file: 8 reversals, 8 baits, and 8
+hard cases split four true and four false. The baits reproduce the shapes the earlier
+measurement lost points on, one per shape: a generic noun shared by two subjects, a
+restatement, a past observation against a standing rule, two people disagreeing, a widened
+scope, and two claims about different attributes of one subject. The battery calls
+`judgeContradiction`, which the stage itself calls, so the prompt and schema under measurement
+are the ones that ship. It names its route in the output rather than assuming one.
+
+**The numbers.** Route `anthropic / claude-haiku-4-5`, reason `key`, run twice with identical
+results: TP 12, FP 2, FN 0, TN 10, precision **0.857**, recall **1.000**. Per class, 8 of 8
+reversals caught, 6 of 8 baits refused, 8 of 8 hard cases right. The same 24 pairs against
+`qwen3:8b`, forced with `TEST_AION_GENERATION=local`: TP 11, FP 3, FN 1, TN 9, precision
+**0.786**, recall **0.917**, at 5 of 8 baits and 7 of 8 hard. Haiku is the better judge on both
+axes and still short of the bar.
+
+**Confidence is the decisive half, again.** All 14 of Haiku's affirmative judgments came back at
+exactly 0.95, one distinct value across correct and wrong alike, so no threshold separates them:
+anything at or below 0.95 admits all 14 and anything above admits none. The local model spreads
+across 0.95 and 1.00 and puts both of its wrong affirmatives at 1.00, which is worse than flat.
+The gate at 0.85 is unreachable as a filter under either model, and the battery asserts the
+shipped default stays `propose` while that holds.
+
+**Both of Haiku's misses are prompt gaps, not reasoning failures.** It closed a claim on two
+people stating different positions, and it closed a statement whose scope the new one widened
+while leaving it true. The system prompt has a rule for the first shape and none for the fifth,
+and a prompt change is the next lever on this number. It was left alone here on purpose: the
+variable under test was the model, and changing the prompt in the same pass would have measured
+neither.
+
+**Apply granularity: the family is the default now.** Claim-level apply was the measured
+correction that corrected nothing, because a claim's siblings from the same observation kept
+stating the old value as current. Episode-level apply flipped the answer and took definitions
+and historical records with it. `applySupersessionProposal` now takes a scope. `family`, the
+default, closes the judged claim and the siblings extracted from the same observation that name
+one of its subjects, where a subject is an entity that episode mentioned whose stored fold
+appears inside the claim's. `claim` is the narrow escape, reached by `aion proposals apply <id>
+--claim-only`. `episode` is unchanged and still reached by `--episode`. Passing both escapes is
+refused rather than resolved. A claim naming no entity has no subject to widen on, so the family
+degrades to the claim alone.
+
+**The gloss was the carrier the close could not reach.** An entity description is written once
+by the first episode to name the subject, is served as a fact, carries no lineage, and is what
+kept the ownership fixture answering with the old owner at rank 1 marked current after the
+judged claim closed. Entities are still never closed: closing one would take the identity every
+later mention resolves through. What a family apply does instead is retire the description,
+clearing `text` and `content_vec` on a subject entity whose gloss names another subject of the
+closed claim, which is the shape of a description written from that same claim. The entity, its
+name and every edge through it stay. A gloss naming no other subject is a definition and
+survives. A node with no text is neither a pending vector nor a parity gap, so the retirement is
+inert for the backfill and for doctor, and the description comes back when something re-derives
+it from the claims that are open now.
+
+**Gate.** `apply-granularity.int.test.ts` runs the ownership fixture through the live pipeline:
+three carriers of the stale ownership before the apply, zero stale facts after, both glosses
+retired, the true definition of the pipeline left open, the source episode left open. Twice, with
+the same result. The raw observation that the old owner took the thing over in March stays open
+and current, because it is a true record of what was said; closing it is what `--episode` is
+for. The judge did not propose this pair either time, which matches the earlier finding that
+misses trace to extraction rather than to the judge: it extracted "took over" and "transferred
+ownership", two statements that genuinely do not contradict.
