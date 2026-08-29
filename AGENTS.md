@@ -76,6 +76,29 @@ Use it to exercise the actual binary, not as a test runner.
   A grep guard modeled on it would be the cheap way to enforce Cypher confinement to
   `infrastructure/graph/`, if that becomes worth codifying.
 
+## The re-exercise gate
+
+`packages/mcp/src/gate/` holds the seven scripted batteries the fix round is gated on, each
+one a finding from `docs/exercise/2026-08-28-p3-exercise.md` re-run against the shipped
+pipeline (`bootstrap.ts`'s own stage list, live Ollama, a throwaway Neo4j per file).
+
+```
+npx vitest run --project integration --reporter=verbose re-exercise-gate         # all seven
+npx vitest run --project integration --reporter=verbose re-exercise-gate-recall  # 1, 2
+npx vitest run --project integration --reporter=verbose re-exercise-gate-change  # 3, 4, 5
+npx vitest run --project integration --reporter=verbose re-exercise-gate-write   # 6, 7
+```
+
+`--reporter=verbose` is not optional if you want the numbers: the default reporter prints a
+passing test's `console.log` nowhere, and every battery reports its measurement that way.
+
+Batteries: 1 unrelated queries come back thin or empty; 2 the paired on-topic set still hits;
+3 an applied correction changes the answer; 4 the six-case contradiction set closes nothing in
+propose mode; 5 narratives stay grounded in their session's own nodes; 6 the leaked-shape
+corpus reaches no stored node; 7 a live turn enriches ahead of a bulk flood. Battery fixtures
+are shared with the workstream that owns each area (`floors.fixtures.ts`,
+`leaked-shapes.fixture.ts`) rather than copied.
+
 ## Live-stack cautions
 
 - Never point tests at the live `aion` compose project (the `neo4j` / `aion-mcp` /
