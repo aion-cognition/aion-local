@@ -6,7 +6,12 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { openLogger } from '../../infrastructure/logging/logger.js';
 import { OllamaProvider } from '../../infrastructure/providers/ollama-provider.js';
-import { CUE_FIXTURES } from './cues.fixtures.js';
+import {
+  BARE_QUERY_FIXTURES,
+  CUE_FIXTURES,
+  SUMMARY_TONE_FIXTURES,
+  SUMMARY_TONE_QUERY,
+} from './cues.fixtures.js';
 import { CueCache, extractCues, type CueExtractionDeps } from './cues.js';
 
 /**
@@ -113,4 +118,70 @@ describe('cue extraction against live host Ollama', () => {
     expect(timedOut.length).toBeLessThanOrEqual(MAX_TIMED_OUT);
     expect(emptyCount / rows.length).toBeLessThanOrEqual(MAX_EMPTY_RATE);
   });
+});
+
+/**
+ * The three A5 behaviours the live model has to hold up, as opposed to the ones the mocked
+ * tests pin. The raw-query rule is code and is asserted here only because a live run is where
+ * a prompt change would silently break it; the intent and genericness judgments are the
+ * model's own and this is the only place they are measured.
+ */
+describe('the hardened prompt against the live cue model', () => {
+  it.each(BARE_QUERY_FIXTURES)(
+    'keeps the raw query and stays terse on a bare off-topic query: $input.query',
+    async (fixture) => {
+      const result = await extractCues(deps, fixture.input);
+
+      console.log(
+        `"${fixture.input.query}" -> ${result.cues.map((cue) => cue.text).join(' | ')}`,
+      );
+      expect(result.cues[0]).toEqual({
+        text: fixture.input.query,
+        source: 'query',
+        weight: 3,
+      });
+      // A query naming nothing the substrate could hold should not turn into a topic list.
+      // Six is loose enough for one unlucky generation and tight enough to catch a prompt
+      // that has gone back to inventing.
+      expect(result.cues.length).toBeLessThanOrEqual(6);
+    },
+    30_000,
+  );
+
+  it('judges a decision-shaped query decision-shaped and a measurement query not', async () => {
+    const decision = await extractCues(deps, {
+      query: 'what did we decide about the remittance ingest transport and why',
+    });
+    const measurement = await extractCues(deps, {
+      query: 'how long does the split migration take on a production sized copy',
+    });
+
+    console.log(
+      `intent: decision-shaped -> ${String(decision.cues[0]?.intent)}, ` +
+        `measurement -> ${String(measurement.cues[0]?.intent)}`,
+    );
+    expect(decision.cues.every((cue) => cue.intent === 'decision')).toBe(true);
+    expect(measurement.cues.every((cue) => cue.intent === undefined)).toBe(true);
+  }, 60_000);
+
+  it.each(SUMMARY_TONE_FIXTURES)(
+    'damps the summary to 1x whatever it says, on EX-20\'s own summaries: $summary',
+    async (fixture) => {
+      const result = await extractCues(deps, {
+        query: SUMMARY_TONE_QUERY,
+        summary: fixture.summary,
+      });
+      const summaryCues = result.cues.filter((cue) => cue.source === 'summary');
+
+      console.log(
+        `"${fixture.summary.slice(0, 48)}" -> ${String(summaryCues.length)} summary cues ` +
+          `(${fixture.measured})`,
+      );
+      expect(result.cues[0]?.text).toBe(SUMMARY_TONE_QUERY);
+      for (const cue of summaryCues) {
+        expect(cue.weight).toBe(1);
+      }
+    },
+    30_000,
+  );
 });

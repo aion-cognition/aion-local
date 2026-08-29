@@ -4,8 +4,10 @@ import {
   type Degradation,
   type MemoryPack,
   type MemoryPackItem,
+  type PackTruncation,
   type StageTimingsMs,
 } from '@aion/protocol';
+import { GLOSS_LABEL } from './facts.js';
 import type { FusedItem } from './fusion.js';
 
 /**
@@ -82,7 +84,7 @@ export const CHARS_PER_TOKEN = 4;
 
 const PACK_HEADING = '# Memory';
 
-const EMPTY_PACK_TEXT = `${PACK_HEADING}\n\nNo memories matched this query.`;
+const EMPTY_PACK_BODY = 'No memories matched this query.';
 
 const BUCKET_HEADINGS: Readonly<Record<PackBucket, string>> = {
   facts: '## Facts',
@@ -106,11 +108,23 @@ export function bucketFor(labels: readonly string[]): PackBucket | undefined {
   return undefined;
 }
 
-function toPackItem(item: FusedItem): MemoryPackItem {
+/**
+ * An item plus the one thing the wire item cannot carry: whether it is an entity gloss.
+ * Labels are graph vocabulary and stay out of the protocol, but the gloss cap counts them
+ * and the provenance-age annotation only applies to them.
+ */
+type PackEntry = {
+  readonly item: MemoryPackItem;
+  readonly gloss: boolean;
+};
+
+function toPackItem(item: FusedItem, rank: number): MemoryPackItem {
   return {
     id: item.id,
     content: item.content,
     ...(item.occurredAt === undefined ? {} : { occurred_at: item.occurredAt.toISOString() }),
+    rank,
+    confidence: item.relevance,
     rationale: item.rationale,
     currency: item.currency,
     ...(item.supersededBy === undefined
@@ -124,19 +138,35 @@ function toPackItem(item: FusedItem): MemoryPackItem {
   };
 }
 
+/** Calendar day only: the age is the point, and a timestamp to the millisecond hides it. */
+function renderDay(timestamp: string): string {
+  return timestamp.slice(0, 'YYYY-MM-DD'.length);
+}
+
 /**
- * Content on its own line, then one line of provenance: id, method and score, the path for
- * an activated item, and the lineage marker for a superseded one. PRD §5.5 requires the
- * marker wherever superseded knowledge surfaces, so it is part of the rendered block and
- * not only of the structured item.
+ * Content on its own line, then one line of provenance: id, the method that found it, the
+ * absolute confidence behind admission, the path for an activated item, and the lineage
+ * marker for a superseded one. PRD §5.5 requires the marker wherever superseded knowledge
+ * surfaces, so it is part of the rendered block and not only of the structured item.
+ *
+ * The list number is the item's rank across the whole pack rather than its position in its
+ * own bucket, so the reader can order two items in different buckets. `rationale.score` is
+ * deliberately not printed: it is the producing method's own number and comparing two of
+ * them says nothing (EX-30).
+ *
+ * An entity gloss is annotated with the date of its first mention. The description was
+ * written once, by the episode that first named the entity, and is never revised (EX-18), so
+ * rendering it without its age serves a year-old sentence as a current fact.
  */
-function renderItem(item: MemoryPackItem, position: number): string {
-  const facts = [
-    `[${item.id}]`,
-    `${item.rationale.method} ${item.rationale.score.toFixed(2)}`,
-  ];
+function renderItem(entry: PackEntry): string {
+  const { item } = entry;
+  const facts = [`[${item.id}]`, item.rationale.method, `confidence ${item.confidence.toFixed(2)}`];
   if (item.occurred_at !== undefined) {
-    facts.push(`occurred ${item.occurred_at}`);
+    facts.push(
+      entry.gloss
+        ? `from first mention, ${renderDay(item.occurred_at)}`
+        : `occurred ${item.occurred_at}`,
+    );
   }
   if (item.rationale.path !== undefined) {
     facts.push(`path ${item.rationale.path}`);
@@ -144,11 +174,11 @@ function renderItem(item: MemoryPackItem, position: number): string {
   if (item.superseded_by !== undefined) {
     facts.push(`superseded by ${item.superseded_by.id} at ${item.superseded_by.at}`);
   }
-  return `${String(position)}. ${item.content}\n   ${facts.join(' | ')}`;
+  return `${String(item.rank)}. ${item.content}\n   ${facts.join(' | ')}`;
 }
 
-function renderBucket(bucket: PackBucket, items: readonly MemoryPackItem[]): string {
-  const blocks = items.map((item, index) => renderItem(item, index + 1));
+function renderBucket(bucket: PackBucket, entries: readonly PackEntry[]): string {
+  const blocks = entries.map((entry) => renderItem(entry));
   return `${BUCKET_HEADINGS[bucket]}\n${blocks.join('\n')}`;
 }
 
@@ -163,9 +193,59 @@ export type AssemblePackInput = {
   readonly degraded?: readonly Degradation[];
   /** The calling session's own episodes with no orchestrator ledger key yet (EX-11). */
   readonly pendingEnrichment?: number;
+  /** Set when spreading activation stopped on its budget rather than converging (EX-21). */
+  readonly truncated?: PackTruncation;
+  /**
+   * Goal and Plan nodes whose text is the query said back (`facts.ts`). Kept out of facts
+   * entirely rather than ranked down: a restatement carries no answer at any rank, and it is
+   * maximally similar to the query, so ranking alone puts it first (EX-19).
+   */
+  readonly restating?: ReadonlySet<string>;
+  /**
+   * How many entity glosses the facts bucket may hold. Absent leaves it uncapped; the
+   * pipeline always supplies it, because uncapped is what EX-19 measured at 58% of slots.
+   */
+  readonly entityGlossCap?: number;
 };
 
-type Selection = Map<PackBucket, MemoryPackItem[]>;
+type Selection = Map<PackBucket, PackEntry[]>;
+
+const STAGE_PHRASES: Readonly<Record<Degradation['stage'], string>> = {
+  cues: 'cue extraction',
+  embed: 'embedding',
+  graph: 'graph reads',
+};
+
+const TRUNCATION_PHRASES: Readonly<Record<PackTruncation, string>> = {
+  activation_budget: 'spread truncated on the activation budget',
+};
+
+/**
+ * The honesty signals as one plain line at the top of the rendered block. A client reading
+ * only `content` from an MCP tool result sees the rendered text and nothing else, so a pack
+ * whose metadata says "degraded" reads to that client exactly like a confident answer — one
+ * exercise angle lost a full baseline run to precisely that (EX-39). The same three signals
+ * stay in `metadata` for a structured consumer; this is the copy that reaches everyone.
+ */
+function honestyNote(input: AssemblePackInput): string | undefined {
+  const clauses: string[] = [];
+  for (const rung of input.degraded ?? []) {
+    clauses.push(`degraded ${STAGE_PHRASES[rung.stage]} (${rung.reason})`);
+  }
+  if (input.truncated !== undefined) {
+    clauses.push(TRUNCATION_PHRASES[input.truncated]);
+  }
+  const pending = input.pendingEnrichment ?? 0;
+  if (pending > 0) {
+    clauses.push(
+      `${String(pending)} recent episode${pending === 1 ? '' : 's'} not yet enriched`,
+    );
+  }
+  if (clauses.length === 0) {
+    return undefined;
+  }
+  return `note: ${clauses.join('; ')}`;
+}
 
 /**
  * Rank order decides everything; the caps and the budget only decide where it stops. An
@@ -175,14 +255,27 @@ type Selection = Map<PackBucket, MemoryPackItem[]>;
  * The running estimate charges a bucket's heading to its first accepted item, because the
  * heading is text the agent pays for too.
  */
-function select(input: AssemblePackInput): Selection {
+function select(input: AssemblePackInput, note: string | undefined): Selection {
   const selection: Selection = new Map();
   const packedEpisodes = new Set<string>();
-  let tokens = estimateTokens(PACK_HEADING);
+  // The note is charged with its own blank-line separator: it is text the agent pays for, and
+  // a caller that asked for a small budget should not lose an item to it silently.
+  let tokens =
+    estimateTokens(PACK_HEADING) + (note === undefined ? 0 : estimateTokens(`${note}\n\n`));
+  let ranked = 0;
+  let glosses = 0;
 
   for (const item of input.items) {
     const bucket = bucketFor(item.labels);
     if (bucket === undefined) {
+      continue;
+    }
+    if (bucket === 'facts' && input.restating?.has(item.id) === true) {
+      continue;
+    }
+
+    const gloss = bucket === 'facts' && item.labels.includes(GLOSS_LABEL);
+    if (gloss && glosses >= (input.entityGlossCap ?? Number.POSITIVE_INFINITY)) {
       continue;
     }
 
@@ -195,16 +288,20 @@ function select(input: AssemblePackInput): Selection {
       continue;
     }
 
-    const packItem = toPackItem(item);
+    const entry: PackEntry = { item: toPackItem(item, ranked + 1), gloss };
     const cost =
-      estimateTokens(renderItem(packItem, held.length + 1)) +
+      estimateTokens(renderItem(entry)) +
       (held.length === 0 ? estimateTokens(BUCKET_HEADINGS[bucket]) : 0);
     if (tokens + cost > input.tokenBudget) {
       continue;
     }
 
     tokens += cost;
-    held.push(packItem);
+    ranked += 1;
+    if (gloss) {
+      glosses += 1;
+    }
+    held.push(entry);
     selection.set(bucket, held);
     if (key !== undefined) {
       packedEpisodes.add(key);
@@ -214,17 +311,20 @@ function select(input: AssemblePackInput): Selection {
   return selection;
 }
 
-function render(selection: Selection): string {
+function render(selection: Selection, note: string | undefined): string {
   const sections: string[] = [];
+  if (note !== undefined) {
+    sections.push(note);
+  }
   for (const bucket of PACK_BUCKETS) {
-    const items = selection.get(bucket);
-    if (items === undefined || items.length === 0) {
+    const entries = selection.get(bucket);
+    if (entries === undefined || entries.length === 0) {
       continue;
     }
-    sections.push(renderBucket(bucket, items));
+    sections.push(renderBucket(bucket, entries));
   }
-  if (sections.length === 0) {
-    return EMPTY_PACK_TEXT;
+  if (sections.length === (note === undefined ? 0 : 1)) {
+    sections.push(EMPTY_PACK_BODY);
   }
   return `${PACK_HEADING}\n\n${sections.join('\n\n')}`;
 }
@@ -236,14 +336,15 @@ function render(selection: Selection): string {
  * agent a pack the protocol does not describe.
  */
 export function assemblePack(input: AssemblePackInput): MemoryPack {
-  const selection = select(input);
-  const renderedText = render(selection);
+  const note = honestyNote(input);
+  const selection = select(input, note);
+  const renderedText = render(selection, note);
 
   const buckets: Record<string, readonly MemoryPackItem[]> = {};
   for (const bucket of PACK_BUCKETS) {
-    const items = selection.get(bucket);
-    if (items !== undefined && items.length > 0) {
-      buckets[bucket] = items;
+    const entries = selection.get(bucket);
+    if (entries !== undefined && entries.length > 0) {
+      buckets[bucket] = entries.map((entry) => entry.item);
     }
   }
 
@@ -260,6 +361,7 @@ export function assemblePack(input: AssemblePackInput): MemoryPack {
       ...(input.pendingEnrichment === undefined || input.pendingEnrichment === 0
         ? {}
         : { pending_enrichment: input.pendingEnrichment }),
+      ...(input.truncated === undefined ? {} : { truncated: input.truncated }),
     },
   });
 }

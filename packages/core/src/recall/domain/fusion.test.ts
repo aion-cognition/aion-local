@@ -481,3 +481,55 @@ describe('an empty candidate set', () => {
     expect(items([list('vector', [])])).toEqual([]);
   });
 });
+
+describe('the decision-intent label boost', () => {
+  const BOOSTED: FusionOptions = { ...RRF, labelBoosts: { Decision: 1.25, Insight: 1.25 } };
+
+  function ranked(count: number, labels: readonly string[]): FusionCandidate[] {
+    return Array.from({ length: count }, (_, index) =>
+      candidate(`${labels[0] ?? 'x'}-${String(index)}`, { labels: [...labels, 'Memory'] }),
+    );
+  }
+
+  it('lifts a Decision the lexical leg buried past the glosses above it', () => {
+    const glosses = ranked(12, ['Entity']);
+    const decision = candidate('decision', { labels: ['Decision', 'Memory'] });
+
+    const fused = items([list('bm25', [...glosses, decision])], BOOSTED);
+
+    expect(ids(fused)[0]).toBe('decision');
+  });
+
+  it('leaves the order alone on a query with no judged intent', () => {
+    const glosses = ranked(12, ['Entity']);
+    const decision = candidate('decision', { labels: ['Decision', 'Memory'] });
+
+    const fused = items([list('bm25', [...glosses, decision])]);
+
+    expect(ids(fused)[0]).toBe('Entity-0');
+    expect(ids(fused).at(-1)).toBe('decision');
+  });
+
+  // The boost is a thumb on the scale, not a bypass: an item no leg ranked at all is not in
+  // the fusion to be boosted, and one ranked far below the cap stays below it.
+  it('does not lift a Decision past an item ranked twenty places above it', () => {
+    const glosses = ranked(30, ['Entity']);
+    const decision = candidate('decision', { labels: ['Decision', 'Memory'] });
+
+    const fused = items([list('bm25', [...glosses, decision])], BOOSTED);
+
+    expect(ids(fused)[0]).toBe('Entity-0');
+  });
+
+  it('cannot admit an item the floors rejected', () => {
+    const decision = candidate('decision', {
+      labels: ['Decision', 'Memory'],
+      method: 'vector',
+      relevance: 0.2,
+    });
+
+    const fused = items([list('vector', [decision])], { ...BOOSTED, admission: CALIBRATED });
+
+    expect(fused).toEqual([]);
+  });
+});

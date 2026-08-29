@@ -83,6 +83,13 @@ export const KNOB_REGISTRY: readonly Knob[] = [
     kind: 'number',
   },
   { envVar: 'AION_PACK_CLUSTER_CAP', path: ['recall', 'clusterCap'], kind: 'number' },
+  { envVar: 'AION_PACK_ENTITY_GLOSS_CAP', path: ['recall', 'entityGlossCap'], kind: 'number' },
+  {
+    envVar: 'AION_FACTS_RESTATEMENT_FLOOR',
+    path: ['recall', 'restatementFloor'],
+    kind: 'number',
+  },
+  { envVar: 'AION_DECISION_INTENT_BOOST', path: ['recall', 'decisionBoost'], kind: 'number' },
 
   { envVar: 'AION_SEARCH_METHODS', path: ['search', 'methods'], kind: 'stringList' },
   { envVar: 'AION_SEARCH_RERANKER', path: ['search', 'reranker'], kind: 'string' },

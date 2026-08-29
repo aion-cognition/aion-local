@@ -6,6 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openLogger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import { CueCache, extractCues, type CueExtractionDeps } from './cues.js';
+import {
+  BARE_QUERY_FIXTURES,
+  SUMMARY_TONE_FIXTURES,
+  SUMMARY_TONE_QUERY,
+} from './cues.fixtures.js';
 
 const MODEL = 'qwen3:1.7b';
 const BUDGET_MS = 2000;
@@ -46,7 +51,7 @@ afterEach(() => {
 });
 
 describe('bucket weighting', () => {
-  it('assigns 3x to query cues, 2x to summary cues, 1x to recent-turn cues', async () => {
+  it('assigns 3x to query cues and 1x to summary and recent-turn cues alike', async () => {
     generate.mockResolvedValue(fullOutput());
 
     const result = await extractCues(deps, {
@@ -57,9 +62,10 @@ describe('bucket weighting', () => {
 
     expect(result.degraded).toBe(false);
     expect(result.cues).toEqual([
+      { text: 'why did the migration deadlock', source: 'query', weight: 3 },
       { text: 'migration deadlock', source: 'query', weight: 3 },
       { text: 'per-table split', source: 'query', weight: 3 },
-      { text: 'production deploy', source: 'summary', weight: 2 },
+      { text: 'production deploy', source: 'summary', weight: 1 },
       { text: 'dry run', source: 'recent_turns', weight: 1 },
     ]);
     for (const cue of result.cues) {
@@ -73,6 +79,7 @@ describe('bucket weighting', () => {
     const result = await extractCues(deps, { query: 'why did the migration deadlock' });
 
     expect(result.cues).toEqual([
+      { text: 'why did the migration deadlock', source: 'query', weight: 3 },
       { text: 'migration deadlock', source: 'query', weight: 3 },
       { text: 'per-table split', source: 'query', weight: 3 },
     ]);
@@ -94,9 +101,10 @@ describe('bucket weighting', () => {
     });
 
     expect(result.cues).toEqual([
+      { text: 'q', source: 'query', weight: 3 },
       { text: 'deadlock fix', source: 'query', weight: 3 },
       { text: 'Migration', source: 'query', weight: 3 },
-      { text: 'unique summary cue', source: 'summary', weight: 2 },
+      { text: 'unique summary cue', source: 'summary', weight: 1 },
       { text: 'unique recent cue', source: 'recent_turns', weight: 1 },
     ]);
   });
@@ -106,7 +114,10 @@ describe('bucket weighting', () => {
 
     const result = await extractCues(deps, { query: 'q' });
 
-    expect(result.cues).toEqual([{ text: 'padded', source: 'query', weight: 3 }]);
+    expect(result.cues).toEqual([
+      { text: 'q', source: 'query', weight: 3 },
+      { text: 'padded', source: 'query', weight: 3 },
+    ]);
   });
 });
 
@@ -195,7 +206,7 @@ describe('degradation ladder', () => {
 
     expect(result.cues).toEqual([
       { text: 'why did we pick webhooks', source: 'raw_query', weight: 3 },
-      { text: 'debugging the ingestion service rollout', source: 'raw_summary', weight: 2 },
+      { text: 'debugging the ingestion service rollout', source: 'raw_summary', weight: 1 },
     ]);
     for (const cue of result.cues) {
       expect(CueSchema.parse(cue)).toEqual(cue);
@@ -285,7 +296,154 @@ describe('the one generate() call', () => {
     expect(request.model).toBe(MODEL);
     expect(request.schema).toMatchObject({
       type: 'object',
-      required: ['query_cues', 'summary_cues', 'recent_turn_cues'],
+      required: ['query_cues', 'summary_cues', 'recent_turn_cues', 'query_intent'],
     });
+  });
+});
+
+describe('the raw query is always a cue', () => {
+  it.each(BARE_QUERY_FIXTURES)(
+    'keeps the question itself even when the model invents topics for: $input.query',
+    async (fixture) => {
+      // What the exercise's bare queries actually produced: confident, on-topic-looking cues
+      // for a topic the substrate has never held.
+      generate.mockResolvedValue(
+        fullOutput({ query_cues: ['kafka consumer lag', 'outbox poller'] }),
+      );
+
+      const result = await extractCues(deps, fixture.input);
+
+      expect(result.cues[0]).toEqual({
+        text: fixture.input.query,
+        source: 'query',
+        weight: 3,
+      });
+    },
+  );
+
+  it('is the only cue when the model returns none at all', async () => {
+    generate.mockResolvedValue(fullOutput({ query_cues: [] }));
+
+    const result = await extractCues(deps, { query: 'zzqxwv plortnak vugglesnorf' });
+
+    expect(result.cues).toEqual([
+      { text: 'zzqxwv plortnak vugglesnorf', source: 'query', weight: 3 },
+    ]);
+  });
+
+  it('surfaces once when the model happens to return the query back', async () => {
+    generate.mockResolvedValue(fullOutput({ query_cues: ['Why did the migration deadlock'] }));
+
+    const result = await extractCues(deps, { query: 'why did the migration deadlock' });
+
+    expect(result.cues).toEqual([
+      { text: 'why did the migration deadlock', source: 'query', weight: 3 },
+    ]);
+  });
+
+  it('instructs the model to stay inside the section rather than guess', async () => {
+    generate.mockResolvedValue(fullOutput());
+
+    await extractCues(deps, { query: 'why did the migration deadlock' });
+
+    const prompt = String(generate.mock.calls[0]?.[0]?.messages?.[0]?.content ?? '');
+    expect(prompt).toContain('Never introduce a topic, domain, or entity the section does not mention');
+    expect(prompt).toContain('never guess what the user might have meant');
+    expect(prompt).toContain('return an empty array');
+  });
+});
+
+describe('decision intent', () => {
+  it('marks the query cues when the model judged the query decision-shaped', async () => {
+    generate.mockResolvedValue({ ...fullOutput(), query_intent: 'decision' });
+
+    const result = await extractCues(deps, {
+      query: 'what did we decide about the remittance ingest',
+      summary: 'reviewing the ingestion design',
+    });
+
+    expect(result.cues.filter((cue) => cue.source === 'query')).toSatisfy(
+      (cues: readonly { readonly intent?: string }[]) =>
+        cues.every((cue) => cue.intent === 'decision'),
+    );
+    expect(result.cues.find((cue) => cue.source === 'summary')?.intent).toBeUndefined();
+  });
+
+  it('marks nothing when the model judged the query some other shape', async () => {
+    generate.mockResolvedValue({ ...fullOutput(), query_intent: 'other' });
+
+    const result = await extractCues(deps, { query: 'how long did the migration take' });
+
+    expect(result.cues.every((cue) => cue.intent === undefined)).toBe(true);
+  });
+
+  it('marks nothing when the provider dropped the field rather than degrading the call', async () => {
+    generate.mockResolvedValue(fullOutput());
+
+    const result = await extractCues(deps, { query: 'what did we decide' });
+
+    expect(result.degraded).toBe(false);
+    expect(result.cues.every((cue) => cue.intent === undefined)).toBe(true);
+  });
+});
+
+describe('summary cues are damped by weight, not by wording', () => {
+  it('carries every summary cue at 1x, whatever the summary says', async () => {
+    generate.mockResolvedValue(
+      fullOutput({ summary_cues: ['frankfurt on-call handoff', 'neo4j migration deadlock'] }),
+    );
+
+    const result = await extractCues(deps, {
+      query: SUMMARY_TONE_QUERY,
+      summary: 'reviewing the on-call handoff for Frankfurt',
+    });
+
+    expect(result.cues.filter((cue) => cue.source === 'summary')).toEqual([
+      { text: 'frankfurt on-call handoff', source: 'summary', weight: 1 },
+      { text: 'neo4j migration deadlock', source: 'summary', weight: 1 },
+    ]);
+  });
+
+  it.each(SUMMARY_TONE_FIXTURES)(
+    'damps rather than drops or rewords, on EX-20\'s own summary: $summary',
+    async (fixture) => {
+      generate.mockResolvedValue(fullOutput({ summary_cues: ['first cue', 'second cue'] }));
+
+      const result = await extractCues(deps, {
+        query: SUMMARY_TONE_QUERY,
+        summary: fixture.summary,
+      });
+      const summaryCues = result.cues.filter((cue) => cue.source === 'summary');
+
+      expect(summaryCues.map((cue) => cue.text)).toEqual(['first cue', 'second cue']);
+      expect(summaryCues.every((cue) => cue.weight === 1)).toBe(true);
+    },
+  );
+
+  it('keeps the query cues at 3x, so the question always outranks the context', async () => {
+    generate.mockResolvedValue(fullOutput());
+
+    const result = await extractCues(deps, {
+      query: SUMMARY_TONE_QUERY,
+      summary: 'recalling my own recent work',
+    });
+
+    expect(result.cues.filter((cue) => cue.source === 'query').every((cue) => cue.weight === 3)).toBe(
+      true,
+    );
+  });
+
+  it('damps the raw summary on the degraded path too', async () => {
+    generate.mockRejectedValue(new Error('ollama unreachable'));
+
+    const result = await extractCues(deps, {
+      query: SUMMARY_TONE_QUERY,
+      summary: 'recalling my own recent work',
+    });
+
+    expect(result.cues).toEqual([
+      { text: SUMMARY_TONE_QUERY, source: 'raw_query', weight: 3 },
+      { text: 'recalling my own recent work', source: 'raw_summary', weight: 1 },
+    ]);
   });
 });

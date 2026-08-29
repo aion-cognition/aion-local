@@ -136,18 +136,30 @@ This is the other half of the fix: before it, this same outage produced a normal
 empty pack with **no** degradation marker at all, byte-identical to a genuine "nothing
 matches" miss.
 
-One thing the fix does not reach: `rendered_text` never carries the marker. `render()`
-(`packages/core/src/recall/domain/pack.ts:198-211`) builds the text block from items alone
-and never reads `degraded`; an empty selection always renders the constant
-`"# Memory\n\nNo memories matched this query."` (`pack.ts:68`), whether or not a rung
-fired. An agent reading only the tool's text content, not `structuredContent.metadata`,
-still cannot tell an outage from an honest miss.
+`rendered_text` now carries it too. `assemblePack` builds one plain line from the three
+honesty signals and renders it directly under the heading, before any bucket:
 
-Re-verified live (`docker stop` on the harness Neo4j mid-service, then a recall against a
-warm session): resolved in 16.6-17.6s across two runs (down from the pre-fix 62-66s, driven
-by the driver-timeout fix below) with `metadata.degraded` exactly
-`[{"stage":"graph","reason":"unavailable"}]` and `rendered_text` exactly the empty-pack
-constant above, confirming the residual gap.
+```
+# Memory
+
+note: degraded graph reads (unavailable)
+
+No memories matched this query.
+```
+
+The line names each degradation rung, then a spread that stopped on the activation budget
+(`metadata.truncated`), then the calling session's un-enriched episode count
+(`metadata.pending_enrichment`), joined by `; `. It is absent entirely on a healthy pack and
+present on an empty one, which is where a caller most needs it. This closes the gap the
+previous revision of this page recorded: an agent reading only the tool's text content, not
+`structuredContent.metadata`, could not tell an outage from an honest miss, and one exercise
+angle lost a full baseline run to exactly that.
+
+Re-verified live before the fix (`docker stop` on the harness Neo4j mid-service, then a
+recall against a warm session): resolved in 16.6-17.6s across two runs (down from the pre-fix
+62-66s, driven by the driver-timeout fix below) with `metadata.degraded` exactly
+`[{"stage":"graph","reason":"unavailable"}]` and `rendered_text` then still the bare
+empty-pack constant.
 
 **Diagnose.** `aion doctor`'s `neo4j-bolt` check (`packages/cli/src/doctor.ts:74-85`), which
 every other check depends on. Live, `selectSeeds`' error log line above names it directly.

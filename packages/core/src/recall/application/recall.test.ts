@@ -130,7 +130,9 @@ describe('recall against an empty substrate', () => {
     expect(pack.preferences).toBeUndefined();
     expect(pack.resonant).toBeUndefined();
     expect(pack.rendered_text).toContain('No memories matched this query.');
+    // The caller's own question leads the cue set whatever the model returned (EX-20).
     expect(pack.metadata.cues).toEqual([
+      { text: 'why did we pick webhooks', source: 'query', weight: 3 },
       { text: 'webhook ingestion', source: 'query', weight: 3 },
     ]);
   });
@@ -151,7 +153,7 @@ describe('recall against an empty substrate', () => {
 
     expect(generate).toHaveBeenCalledTimes(1);
     expect(embed).toHaveBeenCalledTimes(1);
-    expect(embed).toHaveBeenCalledWith(['webhook ingestion']);
+    expect(embed).toHaveBeenCalledWith(['why webhooks', 'webhook ingestion']);
   });
 
   it('records a timing for every stage', async () => {
@@ -215,8 +217,9 @@ describe('degradation', () => {
     });
 
     expect(pack.metadata.degraded).toEqual([{ stage: 'embed', reason: 'model_error' }]);
-    expect(pack.metadata.cues).toHaveLength(1);
+    expect(pack.metadata.cues).toHaveLength(2);
     expect(pack.rendered_text).toContain('No memories matched this query.');
+    expect(pack.rendered_text).toContain('note: degraded embedding (model_error)');
   });
 
   // PRD §10's deeper rung. Both inference calls are gone, and a pack that named only the
@@ -296,6 +299,6 @@ describe('the side-effect seam', () => {
       { identity: IDENTITY, now: NOW },
     );
 
-    expect(pack.metadata.cues).toHaveLength(1);
+    expect(pack.metadata.cues).toHaveLength(2);
   });
 });

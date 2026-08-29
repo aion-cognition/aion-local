@@ -254,6 +254,8 @@ describe('the structured items', () => {
       id: 'stale',
       content: 'content of stale',
       occurred_at: '2026-08-01T00:00:00.000Z',
+      rank: 1,
+      confidence: 0.8,
       rationale: { method: 'vector', score: 0.8 },
       currency: 'superseded',
       superseded_by: { id: 'stale-successor', at: '2026-08-10T00:00:00.000Z' },
@@ -275,14 +277,17 @@ describe('the rendered text block', () => {
     expect(pack.rendered_text.indexOf('## Facts')).toBeLessThan(
       pack.rendered_text.indexOf('## Episodes'),
     );
+    // The list number is the item's rank across the whole pack, so f1 at facts rank 1 is
+    // globally 2 and the reader can order it against the two episodes (EX-30).
     expect(pack.rendered_text).toContain('1. content of e1');
-    expect(pack.rendered_text).toContain('2. content of e2');
+    expect(pack.rendered_text).toContain('2. content of f1');
+    expect(pack.rendered_text).toContain('3. content of e2');
   });
 
   it('shows the traversal path of an activated item', () => {
     const pack = assemble([item('reached', { path: 'a -[PARTICIPATES_IN]-> b -[FOLLOWS]-> c' })]);
 
-    expect(pack.rendered_text).toContain('activation 0.80');
+    expect(pack.rendered_text).toContain('activation | confidence 0.80');
     expect(pack.rendered_text).toContain('path a -[PARTICIPATES_IN]-> b -[FOLLOWS]-> c');
   });
 
@@ -292,5 +297,178 @@ describe('the rendered text block', () => {
     expect(pack.rendered_text).toContain(
       'superseded by stale-successor at 2026-08-10T00:00:00.000Z',
     );
+  });
+});
+
+describe('the facts bucket', () => {
+  function gloss(id: string): FusedItem {
+    return item(id, { labels: ['Entity', 'Memory', 'AionNode'], content: `${id} (concept): a gloss` });
+  }
+
+  function goal(id: string): FusedItem {
+    return item(id, { labels: ['Goal', 'Memory', 'AionNode'] });
+  }
+
+  it('caps entity glosses well under the bucket cap', () => {
+    const items = ['g1', 'g2', 'g3', 'g4', 'g5', 'g6'].map(gloss);
+
+    const pack = assemble(items, { entityGlossCap: 4 });
+
+    expect(pack.facts?.map((entry) => entry.id)).toEqual(['g1', 'g2', 'g3', 'g4']);
+  });
+
+  it('leaves room for content the glosses would otherwise have crowded out', () => {
+    const decision = item('d1', { labels: ['Decision', 'Memory', 'AionNode'] });
+    const items = [...['g1', 'g2', 'g3', 'g4', 'g5', 'g6'].map(gloss), decision];
+
+    const pack = assemble(items, { entityGlossCap: 2, caps: { ...CAPS, facts: 3 } });
+
+    expect(pack.facts?.map((entry) => entry.id)).toEqual(['g1', 'g2', 'd1']);
+  });
+
+  it('leaves the glosses uncapped when the caller measured no cap', () => {
+    const pack = assemble(['g1', 'g2', 'g3', 'g4', 'g5', 'g6'].map(gloss));
+
+    expect(pack.facts).toHaveLength(6);
+  });
+
+  it('keeps a query-restating Goal out of the bucket entirely, at any rank', () => {
+    const pack = assemble([goal('restating'), goal('answering')], {
+      restating: new Set(['restating']),
+    });
+
+    expect(pack.facts?.map((entry) => entry.id)).toEqual(['answering']);
+  });
+
+  it('leaves an item in another bucket alone even when named as restating', () => {
+    const pack = assemble([item('e1')], { restating: new Set(['e1']) });
+
+    expect(pack.episodes?.map((entry) => entry.id)).toEqual(['e1']);
+  });
+
+  it('dates an entity gloss by its first mention rather than by an occurrence', () => {
+    const pack = assemble([
+      { ...gloss('g1'), occurredAt: new Date('2025-11-14T08:30:00.000Z') },
+    ]);
+
+    expect(pack.rendered_text).toContain('from first mention, 2025-11-14');
+    expect(pack.rendered_text).not.toContain('occurred 2025-11-14');
+  });
+
+  it('keeps the occurrence stamp on everything that is not a gloss', () => {
+    const pack = assemble([item('e1', { occurredAt: new Date('2025-11-14T08:30:00.000Z') })]);
+
+    expect(pack.rendered_text).toContain('occurred 2025-11-14T08:30:00.000Z');
+    expect(pack.rendered_text).not.toContain('from first mention');
+  });
+});
+
+describe('rank and confidence', () => {
+  it('numbers items by their rank across the whole pack, not within a bucket', () => {
+    const pack = assemble([
+      item('e1'),
+      item('f1', { labels: ['Entity', 'AionNode'] }),
+      item('e2'),
+      item('f2', { labels: ['Entity', 'AionNode'] }),
+    ]);
+
+    expect(pack.episodes?.map((entry) => entry.rank)).toEqual([1, 3]);
+    expect(pack.facts?.map((entry) => entry.rank)).toEqual([2, 4]);
+  });
+
+  it('leaves no gap in the ranks when an item is dropped before it is packed', () => {
+    const pack = assemble([item('s1', { labels: ['Session', 'AionNode'] }), item('e1'), item('e2')]);
+
+    expect(pack.episodes?.map((entry) => entry.rank)).toEqual([1, 2]);
+  });
+
+  it('carries the absolute measurement the floor read, not the method score', () => {
+    const measured: FusedItem = {
+      ...item('e1'),
+      relevance: 0.62,
+      rationale: { method: 'bm25', score: 1 },
+    };
+
+    const pack = assemble([measured]);
+
+    expect(pack.episodes?.[0]?.confidence).toBe(0.62);
+    expect(pack.rendered_text).toContain('bm25 | confidence 0.62');
+    expect(pack.rendered_text).not.toContain('bm25 1.00');
+  });
+
+  it('says zero for an item nothing measured', () => {
+    const traversed: FusedItem = { ...item('reached', { path: 'a -[X]-> b' }), relevance: 0 };
+
+    expect(assemble([traversed]).episodes?.[0]?.confidence).toBe(0);
+  });
+});
+
+describe('the honesty line', () => {
+  it('states every signal that fired, in one line at the top', () => {
+    const pack = assemble([item('e1')], {
+      degraded: [{ stage: 'cues', reason: 'timeout' }],
+      truncated: 'activation_budget',
+      pendingEnrichment: 2,
+    });
+
+    const [heading, note] = pack.rendered_text.split('\n\n');
+    expect(heading).toBe('# Memory');
+    expect(note).toBe(
+      'note: degraded cue extraction (timeout); spread truncated on the activation budget; ' +
+        '2 recent episodes not yet enriched',
+    );
+  });
+
+  it('names each degradation rung separately', () => {
+    const pack = assemble([], {
+      degraded: [
+        { stage: 'cues', reason: 'model_error' },
+        { stage: 'embed', reason: 'model_error' },
+        { stage: 'graph', reason: 'unavailable' },
+      ],
+    });
+
+    expect(pack.rendered_text).toContain(
+      'note: degraded cue extraction (model_error); degraded embedding (model_error); ' +
+        'degraded graph reads (unavailable)',
+    );
+  });
+
+  it('reaches an empty pack too, which is where a caller most needs it', () => {
+    const pack = assemble([], { degraded: [{ stage: 'graph', reason: 'unavailable' }] });
+
+    expect(pack.rendered_text).toBe(
+      '# Memory\n\nnote: degraded graph reads (unavailable)\n\nNo memories matched this query.',
+    );
+  });
+
+  it('says nothing at all on a healthy pack', () => {
+    const pack = assemble([item('e1')], { degraded: [], pendingEnrichment: 0 });
+
+    expect(pack.rendered_text).not.toContain('note:');
+    expect(pack.metadata.truncated).toBeUndefined();
+  });
+
+  it('agrees with the singular when exactly one episode is unenriched', () => {
+    expect(assemble([], { pendingEnrichment: 1 }).rendered_text).toContain(
+      '1 recent episode not yet enriched',
+    );
+  });
+
+  it('names the truncation in metadata as well as in the line', () => {
+    const pack = assemble([item('e1')], { truncated: 'activation_budget' });
+
+    expect(pack.metadata.truncated).toBe('activation_budget');
+  });
+
+  it('charges the note to the token budget rather than letting it overrun', () => {
+    const pack = assemble([item('e1', { content: 'x'.repeat(200) })], {
+      tokenBudget: 60,
+      degraded: [{ stage: 'cues', reason: 'timeout' }],
+      pendingEnrichment: 3,
+    });
+
+    expect(pack.metadata.token_estimate).toBeLessThanOrEqual(60);
+    expect(pack.metadata.token_estimate).toBe(estimateTokens(pack.rendered_text));
   });
 });

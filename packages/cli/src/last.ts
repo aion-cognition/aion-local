@@ -69,11 +69,18 @@ const BUCKET_LABELS: Readonly<Record<PackBucket, string>> = {
 
 const STAGES: readonly (keyof StageTimingsMs)[] = ['cues', 'embed', 'seeds', 'activation', 'fusion'];
 
-/** One item's rationale line: method, score, and whichever of path/currency/lineage/occurred-at apply. */
+/**
+ * One item's rationale line: rank, method, the two scores, and whichever of
+ * path/currency/lineage/occurred-at apply. `confidence` is the absolute measurement admission
+ * read and is comparable between items; `score` is the producing method's own number and is
+ * not, which is why the rank is printed beside them.
+ */
 function itemFacts(item: MemoryPackItem): string {
   const facts = [
     `id=${item.id}`,
+    `rank=${String(item.rank)}`,
     `method=${item.rationale.method}`,
+    `confidence=${item.confidence.toFixed(3)}`,
     `score=${item.rationale.score.toFixed(3)}`,
   ];
   if (item.rationale.path !== undefined) {

@@ -568,6 +568,25 @@ export type {
 export { CHARS_PER_TOKEN, PACK_BUCKETS, assemblePack, bucketFor, estimateTokens } from './recall/domain/pack.js';
 export type { AssemblePackInput, BucketCaps, PackBucket } from './recall/domain/pack.js';
 
+export {
+  DECISION_INTENT_LABELS,
+  GLOSS_LABEL,
+  RESTATEMENT_LABELS,
+  hasDecisionIntent,
+  labelBoosts,
+  queryCueTexts,
+  queryRestatements,
+} from './recall/domain/facts.js';
+export type { RestatementCandidate, RestatementPolicy } from './recall/domain/facts.js';
+
+export {
+  ANSWERING_GOALS,
+  DECISION_SUBSTRATE,
+  DECISION_PROBE,
+  RESTATING_GOALS,
+} from './recall/application/facts.fixtures.js';
+export type { FactsPair, SubstrateNode } from './recall/application/facts.fixtures.js';
+
 export { handleRecall, readModeFor } from './recall/application/recall.js';
 export type { RecallCompletion, RecallDeps, RecallListener, RecallOptions } from './recall/application/recall.js';
 
