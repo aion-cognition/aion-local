@@ -3,19 +3,20 @@ import type { Currency, SupersededBy } from '../../infrastructure/graph/read-mod
 import type { Vector } from '../../infrastructure/providers/types.js';
 import { hashContent } from '../../reflection/domain/content.js';
 import {
+  absoluteRelevance,
   admitsOnEvidence,
   type AdmissionPolicy,
   type AdmissionReport,
   type Measurement,
 } from './admission.js';
-import { bucketFor } from './pack.js';
+import { applyClusterCap, mmrOrder } from './ranking.js';
 
 /**
  * Whitepaper §5.3 and §5.5. Each retrieval leg hands over its own ranked list; this module
  * turns them into one ordered candidate set — weighted RRF by default, MMR behind the
  * reranker flag — and applies the two policies that decide what may surface at all:
  * `admission.ts`'s absolute floors (PRD §3.1, "empty beats noisy") and PRD §5.5's currency
- * ranking.
+ * ranking. Ordering, near-duplicate capping and MMR live in `ranking.ts`.
  */
 
 /** Whitepaper §5.3's three legs. The weights they fuse under are `config.search.weights`. */
@@ -40,14 +41,13 @@ export type FusionCandidate = {
   /** Whitepaper §5.7's impression of why the item surfaced. Its score is the method's own. */
   readonly rationale: Rationale;
   /**
-   * A similarity measurement on a comparable [0,1] scale, which is what the floor is measured
-   * against. The fused score is a rank statistic — an RRF sum sits near 1/k whatever the
-   * retrieval quality behind it — so a floor applied to it would either drop everything or
-   * nothing.
+   * The producing method's own number, on the producing method's own scale. Used for ranking
+   * and for choosing which leg owns the rationale; never for admission, and never reported as
+   * a confidence — a normalized BM25 score puts the top lexical hit of any query at 1.00.
+   * `evidence` is what admission and `confidence` read.
    *
    * Zero when the method that produced the candidate measures nothing: a recency hit says
-   * "touched lately", not "matches the query". Such a candidate still ranks and corroborates;
-   * it just cannot carry itself into a pack.
+   * "touched lately", not "matches the query".
    */
   readonly relevance: number;
   /**
@@ -72,6 +72,11 @@ export type RankedList = {
 export type FusedItem = FusionCandidate & {
   /** Weighted RRF across every leg that produced the item, down-weighted when superseded. */
   readonly score: number;
+  /**
+   * The strongest cosine any method measured for this item, zero when none did. Comparable
+   * between queries and between items, which is what makes it the number a pack may print.
+   */
+  readonly measured: number;
 };
 
 export type FusionOptions = {
@@ -91,7 +96,7 @@ export type FusionOptions = {
    * Content vectors by node id, fetched only when the reranker is MMR. An id with no
    * vector is treated as maximally distinct, so a partial map degrades toward relevance
    * order rather than toward an arbitrary one. The cluster cap's cosine leg reuses this
-   * same map rather than fetching its own — see `clusterRoots`.
+   * same map rather than fetching its own — see `ranking.ts`.
    */
   readonly vectors?: ReadonlyMap<string, Vector>;
 };
@@ -107,26 +112,6 @@ export const SUPERSEDED_RANK_WEIGHT = 0.5;
 /** Whitepaper §5.5: `1 / (k + rank)`, ranks counted from 1. */
 export function reciprocalRank(rank: number, k: number): number {
   return 1 / (k + rank + 1);
-}
-
-export function cosineSimilarity(left: Vector, right: Vector): number {
-  if (left.length !== right.length || left.length === 0) {
-    return 0;
-  }
-  let dot = 0;
-  let leftNorm = 0;
-  let rightNorm = 0;
-  for (let index = 0; index < left.length; index += 1) {
-    const a = left[index] ?? 0;
-    const b = right[index] ?? 0;
-    dot += a * b;
-    leftNorm += a * a;
-    rightNorm += b * b;
-  }
-  if (leftNorm === 0 || rightNorm === 0) {
-    return 0;
-  }
-  return dot / (Math.sqrt(leftNorm) * Math.sqrt(rightNorm));
 }
 
 type Accumulator = {
@@ -203,216 +188,6 @@ function dedupeByContent(items: readonly FusedItem[]): FusedItem[] {
 }
 
 /**
- * Sixteen characters is `"restart burst 0/"` — EX-22's own burst-record shape, a one-line
- * template that varies only in a trailing count. Long enough to be a real coincidence for
- * two unrelated short memories to share verbatim, short enough that the template's fixed
- * part survives even when the whole record is barely longer than the prefix itself; a
- * longer prefix would swallow the varying suffix on records this short and stop clustering
- * them at all. Case-folded so a casing variant of the same template still keys the same.
- */
-const CLUSTER_PREFIX_CHARS = 16;
-
-/** Cosine above which two items are the same content by vector rather than by text. */
-const CLUSTER_COSINE_THRESHOLD = 0.95;
-
-function clusterPrefixKey(content: string): string {
-  return hashContent(content.trim().toLowerCase().slice(0, CLUSTER_PREFIX_CHARS));
-}
-
-/**
- * Union-find over the post-dedupe set, grouped by pack bucket first: a Concept and an
- * Episode never share a cluster even if their content coincidentally collided, since they
- * were never competing for the same slot to begin with (`pack.ts`'s bucket caps are per
- * bucket already). Within a bucket, two items join a cluster when their content shares the
- * prefix key above, or — only when the caller already fetched embeddings for MMR — when
- * their vectors clear `CLUSTER_COSINE_THRESHOLD`. A run with no vectors in hand (the
- * default RRF reranker) relies on the prefix leg alone, which is what EX-22's own repro
- * needs: the burst records it measured are one-line and share their opening verbatim.
- */
-function clusterRoots(
-  items: readonly FusedItem[],
-  vectors: ReadonlyMap<string, Vector> | undefined,
-): ReadonlyMap<string, string> {
-  const parent = new Map<string, string>();
-  for (const item of items) {
-    parent.set(item.id, item.id);
-  }
-
-  function find(id: string): string {
-    let root = id;
-    let next = parent.get(root);
-    while (next !== undefined && next !== root) {
-      root = next;
-      next = parent.get(root);
-    }
-    parent.set(id, root);
-    return root;
-  }
-
-  function union(left: string, right: string): void {
-    const leftRoot = find(left);
-    const rightRoot = find(right);
-    if (leftRoot !== rightRoot) {
-      parent.set(rightRoot, leftRoot);
-    }
-  }
-
-  const byBucket = new Map<string, FusedItem[]>();
-  for (const item of items) {
-    const bucket = bucketFor(item.labels) ?? '';
-    const grouped = byBucket.get(bucket) ?? [];
-    grouped.push(item);
-    byBucket.set(bucket, grouped);
-  }
-
-  for (const grouped of byBucket.values()) {
-    const byPrefix = new Map<string, string>();
-    for (const item of grouped) {
-      const key = clusterPrefixKey(item.content);
-      const first = byPrefix.get(key);
-      if (first === undefined) {
-        byPrefix.set(key, item.id);
-        continue;
-      }
-      union(first, item.id);
-    }
-
-    if (vectors === undefined) {
-      continue;
-    }
-    for (let i = 0; i < grouped.length; i += 1) {
-      const left = grouped[i];
-      const leftVector = left === undefined ? undefined : vectors.get(left.id);
-      if (left === undefined || leftVector === undefined) {
-        continue;
-      }
-      for (let j = i + 1; j < grouped.length; j += 1) {
-        const right = grouped[j];
-        const rightVector = right === undefined ? undefined : vectors.get(right.id);
-        if (right === undefined || rightVector === undefined) {
-          continue;
-        }
-        if (cosineSimilarity(leftVector, rightVector) > CLUSTER_COSINE_THRESHOLD) {
-          union(left.id, right.id);
-        }
-      }
-    }
-  }
-
-  const roots = new Map<string, string>();
-  for (const item of items) {
-    roots.set(item.id, find(item.id));
-  }
-  return roots;
-}
-
-/**
- * PRD §3.1's floor keeps noise out; this keeps one shape from crowding out everything else
- * that cleared it (EX-22). Items arrive best-first, so the first member of a cluster this
- * loop keeps is already its best-ranked one — `keptByRoot` enforces the cap and
- * `droppedNearDuplicate` counts what it declined, so the report can say why a bucket held
- * fewer distinct memories than it admitted candidates for.
- */
-function applyClusterCap(
-  items: readonly FusedItem[],
-  cap: number,
-  vectors: ReadonlyMap<string, Vector> | undefined,
-): FusedItem[] {
-  if (items.length <= 1) {
-    return [...items];
-  }
-
-  const roots = clusterRoots(items, vectors);
-  const keptByRoot = new Map<string, number>();
-  const survivors: FusedItem[] = [];
-
-  for (const item of items) {
-    const root = roots.get(item.id) ?? item.id;
-    const kept = keptByRoot.get(root) ?? 0;
-    if (kept >= cap) {
-      continue;
-    }
-    keptByRoot.set(root, kept + 1);
-    survivors.push(item);
-  }
-
-  return survivors;
-}
-
-function redundancy(
-  candidate: FusedItem,
-  selected: readonly FusedItem[],
-  vectors: ReadonlyMap<string, Vector> | undefined,
-): number {
-  const candidateVector = vectors?.get(candidate.id);
-  if (candidateVector === undefined) {
-    return 0;
-  }
-  let worst = 0;
-  for (const chosen of selected) {
-    const chosenVector = vectors?.get(chosen.id);
-    if (chosenVector === undefined) {
-      continue;
-    }
-    worst = Math.max(worst, cosineSimilarity(candidateVector, chosenVector));
-  }
-  return worst;
-}
-
-/**
- * Whitepaper §5.5's diversity-aware alternative: `lambda * relevance - (1 - lambda) *
- * redundancy`, selected greedily. Redundancy is cosine distance between content vectors
- * rather than the whitepaper's Jaccard word overlap, because word overlap needs a
- * tokenizer and this build keeps text machinery out of the cognitive path entirely
- * (PRD §2) — the embedding is the redundancy signal the substrate already holds.
- *
- * Relevance is normalized against the top fused score first. Raw RRF sums cluster near
- * `1/k` while cosine similarity spans [0,1], so mixing them unnormalized would make lambda
- * meaningless and hand every ordering to the diversity term.
- */
-export function mmrOrder(
-  items: readonly FusedItem[],
-  lambda: number,
-  vectors: ReadonlyMap<string, Vector> | undefined,
-): FusedItem[] {
-  const top = items[0]?.score ?? 0;
-  if (items.length <= 1 || top <= 0) {
-    return [...items];
-  }
-
-  const remaining = [...items];
-  const selected: FusedItem[] = [];
-  const first = remaining.shift();
-  if (first !== undefined) {
-    selected.push(first);
-  }
-
-  while (remaining.length > 0) {
-    let bestIndex = 0;
-    let bestScore = -Infinity;
-    for (let index = 0; index < remaining.length; index += 1) {
-      const candidate = remaining[index];
-      if (candidate === undefined) {
-        continue;
-      }
-      const score =
-        lambda * (candidate.score / top) -
-        (1 - lambda) * redundancy(candidate, selected, vectors);
-      if (score > bestScore) {
-        bestScore = score;
-        bestIndex = index;
-      }
-    }
-    const [chosen] = remaining.splice(bestIndex, 1);
-    if (chosen !== undefined) {
-      selected.push(chosen);
-    }
-  }
-
-  return selected;
-}
-
-/**
  * Whitepaper §5.5. Ranks fuse reciprocally so the legs need no score calibration between
  * them, and each leg's contribution is scaled by its §5.3 weight (0.4 vector, 0.3 keyword,
  * 0.3 graph), which is where the two sections meet: RRF decides the shape, the weights
@@ -424,11 +199,11 @@ export function mmrOrder(
  * global Workspace — is dropped the same way and for the same reason: it is the graph's
  * connectivity, not something the user ever told the substrate.
  *
- * Two admission rules, because two different things can put a candidate here. A retrieval hit
- * is admitted on its own evidence against the absolute floors (`admitsOnEvidence`). A node
- * reached only by traversal has no measurement to offer, so it is admitted when the recall
- * found an anchor — at least one hit that did clear admission. Traversal extends a pack that
- * something answered; it never fills one nothing answered.
+ * One admission rule, and it is per item: a candidate reaches the pack when its own evidence
+ * clears the absolute floors (`admitsOnEvidence`), and never otherwise. A node the spread
+ * reached carries no measurement, so it is refused however strongly the rest of the pack
+ * measured — the exercise's off-topic packs filled to budget precisely because one incidental
+ * hit unlocked every node activation had touched.
  *
  * The report is what makes a thin pack readable: an empty result with `considered` at zero is
  * a substrate with nothing in it, and the same result with `considered` at forty is a floor
@@ -470,34 +245,29 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
     }
   }
 
-  const admitted = new Map<string, boolean>();
-  let anchored = false;
-  for (const [id, entry] of merged) {
-    const ok = admitsOnEvidence(entry.evidence, options.admission);
-    admitted.set(id, ok);
-    anchored = anchored || ok;
-  }
-
   const items: FusedItem[] = [];
   let droppedBelowFloor = 0;
-  let droppedUnanchored = 0;
-  for (const [id, entry] of merged) {
-    const traversed = entry.activation !== undefined;
-    if (admitted.get(id) !== true) {
-      if (!traversed) {
-        droppedBelowFloor += 1;
+  let droppedUnmeasured = 0;
+  let anchored = false;
+  for (const entry of merged.values()) {
+    if (!admitsOnEvidence(entry.evidence, options.admission)) {
+      // Two counters, because they are two different answers to "why is this pack thin".
+      // Something measured the first and the measurement fell short; nothing measured the
+      // second at all, and the spread alone is not a reason to serve a memory.
+      if (entry.activation !== undefined && entry.relevance === 0) {
+        droppedUnmeasured += 1;
         continue;
       }
-      if (!anchored) {
-        droppedUnanchored += 1;
-        continue;
-      }
+      droppedBelowFloor += 1;
+      continue;
     }
+    anchored = true;
     const superseded = entry.best.currency === 'superseded';
     const ranked = entry.score * boostFor(entry.best.labels, options.labelBoosts);
     items.push({
       ...entry.best,
       relevance: entry.relevance,
+      measured: absoluteRelevance(entry.evidence),
       // The merged evidence, not the winning candidate's own: the gate counted every
       // measurement, and a reader of the item downstream has to see the same set.
       evidence: [...entry.evidence],
@@ -518,7 +288,7 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
       considered: merged.size,
       admitted: ordered.length,
       droppedBelowFloor,
-      droppedUnanchored,
+      droppedUnmeasured,
       droppedDuplicateContent: items.length - deduped.length,
       droppedNearDuplicate: deduped.length - capped.length,
       anchored,

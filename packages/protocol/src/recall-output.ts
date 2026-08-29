@@ -41,7 +41,7 @@ export type Rationale = z.infer<typeof RationaleSchema>;
  * `rank` and `confidence` are what let a reader compare two items. `rationale.score` cannot:
  * it is the producing method's own number, so a BM25 hit normalized to the best hit of its
  * cue prints 1.00 next to a cosine of 0.62 and the list reads as though the lexical hit were
- * the stronger one (EX-30 measured the printed score rising as the list went down on 27% of
+ * the stronger one (the exercise measured the printed score rising as the list went down on 27% of
  * adjacent pairs).
  */
 export const MemoryPackItemSchema = z.strictObject({
@@ -55,9 +55,10 @@ export const MemoryPackItemSchema = z.strictObject({
    */
   rank: z.number().int().positive(),
   /**
-   * The absolute measurement admission read: a cosine on [0,1], comparable between queries.
-   * Zero where nothing measured the item — a node reached by traversal alone rides in on the
-   * pack's anchor rather than on a measurement of its own, and says so.
+   * The absolute measurement admission read: the strongest cosine any method returned for the
+   * item, on [0,1] and comparable between queries. Zero means the item was admitted on a
+   * literal match — Lucene on the verbatim cue, or an exact entity name — which is evidence
+   * rather than a measurement, so no number is invented for it.
    */
   confidence: z.number(),
   rationale: RationaleSchema,
@@ -102,7 +103,7 @@ export type CueWeight = z.infer<typeof CueWeightSchema>;
  * What the caller is asking for, judged by the cue model rather than read off the words. One
  * member, because a decision-shaped query is the only intent the exercise measured a ranking
  * failure for: on an entirely decision-oriented workload the bucket meant to answer "what did
- * we decide" gave Decision nodes 3% of its slots (EX-19). A second intent is an addition here,
+ * we decide" gave Decision nodes 3% of its slots. A second intent is an addition here,
  * not a redesign.
  */
 export const CueIntentSchema = z.enum(['decision']);
@@ -150,12 +151,40 @@ export type Degradation = z.infer<typeof DegradationSchema>;
 /**
  * Why the pack is smaller than the substrate could have answered with. `activation_budget`
  * means spreading activation stopped on its visit budget rather than converging, so the
- * traversal leg was cut off mid-spread: EX-21 measured that on 60.2% of recalls against a
+ * traversal leg was cut off mid-spread, measured on 60.2% of recalls against a
  * populated substrate, logged and never told to the caller.
  */
 export const PackTruncationSchema = z.enum(['activation_budget']);
 
 export type PackTruncation = z.infer<typeof PackTruncationSchema>;
+
+/**
+ * What the admission gate judged and what it refused. Without this a thin pack is unreadable:
+ * `considered: 0` is a substrate with nothing in it, `considered: 43` with everything dropped
+ * is a floor doing its job, and the two need opposite responses from the caller. The floors
+ * themselves are reported alongside the counts because a drop count means nothing without the
+ * bar it was measured against.
+ */
+export const AdmissionReportSchema = z.strictObject({
+  /** Distinct candidates the gate judged; contentless and structural rows never reach it. */
+  considered: z.number().int().nonnegative(),
+  /** Cleared the gate. More than the pack holds means the caps or the token budget cut the rest. */
+  admitted: z.number().int().nonnegative(),
+  /** Measured by at least one method, and no measurement, exact hit or corroboration cleared. */
+  dropped_below_floor: z.number().int().nonnegative(),
+  /** Reached by spreading activation alone, so no method measured it against the query. */
+  dropped_unmeasured: z.number().int().nonnegative(),
+  dropped_duplicate_content: z.number().int().nonnegative(),
+  /** Admitted, then bumped from a near-identical cluster that had already filled its cap. */
+  dropped_near_duplicate: z.number().int().nonnegative(),
+  /** Cosine at or above which one measurement admits an item on its own. */
+  vector_floor: z.number(),
+  /** Cosine at or above which a measurement counts as one unit of corroboration. */
+  corroboration_floor: z.number(),
+  bm25_mode: z.enum(['exact', 'corroborated', 'any']),
+});
+
+export type AdmissionReportOutput = z.infer<typeof AdmissionReportSchema>;
 
 /**
  * A list, because the rungs are independent: a full Ollama outage takes the cue and embed
@@ -166,11 +195,12 @@ export const MemoryPackMetadataSchema = z.strictObject({
   token_estimate: z.number().int().nonnegative(),
   stage_timings_ms: StageTimingsMsSchema,
   cues: z.array(CueSchema),
+  admission: AdmissionReportSchema,
   degraded: z.array(DegradationSchema).min(1).optional(),
   /**
    * The calling session's own episodes with no orchestrator ledger key: real, stored, and
    * reachable by raw text, but not yet reachable by entity resolution, traversal, or context
-   * vectors (EX-11: a memory was not fully recallable for 20 to 25 minutes and the pack never
+   * vectors (a memory was not fully recallable for 20 to 25 minutes and the pack never
    * said so). Optional and omitted at zero — a healthy pack states nothing extra.
    */
   pending_enrichment: z.number().int().positive().optional(),

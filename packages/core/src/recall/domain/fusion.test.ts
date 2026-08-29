@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import type { Vector } from '../../infrastructure/providers/types.js';
 import type { AdmissionPolicy, Measurement } from './admission.js';
 import {
-  cosineSimilarity,
   fuse,
   reciprocalRank,
   SUPERSEDED_RANK_WEIGHT,
@@ -23,8 +22,8 @@ const ADMIT_ALL: AdmissionPolicy = { vectorFloor: 0, corroborationFloor: 0, bm25
 
 /** The shipped shape: a calibrated cosine floor, a lower corroboration floor, exact-only BM25. */
 const CALIBRATED: AdmissionPolicy = {
-  vectorFloor: 0.5,
-  corroborationFloor: 0.45,
+  vectorFloor: 0.6,
+  corroborationFloor: 0.55,
   bm25Mode: 'exact',
 };
 
@@ -174,15 +173,35 @@ describe('traversal admission', () => {
     );
   }
 
-  it('surfaces a node only traversal found, under an activation score the floor would reject', () => {
-    const fused = anchoredRun(0.8);
-
-    expect(ids(fused)).toEqual(['anchor', 'reached']);
-    expect(fused[1]?.rationale.method).toBe('activation');
+  /**
+   * The mechanism behind every budget-saturated off-topic pack the exercise measured: one
+   * incidental hit cleared the floor and every node the spread had touched came with it. A
+   * traversal-only node has no measurement against the query, so a strong anchor is not a
+   * reason to serve it — and the anchor being strong is exactly when it used to be.
+   */
+  it('refuses a traversal-only node however strongly something else anchored the pack', () => {
+    expect(ids(anchoredRun(0.9))).toEqual(['anchor']);
   });
 
   it('surfaces nothing when no hit cleared the floor, so traversal cannot fill an empty pack', () => {
     expect(anchoredRun(0.42)).toEqual([]);
+  });
+
+  it('admits a traversal-reached node that a retrieval leg also measured over the floor', () => {
+    const fused = items(
+      [
+        list('vector', [
+          candidate('anchor', { relevance: 0.9 }),
+          candidate('reached', { relevance: 0.72 }),
+        ]),
+        list('graph_traversal', [
+          candidate('reached', { method: 'activation', relevance: 0, activation: 0.29, evidence: [] }),
+        ]),
+      ],
+      { ...RRF, admission: CALIBRATED },
+    );
+
+    expect(ids(fused)).toEqual(['reached', 'anchor']);
   });
 
   it('still drops a seed whose only strategy measured nothing', () => {
@@ -221,9 +240,9 @@ describe('the admission report', () => {
     expect(result.admission).toEqual({
       policy: CALIBRATED,
       considered: 4,
-      admitted: 2,
+      admitted: 1,
       droppedBelowFloor: 1,
-      droppedUnanchored: 0,
+      droppedUnmeasured: 1,
       droppedDuplicateContent: 1,
       droppedNearDuplicate: 0,
       anchored: true,
@@ -243,7 +262,7 @@ describe('the admission report', () => {
     expect(rejected.admission.anchored).toBe(false);
   });
 
-  it('counts a traversal-only candidate as unanchored rather than as below the floor', () => {
+  it('counts a traversal-only candidate as unmeasured rather than as below the floor', () => {
     const result = fuse(
       [
         list('graph_traversal', [
@@ -254,7 +273,7 @@ describe('the admission report', () => {
     );
 
     expect(result.items).toEqual([]);
-    expect(result.admission.droppedUnanchored).toBe(1);
+    expect(result.admission.droppedUnmeasured).toBe(1);
     expect(result.admission.droppedBelowFloor).toBe(0);
   });
 });
@@ -292,19 +311,18 @@ describe('rationale', () => {
     expect(fused[0]?.rationale).toEqual({ method: 'vector', score: 0.9 });
   });
 
-  it('leaves a traversal-only item explained by activation', () => {
+  it('leaves an item the spread re-found explained by the leg that measured it', () => {
     const fused = items(
       [
         list('vector', [candidate('anchor', { relevance: 0.8 })]),
         list('graph_traversal', [
-          candidate('anchor', { relevance: 0.8 }),
-          candidate('reached', { method: 'activation', relevance: 0, activation: 0.4, evidence: [] }),
+          candidate('anchor', { method: 'activation', relevance: 0.4, activation: 0.4 }),
         ]),
       ],
       { ...RRF, admission: CALIBRATED },
     );
 
-    expect(fused[1]?.rationale.method).toBe('activation');
+    expect(fused[0]?.rationale.method).toBe('vector');
   });
 });
 
@@ -459,19 +477,6 @@ describe('near-duplicate crowding cap', () => {
 
     expect(ids(fused).filter((id) => id.startsWith('near-'))).toHaveLength(2);
     expect(ids(fused)).toContain('far');
-  });
-});
-
-describe('cosine similarity', () => {
-  it('scores identical vectors at one and orthogonal vectors at zero', () => {
-    expect(cosineSimilarity([1, 2, 3], [1, 2, 3])).toBeCloseTo(1, 10);
-    expect(cosineSimilarity([1, 0], [0, 1])).toBeCloseTo(0, 10);
-  });
-
-  it('scores a mismatched or zero vector at zero rather than throwing', () => {
-    expect(cosineSimilarity([1, 0], [1, 0, 0])).toBe(0);
-    expect(cosineSimilarity([0, 0], [1, 0])).toBe(0);
-    expect(cosineSimilarity([], [])).toBe(0);
   });
 });
 
