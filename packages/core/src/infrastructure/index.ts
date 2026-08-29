@@ -397,3 +397,17 @@ export {
   recordCueOutcome,
 } from './sqlite/recall-samples.js';
 
+export { PACK_METHODS, packMethodCounters, recordPackMethodCounts } from './sqlite/method-counters.js';
+export type { PackMethod, PackMethodCounters } from './sqlite/method-counters.js';
+
+export {
+  buildEdgeWeightDistribution,
+  EDGE_WEIGHT_DISTRIBUTION_TYPES,
+  edgeWeightDistribution,
+} from './graph/edge-weight-distribution.js';
+export type {
+  EdgeWeightDistribution,
+  EdgeWeightDistributionType,
+  EdgeWeightStats,
+} from './graph/edge-weight-distribution.js';
+

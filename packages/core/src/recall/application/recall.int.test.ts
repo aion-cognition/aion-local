@@ -21,6 +21,7 @@ import { LaneAssigner } from '../../reflection/application/lanes.js';
 import { SessionManager } from '../../session/session-manager.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { getLastPack } from '../../infrastructure/sqlite/last-pack.js';
+import { packMethodCounters } from '../../infrastructure/sqlite/method-counters.js';
 import { markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import { orchestratorLedgerKey } from '../../reflection/application/orchestrator.js';
 import { CueCache } from './cues.js';
@@ -293,5 +294,27 @@ describe('pending_enrichment metadata', () => {
     });
 
     expect(pack.metadata.pending_enrichment).toBeUndefined();
+  });
+});
+
+describe('per-method pack contribution counters', () => {
+  it('accumulates across separate recalls rather than resetting on each one', async () => {
+    const before = packMethodCounters(db);
+
+    const first = await handleRecall(deps, { query: QUERY }, {
+      identity: READ_SESSION,
+      now: RECALLED_AT,
+    });
+    const second = await handleRecall(deps, { query: QUERY }, {
+      identity: READ_SESSION,
+      now: RECALLED_AT,
+    });
+
+    const after = packMethodCounters(db);
+    const methods = [...first.episodes ?? [], ...second.episodes ?? []].map((item) => item.rationale.method);
+    expect(methods.length).toBeGreaterThan(0);
+    for (const method of methods) {
+      expect(after[method]).toBeGreaterThan(before[method]);
+    }
   });
 });

@@ -16,6 +16,7 @@ import {
   loadConfig,
   openLogger,
   OllamaProvider,
+  plasticityCounters,
   queueLagSnapshot,
   readMemberName,
   RecallSideEffects,
@@ -278,6 +279,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       port: config.operational.mcpPort,
       onSessionClosed: narratives.onSessionClosed,
       queueLag: () => queueLagSnapshot(store.db, config.operational.workerMaxAttempts),
+      plasticity: () => plasticityCounters(store.db),
     });
 
     // The primary trigger, not the fallback: a client's close() tears down its own
