@@ -47,7 +47,7 @@ export class AnthropicTestProvider implements Provider {
 /**
  * The provider an integration test drives enrichment through. With `AION_ANTHROPIC_API_KEY` in
  * the environment the generations run on Haiku and come back in a second or two, where qwen3:8b
- * takes 35 to 100 seconds for the same call. Set `AION_TEST_GENERATION=local` to force the local
+ * takes 35 to 100 seconds for the same call. Set `TEST_AION_GENERATION=local` to force the local
  * model, which is what a file measuring local-model quality wants. With no key at all everything
  * falls back to local silently, so a machine without one still runs the whole suite.
  *
@@ -56,7 +56,7 @@ export class AnthropicTestProvider implements Provider {
 export function testGenerationProvider(options: OllamaProviderOptions): Provider {
   const ollama = new OllamaProvider(options);
   const apiKey = process.env.AION_ANTHROPIC_API_KEY ?? '';
-  if (apiKey.trim().length === 0 || process.env.AION_TEST_GENERATION === 'local') {
+  if (apiKey.trim().length === 0 || process.env.TEST_AION_GENERATION === 'local') {
     return ollama;
   }
 

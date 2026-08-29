@@ -234,15 +234,16 @@ The pass is not clean at the baseline's 1463/1466 shape. Full run: 15 failed, 14
 3 skipped (1469). Integration alone: 3 failed, 327 passed, 3 skipped (333). Two causes,
 neither a harness-boot regression:
 
-- Fourteen of fifteen failures (twelve unit, two integration) are one bug. The shared
-  harness's `globalSetup` publishes `AION_TEST_SHARED_NEO4J_URI`, `_PASSWORD`, and
-  `_CONTAINER` to `process.env` before any worker forks. The config loader's strict
-  validator (`infrastructure/config/registry.ts`'s `RESERVED_ENV_VARS`, checked in
-  `load-config.ts`) rejects any `AION_*` variable it does not recognize, and those three are
-  not in it. Every CLI command that calls `loadConfig(process.env)` against the real
-  environment (`aion queue`, `aion last`, `aion proposals`) throws in both projects, on
-  every combined run. The fix is a one-line allowlist addition in `registry.ts`; not applied
-  in this entry, since it is the harness's config surface, not the measurement task's.
+- Fourteen of fifteen failures (twelve unit, two integration) were one bug. The shared
+  harness's `globalSetup` originally published its three shared-container variables under
+  `AION_TEST_SHARED_*` names, and the config loader's strict validator rejects any `AION_*`
+  variable it does not recognize, so every CLI command that calls
+  `loadConfig(process.env)` against the real environment (`aion queue`, `aion last`,
+  `aion proposals`) threw in both projects on every combined run. Fixed by moving the test
+  infrastructure out of the `AION_*` namespace entirely: the shared-container variables are
+  now `TEST_SHARED_NEO4J_*` and the generation-route switch is `TEST_AION_GENERATION`, so
+  the validator never sees them and product config validation stays untouched. Test
+  infrastructure does not get to squat the namespace the validator owns.
 - The fifteenth, `cognitive.int.test.ts`'s "mints no Goal from a decision-light closing
   episode" assertion, is unrelated: the file never calls `loadConfig`. It failed in both
   full-context runs recorded here and passed 3 of 3 isolated reruns of the same file alone.
