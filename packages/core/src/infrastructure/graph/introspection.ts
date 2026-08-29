@@ -1,4 +1,4 @@
-import type { Driver } from 'neo4j-driver';
+import neo4j, { type Driver } from 'neo4j-driver';
 import { runRead } from './connection.js';
 import { VectorIndexDimensionMismatchError, VectorIndexMissingError } from './errors.js';
 
@@ -109,7 +109,8 @@ export async function readStoredText(
       'RETURN n.id AS id, reduce(joined = \'\', s IN strings | joined + \' \' + s) AS text',
       'LIMIT $limit',
     ].join('\n'),
-    { limit },
+    // Neo4j rejects a JS number here: it arrives as a float and LIMIT wants an integer.
+    { limit: neo4j.int(Math.trunc(limit)) },
     (row) => ({ id: String(row.id ?? ''), text: String(row.text ?? '') }),
   );
 }
