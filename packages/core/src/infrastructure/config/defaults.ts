@@ -54,7 +54,11 @@ export const DEFAULTS: Config = {
     maxPreferences: 3,
     maxResonant: 5,
     useContextResonance: true,
-    associationStrength: 0.5,
+    // At `hebbian.weightFloor`, deliberately. Decay clamps a weight at the floor so a faded
+    // pathway stays traversable, and a traversal cutoff above the floor would sever the whole
+    // band the clamp exists to keep. Fading is proportional (spreading activation scales
+    // propagation by strength); this number is only the point at which an edge counts as gone.
+    associationStrength: 0.1,
     compressionThreshold: 512,
     // 8000 because a hang guard must not fire on ordinary calls. The cue model's cold-start
     // round trip measured 2288ms on host Ollama against 527-937ms warm, and a guard that

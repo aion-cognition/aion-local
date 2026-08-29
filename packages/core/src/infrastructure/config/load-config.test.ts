@@ -21,6 +21,16 @@ describe('loadConfig defaults', () => {
     expect(config.recall.cueBudgetMs).toBe(8000);
   });
 
+  // The traversal cutoff above the decay floor is the shape that made the floor inert: decay
+  // clamps a weight at the floor so a faded path stays reachable, and a cutoff above it severs
+  // exactly the band the clamp protects, while every operator surface still reads the edge as
+  // present. The two numbers are set apart, so the relation between them is pinned here.
+  it('keeps the traversal cutoff at or under the weight decay clamps to', () => {
+    const config = loadConfig({});
+
+    expect(config.recall.associationStrength).toBeLessThanOrEqual(config.hebbian.weightFloor);
+  });
+
   it('never mutates the shared DEFAULTS object across calls', () => {
     const before = DEFAULTS.recall.maxHops;
 

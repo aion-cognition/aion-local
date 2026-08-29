@@ -113,10 +113,10 @@ for (const type of MODEL_INFERRED_TYPES) {
 const DEFAULT_ACTIVATION_WEIGHT = 0.3;
 
 /**
- * These two are inferred rather than observed, so their propagation is scaled by the
- * evidence behind them (`strength x confidence`) instead of by type alone.
+ * These two are inferred rather than observed, so the confidence behind them scales their
+ * propagation on top of the strength scaling every type gets.
  */
-const EVIDENCE_SCALED_TYPES: readonly string[] = ['SIMILAR', 'RELATED_TO'];
+const CONFIDENCE_SCALED_TYPES: readonly string[] = ['SIMILAR', 'RELATED_TO'];
 
 /**
  * Hub inhibition strength in `1 / (1 + alpha * ln(1 + degree - hubThreshold))`. At
@@ -157,9 +157,11 @@ export type ActivationBudget = {
   readonly hubThreshold: number;
   readonly maxHops: number;
   /**
-   * The minimum association strength for traversal. Edges are stored with strength 1.0
-   * unless a writer lowers one, and Hebbian decay is what lowers them, so this is the knob
-   * that stops recall from walking associations that have faded out.
+   * The strength at which an edge stops being an edge at all. It belongs at or below
+   * `hebbian.weightFloor`: decay clamps at that floor precisely so a faded path still carries
+   * activation when the cue is strong enough, and a cutoff above it severs the whole band the
+   * floor was protecting while every operator surface still reads those edges as present.
+   * Fading is `edgeWeight`'s business, and it is proportional; this is only the hard bottom.
    */
   readonly associationStrength: number;
   /** The cap on nodes carried out of spreading activation: how much of the spread survives. */
@@ -216,17 +218,24 @@ function clampProportion(value: number): number {
 }
 
 /**
- * Type multiplier, scaled by the evidence behind the edge for the two inferred types.
- * Exported because the fusion stage explains activation scores with it.
+ * Type multiplier, scaled by the edge's own strength, and by confidence as well for the two
+ * inferred types. Exported because the fusion stage explains activation scores with it.
+ *
+ * Strength scales every type, which is what makes a faded pathway fade rather than vanish. An
+ * edge the merge policy left unweighted reads back as 1.0 and is unaffected; only an edge
+ * something has actively weakened carries less, in proportion to how weak it now is. Decay is
+ * the writer that weakens edges, so this is where its floor becomes a real lower bound on
+ * influence instead of a number no traversal ever consults.
  */
 export function edgeWeight(neighbor: AdjacencyNeighbor): number {
   const base = isRelationshipType(neighbor.relationshipType)
     ? ACTIVATION_WEIGHTS[neighbor.relationshipType]
     : DEFAULT_ACTIVATION_WEIGHT;
-  if (!EVIDENCE_SCALED_TYPES.includes(neighbor.relationshipType)) {
-    return base;
+  const scaled = base * clampProportion(neighbor.strength);
+  if (!CONFIDENCE_SCALED_TYPES.includes(neighbor.relationshipType)) {
+    return scaled;
   }
-  return base * clampProportion(neighbor.strength) * clampProportion(neighbor.confidence);
+  return scaled * clampProportion(neighbor.confidence);
 }
 
 /**
@@ -296,8 +305,8 @@ function initialize(seeds: readonly ActivationSeed[]): SpreadState {
  * evidence reinforcing relevance, not double counting.
  */
 function propagate(state: SpreadState, neighbor: AdjacencyNeighbor, budget: ActivationBudget): void {
-  // The association-strength floor. An edge the merge policy left unweighted reads back as
-  // 1.0, so this bites only associations something has actively weakened.
+  // The hard bottom, not the fade. An edge under it is treated as absent; everything above it
+  // propagates in proportion to its strength through `edgeWeight`.
   if (neighbor.strength < budget.associationStrength) {
     return;
   }
