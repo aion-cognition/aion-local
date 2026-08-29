@@ -20,7 +20,8 @@
     "lint:fix": "eslint . --fix",
     "lint:conflicts": "eslint-config-prettier packages/core/src/index.ts",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "lint:preset-drift": "node eslint/check-preset-drift.js"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
