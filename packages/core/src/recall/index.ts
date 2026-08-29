@@ -117,6 +117,16 @@ export {
 } from './application/facts.fixtures.js';
 export type { FactsPair, SubstrateNode } from './application/facts.fixtures.js';
 
+export { RESONANCE_PATH, contextCentroid, resonantItem } from './domain/resonance.js';
+export type { ActivationWeight } from './domain/resonance.js';
+export { resonate } from './application/resonance.js';
+export type {
+  ResonanceDeps,
+  ResonanceInput,
+  ResonanceResult,
+  ResonanceSkip,
+} from './application/resonance.js';
+
 export { handleRecall, readModeFor } from './application/recall.js';
 export type { RecallCompletion, RecallDeps, RecallListener, RecallOptions } from './application/recall.js';
 

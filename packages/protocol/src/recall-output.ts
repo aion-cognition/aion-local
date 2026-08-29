@@ -59,6 +59,11 @@ export const MemoryPackItemSchema = z.strictObject({
    * item, on [0,1] and comparable between queries. Zero means the item was admitted on a
    * literal match (Lucene on the verbatim cue, or an exact entity name), which is evidence
    * rather than a measurement, so no number is invented for it.
+   *
+   * On a resonant item the cosine is measured in context space rather than against the query,
+   * so it says how strongly the memory's neighborhood resembles the activated set and not how
+   * well it answers what was asked. `rationale.method` is what tells the two apart, which is
+   * why the rendered line prints the method beside the number.
    */
   confidence: z.number(),
   rationale: RationaleSchema,
@@ -118,13 +123,20 @@ export const CueSchema = z.strictObject({
 
 export type Cue = z.infer<typeof CueSchema>;
 
-/** The five recall stages, each timed independently. */
+/**
+ * The recall stages, each timed independently. `resonance` is the second pass and is optional
+ * for one reason only: a pack is persisted to `last_pack` and read back later, so packs written
+ * before the stage existed have to keep parsing. Recall always times it, including on the runs
+ * where it declines to search, so a pack this version produces always carries the field and a
+ * near-zero reading is the stage saying it had nothing to resonate from.
+ */
 export const StageTimingsMsSchema = z.strictObject({
   embed: z.number().nonnegative(),
   cues: z.number().nonnegative(),
   seeds: z.number().nonnegative(),
   activation: z.number().nonnegative(),
   fusion: z.number().nonnegative(),
+  resonance: z.number().nonnegative().optional(),
 });
 
 export type StageTimingsMs = z.infer<typeof StageTimingsMsSchema>;

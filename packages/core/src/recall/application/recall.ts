@@ -1,6 +1,5 @@
 import {
   RecallInputSchema,
-  type Cue,
   type Degradation,
   type MemoryPack,
   type PackTruncation,
@@ -11,16 +10,13 @@ import {
 import type { Driver } from 'neo4j-driver';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { fetchAdjacency } from '../../infrastructure/graph/adjacency.js';
-import { listSessionEpisodeIds } from '../../infrastructure/graph/episodes.js';
 import { asOf, bitemporalAt, knewAt, withCurrency, type ReadMode } from '../../infrastructure/graph/read-modes.js';
-import { contentVectors, nodeCandidates, type SeedCandidate } from '../../infrastructure/graph/seed-queries.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
-import type { Provider, Vector } from '../../infrastructure/providers/types.js';
+import type { Provider } from '../../infrastructure/providers/types.js';
 import type { SessionManager } from '../../session/session-manager.js';
-import { isLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
-import { orchestratorLedgerKey } from '../../reflection/application/orchestrator.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { saveLastPack } from '../../infrastructure/sqlite/last-pack.js';
+import { recordPackMethodCounts } from '../../infrastructure/sqlite/method-counters.js';
 import { recordCueOutcome } from '../../infrastructure/sqlite/recall-samples.js';
 import {
   spreadActivation,
@@ -30,20 +26,27 @@ import {
   type ActivationTermination,
   type AdjacencyFetch,
 } from '../domain/activation.js';
-import { scoreArrivals } from '../domain/arrival-scoring.js';
 import { labelBoosts, queryCueTexts, queryRestatements } from '../domain/facts.js';
 import { buildRankedLists, toActivationSeed } from './candidates.js';
 import { extractCues, type CueCache, type CueExtractionResult } from './cues.js';
-import type { AdmissionPolicy, AdmissionReport, Measurement } from '../domain/admission.js';
-import { fuse, type FusedItem, type FusionResult, type RankedList } from '../domain/fusion.js';
+import type { AdmissionPolicy, AdmissionReport } from '../domain/admission.js';
+import { fuse, type FusedItem, type FusionResult } from '../domain/fusion.js';
 import { assemblePack, type BucketCaps } from '../domain/pack.js';
-import { selectSeeds, type Seed, type SeedCue } from './seeds.js';
+import { resonate, type ResonanceResult } from './resonance.js';
+import { selectSeeds, type Seed } from './seeds.js';
+import {
+  embedCues,
+  hydrate,
+  measureArrivals,
+  mmrVectors,
+  pendingEnrichment,
+} from './stage-reads.js';
 
 /**
  * The recall pipeline, in the order its stages run. Cue extraction spends the one generation
  * call recall is allowed, every cue is embedded in a single batch, the four seed strategies
- * run, activation spreads from what they found, fusion ranks the union, and the pack is
- * assembled and persisted.
+ * run, activation spreads from what they found, fusion ranks the union, context resonance
+ * makes its second pass over what activation reached, and the pack is assembled and persisted.
  *
  * `as_of` / `knew_at` bind one read mode for the whole run: currency is judged from a single
  * vantage point, so seeds, traversal, and hydration cannot disagree about what was true when.
@@ -127,40 +130,6 @@ export function readModeFor(input: RecallInput): ReadMode {
   return withCurrency();
 }
 
-type EmbeddedCues = {
-  readonly cues: readonly SeedCue[];
-  readonly degradation?: Degradation;
-};
-
-/**
- * One batched `embed` for every cue, including the degradation ladder's raw-query cue. An
- * embedding outage costs recall its vector leg and nothing else: BM25, exact entity
- * resolution, recency, and traversal all run on cue text or on graph structure, which is the
- * ladder's deeper rung. The rung is reported, because a pack answered without its semantic
- * leg is a thinner answer than the caller has any other way to see.
- */
-async function embedCues(deps: RecallDeps, cues: readonly Cue[]): Promise<EmbeddedCues> {
-  if (cues.length === 0) {
-    return { cues: [] };
-  }
-  let vectors: readonly Vector[] = [];
-  try {
-    vectors = await deps.provider.embed(cues.map((cue) => cue.text));
-  } catch (err) {
-    deps.logger.warn({ err, model: deps.config.models.embed }, 'cue embedding failed');
-    return { cues, degradation: { stage: 'embed', reason: 'model_error' } };
-  }
-  return {
-    cues: cues.map((cue, index) => {
-      const vector = vectors[index];
-      if (vector === undefined || vector.length === 0) {
-        return cue;
-      }
-      return { ...cue, vector };
-    }),
-  };
-}
-
 function admissionFor(config: Config): AdmissionPolicy {
   return {
     vectorFloor: config.recall.vectorAdmissionFloor,
@@ -179,80 +148,33 @@ function capsFor(config: Config): BucketCaps {
   };
 }
 
-async function mmrVectors(
-  deps: RecallDeps,
-  lists: readonly RankedList[],
-  mode: ReadMode,
-): Promise<ReadonlyMap<string, Vector> | undefined> {
-  if (deps.config.search.reranker !== 'mmr') {
-    return undefined;
-  }
-  const ids = new Set<string>();
-  for (const list of lists) {
-    for (const candidate of list.candidates) {
-      ids.add(candidate.id);
-    }
-  }
-  const rows = await contentVectors(deps.driver, { ids: [...ids], mode });
-  return new Map(rows.map((row) => [row.id, row.vector]));
-}
-
 /** The activated ids no seed strategy found: what the spread reached on its own. */
 function arrivalIds(seeds: readonly Seed[], activated: readonly ActivatedNode[]): string[] {
   const known = new Set(seeds.map((seed) => seed.id));
   return activated.map((node) => node.nodeId).filter((id) => !known.has(id));
 }
 
-/** Hydrates the activated ids no seed strategy already carried content for. */
-async function hydrate(
-  deps: RecallDeps,
-  ids: readonly string[],
-  mode: ReadMode,
-): Promise<ReadonlyMap<string, SeedCandidate>> {
-  const rows = await nodeCandidates(deps.driver, { ids, mode });
-  return new Map(rows.map((row) => [row.id, row]));
-}
-
 /**
- * The cosine every arrival is measured by, from one batched read of the content vectors the
- * arrivals already carry. It runs beside hydration rather than after it: the two ask the same
- * driver about the same ids and neither needs the other's answer, so the measurement costs the
- * fusion stage a round trip it overlaps rather than one it waits for.
+ * Everything the first pass produced, which is what a resonant hit has to be new against. The
+ * three sets overlap heavily on a normal run; the union is what makes "found by neither seed
+ * nor spread" a property of the id rather than of which stage was asked.
  */
-async function measureArrivals(
-  deps: RecallDeps,
-  ids: readonly string[],
-  cues: readonly SeedCue[],
-  mode: ReadMode,
-): Promise<ReadonlyMap<string, Measurement[]>> {
-  const rows = await contentVectors(deps.driver, { ids, mode });
-  return scoreArrivals({
-    arrivals: ids,
-    vectors: new Map(rows.map((row) => [row.id, row.vector])),
-    cues,
-  });
-}
-
-/**
- * The calling session's own episodes with no orchestrator ledger key: stored and
- * findable by raw text, but not yet reachable by entity resolution, traversal, or context
- * vectors. Best-effort: a failure here costs the pack one honesty field, never the recall
- * itself, so it is caught and logged rather than allowed to fail the call.
- */
-async function pendingEnrichment(deps: RecallDeps, sessionId: string, mode: ReadMode): Promise<number> {
-  try {
-    const episodeIds = await listSessionEpisodeIds(deps.driver, sessionId, mode);
-    let count = 0;
-    for (const episodeId of episodeIds) {
-      if (!isLedgerApplied(deps.db, orchestratorLedgerKey(episodeId))) {
-        count += 1;
-      }
-    }
-    return count;
-  } catch (err) {
-    deps.logger.warn({ err, sessionId }, 'pending-enrichment count failed; omitted from the pack');
-    return 0;
+function firstPassIds(
+  seeds: readonly Seed[],
+  activated: readonly ActivatedNode[],
+  items: readonly FusedItem[],
+): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const seed of seeds) {
+    ids.add(seed.id);
   }
+  for (const node of activated) {
+    ids.add(node.nodeId);
+  }
+  for (const item of items) {
+    ids.add(item.id);
+  }
+  return ids;
 }
 
 /**
@@ -396,6 +318,21 @@ export async function handleRecall(
     });
   });
 
+  // The second pass, after fusion rather than straight after activation: it needs to know
+  // whether the first pass anchored, and excluding what fusion admitted is what keeps a
+  // resonant discovery out of every other bucket.
+  const resonance = await timed<ResonanceResult>(() =>
+    resonate(
+      { driver: deps.driver, config: deps.config, logger: deps.logger },
+      {
+        activated: activation.value.activated,
+        exclude: firstPassIds(seeds, activation.value.activated, fusion.value.items),
+        anchored: fusion.value.admission.anchored,
+        mode,
+      },
+    ),
+  );
+
   // Started as early as the session resolves and awaited only once the pack is ready to
   // assemble, so this honesty field's own graph read never adds serial latency to the call.
   const pendingEnrichmentCount = await pendingEnrichmentPromise;
@@ -406,6 +343,7 @@ export async function handleRecall(
     seeds: selection.ms,
     activation: activation.ms,
     fusion: fusion.ms,
+    resonance: resonance.ms,
   };
 
   const truncated = truncationFor(activation.value.termination);
@@ -424,12 +362,19 @@ export async function handleRecall(
       queryCues: queryCueTexts(cues.value.cues),
     }),
     entityGlossCap: deps.config.recall.entityGlossCap,
+    resonant: resonance.value.items,
   });
 
   saveLastPack(deps.db, sessionId, pack, now.toISOString());
   // The cue stage is 60-95% of recall wall time and the first thing contention takes; a
   // degraded pack is otherwise indistinguishable from a healthy one at the item count.
   recordCueOutcome(deps.db, cues.value.degradation !== undefined);
+  // The spirit metric's raw material: both buckets a pack actually served, not just the
+  // first pass, so a resonant hit counts toward its own method rather than vanishing into it.
+  recordPackMethodCounts(
+    deps.db,
+    [...fusion.value.items, ...resonance.value.items].map((item) => item.rationale.method),
+  );
 
   deps.logger.info(
     {
@@ -441,6 +386,10 @@ export async function handleRecall(
       activated: activation.value.activated.length,
       termination: activation.value.termination,
       items: fusion.value.items.length,
+      resonant: resonance.value.items.length,
+      // Why the second pass was quiet: a setting, a query nothing anchored, or a substrate
+      // whose enrichment has not written the context vectors yet. Absent when it searched.
+      resonanceSkipped: resonance.value.skipped,
       // What the floor rejected and the floor it used, so a thin pack is readable from the
       // log without re-running the query.
       admission: fusion.value.admission,
