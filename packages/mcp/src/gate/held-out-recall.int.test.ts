@@ -274,8 +274,8 @@ describe('a claim stored in one session answers the natural question asked in an
     );
 
     // What every probe owes on its own: the episode holding the claim reached the pack. Rank
-    // zero is the failure this battery exists to catch, and it is what the round-two answerless
-    // set looked like from here. Whether the words of the answer land in the top five is judged
+    // zero is the failure this battery exists to catch: a genuinely on-topic recall that comes
+    // back with no answer in it. Whether the words of the answer land in the top five is judged
     // over the whole battery below, because the substrate is rebuilt by live model calls.
     expect(rank).toBeGreaterThan(0);
   }, 180_000);

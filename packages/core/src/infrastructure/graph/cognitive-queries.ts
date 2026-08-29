@@ -9,8 +9,7 @@ import type { NodeLabel } from './labels.js';
 import { toGraphVector, type GraphProperties } from './values.js';
 
 /**
- * Whitepaper §6.7's nine cognitive types. Each is one of P3-1's new labels; this module is
- * their only writer.
+ * Whitepaper §6.7's nine cognitive types. This module is their only writer.
  */
 export const COGNITIVE_NODE_LABELS = [
   'Goal',

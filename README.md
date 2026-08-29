@@ -176,12 +176,14 @@ backbone), experience capture (reflection intake: validate, redact, dedupe, stor
 bitemporally), recall with the full MCP surface (four seed strategies, spreading activation,
 RRF fusion, MemoryPack assembly), and the reflection pipeline that turns a stored episode
 into entities, associations, cognitive structure, typed relationships, supersession
-judgments, and a session narrative. 1,135 unit tests pass deterministically; the 331-test
-integration suite runs against a live Neo4j and host Ollama, and two tests whose assertion
-turns on the reflect model's live judgment (causal-edge direction, contradiction detection)
-are known to flake under Ollama's sampling rather than the pipeline under test. `aion doctor`
-runs 13 checks against a live stack. The full build history, including what review found in
-each phase, is in [docs/build-ledger.md](docs/build-ledger.md).
+judgments, and a session narrative. 1,342 unit tests pass deterministically; the 423-test
+integration suite runs against a live Neo4j and host Ollama. Two tests whose assertion turns
+on the reflect model's live judgment (causal-edge direction, contradiction detection) are
+known to flake under Ollama's sampling rather than the pipeline under test and stay skipped;
+a third, a cross-stage entity-naming gap, is recorded as a measurement and kept skipped by
+design rather than closed. `aion doctor` runs 13 checks against a live stack. The full build
+history, including what review found in each phase, is in
+[docs/build-ledger.md](docs/build-ledger.md).
 
 P5 and later are not yet built: the maintenance passes that schedule plasticity, Anthropic
 routing, and the rest of the CLI surface. P4 landed the retrieval core, so recall serves
