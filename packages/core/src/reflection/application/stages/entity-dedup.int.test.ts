@@ -26,7 +26,10 @@ import {
   type Neo4jHarness,
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger } from '../../../infrastructure/logging/logger.js';
+import { OllamaProvider } from '../../../infrastructure/providers/ollama-provider.js';
+import type { Vector } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import { listEntityMergeProposals } from '../../../infrastructure/sqlite/entity-merge-proposals.js';
 import { getLedgerEntry } from '../../../infrastructure/sqlite/ops-ledger.js';
 import { entityMergeLedgerKey } from '../../domain/entity-merge.js';
 import type { StageContext } from '../../domain/stage.js';
@@ -36,7 +39,9 @@ import { EntityDedupStage } from './entity-dedup.js';
  * The similarity search, mention-count aggregation, edge redirection and `supersede` close
  * all run genuine Cypher against a live server here. Vectors are hand-built rather than
  * embedded by a real model: a fixed, known cosine keeps the merge/no-merge boundary
- * deterministic, and the real embedding path is already proven by `entities.int.test.ts`.
+ * deterministic, and the real embedding path is already proven by `entities.int.test.ts`. The
+ * one exception is the degenerate-embedding case at the bottom, which only reproduces against
+ * the real model.
  */
 
 const DIMENSION = DEFAULTS.models.embedDimension;
@@ -168,7 +173,7 @@ describe('entity dedup against a live graph', () => {
     const outcome = await new EntityDedupStage().run(context());
 
     expect(outcome.status).toBe('ok');
-    expect(outcome.counts).toEqual({ merges: 1 });
+    expect(outcome.counts).toMatchObject({ merges: 1 });
 
     const canonical = await storedEntity(harness.driver, canonicalId);
     const duplicate = await storedEntity(harness.driver, duplicateId);
@@ -201,7 +206,7 @@ describe('entity dedup against a live graph', () => {
     expect(getLedgerEntry(db, ledgerKey)).toBeDefined();
 
     const rerun = await new EntityDedupStage().run(context());
-    expect(rerun.counts).toEqual({ merges: 0 });
+    expect(rerun.counts).toMatchObject({ merges: 0 });
     expect(await supersedingNodeIds(harness.driver, duplicateId)).toEqual([canonicalId]);
   }, 120_000);
 
@@ -244,7 +249,7 @@ describe('entity dedup against a live graph', () => {
     episodeId = soloEpisodeId;
     const outcome = await new EntityDedupStage().run(context());
 
-    expect(outcome.counts).toEqual({ merges: 0 });
+    expect(outcome.counts).toMatchObject({ merges: 0 });
     const unrelated = await storedEntity(harness.driver, unrelatedId);
     expect(unrelated?.validUntil).toBeNull();
   }, 60_000);
@@ -293,7 +298,7 @@ describe('what a merge has to stay merged against', () => {
     });
 
     const outcome = await new EntityDedupStage().run(context());
-    expect(outcome.counts).toEqual({ merges: 1 });
+    expect(outcome.counts).toMatchObject({ merges: 1 });
     expect((await storedEntity(harness.driver, mergedAwayId))?.validUntil).not.toBeNull();
   }, 120_000);
 
@@ -424,4 +429,138 @@ describe('merge atomicity', () => {
     expect(after?.aliases).toEqual(before?.aliases);
     expect(after?.accessCount).toBe(before?.accessCount);
   }, 60_000);
+});
+
+/**
+ * The exercise's own reproduction, against the real embedding model rather than hand-built
+ * vectors: `nomic-embed-text` returns one constant vector for whole classes of out-of-vocabulary
+ * text, so these names score 1.0000 against each other and eight distinct emoji entities were
+ * closed into one node in the live product. The fold cannot fix a model that has no tokens for
+ * the input; the name-form leg is what has to refuse it.
+ */
+describe('the degenerate embedding case', () => {
+  const degenerateEpisodeId = 'live-episode-degenerate';
+  let vectors: Vector[];
+
+  function cosine(a: Vector, b: Vector): number {
+    let dot = 0;
+    let normA = 0;
+    let normB = 0;
+    for (let index = 0; index < a.length; index += 1) {
+      dot += (a[index] ?? 0) * (b[index] ?? 0);
+      normA += (a[index] ?? 0) ** 2;
+      normB += (b[index] ?? 0) ** 2;
+    }
+    return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+  }
+
+  beforeAll(async () => {
+    const provider = new OllamaProvider({
+      baseUrl: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
+      embedModel: DEFAULTS.models.embed,
+    });
+    vectors = await provider.embed(['Zoë Müller', 'José Álvarez']);
+    await seedEpisode(degenerateEpisodeId);
+  }, 120_000);
+
+  it('refuses two unrelated non-ASCII names the model embeds identically', async () => {
+    const [subjectVector, candidateVector] = vectors;
+    expect(subjectVector).toBeDefined();
+    expect(candidateVector).toBeDefined();
+    // The premise: still degenerate, well over the 0.85 threshold the vector leg applies.
+    expect(cosine(subjectVector ?? [], candidateVector ?? [])).toBeGreaterThan(0.85);
+
+    const subjectId = await seedEntity(
+      {
+        name: 'Zoë Müller',
+        nameNorm: 'zoë müller',
+        type: 'person',
+        text: 'Zoë Müller (person)',
+        sourceEpisodeId: degenerateEpisodeId,
+        extractionMethod: 'test',
+        confidence: 0.8,
+      },
+      subjectVector ?? [],
+    );
+    const otherId = await seedEntity(
+      {
+        name: 'José Álvarez',
+        nameNorm: 'josé álvarez',
+        type: 'person',
+        text: 'José Álvarez (person)',
+        sourceEpisodeId: degenerateEpisodeId,
+        extractionMethod: 'test',
+        confidence: 0.8,
+      },
+      candidateVector ?? [],
+    );
+    await linkEntityMentions(harness.driver, {
+      episodeId: degenerateEpisodeId,
+      entityIds: [subjectId],
+      now: NOW,
+      confidence: 0.8,
+      provenance: ['test'],
+    });
+
+    episodeId = degenerateEpisodeId;
+    const outcome = await new EntityDedupStage().run(context());
+
+    expect(outcome.counts).toMatchObject({ merges: 0, cross_type_proposals: 0 });
+    expect((await storedEntity(harness.driver, subjectId))?.validUntil).toBeNull();
+    expect((await storedEntity(harness.driver, otherId))?.validUntil).toBeNull();
+    expect(listEntityMergeProposals(db)).toEqual([]);
+  }, 120_000);
+});
+
+describe('cross-type near-duplicates', () => {
+  const crossTypeEpisodeId = 'live-episode-cross-type';
+
+  it('proposes the pair the type key made unmergeable, and merges nothing', async () => {
+    await seedEpisode(crossTypeEpisodeId);
+    const toolId = await seedEntity(
+      {
+        name: 'Kubernetes',
+        nameNorm: 'kubernetes',
+        type: 'tool',
+        text: 'Kubernetes (tool): the orchestrator',
+        sourceEpisodeId: crossTypeEpisodeId,
+        extractionMethod: 'test',
+        confidence: 0.8,
+      },
+      unitVector(0),
+    );
+    const conceptId = await seedEntity(
+      {
+        name: 'Kubernetes',
+        nameNorm: 'kubernetes',
+        type: 'concept',
+        text: 'Kubernetes (concept): the orchestrator',
+        sourceEpisodeId: crossTypeEpisodeId,
+        extractionMethod: 'test',
+        confidence: 0.8,
+      },
+      nearDuplicateVector(),
+    );
+    await linkEntityMentions(harness.driver, {
+      episodeId: crossTypeEpisodeId,
+      entityIds: [toolId],
+      now: NOW,
+      confidence: 0.8,
+      provenance: ['test'],
+    });
+
+    episodeId = crossTypeEpisodeId;
+    const outcome = await new EntityDedupStage().run(context());
+
+    expect(outcome.counts).toMatchObject({ merges: 0, cross_type_proposals: 1 });
+    expect((await storedEntity(harness.driver, toolId))?.validUntil).toBeNull();
+    expect((await storedEntity(harness.driver, conceptId))?.validUntil).toBeNull();
+
+    const proposals = listEntityMergeProposals(db).filter(
+      (proposal) => proposal.episodeId === crossTypeEpisodeId,
+    );
+    expect(proposals).toHaveLength(1);
+    expect([proposals[0]?.leftType, proposals[0]?.rightType].sort()).toEqual(['concept', 'tool']);
+    expect(proposals[0]?.resolvedAt).toBeNull();
+  }, 120_000);
 });

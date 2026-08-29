@@ -1,4 +1,5 @@
 import type { Provider, StructuredRequest, Vector } from './types.js';
+import { foldForIdentity } from './unicode-fold.js';
 
 export type OllamaProviderOptions = {
   baseUrl: string;
@@ -11,19 +12,13 @@ function normalizeBaseUrl(url: string): string {
 }
 
 /**
- * Measured against Ollama 0.24.0 + `nomic-embed-text`: every word carrying an uppercase
- * letter tokenizes to one out-of-vocabulary token, so `Redis`, `Dog`, `Apple` and
- * `Thandiwe Baptiste` all return the same 768 floats, byte for byte, while their lowercase
- * forms embed distinctly. The model's vocabulary is uncased and nothing lowercases ahead of
- * it, which silently collapses every proper noun — exactly what entity identity, dedup, and
- * recall need to tell apart.
- *
- * Folding here rather than at a call site is what keeps stored and query vectors on the same
- * footing: an asymmetric fold would score a document against a differently-tokenized query.
- * Case folding on whole text, not term derivation — nothing is split, stemmed, or dropped.
+ * `foldForIdentity` is the same fold `name_norm` is derived through, which is what keeps a
+ * stored vector and a query vector on the same footing. Folding here rather than at a call
+ * site is deliberate: an asymmetric fold would score a document against a differently
+ * tokenized query. See `unicode-fold.ts` for what the fold does and why.
  */
 function foldForEmbedding(text: string): string {
-  return text.toLowerCase();
+  return foldForIdentity(text);
 }
 
 /**

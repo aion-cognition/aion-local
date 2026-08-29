@@ -82,6 +82,28 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     pack_json TEXT NOT NULL,
     ts TEXT NOT NULL
   )`,
+  /**
+   * Near-duplicate entities of different types, which dedup detects and never applies: one
+   * real thing typed two ways is a type mistake, and merging on the type key would pick a
+   * winner the extraction never justified. Its own table rather than a `kind` column on
+   * `supersession_proposals` because the columns do not overlap — no contradiction judgment,
+   * no model confidence, and a pair of names and types the reviewer has to see to decide.
+   * The pair is stored id-sorted, so discovery from either side is one row.
+   */
+  `CREATE TABLE IF NOT EXISTS entity_merge_proposals (
+    id TEXT PRIMARY KEY,
+    left_id TEXT NOT NULL,
+    left_name TEXT NOT NULL,
+    left_type TEXT NOT NULL,
+    right_id TEXT NOT NULL,
+    right_name TEXT NOT NULL,
+    right_type TEXT NOT NULL,
+    similarity REAL NOT NULL,
+    episode_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    resolved_at TEXT,
+    UNIQUE (left_id, right_id)
+  )`,
 ];
 
 type ColumnAddition = {

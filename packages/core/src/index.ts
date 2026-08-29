@@ -563,3 +563,28 @@ export {
   RecallSideEffects,
   reinforcementPairs,
 } from './recall/application/side-effects.js';
+
+export { foldForIdentity, foldName } from './infrastructure/providers/unicode-fold.js';
+
+export {
+  MIN_OVERLAP_NAME_LENGTH,
+  NAME_FORM_OVERLAP_THRESHOLD,
+  nameFormMatches,
+  nameFormOverlap,
+} from './reflection/domain/entity-identity.js';
+
+export { MERGE_PROVENANCE_PROPERTY } from './infrastructure/graph/entity-dedup-queries.js';
+export type { MergedEntityRecord } from './infrastructure/graph/entity-dedup-queries.js';
+
+export {
+  findEntityMergeProposalsForNode,
+  getEntityMergeProposal,
+  listEntityMergeProposals,
+  recordEntityMergeProposal,
+  resolveEntityMergeProposal,
+} from './infrastructure/sqlite/entity-merge-proposals.js';
+export type {
+  EntityMergeProposal,
+  EntityMergeProposalInput,
+  EntityMergeProposalSide,
+} from './infrastructure/sqlite/entity-merge-proposals.js';

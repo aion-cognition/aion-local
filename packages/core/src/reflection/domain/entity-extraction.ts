@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { JsonSchema } from '../../infrastructure/providers/types.js';
+import { foldName } from '../../infrastructure/providers/unicode-fold.js';
 
 /**
  * Whitepaper §6.4: the model names entities and their types, and this module is everything
@@ -45,13 +46,12 @@ export type ExtractedEntity = {
 };
 
 /**
- * The same folding `graph/backbone.ts` and `graph/seed-queries.ts` apply, kept as a third
- * definition only so this module stays free of the graph adapter; `entity-extraction.test.ts`
- * asserts the three agree. Key folding on a name, not term derivation: nothing is split,
- * stemmed, or dropped.
+ * `graph/backbone.ts`, `graph/seed-queries.ts` and the embedding path all fold through the
+ * same `foldName`; `entity-extraction.test.ts` asserts they agree. Key folding on a name, not
+ * term derivation: nothing is split, stemmed, or dropped.
  */
 export function normalizeEntityName(name: string): string {
-  return name.trim().replace(/\s+/g, ' ').toLowerCase();
+  return foldName(name);
 }
 
 export function isEntityType(value: string): value is EntityType {

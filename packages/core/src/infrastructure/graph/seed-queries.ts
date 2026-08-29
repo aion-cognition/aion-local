@@ -1,5 +1,6 @@
 import neo4j, { type Driver } from 'neo4j-driver';
 import type { Vector } from '../providers/types.js';
+import { foldName } from '../providers/unicode-fold.js';
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { runRead } from './connection.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
@@ -93,7 +94,7 @@ export type EntityNameMatch = ScoredSeedCandidate & {
  * nothing is split, dropped, stemmed, or rewritten.
  */
 export function normalizeSeedName(name: string): string {
-  return name.trim().replace(/\s+/g, ' ').toLowerCase();
+  return foldName(name);
 }
 
 /**
