@@ -91,25 +91,41 @@ export class AnthropicHaikuClient {
     const viaPrompt = this.#schemaDelivery === 'system_prompt';
     const instructions = viaPrompt ? joinInstructions(system, schemaInstruction(req.schema)) : system;
 
-    const response = await this.#fetchImpl(ANTHROPIC_API_URL, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': this.#apiKey,
-        'anthropic-version': ANTHROPIC_VERSION,
-      },
-      body: JSON.stringify({
-        model: req.model,
-        // Callers that omit temperature get 0, not the API default: test inference has to
-        // be as repeatable as a mocked provider or suite runs diverge on sampling luck.
-        temperature: req.temperature ?? 0,
-        max_tokens: req.maxTokens ?? this.#maxTokens,
-        ...(instructions === undefined ? {} : { system: instructions }),
-        ...(viaPrompt ? {} : { output_config: { format: { type: 'json_schema', schema: req.schema } } }),
-        messages: rest,
-      }),
-      ...(req.signal === undefined ? {} : { signal: req.signal }),
-    });
+    // A sustained suite run shares one API key across every enrichment call, so a 429 or a
+    // transient overload is a normal event here, not a failure. Throwing hands it to the
+    // reflection worker's own backoff, which stretches to minutes and blows the freshness
+    // batteries; absorbing it with a short honor-retry-after wait keeps test inference at
+    // test speed. Three attempts, then the real error propagates.
+    let response!: Response;
+    for (let attempt = 1; ; attempt += 1) {
+      response = await this.#fetchImpl(ANTHROPIC_API_URL, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': this.#apiKey,
+          'anthropic-version': ANTHROPIC_VERSION,
+        },
+        body: JSON.stringify({
+          model: req.model,
+          // Callers that omit temperature get 0, not the API default: test inference has to
+          // be as repeatable as a mocked provider or suite runs diverge on sampling luck.
+          temperature: req.temperature ?? 0,
+          max_tokens: req.maxTokens ?? this.#maxTokens,
+          ...(instructions === undefined ? {} : { system: instructions }),
+          ...(viaPrompt ? {} : { output_config: { format: { type: 'json_schema', schema: req.schema } } }),
+          messages: rest,
+        }),
+        ...(req.signal === undefined ? {} : { signal: req.signal }),
+      });
+      const throttled = response.status === 429 || response.status === 529 || response.status >= 500;
+      if (!throttled || attempt >= 3) {
+        break;
+      }
+      const retryAfter = Number(response.headers.get('retry-after'));
+      const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : attempt * 2000;
+      await response.text().catch(() => undefined);
+      await new Promise((resolve) => setTimeout(resolve, Math.min(waitMs, 30_000)));
+    }
     if (!response.ok) {
       throw new Error(`Anthropic generate request failed: ${response.status} ${await response.text()}`);
     }
