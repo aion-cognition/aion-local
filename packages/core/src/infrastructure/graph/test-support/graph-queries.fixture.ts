@@ -303,6 +303,7 @@ export type NamedPair = {
   readonly a: string;
   readonly b: string;
   readonly count: number;
+  readonly strength: number;
 };
 
 /**
@@ -316,10 +317,16 @@ export async function coOccurrencePairs(driver: Driver): Promise<NamedPair[]> {
     [
       `MATCH (a:Entity)-[r:${CO_OCCURS_TYPE}]-(b:Entity)`,
       'WHERE a.name < b.name',
-      'RETURN a.name AS a, b.name AS b, r.count AS count ORDER BY a.name, b.name',
+      'RETURN a.name AS a, b.name AS b, r.count AS count, r.strength AS strength',
+      'ORDER BY a.name, b.name',
     ].join('\n'),
     {},
-    (row) => ({ a: row.a as string, b: row.b as string, count: row.count as number }),
+    (row) => ({
+      a: row.a as string,
+      b: row.b as string,
+      count: row.count as number,
+      strength: row.strength as number,
+    }),
   );
 }
 

@@ -18,7 +18,11 @@ import {
   DEFAULT_NARRATIVE_TIMEOUT_MS,
   DEFAULT_SESSION_IDLE_MS,
 } from './narratives.js';
-import { DEFAULT_ASSOCIATION_SEMANTIC_THRESHOLD, DEFAULT_ASSOCIATION_SIMILAR_LIMIT } from './stages/associations.js';
+import {
+  DEFAULT_ASSOCIATION_SEMANTIC_THRESHOLD,
+  DEFAULT_ASSOCIATION_SIMILAR_LIMIT,
+  DEFAULT_ASSOCIATION_WEIGHT_FLOOR,
+} from './stages/associations.js';
 import { DEFAULT_COGNITIVE_TIMEOUT_MS, DEFAULT_MAX_COGNITIVE_NODES } from './stages/cognitive.js';
 import { DEFAULT_ENTITY_DEDUP_SIMILARITY_THRESHOLD } from './stages/entity-dedup.js';
 import { DEFAULT_ENTITY_TIMEOUT_MS, DEFAULT_MAX_ENTITIES } from './stages/entities.js';
@@ -54,6 +58,9 @@ describe('reflection config defaults', () => {
     expect(reflection.entityDedupThreshold).toBe(DEFAULT_ENTITY_DEDUP_SIMILARITY_THRESHOLD);
     expect(reflection.associationSemanticThreshold).toBe(DEFAULT_ASSOCIATION_SEMANTIC_THRESHOLD);
     expect(reflection.associationSimilarLimit).toBe(DEFAULT_ASSOCIATION_SIMILAR_LIMIT);
+    // The co-occurrence clamp is plasticity's floor, not a knob of its own: an association
+    // written under the floor would be an edge recall refuses to walk the moment it is made.
+    expect(DEFAULTS.hebbian.weightFloor).toBe(DEFAULT_ASSOCIATION_WEIGHT_FLOOR);
     expect(reflection.cognitiveTimeoutMs).toBe(DEFAULT_COGNITIVE_TIMEOUT_MS);
     expect(reflection.maxCognitiveNodes).toBe(DEFAULT_MAX_COGNITIVE_NODES);
     expect(reflection.semanticTimeoutMs).toBe(DEFAULT_SEMANTIC_RELATIONSHIP_TIMEOUT_MS);
