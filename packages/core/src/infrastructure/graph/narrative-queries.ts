@@ -1,16 +1,18 @@
 import neo4j, { type Driver } from 'neo4j-driver';
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
-import { runRead, type GraphStatement } from './connection.js';
+import { runRead, runWrite, type GraphStatement } from './connection.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from './episodes.js';
+import type { NodeLabel } from './labels.js';
 import { readModeFragment, withCurrency } from './read-modes.js';
 import type { RelationshipType } from './relationships.js';
 import { toGraphDateTime, type Row } from './values.js';
 
 /**
- * Whitepaper §6.10. The three reads narrative compression needs: the episodes a session
- * accumulated, the narrative versions it already carries, and the sessions that have gone
- * quiet. The node and its edges are written through the ordinary stamped-node and
- * edge-upsert adapters, so nothing here writes.
+ * Whitepaper §6.10. The reads narrative compression needs: the episodes a session
+ * accumulated, the claim-bearing nodes extracted from them, the narrative versions the
+ * session already carries, and the sessions that have gone quiet. The node and its edges are
+ * written through the ordinary stamped-node and edge-upsert adapters; the one write here is
+ * the forget stamp, which no other module owns.
  */
 
 /**
@@ -28,7 +30,26 @@ export const NARRATIVE_PROPERTIES = {
   coverageCount: 'coverage_count',
   spanStart: 'span_start',
   spanEnd: 'span_end',
+  /** Ids of the nodes the stored sentences cite. */
+  citations: 'citations',
+  sentenceCount: 'sentence_count',
+  /** Revision of the grounding rule the node was written under; the cleanup selects on it. */
+  grounding: 'grounding',
 } as const;
+
+/**
+ * Claim-bearing extracted types only. Goal and Plan restate the episode they came from often
+ * enough that offering them back as grounding sources would license the restatement the
+ * grounding rule exists to stop.
+ */
+export const NARRATIVE_SOURCE_LABELS = [
+  'Decision',
+  'Insight',
+  'Event',
+  'Concept',
+  'Pattern',
+  'Trend',
+] as const satisfies readonly NodeLabel[];
 
 /**
  * Appendix C directions, chosen to read as English: an episode is summarized by the
@@ -192,6 +213,131 @@ const FIND_IDLE_SESSIONS = [
   'ORDER BY last_activity, s.id',
   'LIMIT $limit',
 ].join('\n');
+
+export type SessionSourceNode = {
+  readonly id: string;
+  /** The matched label, lowercased, which is how the prompt names the node. */
+  readonly kind: string;
+  readonly text: string;
+  readonly episodeId: string;
+};
+
+/** One session's worth of extracted nodes; a session past this has more than a narrative can cite. */
+const NARRATIVE_SOURCE_LIMIT = 120;
+
+/**
+ * The claim-bearing nodes the session's episodes produced, grouped by their episode in the
+ * order the episodes happened. A superseded node stays in the set for the same reason a
+ * superseded episode does: it is still part of what the session held.
+ */
+function sessionSourceNodesStatement(sessionId: string): GraphStatement {
+  const node = readModeFragment(withCurrency(), 'n', 'rmn');
+  const episode = readModeFragment(withCurrency(), 'e', 'rme');
+  const cypher = [
+    `MATCH (n)-[:EXTRACTED_FROM]->(e:Episode)-[:${CONTAINMENT_TYPE}]->(:Session { id: $sessionId })`,
+    `WHERE ${node.where} AND ${episode.where}`,
+    '  AND any(label IN labels(n) WHERE label IN $labels)',
+    'RETURN',
+    '  n.id AS id,',
+    '  head([label IN labels(n) WHERE label IN $labels]) AS kind,',
+    `  n.${MEMORY_PROPERTIES.text} AS text,`,
+    '  e.id AS episode_id',
+    `ORDER BY e.${BITEMPORAL_PROPERTIES.occurredAt}, e.${BITEMPORAL_PROPERTIES.txFrom}, e.id, n.id`,
+    'LIMIT $limit',
+  ].join('\n');
+
+  return {
+    cypher,
+    parameters: {
+      sessionId,
+      labels: [...NARRATIVE_SOURCE_LABELS],
+      limit: toGraphInteger(NARRATIVE_SOURCE_LIMIT),
+      ...node.parameters,
+      ...episode.parameters,
+    },
+  };
+}
+
+export async function loadSessionSourceNodes(
+  driver: Driver,
+  sessionId: string,
+): Promise<SessionSourceNode[]> {
+  const statement = sessionSourceNodesStatement(sessionId);
+  return runRead(driver, statement.cypher, statement.parameters, (row) => ({
+    id: row.id as string,
+    kind: typeof row.kind === 'string' ? row.kind.toLowerCase() : 'note',
+    text: typeof row.text === 'string' ? row.text : '',
+    episodeId: row.episode_id as string,
+  }));
+}
+
+export type StaleNarrative = {
+  readonly id: string;
+  readonly sessionId: string;
+  /** Live episodes the session still holds; zero means no regeneration can be grounded. */
+  readonly episodeCount: number;
+};
+
+/**
+ * Standing narratives written under an older grounding revision, with what their session can
+ * still support. Selecting on the revision rather than on age is what makes a repeated
+ * cleanup converge: a rewrite stamps the current revision and stops matching.
+ */
+const FIND_STALE_NARRATIVES = [
+  `MATCH (n:Narrative)-[:${DERIVES_FROM_TYPE}]->(s:Session)`,
+  `WHERE n.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  `  AND n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
+  `  AND coalesce(n.${NARRATIVE_PROPERTIES.grounding}, '') <> $grounding`,
+  `OPTIONAL MATCH (e:Episode)-[:${CONTAINMENT_TYPE}]->(s)`,
+  `  WHERE e.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  'WITH n, s, count(e) AS episode_count',
+  'RETURN n.id AS id, s.id AS session_id, episode_count',
+  'ORDER BY s.id, n.id',
+  'LIMIT $limit',
+].join('\n');
+
+export async function findStaleNarratives(
+  driver: Driver,
+  grounding: string,
+  limit: number,
+): Promise<StaleNarrative[]> {
+  if (limit <= 0) {
+    return [];
+  }
+  return runRead(
+    driver,
+    FIND_STALE_NARRATIVES,
+    { grounding, limit: toGraphInteger(limit) },
+    (row) => ({
+      id: row.id as string,
+      sessionId: row.session_id as string,
+      episodeCount: typeof row.episode_count === 'number' ? row.episode_count : 0,
+    }),
+  );
+}
+
+/**
+ * The forget stamp, for a narrative whose session can no longer ground a rewrite. Suppression,
+ * not deletion: `as_of` and `knew_at` still return the node, and `coalesce` keeps the first
+ * stamp so a repeated run is a no-op.
+ */
+const FORGET_NARRATIVE = [
+  'MATCH (n:Narrative { id: $id })',
+  `SET n.${BITEMPORAL_PROPERTIES.forgottenAt} = coalesce(n.${BITEMPORAL_PROPERTIES.forgottenAt}, $now),`,
+  `    n.${BITEMPORAL_PROPERTIES.validUntil} = coalesce(n.${BITEMPORAL_PROPERTIES.validUntil}, $now),`,
+  `    n.${BITEMPORAL_PROPERTIES.txUntil} = coalesce(n.${BITEMPORAL_PROPERTIES.txUntil}, $now)`,
+  'RETURN n.id AS id',
+].join('\n');
+
+export async function forgetNarrative(driver: Driver, id: string, now: Date): Promise<boolean> {
+  const rows = await runWrite(
+    driver,
+    FORGET_NARRATIVE,
+    { id, now: toGraphDateTime(now) },
+    (row) => row.id as string,
+  );
+  return rows.length > 0;
+}
 
 export async function findIdleSessions(
   driver: Driver,

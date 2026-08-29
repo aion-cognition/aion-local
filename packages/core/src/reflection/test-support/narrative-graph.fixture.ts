@@ -3,6 +3,7 @@ import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../../infrastructure/graph/
 import {
   DERIVES_FROM_TYPE,
   NARRATIVE_PROPERTIES,
+  NARRATIVE_SOURCE_LABELS,
 } from '../../infrastructure/graph/narrative-queries.js';
 import { coerceGraphValue, type Row } from '../../infrastructure/graph/values.js';
 import { FakeGraph, type FakeNode } from './fake-graph.fixture.js';
@@ -38,9 +39,23 @@ export class NarrativeFakeGraph extends FakeGraph {
     cypher: string,
     parameters: Record<string, unknown> = {},
   ): Promise<unknown> {
+    // Before the session-episode branch: the source-node read walks through `(e:Episode)` too.
+    if (cypher.includes('[:EXTRACTED_FROM]->(e:Episode)')) {
+      this.statements.push({ cypher, parameters });
+      return toResult(this.#sessionSourceNodes(parameters));
+    }
     if (cypher.includes('(:Session { id: $sessionId })') && cypher.includes('(e:Episode)')) {
       this.statements.push({ cypher, parameters });
       return toResult(this.#sessionEpisodes(parameters));
+    }
+    // Before the per-session narrative read, which the stale-revision scan otherwise matches.
+    if (cypher.includes(`coalesce(n.${NARRATIVE_PROPERTIES.grounding}, '')`)) {
+      this.statements.push({ cypher, parameters });
+      return toResult(this.#staleNarratives(parameters));
+    }
+    if (cypher.includes(`SET n.${BITEMPORAL_PROPERTIES.forgottenAt} = coalesce`)) {
+      this.statements.push({ cypher, parameters });
+      return toResult(this.#forgetNarrative(parameters));
     }
     // The idle sweep matches narratives too, so its own marker is tested first.
     if (cypher.includes('AS last_activity')) {
@@ -82,6 +97,61 @@ export class NarrativeFakeGraph extends FakeGraph {
         occurred_at: node.properties[BITEMPORAL_PROPERTIES.occurredAt],
         tx_from: node.properties[BITEMPORAL_PROPERTIES.txFrom],
       }));
+  }
+
+  /** Claim-bearing nodes extracted from the session's episodes, episode order preserved. */
+  #sessionSourceNodes(parameters: Record<string, unknown>): Row[] {
+    const rows: Row[] = [];
+    for (const episode of this.#sessionEpisodes(parameters)) {
+      for (const node of this.nodes.values()) {
+        const labelled = node.labels.some((label) =>
+          (NARRATIVE_SOURCE_LABELS as readonly string[]).includes(label),
+        );
+        if (!labelled || !this.edges.has(`EXTRACTED_FROM:${node.id}:${String(episode.id)}`)) {
+          continue;
+        }
+        rows.push({
+          id: node.id,
+          kind: node.labels.find((label) =>
+            (NARRATIVE_SOURCE_LABELS as readonly string[]).includes(label),
+          ),
+          text: node.properties[MEMORY_PROPERTIES.text],
+          episode_id: episode.id,
+        });
+      }
+    }
+    return rows;
+  }
+
+  /** Standing narratives from an older grounding revision, and what their session can ground. */
+  #staleNarratives(parameters: Record<string, unknown>): Row[] {
+    const rows: Row[] = [];
+    for (const session of this.nodesWithLabel('Session')) {
+      for (const narrative of this.#narrativesOf(session.id)) {
+        const stale =
+          narrative.properties[BITEMPORAL_PROPERTIES.validUntil] === undefined &&
+          narrative.properties[NARRATIVE_PROPERTIES.grounding] !== parameters.grounding;
+        if (stale) {
+          rows.push({
+            id: narrative.id,
+            session_id: session.id,
+            episode_count: this.#episodesOf(session.id).length,
+          });
+        }
+      }
+    }
+    return rows;
+  }
+
+  #forgetNarrative(parameters: Record<string, unknown>): Row[] {
+    const node = this.nodes.get(parameters.id as string);
+    if (node === undefined) {
+      return [];
+    }
+    node.properties[BITEMPORAL_PROPERTIES.forgottenAt] ??= parameters.now;
+    node.properties[BITEMPORAL_PROPERTIES.validUntil] ??= parameters.now;
+    node.properties[BITEMPORAL_PROPERTIES.txUntil] ??= parameters.now;
+    return [{ id: node.id }];
   }
 
   #narrativesOf(sessionId: string): FakeNode[] {
