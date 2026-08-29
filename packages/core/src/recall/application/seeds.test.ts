@@ -288,6 +288,60 @@ function fulltextRows(cypher: string, parameters: FakeRow): readonly FakeRow[] {
   return [row('term-hit', 8.4)];
 }
 
+const POPULATION_QUERY = 'count(n) AS population';
+
+function countingDriver(
+  population: number | Error,
+  onCount: () => void = () => {},
+): Driver {
+  return {
+    executeQuery: (cypher: string) => {
+      if (!cypher.includes(POPULATION_QUERY)) {
+        return Promise.resolve(NO_ROWS);
+      }
+      onCount();
+      if (population instanceof Error) {
+        return Promise.reject(population);
+      }
+      return Promise.resolve({
+        records: [{ toObject: () => ({ population }) }],
+        summary: { counters: { updates: () => ({}) } },
+      });
+    },
+  } as unknown as Driver;
+}
+
+describe('the seed budget the substrate earns', () => {
+  it('sizes the candidate set from the memory population and reports what it used', async () => {
+    const small = await selectFrom(countingDriver(1));
+    const large = await selectFrom(countingDriver(6600));
+
+    expect(small.budget).toBe(DEFAULTS.contextResonance.seedBudgetBase);
+    expect(large.budget).toBeGreaterThan(small.budget);
+    expect(large.budget).toBeLessThanOrEqual(DEFAULTS.contextResonance.seedLimit);
+  });
+
+  it('counts the substrate once and reuses the reading for the next recall', async () => {
+    let counts = 0;
+    const driver = countingDriver(6600, () => {
+      counts += 1;
+    });
+
+    await selectFrom(driver);
+    await selectFrom(driver);
+
+    expect(counts).toBe(1);
+  });
+
+  // A count is not a candidate, so losing it costs a smaller budget rather than a recall.
+  it('falls back to the base budget when the count fails and the legs answer', async () => {
+    const selection = await selectFrom(countingDriver(new Error('ServiceUnavailable')));
+
+    expect(selection.budget).toBe(DEFAULTS.contextResonance.seedBudgetBase);
+    expect(selection.graphUnavailable).toBe(false);
+  });
+});
+
 describe('selectSeeds when the graph is not answering', () => {
   it('flags the graph unavailable when every query it issued was rejected', async () => {
     const selection = await selectFrom(

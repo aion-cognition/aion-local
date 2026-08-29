@@ -106,7 +106,14 @@ export const ConfigSchema = z.object({
     flushIntervalMs: positiveInt,
   }),
   contextResonance: z.object({
+    /**
+     * The ceiling on the seed budget rather than the budget itself. The budget is
+     * `seedBudgetBase + seedBudgetGrowth * ln(memory nodes)`, so this is what a substrate
+     * large enough to reach it settles at, and pinning it low pins the budget outright.
+     */
     seedLimit: positiveInt,
+    seedBudgetBase: positiveInt,
+    seedBudgetGrowth: z.number().positive(),
     activationLimit: positiveInt,
     resonantLimit: positiveInt,
     maxHops: nonNegativeInt,

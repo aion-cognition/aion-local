@@ -8,7 +8,13 @@ import { supersede, writeStampedNode } from '../../infrastructure/graph/bitempor
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
 import { asOf, withCurrency } from '../../infrastructure/graph/read-modes.js';
-import { entitySimilaritySeeds, fulltextSeeds, vectorSeeds } from '../../infrastructure/graph/seed-queries.js';
+import {
+  countMemoryNodes,
+  entitySimilaritySeeds,
+  fulltextSeeds,
+  vectorSeeds,
+} from '../../infrastructure/graph/seed-queries.js';
+import { seedBudget } from '../domain/seed-selection.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
@@ -320,6 +326,34 @@ describe('merge', () => {
     });
     expect(seed?.provenance.map((entry) => entry.strategy)).toContain('bm25');
     expect(seed?.isStructural).toBe(true);
+  });
+});
+
+describe('the seed budget the substrate earns', () => {
+  it('is read from the memory nodes the graph holds rather than from a fixed number', async () => {
+    const population = await countMemoryNodes(harness.driver);
+    const selection = await selectSeeds(deps({ seedLimit: DEFAULTS.contextResonance.seedLimit }), {
+      cues: [cue('the seed limit', 3, VECTORS.truth)],
+    });
+
+    expect(population).toBeGreaterThan(0);
+    expect(selection.budget).toBe(
+      seedBudget(population, {
+        base: DEFAULTS.contextResonance.seedBudgetBase,
+        growth: DEFAULTS.contextResonance.seedBudgetGrowth,
+        cap: DEFAULTS.contextResonance.seedLimit,
+      }),
+    );
+    expect(selection.budget).toBeGreaterThan(DEFAULTS.contextResonance.seedBudgetBase);
+  });
+
+  it('stops at a pinned seed limit, which is the cap on the curve', async () => {
+    const selection = await selectSeeds(deps({ seedLimit: 2 }), {
+      cues: [cue('the seed limit', 3, VECTORS.truth)],
+    });
+
+    expect(selection.budget).toBe(2);
+    expect(selection.seeds).toHaveLength(2);
   });
 });
 
