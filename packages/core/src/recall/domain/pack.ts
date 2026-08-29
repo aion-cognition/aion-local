@@ -89,6 +89,22 @@ function episodeKey(item: FusedItem): string {
  */
 export const CHARS_PER_TOKEN = 4;
 
+/**
+ * The extraction prompt asks for one sentence, so most stored rationales land well under this;
+ * the cap guards the rare long one, so a single node's why can never claim a disproportionate
+ * share of the token budget. Cut at the last whole word under the limit rather than mid-word.
+ */
+export const MAX_WHY_CHARS = 220;
+
+function capWhy(why: string): string {
+  if (why.length <= MAX_WHY_CHARS) {
+    return why;
+  }
+  const cut = why.slice(0, MAX_WHY_CHARS);
+  const lastSpace = cut.lastIndexOf(' ');
+  return `${lastSpace > 0 ? cut.slice(0, lastSpace) : cut}…`;
+}
+
 const PACK_HEADING = '# Memory';
 
 const EMPTY_PACK_BODY = 'No memories matched this query.';
@@ -136,6 +152,7 @@ function toPackItem(item: FusedItem, rank: number): MemoryPackItem {
     // would print 1.00 beside a cosine of 0.62.
     confidence: item.measured,
     rationale: item.rationale,
+    ...(item.why === undefined ? {} : { why: capWhy(item.why) }),
     currency: item.currency,
     ...(item.supersededBy === undefined
       ? {}
@@ -154,10 +171,11 @@ function renderDay(timestamp: string): string {
 }
 
 /**
- * Content on its own line, then one line of provenance: id, the method that found it, the
- * absolute confidence behind admission, the path for an activated item, and the lineage
- * marker for a superseded one. The marker belongs wherever superseded knowledge surfaces, so
- * it is part of the rendered block and not only of the structured item.
+ * Content on its own line, then the node's own reason when it stored one, then one line of
+ * provenance: id, the method that found it, the absolute confidence behind admission, the
+ * path for an activated item, and the lineage marker for a superseded one. The marker belongs
+ * wherever superseded knowledge surfaces, so it is part of the rendered block and not only of
+ * the structured item.
  *
  * The list number is the item's rank across the whole pack rather than its position in its
  * own bucket, so the reader can order two items in different buckets. `rationale.score` is
@@ -189,7 +207,8 @@ function renderItem(entry: PackEntry): string {
   if (item.superseded_by !== undefined) {
     facts.push(`superseded by ${item.superseded_by.id} at ${item.superseded_by.at}`);
   }
-  return `${String(item.rank)}. ${item.content}\n   ${facts.join(' | ')}`;
+  const why = item.why === undefined ? '' : `\n   why: ${item.why}`;
+  return `${String(item.rank)}. ${item.content}${why}\n   ${facts.join(' | ')}`;
 }
 
 function renderBucket(bucket: PackBucket, entries: readonly PackEntry[]): string {

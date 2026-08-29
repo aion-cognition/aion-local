@@ -1,14 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import type { SeedCandidate } from '../../infrastructure/graph/seed-queries.js';
 import {
   LEG_RESERVATION_SHARES,
   SEED_STRATEGIES,
   legReservations,
+  mergeSeeds,
   roundRobinByCue,
   seedBudget,
   selectWithReservations,
   type Seed,
   type SeedBudgetCurve,
+  type SeedContribution,
   type SeedStrategy,
 } from './seed-selection.js';
 
@@ -228,5 +231,36 @@ describe('selectWithReservations', () => {
 
   it('returns nothing on a budget of zero', () => {
     expect(selectWithReservations({ ranked: all, byStrategy: lists, budget: 0 })).toEqual([]);
+  });
+});
+
+function candidate(id: string, why?: string): SeedCandidate {
+  return {
+    id,
+    labels: ['Decision', 'Memory', 'AionNode'],
+    content: `content of ${id}`,
+    currency: 'current',
+    ...(why === undefined ? {} : { why }),
+  };
+}
+
+function contribution(candidate: SeedCandidate, score: number): SeedContribution {
+  return { candidate, strategy: 'vector', score, relevance: score };
+}
+
+describe('mergeSeeds', () => {
+  it("carries a candidate's own reason through onto the merged seed", () => {
+    const [merged] = mergeSeeds(
+      [contribution(candidate('d1', 'because Postgres already owns the lock'), 0.8)],
+      10,
+    );
+
+    expect(merged?.why).toBe('because Postgres already owns the lock');
+  });
+
+  it('leaves why absent for a candidate whose node stores no rationale', () => {
+    const [merged] = mergeSeeds([contribution(candidate('e1'), 0.8)], 10);
+
+    expect(merged?.why).toBeUndefined();
   });
 });

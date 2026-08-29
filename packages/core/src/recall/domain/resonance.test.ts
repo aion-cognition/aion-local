@@ -30,8 +30,14 @@ const ADMISSION: AdmissionReport = {
   anchored: true,
 };
 
-function candidate(id: string, content = `content of ${id}`): SeedCandidate {
-  return { id, labels: ['Episode', 'Memory', 'AionNode'], content, currency: 'current' };
+function candidate(id: string, content = `content of ${id}`, why?: string): SeedCandidate {
+  return {
+    id,
+    labels: ['Episode', 'Memory', 'AionNode'],
+    content,
+    currency: 'current',
+    ...(why === undefined ? {} : { why }),
+  };
 }
 
 function vectors(entries: readonly [string, Vector][]): ReadonlyMap<string, Vector> {
@@ -99,6 +105,12 @@ describe('a resonant discovery', () => {
     expect(found.measured).toBe(0.82);
     expect(found.relevance).toBe(0.82);
     expect(found.evidence).toEqual([{ method: 'resonance', relevance: 0.82 }]);
+  });
+
+  it('carries the node\'s own reason through when the discovery has one', () => {
+    const found = resonantItem(candidate('r1', undefined, 'shares the deploy-window subject'), 0.82);
+
+    expect(found.why).toBe('shares the deploy-window subject');
   });
 
   it('lands in the resonant bucket rather than the one its labels would route it to', () => {

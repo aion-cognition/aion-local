@@ -41,6 +41,8 @@ export type FusionCandidate = {
   readonly sourceEpisodeId?: string;
   /** Why the item surfaced, as the pack reports it. Its score is the method's own. */
   readonly rationale: Rationale;
+  /** The node's own stated reason (a Decision's `rationale` property), distinct from `rationale` above. */
+  readonly why?: string;
   /**
    * The producing method's own number, on the producing method's own scale. Used for ranking
    * and for choosing which leg owns the rationale; never for admission, and never reported as

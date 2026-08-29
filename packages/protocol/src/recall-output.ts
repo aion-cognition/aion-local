@@ -67,6 +67,13 @@ export const MemoryPackItemSchema = z.strictObject({
    */
   confidence: z.number(),
   rationale: RationaleSchema,
+  /**
+   * The node's own stated reason, when it stored one (a Decision's `rationale` property
+   * today). Optional and absent on most items, since most node types carry no such field.
+   * Deliberately not named `rationale`: that name is `rationale` above, the retrieval
+   * rationale (method, score, path), and the two answer different questions.
+   */
+  why: z.string().min(1).optional(),
   currency: CurrencySchema,
   superseded_by: SupersededBySchema.optional(),
 });

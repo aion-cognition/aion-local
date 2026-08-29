@@ -7,6 +7,7 @@ import {
   bucketFor,
   CHARS_PER_TOKEN,
   estimateTokens,
+  MAX_WHY_CHARS,
   type AssemblePackInput,
   type BucketCaps,
 } from './pack.js';
@@ -33,6 +34,8 @@ type ItemOverrides = {
   readonly sourceEpisodeId?: string;
   /** The absolute cosine behind admission; zero for an item a literal match let in. */
   readonly measured?: number;
+  /** The node's own stated reason, when the fixture wants one. */
+  readonly why?: string;
 };
 
 function item(id: string, overrides: ItemOverrides = {}): FusedItem {
@@ -53,6 +56,7 @@ function item(id: string, overrides: ItemOverrides = {}): FusedItem {
     ...(overrides.sourceEpisodeId === undefined
       ? {}
       : { sourceEpisodeId: overrides.sourceEpisodeId }),
+    ...(overrides.why === undefined ? {} : { why: overrides.why }),
     ...(overrides.superseded === true
       ? {
           currency: 'superseded' as const,
@@ -285,6 +289,33 @@ describe('the structured items', () => {
     const pack = assemble([item('e1'), item('f1', { labels: ['Entity', 'AionNode'] })]);
     expect(MemoryPackSchema.safeParse(pack).success).toBe(true);
   });
+
+  it('leaves why absent on an item whose node carries no rationale', () => {
+    const pack = assemble([item('e1')]);
+    expect(pack.episodes?.[0]?.why).toBeUndefined();
+  });
+
+  it('carries the node\'s own reason as a distinct field from the retrieval rationale', () => {
+    const pack = assemble([
+      item('d1', {
+        labels: ['Decision', 'Memory', 'AionNode'],
+        why: 'PostgreSQL already owns the ledger row.',
+      }),
+    ]);
+
+    expect(pack.facts?.[0]?.why).toBe('PostgreSQL already owns the ledger row.');
+    expect(pack.facts?.[0]?.rationale).toEqual({ method: 'vector', score: 0.8 });
+  });
+
+  it('caps a why past the length limit at the last whole word', () => {
+    const long = `${'reason '.repeat(40)}word`;
+    const pack = assemble([item('d1', { labels: ['Decision', 'Memory', 'AionNode'], why: long })]);
+
+    const capped = pack.facts?.[0]?.why ?? '';
+    expect(capped.length).toBeLessThanOrEqual(MAX_WHY_CHARS + 1);
+    expect(capped.endsWith('…')).toBe(true);
+    expect(long.startsWith(capped.slice(0, -1))).toBe(true);
+  });
 });
 
 describe('the rendered text block', () => {
@@ -316,5 +347,26 @@ describe('the rendered text block', () => {
     expect(pack.rendered_text).toContain(
       'superseded by stale-successor at 2026-08-10T00:00:00.000Z',
     );
+  });
+
+  it('renders why as its own line directly under the claim, ahead of the provenance line', () => {
+    const pack = assemble([
+      item('d1', {
+        labels: ['Decision', 'Memory', 'AionNode'],
+        why: 'A Redis mutex would duplicate a guarantee Postgres already gives.',
+      }),
+    ]);
+
+    const lines = pack.rendered_text.split('\n');
+    const claimIndex = lines.findIndex((line) => line.includes('1. content of d1'));
+    expect(lines[claimIndex + 1]).toBe(
+      '   why: A Redis mutex would duplicate a guarantee Postgres already gives.',
+    );
+    expect(lines[claimIndex + 2]).toContain('[d1] | vector | confidence 0.80');
+  });
+
+  it('omits the why line entirely for an item whose node carries no rationale', () => {
+    const pack = assemble([item('e1')]);
+    expect(pack.rendered_text).not.toContain('why:');
   });
 });
