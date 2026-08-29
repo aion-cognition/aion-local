@@ -14,6 +14,7 @@ import {
   queueLagSnapshot,
   readVectorIndexes,
   reconcileEnrichment,
+  scanRedactionResidue,
   SqliteStore,
   verifyGdsAvailable,
   type Config,
@@ -70,9 +71,9 @@ export async function probeMcpHttp(port: number, fetchImpl: typeof fetch = fetch
 }
 
 /**
- * Pure SQLite, no Neo4j: `aion doctor` printed "8 checks passed" with 4,000+ jobs pending
- * and again with one permanently wedged job (EX-10). Warn, never fail — a backlog is a
- * thing that is behind, not a thing that is broken.
+ * Pure SQLite, no Neo4j: `aion doctor` printed "8 checks passed" with 4,000+ jobs pending,
+ * and again with one permanently wedged job. Warn, never fail — a backlog is a thing that is
+ * behind, not a thing that is broken.
  */
 export function queueLagCheck(db: SqliteHandle, config: Config, now: Date = new Date()): CheckResult {
   const snapshot = queueLagSnapshot(db, config.operational.workerMaxAttempts, now);
@@ -87,6 +88,9 @@ export function queueLagCheck(db: SqliteHandle, config: Config, now: Date = new 
     snapshot.p95EnrichmentLagMs === undefined
       ? 'no enrichment lag samples yet'
       : `p95 enrichment lag ${String(Math.round(snapshot.p95EnrichmentLagMs / 1000))}s`,
+    snapshot.cueDegradedRate === undefined
+      ? 'no recalls measured yet'
+      : `${(snapshot.cueDegradedRate * 100).toFixed(1)}% of recent recalls degraded on cues`,
   ].join(', ');
 
   const stale = oldest !== undefined && oldest > config.operational.lagOldestUnclaimedWarnMs;
@@ -192,6 +196,50 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
           return { ok: true, warn: true, detail: separation.detail };
         }
         return { ok: true, detail: separation.detail };
+      },
+    },
+    {
+      /**
+       * Propose-only supersession means every judgment is a row waiting on a person. An open
+       * review queue nobody can see is the state the exercise reported from the other side:
+       * the table had never held a row, and the answer to that cannot be a table nothing
+       * counts. Informational — a proposal is work to do, not a broken invariant.
+       */
+      /**
+       * Informational, and the only thing that can tell a substrate nobody ever leaked into
+       * from one that was. The closures stop the next write; nothing hard-deletes, so what an
+       * older ruleset already stored is permanent and recall-eligible until a forget operation
+       * exists to remove it. Warn rather than fail: the material is a fact about history.
+       */
+      name: 'redaction-residue',
+      dependsOn: NEO4J_BOLT,
+      run: async () => {
+        const residue = await scanRedactionResidue(
+          connection.driver,
+          config.redaction.entropyThreshold,
+        );
+        const detail =
+          `${String(residue.leaking)} of ${String(residue.scanned)} nodes still carry ` +
+          `secret-shaped text` +
+          (residue.leaking === 0
+            ? ''
+            : ` (${residue.ruleIds.join(', ')}; e.g. ${residue.sampleIds.join(', ')})`);
+        if (residue.leaking > 0) {
+          return { ok: true, warn: true, detail };
+        }
+        return { ok: true, detail };
+      },
+    },
+    {
+      name: 'review-queue',
+      run: async () => {
+        const snapshot = queueLagSnapshot(db, config.operational.workerMaxAttempts);
+        const open = snapshot.supersessionProposalsOpen + snapshot.entityMergeProposalsOpen;
+        const detail =
+          `${String(snapshot.supersessionProposalsOpen)} supersession, ` +
+          `${String(snapshot.entityMergeProposalsOpen)} entity-merge proposals open` +
+          (open === 0 ? '' : ' — aion proposals ls');
+        return { ok: true, detail };
       },
     },
     {

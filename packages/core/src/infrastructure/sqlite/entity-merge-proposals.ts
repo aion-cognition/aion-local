@@ -161,3 +161,11 @@ export function resolveEntityMergeProposal(
     .run(resolvedAt, id);
   return result.changes > 0;
 }
+
+/** Open proposals only: a resolved row is a decision already made, not a queue for anyone. */
+export function countOpenEntityMergeProposals(db: SqliteHandle): number {
+  const row = db
+    .prepare('SELECT COUNT(*) AS count FROM entity_merge_proposals WHERE resolved_at IS NULL')
+    .get() as { count: number };
+  return row.count;
+}
