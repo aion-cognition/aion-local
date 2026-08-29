@@ -117,6 +117,17 @@ export const ConfigSchema = z.object({
     maxNarrativeEpisodeChars: positiveInt,
     narrativeSweepLimit: positiveInt,
   }),
+  /**
+   * The arrival-rate backstop behind the reflection queue's priority lanes. The explicit
+   * `lane` input is what normally decides; these bound the damage a client that floods
+   * without setting it can do to everyone else's freshness.
+   */
+  lanes: z.object({
+    arrivalWindowMs: positiveInt,
+    sessionArrivalMax: positiveInt,
+    globalArrivalMax: positiveInt,
+    hotSessionArrivalMax: positiveInt,
+  }),
   redaction: z.object({
     /** Shannon entropy in bits/char above which an unmatched token is still flagged as a likely secret. */
     entropyThreshold: z.number().positive(),
@@ -141,6 +152,8 @@ export const ConfigSchema = z.object({
     workerBreakerThreshold: positiveInt,
     workerBreakerCooldownMs: positiveInt,
     workerVectorBatchSize: positiveInt,
+    /** Unenriched episodes `aion doctor` reports as a warning rather than a count. */
+    reconcileWarnThreshold: nonNegativeInt,
   }),
   logging: z.object({
     filePath: z.string().min(1),

@@ -219,6 +219,15 @@ export const KNOB_REGISTRY: readonly Knob[] = [
     kind: 'number',
   },
 
+  { envVar: 'AION_LANE_ARRIVAL_WINDOW_MS', path: ['lanes', 'arrivalWindowMs'], kind: 'number' },
+  { envVar: 'AION_LANE_SESSION_ARRIVAL_MAX', path: ['lanes', 'sessionArrivalMax'], kind: 'number' },
+  { envVar: 'AION_LANE_GLOBAL_ARRIVAL_MAX', path: ['lanes', 'globalArrivalMax'], kind: 'number' },
+  {
+    envVar: 'AION_LANE_HOT_SESSION_ARRIVAL_MAX',
+    path: ['lanes', 'hotSessionArrivalMax'],
+    kind: 'number',
+  },
+
   { envVar: 'AION_REDACTION_ENTROPY_THRESHOLD', path: ['redaction', 'entropyThreshold'], kind: 'number' },
 
   { envVar: 'AION_MAINTENANCE_TIER3', path: ['maintenance', 'tier3'], kind: 'boolean' },
@@ -254,6 +263,11 @@ export const KNOB_REGISTRY: readonly Knob[] = [
   {
     envVar: 'AION_WORKER_VECTOR_BATCH_SIZE',
     path: ['operational', 'workerVectorBatchSize'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_RECONCILE_WARN_THRESHOLD',
+    path: ['operational', 'reconcileWarnThreshold'],
     kind: 'number',
   },
 

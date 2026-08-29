@@ -36,6 +36,7 @@ import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite
 import { SessionManager } from '../../session/session-manager.js';
 import { ReflectionDispatch } from './dispatch.js';
 import { handleReflection, type ReflectionIntakeDeps } from './intake.js';
+import { LaneAssigner } from './lanes.js';
 import {
   closeSessionNarrative,
   DEFAULT_SESSION_IDLE_MS,
@@ -128,6 +129,7 @@ beforeAll(async () => {
     dispatch: new ReflectionDispatch(),
     logger,
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
+    lanes: new LaneAssigner(DEFAULTS.lanes),
   };
   deps = { driver: harness.driver, provider: provider(), logger };
 

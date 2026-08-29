@@ -14,6 +14,8 @@ type ReflectionJobRow = {
   claimed_at: string | null;
   claimed_by: string | null;
   last_error: string | null;
+  lane: string | null;
+  session_id: string | null;
 };
 
 /**
@@ -21,7 +23,8 @@ type ReflectionJobRow = {
  * claim-two-process test loads this file directly via native ESM in a forked
  * child process, which (unlike the project's tsc/vitest resolvers) does not map a
  * relative `.js` specifier back to its sibling `.ts` source, so claim.ts cannot
- * take a runtime (non-type-only) import from reflection-queue.ts.
+ * take a runtime (non-type-only) import from reflection-queue.ts. The lane literals
+ * below are inline for the same reason.
  */
 function toReflectionJob(row: ReflectionJobRow): ReflectionJob {
   return {
@@ -33,8 +36,40 @@ function toReflectionJob(row: ReflectionJobRow): ReflectionJob {
     claimedAt: row.claimed_at,
     claimedBy: row.claimed_by,
     lastError: row.last_error,
+    lane: row.lane === 'bulk' ? 'bulk' : 'interactive',
+    sessionId: row.session_id,
   };
 }
+
+/**
+ * Which claimable row goes next, as one ordered subquery.
+ *
+ * `lane_rank` is 0 for interactive and 1 for everything else, and it sorts first, so no bulk
+ * row is ever claimed while an interactive one is claimable — the starvation the live
+ * incident produced (4,016 bulk jobs ahead of every real episode) cannot recur in that
+ * direction. An unrecognised lane sorts with bulk: a lane nobody taught this build about is
+ * not a promotion.
+ *
+ * `lane_seq` is the row's turn within its own (lane, session) group, stamped at insert
+ * (reflection-queue.ts), so ordering by it interleaves the sessions: every session's first
+ * job, then every session's second, and so on. One session pushing a thousand episodes
+ * therefore delays another session's first episode by one job, not by a thousand. `rowid`
+ * breaks the remaining tie, which makes the order among equal turns first-in-first-out and
+ * the whole ordering total.
+ *
+ * The turn is a stored column and not a window function over this result set for a reason:
+ * ROW_NUMBER would renumber every group as rows are claimed, so after the first claim the
+ * interleave collapses back into first-in-first-out.
+ */
+const CLAIM_NEXT = `UPDATE reflection_queue
+         SET claimed_at = ?, claimed_by = ?
+         WHERE id = (
+           SELECT id FROM reflection_queue
+           WHERE claimed_at IS NULL AND attempts < ?
+           ORDER BY CASE lane WHEN 'interactive' THEN 0 ELSE 1 END, lane_seq, rowid
+           LIMIT 1
+         )
+         RETURNING *`;
 
 /**
  * Claims reflection_queue jobs on behalf of one process. `id` is minted once per
@@ -49,9 +84,10 @@ export class ReflectionQueueClaimant {
   }
 
   /**
-   * Atomically claims the oldest unclaimed job, or undefined if none. Ordered by
-   * `rowid`, not `id`: ids are random UUIDs, and enqueued_at alone ties on
-   * same-millisecond bursts. The UPDATE's subquery and assignment run as one SQLite
+   * Atomically claims the next unclaimed job by the lane-then-round-robin order documented
+   * on `CLAIM_NEXT` above, or undefined if none. Insertion order (`rowid`) rather than `id`
+   * or `enqueued_at` is what breaks every tie in it: ids are random UUIDs and enqueued_at
+   * ties on same-millisecond bursts. The UPDATE's subquery and assignment run as one SQLite
    * statement, so concurrent claimants (any process, any thread) never select the
    * same row — the file-level write lock plus busy_timeout serializes them.
    *
@@ -63,19 +99,9 @@ export class ReflectionQueueClaimant {
    */
   claimNext(db: SqliteHandle, maxAttempts?: number): ReflectionJob | undefined {
     const attemptBound = maxAttempts ?? Number.MAX_SAFE_INTEGER;
-    const row = db
-      .prepare(
-        `UPDATE reflection_queue
-         SET claimed_at = ?, claimed_by = ?
-         WHERE id = (
-           SELECT id FROM reflection_queue
-           WHERE claimed_at IS NULL AND attempts < ?
-           ORDER BY rowid ASC
-           LIMIT 1
-         )
-         RETURNING *`,
-      )
-      .get(new Date().toISOString(), this.id, attemptBound) as ReflectionJobRow | undefined;
+    const row = db.prepare(CLAIM_NEXT).get(new Date().toISOString(), this.id, attemptBound) as
+      | ReflectionJobRow
+      | undefined;
     return row === undefined ? undefined : toReflectionJob(row);
   }
 

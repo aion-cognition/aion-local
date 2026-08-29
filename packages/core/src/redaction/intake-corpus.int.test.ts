@@ -17,6 +17,7 @@ import { openSqliteHandle, type SqliteHandle } from '../infrastructure/sqlite/da
 import { listReflectionJobs } from '../infrastructure/sqlite/reflection-queue.js';
 import { ReflectionDispatch } from '../reflection/application/dispatch.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../reflection/application/intake.js';
+import { LaneAssigner } from '../reflection/application/lanes.js';
 import { SessionManager } from '../session/session-manager.js';
 import { buildFingerprint } from './fingerprint.js';
 import { LEAKED_SHAPES, SURVIVING_TEXT } from './test-support/leaked-shapes.fixture.js';
@@ -57,6 +58,7 @@ beforeAll(async () => {
     dispatch: new ReflectionDispatch(),
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
+    lanes: new LaneAssigner(DEFAULTS.lanes),
   };
 
   for (const [index, shape] of LEAKED_SHAPES.entries()) {

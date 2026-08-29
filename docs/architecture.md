@@ -85,6 +85,15 @@ the dispatch signal. `ReflectionWorker` claims the queue row the signal announce
 `ReflectionOrchestrator` over the stage list `packages/mcp/src/bootstrap.ts` registers. The
 queue row is the durable truth; the signal is best-effort.
 
+Which row it claims is a scheduling decision, not insertion order. Every row carries a lane
+(`interactive` by default, `bulk` when the caller flagged it or the arrival-rate backstop
+demoted the session), the session it belongs to, and its turn within that (lane, session)
+group. `claimNext` orders by lane first, then turn, then insertion — so the bulk lane never
+runs while an interactive job is claimable, and inside a lane the sessions interleave. The
+turn is stamped at enqueue rather than computed at claim time: a window function over the
+unclaimed rows renumbers every group as rows leave it, which collapses the interleave back
+into first-in-first-out after the first claim.
+
 ## Read path: recall
 
 `handleRecall` (`recall/application/recall.ts`) runs these stages, each timed

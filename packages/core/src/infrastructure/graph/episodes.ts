@@ -1,4 +1,4 @@
-import type { Driver } from 'neo4j-driver';
+import neo4j, { type Driver } from 'neo4j-driver';
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { runRead, type GraphTransaction } from './connection.js';
 
@@ -76,4 +76,36 @@ export async function findEpisodeByContentHashInTransaction(
     (row) => row.id as string,
   );
   return rows[0];
+}
+
+export type StoredEpisodeRef = {
+  readonly id: string;
+  readonly sessionId: string | undefined;
+};
+
+/**
+ * Every episode the substrate holds, newest first, for reconciliation against the ops ledger
+ * and the queue. Superseded episodes are included and forgotten ones are not: a corrected
+ * episode still deserves enrichment, an explicitly forgotten one never will.
+ *
+ * Newest first because that is the order the answer matters in — an episode written minutes
+ * ago and never enqueued is a live freshness bug, one from last month is history — and it
+ * makes `limit` cut the tail rather than the head.
+ */
+const LIST_STORED_EPISODES = [
+  'MATCH (e:Episode)',
+  `WHERE e.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  `RETURN e.id AS id, e.${MEMORY_PROPERTIES.sessionId} AS session_id`,
+  `ORDER BY e.${BITEMPORAL_PROPERTIES.txFrom} DESC, e.id`,
+  'LIMIT $limit',
+].join('\n');
+
+export async function listStoredEpisodes(
+  driver: Driver,
+  limit: number,
+): Promise<readonly StoredEpisodeRef[]> {
+  return runRead(driver, LIST_STORED_EPISODES, { limit: neo4j.int(Math.trunc(limit)) }, (row) => ({
+    id: row.id as string,
+    sessionId: typeof row.session_id === 'string' ? row.session_id : undefined,
+  }));
 }

@@ -31,6 +31,19 @@ export function isLedgerApplied(db: SqliteHandle, key: string): boolean {
   return getLedgerEntry(db, key) !== undefined;
 }
 
+/**
+ * Every key under one namespace, for callers that must answer "which of these thousands of
+ * things has run" without a query per thing. `prefix` is matched with LIKE against a literal
+ * escape, so a key containing `%` or `_` cannot widen the match.
+ */
+export function listLedgerKeys(db: SqliteHandle, prefix: string): string[] {
+  const escaped = prefix.replace(/[\\%_]/g, '\\$&');
+  const rows = db
+    .prepare("SELECT key FROM ops_ledger WHERE key LIKE ? ESCAPE '\\' ORDER BY key")
+    .all(`${escaped}%`) as { key: string }[];
+  return rows.map((row) => row.key);
+}
+
 /** Idempotent: re-marking the same key updates appliedAt/summary rather than erroring. */
 export function markLedgerApplied(db: SqliteHandle, key: string, summary?: unknown): void {
   db.prepare(

@@ -18,6 +18,7 @@ import { openLogger, type Logger } from '../../infrastructure/logging/logger.js'
 import type { Provider, Vector } from '../../infrastructure/providers/types.js';
 import { ReflectionDispatch } from '../../reflection/application/dispatch.js';
 import { handleReflection } from '../../reflection/application/intake.js';
+import { LaneAssigner } from '../../reflection/application/lanes.js';
 import { SessionManager } from '../../session/session-manager.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { listReinforcementSignals } from '../../infrastructure/sqlite/reinforcement-queue.js';
@@ -111,6 +112,7 @@ async function push(observation: string, now: Date): Promise<string> {
       dispatch: new ReflectionDispatch(),
       logger,
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
+      lanes: new LaneAssigner(DEFAULTS.lanes),
     },
     { observations: [observation] },
     { identity: WRITE_SESSION, now },

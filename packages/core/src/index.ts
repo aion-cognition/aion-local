@@ -22,17 +22,38 @@ export { getMeta, setMeta } from './infrastructure/sqlite/meta.js';
 export {
   getLedgerEntry,
   isLedgerApplied,
+  listLedgerKeys,
   markLedgerApplied,
 } from './infrastructure/sqlite/ops-ledger.js';
 export type { OpsLedgerEntry } from './infrastructure/sqlite/ops-ledger.js';
 
 export {
+  DEFAULT_REFLECTION_LANE,
+  REFLECTION_LANES,
   enqueueReflectionJob,
   findPendingReflectionJob,
   getReflectionJob,
+  isReflectionLane,
   listReflectionJobs,
+  toReflectionLane,
 } from './infrastructure/sqlite/reflection-queue.js';
-export type { ReflectionJob } from './infrastructure/sqlite/reflection-queue.js';
+export type {
+  EnqueueReflectionJobOptions,
+  ReflectionJob,
+  ReflectionLane,
+} from './infrastructure/sqlite/reflection-queue.js';
+
+export {
+  countQueueJobs,
+  countQueueJobsByLane,
+  dropUnclaimedJobs,
+  listQueueJobs,
+  promoteJobs,
+} from './infrastructure/sqlite/reflection-queue-admin.js';
+export type {
+  ReflectionQueueCounts,
+  ReflectionQueueFilter,
+} from './infrastructure/sqlite/reflection-queue-admin.js';
 
 export {
   DEFAULT_STALE_CLAIM_TIMEOUT_MS,
@@ -165,8 +186,12 @@ export {
   MEMORY_PROPERTIES,
   findEpisodeByContentHash,
   findEpisodeByContentHashInTransaction,
+  listStoredEpisodes,
 } from './infrastructure/graph/episodes.js';
-export type { FindEpisodeByContentHashInput } from './infrastructure/graph/episodes.js';
+export type {
+  FindEpisodeByContentHashInput,
+  StoredEpisodeRef,
+} from './infrastructure/graph/episodes.js';
 
 export { ensureGraphSession } from './infrastructure/graph/sessions.js';
 export type { EnsureGraphSessionInput, EnsureGraphSessionResult } from './infrastructure/graph/sessions.js';
@@ -225,6 +250,12 @@ export {
   handleReflection,
 } from './reflection/application/intake.js';
 export type { ReflectionIntakeDeps, ReflectionIntakeOptions } from './reflection/application/intake.js';
+
+export { LaneAssigner } from './reflection/application/lanes.js';
+export type { LaneAssignerOptions, LaneDecision, LaneRequest } from './reflection/application/lanes.js';
+
+export { DEFAULT_RECONCILE_LIMIT, reconcileEnrichment } from './reflection/application/reconcile.js';
+export type { ReconcileOptions, ReconcileReport } from './reflection/application/reconcile.js';
 
 export { ReflectionNotStoredError } from './reflection/application/errors.js';
 export type { ReflectionFailureStage } from './reflection/application/errors.js';

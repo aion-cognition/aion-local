@@ -29,6 +29,7 @@ import { SessionManager } from '../../../session/session-manager.js';
 import type { StageContext, StageOutcome } from '../../domain/stage.js';
 import { ReflectionDispatch } from '../dispatch.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../intake.js';
+import { LaneAssigner } from '../lanes.js';
 import { AssociationInferenceStage } from './associations.js';
 
 const NOW = new Date('2026-08-28T12:00:00.000Z');
@@ -137,6 +138,7 @@ beforeAll(async () => {
     dispatch: new ReflectionDispatch(),
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
+    lanes: new LaneAssigner(DEFAULTS.lanes),
   };
 }, 300_000);
 

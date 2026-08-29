@@ -24,6 +24,7 @@ import { SessionManager } from '../../../session/session-manager.js';
 import type { StageContext } from '../../domain/stage.js';
 import { ReflectionDispatch } from '../dispatch.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../intake.js';
+import { LaneAssigner } from '../lanes.js';
 import { CognitiveExtractionStage } from './cognitive.js';
 import { EntityExtractionStage } from './entities.js';
 import { SemanticRelationshipStage } from './semantic-relationships.js';
@@ -94,6 +95,7 @@ beforeAll(async () => {
     dispatch: new ReflectionDispatch(),
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
+    lanes: new LaneAssigner(DEFAULTS.lanes),
   };
 
   const stored = await handleReflection(intake, PAYLOAD, { identity: SESSION_IDENTITY });

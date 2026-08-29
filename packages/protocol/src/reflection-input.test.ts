@@ -34,6 +34,16 @@ describe('ReflectionInputSchema valid fixtures', () => {
     expect(ReflectionInputSchema.parse(input)).toEqual(input);
   });
 
+  it('parses an explicit bulk lane', () => {
+    const input = { observations: ['a batch import'], lane: 'bulk' };
+    expect(ReflectionInputSchema.parse(input)).toEqual(input);
+  });
+
+  it('rejects a lane outside the vocabulary', () => {
+    const result = ReflectionInputSchema.safeParse({ observations: ['a decision'], lane: 'urgent' });
+    expect(result.success).toBe(false);
+  });
+
   it('parses a per-item occurred_at on a turn and a tool_execution', () => {
     const input = {
       turns: [{ role: 'user', text: 'hi', occurred_at: '2026-02-14' }],

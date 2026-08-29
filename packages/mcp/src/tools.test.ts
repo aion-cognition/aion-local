@@ -46,7 +46,7 @@ function pack(): MemoryPack {
 function backendReturning(): ToolBackend {
   return {
     recall: () => Promise.resolve(pack()),
-    reflection: () => Promise.resolve({ episode_id: 'episode-1', queued: true } as const),
+    reflection: () => Promise.resolve({ episode_id: 'episode-1', queued: true, lane: 'interactive' } as const),
   };
 }
 
@@ -101,6 +101,7 @@ describe('tool definitions', () => {
       'observations',
       'summary',
       'session_id',
+      'lane',
     ]);
   });
 
@@ -114,7 +115,7 @@ describe('tool definitions', () => {
     expect(recallValidator(pack()).valid).toBe(true);
 
     const reflectionValidator = validator.getValidator(TOOL_DEFINITIONS[1]?.outputSchema ?? {});
-    expect(reflectionValidator({ episode_id: 'episode-1', queued: true }).valid).toBe(true);
+    expect(reflectionValidator({ episode_id: 'episode-1', queued: true, lane: 'interactive' }).valid).toBe(true);
   });
 });
 
@@ -138,9 +139,9 @@ describe('reflection results', () => {
     );
 
     expect(result.content).toEqual([
-      { type: 'text', text: 'Stored episode episode-1; queued for reflection.' },
+      { type: 'text', text: 'Stored episode episode-1; queued for reflection (interactive lane).' },
     ]);
-    expect(result.structuredContent).toEqual({ episode_id: 'episode-1', queued: true });
+    expect(result.structuredContent).toEqual({ episode_id: 'episode-1', queued: true, lane: 'interactive' });
   });
 });
 

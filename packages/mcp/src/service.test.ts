@@ -41,7 +41,7 @@ const backend: ToolBackend = {
   },
   reflection: (_args, identity) => {
     calls.push({ tool: 'reflection', identity });
-    return Promise.resolve({ episode_id: 'episode-1', queued: true } as const);
+    return Promise.resolve({ episode_id: 'episode-1', queued: true, lane: 'interactive' } as const);
   },
 };
 
@@ -165,8 +165,10 @@ describe('results', () => {
         arguments: { observations: ['webhooks won'] },
       });
       const content = result.content as ReadonlyArray<{ text: string }>;
-      expect(content[0]?.text).toBe('Stored episode episode-1; queued for reflection.');
-      expect(result.structuredContent).toEqual({ episode_id: 'episode-1', queued: true });
+      expect(content[0]?.text).toBe(
+        'Stored episode episode-1; queued for reflection (interactive lane).',
+      );
+      expect(result.structuredContent).toEqual({ episode_id: 'episode-1', queued: true, lane: 'interactive' });
     } finally {
       await client.close();
     }
@@ -269,7 +271,7 @@ describe('graceful shutdown', () => {
         await gate;
         return emptyPack();
       },
-      reflection: () => Promise.resolve({ episode_id: 'episode-1', queued: true } as const),
+      reflection: () => Promise.resolve({ episode_id: 'episode-1', queued: true, lane: 'interactive' } as const),
     };
 
     const drainable = new AionMcpService({

@@ -28,6 +28,7 @@ import { SessionManager } from '../../session/session-manager.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../domain/stage.js';
 import { ReflectionDispatch } from './dispatch.js';
 import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
+import { LaneAssigner } from './lanes.js';
 import { orchestratorLedgerKey, ReflectionOrchestrator } from './orchestrator.js';
 import { findPendingVectorNodes } from './vectors.js';
 import { ReflectionWorker, type ReflectionWorkerOptions } from './worker.js';
@@ -218,6 +219,7 @@ beforeAll(async () => {
     dispatch,
     logger,
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
+    lanes: new LaneAssigner(DEFAULTS.lanes),
   };
   deadOllama = {
     ...live,
