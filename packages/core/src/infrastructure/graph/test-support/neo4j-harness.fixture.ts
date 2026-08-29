@@ -11,9 +11,9 @@ import {
  * whole run. All three are absent when a file runs outside that runner, and the harness
  * falls back to a container of its own so single-file debugging keeps working.
  */
-export const SHARED_NEO4J_URI_ENV = 'AION_TEST_SHARED_NEO4J_URI';
-export const SHARED_NEO4J_PASSWORD_ENV = 'AION_TEST_SHARED_NEO4J_PASSWORD';
-export const SHARED_NEO4J_CONTAINER_ENV = 'AION_TEST_SHARED_NEO4J_CONTAINER';
+export const SHARED_NEO4J_URI_ENV = 'TEST_SHARED_NEO4J_URI';
+export const SHARED_NEO4J_PASSWORD_ENV = 'TEST_SHARED_NEO4J_PASSWORD';
+export const SHARED_NEO4J_CONTAINER_ENV = 'TEST_SHARED_NEO4J_CONTAINER';
 
 /** Large enough that a test graph clears in one round trip, small enough to bound the transaction. */
 const RESET_BATCH_SIZE = 10_000;

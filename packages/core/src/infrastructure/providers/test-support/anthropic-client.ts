@@ -100,6 +100,9 @@ export class AnthropicHaikuClient {
       },
       body: JSON.stringify({
         model: req.model,
+        // Callers that omit temperature get 0, not the API default: test inference has to
+        // be as repeatable as a mocked provider or suite runs diverge on sampling luck.
+        temperature: req.temperature ?? 0,
         max_tokens: req.maxTokens ?? this.#maxTokens,
         ...(instructions === undefined ? {} : { system: instructions }),
         ...(viaPrompt ? {} : { output_config: { format: { type: 'json_schema', schema: req.schema } } }),

@@ -100,7 +100,7 @@ const pairs = new Map<string, SeededPair>();
  * judgment is spent on, and which rows land. That holds on whichever model answers, so the
  * default route is the fast one. The published precision number for this battery is not a
  * behavior claim and was measured on the local judge, so re-measuring it means running this
- * file with `AION_TEST_GENERATION=local`.
+ * file with `TEST_AION_GENERATION=local`.
  */
 function liveModelProvider(): Provider {
   return testGenerationProvider({
