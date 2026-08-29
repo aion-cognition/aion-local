@@ -8,6 +8,7 @@ import {
   type PackTruncation,
   type StageTimingsMs,
 } from '@aion/protocol';
+import { hashContent } from '../../reflection/domain/content.js';
 import type { AdmissionReport } from './admission.js';
 import { GLOSS_LABEL } from './facts.js';
 import type { FusedItem } from './fusion.js';
@@ -44,9 +45,14 @@ export type BucketCaps = Readonly<Record<PackBucket, number>>;
  * vectors and sit in `content_fts`, so retrieval finds them and assembly would then drop
  * every one.
  *
- * Preferences and the resonant bucket still have no producer, since preference extraction is
- * unbuilt and resonance is not yet implemented, so those two are structurally absent from a
- * pack rather than empty. A label with no bucket cannot be packed and its item is dropped.
+ * Preferences still have no producer, since preference extraction is unbuilt, so that bucket is
+ * structurally absent from a pack rather than empty. A label with no bucket cannot be packed and
+ * its item is dropped.
+ *
+ * The resonant bucket is not in this table and never will be. Every other bucket answers "what
+ * kind of memory is this", which a label decides; resonance answers "how was this found", which
+ * only the stage that found it knows. A resonant Episode belongs beside the other resonant
+ * discoveries, not beside the episodes the query matched directly.
  */
 const BUCKET_BY_LABEL: Readonly<Record<string, PackBucket>> = {
   Episode: 'episodes',
@@ -217,6 +223,13 @@ export type AssemblePackInput = {
    * pipeline always supplies it, because uncapped measured 58% of the bucket's slots.
    */
   readonly entityGlossCap?: number;
+  /**
+   * Context resonance's discoveries, best first by context similarity. They are routed to the
+   * resonant bucket by where they came from rather than by their labels, and they are ranked
+   * after everything the first pass admitted: a direct answer outranks an association, whatever
+   * the two scores say, because the two numbers are not on one scale.
+   */
+  readonly resonant?: readonly FusedItem[];
 };
 
 type Selection = Map<PackBucket, PackEntry[]>;
@@ -265,16 +278,55 @@ function honestyNote(input: AssemblePackInput): string | undefined {
  *
  * The running estimate charges a bucket's heading to its first accepted item, because the
  * heading is text the agent pays for too.
+ *
+ * The fused items are laid down first and the resonant ones after, so a direct answer always
+ * outranks an association and takes the budget first. Their two scores are not on one scale,
+ * so there is no order to merge them into.
  */
 function select(input: AssemblePackInput, note: string | undefined): Selection {
   const selection: Selection = new Map();
   const packedEpisodes = new Set<string>();
+  const packedIds = new Set<string>();
+  const packedContent = new Set<string>();
   // The note is charged with its own blank-line separator: it is text the agent pays for, and
   // a caller that asked for a small budget should not lose an item to it silently.
   let tokens =
     estimateTokens(PACK_HEADING) + (note === undefined ? 0 : estimateTokens(`${note}\n\n`));
   let ranked = 0;
   let glosses = 0;
+
+  /** Places the item in the named bucket when the cap and the budget still leave room for it. */
+  function accept(item: FusedItem, bucket: PackBucket, gloss: boolean): void {
+    const held = selection.get(bucket) ?? [];
+    if (held.length >= input.caps[bucket]) {
+      return;
+    }
+    const key = bucket === 'episodes' ? episodeKey(item) : undefined;
+    if (key !== undefined && packedEpisodes.has(key)) {
+      return;
+    }
+
+    const entry: PackEntry = { item: toPackItem(item, ranked + 1), gloss };
+    const cost =
+      estimateTokens(renderItem(entry)) +
+      (held.length === 0 ? estimateTokens(BUCKET_HEADINGS[bucket]) : 0);
+    if (tokens + cost > input.tokenBudget) {
+      return;
+    }
+
+    tokens += cost;
+    ranked += 1;
+    if (gloss) {
+      glosses += 1;
+    }
+    packedIds.add(item.id);
+    packedContent.add(hashContent(item.content));
+    held.push(entry);
+    selection.set(bucket, held);
+    if (key !== undefined) {
+      packedEpisodes.add(key);
+    }
+  }
 
   for (const item of input.items) {
     const bucket = bucketFor(item.labels);
@@ -290,33 +342,17 @@ function select(input: AssemblePackInput, note: string | undefined): Selection {
       continue;
     }
 
-    const held = selection.get(bucket) ?? [];
-    if (held.length >= input.caps[bucket]) {
-      continue;
-    }
-    const key = bucket === 'episodes' ? episodeKey(item) : undefined;
-    if (key !== undefined && packedEpisodes.has(key)) {
-      continue;
-    }
+    accept(item, bucket, gloss);
+  }
 
-    const entry: PackEntry = { item: toPackItem(item, ranked + 1), gloss };
-    const cost =
-      estimateTokens(renderItem(entry)) +
-      (held.length === 0 ? estimateTokens(BUCKET_HEADINGS[bucket]) : 0);
-    if (tokens + cost > input.tokenBudget) {
+  // Resonance runs beside fusion rather than inside it, so its hits are the one place a pack
+  // could hold the same memory twice. The stage already excludes every id the first pass
+  // produced; this catches the other half, a distinct node whose text says the same thing.
+  for (const item of input.resonant ?? []) {
+    if (packedIds.has(item.id) || packedContent.has(hashContent(item.content))) {
       continue;
     }
-
-    tokens += cost;
-    ranked += 1;
-    if (gloss) {
-      glosses += 1;
-    }
-    held.push(entry);
-    selection.set(bucket, held);
-    if (key !== undefined) {
-      packedEpisodes.add(key);
-    }
+    accept(item, 'resonant', false);
   }
 
   return selection;

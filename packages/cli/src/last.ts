@@ -67,7 +67,14 @@ const BUCKET_LABELS: Readonly<Record<PackBucket, string>> = {
   resonant: 'Resonant',
 };
 
-const STAGES: readonly (keyof StageTimingsMs)[] = ['cues', 'embed', 'seeds', 'activation', 'fusion'];
+const STAGES: readonly (keyof StageTimingsMs)[] = [
+  'cues',
+  'embed',
+  'seeds',
+  'activation',
+  'fusion',
+  'resonance',
+];
 
 /**
  * One item's rationale line: rank, method, the two scores, and whichever of
@@ -146,7 +153,11 @@ export function renderPack(entry: LastPackEntry, write: Writer): void {
 
   write('stage timings (ms)');
   for (const stage of STAGES) {
-    write(`  ${stage.padEnd(10)} ${entry.pack.metadata.stage_timings_ms[stage].toFixed(2)}`);
+    // A stage with no reading was not in the pipeline when this pack was stored, which is a
+    // different thing from a stage that ran in no time, so the line says so rather than
+    // printing a zero the reader would take for a measurement.
+    const ms = entry.pack.metadata.stage_timings_ms[stage];
+    write(`  ${stage.padEnd(10)} ${ms === undefined ? '-' : ms.toFixed(2)}`);
   }
   write('');
 
