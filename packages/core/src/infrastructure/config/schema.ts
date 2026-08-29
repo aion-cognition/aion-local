@@ -43,7 +43,17 @@ export const ConfigSchema = z.object({
     compressionThreshold: positiveInt,
     cueBudgetMs: positiveInt,
     tokenBudget: positiveInt,
-    minRelevance: proportion,
+    /**
+     * Absolute cosine floors, calibrated against the embedding model's measured noise rather
+     * than pinned by either doc: `floor-calibration.int.test.ts` measures both distributions
+     * and fails when the committed value stops separating them. `vectorAdmissionFloor` admits
+     * one measurement alone; `corroborationFloor` is the lower bar a measurement has to clear
+     * to count as one of the two an item can be corroborated in on.
+     */
+    vectorAdmissionFloor: proportion,
+    corroborationFloor: proportion,
+    /** A Lucene score is corpus-relative, so the lexical leg admits by rule, not by number. */
+    bm25AdmissionMode: z.enum(['exact', 'corroborated', 'any']),
     /**
      * Not an Appendix E parameter. Entity resolution's fuzzy leg needs a name-similarity floor
      * of its own; borrowing `contextResonance.contextSearchThreshold` would make one env var

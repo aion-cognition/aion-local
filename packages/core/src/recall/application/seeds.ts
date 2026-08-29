@@ -7,6 +7,7 @@ import {
   entitySimilaritySeeds,
   escapeLuceneQuery,
   fulltextSeeds,
+  lucenePhraseQuery,
   normalizeSeedName,
   recencySeeds,
   vectorSeeds,
@@ -48,20 +49,26 @@ export type SeedCue = {
 };
 
 /**
- * Two numbers, because Algorithm 1's bucket weights and the relevance floor answer different
+ * Two numbers, because Algorithm 1's bucket weights and the admission floor answer different
  * questions. `score` is the ranking number: the method's score scaled by the weight of the cue
  * that found it, which is how a query cue outranks a recent-turn cue. `relevance` is the
- * method's own measurement on its own comparable scale, which is what `AION_MIN_RELEVANCE`
- * is measured against.
+ * method's own measurement on its own comparable scale, which is what
+ * `AION_VECTOR_ADMISSION_FLOOR` is measured against.
  *
  * Composing the two — measuring a weighted score against an absolute floor — deletes whole
- * buckets: at the pinned floor of 0.35 no 1x recent-turn cue could ever contribute an item,
- * however perfect its match, because 1.0 scaled to a third of itself is 0.333.
+ * buckets: at a floor of 0.5 no 1x recent-turn cue could ever contribute an item, however
+ * perfect its match, because 1.0 scaled to a third of itself is 0.333.
  */
 export type SeedProvenance = {
   readonly strategy: SeedStrategy;
   readonly score: number;
   readonly relevance: number;
+  /**
+   * A literal match on the cue as written: Lucene matched the whole cue as a phrase, or the
+   * cue resolved an entity name exactly. A cosine is a measurement that has to clear a floor;
+   * a literal match is evidence of its own, so admission reads the two differently.
+   */
+  readonly exact?: true;
   /** The cue text behind the hit; absent for recency, which no cue drives. */
   readonly cue?: string;
 };
@@ -79,6 +86,7 @@ export type SeedContribution = {
   readonly strategy: SeedStrategy;
   readonly score: number;
   readonly relevance: number;
+  readonly exact?: true;
   readonly cue?: string;
 };
 
@@ -142,8 +150,8 @@ export function normalizeToBest(
  *
  * A rank, never a relevance. Whitepaper §5.2 calls recency a weighting of the seed selection,
  * and "this was touched recently" is not a measurement of how well a node answers the query,
- * so a recency contribution carries `relevance: 0` (`RECENCY_RELEVANCE`). It seeds the spread
- * and it corroborates a node another strategy also found; on its own it never fills a pack.
+ * so a recency contribution carries `relevance: 0` (`RECENCY_RELEVANCE`). It seeds the spread,
+ * and that is all: admission never counts it, as evidence or as corroboration.
  */
 export function recencyScore(rank: number): number {
   return 1 / (1 + rank);
@@ -170,15 +178,13 @@ function compareSeeds(a: Seed, b: Seed): number {
 }
 
 function toProvenance(contribution: SeedContribution): SeedProvenance {
-  const base = {
+  return {
     strategy: contribution.strategy,
     score: contribution.score,
     relevance: contribution.relevance,
+    ...(contribution.exact === undefined ? {} : { exact: contribution.exact }),
+    ...(contribution.cue === undefined ? {} : { cue: contribution.cue }),
   };
-  if (contribution.cue === undefined) {
-    return base;
-  }
-  return { ...base, cue: contribution.cue };
 }
 
 /**
@@ -239,17 +245,18 @@ function contribute(
   strategy: SeedStrategy,
   candidate: ScoredSeedCandidate,
   cue: SeedCue | undefined,
+  exact?: true,
 ): SeedContribution {
-  if (cue === undefined) {
-    return { candidate, strategy, score: candidate.score, relevance: candidate.score };
-  }
-  return {
+  const base = {
     candidate,
     strategy,
-    score: scaleByCueWeight(candidate.score, cue.weight),
     relevance: candidate.score,
-    cue: cue.text,
+    ...(exact === undefined ? {} : { exact }),
   };
+  if (cue === undefined) {
+    return { ...base, score: candidate.score };
+  }
+  return { ...base, score: scaleByCueWeight(candidate.score, cue.weight), cue: cue.text };
 }
 
 function embeddedCues(cues: readonly SeedCue[]): ReadonlyArray<SeedCue & { vector: Vector }> {
@@ -315,6 +322,12 @@ async function vectorContributions(
 }
 
 /**
+ * Two queries per cue, because the leg answers two different questions. The loose query is
+ * the ranked list RRF fuses; the phrase query is the only admission evidence BM25 can offer,
+ * since normalizing a corpus-relative Lucene score to the best hit of the same cue puts the
+ * top of every list at 1.00 whatever it matched. The phrase leg runs separately rather than
+ * being read off the loose one: an exact hit ranked below `vectorLimit` there is never seen.
+ *
  * Per-cue rather than one combined query, so one cue that trips the Lucene parser costs only
  * its own contribution. The cue text reaches the index escaped but otherwise verbatim.
  */
@@ -337,6 +350,16 @@ async function bm25Contributions(
           mode,
         });
         return normalizeToBest(rows).map((row) => contribute('bm25', row, cue));
+      })(),
+    );
+    tasks.push(
+      (async () => {
+        const rows = await fulltextSeeds(deps.driver, {
+          query: lucenePhraseQuery(cue.text),
+          limit: deps.config.recall.vectorLimit,
+          mode,
+        });
+        return normalizeToBest(rows).map((row) => contribute('bm25', row, cue, true));
       })(),
     );
   }
@@ -375,7 +398,9 @@ async function entityContributions(
     tasks.push(
       (async () => {
         const rows = await entityNameSeeds(deps.driver, { names: [...byName.keys()], mode });
-        return rows.map((row) => contribute('entity_resolution', row, byName.get(row.nameNorm)));
+        return rows.map((row) =>
+          contribute('entity_resolution', row, byName.get(row.nameNorm), true),
+        );
       })(),
     );
   }

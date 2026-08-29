@@ -26,7 +26,8 @@ import {
 } from '../domain/activation.js';
 import { buildRankedLists, toActivationSeed } from './candidates.js';
 import { extractCues, type CueCache, type CueExtractionResult } from './cues.js';
-import { fuse, type FusedItem, type RankedList } from '../domain/fusion.js';
+import type { AdmissionPolicy, AdmissionReport } from '../domain/admission.js';
+import { fuse, type FusedItem, type FusionResult, type RankedList } from '../domain/fusion.js';
 import { assemblePack, type BucketCaps } from '../domain/pack.js';
 import { selectSeeds, type Seed, type SeedCue } from './seeds.js';
 
@@ -47,6 +48,8 @@ export type RecallCompletion = {
   /** Whitepaper §5.8's co-activated set, seeds included, for the reinforcement side effects. */
   readonly activated: readonly ActivatedNode[];
   readonly items: readonly FusedItem[];
+  /** What the admission gate dropped and the floors it used, for a caller that reports honesty signals. */
+  readonly admission: AdmissionReport;
   readonly pack: MemoryPack;
   readonly now: Date;
   /**
@@ -148,6 +151,14 @@ async function embedCues(deps: RecallDeps, cues: readonly Cue[]): Promise<Embedd
       }
       return { ...cue, vector };
     }),
+  };
+}
+
+function admissionFor(config: Config): AdmissionPolicy {
+  return {
+    vectorFloor: config.recall.vectorAdmissionFloor,
+    corroborationFloor: config.recall.corroborationFloor,
+    bm25Mode: config.recall.bm25AdmissionMode,
   };
 }
 
@@ -290,7 +301,7 @@ export async function handleRecall(
         }),
   );
 
-  const fusion = await timed(async () => {
+  const fusion = await timed<FusionResult>(async () => {
     const hydrated = await hydrate(deps, seeds, activation.value.activated, mode);
     const lists = buildRankedLists(deps.config, {
       seeds,
@@ -301,7 +312,7 @@ export async function handleRecall(
     const vectors = await mmrVectors(deps, lists, mode);
     return fuse(lists, {
       rrfConstant: deps.config.search.rrfConstant,
-      minRelevance: deps.config.recall.minRelevance,
+      admission: admissionFor(deps.config),
       reranker: deps.config.search.reranker,
       mmrLambda: deps.config.search.mmrLambda,
       ...(vectors === undefined ? {} : { vectors }),
@@ -317,7 +328,7 @@ export async function handleRecall(
   };
 
   const pack = assemblePack({
-    items: fusion.value,
+    items: fusion.value.items,
     caps: capsFor(deps.config),
     tokenBudget: payload.budget?.max_tokens ?? deps.config.recall.tokenBudget,
     cues: cues.value.cues,
@@ -336,7 +347,10 @@ export async function handleRecall(
       seeds: seeds.length,
       activated: activation.value.activated.length,
       termination: activation.value.termination,
-      items: fusion.value.length,
+      items: fusion.value.items.length,
+      // What the floor rejected and the floor it used, so a thin pack is readable from the
+      // log without re-running the query.
+      admission: fusion.value.admission,
       tokenEstimate: pack.metadata.token_estimate,
       timings,
     },
@@ -347,7 +361,8 @@ export async function handleRecall(
     sessionId,
     seeds,
     activated: activation.value.activated,
-    items: fusion.value,
+    items: fusion.value.items,
+    admission: fusion.value.admission,
     pack,
     now,
     mode,

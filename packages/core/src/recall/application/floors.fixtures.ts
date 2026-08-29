@@ -1,0 +1,217 @@
+/**
+ * The evidence behind the admission floors, as fixtures rather than as lore.
+ *
+ * Two distributions decide a floor and both have to be measured: what unrelated text scores
+ * against this embedding model, and what a genuine match scores. The exercise measured the
+ * first and nearly missed the second — a real match at 0.631 sits close enough to a naive 0.60
+ * floor that the floor would have starved it (EX-1 plus the consultation's amnesia warning).
+ *
+ * `floor-calibration.int.test.ts` embeds every pair here against live Ollama and asserts the
+ * committed floors still separate the two distributions. `floor-battery.int.test.ts` runs the
+ * query batteries through the whole pipeline: the off-topic battery must come back thin or
+ * empty, and the on-topic battery must still hit. Both are exported for the round's
+ * re-exercise harness, which runs the same pairs against the live stack.
+ */
+
+/**
+ * Mutually unrelated, one subject each, matching the exercise's own probe: 15 pairwise cosines
+ * over six sentences that share nothing.
+ */
+export const UNRELATED_SENTENCES: readonly string[] = [
+  'The monsoon rainfall variability across Tamil Nadu districts peaked in October.',
+  'To re-tension a bicycle wheel spoke, work a quarter turn at a time around the rim.',
+  'Anchovy fillets are cured in salt for at least three months before they are canned.',
+  'Surface codes correct quantum errors by measuring stabilizers on a lattice of qubits.',
+  'The Reykjavik ferry logged eleven albatross sightings in the winter of 1974.',
+  'Sourdough starter doubles in about six hours at twenty-four degrees.',
+];
+
+export type ScoredPair = {
+  readonly cue: string;
+  readonly content: string;
+};
+
+/**
+ * The shape the floor actually faces: an off-topic query against stored engineering content.
+ * Every entry pairs one of EX-1's own miss queries with the substrate text that surfaced for
+ * it, so the noise distribution is measured on the real failure rather than on abstract
+ * sentence pairs.
+ */
+export const UNRELATED_PAIRS: readonly ScoredPair[] = [
+  {
+    cue: 'how do I re-tension a bicycle wheel spoke',
+    content: 'Feature flags are not re-read during the middle of a request.',
+  },
+  {
+    cue: 'quantum error correction surface codes for topological qubits',
+    content: 'ops surface (concept): the maintenance burden of Kafka.',
+  },
+  {
+    cue: 'monsoon rainfall variability across Tamil Nadu districts',
+    content: 'Use a Postgres outbox table plus a polling worker for remittance ingest.',
+  },
+  {
+    cue: 'how many albatrosses did the Reykjavik ferry log in 1974',
+    content: 'We will not shard the orders table.',
+  },
+  {
+    cue: 'zzqxwv plortnak vugglesnorf',
+    content: 'The split migration takes 4 minutes 12 seconds against a production-sized copy.',
+  },
+  {
+    cue: 'what is the best anchovy brand for puttanesca',
+    content: 'Database connection string was exposed in logs.',
+  },
+  {
+    cue: 'how do I re-tension a bicycle wheel spoke',
+    content: 'We reject the proposal to write to the finops-owned billing table directly.',
+  },
+  {
+    cue: 'monsoon rainfall variability across Tamil Nadu districts',
+    content: 'Barrel exports can hide circular dependencies until re-exports are removed.',
+  },
+];
+
+/**
+ * Genuine matches: the content answers the query and names its subject. These are the pairs a
+ * floor is not allowed to starve, and they are lifted from the extraction the exercise judged
+ * faithful, including the two rank-1 successes it recorded.
+ */
+export const RELATED_PAIRS: readonly ScoredPair[] = [
+  {
+    cue: 'did we decide to shard the orders table',
+    content: 'We will not shard the orders table.',
+  },
+  {
+    cue: 'what did we decide about the finops billing table',
+    content: 'We reject the proposal to write to the finops-owned billing table directly.',
+  },
+  {
+    cue: 'how long does the split migration take on a production sized copy',
+    content: 'The split migration takes 4 minutes 12 seconds against a production-sized copy.',
+  },
+  {
+    cue: 'database connection string leaked password and credential rotation',
+    content: 'Database connection string was exposed in logs.',
+  },
+  {
+    cue: 'how long did the migration take',
+    content: 'The split migration takes 4 minutes 12 seconds against a production-sized copy.',
+  },
+  {
+    cue: 'what did we decide about how the remittance files get ingested',
+    content: 'Use a Postgres outbox table plus a polling worker for remittance ingest.',
+  },
+  {
+    cue: 'why did the barrel export hide the circular dependency',
+    content: 'Barrel exports can hide circular dependencies until re-exports are removed.',
+  },
+  {
+    cue: 'what is the idempotency key supposed to hash',
+    content: 'An idempotency key must hash the identity of the event, not the envelope around it.',
+  },
+  {
+    cue: 'are we rotating the leaked credential',
+    content: 'Database connection string was exposed in logs.',
+  },
+  {
+    cue: 'what happened with the feature flag caching',
+    content: 'Feature flags are not re-read during the middle of a request.',
+  },
+];
+
+/**
+ * Related, and under the floor. A vague query names no subject, so its cosine against the
+ * answer sits inside the noise band and no floor can admit it without admitting noise with it.
+ * These are what corroboration and exact lexical hits exist for, not an argument for a lower
+ * floor. The calibration test measures them and reports them; it asserts nothing about them.
+ */
+export const WEAK_RELATED_PAIRS: readonly ScoredPair[] = [
+  { cue: 'what am I working on', content: 'Get the Halyard ledger onto the new PostgreSQL primary.' },
+  {
+    cue: 'is the fix already in the runbook',
+    content: 'The split migration takes 4 minutes 12 seconds against a production-sized copy.',
+  },
+  { cue: 'what did we decide', content: 'We will not shard the orders table.' },
+  {
+    cue: 'why did we reject that',
+    content: 'We reject the proposal to write to the finops-owned billing table directly.',
+  },
+];
+
+/** One stored memory for the battery substrate. */
+export type BatteryEpisode = {
+  readonly id: string;
+  readonly observation: string;
+};
+
+/**
+ * The substrate both batteries read. Every line is content the exercise actually stored or
+ * extracted, so a hit and a miss both mean what they meant there.
+ */
+export const BATTERY_SUBSTRATE: readonly BatteryEpisode[] = [
+  { id: 'shard', observation: 'We will not shard the orders table.' },
+  {
+    id: 'finops',
+    observation: 'We reject the proposal to write to the finops-owned billing table directly.',
+  },
+  {
+    id: 'migration',
+    observation: 'The split migration takes 4 minutes 12 seconds against a production-sized copy.',
+  },
+  { id: 'connection-string', observation: 'Database connection string was exposed in logs.' },
+  {
+    id: 'remittance',
+    observation: 'Use a Postgres outbox table plus a polling worker for remittance ingest.',
+  },
+  {
+    id: 'barrel',
+    observation: 'Barrel exports can hide circular dependencies until re-exports are removed.',
+  },
+  {
+    id: 'idempotency',
+    observation:
+      'An idempotency key must hash the identity of the event, not the envelope around it.',
+  },
+  { id: 'feature-flags', observation: 'Feature flags are not re-read during the middle of a request.' },
+  { id: 'ops-surface', observation: 'The ops surface concept covers the maintenance burden of Kafka.' },
+  { id: 'halyard', observation: 'Get the Halyard ledger onto the new PostgreSQL primary.' },
+];
+
+/**
+ * EX-1's own miss queries, verbatim where the report quotes them. Every one returned a full,
+ * budget-saturated pack of confident items; the floor's job is to make them thin or empty.
+ */
+export const OFF_TOPIC_BATTERY: readonly string[] = [
+  'how do I re-tension a bicycle wheel spoke',
+  'monsoon rainfall variability across Tamil Nadu districts',
+  'quantum error correction surface codes for topological qubits',
+  'zzqxwv plortnak vugglesnorf',
+  'how many albatrosses did the Reykjavik ferry log in 1974',
+  'what is the best anchovy brand for puttanesca',
+];
+
+export type OnTopicProbe = {
+  readonly query: string;
+  /** The `BATTERY_SUBSTRATE` id the pack has to carry back. */
+  readonly expects: string;
+};
+
+/**
+ * The paired half of the gate: the floor has to starve noise without starving these. Three are
+ * the exercise's recorded rank-1 successes; the rest are its other measured hits.
+ */
+export const ON_TOPIC_BATTERY: readonly OnTopicProbe[] = [
+  { query: 'did we decide to shard the orders table', expects: 'shard' },
+  { query: 'what did we decide about the finops billing table', expects: 'finops' },
+  {
+    query: 'how long does the split migration take on a production sized copy',
+    expects: 'migration',
+  },
+  {
+    query: 'database connection string leaked password and credential rotation',
+    expects: 'connection-string',
+  },
+  { query: 'what did we decide about how the remittance files get ingested', expects: 'remittance' },
+  { query: 'what is the idempotency key supposed to hash', expects: 'idempotency' },
+];

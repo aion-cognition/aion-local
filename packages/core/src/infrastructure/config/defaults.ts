@@ -67,7 +67,14 @@ export const DEFAULTS: Config = {
     // is a call that never returns.
     cueBudgetMs: 8000,
     tokenBudget: 1200,
-    minRelevance: 0.35,
+    // Measured, not pinned. Against nomic-embed-text on 23 unrelated pairs and 10 genuine
+    // matches (`floors.fixtures.ts`): unrelated p95 0.474, related p05 0.513, so 0.50 is the
+    // separating point. 0.60 would starve real matches — the weakest genuine pair measured
+    // 0.588 and the exercise measured one at 0.631. `floor-calibration.int.test.ts` re-measures
+    // both distributions and fails if these stop separating them.
+    vectorAdmissionFloor: 0.5,
+    corroborationFloor: 0.45,
+    bm25AdmissionMode: 'exact',
     entityMatchThreshold: 0.7,
   },
   search: {

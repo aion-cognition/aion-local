@@ -53,8 +53,9 @@ export const EXACT_NAME_MATCH_SCORE = 1;
  * Neo4j reports cosine similarity rescaled onto [0,1] as `(1 + cos) / 2` — both the vector
  * index and `vector.similarity.cosine` — so two unrelated memories come back at 0.5 rather
  * than at 0. Every score this module returns is converted back to a true cosine, because the
- * thresholds it is measured against (`AION_MIN_RELEVANCE`, `AION_RECALL_ENTITY_MATCH_THRESHOLD`)
- * are cosines: read raw, a floor of 0.35 would admit every row the index cared to return.
+ * thresholds it is measured against (`AION_VECTOR_ADMISSION_FLOOR`,
+ * `AION_RECALL_ENTITY_MATCH_THRESHOLD`) are cosines: read raw, a floor of 0.5 would admit
+ * every row the index cared to return.
  */
 const RESCALED_COSINE_TO_COSINE = '2.0 * %s - 1.0';
 
@@ -109,6 +110,24 @@ const LUCENE_SYNTAX = /([+\-!(){}[\]^"~*?:\\/&|])/g;
  */
 export function escapeLuceneQuery(text: string): string {
   return text.trim().replace(LUCENE_SYNTAX, '\\$1');
+}
+
+/**
+ * The same escaped cue wrapped as a Lucene phrase, so the index answers "does any document
+ * contain this cue verbatim" rather than "does any document share a term with it". The
+ * analyzer still does the term work; wrapping in quotes only asks Lucene to require the
+ * terms it produced, in order and adjacent.
+ *
+ * That is the only literal-match evidence recall can get from the lexical leg: a plain
+ * fulltext hit means one shared term at an uncalibrated score, which is not a measurement
+ * anything can be admitted on.
+ */
+export function lucenePhraseQuery(text: string): string {
+  const escaped = escapeLuceneQuery(text);
+  if (escaped.length === 0) {
+    return '';
+  }
+  return `"${escaped}"`;
 }
 
 /** Procedure arguments and `LIMIT` are Cypher INTEGER; a plain JS number arrives as FLOAT and is rejected. */

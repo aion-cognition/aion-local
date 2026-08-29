@@ -70,6 +70,22 @@ describe('a seed as a fusion candidate', () => {
     expect(candidate?.relevance).toBe(0.9);
   });
 
+  it('hands fusion every measurement behind it, since admission counts them', () => {
+    const candidate = seedCandidate(
+      seed('e1', [
+        { strategy: 'bm25', score: 0.9, relevance: 0.9, exact: true, cue: 'SQLITE_BUSY' },
+        { strategy: 'vector', score: 0.47, relevance: 0.47, cue: 'claim contention' },
+        { strategy: 'recency', score: 0.5, relevance: 0 },
+      ]),
+    );
+
+    expect(candidate?.evidence).toEqual([
+      { method: 'bm25', relevance: 0.9, exact: true, cue: 'SQLITE_BUSY' },
+      { method: 'vector', relevance: 0.47, cue: 'claim contention' },
+      { method: 'recency', relevance: 0 },
+    ]);
+  });
+
   it('carries the lineage annotation through to the item', () => {
     const candidate = seedCandidate(seed('old', [{ strategy: 'vector', score: 0.7, relevance: 0.7 }], true));
 

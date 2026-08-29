@@ -125,8 +125,11 @@ independently for the pack's `stage_timings_ms`:
    server.
 5. **Fusion.** Seed and activated candidates are hydrated, then fused: weighted Reciprocal
    Rank Fusion across the vector/bm25/graph_traversal legs by default (`rrf`, k=60), or
-   MMR reranking when `AION_SEARCH_RERANKER=mmr`. Items below `AION_MIN_RELEVANCE` are
-   dropped even if they rank; duplicates collapse by content hash, keeping the
+   MMR reranking when `AION_SEARCH_RERANKER=mmr`. Ranking and admission are separate:
+   an item reaches the pack only on absolute evidence — a cosine at or above
+   `AION_VECTOR_ADMISSION_FLOOR`, a Lucene match on the verbatim cue, two independent
+   measurements at or above `AION_CORROBORATION_FLOOR`, or traversal from a pack something
+   else anchored — however well it ranks. Duplicates collapse by content hash, keeping the
    higher-ranked instance.
 6. **Pack assembly.** Fused items route to a bucket by node label: `Episode`/`Turn` to
    `episodes`, `Entity` to `facts`. Each bucket is capped, trimmed to the token budget,

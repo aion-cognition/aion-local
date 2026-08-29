@@ -2,16 +2,28 @@ import type { Rationale } from '@aion/protocol';
 import type { Currency, SupersededBy } from '../../infrastructure/graph/read-modes.js';
 import type { Vector } from '../../infrastructure/providers/types.js';
 import { hashContent } from '../../reflection/domain/content.js';
+import {
+  admitsOnEvidence,
+  type AdmissionPolicy,
+  type AdmissionReport,
+  type Measurement,
+} from './admission.js';
 
 /**
  * Whitepaper §5.3 and §5.5. Each retrieval leg hands over its own ranked list; this module
  * turns them into one ordered candidate set — weighted RRF by default, MMR behind the
- * reranker flag — and applies the two policies that decide what may surface at all: the
- * minimum relevance floor (PRD §3.1, "empty beats noisy") and PRD §5.5's currency ranking.
+ * reranker flag — and applies the two policies that decide what may surface at all:
+ * `admission.ts`'s absolute floors (PRD §3.1, "empty beats noisy") and PRD §5.5's currency
+ * ranking.
  */
 
 /** Whitepaper §5.3's three legs. The weights they fuse under are `config.search.weights`. */
 export type FusionLeg = 'vector' | 'bm25' | 'graph_traversal';
+
+export type FusionResult = {
+  readonly items: readonly FusedItem[];
+  readonly admission: AdmissionReport;
+};
 
 export type FusionCandidate = {
   readonly id: string;
@@ -38,6 +50,11 @@ export type FusionCandidate = {
    */
   readonly relevance: number;
   /**
+   * Every measurement behind the candidate, one entry per method and cue. A candidate that
+   * carries none is read as carrying exactly one, its own `rationale.method` at `relevance`.
+   */
+  readonly evidence?: readonly Measurement[];
+  /**
    * Set only for a node no retrieval leg found, reached by spreading activation alone. Its
    * own floor is Algorithm 2's `min_activation`, already applied by the time it gets here.
    */
@@ -58,7 +75,7 @@ export type FusedItem = FusionCandidate & {
 
 export type FusionOptions = {
   readonly rrfConstant: number;
-  readonly minRelevance: number;
+  readonly admission: AdmissionPolicy;
   readonly reranker: 'rrf' | 'mmr';
   readonly mmrLambda: number;
   /**
@@ -106,8 +123,17 @@ type Accumulator = {
   best: FusionCandidate;
   score: number;
   relevance: number;
+  evidence: Measurement[];
   activation?: number;
 };
+
+/** A candidate that names no evidence carries exactly one measurement: the one that found it. */
+function measurementsOf(candidate: FusionCandidate): readonly Measurement[] {
+  if (candidate.evidence !== undefined) {
+    return candidate.evidence;
+  }
+  return [{ method: candidate.rationale.method, relevance: candidate.relevance }];
+}
 
 /**
  * The strongest retrieval leg owns the rationale. An item that several legs found keeps
@@ -237,15 +263,16 @@ export function mmrOrder(
  * connectivity, not something the user ever told the substrate.
  *
  * Two admission rules, because two different things can put a candidate here. A retrieval hit
- * is admitted on its own measurement against the floor (PRD §3.1, "empty beats noisy"). A node
+ * is admitted on its own evidence against the absolute floors (`admitsOnEvidence`). A node
  * reached only by traversal has no measurement to offer, so it is admitted when the recall
- * found an anchor — at least one hit that did clear the floor. Traversal extends a pack that
+ * found an anchor — at least one hit that did clear admission. Traversal extends a pack that
  * something answered; it never fills one nothing answered.
+ *
+ * The report is what makes a thin pack readable: an empty result with `considered` at zero is
+ * a substrate with nothing in it, and the same result with `considered` at forty is a floor
+ * doing its job.
  */
-export function fuse(
-  lists: readonly RankedList[],
-  options: FusionOptions,
-): readonly FusedItem[] {
+export function fuse(lists: readonly RankedList[], options: FusionOptions): FusionResult {
   const merged = new Map<string, Accumulator>();
 
   for (const list of lists) {
@@ -263,6 +290,7 @@ export function fuse(
           best: candidate,
           score: contribution,
           relevance: candidate.relevance,
+          evidence: [...measurementsOf(candidate)],
           ...(candidate.activation === undefined ? {} : { activation: candidate.activation }),
         });
         continue;
@@ -273,20 +301,35 @@ export function fuse(
         held.best = candidate;
       }
       held.relevance = Math.max(held.relevance, candidate.relevance);
+      held.evidence.push(...measurementsOf(candidate));
       if (candidate.activation !== undefined) {
         held.activation = Math.max(held.activation ?? 0, candidate.activation);
       }
     }
   }
 
-  const anchored = [...merged.values()].some((entry) => entry.relevance >= options.minRelevance);
+  const admitted = new Map<string, boolean>();
+  let anchored = false;
+  for (const [id, entry] of merged) {
+    const ok = admitsOnEvidence(entry.evidence, options.admission);
+    admitted.set(id, ok);
+    anchored = anchored || ok;
+  }
 
   const items: FusedItem[] = [];
-  for (const entry of merged.values()) {
-    const measured = entry.relevance >= options.minRelevance;
-    const traversed = anchored && entry.activation !== undefined;
-    if (!measured && !traversed) {
-      continue;
+  let droppedBelowFloor = 0;
+  let droppedUnanchored = 0;
+  for (const [id, entry] of merged) {
+    const traversed = entry.activation !== undefined;
+    if (admitted.get(id) !== true) {
+      if (!traversed) {
+        droppedBelowFloor += 1;
+        continue;
+      }
+      if (!anchored) {
+        droppedUnanchored += 1;
+        continue;
+      }
     }
     const superseded = entry.best.currency === 'superseded';
     items.push({
@@ -298,8 +341,19 @@ export function fuse(
 
   items.sort(compareFused);
   const deduped = dedupeByContent(items);
-  if (options.reranker === 'mmr') {
-    return mmrOrder(deduped, options.mmrLambda, options.vectors);
-  }
-  return deduped;
+  const ordered =
+    options.reranker === 'mmr' ? mmrOrder(deduped, options.mmrLambda, options.vectors) : deduped;
+
+  return {
+    items: ordered,
+    admission: {
+      policy: options.admission,
+      considered: merged.size,
+      admitted: ordered.length,
+      droppedBelowFloor,
+      droppedUnanchored,
+      droppedDuplicateContent: items.length - deduped.length,
+      anchored,
+    },
+  };
 }

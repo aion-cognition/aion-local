@@ -8,6 +8,7 @@ import {
   GraphConnection,
   latestAppliedGraphMigration,
   loadConfig,
+  measureAdmissionFloor,
   openLogger,
   OllamaProvider,
   readVectorIndexes,
@@ -136,6 +137,32 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
           throw new EmbedDimensionMismatchError(config.models.embed, config.models.embedDimension, vector.length);
         }
         return { ok: true, detail: `${config.models.embed} → ${vector.length} dimensions` };
+      },
+    },
+    {
+      /**
+       * Informational: it re-measures the two distributions the admission floors were
+       * calibrated against and warns when this machine's model no longer separates them.
+       * It never adjusts a floor — the committed constants are the runtime source of truth,
+       * and a floor that drifted per machine would make two installs remember differently.
+       * `floor-calibration.int.test.ts` is where a floor is re-committed.
+       */
+      name: 'floor-calibration',
+      dependsOn: 'ollama-round-trip',
+      run: async () => {
+        const provider = new OllamaProvider({
+          baseUrl: config.ollama.url,
+          embedModel: config.models.embed,
+        });
+        const separation = await measureAdmissionFloor(provider, {
+          vectorFloor: config.recall.vectorAdmissionFloor,
+          corroborationFloor: config.recall.corroborationFloor,
+          bm25Mode: config.recall.bm25AdmissionMode,
+        });
+        if (!separation.separated) {
+          return { ok: true, warn: true, detail: separation.detail };
+        }
+        return { ok: true, detail: separation.detail };
       },
     },
     {

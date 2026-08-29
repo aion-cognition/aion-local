@@ -9,6 +9,7 @@ import { openLogger, type Logger } from '../../infrastructure/logging/logger.js'
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import { listReinforcementSignals } from '../../infrastructure/sqlite/reinforcement-queue.js';
 import type { ActivatedNode } from '../domain/activation.js';
+import type { AdmissionReport } from '../domain/admission.js';
 import type { FusedItem } from '../domain/fusion.js';
 import type { RecallCompletion } from './recall.js';
 import {
@@ -52,12 +53,24 @@ function fusedItem(id: string): FusedItem {
   };
 }
 
+/** The gate's own report for a recall that fused nothing; side effects never read it. */
+const NOTHING_ADMITTED: AdmissionReport = {
+  policy: { vectorFloor: 0.5, corroborationFloor: 0.45, bm25Mode: 'exact' },
+  considered: 0,
+  admitted: 0,
+  droppedBelowFloor: 0,
+  droppedUnanchored: 0,
+  droppedDuplicateContent: 0,
+  anchored: false,
+};
+
 function completion(overrides: Partial<RecallCompletion> = {}): RecallCompletion {
   return {
     sessionId: 'session-1',
     seeds: [],
     activated: [],
     items: [],
+    admission: NOTHING_ADMITTED,
     pack: EMPTY_PACK,
     now: NOW,
     mode: withCurrency(),

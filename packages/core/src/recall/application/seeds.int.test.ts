@@ -186,11 +186,11 @@ describe('per-strategy hits', () => {
     });
 
     // Neo4j hands back `(1 + cos) / 2`, which would put every orthogonal memory at 0.5 —
-    // above `AION_MIN_RELEVANCE`, and so no floor at all.
+    // at `AION_VECTOR_ADMISSION_FLOOR`, and so no floor at all.
     expect(rows.find((row) => row.id === ids.activation)?.score).toBeCloseTo(1, 5);
     expect(rows.find((row) => row.id === ids.claimPath)?.score).toBeCloseTo(0, 5);
     expect(rows.find((row) => row.id === ids.claimPath)?.score).toBeLessThan(
-      DEFAULTS.recall.minRelevance,
+      DEFAULTS.recall.vectorAdmissionFloor,
     );
   });
 
@@ -309,10 +309,13 @@ describe('merge', () => {
   it('resolves a name to a structural workspace entity alongside the content hit on the same name', async () => {
     const selection = await selectSeeds(deps(), { cues: [cue('global', 3)] });
     const seed = find(selection.seeds, workspaceId);
+    // `exact` because a normalized-name match is an identity match, which admission reads as
+    // evidence rather than as a score to measure against the cosine floor.
     expect(seed?.provenance).toContainEqual({
       strategy: 'entity_resolution',
       score: 1,
       relevance: 1,
+      exact: true,
       cue: 'global',
     });
     expect(seed?.provenance.map((entry) => entry.strategy)).toContain('bm25');
