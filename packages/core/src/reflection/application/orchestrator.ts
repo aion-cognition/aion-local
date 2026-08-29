@@ -6,6 +6,8 @@ import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { isLedgerApplied, markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import {
   shouldMarkApplied,
+  stageAlreadyAppliedRecord,
+  stageLedgerKey,
   summarizeRun,
   type ReflectionStage,
   type ReflectionSummary,
@@ -62,10 +64,14 @@ function errorMessage(err: unknown): string {
 }
 
 /**
- * Whitepaper §6 and Algorithm 4. The gate comes first so a re-enqueued job costs one SQLite
- * read; the episode loads once and every stage shares it; each stage is isolated, so a
- * failed extraction does not cost the run its deduplication (§12.2); and the ledger is
- * marked last, with the per-stage record of what the run actually did.
+ * Whitepaper §6 and Algorithm 4. The run-level gate comes first so a re-enqueued job costs
+ * one SQLite read; the episode loads once and every stage shares it; each stage is isolated,
+ * so a failed extraction does not cost the run its deduplication (§12.2); the run-level
+ * ledger is marked last, with the per-stage record of what the run actually did.
+ *
+ * Underneath that sits the per-stage ledger (EX-4): each stage is also gated on its own key,
+ * marked as it finishes rather than at the end, so a retry after a partial failure re-enters
+ * only the stages that have not yet applied instead of re-running the whole pipeline.
  *
  * The stage list is the pipeline. Order is the caller's, fixed at construction, and nothing
  * in here knows what any particular stage does.
@@ -110,7 +116,7 @@ export class ReflectionOrchestrator {
 
     const stages: StageRecord[] = [];
     for (const stage of this.#stages) {
-      stages.push(await this.#runStage(stage, context));
+      stages.push(await this.#runOrSkip(stage, context));
     }
 
     const summary = summarizeRun(episodeId, elapsed(started), stages);
@@ -126,6 +132,9 @@ export class ReflectionOrchestrator {
         applied,
         durationMs: summary.durationMs,
         counts: summary.counts,
+        // Named apart from `stages` below, per-episode: which stages this run entered at all
+        // versus which ones a prior attempt already closed out.
+        skippedStages: summary.skippedStages,
         stages: stages.map((stage) => ({
           name: stage.name,
           status: stage.status,
@@ -136,6 +145,24 @@ export class ReflectionOrchestrator {
     );
 
     return { episodeId, status: 'completed', applied, summary };
+  }
+
+  /**
+   * The per-stage ledger gate (EX-4). A stage whose key is already applied is not entered —
+   * `run` is never called — so a retry cannot re-mint what an earlier attempt already wrote.
+   * The key is set the moment the stage finishes without failing, `ok` or `skipped` alike,
+   * mirroring `shouldMarkApplied`'s view that only `failed` leaves something to retry.
+   */
+  async #runOrSkip(stage: ReflectionStage, context: StageContext): Promise<StageRecord> {
+    const key = stageLedgerKey(stage.name, context.episodeId);
+    if (isLedgerApplied(this.#deps.db, key)) {
+      return stageAlreadyAppliedRecord(stage.name);
+    }
+    const record = await this.#runStage(stage, context);
+    if (record.status !== 'failed') {
+      markLedgerApplied(this.#deps.db, key, { status: record.status, summary: record.summary });
+    }
+    return record;
   }
 
   /**
