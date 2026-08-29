@@ -200,3 +200,16 @@ suite: four angles plus an independent concurrent client, roughly 70 raw finding
 the short version is that the write path earns its complexity, the read path does not yet,
 and everything that reasons between nodes (supersession, narratives, the relevance floor)
 needs the fix round that report feeds. A fix-planning round gates P4.
+
+The fix round ran 2026-08-29 (plan 07, consulted cross-session, 19 agents): admission
+floors with two-distribution calibration, priority lanes, propose-only supersession,
+grounded narratives, per-stage ledger, redaction closures, session lifecycle, and the
+seven-battery re-exercise harness that now gates every round. Gated at 1463/1466 with all
+batteries green. Exercise round 2 followed the same day (`docs/exercise/2026-08-29-round-2.md`
+plus the wire lane's `2026-08-29-round-2-wire.md`): the fix round bought honesty (empty
+packs real, honesty line reaches text-only consumers, interactive enrichment in seconds)
+and did not buy recall. Round 2's blockers are retrieval-core: a 10-seed budget against a
+6,600-node substrate silently drops above-floor answers, activation arrivals are refused
+unmeasured instead of scored, and supersession precision measured 0.400 against the 0.9
+bar, so auto-apply stays closed. Those findings are the input to P4 planning, where
+activation, resonance, and plasticity were always going to be the spirit-critical work.
