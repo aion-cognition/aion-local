@@ -81,3 +81,88 @@ export {
   reinforcementFlushOperation,
   reinforcementFlushRelevance,
 } from './application/plasticity-operations.js';
+
+export {
+  DEAD_LETTER_OPERATION,
+  deadLetterOperation,
+  deadLetterRelevance,
+} from './application/operations/dead-letter.js';
+export {
+  RECONCILE_REENQUEUE_OPERATION,
+  reconcileReenqueueOperation,
+  reconcileReenqueueRelevance,
+} from './application/operations/reconcile-reenqueue.js';
+export {
+  REDACTION_RESIDUE_PURGE_OPERATION,
+  redactionResiduePurgeOperation,
+  redactionResiduePurgeRelevance,
+} from './application/operations/redaction-residue-purge.js';
+export {
+  VECTOR_BACKFILL_OPERATION,
+  vectorBackfillOperation,
+  vectorBackfillRelevance,
+} from './application/operations/vector-backfill.js';
+
+export {
+  DESCRIPTION_FRESHNESS_OPERATION,
+  descriptionFreshnessOperation,
+  descriptionFreshnessRelevance,
+} from './application/operations/description-freshness-operation.js';
+export type { DescriptionFreshnessOverrides } from './application/operations/description-freshness-operation.js';
+export {
+  NARRATIVE_CLEANUP_OPERATION,
+  NARRATIVE_DUPLICATE_METHOD,
+  narrativeCleanupOperation,
+  narrativeCleanupRelevance,
+} from './application/operations/narrative-cleanup-operation.js';
+export {
+  RETRO_JUDGMENT_SWEEP_OPERATION,
+  RETRO_SWEEP_STANDING_RELEVANCE,
+  retroJudgmentSweepOperation,
+} from './application/operations/retro-judgment-sweep-operation.js';
+export type { RetroJudgmentSweepOverrides } from './application/operations/retro-judgment-sweep-operation.js';
+export type { ProviderFactory } from './application/operations/routed-generation.js';
+
+export {
+  COMMUNITY_REFRESH_OPERATION,
+  COMMUNITY_REFRESH_RELEVANCE,
+  communityRefreshOperation,
+  communityRefreshRelevance,
+} from './application/operations/community-refresh.js';
+export {
+  ORPHAN_CLEANUP_OPERATION,
+  ORPHAN_RELINK_CONFIDENCE,
+  ORPHAN_RELINK_PROVENANCE,
+  ORPHAN_RELINK_SIGNAL,
+  ORPHAN_RELINK_STRENGTH,
+  orphanCleanupOperation,
+  orphanCleanupRelevance,
+} from './application/operations/orphan-cleanup.js';
+export {
+  BRIDGE_CANDIDATE_LIMIT,
+  SYMBIOSIS_BRIDGE_OPERATION,
+  SYMBIOSIS_BRIDGE_RELEVANCE,
+  symbiosisBridgeOperation,
+  symbiosisBridgeRelevance,
+} from './application/operations/symbiosis-bridge.js';
+export type {
+  BridgeEmbedder,
+  SymbiosisBridgeOptions,
+} from './application/operations/symbiosis-bridge.js';
+
+/**
+ * The repair the loop never selects on its own. It is exported beside the catalog because it
+ * has the same shape as an operation and belongs to the same layer; what it does not have is a
+ * measurable trigger, so a person names the merge to reverse.
+ */
+export {
+  ENTITY_UNMERGE_OPERATION,
+  entityUnmergeLedgerKey,
+  listUnmergeableRecords,
+  runEntityUnmerge,
+} from './application/operations/unmerge.js';
+export type {
+  UnmergeDeps,
+  UnmergeReport,
+  UnmergeRequest,
+} from './application/operations/unmerge.js';

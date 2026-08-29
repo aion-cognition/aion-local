@@ -264,6 +264,19 @@ export type {
   SupersedeEpisodeResult,
 } from './graph/episode-supersession.js';
 
+export {
+  findClaimSubjects,
+  findSubjectSiblings,
+  SUBJECT_PROPAGATION_METHOD,
+  supersedeSubjectFamily,
+} from './graph/subject-family.js';
+export type {
+  ClaimSubject,
+  SubjectFamilyResult,
+  SubjectSibling,
+  SupersedeSubjectFamilyInput,
+} from './graph/subject-family.js';
+
 export { bootstrapBackbone, GLOBAL_WORKSPACE_NAME, readMemberName } from './graph/backbone.js';
 export type { BootstrapBackboneInput, BootstrapBackboneResult } from './graph/backbone.js';
 
@@ -491,3 +504,52 @@ export type {
 export { recallCadenceCounters, recordRecallOutcome } from './sqlite/recall-cadence.js';
 export type { RecallCadenceCounters, RecallOutcome } from './sqlite/recall-cadence.js';
 
+
+export {
+  findOrphanNodes,
+  findOrphanRelinkTargets,
+} from './graph/topology-queries.js';
+export type { OrphanNode, OrphanRelinkTarget, RelinkKind } from './graph/topology-queries.js';
+
+export {
+  COMMUNITY_MAX_ITERATIONS,
+  COMMUNITY_PROPERTY,
+  CONTENT_PROJECTION_NAME,
+  countProjectableNodes,
+  dropProjection,
+  labelPropagationAvailable,
+  projectContentGraph,
+  readCommunityProfiles,
+  writeCommunities,
+} from './graph/community-queries.js';
+export type {
+  CommunityProfile,
+  CommunityWriteResult,
+  ContentProjection,
+} from './graph/community-queries.js';
+
+export {
+  BRIDGE_PROVENANCE,
+  BRIDGE_SIGNAL,
+  BRIDGE_SIMILARITY_PROPERTY,
+  BRIDGE_SOURCE_COMMUNITY_PROPERTY,
+  BRIDGE_TARGET_COMMUNITY_PROPERTY,
+  countBridgesBetween,
+  findClosestCrossCommunityPair,
+  writeBridge,
+} from './graph/bridge-queries.js';
+export type { BridgeWrite, CrossCommunityPair } from './graph/bridge-queries.js';
+
+export {
+  applyUnmerge,
+  readCanonicalMerge,
+  readCanonicalMergeRecords,
+  releasedNameNorm,
+} from './graph/unmerge-queries.js';
+export type {
+  CanonicalMerge,
+  MergeProvenanceEdge,
+  MergeProvenanceRecord,
+  UnmergeInput,
+  UnmergeResult,
+} from './graph/unmerge-queries.js';

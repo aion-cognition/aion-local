@@ -216,6 +216,44 @@ export const DEFAULTS: Config = {
     // The whitepaper's deprioritization line: at or above it an operation scores at full
     // weight, under it at half, and starvation still eventually runs it either way.
     effectivenessFloor: 0.5,
+    // At hebbian.batchSize's own default: a content-vector backfill is the same shape of
+    // work as a reinforcement flush, one bounded pass over a pending queue.
+    vectorBackfillBatchSize: 100,
+    // A fifth of the content-vector batch. Context staleness is a quality gap the next
+    // pipeline run corrects anyway, not a hole in vector search, so each tick spends little
+    // on it.
+    contextRefreshBatchSize: 20,
+    reconcileBatchSize: 200,
+    deadLetterBatchSize: 50,
+    // Small: every hit rewrites a live node property, and a wrong redaction destroys
+    // content permanently since nothing in the substrate is hard-deleted.
+    redactionPurgeBatchSize: 20,
+    // Sessions, not narratives: a session with duplicates costs one supersede per straggler,
+    // a stale one a regeneration call, so ten sessions is a modest tick even at the worst mix.
+    narrativeCleanupBatch: 10,
+    // Each episode costs up to eight judgment calls (supersession's own ceiling), so five
+    // keeps one tick's model spend in line with an ordinary reflection run.
+    retroSupersessionBatch: 5,
+    // Each entity costs one generation call and one embed. Small on purpose: a refresh a
+    // tick behind is a staleness window, not an outage.
+    descriptionRefreshBatch: 3,
+    // Five new mentions since the description was written is enough traffic to plausibly
+    // have added something worth folding in, without refreshing on every other mention.
+    descriptionRefreshMentionGrowth: 5,
+    // Two graph reads and at most one small write per orphan, so a couple of hundred is a
+    // tick's work even when every one of them needs a repair.
+    orphanCleanupBatch: 200,
+    // A month with no candidate and no new edge. Anything the pipeline was going to attach
+    // has long since attached, and forgetting is reversible in the sense that matters here:
+    // the node stays readable under `as_of`.
+    orphanForgetAfterDays: 30,
+    // The projection is in-memory and all-or-nothing. Twenty thousand nodes is well past a
+    // laptop-scale substrate and still inside a heap the compose file caps at 1G.
+    communityNodeLimit: 20_000,
+    // The same floor the critical rules use: under twenty nodes, communities describe noise.
+    communityMinNodes: 20,
+    // Three members is the smallest group that can be a neighbourhood rather than a pair.
+    bridgeMinCommunitySize: 3,
   },
   sqlite: {
     path: DEFAULT_SQLITE_PATH,
