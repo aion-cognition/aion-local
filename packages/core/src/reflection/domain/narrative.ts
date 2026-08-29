@@ -39,12 +39,21 @@ export function coverageKey(episodeIds: readonly string[]): string {
 }
 
 /**
+ * The revision of the grounding rule a narrative was written under, stored on the node and
+ * folded into a regenerated narrative's id. Two jobs, one value: the cleanup selects the
+ * narratives that predate it, and the id it derives cannot collide with the node it is
+ * superseding. Bump it when a change to the rule warrants rewriting what already stands.
+ */
+export const NARRATIVE_GROUNDING = 'grounded-1';
+
+/**
  * Derived from the session and the episode set, never minted: a crash between the node write
  * and the supersession leaves the retry writing the same id, so `MERGE` matches instead of
  * forking a second narrative for one boundary.
  */
-export function narrativeNodeId(sessionId: string, key: string): string {
-  return hashContent(['narrative', sessionId, key]);
+export function narrativeNodeId(sessionId: string, key: string, generation = ''): string {
+  const parts = generation === '' ? [] : [generation];
+  return hashContent(['narrative', sessionId, key, ...parts]);
 }
 
 /** Silence since the last thing the substrate heard from the session. */
@@ -117,9 +126,18 @@ function skip(
  * one that covers fewer — every case of it is an episode forgotten after the fact — leaves
  * the standing narrative alone rather than regressing it.
  */
+export type NarrativeDecisionOptions = {
+  /**
+   * Rewrites the standing narrative over the same episode set. Only the cleanup path sets it:
+   * an ordinary close must stay a no-op when nothing new arrived.
+   */
+  readonly regenerate?: boolean;
+};
+
 export function decideSessionNarrative(
   episodes: readonly NarrativeEpisode[],
   existing: readonly ExistingNarrative[],
+  options: NarrativeDecisionOptions = {},
 ): NarrativeDecision {
   const episodeIds = episodes.map((episode) => episode.id);
   const key = coverageKey(episodeIds);
@@ -128,6 +146,17 @@ export function decideSessionNarrative(
 
   if (episodes.length === 0) {
     return skip('the session holds no episodes', key, highestVersion, episodeIds, []);
+  }
+
+  if (options.regenerate === true) {
+    return {
+      action: 'create',
+      reason: `regenerated over ${String(episodes.length)} episodes`,
+      coverageKey: key,
+      version: highestVersion + 1,
+      episodeIds,
+      supersedes: open.map((narrative) => narrative.id),
+    };
   }
 
   const matching = existing.find((narrative) => narrative.coverageKey === key);
@@ -165,70 +194,246 @@ export function decideSessionNarrative(
   };
 }
 
+/** A node the narrative may cite: the episode itself, or something extracted from it. */
+export type NarrativeSourceNode = {
+  readonly id: string;
+  /** How the prompt names the node, lowercased: `episode`, `decision`, `insight`. */
+  readonly kind: string;
+  readonly text: string;
+  readonly occurredAt?: Date;
+};
+
+/** An extracted node carries the episode it came from, which is what orders it in the prompt. */
+export type NarrativeExtractedNode = NarrativeSourceNode & {
+  readonly episodeId: string;
+};
+
+/** The tag the model cites, paired with the graph id that tag resolves to. */
+export type NarrativeSourceItem = NarrativeSourceNode & {
+  readonly handle: string;
+};
+
 export type NarrativeSource = {
   readonly text: string;
+  readonly items: readonly NarrativeSourceItem[];
   readonly renderedCount: number;
   /** Fraction of the covered episodes the model actually saw. */
   readonly coverage: number;
+  /** How many sentences the source can support, which is also what assembly enforces. */
+  readonly sentenceBudget: number;
 };
+
+/**
+ * A ceiling, not a target. Eight sentences over one thin episode is how the free-prose
+ * narrative filled its length quota with invention.
+ */
+export const NARRATIVE_MAX_SENTENCES = 6;
+
+/** Source characters that earn one sentence. Below one sentence's worth, the answer is one. */
+const CHARS_PER_SENTENCE = 150;
+
+/**
+ * Header plus per-sentence JSON, so a thin session cannot be padded to the ceiling. The
+ * per-sentence allowance covers the citation envelope as well as the sentence: a truncated
+ * answer is unparseable JSON, not a shorter narrative.
+ */
+const NARRATIVE_BASE_TOKENS = 160;
+const NARRATIVE_TOKENS_PER_SENTENCE = 150;
+const NARRATIVE_MAX_TOKENS_CEILING = 1_200;
 
 function round(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
-function renderEpisode(episode: NarrativeEpisode, maxChars: number): string {
-  const body = episode.summary ?? episode.text;
-  const clipped = body.length > maxChars ? `${body.slice(0, maxChars)}…` : body;
-  const when = episode.occurredAt === undefined ? '' : ` (${episode.occurredAt.toISOString()})`;
-  return `episode${when}:\n${clipped}`;
+function clip(text: string, maxChars: number): string {
+  return text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;
+}
+
+/**
+ * Header and content on separate lines. Run together, a thin item's whole line reads as a
+ * sentence and the model copies the header with it into the stored narrative.
+ */
+function renderItem(item: NarrativeSourceItem): string {
+  const when = item.occurredAt === undefined ? '' : ` ${item.occurredAt.toISOString()}`;
+  return `[${item.handle}] ${item.kind}${when}\n${item.text}`;
+}
+
+/**
+ * Length scales with the source: the budget is what the rendered items can support, capped,
+ * and one sentence is the floor. A session of one short observation is one sentence.
+ */
+export function narrativeSentenceBudget(items: readonly NarrativeSourceItem[]): number {
+  const chars = items.reduce((total, item) => total + item.text.length, 0);
+  const bySize = Math.floor(chars / CHARS_PER_SENTENCE);
+  return Math.max(1, Math.min(NARRATIVE_MAX_SENTENCES, items.length, bySize));
+}
+
+export function narrativeMaxTokens(sentenceBudget: number): number {
+  return Math.min(
+    NARRATIVE_MAX_TOKENS_CEILING,
+    NARRATIVE_BASE_TOKENS + sentenceBudget * NARRATIVE_TOKENS_PER_SENTENCE,
+  );
 }
 
 /**
  * The compression input. A long session is rendered from its most recent episodes rather
  * than truncated mid-history, and the ratio it saw is recorded as the narrative's coverage
  * score — the node then says how much of what it claims to cover actually reached the model.
- * Clipping is a byte slice, not term selection: nothing here decides what an episode means.
+ * Every item carries a tag the answer must cite, and an extracted node follows the episode it
+ * came from so the model reads the session as an arc rather than two lists. Clipping is a
+ * byte slice, not term selection: nothing here decides what an episode means.
  */
 export function renderNarrativeSource(
   episodes: readonly NarrativeEpisode[],
+  extracted: readonly NarrativeExtractedNode[],
   maxEpisodes: number,
   maxEpisodeChars: number,
 ): NarrativeSource {
   const rendered = episodes.slice(Math.max(0, episodes.length - maxEpisodes));
+  const items: NarrativeSourceItem[] = [];
+
+  for (const episode of rendered) {
+    items.push({
+      handle: `S${String(items.length + 1)}`,
+      id: episode.id,
+      kind: 'episode',
+      text: clip(episode.summary ?? episode.text, maxEpisodeChars),
+      ...(episode.occurredAt === undefined ? {} : { occurredAt: episode.occurredAt }),
+    });
+    for (const node of extracted.filter((candidate) => candidate.episodeId === episode.id)) {
+      items.push({
+        handle: `S${String(items.length + 1)}`,
+        id: node.id,
+        kind: node.kind,
+        text: clip(node.text, maxEpisodeChars),
+      });
+    }
+  }
+
   return {
-    text: rendered.map((episode) => renderEpisode(episode, maxEpisodeChars)).join('\n\n'),
+    text: items.map(renderItem).join('\n\n'),
+    items,
     renderedCount: rendered.length,
     coverage: episodes.length === 0 ? 0 : round(rendered.length / episodes.length),
+    sentenceBudget: narrativeSentenceBudget(items),
   };
 }
 
 export const NARRATIVE_JSON_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
-    summary: { type: 'string' },
-    narrative: { type: 'string' },
+    sentences: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          text: { type: 'string' },
+          source_ids: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['text', 'source_ids'],
+      },
+    },
   },
-  required: ['summary', 'narrative'],
+  required: ['sentences'],
 };
 
 export const NarrativeOutputSchema = z.object({
-  summary: z.string().min(1),
-  narrative: z.string().min(1),
+  sentences: z.array(
+    z.object({
+      text: z.string(),
+      source_ids: z.array(z.string()),
+    }),
+  ),
 });
 
 export type NarrativeOutput = z.infer<typeof NarrativeOutputSchema>;
 
-const NARRATIVE_SYSTEM_PROMPT = [
-  "You compress an AI coding agent's work session into one durable memory.",
-  'The input is the session\'s episodes in the order they happened.',
-  'Ground every sentence in the episodes: name the work, the decisions, and the outcomes they record, and add nothing they do not state.',
-  'Write "summary" as one sentence naming what the session was about.',
-  'Write "narrative" as a single past-tense paragraph of at most eight sentences covering the arc of the session.',
-].join(' ');
+export type GroundedNarrative = {
+  /** The first grounded sentence, so the one line every pack shows is itself cited. */
+  readonly summary: string;
+  readonly narrative: string;
+  /** Graph ids of the cited nodes, in the order they were first cited. */
+  readonly citations: readonly string[];
+  readonly kept: number;
+  readonly dropped: number;
+};
 
-export function buildNarrativeMessages(source: string): ChatMessage[] {
+/**
+ * Reading the tag back out of the answer, not judging its content: a model that writes `[s1]`
+ * or `S1.` cited S1, and only the tag's identity is at stake here.
+ */
+function normalizeHandle(value: string): string {
+  return value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function resolveCitations(
+  raw: readonly string[],
+  byHandle: ReadonlyMap<string, string>,
+): string[] {
+  const ids: string[] = [];
+  for (const value of raw) {
+    const id = byHandle.get(normalizeHandle(value));
+    if (id !== undefined && !ids.includes(id)) {
+      ids.push(id);
+    }
+  }
+  return ids;
+}
+
+/**
+ * The grounding rule, enforced rather than requested: a sentence citing no source item the
+ * prompt actually supplied never reaches the node, and the budget caps what a model that
+ * ignored it can still store.
+ */
+export function assembleNarrative(
+  output: NarrativeOutput,
+  source: NarrativeSource,
+): GroundedNarrative {
+  const byHandle = new Map(source.items.map((item) => [item.handle, item.id]));
+  const kept: string[] = [];
+  const citations: string[] = [];
+  let dropped = 0;
+
+  for (const sentence of output.sentences) {
+    const text = sentence.text.trim();
+    const cited = resolveCitations(sentence.source_ids, byHandle);
+    if (text.length === 0 || cited.length === 0 || kept.length >= source.sentenceBudget) {
+      dropped += 1;
+      continue;
+    }
+    kept.push(text);
+    for (const id of cited) {
+      if (!citations.includes(id)) {
+        citations.push(id);
+      }
+    }
+  }
+
+  return {
+    summary: kept[0] ?? '',
+    narrative: kept.join(' '),
+    citations,
+    kept: kept.length,
+    dropped,
+  };
+}
+
+function narrativeSystemPrompt(sentenceBudget: number): string {
   return [
-    { role: 'system', content: NARRATIVE_SYSTEM_PROMPT },
-    { role: 'user', content: `Session:\n${source}` },
+    "You compress an AI coding agent's work session into one durable memory.",
+    'The input is the session\'s source items in the order they happened; each starts with a header line tagged like [S1] and its content follows.',
+    'Answer with sentences. Every sentence lists in "source_ids" the tags of the items it draws on.',
+    'State only what the cited items state: never add a cause, motive, outcome, participant, quantity or judgement they do not contain.',
+    'Name the concrete work, decisions and results the items record, in their own wording where it is specific.',
+    'Write your own sentences; never copy a tag or a header line into one.',
+    `Write at most ${String(sentenceBudget)} sentences, and fewer when the items say little.`,
+    'A sentence you cannot cite is a sentence you must not write.',
+  ].join(' ');
+}
+
+export function buildNarrativeMessages(source: NarrativeSource): ChatMessage[] {
+  return [
+    { role: 'system', content: narrativeSystemPrompt(source.sentenceBudget) },
+    { role: 'user', content: `Session:\n${source.text}` },
   ];
 }

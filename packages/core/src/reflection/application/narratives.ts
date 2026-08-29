@@ -11,6 +11,7 @@ import {
   findIdleSessions,
   findSessionNarratives,
   loadSessionEpisodes,
+  loadSessionSourceNodes,
   NARRATIVE_PROPERTIES,
   SUMMARIZED_BY_TYPE,
 } from '../../infrastructure/graph/narrative-queries.js';
@@ -18,18 +19,21 @@ import type { GraphProperties } from '../../infrastructure/graph/values.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import {
+  assembleNarrative,
   buildNarrativeMessages,
   decideSessionNarrative,
   isSessionIdle,
   lastActivityAt,
+  narrativeMaxTokens,
   narrativeNodeId,
   narrativeSpan,
+  NARRATIVE_GROUNDING,
   NARRATIVE_JSON_SCHEMA,
   NarrativeOutputSchema,
   renderNarrativeSource,
   SESSION_NARRATIVE_SCOPE,
+  type GroundedNarrative,
   type NarrativeDecision,
-  type NarrativeOutput,
   type NarrativeSource,
   type NarrativeSpan,
 } from '../domain/narrative.js';
@@ -50,7 +54,6 @@ export const NARRATIVE_STAGE_NAME = 'narratives';
 export const DEFAULT_NARRATIVE_MODEL = 'qwen3:8b';
 export const DEFAULT_SESSION_IDLE_MS = 30 * 60 * 1000;
 export const DEFAULT_NARRATIVE_TIMEOUT_MS = 60_000;
-export const DEFAULT_NARRATIVE_MAX_TOKENS = 700;
 export const DEFAULT_MAX_SOURCE_EPISODES = 40;
 export const DEFAULT_MAX_EPISODE_CHARS = 2_000;
 export const DEFAULT_IDLE_SWEEP_LIMIT = 20;
@@ -74,6 +77,8 @@ export type NarrativeOptions = {
   readonly maxSourceEpisodes?: number;
   readonly maxEpisodeChars?: number;
   readonly now?: Date;
+  /** Cleanup only: rewrite the standing narrative over the same episodes, superseding it. */
+  readonly regenerate?: boolean;
 };
 
 export type IdleSweepOptions = NarrativeOptions & {
@@ -99,6 +104,7 @@ type NarrativeSettings = {
   readonly maxSourceEpisodes: number;
   readonly maxEpisodeChars: number;
   readonly now: Date;
+  readonly regenerate: boolean;
 };
 
 function settingsOf(options: NarrativeOptions): NarrativeSettings {
@@ -109,6 +115,7 @@ function settingsOf(options: NarrativeOptions): NarrativeSettings {
     maxSourceEpisodes: options.maxSourceEpisodes ?? DEFAULT_MAX_SOURCE_EPISODES,
     maxEpisodeChars: options.maxEpisodeChars ?? DEFAULT_MAX_EPISODE_CHARS,
     now: options.now ?? new Date(),
+    regenerate: options.regenerate ?? false,
   };
 }
 
@@ -120,28 +127,29 @@ function errorMessage(err: unknown): string {
 }
 
 /**
- * One structured-output call, guarded. Reflection's latency regime is relaxed, not unbounded:
- * `qwen3:8b` with reasoning on measured 10-44s with occasional non-returns, so reasoning is
- * off and the call carries its own deadline rather than relying on the orchestrator, which
- * imposes none.
+ * One structured-output call, guarded, and the grounding filter over its answer. Reflection's
+ * latency regime is relaxed, not unbounded: `qwen3:8b` with reasoning on measured 10-44s with
+ * occasional non-returns, so reasoning is off and the call carries its own deadline rather
+ * than relying on the orchestrator, which imposes none. The token ceiling tracks the source's
+ * own sentence budget: a fixed one is what a thin session pads with invention.
  */
 async function compress(
   deps: NarrativeDeps,
   settings: NarrativeSettings,
   source: NarrativeSource,
-): Promise<NarrativeOutput> {
+): Promise<GroundedNarrative> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), settings.timeoutMs);
   try {
     const raw = await deps.provider.generate({
       model: settings.model,
-      messages: buildNarrativeMessages(source.text),
+      messages: buildNarrativeMessages(source),
       schema: NARRATIVE_JSON_SCHEMA,
-      maxTokens: DEFAULT_NARRATIVE_MAX_TOKENS,
+      maxTokens: narrativeMaxTokens(source.sentenceBudget),
       think: false,
       signal: controller.signal,
     });
-    return NarrativeOutputSchema.parse(raw);
+    return assembleNarrative(NarrativeOutputSchema.parse(raw), source);
   } finally {
     clearTimeout(timer);
   }
@@ -151,7 +159,7 @@ type NarrativeWrite = {
   readonly narrativeId: string;
   readonly sessionId: string;
   readonly decision: NarrativeDecision;
-  readonly output: NarrativeOutput;
+  readonly output: GroundedNarrative;
   readonly source: NarrativeSource;
   readonly span: NarrativeSpan;
   readonly now: Date;
@@ -162,12 +170,16 @@ type NarrativeWrite = {
  * both what `content_fts` indexes and what the pending-vector drain would embed if the
  * embedder is down at close time. Writing the body under `text` is what keeps a narrative
  * that missed its vector recoverable by the ordinary backfill instead of permanently
- * invisible to vector search.
+ * invisible to vector search. `citations` carries the ids every stored sentence cited, which
+ * is what makes the claim auditable after the fact.
  */
 function narrativeProperties(input: NarrativeWrite): GraphProperties {
   return {
     [MEMORY_PROPERTIES.summary]: input.output.summary,
     [MEMORY_PROPERTIES.text]: input.output.narrative,
+    [NARRATIVE_PROPERTIES.citations]: [...input.output.citations],
+    [NARRATIVE_PROPERTIES.sentenceCount]: input.output.kept,
+    [NARRATIVE_PROPERTIES.grounding]: NARRATIVE_GROUNDING,
     [MEMORY_PROPERTIES.sessionId]: input.sessionId,
     [MEMORY_PROPERTIES.extractionMethod]: NARRATIVE_EXTRACTION_METHOD,
     [NARRATIVE_PROPERTIES.scope]: SESSION_NARRATIVE_SCOPE,
@@ -292,8 +304,9 @@ async function narrateSession(
   }
 
   const existing = await findSessionNarratives(deps.driver, sessionId);
-  const decision = decideSessionNarrative(episodes, existing);
-  const narrativeId = narrativeNodeId(sessionId, decision.coverageKey);
+  const decision = decideSessionNarrative(episodes, existing, { regenerate: settings.regenerate });
+  const generation = settings.regenerate ? NARRATIVE_GROUNDING : '';
+  const narrativeId = narrativeNodeId(sessionId, decision.coverageKey, generation);
 
   if (decision.action === 'skip') {
     await closeSuperseded(deps, decision, narrativeId, settings.now);
@@ -302,11 +315,12 @@ async function narrateSession(
 
   const source = renderNarrativeSource(
     episodes,
+    await loadSessionSourceNodes(deps.driver, sessionId),
     settings.maxSourceEpisodes,
     settings.maxEpisodeChars,
   );
 
-  let output: NarrativeOutput;
+  let output: GroundedNarrative;
   try {
     output = await compress(deps, settings, source);
   } catch (err) {
@@ -314,6 +328,19 @@ async function narrateSession(
     return {
       status: 'failed',
       summary: `narrative compression failed: ${errorMessage(err)}`,
+      sessionId,
+      episodes: episodes.length,
+    };
+  }
+
+  if (output.kept === 0) {
+    deps.logger.warn(
+      { sessionId, episodes: episodes.length, dropped: output.dropped },
+      'narrative dropped: no sentence cited a source the session holds',
+    );
+    return {
+      status: 'failed',
+      summary: `narrative dropped: ${String(output.dropped)} sentences cited nothing in the session`,
       sessionId,
       episodes: episodes.length,
     };
@@ -339,6 +366,9 @@ async function narrateSession(
       version: decision.version,
       episodes: episodes.length,
       rendered: source.renderedCount,
+      sentences: output.kept,
+      dropped: output.dropped,
+      citations: output.citations.length,
       superseded: decision.supersedes.length,
     },
     'session narrative stored',

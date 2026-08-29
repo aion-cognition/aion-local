@@ -14,7 +14,8 @@
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
     "test:watch": "vitest --project unit",
-    "quality:extraction": "tsc -b packages/core && node packages/core/dist/reflection/test-support/quality-harness/run.js"
+    "quality:extraction": "tsc -b packages/core && node packages/core/dist/reflection/test-support/quality-harness/run.js",
+    "cleanup:narratives": "tsc -b packages/core && node packages/core/dist/reflection/application/narrative-cleanup-run.js"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",

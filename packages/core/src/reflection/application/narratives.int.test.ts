@@ -6,12 +6,14 @@ import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { BITEMPORAL_PROPERTIES } from '../../infrastructure/graph/bitemporal.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
 import { MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
+import { writeCognitiveNode } from '../../infrastructure/graph/cognitive-queries.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
 import {
   DERIVES_FROM_TYPE,
   findIdleSessions,
   findSessionNarratives,
   loadSessionEpisodes,
+  loadSessionSourceNodes,
   NARRATIVE_PROPERTIES,
   SUMMARIZED_BY_TYPE,
 } from '../../infrastructure/graph/narrative-queries.js';
@@ -79,6 +81,44 @@ const EPISODES = [
     ],
   },
 ];
+
+/** The exercise's fabrication fixture, verbatim: 27 words that became eight invented sentences. */
+const THIN_SESSION_IDENTITY = 'mcp-transport-session-narratives-thin';
+const THIN_EPISODE = {
+  summary: 'close-mode probe terminate',
+  observations: [
+    'Close-hook probe using terminate. One observation so the session has an episode to narrate.',
+  ],
+};
+
+/** The realistic planning session: decisions the narrative has to name rather than invent. */
+const PLANNING_SESSION_IDENTITY = 'mcp-transport-session-narratives-planning';
+const PLANNING_EPISODE = {
+  summary:
+    'planning the Meridian rollout: four decisions taken and two alternative approaches rejected',
+  turns: [
+    {
+      role: 'user',
+      text: 'walk through the rollout decisions we settled on for Meridian this afternoon',
+      occurred_at: '2026-04-03T09:00:00Z',
+    },
+    {
+      role: 'assistant',
+      text: 'four decisions: the orders table stays unsharded, session state moves to signed cookies, Meridian ships behind a flag with two weeks of shadow reads, and this service never writes to the finops-owned billing table',
+      occurred_at: '2026-04-03T09:01:00Z',
+    },
+  ],
+};
+
+const PLANNING_DECISIONS = [
+  'Do not shard the orders table; the write volume does not justify the operational cost yet',
+  'Move session state to signed cookies instead of keeping it in the Redis store',
+  'Ship Meridian behind a flag with two weeks of shadow reads before any cutover',
+  'Do not write to the finops-owned billing table from this service under any circumstance',
+];
+
+const PLANNING_INSIGHT =
+  'Shadow reads are the only way to compare Meridian against the current path without user-visible risk';
 
 const LATE_EPISODE = {
   summary: 'the backfill finished and Ariadne launched',
@@ -269,4 +309,68 @@ describe('idle sweep against a live substrate', () => {
     const again = await sweepIdleSessions(deps, { now: afterTheIdleWindow() });
     expect(again).toEqual([]);
   }, 120_000);
+});
+
+/**
+ * Grounding, against the model that fabricated. The assertions are structural — how many
+ * sentences survived and which node ids they cited — because a string match against the
+ * source would only prove the model echoed wording, not that the claim is sourced.
+ */
+describe('grounding against a live substrate', () => {
+  let thinEpisodeId: string;
+  let planningEpisodeId: string;
+  const decisionIds: string[] = [];
+
+  beforeAll(async () => {
+    thinEpisodeId = await push(THIN_EPISODE, THIN_SESSION_IDENTITY);
+    planningEpisodeId = await push(PLANNING_EPISODE, PLANNING_SESSION_IDENTITY);
+
+    const now = new Date();
+    for (const text of PLANNING_DECISIONS) {
+      const written = await writeCognitiveNode(harness.driver, {
+        episodeId: planningEpisodeId,
+        label: 'Decision',
+        text,
+        now,
+      });
+      decisionIds.push(written.node.id);
+    }
+    await writeCognitiveNode(harness.driver, {
+      episodeId: planningEpisodeId,
+      label: 'Insight',
+      text: PLANNING_INSIGHT,
+      now,
+    });
+  }, 120_000);
+
+  it('turns 27 words of source into one grounded sentence, not eight invented ones', async () => {
+    const result = await closeSessionNarrative(deps, THIN_SESSION_IDENTITY);
+
+    expect(result.status).toBe('created');
+    const properties = await nodeProperties(harness.driver, result.narrativeId as string);
+    const citations = properties[NARRATIVE_PROPERTIES.citations] as string[];
+
+    expect(properties[NARRATIVE_PROPERTIES.sentenceCount]).toBe(1);
+    expect(citations.length).toBeGreaterThan(0);
+    // Every citation resolves to a node the session actually holds: nothing else could be cited.
+    expect(citations.every((id) => id === thinEpisodeId)).toBe(true);
+  }, 180_000);
+
+  it('names the decisions the planning session actually took', async () => {
+    const sources = await loadSessionSourceNodes(harness.driver, PLANNING_SESSION_IDENTITY);
+    expect(sources.map((source) => source.id).sort()).toEqual(
+      [...decisionIds].concat(sources.filter((s) => s.kind === 'insight').map((s) => s.id)).sort(),
+    );
+
+    const result = await closeSessionNarrative(deps, PLANNING_SESSION_IDENTITY);
+
+    expect(result.status).toBe('created');
+    const properties = await nodeProperties(harness.driver, result.narrativeId as string);
+    const citations = properties[NARRATIVE_PROPERTIES.citations] as string[];
+    const sourceIds = new Set([planningEpisodeId, ...sources.map((source) => source.id)]);
+
+    expect(citations.every((id) => sourceIds.has(id))).toBe(true);
+    expect(citations.filter((id) => decisionIds.includes(id)).length).toBeGreaterThan(0);
+    expect(Number(properties[NARRATIVE_PROPERTIES.sentenceCount])).toBeGreaterThan(1);
+  }, 180_000);
 });
