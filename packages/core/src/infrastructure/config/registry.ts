@@ -282,6 +282,16 @@ export const KNOB_REGISTRY: readonly Knob[] = [
     path: ['operational', 'reconcileWarnThreshold'],
     kind: 'number',
   },
+  {
+    envVar: 'AION_LAG_OLDEST_UNCLAIMED_WARN_MS',
+    path: ['operational', 'lagOldestUnclaimedWarnMs'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_LAG_QUEUE_DEPTH_WARN_THRESHOLD',
+    path: ['operational', 'lagQueueDepthWarnThreshold'],
+    kind: 'number',
+  },
 
   { envVar: LOG_FILE_ENV_VAR, path: ['logging', 'filePath'], kind: 'string' },
   { envVar: LOG_LEVEL_ENV_VAR, path: ['logging', 'level'], kind: 'string' },

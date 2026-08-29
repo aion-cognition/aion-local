@@ -243,6 +243,66 @@ describe('health', () => {
     const response = await fetch(new URL('/nope', url));
     expect(response.status).toBe(404);
   });
+
+  it('omits the queue-lag fields when no queueLag dependency was supplied', async () => {
+    const response = await fetch(new URL(HEALTH_PATH, url));
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body['queue_depth']).toBeUndefined();
+    expect(body['enrichment_lag_p95_ms']).toBeUndefined();
+  });
+
+  it('surfaces queue depth, oldest-unclaimed age, exhausted attempts, reinforcement drops, and p95 lag', async () => {
+    const withLag = new AionMcpService({
+      backend,
+      logger,
+      host: '127.0.0.1',
+      port: 0,
+      queueLag: () => ({
+        depthByLane: { interactive: 2, bulk: 5 },
+        oldestUnclaimedMs: 12_000,
+        exhausted: 1,
+        reinforcementDropped: 7,
+        p95EnrichmentLagMs: 4_200,
+      }),
+    });
+    const port = await withLag.listen();
+    try {
+      const response = await fetch(new URL(HEALTH_PATH, `http://127.0.0.1:${String(port)}`));
+      const body = (await response.json()) as Record<string, unknown>;
+      expect(body['queue_depth']).toEqual({ interactive: 2, bulk: 5 });
+      expect(body['queue_oldest_unclaimed_ms']).toBe(12_000);
+      expect(body['queue_exhausted']).toBe(1);
+      expect(body['reinforcement_dropped']).toBe(7);
+      expect(body['enrichment_lag_p95_ms']).toBe(4_200);
+    } finally {
+      await withLag.close();
+    }
+  });
+
+  it('reports null rather than omitting age and p95 lag when there is nothing to measure yet', async () => {
+    const empty = new AionMcpService({
+      backend,
+      logger,
+      host: '127.0.0.1',
+      port: 0,
+      queueLag: () => ({
+        depthByLane: { interactive: 0, bulk: 0 },
+        oldestUnclaimedMs: undefined,
+        exhausted: 0,
+        reinforcementDropped: 0,
+        p95EnrichmentLagMs: undefined,
+      }),
+    });
+    const port = await empty.listen();
+    try {
+      const response = await fetch(new URL(HEALTH_PATH, `http://127.0.0.1:${String(port)}`));
+      const body = (await response.json()) as Record<string, unknown>;
+      expect(body['queue_oldest_unclaimed_ms']).toBeNull();
+      expect(body['enrichment_lag_p95_ms']).toBeNull();
+    } finally {
+      await empty.close();
+    }
+  });
 });
 
 describe('graceful shutdown', () => {

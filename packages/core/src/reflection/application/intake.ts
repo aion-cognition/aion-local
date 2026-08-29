@@ -18,6 +18,7 @@ import type { Provider } from '../../infrastructure/providers/types.js';
 import { redactPayload } from '../../redaction/deep-walk.js';
 import type { SessionManager } from '../../session/session-manager.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { countQueueJobs } from '../../infrastructure/sqlite/reflection-queue-admin.js';
 import {
   DEFAULT_REFLECTION_LANE,
   enqueueReflectionJob,
@@ -248,6 +249,17 @@ type IntegrateJob = {
   readonly decision: LaneDecision | undefined;
 };
 
+/**
+ * Unclaimed interactive-lane rows already in the queue, measured before this call's own job
+ * lands. Interactive is served strictly first (the lanes pin), so this is exactly how many
+ * jobs sit ahead of a fresh interactive enqueue and, for a caller demoted to bulk, how many
+ * interactive jobs it queues behind either way (EX-10: the ack always said `queued: true`
+ * with no sense of how far behind that queue actually was).
+ */
+function pendingAhead(db: SqliteHandle): number {
+  return countQueueJobs(db, { lane: DEFAULT_REFLECTION_LANE }).unclaimed;
+}
+
 function ensureIntegrateJob(
   deps: ReflectionIntakeDeps,
   episodeId: string,
@@ -338,6 +350,9 @@ export async function handleReflection(
     suppliedIdentity ?? options.identity,
     now,
   );
+  // Measured before this call's own row lands, so a fresh enqueue is not counted against
+  // itself; a duplicate payload reads the same figure the already-queued job would.
+  const ahead = pendingAhead(deps.db);
   const job = ensureIntegrateJob(deps, stored.episodeId, sessionId, requestedLane, now);
   if (job.enqueued) {
     deps.dispatch.signal({
@@ -368,7 +383,7 @@ export async function handleReflection(
       { episodeId: stored.episodeId, sessionId, requeued: job.enqueued, lane: job.lane },
       'reflection payload already stored',
     );
-    return { episode_id: stored.episodeId, queued: true, lane: job.lane };
+    return { episode_id: stored.episodeId, queued: true, lane: job.lane, pending_ahead: ahead };
   }
 
   deps.logger.info(
@@ -384,5 +399,5 @@ export async function handleReflection(
     'reflection stored',
   );
 
-  return { episode_id: stored.episodeId, queued: true, lane: job.lane };
+  return { episode_id: stored.episodeId, queued: true, lane: job.lane, pending_ahead: ahead };
 }

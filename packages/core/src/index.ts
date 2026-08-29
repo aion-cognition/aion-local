@@ -69,6 +69,13 @@ export {
 } from './infrastructure/sqlite/reinforcement-queue.js';
 export type { ReinforcementSignal } from './infrastructure/sqlite/reinforcement-queue.js';
 
+export {
+  DEFAULT_LAG_SAMPLE_WINDOW,
+  listEnrichmentLagSamplesMs,
+  p95EnrichmentLagMs,
+  recordEnrichmentLagMs,
+} from './infrastructure/sqlite/lag-samples.js';
+
 export { getLastPack, listLastPackSessions, saveLastPack } from './infrastructure/sqlite/last-pack.js';
 export type { LastPack, LastPackSession } from './infrastructure/sqlite/last-pack.js';
 
@@ -186,6 +193,7 @@ export {
   MEMORY_PROPERTIES,
   findEpisodeByContentHash,
   findEpisodeByContentHashInTransaction,
+  listSessionEpisodeIds,
   listStoredEpisodes,
 } from './infrastructure/graph/episodes.js';
 export type {
@@ -256,6 +264,9 @@ export type { LaneAssignerOptions, LaneDecision, LaneRequest } from './reflectio
 
 export { DEFAULT_RECONCILE_LIMIT, reconcileEnrichment } from './reflection/application/reconcile.js';
 export type { ReconcileOptions, ReconcileReport } from './reflection/application/reconcile.js';
+
+export { queueLagSnapshot } from './reflection/application/lag.js';
+export type { QueueLagSnapshot } from './reflection/application/lag.js';
 
 export { ReflectionNotStoredError } from './reflection/application/errors.js';
 export type { ReflectionFailureStage } from './reflection/application/errors.js';

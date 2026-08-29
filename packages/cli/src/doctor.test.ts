@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import { probeMcpHttp, runChecks, summarize, type Check, type CheckReport } from './doctor.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DEFAULTS, enqueueReflectionJob, SqliteStore, type Config, type SqliteHandle } from '@aion/core';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { probeMcpHttp, queueLagCheck, runChecks, summarize, type Check, type CheckReport } from './doctor.js';
 
 function collector(): { lines: string[]; write: (line: string) => void } {
   const lines: string[] = [];
@@ -114,6 +118,67 @@ describe('probeMcpHttp', () => {
 
     expect(result.ok).toBe(false);
     expect(result.detail).toContain('unexpected health payload');
+  });
+});
+
+describe('queueLagCheck', () => {
+  let dir: string;
+  let store: SqliteStore;
+  let config: Config;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'aion-doctor-queue-lag-'));
+    store = new SqliteStore({ filePath: join(dir, 'aion.sqlite') });
+    config = {
+      ...DEFAULTS,
+      operational: { ...DEFAULTS.operational, lagOldestUnclaimedWarnMs: 600_000, lagQueueDepthWarnThreshold: 200 },
+    };
+  });
+
+  afterEach(() => {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('passes clean on an empty queue', () => {
+    const result = queueLagCheck(store.db, config);
+
+    expect(result.ok).toBe(true);
+    expect(result.warn).toBeUndefined();
+    expect(result.detail).toContain('depth 0');
+  });
+
+  it('warns, never fails, once the oldest unclaimed job is past the threshold', () => {
+    enqueueReflectionJob(store.db, 'integrate', { episode_id: 'e1' }, { lane: 'interactive' });
+    const now = new Date();
+    store.db
+      .prepare('UPDATE reflection_queue SET enqueued_at = ?')
+      .run(new Date(now.getTime() - 700_000).toISOString());
+
+    const result = queueLagCheck(store.db as SqliteHandle, config, now);
+
+    expect(result.ok).toBe(true);
+    expect(result.warn).toBe(true);
+    expect(result.detail).toContain('oldest unclaimed 700s');
+  });
+
+  it('warns once total unclaimed depth passes the threshold, ages aside', () => {
+    for (let index = 0; index < 201; index += 1) {
+      enqueueReflectionJob(store.db, 'integrate', { episode_id: `e${String(index)}` }, { lane: 'bulk' });
+    }
+
+    const result = queueLagCheck(store.db, config);
+
+    expect(result.warn).toBe(true);
+    expect(result.detail).toContain('depth 201');
+  });
+
+  it('stays clean under both thresholds', () => {
+    enqueueReflectionJob(store.db, 'integrate', { episode_id: 'e1' }, { lane: 'interactive' });
+
+    const result = queueLagCheck(store.db, config);
+
+    expect(result.warn).toBeUndefined();
   });
 });
 

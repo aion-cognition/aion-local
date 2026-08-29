@@ -11,6 +11,16 @@ describe('ReflectionOutputSchema valid fixtures', () => {
     const output = { episode_id: 'episode-1', queued: true, lane: 'bulk' };
     expect(ReflectionOutputSchema.parse(output)).toEqual(output);
   });
+
+  it('parses an ack carrying pending_ahead', () => {
+    const output = { episode_id: 'episode-1', queued: true, lane: 'interactive', pending_ahead: 3 };
+    expect(ReflectionOutputSchema.parse(output)).toEqual(output);
+  });
+
+  it('parses an ack with pending_ahead absent, for a build that predates it', () => {
+    const output = { episode_id: 'episode-1', queued: true, lane: 'interactive' };
+    expect(ReflectionOutputSchema.parse(output)).toEqual(output);
+  });
 });
 
 describe('ReflectionOutputSchema invalid shapes', () => {
@@ -49,6 +59,16 @@ describe('ReflectionOutputSchema invalid shapes', () => {
       episode_id: 'e1',
       queued: true,
       lane: 'urgent',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a negative pending_ahead', () => {
+    const result = ReflectionOutputSchema.safeParse({
+      episode_id: 'e1',
+      queued: true,
+      lane: 'interactive',
+      pending_ahead: -1,
     });
     expect(result.success).toBe(false);
   });

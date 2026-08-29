@@ -21,6 +21,8 @@ import { LaneAssigner } from '../../reflection/application/lanes.js';
 import { SessionManager } from '../../session/session-manager.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { getLastPack } from '../../infrastructure/sqlite/last-pack.js';
+import { markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
+import { orchestratorLedgerKey } from '../../reflection/application/orchestrator.js';
 import { CueCache } from './cues.js';
 import { handleRecall, type RecallDeps } from './recall.js';
 
@@ -104,7 +106,7 @@ async function waitFor(label: string, ready: () => Promise<boolean>): Promise<vo
   throw new Error(`timed out waiting for ${label}`);
 }
 
-async function push(observation: string, now: Date): Promise<string> {
+async function push(observation: string, now: Date, identity: string = WRITE_SESSION): Promise<string> {
   const result = await handleReflection(
     {
       driver: harness.driver,
@@ -117,7 +119,7 @@ async function push(observation: string, now: Date): Promise<string> {
       lanes: new LaneAssigner(DEFAULTS.lanes),
     },
     { observations: [observation] },
-    { identity: WRITE_SESSION, now },
+    { identity, now },
   );
   return result.episode_id;
 }
@@ -247,5 +249,40 @@ describe('recall over a substrate written by the real intake path', () => {
     expect(pack.resonant).toBeUndefined();
     expect(pack.rendered_text).toContain('No memories matched this query.');
     expect(pack.metadata.cues).toHaveLength(1);
+  });
+});
+
+describe('pending_enrichment metadata (EX-11)', () => {
+  const PENDING_SESSION = 'recall-int-pending-session';
+  const PENDING_AT = new Date('2026-06-03T09:00:00.000Z');
+
+  it("counts the calling session's own episodes with no orchestrator ledger key", async () => {
+    await push('first pending observation', PENDING_AT, PENDING_SESSION);
+    const second = await push('second pending observation', PENDING_AT, PENDING_SESSION);
+    await push('third pending observation', PENDING_AT, PENDING_SESSION);
+
+    // Only `second` is marked enriched; the orchestrator never runs in this file, so the
+    // other two stay open the way a fresh episode always does before the worker reaches it.
+    markLedgerApplied(db, orchestratorLedgerKey(second));
+
+    const pack = await handleRecall(deps, { query: 'pending observation' }, {
+      identity: PENDING_SESSION,
+      now: PENDING_AT,
+    });
+
+    expect(pack.metadata.pending_enrichment).toBe(2);
+  });
+
+  it('omits pending_enrichment once every one of the session\'s episodes is enriched', async () => {
+    const session = 'recall-int-fully-enriched-session';
+    const episodeId = await push('a fully enriched observation', PENDING_AT, session);
+    markLedgerApplied(db, orchestratorLedgerKey(episodeId));
+
+    const pack = await handleRecall(deps, { query: 'fully enriched observation' }, {
+      identity: session,
+      now: PENDING_AT,
+    });
+
+    expect(pack.metadata.pending_enrichment).toBeUndefined();
   });
 });

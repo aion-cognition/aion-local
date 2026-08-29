@@ -170,6 +170,10 @@ export const ConfigSchema = z.object({
     workerVectorBatchSize: positiveInt,
     /** Unenriched episodes `aion doctor` reports as a warning rather than a count. */
     reconcileWarnThreshold: nonNegativeInt,
+    /** `aion doctor`'s `queue-lag` check warns past this age (EX-10: no gauge existed at all). */
+    lagOldestUnclaimedWarnMs: positiveInt,
+    /** `aion doctor`'s `queue-lag` check warns past this total unclaimed depth. */
+    lagQueueDepthWarnThreshold: nonNegativeInt,
   }),
   logging: z.object({
     filePath: z.string().min(1),

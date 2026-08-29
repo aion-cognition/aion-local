@@ -204,7 +204,11 @@ describe('tool results over the wire', () => {
     for (const exchange of [exchangeA, exchangeB]) {
       const ack = exchange.ack as { content: ReadonlyArray<{ type: string; text: string }> };
       expect(ack.content[0]?.type).toBe('text');
-      expect(ack.content[0]?.text).toBe(`Stored episode ${exchange.episodeId}; queued for reflection.`);
+      // Not an exact match: the two pushes race, so which one's queue insert lands first
+      // (and therefore whether the ack names a `pending_ahead` clause) is nondeterministic.
+      expect(ack.content[0]?.text).toContain(
+        `Stored episode ${exchange.episodeId}; queued for reflection (interactive lane).`,
+      );
     }
     expect(exchangeA.episodeId).not.toBe(exchangeB.episodeId);
   });

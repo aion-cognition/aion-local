@@ -1,6 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 import { ReflectionQueueClaimant, reclaimStaleReflectionJobs } from '../../infrastructure/sqlite/claim.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { recordEnrichmentLagMs } from '../../infrastructure/sqlite/lag-samples.js';
 import type { ReflectionJob } from '../../infrastructure/sqlite/reflection-queue.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
@@ -325,6 +326,12 @@ export class ReflectionWorker {
   #succeed(job: ReflectionJob, episodeId: string, run: ReflectionRun): void {
     this.#consecutiveFailures = 0;
     this.#claimant.complete(this.#deps.db, job.id);
+    // Only a run that actually enriched something is the freshness pin's "intake to
+    // enriched": `already_applied` and `episode_unavailable` measured nothing new, and
+    // recording them would understate the lag the p95 exists to catch (EX-10).
+    if (run.applied && run.status === 'completed') {
+      recordEnrichmentLagMs(this.#deps.db, Date.now() - Date.parse(job.enqueuedAt));
+    }
     this.#deps.logger.info(
       { jobId: job.id, episodeId, status: run.status, applied: run.applied, counts: run.summary.counts },
       'reflection job complete',

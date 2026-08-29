@@ -230,6 +230,18 @@ describe('the explicitly empty pack', () => {
   it('leaves the degraded marker absent on a normal recall', () => {
     expect(assemble([item('e1')]).metadata.degraded).toBeUndefined();
   });
+
+  it('names the calling session\'s unenriched episode count', () => {
+    expect(assemble([], { pendingEnrichment: 3 }).metadata.pending_enrichment).toBe(3);
+  });
+
+  it('leaves pending_enrichment absent at zero rather than stating it', () => {
+    expect(assemble([], { pendingEnrichment: 0 }).metadata.pending_enrichment).toBeUndefined();
+  });
+
+  it('leaves pending_enrichment absent when the caller never measured it', () => {
+    expect(assemble([]).metadata.pending_enrichment).toBeUndefined();
+  });
 });
 
 describe('the structured items', () => {
