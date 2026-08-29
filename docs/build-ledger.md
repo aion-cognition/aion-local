@@ -394,3 +394,69 @@ scheduler in front of it. On a substrate carrying that much exercise debris the 
 also resonates with it: a query about admission floors came back with four "bulk import item"
 entities at 0.92, which is shape matching working exactly as specified against a neighborhood
 of near-identical fixtures.
+
+## P4 review: what the fix pass found and changed
+
+A review of P4 against the live substrate found seven defects that measurement settles rather
+than argues. This section records what was measured, since three of the numbers above turned
+out to be wrong.
+
+**The corrections first.** The full suite was not green. On the default route, the one the
+key selects, cognitive extraction failed deterministically on one episode, so the 1,731-pass
+figure above was taken on a run that did not include it. `CO_OCCURS already pinned at 1.0` was
+recorded as a fact about the substrate; it was a fact about the writer, which pinned it. And
+the decay sweep did not sweep: three live runs of 500 moved the same 500 edges each time.
+
+**The remote route reads replies two ways it did not before.** The model sometimes answers
+with a fenced JSON block, a line of second thoughts, then a corrected block; the parser took
+the whole reply as one value and threw. It now falls back to the last complete value, which is
+the answer the model settled on. Separately, one node typed outside the nine cognitive labels
+used to fail the whole array, costing an episode every node the model got right. Nodes are
+validated one at a time now. With both fixed the rationale battery runs on the shipped route
+rather than forcing the local model, and its Decision comes back at rank 1 carrying its why.
+
+**Decay was measuring disuse off the property it writes.** `duration.inDays` truncates to whole
+days, all 7,618 unprotected edges sat in one bucket, so the ordering was a total tie and the
+limit returned the same planner-ordered rows every call. Staleness and sweep order are now two
+properties: the curve reads `updated_at`, which means last used and which decay no longer
+writes, and the scan orders on `decayed_at`, which only the sweep writes. Live, three sweeps of
+500 now touch 1,500 distinct edges with zero overlap.
+
+**The weight floor was inert.** Decay clamps at 0.1 so a faded path stays reachable, and
+traversal refused any edge under 0.5 before computing a weight at all. Spreading activation now
+scales propagation by the edge's own strength for every relationship type, and the traversal
+cutoff sits at the floor.
+
+**Co-occurrence carries its discount.** The clique discount had reached the reinforcement
+learning rate only, while the edges themselves were written at 1.0, where a bounded step is a
+no-op. The edge upsert gained an explicit strength policy: restating a fact still takes the
+maximum, co-occurrence takes a bounded step at the same discount the queue applies.
+
+**Both vector indexes seed now.** `context_vec` was written, indexed, and read by nothing that
+measures against the query. Measured for "how did we fix the checkout latency": the nodes
+stating the fix rank 1 to 5 by neighborhood and 12, 15, 19, 44 and 55 by content, with content
+cosines from 0.60 to 0.73 against a 0.60 floor. They were admissible all along and never became
+candidates. A row found by neighborhood is scored on the ordinary content cosine, so no second
+distribution meets a floor calibrated on the first.
+
+**Resonance runs on the anchored set.** Its centroid averaged the whole activated set, most of
+which the seed legs merely reached, and a mean over that lands near the substrate's centre of
+mass. Live: a centroid over forty arbitrary context vectors returns the busiest nodes in the
+graph at 0.95 to 0.98 for any query; the centroid of the one node a nonsense query admitted
+returns that node's own neighborhood at 0.996. The centroid is now the admitted items, and the
+bucket is capped at how many of them there are.
+
+**Gate.** Unit project green: 1,342 across 118 files. Integration green across all 52 files,
+run by directory: recall 104, mcp 126 and 1 skipped, infrastructure and reflection and
+plasticity 160 and 2 skipped, session and redaction and cli 30. The six gate batteries pass on
+the default route, the held-out battery five times in a row. The image was rebuilt and the
+service recreated, and the live checks re-ran on it: all six off-topic strings return an empty
+or single-item pack with no resonant bucket, where two of them had been returning six items.
+
+**What the pass did not close.** Two of R2-1's three named nodes now reach the pack; the
+Decision node ranks 44th by content and outside the top 40 by neighborhood, and no budget
+reaches it. The "what did we decide" family is unchanged: its Decision nodes rank poorly in
+both indexes, so the second index does not help them. One held-out probe per run still misses
+its answer term in the top five, always to the same shape: three near-identical items about one
+distractor goal, split across two buckets so the cluster cap groups none of them. That is the
+floors-and-caps re-measurement, not a retrieval regression.
