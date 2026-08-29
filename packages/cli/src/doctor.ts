@@ -11,6 +11,7 @@ import {
   measureAdmissionFloor,
   openLogger,
   OllamaProvider,
+  queueLagSnapshot,
   readVectorIndexes,
   reconcileEnrichment,
   SqliteStore,
@@ -66,6 +67,34 @@ export async function probeMcpHttp(port: number, fetchImpl: typeof fetch = fetch
     return { ok: false, detail: `unexpected health payload from ${url}: ${JSON.stringify(body)}` };
   }
   return { ok: true, detail: `${url}, ${String(body.sessions)} sessions` };
+}
+
+/**
+ * Pure SQLite, no Neo4j: `aion doctor` printed "8 checks passed" with 4,000+ jobs pending
+ * and again with one permanently wedged job (EX-10). Warn, never fail — a backlog is a
+ * thing that is behind, not a thing that is broken.
+ */
+export function queueLagCheck(db: SqliteHandle, config: Config, now: Date = new Date()): CheckResult {
+  const snapshot = queueLagSnapshot(db, config.operational.workerMaxAttempts, now);
+  const { interactive, bulk } = snapshot.depthByLane;
+  const depth = interactive + bulk;
+  const oldest = snapshot.oldestUnclaimedMs;
+  const detail = [
+    `depth ${String(depth)} (interactive ${String(interactive)}, bulk ${String(bulk)})`,
+    `oldest unclaimed ${oldest === undefined ? 'none' : `${String(Math.round(oldest / 1000))}s`}`,
+    `${String(snapshot.exhausted)} exhausted`,
+    `${String(snapshot.reinforcementDropped)} reinforcement rows dropped`,
+    snapshot.p95EnrichmentLagMs === undefined
+      ? 'no enrichment lag samples yet'
+      : `p95 enrichment lag ${String(Math.round(snapshot.p95EnrichmentLagMs / 1000))}s`,
+  ].join(', ');
+
+  const stale = oldest !== undefined && oldest > config.operational.lagOldestUnclaimedWarnMs;
+  const deep = depth > config.operational.lagQueueDepthWarnThreshold;
+  if (stale || deep) {
+    return { ok: true, warn: true, detail };
+  }
+  return { ok: true, detail };
 }
 
 function writableDirectories(config: Config): readonly string[] {
@@ -196,6 +225,10 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
         }
         return { ok: true, detail: scanned };
       },
+    },
+    {
+      name: 'queue-lag',
+      run: () => Promise.resolve(queueLagCheck(db, config)),
     },
     {
       name: 'volumes-writable',

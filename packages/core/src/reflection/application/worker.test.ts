@@ -7,6 +7,7 @@ import { openLogger, type Logger } from '../../infrastructure/logging/logger.js'
 import type { Provider, Vector } from '../../infrastructure/providers/types.js';
 import { ReflectionQueueClaimant } from '../../infrastructure/sqlite/claim.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
+import { listEnrichmentLagSamplesMs } from '../../infrastructure/sqlite/lag-samples.js';
 import { enqueueReflectionJob, getReflectionJob } from '../../infrastructure/sqlite/reflection-queue.js';
 import { FakeGraph } from '../test-support/fake-graph.fixture.js';
 import { ReflectionDispatch } from './dispatch.js';
@@ -194,6 +195,51 @@ describe('signal-driven execution', () => {
 
     expect(getReflectionJob(store.db, jobId)).toBeUndefined();
     expect(started.retrying).toBe(0);
+  });
+});
+
+describe('enrichment lag', () => {
+  function backdateEnqueue(jobId: string, ageMs: number): void {
+    store.db
+      .prepare('UPDATE reflection_queue SET enqueued_at = ? WHERE id = ?')
+      .run(new Date(Date.now() - ageMs).toISOString(), jobId);
+  }
+
+  it('records a sample for a run that actually enriched the episode', async () => {
+    const runner = new StubRunner();
+    const started = build(runner);
+    await started.start();
+
+    const jobId = enqueue();
+    backdateEnqueue(jobId, 5_000);
+    signal(jobId);
+    await started.whenIdle();
+
+    const samples = listEnrichmentLagSamplesMs(store.db);
+    expect(samples).toHaveLength(1);
+    // Loose bound: real wall time passes running the test, backoff and timers are not at play.
+    expect(samples[0]).toBeGreaterThanOrEqual(5_000);
+    expect(samples[0]).toBeLessThan(6_000);
+  });
+
+  // `already_applied` and `episode_unavailable` are terminal but enriched nothing new; a
+  // sample here would understate the lag the p95 exists to catch (EX-10).
+  it('records nothing for a terminal run that enriched nothing', async () => {
+    const runner = new StubRunner();
+    runner.outcome = (episodeId): ReflectionRun => ({
+      episodeId,
+      status: 'already_applied',
+      applied: false,
+      summary: { episodeId, durationMs: 1, stages: [], counts: {} },
+    });
+    const started = build(runner);
+    await started.start();
+
+    const jobId = enqueue();
+    signal(jobId);
+    await started.whenIdle();
+
+    expect(listEnrichmentLagSamplesMs(store.db)).toEqual([]);
   });
 });
 

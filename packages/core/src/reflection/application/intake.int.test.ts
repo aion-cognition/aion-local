@@ -218,7 +218,9 @@ describe('reflection intake against a live graph and live Ollama', () => {
 
     const repeat = await handleReflection(deps, MIXED_PAYLOAD, { identity: SESSION_IDENTITY });
 
-    expect(repeat).toEqual({ episode_id: episodeId, queued: true, lane: 'interactive' });
+    // pending_ahead counts the one already-queued interactive job from the beforeAll push,
+    // which nothing in this file ever claims.
+    expect(repeat).toEqual({ episode_id: episodeId, queued: true, lane: 'interactive', pending_ahead: 1 });
     expect(await countNodes(harness.driver)).toBe(nodesBefore);
     expect(await countRelationships(harness.driver)).toBe(edgesBefore);
     expect(listReflectionJobs(db)).toHaveLength(1);

@@ -1,6 +1,7 @@
 import neo4j, { type Driver } from 'neo4j-driver';
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { runRead, type GraphTransaction } from './connection.js';
+import { readModeFragment, withCurrency, type ReadMode } from './read-modes.js';
 
 /**
  * Property names shared between the writer in `core/reflection/` and the Cypher here, so
@@ -108,4 +109,33 @@ export async function listStoredEpisodes(
     id: row.id as string,
     sessionId: typeof row.session_id === 'string' ? row.session_id : undefined,
   }));
+}
+
+/**
+ * One session's own episode ids, for a caller that must answer "how many of mine are still
+ * unenriched" without pulling every episode's text (`loadSessionEpisodes` in
+ * `narrative-queries.ts` does that for compression; this is the id-only reader for a check
+ * run on every recall). Respects `mode` so a bitemporal read sees the episode set that
+ * existed at that vantage point.
+ */
+function sessionEpisodeIdsStatement(
+  sessionId: string,
+  mode: ReadMode,
+): { cypher: string; parameters: Record<string, unknown> } {
+  const episode = readModeFragment(mode, 'e', 'rme');
+  const cypher = [
+    `MATCH (e:Episode)-[:${CONTAINMENT_TYPE}]->(:Session { id: $sessionId })`,
+    `WHERE ${episode.where}`,
+    'RETURN e.id AS id',
+  ].join('\n');
+  return { cypher, parameters: { sessionId, ...episode.parameters } };
+}
+
+export async function listSessionEpisodeIds(
+  driver: Driver,
+  sessionId: string,
+  mode: ReadMode = withCurrency(),
+): Promise<readonly string[]> {
+  const statement = sessionEpisodeIdsStatement(sessionId, mode);
+  return runRead(driver, statement.cypher, statement.parameters, (row) => row.id as string);
 }

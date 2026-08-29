@@ -143,6 +143,39 @@ describe('reflection results', () => {
     ]);
     expect(result.structuredContent).toEqual({ episode_id: 'episode-1', queued: true, lane: 'interactive' });
   });
+
+  // EX-39's concern applies to the ack too: a text-only client has no other way to see how
+  // far behind live traffic its own memory queued.
+  it('names how many interactive jobs are ahead of it, in the rendered text', async () => {
+    const backend: ToolBackend = {
+      recall: () => Promise.resolve(pack()),
+      reflection: () =>
+        Promise.resolve({ episode_id: 'episode-1', queued: true, lane: 'interactive', pending_ahead: 3 } as const),
+    };
+
+    const result = await callTool(backend, logger, 'reflection', { observations: ['x'] }, 'session-a');
+
+    expect(result.content).toEqual([
+      {
+        type: 'text',
+        text: 'Stored episode episode-1; queued for reflection (interactive lane). 3 interactive jobs ahead of it.',
+      },
+    ]);
+  });
+
+  it('omits the pending-ahead clause when there is nothing ahead of it', async () => {
+    const backend: ToolBackend = {
+      recall: () => Promise.resolve(pack()),
+      reflection: () =>
+        Promise.resolve({ episode_id: 'episode-1', queued: true, lane: 'interactive', pending_ahead: 0 } as const),
+    };
+
+    const result = await callTool(backend, logger, 'reflection', { observations: ['x'] }, 'session-a');
+
+    expect(result.content).toEqual([
+      { type: 'text', text: 'Stored episode episode-1; queued for reflection (interactive lane).' },
+    ]);
+  });
 });
 
 describe('error mapping', () => {

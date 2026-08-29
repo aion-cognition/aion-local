@@ -123,6 +123,13 @@ export const MemoryPackMetadataSchema = z.strictObject({
   stage_timings_ms: StageTimingsMsSchema,
   cues: z.array(CueSchema),
   degraded: z.array(DegradationSchema).min(1).optional(),
+  /**
+   * The calling session's own episodes with no orchestrator ledger key: real, stored, and
+   * reachable by raw text, but not yet reachable by entity resolution, traversal, or context
+   * vectors (EX-11: a memory was not fully recallable for 20 to 25 minutes and the pack never
+   * said so). Optional and omitted at zero — a healthy pack states nothing extra.
+   */
+  pending_enrichment: z.number().int().positive().optional(),
 });
 
 export type MemoryPackMetadata = z.infer<typeof MemoryPackMetadataSchema>;

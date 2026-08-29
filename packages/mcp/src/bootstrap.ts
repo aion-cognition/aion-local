@@ -16,6 +16,7 @@ import {
   loadConfig,
   openLogger,
   OllamaProvider,
+  queueLagSnapshot,
   readMemberName,
   RecallSideEffects,
   ReflectionDispatch,
@@ -273,6 +274,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       host: bindHost(runningInContainer()),
       port: config.operational.mcpPort,
       onSessionClosed: narratives.onSessionClosed,
+      queueLag: () => queueLagSnapshot(store.db, config.operational.workerMaxAttempts),
     });
 
     logger.info(

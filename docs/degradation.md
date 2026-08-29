@@ -284,6 +284,8 @@ Every knob below is `AION_*`-overridable; the catalog is
 | `AION_LANE_GLOBAL_ARRIVAL_MAX` (`lanes.globalArrivalMax`) | 120 | Arrivals across every session inside the window before the substrate counts as hot. Twelve busy sessions' worth. | Below ordinary multi-agent load, every session drops to the hot allowance for no reason. | New in the fix round. |
 | `AION_LANE_HOT_SESSION_ARRIVAL_MAX` (`lanes.hotSessionArrivalMax`) | 3 | The per-session allowance while the substrate is hot; what stops enough fresh sessions from reproducing the flood with every per-session counter reading green. | At 1, a single retry during someone else's flood costs a legitimate session its lane. | New in the fix round. |
 | `AION_RECONCILE_WARN_THRESHOLD` (`operational.reconcileWarnThreshold`) | 50 | Unenriched episodes `aion doctor` tolerates before it warns. | Raised past a real backlog, doctor goes back to reporting all-green over a substrate hours behind, which is the state EX-41 was filed for. | New in the fix round. |
+| `AION_LAG_OLDEST_UNCLAIMED_WARN_MS` (`operational.lagOldestUnclaimedWarnMs`) | 600000 | Age of the oldest unclaimed job `aion doctor`'s `queue-lag` check tolerates before it warns. | Raised past a real backlog, doctor stops naming a queue that has gone stale. Ten minutes is inside the 1.9 to 6.7 episodes/min drain rate EX-10 measured. | New in the fix round. |
+| `AION_LAG_QUEUE_DEPTH_WARN_THRESHOLD` (`operational.lagQueueDepthWarnThreshold`) | 200 | Total unclaimed jobs, either lane, `aion doctor`'s `queue-lag` check tolerates before it warns. | Raised past a real backlog, the same silence as above but by depth instead of age — either alone can miss a starved-then-drained queue the other catches. | New in the fix round. |
 
 Raising `AION_WORKER_COUNT` past 1 buys nothing on its own: the reflection worker, the
 recall cue model, and the idle narrative sweeper all share one host Ollama endpoint
@@ -308,6 +310,16 @@ Both halves have an operator surface. `aion queue ls` shows depth, age and per-l
 sheds unclaimed rows after printing the count. Shedding leaves the episodes stored and
 unenriched, which `aion queue reconcile` counts and `--re-enqueue` hands back to the queue in
 the bulk lane.
+
+The same lag is visible without touching the queue directly. `/health` and `aion status`
+report queue depth per lane, the oldest unclaimed job's age, the exhausted-attempts count,
+the reinforcement queue's cumulative dropped-row counter, and the p95 of intake-to-enriched
+lag over a rolling window of completed jobs; `aion doctor`'s `queue-lag` check warns (never
+fails) past `AION_LAG_OLDEST_UNCLAIMED_WARN_MS` / `AION_LAG_QUEUE_DEPTH_WARN_THRESHOLD`. The
+reflection ack carries `pending_ahead` — unclaimed interactive-lane jobs ahead of it at
+enqueue time — and a recall pack's metadata carries `pending_enrichment`: the calling
+session's own episodes with no orchestrator ledger key yet (EX-11), so an agent can tell its
+own last few turns are still thin before it asks why a fact from them was not found.
 
 ## Deferred gaps
 

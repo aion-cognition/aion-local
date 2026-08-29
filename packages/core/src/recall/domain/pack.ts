@@ -161,6 +161,8 @@ export type AssemblePackInput = {
   readonly timings: StageTimingsMs;
   /** Every rung of the ladder that fired (PRD §6.1, §10); absent on a normal recall. */
   readonly degraded?: readonly Degradation[];
+  /** The calling session's own episodes with no orchestrator ledger key yet (EX-11). */
+  readonly pendingEnrichment?: number;
 };
 
 type Selection = Map<PackBucket, MemoryPackItem[]>;
@@ -255,6 +257,9 @@ export function assemblePack(input: AssemblePackInput): MemoryPack {
       ...(input.degraded === undefined || input.degraded.length === 0
         ? {}
         : { degraded: [...input.degraded] }),
+      ...(input.pendingEnrichment === undefined || input.pendingEnrichment === 0
+        ? {}
+        : { pending_enrichment: input.pendingEnrichment }),
     },
   });
 }

@@ -10,11 +10,14 @@ import {
 import type { Driver } from 'neo4j-driver';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { fetchAdjacency } from '../../infrastructure/graph/adjacency.js';
+import { listSessionEpisodeIds } from '../../infrastructure/graph/episodes.js';
 import { asOf, bitemporalAt, knewAt, withCurrency, type ReadMode } from '../../infrastructure/graph/read-modes.js';
 import { contentVectors, nodeCandidates, type SeedCandidate } from '../../infrastructure/graph/seed-queries.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider, Vector } from '../../infrastructure/providers/types.js';
 import type { SessionManager } from '../../session/session-manager.js';
+import { isLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
+import { orchestratorLedgerKey } from '../../reflection/application/orchestrator.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { saveLastPack } from '../../infrastructure/sqlite/last-pack.js';
 import {
@@ -203,6 +206,28 @@ async function hydrate(
   return new Map(rows.map((row) => [row.id, row]));
 }
 
+/**
+ * The calling session's own episodes with no orchestrator ledger key (EX-11): stored and
+ * findable by raw text, but not yet reachable by entity resolution, traversal, or context
+ * vectors. Best-effort — a failure here costs the pack one honesty field, never the recall
+ * itself, so it is caught and logged rather than allowed to fail the call.
+ */
+async function pendingEnrichment(deps: RecallDeps, sessionId: string, mode: ReadMode): Promise<number> {
+  try {
+    const episodeIds = await listSessionEpisodeIds(deps.driver, sessionId, mode);
+    let count = 0;
+    for (const episodeId of episodeIds) {
+      if (!isLedgerApplied(deps.db, orchestratorLedgerKey(episodeId))) {
+        count += 1;
+      }
+    }
+    return count;
+  } catch (err) {
+    deps.logger.warn({ err, sessionId }, 'pending-enrichment count failed; omitted from the pack');
+    return 0;
+  }
+}
+
 function activationBudget(config: Config): ActivationBudget {
   return {
     ...config.activation,
@@ -247,6 +272,11 @@ export async function handleRecall(
     identity: payload.session_id ?? options.identity,
     now,
   });
+
+  // Fired here rather than awaited here: it depends only on `sessionId` and `mode`, so
+  // starting it now lets it run alongside every stage below instead of adding its own
+  // latency once the pack is ready to assemble (see the `await` beside `assemblePack`).
+  const pendingEnrichmentPromise = pendingEnrichment(deps, sessionId, mode);
 
   const cues = await timed<CueExtractionResult>(() =>
     extractCues(
@@ -320,6 +350,10 @@ export async function handleRecall(
     });
   });
 
+  // Started as early as the session resolves and awaited only once the pack is ready to
+  // assemble, so this honesty field's own graph read never adds serial latency to the call.
+  const pendingEnrichmentCount = await pendingEnrichmentPromise;
+
   const timings: StageTimingsMs = {
     cues: cues.ms,
     embed: embedded.ms,
@@ -335,6 +369,7 @@ export async function handleRecall(
     cues: cues.value.cues,
     timings,
     ...(degradations.length === 0 ? {} : { degraded: degradations }),
+    pendingEnrichment: pendingEnrichmentCount,
   });
 
   saveLastPack(deps.db, sessionId, pack, now.toISOString());

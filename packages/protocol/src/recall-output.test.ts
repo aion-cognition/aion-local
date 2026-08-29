@@ -56,6 +56,22 @@ describe('MemoryPackSchema valid fixtures', () => {
     expect(() => MemoryPackSchema.parse(pack)).toThrow();
   });
 
+  it('parses pending_enrichment alongside the calling session\'s unenriched count', () => {
+    const pack = {
+      rendered_text: 'No relevant memories found.',
+      metadata: { ...baseMetadata, pending_enrichment: 3 },
+    };
+    expect(MemoryPackSchema.parse(pack)).toEqual(pack);
+  });
+
+  it('rejects pending_enrichment: 0 — a healthy pack omits it rather than stating zero', () => {
+    const pack = {
+      rendered_text: 'No relevant memories found.',
+      metadata: { ...baseMetadata, pending_enrichment: 0 },
+    };
+    expect(() => MemoryPackSchema.parse(pack)).toThrow();
+  });
+
   it('parses a pack with a direct-hit item and no path in its rationale', () => {
     const pack = {
       episodes: [

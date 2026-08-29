@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { Logger } from '@aion/core';
+import type { Logger, QueueLagSnapshot } from '@aion/core';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
@@ -76,6 +76,14 @@ export type AionMcpServiceOptions = {
    * a DELETE never reaches it at all, which is what the idle sweep exists for.
    */
   readonly onSessionClosed?: (sessionId: string) => void;
+  /**
+   * EX-10: `/health` reported only `{status, sessions, descriptions_version}` while 4,000+
+   * jobs sat pending. `queueLagSnapshot` (`@aion/core`) is SQLite-only — no Neo4j, no Ollama
+   * — so calling it on every liveness probe stays cheap; the check the doctor.ts comment
+   * documents (never touching the graph or the model) is unchanged. Absent, the fields it
+   * would fill are simply omitted, which is what every construction that predates it gets.
+   */
+  readonly queueLag?: () => QueueLagSnapshot;
 };
 
 export class AionMcpService {
@@ -87,6 +95,7 @@ export class AionMcpService {
   readonly #http: HttpServer;
   readonly #drainTimeoutMs: number;
   readonly #onSessionClosed: ((sessionId: string) => void) | undefined;
+  readonly #queueLag: (() => QueueLagSnapshot) | undefined;
   /** Tool calls that have started and not yet settled. Shutdown waits on these. */
   readonly #inFlight = new Set<Promise<unknown>>();
   #stopping = false;
@@ -98,6 +107,7 @@ export class AionMcpService {
     this.#configuredPort = options.port;
     this.#drainTimeoutMs = options.drainTimeoutMs ?? DRAIN_TIMEOUT_MS;
     this.#onSessionClosed = options.onSessionClosed;
+    this.#queueLag = options.queueLag;
     this.#http = createServer((req, res) => {
       void this.#route(req, res);
     });
@@ -207,6 +217,25 @@ export class AionMcpService {
     this.#logger.info({ port }, 'mcp service stopped');
   }
 
+  /**
+   * Flat, snake_case keys alongside `/health`'s existing ones (PRD wire convention). Depth
+   * is per lane rather than a bare total, since a starved interactive lane behind a bulk
+   * flood and an evenly-loaded queue report the same total but need opposite responses.
+   */
+  #queueLagFields(): Record<string, unknown> {
+    if (this.#queueLag === undefined) {
+      return {};
+    }
+    const snapshot = this.#queueLag();
+    return {
+      queue_depth: snapshot.depthByLane,
+      queue_oldest_unclaimed_ms: snapshot.oldestUnclaimedMs ?? null,
+      queue_exhausted: snapshot.exhausted,
+      reinforcement_dropped: snapshot.reinforcementDropped,
+      enrichment_lag_p95_ms: snapshot.p95EnrichmentLagMs ?? null,
+    };
+  }
+
   async #route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
       const path = new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
@@ -215,6 +244,7 @@ export class AionMcpService {
           status: 'ok',
           sessions: this.#sessions.size,
           descriptions_version: DESCRIPTIONS_VERSION,
+          ...this.#queueLagFields(),
         });
         return;
       }
