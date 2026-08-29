@@ -47,7 +47,7 @@ function input(overrides: Partial<ResonanceInput> = {}): ResonanceInput {
   return {
     activated: activated('a', 'b'),
     exclude: new Set(['a', 'b']),
-    anchored: true,
+    anchoredIds: new Set(['a', 'b']),
     mode: withCurrency(),
     ...overrides,
   };
@@ -115,7 +115,7 @@ describe('context resonance when it declines to search', () => {
   // own evidence there is no such shape, and searching from one anyway is how an off-topic
   // pack fills itself.
   it('declines a query the first pass could not anchor', async () => {
-    const result = await resonate(deps(unreachableDriver()), input({ anchored: false }));
+    const result = await resonate(deps(unreachableDriver()), input({ anchoredIds: new Set() }));
 
     expect(result.skipped).toBe('no_anchor');
     expect(result.items).toEqual([]);
@@ -187,6 +187,64 @@ describe('context resonance when it searches', () => {
     );
 
     expect(result.items.map((item) => item.id)).toEqual(['r1', 'r2']);
+  });
+
+  it('averages only the activated nodes the first pass admitted', async () => {
+    const asked: string[] = [];
+    const driver = answeringWith((cypher) => {
+      const target = routed(cypher);
+      if (target === 'context-vectors') {
+        return [contextVectorRow('a', [1, 0])];
+      }
+      if (target === 'search') {
+        return [hitRow('r1', 0.9)];
+      }
+      return [candidateRow('r1')];
+    });
+    const recording = {
+      executeQuery: (cypher: string, parameters: Record<string, unknown>) => {
+        if (routed(cypher) === 'context-vectors') {
+          asked.push(...(parameters['ids'] as string[]));
+        }
+        return (driver as unknown as { executeQuery: (c: string) => unknown }).executeQuery(cypher);
+      },
+    } as unknown as Driver;
+
+    await resonate(
+      deps(recording),
+      input({ activated: activated('a', 'b', 'c'), anchoredIds: new Set(['a']) }),
+    );
+
+    // 'b' and 'c' were reached, not admitted. Averaging them in is what walks the centroid
+    // toward the middle of the substrate, where the busiest nodes sit close to everything.
+    expect(asked).toEqual(['a']);
+  });
+
+  it('returns no more resonant hits than the first pass admitted items', async () => {
+    const limits: number[] = [];
+    const driver = answeringWith((cypher) => {
+      const target = routed(cypher);
+      if (target === 'context-vectors') {
+        return [contextVectorRow('a', [1, 0])];
+      }
+      if (target === 'search') {
+        return [hitRow('r1', 0.9)];
+      }
+      return [candidateRow('r1')];
+    });
+    const recording = {
+      executeQuery: (cypher: string, parameters: Record<string, unknown>) => {
+        if (routed(cypher) === 'search') {
+          limits.push(Number((parameters['limit'] as { toNumber?: () => number }).toNumber?.() ?? parameters['limit']));
+        }
+        return (driver as unknown as { executeQuery: (c: string) => unknown }).executeQuery(cypher);
+      },
+    } as unknown as Driver;
+
+    await resonate(deps(recording), input({ anchoredIds: new Set(['a']) }));
+
+    expect(limits).toEqual([1]);
+    expect(DEFAULTS.contextResonance.resonantLimit).toBeGreaterThan(1);
   });
 
   it('drops a hit the hydration read would not return, and one with nothing to render', async () => {
