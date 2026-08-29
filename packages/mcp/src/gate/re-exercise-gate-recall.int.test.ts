@@ -13,15 +13,15 @@ import {
 import { GateSubstrate, waitFor } from './gate-substrate.fixture.js';
 
 /**
- * Batteries 1 and 2 of the re-exercise gate, paired on purpose. EX-1's own miss queries have
- * to come back thin or empty, and the exercise's own hits have to survive the floor that made
- * that happen — half of this alone proves nothing, since a floor at 1.0 passes the first half
- * and starves every question a user would ask.
+ * The off-topic and on-topic batteries, paired on purpose. The measured miss queries have to
+ * come back thin or empty, and the measured hits have to survive the floor that made that
+ * happen. Half of this alone proves nothing, since a floor at 1.0 passes the first half and
+ * starves every question a user would ask.
  *
  * What this adds over `recall/application/floor-battery.int.test.ts`, which measures the same
  * two batteries: the cue model runs for real rather than being stubbed to the raw query, and
  * the substrate is enriched by the shipped pipeline first, so the entity glosses and cognitive
- * nodes that filled EX-1's packs exist here to be admitted or refused.
+ * nodes that filled the off-topic packs exist here to be admitted or refused.
  */
 
 const WRITE_SESSION = 'gate-floor-write';
@@ -39,7 +39,7 @@ const ENRICH_DEADLINE_MS = 900_000;
  */
 const MIN_RANK_ONE_RATE = 0.5;
 
-/** The exercise measured 13 to 27 items and 1,161 to 1,199 of a 1,200-token budget per miss. */
+/** A miss used to come back with 13 to 27 items and 1,161 to 1,199 of a 1,200-token budget. */
 const THIN_PACK_ITEMS = 2;
 
 const substrate = new GateSubstrate('floors');
@@ -95,7 +95,7 @@ beforeAll(async () => {
   }
 
   // The shipped pipeline over the whole substrate, so the glosses and cognitive nodes that
-  // filled EX-1's packs are present. Started after every intake, so no episode is enriched
+  // filled the off-topic packs are present. Started after every intake, so no episode is enriched
   // before its siblings are stored and the entity graph is one graph rather than ten.
   const worker = substrate.worker();
   await worker.start();
@@ -143,7 +143,7 @@ afterAll(async () => {
   await substrate.close();
 });
 
-describe('battery 1: the unrelated-query battery EX-1 filled to budget', () => {
+describe('an unrelated query returns a thin or empty pack', () => {
   it.each(OFF_TOPIC_BATTERY)('comes back thin or empty for: %s', async (query) => {
     const result = await substrate.recall(query, { identity: READ_SESSION, now: RECALLED_AT });
     const unmeasured = result.items.filter((item) => item.confidence === 0).length;
@@ -170,8 +170,8 @@ describe('battery 1: the unrelated-query battery EX-1 filled to budget', () => {
     );
 
     expect(result.items.length).toBeLessThanOrEqual(THIN_PACK_ITEMS);
-    // The pack has to say what it refused, not merely be short: EX-1's packs were full and
-    // silent, and a thin pack with an empty report would be the same silence one size down.
+    // The pack has to say what it refused, not merely be short: the off-topic packs were full
+    // and silent, and a thin pack with an empty report is the same silence one size down.
     expect(result.admission.droppedBelowFloor + result.admission.droppedUnmeasured).toBeGreaterThan(
       0,
     );
@@ -210,7 +210,7 @@ describe('battery 1: the unrelated-query battery EX-1 filled to budget', () => {
   }, 120_000);
 });
 
-describe('battery 2: the paired on-topic battery', () => {
+describe('a question the substrate can answer is still answered', () => {
   it.each(ON_TOPIC_BATTERY)('still answers: $query', async (probe) => {
     const result = await substrate.recall(probe.query, {
       identity: READ_SESSION,

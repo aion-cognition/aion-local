@@ -17,7 +17,7 @@ describe('describeFailedRun', () => {
 
   /**
    * The message an operator reads off the queue row. "no stage enriched" was false the first
-   * time it was measured — eight of nine stages had applied and one had timed out — and the
+   * time it was measured, with eight of nine stages applied and one timed out, and the
    * per-stage ledger makes it further from true, since a retry re-enters only what failed.
    */
   it('names the stage that failed and how much was already applied', () => {

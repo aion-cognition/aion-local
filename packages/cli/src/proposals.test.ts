@@ -74,9 +74,9 @@ describe('aion proposals against a seeded review queue', () => {
   }
 
   /**
-   * The state the exercise reported from the other side: the table had never held a row. The
-   * fix cannot be a table nothing counts, so the queue has to be readable without raw SQL
-   * inside the container, which is how the first live proposal row had to be found.
+   * The table had never held a row, which broke reading the queue without raw SQL inside
+   * the container. The first live proposal row had to be found before the queue could be
+   * queried programmatically.
    */
   it('lists both review queues, with what each proposal would do', async () => {
     const id = seedSupersession();

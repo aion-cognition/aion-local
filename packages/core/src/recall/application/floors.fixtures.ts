@@ -2,9 +2,9 @@
  * The evidence behind the admission floors, as fixtures rather than as lore.
  *
  * Two distributions decide a floor and both have to be measured: what unrelated text scores
- * against this embedding model, and what a genuine match scores. The exercise measured the
- * first and nearly missed the second — a real match at 0.631 sits close enough to a naive 0.60
- * floor that the floor would have starved it.
+ * against this embedding model, and what a genuine match scores. Measuring the first and
+ * skipping the second nearly starved a real match at 0.631, which sits close enough to a naive
+ * 0.60 floor to be cut by it.
  *
  * The two distributions overlap, and that is a property of the model rather than a defect in
  * the corpus: unrelated technical prose reaches 0.55 while a vaguely-worded genuine match can
@@ -37,7 +37,7 @@ export type ScoredPair = {
 
 /**
  * The shape the floor actually faces: an off-topic query against stored engineering content.
- * Every entry pairs one of the exercise's own miss queries with the substrate text that surfaced for
+ * Every entry pairs one of the measured miss queries with the substrate text that surfaced for
  * it, so the noise distribution is measured on the real failure rather than on abstract
  * sentence pairs.
  */
@@ -210,7 +210,7 @@ export const BATTERY_SUBSTRATE: readonly BatteryEpisode[] = [
 ];
 
 /**
- * The exercise's own miss queries, verbatim where the report quotes them. Every one returned a full,
+ * The measured miss queries, verbatim where they were recorded. Every one returned a full,
  * budget-saturated pack of confident items; the floor's job is to make them thin or empty.
  */
 export const OFF_TOPIC_BATTERY: readonly string[] = [

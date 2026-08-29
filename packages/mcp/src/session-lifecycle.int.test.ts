@@ -170,11 +170,11 @@ describe('lazy Session node creation', () => {
   });
 
   /**
-   * Recall produces nothing to remember, so it mints nothing. Half the Session nodes the
-   * exercise measured held zero episodes, and recall is what generated them: ~1,480 calls,
-   * each one adding an edge to both structural hubs and a link to a 477-edge FOLLOWS chain.
-   * The pack is still served and still recorded against the session id, which is the point —
-   * the id exists without the node, because the node is keyed on the id.
+   * Recall produces nothing to remember, so it mints nothing. Half the Session nodes measured
+   * held zero episodes, and recall is what generated them: ~1,480 calls, each one adding an
+   * edge to both structural hubs and a link to a 477-edge FOLLOWS chain. The pack is still
+   * served and still recorded against the session id, which is the point: the id exists
+   * without the node, because the node is keyed on the id.
    */
   it('leaves no Session node for a recall-only session, and still serves the pack', async () => {
     const { client, transport } = await open();

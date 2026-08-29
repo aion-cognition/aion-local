@@ -305,8 +305,7 @@ describe('the raw query is always a cue', () => {
   it.each(BARE_QUERY_FIXTURES)(
     'keeps the question itself even when the model invents topics for: $input.query',
     async (fixture) => {
-      // What the exercise's bare queries actually produced: confident, on-topic-looking cues
-      // for a topic the substrate has never held.
+      // Models produce confident, on-topic-looking cues for topics the substrate has never held.
       generate.mockResolvedValue(
         fullOutput({ query_cues: ['kafka consumer lag', 'outbox poller'] }),
       );

@@ -212,7 +212,7 @@ async function hydrate(
 /**
  * The calling session's own episodes with no orchestrator ledger key: stored and
  * findable by raw text, but not yet reachable by entity resolution, traversal, or context
- * vectors. Best-effort — a failure here costs the pack one honesty field, never the recall
+ * vectors. Best-effort: a failure here costs the pack one honesty field, never the recall
  * itself, so it is caught and logged rather than allowed to fail the call.
  */
 async function pendingEnrichment(deps: RecallDeps, sessionId: string, mode: ReadMode): Promise<number> {
@@ -232,10 +232,10 @@ async function pendingEnrichment(deps: RecallDeps, sessionId: string, mode: Read
 }
 
 /**
- * Which terminations mean the answer was cut short. `hop_limit` is not one of them: PRD §6.3
- * bounds traversal depth by design, so stopping there is the spread finishing its job. The
- * other two are budgets — the exercise measured `node_budget` on 60.2% of recalls against a
- * populated substrate, invisible to every caller.
+ * Which terminations mean the answer was cut short. `hop_limit` is not one of them: traversal
+ * depth is bounded by design, so stopping there is the spread finishing its job. The other two
+ * are budgets. `node_budget` measured on 60.2% of recalls against a populated substrate,
+ * invisible to every caller.
  */
 function truncationFor(termination: ActivationTermination): PackTruncation | undefined {
   if (termination === 'node_budget' || termination === 'max_iterations') {

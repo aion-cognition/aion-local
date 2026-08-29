@@ -18,13 +18,12 @@ import { CROSS_STAGE_ENTITY_MISS } from './gate-batteries.fixture.js';
 import { GateSubstrate, waitFor } from './gate-substrate.fixture.js';
 
 /**
- * Batteries 6 and 7: what the write path stores, and who it serves first.
+ * What the write path stores, and who it serves first.
  *
- * Redaction is read back from the substrate rather than from the redactor's return value —
- * the exercise's own redaction pass read pack output, reported PASS, and left three shapes in
- * Neo4j in plaintext where nothing is ever hard-deleted (EX-2, EX-3, EX-9). The corpus is
- * B1's, imported rather than retyped, so one set of strings governs the unit tests, the intake
- * integration test, and this gate.
+ * Redaction is read back from the substrate rather than from the redactor's return value: an
+ * earlier pass read pack output, reported clean, and left three shapes sitting in Neo4j in
+ * plaintext, where nothing is ever hard-deleted. The corpus is imported rather than retyped,
+ * so one set of strings governs the unit tests, the intake integration test, and this gate.
  *
  * The starvation sim is the live incident at one fiftieth of its size: a bulk flood queued
  * ahead of one live turn, which on the night sat unclaimed while the queue reached 4,016 jobs
@@ -66,7 +65,7 @@ afterAll(async () => {
   await substrate.close();
 });
 
-describe('battery 6: the leaked-shape corpus through a real intake', () => {
+describe('the leaked-shape corpus through a real intake', () => {
   for (const shape of LEAKED_SHAPES) {
     it(`stores no trace of ${shape.label}`, () => {
       expect(storedProperties).not.toContain(shape.material);
@@ -87,7 +86,7 @@ describe('battery 6: the leaked-shape corpus through a real intake', () => {
   }
 });
 
-describe('battery 7: a bulk load queued ahead of one live turn', () => {
+describe('a bulk load queued ahead of one live turn', () => {
   const acks: ReflectionOutput[] = [];
   let live: ReflectionOutput | undefined;
   let bulkUnclaimedWhenLiveEnriched = 0;
@@ -190,12 +189,12 @@ describe('battery 7: a bulk load queued ahead of one live turn', () => {
 });
 
 /**
- * The half of battery 7 the explicit flag hides. The live incident was four harnesses that
+ * The half of the bulk-load case the explicit flag hides. The live incident was four harnesses that
  * never declared themselves bulk, so the flag path would have caught none of it: the
  * arrival-rate backstop is what had to fire, and a battery that always sets `lane: 'bulk'`
  * stays green with that backstop switched off entirely.
  */
-describe('battery 7b: a flood that never says it is one', () => {
+describe('a flood that never says it is one', () => {
   const acks: ReflectionOutput[] = [];
   const UNDECLARED_SESSION = 'gate-undeclared-flood';
 
@@ -236,13 +235,12 @@ describe('battery 7b: a flood that never says it is one', () => {
 });
 
 /**
- * EX-28, recorded as a measurement rather than closed as a fix. The entity stage misses proper
- * nouns the cognitive stage names in the same run, and the one fix that would close it —
- * batching the two extractions into one pass — is deliberately out of this round (plan §4.5,
- * quality-neutral-first). This is the counter-evidence exhibit for that decision, kept
- * runnable so the measurement is a `.skip` away rather than a rewrite away.
+ * Recorded as a measurement rather than closed as a fix. The entity stage misses proper nouns
+ * the cognitive stage names in the same run. The one fix that would close it, batching the two
+ * extractions into a single pass, is deliberately out of scope while quality-neutral changes
+ * come first. Kept runnable so the measurement is a `.skip` away rather than a rewrite away.
  */
-describe('EX-28 counter-evidence, not a gate', () => {
+describe('cross-stage entity naming, measured but not gated', () => {
   it.skip('names the central entities its own cognitive nodes name', async () => {
     const stored = await substrate.store(CROSS_STAGE_ENTITY_MISS.payload, {
       identity: CROSS_STAGE_ENTITY_MISS.identity,

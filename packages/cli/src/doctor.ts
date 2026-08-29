@@ -72,7 +72,7 @@ export async function probeMcpHttp(port: number, fetchImpl: typeof fetch = fetch
 
 /**
  * Pure SQLite, no Neo4j: `aion doctor` printed "8 checks passed" with 4,000+ jobs pending,
- * and again with one permanently wedged job. Warn, never fail — a backlog is a thing that is
+ * and again with one permanently wedged job. Warn, never fail: a backlog is a thing that is
  * behind, not a thing that is broken.
  */
 export function queueLagCheck(db: SqliteHandle, config: Config, now: Date = new Date()): CheckResult {
@@ -200,12 +200,6 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
     },
     {
       /**
-       * Propose-only supersession means every judgment is a row waiting on a person. An open
-       * review queue nobody can see is the state the exercise reported from the other side:
-       * the table had never held a row, and the answer to that cannot be a table nothing
-       * counts. Informational — a proposal is work to do, not a broken invariant.
-       */
-      /**
        * Informational, and the only thing that can tell a substrate nobody ever leaked into
        * from one that was. The closures stop the next write; nothing hard-deletes, so what an
        * older ruleset already stored is permanent and recall-eligible until a forget operation
@@ -231,6 +225,12 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
       },
     },
     {
+      /**
+       * Propose-only supersession means every judgment is a row waiting on a person. An open
+       * review queue nobody can see is the same failure from the other side: the table had
+       * never held a row, and the answer to that cannot be a table nothing counts.
+       * Informational, since a proposal is work to do, not a broken invariant.
+       */
       name: 'review-queue',
       run: async () => {
         const snapshot = queueLagSnapshot(db, config.operational.workerMaxAttempts);

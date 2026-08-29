@@ -12,11 +12,11 @@ import {
 import { applyClusterCap, mmrOrder } from './ranking.js';
 
 /**
- * Whitepaper §5.3 and §5.5. Each retrieval leg hands over its own ranked list; this module
- * turns them into one ordered candidate set — weighted RRF by default, MMR behind the
- * reranker flag — and applies the two policies that decide what may surface at all:
- * `admission.ts`'s absolute floors (PRD §3.1, "empty beats noisy") and PRD §5.5's currency
- * ranking. Ordering, near-duplicate capping and MMR live in `ranking.ts`.
+ * Each retrieval leg hands over its own ranked list; this module turns them into one ordered
+ * candidate set (weighted RRF by default, MMR behind the reranker flag) and applies the two
+ * policies that decide what may surface at all: `admission.ts`'s absolute floors, where empty
+ * beats noisy, and currency ranking. Ordering, near-duplicate capping and MMR live in
+ * `ranking.ts`.
  */
 
 /** The three retrieval legs. The weights they fuse under are `config.search.weights`. */
@@ -43,7 +43,7 @@ export type FusionCandidate = {
   /**
    * The producing method's own number, on the producing method's own scale. Used for ranking
    * and for choosing which leg owns the rationale; never for admission, and never reported as
-   * a confidence — a normalized BM25 score puts the top lexical hit of any query at 1.00.
+   * a confidence: a normalized BM25 score puts the top lexical hit of any query at 1.00.
    * `evidence` is what admission and `confidence` read.
    *
    * Zero when the method that produced the candidate measures nothing: a recency hit says
@@ -96,7 +96,7 @@ export type FusionOptions = {
    * Content vectors by node id, fetched only when the reranker is MMR. An id with no
    * vector is treated as maximally distinct, so a partial map degrades toward relevance
    * order rather than toward an arbitrary one. The cluster cap's cosine leg reuses this
-   * same map rather than fetching its own — see `ranking.ts`.
+   * same map rather than fetching its own (see `ranking.ts`).
    */
   readonly vectors?: ReadonlyMap<string, Vector>;
 };
@@ -188,10 +188,9 @@ function dedupeByContent(items: readonly FusedItem[]): FusedItem[] {
 }
 
 /**
- * Whitepaper §5.5. Ranks fuse reciprocally so the legs need no score calibration between
- * them, and each leg's contribution is scaled by its §5.3 weight (0.4 vector, 0.3 keyword,
- * 0.3 graph), which is where the two sections meet: RRF decides the shape, the weights
- * decide how much each leg is trusted.
+ * Ranks fuse reciprocally so the legs need no score calibration between them, and each leg's
+ * contribution is scaled by its weight (0.4 vector, 0.3 keyword, 0.3 graph). RRF decides the
+ * shape, the weights decide how much each leg is trusted.
  *
  * A candidate with no content is counted for rank and then dropped. It was a real hit, so
  * removing its rank would promote everything under it, but a memory the pack cannot render
@@ -202,8 +201,8 @@ function dedupeByContent(items: readonly FusedItem[]): FusedItem[] {
  * One admission rule, and it is per item: a candidate reaches the pack when its own evidence
  * clears the absolute floors (`admitsOnEvidence`), and never otherwise. A node the spread
  * reached carries no measurement, so it is refused however strongly the rest of the pack
- * measured — the exercise's off-topic packs filled to budget precisely because one incidental
- * hit unlocked every node activation had touched.
+ * measured. Off-topic packs used to fill to budget precisely because one incidental hit
+ * unlocked every node activation had touched.
  *
  * The report is what makes a thin pack readable: an empty result with `considered` at zero is
  * a substrate with nothing in it, and the same result with `considered` at forty is a floor

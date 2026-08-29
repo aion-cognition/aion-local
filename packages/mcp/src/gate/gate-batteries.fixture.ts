@@ -1,12 +1,12 @@
 /**
- * The re-exercise batteries, as data. Every string is content the P3 exercise actually pushed
- * or quoted, so a pass here means the measured failure is closed rather than that a new
- * fixture happens to behave. The exercise ids each entry cites are the finding the entry
- * reproduces.
+ * The gate batteries, as data. Every string is content that was actually pushed or quoted when
+ * the failures below were measured, so a pass here means the measured failure is closed rather
+ * than that a new fixture happens to behave.
  *
- * Batteries 1, 2 and 6 reuse fixtures another workstream already owns —
- * `recall/application/floors.fixtures.ts` and `redaction/test-support/leaked-shapes.fixture.ts`
- * — and are imported at their gate file rather than copied here.
+ * The off-topic, on-topic and leaked-shape sets reuse fixtures that already live elsewhere
+ * (`recall/application/floors.fixtures.ts` and
+ * `redaction/test-support/leaked-shapes.fixture.ts`) and are imported at their gate file
+ * rather than copied here.
  */
 
 export type ChangeCase = {
@@ -17,8 +17,8 @@ export type ChangeCase = {
   readonly baseline: string;
   readonly next: string;
   /**
-   * A genuine correction (the answer must change) or a bait (nothing may close). The exercise's
-   * own six-case battery was four genuine and two bait.
+   * A genuine correction (the answer must change) or a bait (nothing may close). The measured
+   * six-case set was four genuine and two bait.
    */
   readonly kind: 'correction' | 'bait';
   /** Asked after both are enriched; only meaningful for a correction. */
@@ -28,10 +28,10 @@ export type ChangeCase = {
 };
 
 /**
- * EX-5's four corrections and two of the exercise's false baits, one six-case set. The
- * corrections are the ones that measured 3 of 4 questions still answering with the
- * pre-correction value, every item stamped `current`; the baits are two of EX-7's three false
- * auto-applies, where the judge closed a node that was still true.
+ * Four corrections and two false baits, one six-case set. The corrections are the ones that
+ * measured 3 of 4 questions still answering with the pre-correction value, every item stamped
+ * `current`; the baits are two of the three measured false auto-applies, where the judge
+ * closed a node that was still true.
  */
 export const CHANGE_BATTERY: readonly ChangeCase[] = [
   {
@@ -102,12 +102,12 @@ export function changeCase(key: string): ChangeCase {
 export type NarrativeFixture = {
   readonly identity: string;
   readonly payload: Record<string, unknown>;
-  /** Words the session's own source does not support; EX-8 found every one of them stored. */
+  /** Words the session's own source does not support; every one of them was found stored. */
   readonly inventions: readonly string[];
 };
 
 /**
- * EX-8's fabrication fixture, verbatim and complete: 27 words of source that became eight
+ * The fabrication fixture, verbatim and complete: 27 words of source that became eight
  * sentences of invented surveillance history, stored permanently with a content vector.
  */
 export const THIN_NARRATIVE: NarrativeFixture = {
@@ -128,7 +128,7 @@ export const THIN_NARRATIVE: NarrativeFixture = {
 };
 
 /**
- * EX-8's "wrong architecture invented" fixture: an episode stating four decisions produced a
+ * The "wrong architecture invented" fixture: an episode stating four decisions produced a
  * narrative about a microservices architecture and a service mesh, neither of which appears in
  * the source. On this input the narrative has to name the decisions instead.
  */
@@ -165,11 +165,10 @@ export const PLANNING_NARRATIVE: NarrativeFixture = {
 };
 
 /**
- * EX-28, kept as a measurement rather than as a fix. The episode names Redis four times and the
- * cognitive stage names it too, while the entity stage's MENTIONS list did not carry it. The
- * plan's consultation log records this as the counter-evidence exhibit for the batching
- * question that stays out of this round (§4.5), so the harness holds the fixture and the check
- * stays skipped until a harness-gated batching measurement is on the table.
+ * Kept as a measurement rather than as a fix. The episode names Redis four times and the
+ * cognitive stage names it too, while the entity stage's MENTIONS list did not carry it.
+ * Batching the two extractions is out of scope for now, so the harness holds the fixture and
+ * the check stays skipped until a measurement of that batching is on the table.
  */
 export const CROSS_STAGE_ENTITY_MISS = {
   identity: 'gate-ex28-counter-evidence',
@@ -181,6 +180,6 @@ export const CROSS_STAGE_ENTITY_MISS = {
       'Stripe kept retrying the webhook against a service that could not read its own sessions.',
     ],
   },
-  /** Named in the source and, in the exercise, named by the cognitive stage in the same run. */
+  /** Named in the source and, when measured, named by the cognitive stage in the same run. */
   central: ['redis', 'stripe', 'postgresql'],
 } as const;

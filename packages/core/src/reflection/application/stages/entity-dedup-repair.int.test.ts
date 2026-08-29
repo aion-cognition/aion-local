@@ -60,14 +60,14 @@ function unitVector(index: number): number[] {
   return vector;
 }
 
-/** Cosine against `unitVector(0)` is ~0.998 — comfortably over 0.85, comfortably under 1. */
+/** Cosine against `unitVector(0)` is ~0.998, comfortably over 0.85 and comfortably under 1. */
 function nearDuplicateVector(): number[] {
   const vector = unitVector(0);
   vector[1] = 0.05;
   return vector;
 }
 
-/** Cosine against `unitVector(0)` is exactly 0 — nowhere near any reasonable threshold. */
+/** Cosine against `unitVector(0)` is exactly 0, nowhere near any reasonable threshold. */
 function unrelatedVector(): number[] {
   return unitVector(2);
 }
@@ -201,7 +201,7 @@ describe('merge atomicity', () => {
 });
 
 /**
- * The exercise's own reproduction, against the real embedding model rather than hand-built
+ * The original reproduction, against the real embedding model rather than hand-built
  * vectors: `nomic-embed-text` returns one constant vector for whole classes of out-of-vocabulary
  * text, so these names score 1.0000 against each other and eight distinct emoji entities were
  * closed into one node in the live product. The fold cannot fix a model that has no tokens for

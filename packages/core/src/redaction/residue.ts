@@ -4,8 +4,8 @@ import { redact } from './redact.js';
 
 /**
  * What an older, leakier ruleset already wrote. Closing a leak path stops the next write; it
- * does nothing about the material the exercise measured sitting in Neo4j in plaintext, and
- * nothing is ever hard-deleted, so that material is permanent and recall-eligible.
+ * does nothing about plaintext credentials already written to Neo4j, which remain permanent
+ * and recall-eligible since nothing is ever hard-deleted.
  *
  * Removing it is a destructive graph write and belongs to the forget operation, which this
  * phase does not ship. Counting it does not: an operator with no gauge cannot tell a substrate

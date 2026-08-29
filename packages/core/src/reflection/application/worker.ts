@@ -90,8 +90,8 @@ function errorMessage(err: unknown): string {
 
 /**
  * What actually went wrong, in the one field an operator reads: the queue row's `last_error`.
- * The old message claimed nothing enriched, which was false the first time it was measured —
- * eight of nine stages had applied and one had timed out — and is further from true now that
+ * The old message claimed nothing enriched, which was false the first time it was measured,
+ * with eight of nine stages applied and one timed out, and is further from true now that
  * the ledger is per stage, since a retry re-enters only what failed and every other stage is
  * already applied before the run starts.
  */

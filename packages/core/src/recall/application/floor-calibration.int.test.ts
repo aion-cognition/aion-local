@@ -21,7 +21,7 @@ import {
 /**
  * The committed calibration. It measures both distributions against the live embedding model
  * and fails when `recall.vectorAdmissionFloor` stops holding them apart, which is the only
- * signal that the constant has gone stale — a floor tuned on noise alone cannot tell "rejects
+ * signal that the constant has gone stale. A floor tuned on noise alone cannot tell "rejects
  * unrelated text" from "rejects everything".
  *
  * Measured 2026-08-29, nomic-embed-text on host Ollama, and printed on every run:

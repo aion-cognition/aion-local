@@ -98,8 +98,8 @@ function round(value: number): string {
 
 /**
  * The share of genuine matches the floor rejects on the vector leg alone. These are not
- * starved — corroboration and exact lexical hits are what admit them — but past a point the
- * floor is carrying the wrong load and the number has to be visible before it gets there.
+ * starved, since corroboration and exact lexical hits are what admit them, but past a point
+ * the floor is carrying the wrong load and the number has to be visible before it gets there.
  */
 export const MAX_RELATED_UNDER_FLOOR = 0.4;
 
@@ -107,9 +107,9 @@ export const MAX_RELATED_UNDER_FLOOR = 0.4;
  * Two claims about the committed floor, plus one measurement reported either way.
  *
  * The floor must sit above what unrelated text scores, with drift allowance: this is the only
- * claim a floor can make on its own, and it is the one the exercise's off-topic packs violated.
+ * claim a floor can make on its own, and it is the one the off-topic packs violated.
  * It must also sit below what a typical genuine match scores, judged at the related median
- * rather than at a tail order statistic — the tails of the two distributions overlap on this
+ * rather than at a tail order statistic. The tails of the two distributions overlap on this
  * model, so a floor pinned to `related.p05` is pinned to noise.
  *
  * Overlap itself is not a failure. Where the distributions cross, the answer is corroboration
@@ -120,10 +120,10 @@ export const MAX_RELATED_UNDER_FLOOR = 0.4;
  * The corroboration floor gets the same claim as the admission floor and for the same reason.
  * It is a lower bar, not a suspended one: two measurements that are both inside the noise band
  * are one distribution sampled twice, and letting them vouch for each other reproduces the
- * failure one notch down — which is what the gate's surviving off-topic items were, every one
+ * failure one notch down. That is what the surviving off-topic items were, every one
  * of them under the admission floor on its own evidence.
  *
- * Tolerance is drift allowance, not slack in a claim — embeddings are deterministic for a given
+ * Tolerance is drift allowance, not slack in a claim: embeddings are deterministic for a given
  * model, so anything past it means the model changed and the constant has to be re-measured.
  */
 export function checkSeparation(input: SeparationInput): Separation {

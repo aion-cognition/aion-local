@@ -79,10 +79,10 @@ export type AionMcpServiceOptions = {
   readonly onSessionClosed?: (sessionId: string) => void;
   /**
    * `/health` used to report only `{status, sessions, descriptions_version}` while 4,000+
-   * jobs sat pending. `queueLagSnapshot` (`@aion/core`) is SQLite-only — no Neo4j, no Ollama
-   * — so calling it on every liveness probe stays cheap; the check the doctor.ts comment
-   * documents (never touching the graph or the model) is unchanged. Absent, the fields it
-   * would fill are simply omitted, which is what every construction that predates it gets.
+   * jobs sat pending. `queueLagSnapshot` (`@aion/core`) is SQLite-only, with no Neo4j and no
+   * Ollama, so calling it on every liveness probe stays cheap and never touches the graph or
+   * the model. Absent, the fields it would fill are simply omitted, which is what every
+   * construction that predates it gets.
    */
   readonly queueLag?: () => QueueLagSnapshot;
 };

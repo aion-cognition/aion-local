@@ -5,10 +5,10 @@ import type { Measurement } from './admission.js';
  * What may sit in the facts bucket, and in what order. The admission gate decides whether a
  * candidate is a memory at all; this decides whether it is an *answer*.
  *
- * The exercise measured the gap: over 168 fact slots on an entirely decision-oriented workload,
- * Entity glosses took 58% and Decision nodes took 3%, and the item that ranked first for
- * "what did we decide about the remittance ingest transport" was a Goal restating the
- * question. Three rules, each measured rather than asserted:
+ * On an entirely decision-oriented workload over 168 fact slots: Entity glosses took 58% and
+ * Decision nodes took 3%, and the item that ranked first for "what did we decide about the
+ * remittance ingest transport" was a Goal restating the question. Three rules address this gap,
+ * each grounded in evidence:
  *
  *  - a Goal or Plan whose text is the query said back is not an answer (`queryRestatements`);
  *  - a decision-shaped query wants Decision and Insight over everything else (`labelBoosts`);

@@ -41,7 +41,7 @@ export type Rationale = z.infer<typeof RationaleSchema>;
  * `rank` and `confidence` are what let a reader compare two items. `rationale.score` cannot:
  * it is the producing method's own number, so a BM25 hit normalized to the best hit of its
  * cue prints 1.00 next to a cosine of 0.62 and the list reads as though the lexical hit were
- * the stronger one (the exercise measured the printed score rising as the list went down on 27% of
+ * the stronger one (the printed score measured as rising while the list went down, on 27% of
  * adjacent pairs).
  */
 export const MemoryPackItemSchema = z.strictObject({
@@ -57,7 +57,7 @@ export const MemoryPackItemSchema = z.strictObject({
   /**
    * The absolute measurement admission read: the strongest cosine any method returned for the
    * item, on [0,1] and comparable between queries. Zero means the item was admitted on a
-   * literal match — Lucene on the verbatim cue, or an exact entity name — which is evidence
+   * literal match (Lucene on the verbatim cue, or an exact entity name), which is evidence
    * rather than a measurement, so no number is invented for it.
    */
   confidence: z.number(),
@@ -99,8 +99,8 @@ export type CueWeight = z.infer<typeof CueWeightSchema>;
 
 /**
  * What the caller is asking for, judged by the cue model rather than read off the words. One
- * member, because a decision-shaped query is the only intent the exercise measured a ranking
- * failure for: on an entirely decision-oriented workload the bucket meant to answer "what did
+ * member, because a decision-shaped query is the only intent with a measured ranking
+ * failure: on an entirely decision-oriented workload the bucket meant to answer "what did
  * we decide" gave Decision nodes 3% of its slots. A second intent is an addition here,
  * not a redesign.
  */
@@ -199,7 +199,7 @@ export const MemoryPackMetadataSchema = z.strictObject({
    * The calling session's own episodes with no orchestrator ledger key. Real, stored, and
    * reachable by raw text, but not yet reachable by entity resolution, traversal, or context
    * vectors (a memory was not fully recallable for 20 to 25 minutes and the pack never
-   * said so). Optional and omitted at zero — a healthy pack states nothing extra.
+   * said so). Optional and omitted at zero: a healthy pack states nothing extra.
    */
   pending_enrichment: z.number().int().positive().optional(),
   /** Absent on a spread that converged; present means the pack is a cut-off answer. */

@@ -287,9 +287,8 @@ describe('reflection intake when a dependency is down', () => {
     expect((error as ReflectionNotStoredError).stage).toBe('graph');
   });
 
-  // A statement the server answered and refused is a defect in this build, not an outage,
-  // and relabelling it "send it again once the service is back" would send the caller in
-  // circles.
+  // A statement the server answered and refused is a defect on our side, not an outage, and
+  // relabelling it "send it again once the service is back" would send the caller in circles.
   it('passes a rejection the graph itself made through unchanged', async () => {
     const rejected = Object.assign(new Error('constraint violated'), {
       code: 'Neo.ClientError.Schema.ConstraintValidationFailed',

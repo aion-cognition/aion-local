@@ -214,7 +214,7 @@ export type AssemblePackInput = {
   readonly restating?: ReadonlySet<string>;
   /**
    * How many entity glosses the facts bucket may hold. Absent leaves it uncapped; the
-   * pipeline always supplies it, because uncapped is what the exercise measured at 58% of slots.
+   * pipeline always supplies it, because uncapped measured 58% of the bucket's slots.
    */
   readonly entityGlossCap?: number;
 };
@@ -234,9 +234,9 @@ const TRUNCATION_PHRASES: Readonly<Record<PackTruncation, string>> = {
 /**
  * The honesty signals as one plain line at the top of the rendered block. A client reading
  * only `content` from an MCP tool result sees the rendered text and nothing else, so a pack
- * whose metadata says "degraded" reads to that client exactly like a confident answer — one
- * exercise angle lost a full baseline run to precisely that. The same three signals
- * stay in `metadata` for a structured consumer; this is the copy that reaches everyone.
+ * whose metadata says "degraded" reads to that client exactly like a confident answer, which
+ * already cost one full baseline run. The same three signals stay in `metadata` for a
+ * structured consumer; this is the copy that reaches everyone.
  */
 function honestyNote(input: AssemblePackInput): string | undefined {
   const clauses: string[] = [];

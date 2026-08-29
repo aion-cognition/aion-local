@@ -174,10 +174,10 @@ describe('traversal admission', () => {
   }
 
   /**
-   * The mechanism behind every budget-saturated off-topic pack the exercise measured: one
-   * incidental hit cleared the floor and every node the spread had touched came with it. A
-   * traversal-only node has no measurement against the query, so a strong anchor is not a
-   * reason to serve it — and the anchor being strong is exactly when it used to be.
+   * The mechanism behind every budget-saturated off-topic pack measured: one incidental hit
+   * cleared the floor and every node the spread had touched came with it. A traversal-only
+   * node has no measurement against the query, so a strong anchor is not a reason to serve it,
+   * and the anchor being strong is exactly when it used to be.
    */
   it('refuses a traversal-only node however strongly something else anchored the pack', () => {
     expect(ids(anchoredRun(0.9))).toEqual(['anchor']);

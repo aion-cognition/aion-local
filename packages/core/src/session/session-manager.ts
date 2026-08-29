@@ -39,10 +39,9 @@ export class SessionManager {
 
   /**
    * The session id for an identity, with no graph write. A Session node is minted by the
-   * first call that produces content, never by connecting or by reading: half the Session
-   * nodes the exercise measured held zero episodes, and each one still added an edge to both
-   * structural hubs and a link to the FOLLOWS chain. `ensureGraphSession` keys the node on
-   * the identity verbatim, so the id is known before the node exists.
+   * first call that produces content, never by connecting or by reading. Empty sessions still
+   * add edges to both structural hubs and a link to the FOLLOWS chain. `ensureGraphSession`
+   * keys the node on the identity verbatim, so the id is known before the node exists.
    */
   sessionIdFor(identity: string): string {
     if (identity.length === 0) {
