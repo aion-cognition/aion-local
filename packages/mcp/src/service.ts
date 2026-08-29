@@ -360,7 +360,9 @@ export class AionMcpService {
   }
 
   /**
-   * The backstop for a client that never sends a DELETE: a session past `idleMs` since its
+   * The path most sessions actually close by. A client's `close()` aborts its transport
+   * locally and issues no DELETE, so waiting for the hook leaves the session open until the
+   * process ends: a session past `idleMs` since its
    * last request closes the way a DELETE
    * would (`session.server.close()` runs the same transport-close chain `#forget` reaches
    * from), independent of whether the client ever sends one. `SessionIdleSweeper` is what

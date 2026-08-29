@@ -280,7 +280,8 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       queueLag: () => queueLagSnapshot(store.db, config.operational.workerMaxAttempts),
     });
 
-    // The backstop: a client's close() never sends the DELETE `onSessionClosed` above
+    // The primary trigger, not the fallback: a client's close() tears down its own
+    // transport and never sends the DELETE `onSessionClosed` above
     // depends on, so a session with no request in this long closes on its own instead.
     const idleSessions = new SessionIdleSweeper(service, {
       idleMs: config.operational.sessionIdleExpiryMinutes * MINUTE_MS,
