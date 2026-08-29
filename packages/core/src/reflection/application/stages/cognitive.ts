@@ -67,9 +67,35 @@ const ExtractedNodeSchema = z.object({
 
 type ExtractedNode = z.infer<typeof ExtractedNodeSchema>;
 
+/**
+ * The list is validated per node, not as a whole. A model that invents a tenth type for one
+ * node ("Problem" is the one seen most) otherwise costs the episode every node it got right,
+ * which measured as no cognitive structure at all on a route that had extracted a clean
+ * Decision beside the bad entry. An unusable node is dropped and counted; a reply that is not
+ * a list of objects at all is still a failed extraction.
+ */
 const CognitiveExtractionOutputSchema = z.object({
-  nodes: z.array(ExtractedNodeSchema),
+  nodes: z.array(z.unknown()),
 });
+
+type UsableNodes = {
+  readonly nodes: readonly ExtractedNode[];
+  readonly dropped: number;
+};
+
+function usableNodes(raw: readonly unknown[]): UsableNodes {
+  const nodes: ExtractedNode[] = [];
+  let dropped = 0;
+  for (const entry of raw) {
+    const parsed = ExtractedNodeSchema.safeParse(entry);
+    if (parsed.success) {
+      nodes.push(parsed.data);
+      continue;
+    }
+    dropped += 1;
+  }
+  return { nodes, dropped };
+}
 
 const SYSTEM_PROMPT = [
   'You extract cognitive structure from a memory episode recorded by an AI coding agent:',
@@ -80,6 +106,8 @@ const SYSTEM_PROMPT = [
   'is the normal and expected outcome — do not add a node merely to cover a type, and do not',
   'add a second node restating one you already extracted under a different type.',
   'Give each node a type from that list and a one-sentence text grounded in the episode.',
+  'Those nine are the only types that exist; a node whose type is not one of them is discarded,',
+  'so record what would have been a tenth type under whichever of the nine fits it best.',
   'For a goal, add status (active, completed, or abandoned) and priority (low, medium, or high) when the episode states them.',
   'For a plan, add status (active, completed, or abandoned) when the episode states it.',
   'For a decision, add a one-sentence rationale when the episode gives one.',
@@ -220,10 +248,23 @@ export class CognitiveExtractionStage implements ReflectionStage {
       };
     }
 
-    const extracted = parsed.data.nodes
+    const usable = usableNodes(parsed.data.nodes);
+    if (usable.dropped > 0) {
+      ctx.logger.warn(
+        { episodeId: ctx.episodeId, dropped: usable.dropped, kept: usable.nodes.length },
+        'cognitive extraction: dropped node(s) the schema does not describe',
+      );
+    }
+    const extracted = usable.nodes
       .slice(0, this.#maxNodes)
       .filter((node) => node.text.trim().length > 0);
     if (extracted.length === 0) {
+      if (usable.dropped > 0) {
+        return {
+          status: 'failed',
+          summary: `cognitive extraction returned ${usable.dropped} node(s), none of them a described type`,
+        };
+      }
       return { status: 'skipped', summary: 'no cognitive structure found in the episode' };
     }
 

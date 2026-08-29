@@ -14,13 +14,6 @@ import { heldOutCase } from './held-out-recall.fixture.js';
  * episode produces mentions the row-level lock, only the Decision carries a reason for it,
  * and which of them a pack ranks first moves from run to run: matching on the text passes or
  * fails on the ranking rather than on the property under test.
- *
- * Forced onto the local model rather than the default routing: the Anthropic route's
- * system-prompt schema delivery returns a `type` value cognitive extraction's schema rejects
- * for this exact episode, every time, at temperature zero, so the default route never produces
- * a Decision node here at all. That is a defect in extraction, not in the selection and
- * rendering this probe checks, so it stays out of the assertion by picking the route that
- * extracts cleanly.
  */
 
 const WRITE_SESSION = 'gate-rationale-write';
@@ -39,11 +32,8 @@ let decisionId = '';
  * rendered line carries the same string the property does.
  */
 let storedReason = '';
-let previousGenerationRoute: string | undefined;
 
 beforeAll(async () => {
-  previousGenerationRoute = process.env.TEST_AION_GENERATION;
-  process.env.TEST_AION_GENERATION = 'local';
   await substrate.open();
 
   const held = heldOutCase('refund-locking');
@@ -75,11 +65,6 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await substrate.close();
-  if (previousGenerationRoute === undefined) {
-    delete process.env.TEST_AION_GENERATION;
-  } else {
-    process.env.TEST_AION_GENERATION = previousGenerationRoute;
-  }
 });
 
 describe('a decision node renders the reason behind it', () => {
