@@ -234,7 +234,12 @@ export type {
   ReflectionJobSignal,
 } from './reflection/application/dispatch.js';
 
-export { mergeStageCounts, shouldMarkApplied, summarizeRun } from './reflection/domain/stage.js';
+export {
+  mergeStageCounts,
+  shouldMarkApplied,
+  stageLedgerKey,
+  summarizeRun,
+} from './reflection/domain/stage.js';
 export type {
   ReflectionStage,
   ReflectionSummary,

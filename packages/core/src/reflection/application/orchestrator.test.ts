@@ -15,6 +15,7 @@ import type {
   StageOutcome,
 } from '../domain/stage.js';
 import { FakeGraph } from '../test-support/fake-graph.fixture.js';
+import { stageLedgerKey } from '../domain/stage.js';
 import {
   orchestratorLedgerKey,
   ReflectionOrchestrator,
@@ -252,9 +253,72 @@ describe('ReflectionOrchestrator', () => {
     expect(run.applied).toBe(false);
     expect(run.summary.stages.map((entry) => entry.status)).toEqual(['failed', 'failed']);
     expect(isLedgerApplied(store.db, orchestratorLedgerKey(EPISODE_ID))).toBe(false);
+    // The all-failed rule holds at both levels: neither stage's own key is set either.
+    expect(isLedgerApplied(store.db, stageLedgerKey('entities', EPISODE_ID))).toBe(false);
+    expect(isLedgerApplied(store.db, stageLedgerKey('cognitive', EPISODE_ID))).toBe(false);
   });
 
-  it('gives a transiently failed stage another attempt: the second run re-enters the pipeline', async () => {
+  it('re-enters only the stages that have not yet applied across three retries, and never twice a stage that has', async () => {
+    let entityCalls = 0;
+    let narrativeCalls = 0;
+    let semanticAttempts = 0;
+    const entities: ReflectionStage = {
+      name: 'entities',
+      run: async () => {
+        entityCalls += 1;
+        return { status: 'ok', summary: 'extracted 2 entities', counts: { entities: 2 } };
+      },
+    };
+    // A stage that decides for itself there is nothing to do is just as terminal as `ok`:
+    // its ledger key closes too, so it does not re-run on the retries that follow it either.
+    const narrative: ReflectionStage = {
+      name: 'narrative',
+      run: async () => {
+        narrativeCalls += 1;
+        return { status: 'skipped', summary: 'session still open' };
+      },
+    };
+    const semanticRelationships: ReflectionStage = {
+      name: 'semantic-relationships',
+      run: async () => {
+        semanticAttempts += 1;
+        if (semanticAttempts < 3) {
+          throw new Error('semantic relationship call timed out: AbortError');
+        }
+        return { status: 'ok', summary: 'extracted 4 relationships', counts: { cognitive: 4 } };
+      },
+    };
+    const stages = [entities, narrative, semanticRelationships];
+
+    const first = await new ReflectionOrchestrator(deps, stages).run(EPISODE_ID, { now: NOW });
+    const second = await new ReflectionOrchestrator(deps, stages).run(EPISODE_ID, { now: NOW });
+    const third = await new ReflectionOrchestrator(deps, stages).run(EPISODE_ID, { now: NOW });
+
+    // The node-minting stages ran exactly once each, no matter how many retries the failing
+    // stage cost the run; that bound is what makes re-minting (EX-4) impossible.
+    expect(entityCalls).toBe(1);
+    expect(narrativeCalls).toBe(1);
+    expect(semanticAttempts).toBe(3);
+
+    expect(first.applied).toBe(false);
+    expect(second.applied).toBe(false);
+    expect(third.applied).toBe(true);
+
+    expect(second.summary.skippedStages).toEqual(['entities', 'narrative']);
+    expect(third.summary.skippedStages).toEqual(['entities', 'narrative']);
+    expect(third.summary.counts).toEqual({ cognitive: 4 });
+
+    expect(isLedgerApplied(store.db, stageLedgerKey('entities', EPISODE_ID))).toBe(true);
+    expect(isLedgerApplied(store.db, stageLedgerKey('narrative', EPISODE_ID))).toBe(true);
+    expect(isLedgerApplied(store.db, stageLedgerKey('semantic-relationships', EPISODE_ID))).toBe(
+      true,
+    );
+    expect(isLedgerApplied(store.db, orchestratorLedgerKey(EPISODE_ID))).toBe(true);
+  });
+
+  it('gives a transiently failed stage another attempt: the second run skips the stage that already applied', async () => {
+    // EX-4: `cognitive` succeeded on attempt one, so the per-stage ledger closes it out and
+    // the retry re-enters only `entities`, the stage that actually has something left to do.
     let attempts = 0;
     const flaky = {
       name: 'entities',
@@ -276,8 +340,10 @@ describe('ReflectionOrchestrator', () => {
     expect(second.status).toBe('completed');
     expect(second.applied).toBe(true);
     expect(second.summary.counts).toEqual({ entities: 2 });
-    expect(entered).toEqual(['entities', 'cognitive', 'entities', 'cognitive']);
+    expect(second.summary.skippedStages).toEqual(['cognitive']);
+    expect(entered).toEqual(['entities', 'cognitive', 'entities']);
     expect(isLedgerApplied(store.db, orchestratorLedgerKey(EPISODE_ID))).toBe(true);
+    expect(isLedgerApplied(store.db, stageLedgerKey('cognitive', EPISODE_ID))).toBe(true);
   });
 
   it('leaves the ledger unmarked when no stages are registered', async () => {

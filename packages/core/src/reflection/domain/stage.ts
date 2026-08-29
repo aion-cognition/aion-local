@@ -69,7 +69,35 @@ export type ReflectionSummary = {
   readonly stages: readonly StageRecord[];
   /** Every stage's counts, summed by key. */
   readonly counts: StageCounts;
+  /** Stage names the per-stage ledger skipped this run because an earlier attempt already applied them. */
+  readonly skippedStages: readonly string[];
 };
+
+/**
+ * The whitepaper's per-episode ledger key only ever gated the whole pipeline. EX-4: a stage
+ * with no ledger of its own (`cognitive`, historically) re-runs its full extraction on every
+ * retry of the run it belongs to, and each pass MERGEs a fresh set of near-duplicate nodes
+ * because its only idempotency is a content hash over LLM output that never collides twice.
+ * `reflection:stage:{stageName}:{episodeId}` closes that gap one level down: the orchestrator
+ * marks it the moment a stage finishes without failing and skips the stage entirely, without
+ * calling `run`, when the key is already there. A retry therefore re-enters only the stages
+ * that have not yet applied.
+ */
+export function stageLedgerKey(stageName: string, episodeId: string): string {
+  return `reflection:stage:${stageName}:${episodeId}`;
+}
+
+/** The `summary` a skipped-by-ledger stage records, distinct from a stage's own business-logic skip. */
+export const STAGE_ALREADY_APPLIED_SUMMARY = 'already applied on an earlier attempt';
+
+/** The record the orchestrator produces for a stage it did not enter because its ledger key was already set. */
+export function stageAlreadyAppliedRecord(name: string): StageRecord {
+  return { name, status: 'skipped', summary: STAGE_ALREADY_APPLIED_SUMMARY, durationMs: 0 };
+}
+
+function isStageAlreadyApplied(record: StageRecord): boolean {
+  return record.status === 'skipped' && record.summary === STAGE_ALREADY_APPLIED_SUMMARY;
+}
 
 export function mergeStageCounts(stages: readonly StageRecord[]): StageCounts {
   const totals: Record<string, number> = {};
@@ -106,5 +134,11 @@ export function summarizeRun(
   durationMs: number,
   stages: readonly StageRecord[],
 ): ReflectionSummary {
-  return { episodeId, durationMs, stages, counts: mergeStageCounts(stages) };
+  return {
+    episodeId,
+    durationMs,
+    stages,
+    counts: mergeStageCounts(stages),
+    skippedStages: stages.filter(isStageAlreadyApplied).map((stage) => stage.name),
+  };
 }

@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   mergeStageCounts,
   shouldMarkApplied,
+  stageAlreadyAppliedRecord,
+  stageLedgerKey,
+  STAGE_ALREADY_APPLIED_SUMMARY,
   summarizeRun,
   type StageRecord,
 } from './stage.js';
@@ -92,6 +95,7 @@ describe('summarizeRun', () => {
       durationMs: 42.5,
       stages,
       counts: { entities: 2, merges: 1 },
+      skippedStages: [],
     });
   });
 
@@ -99,5 +103,32 @@ describe('summarizeRun', () => {
     const summary = summarizeRun('episode-1', 3, [record('entities', 'ok', { entities: 1 })]);
 
     expect(JSON.parse(JSON.stringify(summary))).toEqual(summary);
+  });
+
+  it('names the stages the per-stage ledger skipped, apart from a stage that skipped on its own', () => {
+    const summary = summarizeRun('episode-1', 3, [
+      stageAlreadyAppliedRecord('entities'),
+      record('narrative', 'skipped'),
+      record('cognitive', 'ok', { cognitive: 4 }),
+    ]);
+
+    expect(summary.skippedStages).toEqual(['entities']);
+  });
+});
+
+describe('stageLedgerKey', () => {
+  it('follows the pinned per-stage format', () => {
+    expect(stageLedgerKey('cognitive', 'episode-1')).toBe('reflection:stage:cognitive:episode-1');
+  });
+});
+
+describe('stageAlreadyAppliedRecord', () => {
+  it('is a skipped record carrying the already-applied sentinel and no duration', () => {
+    expect(stageAlreadyAppliedRecord('entities')).toEqual({
+      name: 'entities',
+      status: 'skipped',
+      summary: STAGE_ALREADY_APPLIED_SUMMARY,
+      durationMs: 0,
+    });
   });
 });
