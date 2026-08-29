@@ -105,7 +105,6 @@ export async function loadEntityDedupDetails(
 }
 
 export type FindSimilarCurrentEntitiesInput = {
-  readonly type: string;
   readonly excludeId: string;
   readonly vector: Vector;
   readonly threshold: number;
@@ -114,14 +113,20 @@ export type FindSimilarCurrentEntitiesInput = {
 
 export type SimilarCurrentEntityMatch = {
   readonly id: string;
+  readonly type: string;
   readonly score: number;
 };
 
 /**
- * §6.5's "current Entity nodes of the same type": unlike `entitySimilaritySeeds` (recall's
- * read, which stays currency-aware rather than currency-filtered), a merge candidate must
- * still hold currency, or the search would propose absorbing into — or out of — an identity
- * a previous run already closed.
+ * Current Entity nodes near a name vector, of any type. Unlike `entitySimilaritySeeds`
+ * (recall's read, which stays currency-aware rather than currency-filtered), a merge candidate
+ * must still hold currency, or the search would propose absorbing into — or out of — an
+ * identity a previous run already closed.
+ *
+ * The search used to filter on the subject's own type, which made a cross-type duplicate
+ * invisible: PostgreSQL existed as tool, concept and organization at once and no run could
+ * see it. Type comes back on the row instead, and the stage routes a same-type hit to a merge
+ * and a cross-type hit to a proposal.
  *
  * `vector.similarity.cosine` rescales onto [0,1] the same way the vector index does
  * (`(1 + cos) / 2`), so the result is converted back to a true cosine before it is compared
@@ -129,15 +134,14 @@ export type SimilarCurrentEntityMatch = {
  */
 const FIND_SIMILAR_CURRENT_ENTITIES = [
   `MATCH (n:${ENTITY_LABEL})`,
-  `WHERE n.${ENTITY_TYPE_PROPERTY} = $type`,
-  '  AND n.id <> $excludeId',
+  'WHERE n.id <> $excludeId',
   `  AND n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
   `  AND n.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
   `  AND n.${ENTITY_NAME_VECTOR_PROPERTY} IS NOT NULL`,
   `  AND size(n.${ENTITY_NAME_VECTOR_PROPERTY}) = $dimension`,
   `WITH n, (2.0 * vector.similarity.cosine(n.${ENTITY_NAME_VECTOR_PROPERTY}, $vector) - 1.0) AS score`,
   'WHERE score >= $threshold',
-  'RETURN n.id AS id, score',
+  `RETURN n.id AS id, n.${ENTITY_TYPE_PROPERTY} AS type, score`,
   'ORDER BY score DESC',
   'LIMIT $limit',
 ].join('\n');
@@ -150,19 +154,20 @@ export async function findSimilarCurrentEntities(
     driver,
     FIND_SIMILAR_CURRENT_ENTITIES,
     {
-      type: input.type,
       excludeId: input.excludeId,
       vector: toGraphVector(input.vector),
       dimension: toGraphInteger(input.vector.length),
       threshold: input.threshold,
       limit: toGraphInteger(input.limit),
     },
-    (row) => ({ id: row.id as string, score: row.score as number }),
+    (row) => ({ id: row.id as string, type: String(row.type ?? ''), score: row.score as number }),
   );
 }
 
 export type RedirectableEdge = {
   readonly mergedId: string;
+  /** `elementId(r)` of the relationship as it stood on the merged node, for the unmerge trail. */
+  readonly edgeId: string;
   readonly type: string;
   readonly direction: 'out' | 'in';
   readonly otherId: string;
@@ -183,7 +188,7 @@ const FIND_MERGED_NODE_EDGES = [
   'UNWIND $mergedIds AS mergedId',
   `MATCH (m:${BASE_NODE_LABEL} { id: mergedId })-[r]-(o:${BASE_NODE_LABEL})`,
   'WHERE o.id <> mergedId',
-  'RETURN mergedId AS mergedId, type(r) AS type,',
+  'RETURN mergedId AS mergedId, elementId(r) AS edgeId, type(r) AS type,',
   "       CASE WHEN startNode(r).id = mergedId THEN 'out' ELSE 'in' END AS direction,",
   '       o.id AS otherId, r.strength AS strength, r.confidence AS confidence,',
   '       r.signals AS signals, r.provenance AS provenance, r.count AS count, r.rationale AS rationale',
@@ -193,6 +198,7 @@ function mapRedirectableEdge(row: Row): RedirectableEdge {
   const rationale = row.rationale;
   return {
     mergedId: row.mergedId as string,
+    edgeId: String(row.edgeId ?? ''),
     type: row.type as string,
     direction: row.direction === 'in' ? 'in' : 'out',
     otherId: row.otherId as string,
@@ -215,6 +221,18 @@ async function findMergedNodeEdgesInTransaction(
   return tx.run(FIND_MERGED_NODE_EDGES, { mergedIds: [...mergedIds] }, mapRedirectableEdge);
 }
 
+/** The property carrying one JSON record per absorbed identity. Read by the P5 unmerge op. */
+export const MERGE_PROVENANCE_PROPERTY = 'merge_provenance';
+
+/** What the caller knows about an absorbed node that the graph will no longer answer for. */
+export type MergedEntityRecord = {
+  readonly id: string;
+  readonly name: string;
+  readonly nameNorm: string;
+  readonly type: string;
+  readonly aliases: readonly string[];
+};
+
 export type MergeEntityGroupInput = {
   readonly canonicalId: string;
   readonly mergedIds: readonly string[];
@@ -225,6 +243,16 @@ export type MergeEntityGroupInput = {
   /** Carried onto the `SUPERSEDES` edge each merged node gets, so lineage names the merge. */
   readonly supersedeSignals?: readonly string[];
   readonly supersedeProvenance?: readonly string[];
+  /**
+   * Identity of each absorbed node, keyed by id. A merge is not reversible from the graph
+   * alone: `upsertEdgeInTransaction` sums counts and takes the max strength, so once a
+   * redirected edge collides with one the canonical already held, nothing on the surviving
+   * edge says what the merge contributed. The unmerge operation is P5 maintenance; the record
+   * it will need can only be written here, at merge time.
+   */
+  readonly mergedRecords?: readonly MergedEntityRecord[];
+  /** The `entity.merge:` ledger key this merge is idempotent on, stored with the record. */
+  readonly ledgerKey?: string;
   readonly now: Date;
 };
 
@@ -232,6 +260,93 @@ export type MergeEntityGroupResult = {
   readonly edgesRedirected: number;
   readonly superseded: readonly string[];
 };
+
+/**
+ * One edge as it stood on the absorbed node. `redirected` is false for the edges a merge drops
+ * — a relationship whose other endpoint is also in the group becomes a self-loop and is never
+ * written — and an unmerge has to put those back too, so they are recorded either way.
+ */
+type ProvenanceEdge = {
+  readonly edge_id: string;
+  readonly type: string;
+  readonly direction: 'out' | 'in';
+  readonly other_id: string;
+  readonly strength: number;
+  readonly confidence: number;
+  readonly count: number;
+  readonly signals: readonly string[];
+  readonly provenance: readonly string[];
+  readonly redirected: boolean;
+  readonly rationale?: string;
+};
+
+function toProvenanceEdge(edge: RedirectableEdge, redirected: boolean): ProvenanceEdge {
+  return {
+    edge_id: edge.edgeId,
+    type: edge.type,
+    direction: edge.direction,
+    other_id: edge.otherId,
+    strength: edge.strength,
+    confidence: edge.confidence,
+    count: edge.count,
+    signals: [...edge.signals],
+    provenance: [...edge.provenance],
+    redirected,
+    ...(edge.rationale === undefined ? {} : { rationale: edge.rationale }),
+  };
+}
+
+const READ_MERGE_PROVENANCE = [
+  `MATCH (n:${ENTITY_LABEL} { id: $id })`,
+  `RETURN coalesce(n.${MERGE_PROVENANCE_PROPERTY}, []) AS records`,
+].join('\n');
+
+/**
+ * Read inside the merge transaction, not from the detail load that fed the decision: the
+ * property is appended to, and a concurrent merge into the same canonical would otherwise
+ * overwrite the record it wrote while this one was deciding.
+ */
+async function readMergeProvenanceInTransaction(
+  tx: GraphTransaction,
+  canonicalId: string,
+): Promise<string[]> {
+  const rows = await tx.run(READ_MERGE_PROVENANCE, { id: canonicalId }, (row) => row.records);
+  const records = rows[0];
+  if (!Array.isArray(records)) {
+    return [];
+  }
+  return records.filter((record): record is string => typeof record === 'string');
+}
+
+/**
+ * One JSON string per absorbed identity. Neo4j properties hold no nested maps, so the record
+ * is serialized; it is a list rather than one blob so appending a later merge never rewrites
+ * an earlier one.
+ */
+function buildMergeProvenance(
+  input: MergeEntityGroupInput,
+  mergedIds: readonly string[],
+  trail: ReadonlyMap<string, readonly ProvenanceEdge[]>,
+): string[] {
+  const byId = new Map((input.mergedRecords ?? []).map((record) => [record.id, record]));
+  return mergedIds.map((mergedId) => {
+    const record = byId.get(mergedId);
+    return JSON.stringify({
+      merged_id: mergedId,
+      merged_at: input.now.toISOString(),
+      ...(input.ledgerKey === undefined ? {} : { ledger_key: input.ledgerKey }),
+      ...(record === undefined
+        ? {}
+        : {
+            merged_name: record.name,
+            merged_name_norm: record.nameNorm,
+            merged_type: record.type,
+            merged_aliases: [...record.aliases],
+          }),
+      edges: trail.get(mergedId) ?? [],
+    });
+  });
+}
 
 /**
  * Whitepaper §6.5's "the merge executes inside a graph transaction to ensure atomicity", as
@@ -265,13 +380,15 @@ export async function redirectAndAbsorb(
     }
 
     const edges = await findMergedNodeEdgesInTransaction(tx, mergedIds);
+    const trail = new Map<string, ProvenanceEdge[]>();
     let redirected = 0;
     for (const edge of edges) {
       const other = absorbed.has(edge.otherId) ? input.canonicalId : edge.otherId;
-      if (other === input.canonicalId) {
-        continue;
-      }
-      if (!isRelationshipType(edge.type)) {
+      const kept = other !== input.canonicalId && isRelationshipType(edge.type);
+      const record = trail.get(edge.mergedId) ?? [];
+      record.push(toProvenanceEdge(edge, kept));
+      trail.set(edge.mergedId, record);
+      if (!kept) {
         continue;
       }
 
@@ -292,6 +409,11 @@ export async function redirectAndAbsorb(
       redirected += 1;
     }
 
+    const provenance = [
+      ...(await readMergeProvenanceInTransaction(tx, input.canonicalId)),
+      ...buildMergeProvenance(input, mergedIds, trail),
+    ];
+
     await writeStampedNodeInTransaction(tx, {
       label: 'Entity',
       id: input.canonicalId,
@@ -299,6 +421,7 @@ export async function redirectAndAbsorb(
       mergeProperties: {
         [ENTITY_ALIASES_PROPERTY]: input.aliases,
         [ACCESS_COUNT_PROPERTY]: input.accessCount,
+        [MERGE_PROVENANCE_PROPERTY]: provenance,
         ...(input.lastAccessed === undefined ? {} : { [LAST_ACCESSED_PROPERTY]: input.lastAccessed }),
       },
     });

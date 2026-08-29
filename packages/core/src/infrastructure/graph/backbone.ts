@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Driver } from 'neo4j-driver';
+import { foldName } from '../providers/unicode-fold.js';
 import { BITEMPORAL_PROPERTIES, writeStampedNode, type StampedNodeResult } from './bitemporal.js';
 import { runRead } from './connection.js';
 
@@ -25,7 +26,7 @@ function displayName(name: string): string {
 }
 
 function normalizeEntityName(name: string): string {
-  return displayName(name).toLowerCase();
+  return foldName(name);
 }
 
 /**

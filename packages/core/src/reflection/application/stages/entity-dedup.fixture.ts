@@ -1,6 +1,9 @@
 import { BITEMPORAL_PROPERTIES } from '../../../infrastructure/graph/bitemporal.js';
 import { ACCESS_COUNT_PROPERTY } from '../../../infrastructure/graph/access-tracking.js';
-import { ENTITY_ALIASES_PROPERTY } from '../../../infrastructure/graph/entity-dedup-queries.js';
+import {
+  ENTITY_ALIASES_PROPERTY,
+  MERGE_PROVENANCE_PROPERTY,
+} from '../../../infrastructure/graph/entity-dedup-queries.js';
 import { ENTITY_MENTION_TYPE, ENTITY_TYPE_PROPERTY } from '../../../infrastructure/graph/entity-queries.js';
 import { MEMORY_PROPERTIES } from '../../../infrastructure/graph/episodes.js';
 import {
@@ -49,6 +52,10 @@ export class DedupFakeGraph extends FakeGraph {
       this.statements.push({ cypher, parameters });
       return toResult(this.#similarEntities(parameters));
     }
+    if (cypher.includes(`coalesce(n.${MERGE_PROVENANCE_PROPERTY}, [])`)) {
+      this.statements.push({ cypher, parameters });
+      return toResult(this.#mergeProvenance(parameters));
+    }
     if (cypher.includes('UNWIND $mergedIds AS mergedId') && cypher.includes('startNode(r).id')) {
       this.statements.push({ cypher, parameters });
       return toResult(this.#mergedNodeEdges(parameters));
@@ -95,7 +102,6 @@ export class DedupFakeGraph extends FakeGraph {
   }
 
   #similarEntities(parameters: Record<string, unknown>): Row[] {
-    const type = parameters.type as string;
     const excludeId = parameters.excludeId as string;
     const vector = parameters.vector as number[];
     const threshold = parameters.threshold as number;
@@ -104,12 +110,12 @@ export class DedupFakeGraph extends FakeGraph {
 
     const scored = this.entities()
       .filter((node) => node.id !== excludeId)
-      .filter((node) => node.properties[ENTITY_TYPE_PROPERTY] === type)
       .filter((node) => node.properties[BITEMPORAL_PROPERTIES.validUntil] === undefined)
       .filter((node) => node.properties[BITEMPORAL_PROPERTIES.forgottenAt] === undefined)
       .filter((node) => Array.isArray(node.properties[ENTITY_NAME_VECTOR_PROPERTY]))
       .map((node) => ({
         id: node.id,
+        type: node.properties[ENTITY_TYPE_PROPERTY],
         score: cosine(vector, node.properties[ENTITY_NAME_VECTOR_PROPERTY] as number[]),
       }))
       .filter((row) => row.score >= threshold)
@@ -117,6 +123,11 @@ export class DedupFakeGraph extends FakeGraph {
       .slice(0, limit);
 
     return scored;
+  }
+
+  #mergeProvenance(parameters: Record<string, unknown>): Row[] {
+    const node = this.nodes.get(parameters.id as string);
+    return [{ records: node?.properties[MERGE_PROVENANCE_PROPERTY] ?? [] }];
   }
 
   #mergedNodeEdges(parameters: Record<string, unknown>): Row[] {
@@ -149,6 +160,7 @@ export class DedupFakeGraph extends FakeGraph {
   ): Row {
     return {
       mergedId,
+      edgeId: edge.id,
       type: edge.type,
       direction,
       otherId,
