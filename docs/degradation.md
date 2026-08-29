@@ -276,6 +276,16 @@ Every knob below is `AION_*`-overridable; the catalog is
 | `contextResonance.seedLimit` / `.activationLimit` | 10 / 50 | Bounds the seed set and the co-activated set per recall, so activation's cost is predictable. | A true signal ranked past the cap is not considered at all, not degraded. | Not flagged as a deviation; matches the whitepaper's seed budget. |
 | `activation.maxNodesVisited` / `.hubThreshold` | 500 / 10 | Bounds worst-case traversal cost; the hub threshold keeps one high-degree node from flooding the frontier. | A legitimate multi-hop path through a dense area can be cut before it is explored. | Not flagged as a deviation. |
 | Other bucket caps: `maxFacts` / `maxNarratives` / `maxPreferences` / `maxResonant` / `vectorLimit` | 15 / 5 / 3 / 5 / 5 | Same shape as `maxEpisodes`: each decides what survives fusion for its bucket. | Same cost as `maxEpisodes`, unverified at other values: only the episode cap has a live pass/fail checkpoint behind it. `preferences` and `resonant` have no producer yet (P4), so their caps are inert today. | Not flagged as a deviation. |
+| `AION_WORKER_COUNT` (`operational.workerCount`) | 1 | Concurrent reflection claim-and-run slots on one shared queue claimant, so more than one episode enriches at once. | Every worker still calls the same host Ollama for its model stages (`AION_REFLECT_MODEL`), and nothing prioritizes between them — see the contention note below. | PRD §7 pins 1. |
+
+Raising `AION_WORKER_COUNT` past 1 buys nothing on its own: the reflection worker, the
+recall cue model, and the idle narrative sweeper all share one host Ollama endpoint
+(`AION_OLLAMA_URL`), and by default Ollama itself serializes requests to one model. Set
+`OLLAMA_NUM_PARALLEL` on the **host** Ollama process (not an `AION_*` var — Ollama runs on
+the host, not in a container) to raise its per-model concurrency alongside the worker count.
+Measured contention without it: recall wall p50 rose from 945ms to 4,463ms (372%) under a
+busy reflection worker, and the worker itself lost about 9% throughput under concurrent
+recalls (1.98 to 1.80 episodes/min).
 
 ## Deferred gaps
 

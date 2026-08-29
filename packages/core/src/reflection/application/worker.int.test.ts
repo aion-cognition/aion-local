@@ -25,7 +25,7 @@ import {
   listReflectionJobs,
 } from '../../infrastructure/sqlite/reflection-queue.js';
 import { SessionManager } from '../../session/session-manager.js';
-import type { StageContext, StageOutcome } from '../domain/stage.js';
+import type { ReflectionStage, StageContext, StageOutcome } from '../domain/stage.js';
 import { ReflectionDispatch } from './dispatch.js';
 import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
 import { orchestratorLedgerKey, ReflectionOrchestrator } from './orchestrator.js';
@@ -45,6 +45,8 @@ const SIGNAL_IDENTITY = 'worker-signal-session';
 const DRAIN_IDENTITY = 'worker-drain-session';
 const RECLAIM_IDENTITY = 'worker-reclaim-session';
 const BREAKER_IDENTITY = 'worker-breaker-session';
+const CONCURRENT_IDENTITY_A = 'worker-concurrent-session-a';
+const CONCURRENT_IDENTITY_B = 'worker-concurrent-session-b';
 
 const SIGNAL_PAYLOAD = {
   turns: [
@@ -78,6 +80,22 @@ const BREAKER_PAYLOAD = {
   summary: 'circuit breaker behaviour',
 };
 
+const CONCURRENT_PAYLOAD_A = {
+  turns: [
+    { role: 'user', text: 'worker_count above 1 should let two episodes enrich at once' },
+    { role: 'assistant', text: 'this is the first of the pair' },
+  ],
+  summary: 'concurrency probe, episode a',
+};
+
+const CONCURRENT_PAYLOAD_B = {
+  turns: [
+    { role: 'user', text: 'worker_count above 1 should let two episodes enrich at once' },
+    { role: 'assistant', text: 'this is the second of the pair' },
+  ],
+  summary: 'concurrency probe, episode b',
+};
+
 /** One stage whose outcome the test controls, so a run's success is not a model's opinion. */
 class RecordingStage {
   readonly name = 'recording';
@@ -109,6 +127,47 @@ class RecordingStage {
   }
 }
 
+/**
+ * Blocks every run on one shared gate until the test releases it, so two claimed jobs can be
+ * proven in flight at once: under `workerCount: 1` a second job is never claimed until the
+ * first's run settles, so `entries` reaching 2 before `release()` is only possible when both
+ * are genuinely concurrent, not a timing coincidence a wall-clock assertion would be.
+ */
+class GatedStage {
+  readonly name = 'gated';
+  readonly entries: string[] = [];
+  #release: (() => void) | undefined;
+  readonly #gate = new Promise<void>((resolve) => {
+    this.#release = resolve;
+  });
+  readonly #waiting: Array<{ readonly count: number; readonly resolve: () => void }> = [];
+
+  /** Resolves once `count` runs have entered the stage and are parked on the gate. */
+  entered(count: number): Promise<void> {
+    if (this.entries.length >= count) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      this.#waiting.push({ count, resolve });
+    });
+  }
+
+  release(): void {
+    this.#release?.();
+  }
+
+  async run(ctx: StageContext): Promise<StageOutcome> {
+    this.entries.push(ctx.episodeId);
+    for (const waiter of [...this.#waiting]) {
+      if (this.entries.length >= waiter.count) {
+        waiter.resolve();
+      }
+    }
+    await this.#gate;
+    return { status: 'ok', summary: `recorded ${ctx.episode.turns.length} turns`, counts: { entities: 1 } };
+  }
+}
+
 let harness: Neo4jHarness;
 let db: SqliteHandle;
 let dataDir: string;
@@ -118,7 +177,7 @@ let live: ReflectionIntakeDeps;
 let deadOllama: ReflectionIntakeDeps;
 let worker: ReflectionWorker | undefined;
 
-function buildWorker(stage: RecordingStage, options: ReflectionWorkerOptions = {}): ReflectionWorker {
+function buildWorker(stage: ReflectionStage, options: ReflectionWorkerOptions = {}): ReflectionWorker {
   const runner = new ReflectionOrchestrator(
     { driver: harness.driver, db, provider: live.provider, logger },
     [stage],
@@ -263,6 +322,37 @@ describe('five consecutive failures', () => {
     expect(started.paused).toBe(false);
     expect(stage.episodes).toHaveLength(6);
     expect(getLedgerEntry(db, orchestratorLedgerKey(episodeId))?.summary).toMatchObject({
+      counts: { entities: 1 },
+    });
+  });
+});
+
+describe('workerCount above 1', () => {
+  it('claims and runs two episodes concurrently on one shared claimant, with no double-claim', async () => {
+    const stage = new GatedStage();
+    const started = buildWorker(stage, { workerCount: 2 });
+    await started.start();
+
+    const storedA = await handleReflection(live, CONCURRENT_PAYLOAD_A, {
+      identity: CONCURRENT_IDENTITY_A,
+    });
+    const storedB = await handleReflection(live, CONCURRENT_PAYLOAD_B, {
+      identity: CONCURRENT_IDENTITY_B,
+    });
+
+    // See GatedStage: only resolves if both jobs were claimed and in flight at once.
+    await stage.entered(2);
+    expect(stage.entries.slice().sort()).toEqual([storedA.episode_id, storedB.episode_id].sort());
+
+    stage.release();
+    await started.whenIdle();
+
+    expect(stage.entries).toHaveLength(2);
+    expect(listReflectionJobs(db)).toEqual([]);
+    expect(getLedgerEntry(db, orchestratorLedgerKey(storedA.episode_id))?.summary).toMatchObject({
+      counts: { entities: 1 },
+    });
+    expect(getLedgerEntry(db, orchestratorLedgerKey(storedB.episode_id))?.summary).toMatchObject({
       counts: { entities: 1 },
     });
   });

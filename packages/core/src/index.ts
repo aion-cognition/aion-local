@@ -41,8 +41,10 @@ export {
 } from './infrastructure/sqlite/claim.js';
 
 export {
+  DEFAULT_REINFORCEMENT_QUEUE_CAP,
   enqueueReinforcementSignal,
   listReinforcementSignals,
+  reinforcementQueueDroppedCount,
 } from './infrastructure/sqlite/reinforcement-queue.js';
 export type { ReinforcementSignal } from './infrastructure/sqlite/reinforcement-queue.js';
 

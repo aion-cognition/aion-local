@@ -1,6 +1,9 @@
 import { findCoExtractedNodeIds } from '../../../infrastructure/graph/reinforcement-queries.js';
 import { isLedgerApplied, markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
-import { enqueueReinforcementSignal } from '../../../infrastructure/sqlite/reinforcement-queue.js';
+import {
+  DEFAULT_REINFORCEMENT_QUEUE_CAP,
+  enqueueReinforcementSignal,
+} from '../../../infrastructure/sqlite/reinforcement-queue.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
 
 /**
@@ -32,8 +35,17 @@ export function coExtractionLedgerKey(episodeId: string): string {
   return `reinforcement.co_extraction:${episodeId}`;
 }
 
+export type ReinforcementEnqueueStageOptions = {
+  readonly reinforcementQueueCap?: number;
+};
+
 export class ReinforcementEnqueueStage implements ReflectionStage {
   readonly name = REINFORCEMENT_STAGE_NAME;
+  readonly #reinforcementQueueCap: number;
+
+  constructor(options: ReinforcementEnqueueStageOptions = {}) {
+    this.#reinforcementQueueCap = options.reinforcementQueueCap ?? DEFAULT_REINFORCEMENT_QUEUE_CAP;
+  }
 
   async run(ctx: StageContext): Promise<StageOutcome> {
     const key = coExtractionLedgerKey(ctx.episodeId);
@@ -72,6 +84,7 @@ export class ReinforcementEnqueueStage implements ReflectionStage {
           target,
           REFLECTION_CO_EXTRACTION_TRIGGER,
           enqueuedAt,
+          this.#reinforcementQueueCap,
         );
         count += 1;
       }

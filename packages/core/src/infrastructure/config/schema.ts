@@ -126,6 +126,8 @@ export const ConfigSchema = z.object({
   }),
   sqlite: z.object({
     path: z.string().min(1),
+    /** Rows past this are dropped oldest-first at enqueue; the table has no consumer until P4. */
+    reinforcementQueueCap: positiveInt,
   }),
   operational: z.object({
     dataDir: z.string().min(1),

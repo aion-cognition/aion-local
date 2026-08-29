@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import { DEFAULT_REINFORCEMENT_QUEUE_CAP } from '../../infrastructure/sqlite/reinforcement-queue.js';
 import {
   DEFAULT_BREAKER_COOLDOWN_MS,
   DEFAULT_BREAKER_THRESHOLD,
@@ -83,5 +84,9 @@ describe('reflection config defaults', () => {
     expect(operational.workerBreakerThreshold).toBe(DEFAULT_BREAKER_THRESHOLD);
     expect(operational.workerBreakerCooldownMs).toBe(DEFAULT_BREAKER_COOLDOWN_MS);
     expect(operational.workerVectorBatchSize).toBe(DEFAULT_VECTOR_BATCH_SIZE);
+  });
+
+  it('threads the same cap the reinforcement queue pins', () => {
+    expect(DEFAULTS.sqlite.reinforcementQueueCap).toBe(DEFAULT_REINFORCEMENT_QUEUE_CAP);
   });
 });
