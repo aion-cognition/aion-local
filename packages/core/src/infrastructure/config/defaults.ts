@@ -203,7 +203,7 @@ export const DEFAULTS: Config = {
     workerBreakerCooldownMs: 60_000,
     workerVectorBatchSize: 64,
     reconcileWarnThreshold: 50,
-    // Plan-pinned defaults: ten minutes past the drain rate measured against the live substrate
+    // Ten minutes clears the drain rate measured against the live substrate
     // (1.9 to 6.7 episodes/min) is a real backlog, not noise; 200 unclaimed is the same
     // judgment by depth instead of age.
     lagOldestUnclaimedWarnMs: 600_000,
