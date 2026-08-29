@@ -4,6 +4,7 @@
  */
 
 export * from './infrastructure/index.js';
+export * from './plasticity/index.js';
 export * from './recall/index.js';
 export * from './redaction/index.js';
 export * from './reflection/index.js';

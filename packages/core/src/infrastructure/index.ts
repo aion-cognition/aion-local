@@ -69,11 +69,20 @@ export {
 
 export {
   DEFAULT_REINFORCEMENT_QUEUE_CAP,
+  claimReinforcementSignals,
+  countReinforcementSignals,
+  deleteReinforcementSignals,
   enqueueReinforcementSignal,
   listReinforcementSignals,
+  recordReinforcementFlush,
+  reinforcementFlushCounters,
   reinforcementQueueDroppedCount,
 } from './sqlite/reinforcement-queue.js';
-export type { ReinforcementSignal } from './sqlite/reinforcement-queue.js';
+export type {
+  ReinforcementFlushCounters,
+  ReinforcementFlushCounts,
+  ReinforcementSignal,
+} from './sqlite/reinforcement-queue.js';
 
 export {
   DEFAULT_LAG_SAMPLE_WINDOW,
@@ -172,6 +181,18 @@ export type { GraphProperties, GraphWritable, Row, RowMapper } from './graph/val
 
 export { buildEdgeUpsert, upsertEdge, upsertEdgeInTransaction } from './graph/edges.js';
 export type { EdgeUpsert, UpsertedEdge } from './graph/edges.js';
+
+export { buildEdgeWeightReinforcement, reinforceEdgeWeights } from './graph/edge-weights.js';
+export type {
+  ReinforceEdgeWeightsInput,
+  ReinforcedEdge,
+  WeightReinforcement,
+} from './graph/edge-weights.js';
+
+export {
+  PROTECTED_RELATIONSHIP_TYPES,
+  isProtectedRelationshipType,
+} from './graph/protected-relationships.js';
 
 export { LOCK_PROPERTY, lockNodeInTransaction } from './graph/locks.js';
 
