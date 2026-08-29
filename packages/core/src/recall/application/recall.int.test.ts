@@ -196,9 +196,10 @@ describe('recall over a substrate written by the real intake path', () => {
    * reaching a node is no longer a reason to serve it. This episode shares a session with the
    * one the query is about and nothing else, which is exactly the shape that filled the
    * exercise's off-topic packs to budget: one hit clears the floor and the whole activation
-   * spread rides in behind it.
+   * spread rides in behind it. It is scored against the query like any other candidate, and
+   * what keeps it out is the answer that scoring gives.
    */
-  it('refuses an episode no retrieval leg measured, however well anchored the pack is', async () => {
+  it('refuses an episode the spread reached that measures nothing like the query', async () => {
     const pack = await handleRecall(deps, { query: QUERY }, {
       identity: READ_SESSION,
       now: RECALLED_AT,
@@ -206,7 +207,7 @@ describe('recall over a substrate written by the real intake path', () => {
 
     expect(pack.episodes?.map((item) => item.id)).toEqual([webhooksEpisodeId]);
     // Refused, and said so: a pack this thin has to be readable as a floor doing its job.
-    expect(pack.metadata.admission.dropped_unmeasured).toBeGreaterThan(0);
+    expect(pack.metadata.admission.dropped_below_floor).toBeGreaterThan(0);
 
     // The claim only means something if no direct leg could have produced it.
     const direct = await vectorSeeds(harness.driver, {

@@ -159,7 +159,10 @@ describe('the absolute cosine floor through fusion', () => {
 });
 
 describe('traversal admission', () => {
-  /** The gate-scale shape: a strong direct hit, plus a node only the spread reached. */
+  /**
+   * The gate-scale shape: a strong direct hit, plus a node only the spread reached whose
+   * content vector is still pending, so nothing measured it against the query.
+   */
   function anchoredRun(anchorRelevance: number): readonly FusedItem[] {
     return items(
       [
@@ -173,14 +176,73 @@ describe('traversal admission', () => {
     );
   }
 
+  /** A node the spread reached, measured against one query cue at the given cosine. */
+  function arrival(id: string, measured: number, activation = 0.29): FusionCandidate {
+    return candidate(id, {
+      method: 'activation',
+      relevance: 0,
+      activation,
+      evidence: [{ method: 'vector', relevance: measured, cue: 'outbox table' }],
+    });
+  }
+
   /**
    * The mechanism behind every budget-saturated off-topic pack measured: one incidental hit
-   * cleared the floor and every node the spread had touched came with it. A traversal-only
-   * node has no measurement against the query, so a strong anchor is not a reason to serve it,
-   * and the anchor being strong is exactly when it used to be.
+   * cleared the floor and every node the spread had touched came with it. Nothing measured
+   * this one, so a strong anchor is not a reason to serve it, and the anchor being strong is
+   * exactly when it used to be.
    */
-  it('refuses a traversal-only node however strongly something else anchored the pack', () => {
+  it('refuses an unmeasured node however strongly something else anchored the pack', () => {
     expect(ids(anchoredRun(0.9))).toEqual(['anchor']);
+  });
+
+  it('admits a node the spread reached when its own measurement clears the floor', () => {
+    const fused = items(
+      [
+        list('vector', [candidate('anchor', { relevance: 0.9 })]),
+        list('graph_traversal', [candidate('anchor', { relevance: 0.9 }), arrival('reached', 0.71)]),
+      ],
+      { ...RRF, admission: CALIBRATED },
+    );
+
+    expect(ids(fused)).toEqual(['anchor', 'reached']);
+    // Found by the spread, admitted on the cosine: the two are separate claims about it, and
+    // the pack has to be able to say both.
+    expect(fused[1]?.rationale.method).toBe('activation');
+    expect(fused[1]?.measured).toBe(0.71);
+  });
+
+  it('refuses a node the spread reached whose measurement lands under the floor', () => {
+    const fused = items(
+      [
+        list('vector', [candidate('anchor', { relevance: 0.9 })]),
+        list('graph_traversal', [candidate('anchor', { relevance: 0.9 }), arrival('reached', 0.44)]),
+      ],
+      { ...RRF, admission: CALIBRATED },
+    );
+
+    expect(ids(fused)).toEqual(['anchor']);
+  });
+
+  it('admits a node two cues corroborated sub-floor, the rule any seed gets', () => {
+    const fused = items(
+      [
+        list('graph_traversal', [
+          candidate('reached', {
+            method: 'activation',
+            relevance: 0,
+            activation: 0.29,
+            evidence: [
+              { method: 'vector', relevance: 0.57, cue: 'outbox table' },
+              { method: 'vector', relevance: 0.56, cue: 'remittance ingest' },
+            ],
+          }),
+        ]),
+      ],
+      { ...RRF, admission: CALIBRATED },
+    );
+
+    expect(ids(fused)).toEqual(['reached']);
   });
 
   it('surfaces nothing when no hit cleared the floor, so traversal cannot fill an empty pack', () => {
@@ -262,7 +324,7 @@ describe('the admission report', () => {
     expect(rejected.admission.anchored).toBe(false);
   });
 
-  it('counts a traversal-only candidate as unmeasured rather than as below the floor', () => {
+  it('counts an arrival nothing could measure as unmeasured rather than as below the floor', () => {
     const result = fuse(
       [
         list('graph_traversal', [
@@ -275,5 +337,29 @@ describe('the admission report', () => {
     expect(result.items).toEqual([]);
     expect(result.admission.droppedUnmeasured).toBe(1);
     expect(result.admission.droppedBelowFloor).toBe(0);
+  });
+
+  /**
+   * The two counters answer different questions, and a refusal only reads honestly when the
+   * measured arrivals stop landing in the pending pile: this one was scored and fell short.
+   */
+  it('counts a measured arrival as below the floor rather than as unmeasured', () => {
+    const result = fuse(
+      [
+        list('graph_traversal', [
+          candidate('reached', {
+            method: 'activation',
+            relevance: 0,
+            activation: 0.4,
+            evidence: [{ method: 'vector', relevance: 0.38, cue: 'outbox table' }],
+          }),
+        ]),
+      ],
+      { ...RRF, admission: CALIBRATED },
+    );
+
+    expect(result.items).toEqual([]);
+    expect(result.admission.droppedBelowFloor).toBe(1);
+    expect(result.admission.droppedUnmeasured).toBe(0);
   });
 });

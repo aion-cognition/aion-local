@@ -49,7 +49,11 @@ export type AdmissionReport = {
   readonly admitted: number;
   /** Measured by at least one method, and no measurement, exact hit or corroboration cleared. */
   readonly droppedBelowFloor: number;
-  /** Reached by spreading activation alone, so no method measured it against the query. */
+  /**
+   * Nothing measured it against the query, so no floor ever judged it: a node the spread
+   * reached whose content vector is still pending, or a hit from a leg that measures
+   * something other than relevance.
+   */
   readonly droppedUnmeasured: number;
   readonly droppedDuplicateContent: number;
   /**
@@ -65,7 +69,10 @@ export type AdmissionReport = {
 /**
  * The methods whose score is a cosine on [0,1], and so the only ones a floor can be measured
  * against. BM25 is absent by construction: a Lucene score is corpus-relative. Recency and
- * activation are absent because neither measures how well a node answers the query.
+ * activation are absent because neither score measures how well a node answers the query: an
+ * activation score measures how strongly the graph connects the node to a seed. A node the
+ * spread reached is scored against the query separately (`arrival-scoring.ts`), and that
+ * cosine reaches the gate as the vector measurement it is.
  */
 const COSINE_METHODS: ReadonlySet<RecallMethod> = new Set<RecallMethod>([
   'vector',
@@ -91,10 +98,10 @@ function measurementKey(measurement: Measurement): string {
  * result packs with unrelated content. Normalizing that score to the best hit of the same query
  * makes the top of every list read 1.00.
  *
- * Traversal is none of them either, and no caller may make it one. A node the spread reached
- * carries no measurement against the query, so it cannot be admitted on what a different node
- * measured: an off-topic pack fills to budget the moment one incidental hit is allowed to
- * unlock everything activation touched.
+ * The reach itself is none of them either, and no caller may make it one. A node the spread
+ * reached is admitted on the cosine something measured for it, exactly as a seed is, and never
+ * on the strength of the path that found it: an off-topic pack fills to budget the moment one
+ * incidental hit is allowed to unlock everything activation touched.
  */
 export function admitsOnEvidence(
   measurements: readonly Measurement[],
@@ -129,6 +136,21 @@ export function admitsOnEvidence(
   }
 
   return alone || corroborating.size >= 2;
+}
+
+/**
+ * Whether anything judged this item against the query at all, which is a different question
+ * from whether it passed. A refusal is only readable when the two are counted apart: a
+ * measurement that fell short says the floor is working, and no measurement at all says the
+ * item was never given a chance to clear one.
+ */
+export function wasMeasured(measurements: readonly Measurement[]): boolean {
+  for (const measurement of measurements) {
+    if (measurement.exact === true || COSINE_METHODS.has(measurement.method)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
