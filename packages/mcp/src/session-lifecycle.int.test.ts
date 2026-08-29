@@ -115,6 +115,7 @@ beforeAll(async () => {
     logger,
     entropyThreshold: config.redaction.entropyThreshold,
     lanes: new LaneAssigner(config.lanes),
+    workerMaxAttempts: config.operational.workerMaxAttempts,
   };
   const recall: RecallDeps = {
     driver: harness.driver,
@@ -168,13 +169,34 @@ describe('lazy Session node creation', () => {
     expect(await sessionExists(sessionId)).toBe(false);
   });
 
-  it('creates the Session node on a recall-only session: recall is content', async () => {
+  /**
+   * Recall produces nothing to remember, so it mints nothing. Half the Session nodes the
+   * exercise measured held zero episodes, and recall is what generated them: ~1,480 calls,
+   * each one adding an edge to both structural hubs and a link to a 477-edge FOLLOWS chain.
+   * The pack is still served and still recorded against the session id, which is the point —
+   * the id exists without the node, because the node is keyed on the id.
+   */
+  it('leaves no Session node for a recall-only session, and still serves the pack', async () => {
     const { client, transport } = await open();
     await client.callTool({ name: 'recall', arguments: { query: 'anything at all' } });
     const sessionId = transport.sessionId ?? '';
 
-    expect(await sessionExists(sessionId)).toBe(true);
+    expect(await sessionExists(sessionId)).toBe(false);
     expect(getLastPack(db, sessionId)).toBeDefined();
+
+    await transport.terminateSession();
+    await client.close();
+  });
+
+  it('creates it on the first reflection, which is the first thing worth remembering', async () => {
+    const { client, transport } = await open();
+    await client.callTool({ name: 'recall', arguments: { query: 'still nothing stored' } });
+    const sessionId = transport.sessionId ?? '';
+    expect(await sessionExists(sessionId)).toBe(false);
+
+    await client.callTool({ name: 'reflection', arguments: { observations: ['now there is'] } });
+
+    expect(await sessionExists(sessionId)).toBe(true);
 
     await transport.terminateSession();
     await client.close();
@@ -188,7 +210,7 @@ describe('FOLLOWS chain integrity across mixed empty/content sessions', () => {
     await probeBefore.client.close();
 
     const first = await open();
-    await first.client.callTool({ name: 'recall', arguments: { query: 'chain link A' } });
+    await first.client.callTool({ name: 'reflection', arguments: { observations: ['chain link A'] } });
     const sessionA = first.transport.sessionId ?? '';
     await first.transport.terminateSession();
     await first.client.close();
@@ -223,7 +245,8 @@ describe('reliable close', () => {
     });
     const sessionId = transport.sessionId ?? '';
 
-    // A bare close(): no DELETE, so onSessionClosed cannot fire server-side on its own (EX-32).
+    // A bare close(): the SDK client tears down its own transport without issuing the DELETE
+    // the close hook depends on, so the idle sweep is the primary trigger and not the backstop.
     await client.close();
     expect(await sessionExists(sessionId)).toBe(true);
 
@@ -237,7 +260,7 @@ describe('reliable close', () => {
 
   it('answers a late call on an idle-expired session with the clean unknown-session error', async () => {
     const { client, transport } = await open();
-    await client.callTool({ name: 'recall', arguments: { query: 'about to go quiet' } });
+    await client.callTool({ name: 'reflection', arguments: { observations: ['about to go quiet'] } });
     const sessionId = transport.sessionId ?? '';
 
     sweeper.sweepOnce(new Date(Date.now() + IDLE_MS + 50));

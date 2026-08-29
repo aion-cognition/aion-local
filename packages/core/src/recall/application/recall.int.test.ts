@@ -117,6 +117,7 @@ async function push(observation: string, now: Date, identity: string = WRITE_SES
       logger,
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
       lanes: new LaneAssigner(DEFAULTS.lanes),
+      workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
     },
     { observations: [observation] },
     { identity, now },

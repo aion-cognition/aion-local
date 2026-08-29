@@ -79,7 +79,7 @@ export type AionMcpServiceOptions = {
    */
   readonly onSessionClosed?: (sessionId: string) => void;
   /**
-   * EX-10: `/health` reported only `{status, sessions, descriptions_version}` while 4,000+
+   * `/health` used to report only `{status, sessions, descriptions_version}` while 4,000+
    * jobs sat pending. `queueLagSnapshot` (`@aion/core`) is SQLite-only — no Neo4j, no Ollama
    * — so calling it on every liveness probe stays cheap; the check the doctor.ts comment
    * documents (never touching the graph or the model) is unchanged. Absent, the fields it
@@ -235,6 +235,9 @@ export class AionMcpService {
       queue_exhausted: snapshot.exhausted,
       reinforcement_dropped: snapshot.reinforcementDropped,
       enrichment_lag_p95_ms: snapshot.p95EnrichmentLagMs ?? null,
+      cue_degraded_rate: snapshot.cueDegradedRate ?? null,
+      supersession_proposals_open: snapshot.supersessionProposalsOpen,
+      entity_merge_proposals_open: snapshot.entityMergeProposalsOpen,
     };
   }
 
@@ -357,7 +360,8 @@ export class AionMcpService {
   }
 
   /**
-   * EX-32's backstop: a session past `idleMs` since its last request closes the way a DELETE
+   * The backstop for a client that never sends a DELETE: a session past `idleMs` since its
+   * last request closes the way a DELETE
    * would (`session.server.close()` runs the same transport-close chain `#forget` reaches
    * from), independent of whether the client ever sends one. `SessionIdleSweeper` is what
    * puts this on a clock; this method only decides which sessions qualify at the given
