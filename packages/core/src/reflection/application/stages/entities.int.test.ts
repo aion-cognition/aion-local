@@ -20,7 +20,7 @@ import {
   type Neo4jHarness,
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger } from '../../../infrastructure/logging/logger.js';
-import { OllamaProvider } from '../../../infrastructure/providers/ollama-provider.js';
+import { testGenerationProvider } from '../../../infrastructure/providers/test-support/generation-provider.js';
 import type { Provider, Vector } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { SessionManager } from '../../../session/session-manager.js';
@@ -105,7 +105,7 @@ beforeAll(async () => {
   db = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
   await runGraphMigrations(harness.driver, db, { embedDimension: DEFAULTS.models.embedDimension });
 
-  provider = new OllamaProvider({
+  provider = testGenerationProvider({
     baseUrl: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
     embedModel: DEFAULTS.models.embed,
   });

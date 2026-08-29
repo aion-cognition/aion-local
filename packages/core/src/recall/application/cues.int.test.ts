@@ -57,6 +57,9 @@ type SpotRow = {
 const dataDir = mkdtempSync(join(tmpdir(), 'aion-cues-int-'));
 const rows: SpotRow[] = [];
 
+// The local cue model is the subject, so this builds `OllamaProvider` directly rather than
+// taking the test route that sends generations to a remote model. A remote pass here would
+// report latency and quality numbers for a model the install never runs.
 const deps: CueExtractionDeps = {
   provider: new OllamaProvider({ baseUrl: OLLAMA_URL, embedModel: DEFAULTS.models.embed }),
   model: CUE_MODEL,

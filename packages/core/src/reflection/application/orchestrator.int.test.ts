@@ -14,7 +14,7 @@ import {
 import { findEpisodeEntities } from '../../infrastructure/graph/entity-queries.js';
 import { findEpisodeCognitiveNodes } from '../../infrastructure/graph/semantic-relationship-queries.js';
 import { openLogger } from '../../infrastructure/logging/logger.js';
-import { OllamaProvider } from '../../infrastructure/providers/ollama-provider.js';
+import { testGenerationProvider } from '../../infrastructure/providers/test-support/generation-provider.js';
 import { SessionManager } from '../../session/session-manager.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { getLedgerEntry, isLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
@@ -105,7 +105,7 @@ function orchestrator(stages: readonly ReflectionStage[]): ReflectionOrchestrato
     {
       driver: harness.driver,
       db,
-      provider: new OllamaProvider({
+      provider: testGenerationProvider({
         baseUrl: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
         embedModel: DEFAULTS.models.embed,
       }),
@@ -131,7 +131,7 @@ beforeAll(async () => {
       memberId: backbone.member.id,
       workspaceId: backbone.workspace.id,
     }),
-    provider: new OllamaProvider({
+    provider: testGenerationProvider({
       baseUrl: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
       embedModel: DEFAULTS.models.embed,
     }),
