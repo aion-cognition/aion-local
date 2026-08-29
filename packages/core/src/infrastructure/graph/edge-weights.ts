@@ -130,12 +130,20 @@ export async function reinforceEdgeWeights(
 /**
  * Decay's sibling write, not a parameter on the reinforcement builder above: reinforcement
  * is handed named pairs and matches exactly those, while decay has no pairs to be handed and
- * instead scans for its own candidates, oldest-touched first. The floor is a hard clamp
+ * instead scans for its own candidates, least recently swept first. The floor is a hard clamp
  * here rather than the lower bound reinforcement only approaches from below, since decay
  * moves a weight down and the clamp is what stops it going past the floor.
  */
+
+/**
+ * When the decay sweep last visited an edge. Written only by the sweep and read only by its
+ * own scan order: it is the cursor that makes a bounded run cover the graph in turns, and it
+ * is deliberately not `updated_at`, which means "last used" and is the curve's input.
+ */
+export const DECAYED_AT_PROPERTY = 'decayed_at';
+
 export type WeightDecayInput = {
-  /** Caps how many of the stalest unprotected edges one call touches. */
+  /** Caps how many unprotected edges one call touches. */
   readonly batchSize: number;
   /** eta_decay in the bell curve. */
   readonly decayRate: number;
@@ -170,14 +178,30 @@ function assertPositive(name: string, value: number): void {
 }
 
 /**
- * A scan over the graph's own stalest unprotected edges rather than an `UNWIND` of named
- * pairs: decay has no queue to draw candidates from, so the query finds them. Staleness is
- * `duration.inDays(r.updated_at, $now)`, computed in the same statement that writes the
- * result so the read and the write never race, matching the reinforcement builder above.
+ * A scan over the graph's own unprotected edges rather than an `UNWIND` of named pairs: decay
+ * has no queue to draw candidates from, so the query finds them. Staleness and sweep order are
+ * two different properties, and reading both off one is what made an earlier version of this
+ * query stand still.
  *
- * `ORDER BY ... LIMIT` before the write is what makes a bounded run resumable rather than
- * repeating: every edge this call touches gets a fresh `updated_at`, so the next call's scan
- * naturally ranks it behind whatever is still stale.
+ * Staleness, the curve's input, is `duration.inDays(r.updated_at, $now)`. `updated_at` moves
+ * when a writer touches the edge (the merge policy, reinforcement's bounded step), which is
+ * exactly "last used", and decay must not move it: measuring disuse off a property the sweep
+ * itself refreshes caps every edge at one sweep cycle of staleness, so the 30-day peak the
+ * curve is built around is unreachable and the sweep applies a near-uniform left-tail step to
+ * everything instead of discriminating on disuse.
+ *
+ * Sweep order, which is what makes a bounded run resumable, is `decayed_at`: written only
+ * here, read only here, least-recently-swept first with never-swept edges ahead of all of
+ * them. Ordering on staleness instead cannot advance, because `duration.inDays(...).days`
+ * truncates to whole days: on a substrate whose edges were all written this week every
+ * candidate sits in one bucket, `ORDER BY` is a total tie, and `LIMIT` returns the same
+ * planner-ordered rows every call, driving one arbitrary slice to the floor while the rest of
+ * the graph never decays at all. Staleness still breaks ties inside one `decayed_at` cohort,
+ * so the stalest of the edges due for a sweep are the ones it takes.
+ *
+ * A null `updated_at` coalesces to `$now`, which reads as zero days stale rather than
+ * poisoning the arithmetic: `duration.inDays(null, ...)` is null, and a null flows through the
+ * exponent and the comparison to write `r.strength = null`, which no reader can interpret.
  */
 export function buildEdgeWeightDecay(input: WeightDecayInput): GraphStatement {
   assertProportion('weightFloor', input.weightFloor);
@@ -193,8 +217,12 @@ export function buildEdgeWeightDecay(input: WeightDecayInput): GraphStatement {
   const cypher = [
     `MATCH (a:${BASE_NODE_LABEL})-[r]->(b:${BASE_NODE_LABEL})`,
     `WHERE NOT type(r) IN $protected AND ${source.where} AND ${target.where}`,
-    'WITH r, duration.inDays(r.updated_at, $now).days AS daysSinceAccess',
-    'ORDER BY daysSinceAccess DESC',
+    'WITH r, duration.inDays(coalesce(r.updated_at, $now), $now).days AS daysSinceAccess,',
+    `     r.${DECAYED_AT_PROPERTY} AS sweptAt`,
+    // Two tiers rather than a coalesce, because Cypher sorts nulls last under ASC and an edge
+    // no sweep has reached yet is the one most owed a step, not the one least owed it.
+    'ORDER BY CASE WHEN sweptAt IS NULL THEN 0 ELSE 1 END, sweptAt ASC,',
+    '         daysSinceAccess DESC, r.id ASC',
     'LIMIT $batchSize',
     'WITH r, exp(-1.0 * ((daysSinceAccess - $peakDays) ^ 2.0) / (2.0 * ($sigma ^ 2.0))) AS decay',
     'WITH r, coalesce(r.strength, $weightFloor) AS before, decay',
@@ -202,7 +230,7 @@ export function buildEdgeWeightDecay(input: WeightDecayInput): GraphStatement {
     '     CASE WHEN before - $decayRate * decay < $weightFloor THEN $weightFloor',
     '          ELSE before - $decayRate * decay END AS after',
     'SET r.strength = after,',
-    '    r.updated_at = $now',
+    `    r.${DECAYED_AT_PROPERTY} = $now`,
     'RETURN r.id AS id, type(r) AS type, startNode(r).id AS sourceId,',
     '       endNode(r).id AS targetId, after AS strength, before AS previousStrength',
   ].join('\n');

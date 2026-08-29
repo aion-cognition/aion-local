@@ -242,6 +242,42 @@ describe('hebbian decay against the graph', () => {
     expect(await edgeStrength('SIMILAR', 'e4-a', 'e4-b')).toBeLessThan(0.5);
   });
 
+  it('applies the same step again when a later sweep reaches the same edge', async () => {
+    await seedEntity('twice-a');
+    await seedEntity('twice-b');
+    await seedEdge('SIMILAR', 'twice-a', 'twice-b', 0.9, PEAK_DAYS);
+
+    await sweep();
+    const afterFirst = (await edgeStrength('SIMILAR', 'twice-a', 'twice-b')) ?? 0.9;
+    await sweep();
+    const afterSecond = (await edgeStrength('SIMILAR', 'twice-a', 'twice-b')) ?? afterFirst;
+
+    // The edge went unused across both sweeps, so both steps are the same size. A sweep that
+    // read staleness off a property it writes would flatten the second step to the curve's
+    // left tail and report an edge nobody touched as freshly used.
+    expect(0.9 - afterFirst).toBeCloseTo(afterFirst - afterSecond, 6);
+    expect(0.9 - afterFirst).toBeCloseTo(DECAY_RATE * decayFactor(PEAK_DAYS, PEAK_DAYS, SIGMA), 6);
+  });
+
+  it('covers every edge in turn when they are all the same whole number of days stale', async () => {
+    const pairs = ['tie-1', 'tie-2', 'tie-3'];
+    for (const pair of pairs) {
+      await seedEntity(`${pair}-a`);
+      await seedEntity(`${pair}-b`);
+      await seedEdge('SIMILAR', `${pair}-a`, `${pair}-b`, 0.9, 0);
+    }
+
+    // One edge per call, three calls. Staleness truncates to whole days, so these three tie on
+    // it exactly; what has to advance the scan is the sweep's own cursor, not the staleness.
+    await sweep(1);
+    await sweep(1);
+    await sweep(1);
+
+    for (const pair of pairs) {
+      expect(await edgeStrength('SIMILAR', `${pair}-a`, `${pair}-b`)).toBeLessThan(0.9);
+    }
+  });
+
   it('records what it did in meta for the operator surfaces', async () => {
     await seedEntity('meta-a');
     await seedEntity('meta-b');
