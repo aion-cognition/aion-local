@@ -39,6 +39,8 @@ export type QueueHealth = {
   /** Unclaimed jobs past the attempt ceiling: no worker will ever take them again. */
   readonly exhausted: number;
   readonly p95EnrichmentLagMs: number | undefined;
+  /** Exhausted jobs `dead_letter` already gave their one retry, which failed again: needs a person. */
+  readonly deadLetterAttentionCount: number;
 };
 
 export type EnrichmentHealth = {
@@ -135,6 +137,7 @@ export const NEUTRAL_QUEUE_HEALTH: QueueHealth = {
   oldestUnclaimedMs: undefined,
   exhausted: 0,
   p95EnrichmentLagMs: undefined,
+  deadLetterAttentionCount: 0,
 };
 
 export const NEUTRAL_ENRICHMENT_HEALTH: EnrichmentHealth = {
