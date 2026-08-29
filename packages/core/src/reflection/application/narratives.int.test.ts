@@ -46,11 +46,33 @@ import {
   type NarrativeDeps,
 } from './narratives.js';
 
-// A live 8B pass occasionally grounds zero sentences under Ollama contention, which reads as
-// status 'failed'. These tests assert structure (versioning, provenance, idempotency), never
-// prose quality, so one retry keeps the structural assertion honest without waiting on model
-// quality the suite is forbidden to depend on.
-async function closeWithOneRetry(
+// The structural describes (versioning, provenance edges, idle-sweep bookkeeping) prove
+// Cypher and orchestration, not prose quality, and the suite must never depend on model
+// output quality. A live 8B pass occasionally grounds zero sentences, which reads as
+// status 'failed' and would hold those structural assertions hostage, so they run on a
+// deterministic provider that always cites the first source node the prompt offers. The
+// grounding describe below keeps the live model: grounding quality is its actual subject.
+function deterministicNarrativeProvider(): NarrativeDeps['provider'] {
+  const live = provider();
+  return {
+    embed: (texts) => live.embed(texts),
+    generate: (request) => {
+      const prompt = request.messages.map((message) => message.content).join('\n');
+      const handles = [...new Set(prompt.match(/\[S\d+\]/g) ?? [])].map((tag) => tag.slice(1, -1));
+      const cited = handles.slice(0, 2);
+      return Promise.resolve({
+        sentences: [
+          { text: 'The session staged, migrated, and held the Ariadne rollout.', source_ids: cited },
+        ],
+      });
+    },
+  };
+}
+
+// The grounding describe asserts live-model behavior on purpose, and a saturated Ollama can
+// fail one pass without saying anything about grounding. One retry absorbs contention; a
+// double failure is a real grounding result and should fail the test.
+async function closeWithGroundingRetry(
   narrativeDeps: NarrativeDeps,
   identity: string,
 ): ReturnType<typeof closeSessionNarrative> {
@@ -64,7 +86,7 @@ async function closeWithOneRetry(
 /**
  * The whole boundary against a live substrate: episodes pushed through a session, the close
  * compressing them with the reflect model, and the narrative that results reachable by both
- * retrieval legs. What only a real server proves here is the Cypher — the idle-session
+ * retrieval legs. What only a real server proves here is the Cypher: the idle-session
  * aggregation, the version read, and `content_fts` actually covering `Narrative`.
  */
 
@@ -148,6 +170,7 @@ let db: SqliteHandle;
 let dataDir: string;
 let intake: ReflectionIntakeDeps;
 let deps: NarrativeDeps;
+let structuralDeps: NarrativeDeps;
 let firstNarrativeId: string;
 
 function provider(): OllamaProvider {
@@ -188,6 +211,7 @@ beforeAll(async () => {
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
   };
   deps = { driver: harness.driver, provider: provider(), logger };
+  structuralDeps = { driver: harness.driver, provider: deterministicNarrativeProvider(), logger };
 
   for (const payload of EPISODES) {
     await push(payload, SESSION_IDENTITY);
@@ -211,7 +235,7 @@ describe('session close against a live substrate', () => {
   });
 
   it('compresses the session into a narrative with provenance and a vector', async () => {
-    const result = await closeWithOneRetry(deps, SESSION_IDENTITY);
+    const result = await closeSessionNarrative(structuralDeps, SESSION_IDENTITY);
 
     expect(result.status).toBe('created');
     expect(result.version).toBe(1);
@@ -279,7 +303,7 @@ describe('session close against a live substrate', () => {
   }, 120_000);
 
   it('writes nothing on a re-close over the same episodes', async () => {
-    const result = await closeWithOneRetry(deps, SESSION_IDENTITY);
+    const result = await closeSessionNarrative(structuralDeps, SESSION_IDENTITY);
 
     expect(result.status).toBe('skipped');
     expect(await findSessionNarratives(harness.driver, SESSION_IDENTITY)).toHaveLength(1);
@@ -288,7 +312,7 @@ describe('session close against a live substrate', () => {
   it('mints version 2 and supersedes version 1 once the session grew', async () => {
     await push(LATE_EPISODE, SESSION_IDENTITY);
 
-    const result = await closeWithOneRetry(deps, SESSION_IDENTITY);
+    const result = await closeSessionNarrative(structuralDeps, SESSION_IDENTITY);
 
     expect(result.status).toBe('created');
     expect(result.version).toBe(2);
@@ -321,7 +345,7 @@ describe('idle sweep against a live substrate', () => {
   });
 
   it('narrates it, and then stops offering it', async () => {
-    const results = await sweepIdleSessions(deps, { now: afterTheIdleWindow() });
+    const results = await sweepIdleSessions(structuralDeps, { now: afterTheIdleWindow() });
 
     expect(results.map((result) => [result.sessionId, result.status])).toEqual([
       [IDLE_SESSION_IDENTITY, 'created'],
@@ -331,7 +355,7 @@ describe('idle sweep against a live substrate', () => {
     expect(covered).toHaveLength(1);
     expect(covered[0]?.open).toBe(true);
 
-    const again = await sweepIdleSessions(deps, { now: afterTheIdleWindow() });
+    const again = await sweepIdleSessions(structuralDeps, { now: afterTheIdleWindow() });
     expect(again).toEqual([]);
   }, 120_000);
 });
@@ -369,7 +393,7 @@ describe('grounding against a live substrate', () => {
   }, 120_000);
 
   it('turns 27 words of source into one grounded sentence, not eight invented ones', async () => {
-    const result = await closeWithOneRetry(deps, THIN_SESSION_IDENTITY);
+    const result = await closeWithGroundingRetry(deps, THIN_SESSION_IDENTITY);
 
     expect(result.status).toBe('created');
     const properties = await nodeProperties(harness.driver, result.narrativeId as string);
@@ -387,7 +411,7 @@ describe('grounding against a live substrate', () => {
       [...decisionIds].concat(sources.filter((s) => s.kind === 'insight').map((s) => s.id)).sort(),
     );
 
-    const result = await closeWithOneRetry(deps, PLANNING_SESSION_IDENTITY);
+    const result = await closeWithGroundingRetry(deps, PLANNING_SESSION_IDENTITY);
 
     expect(result.status).toBe('created');
     const properties = await nodeProperties(harness.driver, result.narrativeId as string);
