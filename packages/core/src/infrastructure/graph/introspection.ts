@@ -92,6 +92,21 @@ export async function countGraphElements(driver: Driver): Promise<GraphCounts> {
 }
 
 /**
+ * One row per label a node carries, `aion stats`' substrate breakdown. A node counts under
+ * every label on it (`Episode`, its `Memory` companion, and `AionNode`), so the rows are not
+ * a partition of the node total; they are each label's own share of it.
+ */
+export async function countNodesByLabel(driver: Driver): Promise<ReadonlyMap<string, number>> {
+  const rows = await runRead(
+    driver,
+    'MATCH (n) UNWIND labels(n) AS label RETURN label, count(*) AS count ORDER BY label',
+    {},
+    (row) => ({ label: row['label'] as string, count: row['count'] as number }),
+  );
+  return new Map(rows.map((row) => [row.label, row.count]));
+}
+
+/**
  * Every string property of every node, in pages. The redaction residue check is the only
  * caller: secret detection is deterministic, so re-running the current rules over what is
  * already stored is the one way to find material an older, leakier ruleset wrote. Paged and

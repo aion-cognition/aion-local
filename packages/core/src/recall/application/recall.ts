@@ -17,6 +17,7 @@ import type { SessionManager } from '../../session/session-manager.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { saveLastPack } from '../../infrastructure/sqlite/last-pack.js';
 import { recordPackMethodCounts } from '../../infrastructure/sqlite/method-counters.js';
+import { recordRecallOutcome } from '../../infrastructure/sqlite/recall-cadence.js';
 import { recordCueOutcome } from '../../infrastructure/sqlite/recall-samples.js';
 import {
   spreadActivation,
@@ -375,6 +376,11 @@ export async function handleRecall(
     deps.db,
     [...fusion.value.items, ...resonance.value.items].map((item) => item.rationale.method),
   );
+  // Cadence's raw material (PRD §3.4): calls per session and the empty-pack rate, from a
+  // lifetime total rather than the degraded-rate window above, which trims to the last 500.
+  recordRecallOutcome(deps.db, {
+    empty: fusion.value.items.length === 0 && resonance.value.items.length === 0,
+  });
 
   deps.logger.info(
     {
