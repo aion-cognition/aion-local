@@ -367,6 +367,11 @@ export const KNOB_REGISTRY: readonly Knob[] = [
     kind: 'number',
   },
   {
+    envVar: 'AION_MAINTENANCE_BRIDGE_OVERLAP_CEILING',
+    path: ['maintenance', 'bridgeOverlapCeiling'],
+    kind: 'number',
+  },
+  {
     envVar: 'AION_MAINTENANCE_BRIDGE_MIN_COMMUNITY_SIZE',
     path: ['maintenance', 'bridgeMinCommunitySize'],
     kind: 'number',

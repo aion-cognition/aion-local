@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
-import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
-import { runWrite } from '../../../infrastructure/graph/connection.js';
+import { forgetNode, writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
+import { runRead } from '../../../infrastructure/graph/connection.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import {
   startNeo4jHarness,
@@ -67,9 +67,21 @@ function ctxFor(overrides: Partial<OperationContext> = {}): OperationContext {
   };
 }
 
-/** The two ordering tests below assert on tx_from order, so they start from an empty graph. */
-async function clearEpisodes(): Promise<void> {
-  await runWrite(harness.driver, 'MATCH (e:Episode) DETACH DELETE e', {}, (row) => row);
+/**
+ * The two ordering tests below assert on tx_from order, so they start with nothing else in
+ * scope. Forgotten rather than deleted, which is the substrate's own way of taking something
+ * out of scope, and what `listStoredEpisodes` already filters on.
+ */
+async function forgetExistingEpisodes(): Promise<void> {
+  const ids = await runRead(
+    harness.driver,
+    'MATCH (e:Episode) WHERE e.forgotten_at IS NULL RETURN e.id AS id',
+    {},
+    (row) => row['id'] as string,
+  );
+  for (const id of ids) {
+    await forgetNode(harness.driver, { id, now: NOW });
+  }
 }
 
 function jobsFor(episodeId: string) {
@@ -120,7 +132,7 @@ describe('reconcile_reenqueue', () => {
   }, 60_000);
 
   it('bounds the jobs it writes without narrowing what it scanned, oldest first', async () => {
-    await clearEpisodes();
+    await forgetExistingEpisodes();
     await writeStampedNode(harness.driver, {
       label: 'Episode',
       id: 'reconcile-bound-old',
@@ -149,7 +161,7 @@ describe('reconcile_reenqueue', () => {
   }, 60_000);
 
   it('reaches an episode far older than one batch of newer ones', async () => {
-    await clearEpisodes();
+    await forgetExistingEpisodes();
     await writeStampedNode(harness.driver, {
       label: 'Episode',
       id: 'reconcile-stranded',

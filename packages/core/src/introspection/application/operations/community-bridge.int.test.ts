@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
-import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
+import { forgetNode, writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
 import { fetchAdjacency } from '../../../infrastructure/graph/adjacency.js';
 import { COMMUNITY_PROPERTY } from '../../../infrastructure/graph/community-queries.js';
 import { runRead } from '../../../infrastructure/graph/connection.js';
@@ -27,6 +27,7 @@ import {
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { communityRefreshOperation } from './community-refresh.js';
+import type { ProviderFactory } from './routed-generation.js';
 import { symbiosisBridgeOperation } from './symbiosis-bridge.js';
 
 /**
@@ -81,6 +82,26 @@ const config: Config = {
 /** A deterministic stand-in for the local embedder: the bridge's own vector is not the subject. */
 const embed = async (texts: readonly string[]): Promise<Vector[]> =>
   texts.map(() => unitVector(2));
+
+const PROPOSED_SUMMARY = 'Both clusters describe the same ingest path, one side batching it.';
+const PROPOSED_RATIONALE = 'The two memories name the same pipeline from either end.';
+
+/** A model that answers, so the run takes the proposal path the design puts first. */
+const answeringProvider: ProviderFactory = () => ({
+  embed,
+  generate: async (): Promise<unknown> =>
+    Promise.resolve({
+      summary: PROPOSED_SUMMARY,
+      rationale: PROPOSED_RATIONALE,
+      compatibility: 0.72,
+    }),
+});
+
+/** A model that is not there, which is the case the deterministic sentence exists for. */
+const failingProvider: ProviderFactory = () => ({
+  embed,
+  generate: (): Promise<unknown> => Promise.reject(new Error('ollama unreachable')),
+});
 
 function unitVector(index: number): number[] {
   const vector = new Array<number>(EMBED_DIMENSION).fill(0);
@@ -159,7 +180,52 @@ async function communityOf(id: string): Promise<number | undefined> {
 }
 
 async function bridgeIds(): Promise<string[]> {
-  return runRead(harness.driver, 'MATCH (b:Bridge) RETURN b.id AS id', {}, (row) => row['id'] as string);
+  return runRead(
+    harness.driver,
+    'MATCH (b:Bridge) WHERE b.forgotten_at IS NULL RETURN b.id AS id',
+    {},
+    (row) => row['id'] as string,
+  );
+}
+
+async function bridgeSummary(): Promise<string | undefined> {
+  const rows = await runRead(
+    harness.driver,
+    'MATCH (b:Bridge) WHERE b.forgotten_at IS NULL RETURN b.text AS text',
+    {},
+    (row) => row['text'] as string,
+  );
+  return rows[0];
+}
+
+async function bridgeEndpoints(): Promise<
+  { id: string; provenance: string[]; rationale: string }[]
+> {
+  return runRead(
+    harness.driver,
+    [
+      'MATCH (b:Bridge)-[r:RELATED_TO]-(n:AionNode)',
+      'WHERE b.forgotten_at IS NULL',
+      'RETURN n.id AS id, r.provenance AS provenance, r.rationale AS rationale',
+    ].join('\n'),
+    {},
+    (row) => ({
+      id: row['id'] as string,
+      provenance: row['provenance'] as string[],
+      rationale: row['rationale'] as string,
+    }),
+  );
+}
+
+/**
+ * Fixture surgery, so the last case starts from an unbridged pair rather than a second
+ * harness. Forgotten rather than deleted: `countBridgesBetween` reads current bridges only,
+ * which is the same mechanism the rest of the substrate uses to take something out of scope.
+ */
+async function forgetBridges(): Promise<void> {
+  for (const id of await bridgeIds()) {
+    await forgetNode(harness.driver, { id, now: NOW });
+  }
 }
 
 beforeAll(async () => {
@@ -192,7 +258,10 @@ describe('community refresh and the symbiosis bridge', () => {
   });
 
   it('will not bridge before the communities have been derived', async () => {
-    const outcome = await symbiosisBridgeOperation({ embed }).run(context());
+    const outcome = await symbiosisBridgeOperation({
+      embed,
+      buildProvider: answeringProvider,
+    }).run(context());
 
     expect(outcome.status).toBe('noop');
     expect(await bridgeIds()).toEqual([]);
@@ -212,31 +281,27 @@ describe('community refresh and the symbiosis bridge', () => {
     expect(left[0]).not.toBe(right[0]);
   });
 
-  it('bridges the closest cross-community pair', async () => {
-    const outcome = await symbiosisBridgeOperation({ embed }).run(context());
+  it('bridges the closest cross-community pair and writes the sentence the model proposed', async () => {
+    const outcome = await symbiosisBridgeOperation({
+      embed,
+      buildProvider: answeringProvider,
+    }).run(context());
 
     expect(outcome.status).toBe('applied');
     expect(outcome.itemsAffected).toBe(1);
+    expect(outcome.detail).toContain('model-proposed');
 
     const bridges = await bridgeIds();
     expect(bridges).toHaveLength(1);
+    expect(await bridgeSummary()).toBe(PROPOSED_SUMMARY);
 
-    const endpoints = await runRead(
-      harness.driver,
-      'MATCH (b:Bridge)-[r:RELATED_TO]-(n:AionNode) RETURN n.id AS id, r.provenance AS provenance, r.rationale AS rationale',
-      {},
-      (row) => ({
-        id: row['id'] as string,
-        provenance: row['provenance'] as string[],
-        rationale: row['rationale'] as string,
-      }),
-    );
+    const endpoints = await bridgeEndpoints();
     expect(endpoints.map((endpoint) => endpoint.id).sort()).toEqual(
       [NEAREST_LEFT, NEAREST_RIGHT].sort(),
     );
     for (const endpoint of endpoints) {
       expect(endpoint.provenance).toContain('introspection');
-      expect(endpoint.rationale).toContain('closest pair by content vector');
+      expect(endpoint.rationale).toBe(PROPOSED_RATIONALE);
     }
   });
 
@@ -252,9 +317,41 @@ describe('community refresh and the symbiosis bridge', () => {
   });
 
   it('writes no second bridge between a pair it has already joined', async () => {
-    const outcome = await symbiosisBridgeOperation({ embed }).run(context());
+    const outcome = await symbiosisBridgeOperation({
+      embed,
+      buildProvider: answeringProvider,
+    }).run(context());
 
     expect(outcome.status).toBe('noop');
     expect(await bridgeIds()).toHaveLength(1);
+  });
+
+  /**
+   * The floor under the design, not the design. A bridge is an enhancement, so a model that is
+   * down costs the sentence and not the run, and what lands says what it is: a pair chosen by
+   * the graph's own shape and anchored by the vectors, described in the terms both are stated
+   * in.
+   */
+  it('writes a deterministic bridge when the model is unavailable', async () => {
+    await forgetBridges();
+
+    const outcome = await symbiosisBridgeOperation({
+      embed,
+      buildProvider: failingProvider,
+    }).run(context());
+
+    expect(outcome.status).toBe('applied');
+    expect(outcome.detail).toContain('deterministic');
+    expect(await bridgeSummary()).toContain('Bridge between two memory clusters');
+
+    const endpoints = await bridgeEndpoints();
+    expect(endpoints.map((endpoint) => endpoint.id).sort()).toEqual(
+      [NEAREST_LEFT, NEAREST_RIGHT].sort(),
+    );
+    for (const endpoint of endpoints) {
+      expect(endpoint.rationale).toContain('closest pair by content vector');
+      // The pair score is in the rationale, so why these two clusters is re-derivable later.
+      expect(endpoint.rationale).toContain('coherence');
+    }
   });
 });

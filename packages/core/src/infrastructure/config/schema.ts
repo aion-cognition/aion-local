@@ -233,6 +233,11 @@ export const ConfigSchema = z.object({
     communityMinNodes: positiveInt,
     /** Members a community needs before `symbiosis_bridge` may use it as an endpoint. */
     bridgeMinCommunitySize: positiveInt,
+    /**
+     * Share of the smaller community's size, in edges already crossing to the other one, above
+     * which the pair counts as connected and `symbiosis_bridge` skips it.
+     */
+    bridgeOverlapCeiling: proportion,
   }),
   sqlite: z.object({
     path: z.string().min(1),

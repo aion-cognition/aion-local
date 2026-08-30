@@ -166,12 +166,18 @@ export type CommunityProfile = {
   readonly size: number;
   /** Association edges from this community's members to a member of any other community. */
   readonly externalEdges: number;
+  /** Association edges between two of this community's own members: how much of a thing it is. */
+  readonly internalEdges: number;
 };
 
 /**
- * Communities ranked by how little joins them to the rest of the graph. The first two rows of
- * a run are the pair the bridge engine is for: large enough to be a real neighbourhood, and
- * connected to nothing much, which is the knowledge island the design describes.
+ * Every community large enough to be a neighbourhood, with the two edge counts a pair score
+ * needs: how much holds each one together, and how much already joins it to everything else.
+ *
+ * Ordered by isolation, which is where the search starts, but the order is no longer the
+ * answer: taking the first two rows picked the two loneliest communities whether or not they
+ * had anything to do with each other. The scoring in the bridge operation reads the whole
+ * list.
  */
 const READ_COMMUNITY_PROFILES = [
   'MATCH (n:Memory)',
@@ -182,8 +188,12 @@ const READ_COMMUNITY_PROFILES = [
   'UNWIND members AS m',
   'OPTIONAL MATCH (m)-[r]-(o:Memory)',
   `  WHERE NOT type(r) IN [${BACKBONE_TYPES}]`,
-  `    AND o.${COMMUNITY_PROPERTY} IS NOT NULL AND o.${COMMUNITY_PROPERTY} <> community`,
-  'RETURN community, size, count(r) AS external_edges',
+  `    AND o.${COMMUNITY_PROPERTY} IS NOT NULL`,
+  'WITH community, size,',
+  `  sum(CASE WHEN o.${COMMUNITY_PROPERTY} <> community THEN 1 ELSE 0 END) AS external_edges,`,
+  `  sum(CASE WHEN o.${COMMUNITY_PROPERTY} = community THEN 1 ELSE 0 END) AS internal_ends`,
+  // Each internal edge is walked from both of its endpoints, so the ends count double.
+  'RETURN community, size, external_edges, internal_ends / 2 AS internal_edges',
   'ORDER BY external_edges ASC, size DESC, community ASC',
 ].join('\n');
 
@@ -195,5 +205,41 @@ export async function readCommunityProfiles(
     community: row['community'] as number,
     size: row['size'] as number,
     externalEdges: row['external_edges'] as number,
+    internalEdges: row['internal_edges'] as number,
+  }));
+}
+
+export type CommunityPairEdges = {
+  readonly left: number;
+  readonly right: number;
+  /** Association edges already crossing between these two communities. */
+  readonly edges: number;
+};
+
+/**
+ * How much structure each pair of communities already shares. A pair joined by a dozen edges
+ * is not a knowledge island needing a bridge; it is a neighbourhood the graph has already
+ * connected, and a bridge across it buys activation nothing it could not already walk.
+ *
+ * Only pairs with at least one crossing edge come back. A pair with none is the case the
+ * bridge engine is for, and its absence from this list is what says so.
+ */
+const READ_COMMUNITY_PAIR_EDGES = [
+  'MATCH (a:Memory)-[r]-(b:Memory)',
+  `WHERE ${CURRENT('a')} AND ${CURRENT('b')}`,
+  `  AND NOT type(r) IN [${BACKBONE_TYPES}]`,
+  `  AND a.${COMMUNITY_PROPERTY} IS NOT NULL AND b.${COMMUNITY_PROPERTY} IS NOT NULL`,
+  `  AND a.${COMMUNITY_PROPERTY} < b.${COMMUNITY_PROPERTY}`,
+  `  AND coalesce(a.${STRUCTURAL_PROPERTY}, false) = false`,
+  `  AND coalesce(b.${STRUCTURAL_PROPERTY}, false) = false`,
+  `RETURN a.${COMMUNITY_PROPERTY} AS left, b.${COMMUNITY_PROPERTY} AS right, count(r) AS edges`,
+  'ORDER BY left, right',
+].join('\n');
+
+export async function readCommunityPairEdges(driver: Driver): Promise<CommunityPairEdges[]> {
+  return runRead(driver, READ_COMMUNITY_PAIR_EDGES, {}, (row) => ({
+    left: row['left'] as number,
+    right: row['right'] as number,
+    edges: row['edges'] as number,
   }));
 }
