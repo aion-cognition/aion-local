@@ -3,6 +3,7 @@ import { backboneRepairOperation } from './operations/backbone-repair.js';
 import { communityRefreshOperation } from './operations/community-refresh.js';
 import { deadLetterOperation } from './operations/dead-letter.js';
 import { descriptionFreshnessOperation } from './operations/description-freshness-operation.js';
+import { mergeShadowOperation } from './operations/merge-shadow-operation.js';
 import { narrativeCleanupOperation } from './operations/narrative-cleanup-operation.js';
 import { narrativeRegroundingOperation } from './operations/narrative-regrounding.js';
 import { orphanCleanupOperation } from './operations/orphan-cleanup.js';
@@ -20,9 +21,9 @@ import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-
  *
  * Order is documentation, not priority. Selection is by tier and urgency, and ties break on
  * waiting time and then on name, so moving a line here changes nothing about what runs. The
- * four groups below read outward from the substrate: what makes a node findable at all, then
+ * first four groups read outward from the substrate: what makes a node findable at all, then
  * what makes the edges between nodes carry weight, then what the nodes say, then the shape the
- * whole graph has taken.
+ * whole graph has taken. The last group stands apart: it repairs nothing, it only watches.
  */
 export function introspectionOperations(): readonly IntrospectionOperation[] {
   return [
@@ -54,5 +55,10 @@ export function introspectionOperations(): readonly IntrospectionOperation[] {
     orphanCleanupOperation(),
     communityRefreshOperation(),
     symbiosisBridgeOperation(),
+
+    // Introspection on a policy nobody has armed yet: judges what an auto-merge rule would do
+    // with an open entity-merge proposal, writes the verdict to the ops ledger, and touches
+    // nothing else. `aion stats` is where the verdicts turn into a measurement.
+    mergeShadowOperation(),
   ];
 }

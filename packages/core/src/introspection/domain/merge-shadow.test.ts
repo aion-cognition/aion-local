@@ -1,0 +1,116 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  mergeShadowLedgerKey,
+  readMergeShadowVerdict,
+  summarizeMergeShadowAgreement,
+  verdictAgrees,
+  verdictOf,
+  wouldAutoApply,
+  type MergeShadowResolvedJudgment,
+} from './merge-shadow.js';
+
+describe('wouldAutoApply', () => {
+  it('is true for names that fold to the same string', () => {
+    expect(wouldAutoApply('Postgres', 'postgres')).toBe(true);
+    expect(wouldAutoApply('Alice Chen', 'alice chen')).toBe(true);
+  });
+
+  it('collapses inner whitespace and trims before comparing', () => {
+    expect(wouldAutoApply('  Alice   Chen ', 'Alice Chen')).toBe(true);
+  });
+
+  it('is false for a name that only contains the other as a substring', () => {
+    // The character-overlap rule entity-identity.ts uses for merge *candidates* would score
+    // this pair above its own threshold; the shadow rule is exact-fold equality, not overlap.
+    expect(wouldAutoApply('UserPromptSubmit', 'UserPromptSubmit hook')).toBe(false);
+  });
+
+  it('is false for names that differ only in a diacritic', () => {
+    expect(wouldAutoApply('resume', 'résumé')).toBe(false);
+  });
+
+  it('is false for two different names entirely', () => {
+    expect(wouldAutoApply('Zephyr Ingest', 'Downstream Consumer')).toBe(false);
+  });
+});
+
+describe('verdictOf', () => {
+  it('names the two verdicts the shadow can reach', () => {
+    expect(verdictOf(true)).toBe('would_apply');
+    expect(verdictOf(false)).toBe('would_queue');
+  });
+});
+
+describe('readMergeShadowVerdict', () => {
+  it('reads a verdict back out of a stored ledger payload', () => {
+    expect(readMergeShadowVerdict({ verdict: 'would_apply' })).toBe('would_apply');
+    expect(readMergeShadowVerdict({ verdict: 'would_queue' })).toBe('would_queue');
+  });
+
+  it('reads undefined for anything that is not a recognized verdict', () => {
+    expect(readMergeShadowVerdict(undefined)).toBeUndefined();
+    expect(readMergeShadowVerdict(null)).toBeUndefined();
+    expect(readMergeShadowVerdict('would_apply')).toBeUndefined();
+    expect(readMergeShadowVerdict({ verdict: 'maybe' })).toBeUndefined();
+    expect(readMergeShadowVerdict({})).toBeUndefined();
+  });
+});
+
+describe('mergeShadowLedgerKey', () => {
+  it('namespaces the proposal id under the permanent merge_shadow prefix', () => {
+    expect(mergeShadowLedgerKey('prop-1')).toBe('merge_shadow:prop-1');
+  });
+});
+
+describe('verdictAgrees', () => {
+  it('agrees when a would-apply verdict actually merged', () => {
+    expect(verdictAgrees('would_apply', true)).toBe(true);
+  });
+
+  it('agrees when a would-queue verdict never merged', () => {
+    expect(verdictAgrees('would_queue', false)).toBe(true);
+  });
+
+  it('disagrees when a would-apply verdict never merged', () => {
+    expect(verdictAgrees('would_apply', false)).toBe(false);
+  });
+
+  it('disagrees when a would-queue verdict merged anyway', () => {
+    expect(verdictAgrees('would_queue', true)).toBe(false);
+  });
+});
+
+describe('summarizeMergeShadowAgreement', () => {
+  function judgment(overrides: Partial<MergeShadowResolvedJudgment>): MergeShadowResolvedJudgment {
+    return {
+      proposalId: 'prop-1',
+      leftName: 'Left',
+      leftType: 'tool',
+      rightName: 'Right',
+      rightType: 'concept',
+      verdict: 'would_apply',
+      actuallyMerged: true,
+      ...overrides,
+    };
+  }
+
+  it('reads an empty run as no verdicts to compare', () => {
+    expect(summarizeMergeShadowAgreement([])).toEqual({ total: 0, agreeing: 0, disagreements: [] });
+  });
+
+  it('counts every agreeing pair and names the ones that disagree', () => {
+    const agreeing = judgment({ proposalId: 'agree-1' });
+    const disagreeing = judgment({
+      proposalId: 'disagree-1',
+      verdict: 'would_apply',
+      actuallyMerged: false,
+    });
+
+    const summary = summarizeMergeShadowAgreement([agreeing, disagreeing]);
+
+    expect(summary.total).toBe(2);
+    expect(summary.agreeing).toBe(1);
+    expect(summary.disagreements).toEqual([disagreeing]);
+  });
+});
