@@ -615,9 +615,12 @@ tags were on disk the whole time, which is what unloading rather than deleting b
 
 **Precision, re-measured under the shipped route.** The 24-case battery after the provider
 change: TP 12, FP 2, FN 0, TN 10, precision 0.857, recall 1.000, the same two baits missed
-(vantage disagreement, widened scope). Affirmative confidences moved from one flat value to
-0.92, 0.95, 0.99, and separation still does not exist: lowest correct 0.95, highest wrong 0.95.
-Both halves of the auto-mode rule still fail, so `AION_SUPERSEDE_MODE` keeps `propose`.
+(vantage disagreement, widened scope). Affirmative confidences are one flat value: all 14 came
+back at exactly 0.95, `distinct values [0.95]`, re-measured twice more since. (An earlier
+version of this paragraph reported a spread of 0.92/0.95/0.99; no run has ever produced one,
+and it contradicted the P5-3 section above. The conclusion it fed is if anything stronger
+without it.) Both halves of the auto-mode rule still fail, so `AION_SUPERSEDE_MODE` keeps
+`propose`.
 
 **Gate.** `npm test`: 199 files, 1,941 passed, 3 skipped, 1 failed. The failure is one probe of
 the on-topic recall battery, and it is a bar sitting inside live-model variance rather than a
@@ -632,3 +635,139 @@ and unenriched; `dead_letter` owns it and will relane it once its urgency clears
 exhausted rows takes 32 cycles of starvation boost. The substrate's 3,985 unenriched episodes
 and 13 redaction-residue nodes are real backlog that `aion doctor` warns on and the loop is
 working through 200 and 20 at a time.
+
+## P5 review: what the fix pass found and changed
+
+The review's central finding was one shape wearing eight faces: the loop had a way to preempt
+and no way to stop preempting, and everything downstream of that starved. Seven of the twelve
+registered operations had never been selected. The fixes below are ordered by how much of that
+they account for.
+
+**Tier 1 was a property of the operation and is now a property of the cycle.** `orphan_cleanup`
+shipped as `tier: 1`, and `decide` selected any tier-1 candidate with relevance above zero
+before it scored anything else. Its bucket was a quarter-hour, which is the tick, so a standing
+orphan condition claimed a fresh window every cycle and won it. The live log is unambiguous:
+cycles 12 through 18 are `orphan_cleanup tier 1 applied 200` and nothing else, across three and
+a half hours. Every operation now declares in `answers` the one critical condition it repairs
+and earns tier 1 for the cycles the snapshot meets it, and preemption is bounded: past a grace
+of three resolved runs it holds only while the operation is still moving the metric it declared.
+A pathology that stands for weeks no longer blocks the catalog for weeks.
+
+**Two of the three critical conditions had no responder.** `vector_backfill` shipped as tier 2,
+so a parity crisis competed on urgency with content touch-ups rather than preempting; it now
+answers `vector_parity`. `missing_backbone_links` was computed, reported, and answered by
+nothing at all — Appendix D's `emergency_relationship_repair` was absent. It exists now
+(`operations/backbone-repair.ts`): an episode carries `session_id` from intake, so restoring the
+missing `PARTICIPATES_IN` edge is a lookup rather than a guess, and an episode naming a session
+the graph no longer holds is left alone rather than attached to something invented for it. The
+engine test that certified tier-1 preemption was building a fake operation named
+`vector_backfill` with `tier: 1`; it now drives the registered ones.
+
+**The orphan metric was mostly an unenriched-episode count.** `COUNT_ORPHANS` counted any node
+whose every edge is backbone, which is every episode reflection has not reached yet. On the live
+substrate that read 3,236 of 6,934 nodes, an orphan share of 0.467, comfortably over the 0.3
+critical threshold — and the repair wrote a heuristic `RELATED_TO` onto each one, which removed
+it from the metric and left it exactly as unenriched as before. Both the count and the sweep now
+exclude an `:Episode` nothing has been extracted from: the same substrate reads 549 of 2,915,
+a share of 0.188, and the backlog belongs to the operation that can actually drain it.
+
+**`reconcile_reenqueue` could not reach the backlog it was scored on.** It scanned the newest
+200 episodes and was scored on a count taken over 20,000, so once the newest 200 were clean the
+relevance stayed pinned at 1.0 forever and `reEnqueued` stayed 0. The repo's own test asserted
+the exclusion. The scan is now the full window and only the write is batched, oldest first,
+because an episode stranded months ago is the one nothing else will ever pick up.
+
+**A leak is an incident, not a share.** `redaction_residue_purge` scored `leaking / scanned`, so
+13 leaking nodes in 2,000 scored 0.0065 and would have needed roughly 59 hours of starvation
+boost to cross the urgency threshold. It is the one operation whose subject is a security
+control. Relevance now floors at 0.5 the moment anything leaks, and the share still orders a
+large residue above a small one. On the live substrate it went from `never selected` to selected
+at urgency 1.875 and rewrote 3 of 3 flagged nodes.
+
+**And the residue count could never reach zero.** Chasing the purge's live numbers turned up a
+defect the review had not named: a fingerprint is `key: value` shaped, so `scanRedactionResidue`
+re-matched the purge's own earlier output and counted every already-fixed node as a fresh leak.
+The operation had a fingerprint-aware check; the scan and the health metric did not, so the
+metric the operation is scored on could not be driven down and `aion doctor` reported a leak
+that was closed. One shared `withoutFingerprints` now backs all three. `aion doctor` went from
+`warn: 13 of 5000 nodes still carry secret-shaped text` to `ok: 0 of 5000`; the 13 were the
+purge's own work being counted against it.
+
+**A family apply closed true claims.** The default closed every sibling from the same
+observation that named the judged claim's subject, which took a claim reaffirmed by the
+correcting episode itself. Naming the same subject is not being about the same thing. A sibling
+now closes only when its content vector reaches `AION_REFLECTION_SUPERSEDE_FAMILY_RELATEDNESS_FLOOR`
+(0.6) against the judged claim; the rest are reported as named-and-standing, the way glosses
+already were, so a person who meant to take the whole observation can see what the narrower cut
+left. A sibling with no vector to compare stands: under-closing is visible and reversible with
+`--episode`, over-closing is neither.
+
+**Retiring a gloss destroyed the only copy of it.** `RETIRE_GLOSS` set `text` and `content_vec`
+to null with no archive, in a substrate whose whole design is that nothing is hard-deleted. The
+wording now moves to `prior_descriptions`, exactly as the refresh path already moved it, with a
+`description_retired_at` stamp, and the mention baseline resets so description freshness can
+actually re-derive one.
+
+**A correction never reached the narrative that restated it.** Narratives carry no supersession
+lineage, and the staleness scan selects on the grounding revision, which a correction does not
+change — so the pack served the closed claim's narrative beside its replacement, both marked
+current. An apply now marks the affected sessions' narratives for regrounding, and
+`narrative_regrounding` (new, registered) drains that marker through the regeneration path that
+already existed as a hand-run tool.
+
+**The bridge engine was its own fallback.** §8.5 specifies scored candidate pairs and a
+model-proposed bridge with a deterministic fallback; what shipped took `profiles[0]` and
+`profiles[1]`, the two least connected communities, and wrote a templated sentence. Pairs are
+now scored on coherence, size balance, overlap and isolation, four terms multiplied so one
+strong term cannot carry a pair that fails on another, and pairs already sharing more than
+`AION_MAINTENANCE_BRIDGE_OVERLAP_CEILING` of structure are skipped rather than ranked low. The
+model writes the summary and rationale; the deterministic sentence is the floor when it is
+unavailable. The live run after the change: `model-proposed bridge between communities of 8 and
+8 members, pair score 1.000, cosine 0.560`, against the previous day's `38 and 21 members` from
+the least-connected pick.
+
+**The spirit metric was counting the wrong thing.** It incremented from
+`fusion.items + resonance.items`, the input to `assemblePack`, while assembly drops items on
+bucket caps, the token budget, the restatement filter, the gloss cap, duplicate episode keys and
+unbucketed labels. Resonance is the worst case structurally: the stage returns up to 20 and the
+pack serves at most 5. It now reads the assembled pack. `graph_traversal` also left the counter:
+it is the fusion leg's name and no item carries it, so the row printed zero forever and read as
+a measurement.
+
+**Two operator surfaces existed only as exported functions.** `runEntityUnmerge` was reachable
+from nothing — no CLI command, no MCP tool, no operation — and no command could force a
+maintenance operation, which is what a person needs the moment they know something the health
+snapshot cannot express. `aion unmerge ls|apply` and `aion maintain ls|run` close both. A forced
+run bypasses the relevance score and the bucket claim and nothing else: the batch bounds, the
+transactions, the protected set and the ledger record all hold.
+
+**Smaller.** A cycle that lost a bucket claim could never reach tier 3, because the fall-through
+returned the skipped report before the tier-3 branch was read. The tier-1 selection reason joined
+every critical condition the snapshot met rather than the one the selected operation answers, so
+the ledger recorded a cause the run did not address. `aion why` on a node no episode produced
+said "no source episode recorded" and stopped, while the whole story sat on its edges: it now
+reads the rationale off derived edges, which covers bridges, orphan relinks and backbone repairs
+alike. `infrastructure/index.ts` had passed the 500-line cap and split at the graph boundary.
+
+**Two unstable tests, both races in the tests.** `routing-key-flip.int.test.ts` compared Ollama's
+`/api/tags` response as an ordered array, and that endpoint has no stable order; six back-to-back
+plain curls returned two different orders. It compares sets now. The stale-claim reaper test built
+a worker with `staleTimeoutMs: 0` and planted a claim before `start()`, then asserted the startup
+drain ran nothing — with a zero stale window the drain is entitled to reclaim it. Measured 1 red
+in 6 runs before, 5 green in 5 after.
+
+**Checkpoint item d, re-driven.** The forced pathology from the review: 60 exhausted queue rows,
+which puts `dead_letter` at relevance 1.0. Before the fixes, cycles 12 to 18 all selected
+`orphan_cleanup` at tier 1 and `dead_letter` read `never selected`. After, on a one-minute tick:
+cycle 19 `dead_letter tier 2 applied 50`, 20 `reconcile_reenqueue applied 200`, 21
+`reinforcement_flush applied 2`, 22 `redaction_residue_purge applied 3`, 25 `community_refresh
+applied 6934`, 26 `symbiosis_bridge applied 1`, 28 `description_freshness applied 2`, 29
+`memory_decay applied 100`, 34 `retro_judgment_sweep applied 1`. Every operation the review found
+starved ran inside sixteen cycles. The probe rows were removed and the tick knob restored
+afterwards.
+
+**Left open.** `narrative_regrounding` and `emergency_relationship_repair` read `never selected`
+on the live substrate, which is the correct answer for both: no narrative carries the marker yet
+and no episode is missing its session link. Neither has a live selection to point at, and both
+are covered by integration tests that force the condition. The enrichment backlog is real and
+draining at 200 an hour now that reconcile can see it.
