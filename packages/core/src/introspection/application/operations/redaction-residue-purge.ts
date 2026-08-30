@@ -15,6 +15,15 @@ export const REDACTION_RESIDUE_PURGE_OPERATION = 'redaction_residue_purge';
 const FINGERPRINT_PATTERN = /⟨secret:[a-z0-9-]+:[0-9a-f]{6}⟩/g;
 
 /**
+ * What a fingerprint stands in as while the detector looks, and not the empty string. Removing
+ * the token outright closes the gap between `api_key:` and whatever the next line names, and
+ * the generic assignment rule then reads the next line's field name as this line's value: a
+ * fresh match over text that holds no secret at all. `redacted` is the one placeholder that
+ * rule's own lookahead exempts, so a fingerprint reads as what it is.
+ */
+const FINGERPRINT_PLACEHOLDER = 'redacted';
+
+/**
  * `redact()` has no way to know a span is its own earlier output: the fingerprint token
  * embeds the rule id after a colon, which is exactly the `key: value` shape
  * `generic-secret-assignment` matches on. Scanning already-clean text finds that match again
@@ -23,7 +32,10 @@ const FINGERPRINT_PATTERN = /⟨secret:[a-z0-9-]+:[0-9a-f]{6}⟩/g;
  * its own earlier fix back.
  */
 function stillLeaking(text: string, entropyThreshold: number): boolean {
-  return redact(text.replace(FINGERPRINT_PATTERN, ''), entropyThreshold).matches.length > 0;
+  return (
+    redact(text.replace(FINGERPRINT_PATTERN, FINGERPRINT_PLACEHOLDER), entropyThreshold).matches
+      .length > 0
+  );
 }
 
 /**
@@ -38,11 +50,52 @@ function stillLeaking(text: string, entropyThreshold: number): boolean {
  * writes back only the ones that changed: a property update, never a delete, `redacted_at`
  * stamped so the rewrite itself is bitemporally honest about when it happened.
  */
+/**
+ * A floor, not a share. Every other operation's subject is proportional hygiene, where a small
+ * number out of a large scan genuinely is a small problem. This one's subject is a plaintext
+ * secret sitting in the graph, and thirteen of them out of two thousand nodes is not thirteen
+ * two-thousandths of a problem. The share still orders a large residue above a small one; the
+ * floor is what stops a small one from waiting days on starvation protection to be noticed.
+ */
+export const REDACTION_RESIDUE_MIN_RELEVANCE = 0.5;
+
 export function redactionResiduePurgeRelevance(health: HealthSnapshot): number {
-  if (health.redaction.scanned === 0) {
+  if (health.redaction.scanned === 0 || health.redaction.leaking === 0) {
     return 0;
   }
-  return Math.min(1, health.redaction.leaking / health.redaction.scanned);
+  return Math.max(
+    REDACTION_RESIDUE_MIN_RELEVANCE,
+    Math.min(1, health.redaction.leaking / health.redaction.scanned),
+  );
+}
+
+/**
+ * Redacts around the fingerprints already in the text rather than through them.
+ *
+ * A fingerprint is `key: value` shaped, so redacting text that contains one makes
+ * `generic-secret-assignment` match the fingerprint itself and nest a fresh one inside it,
+ * which buries the rule id that says what the original leak was. Splitting on the fingerprints
+ * and redacting only the spans between them leaves each earlier fix intact and still catches
+ * every new leak, since a span that was already replaced holds no secret to find.
+ */
+function redactAroundFingerprints(
+  text: string,
+  entropyThreshold: number,
+): { readonly text: string; readonly matches: number } {
+  const parts: string[] = [];
+  let matches = 0;
+  let cursor = 0;
+  for (const found of text.matchAll(FINGERPRINT_PATTERN)) {
+    const at = found.index ?? 0;
+    const segment = redact(text.slice(cursor, at), entropyThreshold);
+    matches += segment.matches.length;
+    parts.push(segment.text, found[0]);
+    cursor = at + found[0].length;
+  }
+  const tail = redact(text.slice(cursor), entropyThreshold);
+  matches += tail.matches.length;
+  parts.push(tail.text);
+  return { text: parts.join(''), matches };
 }
 
 /** Every string property whose own text still trips a rule, keyed by name; `id` never enters this map. */
@@ -55,8 +108,8 @@ function redactedProperties(
     if (!stillLeaking(value, entropyThreshold)) {
       continue;
     }
-    const result = redact(value, entropyThreshold);
-    if (result.matches.length > 0) {
+    const result = redactAroundFingerprints(value, entropyThreshold);
+    if (result.matches > 0) {
       changed[key] = result.text;
     }
   }

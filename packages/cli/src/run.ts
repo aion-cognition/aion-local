@@ -2,11 +2,13 @@ import { runDoctor } from './doctor.js';
 import { runForget } from './forget.js';
 import { runInit } from './init.js';
 import { runLast } from './last.js';
+import { runMaintain } from './maintain.js';
 import { runProposals } from './proposals.js';
 import { runQueue } from './queue.js';
 import { runSearch } from './search.js';
 import { runStats } from './stats.js';
 import { runStatus } from './status.js';
+import { runUnmerge } from './unmerge.js';
 import { runWhy } from './why.js';
 
 export const CLI_NAME = 'aion';
@@ -40,6 +42,14 @@ const commands: Record<string, Command> = {
   proposals: {
     summary: 'review judged contradictions and duplicate entities: ls | apply | dismiss',
     run: (argv) => runProposals(argv),
+  },
+  maintain: {
+    summary: 'the maintenance catalog, and forcing one operation to run now: ls | run',
+    run: (argv) => runMaintain(argv),
+  },
+  unmerge: {
+    summary: 'split an identity back out of the entity dedup absorbed it into: ls | apply',
+    run: (argv) => runUnmerge(argv),
   },
   stats: {
     summary: 'substrate counts, queue and plasticity health, cadence, per-method pack shares',
