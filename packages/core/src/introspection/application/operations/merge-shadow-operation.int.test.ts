@@ -10,7 +10,10 @@ import {
   mergeEntities,
   type EntityMergeInput,
 } from '../../../infrastructure/graph/entity-queries.js';
-import { wasEntityMergeApplied } from '../../../infrastructure/graph/merge-shadow-queries.js';
+import {
+  entityMergePairState,
+  wasEntityMergeApplied,
+} from '../../../infrastructure/graph/merge-shadow-queries.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import {
   countNodes,
@@ -178,7 +181,7 @@ describe('mergeShadowOperation against a live graph', () => {
     if (verdict === undefined) {
       throw new Error('expected the shadow to have recorded a verdict before the apply');
     }
-    const actuallyMerged = await wasEntityMergeApplied(harness.driver, toolId, conceptId);
+    const pairState = await entityMergePairState(harness.driver, toolId, conceptId);
     const judgment: MergeShadowResolvedJudgment = {
       proposalId,
       leftName: 'Harbor Index',
@@ -186,12 +189,14 @@ describe('mergeShadowOperation against a live graph', () => {
       rightName: 'Harbor Index',
       rightType: 'concept',
       verdict,
-      actuallyMerged,
+      actuallyMerged: pairState.merged,
+      bothCurrent: pairState.bothCurrent,
     };
 
     const agreement = summarizeMergeShadowAgreement([judgment]);
 
-    expect(actuallyMerged).toBe(true);
-    expect(agreement).toEqual({ total: 1, agreeing: 1, disagreements: [] });
+    expect(pairState.merged).toBe(true);
+    expect(pairState.bothCurrent).toBe(false);
+    expect(agreement).toEqual({ total: 1, agreeing: 1, disagreements: [], staleCleared: 0 });
   }, 120_000);
 });

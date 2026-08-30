@@ -21,6 +21,14 @@ export function wouldAutoApply(leftName: string, rightName: string): boolean {
   return normalizeEntityName(leftName) === normalizeEntityName(rightName);
 }
 
+/**
+ * Provenance stamped on the `SUPERSEDES` edge `merge_auto` writes. It is declared beside the
+ * verdict rule rather than in the operation that acts on it, because the two are the same
+ * policy: this constant is what makes the acting half's lineage say a rule decided, never a
+ * person.
+ */
+export const AUTO_MERGE_METHOD = 'auto_merge';
+
 export type MergeShadowVerdict = 'would_apply' | 'would_queue';
 
 export function verdictOf(wouldApply: boolean): MergeShadowVerdict {
@@ -71,24 +79,36 @@ export type MergeShadowResolvedJudgment = {
   readonly verdict: MergeShadowVerdict;
   /** From the graph: a `SUPERSEDES` edge with signal `entity_merge` between the two ids. */
   readonly actuallyMerged: boolean;
+  /** From the graph: both sides still hold currency. Always false after a merge of the pair. */
+  readonly bothCurrent: boolean;
 };
 
 export type MergeShadowAgreement = {
   readonly total: number;
   readonly agreeing: number;
   readonly disagreements: readonly MergeShadowResolvedJudgment[];
+  /** Resolved without a merge because a side was already gone; nobody decided against the pair. */
+  readonly staleCleared: number;
 };
 
-/** The pure half of the stats agreement surface: counts and names, no ledger or graph read. */
+/**
+ * The pure half of the stats agreement surface: counts and names, no ledger or graph read.
+ * A resolved pair that never merged and has a side without currency was cleared as stale, so
+ * it says nothing about whether the verdict matched a person's judgment; those are counted
+ * apart rather than scored, or every stale clear would read as a policy failure.
+ */
 export function summarizeMergeShadowAgreement(
   judgments: readonly MergeShadowResolvedJudgment[],
 ): MergeShadowAgreement {
-  const disagreements = judgments.filter(
+  const stale = judgments.filter((judgment) => !judgment.actuallyMerged && !judgment.bothCurrent);
+  const scored = judgments.filter((judgment) => !stale.includes(judgment));
+  const disagreements = scored.filter(
     (judgment) => !verdictAgrees(judgment.verdict, judgment.actuallyMerged),
   );
   return {
-    total: judgments.length,
-    agreeing: judgments.length - disagreements.length,
+    total: scored.length,
+    agreeing: scored.length - disagreements.length,
     disagreements,
+    staleCleared: stale.length,
   };
 }
