@@ -21,6 +21,8 @@ export const DESCRIPTION_MENTION_COUNT_PROPERTY = 'description_mention_count';
 export const PRIOR_DESCRIPTIONS_PROPERTY = 'prior_descriptions';
 export const DESCRIPTION_REFRESHED_AT_PROPERTY = 'description_refreshed_at';
 export const DESCRIPTION_REFRESH_METHOD_PROPERTY = 'description_refresh_method';
+/** When a correction retired the description; the wording itself moves to `prior_descriptions`. */
+export const DESCRIPTION_RETIRED_AT_PROPERTY = 'description_retired_at';
 
 /** Provenance stamped on every regenerated description. */
 export const DESCRIPTION_REFRESH_METHOD = 'introspection_description_freshness';

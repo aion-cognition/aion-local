@@ -220,6 +220,7 @@ async function runApply(deps: ProposalDeps, flags: ProposalFlags): Promise<numbe
     const applied = await applySupersessionProposal(connection.driver, deps.db, {
       id,
       scope: flags.scope,
+      relatednessFloor: deps.config.reflection.supersedeFamilyRelatednessFloor,
     });
     deps.logger.warn(
       {
@@ -228,6 +229,7 @@ async function runApply(deps: ProposalDeps, flags: ProposalFlags): Promise<numbe
         closed: applied.closedIds,
         supersededBy: applied.supersededBy,
         subjects: applied.subjects,
+        held: applied.heldSiblings.map((sibling) => sibling.id),
         retiredGlosses: applied.retiredGlosses.map((gloss) => gloss.entityId),
         openGlosses: applied.openGlosses.map((gloss) => gloss.entityId),
       },
@@ -238,6 +240,7 @@ async function runApply(deps: ProposalDeps, flags: ProposalFlags): Promise<numbe
         `superseded by ${short(applied.supersededBy)}`,
     );
     renderClosed(applied.closedIds, applied.siblings, deps.write);
+    renderHeldSiblings(applied.heldSiblings, deps.write);
     renderRetiredGlosses(applied.retiredGlosses, deps.write);
     renderOpenGlosses(applied.openGlosses, deps.write);
     deps.write(SCOPE_NOTES[applied.scope]);
@@ -260,6 +263,26 @@ function renderClosed(
       continue;
     }
     write(`  closed ${closed}  ${sibling.label}, on subject "${sibling.subject}"`);
+  }
+}
+
+/**
+ * What the correction named but did not answer. Two claims out of one observation can share a
+ * subject and be about different things, and closing the second because it said the same name
+ * takes a fact that is still true; the person who meant to take the whole observation has
+ * `--episode` and now knows what it would cost.
+ */
+function renderHeldSiblings(siblings: readonly SubjectSibling[], write: Writer): void {
+  if (siblings.length === 0) {
+    return;
+  }
+  write(`${String(siblings.length)} sibling(s) name this subject and stand:`);
+  for (const sibling of siblings) {
+    const reading =
+      sibling.relatedness === undefined
+        ? 'no vector to compare yet'
+        : `relatedness ${sibling.relatedness.toFixed(2)}`;
+    write(`  ${short(sibling.id)}  ${sibling.label}, ${reading}: ${sibling.text}`);
   }
 }
 

@@ -7,6 +7,11 @@ import {
 } from './bitemporal.js';
 import { normalizeCognitiveText, TEXT_NORM_PROPERTY } from './cognitive-queries.js';
 import { inWriteTransaction, runRead, type GraphTransaction } from './connection.js';
+import {
+  DESCRIPTION_MENTION_COUNT_PROPERTY,
+  DESCRIPTION_RETIRED_AT_PROPERTY,
+  PRIOR_DESCRIPTIONS_PROPERTY,
+} from './entity-description-queries.js';
 import { upsertEdgeInTransaction } from './edges.js';
 import { ENTITY_MENTION_TYPE } from './entity-queries.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
@@ -107,9 +112,18 @@ export async function findClaimSubjects(
 }
 
 /**
- * The siblings that close with the claim. Same source episode, still open, naming one of the
+ * The siblings a close is decided over. Same source episode, still open, naming one of the
  * claim's subjects, and observed nowhere else: a fact a second open episode also produced is
  * a fact the substrate saw twice, and one correction is not evidence against both.
+ *
+ * Naming the subject is where the match stops and where the decision starts. Two claims from
+ * one observation about one subject can be about entirely different things: a correction that
+ * moves a service's checkpoint store from one system to another says nothing about who was
+ * assigned to do the work, and closing that second claim because it also said the service's
+ * name takes a fact that is still true. `relatedness` is what separates them, and it is the
+ * cosine between the two claims' own content vectors: the substrate's sanctioned statement
+ * that two sentences are about the same thing, already computed, and re-derivable months later
+ * by anyone who asks why a claim closed.
  */
 const SUBJECT_SIBLINGS = [
   `MATCH (claim { id: $claimId })-[:EXTRACTED_FROM]->(source:Episode)`,
@@ -120,7 +134,8 @@ const SUBJECT_SIBLINGS = [
   `  AND e.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
   `  AND size(e.${ENTITY_NAME_NORM_PROPERTY}) >= $minNameLength`,
   `  AND claim.${TEXT_NORM_PROPERTY} CONTAINS e.${ENTITY_NAME_NORM_PROPERTY}`,
-  `WITH source, collect(DISTINCT e.${ENTITY_NAME_NORM_PROPERTY}) AS names`,
+  // `claim` is carried through: the relatedness reading below is against its own vector.
+  `WITH claim, source, collect(DISTINCT e.${ENTITY_NAME_NORM_PROPERTY}) AS names`,
   'MATCH (sibling)-[:EXTRACTED_FROM]->(source)',
   'WHERE sibling.id <> $claimId',
   '  AND any(label IN labels(sibling) WHERE label IN $labels)',
@@ -133,7 +148,12 @@ const SUBJECT_SIBLINGS = [
   '  }',
   `RETURN sibling.id AS id, sibling.${MEMORY_PROPERTIES.text} AS text,`,
   '       [label IN labels(sibling) WHERE label IN $labels][0] AS label,',
-  `       head([name IN names WHERE sibling.${TEXT_NORM_PROPERTY} CONTAINS name]) AS subject`,
+  `       head([name IN names WHERE sibling.${TEXT_NORM_PROPERTY} CONTAINS name]) AS subject,`,
+  `       CASE WHEN claim.${MEMORY_PROPERTIES.contentVector} IS NULL`,
+  `             OR sibling.${MEMORY_PROPERTIES.contentVector} IS NULL THEN null`,
+  '            ELSE 2.0 * vector.similarity.cosine(',
+  `              claim.${MEMORY_PROPERTIES.contentVector}, sibling.${MEMORY_PROPERTIES.contentVector}`,
+  '            ) - 1.0 END AS relatedness',
   'ORDER BY id',
 ].join('\n');
 
@@ -143,15 +163,34 @@ export type SubjectSibling = {
   readonly text: string;
   /** Which of the claim's subjects this sibling names. */
   readonly subject: string;
+  /**
+   * Cosine against the judged claim, or absent when either side has no content vector yet.
+   * Absent is not zero and not one: it is "no answer", and a close is not made on no answer.
+   */
+  readonly relatedness?: number;
 };
 
 function mapSibling(row: Row): SubjectSibling {
+  const relatedness = row.relatedness;
   return {
     id: row.id as string,
     label: String(row.label ?? ''),
     text: String(row.text ?? ''),
     subject: String(row.subject ?? ''),
+    ...(typeof relatedness === 'number' ? { relatedness } : {}),
   };
+}
+
+/**
+ * Whether the correction is evidence against this sibling as well as against the claim.
+ *
+ * A sibling with no relatedness reading stands. Under-closing leaves the old sentence beside
+ * the new one in a pack, which is visible and reversible with `--episode`; over-closing takes
+ * a true claim out of every future answer, which is neither. When the reading is missing
+ * because a vector has not been written yet, the next apply on the same claim will have it.
+ */
+export function siblingCloses(sibling: SubjectSibling, floor: number): boolean {
+  return sibling.relatedness !== undefined && sibling.relatedness >= floor;
 }
 
 function siblingParameters(claimId: string): Record<string, unknown> {
@@ -182,10 +221,25 @@ const CLOSE_SIBLING = [
  * states would keep pulling it up the ranking for a question it can no longer answer. With no
  * text the node is neither a pending vector nor a parity gap, since both populations are
  * defined on nodes that have text to embed.
+ *
+ * The wording moves to `prior_descriptions` on the way out, exactly as the refresh path moves
+ * it. Nothing in this substrate is hard-deleted, and a retirement that dropped the only copy
+ * of a sentence would be the one place that stopped being true.
+ *
+ * The mention baseline resets with it. Description freshness re-derives a description once an
+ * entity has gained enough mentions since the last one was written, and leaving the old count
+ * in place would hold a retired entity under that bar for as long as the count it was measured
+ * against: the description would never come back.
  */
 const RETIRE_GLOSS = [
   'MATCH (e:Entity { id: $id })',
-  `SET e.${MEMORY_PROPERTIES.text} = null, e.${MEMORY_PROPERTIES.contentVector} = null`,
+  `WHERE e.${MEMORY_PROPERTIES.text} IS NOT NULL`,
+  `SET e.${PRIOR_DESCRIPTIONS_PROPERTY} =`,
+  `      coalesce(e.${PRIOR_DESCRIPTIONS_PROPERTY}, []) + [e.${MEMORY_PROPERTIES.text}],`,
+  `    e.${MEMORY_PROPERTIES.text} = null,`,
+  `    e.${MEMORY_PROPERTIES.contentVector} = null,`,
+  `    e.${DESCRIPTION_MENTION_COUNT_PROPERTY} = 0,`,
+  `    e.${DESCRIPTION_RETIRED_AT_PROPERTY} = $now`,
   'RETURN e.id AS id',
 ].join('\n');
 
@@ -224,6 +278,8 @@ export type SupersedeSubjectFamilyInput = {
   /** The judged claim: it closes, and it defines the subject the siblings are matched on. */
   readonly claimId: string;
   readonly newId: string;
+  /** Cosine against the judged claim a sibling must reach before the correction closes it too. */
+  readonly relatednessFloor: number;
   readonly now?: Date;
   readonly signals?: readonly string[];
   readonly provenance?: readonly string[];
@@ -233,7 +289,14 @@ export type SubjectFamilyResult = {
   readonly supersession: SupersedeResult;
   /** The judged claim first, then the siblings that closed with it. */
   readonly closedIds: readonly string[];
+  /** The siblings that closed. */
   readonly siblings: readonly SubjectSibling[];
+  /**
+   * Siblings that named the same subject and were left open, because the correction is not
+   * evidence against what they say. Reported rather than dropped: a person who meant to close
+   * the whole observation needs to see what the narrower cut left behind.
+   */
+  readonly heldSiblings: readonly SubjectSibling[];
   /** The subjects the match ran on; empty means the family degraded to the claim alone. */
   readonly subjects: readonly string[];
   /** Descriptions that restated the closed claim and were cleared, entities left in place. */
@@ -273,7 +336,11 @@ export async function supersedeSubjectFamily(
       ...(input.provenance === undefined ? {} : { provenance: input.provenance }),
     });
 
-    const siblings = await tx.run(SUBJECT_SIBLINGS, siblingParameters(input.claimId), mapSibling);
+    const candidates = await tx.run(SUBJECT_SIBLINGS, siblingParameters(input.claimId), mapSibling);
+    const siblings = candidates.filter((sibling) =>
+      siblingCloses(sibling, input.relatednessFloor),
+    );
+    const held = candidates.filter((sibling) => !siblingCloses(sibling, input.relatednessFloor));
     for (const sibling of siblings) {
       await tx.run(CLOSE_SIBLING, { id: sibling.id, now: toGraphDateTime(now) }, (row) => row.id);
       await upsertEdgeInTransaction(tx, {
@@ -289,9 +356,13 @@ export async function supersedeSubjectFamily(
       });
     }
     for (const subject of retired) {
-      await tx.run(RETIRE_GLOSS, { id: subject.entityId }, (row) => row.id);
+      await tx.run(
+        RETIRE_GLOSS,
+        { id: subject.entityId, now: toGraphDateTime(now) },
+        (row) => row.id,
+      );
     }
-    return { supersession, siblings, subjects, retired };
+    return { supersession, siblings, held, subjects, retired };
   });
 
   const retiredIds = new Set(closed.retired.map((subject) => subject.entityId));
@@ -299,6 +370,7 @@ export async function supersedeSubjectFamily(
     supersession: closed.supersession,
     closedIds: [input.claimId, ...closed.siblings.map((sibling) => sibling.id)],
     siblings: closed.siblings,
+    heldSiblings: closed.held,
     subjects: closed.subjects.map((subject) => subject.name),
     retiredGlosses: closed.retired,
     openGlosses: closed.subjects.filter(

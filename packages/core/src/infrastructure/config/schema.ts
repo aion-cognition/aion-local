@@ -161,6 +161,12 @@ export const ConfigSchema = z.object({
     /** The auto path's threshold only. In `propose` mode nothing reads it. */
     supersedeAutoConfidence: proportion,
     supersedeNeighborThreshold: proportion,
+    /**
+     * How close a sibling claim has to be to the judged one before a family apply closes it
+     * too. Two claims from one observation can name the same subject and be about different
+     * things; this is where that line sits.
+     */
+    supersedeFamilyRelatednessFloor: proportion,
     supersedeTimeoutMs: positiveInt,
     maxSupersessionSubjects: positiveInt,
     maxContradictionNeighbors: positiveInt,

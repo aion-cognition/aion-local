@@ -176,6 +176,10 @@ export const DEFAULTS: Config = {
     supersedeMode: 'propose',
     supersedeAutoConfidence: 0.85,
     supersedeNeighborThreshold: 0.75,
+    // Under the neighbour threshold, because these two claims already share an observation and
+    // a named subject: the evidence a family close needs on top of that is that they are about
+    // the same thing, not that they nearly restate each other.
+    supersedeFamilyRelatednessFloor: 0.6,
     supersedeTimeoutMs: 60_000,
     maxSupersessionSubjects: 6,
     maxContradictionNeighbors: 3,
