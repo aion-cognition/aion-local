@@ -135,6 +135,12 @@ export function renderProvenance(
     for (const edge of lineage) {
       const direction = edge.outgoing ? 'supersedes' : 'superseded by';
       write(`  ${direction}  ${edge.otherId} (${edge.otherLabels.join(', ')})`);
+      // A reopened close is kept rather than removed, so the line has to say the substrate
+      // stopped holding it. Without this the edge reads as a live supersession on a node the
+      // stamps above report as current.
+      if (edge.reopenedAt !== undefined) {
+        write(`            reopened ${edge.reopenedAt.toISOString()}; this close no longer holds`);
+      }
     }
   }
   write('');

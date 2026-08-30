@@ -1,14 +1,13 @@
 import { z } from 'zod';
 
+import { applyJudgment, type SupersessionMode } from './supersession-apply.js';
 import { RunTally } from './supersession-tally.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { describeError, isAbortError } from '../../../infrastructure/errors.js';
-import { supersede } from '../../../infrastructure/graph/bitemporal.js';
 import {
   findContradictionCandidates,
   findEpisodeFactNodes,
   findSubjectIdentityCandidates,
-  SUPERSESSION_METHOD,
   type ContradictionCandidate,
   type EpisodeFactNode,
 } from '../../../infrastructure/graph/supersession-queries.js';
@@ -18,7 +17,6 @@ import type {
   Provider,
   Vector,
 } from '../../../infrastructure/providers/types.js';
-import { recordSupersessionProposal } from '../../../infrastructure/sqlite/supersession-proposals.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
 
 /**
@@ -26,11 +24,15 @@ import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/s
  * the current claims that name the same subject, and one structured-output judgment per pair
  * decides whether the new statement reverses the old one.
  *
- * Detection is not application. In the default `propose` mode every affirmative judgment
- * becomes a `supersession_proposals` row and nothing touches the graph: measured over a
- * hundred enrichments the judge fired three times, emitted confidence 1.0 each time, and was
- * wrong all three, so a confidence gate gated nothing. `auto` restores the split for the day
- * a quality harness measures precision on the contradiction battery.
+ * Detection is not application, and confidence is not the gate. Measured over a hundred
+ * enrichments the local judge fired three times, emitted confidence 1.0 each time, and was
+ * wrong all three; the remote judge answers 0.95 to every affirmative. A number that never
+ * varies cannot separate a right answer from a wrong one, so what gates a close here is a
+ * second opinion rather than a threshold: `unanimous` mode sends every affirmative to
+ * `supersession-review.ts`, which argues the other side on the same evidence, and closes only
+ * what both passes agree on. `propose` writes every affirmative to `supersession_proposals`
+ * and touches nothing, which makes it the kill switch. `auto` is the confidence-gated
+ * predecessor, kept valid for a deployment that pinned it.
  *
  * Entities are deliberately out of scope: extraction merges them on `(name_norm, type)`, so a
  * second episode naming the same entity reuses the same node and there is no new node to
@@ -39,9 +41,9 @@ import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/s
 
 export const SUPERSESSION_STAGE_NAME = 'supersession';
 
-export type SupersessionMode = 'propose' | 'auto';
+export type { SupersessionMode };
 
-/** The pinned `AION_SUPERSEDE_MODE`. Propose-only until precision is measured, not assumed. */
+/** The pinned `AION_SUPERSEDE_MODE`, set by the battery's measurement rather than by hand. */
 export const DEFAULT_SUPERSEDE_MODE: SupersessionMode = DEFAULTS.reflection.supersedeMode;
 
 /** The pinned `AION_SUPERSEDE_AUTO_CONFIDENCE`: the `auto` mode's threshold, read nowhere else. */
@@ -59,6 +61,8 @@ export type SupersessionStageOptions = {
   readonly maxSubjects: number;
   readonly maxNeighbors: number;
   readonly maxJudgments: number;
+  /** How wide a unanimous close cuts: the same family floor `aion proposals apply` runs on. */
+  readonly familyRelatednessFloor: number;
 };
 
 const JUDGMENT_JSON_SCHEMA: JsonSchema = {
@@ -228,6 +232,7 @@ export class SupersessionStage implements ReflectionStage {
       maxSubjects: DEFAULTS.reflection.maxSupersessionSubjects,
       maxNeighbors: DEFAULTS.reflection.maxContradictionNeighbors,
       maxJudgments: DEFAULTS.reflection.maxContradictionJudgments,
+      familyRelatednessFloor: DEFAULTS.reflection.supersedeFamilyRelatednessFloor,
       ...options,
     };
   }
@@ -364,12 +369,7 @@ export class SupersessionStage implements ReflectionStage {
     return undefined;
   }
 
-  /**
-   * In `propose` mode the graph is never touched, so a re-run re-judges the same pair and
-   * refreshes the one proposal row rather than adding a second. In `auto` mode `supersede()`
-   * owns its own transaction and is a no-op on repeat, and the closed node drops out of the
-   * next run's candidate search.
-   */
+  /** What an affirmative judgment does per mode, including the second pass `unanimous` gates on. */
   async #apply(
     ctx: StageContext,
     subject: EpisodeFactNode,
@@ -377,33 +377,36 @@ export class SupersessionStage implements ReflectionStage {
     judgment: ContradictionJudgment,
     tally: RunTally,
   ): Promise<void> {
-    if (this.#options.mode === 'auto' && judgment.confidence >= this.#options.autoConfidence) {
-      await supersede(ctx.driver, {
-        oldId: candidate.id,
-        newId: subject.id,
-        now: ctx.now,
-        signals: ['contradiction'],
-        provenance: [SUPERSESSION_METHOD],
-      });
-      tally.recordSupersession();
-      return;
-    }
-
-    recordSupersessionProposal(ctx.db, {
-      oldId: candidate.id,
-      newId: subject.id,
-      confidence: judgment.confidence,
-      episodeId: ctx.episodeId,
-      createdAt: ctx.now.toISOString(),
-      ...(judgment.rationale === undefined ? {} : { rationale: judgment.rationale }),
-    });
-    tally.recordProposal(candidate.matchedBy === 'subject');
+    const { mode, autoConfidence, familyRelatednessFloor, model, timeoutMs } = this.#options;
+    const outcome = await applyJudgment(
+      ctx,
+      {
+        subject,
+        candidate,
+        confidence: judgment.confidence,
+        ...(judgment.rationale === undefined ? {} : { rationale: judgment.rationale }),
+      },
+      { mode, autoConfidence, familyRelatednessFloor, model, timeoutMs },
+      tally,
+    );
+    ctx.logger.debug(
+      {
+        episodeId: ctx.episodeId,
+        subjectId: subject.id,
+        candidateId: candidate.id,
+        outcome,
+      },
+      `contradiction judgment ${outcome}`,
+    );
   }
 
   #report(tally: RunTally, writeError: unknown): StageOutcome {
     const counts = {
       supersessions: tally.superseded,
       supersessionProposals: tally.proposed,
+      // Named even at zero, so a reader of one run's counts can tell "none went stale" from
+      // "this build does not measure that".
+      supersessionStaleTargets: tally.staleTargets,
     };
 
     if (writeError !== undefined) {
@@ -422,12 +425,24 @@ export class SupersessionStage implements ReflectionStage {
       };
     }
 
+    // The second pass runs in `unanimous` mode alone, so its counters are named only there
+    // rather than reported as two zeroes on every other run. The stale count is named by both
+    // closing modes, since either can find its target already taken.
+    const stale =
+      this.#options.mode === 'propose'
+        ? ''
+        : `, ${tally.staleTargets} with the target already gone`;
+    const review =
+      this.#options.mode === 'unanimous'
+        ? `, second pass ${tally.unanimous} unanimous and ${tally.vetoed} vetoed`
+        : '';
+
     return {
       status: 'ok',
       summary:
         `${tally.judgments} contradiction judgment(s) in ${this.#options.mode} mode: ` +
         `${tally.superseded} superseded, ${tally.proposed} proposed for review ` +
-        `(${tally.proposedBySubject} by shared subject)`,
+        `(${tally.proposedBySubject} by shared subject)${review}${stale}`,
       counts,
     };
   }

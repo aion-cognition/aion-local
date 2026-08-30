@@ -110,6 +110,7 @@ export function reflectionStages(config: Config): readonly ReflectionStage[] {
       maxSubjects: reflection.maxSupersessionSubjects,
       maxNeighbors: reflection.maxContradictionNeighbors,
       maxJudgments: reflection.maxContradictionJudgments,
+      familyRelatednessFloor: reflection.supersedeFamilyRelatednessFloor,
     }),
     new ReinforcementEnqueueStage({ reinforcementQueueCap: config.sqlite.reinforcementQueueCap }),
     new ContextVectorStage(),

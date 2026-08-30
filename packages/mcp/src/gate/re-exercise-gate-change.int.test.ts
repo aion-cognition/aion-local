@@ -4,10 +4,12 @@ import {
   listSupersessionProposals,
   NARRATIVE_PROPERTIES,
   supersedeEpisode,
+  UNANIMOUS_APPLY_METHOD,
   type NarrativeDeps,
   type SupersessionProposal,
 } from '@aion/core';
 import { loadSessionSourceNodes } from '@aion/core/infrastructure/graph/narrative-queries.js';
+import { SUBJECT_PROPAGATION_METHOD } from '@aion/core/infrastructure/graph/subject-family.js';
 import { SUPERSESSION_METHOD } from '@aion/core/infrastructure/graph/supersession-queries.js';
 import {
   nodeProperties,
@@ -45,8 +47,9 @@ const ENRICH_DEADLINE_MS = 1_500_000;
 
 /**
  * The judge is a model, so the count of genuine reversals it catches is a measurement rather
- * than a guarantee. What is a guarantee is the mode: nothing may close. The last measurement
- * caught none at all, 0 true positives across two designed batteries, so this floor is one.
+ * than a guarantee. What is a guarantee is that no one judgment closes anything. The last
+ * measurement caught none at all, 0 true positives across two designed batteries, so this
+ * floor is one.
  */
 const MIN_CORRECTIONS_PROPOSED = 1;
 
@@ -154,15 +157,36 @@ afterAll(async () => {
   await substrate.close();
 });
 
-describe('the six-case supersession set in propose mode', () => {
-  it('closes nothing, whatever the judge said', async () => {
+/**
+ * The guard survives the posture change that moved the shipped default off `propose`, because
+ * what it was always about is that no single judgment closes anything. Under `unanimous` a
+ * closure needs two independent judgments, carries `supersession_unanimous_auto`, and leaves a
+ * resolved row; under `propose` nothing closes at all. Both are asserted against the shipped
+ * config rather than a pinned one, so this stays a gate on what ships.
+ */
+describe('the six-case supersession set under the shipped mode', () => {
+  it('closes nothing on one judgment alone', async () => {
+    // The legacy `auto` provenance, which no shipped mode writes: a close stamped this way is
+    // a confidence gate that came back.
     const written = await relationshipsByProvenance(substrate.driver, SUPERSESSION_METHOD);
     expect(written).toEqual([]);
+
+    // The two stamps a unanimous close writes: its own on the judged claim, and the family
+    // blade's on the siblings it takes with it. Nothing else may close a node here.
+    const judged = await relationshipsByProvenance(substrate.driver, UNANIMOUS_APPLY_METHOD);
+    const family = await relationshipsByProvenance(substrate.driver, SUBJECT_PROPAGATION_METHOD);
+    const closedIds = new Set([...judged, ...family].map((edge) => edge.targetId));
+    if (substrate.config.reflection.supersedeMode === 'propose') {
+      expect(closedIds.size).toBe(0);
+    }
 
     for (const held of cases) {
       for (const id of held.baselineNodeIds) {
         const properties = await nodeProperties(substrate.driver, id);
-        expect(properties.valid_until ?? undefined).toBeUndefined();
+        const isClosed = (properties.valid_until ?? undefined) !== undefined;
+        // Open, or closed by a two-pass judgment and nothing else. A node closed with no
+        // two-pass lineage behind it is a close the shipped posture does not allow.
+        expect(isClosed ? closedIds.has(id) : true).toBe(true);
       }
     }
   }, 180_000);
@@ -179,16 +203,22 @@ describe('the six-case supersession set in propose mode', () => {
 
     const caught = corrections.filter((entry) => proposed(entry) > 0).length;
     const baited = baits.filter((entry) => proposed(entry) > 0).length;
+    const open = proposals.filter((row) => row.resolvedAt === null).length;
     console.log(
-      `supersession battery: ${String(caught)}/${String(corrections.length)} corrections proposed, ` +
-        `${String(baited)}/${String(baits.length)} baits proposed, ` +
-        `${String(proposals.length)} proposal rows, 0 closures`,
+      `supersession battery in ${substrate.config.reflection.supersedeMode} mode: ` +
+        `${String(caught)}/${String(corrections.length)} corrections judged, ` +
+        `${String(baited)}/${String(baits.length)} baits judged, ` +
+        `${String(proposals.length)} rows, ${String(open)} still open for review`,
     );
 
     expect(caught).toBeGreaterThanOrEqual(MIN_CORRECTIONS_PROPOSED);
     for (const row of proposals) {
-      expect(row.resolvedAt).toBeNull();
       expect(row.newId).not.toBe(row.oldId);
+      // A resolved row is one the pipeline applied itself, and it says so; an open one is a
+      // decision waiting for a person.
+      if (row.resolvedAt !== null) {
+        expect(substrate.config.reflection.supersedeMode).not.toBe('propose');
+      }
     }
   });
 });
@@ -258,12 +288,13 @@ describe('the four corrections, read back', () => {
       expect(applied.supersession.newId).toBe(row.correctionEpisodeId);
 
       // The derived family closes with its episode, which is what stops a stale extracted fact
-      // from answering as `current` long after its episode was corrected.
+      // from answering as `current` long after its episode was corrected. Asserted one way
+      // only: under the shipped mode the pipeline may already have closed a baseline node on
+      // its own, so a node this apply did not name can be closed for a reason of its own.
       const closed = new Set(applied.propagation.closedIds);
-      for (const id of row.baselineNodeIds) {
+      for (const id of row.baselineNodeIds.filter((nodeId) => closed.has(nodeId))) {
         const properties = await nodeProperties(substrate.driver, id);
-        const stillOpen = (properties.valid_until ?? undefined) === undefined;
-        expect(stillOpen).toBe(!closed.has(id));
+        expect(properties.valid_until ?? undefined).toBeDefined();
       }
 
       const after = await ask(entry, 'after ');

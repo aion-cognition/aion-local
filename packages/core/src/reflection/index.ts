@@ -50,7 +50,19 @@ export { CognitiveExtractionStage } from './application/stages/cognitive.js';
 export { SemanticRelationshipStage } from './application/stages/semantic-relationships.js';
 
 export { judgeContradiction, SupersessionStage } from './application/stages/supersession.js';
-export type { ContradictionJudgment } from './application/stages/supersession.js';
+export type { ContradictionJudgment, SupersessionMode } from './application/stages/supersession.js';
+
+export {
+  describeVeto,
+  reviewContradiction,
+  vetoForUnansweredReview,
+} from './application/stages/supersession-review.js';
+export type {
+  ReviewOutcome,
+  ReviewPair,
+  ReviewVerdict,
+  VetoCheck,
+} from './application/stages/supersession-review.js';
 
 export { ReinforcementEnqueueStage } from './application/stages/reinforcement.js';
 
@@ -71,5 +83,8 @@ export {
   DEFAULT_APPLY_SCOPE,
   dismissSupersessionProposal,
   ProposalNotFoundError,
+  PROPOSAL_APPLY_METHOD,
+  UNANIMOUS_APPLY_METHOD,
+  UNANIMOUS_APPLY_SIGNALS,
 } from './application/proposals.js';
-export type { ApplyScope } from './application/proposals.js';
+export type { ApplyAttribution, ApplyScope } from './application/proposals.js';

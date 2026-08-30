@@ -51,15 +51,23 @@ describe('run', () => {
     }
   });
 
-  it('lists stats, why, search, and forget in the usage text', async () => {
+  it('lists stats, why, search, forget, and unsupersede in the usage text', async () => {
     const stdout = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
 
     await run(['help']);
 
     const text = String(stdout.mock.calls[0]?.[0]);
-    for (const command of ['stats', 'why', 'search', 'forget']) {
+    for (const command of ['stats', 'why', 'search', 'forget', 'unsupersede']) {
       expect(text).toContain(command);
     }
+  });
+
+  it('forwards --help to unsupersede rather than opening a substrate', async () => {
+    const stdout = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+
+    await expect(run(['unsupersede', '--help'])).resolves.toBe(0);
+
+    expect(String(stdout.mock.calls[0]?.[0])).toContain('usage: aion unsupersede <node_id>');
   });
 
   it('lists hooks in the usage text', async () => {

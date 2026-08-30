@@ -120,9 +120,19 @@ export function readModeFragment(mode: ReadMode, nodeVar: string, prefix = 'rm')
 
   const successor = `${prefix}_sup`;
   const successorEdge = `${prefix}_sup_rel`;
-  /** A knowledge-time read reports only the lineage the substrate had recorded by then. */
+  const edgeOpen = `${successorEdge}.${BITEMPORAL_PROPERTIES.txUntil} IS NULL`;
+  /**
+   * Lineage a reopen closed is lineage the substrate no longer holds, so the default read
+   * drops it: `aion unsupersede` restores currency, and a node reported current and superseded
+   * at once would be the substrate contradicting itself. A knowledge-time read reports what
+   * was recorded by then and still held then, which is what keeps a reopen invisible to a read
+   * pinned before it.
+   */
   const lineageFilter =
-    mode.knownAt === undefined ? '' : ` WHERE ${successorEdge}.created_at <= $${knownAtParam}`;
+    mode.knownAt === undefined
+      ? ` WHERE ${edgeOpen}`
+      : ` WHERE ${successorEdge}.created_at <= $${knownAtParam}` +
+        ` AND (${edgeOpen} OR ${successorEdge}.${BITEMPORAL_PROPERTIES.txUntil} > $${knownAtParam})`;
   const lineage =
     `head([ (${successor})-[${successorEdge}:${SUPERSEDES_TYPE}]->(${nodeVar})${lineageFilter}` +
     ` | { id: ${successor}.id, at: ${successorEdge}.created_at } ])`;

@@ -107,14 +107,16 @@ does not work and says so: the CLI orchestrates the repo it lives in.
 - `why`: provenance, lineage, and open proposals for one node
 - `search`: direct hybrid search through the seed layer, bypassing pack assembly
 - `forget`: bitemporal close of a node, by id or by query
+- `unsupersede`: reopen a claim a supersession closed, whatever made the close
 - `queue`: inspect and triage the reflection queue
 - `proposals`: review judged contradictions and duplicate entities
 - `maintain`: the maintenance catalog, and forcing one operation to run now
 - `unmerge`: split an identity back out of the entity dedup absorbed it into
 
-The commands with teeth make you say so: `queue drop`, `queue reconcile --re-enqueue`, and
-`forget` preview what they would do and stop without `--yes`, and `proposals`, `maintain`,
-and `unmerge` act only through an explicit `apply` or `run` subcommand. Their full
+The commands with teeth make you say so: `queue drop`, `queue reconcile --re-enqueue`,
+`forget`, and `unsupersede` preview what they would do and stop without `--yes`, and
+`proposals`, `maintain`, and `unmerge` act only through an explicit `apply` or `run`
+subcommand. Their full
 semantics, the logging layout, and the knobs an operator tunes are in
 [docs/operations.md](docs/operations.md).
 

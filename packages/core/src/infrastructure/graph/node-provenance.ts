@@ -14,6 +14,7 @@ import {
   type ReadMode,
 } from './read-modes.js';
 import { ENTITY_NAME_PROPERTY, LAST_ACCESSED_PROPERTY } from './seed-queries.js';
+import { EDGE_REOPENED_AT_PROPERTY } from './unsupersede.js';
 import type { Row } from './values.js';
 
 /**
@@ -144,6 +145,12 @@ export type NodeEdge = {
   /** Why the edge exists, when whatever wrote it said so. A repair and a bridge both do. */
   readonly rationale?: string;
   readonly createdAt?: Date;
+  /**
+   * When `aion unsupersede` closed this lineage. Present only on a `SUPERSEDES` edge someone
+   * reopened, which is the one case where an edge the graph still holds is one the substrate
+   * no longer believes.
+   */
+  readonly reopenedAt?: Date;
 };
 
 function edgesStatement(id: string, mode: ReadMode): GraphStatement {
@@ -162,7 +169,8 @@ function edgesStatement(id: string, mode: ReadMode): GraphStatement {
     '       coalesce(r.provenance, []) AS provenance,',
     '       coalesce(r.signals, []) AS signals,',
     '       r.rationale AS rationale,',
-    '       r.created_at AS created_at',
+    '       r.created_at AS created_at,',
+    `       r.${EDGE_REOPENED_AT_PROPERTY} AS reopened_at`,
     'ORDER BY type(r), other_id',
   ].join('\n');
   return { cypher, parameters: { ...fragment.parameters, id } };
@@ -170,6 +178,7 @@ function edgesStatement(id: string, mode: ReadMode): GraphStatement {
 
 function mapEdge(row: Row): NodeEdge {
   const createdAt = row.created_at;
+  const reopenedAt = row.reopened_at;
   return {
     type: row.type as string,
     outgoing: row.outgoing === true,
@@ -185,6 +194,7 @@ function mapEdge(row: Row): NodeEdge {
       ? { rationale: row.rationale }
       : {}),
     ...(createdAt instanceof Date ? { createdAt } : {}),
+    ...(reopenedAt instanceof Date ? { reopenedAt } : {}),
   };
 }
 

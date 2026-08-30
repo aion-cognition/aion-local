@@ -12,6 +12,7 @@ import type { StructuredRequest } from '../../../infrastructure/providers/types.
 import { SqliteStore, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import {
   listSupersessionProposals,
+  resolveSupersessionProposal,
   type SupersessionProposal,
 } from '../../../infrastructure/sqlite/supersession-proposals.js';
 import type { StageContext } from '../../domain/stage.js';
@@ -67,9 +68,24 @@ export class SupersessionFakeGraph extends FakeGraph {
       this.statements.push({ cypher, parameters });
       return toResult(this.#subjectIdentityCandidates(parameters));
     }
+    // The reads a family apply makes, answered empty, so the family degrades to the judged
+    // claim: what widens a family is proven against a real server in `proposals.int.test.ts`.
+    // Ahead of the cosine branch below, because the sibling read carries a cosine of its own
+    // and matching on that first would hand it the candidate search's parameters.
+    if (
+      cypher.includes('MATCH (claim { id: $claimId })') ||
+      cypher.includes('UNWIND $ids AS closedId')
+    ) {
+      this.statements.push({ cypher, parameters });
+      return toResult([]);
+    }
     if (cypher.includes('vector.similarity.cosine')) {
       this.statements.push({ cypher, parameters });
       return toResult(this.#contradictionCandidates(parameters));
+    }
+    if (cypher.includes('UNWIND $ids AS wanted')) {
+      this.statements.push({ cypher, parameters });
+      return toResult(this.#nodesWithoutCurrency(parameters));
     }
     if (cypher.includes(`SET old.${BITEMPORAL_PROPERTIES.validUntil} = coalesce(`)) {
       this.statements.push({ cypher, parameters });
@@ -197,6 +213,22 @@ export class SupersessionFakeGraph extends FakeGraph {
     );
   }
 
+  /** An id the graph does not know counts as gone, exactly as the real read reports it. */
+  #nodesWithoutCurrency(parameters: Record<string, unknown>): Row[] {
+    const ids = (parameters.ids ?? []) as readonly string[];
+    return ids
+      .filter((id) => {
+        const node = this.nodes.get(id);
+        return (
+          node === undefined ||
+          node.properties[BITEMPORAL_PROPERTIES.validUntil] !== undefined ||
+          node.properties[BITEMPORAL_PROPERTIES.forgottenAt] !== undefined
+        );
+      })
+      .sort((left, right) => left.localeCompare(right))
+      .map((id) => ({ id }));
+  }
+
   #closeSupersededNode(parameters: Record<string, unknown>): Row[] {
     const id = parameters.oldId as string;
     const node = this.nodes.get(id);
@@ -282,6 +314,19 @@ export class SupersessionTestBed {
   /** Consumed in order by any judgment no keyed verdict matched. */
   responses: unknown[] = [];
   verdicts: KeyedVerdict[] = [];
+  /**
+   * Consumed in order by the second pass. Separate from `responses` because the two passes
+   * answer different schemas, and a shared queue would make every test's ordering the subject.
+   */
+  reviews: unknown[] = [];
+  /**
+   * A node closed while the second pass is in flight, which is the one window the stale class
+   * lives in: the candidate search filters on currency, so a target can only go between that
+   * read and the write.
+   */
+  closeDuringReview: string | undefined;
+  /** The same window for a mode with no second call: the target goes while the judge answers. */
+  closeDuringJudgment: string | undefined;
   #store: SqliteStore | undefined;
   #dataDir = '';
 
@@ -290,6 +335,9 @@ export class SupersessionTestBed {
     this.requests = [];
     this.responses = [];
     this.verdicts = [];
+    this.reviews = [];
+    this.closeDuringReview = undefined;
+    this.closeDuringJudgment = undefined;
     this.#dataDir = mkdtempSync(join(tmpdir(), 'aion-supersession-stage-'));
     this.#store = new SqliteStore({ filePath: join(this.#dataDir, 'aion.sqlite') });
   }
@@ -310,6 +358,19 @@ export class SupersessionTestBed {
     return listSupersessionProposals(this.db);
   }
 
+  /** Stands in for a person deciding the row, which is the only state the stage defers to. */
+  resolve(id: string): void {
+    resolveSupersessionProposal(this.db, id, this.now.toISOString());
+  }
+
+  /** Stands in for whatever else took the node: a family close, or a person applying elsewhere. */
+  closeNode(id: string): void {
+    const node = this.graph.nodes.get(id);
+    if (node !== undefined) {
+      node.properties[BITEMPORAL_PROPERTIES.validUntil] = this.now;
+    }
+  }
+
   context(episodeId: string): StageContext {
     return {
       driver: this.graph.driver,
@@ -318,6 +379,21 @@ export class SupersessionTestBed {
         embed: async () => [],
         generate: async (request: StructuredRequest) => {
           this.requests.push(request);
+          if (isReviewRequest(request)) {
+            if (this.closeDuringReview !== undefined) {
+              this.closeNode(this.closeDuringReview);
+              this.closeDuringReview = undefined;
+            }
+            const review = this.reviews.shift();
+            if (review instanceof Error) {
+              throw review;
+            }
+            return review ?? { earlier_survives: false, newer_is_well_formed: true };
+          }
+          if (this.closeDuringJudgment !== undefined) {
+            this.closeNode(this.closeDuringJudgment);
+            this.closeDuringJudgment = undefined;
+          }
           const prompt = promptOf(request);
           const keyed = this.verdicts.find((entry) => prompt.includes(entry.match));
           if (keyed !== undefined) {
@@ -362,6 +438,20 @@ export class SupersessionTestBed {
 
 function promptOf(request: StructuredRequest): string {
   return request.messages.map((message) => message.content).join('\n');
+}
+
+/**
+ * Which pass a call belongs to, read off the schema it asks for rather than off its wording:
+ * the two prompts get edited and the two answer shapes do not.
+ */
+function isReviewRequest(request: StructuredRequest): boolean {
+  const properties = request.schema.properties as Record<string, unknown> | undefined;
+  return properties !== undefined && 'earlier_survives' in properties;
+}
+
+/** Every second-pass prompt the stage sent, in order. */
+export function reviewPrompts(requests: readonly StructuredRequest[]): string[] {
+  return requests.filter(isReviewRequest).map(promptOf);
 }
 
 type Counters = {

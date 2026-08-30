@@ -347,6 +347,28 @@ subject of the closed claim: an entity is never closed, since one outlives every
 named it, but a frozen sentence restating a claim that just closed is cleared so recall stops
 serving it as a current fact.
 
+What decides that a close should happen is two model calls, not one, and not a confidence
+number. The supersession stage judges each pair (`reflection/application/stages/supersession.ts`),
+and under the shipped `AION_SUPERSEDE_MODE=unanimous` every affirmative goes to a second call
+that argues the other side on the same evidence and never sees the first one's reasoning
+(`supersession-review.ts`). It checks two things: whether the older claim is actually made false,
+since an opinion, a wider scope, and a different attribute of one subject all survive, and
+whether the newer claim is coherent at all, since a garbled extraction can win a same-subject
+comparison while asserting nothing. Only a unanimous pair closes, through the same
+`applySupersessionProposal` path a review takes, stamped `supersession_unanimous_auto`. A veto
+becomes a proposal row carrying the reason. The stage reports three outcomes rather than two,
+read off the graph: closed, vetoed or proposed, and target-already-gone, the last being a
+judgment whose losing side had already lost currency and which therefore closed nothing.
+Confidence was the earlier gate and is not one: the judge answers 0.95 to every affirmative it
+makes, and a threshold over one value gates nothing.
+
+`unsupersedeNode(driver, { id })` (`infrastructure/graph/unsupersede.ts`) is the inverse, and
+`aion unsupersede` drives it. It closes the `SUPERSEDES` edge in system time rather than
+removing it, stamps `reopened_at` on it, and drops the two stamps that closed the node, so a
+reopened claim reads as current, `aion why` shows the close and the reopen both, and a
+knowledge-time read pinned before the reopen still reports the supersession the substrate held
+then. It works on a close from any mode, since every close writes the same stamps.
+
 Four read modes, all built from one composable fragment
 (`infrastructure/graph/read-modes.ts`) so every seed strategy and the traversal share one
 definition of currency:
@@ -358,8 +380,9 @@ definition of currency:
   eligible, just annotated.
 - **`asOf(validAt)`**: a world-time slice, rows whose valid interval covers `validAt`.
 - **`knewAt(knownAt)`**: a system-time slice, rows whose transaction interval covers
-  `knownAt`. Lineage itself is filtered to supersessions recorded by `knownAt`, so a
-  knowledge-time read cannot report a correction the substrate had not made yet.
+  `knownAt`. Lineage itself is filtered to supersessions recorded by `knownAt` and still held
+  then, so a knowledge-time read reports neither a correction the substrate had not made yet
+  nor one it has since reopened.
 - **`bitemporalAt(validAt, knownAt)`**: both predicates at once, what the substrate
   believed at `knownAt` about what was true at `validAt`.
 

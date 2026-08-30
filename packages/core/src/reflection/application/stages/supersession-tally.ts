@@ -11,9 +11,31 @@ export class RunTally {
   #proposedBySubject = 0;
   #judgments = 0;
   #judgeErrors = 0;
+  #unanimous = 0;
+  #vetoed = 0;
+  #staleTargets = 0;
 
   get superseded(): number {
     return this.#superseded;
+  }
+
+  /** Affirmative judgments the second pass also affirmed. */
+  get unanimous(): number {
+    return this.#unanimous;
+  }
+
+  /** Affirmative judgments the second pass refused, on either check. */
+  get vetoed(): number {
+    return this.#vetoed;
+  }
+
+  /**
+   * Unanimous judgments that closed nothing because a side had already lost currency. Counted
+   * apart from both closures and reviews: it is neither, and folding it into either one is a
+   * number that describes something that did not happen.
+   */
+  get staleTargets(): number {
+    return this.#staleTargets;
   }
 
   get proposed(): number {
@@ -43,6 +65,18 @@ export class RunTally {
 
   recordSupersession(): void {
     this.#superseded += 1;
+  }
+
+  recordUnanimous(): void {
+    this.#unanimous += 1;
+  }
+
+  recordVeto(): void {
+    this.#vetoed += 1;
+  }
+
+  recordStaleTarget(): void {
+    this.#staleTargets += 1;
   }
 
   recordProposal(bySubject: boolean): void {

@@ -88,6 +88,18 @@ export { forgetNode, supersede, writeStampedNode } from './graph/bitemporal.js';
 
 export { supersedeEpisode } from './graph/episode-supersession.js';
 
+export {
+  EDGE_REOPENED_AT_PROPERTY,
+  previewSupersession,
+  unsupersedeNode,
+} from './graph/unsupersede.js';
+
+export type {
+  ReopenedLineage,
+  SupersessionPreview,
+  UnsupersedeResult,
+} from './graph/unsupersede.js';
+
 export type { ClaimSubject, SubjectSibling } from './graph/subject-family.js';
 
 export { bootstrapBackbone, readMemberName } from './graph/backbone.js';
