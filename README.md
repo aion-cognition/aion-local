@@ -22,8 +22,9 @@ because the vector space is the substrate.
 Prerequisites: Docker (with Compose), git, and [Ollama](https://ollama.com) running on the
 host at its default port, 11434.
 
+Clone this repo, then:
+
 ```
-git clone <repo-url>
 cd aion-local
 ./bin/aion init
 ```
@@ -158,3 +159,7 @@ reconciliation, the harness hooks, and the CLI above. 1,617 unit tests pass dete
 the integration suite runs against a live Neo4j and host Ollama. Engrams, described in the
 whitepaper, are designed and not yet built, and the `preferences` pack bucket has no producer
 yet and stays structurally absent rather than empty.
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).
