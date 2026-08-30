@@ -444,9 +444,6 @@ async function afterOneSweep(): Promise<void> {
 
 describe('stale-claim reaper', () => {
   it('reclaims a dead process claim without a restart, and runs the job', async () => {
-    const abandoned = enqueue();
-    new ReflectionQueueClaimant('a-process-that-died').claimNext(store.db);
-
     const runner = new StubRunner();
     // Zero stale window, so the claim is stale the moment the reaper looks; the interval
     // floor keeps the sweep off the event loop's hot path either way.
@@ -454,8 +451,11 @@ describe('stale-claim reaper', () => {
     const drain = await started.start();
 
     // The startup drain is what a restart already covers; this test is about the sweep that
-    // follows it, so the claim is planted after start() returns.
+    // follows it. Both claims are planted after start() returns, since with a zero stale
+    // window the drain is entitled to reclaim anything already sitting there.
     expect(drain.ran).toBe(0);
+    const abandoned = enqueue();
+    new ReflectionQueueClaimant('a-process-that-died').claimNext(store.db);
     const stranded = enqueue();
     new ReflectionQueueClaimant('a-second-dead-process').claimNext(store.db);
     expect(getReflectionJob(store.db, stranded)?.claimedBy).toBe('a-second-dead-process');
