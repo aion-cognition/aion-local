@@ -3,6 +3,7 @@ import {
   ModelPullError,
   ModelVerificationError,
   OllamaUnreachableError,
+  summarizeErrorBody,
 } from './errors.js';
 
 export type OllamaProvisionTarget = {
@@ -72,7 +73,7 @@ export async function listOllamaModels(
   if (!response.ok) {
     throw new OllamaUnreachableError(
       baseUrl,
-      new Error(`${response.status} ${await response.text()}`),
+      new Error(`${response.status} ${summarizeErrorBody(await response.text())}`),
     );
   }
   const body = (await response.json()) as { models?: { name?: unknown }[] };
@@ -133,7 +134,10 @@ async function pullModel(
     body: JSON.stringify({ model, stream: true }),
   });
   if (!response.ok) {
-    throw new ModelPullError(model, `${response.status} ${await response.text()}`);
+    throw new ModelPullError(
+      model,
+      `${response.status} ${summarizeErrorBody(await response.text())}`,
+    );
   }
 
   let lastStatus = '';
@@ -181,7 +185,11 @@ async function verifyEmbedModel(
     body: JSON.stringify({ model, input: ['aion init embed round-trip'] }),
   });
   if (!response.ok) {
-    throw new ModelVerificationError(model, 'embed', `${response.status} ${await response.text()}`);
+    throw new ModelVerificationError(
+      model,
+      'embed',
+      `${response.status} ${summarizeErrorBody(await response.text())}`,
+    );
   }
 
   const body = (await response.json()) as { embeddings?: number[][] };
@@ -219,7 +227,11 @@ export async function verifyOllamaChatModel(
     }),
   });
   if (!response.ok) {
-    throw new ModelVerificationError(model, 'chat', `${response.status} ${await response.text()}`);
+    throw new ModelVerificationError(
+      model,
+      'chat',
+      `${response.status} ${summarizeErrorBody(await response.text())}`,
+    );
   }
 
   const body = (await response.json()) as { message?: unknown; done?: boolean };
