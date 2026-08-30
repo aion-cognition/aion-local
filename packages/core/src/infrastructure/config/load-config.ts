@@ -1,4 +1,5 @@
 import { DEFAULTS } from './defaults.js';
+import type { KnobKind } from './knobs.js';
 import {
   envVarForPath,
   knownEnvVars,
@@ -6,7 +7,6 @@ import {
   RESERVED_ENV_VARS,
   RETIRED_ENV_VARS,
   type Knob,
-  type KnobKind,
 } from './registry.js';
 import { ConfigSchema, type Config } from './schema.js';
 
