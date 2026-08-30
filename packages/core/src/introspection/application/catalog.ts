@@ -3,6 +3,7 @@ import { backboneRepairOperation } from './operations/backbone-repair.js';
 import { communityRefreshOperation } from './operations/community-refresh.js';
 import { deadLetterOperation } from './operations/dead-letter.js';
 import { descriptionFreshnessOperation } from './operations/description-freshness-operation.js';
+import { mergeAutoOperation } from './operations/merge-auto-operation.js';
 import { mergeShadowOperation } from './operations/merge-shadow-operation.js';
 import { narrativeCleanupOperation } from './operations/narrative-cleanup-operation.js';
 import { narrativeRegroundingOperation } from './operations/narrative-regrounding.js';
@@ -56,9 +57,11 @@ export function introspectionOperations(): readonly IntrospectionOperation[] {
     communityRefreshOperation(),
     symbiosisBridgeOperation(),
 
-    // Introspection on a policy nobody has armed yet: judges what an auto-merge rule would do
-    // with an open entity-merge proposal, writes the verdict to the ops ledger, and touches
-    // nothing else. `aion stats` is where the verdicts turn into a measurement.
+    // Entity-merge policy, judge and actor: the shadow judges every proposal and writes its
+    // verdict to the ops ledger without touching the graph, and the auto operation merges the
+    // exact-name pairs the shadow already proved safe. A fuzzy pair passes through both
+    // untouched and stays queued for `aion proposals`.
     mergeShadowOperation(),
+    mergeAutoOperation(),
   ];
 }

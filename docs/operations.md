@@ -32,6 +32,12 @@ auto-supersession with an extra keystroke. Its default blade closes the judged c
 siblings of the same episode that name one of its subjects; `--claim-only` closes just the
 claim, and `--episode` closes everything that observation produced.
 
+An entity-merge proposal whose two names match exactly never reaches this list: `merge_auto`
+merges it on its own. `aion proposals` is where a person decides the fuzzy remainder, the
+pairs whose names differ. `AION_AUTO_MERGE=false` turns that off and leaves every proposal
+queued for a person instead; `aion unmerge` reverses a merge `merge_auto` made, one at a
+time, the same as any other entity merge.
+
 What reaches this queue depends on `AION_SUPERSEDE_MODE`. Under the shipped `unanimous`, the
 pipeline closes what two independent judgments agree on and queues the rest, so a row here is
 one the second pass vetoed and the veto is its rationale. Under `propose` every judgment lands
