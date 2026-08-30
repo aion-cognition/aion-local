@@ -76,6 +76,15 @@ async function residentNames(): Promise<string[]> {
   return (await listResidentModels(OLLAMA_URL)).map((model) => model.name);
 }
 
+/**
+ * Sorted, because what this asserts is that nothing was pulled or removed. Ollama's tag
+ * listing has no stable order between two calls, so comparing it as a sequence fails on the
+ * order alone and says nothing about the disk.
+ */
+async function installedModels(): Promise<string[]> {
+  return [...(await listOllamaModels(OLLAMA_URL))].sort();
+}
+
 async function loadChatModel(): Promise<void> {
   const response = await fetch(`${OLLAMA_URL}/api/generate`, {
     method: 'POST',
@@ -118,7 +127,7 @@ describe('booting with the key and again without it', () => {
   it.skipIf(API_KEY === '')(
     'routes generation to Anthropic and unloads the local model the key covers',
     async () => {
-      const installedBefore = await listOllamaModels(OLLAMA_URL);
+      const installedBefore = await installedModels();
       await loadChatModel();
       expect(await residentNames()).toContain(CHAT_MODEL);
 
@@ -136,7 +145,7 @@ describe('booting with the key and again without it', () => {
       );
       expect(messages.some((message) => message.startsWith('model reconciliation: unloaded'))).toBe(true);
       expect(await waitUntil(async () => !(await residentNames()).includes(CHAT_MODEL))).toBe(true);
-      expect(await listOllamaModels(OLLAMA_URL)).toEqual(installedBefore);
+      expect(await installedModels()).toEqual(installedBefore);
     },
     300_000,
   );
@@ -144,7 +153,7 @@ describe('booting with the key and again without it', () => {
   it(
     'restores local routing with the key gone, and reconciliation touches nothing',
     async () => {
-      const installedBefore = await listOllamaModels(OLLAMA_URL);
+      const installedBefore = await installedModels();
       await loadChatModel();
 
       const offset = logLines().length;
@@ -162,7 +171,7 @@ describe('booting with the key and again without it', () => {
       // Nothing to unload means Ollama is not called at all, so no reconciliation line is written.
       expect(messages.some((message) => message.startsWith('model reconciliation:'))).toBe(false);
       expect(await residentNames()).toContain(CHAT_MODEL);
-      expect(await listOllamaModels(OLLAMA_URL)).toEqual(installedBefore);
+      expect(await installedModels()).toEqual(installedBefore);
     },
     300_000,
   );
