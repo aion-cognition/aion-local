@@ -2,7 +2,8 @@ import { MemoryPackSchema, type Cue, type StageTimingsMs } from '@aion/protocol'
 import { describe, expect, it } from 'vitest';
 
 import type { AdmissionReport } from './admission.js';
-import { assemblePack, type BucketCaps } from './pack.js';
+import type { BucketCaps } from './pack-buckets.js';
+import { assemblePack } from './pack.js';
 import { RESONANCE_PATH, contextCentroid, resonantItem } from './resonance.js';
 import type { SeedCandidate } from '../../infrastructure/graph/seed-queries.js';
 import type { Vector } from '../../infrastructure/providers/types.js';
@@ -107,6 +108,12 @@ describe('a resonant discovery', () => {
     expect(found.measured).toBe(0.82);
     expect(found.relevance).toBe(0.82);
     expect(found.evidence).toEqual([{ method: 'resonance', relevance: 0.82 }]);
+    // Its own rule, so the number cannot be read as a cosine against the query.
+    expect(found.admittedBy).toEqual({
+      rule: 'context_threshold',
+      score: 0.82,
+      qualifying: ['resonance 0.82'],
+    });
   });
 
   it("carries the node's own reason through when the discovery has one", () => {

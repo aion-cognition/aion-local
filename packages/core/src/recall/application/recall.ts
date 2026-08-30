@@ -19,6 +19,7 @@ import {
   measureArrivals,
   mmrVectors,
   pendingEnrichment,
+  relatedClaims,
 } from './stage-reads.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { fetchAdjacency } from '../../infrastructure/graph/adjacency.js';
@@ -48,7 +49,8 @@ import {
 import type { AdmissionPolicy, AdmissionReport } from '../domain/admission.js';
 import { labelBoosts, queryCueTexts, queryRestatements } from '../domain/facts.js';
 import { fuse, type FusedItem, type FusionResult } from '../domain/fusion.js';
-import { assemblePack, packMethods, type BucketCaps } from '../domain/pack.js';
+import type { BucketCaps } from '../domain/pack-buckets.js';
+import { assemblePack, packMethods } from '../domain/pack.js';
 
 /**
  * The recall pipeline, in the order its stages run. Cue extraction spends the one generation
@@ -345,6 +347,10 @@ export async function handleRecall(
   // assemble, so this honesty field's own graph read never adds serial latency to the call.
   const pendingEnrichmentCount = await pendingEnrichmentPromise;
 
+  // After the second pass, because only what resonance surfaced is asked about, and a pack
+  // whose resonant bucket holds no raw turn issues no query at all.
+  const claims = await relatedClaims(deps, resonance.value.items, mode);
+
   const timings: StageTimingsMs = {
     cues: cues.ms,
     embed: embedded.ms,
@@ -371,6 +377,7 @@ export async function handleRecall(
     }),
     entityGlossCap: deps.config.recall.entityGlossCap,
     resonant: resonance.value.items,
+    ...(claims.size === 0 ? {} : { relatedClaims: claims }),
   });
 
   saveLastPack(deps.db, sessionId, pack, now.toISOString());

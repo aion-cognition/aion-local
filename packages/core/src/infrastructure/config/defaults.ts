@@ -112,6 +112,11 @@ export const DEFAULTS: Config = {
     // enough to bring a Decision any leg ranked into the bucket, not enough to let one no leg
     // ranked displace the top hit.
     decisionBoost: 1.25,
+    // Above the whole unrelated sample this embedding model produced (max 0.547 in
+    // `floors.fixtures.ts`), so a claim that only shares a subject's name with the turn does
+    // not qualify. The contradicting pair this annotation was built for measured 0.79 turn to
+    // claim, and the next claim in the same family 0.68.
+    relatedClaimFloor: 0.55,
   },
   search: {
     methods: ['vector', 'bm25', 'graph_traversal'],

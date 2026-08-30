@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  admissionEvidence,
   admitsOnEvidence,
   wasMeasured,
   type AdmissionPolicy,
@@ -144,6 +145,78 @@ describe('a node the spread reached', () => {
 
   it('is refused on the reach itself, however strongly the graph connects it', () => {
     expect(admits([{ method: 'activation', relevance: 0.98 }])).toBe(false);
+  });
+});
+
+/**
+ * What the gate reports back about an admission. The score is the one a pack prints, so it has
+ * to be a number the admitting rule read: a leg that measured 0.44 and admitted nothing is not
+ * what let the item in, and printing its number beside the item reads as a floor that leaked.
+ */
+describe('what the gate says admitted an item', () => {
+  it('names the vector floor and the cosine that cleared it', () => {
+    expect(
+      admissionEvidence([{ method: 'vector', relevance: 0.72, cue: 'outbox table' }], CALIBRATED),
+    ).toEqual({ rule: 'vector_floor', score: 0.72, qualifying: ['vector 0.72'] });
+  });
+
+  it('names the literal match and reports no measurement behind it', () => {
+    expect(
+      admissionEvidence(
+        [
+          { method: 'bm25', relevance: 1, exact: true, cue: 'SQLITE_BUSY' },
+          { method: 'vector', relevance: 0.44, cue: 'SQLITE_BUSY' },
+        ],
+        CALIBRATED,
+      ),
+    ).toEqual({ rule: 'exact_match', score: 0, qualifying: ['bm25 exact'] });
+  });
+
+  it('names both legs that corroborated and the stronger cosine of the two', () => {
+    expect(
+      admissionEvidence(
+        [
+          { method: 'vector', relevance: 0.47, cue: 'remittance ingest' },
+          { method: 'vector', relevance: 0.46, cue: 'outbox table' },
+        ],
+        CALIBRATED,
+      ),
+    ).toEqual({
+      rule: 'corroborated',
+      score: 0.47,
+      qualifying: ['vector 0.47', 'vector 0.46'],
+    });
+  });
+
+  it('counts a verbatim lexical hit as one leg of a corroboration in the strict mode', () => {
+    expect(
+      admissionEvidence(
+        [
+          { method: 'bm25', relevance: 1, exact: true, cue: 'spoke tension' },
+          { method: 'vector', relevance: 0.46, cue: 'spoke tension' },
+        ],
+        { ...CALIBRATED, bm25Mode: 'corroborated' },
+      ),
+    ).toEqual({
+      rule: 'corroborated',
+      score: 0.46,
+      qualifying: ['bm25 exact', 'vector 0.46'],
+    });
+  });
+
+  it('names the escape hatch when an uncalibrated lexical hit admits alone', () => {
+    expect(
+      admissionEvidence([{ method: 'bm25', relevance: 1, cue: 'bicycle wheel spoke' }], {
+        ...CALIBRATED,
+        bm25Mode: 'any',
+      }),
+    ).toEqual({ rule: 'bm25_any', score: 0, qualifying: ['bm25 1.00'] });
+  });
+
+  it('says nothing admitted the item when no rule fired', () => {
+    expect(
+      admissionEvidence([{ method: 'vector', relevance: 0.31, cue: 'outbox table' }], CALIBRATED),
+    ).toBeUndefined();
   });
 });
 
