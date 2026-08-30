@@ -135,10 +135,13 @@ beforeAll(async () => {
     db,
     sessions,
     provider,
-    // The session subtraction is off: the battery asks one reading session many questions, and
+    // Both session subtractions are off: the battery asks one reading session many questions, and
     // each answer is judged on what the floors admit rather than on what an earlier question in
     // the same session was already handed.
-    config: { ...DEFAULTS, recall: { ...DEFAULTS.recall, sessionDedup: false } },
+    config: {
+      ...DEFAULTS,
+      recall: { ...DEFAULTS.recall, sessionDedup: false, ownSessionFilter: false },
+    },
     cueCache: new CueCache(),
     logger,
   };

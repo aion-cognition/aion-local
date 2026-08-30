@@ -552,3 +552,90 @@ describe('repeats this session already holds', () => {
     expect(deduped.episodes?.map((entry) => entry.id)).toEqual(['e2']);
   });
 });
+
+/**
+ * The second subtraction, and the one a reader has to be able to tell from the first. A pack
+ * that shrank because the session is being quoted back to itself is a different report from one
+ * that shrank because an earlier recall already served the same memory.
+ */
+describe('memories made out of this session own turns', () => {
+  it('leaves an own-session item out of its bucket entirely', () => {
+    const pack = assemble([item('e1'), item('e2')], { suppressedOwn: new Set(['e1']) });
+
+    expect(pack.episodes?.map((entry) => entry.id)).toEqual(['e2']);
+  });
+
+  it('withholds a resonant discovery this session produced', () => {
+    const pack = assemble([], {
+      resonant: [item('r1', { path: 'a' }), item('r2', { path: 'a' })],
+      suppressedOwn: new Set(['r2']),
+    });
+
+    expect(pack.resonant?.map((entry) => entry.id)).toEqual(['r1']);
+  });
+
+  it('counts what it withheld and names it in the line', () => {
+    const pack = assemble([item('e1'), item('e2'), item('e3')], {
+      suppressedOwn: new Set(['e1', 'e2']),
+    });
+
+    expect(pack.metadata.suppressed_own).toBe(2);
+    expect(pack.rendered_text).toContain("note: 2 items from this session's own turns");
+  });
+
+  it('agrees with the singular when it withheld exactly one', () => {
+    const pack = assemble([item('e1'), item('e2')], { suppressedOwn: new Set(['e1']) });
+
+    expect(pack.rendered_text).toContain("note: 1 item from this session's own turns");
+  });
+
+  it('names both subtractions when both fired', () => {
+    const items = [item('e1'), item('e2'), item('e3')];
+
+    const pack = assemble(items, {
+      suppressed: new Set(['e1']),
+      suppressedOwn: new Set(['e2', 'e3']),
+    });
+
+    expect(pack.metadata.suppressed_repeats).toBe(1);
+    expect(pack.metadata.suppressed_own).toBe(2);
+    expect(pack.rendered_text).toContain(
+      "note: 1 item already served this session, unchanged; 2 items from this session's own turns",
+    );
+  });
+
+  it('says nothing when it withheld nothing, on either shape of an absent set', () => {
+    const empty = assemble([item('e1')], { suppressedOwn: new Set() });
+    const absent = assemble([item('e1')]);
+
+    expect(empty.metadata.suppressed_own).toBeUndefined();
+    expect(empty).toEqual(absent);
+    expect(empty.rendered_text).not.toContain('note:');
+  });
+
+  /**
+   * "No memories matched" would send the caller looking for a substrate problem when what the
+   * query matched is the transcript in front of it.
+   */
+  it('explains an empty pack that emptied into the session own record', () => {
+    const pack = assemble([item('e1')], { suppressedOwn: new Set(['e1']) });
+
+    expect(pack.episodes).toBeUndefined();
+    expect(pack.rendered_text).toBe(
+      "# Memory\n\nnote: 1 item from this session's own turns\n\n" +
+        "Every memory this query matched came from this session's own record.",
+    );
+  });
+
+  it('names both reasons when both emptied the pack', () => {
+    const pack = assemble([item('e1'), item('e2')], {
+      suppressed: new Set(['e1']),
+      suppressedOwn: new Set(['e2']),
+    });
+
+    expect(pack.rendered_text).toContain(
+      'This session already holds every memory this query matched, from earlier recalls and ' +
+        'from its own record.',
+    );
+  });
+});

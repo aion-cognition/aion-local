@@ -28,6 +28,8 @@ export { RESONANCE_PATH } from './domain/resonance.js';
 
 export { servedFingerprint, servedRecords, suppressedRepeats } from './domain/session-dedup.js';
 
+export { suppressedOwnSession } from './domain/session-origin.js';
+
 export { handleRecall } from './application/recall.js';
 export type { RecallCompletion, RecallDeps } from './application/recall.js';
 

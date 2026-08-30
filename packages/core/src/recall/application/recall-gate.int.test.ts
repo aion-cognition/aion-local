@@ -77,7 +77,7 @@ const provider: Provider = {
 };
 
 /**
- * The session subtraction is off: the gate asks the same reading session several questions in
+ * Both session subtractions are off: the gate asks the same reading session several questions in
  * a row, and each one is judged on what the substrate answers rather than on what an earlier
  * question in the same session already handed over.
  */
@@ -85,7 +85,7 @@ function config(): Config {
   return {
     ...DEFAULTS,
     models: { ...DEFAULTS.models, embedDimension: EMBED_DIMENSION },
-    recall: { ...DEFAULTS.recall, sessionDedup: false },
+    recall: { ...DEFAULTS.recall, sessionDedup: false, ownSessionFilter: false },
   };
 }
 

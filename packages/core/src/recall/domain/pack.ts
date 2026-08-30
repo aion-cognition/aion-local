@@ -54,11 +54,30 @@ const PACK_HEADING = '# Memory';
 const EMPTY_PACK_BODY = 'No memories matched this query.';
 
 /**
- * The other way a pack empties: every match was cut at the wire because this session was
- * already handed it. Saying "no memories matched" there would be false, and it is the one
- * sentence a reader would act on by asking again.
+ * The three other ways a pack empties, all of them the wire cutting matches the substrate did
+ * hold. Saying "no memories matched" for any of them would be false, and it is the one sentence
+ * a reader would act on by asking again.
  */
 const EMPTY_AFTER_REPEATS_BODY = 'This session already holds every memory this query matched.';
+
+const EMPTY_AFTER_OWN_BODY = "Every memory this query matched came from this session's own record.";
+
+const EMPTY_AFTER_BOTH_BODY =
+  'This session already holds every memory this query matched, from earlier recalls and from ' +
+  'its own record.';
+
+function emptyOpening(repeats: number, own: number): string {
+  if (repeats > 0 && own > 0) {
+    return EMPTY_AFTER_BOTH_BODY;
+  }
+  if (own > 0) {
+    return EMPTY_AFTER_OWN_BODY;
+  }
+  if (repeats > 0) {
+    return EMPTY_AFTER_REPEATS_BODY;
+  }
+  return EMPTY_PACK_BODY;
+}
 
 /**
  * What an empty pack says about itself, in the rendered text rather than only in metadata.
@@ -69,8 +88,8 @@ const EMPTY_AFTER_REPEATS_BODY = 'This session already holds every memory this q
  * this is the copy that reaches a client reading only the rendered block, which is also the
  * client most likely to read a note about a truncated spread as the reason the pack is empty.
  */
-function emptyPackBody(report: AdmissionReport, repeats: number): string {
-  const opening = repeats > 0 ? EMPTY_AFTER_REPEATS_BODY : EMPTY_PACK_BODY;
+function emptyPackBody(report: AdmissionReport, repeats: number, own: number): string {
+  const opening = emptyOpening(repeats, own);
   if (report.considered === 0) {
     return `${opening} Nothing reached the admission gate.`;
   }
@@ -142,6 +161,13 @@ export type AssemblePackInput = {
    * time-traveled read, and whenever the knob is off.
    */
   readonly suppressed?: ReadonlySet<string>;
+  /**
+   * Ids whose only source is this session's own turns (`session-origin.ts`). Cut here for the
+   * same reason and with the same reach as the repeats: the admitted set that reaches cognition
+   * is unchanged, and only the wire gets smaller. Empty on a time-traveled read and whenever the
+   * knob is off.
+   */
+  readonly suppressedOwn?: ReadonlySet<string>;
 };
 
 type Selection = Map<PackBucket, PackEntry[]>;
@@ -181,6 +207,12 @@ function honestyNote(input: AssemblePackInput): string | undefined {
       `${String(repeats)} item${repeats === 1 ? '' : 's'} already served this session, unchanged`,
     );
   }
+  // Named separately from the repeats, because the two withhold for different reasons and a
+  // reader deciding whether to ask again needs to know which one it is looking at.
+  const own = input.suppressedOwn?.size ?? 0;
+  if (own > 0) {
+    clauses.push(`${String(own)} item${own === 1 ? '' : 's'} from this session's own turns`);
+  }
   if (clauses.length === 0) {
     return undefined;
   }
@@ -210,6 +242,11 @@ function select(input: AssemblePackInput, note: string | undefined): Selection {
     estimateTokens(PACK_HEADING) + (note === undefined ? 0 : estimateTokens(`${note}\n\n`));
   let ranked = 0;
   let glosses = 0;
+
+  /** Cut at the wire by either subtraction: already in this session's context, either way. */
+  function withheld(id: string): boolean {
+    return input.suppressed?.has(id) === true || input.suppressedOwn?.has(id) === true;
+  }
 
   /** Places the item in the named bucket when the cap and the budget still leave room for it. */
   function accept(item: FusedItem, bucket: PackBucket, gloss: boolean): void {
@@ -248,7 +285,7 @@ function select(input: AssemblePackInput, note: string | undefined): Selection {
   }
 
   for (const item of input.items) {
-    if (input.suppressed?.has(item.id) === true) {
+    if (withheld(item.id)) {
       continue;
     }
     const bucket = bucketFor(item.labels);
@@ -271,7 +308,7 @@ function select(input: AssemblePackInput, note: string | undefined): Selection {
   // could hold the same memory twice. The stage already excludes every id the first pass
   // produced; this catches the other half, a distinct node whose text says the same thing.
   for (const item of input.resonant ?? []) {
-    if (input.suppressed?.has(item.id) === true) {
+    if (withheld(item.id)) {
       continue;
     }
     if (packedIds.has(item.id) || packedContent.has(hashContent(item.content))) {
@@ -288,6 +325,7 @@ function render(
   note: string | undefined,
   admission: AdmissionReport,
   repeats: number,
+  own: number,
 ): string {
   const sections: string[] = [];
   if (note !== undefined) {
@@ -301,7 +339,7 @@ function render(
     sections.push(renderBucket(bucket, entries));
   }
   if (sections.length === (note === undefined ? 0 : 1)) {
-    sections.push(emptyPackBody(admission, repeats));
+    sections.push(emptyPackBody(admission, repeats, own));
   }
   return `${PACK_HEADING}\n\n${sections.join('\n\n')}`;
 }
@@ -347,9 +385,10 @@ export function packMethods(pack: MemoryPack): readonly string[] {
  */
 export function assemblePack(input: AssemblePackInput): MemoryPack {
   const repeats = input.suppressed?.size ?? 0;
+  const own = input.suppressedOwn?.size ?? 0;
   const note = honestyNote(input);
   const selection = select(input, note);
-  const renderedText = render(selection, note, input.admission, repeats);
+  const renderedText = render(selection, note, input.admission, repeats, own);
 
   const buckets: Record<string, readonly MemoryPackItem[]> = {};
   for (const bucket of PACK_BUCKETS) {
@@ -375,6 +414,7 @@ export function assemblePack(input: AssemblePackInput): MemoryPack {
         : { pending_enrichment: input.pendingEnrichment }),
       ...(input.truncated === undefined ? {} : { truncated: input.truncated }),
       ...(repeats === 0 ? {} : { suppressed_repeats: repeats }),
+      ...(own === 0 ? {} : { suppressed_own: own }),
     },
   });
 }

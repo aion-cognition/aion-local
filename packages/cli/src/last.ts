@@ -155,6 +155,10 @@ export function renderPack(entry: LastPackEntry, write: Writer): void {
   if (repeats !== undefined) {
     write(`suppressed      ${String(repeats)} already served this session, unchanged`);
   }
+  const own = entry.pack.metadata.suppressed_own;
+  if (own !== undefined) {
+    write(`suppressed      ${String(own)} from this session's own turns`);
+  }
 }
 
 export function renderSessionList(

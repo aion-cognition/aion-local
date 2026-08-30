@@ -82,15 +82,15 @@ const provider: Provider = {
  * every fixture node in as a direct hit and there would be nothing left for traversal to be
  * the only path to.
  *
- * The session subtraction is off throughout. Every test here asks the same question of the
+ * Both session subtractions are off throughout. Every test here asks the same question of the
  * same reading session, and what each one measures is what the substrate answers rather than
- * what that session has already been handed.
+ * what that session has already been handed or wrote itself.
  */
 function config(): Config {
   return {
     ...DEFAULTS,
     models: { ...DEFAULTS.models, embedDimension: EMBED_DIMENSION },
-    recall: { ...DEFAULTS.recall, vectorLimit: 1, sessionDedup: false },
+    recall: { ...DEFAULTS.recall, vectorLimit: 1, sessionDedup: false, ownSessionFilter: false },
     contextResonance: { ...DEFAULTS.contextResonance, seedLimit: 1 },
   };
 }

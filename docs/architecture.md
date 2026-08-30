@@ -234,6 +234,23 @@ independently for the pack's `stage_timings_ms`:
    `AION_RECALL_SESSION_DEDUP=false` restores the full pack on every call. The record dies with
    the session, on the client's DELETE or on the idle sweep, whichever reaches it.
 
+9. **Own-session origin.** The second subtraction, and the one dedup cannot make. A turn is
+   reflected into the graph when the session stops, and the next prompt's recall finds that turn
+   and the claims extracted from it as memories the session has never been served, so no
+   fingerprint and no served row can catch them. What separates them is where they came from. One
+   batched read (`origin-queries.ts`), issued beside the related-claim lookup, answers which
+   sessions each candidate's provenance names: a Turn, an Episode and a session Narrative carry
+   `session_id` on the node, the nine cognitive types carry none and hang off `EXTRACTED_FROM` to
+   their source episode, and an Entity hangs off neither, so its provenance is the set of episodes
+   that `MENTIONS` it. An item whose provenance names the asking session and no other is cut from
+   the buckets, counted in `metadata.suppressed_own`, and named in the honesty line beside the
+   repeats. An item the substrate has corrected since (closed lineage, a currency marker, or the
+   current claim resonance found beside a raw turn) is served in full, because the correction is
+   the part the conversation does not hold. Origin decides before dedup and what it withholds
+   leaves no served row, since the session never read those items. Cognition is untouched here
+   too, a time-traveled read is exempt, and `AION_RECALL_OWN_SESSION_FILTER=false` restores every
+   item a session produced.
+
 Both paths inherit the driver timeouts `GraphConnection` sets: 5s to connect, 10s to acquire
 a pooled connection, 10s of transaction retries. The driver's defaults (60s and 30s) meet or
 exceed the MCP client's 60s request timeout, which is how a call against a stopped Neo4j

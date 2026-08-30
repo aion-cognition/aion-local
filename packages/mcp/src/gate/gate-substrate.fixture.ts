@@ -93,9 +93,10 @@ export class GateSubstrate {
         url: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
       },
       // The one departure from the shipped defaults, and it is what makes a battery a battery:
-      // every question is asked of one reading session, and each answer has to be judged on
-      // what the substrate holds rather than on what an earlier question already served.
-      recall: { ...DEFAULTS.recall, sessionDedup: false },
+      // every question is asked of one reading session, and each answer has to be judged on what
+      // the substrate holds rather than on what an earlier question served or what that session
+      // wrote itself.
+      recall: { ...DEFAULTS.recall, sessionDedup: false, ownSessionFilter: false },
     };
     this.config = options.tune === undefined ? shipped : options.tune(shipped);
     this.#lanes = new LaneAssigner(this.config.lanes);
