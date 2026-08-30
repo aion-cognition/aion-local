@@ -19,7 +19,11 @@ import { openLogger, type Logger } from '../../../infrastructure/logging/logger.
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
 import type { OperationContext } from '../../domain/operation.js';
-import { redactionResiduePurgeOperation } from './redaction-residue-purge.js';
+import {
+  REDACTION_RESIDUE_MIN_RELEVANCE,
+  redactionResiduePurgeOperation,
+  redactionResiduePurgeRelevance,
+} from './redaction-residue-purge.js';
 
 const EMBED_DIMENSION = 8;
 const NOW = new Date('2026-08-29T14:00:00.000Z');
@@ -62,6 +66,25 @@ function ctxFor(overrides: Partial<OperationContext> = {}): OperationContext {
   };
 }
 
+describe('redaction_residue_purge relevance', () => {
+  it('is zero with nothing leaking and clears the urgency threshold on a single leak', () => {
+    const clean = healthFixture({ redaction: { scanned: 2_000, leaking: 0 } });
+    expect(redactionResiduePurgeRelevance(clean)).toBe(0);
+
+    // Thirteen out of two thousand is a share of 0.0065. Scored as a share it would need
+    // roughly two and a half days of starvation boost to reach the threshold at all.
+    const leaking = healthFixture({ redaction: { scanned: 2_000, leaking: 13 } });
+    expect(redactionResiduePurgeRelevance(leaking)).toBeGreaterThan(
+      DEFAULTS.maintenance.urgencyThreshold,
+    );
+    expect(redactionResiduePurgeRelevance(leaking)).toBe(REDACTION_RESIDUE_MIN_RELEVANCE);
+
+    // A residue large enough to be proportional still orders above the floor.
+    const flooded = healthFixture({ redaction: { scanned: 2_000, leaking: 1_600 } });
+    expect(redactionResiduePurgeRelevance(flooded)).toBeCloseTo(0.8, 6);
+  });
+});
+
 describe('redaction_residue_purge', () => {
   it('rewrites the leaking property, stamps redacted_at, and leaves id and other properties alone', async () => {
     await writeStampedNode(harness.driver, {
@@ -101,6 +124,29 @@ describe('redaction_residue_purge', () => {
     const after = await nodeProperties(harness.driver, 'leak-node-1');
     // Not just "still redacted": the exact same fingerprint, not a fresh one nested in it.
     expect(after.text).toBe(before.text);
+  }, 60_000);
+
+  it('leaves an existing fingerprint intact while fingerprinting a new leak beside it', async () => {
+    // The shape the detector cannot tell from a secret: an earlier fix, whose token is itself
+    // `key: value`, sitting one line above a real leak that has never been redacted.
+    const priorFingerprint = '⟨secret:generic-secret-assignment:abdd33⟩';
+    await writeStampedNode(harness.driver, {
+      label: 'Episode',
+      id: 'leak-node-nested',
+      properties: { text: `api_key: ${priorFingerprint}\nanthropic_key: ${LEAKED_KEY}` },
+      now: NOW,
+    });
+
+    const result = await redactionResiduePurgeOperation().run(ctxFor());
+    expect(result.status).toBe('applied');
+
+    const props = await nodeProperties(harness.driver, 'leak-node-nested');
+    const text = String(props.text);
+    expect(text).toContain(`api_key: ${priorFingerprint}`);
+    expect(text).not.toContain(LEAKED_KEY);
+    expect(text).toMatch(/⟨secret:anthropic-api-key:[0-9a-f]{6}⟩/);
+    // No fingerprint holds another one: the rule id of the earlier fix is still readable.
+    expect(text).not.toMatch(/⟨secret:[a-z0-9-]*⟨/);
   }, 60_000);
 
   it('bounds one run to redactionPurgeBatchSize nodes', async () => {
