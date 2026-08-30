@@ -6,8 +6,11 @@ import {
   projectContentGraph,
   writeCommunities,
 } from '../../../infrastructure/graph/community-queries.js';
-import { CRITICAL_MIN_POPULATION } from '../../domain/decide.js';
-import { HEALTH_COLLECTORS, type HealthSnapshot } from '../../domain/health.js';
+import {
+  CRITICAL_MIN_POPULATION,
+  HEALTH_COLLECTORS,
+  type HealthSnapshot,
+} from '../../domain/health.js';
 import type {
   IntrospectionOperation,
   OperationContext,
@@ -109,7 +112,6 @@ async function runCommunityRefresh(ctx: OperationContext): Promise<OperationOutc
 export function communityRefreshOperation(): IntrospectionOperation {
   return {
     name: COMMUNITY_REFRESH_OPERATION,
-    tier: 2,
     bucket: 'day',
     relevance: communityRefreshRelevance,
     run: runCommunityRefresh,

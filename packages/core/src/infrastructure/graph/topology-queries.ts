@@ -21,6 +21,9 @@ import type { Row } from './values.js';
 
 const BACKBONE_TYPES = PROTECTED_RELATIONSHIP_TYPES.map((type) => `'${type}'`).join(', ');
 
+/** Reflection's provenance edge, which is what makes an episode enriched rather than pending. */
+const EXTRACTION_TYPE = 'EXTRACTED_FROM';
+
 const CURRENT = (variable: string): string =>
   [
     `${variable}.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
@@ -51,6 +54,9 @@ const FIND_ORPHAN_NODES = [
   'MATCH (n:Memory)',
   `WHERE ${CURRENT('n')}`,
   `  AND coalesce(n.${STRUCTURAL_PROPERTY}, false) = false`,
+  // Same exclusion the health count applies: an episode reflection has not processed is
+  // pending, not fragmented, and a heuristic relink onto it hides the backlog it belongs to.
+  `  AND NOT (n:Episode AND NOT EXISTS { MATCH ()-[:${EXTRACTION_TYPE}]->(n) })`,
   `  AND NOT EXISTS { MATCH (n)-[r]-() WHERE NOT type(r) IN [${BACKBONE_TYPES}] }`,
   `RETURN n.id AS id, n.${BITEMPORAL_PROPERTIES.txFrom} AS tx_from`,
   `ORDER BY n.${BITEMPORAL_PROPERTIES.txFrom}, n.id`,

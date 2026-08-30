@@ -337,6 +337,11 @@ export const KNOB_REGISTRY: readonly Knob[] = [
     kind: 'number',
   },
   {
+    envVar: 'AION_MAINTENANCE_BACKBONE_REPAIR_BATCH',
+    path: ['maintenance', 'backboneRepairBatch'],
+    kind: 'number',
+  },
+  {
     envVar: 'AION_MAINTENANCE_ORPHAN_CLEANUP_BATCH',
     path: ['maintenance', 'orphanCleanupBatch'],
     kind: 'number',

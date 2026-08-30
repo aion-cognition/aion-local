@@ -65,10 +65,15 @@ async function refreshContextVectors(
   return { processed: staleIds.length, affected: written.length };
 }
 
+/**
+ * It answers `vector_parity`, so a parity crisis selects it directly rather than making it
+ * compete on urgency with a content touch-up. Below the critical threshold the same relevance
+ * is scored routinely, which is the ordinary pending-vector drain.
+ */
 export function vectorBackfillOperation(): IntrospectionOperation {
   return {
     name: VECTOR_BACKFILL_OPERATION,
-    tier: 2,
+    answers: 'vector_parity',
     bucket: 'quarter-hour',
     relevance: vectorBackfillRelevance,
     measure: (health) => health.graph.vectorExpected - health.graph.vectorPresent,

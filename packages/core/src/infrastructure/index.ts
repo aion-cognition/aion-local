@@ -175,6 +175,9 @@ export {
 } from './graph/introspection-health.js';
 export type { OrphanCounts, VectorParityCounts } from './graph/introspection-health.js';
 
+export { findEpisodesMissingSessionLink } from './graph/backbone-repair-queries.js';
+export type { BackboneRepairTarget } from './graph/backbone-repair-queries.js';
+
 export { fetchNodeEdges, fetchNodeProvenance } from './graph/node-provenance.js';
 export type { NodeEdge, NodeProvenance } from './graph/node-provenance.js';
 

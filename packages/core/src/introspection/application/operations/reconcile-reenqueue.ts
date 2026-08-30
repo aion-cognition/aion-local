@@ -20,7 +20,6 @@ export function reconcileReenqueueRelevance(health: HealthSnapshot): number {
 export function reconcileReenqueueOperation(): IntrospectionOperation {
   return {
     name: RECONCILE_REENQUEUE_OPERATION,
-    tier: 2,
     bucket: 'hour',
     relevance: reconcileReenqueueRelevance,
     measure: (health) => health.enrichment.unenriched,

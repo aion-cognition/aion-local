@@ -3,7 +3,7 @@ import type { Config } from '../../infrastructure/config/schema.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import type { OperationBucket } from './buckets.js';
-import type { HealthSnapshot } from './health.js';
+import type { CriticalCondition, HealthSnapshot } from './health.js';
 
 /**
  * The contract every maintenance operation implements. It is deliberately small: a name, the
@@ -12,10 +12,10 @@ import type { HealthSnapshot } from './health.js';
  * turn, what it did) the engine derives, so an operation never has to reason about scheduling,
  * idempotency, or its own history.
  *
- * Tier is a property of the operation rather than of the decision. A tier-1 operation answers
- * a critical condition and preempts the whole routine catalog, so its `relevance` must return
- * zero unless that condition actually holds; a tier-1 operation that is always slightly
- * relevant would starve every tier-2 operation forever.
+ * Tier is a property of the cycle rather than of the operation. An operation earns tier 1 by
+ * naming the critical condition it repairs in `answers`, and it preempts only on the cycles
+ * the snapshot meets that condition. Every other cycle the same operation is scored routinely,
+ * which is what stops a standing pathology from being a standing preemption.
  */
 
 export type OperationTier = 1 | 2;
@@ -45,7 +45,13 @@ export type OperationOutcome = {
 
 export type IntrospectionOperation = {
   readonly name: string;
-  readonly tier: OperationTier;
+  /**
+   * The tier-1 condition this operation repairs. Declaring one is what makes the operation an
+   * emergency responder for that condition and nothing else: it preempts the routine catalog
+   * on the cycles the condition holds, and its `relevance` must still return zero when there
+   * is no work, since a preemption with nothing to do blocks everything else for free.
+   */
+  readonly answers?: CriticalCondition;
   readonly bucket: OperationBucket;
   /**
    * How much this snapshot calls for the operation, on 0 to 1. Zero means there is nothing to

@@ -15,11 +15,17 @@ import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite
 import { operationStats } from '../../infrastructure/sqlite/introspection-counters.js';
 import { getLedgerEntry } from '../../infrastructure/sqlite/ops-ledger.js';
 import { operationBucketKey } from '../domain/buckets.js';
-import { CRITICAL_MIN_POPULATION } from '../domain/decide.js';
-import { NEUTRAL_GRAPH_HEALTH, type HealthSnapshot } from '../domain/health.js';
+import { CRITICAL_PREEMPTION_GRACE_RUNS } from '../domain/decide.js';
+import {
+  CRITICAL_MIN_POPULATION,
+  NEUTRAL_GRAPH_HEALTH,
+  type HealthSnapshot,
+} from '../domain/health.js';
 import type { IntrospectionOperation, OperationOutcome } from '../domain/operation.js';
 import { healthFixture } from '../domain/test-support/health.fixture.js';
 import { Introspector } from './engine.js';
+import { backboneRepairOperation } from './operations/backbone-repair.js';
+import { vectorBackfillOperation } from './operations/vector-backfill.js';
 
 const EMBED_DIMENSION = 8;
 const NOW = new Date('2026-08-29T14:37:00.000Z');
@@ -69,7 +75,6 @@ function fakeOperation(
   let calls = 0;
   return {
     name,
-    tier: 2,
     bucket: 'quarter-hour',
     relevance: () => 1,
     measure: (health) => health.plasticity.reinforcementQueueDepth,
@@ -186,7 +191,6 @@ describe('Introspector', () => {
   it('records a throwing operation as failed and keeps ticking', async () => {
     const operation: IntrospectionOperation = {
       name: 'broken_maintenance',
-      tier: 2,
       bucket: 'quarter-hour',
       relevance: () => 1,
       run: () => Promise.reject(new Error('graph unavailable')),
@@ -197,12 +201,10 @@ describe('Introspector', () => {
     expect(operationStats(db, 'broken_maintenance')).toMatchObject({ runs: 1, failed: 1 });
   });
 
-  it('preempts a fully relevant routine operation with a critical one', async () => {
+  it('preempts a fully relevant routine operation with the registered parity responder', async () => {
+    // The shipped operation, not a stand-in: what this certifies is that the catalog carries a
+    // responder for the parity condition, which is the half a fake tier-1 operation cannot show.
     const routine = fakeOperation('routine_maintenance');
-    const emergency = fakeOperation('vector_backfill', {
-      tier: 1,
-      relevance: (health) => (health.graph.vectorParity < 0.8 ? 1 : 0),
-    });
     const pathological = healthFixture({
       graph: {
         ...NEUTRAL_GRAPH_HEALTH,
@@ -213,12 +215,62 @@ describe('Introspector', () => {
       },
     });
 
-    const report = await engineFor([routine, emergency], [pathological]).tickOnce();
+    const report = await engineFor([routine, vectorBackfillOperation()], [pathological]).tickOnce();
 
     expect(report.decision).toMatchObject({ kind: 'selected', name: 'vector_backfill', tier: 1 });
     expect(report.decision).toMatchObject({ reason: 'critical: vector_parity' });
-    expect(emergency.calls()).toBe(1);
     expect(routine.calls()).toBe(0);
+  });
+
+  it('answers a missing backbone link with the registered repair', async () => {
+    const routine = fakeOperation('routine_maintenance');
+    const broken = healthFixture({
+      graph: { ...NEUTRAL_GRAPH_HEALTH, nodes: CRITICAL_MIN_POPULATION * 5, episodesWithoutSession: 7 },
+    });
+
+    const report = await engineFor([routine, backboneRepairOperation()], [broken]).tickOnce();
+
+    expect(report.decision).toMatchObject({
+      kind: 'selected',
+      name: 'emergency_relationship_repair',
+      tier: 1,
+      reason: 'critical: missing_backbone_links',
+    });
+    expect(routine.calls()).toBe(0);
+  });
+
+  it('lets the routine catalog through once a standing emergency stops moving its metric', async () => {
+    const routine = fakeOperation('routine_maintenance');
+    const standing = healthFixture({
+      graph: {
+        ...NEUTRAL_GRAPH_HEALTH,
+        nodes: CRITICAL_MIN_POPULATION * 5,
+        orphanNodes: CRITICAL_MIN_POPULATION * 3,
+        orphanShare: 0.6,
+      },
+    });
+    // A pathology nothing in the batch can repair: the operation is selected, runs, changes
+    // nothing, and the share it reports is the same on the next tick.
+    const emergency = fakeOperation('orphan_cleanup', {
+      answers: 'orphan_share',
+      relevance: (health) => health.graph.orphanShare,
+      measure: (health) => health.graph.orphanShare,
+      run: (): Promise<OperationOutcome> =>
+        Promise.resolve({ status: 'noop', itemsProcessed: 200, itemsAffected: 0 }),
+    });
+
+    let at = NOW;
+    let last = await engineFor([routine, emergency], [standing], at).tickOnce();
+    for (let cycle = 0; cycle < 8; cycle += 1) {
+      at = new Date(at.getTime() + 15 * 60 * 1000);
+      last = await engineFor([routine, emergency], [standing], at).tickOnce();
+    }
+
+    expect(operationStats(db, 'orphan_cleanup').unchanged).toBeGreaterThanOrEqual(
+      CRITICAL_PREEMPTION_GRACE_RUNS,
+    );
+    expect(last.decision).toMatchObject({ kind: 'selected', name: 'routine_maintenance', tier: 2 });
+    expect(routine.calls()).toBeGreaterThan(0);
   });
 
   it('leaves the cycle idle when nothing is relevant', async () => {

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CRITICAL_MIN_POPULATION,
-  criticalConditions,
+  CRITICAL_PREEMPTION_GRACE_RUNS,
   decide,
   DEPRIORITIZED_WEIGHT,
   scoreCandidate,
@@ -9,7 +8,13 @@ import {
   type DecisionInput,
   type OperationCandidate,
 } from './decide.js';
-import { HEALTH_COLLECTORS, NEUTRAL_GRAPH_HEALTH, type OperationEffectiveness } from './health.js';
+import {
+  CRITICAL_MIN_POPULATION,
+  criticalConditions,
+  HEALTH_COLLECTORS,
+  NEUTRAL_GRAPH_HEALTH,
+  type OperationEffectiveness,
+} from './health.js';
 import { healthFixture } from './test-support/health.fixture.js';
 
 const POPULATION = CRITICAL_MIN_POPULATION * 5;
@@ -40,7 +45,7 @@ function stats(overrides: Partial<OperationEffectiveness>): OperationEffectivene
 }
 
 function candidate(overrides: Partial<OperationCandidate>): OperationCandidate {
-  return { name: 'routine', tier: 2, relevance: 0.5, ...overrides };
+  return { name: 'routine', relevance: 0.5, ...overrides };
 }
 
 describe('criticalConditions', () => {
@@ -138,24 +143,113 @@ describe('decide', () => {
       baseInput({
         health,
         candidates: [
-          candidate({ name: 'routine', tier: 2, relevance: 1 }),
-          candidate({ name: 'vector_backfill', tier: 1, relevance: 0.4 }),
+          candidate({ name: 'routine', relevance: 1 }),
+          candidate({ name: 'vector_backfill', answers: 'vector_parity', relevance: 0.4 }),
         ],
       }),
     );
     expect(decision).toMatchObject({ kind: 'selected', name: 'vector_backfill', tier: 1 });
   });
 
-  it('ignores a tier-1 operation whose condition does not hold', () => {
+  it('scores an operation routinely on a cycle its own condition does not hold', () => {
     const decision = decide(
       baseInput({
         candidates: [
-          candidate({ name: 'routine', tier: 2, relevance: 0.4 }),
-          candidate({ name: 'vector_backfill', tier: 1, relevance: 0 }),
+          candidate({ name: 'routine', relevance: 0.4 }),
+          candidate({ name: 'vector_backfill', answers: 'vector_parity', relevance: 0.9 }),
         ],
       }),
     );
-    expect(decision).toMatchObject({ kind: 'selected', name: 'routine', tier: 2 });
+    expect(decision).toMatchObject({ kind: 'selected', name: 'vector_backfill', tier: 2 });
+  });
+
+  it('names the condition the selected operation answers, not every condition met', () => {
+    const health = healthFixture({
+      graph: {
+        ...NEUTRAL_GRAPH_HEALTH,
+        nodes: POPULATION,
+        orphanNodes: 60,
+        orphanShare: 0.6,
+        vectorExpected: POPULATION,
+        vectorPresent: 10,
+        vectorParity: 0.1,
+      },
+    });
+    const decision = decide(
+      baseInput({
+        health,
+        candidates: [candidate({ name: 'orphan_cleanup', answers: 'orphan_share', relevance: 0.6 })],
+      }),
+    );
+    expect(decision).toMatchObject({ kind: 'selected', tier: 1, reason: 'critical: orphan_share' });
+  });
+
+  it('stops preempting once an emergency has run its grace out without moving its metric', () => {
+    const graph = {
+      ...NEUTRAL_GRAPH_HEALTH,
+      nodes: POPULATION,
+      orphanNodes: 60,
+      orphanShare: 0.6,
+    };
+    const candidates = [
+      candidate({ name: 'orphan_cleanup', answers: 'orphan_share', relevance: 0.6 }),
+      candidate({ name: 'routine', relevance: 0.5 }),
+    ];
+
+    // Inside the grace, the standing condition still preempts a fully relevant routine one.
+    const trying = decide(
+      baseInput({
+        health: healthFixture({
+          graph,
+          effectiveness: [
+            stats({
+              name: 'orphan_cleanup',
+              runs: CRITICAL_PREEMPTION_GRACE_RUNS - 1,
+              effectiveness: 0,
+            }),
+          ],
+        }),
+        candidates,
+      }),
+    );
+    expect(trying).toMatchObject({ kind: 'selected', name: 'orphan_cleanup', tier: 1 });
+
+    // Past it, with nothing to show for the runs, the catalog gets its turn back.
+    const spent = decide(
+      baseInput({
+        health: healthFixture({
+          graph,
+          effectiveness: [
+            stats({ name: 'orphan_cleanup', runs: CRITICAL_PREEMPTION_GRACE_RUNS, effectiveness: 0 }),
+          ],
+        }),
+        candidates,
+      }),
+    );
+    expect(spent).toMatchObject({ kind: 'selected', name: 'routine', tier: 2 });
+  });
+
+  it('keeps preempting while the emergency is still moving its metric', () => {
+    const decision = decide(
+      baseInput({
+        health: healthFixture({
+          graph: {
+            ...NEUTRAL_GRAPH_HEALTH,
+            nodes: POPULATION,
+            orphanNodes: 60,
+            orphanShare: 0.6,
+          },
+          effectiveness: [
+            stats({ name: 'orphan_cleanup', runs: 40, improved: 40, effectiveness: 1 }),
+          ],
+        }),
+        candidates: [
+          candidate({ name: 'orphan_cleanup', answers: 'orphan_share', relevance: 0.6 }),
+          candidate({ name: 'routine', relevance: 1 }),
+        ],
+      }),
+    );
+    expect(decision).toMatchObject({ kind: 'selected', name: 'orphan_cleanup', tier: 1 });
   });
 
   it('leaves a routine operation under the threshold alone', () => {

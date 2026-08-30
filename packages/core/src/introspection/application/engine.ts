@@ -235,14 +235,17 @@ export class Introspector {
         tier3Enabled: this.#deps.config.maintenance.tier3,
       });
 
+      // The strategic layer is consulted first, before the skipped-claim fall-through below.
+      // A cycle that lost a claim is exactly the cycle where the deterministic tiers had the
+      // least to offer, which is what tier 3 is there for.
+      if (decision.kind === 'tier3') {
+        await this.#consultTier3(health, candidates, decision.reason);
+        return { cycle, health, decision, skipped: skippedReport !== undefined, resolved };
+      }
       // Once a claim has been lost, running out of candidates means the window is covered by
       // whoever holds it, which is a skipped cycle rather than an idle one.
       if (decision.kind !== 'selected' && skippedReport !== undefined) {
         return skippedReport;
-      }
-      if (decision.kind === 'tier3') {
-        await this.#consultTier3(health, candidates, decision.reason);
-        return { cycle, health, decision, skipped: false, resolved };
       }
       if (decision.kind === 'idle') {
         this.#deps.logger.debug({ cycle }, 'introspection cycle idle');
@@ -290,11 +293,12 @@ export class Introspector {
 
   /** A relevance that throws is a zero, not a crash: a broken scorer must not take the loop with it. */
   #candidate(operation: IntrospectionOperation, health: HealthSnapshot): OperationCandidate {
+    const answers = operation.answers === undefined ? {} : { answers: operation.answers };
     try {
-      return { name: operation.name, tier: operation.tier, relevance: operation.relevance(health) };
+      return { name: operation.name, ...answers, relevance: operation.relevance(health) };
     } catch (err) {
       this.#deps.logger.warn({ err, operation: operation.name }, 'operation relevance failed');
-      return { name: operation.name, tier: operation.tier, relevance: 0 };
+      return { name: operation.name, ...answers, relevance: 0 };
     }
   }
 

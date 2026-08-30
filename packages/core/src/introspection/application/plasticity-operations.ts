@@ -32,7 +32,6 @@ export function reinforcementFlushRelevance(health: HealthSnapshot): number {
 export function reinforcementFlushOperation(): IntrospectionOperation {
   return {
     name: REINFORCEMENT_FLUSH_OPERATION,
-    tier: 2,
     bucket: 'quarter-hour',
     relevance: reinforcementFlushRelevance,
     measure: (health) => health.plasticity.reinforcementQueueDepth,
@@ -60,7 +59,6 @@ export function reinforcementFlushOperation(): IntrospectionOperation {
 export function memoryDecayOperation(): IntrospectionOperation {
   return {
     name: MEMORY_DECAY_OPERATION,
-    tier: 2,
     bucket: 'day',
     relevance: () => DECAY_STANDING_RELEVANCE,
     run: async (ctx): Promise<OperationOutcome> => {

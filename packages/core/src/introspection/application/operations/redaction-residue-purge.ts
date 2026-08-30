@@ -66,7 +66,6 @@ function redactedProperties(
 export function redactionResiduePurgeOperation(): IntrospectionOperation {
   return {
     name: REDACTION_RESIDUE_PURGE_OPERATION,
-    tier: 2,
     bucket: 'hour',
     relevance: redactionResiduePurgeRelevance,
     measure: (health) => health.redaction.leaking,
