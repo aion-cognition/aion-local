@@ -30,7 +30,7 @@ import { handleRecall, type RecallDeps } from './recall.js';
 import { resonate } from './resonance.js';
 
 /**
- * The mechanism the whitepaper describes, built as its own scenario. Two memories that share
+ * Context resonance's mechanism, built as its own scenario. Two memories that share
  * no words: one names the query's subject, the other is about something else entirely. What
  * they have in common is the shape of their neighborhoods, because each sits next to an entity
  * whose own embedding is nearly the other's. That is the whole claim of context resonance, and
@@ -297,9 +297,9 @@ function activationOf(...ids: readonly string[]): { nodeId: string; score: numbe
 }
 
 /**
- * Before any context vector exists. The substrate is otherwise complete, so this is the cold
- * start the whitepaper names: a graph whose nodes are real and whose neighborhoods have not
- * been summarized yet.
+ * Before any context vector exists. The substrate is otherwise complete, so this is the
+ * cold-start case: a graph whose nodes are real and whose neighborhoods have not been
+ * summarized yet.
  */
 describe('a substrate with no context vectors written yet', () => {
   it('serves a pack with no resonant bucket and still times the stage', async () => {
@@ -382,8 +382,8 @@ describe('once reflection has summarized every neighborhood', () => {
     expect(found?.content).toContain('seating plan');
     expect(found?.rationale.method).toBe('resonance');
     expect(found?.rationale.path).toBe(RESONANCE_PATH);
-    // Above the whitepaper's 0.7 bar, which is what admitted it: the same node's content
-    // cosine against the query cue is near zero.
+    // Above the configured resonance threshold, which is what admitted it: the same node's
+    // content cosine against the query cue is near zero.
     expect(found?.confidence).toBeGreaterThanOrEqual(
       config().contextResonance.contextSearchThreshold,
     );

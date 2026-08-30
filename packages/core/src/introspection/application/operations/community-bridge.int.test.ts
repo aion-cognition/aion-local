@@ -7,10 +7,10 @@ import type { Config } from '../../../infrastructure/config/schema.js';
 import { forgetNode, writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
 import { fetchAdjacency } from '../../../infrastructure/graph/adjacency.js';
 import { COMMUNITY_PROPERTY } from '../../../infrastructure/graph/community-queries.js';
-import { runRead } from '../../../infrastructure/graph/connection.js';
 import { upsertEdge } from '../../../infrastructure/graph/edges.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import { withCurrency } from '../../../infrastructure/graph/read-modes.js';
+import { nodeProperties } from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
   bridgeEndpoints,
   standingBridges,
@@ -173,13 +173,7 @@ async function seedCluster(ids: readonly string[], axis: number, other: number):
 }
 
 async function communityOf(id: string): Promise<number | undefined> {
-  const rows = await runRead(
-    harness.driver,
-    `MATCH (n:AionNode { id: $id }) RETURN n.${COMMUNITY_PROPERTY} AS community`,
-    { id },
-    (row) => row['community'],
-  );
-  const value = rows[0];
+  const value = (await nodeProperties(harness.driver, id))[COMMUNITY_PROPERTY];
   return typeof value === 'number' ? value : undefined;
 }
 

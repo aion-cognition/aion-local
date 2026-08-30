@@ -29,7 +29,7 @@ const NARRATIVE_DUPLICATE_SIGNALS = ['duplicate_narrative'];
 /**
  * Standing relevance, like `memory_decay`: neither pathology this operation repairs has a
  * live gauge in the snapshot (the graph collector's `staleNarratives` counts a different
- * thing — the grounding-revision backlog this operation does not touch), so it reaches the
+ * thing, the grounding-revision backlog this operation does not touch), so it reaches the
  * urgency threshold on waiting time, the same "scheduled cadence" memory_decay documents.
  * Wiring it to `staleNarratives` anyway would make the engine expect a count this operation
  * cannot move, and score every run against a metric it never had a hand in.

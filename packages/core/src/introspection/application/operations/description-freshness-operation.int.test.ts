@@ -15,6 +15,10 @@ import {
 import { linkEntityMentions, mergeEntities } from '../../../infrastructure/graph/entity-queries.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import {
+  nodeProperties,
+  storedEntity,
+} from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
+import {
   startNeo4jHarness,
   stopNeo4jHarness,
   type Neo4jHarness,
@@ -134,21 +138,15 @@ describe('descriptionFreshnessOperation against a live graph', () => {
     const prompt = calls[0]!.messages.map((message) => message.content).join('\n');
     expect(prompt).toContain(ORIGINAL_DESCRIPTION);
 
-    const rows = await harness.driver.executeQuery(
-      `MATCH (e:Entity { id: $id }) RETURN e.text AS text, e.${PRIOR_DESCRIPTIONS_PROPERTY} AS prior,` +
-        ` e.${DESCRIPTION_MENTION_COUNT_PROPERTY} AS baseline,` +
-        ` e.${DESCRIPTION_REFRESH_METHOD_PROPERTY} AS method,` +
-        ` e.${DESCRIPTION_REFRESHED_AT_PROPERTY} IS NOT NULL AS refreshedAt,` +
-        ' size(e.content_vec) AS vectorSize',
-      { id: entityId },
-    );
-    const row = rows.records[0]!.toObject();
-    expect(row.text).toBe(REFRESHED_DESCRIPTION);
-    expect(row.prior).toEqual([ORIGINAL_DESCRIPTION]);
-    expect(Number(row.baseline)).toBe(MENTION_COUNT);
-    expect(row.method).toBe(DESCRIPTION_REFRESH_METHOD);
-    expect(row.refreshedAt).toBe(true);
-    expect(Number(row.vectorSize)).toBe(EMBED_DIMENSION);
+    const entity = await storedEntity(harness.driver, entityId);
+    expect(entity?.text).toBe(REFRESHED_DESCRIPTION);
+    expect(entity?.contentVectorLength).toBe(EMBED_DIMENSION);
+
+    const props = await nodeProperties(harness.driver, entityId);
+    expect(props[PRIOR_DESCRIPTIONS_PROPERTY]).toEqual([ORIGINAL_DESCRIPTION]);
+    expect(Number(props[DESCRIPTION_MENTION_COUNT_PROPERTY])).toBe(MENTION_COUNT);
+    expect(props[DESCRIPTION_REFRESH_METHOD_PROPERTY]).toBe(DESCRIPTION_REFRESH_METHOD);
+    expect(props[DESCRIPTION_REFRESHED_AT_PROPERTY]).toBeDefined();
   }, 120_000);
 
   it('leaves the freshly refreshed entity alone on the next run', async () => {

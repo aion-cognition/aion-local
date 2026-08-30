@@ -24,7 +24,7 @@ const commands: Record<string, Command> = {
     run: (argv) => runInit(argv),
   },
   status: {
-    summary: 'services, models, and graph counts',
+    summary: 'services, models, routing, and graph counts',
     run: (argv) => runStatus(argv),
   },
   doctor: {

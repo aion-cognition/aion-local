@@ -375,8 +375,8 @@ export async function handleRecall(
   // the token budget was never served, and crediting its method would inflate exactly the
   // claim this counter exists to keep honest.
   recordPackMethodCounts(deps.db, packMethods(pack));
-  // Cadence's raw material (PRD §3.4): calls per session and the empty-pack rate, from a
-  // lifetime total rather than the degraded-rate window above, which trims to the last 500.
+  // Cadence's raw material: calls per session and the empty-pack rate, from a lifetime
+  // total rather than the degraded-rate window above, which trims to the last 500.
   recordRecallOutcome(deps.db, {
     empty: fusion.value.items.length === 0 && resonance.value.items.length === 0,
   });

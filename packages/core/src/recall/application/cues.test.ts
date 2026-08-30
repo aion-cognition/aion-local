@@ -195,7 +195,7 @@ describe('degradation ladder', () => {
     expect(CueSchema.parse(result.cues[0])).toEqual(result.cues[0]);
   });
 
-  it('carries the caller-supplied summary through the ladder at its 2x weight', async () => {
+  it('carries the caller-supplied summary through the ladder at its damped 1x weight', async () => {
     generate.mockRejectedValue(new Error('ollama unreachable'));
 
     const result = await extractCues(deps, {

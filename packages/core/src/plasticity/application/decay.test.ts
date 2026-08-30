@@ -18,7 +18,7 @@ describe('decay knobs match the shipped configuration', () => {
     expect(DEFAULT_HEBBIAN_DECAY_SIGMA).toBe(DEFAULTS.hebbian.decaySigma);
   });
 
-  it('follows the whitepaper constants for the decay rate, peak, and sigma', () => {
+  it('pins the decay rate, peak, and sigma to their calibrated values', () => {
     expect(DEFAULT_HEBBIAN_DECAY_RATE).toBe(0.05);
     expect(DEFAULT_HEBBIAN_DECAY_PEAK_DAYS).toBe(30);
     expect(DEFAULT_HEBBIAN_DECAY_SIGMA).toBe(15);

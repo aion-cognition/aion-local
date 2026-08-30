@@ -9,7 +9,8 @@ import type { NodeLabel } from './labels.js';
 import { toGraphVector, type GraphProperties } from './values.js';
 
 /**
- * Whitepaper §6.7's nine cognitive types. This module is their only writer.
+ * The nine cognitive node types the reflection pipeline extracts. This module is their
+ * only writer.
  */
 export const COGNITIVE_NODE_LABELS = [
   'Goal',
@@ -39,7 +40,7 @@ export function normalizeCognitiveText(text: string): string {
 
 /**
  * Node identity: (source episode, cognitive type, normalized text). A deterministic id
- * folded from the three is the whole idempotency mechanism — `writeStampedNode`'s `(label,
+ * folded from the three is the whole idempotency mechanism: `writeStampedNode`'s `(label,
  * id)` MERGE matches the same id on a re-run instead of creating a duplicate, so extracting
  * the same node from the same episode twice is a no-op. This trades the usual
  * random-id-plus-lookup-query pattern (`episodes.ts`'s content hash) for one with no read
@@ -59,7 +60,7 @@ export function deriveCognitiveNodeId(
 }
 
 /**
- * Section 6.7's "keep it modest": only the fields called out per type. Everything else rides
+ * Kept modest on purpose: only the fields called out per type. Everything else rides
  * on `text` alone. A field left undefined here is dropped before the write, never stored as
  * null (`values.ts`'s `toGraphParameters`).
  */
