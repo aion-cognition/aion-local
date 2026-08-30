@@ -23,7 +23,7 @@ import { claudeSettingsPath, hookScriptPath, resolveHostRepo, type HostRepo } fr
 function unknownHooksOption(option: string): CliUsageError {
   return new CliUsageError(
     `unknown option '${option}' for hooks ` +
-      '(supported: --profile full|lite, --with-research-capture, --stop-mode push|instruct)',
+      '(supported: --profile full|lite, --no-research-capture, --stop-mode push|instruct)',
   );
 }
 
@@ -42,7 +42,7 @@ export type HooksFlags = {
 
 export const DEFAULT_HOOKS_FLAGS: HooksFlags = {
   profile: 'full',
-  withResearchCapture: false,
+  withResearchCapture: true,
   stopMode: 'push',
 };
 
@@ -54,6 +54,10 @@ export function parseHooksFlags(argv: readonly string[]): HooksFlags {
     const value = argv[index + 1];
     if (arg === '--with-research-capture') {
       withResearchCapture = true;
+      continue;
+    }
+    if (arg === '--no-research-capture') {
+      withResearchCapture = false;
       continue;
     }
     if (arg === '--profile' && (value === 'full' || value === 'lite')) {
@@ -226,7 +230,7 @@ function usage(): string {
     '                               start and session end only',
     '  --stop-mode push|instruct    push stores the turn directly; instruct asks the model to',
     '                               store it and blocks the stop until it does',
-    '  --with-research-capture      also capture Slack, Linear, and Notion tool results',
+    '  --no-research-capture        skip the Slack, Linear, and Notion tool-result capture',
     '',
   ].join('\n');
 }

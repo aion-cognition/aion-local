@@ -50,7 +50,7 @@ failing or duplicating work.
 `aion hooks install | uninstall | status` does the hook half on its own. Every hook fails open:
 a service that is down or a payload it cannot read exits 0 and the turn proceeds.
 See [docs/harness.md](docs/harness.md) for what each hook does, the push-and-instruct trade at
-Stop, the PHI caveat on research capture, and the settings JSON for a manual install.
+Stop, the research-capture caution, and the settings JSON for a manual install.
 
 ## Tools
 
