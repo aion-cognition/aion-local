@@ -271,6 +271,7 @@ export type {
 export {
   findClaimSubjects,
   findSubjectSiblings,
+  siblingCloses,
   SUBJECT_PROPAGATION_METHOD,
   supersedeSubjectFamily,
 } from './graph/subject-family.js';

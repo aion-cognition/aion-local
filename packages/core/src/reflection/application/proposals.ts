@@ -49,6 +49,12 @@ export const DEFAULT_APPLY_SCOPE: ApplyScope = 'family';
 export type ApplyProposalInput = {
   readonly id: string;
   readonly scope?: ApplyScope;
+  /**
+   * How close a sibling has to be to the judged claim before a family apply closes it too.
+   * Required rather than defaulted: over-closing takes true claims out of every future answer,
+   * and a caller that has not said where the line sits has not thought about it.
+   */
+  readonly relatednessFloor: number;
   readonly now?: Date;
 };
 
@@ -60,6 +66,8 @@ export type ApplyProposalResult = {
   readonly supersededBy: string;
   /** The siblings a family apply took, with the subject each of them named. */
   readonly siblings: readonly SubjectSibling[];
+  /** Siblings that named the same subject and were left open, because the correction is not about them. */
+  readonly heldSiblings: readonly SubjectSibling[];
   /** The subject names the family matched on; empty means nothing widened the close. */
   readonly subjects: readonly string[];
   /**
@@ -119,6 +127,7 @@ async function applyEpisode(
     closedIds: [sourceId, ...applied.propagation.closedIds],
     supersededBy: proposal.episodeId,
     siblings: [],
+    heldSiblings: [],
     subjects: [],
     retiredGlosses: [],
     openGlosses: [],
@@ -139,7 +148,7 @@ export async function applySupersessionProposal(
   const now = input.now ?? new Date();
   const scope = input.scope ?? DEFAULT_APPLY_SCOPE;
 
-  const applied = await applyScope(driver, proposal, scope, now);
+  const applied = await applyScope(driver, proposal, scope, now, input.relatednessFloor);
   resolveSupersessionProposal(db, proposal.id, now.toISOString());
   return { proposal, scope, ...applied };
 }
@@ -149,6 +158,7 @@ async function applyScope(
   proposal: SupersessionProposal,
   scope: ApplyScope,
   now: Date,
+  relatednessFloor: number,
 ): Promise<Omit<ApplyProposalResult, 'proposal' | 'scope'>> {
   if (scope === 'episode') {
     return applyEpisode(driver, proposal, now);
@@ -166,6 +176,7 @@ async function applyScope(
       closedIds: [proposal.oldId],
       supersededBy: proposal.newId,
       siblings: [],
+      heldSiblings: [],
       subjects: [],
       retiredGlosses: [],
       openGlosses: [],
@@ -175,6 +186,7 @@ async function applyScope(
   const family = await supersedeSubjectFamily(driver, {
     claimId: proposal.oldId,
     newId: proposal.newId,
+    relatednessFloor,
     now,
     signals: PROPOSAL_APPLY_SIGNALS,
     provenance: [PROPOSAL_APPLY_METHOD],
@@ -183,6 +195,7 @@ async function applyScope(
     closedIds: family.closedIds,
     supersededBy: proposal.newId,
     siblings: family.siblings,
+    heldSiblings: family.heldSiblings,
     subjects: family.subjects,
     retiredGlosses: family.retiredGlosses,
     openGlosses: family.openGlosses,

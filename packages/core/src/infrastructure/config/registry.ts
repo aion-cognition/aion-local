@@ -214,6 +214,11 @@ export const KNOB_REGISTRY: readonly Knob[] = [
     kind: 'number',
   },
   {
+    envVar: 'AION_REFLECTION_SUPERSEDE_FAMILY_RELATEDNESS_FLOOR',
+    path: ['reflection', 'supersedeFamilyRelatednessFloor'],
+    kind: 'number',
+  },
+  {
     envVar: 'AION_REFLECTION_SUPERSEDE_TIMEOUT_MS',
     path: ['reflection', 'supersedeTimeoutMs'],
     kind: 'number',
