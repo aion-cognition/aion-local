@@ -639,9 +639,10 @@ working through 200 and 20 at a time.
 ## P5 review: what the fix pass found and changed
 
 The review's central finding was one shape wearing eight faces: the loop had a way to preempt
-and no way to stop preempting, and everything downstream of that starved. Seven of the twelve
-registered operations had never been selected. The fixes below are ordered by how much of that
-they account for.
+and no way to stop preempting, and everything downstream of that starved. `aion stats` before
+the pass: `orphan_cleanup runs 7`, two operations reading `never selected`, and every other one
+at `runs 1` from two hours earlier. The fixes below are ordered by how much of that they
+account for.
 
 **Tier 1 was a property of the operation and is now a property of the cycle.** `orphan_cleanup`
 shipped as `tier: 1`, and `decide` selected any tier-1 candidate with relevance above zero
