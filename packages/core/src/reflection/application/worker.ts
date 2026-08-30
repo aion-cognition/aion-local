@@ -370,7 +370,10 @@ export class ReflectionWorker {
     if (run.applied && run.status === 'completed') {
       recordEnrichmentLagMs(this.#deps.db, Date.now() - Date.parse(job.enqueuedAt));
     }
-    this.#deps.logger.info(
+    // Debug, not info: the orchestrator's own 'reflection enriched' line lands a millisecond
+    // earlier with the same episode, status, and counts, plus the session and the per-stage
+    // record. The queue's job id is all this line adds, so at info level it was a duplicate.
+    this.#deps.logger.debug(
       {
         jobId: job.id,
         episodeId,

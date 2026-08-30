@@ -215,8 +215,8 @@ container, export it first:
 export AION_OLLAMA_URL=http://127.0.0.1:11434
 ```
 
-Every runtime knob is an `AION_*` environment variable, cataloged in
-`packages/core/src/infrastructure/config/registry.ts` with typed defaults in `defaults.ts`.
+Every runtime knob is an `AION_*` environment variable, declared in
+`packages/core/src/infrastructure/config/knobs.ts` with its type and its default.
 A few examples:
 
 - `AION_NEO4J_URI`: Bolt endpoint (`bolt://neo4j:7687` by default)

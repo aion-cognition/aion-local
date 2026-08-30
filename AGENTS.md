@@ -12,6 +12,13 @@ Conventions and commands for agents working in this repo.
 - Files stay under 500 lines. Lint enforces it (`max-lines`), off for tests and fixtures,
   where it stays a review-time rule.
 - No factory functions.
+- A knob is declared once: one row in `packages/core/src/infrastructure/config/knobs.ts`, as
+  `leaf: [envVar, zod schema, default]` under its group. The schema tree, the defaults, and the
+  AION_* registry are folded out of that table, so nothing else needs an edit. The schema
+  carries the real validation (enum, range, refinement), and the decoder that reads the env
+  string follows from the type of the default; a var that feeds a whole subtree names its
+  decoder as a fourth element. Recapture `config-surface.json` when a knob is added, renamed,
+  or retuned, and the diff is the review.
 - Comments state the why or a constraint in plain register: simple tenses, no em-dashes.
   Never cite the whitepaper, the PRD, plans, phases, findings, reviews, or the build
   process; inline the reason itself. No plan or task IDs, no self-referential narration.
@@ -39,7 +46,8 @@ Conventions and commands for agents working in this repo.
 packages/protocol/src/                  Zod wire schemas for recall and reflection
 packages/core/src/
   index.ts                              package entrypoint
-  infrastructure/config/                config schema, defaults, the AION_* registry, loader
+  infrastructure/config/                knobs.ts declares every knob; schema, defaults, and the
+                                        AION_* registry derive from it; loader
   infrastructure/graph/                 every Cypher statement in the workspace
   infrastructure/logging/               pino wrapper
   infrastructure/providers/             Ollama client, circuit breaker, provisioning
@@ -109,6 +117,11 @@ every command). Use it to exercise the actual binary, not as a test runner.
   everything else in that list is a review-time rule.
   A grep guard modeled on this one would be the cheap way to enforce Cypher confinement to
   `infrastructure/graph/`, if that becomes worth codifying.
+- `packages/core/src/infrastructure/config/config-surface.test.ts`: compares the live config
+  surface against the committed `config-surface.json`, knob by knob. It covers the default
+  tree, every env var with its path and kind, and the verdict the loader and the schema return
+  for a fixed probe set, so a change to how the surface is produced is green only if it
+  produces the same surface. A failure with no knob change means the derivation drifted.
 
 ## The gate definition
 

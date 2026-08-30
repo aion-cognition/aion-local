@@ -1,4 +1,5 @@
 import { CircuitBreaker } from './circuit-breaker.js';
+import { summarizeErrorBody } from './errors.js';
 import type { ChatMessage, GenerationBackend, JsonSchema, StructuredRequest } from './types.js';
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
@@ -37,7 +38,9 @@ export class AnthropicRequestError extends Error {
   readonly status: number;
 
   constructor(status: number, body: string) {
-    super(`Anthropic generate request failed: ${String(status)} ${body}`);
+    // Capped and flattened, never carried whole: this message reaches the logs through every
+    // `{ err }` call site, so a body that echoes the request would leak the episode text.
+    super(`Anthropic generate request failed: ${String(status)} ${summarizeErrorBody(body)}`);
     this.name = 'AnthropicRequestError';
     this.status = status;
   }
