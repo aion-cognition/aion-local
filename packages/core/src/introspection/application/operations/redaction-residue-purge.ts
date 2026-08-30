@@ -4,6 +4,10 @@ import {
   writeRedactedProperties,
   type RedactedPropertyUpdate,
 } from '../../../infrastructure/graph/redaction-residue-writes.js';
+import {
+  FINGERPRINT_PATTERN,
+  withoutFingerprints,
+} from '../../../redaction/fingerprint.js';
 import { redact } from '../../../redaction/redact.js';
 import { DEFAULT_RESIDUE_SCAN_LIMIT } from '../../../redaction/residue.js';
 import type { HealthSnapshot } from '../../domain/health.js';
@@ -11,31 +15,12 @@ import type { IntrospectionOperation, OperationContext, OperationOutcome } from 
 
 export const REDACTION_RESIDUE_PURGE_OPERATION = 'redaction_residue_purge';
 
-/** What `buildFingerprint` writes: `⟨secret:<rule-id>:<6 hex chars>⟩`. */
-const FINGERPRINT_PATTERN = /⟨secret:[a-z0-9-]+:[0-9a-f]{6}⟩/g;
-
 /**
- * What a fingerprint stands in as while the detector looks, and not the empty string. Removing
- * the token outright closes the gap between `api_key:` and whatever the next line names, and
- * the generic assignment rule then reads the next line's field name as this line's value: a
- * fresh match over text that holds no secret at all. `redacted` is the one placeholder that
- * rule's own lookahead exempts, so a fingerprint reads as what it is.
- */
-const FINGERPRINT_PLACEHOLDER = 'redacted';
-
-/**
- * `redact()` has no way to know a span is its own earlier output: the fingerprint token
- * embeds the rule id after a colon, which is exactly the `key: value` shape
- * `generic-secret-assignment` matches on. Scanning already-clean text finds that match again
- * and nests a fresh fingerprint inside the last one, forever. Stripping known fingerprint
- * tokens before checking is what tells a genuine new leak apart from the detector echoing
- * its own earlier fix back.
+ * The same test `scanRedactionResidue` runs, so the count that selects this operation and the
+ * check that decides which nodes it rewrites cannot drift apart.
  */
 function stillLeaking(text: string, entropyThreshold: number): boolean {
-  return (
-    redact(text.replace(FINGERPRINT_PATTERN, FINGERPRINT_PLACEHOLDER), entropyThreshold).matches
-      .length > 0
-  );
+  return redact(withoutFingerprints(text), entropyThreshold).matches.length > 0;
 }
 
 /**

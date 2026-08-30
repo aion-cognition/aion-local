@@ -7,7 +7,12 @@ export { redactPayload } from './deep-walk.js';
 export type { DeepRedactionResult } from './deep-walk.js';
 export { HIGH_ENTROPY_RULE_ID, REDACTION_RULES, REDACTION_RULE_IDS } from './rules.js';
 export type { RedactionRule } from './rules.js';
-export { buildFingerprint } from './fingerprint.js';
+export {
+  FINGERPRINT_PATTERN,
+  FINGERPRINT_PLACEHOLDER,
+  buildFingerprint,
+  withoutFingerprints,
+} from './fingerprint.js';
 export { findHighEntropyTokens, shannonEntropy } from './entropy.js';
 export type { TextSpan } from './entropy.js';
 
