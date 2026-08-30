@@ -82,6 +82,11 @@ Run through `./bin/aion <command>`, which builds the image when sources are newe
 and then runs the command in the `aion-cli` container. `aion <command> --help` prints each
 command's flags.
 
+To run `aion` from anywhere, `npm link` once from the clone (needs Node and npm). That puts
+`aion` on your PATH as a symlink back to this working tree, so it always runs your current
+checkout. `npm unlink -g aion-local` removes it. A copying install (`npm install -g .`)
+does not work and says so: the CLI orchestrates the repo it lives in.
+
 - `init`: provision the substrate (neo4j, models, schema, backbone)
 - `hooks`: install, remove, or inspect the Claude Code harness hooks
 - `status`: services, models, routing, and graph counts
