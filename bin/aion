@@ -3,7 +3,18 @@
 # aion-cli container, which is itself the orchestrator of the compose services.
 set -eo pipefail
 
-REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+# The wrapper may be reached through a PATH symlink (`aion link` installs one), so the
+# repo is found by resolving the symlink chain first; dirname of the symlink itself
+# would point at the bin directory the link lives in, not at this repo.
+SELF="${BASH_SOURCE[0]}"
+while [ -L "$SELF" ]; do
+  TARGET="$(readlink "$SELF")"
+  case "$TARGET" in
+    /*) SELF="$TARGET" ;;
+    *) SELF="$(dirname -- "$SELF")/$TARGET" ;;
+  esac
+done
+REPO_DIR="$(cd -- "$(dirname -- "$SELF")/.." && pwd)"
 COMPOSE_FILE="$REPO_DIR/compose.yaml"
 IMAGE="aion-local:latest"
 
@@ -46,6 +57,15 @@ needs_build() {
   [ -n "$source" ] || return 1
   [ "$source" -gt "$built" ]
 }
+
+# A global install is `npm link` from the clone, which is a symlink chain back to this
+# working tree. A copying install (`npm install -g .`) lands in global node_modules with
+# no repo around it; refuse that early with the fix, instead of failing inside compose.
+if [ ! -f "$COMPOSE_FILE" ]; then
+  echo "aion: no compose.yaml next to this script; it is running from a copied install." >&2
+  echo "aion: run \`npm link\` from the aion-local clone instead of \`npm install -g\`." >&2
+  exit 1
+fi
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   echo "aion: building $IMAGE (first run)" >&2
