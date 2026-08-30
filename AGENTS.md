@@ -66,7 +66,8 @@ packages/core/src/
   session/                              identity-to-session-id resolution
 packages/mcp/src/                       MCP server: tool definitions, HTTP transport
 packages/cli/src/                       aion command: init, status, doctor, stats, last, why,
-                                        search, forget, queue, proposals, maintain, unmerge
+                                        search, forget, unsupersede, queue, proposals, maintain,
+                                        unmerge
 bin/aion                                host wrapper: rebuilds the image, runs the CLI container
 ```
 
@@ -160,8 +161,8 @@ npx vitest run --project integration --reporter=verbose re-exercise-gate-write  
 passing test's `console.log` nowhere, and every battery reports its measurement that way.
 
 Batteries: 1 unrelated queries come back thin or empty; 2 the paired on-topic set still hits;
-3 an applied correction changes the answer; 4 the six-case contradiction set closes nothing in
-propose mode; 5 narratives stay grounded in their session's own nodes; 6 the leaked-shape
+3 an applied correction changes the answer; 4 the six-case contradiction set closes nothing on one
+judgment alone; 5 narratives stay grounded in their session's own nodes; 6 the leaked-shape
 corpus reaches no stored node; 7 a live turn enriches ahead of a bulk flood. Battery fixtures
 are shared with the workstream that owns each area (`floors.fixtures.ts`,
 `leaked-shapes.fixture.ts`) rather than copied.
@@ -207,3 +208,11 @@ precision figure came from a live-stack exercise run on
 the local judge, not from this file, so re-measuring it means running the file with
 `TEST_AION_GENERATION=local`. The file's own assertions (propose not close, which rows land)
 hold on either model and are not what that figure describes.
+
+`gate/supersession-precision.int.test.ts` is what sets the shipped `AION_SUPERSEDE_MODE`.
+It scores the single-pass and the two-pass judge over the same 24 pairs and asserts the
+shipped default matches its own measurement against a bar written before the numbers: at or
+above 0.9 precision and 0.9 recall ships `unanimous`, under either bar ships `propose`. A
+failure there means the judge moved, and the fix is to change the default rather than the
+assertion. It also prints a separate RETRO line scoring the two-pass judge against proposals
+a person already ruled on, which is a hindsight figure and never mixed into the first.

@@ -29,7 +29,8 @@ describe('withCurrency', () => {
       "CASE WHEN n.valid_until IS NULL OR n.valid_until > $rm_reference THEN 'current' ELSE 'superseded' END",
     );
     expect(fragment.lineage).toBe(
-      'head([ (rm_sup)-[rm_sup_rel:SUPERSEDES]->(n) | { id: rm_sup.id, at: rm_sup_rel.created_at } ])',
+      'head([ (rm_sup)-[rm_sup_rel:SUPERSEDES]->(n) WHERE rm_sup_rel.tx_until IS NULL' +
+        ' | { id: rm_sup.id, at: rm_sup_rel.created_at } ])',
     );
     expect(fragment.projection).toBe(
       `${fragment.currency} AS currency, ${fragment.lineage} AS superseded_by`,
@@ -52,8 +53,14 @@ describe('asOf', () => {
     expect(fromGraphDateTime(fragment.parameters.rm_reference)).toEqual(VALID_AT);
   });
 
-  it('keeps the whole lineage, since a later supersession is world knowledge', () => {
-    expect(readModeFragment(asOf(VALID_AT), 'n').lineage).not.toContain('WHERE');
+  /**
+   * A world-time slice pins world time only, so the lineage question is still answered from
+   * now: a supersession the substrate has since reopened is one it no longer holds.
+   */
+  it('keeps every supersession the substrate still holds, whenever it was recorded', () => {
+    const { lineage } = readModeFragment(asOf(VALID_AT), 'n');
+    expect(lineage).toContain('WHERE rm_sup_rel.tx_until IS NULL');
+    expect(lineage).not.toContain('created_at <=');
   });
 });
 
@@ -71,9 +78,12 @@ describe('knewAt', () => {
     expect(fromGraphDateTime(fragment.parameters.rm_reference)).toEqual(KNOWN_AT);
   });
 
-  it('reports only the lineage the substrate had recorded by then', () => {
+  it('reports only the lineage the substrate had recorded by then, and still held then', () => {
     const fragment = readModeFragment(knewAt(KNOWN_AT), 'n');
     expect(fragment.lineage).toContain('WHERE rm_sup_rel.created_at <= $rm_known_at');
+    expect(fragment.lineage).toContain(
+      'AND (rm_sup_rel.tx_until IS NULL OR rm_sup_rel.tx_until > $rm_known_at)',
+    );
   });
 });
 

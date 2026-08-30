@@ -253,13 +253,26 @@ export const KNOBS = {
     associationSimilarLimit: ['AION_REFLECTION_ASSOCIATION_SIMILAR_LIMIT', positiveInt, 5],
     maxCognitiveNodes: ['AION_REFLECTION_MAX_COGNITIVE_NODES', positiveInt, 20],
     maxRelationships: ['AION_REFLECTION_MAX_RELATIONSHIPS', positiveInt, 40],
-    /**
-     * `propose` writes every detection to `supersession_proposals` and never closes a node;
-     * `auto` restores the confidence split. Auto returns only once the quality harness measures
-     * precision on the contradiction battery, so the default is the safe one.
-     */
-    supersedeMode: ['AION_SUPERSEDE_MODE', z.enum(['propose', 'auto']), 'propose'],
-    /** The auto path's threshold only. In `propose` mode nothing reads it. */
+    // `propose` writes every detection to `supersession_proposals` and closes nothing, which
+    // makes it the kill switch. `unanimous` sends every affirmative judgment to a second model
+    // call that argues the other side on the same evidence, and closes only what both passes
+    // affirm. `auto` is the confidence gate both predate, still valid and superseded by
+    // `unanimous`: the judge answers 0.95 to every affirmative, so its threshold is a
+    // pass-through or a wall and never a discriminator.
+    //
+    // The default is set by measurement rather than by hand. The rule was pre-registered:
+    // two-pass precision at or above 0.9 and recall at or above 0.9 on the 24-case battery
+    // ships `unanimous`, anything less ships `propose`, and `supersession-precision.int.test.ts`
+    // asserts the shipped value still matches what it measures, in both directions.
+    //
+    // Measured 2026-08-30 against claude-haiku-4-5, 24 pairs: two-pass TP 12, FP 0, FN 0,
+    // TN 12, precision 1.000, recall 1.000. The second pass saw 14 affirmatives and vetoed 2,
+    // both on survival, both the false positives the single pass emitted (precision 0.857 on
+    // the same run). The reviewer's prompt was written against those two shapes before the
+    // measurement, which is a real risk of fitting the instrument: the number to watch is
+    // whether it holds on pairs this set does not contain.
+    supersedeMode: ['AION_SUPERSEDE_MODE', z.enum(['propose', 'auto', 'unanimous']), 'unanimous'],
+    /** The `auto` path's threshold only. No other mode reads it. */
     supersedeAutoConfidence: ['AION_SUPERSEDE_AUTO_CONFIDENCE', proportion, 0.85],
     supersedeNeighborThreshold: ['AION_REFLECTION_SUPERSEDE_NEIGHBOR_THRESHOLD', proportion, 0.75],
     // How close a sibling claim has to be to the judged one before a family apply closes it too.

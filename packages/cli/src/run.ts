@@ -10,6 +10,7 @@ import { runSearch } from './search.js';
 import { runStats } from './stats.js';
 import { runStatus } from './status.js';
 import { runUnmerge } from './unmerge.js';
+import { runUnsupersede } from './unsupersede.js';
 import { runWhy } from './why.js';
 
 export const CLI_NAME = 'aion';
@@ -71,6 +72,10 @@ const commands: Record<string, Command> = {
   forget: {
     summary: 'bitemporal close of a node by id or query: nothing is deleted',
     run: (argv) => runForget(argv),
+  },
+  unsupersede: {
+    summary: 'reopen a claim a supersession closed, whatever made the close',
+    run: (argv) => runUnsupersede(argv),
   },
   help: {
     summary: 'show this message',

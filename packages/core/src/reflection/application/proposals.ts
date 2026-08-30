@@ -19,20 +19,42 @@ import {
 } from '../../infrastructure/sqlite/supersession-proposals.js';
 
 /**
- * The review half of propose-only supersession. Auto-apply is off because the judge answers
- * with one confidence for every firing, so every judgment is a row a person decides on, and a
- * decision needs somewhere to be made. Without this the proposal table is write-only and a
+ * Where a judged contradiction is applied. `aion proposals apply` is the human end of it, and
+ * the confidence the judge attaches is worth nothing on its own, so a person decides every row
+ * the pipeline does not close itself. Without this the proposal table is write-only and a
  * correction can never change what recall answers, which is the user-visible failure the whole
  * posture was meant to fix rather than entrench.
  *
- * Nothing in the pipeline calls any of this. It is reached from `aion proposals` and nowhere
- * else, which is what keeps "a person decided" true.
+ * The supersession stage reaches the same call under `AION_SUPERSEDE_MODE=unanimous`, which is
+ * what `attribution` exists for: one apply path, two provenances, so lineage says which closes
+ * a person made and which the two-pass judge made on its own.
  */
 
 /** Provenance for a human review, distinct from a judged contradiction and from a replay. */
 export const PROPOSAL_APPLY_METHOD = 'supersession_proposal_applied';
 
 const PROPOSAL_APPLY_SIGNALS = ['proposal_review'];
+
+/**
+ * Provenance for a close the two-pass judge made on its own, and the reason this path takes an
+ * override at all. Lineage has to say which closes a person decided and which the machine did,
+ * and a name that reads like a review would make an autonomous substrate indistinguishable
+ * from a reviewed one months later.
+ */
+export const UNANIMOUS_APPLY_METHOD = 'supersession_unanimous_auto';
+
+export const UNANIMOUS_APPLY_SIGNALS = ['two_pass_judge'];
+
+/** What a close stamps on the lineage edge. Defaults to the human review this path was built for. */
+export type ApplyAttribution = {
+  readonly provenance: readonly string[];
+  readonly signals: readonly string[];
+};
+
+const HUMAN_REVIEW: ApplyAttribution = {
+  provenance: [PROPOSAL_APPLY_METHOD],
+  signals: PROPOSAL_APPLY_SIGNALS,
+};
 
 /**
  * How wide a correction cuts.
@@ -58,6 +80,8 @@ export type ApplyProposalInput = {
    */
   readonly relatednessFloor: number;
   readonly now?: Date;
+  /** Who is closing this. Absent means a person did, which is what `aion proposals apply` means. */
+  readonly attribution?: ApplyAttribution;
 };
 
 export type ApplyProposalResult = {
@@ -118,6 +142,7 @@ async function applyEpisode(
   driver: Driver,
   proposal: SupersessionProposal,
   now: Date,
+  attribution: ApplyAttribution,
 ): Promise<Omit<ApplyProposalResult, 'proposal' | 'scope' | 'regroundedNarratives'>> {
   const sourceId = await findSourceEpisodeId(driver, proposal.oldId);
   if (sourceId === undefined) {
@@ -129,8 +154,8 @@ async function applyEpisode(
     oldId: sourceId,
     newId: proposal.episodeId,
     now,
-    signals: PROPOSAL_APPLY_SIGNALS,
-    provenance: [PROPOSAL_APPLY_METHOD],
+    signals: attribution.signals,
+    provenance: attribution.provenance,
   });
   return {
     closedIds: [sourceId, ...applied.propagation.closedIds],
@@ -157,7 +182,10 @@ export async function applySupersessionProposal(
   const now = input.now ?? new Date();
   const scope = input.scope ?? DEFAULT_APPLY_SCOPE;
 
-  const applied = await applyScope(driver, proposal, scope, now, input.relatednessFloor);
+  const applied = await applyScope(driver, proposal, scope, now, {
+    relatednessFloor: input.relatednessFloor,
+    attribution: input.attribution ?? HUMAN_REVIEW,
+  });
   // After the close, not inside it: the marker is a repair instruction rather than part of the
   // correction, and a narrative left unmarked costs a stale sentence, not a wrong close.
   const regroundedNarratives = await markNarrativesForRegrounding(driver, applied.closedIds);
@@ -165,15 +193,21 @@ export async function applySupersessionProposal(
   return { proposal, scope, ...applied, regroundedNarratives };
 }
 
+type ScopeInput = {
+  readonly relatednessFloor: number;
+  readonly attribution: ApplyAttribution;
+};
+
 async function applyScope(
   driver: Driver,
   proposal: SupersessionProposal,
   scope: ApplyScope,
   now: Date,
-  relatednessFloor: number,
+  input: ScopeInput,
 ): Promise<Omit<ApplyProposalResult, 'proposal' | 'scope' | 'regroundedNarratives'>> {
+  const { attribution } = input;
   if (scope === 'episode') {
-    return applyEpisode(driver, proposal, now);
+    return applyEpisode(driver, proposal, now, attribution);
   }
 
   if (scope === 'claim') {
@@ -181,8 +215,8 @@ async function applyScope(
       oldId: proposal.oldId,
       newId: proposal.newId,
       now,
-      signals: PROPOSAL_APPLY_SIGNALS,
-      provenance: [PROPOSAL_APPLY_METHOD],
+      signals: attribution.signals,
+      provenance: attribution.provenance,
     });
     return {
       closedIds: [proposal.oldId],
@@ -198,10 +232,10 @@ async function applyScope(
   const family = await supersedeSubjectFamily(driver, {
     claimId: proposal.oldId,
     newId: proposal.newId,
-    relatednessFloor,
+    relatednessFloor: input.relatednessFloor,
     now,
-    signals: PROPOSAL_APPLY_SIGNALS,
-    provenance: [PROPOSAL_APPLY_METHOD],
+    signals: attribution.signals,
+    provenance: attribution.provenance,
   });
   return {
     closedIds: family.closedIds,

@@ -5,6 +5,7 @@ import { TEXT_NORM_PROPERTY, type CognitiveNodeLabel } from './cognitive-queries
 import { runRead, type GraphStatement } from './connection.js';
 import { ENTITY_MENTION_TYPE } from './entity-queries.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
+import { BASE_NODE_LABEL } from './labels.js';
 import { readModeFragment, withCurrency } from './read-modes.js';
 import { ENTITY_NAME_NORM_PROPERTY } from './seed-queries.js';
 import { fromGraphVector, toGraphInteger, toGraphVector, type Row } from './values.js';
@@ -100,6 +101,37 @@ function mapEpisodeFactNode(row: Row): EpisodeFactNode | undefined {
     textNorm: (row.text_norm as string | null) ?? '',
     ...(contentVector === undefined ? {} : { contentVector }),
   };
+}
+
+/**
+ * Of these ids, the ones that no longer hold currency. The judgment path reads it just before
+ * it writes, because a judgment whose losing side lost currency in the meantime did not close
+ * anything and must not be scored as though it had: a family close taken earlier in the same
+ * run, or a person applying a neighbouring proposal, both leave a pair the judge still believes
+ * in with nothing left to take. Two-way outcome reporting cannot tell that apart from a real
+ * closure, and reports it as one.
+ *
+ * An id the graph does not know is reported as gone: nothing there holds currency either.
+ */
+const NODES_WITHOUT_CURRENCY = [
+  'UNWIND $ids AS wanted',
+  `OPTIONAL MATCH (n:${BASE_NODE_LABEL} { id: wanted })`,
+  `WHERE ${currentOnly('n')}`,
+  'WITH wanted, n',
+  'WHERE n IS NULL',
+  'RETURN wanted AS id',
+  'ORDER BY id',
+].join('\n');
+
+export async function findNodesWithoutCurrency(
+  driver: Driver,
+  ids: readonly string[],
+): Promise<string[]> {
+  const wanted = [...new Set(ids)];
+  if (wanted.length === 0) {
+    return [];
+  }
+  return runRead(driver, NODES_WITHOUT_CURRENCY, { ids: wanted }, (row) => row.id as string);
 }
 
 export type ContradictionCandidate = {

@@ -32,6 +32,51 @@ auto-supersession with an extra keystroke. Its default blade closes the judged c
 siblings of the same episode that name one of its subjects; `--claim-only` closes just the
 claim, and `--episode` closes everything that observation produced.
 
+What reaches this queue depends on `AION_SUPERSEDE_MODE`. Under the shipped `unanimous`, the
+pipeline closes what two independent judgments agree on and queues the rest, so a row here is
+one the second pass vetoed and the veto is its rationale. Under `propose` every judgment lands
+here and nothing closes on its own.
+
+## Supersession mode
+
+```
+AION_SUPERSEDE_MODE=unanimous    # the default: close on two agreeing judgments, queue the rest
+AION_SUPERSEDE_MODE=propose      # the kill switch: queue everything, close nothing
+AION_SUPERSEDE_MODE=auto         # the legacy confidence gate, superseded by unanimous
+```
+
+`unanimous` puts every affirmative contradiction judgment through a second model call that
+argues the other side. The second call never sees the first one's reasoning, leads with the
+presumption that both statements stay, and checks two things: whether the older claim is
+actually made false, and whether the newer one is a coherent claim at all. A closure needs both
+passes. A veto names which check failed and why, and that sentence is the proposal row's
+rationale. The close itself takes the same path and the same blade `aion proposals apply` does,
+and is stamped `supersession_unanimous_auto` so lineage never reads as though a person decided.
+
+The default is a measurement, not a preference. `supersession-precision.int.test.ts` scores both
+judges over 24 designed pairs and asserts the shipped default matches what it measures: at or
+above 0.9 precision and 0.9 recall the default is `unanimous`, under either bar it is `propose`,
+and the test fails loudly either way round. Measured 2026-08-30 on claude-haiku-4-5: two-pass
+precision 1.000 and recall 1.000, against 0.857 and 1.000 for the single pass.
+
+`auto` still works and is documented here only so a deployment that pinned it knows what it has.
+It gates on the judge's stated confidence, which came back 0.95 on every affirmative in the same
+run, so the threshold is a pass-through rather than a filter.
+
+## Reopening a correction
+
+```
+aion unsupersede <node_id> [--yes]
+```
+
+The undo for a close, whatever made it: a wrong judgment, a family cut too wide, or an
+autonomous close you disagree with. It previews what it would reopen and stops without `--yes`.
+
+Nothing is deleted. The `SUPERSEDES` edge is kept and closed in system time, and the claim gets
+its currency back, so `aion why` shows the close and the reopen both, and a `--knew-at` read
+pinned before the reopen still reports the supersession the substrate held then. A forgotten
+node stays forgotten: that is a separate act with its own command.
+
 ## Forcing maintenance
 
 ```

@@ -179,6 +179,26 @@ describe('renderProvenance', () => {
     expect(lines.join('\n')).toContain('superseded by  decision-old (Decision, Memory)');
   });
 
+  /**
+   * A reopened close is kept and stamped rather than removed, so the lineage block has to say
+   * the substrate stopped holding it. Otherwise the edge reads as a live supersession on a
+   * node the stamps above report as current.
+   */
+  it('says a supersession no longer holds once it was reopened', () => {
+    const { lines, write } = collector();
+    const reopened = EDGES.map((edge) =>
+      edge.type === 'SUPERSEDES'
+        ? { ...edge, reopenedAt: new Date('2026-06-06T09:00:00.000Z') }
+        : edge,
+    );
+
+    renderProvenance(CURRENT, reopened, [], [], write);
+
+    const text = lines.join('\n');
+    expect(text).toContain('superseded by  decision-old (Decision, Memory)');
+    expect(text).toContain('reopened 2026-06-06T09:00:00.000Z; this close no longer holds');
+  });
+
   it('renders open supersession and entity-merge proposals touching the node', () => {
     const { lines, write } = collector();
 

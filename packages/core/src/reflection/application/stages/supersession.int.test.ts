@@ -266,6 +266,7 @@ describe('SupersessionStage against a live graph', () => {
     const ctx = await contextFor(pair.nextEpisodeId, liveProvider(calls));
     const outcome = await new SupersessionStage({
       model: DEFAULTS.models.reflect,
+      mode: 'propose',
       maxNeighbors: 1,
     }).run(ctx);
 
@@ -300,6 +301,7 @@ describe('SupersessionStage against a live graph', () => {
     const ctx = await contextFor(pair.nextEpisodeId, liveProvider(calls));
     const outcome = await new SupersessionStage({
       model: DEFAULTS.models.reflect,
+      mode: 'propose',
       maxNeighbors: 1,
     }).run(ctx);
 
@@ -322,6 +324,7 @@ describe('SupersessionStage against a live graph', () => {
     const ctx = await contextFor(pair.nextEpisodeId, liveProvider(calls));
     const outcome = await new SupersessionStage({
       model: DEFAULTS.models.reflect,
+      mode: 'propose',
       maxNeighbors: 2,
       neighborThreshold: 0.4,
     }).run(ctx);
@@ -347,6 +350,7 @@ describe('SupersessionStage against a live graph', () => {
     const ctx = await contextFor(pair.nextEpisodeId, liveProvider(calls));
     const outcome = await new SupersessionStage({
       model: DEFAULTS.models.reflect,
+      mode: 'propose',
       maxNeighbors: 1,
     }).run(ctx);
 
@@ -354,7 +358,11 @@ describe('SupersessionStage against a live graph', () => {
     const prompt = calls[0]!.messages.map((message) => message.content).join('\n');
     expect(prompt).toContain('The reconciliation job ran for four hours during the July close.');
     expect(prompt).toContain('Both statements name: reconciliation job');
-    expect(outcome.counts).toEqual({ supersessions: 0, supersessionProposals: 0 });
+    expect(outcome.counts).toEqual({
+      supersessions: 0,
+      supersessionProposals: 0,
+      supersessionStaleTargets: 0,
+    });
     expect(listSupersessionProposals(db).some((row) => row.oldId === pair.priorId)).toBe(false);
   }, 180_000);
 
@@ -363,7 +371,7 @@ describe('SupersessionStage against a live graph', () => {
     const calls: StructuredRequest[] = [];
 
     const ctx = await contextFor(pair.nextEpisodeId, stubProvider(1, calls));
-    const outcome = await new SupersessionStage({ maxNeighbors: 1 }).run(ctx);
+    const outcome = await new SupersessionStage({ mode: 'propose', maxNeighbors: 1 }).run(ctx);
 
     expect(calls).toHaveLength(1);
     expect(outcome.counts?.supersessions).toBe(0);

@@ -68,7 +68,9 @@ describe('SupersessionStage candidate generation', () => {
     seedSubjectAndDistractor();
     bed.responses = [{ contradicts: true, confidence: 0.9, rationale: 'the limit changed' }];
 
-    const outcome = await new SupersessionStage({ maxNeighbors: 1 }).run(bed.context(EPISODE_ID));
+    const outcome = await new SupersessionStage({ mode: 'propose', maxNeighbors: 1 }).run(
+      bed.context(EPISODE_ID),
+    );
 
     expect(bed.requests).toHaveLength(1);
     const prompt = bed.prompts()[0]!;
@@ -83,7 +85,7 @@ describe('SupersessionStage candidate generation', () => {
     seedSubjectAndDistractor();
     bed.responses = [{ contradicts: true, confidence: 0.9 }];
 
-    await new SupersessionStage({ maxNeighbors: 1 }).run(bed.context(EPISODE_ID));
+    await new SupersessionStage({ mode: 'propose', maxNeighbors: 1 }).run(bed.context(EPISODE_ID));
 
     expect(bed.prompts()[0]).toContain('kind Concept');
     expect(bed.prompts()[0]).toContain('kind Decision');
@@ -93,7 +95,9 @@ describe('SupersessionStage candidate generation', () => {
     seedSubjectAndDistractor();
     bed.responses = [{ contradicts: true, confidence: 0.9 }];
 
-    const outcome = await new SupersessionStage({ maxNeighbors: 1 }).run(bed.context(EPISODE_ID));
+    const outcome = await new SupersessionStage({ mode: 'propose', maxNeighbors: 1 }).run(
+      bed.context(EPISODE_ID),
+    );
 
     expect(outcome.summary).toContain('1 by shared subject');
   });
@@ -117,7 +121,9 @@ describe('SupersessionStage candidate generation', () => {
     });
     bed.responses = [{ contradicts: true, confidence: 0.9 }];
 
-    const outcome = await new SupersessionStage({ maxNeighbors: 1 }).run(bed.context(EPISODE_ID));
+    const outcome = await new SupersessionStage({ mode: 'propose', maxNeighbors: 1 }).run(
+      bed.context(EPISODE_ID),
+    );
 
     expect(bed.requests).toHaveLength(1);
     expect(bed.prompts()[0]).toContain('Queue writes stay in the main Postgres transaction.');
@@ -149,10 +155,16 @@ describe('SupersessionStage candidate generation', () => {
       episodeId: 'episode-short-prior',
     });
 
-    const outcome = await new SupersessionStage({ maxNeighbors: 1 }).run(bed.context(EPISODE_ID));
+    const outcome = await new SupersessionStage({ mode: 'propose', maxNeighbors: 1 }).run(
+      bed.context(EPISODE_ID),
+    );
 
     expect(bed.requests).toHaveLength(0);
-    expect(outcome.counts).toEqual({ supersessions: 0, supersessionProposals: 0 });
+    expect(outcome.counts).toEqual({
+      supersessions: 0,
+      supersessionProposals: 0,
+      supersessionStaleTargets: 0,
+    });
   });
 });
 
@@ -268,11 +280,17 @@ describe('SupersessionStage contradiction battery', () => {
   });
 
   it('proposes the four genuine corrections and nothing for the two baits', async () => {
-    const outcome = await new SupersessionStage({ maxNeighbors: 1 }).run(bed.context(EPISODE_ID));
+    const outcome = await new SupersessionStage({ mode: 'propose', maxNeighbors: 1 }).run(
+      bed.context(EPISODE_ID),
+    );
 
     expect(outcome.status).toBe('ok');
     expect(bed.requests).toHaveLength(BATTERY.length);
-    expect(outcome.counts).toEqual({ supersessions: 0, supersessionProposals: 4 });
+    expect(outcome.counts).toEqual({
+      supersessions: 0,
+      supersessionProposals: 4,
+      supersessionStaleTargets: 0,
+    });
 
     const pairs = bed.proposals().map((row) => [row.oldId, row.newId]);
     expect(pairs.sort()).toEqual(
@@ -286,7 +304,7 @@ describe('SupersessionStage contradiction battery', () => {
   });
 
   it('closes nothing, whatever the judge answered', async () => {
-    await new SupersessionStage({ maxNeighbors: 1 }).run(bed.context(EPISODE_ID));
+    await new SupersessionStage({ mode: 'propose', maxNeighbors: 1 }).run(bed.context(EPISODE_ID));
 
     expect(bed.graph.closeStatements()).toEqual([]);
     expect(bed.supersedesEdges()).toEqual([]);
@@ -296,7 +314,9 @@ describe('SupersessionStage contradiction battery', () => {
   });
 
   it('reaches the different-subject bait through the widener, not the subject leg', async () => {
-    const outcome = await new SupersessionStage({ maxNeighbors: 1 }).run(bed.context(EPISODE_ID));
+    const outcome = await new SupersessionStage({ mode: 'propose', maxNeighbors: 1 }).run(
+      bed.context(EPISODE_ID),
+    );
 
     expect(outcome.summary).toContain('4 by shared subject');
     const baitPrompt = bed.prompts().find((prompt) => prompt.includes('duplicate captures'));
