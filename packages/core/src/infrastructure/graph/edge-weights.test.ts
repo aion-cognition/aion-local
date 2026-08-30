@@ -1,7 +1,11 @@
 import neo4j from 'neo4j-driver';
 import { describe, expect, it } from 'vitest';
 
-import { buildEdgeWeightDecay, buildEdgeWeightReinforcement } from './edge-weights.js';
+import {
+  buildDecayableEdgeCount,
+  buildEdgeWeightDecay,
+  buildEdgeWeightReinforcement,
+} from './edge-weights.js';
 import { GraphWriteError } from './errors.js';
 import { BASE_NODE_LABEL } from './labels.js';
 import { PROTECTED_RELATIONSHIP_TYPES } from './protected-relationships.js';
@@ -172,5 +176,30 @@ describe('bell curve edge weight decay', () => {
 
   it('rejects a non-positive sigma', () => {
     expect(() => buildEdgeWeightDecay({ ...DECAY_INPUT, sigma: 0 })).toThrow(GraphWriteError);
+  });
+});
+
+describe('decayable edge count', () => {
+  it('scans the same unprotected edges the decay sweep would, with no batch limit', () => {
+    const { cypher } = buildDecayableEdgeCount();
+    expect(cypher).toContain(`MATCH (a:${BASE_NODE_LABEL})-[r]->(b:${BASE_NODE_LABEL})`);
+    expect(cypher).toContain('WHERE NOT type(r) IN $protected');
+    expect(cypher).not.toContain('LIMIT');
+  });
+
+  it('excludes the same protected types by the same parameter', () => {
+    const { parameters } = buildDecayableEdgeCount();
+    expect(parameters.protected).toEqual([...PROTECTED_RELATIONSHIP_TYPES]);
+  });
+
+  it('skips an edge onto a forgotten node at either end', () => {
+    const { cypher } = buildDecayableEdgeCount();
+    expect(cypher).toContain('a.forgotten_at IS NULL');
+    expect(cypher).toContain('b.forgotten_at IS NULL');
+  });
+
+  it('returns one count rather than one row per edge', () => {
+    const { cypher } = buildDecayableEdgeCount();
+    expect(cypher).toContain('RETURN count(r) AS n');
   });
 });

@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CueSchema,
+  MEMORY_PACK_BUCKETS,
   MemoryPackItemSchema,
   MemoryPackSchema,
+  packBuckets,
   RationaleSchema,
 } from './recall-output.js';
 
@@ -245,5 +247,43 @@ describe('MemoryPackSchema invalid shapes', () => {
       currency: 'current',
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe('packBuckets', () => {
+  const item = {
+    id: 'x',
+    content: 'x',
+    rank: 1,
+    confidence: 1,
+    rationale: { method: 'vector' as const, score: 1 },
+    currency: 'current' as const,
+  };
+
+  it('fills every bucket on a pack that omitted all of them', () => {
+    const pack = MemoryPackSchema.parse({
+      rendered_text: 'No relevant memories found.',
+      metadata: baseMetadata,
+    });
+
+    const buckets = packBuckets(pack);
+
+    for (const bucket of MEMORY_PACK_BUCKETS) {
+      expect(buckets[bucket]).toEqual([]);
+    }
+  });
+
+  it('carries a present bucket through unchanged and leaves the rest empty', () => {
+    const pack = MemoryPackSchema.parse({
+      facts: [item],
+      rendered_text: 'x',
+      metadata: baseMetadata,
+    });
+
+    const buckets = packBuckets(pack);
+
+    expect(buckets.facts).toEqual([item]);
+    expect(buckets.episodes).toEqual([]);
+    expect(buckets.resonant).toEqual([]);
   });
 });

@@ -1,6 +1,6 @@
 import neo4j, { type Driver } from 'neo4j-driver';
 
-import { runWrite, type GraphStatement } from './connection.js';
+import { runRead, runWrite, type GraphStatement } from './connection.js';
 import { GraphWriteError } from './errors.js';
 import { BASE_NODE_LABEL } from './labels.js';
 import { PROTECTED_RELATIONSHIP_TYPES } from './protected-relationships.js';
@@ -274,4 +274,42 @@ export async function decayEdgeWeights(
 ): Promise<DecayedEdge[]> {
   const statement = buildEdgeWeightDecay(input);
   return runWrite(driver, statement.cypher, statement.parameters, mapDecayedEdge);
+}
+
+/**
+ * The same predicate `buildEdgeWeightDecay` scans against, without the batch limit or the
+ * write: whether the sweep has anything to do at all. A graph made only of backbone and
+ * provenance edges, which a fresh session-only substrate is, has none, and the maintenance
+ * loop's relevance scoring needs that answer before it decides whether decay is worth a turn.
+ */
+export function buildDecayableEdgeCount(): GraphStatement {
+  const source = readModeFragment(withCurrency(), 'a', 'src');
+  const target = readModeFragment(withCurrency(), 'b', 'tgt');
+
+  const cypher = [
+    `MATCH (a:${BASE_NODE_LABEL})-[r]->(b:${BASE_NODE_LABEL})`,
+    `WHERE NOT type(r) IN $protected AND ${source.where} AND ${target.where}`,
+    'RETURN count(r) AS n',
+  ].join('\n');
+
+  return {
+    cypher,
+    parameters: {
+      ...source.parameters,
+      ...target.parameters,
+      protected: [...PROTECTED_RELATIONSHIP_TYPES],
+    },
+  };
+}
+
+/** Zero on a graph with no unprotected edge at all, which is a healthy answer, not a failure. */
+export async function countDecayableEdges(driver: Driver): Promise<number> {
+  const statement = buildDecayableEdgeCount();
+  const rows = await runRead(
+    driver,
+    statement.cypher,
+    statement.parameters,
+    (row: Row) => row.n as number,
+  );
+  return rows[0] ?? 0;
 }

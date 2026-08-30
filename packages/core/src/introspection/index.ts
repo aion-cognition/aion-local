@@ -81,10 +81,12 @@ export type { IntrospectorDeps, IntrospectorOptions, TickReport } from './applic
 export { introspectionOperations } from './application/catalog.js';
 
 export {
+  DECAY_STALE_HOURS,
   DECAY_STANDING_RELEVANCE,
   MEMORY_DECAY_OPERATION,
   REINFORCEMENT_FLUSH_OPERATION,
   memoryDecayOperation,
+  memoryDecayRelevance,
   reinforcementFlushOperation,
   reinforcementFlushRelevance,
 } from './application/plasticity-operations.js';
