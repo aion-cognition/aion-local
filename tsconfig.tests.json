@@ -1,0 +1,34 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "baseUrl": ".",
+    "paths": {
+      "@aion/core": [
+        "packages/core/src/index.ts"
+      ],
+      "@aion/core/*": [
+        "packages/core/src/*"
+      ],
+      "@aion/protocol": [
+        "packages/protocol/src/index.ts"
+      ],
+      "@aion/protocol/*": [
+        "packages/protocol/src/*"
+      ],
+      "@aion/mcp": [
+        "packages/mcp/src/index.ts"
+      ],
+      "@aion/cli": [
+        "packages/cli/src/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "packages/*/src/**/*.ts"
+  ]
+}

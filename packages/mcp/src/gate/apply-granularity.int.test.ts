@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { MemoryPackItem } from '@aion/protocol';
 import {
   applySupersessionProposal,
+  DEFAULTS,
   findEpisodeCognitiveNodes,
   listSupersessionProposals,
   recordSupersessionProposal,
@@ -180,6 +181,7 @@ describe('a correction applied at the default granularity', () => {
     expect(proposal).toBeDefined();
     const applied = await applySupersessionProposal(substrate.driver, substrate.db, {
       id: proposal?.id ?? '',
+      relatednessFloor: DEFAULTS.reflection.supersedeFamilyRelatednessFloor,
       now: APPLIED_AT,
     });
 

@@ -761,6 +761,15 @@ a worker with `staleTimeoutMs: 0` and planted a claim before `start()`, then ass
 drain ran nothing — with a zero stale window the drain is entitled to reclaim it. Measured 1 red
 in 6 runs before, 5 green in 5 after.
 
+**The check that caught the one break the suite would have found late.** `tsc -b` excludes
+`*.test.ts` and `*.fixture.ts`, so a required field added to `ApplyProposalInput` compiled clean
+and reached a gate as `undefined`, where `relatedness >= undefined` is NaN and nothing closed.
+`tsconfig.tests.json` is the one-command diagnostic that finds that class: `npx tsc -p
+tsconfig.tests.json`, a no-emit pass over every source file including tests. It is not a gate
+and cannot be one yet: it reports 65 errors across 30 test files that predate this pass, most of
+them fixtures built before a type gained a field. Read it as a diff against that baseline, not
+as a pass/fail.
+
 **Checkpoint item d, re-driven.** The forced pathology from the review: 60 exhausted queue rows,
 which puts `dead_letter` at relevance 1.0. Before the fixes, cycles 12 to 18 all selected
 `orphan_cleanup` at tier 1 and `dead_letter` read `never selected`. After, on a one-minute tick:
