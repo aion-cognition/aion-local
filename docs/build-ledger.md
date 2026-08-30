@@ -781,8 +781,9 @@ cycle 19 `dead_letter tier 2 applied 50`, 20 `reconcile_reenqueue applied 200`, 
 `reinforcement_flush applied 2`, 22 `redaction_residue_purge applied 3`, 25 `community_refresh
 applied 6934`, 26 `symbiosis_bridge applied 1`, 28 `description_freshness applied 2`, 29
 `memory_decay applied 100`, 34 `retro_judgment_sweep applied 1`. Every operation the review found
-starved ran inside sixteen cycles. The probe rows were removed and the tick knob restored
-afterwards.
+starved ran inside sixteen cycles. The 60 probe rows, the 60 dead-letter ledger keys they
+produced, and the one-minute tick knob were all removed afterwards; the substrate carries
+nothing from the probe.
 
 **Left open.** `narrative_regrounding` and `emergency_relationship_repair` read `never selected`
 on the live substrate, which is the correct answer for both: no narrative carries the marker yet
