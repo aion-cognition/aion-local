@@ -1,4 +1,7 @@
-import { reconcileEnrichment } from '../../../reflection/application/reconcile.js';
+import {
+  DEFAULT_RECONCILE_LIMIT,
+  reconcileEnrichment,
+} from '../../../reflection/application/reconcile.js';
 import type { HealthSnapshot } from '../../domain/health.js';
 import type { IntrospectionOperation, OperationOutcome } from '../../domain/operation.js';
 
@@ -26,8 +29,11 @@ export function reconcileReenqueueOperation(): IntrospectionOperation {
     improves: 'lower',
     run: async (ctx): Promise<OperationOutcome> => {
       const report = await reconcileEnrichment(ctx.driver, ctx.db, {
-        limit: ctx.config.maintenance.reconcileBatchSize,
+        // The scan matches the one the health snapshot takes, so the operation can reach every
+        // episode the metric it is scored on counts. Only the write is batched.
+        limit: DEFAULT_RECONCILE_LIMIT,
         reEnqueue: true,
+        reEnqueueLimit: ctx.config.maintenance.reconcileBatchSize,
       });
       return {
         status: report.reEnqueued === 0 ? 'noop' : 'applied',

@@ -25,6 +25,14 @@ export type ReconcileOptions = {
   readonly limit?: number;
   /** Without it the pass is a count; with it every unenriched episode gets a bulk-lane job. */
   readonly reEnqueue?: boolean;
+  /**
+   * Caps the jobs one pass writes without narrowing what it looked at. The two are separate on
+   * purpose: a scan narrowed to the batch size can only ever see the newest episodes, so the
+   * backlog the operation exists to drain sits permanently outside its own window while the
+   * count it is scored on is taken over the whole substrate. The scan stays wide, the write
+   * stays bounded, and the bound spends itself on the episodes that have waited longest.
+   */
+  readonly reEnqueueLimit?: number;
 };
 
 export type ReconcileReport = {
@@ -92,7 +100,10 @@ export async function reconcileEnrichment(
 
   let reEnqueued = 0;
   if (options.reEnqueue === true) {
-    for (const episode of orphaned) {
+    // Oldest first: `listStoredEpisodes` answers newest first, and an episode stranded months
+    // ago is the one nothing else is ever going to pick up.
+    const batch = [...orphaned].reverse().slice(0, options.reEnqueueLimit ?? orphaned.length);
+    for (const episode of batch) {
       // Bulk: a backfill of episodes that have already waited is exactly what must not push
       // ahead of the turn an agent is having right now.
       enqueueReflectionJob(
