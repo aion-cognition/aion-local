@@ -217,8 +217,8 @@ export const DEFAULTS: Config = {
     // inside a working session rather than inside a week.
     starvationCycles: 8,
     urgencyThreshold: 0.2,
-    // The whitepaper's deprioritization line: at or above it an operation scores at full
-    // weight, under it at half, and starvation still eventually runs it either way.
+    // The deprioritization line: at or above it an operation scores at full weight, under
+    // it at half, and starvation still eventually runs it either way.
     effectivenessFloor: 0.5,
     // At hebbian.batchSize's own default: a content-vector backfill is the same shape of
     // work as a reinforcement flush, one bounded pass over a pending queue.

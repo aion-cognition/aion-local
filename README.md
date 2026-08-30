@@ -223,12 +223,12 @@ recall with the full MCP surface (four seed strategies, spreading activation, RR
 context resonance, MemoryPack assembly), the reflection pipeline that turns a stored episode
 into entities, associations, cognitive structure, typed relationships, supersession judgments
 and a session narrative, Hebbian reinforcement and decay, the introspection loop that
-schedules twelve maintenance operations, per-role Anthropic routing with model reconciliation,
+schedules fourteen maintenance operations, per-role Anthropic routing with model reconciliation,
 and the CLI surface listed above.
 
-1,450 unit tests pass deterministically; the integration suite runs against a live Neo4j and
-host Ollama, with generation on Haiku when a key is set. `npm test` reports 199 files and
-1,945 tests. Three are skipped: two whose assertion turns on the reflect model's live judgment
+1,481 unit tests pass deterministically; the integration suite runs against a live Neo4j and
+host Ollama, with generation on Haiku when a key is set. `npm test` reports 204 files and
+1,988 tests. Three are skipped: two whose assertion turns on the reflect model's live judgment
 (causal-edge direction, contradiction detection) flake under sampling rather than under the
 pipeline, and a third records a cross-stage entity-naming gap as a measurement. One probe of
 the on-topic recall battery asserts a rank bar that sits inside live-model variance and fails

@@ -3,8 +3,8 @@ import { ProviderRouter } from '../../../infrastructure/providers/role-provider.
 import type { Provider } from '../../../infrastructure/providers/types.js';
 
 /**
- * The generation these operations need — supersession judgments, entity description
- * re-synthesis — is reflection-shaped: off the hot path, over stored text, at reflection's
+ * The generation these operations need (supersession judgments, entity description
+ * re-synthesis) is reflection-shaped: off the hot path, over stored text, at reflection's
  * own cadence. It follows the `reflect` role, the same key-routing every reflection stage
  * gets, rather than opening a maintenance role of its own. A router is cheap to build (no I/O
  * until a call is made), so each run constructs its own rather than the engine threading one

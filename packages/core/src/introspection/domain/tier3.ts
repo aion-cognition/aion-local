@@ -6,7 +6,7 @@ import type { HealthSnapshot } from './health.js';
  * The seam tier 3 will land on, and nothing more. The full layer composes a schema-aware
  * prompt from the snapshot, the operation catalog, and the recent effectiveness stats, blends
  * the model's confidence with those stats, and selects an operation when the blend clears a
- * threshold. None of that is built here: this round ships the shape of the call and the
+ * threshold. None of that is built here: what ships is the shape of the call and the
  * opt-in flag, so the loop that will make it exists and does nothing until it does.
  *
  * The constraint the full implementation inherits: a proposal is a recommendation, never an

@@ -2,8 +2,8 @@ import type { SqliteHandle } from './database.js';
 import { getMeta, setMeta } from './meta.js';
 
 /**
- * How often recall is invoked and how often it comes back with nothing, per PRD §3.4:
- * cadence is a measured product signal, not an assumption. Lifetime totals, not a rolling
+ * How often recall is invoked and how often it comes back with nothing: cadence is a
+ * measured product signal, not an assumption. Lifetime totals, not a rolling
  * window: `cueDegradedRate`'s window (`recall-samples.ts`) trims to the last 500 calls, but
  * "calls per session" needs a call count that outlives the trim, and `last_pack` keeps only
  * each session's newest pack, never how many times it was served.

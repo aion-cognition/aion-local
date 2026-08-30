@@ -2,7 +2,7 @@ import neo4j, { type Driver } from 'neo4j-driver';
 import type { Vector } from '../../providers/types.js';
 import { ACCESS_COUNT_PROPERTY } from '../access-tracking.js';
 import { CO_OCCURS_TYPE, SIMILAR_TYPE } from '../association-queries.js';
-import { runRead } from '../connection.js';
+import { runRead, runWrite } from '../connection.js';
 import { CONTEXT_VECTOR_PROPERTY } from '../context-vector-queries.js';
 import { ENTITY_ALIASES_PROPERTY } from '../entity-dedup-queries.js';
 import { ENTITY_MENTION_TYPE, ENTITY_PARTICIPATION_TYPE } from '../entity-queries.js';
@@ -327,6 +327,21 @@ export async function coOccurrencePairs(driver: Driver): Promise<NamedPair[]> {
       count: row.count as number,
       strength: row.strength as number,
     }),
+  );
+}
+
+/** Forces one `CO_OCCURS` edge's strength directly, so a decay test does not have to wait out real time. */
+export async function setCoOccursStrength(
+  driver: Driver,
+  aName: string,
+  bName: string,
+  strength: number,
+): Promise<void> {
+  await runWrite(
+    driver,
+    `MATCH (a:Entity { name: $aName })-[r:${CO_OCCURS_TYPE}]-(b:Entity { name: $bName }) SET r.strength = $strength`,
+    { aName, bName, strength },
+    () => undefined,
   );
 }
 

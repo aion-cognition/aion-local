@@ -4,17 +4,18 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
-import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
-import { runRead } from '../../../infrastructure/graph/connection.js';
+import { BITEMPORAL_PROPERTIES, writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
 import { upsertEdge } from '../../../infrastructure/graph/edges.js';
 import { countOrphanNodes } from '../../../infrastructure/graph/introspection-health.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
-import { findOrphanNodes } from '../../../infrastructure/graph/topology-queries.js';
+import { nodeProperties } from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
+import { relationshipTypesBetween } from '../../../infrastructure/graph/test-support/maintenance-queries.fixture.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
   type Neo4jHarness,
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
+import { findOrphanNodes } from '../../../infrastructure/graph/topology-queries.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
@@ -125,27 +126,12 @@ async function seedLooseInsight(id: string, now: Date): Promise<void> {
   });
 }
 
-async function relationshipTypesBetween(left: string, right: string): Promise<string[]> {
-  return runRead(
-    harness.driver,
-    'MATCH (a:AionNode { id: $left })-[r]-(b:AionNode { id: $right }) RETURN type(r) AS type',
-    { left, right },
-    (row) => row['type'] as string,
-  );
-}
-
 async function orphanIds(): Promise<string[]> {
   return (await findOrphanNodes(harness.driver, 100)).map((orphan) => orphan.id);
 }
 
 async function forgottenAt(id: string): Promise<Date | undefined> {
-  const rows = await runRead(
-    harness.driver,
-    'MATCH (n:AionNode { id: $id }) RETURN n.forgotten_at AS forgotten_at',
-    { id },
-    (row) => row['forgotten_at'],
-  );
-  const value = rows[0];
+  const value = (await nodeProperties(harness.driver, id))[BITEMPORAL_PROPERTIES.forgottenAt];
   return value instanceof Date ? value : undefined;
 }
 
@@ -241,12 +227,12 @@ describe('orphan cleanup', () => {
     // Two relinked, one forgotten, two left alone because they are too new to give up on.
     expect(outcome.itemsAffected).toBe(3);
 
-    expect(await relationshipTypesBetween('decision-orphan', 'entity-postgres')).toContain(
-      'RELATED_TO',
-    );
-    expect(await relationshipTypesBetween('episode-with-sibling', 'episode-sibling')).toContain(
-      'RELATED_TO',
-    );
+    expect(
+      await relationshipTypesBetween(harness.driver, 'decision-orphan', 'entity-postgres'),
+    ).toContain('RELATED_TO');
+    expect(
+      await relationshipTypesBetween(harness.driver, 'episode-with-sibling', 'episode-sibling'),
+    ).toContain('RELATED_TO');
     expect(await forgottenAt('insight-ancient-alone')).toBeInstanceOf(Date);
     expect(await forgottenAt('insight-recent-alone')).toBeUndefined();
     // The unenriched episode is older than the forget threshold and was still not touched.

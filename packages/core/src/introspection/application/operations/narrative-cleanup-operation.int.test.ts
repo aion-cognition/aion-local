@@ -5,10 +5,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import { upsertEdge } from '../../../infrastructure/graph/edges.js';
-import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
+import { BITEMPORAL_PROPERTIES, writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../../../infrastructure/graph/episodes.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import { DERIVES_FROM_TYPE, NARRATIVE_PROPERTIES } from '../../../infrastructure/graph/narrative-queries.js';
+import { nodeProperties } from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
@@ -131,17 +132,11 @@ describe('narrativeCleanupOperation against a live graph', () => {
     expect(outcome.status).toBe('applied');
     expect(outcome.itemsAffected).toBeGreaterThanOrEqual(1);
 
-    const rows = await harness.driver.executeQuery(
-      'MATCH (n:Narrative { id: $id }) RETURN n.valid_until IS NULL AS open',
-      { id: 'dup-narrative-v1' },
-    );
-    expect(rows.records[0]?.toObject().open).toBe(false);
+    const v1Props = await nodeProperties(harness.driver, 'dup-narrative-v1');
+    expect(v1Props[BITEMPORAL_PROPERTIES.validUntil]).toBeDefined();
 
-    const keptRows = await harness.driver.executeQuery(
-      'MATCH (n:Narrative { id: $id }) RETURN n.valid_until IS NULL AS open',
-      { id: 'dup-narrative-v2' },
-    );
-    expect(keptRows.records[0]?.toObject().open).toBe(true);
+    const v2Props = await nodeProperties(harness.driver, 'dup-narrative-v2');
+    expect(v2Props[BITEMPORAL_PROPERTIES.validUntil]).toBeUndefined();
   }, 120_000);
 
   it('forgets a narrative whose session holds no live episode', async () => {
@@ -151,11 +146,8 @@ describe('narrativeCleanupOperation against a live graph', () => {
     const outcome = await narrativeCleanupOperation().run(contextFor());
 
     expect(outcome.status).toBe('applied');
-    const rows = await harness.driver.executeQuery(
-      'MATCH (n:Narrative { id: $id }) RETURN n.forgotten_at IS NOT NULL AS forgotten',
-      { id: 'orphan-narrative' },
-    );
-    expect(rows.records[0]?.toObject().forgotten).toBe(true);
+    const props = await nodeProperties(harness.driver, 'orphan-narrative');
+    expect(props[BITEMPORAL_PROPERTIES.forgottenAt]).toBeDefined();
   }, 120_000);
 
   it('leaves a session with one narrative and a live episode alone', async () => {
@@ -165,10 +157,8 @@ describe('narrativeCleanupOperation against a live graph', () => {
 
     await narrativeCleanupOperation().run(contextFor());
 
-    const rows = await harness.driver.executeQuery(
-      'MATCH (n:Narrative { id: $id }) RETURN n.valid_until IS NULL AS open, n.forgotten_at IS NULL AS live',
-      { id: 'healthy-narrative' },
-    );
-    expect(rows.records[0]?.toObject()).toMatchObject({ open: true, live: true });
+    const props = await nodeProperties(harness.driver, 'healthy-narrative');
+    expect(props[BITEMPORAL_PROPERTIES.validUntil]).toBeUndefined();
+    expect(props[BITEMPORAL_PROPERTIES.forgottenAt]).toBeUndefined();
   }, 120_000);
 });

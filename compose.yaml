@@ -48,7 +48,7 @@ services:
       - AION_LOG_FILE
       - AION_LOG_LEVEL
       # Concurrent reflection claim-and-run slots, default 1. Raising it only helps alongside
-      # the host Ollama's OLLAMA_NUM_PARALLEL (see README's Development section) — otherwise
+      # the host Ollama's OLLAMA_NUM_PARALLEL (see README's Development section); otherwise
       # every extra worker still queues behind the one model call the others are waiting on.
       # - AION_WORKER_COUNT=2
     ports:

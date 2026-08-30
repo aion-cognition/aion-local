@@ -27,7 +27,7 @@ describe('flush knobs match the shipped configuration', () => {
     expect(DEFAULT_HEBBIAN_WEIGHT_FLOOR).toBe(DEFAULTS.hebbian.weightFloor);
   });
 
-  it('follows the whitepaper constants for eta and the floor', () => {
+  it('pins the learning rate and the weight floor to their calibrated values', () => {
     expect(DEFAULT_HEBBIAN_LEARNING_RATE).toBe(0.1);
     expect(DEFAULT_HEBBIAN_WEIGHT_FLOOR).toBe(0.1);
   });

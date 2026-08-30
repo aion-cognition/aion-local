@@ -15,6 +15,7 @@ import { loadEpisodeContext } from '../../../infrastructure/graph/episode-contex
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import {
   coOccurrencePairs,
+  setCoOccursStrength,
   similarPairsAmong,
 } from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
@@ -31,7 +32,6 @@ import { ReflectionDispatch } from '../dispatch.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../intake.js';
 import { LaneAssigner } from '../lanes.js';
 import { cliqueDiscount } from '../../../plasticity/domain/reinforcement.js';
-import { runWrite } from '../../../infrastructure/graph/connection.js';
 import { AssociationInferenceStage } from './associations.js';
 
 const NOW = new Date('2026-08-28T12:00:00.000Z');
@@ -228,12 +228,7 @@ describe('co-occurrence', () => {
     }
     await runStage(first);
 
-    await runWrite(
-      harness.driver,
-      "MATCH (a:Entity { name: 'D1' })-[r:CO_OCCURS]-(b:Entity { name: 'D2' }) SET r.strength = 0.2",
-      {},
-      () => undefined,
-    );
+    await setCoOccursStrength(harness.driver, 'D1', 'D2', 0.2);
 
     const again = await newEpisode('the faded pair said again');
     for (const name of ['D1', 'D2', 'D3']) {

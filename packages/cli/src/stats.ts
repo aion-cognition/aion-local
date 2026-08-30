@@ -33,8 +33,8 @@ import {
 import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
 
 /**
- * `aion stats`: everything `aion status` shows plus the two readings PRD §3.4 pins as
- * measured product signals. Cadence answers whether the agent is actually calling recall;
+ * `aion stats`: everything `aion status` shows plus the two readings pinned as measured
+ * product signals. Cadence answers whether the agent is actually calling recall;
  * the per-method shares are the spirit metric, permanent so the associative-mechanisms
  * claim stays a measurement, not an argument.
  */

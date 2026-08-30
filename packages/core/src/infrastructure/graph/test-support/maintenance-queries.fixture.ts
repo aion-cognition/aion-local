@@ -2,6 +2,7 @@ import type { Driver } from 'neo4j-driver';
 import { BITEMPORAL_PROPERTIES } from '../bitemporal.js';
 import { runRead } from '../connection.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../episodes.js';
+import { BASE_NODE_LABEL } from '../labels.js';
 import { NARRATIVE_PROPERTIES } from '../narrative-queries.js';
 import type { Row } from '../values.js';
 
@@ -90,6 +91,20 @@ export async function bridgeEndpoints(
       provenance: (row.provenance as string[] | null) ?? [],
       rationale: row.rationale as string,
     }),
+  );
+}
+
+/** Every relationship type on any edge between two nodes, undirected: what orphan relink leaves behind. */
+export async function relationshipTypesBetween(
+  driver: Driver,
+  left: string,
+  right: string,
+): Promise<string[]> {
+  return runRead(
+    driver,
+    `MATCH (a:${BASE_NODE_LABEL} { id: $left })-[r]-(b:${BASE_NODE_LABEL} { id: $right }) RETURN type(r) AS type`,
+    { left, right },
+    (row) => row.type as string,
   );
 }
 

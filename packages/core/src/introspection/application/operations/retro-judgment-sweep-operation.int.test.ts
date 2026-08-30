@@ -5,9 +5,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import { bootstrapBackbone } from '../../../infrastructure/graph/backbone.js';
+import { BITEMPORAL_PROPERTIES } from '../../../infrastructure/graph/bitemporal.js';
 import { writeCognitiveNode } from '../../../infrastructure/graph/cognitive-queries.js';
 import { linkEntityMentions, mergeEntities } from '../../../infrastructure/graph/entity-queries.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
+import { nodeProperties } from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
@@ -32,8 +34,8 @@ import { retroJudgmentSweepOperation } from './retro-judgment-sweep-operation.js
 /**
  * The backlog this operation drains never went through the orchestrator's own supersession
  * stage, so intake (which writes only Episode/Turn nodes) plus a direct cognitive-node write
- * models a "pre-fix" episode exactly: the `reflection:stage:supersession:{episodeId}` key is
- * never set until this operation sets it.
+ * models that backlog exactly: the `reflection:stage:supersession:{episodeId}` key is never
+ * set until this operation sets it.
  */
 
 let harness: Neo4jHarness;
@@ -188,11 +190,8 @@ describe('retroJudgmentSweepOperation against a live graph', () => {
     expect(proposals.every((row) => row.resolvedAt === null)).toBe(true);
     expect(proposals.some((row) => row.oldId === priorFactId || row.oldId === nextFactId)).toBe(true);
 
-    const factRows = await harness.driver.executeQuery(
-      'MATCH (n { id: $id }) RETURN n.valid_until IS NULL AS current',
-      { id: priorFactId },
-    );
-    expect(factRows.records[0]?.toObject().current).toBe(true);
+    const priorFactProps = await nodeProperties(harness.driver, priorFactId);
+    expect(priorFactProps[BITEMPORAL_PROPERTIES.validUntil]).toBeUndefined();
 
     expect(isLedgerApplied(db, stageLedgerKey(SUPERSESSION_STAGE_NAME, priorEpisodeId))).toBe(true);
     expect(isLedgerApplied(db, stageLedgerKey(SUPERSESSION_STAGE_NAME, nextEpisodeId))).toBe(true);
