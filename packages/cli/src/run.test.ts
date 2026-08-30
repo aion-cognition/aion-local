@@ -62,6 +62,14 @@ describe('run', () => {
     }
   });
 
+  it('lists hooks in the usage text', async () => {
+    const stdout = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+
+    await run(['help']);
+
+    expect(String(stdout.mock.calls[0]?.[0])).toContain('hooks');
+  });
+
   it('reports an unknown command on stderr and exits 1', async () => {
     const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
 

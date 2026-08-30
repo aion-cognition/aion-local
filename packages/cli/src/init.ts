@@ -19,6 +19,7 @@ import {
   type ProvisionEvent,
 } from '@aion/core';
 import { USAGE_PROTOCOL } from '@aion/mcp';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 
 import {
@@ -29,18 +30,31 @@ import {
   startService,
   waitForMcpHealth,
 } from './compose.js';
+import { installFullProfile } from './hooks-cmd.js';
 import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
 import { envFilePath, envTemplatePath, resolveRepoDir } from './paths.js';
 
 export const GIT_USER_NAME_ENV_VAR = 'AION_GIT_USER_NAME';
+
+export const ANTHROPIC_KEY_ENV_VAR = 'AION_ANTHROPIC_API_KEY';
 
 /** Neo4j's first boot downloads and installs the GDS plugin, which outlasts the 60s default. */
 const NEO4J_READY_TIMEOUT_MS = 180_000;
 
 export class UnknownOptionError extends Error {
   constructor(option: string) {
-    super(`unknown option '${option}' for init (supported: --yes)`);
+    super(`unknown option '${option}' for init (supported: local, full, --yes)`);
     this.name = 'UnknownOptionError';
+  }
+}
+
+export class AnthropicKeyUnavailableError extends Error {
+  constructor() {
+    super(
+      `the full profile routes generation to Anthropic and needs ${ANTHROPIC_KEY_ENV_VAR}. ` +
+        'Set it in the environment or .env, or run `aion init full` from a terminal.',
+    );
+    this.name = 'AnthropicKeyUnavailableError';
   }
 }
 
@@ -61,20 +75,75 @@ export class Neo4jPasswordMissingError extends Error {
   }
 }
 
+/**
+ * `local` is the substrate on its own: Ollama for every generation role, no harness hooks.
+ * `full` adds the Anthropic key and the Claude Code shims that make the recall and reflection
+ * cadence a schedule rather than a judgment call.
+ */
+export type InitProfile = 'local' | 'full';
+
 export type InitFlags = {
   readonly assumeYes: boolean;
+  readonly profile: InitProfile | undefined;
 };
 
 export function parseInitFlags(argv: readonly string[]): InitFlags {
   let assumeYes = false;
+  let profile: InitProfile | undefined;
   for (const arg of argv) {
     if (arg === '--yes' || arg === '-y') {
       assumeYes = true;
       continue;
     }
+    if (arg === 'local' || arg === 'full') {
+      profile = arg;
+      continue;
+    }
     throw new UnknownOptionError(arg);
   }
-  return { assumeYes };
+  return { assumeYes, profile };
+}
+
+export type InitProfileInput = {
+  readonly requested: InitProfile | undefined;
+  readonly assumeYes: boolean;
+  readonly interactive: boolean;
+  readonly ask: (question: string) => Promise<string>;
+};
+
+/** Local is the default everywhere it cannot be asked, because full changes how sessions behave. */
+export async function resolveInitProfile(input: InitProfileInput): Promise<InitProfile> {
+  if (input.requested !== undefined) {
+    return input.requested;
+  }
+  if (input.assumeYes || !input.interactive) {
+    return 'local';
+  }
+  const answer = (await input.ask('Profile, local or full [local]: ')).trim().toLowerCase();
+  return answer === 'full' ? 'full' : 'local';
+}
+
+export type AnthropicKeyInput = {
+  readonly configured: string;
+  readonly fromEnvFile: string | undefined;
+  readonly assumeYes: boolean;
+  readonly interactive: boolean;
+  readonly ask: (question: string) => Promise<string>;
+};
+
+export async function resolveAnthropicKey(input: AnthropicKeyInput): Promise<string> {
+  const existing = (input.configured === '' ? (input.fromEnvFile ?? '') : input.configured).trim();
+  if (existing !== '') {
+    return existing;
+  }
+  if (input.assumeYes || !input.interactive) {
+    throw new AnthropicKeyUnavailableError();
+  }
+  const answer = (await input.ask('Anthropic API key: ')).trim();
+  if (answer === '') {
+    throw new AnthropicKeyUnavailableError();
+  }
+  return answer;
 }
 
 export type MemberNameInput = {
@@ -106,6 +175,29 @@ export async function resolveMemberName(input: MemberNameInput): Promise<string>
     throw new MemberNameUnavailableError();
   }
   return chosen;
+}
+
+/** Outside the container nothing loads `.env`, so a key already recorded there is invisible to `loadConfig`. */
+function envFileValue(path: string, key: string): string | undefined {
+  if (!existsSync(path)) {
+    return undefined;
+  }
+  const line = readFileSync(path, 'utf8')
+    .split('\n')
+    .find((entry) => entry.startsWith(`${key}=`));
+  return line === undefined ? undefined : line.slice(key.length + 1).trim();
+}
+
+function upsertEnvValue(path: string, key: string, value: string): void {
+  const lines = existsSync(path) ? readFileSync(path, 'utf8').split('\n') : [];
+  const index = lines.findIndex((entry) => entry.startsWith(`${key}=`));
+  const entry = `${key}=${value}`;
+  if (index === -1) {
+    lines.push(entry);
+  } else {
+    lines[index] = entry;
+  }
+  writeFileSync(path, lines.join('\n'));
 }
 
 async function askOnTerminal(question: string): Promise<string> {
@@ -278,6 +370,34 @@ async function initialize(
   renderRegistration(config.operational.mcpPort, write);
 }
 
+/**
+ * The key is settled before the substrate comes up, not after. Provisioning reads routing to
+ * decide which local models are worth pulling, and the MCP service it starts reads `.env`
+ * once at boot, so a key written afterwards would leave both on the local path until the next
+ * restart.
+ */
+async function prepareFullProfile(
+  config: Config,
+  flags: InitFlags,
+  write: Writer,
+): Promise<Config> {
+  const envPath = envFilePath(resolveRepoDir());
+  const key = await resolveAnthropicKey({
+    configured: config.anthropic.apiKey,
+    fromEnvFile: envFileValue(envPath, ANTHROPIC_KEY_ENV_VAR),
+    assumeYes: flags.assumeYes,
+    interactive: process.stdin.isTTY,
+    ask: askOnTerminal,
+  });
+  if (key === config.anthropic.apiKey) {
+    return config;
+  }
+  upsertEnvValue(envPath, ANTHROPIC_KEY_ENV_VAR, key);
+  process.env[ANTHROPIC_KEY_ENV_VAR] = key;
+  write(`anthropic key recorded in ${envPath}`);
+  return loadConfig(process.env);
+}
+
 export async function runInit(
   argv: readonly string[] = [],
   write: Writer = stdoutWriter,
@@ -294,7 +414,23 @@ export async function runInit(
 
   const logger = openLogger({ ...config.logging, name: 'aion-init' });
   try {
-    await initialize(config, flags, write, logger);
+    const profile = await resolveInitProfile({
+      requested: flags.profile,
+      assumeYes: flags.assumeYes,
+      interactive: process.stdin.isTTY,
+      ask: askOnTerminal,
+    });
+    const resolved = profile === 'full' ? await prepareFullProfile(config, flags, write) : config;
+
+    await initialize(resolved, flags, write, logger);
+
+    write('');
+    if (profile === 'full') {
+      installFullProfile(write);
+    } else {
+      write('Hooks are not installed on the local profile.');
+      write('`aion hooks install` wires the Claude Code shims; see docs/harness.md.');
+    }
     write('\naion init: ready');
     return 0;
   } catch (err) {
