@@ -291,6 +291,7 @@ export class AionMcpService {
           status: 'ok',
           sessions: this.#sessions.size,
           descriptions_version: DESCRIPTIONS_VERSION,
+          build_sha: process.env.AION_BUILD_SHA ?? 'unstamped',
           ...this.#queueLagFields(),
           ...this.#plasticityFields(),
         });
@@ -487,8 +488,8 @@ export class AionMcpService {
     }
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-deprecated -- Server is the SDK's documented escape hatch for custom request handlers; McpServer's tool API can't express the raw JSON Schema contract tools.ts builds.
   #buildServer(transport: StreamableHTTPServerTransport): Server {
-    // eslint-disable-line @typescript-eslint/no-deprecated -- Server is the SDK's documented escape hatch for custom request handlers; McpServer's tool API can't express the raw JSON Schema contract tools.ts builds.
     // eslint-disable-next-line @typescript-eslint/no-deprecated -- same escape hatch as the return type above.
     const server = new Server(SERVER_INFO, {
       capabilities: { tools: {} },

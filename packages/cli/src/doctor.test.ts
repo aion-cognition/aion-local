@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildDoctorChecks,
   probeMcpHttp,
+  probeServiceFreshness,
   queueLagCheck,
   runChecks,
   summarize,
@@ -199,6 +200,41 @@ describe('runChecks', () => {
 
     expect(reports[0]?.ok).toBe(false);
     expect(reports[0]?.detail).toContain('VectorIndexDimensionMismatchError:');
+  });
+});
+
+describe('probeServiceFreshness', () => {
+  const healthWith = (buildSha: string | undefined) => async () =>
+    new Response(JSON.stringify({ status: 'ok', build_sha: buildSha }), { status: 200 });
+
+  it('reports ok when the running service matches the repo head', async () => {
+    const result = await probeServiceFreshness(8765, 'abc1234', healthWith('abc1234'));
+
+    expect(result).toEqual({ ok: true, detail: 'service and repo both at abc1234' });
+  });
+
+  it('warns when the running service trails the repo head', async () => {
+    const result = await probeServiceFreshness(8765, 'def5678', healthWith('abc1234'));
+
+    expect(result.ok).toBe(true);
+    expect(result.warn).toBe(true);
+    expect(result.detail).toContain('abc1234');
+    expect(result.detail).toContain('def5678');
+  });
+
+  it('warns on an unstamped image instead of guessing', async () => {
+    const result = await probeServiceFreshness(8765, 'abc1234', healthWith(undefined));
+
+    expect(result.ok).toBe(true);
+    expect(result.warn).toBe(true);
+    expect(result.detail).toContain('no build sha');
+  });
+
+  it('warns when the repo head is unknown to the CLI', async () => {
+    const result = await probeServiceFreshness(8765, undefined, healthWith('abc1234'));
+
+    expect(result.ok).toBe(true);
+    expect(result.warn).toBe(true);
   });
 });
 

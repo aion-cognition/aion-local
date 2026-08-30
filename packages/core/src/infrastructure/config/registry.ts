@@ -472,6 +472,8 @@ export const KNOB_REGISTRY: readonly Knob[] = [
 export const RESERVED_ENV_VARS: ReadonlySet<string> = new Set([
   'AION_REPO_PATH',
   'AION_GIT_USER_NAME',
+  'AION_BUILD_SHA',
+  'AION_REPO_HEAD_SHA',
 ]);
 
 const registryByEnvVar = new Map(KNOB_REGISTRY.map((knob) => [knob.envVar, knob]));

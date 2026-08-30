@@ -35,6 +35,8 @@ services:
     stop_grace_period: 20s
     build:
       context: .
+      args:
+        AION_BUILD_SHA: ${AION_BUILD_SHA:-unstamped}
     # The image entrypoint is the CLI. Compose appends `command` to an entrypoint rather
     # than replacing it, so the server has to override the entrypoint itself.
     entrypoint: ['node', '/app/packages/mcp/dist/main.js']
@@ -66,6 +68,8 @@ services:
     image: aion-local:latest
     build:
       context: .
+      args:
+        AION_BUILD_SHA: ${AION_BUILD_SHA:-unstamped}
     working_dir: /repo
     env_file:
       - path: .env
@@ -74,6 +78,7 @@ services:
       - COMPOSE_PROJECT_NAME
       - AION_REPO_PATH
       - AION_GIT_USER_NAME
+      - AION_REPO_HEAD_SHA
       - AION_NEO4J_URI=${AION_NEO4J_URI:-bolt://neo4j:7687}
       - AION_OLLAMA_URL=${AION_OLLAMA_URL:-http://host.docker.internal:11434}
       - AION_MCP_PORT=${AION_MCP_PORT:-8765}
