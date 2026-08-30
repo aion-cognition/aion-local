@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -98,6 +98,19 @@ afterEach(() => {
 
 function embeddedTexts(call: number): string {
   return (embed.mock.calls[call]?.[0] as readonly string[]).join('\n');
+}
+
+/** Pino's numeric levels, which is what the JSONL line carries. */
+const PINO_INFO = 30;
+const PINO_WARN = 40;
+
+type LogLine = { readonly level: number; readonly msg: string; readonly reason?: string };
+
+function logLines(filePath: string): LogLine[] {
+  return readFileSync(filePath, 'utf8')
+    .split('\n')
+    .filter((line) => line !== '')
+    .map((line) => JSON.parse(line) as LogLine);
 }
 
 describe('reflection intake validation', () => {
@@ -214,6 +227,24 @@ describe('reflection intake storage', () => {
 
     expect(generate).not.toHaveBeenCalled();
   });
+
+  // A caller re-pushing an experience the substrate already holds is how an operator tells a
+  // retry storm from real traffic, and at debug it was invisible at the level production runs.
+  it('reports a deduplicated push at info', async () => {
+    const logPath = join(dataDir, 'dedupe.jsonl');
+    const watched: ReflectionIntakeDeps = {
+      ...deps,
+      logger: openLogger({ filePath: logPath, level: 'debug' }),
+    };
+
+    await handleReflection(watched, PAYLOAD, { identity: 'session-a' });
+    await handleReflection(watched, PAYLOAD, { identity: 'session-a' });
+
+    const deduped = logLines(logPath).filter(
+      (line) => line.msg === 'reflection payload already stored',
+    );
+    expect(deduped.map((line) => line.level)).toEqual([PINO_INFO]);
+  });
 });
 
 describe('reflection intake lanes', () => {
@@ -291,6 +322,29 @@ describe('reflection intake lanes', () => {
 
     expect(bulk.episode_id).toBe(interactive.episode_id);
     expect(listReflectionJobs(db)).toHaveLength(1);
+  });
+
+  // A caller that asked for the bulk lane got what it asked for. Warning on it read the same
+  // as the rate backstop tripping, which is the only one of the two an operator has to act on.
+  it('logs a requested demotion at info and a rate-tripped one at warn', async () => {
+    const logPath = join(dataDir, 'lanes.jsonl');
+    const watched: ReflectionIntakeDeps = {
+      ...deps,
+      logger: openLogger({ filePath: logPath, level: 'debug' }),
+    };
+
+    await handleReflection(watched, { ...PAYLOAD, lane: 'bulk' }, { identity: 'asked' });
+    for (let index = 0; index < 3; index += 1) {
+      await handleReflection(watched, payload(index), { identity: 'noisy' });
+    }
+
+    const bulk = logLines(logPath).filter(
+      (line) => line.msg === 'reflection queued in the bulk lane',
+    );
+    expect(bulk.map((line) => [line.reason, line.level])).toEqual([
+      ['requested', PINO_INFO],
+      ['session-rate', PINO_WARN],
+    ]);
   });
 });
 

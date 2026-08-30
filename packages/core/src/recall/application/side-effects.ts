@@ -120,7 +120,14 @@ export class RecallSideEffects {
         );
       }
     } catch (err) {
-      this.#logger.warn({ err }, 'recall reinforcement enqueue failed');
+      this.#logger.warn(
+        {
+          err,
+          sessionId: completion.sessionId,
+          activated: completion.activated.length,
+        },
+        'recall reinforcement enqueue failed',
+      );
     }
   }
 
@@ -138,14 +145,17 @@ export class RecallSideEffects {
     if (ids.length === 0) {
       return;
     }
-    const { now } = completion;
+    const { now, sessionId } = completion;
     this.#pending = this.#pending.then(
       () =>
         new Promise<void>((resolve) => {
           setImmediate(() => {
             recordAccess(this.#driver, { ids, now })
               .catch((err: unknown) => {
-                this.#logger.warn({ err }, 'recall access-tracking write failed');
+                this.#logger.warn(
+                  { err, sessionId, items: ids.length },
+                  'recall access-tracking write failed',
+                );
               })
               .finally(resolve);
           });

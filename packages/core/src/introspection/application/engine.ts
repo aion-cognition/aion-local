@@ -438,6 +438,10 @@ export class Introspector {
         cycle,
         operation: operation.name,
         tier: decision.tier,
+        // Why this operation won the tick. A tier-1 preemption names the condition it answers,
+        // and without both fields the reason lived only in the SQLite ledger row.
+        urgency: decision.urgency,
+        reason: decision.reason,
         status: outcome.status,
         itemsProcessed: outcome.itemsProcessed,
         itemsAffected: outcome.itemsAffected,
