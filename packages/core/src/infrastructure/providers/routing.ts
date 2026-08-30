@@ -22,7 +22,8 @@ export type ProviderPin = 'auto' | ProviderName;
  * failing the boot, and `aion status` and `aion doctor` say so. Routing local is the safe
  * direction of that mistake, since nothing leaves the machine.
  */
-export type RouteReason = 'local-default' | 'key' | 'pinned-local' | 'pinned-remote' | 'pin-without-key';
+export type RouteReason =
+  'local-default' | 'key' | 'pinned-local' | 'pinned-remote' | 'pin-without-key';
 
 export type RoleRoute = {
   readonly role: GenerationRole;
@@ -66,7 +67,13 @@ function resolveRole(config: Config, role: GenerationRole, keyPresent: boolean):
     if (!keyPresent) {
       return local('pin-without-key');
     }
-    return { role, provider: 'anthropic', model: config.anthropic.model, localModel, reason: 'pinned-remote' };
+    return {
+      role,
+      provider: 'anthropic',
+      model: config.anthropic.model,
+      localModel,
+      reason: 'pinned-remote',
+    };
   }
   if (!keyPresent) {
     return local('local-default');

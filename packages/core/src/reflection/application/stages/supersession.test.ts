@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
 import { seedFactNode, SupersessionTestBed } from './supersession.fixture.js';
 import { SupersessionStage } from './supersession.js';
 
@@ -68,7 +69,9 @@ describe('SupersessionStage', () => {
 
   it('proposes rather than supersedes by default, however sure the judgment is', async () => {
     seedContradictingPair();
-    bed.responses = [{ contradicts: true, confidence: 1, rationale: 'the new decision reverses it' }];
+    bed.responses = [
+      { contradicts: true, confidence: 1, rationale: 'the new decision reverses it' },
+    ];
 
     const outcome = await new SupersessionStage().run(bed.context(EPISODE_ID));
 
@@ -99,7 +102,9 @@ describe('SupersessionStage', () => {
 
   it('supersedes in auto mode when the judgment clears the threshold', async () => {
     seedContradictingPair();
-    bed.responses = [{ contradicts: true, confidence: 0.92, rationale: 'the new decision reverses it' }];
+    bed.responses = [
+      { contradicts: true, confidence: 0.92, rationale: 'the new decision reverses it' },
+    ];
 
     const outcome = await new SupersessionStage({ mode: 'auto' }).run(bed.context(EPISODE_ID));
 

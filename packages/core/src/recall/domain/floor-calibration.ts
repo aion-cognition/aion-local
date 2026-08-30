@@ -1,6 +1,6 @@
-import type { Vector } from '../../infrastructure/providers/types.js';
 import type { AdmissionPolicy } from './admission.js';
 import { cosineSimilarity } from './ranking.js';
+import type { Vector } from '../../infrastructure/providers/types.js';
 
 /**
  * The measurement behind `recall.vectorAdmissionFloor`, kept as a function of two measured
@@ -131,7 +131,8 @@ export function checkSeparation(input: SeparationInput): Separation {
   const unrelated = describeDistribution(input.unrelatedScores);
   const related = describeDistribution(input.relatedScores);
   const under = input.relatedScores.filter((score) => score < floor).length;
-  const relatedUnderFloor = input.relatedScores.length === 0 ? 0 : under / input.relatedScores.length;
+  const relatedUnderFloor =
+    input.relatedScores.length === 0 ? 0 : under / input.relatedScores.length;
 
   const floorTooLow = unrelated.p95 >= floor + input.tolerance;
   const floorTooHigh = related.p50 <= floor - input.tolerance;

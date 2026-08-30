@@ -1,5 +1,6 @@
 import type { Cue } from '@aion/protocol';
 import { describe, expect, it } from 'vitest';
+
 import type { Measurement } from './admission.js';
 import {
   hasDecisionIntent,

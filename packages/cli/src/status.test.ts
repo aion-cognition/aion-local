@@ -1,5 +1,6 @@
 import { DEFAULTS, type Config, type PlasticityCounters, type QueueLagSnapshot } from '@aion/core';
 import { describe, expect, it } from 'vitest';
+
 import { renderStatus, type StatusSnapshot } from './status.js';
 
 function collector(): { lines: string[]; write: (line: string) => void } {
@@ -13,6 +14,9 @@ const EMPTY_QUEUE: QueueLagSnapshot = {
   exhausted: 0,
   reinforcementDropped: 0,
   p95EnrichmentLagMs: undefined,
+  cueDegradedRate: undefined,
+  supersessionProposalsOpen: 0,
+  entityMergeProposalsOpen: 0,
 };
 
 const EMPTY_PLASTICITY: PlasticityCounters = {
@@ -24,7 +28,11 @@ const EMPTY_PLASTICITY: PlasticityCounters = {
 
 const healthy: StatusSnapshot = {
   neo4j: { uri: 'bolt://neo4j:7687', reachable: true, detail: 'Neo4j/2026.07.1' },
-  ollama: { url: 'http://host.docker.internal:11434', reachable: true, models: ['nomic-embed-text:latest', 'qwen3:1.7b'] },
+  ollama: {
+    url: 'http://host.docker.internal:11434',
+    reachable: true,
+    models: ['nomic-embed-text:latest', 'qwen3:1.7b'],
+  },
   graph: { nodes: 2, relationships: 0 },
   queue: EMPTY_QUEUE,
   plasticity: EMPTY_PLASTICITY,
@@ -49,7 +57,12 @@ describe('renderStatus', () => {
     const { lines, write } = collector();
     const down: StatusSnapshot = {
       neo4j: { uri: 'bolt://neo4j:7687', reachable: false, detail: 'connection refused' },
-      ollama: { url: 'http://127.0.0.1:11434', reachable: false, models: [], detail: 'OllamaUnreachableError: no' },
+      ollama: {
+        url: 'http://127.0.0.1:11434',
+        reachable: false,
+        models: [],
+        detail: 'OllamaUnreachableError: no',
+      },
       queue: EMPTY_QUEUE,
       plasticity: EMPTY_PLASTICITY,
     };
@@ -74,6 +87,9 @@ describe('renderStatus', () => {
         exhausted: 1,
         reinforcementDropped: 7,
         p95EnrichmentLagMs: 42_000,
+        cueDegradedRate: undefined,
+        supersessionProposalsOpen: 0,
+        entityMergeProposalsOpen: 0,
       },
     };
 
@@ -100,7 +116,9 @@ describe('renderStatus', () => {
     renderStatus(healthy, DEFAULTS, write);
 
     const text = lines.join('\n');
-    expect(text).toContain('hebbian  reinforce 0 signals / 0 pairs / 0 edges (last run never run), queue depth 0');
+    expect(text).toContain(
+      'hebbian  reinforce 0 signals / 0 pairs / 0 edges (last run never run), queue depth 0',
+    );
     expect(text).toContain('decay    0 scanned / 0 decayed (last run never run)');
   });
 
@@ -137,7 +155,9 @@ describe('renderStatus', () => {
     renderStatus(snapshot, DEFAULTS, write);
 
     const text = lines.join('\n');
-    expect(text).toContain(`routing  cue=ollama:${DEFAULTS.models.cue} reflect=ollama:${DEFAULTS.models.reflect}`);
+    expect(text).toContain(
+      `routing  cue=ollama:${DEFAULTS.models.cue} reflect=ollama:${DEFAULTS.models.reflect}`,
+    );
     expect(text).toContain('resident   qwen3:1.7b');
     // Nothing leaves a fully local install, so there is no banner to read past.
     expect(text).not.toContain('Anthropic API');
@@ -153,7 +173,10 @@ describe('renderStatus', () => {
 
   it('names the call classes that leave the machine once the key is set', () => {
     const { lines, write } = collector();
-    const keyed: Config = { ...DEFAULTS, anthropic: { ...DEFAULTS.anthropic, apiKey: 'sk-ant-test' } };
+    const keyed: Config = {
+      ...DEFAULTS,
+      anthropic: { ...DEFAULTS.anthropic, apiKey: 'sk-ant-test' },
+    };
 
     renderStatus(healthy, keyed, write);
 
@@ -189,6 +212,8 @@ describe('renderStatus', () => {
     renderStatus(snapshot, DEFAULTS, write);
 
     const text = lines.join('\n');
-    expect(text).toContain('weights  SIMILAR p50=0.50 (min=0.20 max=0.80, n=4), CO_OCCURS n=0, RELATED_TO n=0');
+    expect(text).toContain(
+      'weights  SIMILAR p50=0.50 (min=0.20 max=0.80, n=4), CO_OCCURS n=0, RELATED_TO n=0',
+    );
   });
 });

@@ -1,4 +1,5 @@
 import type { Driver } from 'neo4j-driver';
+
 import { supersede } from '../../../infrastructure/graph/bitemporal.js';
 import {
   findDuplicateNarrativeSessions,
@@ -38,10 +39,18 @@ export const NARRATIVE_CLEANUP_STANDING_RELEVANCE = 0.15;
 
 /** Highest coverage wins; version breaks a tie the same coverage could otherwise leave open; id is the last resort. */
 function keepNewest(versions: readonly DuplicateNarrativeVersion[]): DuplicateNarrativeVersion {
-  return [...versions].sort(
+  const [newest] = [...versions].sort(
     (left, right) =>
-      right.coverageCount - left.coverageCount || right.version - left.version || left.id.localeCompare(right.id),
-  )[0]!;
+      right.coverageCount - left.coverageCount ||
+      right.version - left.version ||
+      left.id.localeCompare(right.id),
+  );
+  if (newest === undefined) {
+    // The caller only reaches here with a duplicate group, and a duplicate group is
+    // never fewer than two versions (the query that finds one requires it).
+    throw new Error('keepNewest requires at least one version');
+  }
+  return newest;
 }
 
 async function closeDuplicates(
@@ -49,7 +58,10 @@ async function closeDuplicates(
   limit: number,
   now: Date,
 ): Promise<{ sessions: number; closed: number }> {
-  const groups: readonly DuplicateNarrativeGroup[] = await findDuplicateNarrativeSessions(driver, limit);
+  const groups: readonly DuplicateNarrativeGroup[] = await findDuplicateNarrativeSessions(
+    driver,
+    limit,
+  );
   let closed = 0;
   for (const group of groups) {
     const keep = keepNewest(group.versions);

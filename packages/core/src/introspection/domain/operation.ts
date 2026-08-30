@@ -1,9 +1,10 @@
 import type { Driver } from 'neo4j-driver';
+
+import type { OperationBucket } from './buckets.js';
+import type { CriticalCondition, HealthSnapshot } from './health.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import type { OperationBucket } from './buckets.js';
-import type { CriticalCondition, HealthSnapshot } from './health.js';
 
 /**
  * The contract every maintenance operation implements. It is deliberately small: a name, the

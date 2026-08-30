@@ -1,4 +1,5 @@
 import type { Driver } from 'neo4j-driver';
+
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { runRead, type GraphStatement } from './connection.js';
 import { ENTITY_MENTION_TYPE } from './entity-queries.js';

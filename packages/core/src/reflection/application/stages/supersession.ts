@@ -1,4 +1,6 @@
 import { z } from 'zod';
+
+import { RunTally } from './supersession-tally.js';
 import { supersede } from '../../../infrastructure/graph/bitemporal.js';
 import {
   findContradictionCandidates,
@@ -188,7 +190,9 @@ export async function judgeContradiction(
   options: JudgeContradictionOptions,
 ): Promise<JudgeOutcome> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs);
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, options.timeoutMs);
   let raw: unknown;
   try {
     raw = await provider.generate({
@@ -239,15 +243,6 @@ function isAbortError(error: unknown): boolean {
 /** A fact node that can actually search: text to judge and a vector to search with. */
 type FactSubject = EpisodeFactNode & { readonly contentVector: Vector };
 
-type RunTally = {
-  superseded: number;
-  proposed: number;
-  /** Of the proposals, how many came from a shared subject rather than the KNN widener. */
-  proposedBySubject: number;
-  judgments: number;
-  judgeErrors: number;
-};
-
 export class SupersessionStage implements ReflectionStage {
   readonly name = SUPERSESSION_STAGE_NAME;
   readonly #options: SupersessionStageOptions;
@@ -283,13 +278,7 @@ export class SupersessionStage implements ReflectionStage {
       return { status: 'skipped', summary: 'fact nodes carry no content vectors yet' };
     }
 
-    const tally: RunTally = {
-      superseded: 0,
-      proposed: 0,
-      proposedBySubject: 0,
-      judgments: 0,
-      judgeErrors: 0,
-    };
+    const tally = new RunTally();
     let writeError: unknown;
 
     for (const subject of subjects) {
@@ -352,7 +341,7 @@ export class SupersessionStage implements ReflectionStage {
       }
 
       const judgment = await this.#judge(ctx, subject, candidate, tally);
-      if (judgment === undefined || !judgment.contradicts) {
+      if (!judgment?.contradicts) {
         continue;
       }
 
@@ -372,7 +361,7 @@ export class SupersessionStage implements ReflectionStage {
     candidate: ContradictionCandidate,
     tally: RunTally,
   ): Promise<ContradictionJudgment | undefined> {
-    tally.judgments += 1;
+    tally.recordJudgment();
     const outcome = await judgeContradiction(
       ctx.provider,
       {
@@ -391,7 +380,7 @@ export class SupersessionStage implements ReflectionStage {
       return outcome.judgment;
     }
 
-    tally.judgeErrors += 1;
+    tally.recordJudgeError();
     const where = { episodeId: ctx.episodeId, subjectId: subject.id, candidateId: candidate.id };
     if (outcome.status === 'failed') {
       ctx.logger.warn(
@@ -425,7 +414,7 @@ export class SupersessionStage implements ReflectionStage {
         signals: ['contradiction'],
         provenance: [SUPERSESSION_METHOD],
       });
-      tally.superseded += 1;
+      tally.recordSupersession();
       return;
     }
 
@@ -437,10 +426,7 @@ export class SupersessionStage implements ReflectionStage {
       createdAt: ctx.now.toISOString(),
       ...(judgment.rationale === undefined ? {} : { rationale: judgment.rationale }),
     });
-    tally.proposed += 1;
-    if (candidate.matchedBy === 'subject') {
-      tally.proposedBySubject += 1;
-    }
+    tally.recordProposal(candidate.matchedBy === 'subject');
   }
 
   #report(tally: RunTally, writeError: unknown): StageOutcome {

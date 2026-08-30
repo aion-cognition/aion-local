@@ -1,4 +1,6 @@
 import type { Driver } from 'neo4j-driver';
+
+import { observeHealth, readOperationEffectiveness, type ObserveOptions } from './observe.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
@@ -23,7 +25,6 @@ import {
   type OperationOutcome,
 } from '../domain/operation.js';
 import { proposeOnlyAdvisor, type Tier3Advisor } from '../domain/tier3.js';
-import { observeHealth, readOperationEffectiveness, type ObserveOptions } from './observe.js';
 
 /**
  * The introspection loop: observe, decide, act, learn, on a clock the service owns.
@@ -198,7 +199,10 @@ export class Introspector {
       this.#backoffFactor = 1;
     } catch (err) {
       this.#backoffFactor = Math.min(MAX_BACKOFF_FACTOR, this.#backoffFactor * 2);
-      this.#deps.logger.error({ err, cycle, backoff: this.#backoffFactor }, 'introspection observation failed');
+      this.#deps.logger.error(
+        { err, cycle, backoff: this.#backoffFactor },
+        'introspection observation failed',
+      );
       const health = neutralSnapshot(cycle, at.toISOString());
       return {
         cycle,
@@ -254,7 +258,10 @@ export class Introspector {
 
       const operation = this.#deps.operations.find((entry) => entry.name === decision.name);
       if (operation === undefined) {
-        this.#deps.logger.error({ cycle, operation: decision.name }, 'selected operation is not registered');
+        this.#deps.logger.error(
+          { cycle, operation: decision.name },
+          'selected operation is not registered',
+        );
         return { cycle, health, decision, skipped: false, resolved };
       }
 
@@ -330,7 +337,11 @@ export class Introspector {
       if (after === undefined) {
         continue;
       }
-      const resolution: OperationResolution = measureImproved(operation, stats.pendingMeasure, after)
+      const resolution: OperationResolution = measureImproved(
+        operation,
+        stats.pendingMeasure,
+        after,
+      )
         ? 'improved'
         : 'unchanged';
       recordOperationResolution(this.#deps.db, operation.name, resolution);
@@ -374,7 +385,10 @@ export class Introspector {
       status: 'claimed',
     });
     if (!claimed) {
-      this.#deps.logger.debug({ cycle, operation: operation.name, key }, 'maintenance bucket already claimed');
+      this.#deps.logger.debug(
+        { cycle, operation: operation.name, key },
+        'maintenance bucket already claimed',
+      );
       return { cycle, health, decision, skipped: true, resolved };
     }
 
@@ -399,7 +413,10 @@ export class Introspector {
         itemsAffected: 0,
         detail: describeError(err),
       };
-      this.#deps.logger.error({ err, operation: operation.name, cycle }, 'maintenance operation failed');
+      this.#deps.logger.error(
+        { err, operation: operation.name, cycle },
+        'maintenance operation failed',
+      );
     }
 
     markLedgerApplied(this.#deps.db, key, {

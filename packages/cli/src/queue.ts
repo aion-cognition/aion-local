@@ -19,6 +19,7 @@ import {
   type ReflectionQueueFilter,
   type SqliteHandle,
 } from '@aion/core';
+
 import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
 
 /**
@@ -47,7 +48,9 @@ export class UnknownSubcommandError extends Error {
 
 export class UnknownQueueOptionError extends Error {
   constructor(option: string) {
-    super(`unknown option '${option}' for queue (supported: --session, --lane, --limit, --re-enqueue, --yes)`);
+    super(
+      `unknown option '${option}' for queue (supported: --session, --lane, --limit, --re-enqueue, --yes)`,
+    );
     this.name = 'UnknownQueueOptionError';
   }
 }
@@ -207,9 +210,15 @@ type QueueDeps = {
 };
 
 function renderCounts(deps: QueueDeps, flags: QueueFlags): void {
-  const counts = countQueueJobs(deps.db, filterOf(flags), deps.config.operational.workerMaxAttempts);
+  const counts = countQueueJobs(
+    deps.db,
+    filterOf(flags),
+    deps.config.operational.workerMaxAttempts,
+  );
   const byLane = countQueueJobsByLane(deps.db, deps.config.operational.workerMaxAttempts);
-  const lanes = REFLECTION_LANES.map((lane) => `${lane}=${String(byLane.get(lane) ?? 0)}`).join(' ');
+  const lanes = REFLECTION_LANES.map((lane) => `${lane}=${String(byLane.get(lane) ?? 0)}`).join(
+    ' ',
+  );
   deps.write('');
   deps.write(
     `matched  ${String(counts.total)} jobs: ${String(counts.unclaimed)} unclaimed, ${String(counts.claimed)} claimed, ${String(counts.exhausted)} exhausted`,
@@ -231,7 +240,9 @@ function runDrop(deps: QueueDeps, flags: QueueFlags): number {
     return 0;
   }
   if (!flags.yes) {
-    deps.write(`would drop ${String(counts.unclaimed)} unclaimed jobs matching ${describeFilter(flags)}`);
+    deps.write(
+      `would drop ${String(counts.unclaimed)} unclaimed jobs matching ${describeFilter(flags)}`,
+    );
     if (counts.claimed > 0) {
       deps.write(`${String(counts.claimed)} claimed jobs are running and are left alone`);
     }
@@ -241,7 +252,9 @@ function runDrop(deps: QueueDeps, flags: QueueFlags): number {
   const dropped = dropUnclaimedJobs(deps.db, filterOf(flags));
   deps.logger.warn({ dropped, filter: filterOf(flags) }, 'reflection queue jobs dropped');
   deps.write(`dropped ${String(dropped)} unclaimed jobs matching ${describeFilter(flags)}`);
-  deps.write('their episodes are still stored; `aion queue reconcile` counts and can re-enqueue them');
+  deps.write(
+    'their episodes are still stored; `aion queue reconcile` counts and can re-enqueue them',
+  );
   return 0;
 }
 
@@ -260,7 +273,9 @@ async function runReconcile(deps: QueueDeps, flags: QueueFlags): Promise<number>
   try {
     const health = await connection.health();
     if (!health.reachable) {
-      stderrWriter(`reconcile needs Neo4j: ${connection.uri} unreachable: ${health.error ?? 'unknown error'}`);
+      stderrWriter(
+        `reconcile needs Neo4j: ${connection.uri} unreachable: ${health.error ?? 'unknown error'}`,
+      );
       return 1;
     }
     const report = await reconcileEnrichment(connection.driver, deps.db, {
@@ -268,7 +283,9 @@ async function runReconcile(deps: QueueDeps, flags: QueueFlags): Promise<number>
       ...(flags.limit === undefined ? {} : { limit: flags.limit }),
     });
     deps.logger.info({ report }, 'enrichment reconciled');
-    write(`episodes    ${String(report.episodes)}${report.truncated ? ' (limit reached; counts are a floor)' : ''}`);
+    write(
+      `episodes    ${String(report.episodes)}${report.truncated ? ' (limit reached; counts are a floor)' : ''}`,
+    );
     write(`enriched    ${String(report.enriched)}`);
     write(`queued      ${String(report.queued)}`);
     write(`unenriched  ${String(report.unenriched)}`);
@@ -280,7 +297,9 @@ async function runReconcile(deps: QueueDeps, flags: QueueFlags): Promise<number>
       return 0;
     }
     if (!flags.yes) {
-      write(`would re-enqueue ${String(report.unenriched)} episodes in the bulk lane; re-run with --yes`);
+      write(
+        `would re-enqueue ${String(report.unenriched)} episodes in the bulk lane; re-run with --yes`,
+      );
       return 0;
     }
     write(`re-enqueued ${String(report.reEnqueued)} episodes in the bulk lane`);
@@ -290,7 +309,10 @@ async function runReconcile(deps: QueueDeps, flags: QueueFlags): Promise<number>
   }
 }
 
-export async function runQueue(argv: readonly string[] = [], write: Writer = stdoutWriter): Promise<number> {
+export async function runQueue(
+  argv: readonly string[] = [],
+  write: Writer = stdoutWriter,
+): Promise<number> {
   let flags: QueueFlags;
   let config: Config;
   try {

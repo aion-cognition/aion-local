@@ -1,11 +1,17 @@
+import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { countOpenEntityMergeProposals } from '../../infrastructure/sqlite/entity-merge-proposals.js';
 import { p95EnrichmentLagMs } from '../../infrastructure/sqlite/lag-samples.js';
 import { cueDegradedRate } from '../../infrastructure/sqlite/recall-samples.js';
+import {
+  countQueueJobs,
+  countQueueJobsByLane,
+} from '../../infrastructure/sqlite/reflection-queue-admin.js';
+import {
+  REFLECTION_LANES,
+  type ReflectionLane,
+} from '../../infrastructure/sqlite/reflection-queue.js';
 import { reinforcementQueueDroppedCount } from '../../infrastructure/sqlite/reinforcement-queue.js';
 import { countOpenSupersessionProposals } from '../../infrastructure/sqlite/supersession-proposals.js';
-import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { countQueueJobs, countQueueJobsByLane } from '../../infrastructure/sqlite/reflection-queue-admin.js';
-import { REFLECTION_LANES, type ReflectionLane } from '../../infrastructure/sqlite/reflection-queue.js';
 
 /**
  * The operator's read of everything that had no gauge, in one SQLite pass: `aion doctor`

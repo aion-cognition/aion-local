@@ -7,8 +7,14 @@ import {
   type RecallOutput,
   type ReflectionOutput,
 } from '@aion/protocol';
-import { ErrorCode, McpError, type CallToolResult, type Tool } from '@modelcontextprotocol/sdk/types.js';
+import {
+  ErrorCode,
+  McpError,
+  type CallToolResult,
+  type Tool,
+} from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
+
 import {
   DESCRIPTIONS_VERSION,
   DESCRIPTIONS_VERSION_META_KEY,
@@ -34,9 +40,11 @@ type JsonObjectSchema = Tool['inputSchema'];
  */
 function jsonSchemaFor(schema: z.ZodType, io: 'input' | 'output'): JsonObjectSchema {
   const converted = z.toJSONSchema(schema, { io }) as Record<string, unknown>;
-  delete converted['$schema'];
-  if (converted['type'] !== 'object') {
-    throw new Error(`tool schema must convert to a JSON Schema object, produced ${String(converted['type'])}`);
+  delete converted.$schema;
+  if (converted.type !== 'object') {
+    throw new Error(
+      `tool schema must convert to a JSON Schema object, produced ${String(converted.type)}`,
+    );
   }
   return converted as JsonObjectSchema;
 }
@@ -123,7 +131,10 @@ function toMcpError(tool: string, err: unknown, logger: Logger): McpError {
     return new McpError(ErrorCode.InternalError, err.message);
   }
   const name = err instanceof Error ? err.name : typeof err;
-  return new McpError(ErrorCode.InternalError, `${tool} failed (${name}); see the aion service log`);
+  return new McpError(
+    ErrorCode.InternalError,
+    `${tool} failed (${name}); see the aion service log`,
+  );
 }
 
 /**

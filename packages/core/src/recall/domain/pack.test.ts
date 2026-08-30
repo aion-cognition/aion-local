@@ -1,5 +1,6 @@
 import { MemoryPackSchema, type Cue, type StageTimingsMs } from '@aion/protocol';
 import { describe, expect, it } from 'vitest';
+
 import type { AdmissionReport } from './admission.js';
 import type { FusedItem } from './fusion.js';
 import {
@@ -40,7 +41,7 @@ type ItemOverrides = {
 };
 
 function item(id: string, overrides: ItemOverrides = {}): FusedItem {
-  const path = overrides.path;
+  const { path } = overrides;
   return {
     id,
     labels: overrides.labels ?? ['Episode', 'Memory', 'AionNode'],
@@ -107,7 +108,17 @@ describe('bucket routing', () => {
   });
 
   it('routes every cognitive type to facts, which is where a decision belongs', () => {
-    for (const label of ['Goal', 'Plan', 'Decision', 'Insight', 'Concept', 'Context', 'Event', 'Pattern', 'Trend']) {
+    for (const label of [
+      'Goal',
+      'Plan',
+      'Decision',
+      'Insight',
+      'Concept',
+      'Context',
+      'Event',
+      'Pattern',
+      'Trend',
+    ]) {
       expect(bucketFor([label, 'Memory', 'AionNode'])).toBe('facts');
     }
   });
@@ -256,7 +267,7 @@ describe('the explicitly empty pack', () => {
     expect(assemble([item('e1')]).metadata.degraded).toBeUndefined();
   });
 
-  it('names the calling session\'s unenriched episode count', () => {
+  it("names the calling session's unenriched episode count", () => {
     expect(assemble([], { pendingEnrichment: 3 }).metadata.pending_enrichment).toBe(3);
   });
 
@@ -297,7 +308,7 @@ describe('the structured items', () => {
     expect(pack.episodes?.[0]?.why).toBeUndefined();
   });
 
-  it('carries the node\'s own reason as a distinct field from the retrieval rationale', () => {
+  it("carries the node's own reason as a distinct field from the retrieval rationale", () => {
     const pack = assemble([
       item('d1', {
         labels: ['Decision', 'Memory', 'AionNode'],

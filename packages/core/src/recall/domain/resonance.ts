@@ -1,7 +1,7 @@
+import type { FusedItem } from './fusion.js';
 import type { SeedCandidate } from '../../infrastructure/graph/seed-queries.js';
 import type { Vector } from '../../infrastructure/providers/types.js';
 import { weightedMeanVector } from '../../reflection/domain/context-vector.js';
-import type { FusedItem } from './fusion.js';
 
 /**
  * The math behind context resonance, with no graph access: the centroid of an activated set's

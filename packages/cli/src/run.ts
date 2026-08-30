@@ -69,9 +69,9 @@ const commands: Record<string, Command> = {
   },
   help: {
     summary: 'show this message',
-    run: async () => {
+    run: () => {
       process.stdout.write(usage());
-      return 0;
+      return Promise.resolve(0);
     },
   },
 };

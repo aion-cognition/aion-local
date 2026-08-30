@@ -1,6 +1,7 @@
+import neo4j, { type Driver } from 'neo4j-driver';
 import { randomBytes } from 'node:crypto';
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-import neo4j, { type Driver } from 'neo4j-driver';
+
 import { DEFAULTS } from '../config/defaults.js';
 
 /** Compose's in-container service name. Anything else is a bring-your-own Neo4j the CLI must not try to start or stop. */
@@ -59,7 +60,10 @@ export async function waitForBoltReady(
   let lastError: unknown;
 
   while (Date.now() < deadline) {
-    const driver = neo4j.driver(endpoint.uri, neo4j.auth.basic(NEO4J_DEFAULT_USER, endpoint.password));
+    const driver = neo4j.driver(
+      endpoint.uri,
+      neo4j.auth.basic(NEO4J_DEFAULT_USER, endpoint.password),
+    );
     try {
       await driver.verifyConnectivity();
       return;
@@ -78,7 +82,9 @@ export async function waitForBoltReady(
 export async function verifyGdsAvailable(driver: Driver, uri: string): Promise<string> {
   let version: string | undefined;
   try {
-    const result = await driver.executeQuery('CALL gds.version() YIELD gdsVersion RETURN gdsVersion');
+    const result = await driver.executeQuery(
+      'CALL gds.version() YIELD gdsVersion RETURN gdsVersion',
+    );
     version = result.records[0]?.get('gdsVersion') as string | undefined;
   } catch (err) {
     throw new Neo4jGdsUnavailableError(uri, { cause: err });
@@ -107,7 +113,10 @@ export async function validateNeo4jEndpoint(
   options: ReadinessOptions = {},
 ): Promise<{ gdsVersion: string }> {
   await waitForBoltReady(endpoint, options);
-  const driver = neo4j.driver(endpoint.uri, neo4j.auth.basic(NEO4J_DEFAULT_USER, endpoint.password));
+  const driver = neo4j.driver(
+    endpoint.uri,
+    neo4j.auth.basic(NEO4J_DEFAULT_USER, endpoint.password),
+  );
   try {
     const gdsVersion = await verifyGdsAvailable(driver, endpoint.uri);
     return { gdsVersion };

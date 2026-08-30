@@ -1,6 +1,6 @@
+import { bucketFor } from './pack.js';
 import type { Vector } from '../../infrastructure/providers/types.js';
 import { hashContent } from '../../reflection/domain/content.js';
-import { bucketFor } from './pack.js';
 
 /**
  * The ordering machinery, split out of `fusion.ts` so that file holds the
@@ -64,8 +64,8 @@ function clusterPrefixKey(content: string): string {
  * default RRF reranker) relies on the prefix leg alone, which is what the burst repro needs:
  * the records it measured are one-line and share their opening verbatim.
  */
-function clusterRoots<T extends RankableItem>(
-  items: readonly T[],
+function clusterRoots(
+  items: readonly RankableItem[],
   vectors: ReadonlyMap<string, Vector> | undefined,
 ): ReadonlyMap<string, string> {
   const parent = new Map<string, string>();
@@ -92,7 +92,7 @@ function clusterRoots<T extends RankableItem>(
     }
   }
 
-  const byBucket = new Map<string, T[]>();
+  const byBucket = new Map<string, RankableItem[]>();
   for (const item of items) {
     const bucket = bucketFor(item.labels) ?? '';
     const grouped = byBucket.get(bucket) ?? [];
@@ -231,8 +231,7 @@ export function mmrOrder<T extends RankableItem>(
         continue;
       }
       const score =
-        lambda * (candidate.score / top) -
-        (1 - lambda) * redundancy(candidate, selected, vectors);
+        lambda * (candidate.score / top) - (1 - lambda) * redundancy(candidate, selected, vectors);
       if (score > bestScore) {
         bestScore = score;
         bestIndex = index;

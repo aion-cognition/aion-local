@@ -36,7 +36,9 @@ export function deadLetterOperation(): IntrospectionOperation {
     relevance: deadLetterRelevance,
     measure: (health) => health.queue.exhausted,
     improves: 'lower',
-    run: async (ctx): Promise<OperationOutcome> => {
+    // Every step here is a synchronous SQLite call; `run` still returns a promise because
+    // `IntrospectionOperation.run` is one operation's contract shared with graph-backed ones.
+    run: (ctx): Promise<OperationOutcome> => {
       const maxAttempts = ctx.config.operational.workerMaxAttempts;
       const batchSize = ctx.config.maintenance.deadLetterBatchSize;
       const exhausted = listExhaustedJobs(ctx.db, maxAttempts, batchSize);
@@ -58,14 +60,14 @@ export function deadLetterOperation(): IntrospectionOperation {
         }
       }
 
-      return {
+      return Promise.resolve({
         status: relaned === 0 ? 'noop' : 'applied',
         itemsProcessed: exhausted.length,
         itemsAffected: relaned,
         detail:
           `${String(relaned)} relaned to bulk for one retry, ` +
           `${String(stillNeedsAttention)} already retried and still exhausted`,
-      };
+      });
     },
   };
 }

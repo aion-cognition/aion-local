@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULTS } from '../../infrastructure/config/defaults.js';
-import type { SeedCandidate } from '../../infrastructure/graph/seed-queries.js';
+
 import {
   LEG_RESERVATION_SHARES,
   SEED_STRATEGIES,
@@ -14,6 +13,8 @@ import {
   type SeedContribution,
   type SeedStrategy,
 } from './seed-selection.js';
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import type { SeedCandidate } from '../../infrastructure/graph/seed-queries.js';
 
 const CURVE: SeedBudgetCurve = {
   base: DEFAULTS.contextResonance.seedBudgetBase,
@@ -46,11 +47,20 @@ function seed(id: string, strategy: SeedStrategy, score: number, cue?: string): 
 function byStrategy(
   overrides: Partial<Record<SeedStrategy, readonly Seed[]>>,
 ): Readonly<Record<SeedStrategy, readonly Seed[]>> {
-  return { vector: [], context_vector: [], bm25: [], entity_resolution: [], recency: [], ...overrides };
+  return {
+    vector: [],
+    context_vector: [],
+    bm25: [],
+    entity_resolution: [],
+    recency: [],
+    ...overrides,
+  };
 }
 
-function ranked(...lists: ReadonlyArray<readonly Seed[]>): readonly Seed[] {
-  return lists.flat().sort((left, right) => right.score - left.score || left.id.localeCompare(right.id));
+function ranked(...lists: readonly (readonly Seed[])[]): readonly Seed[] {
+  return lists
+    .flat()
+    .sort((left, right) => right.score - left.score || left.id.localeCompare(right.id));
 }
 
 describe('seedBudget', () => {
@@ -109,7 +119,9 @@ describe('legReservations', () => {
 
   it('stands down when the budget cannot seat every leg, rather than favouring the first named', () => {
     const slots = legReservations(SEED_STRATEGIES.length - 1);
-    expect(SEED_STRATEGIES.map((strategy) => slots[strategy]).every((count) => count === 0)).toBe(true);
+    expect(SEED_STRATEGIES.map((strategy) => slots[strategy]).every((count) => count === 0)).toBe(
+      true,
+    );
   });
 
   it('leaves part of the budget for whatever scored best overall', () => {
@@ -186,14 +198,16 @@ describe('selectWithReservations', () => {
     const budget = 10;
 
     expect(all.slice(0, budget).map((entry) => entry.id)).not.toContain('answer');
-    expect(selectWithReservations({ ranked: all, byStrategy: lists, budget }).map((s) => s.id)).toContain(
-      'answer',
-    );
+    expect(
+      selectWithReservations({ ranked: all, byStrategy: lists, budget }).map((s) => s.id),
+    ).toContain('answer');
   });
 
   it('spends exactly the budget when there are candidates for it', () => {
     for (const budget of [4, 10, 20]) {
-      expect(selectWithReservations({ ranked: all, byStrategy: lists, budget })).toHaveLength(budget);
+      expect(selectWithReservations({ ranked: all, byStrategy: lists, budget })).toHaveLength(
+        budget,
+      );
     }
   });
 
@@ -239,7 +253,10 @@ describe('selectWithReservations', () => {
 
     const chosen = selectWithReservations({
       ranked: ranked(buriedByContent, foundByContext),
-      byStrategy: byStrategy({ vector: [...buriedByContent, ...foundByContext], context_vector: foundByContext }),
+      byStrategy: byStrategy({
+        vector: [...buriedByContent, ...foundByContext],
+        context_vector: foundByContext,
+      }),
       budget: 12,
     }).map((entry) => entry.id);
 
@@ -267,8 +284,8 @@ function candidate(id: string, why?: string): SeedCandidate {
   };
 }
 
-function contribution(candidate: SeedCandidate, score: number): SeedContribution {
-  return { candidate, strategy: 'vector', score, relevance: score };
+function contribution(seedCandidate: SeedCandidate, score: number): SeedContribution {
+  return { candidate: seedCandidate, strategy: 'vector', score, relevance: score };
 }
 
 describe('mergeSeeds', () => {

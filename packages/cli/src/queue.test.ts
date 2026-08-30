@@ -1,6 +1,3 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import {
   enqueueReflectionJob,
   listReflectionJobs,
@@ -8,7 +5,11 @@ import {
   SqliteStore,
   type ReflectionLane,
 } from '@aion/core';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
 import {
   InvalidQueueValueError,
   MissingQueueValueError,
@@ -30,7 +31,9 @@ describe('parseQueueFlags', () => {
   });
 
   it('reads every option', () => {
-    expect(parseQueueFlags(['drop', '--session', 's-1', '--lane', 'bulk', '--limit', '5', '--yes'])).toEqual({
+    expect(
+      parseQueueFlags(['drop', '--session', 's-1', '--lane', 'bulk', '--limit', '5', '--yes']),
+    ).toEqual({
       subcommand: 'drop',
       session: 's-1',
       lane: 'bulk',
@@ -63,17 +66,17 @@ describe('aion queue against a seeded substrate', () => {
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'aion-cli-queue-'));
-    process.env['AION_SQLITE_PATH'] = join(dir, 'aion.sqlite');
-    process.env['AION_LOG_FILE'] = join(dir, 'aion.jsonl');
-    process.env['AION_LOG_LEVEL'] = 'fatal';
+    process.env.AION_SQLITE_PATH = join(dir, 'aion.sqlite');
+    process.env.AION_LOG_FILE = join(dir, 'aion.jsonl');
+    process.env.AION_LOG_LEVEL = 'fatal';
     store = new SqliteStore({ filePath: join(dir, 'aion.sqlite') });
   });
 
   afterEach(() => {
     store.close();
-    delete process.env['AION_SQLITE_PATH'];
-    delete process.env['AION_LOG_FILE'];
-    delete process.env['AION_LOG_LEVEL'];
+    delete process.env.AION_SQLITE_PATH;
+    delete process.env.AION_LOG_FILE;
+    delete process.env.AION_LOG_LEVEL;
     rmSync(dir, { recursive: true, force: true });
   });
 

@@ -1,4 +1,5 @@
 import neo4j, { type Driver } from 'neo4j-driver';
+
 import { runRead } from './connection.js';
 import { VectorIndexDimensionMismatchError, VectorIndexMissingError } from './errors.js';
 import { CONTENT_VECTOR_INDEX, CONTEXT_VECTOR_INDEX } from './vector-indexes.js';
@@ -24,7 +25,7 @@ function readIndexConfig(options: unknown): Record<string, unknown> {
   if (typeof options !== 'object' || options === null) {
     return {};
   }
-  const indexConfig = (options as Record<string, unknown>)['indexConfig'];
+  const { indexConfig } = options as Record<string, unknown>;
   if (typeof indexConfig !== 'object' || indexConfig === null) {
     return {};
   }
@@ -38,11 +39,11 @@ export async function readVectorIndexes(driver: Driver): Promise<readonly Vector
     "SHOW INDEXES YIELD name, type, options WHERE type = 'VECTOR' RETURN name, options",
     {},
     (row) => {
-      const config = readIndexConfig(row['options']);
+      const config = readIndexConfig(row.options);
       const dimensions = config[DIMENSIONS_OPTION];
       const similarity = config[SIMILARITY_OPTION];
       return {
-        name: row['name'] as string,
+        name: row.name as string,
         ...(typeof dimensions === 'number' ? { dimensions } : {}),
         ...(typeof similarity === 'string' ? { similarityFunction: similarity } : {}),
       };
@@ -86,7 +87,7 @@ export async function countGraphElements(driver: Driver): Promise<GraphCounts> {
      OPTIONAL MATCH ()-[r]->()
      RETURN nodes, count(r) AS relationships`,
     {},
-    (row) => ({ nodes: row['nodes'] as number, relationships: row['relationships'] as number }),
+    (row) => ({ nodes: row.nodes as number, relationships: row.relationships as number }),
   );
   return rows[0] ?? { nodes: 0, relationships: 0 };
 }
@@ -101,7 +102,7 @@ export async function countNodesByLabel(driver: Driver): Promise<ReadonlyMap<str
     driver,
     'MATCH (n) UNWIND labels(n) AS label RETURN label, count(*) AS count ORDER BY label',
     {},
-    (row) => ({ label: row['label'] as string, count: row['count'] as number }),
+    (row) => ({ label: row.label as string, count: row.count as number }),
   );
   return new Map(rows.map((row) => [row.label, row.count]));
 }
@@ -122,11 +123,14 @@ export async function readStoredText(
       'MATCH (n)',
       'WITH n, [k IN keys(n) WHERE n[k] IS :: STRING | n[k]] AS strings',
       'WHERE size(strings) > 0',
-      'RETURN n.id AS id, reduce(joined = \'\', s IN strings | joined + \' \' + s) AS text',
+      "RETURN n.id AS id, reduce(joined = '', s IN strings | joined + ' ' + s) AS text",
       'LIMIT $limit',
     ].join('\n'),
     // Neo4j rejects a JS number here: it arrives as a float and LIMIT wants an integer.
     { limit: neo4j.int(Math.trunc(limit)) },
-    (row) => ({ id: String(row.id ?? ''), text: String(row.text ?? '') }),
+    (row) => ({
+      id: (row.id as string | null) ?? '',
+      text: (row.text as string | null) ?? '',
+    }),
   );
 }

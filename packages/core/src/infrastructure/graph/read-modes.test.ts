@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import { GraphWriteError } from './errors.js';
 import {
   asOf,
@@ -30,7 +31,9 @@ describe('withCurrency', () => {
     expect(fragment.lineage).toBe(
       'head([ (rm_sup)-[rm_sup_rel:SUPERSEDES]->(n) | { id: rm_sup.id, at: rm_sup_rel.created_at } ])',
     );
-    expect(fragment.projection).toBe(`${fragment.currency} AS currency, ${fragment.lineage} AS superseded_by`);
+    expect(fragment.projection).toBe(
+      `${fragment.currency} AS currency, ${fragment.lineage} AS superseded_by`,
+    );
   });
 });
 

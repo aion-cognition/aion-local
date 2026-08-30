@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import { RecallInputSchema } from './recall-input.js';
 
 describe('RecallInputSchema valid fixtures', () => {

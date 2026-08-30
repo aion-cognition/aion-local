@@ -2,6 +2,13 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+
+import { ReflectionDispatch } from './dispatch.js';
+import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
+import { LaneAssigner } from './lanes.js';
+import { orchestratorLedgerKey, ReflectionOrchestrator } from './orchestrator.js';
+import { findPendingVectorNodes } from './vectors.js';
+import { ReflectionWorker, type ReflectionWorkerOptions } from './worker.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
@@ -26,12 +33,6 @@ import {
 } from '../../infrastructure/sqlite/reflection-queue.js';
 import { SessionManager } from '../../session/session-manager.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../domain/stage.js';
-import { ReflectionDispatch } from './dispatch.js';
-import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
-import { LaneAssigner } from './lanes.js';
-import { orchestratorLedgerKey, ReflectionOrchestrator } from './orchestrator.js';
-import { findPendingVectorNodes } from './vectors.js';
-import { ReflectionWorker, type ReflectionWorkerOptions } from './worker.js';
 
 /**
  * The worker against the real substrate: a signal starts a job with nothing polling for it,
@@ -102,7 +103,7 @@ class RecordingStage {
   readonly name = 'recording';
   readonly episodes: string[] = [];
   mode: 'ok' | 'fail' = 'ok';
-  readonly #waiting: Array<{ readonly count: number; readonly resolve: () => void }> = [];
+  readonly #waiting: { readonly count: number; readonly resolve: () => void }[] = [];
 
   /** Resolves the moment the stage has been entered `count` times, so no test waits on a clock. */
   entered(count: number): Promise<void> {
@@ -124,7 +125,11 @@ class RecordingStage {
     if (this.mode === 'fail') {
       return { status: 'failed', summary: 'the stage refused' };
     }
-    return { status: 'ok', summary: `recorded ${ctx.episode.turns.length} turns`, counts: { entities: 1 } };
+    return {
+      status: 'ok',
+      summary: `recorded ${ctx.episode.turns.length} turns`,
+      counts: { entities: 1 },
+    };
   }
 }
 
@@ -141,7 +146,7 @@ class GatedStage {
   readonly #gate = new Promise<void>((resolve) => {
     this.#release = resolve;
   });
-  readonly #waiting: Array<{ readonly count: number; readonly resolve: () => void }> = [];
+  readonly #waiting: { readonly count: number; readonly resolve: () => void }[] = [];
 
   /** Resolves once `count` runs have entered the stage and are parked on the gate. */
   entered(count: number): Promise<void> {
@@ -165,7 +170,11 @@ class GatedStage {
       }
     }
     await this.#gate;
-    return { status: 'ok', summary: `recorded ${ctx.episode.turns.length} turns`, counts: { entities: 1 } };
+    return {
+      status: 'ok',
+      summary: `recorded ${ctx.episode.turns.length} turns`,
+      counts: { entities: 1 },
+    };
   }
 }
 
@@ -178,7 +187,10 @@ let live: ReflectionIntakeDeps;
 let deadOllama: ReflectionIntakeDeps;
 let worker: ReflectionWorker | undefined;
 
-function buildWorker(stage: ReflectionStage, options: ReflectionWorkerOptions = {}): ReflectionWorker {
+function buildWorker(
+  stage: ReflectionStage,
+  options: ReflectionWorkerOptions = {},
+): ReflectionWorker {
   const runner = new ReflectionOrchestrator(
     { driver: harness.driver, db, provider: live.provider, logger },
     [stage],
@@ -229,8 +241,9 @@ beforeAll(async () => {
 }, 300_000);
 
 afterEach(async () => {
-  await worker?.stop();
+  const current = worker;
   worker = undefined;
+  await current?.stop();
 });
 
 afterAll(async () => {
@@ -285,7 +298,9 @@ describe('a start after an outage and a crash', () => {
     expect(stage.episodes).toEqual([stored.episode_id]);
     await first.stop();
 
-    const abandoned = enqueueReflectionJob(db, INTEGRATE_JOB_TYPE, { episode_id: stored.episode_id });
+    const abandoned = enqueueReflectionJob(db, INTEGRATE_JOB_TYPE, {
+      episode_id: stored.episode_id,
+    });
     new ReflectionQueueClaimant('dead-process').claimNext(db);
     backdateClaim(abandoned, 11 * 60 * 1000);
 
@@ -306,8 +321,9 @@ describe('five consecutive failures', () => {
     stage.mode = 'fail';
     const started = buildWorker(stage, { retryBaseMs: 60_000, breakerCooldownMs: 50 });
 
-    const episodeId = (await handleReflection(live, BREAKER_PAYLOAD, { identity: BREAKER_IDENTITY }))
-      .episode_id;
+    const episodeId = (
+      await handleReflection(live, BREAKER_PAYLOAD, { identity: BREAKER_IDENTITY })
+    ).episode_id;
     const later = [1, 2, 3, 4, 5].map(() =>
       enqueueReflectionJob(db, INTEGRATE_JOB_TYPE, { episode_id: episodeId }),
     );
@@ -315,7 +331,7 @@ describe('five consecutive failures', () => {
 
     expect(drain.ran).toBe(5);
     expect(started.paused).toBe(true);
-    expect(getReflectionJob(db, later[4] as string)?.claimedAt).toBeNull();
+    expect(getReflectionJob(db, later[4]!)?.claimedAt).toBeNull();
     expect(getLedgerEntry(db, orchestratorLedgerKey(episodeId))).toBeUndefined();
 
     stage.mode = 'ok';

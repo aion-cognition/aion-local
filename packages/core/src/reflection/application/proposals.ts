@@ -1,10 +1,11 @@
 import type { Driver } from 'neo4j-driver';
+
 import { supersede } from '../../infrastructure/graph/bitemporal.js';
-import { markNarrativesForRegrounding } from '../../infrastructure/graph/narrative-queries.js';
 import {
   findSourceEpisodeId,
   supersedeEpisode,
 } from '../../infrastructure/graph/episode-supersession.js';
+import { markNarrativesForRegrounding } from '../../infrastructure/graph/narrative-queries.js';
 import {
   supersedeSubjectFamily,
   type ClaimSubject,

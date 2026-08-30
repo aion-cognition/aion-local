@@ -1,8 +1,8 @@
 import { z } from 'zod';
+
 import {
   COGNITIVE_NODE_LABELS,
   writeCognitiveNode,
-  type CognitiveNodeLabel,
   type CognitiveNodeMetadata,
 } from '../../../infrastructure/graph/cognitive-queries.js';
 import type { ChatMessage, JsonSchema, Vector } from '../../../infrastructure/providers/types.js';
@@ -111,7 +111,7 @@ const SYSTEM_PROMPT = [
   'For a goal, add status (active, completed, or abandoned) and priority (low, medium, or high) when the episode states them.',
   'For a plan, add status (active, completed, or abandoned) when the episode states it.',
   'For a decision, add a one-sentence rationale when the episode gives one.',
-  'A goal or plan must state something beyond the episode\'s own summary line; if it would',
+  "A goal or plan must state something beyond the episode's own summary line; if it would",
   'only restate that summary in different words, leave it out.',
 ].join(' ');
 
@@ -173,14 +173,22 @@ function buildRestatementSchema(candidates: readonly RestatementCandidate[]): Js
   return {
     type: 'object',
     properties: {
-      restated: { type: 'array', items: { type: 'string', enum: candidates.map((candidate) => candidate.key) } },
+      restated: {
+        type: 'array',
+        items: { type: 'string', enum: candidates.map((candidate) => candidate.key) },
+      },
     },
     required: ['restated'],
   };
 }
 
-function buildRestatementMessages(summary: string, candidates: readonly RestatementCandidate[]): ChatMessage[] {
-  const items = candidates.map((candidate) => `${candidate.key} [${candidate.type}]: ${candidate.text}`).join('\n');
+function buildRestatementMessages(
+  summary: string,
+  candidates: readonly RestatementCandidate[],
+): ChatMessage[] {
+  const items = candidates
+    .map((candidate) => `${candidate.key} [${candidate.type}]: ${candidate.text}`)
+    .join('\n');
   return [
     { role: 'system', content: RESTATEMENT_SYSTEM_PROMPT },
     { role: 'user', content: `Episode summary:\n${summary}\n\nCandidates:\n${items}` },
@@ -220,7 +228,9 @@ export class CognitiveExtractionStage implements ReflectionStage {
     }
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.#timeoutMs);
+    const timer = setTimeout(() => {
+      controller.abort();
+    }, this.#timeoutMs);
     let raw: unknown;
     try {
       raw = await ctx.provider.generate({
@@ -300,7 +310,7 @@ export class CognitiveExtractionStage implements ReflectionStage {
       try {
         const result = await writeCognitiveNode(ctx.driver, {
           episodeId: ctx.episodeId,
-          label: node.type as CognitiveNodeLabel,
+          label: node.type,
           text: node.text.trim(),
           metadata: metadataFor(node),
           contentVector: vectors[index],
@@ -341,7 +351,12 @@ export class CognitiveExtractionStage implements ReflectionStage {
     const candidates: RestatementCandidate[] = [];
     nodes.forEach((node, nodeIndex) => {
       if (node.type === 'Goal' || node.type === 'Plan') {
-        candidates.push({ key: `R${candidates.length + 1}`, nodeIndex, type: node.type, text: node.text });
+        candidates.push({
+          key: `R${candidates.length + 1}`,
+          nodeIndex,
+          type: node.type,
+          text: node.text,
+        });
       }
     });
     if (candidates.length === 0) {
@@ -360,7 +375,9 @@ export class CognitiveExtractionStage implements ReflectionStage {
 
     const restatedKeys = new Set(restated);
     const dropped = new Set(
-      candidates.filter((candidate) => restatedKeys.has(candidate.key)).map((candidate) => candidate.nodeIndex),
+      candidates
+        .filter((candidate) => restatedKeys.has(candidate.key))
+        .map((candidate) => candidate.nodeIndex),
     );
     return nodes.filter((_, index) => !dropped.has(index));
   }
@@ -381,7 +398,9 @@ export class CognitiveExtractionStage implements ReflectionStage {
     candidates: readonly RestatementCandidate[],
   ): Promise<readonly string[] | undefined> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.#timeoutMs);
+    const timer = setTimeout(() => {
+      controller.abort();
+    }, this.#timeoutMs);
     try {
       const raw = await ctx.provider.generate({
         model: this.#model,

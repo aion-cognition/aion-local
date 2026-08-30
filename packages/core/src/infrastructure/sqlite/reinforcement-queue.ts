@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+
 import type { SqliteHandle } from './database.js';
 import { getMeta, setMeta } from './meta.js';
 

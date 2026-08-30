@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
 import { SqliteStore } from './database.js';
 import {
   findSupersessionProposalsForNode,
@@ -25,7 +26,9 @@ describe('supersession proposal accessors', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  function record(overrides: Partial<Parameters<typeof recordSupersessionProposal>[1]> = {}): string {
+  function record(
+    overrides: Partial<Parameters<typeof recordSupersessionProposal>[1]> = {},
+  ): string {
     return recordSupersessionProposal(store.db, {
       oldId: 'decision-old',
       newId: 'decision-new',
@@ -55,7 +58,11 @@ describe('supersession proposal accessors', () => {
 
   it('re-judging a pair updates the row rather than adding one', () => {
     const first = record({ confidence: 0.6 });
-    const second = record({ confidence: 0.7, rationale: 'sharper reading', createdAt: '2026-09-01T00:00:00.000Z' });
+    const second = record({
+      confidence: 0.7,
+      rationale: 'sharper reading',
+      createdAt: '2026-09-01T00:00:00.000Z',
+    });
 
     expect(second).toBe(first);
     expect(listSupersessionProposals(store.db)).toHaveLength(1);
@@ -86,10 +93,9 @@ describe('supersession proposal accessors', () => {
     record();
     record({ oldId: 'decision-older', newId: 'decision-old' });
 
-    expect(findSupersessionProposalsForNode(store.db, 'decision-old').map((row) => row.newId)).toEqual([
-      'decision-new',
-      'decision-old',
-    ]);
+    expect(
+      findSupersessionProposalsForNode(store.db, 'decision-old').map((row) => row.newId),
+    ).toEqual(['decision-new', 'decision-old']);
     expect(findSupersessionProposalsForNode(store.db, 'unrelated')).toEqual([]);
   });
 

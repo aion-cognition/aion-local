@@ -1,8 +1,12 @@
+import type { Driver } from 'neo4j-driver';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Driver } from 'neo4j-driver';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { ReflectionDispatch, type ReflectionJobSignal } from './dispatch.js';
+import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
+import { LaneAssigner } from './lanes.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
@@ -26,12 +30,12 @@ import {
 } from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger } from '../../infrastructure/logging/logger.js';
 import { OllamaProvider } from '../../infrastructure/providers/ollama-provider.js';
-import { SessionManager } from '../../session/session-manager.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { listReflectionJobs, type ReflectionJob } from '../../infrastructure/sqlite/reflection-queue.js';
-import { ReflectionDispatch, type ReflectionJobSignal } from './dispatch.js';
-import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
-import { LaneAssigner } from './lanes.js';
+import {
+  listReflectionJobs,
+  type ReflectionJob,
+} from '../../infrastructure/sqlite/reflection-queue.js';
+import { SessionManager } from '../../session/session-manager.js';
 
 const EMBED_DIMENSION = DEFAULTS.models.embedDimension;
 const SESSION_IDENTITY = 'mcp-transport-session-1';
@@ -169,7 +173,9 @@ describe('reflection intake against a live graph and live Ollama', () => {
 
   it('links the episode into the session and the session into the backbone', async () => {
     expect(await edgeTargetId(harness.driver, 'PARTICIPATES_IN', episodeId)).toBe(SESSION_IDENTITY);
-    expect(await edgeTargetId(harness.driver, 'INITIATED_BY', SESSION_IDENTITY)).toBe(backboneIds.memberId);
+    expect(await edgeTargetId(harness.driver, 'INITIATED_BY', SESSION_IDENTITY)).toBe(
+      backboneIds.memberId,
+    );
     expect(await edgeTargetId(harness.driver, 'WITHIN_WORKSPACE', SESSION_IDENTITY)).toBe(
       backboneIds.workspaceId,
     );
@@ -195,7 +201,11 @@ describe('reflection intake against a live graph and live Ollama', () => {
     expect(jobs[0]?.claimedBy).toBeNull();
 
     expect(signals).toHaveLength(1);
-    expect(signals[0]).toMatchObject({ episodeId, sessionId: SESSION_IDENTITY, jobId: jobs[0]?.id });
+    expect(signals[0]).toMatchObject({
+      episodeId,
+      sessionId: SESSION_IDENTITY,
+      jobId: jobs[0]?.id,
+    });
   });
 
   it('leaves the ops ledger untouched: the pipeline owns it, not intake', () => {
@@ -221,7 +231,12 @@ describe('reflection intake against a live graph and live Ollama', () => {
 
     // pending_ahead counts the one already-queued interactive job from the beforeAll push,
     // which nothing in this file ever claims.
-    expect(repeat).toEqual({ episode_id: episodeId, queued: true, lane: 'interactive', pending_ahead: 1 });
+    expect(repeat).toEqual({
+      episode_id: episodeId,
+      queued: true,
+      lane: 'interactive',
+      pending_ahead: 1,
+    });
     expect(await countNodes(harness.driver)).toBe(nodesBefore);
     expect(await countRelationships(harness.driver)).toBe(edgesBefore);
     expect(listReflectionJobs(db)).toHaveLength(1);
@@ -230,13 +245,17 @@ describe('reflection intake against a live graph and live Ollama', () => {
   });
 
   it('stores the same experience again under a second session identity', async () => {
-    const other = await handleReflection(deps, MIXED_PAYLOAD, { identity: 'mcp-transport-session-2' });
+    const other = await handleReflection(deps, MIXED_PAYLOAD, {
+      identity: 'mcp-transport-session-2',
+    });
 
     expect(other.episode_id).not.toBe(episodeId);
     expect(listReflectionJobs(db)).toHaveLength(2);
     expect(signals).toHaveLength(2);
 
-    expect(await countEdges(harness.driver, 'FOLLOWS', 'mcp-transport-session-2', SESSION_IDENTITY)).toBe(1);
+    expect(
+      await countEdges(harness.driver, 'FOLLOWS', 'mcp-transport-session-2', SESSION_IDENTITY),
+    ).toBe(1);
   });
 });
 
@@ -311,7 +330,9 @@ describe('reflection intake under failure and concurrency', () => {
     const closed = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
     closed.close();
 
-    await expect(handleReflection({ ...deps, db: closed }, PAYLOAD, { identity })).rejects.toThrow();
+    await expect(
+      handleReflection({ ...deps, db: closed }, PAYLOAD, { identity }),
+    ).rejects.toThrow();
 
     expect(await countNodesInSession(harness.driver, 'Episode', identity)).toBe(1);
     expect(await jobsForSession(identity)).toHaveLength(0);

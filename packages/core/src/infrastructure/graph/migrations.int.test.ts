@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import { BASE_NODE_LABEL } from './labels.js';
 import {
   GRAPH_MIGRATIONS,
@@ -10,9 +11,13 @@ import {
   runGraphMigrations,
 } from './migrations.js';
 import { CONTENT_FULLTEXT_INDEX } from './seed-queries.js';
-import { startNeo4jHarness, stopNeo4jHarness, type Neo4jHarness } from './test-support/neo4j-harness.fixture.js';
-import { getMeta } from '../sqlite/meta.js';
+import {
+  startNeo4jHarness,
+  stopNeo4jHarness,
+  type Neo4jHarness,
+} from './test-support/neo4j-harness.fixture.js';
 import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
+import { getMeta } from '../sqlite/meta.js';
 
 const EMBED_DIMENSION = 768;
 
@@ -38,11 +43,36 @@ const EXPECTED_CONSTRAINTS = [
 ].sort((a, b) => a.name.localeCompare(b.name));
 
 const EXPECTED_NON_LOOKUP_INDEXES = [
-  ...EXPECTED_CONSTRAINTS.map((c) => ({ name: c.name, type: 'RANGE', labelsOrTypes: c.labelsOrTypes, properties: c.properties })),
-  { name: 'content_vec_idx', type: 'VECTOR', labelsOrTypes: ['Memory'], properties: ['content_vec'] },
-  { name: 'context_vec_idx', type: 'VECTOR', labelsOrTypes: ['Memory'], properties: ['context_vec'] },
-  { name: 'memory_valid_until_idx', type: 'RANGE', labelsOrTypes: ['Memory'], properties: ['valid_until'] },
-  { name: 'memory_tx_until_idx', type: 'RANGE', labelsOrTypes: ['Memory'], properties: ['tx_until'] },
+  ...EXPECTED_CONSTRAINTS.map((c) => ({
+    name: c.name,
+    type: 'RANGE',
+    labelsOrTypes: c.labelsOrTypes,
+    properties: c.properties,
+  })),
+  {
+    name: 'content_vec_idx',
+    type: 'VECTOR',
+    labelsOrTypes: ['Memory'],
+    properties: ['content_vec'],
+  },
+  {
+    name: 'context_vec_idx',
+    type: 'VECTOR',
+    labelsOrTypes: ['Memory'],
+    properties: ['context_vec'],
+  },
+  {
+    name: 'memory_valid_until_idx',
+    type: 'RANGE',
+    labelsOrTypes: ['Memory'],
+    properties: ['valid_until'],
+  },
+  {
+    name: 'memory_tx_until_idx',
+    type: 'RANGE',
+    labelsOrTypes: ['Memory'],
+    properties: ['tx_until'],
+  },
   {
     name: CONTENT_FULLTEXT_INDEX,
     type: 'FULLTEXT',
@@ -66,10 +96,19 @@ const EXPECTED_NON_LOOKUP_INDEXES = [
 ].sort((a, b) => a.name.localeCompare(b.name));
 
 type ConstraintRow = { name: string; labelsOrTypes: string[]; properties: string[] };
-type IndexRow = { name: string; id: number; type: string; labelsOrTypes: string[] | null; properties: string[] | null; options: { indexConfig?: Record<string, unknown> } };
+type IndexRow = {
+  name: string;
+  id: number;
+  type: string;
+  labelsOrTypes: string[] | null;
+  properties: string[] | null;
+  options: { indexConfig?: Record<string, unknown> };
+};
 
 async function fetchConstraints(harness: Neo4jHarness): Promise<ConstraintRow[]> {
-  const result = await harness.driver.executeQuery('SHOW CONSTRAINTS YIELD name, labelsOrTypes, properties RETURN name, labelsOrTypes, properties');
+  const result = await harness.driver.executeQuery(
+    'SHOW CONSTRAINTS YIELD name, labelsOrTypes, properties RETURN name, labelsOrTypes, properties',
+  );
   return result.records
     .map((r) => ({
       name: r.get('name') as string,
@@ -115,7 +154,9 @@ describe('graph schema migrations 001 + 002', () => {
   it('applies both migrations on first run and records both in the meta table', async () => {
     expect(latestAppliedGraphMigration(db)).toBeUndefined();
 
-    const { applied, created } = await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
+    const { applied, created } = await runGraphMigrations(harness.driver, db, {
+      embedDimension: EMBED_DIMENSION,
+    });
 
     expect(applied).toEqual([1, 2]);
     expect(created).toContain('content_vec_idx');
@@ -135,9 +176,14 @@ describe('graph schema migrations 001 + 002', () => {
   it('creates exactly the pinned non-lookup indexes, the fulltext one over every memory label', async () => {
     const indexes = await fetchNonLookupIndexes(harness);
 
-    expect(indexes.map(({ name, type, labelsOrTypes, properties }) => ({ name, type, labelsOrTypes, properties }))).toEqual(
-      EXPECTED_NON_LOOKUP_INDEXES,
-    );
+    expect(
+      indexes.map(({ name, type, labelsOrTypes, properties }) => ({
+        name,
+        type,
+        labelsOrTypes,
+        properties,
+      })),
+    ).toEqual(EXPECTED_NON_LOOKUP_INDEXES);
 
     const contentVec = indexes.find((i) => i.name === 'content_vec_idx');
     const contextVec = indexes.find((i) => i.name === 'context_vec_idx');
@@ -153,7 +199,9 @@ describe('graph schema migrations 001 + 002', () => {
     const constraintsBefore = await fetchConstraints(harness);
     const indexesBefore = await fetchNonLookupIndexes(harness);
 
-    const { applied, created } = await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
+    const { applied, created } = await runGraphMigrations(harness.driver, db, {
+      embedDimension: EMBED_DIMENSION,
+    });
 
     expect(applied).toEqual([]);
     expect(created).toEqual([]);
@@ -165,7 +213,8 @@ describe('graph schema migrations 001 + 002', () => {
 
   it('leaves the fulltext index itself untouched across three inits', async () => {
     const idOf = async (): Promise<number | undefined> =>
-      (await fetchNonLookupIndexes(harness)).find((index) => index.name === CONTENT_FULLTEXT_INDEX)?.id;
+      (await fetchNonLookupIndexes(harness)).find((index) => index.name === CONTENT_FULLTEXT_INDEX)
+        ?.id;
     const before = await idOf();
 
     await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
@@ -180,7 +229,9 @@ describe('graph schema migrations 001 + 002', () => {
     await harness.driver.executeQuery('DROP CONSTRAINT goal_id_unique');
     await harness.driver.executeQuery('DROP INDEX content_vec_idx');
 
-    const { applied, created } = await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
+    const { applied, created } = await runGraphMigrations(harness.driver, db, {
+      embedDimension: EMBED_DIMENSION,
+    });
 
     expect(applied).toEqual([]);
     expect([...created].sort()).toEqual(['content_vec_idx', 'episode_id_unique', 'goal_id_unique']);
@@ -225,7 +276,10 @@ describe('migration 002 fulltext retirement', () => {
     );
     await harness.driver.executeQuery(
       `CREATE (n:Episode:Memory:${BASE_NODE_LABEL} {id: $id, summary: $summary})`,
-      { id: 'pre-002-episode', summary: 'the migration 002 rebuild must not lose glorbanite content' },
+      {
+        id: 'pre-002-episode',
+        summary: 'the migration 002 rebuild must not lose glorbanite content',
+      },
     );
     await harness.driver.executeQuery('CALL db.awaitIndexes(60)');
   });

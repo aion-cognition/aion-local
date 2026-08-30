@@ -1,6 +1,12 @@
-import { ENTITY_MENTION_TYPE, ENTITY_TYPE_PROPERTY } from '../../../infrastructure/graph/entity-queries.js';
+import {
+  ENTITY_MENTION_TYPE,
+  ENTITY_TYPE_PROPERTY,
+} from '../../../infrastructure/graph/entity-queries.js';
 import { MEMORY_PROPERTIES } from '../../../infrastructure/graph/episodes.js';
-import { ENTITY_NAME_NORM_PROPERTY, ENTITY_NAME_PROPERTY } from '../../../infrastructure/graph/seed-queries.js';
+import {
+  ENTITY_NAME_NORM_PROPERTY,
+  ENTITY_NAME_PROPERTY,
+} from '../../../infrastructure/graph/seed-queries.js';
 import type { Row } from '../../../infrastructure/graph/values.js';
 import { FakeGraph } from '../../test-support/fake-graph.fixture.js';
 
@@ -55,7 +61,9 @@ export class SemanticRelationshipFakeGraph extends FakeGraph {
         type: node.properties[ENTITY_TYPE_PROPERTY],
       }))
       .sort((left, right) =>
-        `${left.name_norm as string}${left.id}`.localeCompare(`${right.name_norm as string}${right.id}`),
+        `${left.name_norm as string}${left.id}`.localeCompare(
+          `${right.name_norm as string}${right.id}`,
+        ),
       );
   }
 
@@ -72,6 +80,8 @@ export class SemanticRelationshipFakeGraph extends FakeGraph {
         label: node.labels.find((label) => labels.includes(label)),
         text: node.properties[MEMORY_PROPERTIES.text],
       }))
-      .sort((left, right) => `${left.text as string}${left.id}`.localeCompare(`${right.text as string}${right.id}`));
+      .sort((left, right) =>
+        `${left.text as string}${left.id}`.localeCompare(`${right.text as string}${right.id}`),
+      );
   }
 }

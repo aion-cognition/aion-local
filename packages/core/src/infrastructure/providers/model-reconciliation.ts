@@ -49,7 +49,10 @@ export async function listResidentModels(
   return (body.models ?? [])
     .filter((model): model is { name: string; size?: number } => typeof model.name === 'string')
     .map((model) => {
-      return { name: model.name, sizeBytes: typeof model.size === 'number' ? model.size : undefined };
+      return {
+        name: model.name,
+        sizeBytes: typeof model.size === 'number' ? model.size : undefined,
+      };
     });
 }
 

@@ -1,12 +1,13 @@
-import { createHash } from 'node:crypto';
 import type { Driver } from 'neo4j-driver';
-import type { Vector } from '../providers/types.js';
+import { createHash } from 'node:crypto';
+
 import { writeStampedNodeInTransaction, type StampedNodeResult } from './bitemporal.js';
 import { inWriteTransaction } from './connection.js';
 import { upsertEdgeInTransaction, type UpsertedEdge } from './edges.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
 import type { NodeLabel } from './labels.js';
 import { toGraphVector, type GraphProperties } from './values.js';
+import type { Vector } from '../providers/types.js';
 
 /**
  * The nine cognitive node types the reflection pipeline extracts. This module is their

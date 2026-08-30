@@ -42,7 +42,9 @@ export async function checkOllamaReachable(
   const fetchImpl = options.fetchImpl ?? fetch;
   const timeoutMs = options.reachabilityTimeoutMs ?? DEFAULT_REACHABILITY_TIMEOUT_MS;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
   try {
     const response = await fetchImpl(`${normalizeBaseUrl(baseUrl)}/api/version`, {
       signal: controller.signal,
@@ -68,7 +70,10 @@ export async function listOllamaModels(
   const fetchImpl = options.fetchImpl ?? fetch;
   const response = await fetchImpl(`${normalizeBaseUrl(baseUrl)}/api/tags`);
   if (!response.ok) {
-    throw new OllamaUnreachableError(baseUrl, new Error(`${response.status} ${await response.text()}`));
+    throw new OllamaUnreachableError(
+      baseUrl,
+      new Error(`${response.status} ${await response.text()}`),
+    );
   }
   const body = (await response.json()) as { models?: { name?: unknown }[] };
   return (body.models ?? [])
@@ -81,8 +86,11 @@ export async function listOllamaModels(
  * response body; this has no framing beyond "split on \n", so a stalled or
  * truncated chunk boundary is handled by carrying the remainder to the next read.
  */
-async function readNdjson(response: Response, onLine: (line: Record<string, unknown>) => void): Promise<void> {
-  const body = response.body;
+async function readNdjson(
+  response: Response,
+  onLine: (line: Record<string, unknown>) => void,
+): Promise<void> {
+  const { body } = response;
   if (body === null) {
     return;
   }
@@ -90,7 +98,9 @@ async function readNdjson(response: Response, onLine: (line: Record<string, unkn
   const decoder = new TextDecoder();
   let buffer = '';
   for (;;) {
-    const { done, value } = await reader.read();
+    // Node's global fetch types leave a byte-stream reader's chunk untyped; it is a
+    // `Uint8Array` (or absent at EOF) because nothing here requests a BYOB reader.
+    const { done, value } = (await reader.read()) as { done: boolean; value?: Uint8Array };
     if (done) {
       break;
     }
@@ -150,7 +160,10 @@ async function pullModel(
     throw new ModelPullError(model, pullError);
   }
   if (lastStatus !== 'success') {
-    throw new ModelPullError(model, `stream ended without a "success" status (last: "${lastStatus}")`);
+    throw new ModelPullError(
+      model,
+      `stream ended without a "success" status (last: "${lastStatus}")`,
+    );
   }
   onEvent?.({ type: 'pull_done', model });
 }
@@ -221,7 +234,10 @@ export async function verifyOllamaChatModel(
  * cue and reflect may name the same model) via `/api/pull`, then one round-trip verification
  * per model. Throws the first named error encountered; the CLI surfaces it and exits.
  */
-export async function provisionOllama(target: OllamaProvisionTarget, options: ProvisionOptions = {}): Promise<void> {
+export async function provisionOllama(
+  target: OllamaProvisionTarget,
+  options: ProvisionOptions = {},
+): Promise<void> {
   const fetchImpl = options.fetchImpl ?? fetch;
 
   await checkOllamaReachable(target.baseUrl, {
@@ -237,7 +253,13 @@ export async function provisionOllama(target: OllamaProvisionTarget, options: Pr
     await pullModel(target.baseUrl, model, fetchImpl, options.onEvent);
   }
 
-  await verifyEmbedModel(target.baseUrl, target.embedModel, target.embedDimension, fetchImpl, options.onEvent);
+  await verifyEmbedModel(
+    target.baseUrl,
+    target.embedModel,
+    target.embedDimension,
+    fetchImpl,
+    options.onEvent,
+  );
   for (const model of chatModels) {
     await verifyOllamaChatModel(target.baseUrl, model, fetchImpl, options.onEvent);
   }

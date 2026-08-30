@@ -1,8 +1,9 @@
+import Database from 'better-sqlite3';
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
 import { DEFAULT_BUSY_TIMEOUT_MS, SqliteStore } from './database.js';
 
 describe('SqliteStore', () => {
@@ -115,8 +116,7 @@ describe('SqliteStore', () => {
     const second = new SqliteStore({ filePath: dbPath });
     try {
       const row = second.db.prepare('SELECT value FROM meta WHERE key = ?').get('probe') as
-        | { value: string }
-        | undefined;
+        { value: string } | undefined;
       expect(row?.value).toBe('one');
 
       const tableCount = second.db

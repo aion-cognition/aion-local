@@ -2,12 +2,24 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import {
+  applySupersessionProposal,
+  dismissSupersessionProposal,
+  ProposalAlreadyResolvedError,
+  ProposalNotFoundError,
+  PROPOSAL_APPLY_METHOD,
+} from './proposals.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { BITEMPORAL_PROPERTIES, writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
 import { writeCognitiveNode } from '../../infrastructure/graph/cognitive-queries.js';
 import { upsertEdge } from '../../infrastructure/graph/edges.js';
 import { findSourceEpisodeId } from '../../infrastructure/graph/episode-supersession.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
+import {
+  findClaimSubjects,
+  findSubjectSiblings,
+} from '../../infrastructure/graph/subject-family.js';
 import {
   nodeProperties,
   relationshipsByProvenance,
@@ -17,22 +29,11 @@ import {
   stopNeo4jHarness,
   type Neo4jHarness,
 } from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
-import {
-  findClaimSubjects,
-  findSubjectSiblings,
-} from '../../infrastructure/graph/subject-family.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   getSupersessionProposal,
   recordSupersessionProposal,
 } from '../../infrastructure/sqlite/supersession-proposals.js';
-import {
-  applySupersessionProposal,
-  dismissSupersessionProposal,
-  ProposalAlreadyResolvedError,
-  ProposalNotFoundError,
-  PROPOSAL_APPLY_METHOD,
-} from './proposals.js';
 
 /**
  * The path a correction takes once a person agrees with the judge. Propose mode closes
@@ -143,7 +144,10 @@ afterAll(async () => {
 describe('applying a supersession proposal', () => {
   it('closes the judged claim under --claim-only, and records the review as its own provenance', async () => {
     await seedEpisode('ep-poll-1', 'The Zephyr ingest worker polls every 45 seconds.');
-    await seedEpisode('ep-poll-2', 'We changed the Zephyr ingest worker poll interval to 5 seconds.');
+    await seedEpisode(
+      'ep-poll-2',
+      'We changed the Zephyr ingest worker poll interval to 5 seconds.',
+    );
     const stale = await seedClaim('ep-poll-1', 'Zephyr ingest polls every 45 seconds');
     const corrected = await seedClaim('ep-poll-2', 'Zephyr ingest polls every 5 seconds');
     const proposalId = recordSupersessionProposal(db, {
@@ -170,7 +174,9 @@ describe('applying a supersession proposal', () => {
     // A human review is its own provenance: lineage has to distinguish what a person applied
     // from what the judge would have applied on its own, or the posture change is unreadable.
     const reviewed = await relationshipsByProvenance(harness.driver, PROPOSAL_APPLY_METHOD);
-    expect(reviewed).toContainEqual(expect.objectContaining({ sourceId: corrected, targetId: stale }));
+    expect(reviewed).toContainEqual(
+      expect.objectContaining({ sourceId: corrected, targetId: stale }),
+    );
     expect(getSupersessionProposal(db, proposalId)?.resolvedAt).toEqual(expect.any(String));
   }, 120_000);
 
@@ -183,7 +189,10 @@ describe('applying a supersession proposal', () => {
    * closing it because it said the name would take a fact nothing contradicted.
    */
   it('closes the siblings the correction is about and holds the rest open', async () => {
-    await seedEpisode('ep-fanout-1', 'The Kestrel exporter publishes to Kafka on the primary broker.');
+    await seedEpisode(
+      'ep-fanout-1',
+      'The Kestrel exporter publishes to Kafka on the primary broker.',
+    );
     await seedEpisode('ep-fanout-2', 'The Kestrel exporter publishes to Pub/Sub now.');
     await mention('ep-fanout-1', 'Kestrel exporter', 'service');
     await mention('ep-fanout-1', 'Alderwood loader', 'service');
@@ -224,7 +233,10 @@ describe('applying a supersession proposal', () => {
     const preview = await findSubjectSiblings(harness.driver, stale);
     expect(preview.map((sibling) => sibling.id).sort()).toEqual([otherRelation, restating].sort());
     expect(preview.find((sibling) => sibling.id === restating)?.relatedness).toBeCloseTo(0.9, 2);
-    expect(preview.find((sibling) => sibling.id === otherRelation)?.relatedness).toBeCloseTo(0.2, 2);
+    expect(preview.find((sibling) => sibling.id === otherRelation)?.relatedness).toBeCloseTo(
+      0.2,
+      2,
+    );
     // The episode mentions both services; only the one the claim itself names is a subject.
     const subjects = await findClaimSubjects(harness.driver, stale);
     expect(subjects.map((subject) => subject.name)).toEqual(['Kestrel exporter']);
@@ -264,8 +276,18 @@ describe('applying a supersession proposal', () => {
   it('retires a description that restates the closed claim, and keeps the entity', async () => {
     await seedEpisode('ep-owner-1', 'Dmitri Volkov owns the Quillon pipeline.');
     await seedEpisode('ep-owner-2', 'Anneke Vos owns the Quillon pipeline now.');
-    const person = await mention('ep-owner-1', 'Dmitri Volkov', 'person', 'owns the Quillon pipeline');
-    await mention('ep-owner-1', 'Quillon pipeline', 'project', 'moves claim files into the warehouse');
+    const person = await mention(
+      'ep-owner-1',
+      'Dmitri Volkov',
+      'person',
+      'owns the Quillon pipeline',
+    );
+    await mention(
+      'ep-owner-1',
+      'Quillon pipeline',
+      'project',
+      'moves claim files into the warehouse',
+    );
     const stale = await seedClaim('ep-owner-1', 'Dmitri Volkov owns the Quillon pipeline');
     const corrected = await seedClaim('ep-owner-2', 'Anneke Vos owns the Quillon pipeline');
     const proposalId = recordSupersessionProposal(db, {
@@ -275,7 +297,11 @@ describe('applying a supersession proposal', () => {
       episodeId: 'ep-owner-2',
     });
 
-    const applied = await applySupersessionProposal(harness.driver, db, { id: proposalId, relatednessFloor: FLOOR, now: NOW });
+    const applied = await applySupersessionProposal(harness.driver, db, {
+      id: proposalId,
+      relatednessFloor: FLOOR,
+      now: NOW,
+    });
 
     expect(applied.retiredGlosses.map((gloss) => gloss.name)).toEqual(['Dmitri Volkov']);
     // The definition of the thing that changed hands says nothing about who owns it, so it
@@ -338,7 +364,11 @@ describe('applying a supersession proposal', () => {
       episodeId: 'ep-bare-2',
     });
 
-    const applied = await applySupersessionProposal(harness.driver, db, { id: proposalId, relatednessFloor: FLOOR, now: NOW });
+    const applied = await applySupersessionProposal(harness.driver, db, {
+      id: proposalId,
+      relatednessFloor: FLOOR,
+      now: NOW,
+    });
 
     expect(applied.closedIds).toEqual([stale]);
     expect(applied.subjects).toEqual([]);
@@ -392,10 +422,18 @@ describe('applying a supersession proposal', () => {
     dismissSupersessionProposal(db, proposalId, NOW);
 
     await expect(
-      applySupersessionProposal(harness.driver, db, { id: proposalId, relatednessFloor: FLOOR, now: NOW }),
+      applySupersessionProposal(harness.driver, db, {
+        id: proposalId,
+        relatednessFloor: FLOOR,
+        now: NOW,
+      }),
     ).rejects.toBeInstanceOf(ProposalAlreadyResolvedError);
     await expect(
-      applySupersessionProposal(harness.driver, db, { id: 'no-such-proposal', relatednessFloor: FLOOR, now: NOW }),
+      applySupersessionProposal(harness.driver, db, {
+        id: 'no-such-proposal',
+        relatednessFloor: FLOOR,
+        now: NOW,
+      }),
     ).rejects.toBeInstanceOf(ProposalNotFoundError);
     // Dismissed means the claim stands: nothing was closed on the way to refusing.
     expect(await isClosed(stale)).toBe(false);

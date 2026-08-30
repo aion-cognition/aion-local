@@ -1,6 +1,6 @@
+import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import Database from 'better-sqlite3';
 
 /** Name for the config registry, which is the only place the variable is read. */
 export const SQLITE_PATH_ENV_VAR = 'AION_SQLITE_PATH';
@@ -173,7 +173,7 @@ export function openSqliteHandle(target: SqliteTarget): SqliteHandle {
       return db;
     } catch (err) {
       db.close();
-      const code = (err as { code?: string }).code;
+      const { code } = err as { code?: string };
       if (code !== 'SQLITE_BUSY' || attempt === BOOTSTRAP_MAX_ATTEMPTS) {
         throw err;
       }

@@ -1,4 +1,6 @@
 import type { Driver } from 'neo4j-driver';
+
+import type { RecallCompletion, RecallListener } from './recall.js';
 import { recordAccess } from '../../infrastructure/graph/access-tracking.js';
 import { isTimeTravel } from '../../infrastructure/graph/read-modes.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
@@ -8,7 +10,6 @@ import {
   enqueueReinforcementSignal,
 } from '../../infrastructure/sqlite/reinforcement-queue.js';
 import type { ActivatedNode } from '../domain/activation.js';
-import type { RecallCompletion, RecallListener } from './recall.js';
 
 /**
  * The two recall-hot-path side effects, wired through `RecallDeps.onRecalled` so
@@ -43,9 +44,9 @@ export const REINFORCEMENT_TRIGGER = 'recall_co_activation';
  */
 export function reinforcementPairs(
   activated: readonly ActivatedNode[],
-): ReadonlyArray<readonly [string, string]> {
+): readonly (readonly [string, string])[] {
   const top = activated.filter((node) => !node.isStructural).slice(0, REINFORCEMENT_TOP_N);
-  const pairs: Array<readonly [string, string]> = [];
+  const pairs: (readonly [string, string])[] = [];
   for (let i = 0; i < top.length; i += 1) {
     for (let j = i + 1; j < top.length; j += 1) {
       const source = top[i];

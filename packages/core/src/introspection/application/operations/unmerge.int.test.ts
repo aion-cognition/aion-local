@@ -2,10 +2,15 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { entityUnmergeLedgerKey, listUnmergeableRecords, runEntityUnmerge } from './unmerge.js';
 import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
 import { upsertEdge } from '../../../infrastructure/graph/edges.js';
 import { redirectAndAbsorb } from '../../../infrastructure/graph/entity-dedup-queries.js';
-import { mergeEntities, type EntityMergeInput } from '../../../infrastructure/graph/entity-queries.js';
+import {
+  mergeEntities,
+  type EntityMergeInput,
+} from '../../../infrastructure/graph/entity-queries.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import {
   mentionCounts,
@@ -20,11 +25,6 @@ import {
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { isLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
-import {
-  entityUnmergeLedgerKey,
-  listUnmergeableRecords,
-  runEntityUnmerge,
-} from './unmerge.js';
 
 /**
  * A merge and its reversal, end to end. Two spellings of one tool are merged, then split back
@@ -180,10 +180,13 @@ describe('entity unmerge', () => {
   });
 
   it('splits the absorbed identity back out with its own edges', async () => {
-    const report = await runEntityUnmerge({ driver: harness.driver, db, logger }, {
-      mergedId: duplicateId,
-      now: LATER,
-    });
+    const report = await runEntityUnmerge(
+      { driver: harness.driver, db, logger },
+      {
+        mergedId: duplicateId,
+        now: LATER,
+      },
+    );
 
     expect(report.status).toBe('applied');
     expect(report.canonicalId).toBe(canonicalId);
@@ -237,10 +240,13 @@ describe('entity unmerge', () => {
     expect(isLedgerApplied(db, entityUnmergeLedgerKey(canonicalId, duplicateId))).toBe(true);
     expect(await listUnmergeableRecords(harness.driver, canonicalId)).toEqual([]);
 
-    const second = await runEntityUnmerge({ driver: harness.driver, db, logger }, {
-      mergedId: duplicateId,
-      now: LATER,
-    });
+    const second = await runEntityUnmerge(
+      { driver: harness.driver, db, logger },
+      {
+        mergedId: duplicateId,
+        now: LATER,
+      },
+    );
 
     expect(second.status).toBe('noop');
     expect(second.detail).toContain('already been split back out');

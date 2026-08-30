@@ -1,12 +1,13 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { assemblePack, openLogger, type BucketCaps, type Logger } from '@aion/core';
+import { admittedAll } from '@aion/core/recall/domain/test-support/admission.fixture.js';
 import type { MemoryPack } from '@aion/protocol';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { admittedAll } from '@aion/core/recall/domain/test-support/admission.fixture.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
 import { MCP_PATH } from './http.js';
 import { AionMcpService } from './service.js';
 import type { ToolBackend } from './tools.js';
@@ -32,7 +33,8 @@ function emptyPack(): MemoryPack {
 
 const backend: ToolBackend = {
   recall: () => Promise.resolve(emptyPack()),
-  reflection: () => Promise.resolve({ episode_id: 'episode-1', queued: true, lane: 'interactive' } as const),
+  reflection: () =>
+    Promise.resolve({ episode_id: 'episode-1', queued: true, lane: 'interactive' } as const),
 };
 
 let dir: string;
@@ -61,7 +63,9 @@ beforeEach(async () => {
     logger,
     host: '127.0.0.1',
     port: 0,
-    onSessionClosed: (sessionId) => hook(sessionId),
+    onSessionClosed: (sessionId) => {
+      hook(sessionId);
+    },
   });
   const port = await service.listen();
   url = new URL(`http://127.0.0.1:${String(port)}${MCP_PATH}`);
@@ -76,7 +80,7 @@ describe('session close hook', () => {
   it('fires once with the transport session id the Session node is keyed on', async () => {
     const { client, transport } = await open();
     await client.callTool({ name: 'recall', arguments: { query: 'why webhooks' } });
-    const sessionId = transport.sessionId;
+    const { sessionId } = transport;
 
     await transport.terminateSession();
     await client.close();
@@ -111,7 +115,10 @@ describe('session close hook', () => {
     expect(service.sessionCount).toBe(0);
 
     const later = await open();
-    const answered = await later.client.callTool({ name: 'recall', arguments: { query: 'still up' } });
+    const answered = await later.client.callTool({
+      name: 'recall',
+      arguments: { query: 'still up' },
+    });
     expect(answered.isError ?? false).toBe(false);
     await later.client.close();
   });

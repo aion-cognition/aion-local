@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { CommunityProfile } from '../../infrastructure/graph/community-queries.js';
+
 import {
   communityCoherence,
   communityIsolation,
   rankCommunityPairs,
   scoreCommunityPair,
 } from './bridge-pairs.js';
+import type { CommunityProfile } from '../../infrastructure/graph/community-queries.js';
 
 function profile(overrides: Partial<CommunityProfile> & { community: number }): CommunityProfile {
   return { size: 10, externalEdges: 0, internalEdges: 10, ...overrides };
@@ -13,14 +14,18 @@ function profile(overrides: Partial<CommunityProfile> & { community: number }): 
 
 describe('community terms', () => {
   it('reads coherence as association edges per member, capped at one', () => {
-    expect(communityCoherence(profile({ community: 1, size: 10, internalEdges: 5 }))).toBeCloseTo(0.5);
+    expect(communityCoherence(profile({ community: 1, size: 10, internalEdges: 5 }))).toBeCloseTo(
+      0.5,
+    );
     expect(communityCoherence(profile({ community: 1, size: 10, internalEdges: 40 }))).toBe(1);
     expect(communityCoherence(profile({ community: 1, size: 0, internalEdges: 0 }))).toBe(0);
   });
 
   it('reads isolation as the absence of edges leaving the community', () => {
     expect(communityIsolation(profile({ community: 1, size: 10, externalEdges: 0 }))).toBe(1);
-    expect(communityIsolation(profile({ community: 1, size: 10, externalEdges: 3 }))).toBeCloseTo(0.7);
+    expect(communityIsolation(profile({ community: 1, size: 10, externalEdges: 3 }))).toBeCloseTo(
+      0.7,
+    );
     expect(communityIsolation(profile({ community: 1, size: 10, externalEdges: 40 }))).toBe(0);
   });
 });

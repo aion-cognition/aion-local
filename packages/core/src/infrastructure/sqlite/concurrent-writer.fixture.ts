@@ -5,6 +5,7 @@
 // instead of the project's usual .js-specifier convention, which native node does not
 // map back to the source file.
 import { parentPort, workerData } from 'node:worker_threads';
+
 import { openSqliteHandle } from './database.ts';
 import { enqueueReflectionJob } from './reflection-queue.ts';
 

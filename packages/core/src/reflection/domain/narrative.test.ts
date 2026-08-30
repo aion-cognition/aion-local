@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import {
   assembleNarrative,
   buildNarrativeMessages,
@@ -135,8 +136,20 @@ describe('narrative versioning', () => {
   it('counts versions from the highest ever written, not from the open ones', () => {
     const episodes = [episode('e1'), episode('e2'), episode('e3')];
     const decision = decideSessionNarrative(episodes, [
-      existing({ id: 'narrative-2', version: 2, coverageKey: 'key-2', coverageCount: 2, open: false }),
-      existing({ id: 'narrative-1', version: 1, coverageKey: 'key-1', coverageCount: 1, open: false }),
+      existing({
+        id: 'narrative-2',
+        version: 2,
+        coverageKey: 'key-2',
+        coverageCount: 2,
+        open: false,
+      }),
+      existing({
+        id: 'narrative-1',
+        version: 1,
+        coverageKey: 'key-1',
+        coverageCount: 1,
+        open: false,
+      }),
     ]);
 
     expect(decision.action).toBe('create');
@@ -255,7 +268,12 @@ describe('compression source', () => {
   });
 
   it('files each extracted node behind the episode it came from', () => {
-    const source = renderNarrativeSource([episode('e1'), episode('e2')], [decisionNode('e1')], 40, 2000);
+    const source = renderNarrativeSource(
+      [episode('e1'), episode('e2')],
+      [decisionNode('e1')],
+      40,
+      2000,
+    );
 
     expect(source.items.map((item) => [item.handle, item.kind, item.id])).toEqual([
       ['S1', 'episode', 'e1'],
@@ -265,7 +283,12 @@ describe('compression source', () => {
   });
 
   it('drops an extracted node whose episode fell outside the window', () => {
-    const source = renderNarrativeSource([episode('e1'), episode('e2')], [decisionNode('e1')], 1, 2000);
+    const source = renderNarrativeSource(
+      [episode('e1'), episode('e2')],
+      [decisionNode('e1')],
+      1,
+      2000,
+    );
 
     expect(source.items.map((item) => item.id)).toEqual(['e2']);
   });
@@ -299,7 +322,12 @@ describe('length scaling', () => {
 });
 
 describe('grounded assembly', () => {
-  const source = renderNarrativeSource([episode('e1'), episode('e2')], [decisionNode('e1')], 40, 2000);
+  const source = renderNarrativeSource(
+    [episode('e1'), episode('e2')],
+    [decisionNode('e1')],
+    40,
+    2000,
+  );
 
   it('keeps a cited sentence and records the node id it cited', () => {
     const grounded = assembleNarrative(
@@ -371,7 +399,12 @@ describe('grounded assembly', () => {
 
 describe('model contract', () => {
   it('asks for cited sentences and states the budget the source supports', () => {
-    const source = renderNarrativeSource([episode('e1', { summary: 'shipped the worker' })], [], 40, 2000);
+    const source = renderNarrativeSource(
+      [episode('e1', { summary: 'shipped the worker' })],
+      [],
+      40,
+      2000,
+    );
 
     const messages = buildNarrativeMessages(source);
 

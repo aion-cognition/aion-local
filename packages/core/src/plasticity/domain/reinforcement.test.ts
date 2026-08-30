@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { REINFORCEMENT_TRIGGER } from '../../recall/application/side-effects.js';
-import { REFLECTION_CO_EXTRACTION_TRIGGER as STAGE_TRIGGER } from '../../reflection/application/stages/reinforcement.js';
+
 import {
   RECALL_CO_ACTIVATION_TRIGGER,
   REFLECTION_CO_EXTRACTION_TRIGGER,
@@ -13,6 +12,8 @@ import {
   signalWeight,
   triggerPolicy,
 } from './reinforcement.js';
+import { REINFORCEMENT_TRIGGER } from '../../recall/application/side-effects.js';
+import { REFLECTION_CO_EXTRACTION_TRIGGER as STAGE_TRIGGER } from '../../reflection/application/stages/reinforcement.js';
 
 const FLOOR = 0.1;
 const BASE_RATE = 0.1;
@@ -31,7 +32,7 @@ function clique(ids: readonly string[], ts = TS) {
   const signals = [];
   for (let i = 0; i < ids.length; i += 1) {
     for (let j = i + 1; j < ids.length; j += 1) {
-      signals.push(coExtractionSignal(ids[i] as string, ids[j] as string, ts));
+      signals.push(coExtractionSignal(ids[i]!, ids[j]!, ts));
     }
   }
   return signals;
@@ -243,7 +244,9 @@ describe('window aggregation', () => {
       [recallSignal('a', 'b'), ...clique(['a', 'b', 'c'], '2026-01-02T00:00:00.000Z')],
       BASE_RATE,
     );
-    const target = pairs.find((pair) => pairKey(pair.sourceId, pair.targetId) === pairKey('a', 'b'));
+    const target = pairs.find(
+      (pair) => pairKey(pair.sourceId, pair.targetId) === pairKey('a', 'b'),
+    );
     expect(target?.signalCount).toBe(2);
     expect(target?.effectiveSignal).toBeCloseTo(1.15, 10);
     expect(target?.learningRate).toBeCloseTo(BASE_RATE, 10);

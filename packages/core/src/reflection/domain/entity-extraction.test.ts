@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeSeedName } from '../../infrastructure/graph/seed-queries.js';
+
 import {
   ENTITY_EXTRACTION_JSON_SCHEMA,
   ENTITY_TYPES,
@@ -9,6 +9,7 @@ import {
   parseExtractedEntities,
   type ExtractedEntity,
 } from './entity-extraction.js';
+import { normalizeSeedName } from '../../infrastructure/graph/seed-queries.js';
 
 const MAX = 32;
 
@@ -45,7 +46,11 @@ describe('parseExtractedEntities', () => {
       MAX,
     );
     expect(parsed).toHaveLength(1);
-    expect(parsed?.[0]).toMatchObject({ name: 'Alice Chen', nameNorm: 'alice chen', type: 'person' });
+    expect(parsed?.[0]).toMatchObject({
+      name: 'Alice Chen',
+      nameNorm: 'alice chen',
+      type: 'person',
+    });
   });
 
   it('keeps one name under two types apart, since the graph keys identity on the pair', () => {

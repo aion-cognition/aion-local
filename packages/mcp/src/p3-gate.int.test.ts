@@ -1,8 +1,3 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { MemoryPack } from '@aion/protocol';
 import {
   bootstrapBackbone,
   CO_OCCURS_TYPE,
@@ -43,6 +38,12 @@ import {
   type Neo4jHarness,
 } from '@aion/core/infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { testGenerationProvider } from '@aion/core/infrastructure/providers/test-support/generation-provider.js';
+import type { MemoryPack } from '@aion/protocol';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import { narrativeOptions, reflectionStages, workerOptions } from './bootstrap.js';
 
 /**
@@ -83,7 +84,9 @@ const WORK_PAYLOAD = {
       occurred_at: '2026-08-28T09:00:30Z',
     },
   ],
-  observations: ['Keeping Neo4j means the entity graph stays queryable by traversal rather than by join'],
+  observations: [
+    'Keeping Neo4j means the entity graph stays queryable by traversal rather than by join',
+  ],
 };
 
 const OUTAGE_PAYLOAD = {
@@ -113,18 +116,27 @@ const outageProvider: Provider = {
   generate: () => Promise.reject(new Error('ollama is unreachable')),
 };
 
-async function waitFor(label: string, deadlineMs: number, ready: () => Promise<boolean>): Promise<void> {
+async function waitFor(
+  label: string,
+  deadlineMs: number,
+  ready: () => Promise<boolean>,
+): Promise<void> {
   const deadline = Date.now() + deadlineMs;
   while (Date.now() < deadline) {
     if (await ready()) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1000);
+    });
   }
   throw new Error(`timed out waiting for ${label}`);
 }
 
-function intakeDeps(deps: { provider: Provider; dispatch: ReflectionDispatch }): ReflectionIntakeDeps {
+function intakeDeps(deps: {
+  provider: Provider;
+  dispatch: ReflectionDispatch;
+}): ReflectionIntakeDeps {
   return {
     driver: harness.driver,
     db,
@@ -177,7 +189,10 @@ beforeAll(async () => {
   dataDir = mkdtempSync(join(tmpdir(), 'aion-p3-gate-int-'));
   db = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
   logger = openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'debug' });
-  config = { ...DEFAULTS, ollama: { ...DEFAULTS.ollama, url: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434' } };
+  config = {
+    ...DEFAULTS,
+    ollama: { ...DEFAULTS.ollama, url: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434' },
+  };
 
   await runGraphMigrations(harness.driver, db, { embedDimension: config.models.embedDimension });
   const backbone = await bootstrapBackbone(harness.driver, { memberName: MEMBER_NAME });
@@ -185,7 +200,10 @@ beforeAll(async () => {
     memberId: backbone.member.id,
     workspaceId: backbone.workspace.id,
   });
-  provider = testGenerationProvider({ baseUrl: config.ollama.url, embedModel: config.models.embed });
+  provider = testGenerationProvider({
+    baseUrl: config.ollama.url,
+    embedModel: config.models.embed,
+  });
 
   dispatch = new ReflectionDispatch({
     onListenerError: (err, signal) => {
@@ -287,10 +305,14 @@ describe('gate item 4: recall serves what reflection built', () => {
   // One recall, read by both assertions: the pack is what the agent gets, and asking twice
   // would spend a second cue extraction proving nothing extra.
   beforeAll(async () => {
-    pack = await handleRecall(recallDeps(), { query: RECALL_QUERY }, {
-      identity: READ_SESSION,
-      now: RECALLED_AT,
-    });
+    pack = await handleRecall(
+      recallDeps(),
+      { query: RECALL_QUERY },
+      {
+        identity: READ_SESSION,
+        now: RECALLED_AT,
+      },
+    );
   }, 180_000);
 
   it('fills the facts and narratives buckets on a real recall', async () => {
@@ -329,10 +351,14 @@ describe('gate item 5: an inference outage defers, it never loses', () => {
   let outageEpisodeId: string;
 
   it('stores and queues the episode with its vectors pending', async () => {
-    const stored = await handleReflection(intakeDeps({ provider: outageProvider, dispatch: silent }), OUTAGE_PAYLOAD, {
-      identity: OUTAGE_SESSION,
-      now: NOW,
-    });
+    const stored = await handleReflection(
+      intakeDeps({ provider: outageProvider, dispatch: silent }),
+      OUTAGE_PAYLOAD,
+      {
+        identity: OUTAGE_SESSION,
+        now: NOW,
+      },
+    );
     outageEpisodeId = stored.episode_id;
 
     expect(stored.queued).toBe(true);
@@ -346,7 +372,14 @@ describe('gate item 5: an inference outage defers, it never loses', () => {
 
   it('backfills the vectors and runs the queued job once Ollama answers again', async () => {
     const recovered = new ReflectionWorker(
-      { driver: harness.driver, db, provider, dispatch: new ReflectionDispatch(), runner: orchestrator(), logger },
+      {
+        driver: harness.driver,
+        db,
+        provider,
+        dispatch: new ReflectionDispatch(),
+        runner: orchestrator(),
+        logger,
+      },
       workerOptions(config),
     );
 

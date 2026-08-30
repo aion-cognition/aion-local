@@ -18,15 +18,15 @@ services:
       # Unset, the server default keeps transaction logs indefinitely: measured at 1.6GB for
       # a 105MB graph after a write-heavy session (thousands of small idempotent MERGEs per
       # episode). This product targets one laptop, not point-in-time recovery.
-      NEO4J_db_tx__log_rotation_retention__policy: "2 days 1G"
+      NEO4J_db_tx__log_rotation_retention__policy: '2 days 1G'
     ports:
-      - "127.0.0.1:7474:7474"
-      - "127.0.0.1:7687:7687"
+      - '127.0.0.1:7474:7474'
+      - '127.0.0.1:7687:7687'
     volumes:
       - aion-neo4j:/data
 
   aion-mcp:
-    profiles: ["mcp"]
+    profiles: ['mcp']
     image: aion-local:latest
     restart: unless-stopped
     # The service drains tool calls already running before it closes the driver and SQLite.
@@ -37,7 +37,7 @@ services:
       context: .
     # The image entrypoint is the CLI. Compose appends `command` to an entrypoint rather
     # than replacing it, so the server has to override the entrypoint itself.
-    entrypoint: ["node", "/app/packages/mcp/dist/main.js"]
+    entrypoint: ['node', '/app/packages/mcp/dist/main.js']
     env_file:
       - path: .env
         required: false
@@ -52,11 +52,11 @@ services:
       # every extra worker still queues behind the one model call the others are waiting on.
       # - AION_WORKER_COUNT=2
     ports:
-      - "127.0.0.1:${AION_MCP_PORT:-8765}:${AION_MCP_PORT:-8765}"
+      - '127.0.0.1:${AION_MCP_PORT:-8765}:${AION_MCP_PORT:-8765}'
     volumes:
       - aion-data:/data
     extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - 'host.docker.internal:host-gateway'
     depends_on:
       - neo4j
 
@@ -85,7 +85,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - aion-data:/data
     extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - 'host.docker.internal:host-gateway'
 
 volumes:
   aion-data:

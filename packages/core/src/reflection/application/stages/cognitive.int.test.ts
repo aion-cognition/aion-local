@@ -2,12 +2,19 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { CognitiveExtractionStage } from './cognitive.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../../infrastructure/graph/backbone.js';
 import { loadEpisodeContext } from '../../../infrastructure/graph/episode-context.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
-import { contentVectors, escapeLuceneQuery, fulltextSeeds, vectorSeeds } from '../../../infrastructure/graph/seed-queries.js';
 import { withCurrency } from '../../../infrastructure/graph/read-modes.js';
+import {
+  contentVectors,
+  escapeLuceneQuery,
+  fulltextSeeds,
+  vectorSeeds,
+} from '../../../infrastructure/graph/seed-queries.js';
 import { findEpisodeCognitiveNodes } from '../../../infrastructure/graph/semantic-relationship-queries.js';
 import {
   startNeo4jHarness,
@@ -17,13 +24,12 @@ import {
 import { openLogger } from '../../../infrastructure/logging/logger.js';
 import { testGenerationProvider } from '../../../infrastructure/providers/test-support/generation-provider.js';
 import type { Provider } from '../../../infrastructure/providers/types.js';
-import { SessionManager } from '../../../session/session-manager.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import { SessionManager } from '../../../session/session-manager.js';
 import type { StageContext } from '../../domain/stage.js';
 import { ReflectionDispatch } from '../dispatch.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../intake.js';
 import { LaneAssigner } from '../lanes.js';
-import { CognitiveExtractionStage } from './cognitive.js';
 
 const SESSION_IDENTITY = 'mcp-transport-session-cognitive';
 
@@ -51,7 +57,8 @@ const PAYLOAD = {
         'operation-level, or a retried job creates duplicate work.',
     },
   ],
-  summary: 'decided to split the queue database from the main transaction and captured the idempotency insight',
+  summary:
+    'decided to split the queue database from the main transaction and captured the idempotency insight',
 };
 
 let harness: Neo4jHarness;

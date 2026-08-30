@@ -30,6 +30,7 @@ import {
   type RecallCadenceCounters,
   type SqliteHandle,
 } from '@aion/core';
+
 import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
 
 /**
@@ -85,7 +86,7 @@ function readLedgerSummary(summary: unknown): LedgerSummary {
   if (typeof summary !== 'object' || summary === null) {
     return {};
   }
-  return summary as LedgerSummary;
+  return summary;
 }
 
 /**
@@ -116,9 +117,13 @@ export async function collectStats(
   db: SqliteHandle,
 ): Promise<StatsSnapshot> {
   const health = await connection.health();
-  const labelCounts = health.reachable ? await countNodesByLabel(connection.driver) : new Map<string, number>();
+  const labelCounts = health.reachable
+    ? await countNodesByLabel(connection.driver)
+    : new Map<string, number>();
   const graph = health.reachable ? await countGraphElements(connection.driver) : undefined;
-  const edgeWeights = health.reachable ? await edgeWeightDistribution(connection.driver) : undefined;
+  const edgeWeights = health.reachable
+    ? await edgeWeightDistribution(connection.driver)
+    : undefined;
   const degradedRate = cueDegradedRate(db);
 
   return {
@@ -195,7 +200,11 @@ function renderMaintenance(snapshot: MaintenanceSnapshot, now: number, write: Wr
   }
 }
 
-export function renderStats(snapshot: StatsSnapshot, write: Writer, now: number = Date.now()): void {
+export function renderStats(
+  snapshot: StatsSnapshot,
+  write: Writer,
+  now: number = Date.now(),
+): void {
   write('substrate');
   if (!snapshot.neo4jReachable) {
     write('  counts unavailable while Neo4j is down');
@@ -207,14 +216,18 @@ export function renderStats(snapshot: StatsSnapshot, write: Writer, now: number 
     }
   }
   if (snapshot.graph !== undefined) {
-    write(`  total: ${String(snapshot.graph.nodes)} nodes, ${String(snapshot.graph.relationships)} relationships`);
+    write(
+      `  total: ${String(snapshot.graph.nodes)} nodes, ${String(snapshot.graph.relationships)} relationships`,
+    );
   }
 
   write('');
   write('queue');
   const { queue } = snapshot;
-  const oldest = queue.oldestUnclaimedMs === undefined ? 'none unclaimed' : ageOf(queue.oldestUnclaimedMs);
-  const p95 = queue.p95EnrichmentLagMs === undefined ? 'no samples yet' : ageOf(queue.p95EnrichmentLagMs);
+  const oldest =
+    queue.oldestUnclaimedMs === undefined ? 'none unclaimed' : ageOf(queue.oldestUnclaimedMs);
+  const p95 =
+    queue.p95EnrichmentLagMs === undefined ? 'no samples yet' : ageOf(queue.p95EnrichmentLagMs);
   write(
     `  interactive=${String(queue.depthByLane.interactive)} bulk=${String(queue.depthByLane.bulk)}, ` +
       `oldest unclaimed ${oldest}, ${String(queue.exhausted)} exhausted`,
@@ -241,15 +254,18 @@ export function renderStats(snapshot: StatsSnapshot, write: Writer, now: number 
   write('');
   write('cadence');
   const { cadence } = snapshot;
-  const perSession = snapshot.sessionsServed === 0 ? undefined : cadence.totalCalls / snapshot.sessionsServed;
+  const perSession =
+    snapshot.sessionsServed === 0 ? undefined : cadence.totalCalls / snapshot.sessionsServed;
   write(
-    `  calls        ${String(cadence.totalCalls)} across ${String(snapshot.sessionsServed)} sessions` +
-      (perSession === undefined ? '' : ` (${perSession.toFixed(1)} per session)`),
+    `  calls        ${String(cadence.totalCalls)} across ${String(snapshot.sessionsServed)} sessions${
+      perSession === undefined ? '' : ` (${perSession.toFixed(1)} per session)`
+    }`,
   );
   const emptyRate = cadence.totalCalls === 0 ? undefined : cadence.emptyPacks / cadence.totalCalls;
   write(
-    `  empty packs  ${String(cadence.emptyPacks)}` +
-      (emptyRate === undefined ? '' : ` (${(emptyRate * 100).toFixed(1)}%)`),
+    `  empty packs  ${String(cadence.emptyPacks)}${
+      emptyRate === undefined ? '' : ` (${(emptyRate * 100).toFixed(1)}%)`
+    }`,
   );
   write(
     `  degraded     ${snapshot.degradedRate === undefined ? 'no recalls measured yet' : `${(snapshot.degradedRate * 100).toFixed(1)}%`}`,
@@ -285,7 +301,10 @@ export async function runStats(
   try {
     const snapshot = await collectStats(config, connection, store.db);
     renderStats(snapshot, write);
-    logger.info({ ...snapshot, labelCounts: Object.fromEntries(snapshot.labelCounts) }, 'stats reported');
+    logger.info(
+      { ...snapshot, labelCounts: Object.fromEntries(snapshot.labelCounts) },
+      'stats reported',
+    );
     return snapshot.neo4jReachable ? 0 : 1;
   } finally {
     await connection.close();

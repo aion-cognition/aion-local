@@ -1,4 +1,5 @@
 import type { Driver } from 'neo4j-driver';
+
 import { runRead, type GraphStatement } from './connection.js';
 import { BASE_NODE_LABEL } from './labels.js';
 import { readModeFragment, withCurrency } from './read-modes.js';
@@ -30,7 +31,9 @@ export type EdgeWeightStats = {
 };
 
 /** `undefined` for a type with no live edge, so an empty graph reads as unmeasured rather than as zero. */
-export type EdgeWeightDistribution = Readonly<Record<EdgeWeightDistributionType, EdgeWeightStats | undefined>>;
+export type EdgeWeightDistribution = Readonly<
+  Record<EdgeWeightDistributionType, EdgeWeightStats | undefined>
+>;
 
 export function buildEdgeWeightDistribution(): GraphStatement {
   const source = readModeFragment(withCurrency(), 'a', 'src');
@@ -59,7 +62,10 @@ export function buildEdgeWeightDistribution(): GraphStatement {
   };
 }
 
-type DistributionRow = { readonly type: EdgeWeightDistributionType; readonly stats: EdgeWeightStats };
+type DistributionRow = {
+  readonly type: EdgeWeightDistributionType;
+  readonly stats: EdgeWeightStats;
+};
 
 function mapDistributionRow(row: Row): DistributionRow {
   return {

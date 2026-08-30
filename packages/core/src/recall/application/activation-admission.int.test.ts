@@ -2,6 +2,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { CueCache } from './cues.js';
+import { handleRecall, type RecallDeps } from './recall.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
@@ -15,13 +18,11 @@ import {
 } from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider, Vector } from '../../infrastructure/providers/types.js';
+import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { ReflectionDispatch } from '../../reflection/application/dispatch.js';
 import { handleReflection } from '../../reflection/application/intake.js';
 import { LaneAssigner } from '../../reflection/application/lanes.js';
 import { SessionManager } from '../../session/session-manager.js';
-import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { CueCache } from './cues.js';
-import { handleRecall, type RecallDeps } from './recall.js';
 
 /**
  * The traversal leg, measured. Three episodes share one session, and only one of them names
@@ -69,7 +70,7 @@ function vectorFor(text: string): Vector {
     return axis(0);
   }
   if (lowered.includes('backoff')) {
-    const blended = axis(0);
+    const blended = [...axis(0)];
     blended[2] = 1;
     return blended;
   }
@@ -110,7 +111,9 @@ async function waitFor(label: string, ready: () => Promise<boolean>): Promise<vo
     if (await ready()) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
   }
   throw new Error(`timed out waiting for ${label}`);
 }

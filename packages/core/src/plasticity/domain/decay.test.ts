@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import { boundedDecay, decayFactor } from './decay.js';
 
 const PEAK = 30;

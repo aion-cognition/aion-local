@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { CueSchema, MemoryPackItemSchema, MemoryPackSchema, RationaleSchema } from './recall-output.js';
+
+import {
+  CueSchema,
+  MemoryPackItemSchema,
+  MemoryPackSchema,
+  RationaleSchema,
+} from './recall-output.js';
 
 const baseMetadata = {
   token_estimate: 240,
@@ -10,7 +16,7 @@ const baseMetadata = {
     admitted: 0,
     dropped_below_floor: 0,
     dropped_unmeasured: 0,
-      dropped_unmeasured_arrival: 0,
+    dropped_unmeasured_arrival: 0,
     dropped_duplicate_content: 0,
     dropped_near_duplicate: 0,
     vector_floor: 0.6,
@@ -68,7 +74,7 @@ describe('MemoryPackSchema valid fixtures', () => {
     expect(() => MemoryPackSchema.parse(pack)).toThrow();
   });
 
-  it('parses pending_enrichment alongside the calling session\'s unenriched count', () => {
+  it("parses pending_enrichment alongside the calling session's unenriched count", () => {
     const pack = {
       rendered_text: 'No relevant memories found.',
       metadata: { ...baseMetadata, pending_enrichment: 3 },
@@ -140,7 +146,7 @@ describe('MemoryPackSchema valid fixtures', () => {
     expect(MemoryPackSchema.parse(pack)).toEqual(pack);
   });
 
-  it('parses a fact carrying the node\'s own reason alongside the retrieval rationale', () => {
+  it("parses a fact carrying the node's own reason alongside the retrieval rationale", () => {
     const pack = {
       facts: [
         {

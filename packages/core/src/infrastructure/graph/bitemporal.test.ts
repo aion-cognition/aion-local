@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
 import neo4j from 'neo4j-driver';
+import { describe, expect, it } from 'vitest';
+
 import { BITEMPORAL_PROPERTIES, buildStampedNodeWrite, stampNew } from './bitemporal.js';
 import { BASE_NODE_LABEL, isContentBearing, NODE_LABELS, resolveLabels } from './labels.js';
 import { fromGraphDateTime } from './values.js';
@@ -105,7 +106,9 @@ describe('buildStampedNodeWrite', () => {
     expect(built.cypher).toContain(
       `ON CREATE SET n:Entity:${BASE_NODE_LABEL}, n += $properties, n += $mergeProperties`,
     );
-    expect(built.cypher).toContain(`ON MATCH SET n:Entity:${BASE_NODE_LABEL}, n += $mergeProperties`);
+    expect(built.cypher).toContain(
+      `ON MATCH SET n:Entity:${BASE_NODE_LABEL}, n += $mergeProperties`,
+    );
     expect(built.parameters.mergeProperties).toEqual({ is_structural: true });
   });
 

@@ -1,6 +1,3 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import {
   assemblePack,
   openLogger,
@@ -11,10 +8,14 @@ import {
 } from '@aion/core';
 import { admittedAll } from '@aion/core/recall/domain/test-support/admission.fixture.js';
 import { MemoryPackSchema, type Cue, type MemoryPack, type StageTimingsMs } from '@aion/protocol';
-import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
+
 import { DESCRIPTIONS_VERSION, DESCRIPTIONS_VERSION_META_KEY } from './descriptions.js';
 import { callTool, TOOL_DEFINITIONS, type ToolBackend } from './tools.js';
 
@@ -42,17 +43,25 @@ let logger: Logger;
 let logPath: string;
 
 function pack(): MemoryPack {
-  return assemblePack({ items: [EPISODE], admission: admittedAll(1), caps: CAPS, tokenBudget: 1200, cues: CUES, timings: TIMINGS });
+  return assemblePack({
+    items: [EPISODE],
+    admission: admittedAll(1),
+    caps: CAPS,
+    tokenBudget: 1200,
+    cues: CUES,
+    timings: TIMINGS,
+  });
 }
 
 function backendReturning(): ToolBackend {
   return {
     recall: () => Promise.resolve(pack()),
-    reflection: () => Promise.resolve({ episode_id: 'episode-1', queued: true, lane: 'interactive' } as const),
+    reflection: () =>
+      Promise.resolve({ episode_id: 'episode-1', queued: true, lane: 'interactive' } as const),
   };
 }
 
-function backendThrowing(err: unknown): ToolBackend {
+function backendThrowing(err: Error): ToolBackend {
   return {
     recall: () => Promise.reject(err),
     reflection: () => Promise.reject(err),
@@ -94,7 +103,7 @@ describe('tool definitions', () => {
       'as_of',
       'knew_at',
     ]);
-    expect(recall?.inputSchema['additionalProperties']).toBe(false);
+    expect(recall?.inputSchema.additionalProperties).toBe(false);
 
     const reflection = TOOL_DEFINITIONS[1];
     expect(Object.keys(reflection?.inputSchema.properties ?? {})).toEqual([
@@ -117,13 +126,21 @@ describe('tool definitions', () => {
     expect(recallValidator(pack()).valid).toBe(true);
 
     const reflectionValidator = validator.getValidator(TOOL_DEFINITIONS[1]?.outputSchema ?? {});
-    expect(reflectionValidator({ episode_id: 'episode-1', queued: true, lane: 'interactive' }).valid).toBe(true);
+    expect(
+      reflectionValidator({ episode_id: 'episode-1', queued: true, lane: 'interactive' }).valid,
+    ).toBe(true);
   });
 });
 
 describe('recall results', () => {
   it('returns the rendered block as text and the pack as structured content', async () => {
-    const result = await callTool(backendReturning(), logger, 'recall', { query: 'why webhooks' }, 'session-a');
+    const result = await callTool(
+      backendReturning(),
+      logger,
+      'recall',
+      { query: 'why webhooks' },
+      'session-a',
+    );
 
     expect(result.content).toEqual([{ type: 'text', text: pack().rendered_text }]);
     expect(MemoryPackSchema.safeParse(result.structuredContent).success).toBe(true);
@@ -143,7 +160,11 @@ describe('reflection results', () => {
     expect(result.content).toEqual([
       { type: 'text', text: 'Stored episode episode-1; queued for reflection (interactive lane).' },
     ]);
-    expect(result.structuredContent).toEqual({ episode_id: 'episode-1', queued: true, lane: 'interactive' });
+    expect(result.structuredContent).toEqual({
+      episode_id: 'episode-1',
+      queued: true,
+      lane: 'interactive',
+    });
   });
 
   // Applies to the ack too: a text-only client has no other way to see how far behind
@@ -152,10 +173,21 @@ describe('reflection results', () => {
     const backend: ToolBackend = {
       recall: () => Promise.resolve(pack()),
       reflection: () =>
-        Promise.resolve({ episode_id: 'episode-1', queued: true, lane: 'interactive', pending_ahead: 3 } as const),
+        Promise.resolve({
+          episode_id: 'episode-1',
+          queued: true,
+          lane: 'interactive',
+          pending_ahead: 3,
+        } as const),
     };
 
-    const result = await callTool(backend, logger, 'reflection', { observations: ['x'] }, 'session-a');
+    const result = await callTool(
+      backend,
+      logger,
+      'reflection',
+      { observations: ['x'] },
+      'session-a',
+    );
 
     expect(result.content).toEqual([
       {
@@ -169,10 +201,21 @@ describe('reflection results', () => {
     const backend: ToolBackend = {
       recall: () => Promise.resolve(pack()),
       reflection: () =>
-        Promise.resolve({ episode_id: 'episode-1', queued: true, lane: 'interactive', pending_ahead: 0 } as const),
+        Promise.resolve({
+          episode_id: 'episode-1',
+          queued: true,
+          lane: 'interactive',
+          pending_ahead: 0,
+        } as const),
     };
 
-    const result = await callTool(backend, logger, 'reflection', { observations: ['x'] }, 'session-a');
+    const result = await callTool(
+      backend,
+      logger,
+      'reflection',
+      { observations: ['x'] },
+      'session-a',
+    );
 
     expect(result.content).toEqual([
       { type: 'text', text: 'Stored episode episode-1; queued for reflection (interactive lane).' },
@@ -183,8 +226,10 @@ describe('reflection results', () => {
 describe('error mapping', () => {
   it('reports a rejected payload as invalid params, carrying the zod message', async () => {
     const parsed = z.object({ query: z.string() }).safeParse({});
-    expect(parsed.success).toBe(false);
-    const zodError = parsed.success ? undefined : parsed.error;
+    if (parsed.success) {
+      throw new Error('expected the zod parse to fail');
+    }
+    const zodError = parsed.error;
 
     const err = await callTool(backendThrowing(zodError), logger, 'recall', {}, 'session-a').catch(
       (caught: unknown) => caught,

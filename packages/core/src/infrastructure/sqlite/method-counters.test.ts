@@ -1,8 +1,9 @@
+import { RecallMethodSchema } from '@aion/protocol';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { RecallMethodSchema } from '@aion/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
 import { SqliteStore } from './database.js';
 import { PACK_METHODS, packMethodCounters, recordPackMethodCounts } from './method-counters.js';
 

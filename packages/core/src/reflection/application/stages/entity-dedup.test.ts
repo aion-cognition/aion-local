@@ -2,13 +2,20 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { BITEMPORAL_PROPERTIES } from '../../../infrastructure/graph/bitemporal.js';
+
+import { DedupFakeGraph } from './entity-dedup.fixture.js';
+import { DEFAULT_ENTITY_DEDUP_SIMILARITY_THRESHOLD, EntityDedupStage } from './entity-dedup.js';
 import { ACCESS_COUNT_PROPERTY } from '../../../infrastructure/graph/access-tracking.js';
+import { BITEMPORAL_PROPERTIES } from '../../../infrastructure/graph/bitemporal.js';
 import {
   ENTITY_ALIASES_PROPERTY,
   MERGE_PROVENANCE_PROPERTY,
 } from '../../../infrastructure/graph/entity-dedup-queries.js';
-import { ENTITY_MENTION_TYPE, ENTITY_PARTICIPATION_TYPE } from '../../../infrastructure/graph/entity-queries.js';
+import {
+  ENTITY_MENTION_TYPE,
+  ENTITY_PARTICIPATION_TYPE,
+} from '../../../infrastructure/graph/entity-queries.js';
+import type { EpisodeContext } from '../../../infrastructure/graph/episode-context.js';
 import { MEMORY_PROPERTIES } from '../../../infrastructure/graph/episodes.js';
 import { SUPERSEDES_TYPE } from '../../../infrastructure/graph/relationships.js';
 import {
@@ -17,17 +24,14 @@ import {
   ENTITY_NAME_VECTOR_PROPERTY,
   STRUCTURAL_PROPERTY,
 } from '../../../infrastructure/graph/seed-queries.js';
-import { foldName } from '../../../infrastructure/providers/unicode-fold.js';
+import { toGraphDateTime } from '../../../infrastructure/graph/values.js';
 import { openLogger } from '../../../infrastructure/logging/logger.js';
+import { foldName } from '../../../infrastructure/providers/unicode-fold.js';
+import { SqliteStore } from '../../../infrastructure/sqlite/database.js';
 import { listEntityMergeProposals } from '../../../infrastructure/sqlite/entity-merge-proposals.js';
 import { getLedgerEntry } from '../../../infrastructure/sqlite/ops-ledger.js';
-import { SqliteStore } from '../../../infrastructure/sqlite/database.js';
-import { toGraphDateTime } from '../../../infrastructure/graph/values.js';
-import type { EpisodeContext } from '../../../infrastructure/graph/episode-context.js';
 import { entityMergeLedgerKey } from '../../domain/entity-merge.js';
 import type { StageContext } from '../../domain/stage.js';
-import { DedupFakeGraph } from './entity-dedup.fixture.js';
-import { DEFAULT_ENTITY_DEDUP_SIMILARITY_THRESHOLD, EntityDedupStage } from './entity-dedup.js';
 
 const EPISODE_ID = 'episode-1';
 const SESSION_ID = 'session-1';
@@ -94,9 +98,9 @@ function seedEpisode(id: string): void {
 
 function mention(episodeId: string, entityId: string, count = 1): void {
   graph.seedEdge(ENTITY_MENTION_TYPE, episodeId, entityId);
-  const edge = graph.edgesOfType(ENTITY_MENTION_TYPE).find(
-    (candidate) => candidate.sourceId === episodeId && candidate.targetId === entityId,
-  );
+  const edge = graph
+    .edgesOfType(ENTITY_MENTION_TYPE)
+    .find((candidate) => candidate.sourceId === episodeId && candidate.targetId === entityId);
   if (edge !== undefined) {
     edge.count = count;
   }
@@ -117,8 +121,22 @@ afterEach(() => {
 
 describe('grouping and canonical selection', () => {
   it('merges a near-duplicate into the more-mentioned identity and closes the loser', async () => {
-    seedEntity({ id: 'strong', name: 'Aion', type: 'project', vector: [1, 0], txFrom: NEWER, accessCount: 3 });
-    seedEntity({ id: 'weak', name: 'Aion Project', type: 'project', vector: [9, 4], txFrom: OLDER, accessCount: 1 });
+    seedEntity({
+      id: 'strong',
+      name: 'Aion',
+      type: 'project',
+      vector: [1, 0],
+      txFrom: NEWER,
+      accessCount: 3,
+    });
+    seedEntity({
+      id: 'weak',
+      name: 'Aion Project',
+      type: 'project',
+      vector: [9, 4],
+      txFrom: OLDER,
+      accessCount: 1,
+    });
     mention(EPISODE_ID, 'strong', 3);
     seedEpisode(OTHER_EPISODE_ID);
     mention(OTHER_EPISODE_ID, 'weak', 1);
@@ -142,8 +160,22 @@ describe('grouping and canonical selection', () => {
   });
 
   it('redirects the absorbed entity edges onto the canonical, summing on collision', async () => {
-    seedEntity({ id: 'strong', name: 'Aion', type: 'project', vector: [1, 0], accessCount: 0, txFrom: NEWER });
-    seedEntity({ id: 'weak', name: 'Aion Project', type: 'project', vector: [9, 4], accessCount: 0, txFrom: OLDER });
+    seedEntity({
+      id: 'strong',
+      name: 'Aion',
+      type: 'project',
+      vector: [1, 0],
+      accessCount: 0,
+      txFrom: NEWER,
+    });
+    seedEntity({
+      id: 'weak',
+      name: 'Aion Project',
+      type: 'project',
+      vector: [9, 4],
+      accessCount: 0,
+      txFrom: OLDER,
+    });
     mention(EPISODE_ID, 'strong', 10);
     seedEpisode(OTHER_EPISODE_ID);
     mention(OTHER_EPISODE_ID, 'weak', 5);
@@ -158,15 +190,33 @@ describe('grouping and canonical selection', () => {
 
     const participations = graph.edgesOfType(ENTITY_PARTICIPATION_TYPE);
     expect(
-      participations.find((edge) => edge.targetId === OTHER_EPISODE_ID && edge.sourceId === 'strong'),
+      participations.find(
+        (edge) => edge.targetId === OTHER_EPISODE_ID && edge.sourceId === 'strong',
+      ),
     ).toBeDefined();
     // The stale edge off the closed node is left in place rather than deleted; only the fresh one is current.
-    expect(mentions.some((edge) => edge.sourceId === OTHER_EPISODE_ID && edge.targetId === 'weak')).toBe(true);
+    expect(
+      mentions.some((edge) => edge.sourceId === OTHER_EPISODE_ID && edge.targetId === 'weak'),
+    ).toBe(true);
   });
 
   it('never absorbs the structural node, whatever the organic entity has going for it', async () => {
-    seedEntity({ id: 'member', name: 'Ryan Huber', type: 'member', vector: [1, 0], structural: true, accessCount: 1 });
-    seedEntity({ id: 'organic', name: 'Ryan H', type: 'member', vector: [9, 4], accessCount: 40, txFrom: NEWER });
+    seedEntity({
+      id: 'member',
+      name: 'Ryan Huber',
+      type: 'member',
+      vector: [1, 0],
+      structural: true,
+      accessCount: 1,
+    });
+    seedEntity({
+      id: 'organic',
+      name: 'Ryan H',
+      type: 'member',
+      vector: [9, 4],
+      accessCount: 40,
+      txFrom: NEWER,
+    });
     mention(EPISODE_ID, 'organic', 1);
     seedEpisode(OTHER_EPISODE_ID);
     mention(OTHER_EPISODE_ID, 'member', 1);
@@ -236,7 +286,14 @@ describe('grouping and canonical selection', () => {
     // Names that clear the form check either way, so the configured number is the only thing
     // deciding: cosine([1,0],[1,1]) is 0.707, under the default and over the configured one.
     seedEntity({ id: 'a', name: 'Aion', type: 'project', vector: [1, 0], accessCount: 1 });
-    seedEntity({ id: 'b', name: 'Aion Project', type: 'project', vector: [1, 1], accessCount: 0, txFrom: NEWER });
+    seedEntity({
+      id: 'b',
+      name: 'Aion Project',
+      type: 'project',
+      vector: [1, 1],
+      accessCount: 0,
+      txFrom: NEWER,
+    });
     mention(EPISODE_ID, 'a', 1);
 
     expect(DEFAULT_ENTITY_DEDUP_SIMILARITY_THRESHOLD).toBe(0.85);
@@ -251,8 +308,22 @@ describe('grouping and canonical selection', () => {
 
 describe('idempotency', () => {
   it('gates on the ledger key and does nothing the second time', async () => {
-    seedEntity({ id: 'strong', name: 'Aion', type: 'project', vector: [1, 0], txFrom: NEWER, accessCount: 1 });
-    seedEntity({ id: 'weak', name: 'Aion Project', type: 'project', vector: [9, 4], txFrom: OLDER, accessCount: 1 });
+    seedEntity({
+      id: 'strong',
+      name: 'Aion',
+      type: 'project',
+      vector: [1, 0],
+      txFrom: NEWER,
+      accessCount: 1,
+    });
+    seedEntity({
+      id: 'weak',
+      name: 'Aion Project',
+      type: 'project',
+      vector: [9, 4],
+      txFrom: OLDER,
+      accessCount: 1,
+    });
     mention(EPISODE_ID, 'strong', 1);
 
     const first = await new EntityDedupStage().run(context());
@@ -269,7 +340,14 @@ describe('idempotency', () => {
   });
 
   it('records what an unmerge would need on the canonical', async () => {
-    seedEntity({ id: 'strong', name: 'Aion', type: 'project', vector: [1, 0], txFrom: NEWER, accessCount: 1 });
+    seedEntity({
+      id: 'strong',
+      name: 'Aion',
+      type: 'project',
+      vector: [1, 0],
+      txFrom: NEWER,
+      accessCount: 1,
+    });
     seedEntity({
       id: 'weak',
       name: 'Aion Project',
@@ -313,12 +391,31 @@ describe('idempotency', () => {
   });
 
   it('appends rather than overwrites when a canonical absorbs a second identity', async () => {
-    seedEntity({ id: 'strong', name: 'Aion', type: 'project', vector: [1, 0], txFrom: NEWER, accessCount: 1 });
-    seedEntity({ id: 'weak', name: 'Aion Project', type: 'project', vector: [9, 4], txFrom: OLDER });
+    seedEntity({
+      id: 'strong',
+      name: 'Aion',
+      type: 'project',
+      vector: [1, 0],
+      txFrom: NEWER,
+      accessCount: 1,
+    });
+    seedEntity({
+      id: 'weak',
+      name: 'Aion Project',
+      type: 'project',
+      vector: [9, 4],
+      txFrom: OLDER,
+    });
     mention(EPISODE_ID, 'strong', 1);
     await new EntityDedupStage().run(context());
 
-    seedEntity({ id: 'later', name: 'The Aion Project', type: 'project', vector: [9, 4], txFrom: OLDER });
+    seedEntity({
+      id: 'later',
+      name: 'The Aion Project',
+      type: 'project',
+      vector: [9, 4],
+      txFrom: OLDER,
+    });
     await new EntityDedupStage().run(context());
 
     const records = graph.nodes.get('strong')?.properties[MERGE_PROVENANCE_PROPERTY] as string[];
@@ -330,8 +427,22 @@ describe('idempotency', () => {
   });
 
   it('clears the merged node vectors, best-effort, once absorbed', async () => {
-    seedEntity({ id: 'strong', name: 'Aion', type: 'project', vector: [1, 0], txFrom: NEWER, accessCount: 1 });
-    seedEntity({ id: 'weak', name: 'Aion Project', type: 'project', vector: [9, 4], txFrom: OLDER, accessCount: 1 });
+    seedEntity({
+      id: 'strong',
+      name: 'Aion',
+      type: 'project',
+      vector: [1, 0],
+      txFrom: NEWER,
+      accessCount: 1,
+    });
+    seedEntity({
+      id: 'weak',
+      name: 'Aion Project',
+      type: 'project',
+      vector: [9, 4],
+      txFrom: OLDER,
+      accessCount: 1,
+    });
     mention(EPISODE_ID, 'strong', 1);
 
     await new EntityDedupStage().run(context());
@@ -369,7 +480,9 @@ describe('what a vector alone cannot merge', () => {
     const outcome = await new EntityDedupStage().run(context());
 
     expect(outcome.counts).toMatchObject({ merges: 0, cross_type_proposals: 0 });
-    expect(graph.nodes.get('candidate')?.properties[BITEMPORAL_PROPERTIES.validUntil]).toBeUndefined();
+    expect(
+      graph.nodes.get('candidate')?.properties[BITEMPORAL_PROPERTIES.validUntil],
+    ).toBeUndefined();
   });
 
   it.each([
@@ -387,8 +500,20 @@ describe('what a vector alone cannot merge', () => {
   it('will not chain two unrelated names into one node through a shared neighbour', async () => {
     // The Postgres node absorbed Redis and Valkey this way: each merged with something the
     // other never resembled, and union-find put all three in one group.
-    seedEntity({ id: 'postgres', name: 'Postgres', type: 'tool', vector: IDENTICAL, accessCount: 9 });
-    seedEntity({ id: 'postgresql', name: 'PostgreSQL', type: 'tool', vector: IDENTICAL, txFrom: NEWER });
+    seedEntity({
+      id: 'postgres',
+      name: 'Postgres',
+      type: 'tool',
+      vector: IDENTICAL,
+      accessCount: 9,
+    });
+    seedEntity({
+      id: 'postgresql',
+      name: 'PostgreSQL',
+      type: 'tool',
+      vector: IDENTICAL,
+      txFrom: NEWER,
+    });
     seedEntity({ id: 'redis', name: 'Redis', type: 'tool', vector: IDENTICAL, txFrom: NEWER });
     mention(EPISODE_ID, 'postgres', 9);
     mention(EPISODE_ID, 'postgresql', 1);
@@ -397,6 +522,8 @@ describe('what a vector alone cannot merge', () => {
 
     expect(outcome.counts).toMatchObject({ merges: 1 });
     expect(graph.nodes.get('redis')?.properties[BITEMPORAL_PROPERTIES.validUntil]).toBeUndefined();
-    expect(graph.nodes.get('postgres')?.properties[ENTITY_ALIASES_PROPERTY]).toEqual(['PostgreSQL']);
+    expect(graph.nodes.get('postgres')?.properties[ENTITY_ALIASES_PROPERTY]).toEqual([
+      'PostgreSQL',
+    ]);
   });
 });

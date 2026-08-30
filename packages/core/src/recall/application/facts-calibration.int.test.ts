@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+
+import { ANSWERING_GOALS, RESTATING_GOALS, type FactsPair } from './facts.fixtures.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { OllamaProvider } from '../../infrastructure/providers/ollama-provider.js';
 import {
@@ -7,7 +9,6 @@ import {
   pairedCosines,
   type Distribution,
 } from '../domain/floor-calibration.js';
-import { ANSWERING_GOALS, RESTATING_GOALS, type FactsPair } from './facts.fixtures.js';
 
 /**
  * The committed calibration behind `recall.restatementFloor`, in the shape

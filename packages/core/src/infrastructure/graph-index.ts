@@ -27,9 +27,20 @@ export {
   runGraphMigrations,
 } from './graph/migrations.js';
 
-export type { GraphMigration, GraphMigrationOutcome, MigrationContext } from './graph/migrations.js';
+export type {
+  GraphMigration,
+  GraphMigrationOutcome,
+  MigrationContext,
+} from './graph/migrations.js';
 
-export { GraphConnection, GraphTransaction, inWriteTransaction, runRead, runWrite, runWriteWithCounters } from './graph/connection.js';
+export {
+  GraphConnection,
+  GraphTransaction,
+  inWriteTransaction,
+  runRead,
+  runWrite,
+  runWriteWithCounters,
+} from './graph/connection.js';
 
 export type { GraphHealth, GraphStatement, WriteOutcome } from './graph/connection.js';
 
@@ -69,7 +80,13 @@ export { fetchNodeEdges, fetchNodeProvenance } from './graph/node-provenance.js'
 
 export type { NodeEdge, NodeProvenance } from './graph/node-provenance.js';
 
-export { BASE_NODE_LABEL, NODE_LABELS, isContentBearing, isNodeLabel, resolveLabels } from './graph/labels.js';
+export {
+  BASE_NODE_LABEL,
+  NODE_LABELS,
+  isContentBearing,
+  isNodeLabel,
+  resolveLabels,
+} from './graph/labels.js';
 
 export type { NodeLabel } from './graph/labels.js';
 
@@ -191,10 +208,7 @@ export {
   listStoredEpisodes,
 } from './graph/episodes.js';
 
-export type {
-  FindEpisodeByContentHashInput,
-  StoredEpisodeRef,
-} from './graph/episodes.js';
+export type { FindEpisodeByContentHashInput, StoredEpisodeRef } from './graph/episodes.js';
 
 export { ensureGraphSession } from './graph/sessions.js';
 
@@ -321,10 +335,7 @@ export type {
   EdgeWeightStats,
 } from './graph/edge-weight-distribution.js';
 
-export {
-  findOrphanNodes,
-  findOrphanRelinkTargets,
-} from './graph/topology-queries.js';
+export { findOrphanNodes, findOrphanRelinkTargets } from './graph/topology-queries.js';
 
 export type { OrphanNode, OrphanRelinkTarget, RelinkKind } from './graph/topology-queries.js';
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import { redactPayload } from './deep-walk.js';
 
 describe('redactPayload', () => {
@@ -44,7 +45,7 @@ describe('redactPayload', () => {
     ]);
 
     // The redacted key still addresses its own value, and unrelated keys are untouched.
-    const output = (result.value.tool_executions[0] as { output: Record<string, unknown> }).output;
+    const { output } = result.value.tool_executions[0] as { output: Record<string, unknown> };
     expect(Object.values(output)).toContain('active profile');
     expect(Object.keys(output)).toContain('tokens');
   });

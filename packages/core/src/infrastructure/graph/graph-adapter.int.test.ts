@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
+
 import { BITEMPORAL_PROPERTIES, supersede, writeStampedNode } from './bitemporal.js';
 import { GraphConnection, runRead, runWrite } from './connection.js';
 import { buildEdgeUpsert, upsertEdge } from './edges.js';
@@ -18,8 +18,13 @@ import {
   type CurrencyAnnotation,
   type ReadMode,
 } from './read-modes.js';
+import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
 import { countNodes as countEveryNode } from './test-support/graph-queries.fixture.js';
-import { startNeo4jHarness, stopNeo4jHarness, type Neo4jHarness } from './test-support/neo4j-harness.fixture.js';
+import {
+  startNeo4jHarness,
+  stopNeo4jHarness,
+  type Neo4jHarness,
+} from './test-support/neo4j-harness.fixture.js';
 import { toGraphDateTime, toGraphVector } from './values.js';
 
 const EMBED_DIMENSION = 8;
@@ -66,7 +71,12 @@ async function readEpisodes(mode: ReadMode, ids: readonly string[]): Promise<Ann
 }
 
 async function countNodes(id: string): Promise<number> {
-  const rows = await runRead(harness.driver, 'MATCH (n { id: $id }) RETURN count(n) AS c', { id }, (row) => row.c as number);
+  const rows = await runRead(
+    harness.driver,
+    'MATCH (n { id: $id }) RETURN count(n) AS c',
+    { id },
+    (row) => row.c as number,
+  );
   return rows[0] ?? 0;
 }
 
@@ -84,10 +94,16 @@ type PlanNode = { operatorType: string; children: readonly PlanNode[] };
 
 /** The driver suffixes each operator with the database it planned against (`Projection@neo4j`). */
 function planOperators(plan: PlanNode): string[] {
-  return [plan.operatorType.split('@')[0] ?? plan.operatorType, ...plan.children.flatMap(planOperators)];
+  return [
+    plan.operatorType.split('@')[0] ?? plan.operatorType,
+    ...plan.children.flatMap(planOperators),
+  ];
 }
 
-async function explainOperators(cypher: string, parameters: Record<string, unknown>): Promise<string[]> {
+async function explainOperators(
+  cypher: string,
+  parameters: Record<string, unknown>,
+): Promise<string[]> {
   const result = await harness.driver.executeQuery(`EXPLAIN ${cypher}`, parameters);
   const plan = result.summary.plan as unknown as PlanNode | false;
   if (plan === false) {
@@ -136,7 +152,10 @@ describe('node writes', () => {
   });
 
   it('applies the companion labels the schema objects depend on', async () => {
-    const episode = await writeStampedNode(harness.driver, { label: 'Episode', id: 'node-labels-episode' });
+    const episode = await writeStampedNode(harness.driver, {
+      label: 'Episode',
+      id: 'node-labels-episode',
+    });
     const member = await writeStampedNode(harness.driver, {
       label: 'Member',
       id: 'node-labels-member',
@@ -170,7 +189,10 @@ describe('node writes', () => {
     await writeStampedNode(harness.driver, {
       label: 'Episode',
       id: 'node-vector',
-      properties: { summary: 'vector carrier', content_vec: toGraphVector([1, 0, 0, 0, 0, 0, 0, 0]) },
+      properties: {
+        summary: 'vector carrier',
+        content_vec: toGraphVector([1, 0, 0, 0, 0, 0, 0, 0]),
+      },
     });
     await runWrite(harness.driver, 'CALL db.awaitIndexes(60)', {}, (row) => row);
     const hits = await runRead(
@@ -285,7 +307,9 @@ describe('edge merge policy', () => {
     const operators = await explainOperators(statement.cypher, statement.parameters);
 
     expect(operators).not.toContain('AllNodesScan');
-    expect(operators.filter((operator) => operator.startsWith('NodeUniqueIndexSeek'))).toHaveLength(2);
+    expect(operators.filter((operator) => operator.startsWith('NodeUniqueIndexSeek'))).toHaveLength(
+      2,
+    );
   });
 
   it('names the missing endpoint instead of silently writing nothing', async () => {
@@ -378,13 +402,22 @@ describe('supersession', () => {
   });
 
   it('answers what the substrate knew at a moment under knew_at', async () => {
-    const midway = await readEpisodes(knewAt(new Date('2026-02-01T00:00:00.000Z')), ['sup-old', 'sup-new']);
+    const midway = await readEpisodes(knewAt(new Date('2026-02-01T00:00:00.000Z')), [
+      'sup-old',
+      'sup-new',
+    ]);
     expect(midway.map((row) => row.id)).toEqual(['sup-old']);
 
-    const beforeAnything = await readEpisodes(knewAt(new Date('2026-01-01T00:00:00.000Z')), ['sup-old', 'sup-new']);
+    const beforeAnything = await readEpisodes(knewAt(new Date('2026-01-01T00:00:00.000Z')), [
+      'sup-old',
+      'sup-new',
+    ]);
     expect(beforeAnything).toEqual([]);
 
-    const afterBoth = await readEpisodes(knewAt(new Date('2026-04-01T00:00:00.000Z')), ['sup-old', 'sup-new']);
+    const afterBoth = await readEpisodes(knewAt(new Date('2026-04-01T00:00:00.000Z')), [
+      'sup-old',
+      'sup-new',
+    ]);
     expect(afterBoth.map((row) => row.id)).toEqual(['sup-new']);
   });
 
@@ -429,7 +462,10 @@ describe('forgetting', () => {
 
 describe('connection lifecycle', () => {
   it('reports a reachable server through the same check doctor runs', async () => {
-    const connection = new GraphConnection({ uri: harness.uri, password: 'aion-test-harness-password' });
+    const connection = new GraphConnection({
+      uri: harness.uri,
+      password: 'aion-test-harness-password',
+    });
     try {
       const health = await connection.health();
       expect(health.reachable).toBe(true);

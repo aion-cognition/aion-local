@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
 import neo4j from 'neo4j-driver';
+import { describe, expect, it } from 'vitest';
+
 import {
   coerceGraphValue,
   fromGraphDateTime,

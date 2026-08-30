@@ -2,7 +2,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { DEFAULT_STALE_CLAIM_TIMEOUT_MS, ReflectionQueueClaimant, reclaimStaleReflectionJobs } from './claim.js';
+
+import {
+  DEFAULT_STALE_CLAIM_TIMEOUT_MS,
+  ReflectionQueueClaimant,
+  reclaimStaleReflectionJobs,
+} from './claim.js';
 import { SqliteStore } from './database.js';
 import { enqueueReflectionJob, getReflectionJob } from './reflection-queue.js';
 
@@ -130,7 +135,11 @@ describe('reflection job claiming', () => {
     claimant.claimNext(store.db);
 
     const farFuture = new Date(Date.now() + DEFAULT_STALE_CLAIM_TIMEOUT_MS + 1000);
-    const reclaimedCount = reclaimStaleReflectionJobs(store.db, DEFAULT_STALE_CLAIM_TIMEOUT_MS, farFuture);
+    const reclaimedCount = reclaimStaleReflectionJobs(
+      store.db,
+      DEFAULT_STALE_CLAIM_TIMEOUT_MS,
+      farFuture,
+    );
 
     expect(reclaimedCount).toBe(1);
     const job = getReflectionJob(store.db, id);
@@ -145,7 +154,11 @@ describe('reflection job claiming', () => {
     const claimant = new ReflectionQueueClaimant();
     claimant.claimNext(store.db);
 
-    const reclaimedCount = reclaimStaleReflectionJobs(store.db, DEFAULT_STALE_CLAIM_TIMEOUT_MS, new Date());
+    const reclaimedCount = reclaimStaleReflectionJobs(
+      store.db,
+      DEFAULT_STALE_CLAIM_TIMEOUT_MS,
+      new Date(),
+    );
 
     expect(reclaimedCount).toBe(0);
     expect(getReflectionJob(store.db, id)?.claimedBy).toBe(claimant.id);
@@ -153,6 +166,8 @@ describe('reflection job claiming', () => {
 
   it('leaves an unclaimed job alone', () => {
     enqueueReflectionJob(store.db, 'integrate', {});
-    expect(reclaimStaleReflectionJobs(store.db, DEFAULT_STALE_CLAIM_TIMEOUT_MS, new Date())).toBe(0);
+    expect(reclaimStaleReflectionJobs(store.db, DEFAULT_STALE_CLAIM_TIMEOUT_MS, new Date())).toBe(
+      0,
+    );
   });
 });

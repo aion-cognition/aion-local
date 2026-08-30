@@ -2,6 +2,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+
+import { flushReinforcementQueue } from './flush.js';
+import { writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
 import { upsertEdge } from '../../infrastructure/graph/edges.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
 import type { RelationshipType } from '../../infrastructure/graph/relationships.js';
@@ -11,7 +14,6 @@ import {
   stopNeo4jHarness,
   type Neo4jHarness,
 } from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
-import { writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
@@ -20,7 +22,6 @@ import {
   reinforcementFlushCounters,
 } from '../../infrastructure/sqlite/reinforcement-queue.js';
 import { boundedReinforcement } from '../domain/reinforcement.js';
-import { flushReinforcementQueue } from './flush.js';
 
 const EMBED_DIMENSION = 8;
 const NOW = new Date('2026-03-01T00:00:00.000Z');
@@ -144,13 +145,7 @@ describe('hebbian flush against the graph', () => {
     await seedEdge('CO_OCCURS', 'clique-a', 'clique-b', 0.5);
     for (let i = 0; i < ids.length; i += 1) {
       for (let j = i + 1; j < ids.length; j += 1) {
-        enqueueReinforcementSignal(
-          db,
-          ids[i] as string,
-          ids[j] as string,
-          CO_EXTRACTION_TRIGGER,
-          BURST_TS,
-        );
+        enqueueReinforcementSignal(db, ids[i]!, ids[j]!, CO_EXTRACTION_TRIGGER, BURST_TS);
       }
     }
 
@@ -259,8 +254,20 @@ describe('hebbian flush against the graph', () => {
     await seedEntity('batch-d');
     await seedEdge('SIMILAR', 'batch-a', 'batch-b', 0.5);
     await seedEdge('SIMILAR', 'batch-c', 'batch-d', 0.5);
-    enqueueReinforcementSignal(db, 'batch-a', 'batch-b', RECALL_TRIGGER, '2026-02-28T00:00:00.000Z');
-    enqueueReinforcementSignal(db, 'batch-c', 'batch-d', RECALL_TRIGGER, '2026-02-28T00:01:00.000Z');
+    enqueueReinforcementSignal(
+      db,
+      'batch-a',
+      'batch-b',
+      RECALL_TRIGGER,
+      '2026-02-28T00:00:00.000Z',
+    );
+    enqueueReinforcementSignal(
+      db,
+      'batch-c',
+      'batch-d',
+      RECALL_TRIGGER,
+      '2026-02-28T00:01:00.000Z',
+    );
 
     const first = await flush(1);
 

@@ -1,4 +1,5 @@
 import neo4j, { type Driver } from 'neo4j-driver';
+
 import { runWrite, type GraphStatement } from './connection.js';
 import { GraphWriteError } from './errors.js';
 import { BASE_NODE_LABEL } from './labels.js';

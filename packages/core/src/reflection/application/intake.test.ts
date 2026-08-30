@@ -2,18 +2,19 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { ReflectionDispatch, type ReflectionJobSignal } from './dispatch.js';
+import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
+import { LaneAssigner } from './lanes.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { openLogger } from '../../infrastructure/logging/logger.js';
 import type { Vector } from '../../infrastructure/providers/types.js';
-import { SessionManager } from '../../session/session-manager.js';
-import { ReflectionQueueClaimant } from '../../infrastructure/sqlite/claim.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { enqueueReflectionJob, listReflectionJobs } from '../../infrastructure/sqlite/reflection-queue.js';
-import { ReflectionDispatch, type ReflectionJobSignal } from './dispatch.js';
-import { ReflectionNotStoredError } from './errors.js';
-import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
-import { LaneAssigner } from './lanes.js';
-import { attachContentVectors, findPendingVectorNodes } from './vectors.js';
+import {
+  enqueueReflectionJob,
+  listReflectionJobs,
+} from '../../infrastructure/sqlite/reflection-queue.js';
+import { SessionManager } from '../../session/session-manager.js';
 import { FakeGraph } from '../test-support/fake-graph.fixture.js';
 
 const MEMBER_ID = 'member-1';
@@ -137,7 +138,11 @@ describe('reflection intake redaction', () => {
   });
 
   it('leaves the caller-supplied session identity intact', async () => {
-    await handleReflection(deps, { ...PAYLOAD, session_id: 'mcp-transport-42' }, { identity: 'unused' });
+    await handleReflection(
+      deps,
+      { ...PAYLOAD, session_id: 'mcp-transport-42' },
+      { identity: 'unused' },
+    );
 
     expect(graph.nodesWithLabel('Session').map((node) => node.id)).toEqual(['mcp-transport-42']);
   });
@@ -163,14 +168,28 @@ describe('reflection intake storage', () => {
     const turns = graph.nodesWithLabel('Turn');
     expect(turns.map((turn) => turn.properties.sequence)).toEqual([0, 1]);
     expect(turns.map((turn) => turn.properties.role)).toEqual(['user', 'assistant']);
-    expect(turns.every((turn) => turn.properties.source_episode_id === result.episode_id)).toBe(true);
+    expect(turns.every((turn) => turn.properties.source_episode_id === result.episode_id)).toBe(
+      true,
+    );
 
     const containment = graph.edgesOfType('PARTICIPATES_IN');
     expect(containment).toHaveLength(3);
-    expect(containment.some((edge) => edge.sourceId === result.episode_id && edge.targetId === 'session-a')).toBe(true);
-    expect(turns.every((turn) => containment.some((edge) => edge.sourceId === turn.id && edge.targetId === result.episode_id))).toBe(true);
+    expect(
+      containment.some(
+        (edge) => edge.sourceId === result.episode_id && edge.targetId === 'session-a',
+      ),
+    ).toBe(true);
+    expect(
+      turns.every((turn) =>
+        containment.some(
+          (edge) => edge.sourceId === turn.id && edge.targetId === result.episode_id,
+        ),
+      ),
+    ).toBe(true);
 
-    const turnFollows = graph.edgesOfType('FOLLOWS').filter((edge) => edge.sourceId === turns[1]?.id);
+    const turnFollows = graph
+      .edgesOfType('FOLLOWS')
+      .filter((edge) => edge.sourceId === turns[1]?.id);
     expect(turnFollows).toHaveLength(1);
     expect(turnFollows[0]?.targetId).toBe(turns[0]?.id);
   });
@@ -215,11 +234,18 @@ describe('reflection intake lanes', () => {
     const result = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
 
     expect(result.lane).toBe('interactive');
-    expect(listReflectionJobs(db)[0]).toMatchObject({ lane: 'interactive', sessionId: 'session-a' });
+    expect(listReflectionJobs(db)[0]).toMatchObject({
+      lane: 'interactive',
+      sessionId: 'session-a',
+    });
   });
 
   it('honours an explicit bulk flag and echoes it', async () => {
-    const result = await handleReflection(deps, { ...PAYLOAD, lane: 'bulk' }, { identity: 'session-a' });
+    const result = await handleReflection(
+      deps,
+      { ...PAYLOAD, lane: 'bulk' },
+      { identity: 'session-a' },
+    );
 
     expect(result.lane).toBe('bulk');
     expect(listReflectionJobs(db)[0]?.lane).toBe('bulk');
@@ -266,7 +292,11 @@ describe('reflection intake lanes', () => {
   // episodes depending on which queue it waited in.
   it('keeps the lane out of the content hash', async () => {
     const interactive = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
-    const bulk = await handleReflection(deps, { ...PAYLOAD, lane: 'bulk' }, { identity: 'session-a' });
+    const bulk = await handleReflection(
+      deps,
+      { ...PAYLOAD, lane: 'bulk' },
+      { identity: 'session-a' },
+    );
 
     expect(bulk.episode_id).toBe(interactive.episode_id);
     expect(listReflectionJobs(db)).toHaveLength(1);
@@ -282,7 +312,12 @@ describe('reflection intake pending_ahead', () => {
 
   it('counts unclaimed interactive rows already queued, measured before this job lands', async () => {
     for (let index = 0; index < 3; index += 1) {
-      enqueueReflectionJob(db, INTEGRATE_JOB_TYPE, { episode_id: `seed-${String(index)}` }, { lane: 'interactive' });
+      enqueueReflectionJob(
+        db,
+        INTEGRATE_JOB_TYPE,
+        { episode_id: `seed-${String(index)}` },
+        { lane: 'interactive' },
+      );
     }
 
     const result = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
@@ -304,7 +339,11 @@ describe('reflection intake pending_ahead', () => {
     enqueueReflectionJob(db, INTEGRATE_JOB_TYPE, { episode_id: 'seed-0' }, { lane: 'interactive' });
     enqueueReflectionJob(db, INTEGRATE_JOB_TYPE, { episode_id: 'seed-1' }, { lane: 'interactive' });
 
-    const result = await handleReflection(deps, { ...PAYLOAD, lane: 'bulk' }, { identity: 'session-a' });
+    const result = await handleReflection(
+      deps,
+      { ...PAYLOAD, lane: 'bulk' },
+      { identity: 'session-a' },
+    );
 
     expect(result.lane).toBe('bulk');
     expect(result.pending_ahead).toBe(2);

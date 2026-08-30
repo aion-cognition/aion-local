@@ -4,10 +4,17 @@ import {
   writeContextVectorSync,
 } from '../../../infrastructure/graph/context-vector-sync.js';
 import { OllamaProvider } from '../../../infrastructure/providers/ollama-provider.js';
-import { attachContentVectors, findPendingVectorNodes } from '../../../reflection/application/vectors.js';
+import {
+  attachContentVectors,
+  findPendingVectorNodes,
+} from '../../../reflection/application/vectors.js';
 import { computeContextVectors } from '../../../reflection/domain/context-vector.js';
 import type { HealthSnapshot } from '../../domain/health.js';
-import type { IntrospectionOperation, OperationContext, OperationOutcome } from '../../domain/operation.js';
+import type {
+  IntrospectionOperation,
+  OperationContext,
+  OperationOutcome,
+} from '../../domain/operation.js';
 
 export const VECTOR_BACKFILL_OPERATION = 'vector_backfill';
 
@@ -40,7 +47,10 @@ export function vectorBackfillRelevance(health: HealthSnapshot): number {
 async function backfillContentVectors(
   ctx: OperationContext,
 ): Promise<{ processed: number; affected: number }> {
-  const pending = await findPendingVectorNodes(ctx.driver, ctx.config.maintenance.vectorBackfillBatchSize);
+  const pending = await findPendingVectorNodes(
+    ctx.driver,
+    ctx.config.maintenance.vectorBackfillBatchSize,
+  );
   if (pending.length === 0) {
     return { processed: 0, affected: 0 };
   }
@@ -55,7 +65,10 @@ async function backfillContentVectors(
 async function refreshContextVectors(
   ctx: OperationContext,
 ): Promise<{ processed: number; affected: number }> {
-  const staleIds = await findStaleContextVectorNodes(ctx.driver, ctx.config.maintenance.contextRefreshBatchSize);
+  const staleIds = await findStaleContextVectorNodes(
+    ctx.driver,
+    ctx.config.maintenance.contextRefreshBatchSize,
+  );
   if (staleIds.length === 0) {
     return { processed: 0, affected: 0 };
   }

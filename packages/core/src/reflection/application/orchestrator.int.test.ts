@@ -2,30 +2,31 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+
+import { ReflectionDispatch } from './dispatch.js';
+import { handleReflection, type ReflectionIntakeDeps } from './intake.js';
+import { LaneAssigner } from './lanes.js';
+import { orchestratorLedgerKey, ReflectionOrchestrator } from './orchestrator.js';
+import { CognitiveExtractionStage } from './stages/cognitive.js';
+import { EntityExtractionStage } from './stages/entities.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
+import { findEpisodeEntities } from '../../infrastructure/graph/entity-queries.js';
 import { loadEpisodeContext } from '../../infrastructure/graph/episode-context.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
+import { findEpisodeCognitiveNodes } from '../../infrastructure/graph/semantic-relationship-queries.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
   type Neo4jHarness,
 } from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
-import { findEpisodeEntities } from '../../infrastructure/graph/entity-queries.js';
-import { findEpisodeCognitiveNodes } from '../../infrastructure/graph/semantic-relationship-queries.js';
 import { openLogger } from '../../infrastructure/logging/logger.js';
 import { testGenerationProvider } from '../../infrastructure/providers/test-support/generation-provider.js';
-import { SessionManager } from '../../session/session-manager.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { getLedgerEntry, isLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
+import { SessionManager } from '../../session/session-manager.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../domain/stage.js';
 import { stageLedgerKey } from '../domain/stage.js';
-import { CognitiveExtractionStage } from './stages/cognitive.js';
-import { EntityExtractionStage } from './stages/entities.js';
-import { ReflectionDispatch } from './dispatch.js';
-import { handleReflection, type ReflectionIntakeDeps } from './intake.js';
-import { LaneAssigner } from './lanes.js';
-import { orchestratorLedgerKey, ReflectionOrchestrator } from './orchestrator.js';
 
 const SESSION_IDENTITY = 'mcp-transport-session-orchestrator';
 
@@ -57,7 +58,9 @@ const RETRY_PAYLOAD = {
       occurred_at: '2026-08-28T11:00:30Z',
     },
   ],
-  observations: ['Keeping Neo4j means the entity graph stays queryable by traversal rather than by join'],
+  observations: [
+    'Keeping Neo4j means the entity graph stays queryable by traversal rather than by join',
+  ],
   summary: 'deciding to keep Neo4j over Postgres for the reflection pipeline',
 };
 
@@ -186,7 +189,11 @@ describe('reflection orchestrator against a live graph', () => {
     const pipeline = [
       stage('entities', { status: 'ok', summary: 'extracted 2 entities', counts: { entities: 2 } }),
       poisoned('cognitive', 'the model returned nonsense'),
-      stage('associations', { status: 'ok', summary: 'linked 3 pairs', counts: { associations: 3 } }),
+      stage('associations', {
+        status: 'ok',
+        summary: 'linked 3 pairs',
+        counts: { associations: 3 },
+      }),
     ];
 
     const run = await orchestrator(pipeline).run(throwingEpisodeId);
@@ -205,7 +212,11 @@ describe('reflection orchestrator against a live graph', () => {
     const pipeline = [
       stage('entities', { status: 'ok', summary: 'extracted 2 entities', counts: { entities: 2 } }),
       stage('cognitive', { status: 'ok', summary: 'extracted 1 decision' }),
-      stage('associations', { status: 'ok', summary: 'linked 3 pairs', counts: { associations: 3 } }),
+      stage('associations', {
+        status: 'ok',
+        summary: 'linked 3 pairs',
+        counts: { associations: 3 },
+      }),
     ];
 
     const first = await orchestrator(pipeline).run(enrichEpisodeId);
@@ -227,71 +238,67 @@ describe('reflection orchestrator against a live graph', () => {
     expect(entered).toEqual([]);
   }, 60_000);
 
-  it(
-    'a real entity and cognitive stage do not re-mint nodes when a later stage fails and the job retries',
-    async () => {
-      // Against a live graph: the two stages that actually write nodes run for real; the
-      // stage after them fails so the run stays retryable, and the retry must not touch
-      // the graph through the stages that already applied.
-      const remintEpisodeId = await freshEpisode('remint');
+  it('a real entity and cognitive stage do not re-mint nodes when a later stage fails and the job retries', async () => {
+    // Against a live graph: the two stages that actually write nodes run for real; the
+    // stage after them fails so the run stays retryable, and the retry must not touch
+    // the graph through the stages that already applied.
+    const remintEpisodeId = await freshEpisode('remint');
 
-      let entityCalls = 0;
-      let cognitiveCalls = 0;
-      const realEntities = new EntityExtractionStage();
-      const realCognitive = new CognitiveExtractionStage();
-      const spiedEntities: ReflectionStage = {
-        name: realEntities.name,
-        run: (ctx) => {
-          entityCalls += 1;
-          return realEntities.run(ctx);
-        },
-      };
-      const spiedCognitive: ReflectionStage = {
-        name: realCognitive.name,
-        run: (ctx) => {
-          cognitiveCalls += 1;
-          return realCognitive.run(ctx);
-        },
-      };
-      const flakySemantic = poisoned(
-        'semantic-relationships',
-        'semantic relationship call timed out: AbortError',
-      );
-      const pipeline = [spiedEntities, spiedCognitive, flakySemantic];
+    let entityCalls = 0;
+    let cognitiveCalls = 0;
+    const realEntities = new EntityExtractionStage();
+    const realCognitive = new CognitiveExtractionStage();
+    const spiedEntities: ReflectionStage = {
+      name: realEntities.name,
+      run: (ctx) => {
+        entityCalls += 1;
+        return realEntities.run(ctx);
+      },
+    };
+    const spiedCognitive: ReflectionStage = {
+      name: realCognitive.name,
+      run: (ctx) => {
+        cognitiveCalls += 1;
+        return realCognitive.run(ctx);
+      },
+    };
+    const flakySemantic = poisoned(
+      'semantic-relationships',
+      'semantic relationship call timed out: AbortError',
+    );
+    const pipeline = [spiedEntities, spiedCognitive, flakySemantic];
 
-      const first = await orchestrator(pipeline).run(remintEpisodeId);
+    const first = await orchestrator(pipeline).run(remintEpisodeId);
 
-      expect(first.applied).toBe(false);
-      expect(entityCalls).toBe(1);
-      expect(cognitiveCalls).toBe(1);
-      expect(first.summary.stages.map((s) => s.status)).toEqual(['ok', 'ok', 'failed']);
+    expect(first.applied).toBe(false);
+    expect(entityCalls).toBe(1);
+    expect(cognitiveCalls).toBe(1);
+    expect(first.summary.stages.map((s) => s.status)).toEqual(['ok', 'ok', 'failed']);
 
-      const entitiesAfterFirst = await findEpisodeEntities(harness.driver, remintEpisodeId);
-      const cognitiveAfterFirst = await findEpisodeCognitiveNodes(harness.driver, remintEpisodeId);
-      expect(entitiesAfterFirst.length).toBeGreaterThan(0);
-      expect(cognitiveAfterFirst.length).toBeGreaterThan(0);
+    const entitiesAfterFirst = await findEpisodeEntities(harness.driver, remintEpisodeId);
+    const cognitiveAfterFirst = await findEpisodeCognitiveNodes(harness.driver, remintEpisodeId);
+    expect(entitiesAfterFirst.length).toBeGreaterThan(0);
+    expect(cognitiveAfterFirst.length).toBeGreaterThan(0);
 
-      entered = [];
-      const second = await orchestrator(pipeline).run(remintEpisodeId);
+    entered = [];
+    const second = await orchestrator(pipeline).run(remintEpisodeId);
 
-      // The stage that keeps failing retries; the two that already applied do not re-enter.
-      expect(second.applied).toBe(false);
-      expect(second.summary.skippedStages).toEqual(['entities', 'cognitive']);
-      expect(entityCalls).toBe(1);
-      expect(cognitiveCalls).toBe(1);
-      expect(entered).toEqual(['semantic-relationships']);
-      expect(isLedgerApplied(db, stageLedgerKey('entities', remintEpisodeId))).toBe(true);
-      expect(isLedgerApplied(db, stageLedgerKey('cognitive', remintEpisodeId))).toBe(true);
+    // The stage that keeps failing retries; the two that already applied do not re-enter.
+    expect(second.applied).toBe(false);
+    expect(second.summary.skippedStages).toEqual(['entities', 'cognitive']);
+    expect(entityCalls).toBe(1);
+    expect(cognitiveCalls).toBe(1);
+    expect(entered).toEqual(['semantic-relationships']);
+    expect(isLedgerApplied(db, stageLedgerKey('entities', remintEpisodeId))).toBe(true);
+    expect(isLedgerApplied(db, stageLedgerKey('cognitive', remintEpisodeId))).toBe(true);
 
-      const entitiesAfterSecond = await findEpisodeEntities(harness.driver, remintEpisodeId);
-      const cognitiveAfterSecond = await findEpisodeCognitiveNodes(harness.driver, remintEpisodeId);
-      expect(entitiesAfterSecond.map((e) => e.id).sort()).toEqual(
-        entitiesAfterFirst.map((e) => e.id).sort(),
-      );
-      expect(cognitiveAfterSecond.map((n) => n.id).sort()).toEqual(
-        cognitiveAfterFirst.map((n) => n.id).sort(),
-      );
-    },
-    300_000,
-  );
+    const entitiesAfterSecond = await findEpisodeEntities(harness.driver, remintEpisodeId);
+    const cognitiveAfterSecond = await findEpisodeCognitiveNodes(harness.driver, remintEpisodeId);
+    expect(entitiesAfterSecond.map((e) => e.id).sort()).toEqual(
+      entitiesAfterFirst.map((e) => e.id).sort(),
+    );
+    expect(cognitiveAfterSecond.map((n) => n.id).sort()).toEqual(
+      cognitiveAfterFirst.map((n) => n.id).sort(),
+    );
+  }, 300_000);
 });

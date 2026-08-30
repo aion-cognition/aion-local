@@ -21,7 +21,9 @@ function readSamples(db: SqliteHandle): number[] {
   }
   try {
     const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? parsed.filter((value): value is number => typeof value === 'number') : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((value): value is number => typeof value === 'number')
+      : [];
   } catch {
     return [];
   }
@@ -35,7 +37,8 @@ export function recordEnrichmentLagMs(
 ): void {
   const samples = readSamples(db);
   samples.push(Math.max(0, Math.round(ms)));
-  const trimmed = samples.length > windowSize ? samples.slice(samples.length - windowSize) : samples;
+  const trimmed =
+    samples.length > windowSize ? samples.slice(samples.length - windowSize) : samples;
   setMeta(db, LAG_SAMPLES_META_KEY, JSON.stringify(trimmed));
 }
 

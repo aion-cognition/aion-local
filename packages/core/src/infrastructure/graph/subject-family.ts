@@ -1,5 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 import neo4j from 'neo4j-driver';
+
 import {
   BITEMPORAL_PROPERTIES,
   supersedeInTransaction,
@@ -7,12 +8,12 @@ import {
 } from './bitemporal.js';
 import { normalizeCognitiveText, TEXT_NORM_PROPERTY } from './cognitive-queries.js';
 import { inWriteTransaction, runRead, type GraphTransaction } from './connection.js';
+import { upsertEdgeInTransaction } from './edges.js';
 import {
   DESCRIPTION_MENTION_COUNT_PROPERTY,
   DESCRIPTION_RETIRED_AT_PROPERTY,
   PRIOR_DESCRIPTIONS_PROPERTY,
 } from './entity-description-queries.js';
-import { upsertEdgeInTransaction } from './edges.js';
 import { ENTITY_MENTION_TYPE } from './entity-queries.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
 import { BASE_NODE_LABEL } from './labels.js';
@@ -88,11 +89,11 @@ export type ClaimSubject = {
 };
 
 function mapSubject(row: Row): ClaimSubject {
-  const gloss = String(row.text ?? '').trim();
+  const gloss = ((row.text as string | null) ?? '').trim();
   return {
     entityId: row.id as string,
-    name: String(row.name ?? ''),
-    nameNorm: String(row.name_norm ?? ''),
+    name: (row.name as string | null) ?? '',
+    nameNorm: (row.name_norm as string | null) ?? '',
     sourceEpisodeId: row.source_episode_id as string,
     ...(gloss.length === 0 ? {} : { gloss }),
   };
@@ -171,12 +172,12 @@ export type SubjectSibling = {
 };
 
 function mapSibling(row: Row): SubjectSibling {
-  const relatedness = row.relatedness;
+  const { relatedness } = row;
   return {
     id: row.id as string,
-    label: String(row.label ?? ''),
-    text: String(row.text ?? ''),
-    subject: String(row.subject ?? ''),
+    label: (row.label as string | null) ?? '',
+    text: (row.text as string | null) ?? '',
+    subject: (row.subject as string | null) ?? '',
     ...(typeof relatedness === 'number' ? { relatedness } : {}),
   };
 }
@@ -337,9 +338,7 @@ export async function supersedeSubjectFamily(
     });
 
     const candidates = await tx.run(SUBJECT_SIBLINGS, siblingParameters(input.claimId), mapSibling);
-    const siblings = candidates.filter((sibling) =>
-      siblingCloses(sibling, input.relatednessFloor),
-    );
+    const siblings = candidates.filter((sibling) => siblingCloses(sibling, input.relatednessFloor));
     const held = candidates.filter((sibling) => !siblingCloses(sibling, input.relatednessFloor));
     for (const sibling of siblings) {
       await tx.run(CLOSE_SIBLING, { id: sibling.id, now: toGraphDateTime(now) }, (row) => row.id);

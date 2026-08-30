@@ -52,7 +52,7 @@ export class OllamaProvider implements Provider {
     }
 
     const body = (await response.json()) as { embeddings?: number[][] };
-    if (body.embeddings === undefined || body.embeddings.length !== texts.length) {
+    if (body.embeddings?.length !== texts.length) {
       throw new Error('Ollama embed response missing or mismatched embeddings');
     }
     return body.embeddings;
@@ -81,7 +81,9 @@ export class OllamaProvider implements Provider {
       ...(req.signal === undefined ? {} : { signal: req.signal }),
     });
     if (!response.ok) {
-      throw new Error(`Ollama generate request failed: ${response.status} ${await response.text()}`);
+      throw new Error(
+        `Ollama generate request failed: ${response.status} ${await response.text()}`,
+      );
     }
 
     const body = (await response.json()) as { message?: { content?: string } };

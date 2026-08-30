@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import { LaneAssigner, type LaneAssignerOptions } from './lanes.js';
 
 const LIMITS: LaneAssignerOptions = {
@@ -79,7 +80,9 @@ describe('lane backstop, per session', () => {
     const assigner = new LaneAssigner(LIMITS);
     push(assigner, 'a', LIMITS.sessionArrivalMax + 1);
 
-    expect(assigner.assign({ sessionId: 'a', now: at(LIMITS.arrivalWindowMs + 100) })).toMatchObject({
+    expect(
+      assigner.assign({ sessionId: 'a', now: at(LIMITS.arrivalWindowMs + 100) }),
+    ).toMatchObject({
       lane: 'interactive',
       sessionArrivals: 1,
     });

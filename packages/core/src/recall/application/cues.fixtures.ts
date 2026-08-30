@@ -1,5 +1,5 @@
-import { OFF_TOPIC_BATTERY } from './floors.fixtures.js';
 import type { CueExtractionInput } from './cues.js';
+import { OFF_TOPIC_BATTERY } from './floors.fixtures.js';
 
 /**
  * Realistic recall calls an agent might issue, spanning query-only, query+summary, and
@@ -56,7 +56,10 @@ export const CUE_FIXTURES: readonly CueFixtureScenario[] = [
       summary: 'Investigating a Datadog PHI log leak traced to two independent sources.',
       recentTurns: [
         { role: 'user', text: 'is it the claude error dump or the sql bind params' },
-        { role: 'assistant', text: 'both, they are unrelated leaks that happened to land the same week' },
+        {
+          role: 'assistant',
+          text: 'both, they are unrelated leaks that happened to land the same week',
+        },
       ],
     },
   },
@@ -83,7 +86,8 @@ export const CUE_FIXTURES: readonly CueFixtureScenario[] = [
     description: 'a standing-preference lookup with summary context',
     input: {
       query: 'does Ryan want Co-Authored-By trailers on commits',
-      summary: 'Setting up the git commit workflow for a new repo, deciding on commit message conventions.',
+      summary:
+        'Setting up the git commit workflow for a new repo, deciding on commit message conventions.',
     },
   },
 ];

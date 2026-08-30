@@ -2,6 +2,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { SessionManager } from './session-manager.js';
 import { bootstrapBackbone } from '../infrastructure/graph/backbone.js';
 import { runGraphMigrations } from '../infrastructure/graph/migrations.js';
 import {
@@ -10,9 +12,12 @@ import {
   countOutgoingEdges,
   edgeTargetId,
 } from '../infrastructure/graph/test-support/graph-queries.fixture.js';
-import { startNeo4jHarness, stopNeo4jHarness, type Neo4jHarness } from '../infrastructure/graph/test-support/neo4j-harness.fixture.js';
+import {
+  startNeo4jHarness,
+  stopNeo4jHarness,
+  type Neo4jHarness,
+} from '../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openSqliteHandle, type SqliteHandle } from '../infrastructure/sqlite/database.js';
-import { SessionManager } from './session-manager.js';
 
 const EMBED_DIMENSION = 8;
 
@@ -75,7 +80,10 @@ describe('SessionManager.ensureSession', () => {
 
   it('resolves a known identity from the manager cache without writing again', async () => {
     const manager = new SessionManager(harness.driver, { memberId, workspaceId });
-    const first = await manager.ensureSession({ identity: 'session-cache', now: new Date('2026-02-01T00:00:00.000Z') });
+    const first = await manager.ensureSession({
+      identity: 'session-cache',
+      now: new Date('2026-02-01T00:00:00.000Z'),
+    });
     expect(first.created).toBe(true);
 
     const repeats = await Promise.all([

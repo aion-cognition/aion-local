@@ -187,7 +187,11 @@ export {
   provisionOllama,
   verifyOllamaChatModel,
 } from './providers/provisioning.js';
-export type { OllamaProvisionTarget, ProvisionEvent, ProvisionOptions } from './providers/provisioning.js';
+export type {
+  OllamaProvisionTarget,
+  ProvisionEvent,
+  ProvisionOptions,
+} from './providers/provisioning.js';
 
 export {
   findSupersessionProposalsForNode,
@@ -221,7 +225,11 @@ export {
   recordCueOutcome,
 } from './sqlite/recall-samples.js';
 
-export { PACK_METHODS, packMethodCounters, recordPackMethodCounts } from './sqlite/method-counters.js';
+export {
+  PACK_METHODS,
+  packMethodCounters,
+  recordPackMethodCounts,
+} from './sqlite/method-counters.js';
 export type { PackMethod, PackMethodCounters } from './sqlite/method-counters.js';
 
 export { recallCadenceCounters, recordRecallOutcome } from './sqlite/recall-cadence.js';

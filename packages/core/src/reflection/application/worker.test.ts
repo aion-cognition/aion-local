@@ -2,25 +2,31 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { ReflectionDispatch } from './dispatch.js';
+import { INTEGRATE_JOB_TYPE } from './intake.js';
+import type { ReflectionRun } from './orchestrator.js';
+import { backoffDelayMs, ReflectionWorker, type ReflectionWorkerOptions } from './worker.js';
 import { MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider, Vector } from '../../infrastructure/providers/types.js';
 import { ReflectionQueueClaimant } from '../../infrastructure/sqlite/claim.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import { listEnrichmentLagSamplesMs } from '../../infrastructure/sqlite/lag-samples.js';
-import { enqueueReflectionJob, getReflectionJob } from '../../infrastructure/sqlite/reflection-queue.js';
+import {
+  enqueueReflectionJob,
+  getReflectionJob,
+} from '../../infrastructure/sqlite/reflection-queue.js';
 import { FakeGraph } from '../test-support/fake-graph.fixture.js';
-import { ReflectionDispatch } from './dispatch.js';
-import { INTEGRATE_JOB_TYPE } from './intake.js';
-import type { ReflectionRun } from './orchestrator.js';
-import { backoffDelayMs, ReflectionWorker, type ReflectionWorkerOptions } from './worker.js';
 
 const EPISODE_ID = 'episode-under-reflection';
 
 /** Resolves once the runner has been entered `target` times, so no test waits on a clock. */
 class RunLatch {
   readonly reached: Promise<void>;
-  #resolve: () => void = () => {};
+  #resolve: () => void = () => {
+    // Replaced synchronously below: the Promise executor runs before the constructor returns.
+  };
   #entered = 0;
 
   constructor(private readonly target: number) {
@@ -42,7 +48,7 @@ function completedRun(episodeId: string, applied: boolean): ReflectionRun {
     episodeId,
     status: 'completed',
     applied,
-    summary: { episodeId, durationMs: 1, stages: [], counts: {} },
+    summary: { episodeId, durationMs: 1, stages: [], counts: {}, skippedStages: [] },
   };
 }
 
@@ -122,8 +128,9 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  await worker?.stop();
+  const current = worker;
   worker = undefined;
+  await current?.stop();
   store.close();
   rmSync(dir, { recursive: true, force: true });
 });
@@ -184,7 +191,7 @@ describe('signal-driven execution', () => {
       episodeId,
       status: 'already_applied',
       applied: false,
-      summary: { episodeId, durationMs: 1, stages: [], counts: {} },
+      summary: { episodeId, durationMs: 1, stages: [], counts: {}, skippedStages: [] },
     });
     const started = build(runner);
     await started.start();
@@ -230,7 +237,7 @@ describe('enrichment lag', () => {
       episodeId,
       status: 'already_applied',
       applied: false,
-      summary: { episodeId, durationMs: 1, stages: [], counts: {} },
+      summary: { episodeId, durationMs: 1, stages: [], counts: {}, skippedStages: [] },
     });
     const started = build(runner);
     await started.start();
@@ -398,7 +405,7 @@ describe('circuit breaker', () => {
 
     expect(runner.episodeIds).toHaveLength(5);
     expect(started.paused).toBe(true);
-    expect(getReflectionJob(store.db, jobIds[5] as string)?.claimedAt).toBeNull();
+    expect(getReflectionJob(store.db, jobIds[5]!)?.claimedAt).toBeNull();
 
     failing = false;
     await latch.reached;
@@ -406,7 +413,7 @@ describe('circuit breaker', () => {
 
     expect(started.paused).toBe(false);
     expect(runner.episodeIds[5]).toBe('episode-6');
-    expect(getReflectionJob(store.db, jobIds[5] as string)).toBeUndefined();
+    expect(getReflectionJob(store.db, jobIds[5]!)).toBeUndefined();
   });
 });
 
@@ -439,7 +446,9 @@ describe('stop', () => {
 
 /** The reaper's interval floor is one second, so a real-clock wait is the honest way to reach it. */
 async function afterOneSweep(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 1_300));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 1_300);
+  });
 }
 
 describe('stale-claim reaper', () => {

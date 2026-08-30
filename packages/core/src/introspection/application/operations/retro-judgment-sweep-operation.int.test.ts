@@ -2,6 +2,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { retroJudgmentSweepOperation } from './retro-judgment-sweep-operation.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import { bootstrapBackbone } from '../../../infrastructure/graph/backbone.js';
@@ -21,15 +23,17 @@ import type { Provider, StructuredRequest } from '../../../infrastructure/provid
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { isLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
 import { listSupersessionProposals } from '../../../infrastructure/sqlite/supersession-proposals.js';
-import { SessionManager } from '../../../session/session-manager.js';
 import { ReflectionDispatch } from '../../../reflection/application/dispatch.js';
-import { handleReflection, type ReflectionIntakeDeps } from '../../../reflection/application/intake.js';
+import {
+  handleReflection,
+  type ReflectionIntakeDeps,
+} from '../../../reflection/application/intake.js';
 import { LaneAssigner } from '../../../reflection/application/lanes.js';
 import { SUPERSESSION_STAGE_NAME } from '../../../reflection/application/stages/supersession.js';
 import { stageLedgerKey } from '../../../reflection/domain/stage.js';
+import { SessionManager } from '../../../session/session-manager.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
-import { retroJudgmentSweepOperation } from './retro-judgment-sweep-operation.js';
 
 /**
  * The backlog this operation drains never went through the orchestrator's own supersession
@@ -170,15 +174,17 @@ function contextFor(): OperationContext {
 
 describe('retroJudgmentSweepOperation against a live graph', () => {
   it('never faced the supersession stage before the sweep runs', () => {
-    expect(isLedgerApplied(db, stageLedgerKey(SUPERSESSION_STAGE_NAME, priorEpisodeId))).toBe(false);
+    expect(isLedgerApplied(db, stageLedgerKey(SUPERSESSION_STAGE_NAME, priorEpisodeId))).toBe(
+      false,
+    );
     expect(isLedgerApplied(db, stageLedgerKey(SUPERSESSION_STAGE_NAME, nextEpisodeId))).toBe(false);
   });
 
   it('proposes rather than closing, and marks both episodes swept', async () => {
     const calls: StructuredRequest[] = [];
-    const outcome = await retroJudgmentSweepOperation({ buildProvider: () => stubProvider(calls) }).run(
-      contextFor(),
-    );
+    const outcome = await retroJudgmentSweepOperation({
+      buildProvider: () => stubProvider(calls),
+    }).run(contextFor());
 
     expect(outcome.status).toBe('applied');
     expect(outcome.itemsProcessed).toBe(2);
@@ -188,7 +194,9 @@ describe('retroJudgmentSweepOperation against a live graph', () => {
     const proposals = listSupersessionProposals(db);
     expect(proposals.length).toBeGreaterThan(0);
     expect(proposals.every((row) => row.resolvedAt === null)).toBe(true);
-    expect(proposals.some((row) => row.oldId === priorFactId || row.oldId === nextFactId)).toBe(true);
+    expect(proposals.some((row) => row.oldId === priorFactId || row.oldId === nextFactId)).toBe(
+      true,
+    );
 
     const priorFactProps = await nodeProperties(harness.driver, priorFactId);
     expect(priorFactProps[BITEMPORAL_PROPERTIES.validUntil]).toBeUndefined();
@@ -199,9 +207,9 @@ describe('retroJudgmentSweepOperation against a live graph', () => {
 
   it('converges: a second run finds nothing left in the backlog', async () => {
     const calls: StructuredRequest[] = [];
-    const outcome = await retroJudgmentSweepOperation({ buildProvider: () => stubProvider(calls) }).run(
-      contextFor(),
-    );
+    const outcome = await retroJudgmentSweepOperation({
+      buildProvider: () => stubProvider(calls),
+    }).run(contextFor());
 
     expect(outcome.status).toBe('noop');
     expect(outcome.itemsProcessed).toBe(0);

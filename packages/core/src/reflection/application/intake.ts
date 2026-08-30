@@ -1,22 +1,28 @@
 import { ReflectionInputSchema, type ReflectionOutput } from '@aion/protocol';
 import type { Driver } from 'neo4j-driver';
+
+import type { ReflectionDispatch } from './dispatch.js';
+import { ReflectionNotStoredError } from './errors.js';
+import type { LaneAssigner, LaneDecision } from './lanes.js';
+import { attachContentVectors } from './vectors.js';
 import { writeStampedNodeInTransaction } from '../../infrastructure/graph/bitemporal.js';
-import { inWriteTransaction, type GraphTransaction } from '../../infrastructure/graph/connection.js';
+import {
+  inWriteTransaction,
+  type GraphTransaction,
+} from '../../infrastructure/graph/connection.js';
 import { upsertEdgeInTransaction } from '../../infrastructure/graph/edges.js';
-import { isGraphUnavailable } from '../../infrastructure/graph/errors.js';
 import {
   CONTAINMENT_TYPE,
   findEpisodeByContentHash,
   findEpisodeByContentHashInTransaction,
   MEMORY_PROPERTIES,
 } from '../../infrastructure/graph/episodes.js';
+import { isGraphUnavailable } from '../../infrastructure/graph/errors.js';
 import { lockNodeInTransaction } from '../../infrastructure/graph/locks.js';
 import type { PendingVectorNode } from '../../infrastructure/graph/pending-vectors.js';
 import type { GraphProperties } from '../../infrastructure/graph/values.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
-import { redactPayload } from '../../redaction/deep-walk.js';
-import type { SessionManager } from '../../session/session-manager.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { countQueueJobs } from '../../infrastructure/sqlite/reflection-queue-admin.js';
 import {
@@ -25,11 +31,9 @@ import {
   findPendingReflectionJob,
   type ReflectionLane,
 } from '../../infrastructure/sqlite/reflection-queue.js';
+import { redactPayload } from '../../redaction/deep-walk.js';
+import type { SessionManager } from '../../session/session-manager.js';
 import { prepareEpisode, type PreparedEpisode, type PreparedTurn } from '../domain/content.js';
-import type { ReflectionDispatch } from './dispatch.js';
-import { ReflectionNotStoredError } from './errors.js';
-import type { LaneAssigner, LaneDecision } from './lanes.js';
-import { attachContentVectors } from './vectors.js';
 
 /** The one job intake enqueues. The reflection pipeline's stages fan out from it; intake never runs them. */
 export const INTEGRATE_JOB_TYPE = 'integrate';
@@ -275,7 +279,12 @@ function ensureIntegrateJob(
 ): IntegrateJob {
   // A payload the substrate already holds is not an arrival: counting a client's own retries
   // against it would let a repeated push demote the session for work already queued.
-  const pending = findPendingReflectionJob(deps.db, INTEGRATE_JOB_TYPE, EPISODE_ID_FIELD, episodeId);
+  const pending = findPendingReflectionJob(
+    deps.db,
+    INTEGRATE_JOB_TYPE,
+    EPISODE_ID_FIELD,
+    episodeId,
+  );
   if (pending !== undefined) {
     return { jobId: pending.id, enqueued: false, lane: pending.lane, decision: undefined };
   }

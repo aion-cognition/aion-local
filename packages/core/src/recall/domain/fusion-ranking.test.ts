@@ -1,16 +1,16 @@
 import type { RecallMethod } from '@aion/protocol';
 import { describe, expect, it } from 'vitest';
-import type { Vector } from '../../infrastructure/providers/types.js';
+
 import type { AdmissionPolicy, Measurement } from './admission.js';
 import {
   fuse,
-  reciprocalRank,
   SUPERSEDED_RANK_WEIGHT,
   type FusedItem,
   type FusionCandidate,
   type FusionOptions,
   type RankedList,
 } from './fusion.js';
+import type { Vector } from '../../infrastructure/providers/types.js';
 
 const RRF_CONSTANT = 60;
 
@@ -254,8 +254,14 @@ describe('near-duplicate crowding cap', () => {
     const fused = items(
       [
         list('vector', [
-          candidate('episode-burst', { content: 'restart burst 0/1a', labels: ['Episode', 'Memory'] }),
-          candidate('concept-burst', { content: 'restart burst 0/1b', labels: ['Concept', 'Memory'] }),
+          candidate('episode-burst', {
+            content: 'restart burst 0/1a',
+            labels: ['Episode', 'Memory'],
+          }),
+          candidate('concept-burst', {
+            content: 'restart burst 0/1b',
+            labels: ['Concept', 'Memory'],
+          }),
         ]),
       ],
       { ...RRF, clusterCap: 1 },

@@ -2,6 +2,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { CueCache } from './cues.js';
+import { handleRecall, type RecallDeps } from './recall.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
@@ -15,10 +18,6 @@ import {
 } from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider, Vector } from '../../infrastructure/providers/types.js';
-import { ReflectionDispatch } from '../../reflection/application/dispatch.js';
-import { handleReflection } from '../../reflection/application/intake.js';
-import { LaneAssigner } from '../../reflection/application/lanes.js';
-import { SessionManager } from '../../session/session-manager.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { getLastPack } from '../../infrastructure/sqlite/last-pack.js';
 import {
@@ -27,9 +26,11 @@ import {
   type PackMethod,
 } from '../../infrastructure/sqlite/method-counters.js';
 import { markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
+import { ReflectionDispatch } from '../../reflection/application/dispatch.js';
+import { handleReflection } from '../../reflection/application/intake.js';
+import { LaneAssigner } from '../../reflection/application/lanes.js';
 import { orchestratorLedgerKey } from '../../reflection/application/orchestrator.js';
-import { CueCache } from './cues.js';
-import { handleRecall, type RecallDeps } from './recall.js';
+import { SessionManager } from '../../session/session-manager.js';
 
 const EMBED_DIMENSION = 8;
 const WRITE_SESSION = 'recall-int-write-session';
@@ -73,8 +74,7 @@ function vectorFor(text: string): Vector {
 
 const provider: Provider = {
   embed: (texts) => Promise.resolve(texts.map(vectorFor)),
-  generate: () =>
-    Promise.resolve({ query_cues: [CUE], summary_cues: [], recent_turn_cues: [] }),
+  generate: () => Promise.resolve({ query_cues: [CUE], summary_cues: [], recent_turn_cues: [] }),
 };
 
 /**
@@ -106,12 +106,18 @@ async function waitFor(label: string, ready: () => Promise<boolean>): Promise<vo
     if (await ready()) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
   }
   throw new Error(`timed out waiting for ${label}`);
 }
 
-async function push(observation: string, now: Date, identity: string = WRITE_SESSION): Promise<string> {
+async function push(
+  observation: string,
+  now: Date,
+  identity: string = WRITE_SESSION,
+): Promise<string> {
   const result = await handleReflection(
     {
       driver: harness.driver,
@@ -185,10 +191,14 @@ afterAll(async () => {
 
 describe('recall over a substrate written by the real intake path', () => {
   it('returns the episode the query is about, explained by the strategy that found it', async () => {
-    const pack = await handleRecall(deps, { query: QUERY }, {
-      identity: READ_SESSION,
-      now: RECALLED_AT,
-    });
+    const pack = await handleRecall(
+      deps,
+      { query: QUERY },
+      {
+        identity: READ_SESSION,
+        now: RECALLED_AT,
+      },
+    );
 
     const hit = pack.episodes?.find((item) => item.id === webhooksEpisodeId);
     expect(hit?.content).toContain(WEBHOOKS_OBSERVATION);
@@ -205,10 +215,14 @@ describe('recall over a substrate written by the real intake path', () => {
    * what keeps it out is the answer that scoring gives.
    */
   it('refuses an episode the spread reached that measures nothing like the query', async () => {
-    const pack = await handleRecall(deps, { query: QUERY }, {
-      identity: READ_SESSION,
-      now: RECALLED_AT,
-    });
+    const pack = await handleRecall(
+      deps,
+      { query: QUERY },
+      {
+        identity: READ_SESSION,
+        now: RECALLED_AT,
+      },
+    );
 
     expect(pack.episodes?.map((item) => item.id)).toEqual([webhooksEpisodeId]);
     // Refused, and said so: a pack this thin has to be readable as a floor doing its job.
@@ -230,10 +244,14 @@ describe('recall over a substrate written by the real intake path', () => {
   });
 
   it('renders what it served and persists it under the reading session', async () => {
-    const pack = await handleRecall(deps, { query: QUERY }, {
-      identity: READ_SESSION,
-      now: RECALLED_AT,
-    });
+    const pack = await handleRecall(
+      deps,
+      { query: QUERY },
+      {
+        identity: READ_SESSION,
+        now: RECALLED_AT,
+      },
+    );
 
     expect(pack.rendered_text).toContain('## Episodes');
     expect(pack.rendered_text).toContain(WEBHOOKS_OBSERVATION);
@@ -251,10 +269,14 @@ describe('recall over a substrate written by the real intake path', () => {
   });
 
   it('returns an explicitly empty pack when the substrate held nothing yet', async () => {
-    const pack = await handleRecall(deps, { query: QUERY, knew_at: BEFORE_ANYTHING }, {
-      identity: READ_SESSION,
-      now: RECALLED_AT,
-    });
+    const pack = await handleRecall(
+      deps,
+      { query: QUERY, knew_at: BEFORE_ANYTHING },
+      {
+        identity: READ_SESSION,
+        now: RECALLED_AT,
+      },
+    );
 
     expect(pack.facts).toBeUndefined();
     expect(pack.episodes).toBeUndefined();
@@ -279,23 +301,31 @@ describe('pending_enrichment metadata', () => {
     // other two stay open the way a fresh episode always does before the worker reaches it.
     markLedgerApplied(db, orchestratorLedgerKey(second));
 
-    const pack = await handleRecall(deps, { query: 'pending observation' }, {
-      identity: PENDING_SESSION,
-      now: PENDING_AT,
-    });
+    const pack = await handleRecall(
+      deps,
+      { query: 'pending observation' },
+      {
+        identity: PENDING_SESSION,
+        now: PENDING_AT,
+      },
+    );
 
     expect(pack.metadata.pending_enrichment).toBe(2);
   });
 
-  it('omits pending_enrichment once every one of the session\'s episodes is enriched', async () => {
+  it("omits pending_enrichment once every one of the session's episodes is enriched", async () => {
     const session = 'recall-int-fully-enriched-session';
     const episodeId = await push('a fully enriched observation', PENDING_AT, session);
     markLedgerApplied(db, orchestratorLedgerKey(episodeId));
 
-    const pack = await handleRecall(deps, { query: 'fully enriched observation' }, {
-      identity: session,
-      now: PENDING_AT,
-    });
+    const pack = await handleRecall(
+      deps,
+      { query: 'fully enriched observation' },
+      {
+        identity: session,
+        now: PENDING_AT,
+      },
+    );
 
     expect(pack.metadata.pending_enrichment).toBeUndefined();
   });
@@ -305,21 +335,31 @@ describe('per-method pack contribution counters', () => {
   it('accumulates across separate recalls rather than resetting on each one', async () => {
     const before = packMethodCounters(db);
 
-    const first = await handleRecall(deps, { query: QUERY }, {
-      identity: READ_SESSION,
-      now: RECALLED_AT,
-    });
-    const second = await handleRecall(deps, { query: QUERY }, {
-      identity: READ_SESSION,
-      now: RECALLED_AT,
-    });
+    const first = await handleRecall(
+      deps,
+      { query: QUERY },
+      {
+        identity: READ_SESSION,
+        now: RECALLED_AT,
+      },
+    );
+    const second = await handleRecall(
+      deps,
+      { query: QUERY },
+      {
+        identity: READ_SESSION,
+        now: RECALLED_AT,
+      },
+    );
 
     const after = packMethodCounters(db);
     // Only the methods the counter tracks: `graph_traversal` is the fusion leg's name and no
     // item carries it, so it is not a counter row.
     const methods = [...(first.episodes ?? []), ...(second.episodes ?? [])]
       .map((item) => item.rationale.method)
-      .filter((method): method is PackMethod => (PACK_METHODS as readonly string[]).includes(method));
+      .filter((method): method is PackMethod =>
+        (PACK_METHODS as readonly string[]).includes(method),
+      );
     expect(methods.length).toBeGreaterThan(0);
     for (const method of methods) {
       expect(after[method]).toBeGreaterThan(before[method]);

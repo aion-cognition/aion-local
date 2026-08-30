@@ -2,6 +2,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import {
+  DEFAULT_HEBBIAN_BATCH_SIZE,
+  DEFAULT_HEBBIAN_LEARNING_RATE,
+  DEFAULT_HEBBIAN_WEIGHT_FLOOR,
+} from './flush.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import {
@@ -12,11 +18,6 @@ import {
   recordReinforcementFlush,
   reinforcementFlushCounters,
 } from '../../infrastructure/sqlite/reinforcement-queue.js';
-import {
-  DEFAULT_HEBBIAN_BATCH_SIZE,
-  DEFAULT_HEBBIAN_LEARNING_RATE,
-  DEFAULT_HEBBIAN_WEIGHT_FLOOR,
-} from './flush.js';
 
 const TRIGGER = 'reflection:co-extraction';
 
@@ -51,7 +52,7 @@ describe('claiming a window of signals', () => {
   function enqueueBurst(ids: readonly string[], ts: string): void {
     for (let i = 0; i < ids.length; i += 1) {
       for (let j = i + 1; j < ids.length; j += 1) {
-        enqueueReinforcementSignal(store.db, ids[i] as string, ids[j] as string, TRIGGER, ts);
+        enqueueReinforcementSignal(store.db, ids[i]!, ids[j]!, TRIGGER, ts);
       }
     }
   }
@@ -129,7 +130,13 @@ describe('claiming a window of signals', () => {
     const ids: string[] = [];
     for (let index = 0; index < 1200; index += 1) {
       ids.push(
-        enqueueReinforcementSignal(store.db, `s${String(index)}`, 't', TRIGGER, '2026-01-01T00:00:00.000Z'),
+        enqueueReinforcementSignal(
+          store.db,
+          `s${String(index)}`,
+          't',
+          TRIGGER,
+          '2026-01-01T00:00:00.000Z',
+        ),
       );
     }
 

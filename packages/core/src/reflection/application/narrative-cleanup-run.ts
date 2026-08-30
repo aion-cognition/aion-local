@@ -1,15 +1,15 @@
-import { loadConfig } from '../../infrastructure/config/load-config.js';
-import { GraphConnection } from '../../infrastructure/graph/connection.js';
-import { findStaleNarratives } from '../../infrastructure/graph/narrative-queries.js';
-import { openLogger } from '../../infrastructure/logging/logger.js';
-import { OllamaProvider } from '../../infrastructure/providers/ollama-provider.js';
-import { NARRATIVE_GROUNDING } from '../domain/narrative.js';
 import {
   cleanupNarratives,
   DEFAULT_CLEANUP_LIMIT,
   type NarrativeCleanupReport,
 } from './narrative-cleanup.js';
 import type { NarrativeDeps } from './narratives.js';
+import { loadConfig } from '../../infrastructure/config/load-config.js';
+import { GraphConnection } from '../../infrastructure/graph/connection.js';
+import { findStaleNarratives } from '../../infrastructure/graph/narrative-queries.js';
+import { openLogger } from '../../infrastructure/logging/logger.js';
+import { OllamaProvider } from '../../infrastructure/providers/ollama-provider.js';
+import { NARRATIVE_GROUNDING } from '../domain/narrative.js';
 
 /**
  * Runs `cleanupNarratives` against whatever substrate the environment points at. Compiled,

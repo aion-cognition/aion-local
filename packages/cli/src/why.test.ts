@@ -1,6 +1,17 @@
-import type { EntityMergeProposal, NodeEdge, NodeProvenance, SupersessionProposal } from '@aion/core';
+import type {
+  EntityMergeProposal,
+  NodeEdge,
+  NodeProvenance,
+  SupersessionProposal,
+} from '@aion/core';
 import { describe, expect, it } from 'vitest';
-import { MissingNodeIdError, parseWhyFlags, renderProvenance, UnknownWhyOptionError } from './why.js';
+
+import {
+  MissingNodeIdError,
+  parseWhyFlags,
+  renderProvenance,
+  UnknownWhyOptionError,
+} from './why.js';
 
 function collector(): { lines: string[]; write: (line: string) => void } {
   const lines: string[] = [];
@@ -158,7 +169,9 @@ describe('renderProvenance', () => {
     renderProvenance(CURRENT, EDGES, [], [], write);
 
     const text = lines.join('\n');
-    expect(text).toContain('extracted from     episode-1 (Episode, Memory), method: cognitive-extraction');
+    expect(text).toContain(
+      'extracted from     episode-1 (Episode, Memory), method: cognitive-extraction',
+    );
   });
 
   it('renders supersession lineage in both directions', () => {
@@ -175,14 +188,22 @@ describe('renderProvenance', () => {
     renderProvenance(CURRENT, [], [SUPERSESSION_PROPOSAL], [ENTITY_MERGE_PROPOSAL], write);
 
     const text = lines.join('\n');
-    expect(text).toContain('supersession prop-1: would close aaaaaaaa in favour of bbbbbbbb (confidence 0.95)');
+    expect(text).toContain(
+      'supersession prop-1: would close aaaaaaaa in favour of bbbbbbbb (confidence 0.95)',
+    );
     expect(text).toContain('entity-merge merge-1: Postgres + PostgreSQL at 0.940');
   });
 
   it('omits a resolved proposal from the open list', () => {
     const { lines, write } = collector();
 
-    renderProvenance(CURRENT, [], [{ ...SUPERSESSION_PROPOSAL, resolvedAt: '2026-06-06T00:00:00.000Z' }], [], write);
+    renderProvenance(
+      CURRENT,
+      [],
+      [{ ...SUPERSESSION_PROPOSAL, resolvedAt: '2026-06-06T00:00:00.000Z' }],
+      [],
+      write,
+    );
 
     const text = lines.join('\n');
     expect(text).toContain('open proposals\n  none');

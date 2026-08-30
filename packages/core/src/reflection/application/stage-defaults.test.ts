@@ -1,16 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULTS } from '../../infrastructure/config/defaults.js';
-import { DEFAULT_REINFORCEMENT_QUEUE_CAP } from '../../infrastructure/sqlite/reinforcement-queue.js';
-import {
-  DEFAULT_BREAKER_COOLDOWN_MS,
-  DEFAULT_BREAKER_THRESHOLD,
-  DEFAULT_DRAIN_STALE_TIMEOUT_MS,
-  DEFAULT_MAX_ATTEMPTS,
-  DEFAULT_RETRY_BASE_MS,
-  DEFAULT_RETRY_CAP_MS,
-  DEFAULT_VECTOR_BATCH_SIZE,
-  DEFAULT_WORKER_COUNT,
-} from './worker.js';
+
 import {
   DEFAULT_IDLE_SWEEP_LIMIT,
   DEFAULT_MAX_EPISODE_CHARS,
@@ -24,8 +13,8 @@ import {
   DEFAULT_ASSOCIATION_WEIGHT_FLOOR,
 } from './stages/associations.js';
 import { DEFAULT_COGNITIVE_TIMEOUT_MS, DEFAULT_MAX_COGNITIVE_NODES } from './stages/cognitive.js';
-import { DEFAULT_ENTITY_DEDUP_SIMILARITY_THRESHOLD } from './stages/entity-dedup.js';
 import { DEFAULT_ENTITY_TIMEOUT_MS, DEFAULT_MAX_ENTITIES } from './stages/entities.js';
+import { DEFAULT_ENTITY_DEDUP_SIMILARITY_THRESHOLD } from './stages/entity-dedup.js';
 import {
   DEFAULT_MAX_RELATIONSHIPS,
   DEFAULT_SEMANTIC_RELATIONSHIP_TIMEOUT_MS,
@@ -39,6 +28,18 @@ import {
   DEFAULT_SUPERSEDE_MODE,
   DEFAULT_SUPERSESSION_TIMEOUT_MS,
 } from './stages/supersession.js';
+import {
+  DEFAULT_BREAKER_COOLDOWN_MS,
+  DEFAULT_BREAKER_THRESHOLD,
+  DEFAULT_DRAIN_STALE_TIMEOUT_MS,
+  DEFAULT_MAX_ATTEMPTS,
+  DEFAULT_RETRY_BASE_MS,
+  DEFAULT_RETRY_CAP_MS,
+  DEFAULT_VECTOR_BATCH_SIZE,
+  DEFAULT_WORKER_COUNT,
+} from './worker.js';
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import { DEFAULT_REINFORCEMENT_QUEUE_CAP } from '../../infrastructure/sqlite/reinforcement-queue.js';
 
 /**
  * A stage declares its pinned default as a module constant and the service threads config
@@ -51,7 +52,7 @@ const MINUTE_MS = 60 * 1000;
 
 describe('reflection config defaults', () => {
   it('threads the same numbers the stages pin', () => {
-    const reflection = DEFAULTS.reflection;
+    const { reflection } = DEFAULTS;
 
     expect(reflection.entityTimeoutMs).toBe(DEFAULT_ENTITY_TIMEOUT_MS);
     expect(reflection.maxEntities).toBe(DEFAULT_MAX_ENTITIES);
@@ -83,7 +84,7 @@ describe('reflection config defaults', () => {
   });
 
   it('threads the same numbers the worker pins', () => {
-    const operational = DEFAULTS.operational;
+    const { operational } = DEFAULTS;
 
     expect(operational.workerCount).toBe(DEFAULT_WORKER_COUNT);
     expect(operational.workerStaleClaimTimeoutMs).toBe(DEFAULT_DRAIN_STALE_TIMEOUT_MS);

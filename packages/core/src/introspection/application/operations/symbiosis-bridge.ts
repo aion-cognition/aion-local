@@ -1,4 +1,6 @@
 import { z } from 'zod';
+
+import { reflectProvider, type ProviderFactory } from './routed-generation.js';
 import {
   countBridgesBetween,
   findClosestCrossCommunityPair,
@@ -22,7 +24,6 @@ import type {
   OperationContext,
   OperationOutcome,
 } from '../../domain/operation.js';
-import { reflectProvider, type ProviderFactory } from './routed-generation.js';
 
 /**
  * The symbiosis bridge: one node joining two neighbourhoods the graph connects least, so
@@ -162,7 +163,9 @@ async function proposeBridgeText(
 ): Promise<BridgeText> {
   const fallback = deterministicText(pair, closest);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ctx.config.reflection.semanticTimeoutMs);
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, ctx.config.reflection.semanticTimeoutMs);
   try {
     const raw = await buildProvider(ctx.config).generate({
       model: ctx.config.models.reflect,
@@ -266,7 +269,7 @@ async function runSymbiosisBridge(
   const text = await proposeBridgeText(ctx, buildProvider, pair, closest);
   const vectors = await embed([text.summary]);
   const vector = vectors[0];
-  if (vector === undefined || vector.length !== ctx.config.models.embedDimension) {
+  if (vector?.length !== ctx.config.models.embedDimension) {
     // A bridge with a mis-dimensioned vector is worse than no bridge: the vector index takes
     // the write and every later search against it fails on the whole index.
     return {

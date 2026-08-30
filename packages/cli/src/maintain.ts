@@ -12,6 +12,7 @@ import {
   type IntrospectionOperation,
   type Logger,
 } from '@aion/core';
+
 import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
 
 /**
@@ -79,9 +80,7 @@ export function parseMaintainFlags(argv: readonly string[]): MaintainFlags {
 
 function describeOperation(operation: IntrospectionOperation): string {
   const answers =
-    operation.answers === undefined
-      ? 'routine'
-      : `critical responder for ${operation.answers}`;
+    operation.answers === undefined ? 'routine' : `critical responder for ${operation.answers}`;
   return `  ${operation.name}  ${operation.bucket} window, ${answers}`;
 }
 

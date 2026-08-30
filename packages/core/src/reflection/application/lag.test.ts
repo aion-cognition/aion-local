@@ -2,11 +2,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { recordEnrichmentLagMs } from '../../infrastructure/sqlite/lag-samples.js';
-import { enqueueReinforcementSignal } from '../../infrastructure/sqlite/reinforcement-queue.js';
-import { SqliteStore } from '../../infrastructure/sqlite/database.js';
-import { enqueueReflectionJob } from '../../infrastructure/sqlite/reflection-queue.js';
+
 import { queueLagSnapshot } from './lag.js';
+import { SqliteStore } from '../../infrastructure/sqlite/database.js';
+import { recordEnrichmentLagMs } from '../../infrastructure/sqlite/lag-samples.js';
+import { enqueueReflectionJob } from '../../infrastructure/sqlite/reflection-queue.js';
+import { enqueueReinforcementSignal } from '../../infrastructure/sqlite/reinforcement-queue.js';
 
 describe('queueLagSnapshot', () => {
   let dir: string;
@@ -38,7 +39,9 @@ describe('queueLagSnapshot', () => {
     enqueueReflectionJob(store.db, 'integrate', { episode_id: 'e2' }, { lane: 'bulk' });
     enqueueReflectionJob(store.db, 'integrate', { episode_id: 'e3' }, { lane: 'bulk' });
     store.db
-      .prepare("UPDATE reflection_queue SET enqueued_at = ? WHERE json_extract(payload_json, '$.episode_id') = 'e2'")
+      .prepare(
+        "UPDATE reflection_queue SET enqueued_at = ? WHERE json_extract(payload_json, '$.episode_id') = 'e2'",
+      )
       .run(new Date(now.getTime() - 90_000).toISOString());
 
     const snapshot = queueLagSnapshot(store.db, 5, now);
@@ -57,7 +60,9 @@ describe('queueLagSnapshot', () => {
     const now = new Date('2026-08-29T08:00:00.000Z');
     enqueueReflectionJob(store.db, 'integrate', { episode_id: 'wedged' }, { lane: 'interactive' });
     store.db
-      .prepare("UPDATE reflection_queue SET enqueued_at = ?, attempts = 5 WHERE json_extract(payload_json, '$.episode_id') = 'wedged'")
+      .prepare(
+        "UPDATE reflection_queue SET enqueued_at = ?, attempts = 5 WHERE json_extract(payload_json, '$.episode_id') = 'wedged'",
+      )
       .run(new Date(now.getTime() - 30_619_503).toISOString());
 
     const snapshot = queueLagSnapshot(store.db, 5, now);
@@ -69,7 +74,14 @@ describe('queueLagSnapshot', () => {
 
   it('surfaces the reinforcement dropped counter and the enrichment lag p95', () => {
     for (let index = 0; index < 20; index += 1) {
-      enqueueReinforcementSignal(store.db, `a${String(index)}`, `b${String(index)}`, 'co_occurs', undefined, 5);
+      enqueueReinforcementSignal(
+        store.db,
+        `a${String(index)}`,
+        `b${String(index)}`,
+        'co_occurs',
+        undefined,
+        5,
+      );
     }
     recordEnrichmentLagMs(store.db, 1000);
     recordEnrichmentLagMs(store.db, 2000);

@@ -1,9 +1,12 @@
+import type { Driver } from 'neo4j-driver';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Driver } from 'neo4j-driver';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { CONTEXT_VECTOR_PROPERTY } from '../../../infrastructure/graph/context-vector-queries.js';
+
+import { ContextVectorStage } from './context-vectors.js';
+import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
+import { upsertEdge } from '../../../infrastructure/graph/edges.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import {
   contextVector,
@@ -14,14 +17,10 @@ import {
   stopNeo4jHarness,
   type Neo4jHarness,
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
-import { fromGraphVector, toGraphVector } from '../../../infrastructure/graph/values.js';
-import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
-import { upsertEdge } from '../../../infrastructure/graph/edges.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import type { Provider } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import type { StageContext } from '../../domain/stage.js';
-import { ContextVectorStage } from './context-vectors.js';
 
 /**
  * A small hand-built neighborhood rather than a full LLM enrichment: this stage is pure

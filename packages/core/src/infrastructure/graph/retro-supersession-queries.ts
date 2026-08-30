@@ -1,4 +1,5 @@
 import neo4j, { type Driver } from 'neo4j-driver';
+
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { runRead, type GraphStatement } from './connection.js';
 import { FACT_NODE_LABELS } from './supersession-queries.js';

@@ -30,7 +30,7 @@ export const NAME_FORM_OVERLAP_THRESHOLD = 0.85;
 export const MIN_OVERLAP_NAME_LENGTH = 4;
 
 function characterBigrams(value: string): ReadonlySet<string> {
-  const characters = [...value];
+  const characters = Array.from(value);
   const grams = new Set<string>();
   for (let index = 0; index + 1 < characters.length; index += 1) {
     grams.add(`${characters[index] ?? ''}${characters[index + 1] ?? ''}`);
@@ -93,7 +93,7 @@ export function nameFormMatches(a: string, b: string): boolean {
   if (!sameDigits(foldedA, foldedB)) {
     return false;
   }
-  if (Math.min([...foldedA].length, [...foldedB].length) < MIN_OVERLAP_NAME_LENGTH) {
+  if (Math.min(Array.from(foldedA).length, Array.from(foldedB).length) < MIN_OVERLAP_NAME_LENGTH) {
     return false;
   }
   return nameFormOverlap(foldedA, foldedB) >= NAME_FORM_OVERLAP_THRESHOLD;

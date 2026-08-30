@@ -1,14 +1,15 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { extractCognitiveViaProvider, extractEntitiesViaProvider } from './provider-extractor.js';
+import { renderJsonReport, renderMarkdownReport } from './report.js';
+import type { SkippedRoute } from './report.js';
+import { runQualityHarness, type RouteConfig } from './runner.js';
 import { loadConfig } from '../../../infrastructure/config/load-config.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import { OllamaProvider } from '../../../infrastructure/providers/ollama-provider.js';
 import { AnthropicHaikuClient } from '../../../infrastructure/providers/test-support/anthropic-client.js';
-import { extractCognitiveViaProvider, extractEntitiesViaProvider } from './provider-extractor.js';
-import { renderJsonReport, renderMarkdownReport } from './report.js';
-import { runQualityHarness, type RouteConfig } from './runner.js';
-import type { SkippedRoute } from './report.js';
 
 /**
  * The one knob the config schema does not carry yet: the Anthropic provider work owns
@@ -34,8 +35,10 @@ function buildLocalRoute(config: Config): RouteConfig {
   return {
     route: 'local',
     model,
-    extractEntities: (text) => extractEntitiesViaProvider({ generate: provider.generate.bind(provider), model }, text),
-    extractCognitive: (text) => extractCognitiveViaProvider({ generate: provider.generate.bind(provider), model }, text),
+    extractEntities: (text) =>
+      extractEntitiesViaProvider({ generate: provider.generate.bind(provider), model }, text),
+    extractCognitive: (text) =>
+      extractCognitiveViaProvider({ generate: provider.generate.bind(provider), model }, text),
   };
 }
 
@@ -46,8 +49,10 @@ function buildAnthropicRoute(apiKey: string): RouteConfig {
   return {
     route: 'anthropic',
     model,
-    extractEntities: (text) => extractEntitiesViaProvider({ generate: client.generate.bind(client), model }, text),
-    extractCognitive: (text) => extractCognitiveViaProvider({ generate: client.generate.bind(client), model }, text),
+    extractEntities: (text) =>
+      extractEntitiesViaProvider({ generate: client.generate.bind(client), model }, text),
+    extractCognitive: (text) =>
+      extractCognitiveViaProvider({ generate: client.generate.bind(client), model }, text),
   };
 }
 
@@ -56,7 +61,7 @@ async function main(): Promise<void> {
   const routes: RouteConfig[] = [buildLocalRoute(config)];
   const skippedRoutes: SkippedRoute[] = [];
 
-  const apiKey = config.anthropic.apiKey;
+  const { apiKey } = config.anthropic;
   if (apiKey.trim().length > 0) {
     routes.push(buildAnthropicRoute(apiKey));
   } else {

@@ -1,5 +1,3 @@
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
 import {
   assertVectorIndexDimensions,
   checkOllamaReachable,
@@ -25,6 +23,9 @@ import {
   type SqliteHandle,
 } from '@aion/core';
 import { HEALTH_PATH } from '@aion/mcp';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+
 import { mcpBaseUrl } from './compose.js';
 import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
 
@@ -61,7 +62,10 @@ export type DoctorDeps = {
  * `/health` is liveness-only (never touches Neo4j or Ollama), so a 200 here means the
  * process is up and nothing more; substrate health is the other checks' job.
  */
-export async function probeMcpHttp(port: number, fetchImpl: typeof fetch = fetch): Promise<CheckResult> {
+export async function probeMcpHttp(
+  port: number,
+  fetchImpl: typeof fetch = fetch,
+): Promise<CheckResult> {
   const url = `${mcpBaseUrl(port)}${HEALTH_PATH}`;
   const response = await fetchImpl(url);
   if (!response.ok) {
@@ -79,7 +83,11 @@ export async function probeMcpHttp(port: number, fetchImpl: typeof fetch = fetch
  * and again with one permanently wedged job. Warn, never fail: a backlog is a thing that is
  * behind, not a thing that is broken.
  */
-export function queueLagCheck(db: SqliteHandle, config: Config, now: Date = new Date()): CheckResult {
+export function queueLagCheck(
+  db: SqliteHandle,
+  config: Config,
+  now: Date = new Date(),
+): CheckResult {
   const snapshot = queueLagSnapshot(db, config.operational.workerMaxAttempts, now);
   const { interactive, bulk } = snapshot.depthByLane;
   const depth = interactive + bulk;
@@ -107,7 +115,11 @@ export function queueLagCheck(db: SqliteHandle, config: Config, now: Date = new 
 
 function writableDirectories(config: Config): readonly string[] {
   return [
-    ...new Set([config.operational.dataDir, dirname(config.sqlite.path), dirname(config.logging.filePath)]),
+    ...new Set([
+      config.operational.dataDir,
+      dirname(config.sqlite.path),
+      dirname(config.logging.filePath),
+    ]),
   ];
 }
 
@@ -119,11 +131,17 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
       name: NEO4J_BOLT,
       run: async () => {
         if (config.neo4j.password === '') {
-          return { ok: false, detail: 'AION_NEO4J_PASSWORD is empty; run `aion init` to generate it' };
+          return {
+            ok: false,
+            detail: 'AION_NEO4J_PASSWORD is empty; run `aion init` to generate it',
+          };
         }
         const health = await connection.health();
         if (!health.reachable) {
-          return { ok: false, detail: `${connection.uri} unreachable: ${health.error ?? 'unknown error'}` };
+          return {
+            ok: false,
+            detail: `${connection.uri} unreachable: ${health.error ?? 'unknown error'}`,
+          };
         }
         return { ok: true, detail: `${connection.uri} (${health.agent ?? 'neo4j'})` };
       },
@@ -144,12 +162,18 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
     {
       name: GRAPH_SCHEMA,
       dependsOn: NEO4J_BOLT,
-      run: async () => {
+      run: () => {
         const version = latestAppliedGraphMigration(db);
         if (version === undefined) {
-          return { ok: false, detail: 'no graph migration recorded; run `aion init`' };
+          return Promise.resolve({
+            ok: false,
+            detail: 'no graph migration recorded; run `aion init`',
+          });
         }
-        return { ok: true, detail: `migration ${String(version).padStart(3, '0')} applied` };
+        return Promise.resolve({
+          ok: true,
+          detail: `migration ${String(version).padStart(3, '0')} applied`,
+        });
       },
     },
     {
@@ -171,13 +195,20 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
       name: 'ollama-round-trip',
       run: async () => {
         await checkOllamaReachable(config.ollama.url);
-        const provider = new OllamaProvider({ baseUrl: config.ollama.url, embedModel: config.models.embed });
+        const provider = new OllamaProvider({
+          baseUrl: config.ollama.url,
+          embedModel: config.models.embed,
+        });
         const [vector] = await provider.embed(['aion doctor round-trip']);
         if (vector === undefined) {
           return { ok: false, detail: `${config.models.embed} returned no embedding` };
         }
         if (vector.length !== config.models.embedDimension) {
-          throw new EmbedDimensionMismatchError(config.models.embed, config.models.embedDimension, vector.length);
+          throw new EmbedDimensionMismatchError(
+            config.models.embed,
+            config.models.embedDimension,
+            vector.length,
+          );
         }
 
         const routing = resolveProviderRouting(config);
@@ -240,10 +271,11 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
         );
         const detail =
           `${String(residue.leaking)} of ${String(residue.scanned)} nodes still carry ` +
-          `secret-shaped text` +
-          (residue.leaking === 0
-            ? ''
-            : ` (${residue.ruleIds.join(', ')}; e.g. ${residue.sampleIds.join(', ')})`);
+          `secret-shaped text${
+            residue.leaking === 0
+              ? ''
+              : ` (${residue.ruleIds.join(', ')}; e.g. ${residue.sampleIds.join(', ')})`
+          }`;
         if (residue.leaking > 0) {
           return { ok: true, warn: true, detail };
         }
@@ -258,24 +290,28 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
        * Informational, since a proposal is work to do, not a broken invariant.
        */
       name: 'review-queue',
-      run: async () => {
+      run: () => {
         const snapshot = queueLagSnapshot(db, config.operational.workerMaxAttempts);
         const open = snapshot.supersessionProposalsOpen + snapshot.entityMergeProposalsOpen;
         const detail =
           `${String(snapshot.supersessionProposalsOpen)} supersession, ` +
-          `${String(snapshot.entityMergeProposalsOpen)} entity-merge proposals open` +
-          (open === 0 ? '' : ' — aion proposals ls');
-        return { ok: true, detail };
+          `${String(snapshot.entityMergeProposalsOpen)} entity-merge proposals open${
+            open === 0 ? '' : ' — aion proposals ls'
+          }`;
+        return Promise.resolve({ ok: true, detail });
       },
     },
     {
       name: 'sqlite-wal',
-      run: async () => {
+      run: () => {
         const mode = db.pragma('journal_mode', { simple: true });
         if (String(mode).toLowerCase() !== 'wal') {
-          return { ok: false, detail: `journal_mode is ${String(mode)}, expected wal` };
+          return Promise.resolve({
+            ok: false,
+            detail: `journal_mode is ${String(mode)}, expected wal`,
+          });
         }
-        return { ok: true, detail: `${config.sqlite.path} in WAL` };
+        return Promise.resolve({ ok: true, detail: `${config.sqlite.path} in WAL` });
       },
     },
     {
@@ -306,14 +342,14 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
     },
     {
       name: 'volumes-writable',
-      run: async () => {
+      run: () => {
         for (const directory of writableDirectories(config)) {
           const probe = join(directory, PROBE_FILE);
           mkdirSync(directory, { recursive: true });
           writeFileSync(probe, '');
           rmSync(probe, { force: true });
         }
-        return { ok: true, detail: writableDirectories(config).join(', ') };
+        return Promise.resolve({ ok: true, detail: writableDirectories(config).join(', ') });
       },
     },
   ];
@@ -323,7 +359,10 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
  * A check whose dependency failed is reported rather than run: dialing Neo4j once it is
  * known unreachable buys a connection timeout per check and buries the one real cause.
  */
-export async function runChecks(checks: readonly Check[], write: Writer): Promise<readonly CheckReport[]> {
+export async function runChecks(
+  checks: readonly Check[],
+  write: Writer,
+): Promise<readonly CheckReport[]> {
   const reports: CheckReport[] = [];
   const byName = new Map<string, CheckReport>();
 
@@ -356,7 +395,9 @@ function label(report: CheckReport): string {
 
 export function summarize(reports: readonly CheckReport[], write: Writer): number {
   const failed = reports.filter((report) => !report.ok).map((report) => report.name);
-  const warned = reports.filter((report) => report.ok && report.warn === true).map((report) => report.name);
+  const warned = reports
+    .filter((report) => report.ok && report.warn === true)
+    .map((report) => report.name);
   const warning = warned.length === 0 ? '' : `, ${warned.length} warning: ${warned.join(', ')}`;
   if (failed.length === 0) {
     write(`\n${reports.length} checks passed${warning}`);

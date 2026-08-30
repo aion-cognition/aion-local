@@ -110,7 +110,10 @@ export class LaneAssigner {
     if (sessionArrivals > this.#options.sessionArrivalMax) {
       return { lane: 'bulk', reason: 'session-rate', ...counts };
     }
-    if (globalArrivals > this.#options.globalArrivalMax && sessionArrivals > this.#options.hotSessionArrivalMax) {
+    if (
+      globalArrivals > this.#options.globalArrivalMax &&
+      sessionArrivals > this.#options.hotSessionArrivalMax
+    ) {
       return { lane: 'bulk', reason: 'global-rate', ...counts };
     }
     return { lane: DEFAULT_REFLECTION_LANE, reason: 'default', ...counts };

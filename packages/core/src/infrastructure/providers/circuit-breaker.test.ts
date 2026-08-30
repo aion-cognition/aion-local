@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+
 import { CircuitBreaker, CircuitOpenError } from './circuit-breaker.js';
 
 describe('CircuitBreaker', () => {
@@ -31,7 +32,7 @@ describe('CircuitBreaker', () => {
   it('allows a trial call once the cooldown elapses, closing again on success', async () => {
     let now = 0;
     const breaker = new CircuitBreaker({ failureThreshold: 1, cooldownMs: 1000, now: () => now });
-    const fn = vi.fn(() => Promise.reject(new Error('boom')));
+    const fn = vi.fn<() => Promise<string>>(() => Promise.reject(new Error('boom')));
 
     await expect(breaker.run(fn)).rejects.toThrow('boom');
     await expect(breaker.run(fn)).rejects.toThrow(CircuitOpenError);

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import { buildEdgeUpsert, type EdgeUpsert } from './edges.js';
 import { GraphWriteError } from './errors.js';
 import { BASE_NODE_LABEL } from './labels.js';
@@ -53,7 +54,7 @@ describe('buildEdgeUpsert policy clauses', () => {
     expect(clause(cypher, 'ON CREATE SET')).toContain(
       'r.strength = CASE WHEN $strength < $weightFloor THEN $weightFloor ELSE $strength END',
     );
-    expect(parameters['weightFloor']).toBe(0.1);
+    expect(parameters.weightFloor).toBe(0.1);
   });
 
   it('leaves the weight floor at zero for the writers that do not clamp', () => {

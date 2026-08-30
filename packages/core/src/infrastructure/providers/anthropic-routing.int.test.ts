@@ -2,16 +2,22 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { ProviderRouter, type GenerationEvent } from './role-provider.js';
+import { resolveProviderRouting } from './routing.js';
+import { ReflectionDispatch } from '../../reflection/application/dispatch.js';
+import {
+  handleReflection,
+  type ReflectionIntakeDeps,
+} from '../../reflection/application/intake.js';
+import { LaneAssigner } from '../../reflection/application/lanes.js';
+import { ReflectionOrchestrator } from '../../reflection/application/orchestrator.js';
 import { AssociationInferenceStage } from '../../reflection/application/stages/associations.js';
 import { CognitiveExtractionStage } from '../../reflection/application/stages/cognitive.js';
 import { ContextVectorStage } from '../../reflection/application/stages/context-vectors.js';
-import { EntityDedupStage } from '../../reflection/application/stages/entity-dedup.js';
 import { EntityExtractionStage } from '../../reflection/application/stages/entities.js';
+import { EntityDedupStage } from '../../reflection/application/stages/entity-dedup.js';
 import { SemanticRelationshipStage } from '../../reflection/application/stages/semantic-relationships.js';
-import { ReflectionDispatch } from '../../reflection/application/dispatch.js';
-import { handleReflection, type ReflectionIntakeDeps } from '../../reflection/application/intake.js';
-import { LaneAssigner } from '../../reflection/application/lanes.js';
-import { ReflectionOrchestrator } from '../../reflection/application/orchestrator.js';
 import { SessionManager } from '../../session/session-manager.js';
 import { DEFAULTS } from '../config/defaults.js';
 import type { Config } from '../config/schema.js';
@@ -26,8 +32,6 @@ import {
 } from '../graph/test-support/neo4j-harness.fixture.js';
 import { openLogger } from '../logging/logger.js';
 import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
-import { ProviderRouter, type GenerationEvent } from './role-provider.js';
-import { resolveProviderRouting } from './routing.js';
 
 /**
  * The routed provider against the two live backends: a real enrichment on the Anthropic route,
@@ -107,7 +111,8 @@ beforeAll(async () => {
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
   };
 
-  episodeId = (await handleReflection(intake, PAYLOAD, { identity: 'anthropic-routing' })).episode_id;
+  episodeId = (await handleReflection(intake, PAYLOAD, { identity: 'anthropic-routing' }))
+    .episode_id;
 }, 300_000);
 
 afterAll(async () => {
@@ -128,46 +133,42 @@ describe.skipIf(API_KEY === '')('enrichment on the Anthropic route', () => {
     });
   });
 
-  it(
-    'enriches a real episode end to end, with every generation leaving the machine',
-    async () => {
-      const provider = router.forRole('reflect');
-      const orchestrator = new ReflectionOrchestrator(
-        {
-          driver: harness.driver,
-          db,
-          provider,
-          logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
-        },
-        [
-          new EntityExtractionStage(),
-          new EntityDedupStage(),
-          new AssociationInferenceStage(),
-          new CognitiveExtractionStage(),
-          new SemanticRelationshipStage(),
-          new ContextVectorStage(),
-        ],
-      );
+  it('enriches a real episode end to end, with every generation leaving the machine', async () => {
+    const provider = router.forRole('reflect');
+    const orchestrator = new ReflectionOrchestrator(
+      {
+        driver: harness.driver,
+        db,
+        provider,
+        logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
+      },
+      [
+        new EntityExtractionStage(),
+        new EntityDedupStage(),
+        new AssociationInferenceStage(),
+        new CognitiveExtractionStage(),
+        new SemanticRelationshipStage(),
+        new ContextVectorStage(),
+      ],
+    );
 
-      const before = events.length;
-      const run = await orchestrator.run(episodeId);
+    const before = events.length;
+    const run = await orchestrator.run(episodeId);
 
-      expect(run.status).toBe('completed');
-      expect(run.summary.stages.filter((stage) => stage.status === 'error')).toEqual([]);
-      expect((await findEpisodeEntities(harness.driver, episodeId)).length).toBeGreaterThan(0);
-      expect((await findEpisodeCognitiveNodes(harness.driver, episodeId)).length).toBeGreaterThan(0);
+    expect(run.status).toBe('completed');
+    expect(run.summary.stages.filter((stage) => stage.status === 'failed')).toEqual([]);
+    expect((await findEpisodeEntities(harness.driver, episodeId)).length).toBeGreaterThan(0);
+    expect((await findEpisodeCognitiveNodes(harness.driver, episodeId)).length).toBeGreaterThan(0);
 
-      // The telemetry is the answer to "did that enrichment leave the machine".
-      const generations = events.slice(before);
-      expect(generations.length).toBeGreaterThan(0);
-      for (const event of generations) {
-        expect(event.provider).toBe('anthropic');
-        expect(event.model).toBe(DEFAULTS.anthropic.model);
-        expect(event.role).toBe('reflect');
-      }
-    },
-    300_000,
-  );
+    // The telemetry is the answer to "did that enrichment leave the machine".
+    const generations = events.slice(before);
+    expect(generations.length).toBeGreaterThan(0);
+    for (const event of generations) {
+      expect(event.provider).toBe('anthropic');
+      expect(event.model).toBe(DEFAULTS.anthropic.model);
+      expect(event.role).toBe('reflect');
+    }
+  }, 300_000);
 });
 
 describe('the same router with the key taken away', () => {
@@ -175,31 +176,35 @@ describe('the same router with the key taken away', () => {
     const routing = resolveProviderRouting(config(''));
 
     expect(routing.roles.cue).toMatchObject({ provider: 'ollama', model: DEFAULTS.models.cue });
-    expect(routing.roles.reflect).toMatchObject({ provider: 'ollama', model: DEFAULTS.models.reflect });
+    expect(routing.roles.reflect).toMatchObject({
+      provider: 'ollama',
+      model: DEFAULTS.models.reflect,
+    });
   });
 
-  it(
-    'answers a live generation from Ollama, and the telemetry says so',
-    async () => {
-      const local = newRouter('');
-      const before = events.length;
+  it('answers a live generation from Ollama, and the telemetry says so', async () => {
+    const local = newRouter('');
+    const before = events.length;
 
-      const answer = await local.forRole('cue').generate({
+    const answer = await local.forRole('cue').generate({
+      model: DEFAULTS.models.cue,
+      messages: [{ role: 'user', content: 'Answer with {"ok": true} and nothing else.' }],
+      schema: {
+        type: 'object',
+        properties: { ok: { type: 'boolean' } },
+        required: ['ok'],
+      },
+      think: false,
+    });
+
+    expect(answer).toEqual({ ok: true });
+    expect(events.slice(before)).toEqual([
+      expect.objectContaining({
+        role: 'cue',
+        provider: 'ollama',
         model: DEFAULTS.models.cue,
-        messages: [{ role: 'user', content: 'Answer with {"ok": true} and nothing else.' }],
-        schema: {
-          type: 'object',
-          properties: { ok: { type: 'boolean' } },
-          required: ['ok'],
-        },
-        think: false,
-      });
-
-      expect(answer).toEqual({ ok: true });
-      expect(events.slice(before)).toEqual([
-        expect.objectContaining({ role: 'cue', provider: 'ollama', model: DEFAULTS.models.cue, ok: true }),
-      ]);
-    },
-    180_000,
-  );
+        ok: true,
+      }),
+    ]);
+  }, 180_000);
 });

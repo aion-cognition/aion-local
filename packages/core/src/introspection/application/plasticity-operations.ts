@@ -1,5 +1,8 @@
 import { sweepEdgeDecay } from '../../plasticity/application/decay.js';
-import { DEFAULT_HEBBIAN_BATCH_SIZE, flushReinforcementQueue } from '../../plasticity/application/flush.js';
+import {
+  DEFAULT_HEBBIAN_BATCH_SIZE,
+  flushReinforcementQueue,
+} from '../../plasticity/application/flush.js';
 import type { HealthSnapshot } from '../domain/health.js';
 import type { IntrospectionOperation, OperationOutcome } from '../domain/operation.js';
 

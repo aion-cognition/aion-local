@@ -1,4 +1,5 @@
 import type { Driver } from 'neo4j-driver';
+
 import { runRead } from './connection.js';
 
 /** The label every content-bearing node carries; population counts all of them. */

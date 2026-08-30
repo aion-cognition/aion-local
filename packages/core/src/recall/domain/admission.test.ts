@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import {
   admitsOnEvidence,
   wasMeasured,
@@ -63,9 +64,9 @@ describe('lexical evidence', () => {
   });
 
   it('admits an exact entity-name resolution without measuring a cosine', () => {
-    expect(admits([{ method: 'entity_resolution', relevance: 1, exact: true, cue: 'Ryan Huber' }])).toBe(
-      true,
-    );
+    expect(
+      admits([{ method: 'entity_resolution', relevance: 1, exact: true, cue: 'Ryan Huber' }]),
+    ).toBe(true);
   });
 });
 
@@ -148,7 +149,9 @@ describe('a node the spread reached', () => {
 
 describe('telling a refusal apart from a candidate nothing judged', () => {
   it('reads a cosine as a measurement, whatever it came out at', () => {
-    expect(wasMeasured([{ method: 'vector', relevance: 0.02, cue: 'monsoon rainfall' }])).toBe(true);
+    expect(wasMeasured([{ method: 'vector', relevance: 0.02, cue: 'monsoon rainfall' }])).toBe(
+      true,
+    );
   });
 
   it('reads a literal match as a measurement, since the gate judged it', () => {

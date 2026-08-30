@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
 import type { ReflectionInput, ReflectionTurn, ToolExecution } from '@aion/protocol';
+import { createHash } from 'node:crypto';
 
 /**
  * The payload minus its routing fields. `session_id` never reaches content assembly or the
@@ -51,6 +51,11 @@ function canonical(value: unknown): unknown {
 }
 
 export function stableStringify(value: unknown): string {
+  // lib.es5 types JSON.stringify as always returning `string`, and TS trusts that over a
+  // local cast or widening annotation. At runtime it returns `undefined` for a value JSON
+  // cannot represent, which the fallback covers with the JSON-shaped "null" rather than
+  // the string "undefined".
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- see comment above
   return JSON.stringify(canonical(value)) ?? 'null';
 }
 
@@ -68,7 +73,8 @@ function renderValue(value: unknown): string {
 
 /** What the agent did not capture is left out, not rendered as an empty line or "undefined". */
 function renderToolExecution(execution: ToolExecution): string[] {
-  const duration = execution.duration_ms === undefined ? '' : `, ${String(execution.duration_ms)}ms`;
+  const duration =
+    execution.duration_ms === undefined ? '' : `, ${String(execution.duration_ms)}ms`;
   const lines = [`tool ${execution.tool} [${execution.status}${duration}]`];
 
   if (execution.input !== undefined) {
@@ -130,7 +136,11 @@ function earliestOccurredAt(content: ReflectionContent, fallback: Date): Date {
   return stamps.reduce((earliest, stamp) => (stamp < earliest ? stamp : earliest));
 }
 
-function prepareTurn(turn: ReflectionTurn, sequence: number, episodeOccurredAt: Date): PreparedTurn {
+function prepareTurn(
+  turn: ReflectionTurn,
+  sequence: number,
+  episodeOccurredAt: Date,
+): PreparedTurn {
   return {
     role: turn.role,
     text: turn.text,

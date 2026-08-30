@@ -1,5 +1,5 @@
 import neo4j, { type Driver } from 'neo4j-driver';
-import type { Vector } from '../providers/types.js';
+
 import { ACCESS_COUNT_PROPERTY } from './access-tracking.js';
 import {
   BITEMPORAL_PROPERTIES,
@@ -8,8 +8,8 @@ import {
 } from './bitemporal.js';
 import { type GraphTransaction, inWriteTransaction, runRead, runWrite } from './connection.js';
 import { upsertEdgeInTransaction } from './edges.js';
-import { MEMORY_PROPERTIES } from './episodes.js';
 import { ENTITY_MENTION_TYPE, ENTITY_TYPE_PROPERTY } from './entity-queries.js';
+import { MEMORY_PROPERTIES } from './episodes.js';
 import { BASE_NODE_LABEL } from './labels.js';
 import { lockNodeInTransaction } from './locks.js';
 import { isRelationshipType } from './relationships.js';
@@ -21,6 +21,7 @@ import {
   STRUCTURAL_PROPERTY,
 } from './seed-queries.js';
 import { fromGraphVector, toGraphVector, type Row } from './values.js';
+import type { Vector } from '../providers/types.js';
 
 /**
  * The graph side of entity deduplication. Everything that decides who is canonical lives in
@@ -78,9 +79,9 @@ function mapDedupEntityDetail(row: Row): DedupEntityDetail {
   const lastAccessed = row.last_accessed;
   return {
     id: row.id as string,
-    name: String(row.name ?? ''),
-    nameNorm: String(row.name_norm ?? ''),
-    type: String(row.type ?? ''),
+    name: (row.name as string | null) ?? '',
+    nameNorm: (row.name_norm as string | null) ?? '',
+    type: (row.type as string | null) ?? '',
     isStructural: row.is_structural === true,
     ...(nameVector === undefined ? {} : { nameVector }),
     current: row.current === true,
@@ -160,7 +161,11 @@ export async function findSimilarCurrentEntities(
       threshold: input.threshold,
       limit: toGraphInteger(input.limit),
     },
-    (row) => ({ id: row.id as string, type: String(row.type ?? ''), score: row.score as number }),
+    (row) => ({
+      id: row.id as string,
+      type: (row.type as string | null) ?? '',
+      score: row.score as number,
+    }),
   );
 }
 
@@ -195,10 +200,10 @@ const FIND_MERGED_NODE_EDGES = [
 ].join('\n');
 
 function mapRedirectableEdge(row: Row): RedirectableEdge {
-  const rationale = row.rationale;
+  const { rationale } = row;
   return {
     mergedId: row.mergedId as string,
-    edgeId: String(row.edgeId ?? ''),
+    edgeId: (row.edgeId as string | null) ?? '',
     type: row.type as string,
     direction: row.direction === 'in' ? 'in' : 'out',
     otherId: row.otherId as string,
@@ -422,7 +427,9 @@ export async function redirectAndAbsorb(
         [ENTITY_ALIASES_PROPERTY]: input.aliases,
         [ACCESS_COUNT_PROPERTY]: input.accessCount,
         [MERGE_PROVENANCE_PROPERTY]: provenance,
-        ...(input.lastAccessed === undefined ? {} : { [LAST_ACCESSED_PROPERTY]: input.lastAccessed }),
+        ...(input.lastAccessed === undefined
+          ? {}
+          : { [LAST_ACCESSED_PROPERTY]: input.lastAccessed }),
       },
     });
 
@@ -455,7 +462,10 @@ const CLEAR_ENTITY_VECTORS = [
  * otherwise it would keep answering `entitySimilaritySeeds`, which is currency-aware
  * rather than currency-filtered by design and does not exclude a superseded row on its own.
  */
-export async function clearEntityVectors(driver: Driver, ids: readonly string[]): Promise<string[]> {
+export async function clearEntityVectors(
+  driver: Driver,
+  ids: readonly string[],
+): Promise<string[]> {
   const unique = [...new Set(ids)];
   if (unique.length === 0) {
     return [];

@@ -1,7 +1,3 @@
-import { randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import {
   bootstrapBackbone,
   openSqliteHandle,
@@ -19,7 +15,12 @@ import {
   stopNeo4jHarness,
   type Neo4jHarness,
 } from '@aion/core/infrastructure/graph/test-support/neo4j-harness.fixture.js';
+import { randomUUID } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import { runForget } from './forget.js';
 import { runSearch } from './search.js';
 import { runStats } from './stats.js';
@@ -33,7 +34,7 @@ import { runWhy } from './why.js';
  */
 
 const EMBED_DIMENSION = 768;
-const AION_OLLAMA_URL = process.env['AION_OLLAMA_URL'] ?? 'http://127.0.0.1:11434';
+const AION_OLLAMA_URL = process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434';
 const ENV_KEYS = [
   'AION_NEO4J_URI',
   'AION_NEO4J_PASSWORD',
@@ -84,13 +85,13 @@ beforeAll(async () => {
   await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
   await bootstrapBackbone(harness.driver, { memberName: 'CLI Completion Test' });
 
-  process.env['AION_NEO4J_URI'] = harness.uri;
-  process.env['AION_NEO4J_PASSWORD'] = harness.password;
-  process.env['AION_SQLITE_PATH'] = sqlitePath;
-  process.env['AION_OLLAMA_URL'] = AION_OLLAMA_URL;
-  process.env['AION_EMBED_DIMENSION'] = String(EMBED_DIMENSION);
-  process.env['AION_LOG_FILE'] = join(dir, 'aion.jsonl');
-  process.env['AION_LOG_LEVEL'] = 'fatal';
+  process.env.AION_NEO4J_URI = harness.uri;
+  process.env.AION_NEO4J_PASSWORD = harness.password;
+  process.env.AION_SQLITE_PATH = sqlitePath;
+  process.env.AION_OLLAMA_URL = AION_OLLAMA_URL;
+  process.env.AION_EMBED_DIMENSION = String(EMBED_DIMENSION);
+  process.env.AION_LOG_FILE = join(dir, 'aion.jsonl');
+  process.env.AION_LOG_LEVEL = 'fatal';
 
   episodeId = (
     await writeStampedNode(harness.driver, {
@@ -105,7 +106,7 @@ afterAll(async () => {
   await stopNeo4jHarness(harness);
   rmSync(dir, { recursive: true, force: true });
   for (const key of ENV_KEYS) {
-    delete process.env[key];
+    Reflect.deleteProperty(process.env, key);
   }
 });
 
@@ -132,8 +133,16 @@ describe('aion why against a seeded substrate', () => {
   beforeAll(async () => {
     oldId = randomUUID();
     newId = randomUUID();
-    await writeDecision(oldId, 'we picked polling for the sync engine', new Date('2026-06-01T00:00:00.000Z'));
-    await writeDecision(newId, 'we picked webhooks for the sync engine', new Date('2026-06-05T00:00:00.000Z'));
+    await writeDecision(
+      oldId,
+      'we picked polling for the sync engine',
+      new Date('2026-06-01T00:00:00.000Z'),
+    );
+    await writeDecision(
+      newId,
+      'we picked webhooks for the sync engine',
+      new Date('2026-06-05T00:00:00.000Z'),
+    );
     await supersede(harness.driver, { oldId, newId, now: new Date('2026-06-05T00:00:00.000Z') });
     recordSupersessionProposal(db, {
       oldId,
@@ -194,11 +203,11 @@ describe('aion search against a seeded substrate', () => {
   it('honors --as-of: the pre-supersession world sees the old node, not the new one', async () => {
     const { lines, write } = collector();
 
-    expect(
-      await runSearch([QUERY, '--as-of', '2026-07-02T00:00:00.000Z', '--json'], write),
-    ).toBe(0);
+    expect(await runSearch([QUERY, '--as-of', '2026-07-02T00:00:00.000Z', '--json'], write)).toBe(
+      0,
+    );
 
-    const results = JSON.parse(lines.join('')) as Array<{ id: string }>;
+    const results = JSON.parse(lines.join('')) as { id: string }[];
     const ids = results.map((row) => row.id);
     expect(ids).toContain(beforeId);
     expect(ids).not.toContain(afterId);
@@ -207,11 +216,11 @@ describe('aion search against a seeded substrate', () => {
   it('honors --as-of after the supersession: the new node, not the closed one', async () => {
     const { lines, write } = collector();
 
-    expect(
-      await runSearch([QUERY, '--as-of', '2026-07-10T00:00:00.000Z', '--json'], write),
-    ).toBe(0);
+    expect(await runSearch([QUERY, '--as-of', '2026-07-10T00:00:00.000Z', '--json'], write)).toBe(
+      0,
+    );
 
-    const results = JSON.parse(lines.join('')) as Array<{ id: string }>;
+    const results = JSON.parse(lines.join('')) as { id: string }[];
     const ids = results.map((row) => row.id);
     expect(ids).toContain(afterId);
     expect(ids).not.toContain(beforeId);
@@ -236,7 +245,7 @@ describe('aion forget against a seeded substrate', () => {
 
     const { lines, write } = collector();
     expect(await runSearch([QUERY, '--json'], write)).toBe(0);
-    const results = JSON.parse(lines.join('')) as Array<{ id: string }>;
+    const results = JSON.parse(lines.join('')) as { id: string }[];
     expect(results.map((row) => row.id)).not.toContain(id);
   });
 
@@ -245,7 +254,7 @@ describe('aion forget against a seeded substrate', () => {
 
     expect(await runSearch([QUERY, '--knew-at', beforeForget, '--json'], write)).toBe(0);
 
-    const results = JSON.parse(lines.join('')) as Array<{ id: string }>;
+    const results = JSON.parse(lines.join('')) as { id: string }[];
     expect(results.map((row) => row.id)).toContain(id);
   });
 });

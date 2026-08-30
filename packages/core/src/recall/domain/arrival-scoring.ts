@@ -1,6 +1,6 @@
-import type { Vector } from '../../infrastructure/providers/types.js';
 import type { Measurement } from './admission.js';
 import { cosineSimilarity } from './ranking.js';
+import type { Vector } from '../../infrastructure/providers/types.js';
 
 /**
  * Measuring what the spread reached. An activation score says how strongly the graph connects
@@ -29,7 +29,7 @@ export type ArrivalScoringInput = {
 function embeddedCues(cues: readonly ScoringCue[]): readonly EmbeddedCue[] {
   const embedded: EmbeddedCue[] = [];
   for (const cue of cues) {
-    const vector = cue.vector;
+    const { vector } = cue;
     if (vector !== undefined && vector.length > 0) {
       embedded.push({ ...cue, vector });
     }

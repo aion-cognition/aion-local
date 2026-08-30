@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
 import { SqliteStore } from './database.js';
 import {
   findEntityMergeProposalsForNode,
@@ -80,8 +81,12 @@ describe('entity merge proposal accessors', () => {
   it('finds a proposal from either endpoint', () => {
     const id = record();
 
-    expect(findEntityMergeProposalsForNode(store.db, 'entity-a').map((row) => row.id)).toEqual([id]);
-    expect(findEntityMergeProposalsForNode(store.db, 'entity-b').map((row) => row.id)).toEqual([id]);
+    expect(findEntityMergeProposalsForNode(store.db, 'entity-a').map((row) => row.id)).toEqual([
+      id,
+    ]);
+    expect(findEntityMergeProposalsForNode(store.db, 'entity-b').map((row) => row.id)).toEqual([
+      id,
+    ]);
     expect(findEntityMergeProposalsForNode(store.db, 'entity-z')).toEqual([]);
   });
 

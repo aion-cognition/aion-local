@@ -1,3 +1,4 @@
+import { FakeGraph, type FakeNode } from './fake-graph.fixture.js';
 import { BITEMPORAL_PROPERTIES } from '../../infrastructure/graph/bitemporal.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
 import {
@@ -6,7 +7,6 @@ import {
   NARRATIVE_SOURCE_LABELS,
 } from '../../infrastructure/graph/narrative-queries.js';
 import { coerceGraphValue, type Row } from '../../infrastructure/graph/values.js';
-import { FakeGraph, type FakeNode } from './fake-graph.fixture.js';
 
 /**
  * The narrative reads on top of the intake fake, so one unit test can drive a whole session
@@ -207,7 +207,7 @@ export class NarrativeFakeGraph extends FakeGraph {
     if (node === undefined) {
       return [];
     }
-    const now = parameters.now;
+    const { now } = parameters;
     node.properties[BITEMPORAL_PROPERTIES.validUntil] ??= now;
     node.properties[BITEMPORAL_PROPERTIES.txUntil] ??= now;
     return [

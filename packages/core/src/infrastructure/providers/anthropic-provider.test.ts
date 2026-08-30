@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CircuitOpenError } from './circuit-breaker.js';
+
 import {
   AnthropicProvider,
   AnthropicRequestError,
   AnthropicResponseError,
 } from './anthropic-provider.js';
+import { CircuitOpenError } from './circuit-breaker.js';
 import type { StructuredRequest } from './types.js';
 
 const SCHEMA = { type: 'object', properties: { ok: { type: 'boolean' } } };
@@ -27,7 +28,10 @@ function textResponse(text: string, status = 200, headers: Record<string, string
   return new Response(JSON.stringify({ content: [{ type: 'text', text }] }), { status, headers });
 }
 
-function provider(fetchImpl: typeof fetch, options: { breakerFailureThreshold?: number } = {}): AnthropicProvider {
+function provider(
+  fetchImpl: typeof fetch,
+  options: { breakerFailureThreshold?: number } = {},
+): AnthropicProvider {
   return new AnthropicProvider({
     apiKey: 'sk-ant-test',
     model: 'claude-haiku-4-5',
@@ -38,7 +42,7 @@ function provider(fetchImpl: typeof fetch, options: { breakerFailureThreshold?: 
 
 function sentBody(fetchImpl: ReturnType<typeof vi.fn>, call = 0): Body {
   const init = fetchImpl.mock.calls[call]?.[1] as RequestInit | undefined;
-  return JSON.parse(String(init?.body)) as Body;
+  return JSON.parse(init?.body as string) as Body;
 }
 
 afterEach(() => {
@@ -49,7 +53,7 @@ describe('the request the provider sends', () => {
   it('names its own model, keeps the caller schema in the system prompt, and drops think', async () => {
     const fetchImpl = vi.fn(() => Promise.resolve(textResponse('{"ok": true}')));
 
-    await provider(fetchImpl as unknown as typeof fetch).generate(REQUEST);
+    await provider(fetchImpl).generate(REQUEST);
 
     const body = sentBody(fetchImpl);
     expect(body.model).toBe('claude-haiku-4-5');
@@ -63,9 +67,9 @@ describe('the request the provider sends', () => {
   });
 
   it('sends the key and the API version as headers', async () => {
-    const fetchImpl = vi.fn(() => Promise.resolve(textResponse('{}')));
+    const fetchImpl = vi.fn((..._args: unknown[]) => Promise.resolve(textResponse('{}')));
 
-    await provider(fetchImpl as unknown as typeof fetch).generate(REQUEST);
+    await provider(fetchImpl).generate(REQUEST);
 
     const init = fetchImpl.mock.calls[0]?.[1] as RequestInit | undefined;
     const headers = init?.headers as Record<string, string>;
@@ -79,15 +83,17 @@ describe('the reply the provider reads', () => {
     const reply = '```json\n{"n": 1}\n```\n\nOn reflection:\n\n```json\n{"n": 2}\n```';
     const fetchImpl = vi.fn(() => Promise.resolve(textResponse(reply)));
 
-    await expect(provider(fetchImpl as unknown as typeof fetch).generate(REQUEST)).resolves.toEqual({ n: 2 });
+    await expect(provider(fetchImpl as unknown as typeof fetch).generate(REQUEST)).resolves.toEqual(
+      { n: 2 },
+    );
   });
 
   it('names a reply that carried no JSON, once the constrained retry has also failed', async () => {
     const fetchImpl = vi.fn(() => Promise.resolve(textResponse('I cannot answer that.')));
 
-    await expect(provider(fetchImpl as unknown as typeof fetch).generate(REQUEST)).rejects.toBeInstanceOf(
-      AnthropicResponseError,
-    );
+    await expect(
+      provider(fetchImpl as unknown as typeof fetch).generate(REQUEST),
+    ).rejects.toBeInstanceOf(AnthropicResponseError);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
@@ -100,7 +106,7 @@ describe('the reply the provider reads', () => {
       .mockResolvedValueOnce(textResponse(spliced))
       .mockResolvedValueOnce(textResponse('{"quote": "the first half"}'));
 
-    const value = await provider(fetchImpl as unknown as typeof fetch).generate(REQUEST);
+    const value = await provider(fetchImpl).generate(REQUEST);
 
     expect(value).toEqual({ quote: 'the first half' });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
@@ -129,9 +135,9 @@ describe('the reply the provider reads', () => {
       .mockResolvedValueOnce(textResponse('not json'))
       .mockResolvedValueOnce(textResponse('{"rows": []}'));
 
-    await provider(fetchImpl as unknown as typeof fetch).generate({ ...REQUEST, schema: nested });
+    await provider(fetchImpl).generate({ ...REQUEST, schema: nested });
 
-    const format = (sentBody(fetchImpl, 1).output_config as { format: { schema: Body } }).format;
+    const { format } = sentBody(fetchImpl, 1).output_config as { format: { schema: Body } };
     expect(format.schema).toEqual({
       type: 'object',
       additionalProperties: false,
@@ -156,7 +162,7 @@ describe('the reply the provider reads', () => {
     const constrained = new AnthropicProvider({
       apiKey: 'sk-ant-test',
       model: 'claude-haiku-4-5',
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      fetchImpl,
       schemaDelivery: 'output_config',
     });
 
@@ -190,10 +196,12 @@ describe('failures the provider has to survive', () => {
     vi.useFakeTimers();
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(new Response('slow down', { status: 429, headers: { 'retry-after': '1' } }))
+      .mockResolvedValueOnce(
+        new Response('slow down', { status: 429, headers: { 'retry-after': '1' } }),
+      )
       .mockResolvedValueOnce(textResponse('{"ok": true}'));
 
-    const pending = provider(fetchImpl as unknown as typeof fetch).generate(REQUEST);
+    const pending = provider(fetchImpl).generate(REQUEST);
     await vi.advanceTimersByTimeAsync(1_000);
 
     await expect(pending).resolves.toEqual({ ok: true });
@@ -218,7 +226,7 @@ describe('failures the provider has to survive', () => {
 
   it('opens the breaker rather than paying the API for a failure that is not going away', async () => {
     const fetchImpl = vi.fn(() => Promise.resolve(new Response('bad key', { status: 401 })));
-    const client = provider(fetchImpl as unknown as typeof fetch, { breakerFailureThreshold: 2 });
+    const client = provider(fetchImpl, { breakerFailureThreshold: 2 });
 
     await expect(client.generate(REQUEST)).rejects.toBeInstanceOf(AnthropicRequestError);
     await expect(client.generate(REQUEST)).rejects.toBeInstanceOf(AnthropicRequestError);

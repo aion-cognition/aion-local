@@ -1,5 +1,3 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { MemoryPack, MemoryPackItem } from '@aion/protocol';
 import {
   CO_OCCURS_TYPE,
   ContextVectorStage,
@@ -16,7 +14,9 @@ import {
   writeStampedNode,
 } from '@aion/core';
 import { contextVector } from '@aion/core/infrastructure/graph/test-support/graph-queries.fixture.js';
-import { GateSubstrate, waitFor } from './gate-substrate.fixture.js';
+import type { MemoryPack, MemoryPackItem } from '@aion/protocol';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import {
   ANCHOR_WORLD,
   DISTRACTOR_WORLD,
@@ -25,6 +25,7 @@ import {
   TARGET_WORLD,
   type ResonanceWorld,
 } from './context-resonance.fixture.js';
+import { GateSubstrate, waitFor } from './gate-substrate.fixture.js';
 
 /**
  * The second pass, on the shipped read path and in the embedding space the service actually
@@ -195,7 +196,9 @@ beforeAll(async () => {
   });
   // Both indexes are eventually consistent; a probe that runs while one is catching up measures
   // index lag rather than the second pass.
-  await new Promise((resolve) => setTimeout(resolve, 2000));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 2000);
+  });
 }, 600_000);
 
 afterAll(async () => {
@@ -224,8 +227,9 @@ describe('a memory the query shares no words with reaches the pack by the shape 
 
     console.log(
       `target content cosine to the query: ` +
-        `${cosineSimilarity(queryVector, targetVector).toFixed(3)} against an admission floor of ` +
-        `${String(substrate.config.recall.vectorAdmissionFloor)}`,
+        `${cosineSimilarity(queryVector, targetVector).toFixed(3)} against an admission floor of ${String(
+          substrate.config.recall.vectorAdmissionFloor,
+        )}`,
     );
 
     expect(cosineSimilarity(queryVector, targetVector)).toBeLessThan(
@@ -244,14 +248,17 @@ describe('a memory the query shares no words with reaches the pack by the shape 
 
     console.log(
       `resonant bucket: ${String(result.pack.resonant?.length ?? 0)} item(s), ` +
-        `seeds ${String(result.seeds.length)}, admitted ${String(result.admission.admitted)}` +
-        (result.pack.resonant ?? [])
+        `seeds ${String(result.seeds.length)}, admitted ${String(result.admission.admitted)}${(
+          result.pack.resonant ?? []
+        )
           .map(
             (item) =>
-              `\n    [${item.rationale.method} ${item.confidence.toFixed(3)}] ` +
-              `${item.content.slice(0, 70)}`,
+              `\n    [${item.rationale.method} ${item.confidence.toFixed(3)}] ${item.content.slice(
+                0,
+                70,
+              )}`,
           )
-          .join(''),
+          .join('')}`,
     );
 
     // Not found by a seed strategy and not reached by the spread: if either had, the second
@@ -333,15 +340,19 @@ describe('a memory the query shares no words with reaches the pack by the shape 
  * off-topic pack fills itself with memories nothing measured.
  */
 describe('an off-topic query gets no resonant bucket at all', () => {
-  it.each(OFF_TOPIC_BATTERY)('stays quiet for: %s', async (query) => {
-    const result = await substrate.recall(query, { identity: READ_SESSION, now: RECALLED_AT });
+  it.each(OFF_TOPIC_BATTERY)(
+    'stays quiet for: %s',
+    async (query) => {
+      const result = await substrate.recall(query, { identity: READ_SESSION, now: RECALLED_AT });
 
-    console.log(
-      `off-topic "${query}": ${String(result.items.length)} item(s), ` +
-        `anchored ${String(result.admission.anchored)}, ` +
-        `resonant ${String(result.pack.resonant?.length ?? 0)}`,
-    );
+      console.log(
+        `off-topic "${query}": ${String(result.items.length)} item(s), ` +
+          `anchored ${String(result.admission.anchored)}, ` +
+          `resonant ${String(result.pack.resonant?.length ?? 0)}`,
+      );
 
-    expect(result.pack.resonant).toBeUndefined();
-  }, 120_000);
+      expect(result.pack.resonant).toBeUndefined();
+    },
+    120_000,
+  );
 });

@@ -1,5 +1,3 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { MemoryPackItem } from '@aion/protocol';
 import {
   BATTERY_SUBSTRATE,
   OFF_TOPIC_BATTERY,
@@ -10,6 +8,9 @@ import {
   vectorSeeds,
   withCurrency,
 } from '@aion/core';
+import type { MemoryPackItem } from '@aion/protocol';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import { GateSubstrate, waitFor } from './gate-substrate.fixture.js';
 
 /**
@@ -144,46 +145,53 @@ afterAll(async () => {
 });
 
 describe('an unrelated query returns a thin or empty pack', () => {
-  it.each(OFF_TOPIC_BATTERY)('comes back thin or empty for: %s', async (query) => {
-    const result = await substrate.recall(query, { identity: READ_SESSION, now: RECALLED_AT });
-    const unmeasured = result.items.filter((item) => item.confidence === 0).length;
-    offTopicRows.push({ query, items: result.items.length, unmeasured });
+  it.each(OFF_TOPIC_BATTERY)(
+    'comes back thin or empty for: %s',
+    async (query) => {
+      const result = await substrate.recall(query, { identity: READ_SESSION, now: RECALLED_AT });
+      const unmeasured = result.items.filter((item) => item.confidence === 0).length;
+      offTopicRows.push({ query, items: result.items.length, unmeasured });
 
-    console.log(
-      `off-topic "${query}": ${String(result.items.length)} items ` +
-        `(${String(unmeasured)} with no measurement of their own), ` +
-        `considered ${String(result.admission.considered)}, ` +
-        `below floor ${String(result.admission.droppedBelowFloor)}, ` +
-        `unmeasured ${String(result.admission.droppedUnmeasured)}, ` +
-        `anchored ${String(result.admission.anchored)}, ` +
-        `${String(result.pack.metadata.token_estimate)} tokens` +
-        // What got in, and on what evidence. A count alone cannot tell a floor that is one
-        // notch too low from a leg admitting on something that is not a measurement at all,
-        // and those need opposite fixes.
-        result.items
-          .map(
-            (item) =>
-              `\n    [${item.rationale.method} ${item.confidence.toFixed(2)}] ` +
-              `${item.content.slice(0, 70)}`,
-          )
-          .join(''),
-    );
+      console.log(
+        `off-topic "${query}": ${String(result.items.length)} items ` +
+          `(${String(unmeasured)} with no measurement of their own), ` +
+          `considered ${String(result.admission.considered)}, ` +
+          `below floor ${String(result.admission.droppedBelowFloor)}, ` +
+          `unmeasured ${String(result.admission.droppedUnmeasured)}, ` +
+          `anchored ${String(result.admission.anchored)}, ` +
+          `${String(result.pack.metadata.token_estimate)} tokens${
+            // What got in, and on what evidence. A count alone cannot tell a floor that is one
+            // notch too low from a leg admitting on something that is not a measurement at all,
+            // and those need opposite fixes.
+            result.items
+              .map(
+                (item) =>
+                  `\n    [${item.rationale.method} ${item.confidence.toFixed(2)}] ${item.content.slice(
+                    0,
+                    70,
+                  )}`,
+              )
+              .join('')
+          }`,
+      );
 
-    expect(result.items.length).toBeLessThanOrEqual(THIN_PACK_ITEMS);
-    // The pack has to say what it refused, not merely be short: the off-topic packs were full
-    // and silent, and a thin pack with an empty report is the same silence one size down.
-    expect(result.admission.droppedBelowFloor + result.admission.droppedUnmeasured).toBeGreaterThan(
-      0,
-    );
-    expect(result.admission.admitted).toBe(result.items.length);
-    // The same counts reach the wire, not only the in-process result: a consumer reading the
-    // MCP pack has to be able to tell a floor doing its job from an empty substrate.
-    expect(result.pack.metadata.admission.considered).toBe(result.admission.considered);
-    expect(result.pack.metadata.admission.dropped_below_floor).toBe(
-      result.admission.droppedBelowFloor,
-    );
-    expect(result.pack.metadata.admission.vector_floor).toBe(result.admission.policy.vectorFloor);
-  }, 120_000);
+      expect(result.items.length).toBeLessThanOrEqual(THIN_PACK_ITEMS);
+      // The pack has to say what it refused, not merely be short: the off-topic packs were full
+      // and silent, and a thin pack with an empty report is the same silence one size down.
+      expect(
+        result.admission.droppedBelowFloor + result.admission.droppedUnmeasured,
+      ).toBeGreaterThan(0);
+      expect(result.admission.admitted).toBe(result.items.length);
+      // The same counts reach the wire, not only the in-process result: a consumer reading the
+      // MCP pack has to be able to tell a floor doing its job from an empty substrate.
+      expect(result.pack.metadata.admission.considered).toBe(result.admission.considered);
+      expect(result.pack.metadata.admission.dropped_below_floor).toBe(
+        result.admission.droppedBelowFloor,
+      );
+      expect(result.pack.metadata.admission.vector_floor).toBe(result.admission.policy.vectorFloor);
+    },
+    120_000,
+  );
 
   // Last, so every probe above has already pushed its row. Stated as its own check because it
   // names the mechanism rather than the symptom: an off-topic pack fills when one candidate
@@ -200,10 +208,13 @@ describe('an unrelated query returns a thin or empty pack', () => {
   });
 
   it('says so in the text an agent reads, not only in the structured buckets', async () => {
-    const result = await substrate.recall('monsoon rainfall variability across Tamil Nadu districts', {
-      identity: READ_SESSION,
-      now: RECALLED_AT,
-    });
+    const result = await substrate.recall(
+      'monsoon rainfall variability across Tamil Nadu districts',
+      {
+        identity: READ_SESSION,
+        now: RECALLED_AT,
+      },
+    );
 
     expect(result.items).toHaveLength(0);
     expect(result.pack.rendered_text).toContain('No memories matched this query.');
@@ -211,36 +222,40 @@ describe('an unrelated query returns a thin or empty pack', () => {
 });
 
 describe('a question the substrate can answer is still answered', () => {
-  it.each(ON_TOPIC_BATTERY)('still answers: $query', async (probe) => {
-    const result = await substrate.recall(probe.query, {
-      identity: READ_SESSION,
-      now: RECALLED_AT,
-    });
-    const expected = new Set(derivedIds.get(probe.expects) ?? []);
-    const buckets = new Map<string, readonly MemoryPackItem[]>([
-      ['facts', result.pack.facts ?? []],
-      ['episodes', result.pack.episodes ?? []],
-      ['narratives', result.pack.narratives ?? []],
-      ['preferences', result.pack.preferences ?? []],
-      ['resonant', result.pack.resonant ?? []],
-    ]);
-    const found = locate(result.items, buckets, expected);
+  it.each(ON_TOPIC_BATTERY)(
+    'still answers: $query',
+    async (probe) => {
+      const result = await substrate.recall(probe.query, {
+        identity: READ_SESSION,
+        now: RECALLED_AT,
+      });
+      const expected = new Set(derivedIds.get(probe.expects) ?? []);
+      const buckets = new Map<string, readonly MemoryPackItem[]>([
+        ['facts', result.pack.facts ?? []],
+        ['episodes', result.pack.episodes ?? []],
+        ['narratives', result.pack.narratives ?? []],
+        ['preferences', result.pack.preferences ?? []],
+        ['resonant', result.pack.resonant ?? []],
+      ]);
+      const found = locate(result.items, buckets, expected);
 
-    onTopicRows.push({
-      query: probe.query,
-      items: result.items.length,
-      bucketRank: found.bucketRank,
-      packRank: found.packRank,
-    });
-    console.log(
-      `on-topic "${probe.query}": ${String(result.items.length)} items, answer at bucket rank ` +
-        `${String(found.bucketRank + 1)}, pack rank ${String(found.packRank)}`,
-    );
+      onTopicRows.push({
+        query: probe.query,
+        items: result.items.length,
+        bucketRank: found.bucketRank,
+        packRank: found.packRank,
+      });
+      console.log(
+        `on-topic "${probe.query}": ${String(result.items.length)} items, answer at bucket rank ` +
+          `${String(found.bucketRank + 1)}, pack rank ${String(found.packRank)}`,
+      );
 
-    expect(result.items.length).toBeGreaterThan(0);
-    expect(found.bucketRank).toBeGreaterThanOrEqual(0);
-    expect(found.bucketRank).toBeLessThan(3);
-  }, 120_000);
+      expect(result.items.length).toBeGreaterThan(0);
+      expect(found.bucketRank).toBeGreaterThanOrEqual(0);
+      expect(found.bucketRank).toBeLessThan(3);
+    },
+    120_000,
+  );
 
   // Last, so every probe above has already pushed its row.
   it('keeps the answer at the head of its bucket more often than not', () => {

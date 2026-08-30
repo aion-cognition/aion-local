@@ -2,13 +2,18 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ENTITY_MENTION_TYPE } from '../../../infrastructure/graph/entity-queries.js';
-import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
-import type { Provider, StructuredRequest, Vector } from '../../../infrastructure/providers/types.js';
-import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
-import type { StageContext } from '../../domain/stage.js';
+
 import { SemanticRelationshipFakeGraph } from './semantic-relationships.fixture.js';
 import { SemanticRelationshipStage } from './semantic-relationships.js';
+import { ENTITY_MENTION_TYPE } from '../../../infrastructure/graph/entity-queries.js';
+import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
+import type {
+  Provider,
+  StructuredRequest,
+  Vector,
+} from '../../../infrastructure/providers/types.js';
+import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import type { StageContext } from '../../domain/stage.js';
 
 const EPISODE_ID = 'episode-1';
 const NOW = new Date('2026-08-28T09:05:00.000Z');
@@ -21,7 +26,8 @@ type GenerateFn = (req: StructuredRequest) => Promise<unknown>;
 function stubProvider(generate: GenerateFn): Provider {
   return {
     generate,
-    embed: async (texts: readonly string[]): Promise<Vector[]> => texts.map((_, i) => [i, 0.5, 0.25]),
+    embed: async (texts: readonly string[]): Promise<Vector[]> =>
+      texts.map((_, i) => [i, 0.5, 0.25]),
   };
 }
 
@@ -40,7 +46,11 @@ afterEach(() => {
 });
 
 function seedEntity(id: string, name: string, type: string): void {
-  graph.seedNode(id, ['Entity', 'Memory', 'AionNode'], { name, name_norm: name.toLowerCase(), type });
+  graph.seedNode(id, ['Entity', 'Memory', 'AionNode'], {
+    name,
+    name_norm: name.toLowerCase(),
+    type,
+  });
   graph.seedEdge(ENTITY_MENTION_TYPE, EPISODE_ID, id);
 }
 
@@ -65,7 +75,10 @@ describe('SemanticRelationshipStage', () => {
   it('skips an episode with no text', async () => {
     const stage = new SemanticRelationshipStage();
     const outcome = await stage.run(
-      buildContext(stubProvider(async () => ({ relationships: [] })), '   '),
+      buildContext(
+        stubProvider(async () => ({ relationships: [] })),
+        '   ',
+      ),
     );
 
     expect(outcome).toEqual({
@@ -78,7 +91,9 @@ describe('SemanticRelationshipStage', () => {
     seedEntity('entity-1', 'Aion', 'project');
     const stage = new SemanticRelationshipStage();
 
-    const outcome = await stage.run(buildContext(stubProvider(async () => ({ relationships: [] }))));
+    const outcome = await stage.run(
+      buildContext(stubProvider(async () => ({ relationships: [] }))),
+    );
 
     expect(outcome).toEqual({
       status: 'skipped',
@@ -91,7 +106,9 @@ describe('SemanticRelationshipStage', () => {
     seedCognitive('goal-1', 'Goal', 'ship the worker');
     const stage = new SemanticRelationshipStage();
 
-    const outcome = await stage.run(buildContext(stubProvider(async () => ({ relationships: [] }))));
+    const outcome = await stage.run(
+      buildContext(stubProvider(async () => ({ relationships: [] }))),
+    );
 
     // Only Decision, Insight, and Concept are claim-bearing; the Goal never reaches the
     // candidate list, so one entity is all that remains.
@@ -143,7 +160,13 @@ describe('SemanticRelationshipStage', () => {
     seedEntity('entity-2', 'Aion', 'project');
     const generate = async (): Promise<unknown> => ({
       relationships: [
-        { source: 'E1', target: 'E2', type: 'RELATED_TO', confidence: 0.7, quote: 'words nowhere in the episode' },
+        {
+          source: 'E1',
+          target: 'E2',
+          type: 'RELATED_TO',
+          confidence: 0.7,
+          quote: 'words nowhere in the episode',
+        },
       ],
     });
     const stage = new SemanticRelationshipStage();
@@ -189,7 +212,9 @@ describe('SemanticRelationshipStage', () => {
     seedEntity('entity-1', 'Ryan', 'person');
     seedEntity('entity-2', 'Aion', 'project');
     const generate = async (): Promise<unknown> => ({
-      relationships: [{ source: 'E1', target: 'E2', type: 'RELATED_TO', confidence: -0.5, quote: VALID_QUOTE }],
+      relationships: [
+        { source: 'E1', target: 'E2', type: 'RELATED_TO', confidence: -0.5, quote: VALID_QUOTE },
+      ],
     });
     const stage = new SemanticRelationshipStage();
 
@@ -203,7 +228,9 @@ describe('SemanticRelationshipStage', () => {
     seedEntity('entity-1', 'Ryan', 'person');
     seedEntity('entity-2', 'Aion', 'project');
     const generate = async (): Promise<unknown> => ({
-      relationships: [{ source: 'E1', target: 'E9', type: 'RELATED_TO', confidence: 0.7, quote: VALID_QUOTE }],
+      relationships: [
+        { source: 'E1', target: 'E9', type: 'RELATED_TO', confidence: 0.7, quote: VALID_QUOTE },
+      ],
     });
     const stage = new SemanticRelationshipStage();
 
@@ -217,7 +244,9 @@ describe('SemanticRelationshipStage', () => {
     seedEntity('entity-1', 'Ryan', 'person');
     seedEntity('entity-2', 'Aion', 'project');
     const generate = async (): Promise<unknown> => ({
-      relationships: [{ source: 'E1', target: 'E1', type: 'RELATED_TO', confidence: 0.7, quote: VALID_QUOTE }],
+      relationships: [
+        { source: 'E1', target: 'E1', type: 'RELATED_TO', confidence: 0.7, quote: VALID_QUOTE },
+      ],
     });
     const stage = new SemanticRelationshipStage();
 
@@ -230,7 +259,9 @@ describe('SemanticRelationshipStage', () => {
     seedEntity('entity-1', 'Ryan', 'person');
     seedEntity('entity-2', 'Aion', 'project');
     const generate = async (): Promise<unknown> => ({
-      relationships: [{ source: 'E1', target: 'E2', type: 'BEFRIENDS', confidence: 0.7, quote: VALID_QUOTE }],
+      relationships: [
+        { source: 'E1', target: 'E2', type: 'BEFRIENDS', confidence: 0.7, quote: VALID_QUOTE },
+      ],
     });
     const stage = new SemanticRelationshipStage();
 
@@ -278,7 +309,9 @@ describe('SemanticRelationshipStage', () => {
     seedEntity('entity-a', 'Alpha', 'concept');
     seedEntity('entity-z', 'Zulu', 'concept');
     const generate = async (): Promise<unknown> => ({
-      relationships: [{ source: 'E2', target: 'E1', type: 'ANALOGOUS_TO', confidence: 0.5, quote: VALID_QUOTE }],
+      relationships: [
+        { source: 'E2', target: 'E1', type: 'ANALOGOUS_TO', confidence: 0.5, quote: VALID_QUOTE },
+      ],
     });
     const stage = new SemanticRelationshipStage();
 
@@ -332,7 +365,7 @@ describe('SemanticRelationshipStage', () => {
     const stage = new SemanticRelationshipStage();
     const original = graph.executeQuery.bind(graph);
     let calls = 0;
-    graph.executeQuery = async (cypher: string, parameters: Record<string, unknown> = {}) => {
+    graph.executeQuery = async (cypher: string, parameters: Record<string, unknown>) => {
       calls += 1;
       // Calls 1-2 are the entity and cognitive reads; the first edge write is call 3.
       if (calls === 4) {

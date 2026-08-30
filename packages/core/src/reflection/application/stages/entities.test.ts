@@ -2,6 +2,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { EntityFakeGraph, fakeProvider, type FakeProvider } from './entities.fixture.js';
+import { ENTITY_EXTRACTION_METHOD, EntityExtractionStage } from './entities.js';
 import { ACCESS_COUNT_PROPERTY } from '../../../infrastructure/graph/access-tracking.js';
 import { BITEMPORAL_PROPERTIES } from '../../../infrastructure/graph/bitemporal.js';
 import {
@@ -9,6 +12,7 @@ import {
   ENTITY_PARTICIPATION_TYPE,
   findEpisodeEntities,
 } from '../../../infrastructure/graph/entity-queries.js';
+import type { EpisodeContext } from '../../../infrastructure/graph/episode-context.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../../../infrastructure/graph/episodes.js';
 import {
   ENTITY_NAME_NORM_PROPERTY,
@@ -19,10 +23,7 @@ import {
 } from '../../../infrastructure/graph/seed-queries.js';
 import { openLogger } from '../../../infrastructure/logging/logger.js';
 import { SqliteStore } from '../../../infrastructure/sqlite/database.js';
-import type { EpisodeContext } from '../../../infrastructure/graph/episode-context.js';
 import type { StageContext } from '../../domain/stage.js';
-import { EntityFakeGraph, fakeProvider, type FakeProvider } from './entities.fixture.js';
-import { ENTITY_EXTRACTION_METHOD, EntityExtractionStage } from './entities.js';
 
 const EPISODE_ID = 'episode-1';
 const SESSION_ID = 'session-1';
@@ -117,7 +118,9 @@ describe('canonicalization', () => {
     expect(outcome.counts).toEqual({ entities: 2, mentions: 2 });
     expect(entityNames()).toEqual(['Aion', 'Ryan Huber']);
 
-    const aion = graph.entities().find((node) => node.properties[ENTITY_NAME_NORM_PROPERTY] === 'aion');
+    const aion = graph
+      .entities()
+      .find((node) => node.properties[ENTITY_NAME_NORM_PROPERTY] === 'aion');
     expect(aion?.labels).toContain('Memory');
     expect(aion?.properties[MEMORY_PROPERTIES.text]).toBe('Aion (project): the memory substrate');
     expect(aion?.properties[MEMORY_PROPERTIES.sourceEpisodeId]).toBe(EPISODE_ID);
@@ -209,7 +212,9 @@ describe('structural upgrade', () => {
     expect(outcome.summary).toContain('1 structural');
 
     const member = graph.nodes.get(MEMBER_ID);
-    expect(graph.edgesOfType(ENTITY_MENTION_TYPE).map((edge) => edge.targetId)).toContain(MEMBER_ID);
+    expect(graph.edgesOfType(ENTITY_MENTION_TYPE).map((edge) => edge.targetId)).toContain(
+      MEMBER_ID,
+    );
     // The backbone keeps its own identity: still a member, still without a memory body.
     expect(member?.properties.type).toBe('member');
     expect(member?.properties[MEMORY_PROPERTIES.text]).toBeUndefined();
@@ -222,7 +227,9 @@ describe('structural upgrade', () => {
     seedMember('Ryan Huber');
     await new EntityExtractionStage().run(
       context(
-        fakeProvider({ generate: [{ entities: [{ name: 'ryan   huber', type: 'person', context: '' }] }] }),
+        fakeProvider({
+          generate: [{ entities: [{ name: 'ryan   huber', type: 'person', context: '' }] }],
+        }),
       ),
     );
 

@@ -2,22 +2,23 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { vectorBackfillOperation } from './vector-backfill.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
 import { upsertEdge } from '../../../infrastructure/graph/edges.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
+import { nodeProperties } from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
   type Neo4jHarness,
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
-import { nodeProperties } from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
-import { healthFixture } from '../../domain/test-support/health.fixture.js';
 import type { OperationContext } from '../../domain/operation.js';
-import { vectorBackfillOperation } from './vector-backfill.js';
+import { healthFixture } from '../../domain/test-support/health.fixture.js';
 
 const EMBED_DIMENSION = DEFAULTS.models.embedDimension;
 const NOW = new Date('2026-08-29T14:00:00.000Z');
@@ -102,15 +103,21 @@ function expectVectorClose(actual: unknown, expected: readonly number[]): void {
   const values = actual as number[];
   expect(values).toHaveLength(expected.length);
   values.forEach((value, index) => {
-    expect(value).toBeCloseTo(expected[index] as number, 5);
+    expect(value).toBeCloseTo(expected[index]!, 5);
   });
 }
 
 describe('vector_backfill: context vector pass', () => {
-  const NEIGHBOR_VECTOR = Array.from({ length: EMBED_DIMENSION }, (_, i) => (i + 1) / EMBED_DIMENSION);
-  const OTHER_VECTOR = Array.from({ length: EMBED_DIMENSION }, (_, i) => (EMBED_DIMENSION - i) / EMBED_DIMENSION);
+  const NEIGHBOR_VECTOR = Array.from(
+    { length: EMBED_DIMENSION },
+    (_, i) => (i + 1) / EMBED_DIMENSION,
+  );
+  const OTHER_VECTOR = Array.from(
+    { length: EMBED_DIMENSION },
+    (_, i) => (EMBED_DIMENSION - i) / EMBED_DIMENSION,
+  );
 
-  it('computes a stale node\'s context from its current neighbors and stays put once synced', async () => {
+  it("computes a stale node's context from its current neighbors and stays put once synced", async () => {
     await writeStampedNode(harness.driver, {
       label: 'Episode',
       id: 'context-a',

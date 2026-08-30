@@ -115,6 +115,11 @@ function describe(error: unknown): string {
 function echo(value: unknown): string {
   let rendered: string;
   try {
+    // lib.es5 types JSON.stringify as always returning `string`, and TS's control-flow
+    // analysis trusts that over a local widening annotation or cast. At runtime it returns
+    // `undefined` for a value JSON cannot represent (bare `undefined`, a function, a
+    // symbol), which is exactly the case this fallback exists to cover.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- see comment above
     rendered = JSON.stringify(value) ?? String(value);
   } catch {
     rendered = String(value);
@@ -135,10 +140,7 @@ function refinementMessages(body: string, rejected: string, reason: string): Cha
     { role: 'system', content: `${SYSTEM_PROMPT}\n\n${REFINEMENT_PROMPT}` },
     {
       role: 'user',
-      content: [
-        `Record:\n${body}`,
-        `Previous attempt (${reason}):\n${rejected}`,
-      ].join('\n\n'),
+      content: [`Record:\n${body}`, `Previous attempt (${reason}):\n${rejected}`].join('\n\n'),
     },
   ];
 }
@@ -352,11 +354,13 @@ export class EntityExtractionStage implements ReflectionStage {
     }
 
     const rejected = first.ok ? echo(first.data) : '(the call failed)';
-    const reason = !first.ok
-      ? first.reason
-      : attempted === undefined
-        ? 'it did not match the required shape'
-        : 'it named no entities';
+    let reason: string;
+    if (first.ok) {
+      reason =
+        attempted === undefined ? 'it did not match the required shape' : 'it named no entities';
+    } else {
+      ({ reason } = first);
+    }
     ctx.logger.info(
       { episodeId: ctx.episodeId, model: this.#options.model, reason },
       'entity extraction refining',
@@ -378,7 +382,9 @@ export class EntityExtractionStage implements ReflectionStage {
     messages: readonly ChatMessage[],
   ): Promise<{ ok: true; data: unknown } | { ok: false; reason: string }> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.#options.timeoutMs);
+    const timer = setTimeout(() => {
+      controller.abort();
+    }, this.#options.timeoutMs);
     try {
       const data = await ctx.provider.generate({
         model: this.#options.model,

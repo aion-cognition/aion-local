@@ -1,4 +1,5 @@
 import { z } from 'zod';
+
 import type { JsonSchema } from '../../infrastructure/providers/types.js';
 import { foldName } from '../../infrastructure/providers/unicode-fold.js';
 

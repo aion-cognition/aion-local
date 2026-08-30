@@ -1,10 +1,11 @@
 import { MemoryPackSchema, type Cue, type StageTimingsMs } from '@aion/protocol';
 import { describe, expect, it } from 'vitest';
-import type { SeedCandidate } from '../../infrastructure/graph/seed-queries.js';
-import type { Vector } from '../../infrastructure/providers/types.js';
+
 import type { AdmissionReport } from './admission.js';
 import { assemblePack, type BucketCaps } from './pack.js';
 import { RESONANCE_PATH, contextCentroid, resonantItem } from './resonance.js';
+import type { SeedCandidate } from '../../infrastructure/graph/seed-queries.js';
+import type { Vector } from '../../infrastructure/providers/types.js';
 
 const TIMINGS: StageTimingsMs = {
   embed: 12,
@@ -108,8 +109,11 @@ describe('a resonant discovery', () => {
     expect(found.evidence).toEqual([{ method: 'resonance', relevance: 0.82 }]);
   });
 
-  it('carries the node\'s own reason through when the discovery has one', () => {
-    const found = resonantItem(candidate('r1', undefined, 'shares the deploy-window subject'), 0.82);
+  it("carries the node's own reason through when the discovery has one", () => {
+    const found = resonantItem(
+      candidate('r1', undefined, 'shares the deploy-window subject'),
+      0.82,
+    );
 
     expect(found.why).toBe('shares the deploy-window subject');
   });

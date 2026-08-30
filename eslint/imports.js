@@ -14,7 +14,7 @@ export default {
     'import-x/newline-after-import': 'error',
     'import-x/no-duplicates': 'error',
     'import-x/no-self-import': 'error',
-    'import-x/no-useless-path-segments': ['error', { noUselessIndex: true }],
+    'import-x/no-useless-path-segments': ['error', { noUselessIndex: false }],
     'import-x/no-cycle': ['error', { maxDepth: 8 }],
     'import-x/no-default-export': 'warn',
     'import-x/extensions': ['error', 'ignorePackages', { js: 'always', ts: 'never' }],

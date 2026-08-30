@@ -8,31 +8,9 @@ import {
   type StageTimingsMs,
 } from '@aion/protocol';
 import type { Driver } from 'neo4j-driver';
-import type { Config } from '../../infrastructure/config/schema.js';
-import { fetchAdjacency } from '../../infrastructure/graph/adjacency.js';
-import { asOf, bitemporalAt, knewAt, withCurrency, type ReadMode } from '../../infrastructure/graph/read-modes.js';
-import type { Logger } from '../../infrastructure/logging/logger.js';
-import type { Provider } from '../../infrastructure/providers/types.js';
-import type { SessionManager } from '../../session/session-manager.js';
-import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { saveLastPack } from '../../infrastructure/sqlite/last-pack.js';
-import { recordPackMethodCounts } from '../../infrastructure/sqlite/method-counters.js';
-import { recordRecallOutcome } from '../../infrastructure/sqlite/recall-cadence.js';
-import { recordCueOutcome } from '../../infrastructure/sqlite/recall-samples.js';
-import {
-  spreadActivation,
-  type ActivatedNode,
-  type ActivationBudget,
-  type ActivationRun,
-  type ActivationTermination,
-  type AdjacencyFetch,
-} from '../domain/activation.js';
-import { labelBoosts, queryCueTexts, queryRestatements } from '../domain/facts.js';
+
 import { buildRankedLists, toActivationSeed } from './candidates.js';
 import { extractCues, type CueCache, type CueExtractionResult } from './cues.js';
-import type { AdmissionPolicy, AdmissionReport } from '../domain/admission.js';
-import { fuse, type FusedItem, type FusionResult } from '../domain/fusion.js';
-import { assemblePack, packMethods, type BucketCaps } from '../domain/pack.js';
 import { resonate, type ResonanceResult } from './resonance.js';
 import { selectSeeds, type Seed } from './seeds.js';
 import {
@@ -42,6 +20,35 @@ import {
   mmrVectors,
   pendingEnrichment,
 } from './stage-reads.js';
+import type { Config } from '../../infrastructure/config/schema.js';
+import { fetchAdjacency } from '../../infrastructure/graph/adjacency.js';
+import {
+  asOf,
+  bitemporalAt,
+  knewAt,
+  withCurrency,
+  type ReadMode,
+} from '../../infrastructure/graph/read-modes.js';
+import type { Logger } from '../../infrastructure/logging/logger.js';
+import type { Provider } from '../../infrastructure/providers/types.js';
+import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { saveLastPack } from '../../infrastructure/sqlite/last-pack.js';
+import { recordPackMethodCounts } from '../../infrastructure/sqlite/method-counters.js';
+import { recordRecallOutcome } from '../../infrastructure/sqlite/recall-cadence.js';
+import { recordCueOutcome } from '../../infrastructure/sqlite/recall-samples.js';
+import type { SessionManager } from '../../session/session-manager.js';
+import {
+  spreadActivation,
+  type ActivatedNode,
+  type ActivationBudget,
+  type ActivationRun,
+  type ActivationTermination,
+  type AdjacencyFetch,
+} from '../domain/activation.js';
+import type { AdmissionPolicy, AdmissionReport } from '../domain/admission.js';
+import { labelBoosts, queryCueTexts, queryRestatements } from '../domain/facts.js';
+import { fuse, type FusedItem, type FusionResult } from '../domain/fusion.js';
+import { assemblePack, packMethods, type BucketCaps } from '../domain/pack.js';
 
 /**
  * The recall pipeline, in the order its stages run. Cue extraction spends the one generation
@@ -268,7 +275,7 @@ export async function handleRecall(
       { cues: embedded.value.cues, mode },
     ),
   );
-  const seeds = selection.value.seeds;
+  const { seeds } = selection.value;
 
   // Every rung that fired, in the order the stages run. A pack with no items and no entries
   // here is a real miss; the same pack with a `graph` entry is an outage, and the caller

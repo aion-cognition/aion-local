@@ -1,8 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 import { describe, expect, it } from 'vitest';
-import { DEFAULTS } from '../../infrastructure/config/defaults.js';
-import type { ScoredSeedCandidate, SeedCandidate } from '../../infrastructure/graph/seed-queries.js';
-import type { Logger } from '../../infrastructure/logging/logger.js';
+
 import {
   SEED_STRATEGIES,
   SEED_STRATEGY_METHODS,
@@ -16,6 +14,12 @@ import {
   type SeedSelection,
   type SeedStrategy,
 } from './seeds.js';
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import type {
+  ScoredSeedCandidate,
+  SeedCandidate,
+} from '../../infrastructure/graph/seed-queries.js';
+import type { Logger } from '../../infrastructure/logging/logger.js';
 
 function candidate(id: string, content = `content ${id}`): SeedCandidate {
   return { id, labels: ['Episode', 'Memory', 'AionNode'], content, currency: 'current' };
@@ -52,13 +56,13 @@ describe('scaleByCueWeight', () => {
 describe('normalizeToBest', () => {
   it('puts an unbounded Lucene score on (0, 1] without reordering it', () => {
     const normalized = normalizeToBest([scored('a', 8.4), scored('b', 4.2), scored('c', 2.1)]);
-    expect(normalized.map((row) => row.score)).toEqual([1, 0.5, 0.25]);
-    expect(normalized.map((row) => row.id)).toEqual(['a', 'b', 'c']);
+    expect(normalized.map((seed) => seed.score)).toEqual([1, 0.5, 0.25]);
+    expect(normalized.map((seed) => seed.id)).toEqual(['a', 'b', 'c']);
   });
 
   it('leaves an empty or all-zero list alone rather than dividing by zero', () => {
     expect(normalizeToBest([])).toEqual([]);
-    expect(normalizeToBest([scored('a', 0)]).map((row) => row.score)).toEqual([0]);
+    expect(normalizeToBest([scored('a', 0)]).map((seed) => seed.score)).toEqual([0]);
   });
 });
 
@@ -178,6 +182,7 @@ describe('mergeSeeds', () => {
           },
           strategy: 'vector',
           score: 0.5,
+          relevance: 0.5,
         },
       ],
       10,
@@ -216,7 +221,9 @@ describe('SEED_STRATEGIES', () => {
 const NO_ROWS = { records: [], summary: { counters: { updates: () => ({}) } } };
 
 function silentLogger(): Logger {
-  const noop = (): void => {};
+  const noop = (): void => {
+    // A test logger that prints nothing, on purpose.
+  };
   return { debug: noop, info: noop, warn: noop, error: noop } as unknown as Logger;
 }
 
@@ -237,7 +244,7 @@ function answeringWith(rows: (cypher: string, parameters: FakeRow) => readonly F
   return {
     executeQuery: (cypher: string, parameters: FakeRow) =>
       Promise.resolve({
-        records: rows(cypher, parameters).map((row) => ({ toObject: () => row })),
+        records: rows(cypher, parameters).map((entry) => ({ toObject: () => entry })),
         summary: { counters: { updates: () => ({}) } },
       }),
   } as unknown as Driver;
@@ -274,7 +281,9 @@ describe('what the legs mark as a literal match', () => {
   it('marks an exact entity-name resolution, which is an identity match rather than a score', async () => {
     const selection = await selectSeeds(
       {
-        driver: answeringWith((cypher) => (cypher.includes('MATCH (n:Entity)') ? [row('e', 1)] : [])),
+        driver: answeringWith((cypher) =>
+          cypher.includes('MATCH (n:Entity)') ? [row('e', 1)] : [],
+        ),
         config: DEFAULTS,
         logger: silentLogger(),
       },
@@ -292,7 +301,7 @@ function fulltextRows(cypher: string, parameters: FakeRow): readonly FakeRow[] {
   if (!cypher.includes('db.index.fulltext.queryNodes')) {
     return [];
   }
-  const query = parameters.query;
+  const { query } = parameters;
   if (typeof query === 'string' && query.startsWith('"')) {
     return [row('phrase-hit', 4.2)];
   }
@@ -303,7 +312,9 @@ const POPULATION_QUERY = 'count(n) AS population';
 
 function countingDriver(
   population: number | Error,
-  onCount: () => void = () => {},
+  onCount: () => void = () => {
+    // Most tests don't care how many times the count query ran.
+  },
 ): Driver {
   return {
     executeQuery: (cypher: string) => {

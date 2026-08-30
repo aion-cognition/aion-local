@@ -81,8 +81,7 @@ export const UNRELATED_PAIRS: readonly ScoredPair[] = [
   // A floor calibrated without them is calibrated against text simpler than what is stored.
   {
     cue: 'zzqxwv plortnak vugglesnorf',
-    content:
-      'ZWJ sequences (concept): Zero Width Joiner sequences are tested for emoji rendering.',
+    content: 'ZWJ sequences (concept): Zero Width Joiner sequences are tested for emoji rendering.',
   },
   {
     cue: 'what is the Grimble sprocket calibration for the Vondish array',
@@ -158,7 +157,10 @@ export const RELATED_PAIRS: readonly ScoredPair[] = [
  * floor. The calibration test measures them and reports them; it asserts nothing about them.
  */
 export const WEAK_RELATED_PAIRS: readonly ScoredPair[] = [
-  { cue: 'what am I working on', content: 'Get the Halyard ledger onto the new PostgreSQL primary.' },
+  {
+    cue: 'what am I working on',
+    content: 'Get the Halyard ledger onto the new PostgreSQL primary.',
+  },
   {
     cue: 'is the fix already in the runbook',
     content: 'The split migration takes 4 minutes 12 seconds against a production-sized copy.',
@@ -204,8 +206,14 @@ export const BATTERY_SUBSTRATE: readonly BatteryEpisode[] = [
     observation:
       'An idempotency key must hash the identity of the event, not the envelope around it.',
   },
-  { id: 'feature-flags', observation: 'Feature flags are not re-read during the middle of a request.' },
-  { id: 'ops-surface', observation: 'The ops surface concept covers the maintenance burden of Kafka.' },
+  {
+    id: 'feature-flags',
+    observation: 'Feature flags are not re-read during the middle of a request.',
+  },
+  {
+    id: 'ops-surface',
+    observation: 'The ops surface concept covers the maintenance burden of Kafka.',
+  },
   { id: 'halyard', observation: 'Get the Halyard ledger onto the new PostgreSQL primary.' },
 ];
 
@@ -243,6 +251,9 @@ export const ON_TOPIC_BATTERY: readonly OnTopicProbe[] = [
     query: 'database connection string leaked password and credential rotation',
     expects: 'connection-string',
   },
-  { query: 'what did we decide about how the remittance files get ingested', expects: 'remittance' },
+  {
+    query: 'what did we decide about how the remittance files get ingested',
+    expects: 'remittance',
+  },
   { query: 'what is the idempotency key supposed to hash', expects: 'idempotency' },
 ];

@@ -1,4 +1,5 @@
 import type { Driver } from 'neo4j-driver';
+
 import { ensureGraphSession } from '../infrastructure/graph/sessions.js';
 
 /** The backbone ids every session links to. Resolve once via `bootstrapBackbone` at startup. */
@@ -51,7 +52,7 @@ export class SessionManager {
   }
 
   async ensureSession(input: EnsureSessionInput): Promise<EnsureSessionResult> {
-    const identity = input.identity;
+    const { identity } = input;
     if (identity.length === 0) {
       throw new Error('session identity must be a non-empty string');
     }

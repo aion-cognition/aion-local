@@ -1,4 +1,3 @@
-import { createInterface } from 'node:readline/promises';
 import {
   ConfigError,
   fetchNodeProvenance,
@@ -13,6 +12,8 @@ import {
   type Seed,
   type SeedCue,
 } from '@aion/core';
+import { createInterface } from 'node:readline/promises';
+
 import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
 
 /**
@@ -46,8 +47,7 @@ export function parseForgetFlags(argv: readonly string[]): ForgetFlags {
   let target: string | undefined;
   let yes = false;
 
-  for (const raw of argv) {
-    const arg = raw ?? '';
+  for (const arg of argv) {
     if (arg === '--yes') {
       yes = true;
       continue;
@@ -92,7 +92,7 @@ async function confirm(assumeYes: boolean, write: Writer): Promise<boolean> {
   if (assumeYes) {
     return true;
   }
-  if (process.stdin.isTTY !== true) {
+  if (!process.stdin.isTTY) {
     write('re-run with --yes to forget it (no terminal to confirm on)');
     return false;
   }
@@ -121,7 +121,12 @@ type ForgetDeps = {
   readonly logger: Logger;
 };
 
-async function forgetById(deps: ForgetDeps, id: string, flags: ForgetFlags, write: Writer): Promise<number> {
+async function forgetById(
+  deps: ForgetDeps,
+  id: string,
+  flags: ForgetFlags,
+  write: Writer,
+): Promise<number> {
   const provenance = await fetchNodeProvenance(deps.connection.driver, id);
   if (provenance === undefined) {
     stderrWriter(`no node found for '${id}' (it may not exist, or already be forgotten)`);
@@ -149,8 +154,16 @@ function renderMatches(matches: readonly Seed[], write: Writer): void {
   });
 }
 
-async function forgetByQuery(deps: ForgetDeps, query: string, flags: ForgetFlags, write: Writer): Promise<number> {
-  const provider = new OllamaProvider({ baseUrl: deps.config.ollama.url, embedModel: deps.config.models.embed });
+async function forgetByQuery(
+  deps: ForgetDeps,
+  query: string,
+  flags: ForgetFlags,
+  write: Writer,
+): Promise<number> {
+  const provider = new OllamaProvider({
+    baseUrl: deps.config.ollama.url,
+    embedModel: deps.config.models.embed,
+  });
   const [vector] = await provider.embed([query]);
   if (vector === undefined) {
     stderrWriter(`${deps.config.models.embed} returned no embedding for the query`);
@@ -170,7 +183,9 @@ async function forgetByQuery(deps: ForgetDeps, query: string, flags: ForgetFlags
   }
 
   if (matches.length > 1) {
-    write(`${String(matches.length)} matches for '${query}'; forget takes an id when there is more than one`);
+    write(
+      `${String(matches.length)} matches for '${query}'; forget takes an id when there is more than one`,
+    );
     renderMatches(matches, write);
     write('re-run `aion forget <id>` with the one you mean');
     return 1;
@@ -207,7 +222,9 @@ export async function runForget(
   try {
     const health = await connection.health();
     if (!health.reachable) {
-      stderrWriter(`forget needs Neo4j: ${connection.uri} unreachable: ${health.error ?? 'unknown error'}`);
+      stderrWriter(
+        `forget needs Neo4j: ${connection.uri} unreachable: ${health.error ?? 'unknown error'}`,
+      );
       return 1;
     }
 

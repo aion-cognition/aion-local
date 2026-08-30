@@ -2,6 +2,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { backboneRepairOperation, backboneRepairRelevance } from './backbone-repair.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
@@ -22,7 +24,6 @@ import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sql
 import { NEUTRAL_GRAPH_HEALTH } from '../../domain/health.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
-import { backboneRepairOperation, backboneRepairRelevance } from './backbone-repair.js';
 
 /**
  * Three episodes: one wired correctly, one whose session link is missing but whose session is
@@ -116,7 +117,9 @@ describe('emergency relationship repair', () => {
 
     expect(outcome).toMatchObject({ status: 'applied', itemsProcessed: 1, itemsAffected: 1 });
     expect(await sessionIdsOfEpisode(harness.driver, 'episode-unlinked')).toEqual(['session-live']);
-    expect(await sessionLinkSignals(harness.driver, 'episode-unlinked')).toContain('backbone_repair');
+    expect(await sessionLinkSignals(harness.driver, 'episode-unlinked')).toContain(
+      'backbone_repair',
+    );
     // The one naming a session that is not there stays broken rather than being attached to
     // something invented for it.
     expect(await sessionIdsOfEpisode(harness.driver, 'episode-sessionless')).toEqual([]);

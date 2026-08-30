@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULTS } from '../../infrastructure/config/defaults.js';
-import type { Config } from '../../infrastructure/config/schema.js';
-import type { SeedCandidate } from '../../infrastructure/graph/seed-queries.js';
-import type { ActivatedNode } from '../domain/activation.js';
+
 import {
   buildRankedLists,
   seedCandidate,
@@ -10,6 +7,10 @@ import {
   traversalCandidates,
 } from './candidates.js';
 import type { Seed, SeedProvenance } from './seeds.js';
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import type { Config } from '../../infrastructure/config/schema.js';
+import type { SeedCandidate } from '../../infrastructure/graph/seed-queries.js';
+import type { ActivatedNode } from '../domain/activation.js';
 
 const SUPERSEDED_AT = new Date('2026-08-10T00:00:00.000Z');
 
@@ -94,36 +95,52 @@ describe('a seed as a fusion candidate', () => {
   });
 
   it('carries the lineage annotation through to the item', () => {
-    const candidate = seedCandidate(seed('old', [{ strategy: 'vector', score: 0.7, relevance: 0.7 }], true));
+    const candidate = seedCandidate(
+      seed('old', [{ strategy: 'vector', score: 0.7, relevance: 0.7 }], true),
+    );
 
     expect(candidate?.currency).toBe('superseded');
     expect(candidate?.supersededBy).toEqual({ id: 'old-successor', at: SUPERSEDED_AT });
   });
 
-  it('carries the node\'s own reason through when the seed has one', () => {
+  it("carries the node's own reason through when the seed has one", () => {
     const candidate = seedCandidate(
-      seed('d1', [{ strategy: 'vector', score: 0.7, relevance: 0.7 }], false, 'because Postgres already owns the lock'),
+      seed(
+        'd1',
+        [{ strategy: 'vector', score: 0.7, relevance: 0.7 }],
+        false,
+        'because Postgres already owns the lock',
+      ),
     );
 
     expect(candidate?.why).toBe('because Postgres already owns the lock');
   });
 
   it('leaves why absent for a seed whose node stores no rationale', () => {
-    const candidate = seedCandidate(seed('e1', [{ strategy: 'vector', score: 0.7, relevance: 0.7 }]));
+    const candidate = seedCandidate(
+      seed('e1', [{ strategy: 'vector', score: 0.7, relevance: 0.7 }]),
+    );
 
     expect(candidate?.why).toBeUndefined();
   });
 
   it('enters the spread at its own currency, so a superseded seed starts down-weighted', () => {
-    expect(toActivationSeed(seed('old', [{ strategy: 'vector', score: 0.7, relevance: 0.7 }], true))).toEqual({
+    expect(
+      toActivationSeed(seed('old', [{ strategy: 'vector', score: 0.7, relevance: 0.7 }], true)),
+    ).toEqual({
       nodeId: 'old',
-      currency: { currency: 'superseded', supersededBy: { id: 'old-successor', at: SUPERSEDED_AT } },
+      currency: {
+        currency: 'superseded',
+        supersededBy: { id: 'old-successor', at: SUPERSEDED_AT },
+      },
     });
   });
 });
 
 describe('the traversal list', () => {
-  const found = seed('found', [{ strategy: 'vector', score: 0.9, relevance: 0.9, cue: 'webhooks' }]);
+  const found = seed('found', [
+    { strategy: 'vector', score: 0.9, relevance: 0.9, cue: 'webhooks' },
+  ]);
 
   it('explains a traversal-only node by activation, with the path that reached it', () => {
     const path = 'found -[PARTICIPATES_IN]-> session -[PARTICIPATES_IN]-> reached';
@@ -138,12 +155,14 @@ describe('the traversal list', () => {
     expect(candidates[1]?.rationale).toEqual({ method: 'activation', score: 0.39, path });
   });
 
-  it('carries the node\'s own reason through hydration for an activation-only node', () => {
+  it("carries the node's own reason through hydration for an activation-only node", () => {
     const path = 'found -[PARTICIPATES_IN]-> session -[PARTICIPATES_IN]-> reached';
     const candidates = traversalCandidates({
       seeds: [found],
       activated: [activated('found', 1, 'found'), activated('reached', 0.39, path)],
-      hydrated: new Map([['reached', hydratedNode('reached', 'the migration had already shipped')]]),
+      hydrated: new Map([
+        ['reached', hydratedNode('reached', 'the migration had already shipped')],
+      ]),
     });
 
     const reached = candidates.find((candidate) => candidate.id === 'reached');
@@ -182,7 +201,10 @@ describe('the traversal list', () => {
   it('carries no evidence for an arrival whose content vector is still pending', () => {
     const candidates = traversalCandidates({
       seeds: [found],
-      activated: [activated('found', 1, 'found'), activated('pending', 0.39, 'found -[X]-> pending')],
+      activated: [
+        activated('found', 1, 'found'),
+        activated('pending', 0.39, 'found -[X]-> pending'),
+      ],
       hydrated: new Map([['pending', hydratedNode('pending')]]),
       arrivalEvidence: new Map(),
     });
@@ -215,9 +237,7 @@ describe('the ranked lists fusion receives', () => {
   }
 
   it('builds one weighted list per configured method', () => {
-    expect(
-      lists(DEFAULTS).map((list) => ({ leg: list.leg, weight: list.weight })),
-    ).toEqual([
+    expect(lists(DEFAULTS).map((list) => ({ leg: list.leg, weight: list.weight }))).toEqual([
       { leg: 'vector', weight: 0.4 },
       { leg: 'bm25', weight: 0.3 },
       { leg: 'graph_traversal', weight: 0.3 },

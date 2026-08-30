@@ -2,13 +2,21 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { narrativeCleanupOperation } from './narrative-cleanup-operation.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
+import {
+  BITEMPORAL_PROPERTIES,
+  writeStampedNode,
+} from '../../../infrastructure/graph/bitemporal.js';
 import { upsertEdge } from '../../../infrastructure/graph/edges.js';
-import { BITEMPORAL_PROPERTIES, writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../../../infrastructure/graph/episodes.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
-import { DERIVES_FROM_TYPE, NARRATIVE_PROPERTIES } from '../../../infrastructure/graph/narrative-queries.js';
+import {
+  DERIVES_FROM_TYPE,
+  NARRATIVE_PROPERTIES,
+} from '../../../infrastructure/graph/narrative-queries.js';
 import { nodeProperties } from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
   startNeo4jHarness,
@@ -17,9 +25,8 @@ import {
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger } from '../../../infrastructure/logging/logger.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
-import { healthFixture } from '../../domain/test-support/health.fixture.js';
 import type { OperationContext } from '../../domain/operation.js';
-import { narrativeCleanupOperation } from './narrative-cleanup-operation.js';
+import { healthFixture } from '../../domain/test-support/health.fixture.js';
 
 /**
  * Seeds nodes directly at the graph level rather than through the full session/reflection

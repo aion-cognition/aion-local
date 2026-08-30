@@ -1,6 +1,7 @@
+import { HEALTH_PATH, runningInContainer } from '@aion/mcp';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { HEALTH_PATH, runningInContainer } from '@aion/mcp';
+
 import { COMPOSE_FILE_NAME } from './paths.js';
 
 const execFileAsync = promisify(execFile);
@@ -45,7 +46,7 @@ export function composeRunner(repoDir: string): ComposeRunner {
       const { stdout, stderr } = await execFileAsync('docker', full, { cwd: repoDir });
       return `${stdout}${stderr}`.trim();
     } catch (err) {
-      const stderr = (err as { stderr?: string }).stderr;
+      const { stderr } = err as { stderr?: string };
       const detail = stderr === undefined || stderr.trim() === '' ? String(err) : stderr.trim();
       throw new ComposeCommandError(args, detail, { cause: err });
     }
@@ -57,14 +58,22 @@ export function composeRunner(repoDir: string): ComposeRunner {
  * profiled service addressed by name without it, but pinning the flag keeps this working
  * on older installs too.
  */
-export async function startService(run: ComposeRunner, service: string, profile?: string): Promise<string> {
-  const args = profile === undefined ? ['up', '-d', service] : ['--profile', profile, 'up', '-d', service];
+export async function startService(
+  run: ComposeRunner,
+  service: string,
+  profile?: string,
+): Promise<string> {
+  const args =
+    profile === undefined ? ['up', '-d', service] : ['--profile', profile, 'up', '-d', service];
   return run(args);
 }
 
 export class McpServiceNotReadyError extends Error {
   constructor(port: number, timeoutMs: number, options?: { cause?: unknown }) {
-    super(`aion-mcp on port ${String(port)} did not answer ${HEALTH_PATH} within ${String(timeoutMs)}ms`, options);
+    super(
+      `aion-mcp on port ${String(port)} did not answer ${HEALTH_PATH} within ${String(timeoutMs)}ms`,
+      options,
+    );
     this.name = 'McpServiceNotReadyError';
   }
 }
@@ -85,7 +94,10 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** Polls the liveness endpoint. It never touches Neo4j or Ollama, so a 200 here means the process is up, nothing more. */
-export async function waitForMcpHealth(port: number, options: McpReadinessOptions = {}): Promise<void> {
+export async function waitForMcpHealth(
+  port: number,
+  options: McpReadinessOptions = {},
+): Promise<void> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const timeoutMs = options.timeoutMs ?? DEFAULT_MCP_READY_TIMEOUT_MS;
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_MCP_READY_POLL_INTERVAL_MS;

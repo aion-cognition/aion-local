@@ -1,10 +1,10 @@
+import { closeSessionNarrative, type NarrativeDeps, type NarrativeOptions } from './narratives.js';
 import {
   findStaleNarratives,
   forgetNarrative,
   type StaleNarrative,
 } from '../../infrastructure/graph/narrative-queries.js';
 import { NARRATIVE_GROUNDING } from '../domain/narrative.js';
-import { closeSessionNarrative, type NarrativeDeps, type NarrativeOptions } from './narratives.js';
 
 /**
  * A one-shot repair for the narratives the free-prose writer left behind: they claim history
@@ -31,9 +31,7 @@ export type NarrativeCleanupReport = {
 /** One pass covers a dev substrate; a larger one is repeated passes, not a longer transaction. */
 export const DEFAULT_CLEANUP_LIMIT = 500;
 
-function groupBySession(
-  narratives: readonly StaleNarrative[],
-): Map<string, StaleNarrative[]> {
+function groupBySession(narratives: readonly StaleNarrative[]): Map<string, StaleNarrative[]> {
   const bySession = new Map<string, StaleNarrative[]>();
   for (const narrative of narratives) {
     const group = bySession.get(narrative.sessionId);

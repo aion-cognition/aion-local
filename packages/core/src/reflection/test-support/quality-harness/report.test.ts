@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import { renderJsonReport, renderMarkdownReport, type QualityReport } from './report.js';
 
 const FIXED_REPORT: QualityReport = {
@@ -20,7 +21,13 @@ const FIXED_REPORT: QualityReport = {
         {
           route: 'anthropic',
           model: 'claude-haiku-4-5',
-          entities: { ok: false, count: 0, byType: {}, latencyMs: 800, error: 'Error: request failed' },
+          entities: {
+            ok: false,
+            count: 0,
+            byType: {},
+            latencyMs: 800,
+            error: 'Error: request failed',
+          },
           cognitive: { ok: true, count: 1, byType: { decision: 1 }, latencyMs: 900 },
         },
       ],

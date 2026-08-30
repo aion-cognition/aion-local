@@ -2,6 +2,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+
+import { sweepEdgeDecay } from './decay.js';
 import { writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
 import { upsertEdge } from '../../infrastructure/graph/edges.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
@@ -16,7 +18,6 @@ import { openLogger, type Logger } from '../../infrastructure/logging/logger.js'
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { decaySweepCounters } from '../../infrastructure/sqlite/decay-counters.js';
 import { boundedDecay, decayFactor } from '../domain/decay.js';
-import { sweepEdgeDecay } from './decay.js';
 
 const EMBED_DIMENSION = 8;
 const NOW = new Date('2026-03-01T00:00:00.000Z');

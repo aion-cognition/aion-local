@@ -1,4 +1,5 @@
 import neo4j, { type Driver } from 'neo4j-driver';
+
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { runRead } from './connection.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from './episodes.js';
@@ -57,10 +58,15 @@ export async function countVectorParity(
   driver: Driver,
   limit: number = DEFAULT_HEALTH_SCAN_LIMIT,
 ): Promise<VectorParityCounts> {
-  const rows = await runRead(driver, COUNT_VECTOR_PARITY, { limit: toGraphInteger(limit) }, (row) => ({
-    expected: row['expected'] as number,
-    vectored: row['vectored'] as number,
-  }));
+  const rows = await runRead(
+    driver,
+    COUNT_VECTOR_PARITY,
+    { limit: toGraphInteger(limit) },
+    (row) => ({
+      expected: row.expected as number,
+      vectored: row.vectored as number,
+    }),
+  );
   return rows[0] ?? { expected: 0, vectored: 0 };
 }
 
@@ -95,8 +101,8 @@ export async function countOrphanNodes(
   limit: number = DEFAULT_HEALTH_SCAN_LIMIT,
 ): Promise<OrphanCounts> {
   const rows = await runRead(driver, COUNT_ORPHANS, { limit: toGraphInteger(limit) }, (row) => ({
-    nodes: row['nodes'] as number,
-    orphans: row['orphans'] as number,
+    nodes: row.nodes as number,
+    orphans: row.orphans as number,
   }));
   return rows[0] ?? { nodes: 0, orphans: 0 };
 }
@@ -123,7 +129,7 @@ export async function countEpisodesWithoutSession(
     driver,
     COUNT_EPISODES_WITHOUT_SESSION,
     { limit: toGraphInteger(limit) },
-    (row) => row['missing'] as number,
+    (row) => row.missing as number,
   );
   return rows[0] ?? 0;
 }

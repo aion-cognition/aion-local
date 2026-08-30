@@ -61,4 +61,6 @@ export type ExtractorOutcome<T> =
  * function instead. Scoring and reporting stay unchanged.
  */
 export type EntityExtractorFn = (text: string) => Promise<ExtractorOutcome<EntityExtractionResult>>;
-export type CognitiveExtractorFn = (text: string) => Promise<ExtractorOutcome<CognitiveExtractionResult>>;
+export type CognitiveExtractorFn = (
+  text: string,
+) => Promise<ExtractorOutcome<CognitiveExtractionResult>>;

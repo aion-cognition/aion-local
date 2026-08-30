@@ -2,9 +2,14 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
 import { ReflectionQueueClaimant } from './claim.js';
 import { SqliteStore } from './database.js';
-import { enqueueReflectionJob, type ReflectionJob, type ReflectionLane } from './reflection-queue.js';
+import {
+  enqueueReflectionJob,
+  type ReflectionJob,
+  type ReflectionLane,
+} from './reflection-queue.js';
 
 /**
  * The claim order the live incident needed and did not have: 4,016 bulk jobs sat ahead of

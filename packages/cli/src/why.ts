@@ -14,6 +14,7 @@ import {
   type NodeProvenance,
   type SupersessionProposal,
 } from '@aion/core';
+
 import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
 
 /**
@@ -101,7 +102,9 @@ export function renderProvenance(
 
   write(`currency  ${provenance.currency}`);
   if (provenance.supersededBy !== undefined) {
-    write(`          superseded by ${provenance.supersededBy.id} at ${provenance.supersededBy.at.toISOString()}`);
+    write(
+      `          superseded by ${provenance.supersededBy.id} at ${provenance.supersededBy.at.toISOString()}`,
+    );
   }
   write('bitemporal stamps');
   write(`  occurred_at   ${iso(provenance.occurredAt) ?? '-'}`);
@@ -122,7 +125,9 @@ export function renderProvenance(
     }
     for (const edge of extractedFrom) {
       const method = edge.provenance.length === 0 ? 'unrecorded' : edge.provenance.join(', ');
-      write(`  extracted from     ${edge.otherId} (${edge.otherLabels.join(', ')}), method: ${method}`);
+      write(
+        `  extracted from     ${edge.otherId} (${edge.otherLabels.join(', ')}), method: ${method}`,
+      );
     }
     if (provenance.extractionMethod !== undefined) {
       write(`  extraction method  ${provenance.extractionMethod}`);
@@ -205,7 +210,9 @@ export async function runWhy(
   try {
     const health = await connection.health();
     if (!health.reachable) {
-      stderrWriter(`why needs Neo4j: ${connection.uri} unreachable: ${health.error ?? 'unknown error'}`);
+      stderrWriter(
+        `why needs Neo4j: ${connection.uri} unreachable: ${health.error ?? 'unknown error'}`,
+      );
       return 1;
     }
 

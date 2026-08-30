@@ -21,11 +21,17 @@ import {
   type QueueLagSnapshot,
   type SqliteHandle,
 } from '@aion/core';
+
 import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
 
 export type StatusSnapshot = {
   readonly neo4j: { readonly uri: string; readonly reachable: boolean; readonly detail: string };
-  readonly ollama: { readonly url: string; readonly reachable: boolean; readonly models: readonly string[]; readonly detail?: string };
+  readonly ollama: {
+    readonly url: string;
+    readonly reachable: boolean;
+    readonly models: readonly string[];
+    readonly detail?: string;
+  };
   /**
    * Models Ollama is holding in memory right now, which is the number that matters on a
    * laptop: `models` above is what is on disk. Absent when Ollama did not answer.
@@ -47,7 +53,9 @@ export async function collectStatus(
 ): Promise<StatusSnapshot> {
   const health = await connection.health();
   const graph = health.reachable ? await countGraphElements(connection.driver) : undefined;
-  const edgeWeights = health.reachable ? await edgeWeightDistribution(connection.driver) : undefined;
+  const edgeWeights = health.reachable
+    ? await edgeWeightDistribution(connection.driver)
+    : undefined;
 
   let models: readonly string[] = [];
   let resident: readonly string[] | undefined;
@@ -103,21 +111,31 @@ function formatEdgeWeights(distribution: EdgeWeightDistribution): string {
 }
 
 export function renderStatus(snapshot: StatusSnapshot, config: Config, write: Writer): void {
-  write(`neo4j    ${snapshot.neo4j.reachable ? 'up' : 'down'}  ${snapshot.neo4j.uri} — ${snapshot.neo4j.detail}`);
-  write(`ollama   ${snapshot.ollama.reachable ? 'up' : 'down'}  ${snapshot.ollama.url}${snapshot.ollama.detail === undefined ? '' : ` — ${snapshot.ollama.detail}`}`);
+  write(
+    `neo4j    ${snapshot.neo4j.reachable ? 'up' : 'down'}  ${snapshot.neo4j.uri} — ${snapshot.neo4j.detail}`,
+  );
+  write(
+    `ollama   ${snapshot.ollama.reachable ? 'up' : 'down'}  ${snapshot.ollama.url}${snapshot.ollama.detail === undefined ? '' : ` — ${snapshot.ollama.detail}`}`,
+  );
 
   write('');
   const routing = resolveProviderRouting(config);
-  write(`models   embed=${config.models.embed} cue=${config.models.cue} reflect=${config.models.reflect}`);
+  write(
+    `models   embed=${config.models.embed} cue=${config.models.cue} reflect=${config.models.reflect}`,
+  );
   write(`routing  ${routingSummary(routing)} (embeddings always ${config.models.embed}, local)`);
   for (const route of unbackedPins(routing)) {
-    write(`         ${route.role} is pinned to anthropic with no key set, so it runs on ${route.localModel}`);
+    write(
+      `         ${route.role} is pinned to anthropic with no key set, so it runs on ${route.localModel}`,
+    );
   }
   if (snapshot.ollama.models.length > 0) {
     write(`installed  ${snapshot.ollama.models.join(', ')}`);
   }
   if (snapshot.resident !== undefined) {
-    write(`resident   ${snapshot.resident.length === 0 ? 'nothing loaded in memory' : snapshot.resident.join(', ')}`);
+    write(
+      `resident   ${snapshot.resident.length === 0 ? 'nothing loaded in memory' : snapshot.resident.join(', ')}`,
+    );
   }
   for (const line of remoteBannerLines(routing)) {
     write(line);
@@ -132,15 +150,19 @@ export function renderStatus(snapshot: StatusSnapshot, config: Config, write: Wr
 
   write('');
   const { queue } = snapshot;
-  const oldest = queue.oldestUnclaimedMs === undefined ? 'none unclaimed' : ageOf(queue.oldestUnclaimedMs);
-  const p95 = queue.p95EnrichmentLagMs === undefined ? 'no samples yet' : ageOf(queue.p95EnrichmentLagMs);
+  const oldest =
+    queue.oldestUnclaimedMs === undefined ? 'none unclaimed' : ageOf(queue.oldestUnclaimedMs);
+  const p95 =
+    queue.p95EnrichmentLagMs === undefined ? 'no samples yet' : ageOf(queue.p95EnrichmentLagMs);
   const depth = `interactive=${String(queue.depthByLane.interactive)} bulk=${String(queue.depthByLane.bulk)}`;
   const degraded =
     queue.cueDegradedRate === undefined
       ? 'no recalls yet'
       : `${(queue.cueDegradedRate * 100).toFixed(1)}% of recent recalls degraded on cues`;
   write(`queue    ${depth}, oldest unclaimed ${oldest}, ${String(queue.exhausted)} exhausted`);
-  write(`lag      p95 intake-to-enriched ${p95}, ${String(queue.reinforcementDropped)} reinforcement rows dropped`);
+  write(
+    `lag      p95 intake-to-enriched ${p95}, ${String(queue.reinforcementDropped)} reinforcement rows dropped`,
+  );
   write(`recall   ${degraded}`);
   write(
     `review   ${String(queue.supersessionProposalsOpen)} supersession, ` +

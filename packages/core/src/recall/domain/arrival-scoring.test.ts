@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { Vector } from '../../infrastructure/providers/types.js';
+
 import { scoreArrivals } from './arrival-scoring.js';
+import type { Vector } from '../../infrastructure/providers/types.js';
 
 /** Unit axes, so every expected cosine is exact rather than approximate. */
 function axis(index: number): Vector {

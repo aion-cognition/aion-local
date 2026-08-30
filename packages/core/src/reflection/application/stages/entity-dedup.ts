@@ -8,6 +8,7 @@ import {
 import { findEpisodeEntities } from '../../../infrastructure/graph/entity-queries.js';
 import { recordEntityMergeProposal } from '../../../infrastructure/sqlite/entity-merge-proposals.js';
 import { isLedgerApplied, markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
+import { nameFormMatches } from '../../domain/entity-identity.js';
 import {
   entityMergeLedgerKey,
   groupDuplicates,
@@ -17,7 +18,6 @@ import {
   selectCanonical,
   type DuplicatePair,
 } from '../../domain/entity-merge.js';
-import { nameFormMatches } from '../../domain/entity-identity.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
 
 /**
@@ -113,7 +113,9 @@ export class EntityDedupStage implements ReflectionStage {
       const merging = members.filter(
         (member) => member.id === canonical.id || nameFormMatches(canonical.name, member.name),
       );
-      const mergedIds = merging.filter((member) => member.id !== canonical.id).map((member) => member.id);
+      const mergedIds = merging
+        .filter((member) => member.id !== canonical.id)
+        .map((member) => member.id);
       if (mergedIds.length === 0) {
         continue;
       }
@@ -162,7 +164,11 @@ export class EntityDedupStage implements ReflectionStage {
         threshold: this.#options.similarityThreshold,
         limit: CANDIDATE_SEARCH_LIMIT,
       });
-      await this.#hydrateMissing(ctx, matches.map((match) => match.id), details);
+      await this.#hydrateMissing(
+        ctx,
+        matches.map((match) => match.id),
+        details,
+      );
 
       for (const match of matches) {
         const candidate = details.get(match.id);

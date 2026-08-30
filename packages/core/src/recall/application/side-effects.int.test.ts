@@ -2,9 +2,16 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { CueCache } from './cues.js';
+import { handleRecall, type RecallDeps } from './recall.js';
+import { RecallSideEffects, REINFORCEMENT_TRIGGER } from './side-effects.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Config } from '../../infrastructure/config/schema.js';
-import { bootstrapBackbone, type BootstrapBackboneResult } from '../../infrastructure/graph/backbone.js';
+import {
+  bootstrapBackbone,
+  type BootstrapBackboneResult,
+} from '../../infrastructure/graph/backbone.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
 import { withCurrency } from '../../infrastructure/graph/read-modes.js';
 import { fulltextSeeds, vectorSeeds } from '../../infrastructure/graph/seed-queries.js';
@@ -16,15 +23,12 @@ import {
 } from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider, Vector } from '../../infrastructure/providers/types.js';
+import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { listReinforcementSignals } from '../../infrastructure/sqlite/reinforcement-queue.js';
 import { ReflectionDispatch } from '../../reflection/application/dispatch.js';
 import { handleReflection } from '../../reflection/application/intake.js';
 import { LaneAssigner } from '../../reflection/application/lanes.js';
 import { SessionManager } from '../../session/session-manager.js';
-import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { listReinforcementSignals } from '../../infrastructure/sqlite/reinforcement-queue.js';
-import { CueCache } from './cues.js';
-import { handleRecall, type RecallDeps } from './recall.js';
-import { RecallSideEffects, REINFORCEMENT_TRIGGER } from './side-effects.js';
 
 /**
  * Covers recall's two side effects end to end: this reuses `recall.int.test.ts`'s fixture
@@ -67,8 +71,7 @@ function vectorFor(text: string): Vector {
 
 const provider: Provider = {
   embed: (texts) => Promise.resolve(texts.map(vectorFor)),
-  generate: () =>
-    Promise.resolve({ query_cues: [CUE], summary_cues: [], recent_turn_cues: [] }),
+  generate: () => Promise.resolve({ query_cues: [CUE], summary_cues: [], recent_turn_cues: [] }),
 };
 
 function config(): Config {
@@ -97,7 +100,9 @@ async function waitFor(label: string, ready: () => Promise<boolean>): Promise<vo
     if (await ready()) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
   }
   throw new Error(`timed out waiting for ${label}`);
 }
@@ -182,10 +187,14 @@ describe('recall side effects over a substrate written by the real intake path',
   it('enqueues reinforcement pairs inline and batches access tracking off the response path', async () => {
     expect(listReinforcementSignals(db)).toHaveLength(0);
 
-    const pack = await handleRecall(deps, { query: QUERY }, {
-      identity: READ_SESSION,
-      now: RECALLED_AT,
-    });
+    const pack = await handleRecall(
+      deps,
+      { query: QUERY },
+      {
+        identity: READ_SESSION,
+        now: RECALLED_AT,
+      },
+    );
 
     // Reinforcement is written inline from the listener, before handleRecall's caller
     // resumes.

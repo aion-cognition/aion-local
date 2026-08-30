@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import { findEpisodeEntities, type EpisodeEntity } from '../../../infrastructure/graph/entity-queries.js';
+
+import {
+  findEpisodeEntities,
+  type EpisodeEntity,
+} from '../../../infrastructure/graph/entity-queries.js';
 import {
   findEpisodeCognitiveNodes,
   isSemanticRelationshipType,
@@ -44,7 +48,11 @@ export type SemanticRelationshipStageOptions = {
  * contradict another with. Entity is separate and always eligible: it is not a cognitive
  * label.
  */
-const CLAIM_BEARING_COGNITIVE_LABELS: ReadonlySet<string> = new Set(['Decision', 'Insight', 'Concept']);
+const CLAIM_BEARING_COGNITIVE_LABELS: ReadonlySet<string> = new Set([
+  'Decision',
+  'Insight',
+  'Concept',
+]);
 
 /** One entity or cognitive node, keyed for the prompt so the model never has to spell a name back. */
 type Candidate = {
@@ -59,7 +67,11 @@ function buildCandidates(
 ): Candidate[] {
   const candidates: Candidate[] = [];
   entities.forEach((entity, index) => {
-    candidates.push({ key: `E${index + 1}`, id: entity.id, label: `${entity.name} (${entity.type})` });
+    candidates.push({
+      key: `E${index + 1}`,
+      id: entity.id,
+      label: `${entity.name} (${entity.type})`,
+    });
   });
   cognitive
     .filter((node) => CLAIM_BEARING_COGNITIVE_LABELS.has(node.label))
@@ -83,14 +95,14 @@ const SYSTEM_PROMPT = [
   'transaction" did.',
   'Use PRECEDES when one item happened before another in a way that matters.',
   'Use CONTRADICTS only when the episode states an explicit contradiction: one item directly',
-  'negates, rejects, or reverses the other in the episode\'s own words. Two items that agree,',
+  "negates, rejects, or reverses the other in the episode's own words. Two items that agree,",
   'restate the same fact in different words, or are simply unrelated do not contradict. A',
   'reason for rejecting or choosing against something is not a contradiction with the thing',
   'itself, or with a restatement of the same reason — that is not a relationship this stage',
   'names at all, so leave it out rather than forcing it into CONTRADICTS. Example: the episode',
   'says "we rejected the queue tool because it is incompatible with our cache" — the queue',
   'tool and the cache do not contradict each other, incompatibility between two tools is not',
-  'one of this stage\'s types, so no relationship between them belongs in the answer at all.',
+  "one of this stage's types, so no relationship between them belongs in the answer at all.",
   'When unsure, do not use CONTRADICTS.',
   'Use SIMILAR when two items mean close to the same thing, RELATED_TO when two items are',
   'meaningfully connected but no other type fits, and ANALOGOUS_TO when two items are',
@@ -272,7 +284,9 @@ export class SemanticRelationshipStage implements ReflectionStage {
     }
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.#timeoutMs);
+    const timer = setTimeout(() => {
+      controller.abort();
+    }, this.#timeoutMs);
     let raw: unknown;
     try {
       raw = await ctx.provider.generate({
@@ -305,7 +319,12 @@ export class SemanticRelationshipStage implements ReflectionStage {
     }
 
     const byKey = new Map(candidates.map((candidate) => [candidate.key, candidate]));
-    const proposals = resolveProposals(parsed.data.relationships, byKey, this.#maxRelationships, text);
+    const proposals = resolveProposals(
+      parsed.data.relationships,
+      byKey,
+      this.#maxRelationships,
+      text,
+    );
     if (proposals.length === 0) {
       return {
         status: 'ok',

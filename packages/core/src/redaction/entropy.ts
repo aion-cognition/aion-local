@@ -62,8 +62,8 @@ function overlapsAny(start: number, end: number, spans: readonly TextSpan[]): bo
  */
 function scoreCandidate(token: string, threshold: number): { score: number; valueOffset: number } {
   const assignment = NAMED_ASSIGNMENT.exec(token);
-  const name = assignment?.groups?.['name'];
-  const value = assignment?.groups?.['value'];
+  const name = assignment?.groups?.name;
+  const value = assignment?.groups?.value;
 
   if (name !== undefined && value !== undefined) {
     const valueScore = Math.max(
@@ -92,7 +92,7 @@ export function findHighEntropyTokens(
   const found: TextSpan[] = [];
 
   for (const match of text.matchAll(ENTROPY_TOKEN_PATTERN)) {
-    const tokenStart = match.index ?? 0;
+    const tokenStart = match.index;
     const { score, valueOffset } = scoreCandidate(match[0], threshold);
     if (score < threshold) {
       continue;

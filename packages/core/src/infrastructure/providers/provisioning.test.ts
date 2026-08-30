@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
+
 import { EmbedDimensionMismatchError, ModelPullError, OllamaUnreachableError } from './errors.js';
 import { checkOllamaReachable, provisionOllama, type ProvisionEvent } from './provisioning.js';
 
 function ndjson(lines: readonly Record<string, unknown>[]): Response {
-  const body = lines.map((line) => JSON.stringify(line)).join('\n') + '\n';
+  const body = `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`;
   return new Response(body, { status: 200 });
 }
 
@@ -20,7 +21,9 @@ describe('checkOllamaReachable', () => {
   it('resolves when the version endpoint responds ok', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ version: '0.24.0' }));
     await expect(
-      checkOllamaReachable('http://localhost:11434', { fetchImpl: fetchImpl as unknown as typeof fetch }),
+      checkOllamaReachable('http://localhost:11434', {
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      }),
     ).resolves.toBeUndefined();
   });
 
@@ -40,7 +43,9 @@ describe('checkOllamaReachable', () => {
   it('throws OllamaUnreachableError when the response is not ok', async () => {
     const fetchImpl = vi.fn(async () => new Response('bad gateway', { status: 502 }));
     await expect(
-      checkOllamaReachable('http://localhost:11434', { fetchImpl: fetchImpl as unknown as typeof fetch }),
+      checkOllamaReachable('http://localhost:11434', {
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      }),
     ).rejects.toBeInstanceOf(OllamaUnreachableError);
   });
 });
@@ -50,7 +55,10 @@ describe('provisionOllama', () => {
     const calls: string[] = [];
     const fetchImpl = vi.fn(async (url: string | URL, init?: RequestInit) => {
       const path = new URL(String(url)).pathname;
-      const body = init?.body === undefined ? {} : (JSON.parse(String(init.body)) as Record<string, unknown>);
+      const body =
+        init?.body === undefined
+          ? {}
+          : (JSON.parse(init.body as string) as Record<string, unknown>);
       calls.push(`${path}:${String(body.model)}`);
 
       if (path === '/api/version') {
@@ -89,11 +97,9 @@ describe('provisionOllama', () => {
       '/api/chat:qwen3:8b',
     ]);
     expect(events[0]).toEqual({ type: 'reachable' });
-    expect(events.filter((e) => e.type === 'pull_done').map((e) => (e as { model: string }).model)).toEqual([
-      'nomic-embed-text',
-      'qwen3:1.7b',
-      'qwen3:8b',
-    ]);
+    expect(
+      events.filter((e) => e.type === 'pull_done').map((e) => (e as { model: string }).model),
+    ).toEqual(['nomic-embed-text', 'qwen3:1.7b', 'qwen3:8b']);
     expect(events.at(-1)).toEqual({ type: 'verify_done', model: 'qwen3:8b', kind: 'chat' });
   });
 
@@ -102,7 +108,10 @@ describe('provisionOllama', () => {
     const chatCalls: string[] = [];
     const fetchImpl = vi.fn(async (url: string | URL, init?: RequestInit) => {
       const path = new URL(String(url)).pathname;
-      const body = init?.body === undefined ? {} : (JSON.parse(String(init.body)) as Record<string, unknown>);
+      const body =
+        init?.body === undefined
+          ? {}
+          : (JSON.parse(init.body as string) as Record<string, unknown>);
 
       if (path === '/api/version') {
         return jsonResponse({ version: '0.24.0' });
@@ -140,7 +149,10 @@ describe('provisionOllama', () => {
     const chatCalls: string[] = [];
     const fetchImpl = vi.fn(async (url: string | URL, init?: RequestInit) => {
       const path = new URL(String(url)).pathname;
-      const body = init?.body === undefined ? {} : (JSON.parse(String(init.body)) as Record<string, unknown>);
+      const body =
+        init?.body === undefined
+          ? {}
+          : (JSON.parse(init.body as string) as Record<string, unknown>);
 
       if (path === '/api/version') {
         return jsonResponse({ version: '0.24.0' });

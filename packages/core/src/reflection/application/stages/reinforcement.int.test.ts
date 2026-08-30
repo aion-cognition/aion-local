@@ -2,14 +2,13 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { ReinforcementEnqueueStage } from './reinforcement.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { supersede, writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
 import { upsertEdge } from '../../../infrastructure/graph/edges.js';
+import { linkEntityMentions, mergeEntities } from '../../../infrastructure/graph/entity-queries.js';
 import { CONTAINMENT_TYPE } from '../../../infrastructure/graph/episodes.js';
-import {
-  linkEntityMentions,
-  mergeEntities,
-} from '../../../infrastructure/graph/entity-queries.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import { findCoExtractedNodeIds } from '../../../infrastructure/graph/reinforcement-queries.js';
 import {
@@ -21,7 +20,6 @@ import { openLogger } from '../../../infrastructure/logging/logger.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { listReinforcementSignals } from '../../../infrastructure/sqlite/reinforcement-queue.js';
 import type { StageContext } from '../../domain/stage.js';
-import { ReinforcementEnqueueStage } from './reinforcement.js';
 
 /**
  * The trigger is entities and cognitive structures extracted from one episode. The episode

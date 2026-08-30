@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULTS } from '../config/defaults.js';
+
 import { OllamaProvider } from './ollama-provider.js';
 import type { Vector } from './types.js';
+import { DEFAULTS } from '../config/defaults.js';
 
 /**
  * The one property every embedding-driven decision rests on: two different names must embed
@@ -56,10 +57,8 @@ describe('OllamaProvider.embed against the live embed model', () => {
 
     expect(redis).not.toEqual(postgres);
     expect(person).not.toEqual(otherPerson);
-    expect(dedupScore(redis as Vector, postgres as Vector)).toBeLessThan(
-      DEFAULTS.reflection.entityDedupThreshold,
-    );
-    expect(dedupScore(person as Vector, otherPerson as Vector)).toBeLessThan(
+    expect(dedupScore(redis!, postgres!)).toBeLessThan(DEFAULTS.reflection.entityDedupThreshold);
+    expect(dedupScore(person!, otherPerson!)).toBeLessThan(
       DEFAULTS.reflection.entityDedupThreshold,
     );
   }, 60_000);
@@ -68,7 +67,7 @@ describe('OllamaProvider.embed against the live embed model', () => {
     const [plural, singular] = await provider.embed(['numeric ids', 'numeric id']);
     expect(plural).toBeDefined();
     expect(singular).toBeDefined();
-    expect(dedupScore(plural as Vector, singular as Vector)).toBeGreaterThanOrEqual(
+    expect(dedupScore(plural!, singular!)).toBeGreaterThanOrEqual(
       DEFAULTS.reflection.entityDedupThreshold,
     );
   }, 60_000);

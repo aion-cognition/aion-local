@@ -77,7 +77,8 @@ const TRUE_CONTRADICTIONS: readonly PrecisionCase[] = [
     priorLabel: 'Concept',
     prior: 'The Thornbury index rebuild takes six hours.',
     currentLabel: 'Event',
-    current: 'The Thornbury index rebuild now finishes in forty minutes after the partitioning change.',
+    current:
+      'The Thornbury index rebuild now finishes in forty minutes after the partitioning change.',
     truthNote: 'a standing duration corrected by a stated change, not by a one-off measurement',
   },
   {
@@ -121,7 +122,8 @@ const TRUE_CONTRADICTIONS: readonly PrecisionCase[] = [
     priorLabel: 'Decision',
     prior: 'ScyllaDB was selected as the leading candidate for the Wisteria time-series store.',
     currentLabel: 'Decision',
-    current: 'TimescaleDB is the choice for the Wisteria time-series store; ScyllaDB lost the write benchmark.',
+    current:
+      'TimescaleDB is the choice for the Wisteria time-series store; ScyllaDB lost the write benchmark.',
     truthNote: 'one selection, reversed to the other candidate',
   },
 ];
@@ -137,8 +139,7 @@ const FALSE_BAITS: readonly PrecisionCase[] = [
     prior:
       'The Vantage migration can proceed in parallel with the Redis cutover, as noted by Ines Okafor.',
     currentLabel: 'Decision',
-    current:
-      'Rafael Duarte wants the Vantage migration to wait until the Redis cutover finishes.',
+    current: 'Rafael Duarte wants the Vantage migration to wait until the Redis cutover finishes.',
     truthNote: 'two people holding different positions; a stated opinion is not made untrue',
   },
   {

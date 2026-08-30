@@ -1,5 +1,7 @@
 import type { Cue, Degradation } from '@aion/protocol';
 import type { Driver } from 'neo4j-driver';
+
+import type { SeedCue } from './seeds.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { listSessionEpisodeIds } from '../../infrastructure/graph/episodes.js';
 import type { ReadMode } from '../../infrastructure/graph/read-modes.js';
@@ -16,7 +18,6 @@ import { orchestratorLedgerKey } from '../../reflection/application/orchestrator
 import type { Measurement } from '../domain/admission.js';
 import { scoreArrivals } from '../domain/arrival-scoring.js';
 import type { RankedList } from '../domain/fusion.js';
-import type { SeedCue } from './seeds.js';
 
 /**
  * The one embedding call recall makes and the reads it makes against ids it already holds,
@@ -44,10 +45,7 @@ export type EmbeddedCues = {
  * ladder's deeper rung. The rung is reported, because a pack answered without its semantic
  * leg is a thinner answer than the caller has any other way to see.
  */
-export async function embedCues(
-  deps: StageReadDeps,
-  cues: readonly Cue[],
-): Promise<EmbeddedCues> {
+export async function embedCues(deps: StageReadDeps, cues: readonly Cue[]): Promise<EmbeddedCues> {
   if (cues.length === 0) {
     return { cues: [] };
   }

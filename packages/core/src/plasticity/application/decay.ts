@@ -1,9 +1,10 @@
 import type { Driver } from 'neo4j-driver';
+
+import { DEFAULT_HEBBIAN_BATCH_SIZE, DEFAULT_HEBBIAN_WEIGHT_FLOOR } from './flush.js';
 import { decayEdgeWeights } from '../../infrastructure/graph/edge-weights.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { recordDecaySweep } from '../../infrastructure/sqlite/decay-counters.js';
-import { DEFAULT_HEBBIAN_BATCH_SIZE, DEFAULT_HEBBIAN_WEIGHT_FLOOR } from './flush.js';
 
 /**
  * The Hebbian decay sweep: one callable operation, run to completion and returning what it

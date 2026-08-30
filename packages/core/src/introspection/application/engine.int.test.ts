@@ -2,6 +2,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+
+import { Introspector } from './engine.js';
+import { backboneRepairOperation } from './operations/backbone-repair.js';
+import { vectorBackfillOperation } from './operations/vector-backfill.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
@@ -22,11 +26,8 @@ import {
   type HealthSnapshot,
 } from '../domain/health.js';
 import type { IntrospectionOperation, OperationOutcome } from '../domain/operation.js';
-import type { Tier3Advisor } from '../domain/tier3.js';
 import { healthFixture } from '../domain/test-support/health.fixture.js';
-import { Introspector } from './engine.js';
-import { backboneRepairOperation } from './operations/backbone-repair.js';
-import { vectorBackfillOperation } from './operations/vector-backfill.js';
+import type { Tier3Advisor } from '../domain/tier3.js';
 
 const EMBED_DIMENSION = 8;
 const NOW = new Date('2026-08-29T14:37:00.000Z');
@@ -161,7 +162,11 @@ describe('Introspector', () => {
     expect(runnerUp.calls()).toBe(0);
 
     // Same hour, next quarter-hour window. The hourly operation is still the top candidate.
-    const second = await engineFor([dominant, runnerUp], [healthFixture()], NEXT_QUARTER).tickOnce();
+    const second = await engineFor(
+      [dominant, runnerUp],
+      [healthFixture()],
+      NEXT_QUARTER,
+    ).tickOnce();
 
     expect(second.skipped).toBe(false);
     expect(second.decision).toMatchObject({ kind: 'selected', name: 'quarter_hourly_maintenance' });
@@ -171,10 +176,18 @@ describe('Introspector', () => {
 
   it('scores the run against the next snapshot rather than the one it decided from', async () => {
     const before = healthFixture({
-      plasticity: { reinforcementQueueDepth: 40, reinforcementLastRunAt: undefined, decayLastRunAt: undefined },
+      plasticity: {
+        reinforcementQueueDepth: 40,
+        reinforcementLastRunAt: undefined,
+        decayLastRunAt: undefined,
+      },
     });
     const after = healthFixture({
-      plasticity: { reinforcementQueueDepth: 2, reinforcementLastRunAt: undefined, decayLastRunAt: undefined },
+      plasticity: {
+        reinforcementQueueDepth: 2,
+        reinforcementLastRunAt: undefined,
+        decayLastRunAt: undefined,
+      },
     });
 
     // Relevant only while the queue is deep, so the second tick scores the first run without
@@ -233,7 +246,11 @@ describe('Introspector', () => {
   it('answers a missing backbone link with the registered repair', async () => {
     const routine = fakeOperation('routine_maintenance');
     const broken = healthFixture({
-      graph: { ...NEUTRAL_GRAPH_HEALTH, nodes: CRITICAL_MIN_POPULATION * 5, episodesWithoutSession: 7 },
+      graph: {
+        ...NEUTRAL_GRAPH_HEALTH,
+        nodes: CRITICAL_MIN_POPULATION * 5,
+        episodesWithoutSession: 7,
+      },
     });
 
     const report = await engineFor([routine, backboneRepairOperation()], [broken]).tickOnce();

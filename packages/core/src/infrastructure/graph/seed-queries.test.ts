@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import { escapeLuceneQuery, normalizeSeedName } from './seed-queries.js';
 
 describe('normalizeSeedName', () => {

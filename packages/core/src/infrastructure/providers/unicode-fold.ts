@@ -43,7 +43,5 @@ export function foldForIdentity(text: string): string {
  * collapse then absorbs.
  */
 export function foldName(name: string): string {
-  return foldForIdentity(name)
-    .trim()
-    .replace(/\s+/g, ' ');
+  return foldForIdentity(name).trim().replace(/\s+/g, ' ');
 }

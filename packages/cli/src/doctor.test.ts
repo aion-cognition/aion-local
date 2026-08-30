@@ -1,15 +1,16 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import {
   DEFAULTS,
   enqueueReflectionJob,
-  GraphConnection,
+  type GraphConnection,
   SqliteStore,
   type Config,
   type SqliteHandle,
 } from '@aion/core';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
 import {
   buildDoctorChecks,
   probeMcpHttp,
@@ -79,14 +80,19 @@ describe('the Ollama round-trip check under routing', () => {
   });
 
   it('checks no chat model the key covers, and names where those roles went', async () => {
-    const keyed: Config = { ...DEFAULTS, anthropic: { ...DEFAULTS.anthropic, apiKey: 'sk-ant-test' } };
+    const keyed: Config = {
+      ...DEFAULTS,
+      anthropic: { ...DEFAULTS.anthropic, apiKey: 'sk-ant-test' },
+    };
 
     const { result, paths } = await runOllamaCheck(keyed);
 
     expect(result.ok).toBe(true);
     expect(paths).not.toContain('/api/chat');
     expect(result.detail).toContain('no chat model routes locally');
-    expect(result.detail).toContain(`cue, reflect routed to anthropic (${DEFAULTS.anthropic.model})`);
+    expect(result.detail).toContain(
+      `cue, reflect routed to anthropic (${DEFAULTS.anthropic.model})`,
+    );
   });
 
   it('still checks the chat model a pin kept local', async () => {
@@ -132,14 +138,25 @@ describe('runChecks', () => {
     const reports = await runChecks(checks, write);
 
     expect(ran).toBe(false);
-    expect(reports[1]).toEqual({ name: 'neo4j-gds', ok: false, detail: 'not checked: neo4j-bolt failed' });
+    expect(reports[1]).toEqual({
+      name: 'neo4j-gds',
+      ok: false,
+      detail: 'not checked: neo4j-bolt failed',
+    });
   });
 
   it('still runs a check whose dependency passed', async () => {
     const { write } = collector();
 
     const reports = await runChecks(
-      [passing('neo4j-bolt'), { name: 'graph-schema', dependsOn: 'neo4j-bolt', run: async () => ({ ok: true, detail: 'migration 001 applied' }) }],
+      [
+        passing('neo4j-bolt'),
+        {
+          name: 'graph-schema',
+          dependsOn: 'neo4j-bolt',
+          run: async () => ({ ok: true, detail: 'migration 001 applied' }),
+        },
+      ],
       write,
     );
 
@@ -150,7 +167,12 @@ describe('runChecks', () => {
     const { lines, write } = collector();
 
     const reports = await runChecks(
-      [{ name: 'enrichment-reconcile', run: async () => ({ ok: true, warn: true, detail: '412 behind' }) }],
+      [
+        {
+          name: 'enrichment-reconcile',
+          run: async () => ({ ok: true, warn: true, detail: '412 behind' }),
+        },
+      ],
       write,
     );
 
@@ -184,7 +206,9 @@ describe('probeMcpHttp', () => {
   it('reports ok with the session count from a healthy response', async () => {
     const fetchImpl = async (url: string | URL) => {
       expect(String(url)).toBe('http://127.0.0.1:8765/health');
-      return new Response(JSON.stringify({ status: 'ok', sessions: 3, descriptions_version: 1 }), { status: 200 });
+      return new Response(JSON.stringify({ status: 'ok', sessions: 3, descriptions_version: 1 }), {
+        status: 200,
+      });
     };
 
     const result = await probeMcpHttp(8765, fetchImpl as unknown as typeof fetch);
@@ -195,16 +219,17 @@ describe('probeMcpHttp', () => {
   it('fails on a non-2xx response', async () => {
     const fetchImpl = async () => new Response('not found', { status: 404 });
 
-    const result = await probeMcpHttp(8765, fetchImpl as unknown as typeof fetch);
+    const result = await probeMcpHttp(8765, fetchImpl);
 
     expect(result.ok).toBe(false);
     expect(result.detail).toContain('404');
   });
 
   it('fails on an unexpected health payload', async () => {
-    const fetchImpl = async () => new Response(JSON.stringify({ status: 'degraded' }), { status: 200 });
+    const fetchImpl = async () =>
+      new Response(JSON.stringify({ status: 'degraded' }), { status: 200 });
 
-    const result = await probeMcpHttp(8765, fetchImpl as unknown as typeof fetch);
+    const result = await probeMcpHttp(8765, fetchImpl);
 
     expect(result.ok).toBe(false);
     expect(result.detail).toContain('unexpected health payload');
@@ -221,7 +246,11 @@ describe('queueLagCheck', () => {
     store = new SqliteStore({ filePath: join(dir, 'aion.sqlite') });
     config = {
       ...DEFAULTS,
-      operational: { ...DEFAULTS.operational, lagOldestUnclaimedWarnMs: 600_000, lagQueueDepthWarnThreshold: 200 },
+      operational: {
+        ...DEFAULTS.operational,
+        lagOldestUnclaimedWarnMs: 600_000,
+        lagQueueDepthWarnThreshold: 200,
+      },
     };
   });
 
@@ -245,7 +274,7 @@ describe('queueLagCheck', () => {
       .prepare('UPDATE reflection_queue SET enqueued_at = ?')
       .run(new Date(now.getTime() - 700_000).toISOString());
 
-    const result = queueLagCheck(store.db as SqliteHandle, config, now);
+    const result = queueLagCheck(store.db, config, now);
 
     expect(result.ok).toBe(true);
     expect(result.warn).toBe(true);
@@ -254,7 +283,12 @@ describe('queueLagCheck', () => {
 
   it('warns once total unclaimed depth passes the threshold, ages aside', () => {
     for (let index = 0; index < 201; index += 1) {
-      enqueueReflectionJob(store.db, 'integrate', { episode_id: `e${String(index)}` }, { lane: 'bulk' });
+      enqueueReflectionJob(
+        store.db,
+        'integrate',
+        { episode_id: `e${String(index)}` },
+        { lane: 'bulk' },
+      );
     }
 
     const result = queueLagCheck(store.db, config);

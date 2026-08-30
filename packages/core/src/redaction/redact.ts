@@ -47,14 +47,14 @@ function occurrencesForRule(rule: RedactionRule, text: string): RuleOccurrence[]
   const occurrences: RuleOccurrence[] = [];
 
   for (const match of text.matchAll(regex)) {
-    const secretRange = match.indices?.groups?.['secret'];
+    const secretRange = match.indices?.groups?.secret;
     if (secretRange !== undefined) {
       const [start, end] = secretRange;
       occurrences.push({ start, end, material: text.slice(start, end) });
       continue;
     }
 
-    const start = match.index ?? 0;
+    const start = match.index;
     occurrences.push({ start, end: start + match[0].length, material: match[0] });
   }
 
@@ -81,7 +81,11 @@ function collectOccurrences(text: string, entropyThreshold: number): FoundOccurr
   }
 
   for (const span of findHighEntropyTokens(text, entropyThreshold, claimed)) {
-    found.push({ ...span, material: text.slice(span.start, span.end), ruleId: HIGH_ENTROPY_RULE_ID });
+    found.push({
+      ...span,
+      material: text.slice(span.start, span.end),
+      ruleId: HIGH_ENTROPY_RULE_ID,
+    });
   }
 
   found.sort((a, b) => a.start - b.start);

@@ -75,10 +75,7 @@ export type {
 export { attachContentVectors, findPendingVectorNodes } from './application/vectors.js';
 export type { PendingVectorNode } from './application/vectors.js';
 
-export {
-  ENTITY_EXTRACTION_METHOD,
-  EntityExtractionStage,
-} from './application/stages/entities.js';
+export { ENTITY_EXTRACTION_METHOD, EntityExtractionStage } from './application/stages/entities.js';
 export type { EntityStageOptions } from './application/stages/entities.js';
 
 export { ENTITY_DEDUP_METHOD, EntityDedupStage } from './application/stages/entity-dedup.js';
@@ -130,7 +127,12 @@ export type {
 export { IdleNarrativeSweeper, sweepIntervalMs } from './application/narrative-sweeper.js';
 export type { IdleNarrativeSweeperOptions } from './application/narrative-sweeper.js';
 
-export { hashContent, prepareEpisode, renderEpisodeText, stableStringify } from './domain/content.js';
+export {
+  hashContent,
+  prepareEpisode,
+  renderEpisodeText,
+  stableStringify,
+} from './domain/content.js';
 export type { PreparedEpisode, PreparedTurn, ReflectionContent } from './domain/content.js';
 
 export {

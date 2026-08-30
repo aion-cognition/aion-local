@@ -74,8 +74,7 @@ export function scoreCommunityPair(
   second: CommunityProfile,
   crossingEdges: number,
 ): CommunityPairScore {
-  const [left, right] =
-    first.community <= second.community ? [first, second] : [second, first];
+  const [left, right] = first.community <= second.community ? [first, second] : [second, first];
   const coherence = Math.min(communityCoherence(left), communityCoherence(right));
   const smaller = Math.min(left.size, right.size);
   const larger = Math.max(left.size, right.size);
@@ -101,9 +100,7 @@ export function scoreCommunityPair(
  * Ties break on the community ids, so two pairs the graph cannot separate are not separated by
  * the order the profiles happened to arrive in.
  */
-export function rankCommunityPairs(
-  input: RankCommunityPairsInput,
-): readonly CommunityPairScore[] {
+export function rankCommunityPairs(input: RankCommunityPairsInput): readonly CommunityPairScore[] {
   const crossing = new Map(
     input.pairEdges.map((pair) => [pairKey(pair.left, pair.right), pair.edges]),
   );

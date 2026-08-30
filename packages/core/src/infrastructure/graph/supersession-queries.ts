@@ -1,13 +1,14 @@
 import neo4j, { type Driver } from 'neo4j-driver';
-import type { Vector } from '../providers/types.js';
-import { TEXT_NORM_PROPERTY, type CognitiveNodeLabel } from './cognitive-queries.js';
+
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
+import { TEXT_NORM_PROPERTY, type CognitiveNodeLabel } from './cognitive-queries.js';
 import { runRead, type GraphStatement } from './connection.js';
 import { ENTITY_MENTION_TYPE } from './entity-queries.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
 import { readModeFragment, withCurrency } from './read-modes.js';
 import { ENTITY_NAME_NORM_PROPERTY } from './seed-queries.js';
 import { fromGraphVector, toGraphVector, type Row } from './values.js';
+import type { Vector } from '../providers/types.js';
 
 /**
  * The graph reads behind supersession detection. The stage decides what contradicts what;
@@ -97,7 +98,7 @@ export async function findEpisodeFactNodes(
 }
 
 function mapEpisodeFactNode(row: Row): EpisodeFactNode | undefined {
-  const label = String(row.label ?? '');
+  const label = (row.label as string | null) ?? '';
   if (!isFactNodeLabel(label)) {
     return undefined;
   }
@@ -105,8 +106,8 @@ function mapEpisodeFactNode(row: Row): EpisodeFactNode | undefined {
   return {
     id: row.id as string,
     label,
-    text: String(row.text ?? ''),
-    textNorm: String(row.text_norm ?? ''),
+    text: (row.text as string | null) ?? '',
+    textNorm: (row.text_norm as string | null) ?? '',
     ...(contentVector === undefined ? {} : { contentVector }),
   };
 }
@@ -125,15 +126,15 @@ export type ContradictionCandidate = {
 export type CandidateMatch = 'subject' | 'knn';
 
 function toCandidate(row: Row, matchedBy: CandidateMatch): ContradictionCandidate | undefined {
-  const label = String(row.label ?? '');
+  const label = (row.label as string | null) ?? '';
   if (!isFactNodeLabel(label)) {
     return undefined;
   }
-  const sharedSubject = row.shared_subject === null ? '' : String(row.shared_subject ?? '');
+  const sharedSubject = (row.shared_subject as string | null | undefined) ?? '';
   return {
     id: row.id as string,
     label,
-    text: String(row.text ?? ''),
+    text: (row.text as string | null) ?? '',
     score: typeof row.score === 'number' ? row.score : 0,
     matchedBy,
     ...(sharedSubject.length === 0 ? {} : { sharedSubject }),

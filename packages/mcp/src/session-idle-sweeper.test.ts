@@ -1,8 +1,9 @@
+import { openLogger, type Logger } from '@aion/core';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { openLogger, type Logger } from '@aion/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
 import { AionMcpService } from './service.js';
 import {
   MIN_SESSION_IDLE_SWEEP_INTERVAL_MS,

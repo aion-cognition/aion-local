@@ -2,15 +2,16 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
-import type { Provider } from '../../infrastructure/providers/types.js';
-import { NarrativeFakeGraph } from '../test-support/narrative-graph.fixture.js';
+
 import {
   IdleNarrativeSweeper,
   MIN_SWEEP_INTERVAL_MS,
   sweepIntervalMs,
 } from './narrative-sweeper.js';
 import type { NarrativeDeps } from './narratives.js';
+import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
+import type { Provider } from '../../infrastructure/providers/types.js';
+import { NarrativeFakeGraph } from '../test-support/narrative-graph.fixture.js';
 
 /**
  * The scheduler, not the sweep. What is asserted here is that something on a clock reaches

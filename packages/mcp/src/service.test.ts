@@ -1,13 +1,14 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { assemblePack, openLogger, type BucketCaps, type Logger } from '@aion/core';
 import { admittedAll } from '@aion/core/recall/domain/test-support/admission.fixture.js';
 import { MemoryPackSchema, type Cue, type MemoryPack, type StageTimingsMs } from '@aion/protocol';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { ErrorCode } from '@modelcontextprotocol/sdk/types.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import { USAGE_PROTOCOL } from './descriptions.js';
 import { HEALTH_PATH, MCP_PATH } from './http.js';
 import { AionMcpService } from './service.js';
@@ -28,7 +29,14 @@ type Call = { readonly tool: string; readonly identity: string };
 const calls: Call[] = [];
 
 function emptyPack(): MemoryPack {
-  return assemblePack({ items: [], admission: admittedAll(0), caps: CAPS, tokenBudget: 1200, cues: CUES, timings: TIMINGS });
+  return assemblePack({
+    items: [],
+    admission: admittedAll(0),
+    caps: CAPS,
+    tokenBudget: 1200,
+    cues: CUES,
+    timings: TIMINGS,
+  });
 }
 
 const backend: ToolBackend = {
@@ -111,8 +119,14 @@ describe('session multiplexing', () => {
     const second = await open();
     try {
       await first.client.callTool({ name: 'recall', arguments: { query: 'why webhooks' } });
-      await second.client.callTool({ name: 'reflection', arguments: { observations: ['webhooks won'] } });
-      await first.client.callTool({ name: 'reflection', arguments: { observations: ['still webhooks'] } });
+      await second.client.callTool({
+        name: 'reflection',
+        arguments: { observations: ['webhooks won'] },
+      });
+      await first.client.callTool({
+        name: 'reflection',
+        arguments: { observations: ['still webhooks'] },
+      });
 
       const firstIdentity = calls[0]?.identity;
       const secondIdentity = calls[1]?.identity;
@@ -169,7 +183,9 @@ describe('closeIdleSessions', () => {
 
       // A real gap, not a synthetic one: the cutoff below sits inside it, so the two calls'
       // actual wall-clock order (not their names) is what the assertion below trusts.
-      await new Promise((resolve) => setTimeout(resolve, 25));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 25);
+      });
 
       const activeClient = new Client({ name: 'aion-active-test', version: '0.0.0' });
       const activeTransport = new StreamableHTTPClientTransport(isolatedUrl);
@@ -192,7 +208,7 @@ describe('closeIdleSessions', () => {
       const transport = new StreamableHTTPClientTransport(isolatedUrl);
       await client.connect(transport);
       await client.callTool({ name: 'recall', arguments: { query: 'about to go quiet' } });
-      const sessionId = transport.sessionId;
+      const { sessionId } = transport;
       expect(sessionId).toBeDefined();
 
       isolated.closeIdleSessions(0, Date.now() + 1);
@@ -218,8 +234,11 @@ describe('results', () => {
   it('returns the rendered text and the structured pack over the wire', async () => {
     const client = await connect();
     try {
-      const result = await client.callTool({ name: 'recall', arguments: { query: 'why webhooks' } });
-      const content = result.content as ReadonlyArray<{ type: string; text: string }>;
+      const result = await client.callTool({
+        name: 'recall',
+        arguments: { query: 'why webhooks' },
+      });
+      const content = result.content as readonly { type: string; text: string }[];
       expect(content[0]?.type).toBe('text');
       expect(content[0]?.text).toContain('No memories matched this query.');
       expect(MemoryPackSchema.safeParse(result.structuredContent).success).toBe(true);
@@ -235,11 +254,15 @@ describe('results', () => {
         name: 'reflection',
         arguments: { observations: ['webhooks won'] },
       });
-      const content = result.content as ReadonlyArray<{ text: string }>;
+      const content = result.content as readonly { text: string }[];
       expect(content[0]?.text).toBe(
         'Stored episode episode-1; queued for reflection (interactive lane).',
       );
-      expect(result.structuredContent).toEqual({ episode_id: 'episode-1', queued: true, lane: 'interactive' });
+      expect(result.structuredContent).toEqual({
+        episode_id: 'episode-1',
+        queued: true,
+        lane: 'interactive',
+      });
     } finally {
       await client.close();
     }
@@ -265,7 +288,10 @@ describe('errors', () => {
   it('rejects a POST that opens no session and is not an initialize', async () => {
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
       body: JSON.stringify({ jsonrpc: '2.0', method: 'tools/list', id: 1 }),
     });
 
@@ -318,8 +344,8 @@ describe('health', () => {
   it('omits the queue-lag fields when no queueLag dependency was supplied', async () => {
     const response = await fetch(new URL(HEALTH_PATH, url));
     const body = (await response.json()) as Record<string, unknown>;
-    expect(body['queue_depth']).toBeUndefined();
-    expect(body['enrichment_lag_p95_ms']).toBeUndefined();
+    expect(body.queue_depth).toBeUndefined();
+    expect(body.enrichment_lag_p95_ms).toBeUndefined();
   });
 
   it('surfaces queue depth, oldest-unclaimed age, exhausted attempts, reinforcement drops, and p95 lag', async () => {
@@ -334,17 +360,20 @@ describe('health', () => {
         exhausted: 1,
         reinforcementDropped: 7,
         p95EnrichmentLagMs: 4_200,
+        cueDegradedRate: undefined,
+        supersessionProposalsOpen: 0,
+        entityMergeProposalsOpen: 0,
       }),
     });
     const port = await withLag.listen();
     try {
       const response = await fetch(new URL(HEALTH_PATH, `http://127.0.0.1:${String(port)}`));
       const body = (await response.json()) as Record<string, unknown>;
-      expect(body['queue_depth']).toEqual({ interactive: 2, bulk: 5 });
-      expect(body['queue_oldest_unclaimed_ms']).toBe(12_000);
-      expect(body['queue_exhausted']).toBe(1);
-      expect(body['reinforcement_dropped']).toBe(7);
-      expect(body['enrichment_lag_p95_ms']).toBe(4_200);
+      expect(body.queue_depth).toEqual({ interactive: 2, bulk: 5 });
+      expect(body.queue_oldest_unclaimed_ms).toBe(12_000);
+      expect(body.queue_exhausted).toBe(1);
+      expect(body.reinforcement_dropped).toBe(7);
+      expect(body.enrichment_lag_p95_ms).toBe(4_200);
     } finally {
       await withLag.close();
     }
@@ -362,14 +391,17 @@ describe('health', () => {
         exhausted: 0,
         reinforcementDropped: 0,
         p95EnrichmentLagMs: undefined,
+        cueDegradedRate: undefined,
+        supersessionProposalsOpen: 0,
+        entityMergeProposalsOpen: 0,
       }),
     });
     const port = await empty.listen();
     try {
       const response = await fetch(new URL(HEALTH_PATH, `http://127.0.0.1:${String(port)}`));
       const body = (await response.json()) as Record<string, unknown>;
-      expect(body['queue_oldest_unclaimed_ms']).toBeNull();
-      expect(body['enrichment_lag_p95_ms']).toBeNull();
+      expect(body.queue_oldest_unclaimed_ms).toBeNull();
+      expect(body.enrichment_lag_p95_ms).toBeNull();
     } finally {
       await empty.close();
     }
@@ -402,7 +434,8 @@ describe('graceful shutdown', () => {
         await gate;
         return emptyPack();
       },
-      reflection: () => Promise.resolve({ episode_id: 'episode-1', queued: true, lane: 'interactive' } as const),
+      reflection: () =>
+        Promise.resolve({ episode_id: 'episode-1', queued: true, lane: 'interactive' } as const),
     };
 
     const drainable = new AionMcpService({

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import { ReflectionOutputSchema } from './reflection-output.js';
 
 describe('ReflectionOutputSchema valid fixtures', () => {

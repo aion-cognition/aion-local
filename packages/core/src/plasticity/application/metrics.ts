@@ -1,10 +1,14 @@
 import type { Driver } from 'neo4j-driver';
+
 import {
   edgeWeightDistribution,
   type EdgeWeightDistribution,
 } from '../../infrastructure/graph/edge-weight-distribution.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { decaySweepCounters, type DecaySweepCounters } from '../../infrastructure/sqlite/decay-counters.js';
+import {
+  decaySweepCounters,
+  type DecaySweepCounters,
+} from '../../infrastructure/sqlite/decay-counters.js';
 import {
   countReinforcementSignals,
   reinforcementFlushCounters,
@@ -42,7 +46,10 @@ export type PlasticitySnapshot = PlasticityCounters & {
   readonly edgeWeights: EdgeWeightDistribution;
 };
 
-export async function plasticitySnapshot(driver: Driver, db: SqliteHandle): Promise<PlasticitySnapshot> {
+export async function plasticitySnapshot(
+  driver: Driver,
+  db: SqliteHandle,
+): Promise<PlasticitySnapshot> {
   const edgeWeights = await edgeWeightDistribution(driver);
   return { ...plasticityCounters(db), edgeWeights };
 }

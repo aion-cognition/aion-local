@@ -1,4 +1,5 @@
 import type { Driver } from 'neo4j-driver';
+
 import {
   applyUnmerge,
   readCanonicalMerge,

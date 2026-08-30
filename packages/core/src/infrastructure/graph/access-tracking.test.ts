@@ -1,7 +1,12 @@
 import type { Driver } from 'neo4j-driver';
 import neo4j from 'neo4j-driver';
 import { describe, expect, it } from 'vitest';
-import { ACCESS_COUNT_PROPERTY, buildRecordAccessStatement, recordAccess } from './access-tracking.js';
+
+import {
+  ACCESS_COUNT_PROPERTY,
+  buildRecordAccessStatement,
+  recordAccess,
+} from './access-tracking.js';
 import { BASE_NODE_LABEL } from './labels.js';
 import { LAST_ACCESSED_PROPERTY } from './seed-queries.js';
 
@@ -30,9 +35,13 @@ describe('buildRecordAccessStatement', () => {
 });
 
 describe('recordAccess', () => {
-  function fakeDriver(handler: (cypher: string, parameters: Record<string, unknown>) => unknown): Driver {
-    return { executeQuery: (cypher: string, parameters: Record<string, unknown>) =>
-      Promise.resolve(handler(cypher, parameters)) } as unknown as Driver;
+  function fakeDriver(
+    handler: (cypher: string, parameters: Record<string, unknown>) => unknown,
+  ): Driver {
+    return {
+      executeQuery: (cypher: string, parameters: Record<string, unknown>) =>
+        Promise.resolve(handler(cypher, parameters)),
+    } as unknown as Driver;
   }
 
   it('sends nothing to the server for an empty batch', async () => {
@@ -43,12 +52,16 @@ describe('recordAccess', () => {
   });
 
   it('writes the whole batch in one round trip and reports properties set', async () => {
-    const calls: Array<Record<string, unknown>> = [];
+    const calls: Record<string, unknown>[] = [];
     const driver = fakeDriver((_cypher, parameters) => {
       calls.push(parameters);
       return {
         records: [],
-        summary: { counters: { updates: () => ({ nodesCreated: 0, relationshipsCreated: 0, propertiesSet: 4 }) } },
+        summary: {
+          counters: {
+            updates: () => ({ nodesCreated: 0, relationshipsCreated: 0, propertiesSet: 4 }),
+          },
+        },
       };
     });
 

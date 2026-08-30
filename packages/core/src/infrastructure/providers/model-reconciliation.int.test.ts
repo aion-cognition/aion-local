@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULTS } from '../config/defaults.js';
-import type { Config } from '../config/schema.js';
+
 import { listResidentModels, reconcileResidentModels } from './model-reconciliation.js';
 import { listOllamaModels } from './provisioning.js';
 import { resolveProviderRouting } from './routing.js';
+import { DEFAULTS } from '../config/defaults.js';
+import type { Config } from '../config/schema.js';
 
 const BASE_URL = process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434';
 
@@ -60,60 +61,54 @@ async function waitUntil(predicate: () => Promise<boolean>, timeoutMs = 30_000):
     if (Date.now() > deadline) {
       return false;
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
   }
 }
 
 describe('reconciling live Ollama memory against the key', () => {
-  it(
-    'unloads the instruct model the key covers, keeps the embed model, and leaves the disk alone',
-    async () => {
-      // Sorted, because `/api/tags` is a set and not a sequence: loading a model moves it in
-      // the order Ollama returns, which is the thing this test is about to do twice.
-      const installedBefore = [...(await listOllamaModels(BASE_URL))].sort();
-      await loadModel(CHAT_MODEL);
-      await loadEmbedModel();
-      expect(await residentNames()).toContain(`${CHAT_MODEL}`);
+  it('unloads the instruct model the key covers, keeps the embed model, and leaves the disk alone', async () => {
+    // Sorted, because `/api/tags` is a set and not a sequence: loading a model moves it in
+    // the order Ollama returns, which is the thing this test is about to do twice.
+    const installedBefore = [...(await listOllamaModels(BASE_URL))].sort();
+    await loadModel(CHAT_MODEL);
+    await loadEmbedModel();
+    expect(await residentNames()).toContain(CHAT_MODEL);
 
-      const withKey = await reconcileResidentModels({
-        baseUrl: BASE_URL,
-        routing: resolveProviderRouting(config('sk-ant-live-flip')),
-      });
+    const withKey = await reconcileResidentModels({
+      baseUrl: BASE_URL,
+      routing: resolveProviderRouting(config('sk-ant-live-flip')),
+    });
 
-      expect(withKey.checked).toBe(true);
-      expect(withKey.error).toBeUndefined();
-      expect(withKey.evicted).toContain(CHAT_MODEL);
-      expect(await waitUntil(async () => !(await residentNames()).includes(CHAT_MODEL))).toBe(true);
-      // The vector index runs under every route, so its model is never a candidate.
-      expect(await residentNames()).toContain(`${DEFAULTS.models.embed}:latest`);
-      // Unloading is a memory operation: every tag that was installed is still installed.
-      expect([...(await listOllamaModels(BASE_URL))].sort()).toEqual(installedBefore);
-    },
-    180_000,
-  );
+    expect(withKey.checked).toBe(true);
+    expect(withKey.error).toBeUndefined();
+    expect(withKey.evicted).toContain(CHAT_MODEL);
+    expect(await waitUntil(async () => !(await residentNames()).includes(CHAT_MODEL))).toBe(true);
+    // The vector index runs under every route, so its model is never a candidate.
+    expect(await residentNames()).toContain(`${DEFAULTS.models.embed}:latest`);
+    // Unloading is a memory operation: every tag that was installed is still installed.
+    expect([...(await listOllamaModels(BASE_URL))].sort()).toEqual(installedBefore);
+  }, 180_000);
 
-  it(
-    'touches nothing once the key is gone, and the model loads again with no pull',
-    async () => {
-      const local = await reconcileResidentModels({
-        baseUrl: BASE_URL,
-        routing: resolveProviderRouting(config('')),
-      });
+  it('touches nothing once the key is gone, and the model loads again with no pull', async () => {
+    const local = await reconcileResidentModels({
+      baseUrl: BASE_URL,
+      routing: resolveProviderRouting(config('')),
+    });
 
-      expect(local.checked).toBe(false);
-      expect(local.evicted).toEqual([]);
+    expect(local.checked).toBe(false);
+    expect(local.evicted).toEqual([]);
 
-      // What "disk untouched" buys: the local route works again immediately.
-      await loadModel(CHAT_MODEL);
-      expect(await residentNames()).toContain(CHAT_MODEL);
+    // What "disk untouched" buys: the local route works again immediately.
+    await loadModel(CHAT_MODEL);
+    expect(await residentNames()).toContain(CHAT_MODEL);
 
-      const stillLocal = await reconcileResidentModels({
-        baseUrl: BASE_URL,
-        routing: resolveProviderRouting(config('')),
-      });
-      expect(stillLocal.evicted).toEqual([]);
-      expect(await residentNames()).toContain(CHAT_MODEL);
-    },
-    180_000,
-  );
+    const stillLocal = await reconcileResidentModels({
+      baseUrl: BASE_URL,
+      routing: resolveProviderRouting(config('')),
+    });
+    expect(stillLocal.evicted).toEqual([]);
+    expect(await residentNames()).toContain(CHAT_MODEL);
+  }, 180_000);
 });

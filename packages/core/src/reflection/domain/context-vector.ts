@@ -14,20 +14,26 @@ export type WeightedVector = {
  * the wrong dimension throughout. A single qualifying neighbor returns exactly its own
  * vector, since `(w * v) / w = v` for any positive `w`.
  */
-export function weightedMeanVector(entries: readonly WeightedVector[]): readonly number[] | undefined {
-  const dimension = entries.find((entry) => entry.weight > 0 && entry.vector.length > 0)?.vector.length;
+export function weightedMeanVector(
+  entries: readonly WeightedVector[],
+): readonly number[] | undefined {
+  const dimension = entries.find((entry) => entry.weight > 0 && entry.vector.length > 0)?.vector
+    .length;
   if (dimension === undefined) {
     return undefined;
   }
 
-  const qualifying = entries.filter((entry) => entry.weight > 0 && entry.vector.length === dimension);
+  const qualifying = entries.filter(
+    (entry) => entry.weight > 0 && entry.vector.length === dimension,
+  );
   const totalWeight = qualifying.reduce((sum, entry) => sum + entry.weight, 0);
   if (totalWeight <= 0) {
     return undefined;
   }
 
   const sums = qualifying.reduce<number[]>(
-    (acc, entry) => acc.map((componentSum, i) => componentSum + (entry.vector[i] ?? 0) * entry.weight),
+    (acc, entry) =>
+      acc.map((componentSum, i) => componentSum + (entry.vector[i] ?? 0) * entry.weight),
     new Array<number>(dimension).fill(0),
   );
   return sums.map((sum) => sum / totalWeight);
@@ -70,7 +76,9 @@ export function computeContextVectors(
 
   const results: ComputedContextVector[] = [];
   for (const [nodeId, rows] of grouped) {
-    const mean = weightedMeanVector(rows.map((row) => ({ vector: row.vector, weight: row.strength })));
+    const mean = weightedMeanVector(
+      rows.map((row) => ({ vector: row.vector, weight: row.strength })),
+    );
     if (mean !== undefined) {
       results.push({ id: nodeId, vector: mean, neighborCount: rows.length });
     }

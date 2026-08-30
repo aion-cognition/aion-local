@@ -1,5 +1,6 @@
 import type { CueSource, CueWeight } from '@aion/protocol';
 import type { Driver } from 'neo4j-driver';
+
 import type { Config } from '../../infrastructure/config/schema.js';
 import { withCurrency, type ReadMode } from '../../infrastructure/graph/read-modes.js';
 import {
@@ -156,10 +157,10 @@ function contribute(
   return { ...base, score: scaleByCueWeight(candidate.score, cue.weight), cue: cue.text };
 }
 
-function embeddedCues(cues: readonly SeedCue[]): ReadonlyArray<SeedCue & { vector: Vector }> {
-  const embedded: Array<SeedCue & { vector: Vector }> = [];
+function embeddedCues(cues: readonly SeedCue[]): readonly (SeedCue & { vector: Vector })[] {
+  const embedded: (SeedCue & { vector: Vector })[] = [];
   for (const cue of cues) {
-    const vector = cue.vector;
+    const { vector } = cue;
     if (vector !== undefined && vector.length > 0) {
       embedded.push({ ...cue, vector });
     }
@@ -186,7 +187,7 @@ async function settle(
   logger: Logger,
   strategy: SeedStrategy,
   detail: string,
-  tasks: ReadonlyArray<Promise<readonly SeedContribution[]>>,
+  tasks: readonly Promise<readonly SeedContribution[]>[],
 ): Promise<SettledLeg> {
   const settled = await Promise.allSettled(tasks);
   const contributions: SeedContribution[] = [];
@@ -251,7 +252,7 @@ async function bm25Contributions(
   mode: ReadMode,
   limit: number,
 ): Promise<SettledLeg> {
-  const tasks: Array<Promise<readonly SeedContribution[]>> = [];
+  const tasks: Promise<readonly SeedContribution[]>[] = [];
   for (const cue of cues) {
     const query = escapeLuceneQuery(cue.text);
     if (query.length === 0) {
@@ -305,7 +306,7 @@ async function entityContributions(
     }
   }
 
-  const tasks: Array<Promise<readonly SeedContribution[]>> = [];
+  const tasks: Promise<readonly SeedContribution[]>[] = [];
   if (byName.size > 0) {
     tasks.push(
       (async () => {
@@ -392,7 +393,7 @@ export async function selectSeeds(
     ['bm25', bm25],
     ['entity_resolution', entity],
     ['recency', recency],
-  ] as ReadonlyArray<[SeedStrategy, SettledLeg]>) {
+  ] as readonly [SeedStrategy, SettledLeg][]) {
     byStrategy[strategy] = mergeSeeds(leg.contributions, leg.contributions.length);
     contributions.push(...leg.contributions);
     attempted += leg.attempted;

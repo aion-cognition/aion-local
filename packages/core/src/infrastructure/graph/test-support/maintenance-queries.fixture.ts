@@ -1,4 +1,5 @@
 import type { Driver } from 'neo4j-driver';
+
 import { BITEMPORAL_PROPERTIES } from '../bitemporal.js';
 import { runRead } from '../connection.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../episodes.js';
@@ -43,10 +44,7 @@ export async function sessionLinkSignals(driver: Driver, episodeId: string): Pro
 }
 
 /** The grounding revision one narrative was written under; absent when it carries none. */
-export async function narrativeGrounding(
-  driver: Driver,
-  id: string,
-): Promise<string | undefined> {
+export async function narrativeGrounding(driver: Driver, id: string): Promise<string | undefined> {
   const value = await readFirst(
     driver,
     `MATCH (n:Narrative { id: $id }) RETURN n.${NARRATIVE_PROPERTIES.grounding} AS grounding`,
@@ -57,9 +55,7 @@ export async function narrativeGrounding(
 }
 
 /** Standing bridges, newest first, with the sentence each one carries. */
-export async function standingBridges(
-  driver: Driver,
-): Promise<{ id: string; text: string }[]> {
+export async function standingBridges(driver: Driver): Promise<{ id: string; text: string }[]> {
   return runRead(
     driver,
     [

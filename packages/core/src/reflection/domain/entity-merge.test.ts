@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import {
   entityMergeLedgerKey,
   groupDuplicates,
@@ -64,8 +65,16 @@ describe('selectCanonical', () => {
   });
 
   it('breaks a mention-count tie toward the earlier tx_from', () => {
-    const older = candidate({ id: 'older', mentionCount: 2, txFrom: new Date('2026-01-01T00:00:00Z') });
-    const newer = candidate({ id: 'newer', mentionCount: 2, txFrom: new Date('2026-06-01T00:00:00Z') });
+    const older = candidate({
+      id: 'older',
+      mentionCount: 2,
+      txFrom: new Date('2026-01-01T00:00:00Z'),
+    });
+    const newer = candidate({
+      id: 'newer',
+      mentionCount: 2,
+      txFrom: new Date('2026-06-01T00:00:00Z'),
+    });
 
     expect(selectCanonical([newer, older])).toBe(older);
   });
@@ -90,7 +99,10 @@ describe('mergeAliases', () => {
 
 describe('mergeAccessCount and mergeLastAccessed', () => {
   it('sums access counts across the whole group', () => {
-    const members = [candidate({ id: 'a', accessCount: 2 }), candidate({ id: 'b', accessCount: 5 })];
+    const members = [
+      candidate({ id: 'a', accessCount: 2 }),
+      candidate({ id: 'b', accessCount: 5 }),
+    ];
     expect(mergeAccessCount(members)).toBe(7);
   });
 

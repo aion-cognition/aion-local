@@ -2,10 +2,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { selectSeeds, type Seed, type SeedCue, type SelectSeedsDeps } from './seeds.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Config } from '../../infrastructure/config/schema.js';
-import { supersede, writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
+import { supersede, writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
 import { asOf, withCurrency } from '../../infrastructure/graph/read-modes.js';
 import {
@@ -14,7 +16,6 @@ import {
   fulltextSeeds,
   vectorSeeds,
 } from '../../infrastructure/graph/seed-queries.js';
-import { seedBudget } from '../domain/seed-selection.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
@@ -22,7 +23,7 @@ import {
 } from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { selectSeeds, type Seed, type SeedCue, type SelectSeedsDeps } from './seeds.js';
+import { seedBudget } from '../domain/seed-selection.js';
 
 const EMBED_DIMENSION = 8;
 const WRITTEN_AT = new Date('2026-08-01T00:00:00.000Z');
@@ -88,7 +89,9 @@ async function waitFor(label: string, ready: () => Promise<boolean>): Promise<vo
     if (await ready()) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
   }
   throw new Error(`timed out waiting for ${label}`);
 }
@@ -123,9 +126,13 @@ beforeAll(async () => {
     'the reflection queue claim path retries after SQLITE_BUSY',
     VECTORS.claimPath,
   );
-  ids.activation = await writeEpisode('spreading activation over batched adjacency fetches', VECTORS.activation, {
-    last_accessed: ACCESSED_AT,
-  });
+  ids.activation = await writeEpisode(
+    'spreading activation over batched adjacency fetches',
+    VECTORS.activation,
+    {
+      last_accessed: ACCESSED_AT,
+    },
+  );
   ids.oldTruth = await writeEpisode('the seed limit was five', VECTORS.truth);
   // The correction happens on the supersession date, so a read pinned between the two has a
   // world in which only the old truth exists yet.
@@ -138,7 +145,10 @@ beforeAll(async () => {
     label: 'Turn',
     occurredAt: WRITTEN_AT,
     now: WRITTEN_AT,
-    properties: { text: 'bitemporal supersession never deletes a node', content_vec: [...VECTORS.turn] },
+    properties: {
+      text: 'bitemporal supersession never deletes a node',
+      content_vec: [...VECTORS.turn],
+    },
   });
   ids.turn = turn.id;
 

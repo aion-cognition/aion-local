@@ -21,9 +21,9 @@ function toOpsLedgerEntry(row: OpsLedgerRow): OpsLedgerEntry {
 }
 
 export function getLedgerEntry(db: SqliteHandle, key: string): OpsLedgerEntry | undefined {
-  const row = db.prepare('SELECT key, applied_at, summary_json FROM ops_ledger WHERE key = ?').get(
-    key,
-  ) as OpsLedgerRow | undefined;
+  const row = db
+    .prepare('SELECT key, applied_at, summary_json FROM ops_ledger WHERE key = ?')
+    .get(key) as OpsLedgerRow | undefined;
   return row === undefined ? undefined : toOpsLedgerEntry(row);
 }
 

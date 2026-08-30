@@ -1,6 +1,7 @@
 import { z } from 'zod';
-import type { ChatMessage, JsonSchema } from '../../infrastructure/providers/types.js';
+
 import { hashContent } from './content.js';
+import type { ChatMessage, JsonSchema } from '../../infrastructure/providers/types.js';
 
 /**
  * A session's close (the MCP transport ending, or 30 minutes of silence) is the boundary
@@ -56,8 +57,8 @@ export function narrativeNodeId(sessionId: string, key: string, generation = '')
 }
 
 /** Silence since the last thing the substrate heard from the session. */
-export function isSessionIdle(lastActivityAt: Date, now: Date, idleMs: number): boolean {
-  return now.getTime() - lastActivityAt.getTime() >= idleMs;
+export function isSessionIdle(lastHeardAt: Date, now: Date, idleMs: number): boolean {
+  return now.getTime() - lastHeardAt.getTime() >= idleMs;
 }
 
 /**
@@ -365,10 +366,7 @@ function normalizeHandle(value: string): string {
   return value.toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
-function resolveCitations(
-  raw: readonly string[],
-  byHandle: ReadonlyMap<string, string>,
-): string[] {
+function resolveCitations(raw: readonly string[], byHandle: ReadonlyMap<string, string>): string[] {
   const ids: string[] = [];
   for (const value of raw) {
     const id = byHandle.get(normalizeHandle(value));
@@ -420,7 +418,7 @@ export function assembleNarrative(
 function narrativeSystemPrompt(sentenceBudget: number): string {
   return [
     "You compress an AI coding agent's work session into one durable memory.",
-    'The input is the session\'s source items in the order they happened; each starts with a header line tagged like [S1] and its content follows.',
+    "The input is the session's source items in the order they happened; each starts with a header line tagged like [S1] and its content follows.",
     'Answer with sentences. Every sentence lists in "source_ids" the tags of the items it draws on.',
     'State only what the cited items state: never add a cause, motive, outcome, participant, quantity or judgement they do not contain.',
     'Name the concrete work, decisions and results the items record, in their own wording where it is specific.',

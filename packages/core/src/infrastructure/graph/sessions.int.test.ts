@@ -2,12 +2,17 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import { bootstrapBackbone } from './backbone.js';
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { runRead } from './connection.js';
-import { ensureGraphSession } from './sessions.js';
 import { runGraphMigrations } from './migrations.js';
-import { startNeo4jHarness, stopNeo4jHarness, type Neo4jHarness } from './test-support/neo4j-harness.fixture.js';
+import { ensureGraphSession } from './sessions.js';
+import {
+  startNeo4jHarness,
+  stopNeo4jHarness,
+  type Neo4jHarness,
+} from './test-support/neo4j-harness.fixture.js';
 import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
 
 const EMBED_DIMENSION = 8;
@@ -35,7 +40,12 @@ afterAll(async () => {
 });
 
 async function countNodes(id: string): Promise<number> {
-  const rows = await runRead(harness.driver, 'MATCH (n:Session { id: $id }) RETURN count(n) AS c', { id }, (row) => row.c as number);
+  const rows = await runRead(
+    harness.driver,
+    'MATCH (n:Session { id: $id }) RETURN count(n) AS c',
+    { id },
+    (row) => row.c as number,
+  );
   return rows[0] ?? 0;
 }
 
@@ -52,7 +62,12 @@ async function countEdges(type: string, sourceId: string, targetId: string): Pro
 type FollowsEdge = { from: string; to: string };
 
 async function allSessionIds(): Promise<string[]> {
-  return runRead(harness.driver, 'MATCH (s:Session) RETURN s.id AS id', {}, (row) => row.id as string);
+  return runRead(
+    harness.driver,
+    'MATCH (s:Session) RETURN s.id AS id',
+    {},
+    (row) => row.id as string,
+  );
 }
 
 async function allFollowsEdges(): Promise<FollowsEdge[]> {

@@ -1,5 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 import { describe, expect, it } from 'vitest';
+
 import { buildAdjacencyStatement, fetchAdjacency } from './adjacency.js';
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { BASE_NODE_LABEL } from './labels.js';
@@ -16,7 +17,9 @@ describe('buildAdjacencyStatement', () => {
 
   it('expands the whole frontier in one statement, seeking the base label’s id index', () => {
     expect(statement.cypher).toContain('UNWIND $frontier AS frontierId');
-    expect(statement.cypher).toContain(`MATCH (n:${BASE_NODE_LABEL} { id: frontierId })-[r]-(m:${BASE_NODE_LABEL})`);
+    expect(statement.cypher).toContain(
+      `MATCH (n:${BASE_NODE_LABEL} { id: frontierId })-[r]-(m:${BASE_NODE_LABEL})`,
+    );
     expect(statement.parameters.frontier).toEqual(['a', 'b']);
   });
 
@@ -50,7 +53,11 @@ describe('buildAdjacencyStatement', () => {
   });
 
   it('composes a knowledge-time read mode, parameters included', () => {
-    const timeTravel = buildAdjacencyStatement({ frontier: ['a'], visited: [], mode: knewAt(AS_OF) });
+    const timeTravel = buildAdjacencyStatement({
+      frontier: ['a'],
+      visited: [],
+      mode: knewAt(AS_OF),
+    });
 
     expect(timeTravel.cypher).toContain(`m.${BITEMPORAL_PROPERTIES.txFrom} <= $nb_known_at`);
     expect(timeTravel.parameters.nb_known_at).toBeDefined();
@@ -65,6 +72,8 @@ describe('fetchAdjacency', () => {
       },
     } as unknown as Driver;
 
-    await expect(fetchAdjacency(driver, { frontier: [], visited: ['a'], mode: withCurrency() })).resolves.toEqual([]);
+    await expect(
+      fetchAdjacency(driver, { frontier: [], visited: ['a'], mode: withCurrency() }),
+    ).resolves.toEqual([]);
   });
 });

@@ -2,9 +2,18 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import {
+  narrativeRegroundingOperation,
+  narrativeRegroundingRelevance,
+} from './narrative-regrounding.js';
+import type { ProviderFactory } from './routed-generation.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
-import { BITEMPORAL_PROPERTIES, writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
+import {
+  BITEMPORAL_PROPERTIES,
+  writeStampedNode,
+} from '../../../infrastructure/graph/bitemporal.js';
 import { writeCognitiveNode } from '../../../infrastructure/graph/cognitive-queries.js';
 import { upsertEdge } from '../../../infrastructure/graph/edges.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../../../infrastructure/graph/episodes.js';
@@ -22,19 +31,14 @@ import {
   type Neo4jHarness,
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
-import type { Provider, Vector } from '../../../infrastructure/providers/types.js';
+import type { Vector } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { recordSupersessionProposal } from '../../../infrastructure/sqlite/supersession-proposals.js';
-import { NARRATIVE_GROUNDING } from '../../../reflection/domain/narrative.js';
 import { applySupersessionProposal } from '../../../reflection/application/proposals.js';
+import { NARRATIVE_GROUNDING } from '../../../reflection/domain/narrative.js';
 import { NEUTRAL_GRAPH_HEALTH } from '../../domain/health.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
-import type { ProviderFactory } from './routed-generation.js';
-import {
-  narrativeRegroundingOperation,
-  narrativeRegroundingRelevance,
-} from './narrative-regrounding.js';
 
 /**
  * The gap between a correction and what recall answers. A narrative compresses a session's
@@ -49,7 +53,9 @@ const NOW = new Date('2026-08-29T12:00:00.000Z');
 const SESSION_ID = 'regrounding-session';
 
 const REWRITTEN = {
-  sentences: [{ text: 'Thistledown standardised on Larkspur as its checkpoint store.', source_ids: ['S1'] }],
+  sentences: [
+    { text: 'Thistledown standardised on Larkspur as its checkpoint store.', source_ids: ['S1'] },
+  ],
 };
 
 let harness: Neo4jHarness;
@@ -63,12 +69,11 @@ const config: Config = {
   maintenance: { ...DEFAULTS.maintenance, narrativeCleanupBatch: 50 },
 };
 
-const stubProvider: ProviderFactory = () =>
-  ({
-    embed: (texts: readonly string[]): Promise<Vector[]> =>
-      Promise.resolve(texts.map(() => new Array<number>(EMBED_DIMENSION).fill(0.1))),
-    generate: (): Promise<unknown> => Promise.resolve(REWRITTEN),
-  }) as unknown as Provider;
+const stubProvider: ProviderFactory = () => ({
+  embed: (texts: readonly string[]): Promise<Vector[]> =>
+    Promise.resolve(texts.map(() => new Array<number>(EMBED_DIMENSION).fill(0.1))),
+  generate: (): Promise<unknown> => Promise.resolve(REWRITTEN),
+});
 
 function context(): OperationContext {
   return {
@@ -191,7 +196,9 @@ describe('narrative regrounding', () => {
     });
 
     // Before the apply the narrative reads as current, which is exactly the problem.
-    expect(await narrativeGrounding(harness.driver, 'regrounding-narrative')).toBe(NARRATIVE_GROUNDING);
+    expect(await narrativeGrounding(harness.driver, 'regrounding-narrative')).toBe(
+      NARRATIVE_GROUNDING,
+    );
     expect(await findStaleNarratives(harness.driver, NARRATIVE_GROUNDING, 50)).toEqual([]);
 
     const applied = await applySupersessionProposal(harness.driver, db, {
@@ -202,7 +209,9 @@ describe('narrative regrounding', () => {
     });
 
     expect(applied.regroundedNarratives).toEqual(['regrounding-narrative']);
-    expect(await narrativeGrounding(harness.driver, 'regrounding-narrative')).not.toBe(NARRATIVE_GROUNDING);
+    expect(await narrativeGrounding(harness.driver, 'regrounding-narrative')).not.toBe(
+      NARRATIVE_GROUNDING,
+    );
     const found = await findStaleNarratives(harness.driver, NARRATIVE_GROUNDING, 50);
     expect(found.map((narrative) => narrative.id)).toEqual(['regrounding-narrative']);
   }, 120_000);

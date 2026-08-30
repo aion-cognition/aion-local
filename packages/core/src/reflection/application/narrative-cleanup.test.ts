@@ -2,6 +2,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { cleanupNarratives } from './narrative-cleanup.js';
+import type { NarrativeDeps } from './narratives.js';
 import { BITEMPORAL_PROPERTIES } from '../../infrastructure/graph/bitemporal.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
 import {
@@ -13,8 +16,6 @@ import { openLogger, type Logger } from '../../infrastructure/logging/logger.js'
 import type { Provider, Vector } from '../../infrastructure/providers/types.js';
 import { NARRATIVE_GROUNDING } from '../domain/narrative.js';
 import { NarrativeFakeGraph } from '../test-support/narrative-graph.fixture.js';
-import { cleanupNarratives } from './narrative-cleanup.js';
-import type { NarrativeDeps } from './narratives.js';
 
 const SESSION_ID = 'session-with-episodes';
 const EMPTY_SESSION_ID = 'session-without-episodes';
@@ -45,7 +46,11 @@ function seedEpisode(id: string, sessionId: string): void {
 }
 
 /** A narrative as the free-prose writer left it: no citations, still standing. */
-function seedOldNarrative(id: string, sessionId: string, extra: Record<string, unknown> = {}): void {
+function seedOldNarrative(
+  id: string,
+  sessionId: string,
+  extra: Record<string, unknown> = {},
+): void {
   graph.seedNode(id, ['Narrative', 'Memory', 'AionNode'], {
     [MEMORY_PROPERTIES.summary]: 'The session focused on a close-mode probe.',
     [MEMORY_PROPERTIES.text]: 'The probe was presumably gathering detailed data from a target.',

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+
 import type { SqliteHandle } from './database.js';
 
 /**
@@ -123,8 +124,7 @@ export function getEntityMergeProposal(
   id: string,
 ): EntityMergeProposal | undefined {
   const row = db.prepare('SELECT * FROM entity_merge_proposals WHERE id = ?').get(id) as
-    | EntityMergeProposalRow
-    | undefined;
+    EntityMergeProposalRow | undefined;
   return row === undefined ? undefined : toEntityMergeProposal(row);
 }
 
@@ -157,7 +157,9 @@ export function resolveEntityMergeProposal(
   resolvedAt: string = new Date().toISOString(),
 ): boolean {
   const result = db
-    .prepare('UPDATE entity_merge_proposals SET resolved_at = ? WHERE id = ? AND resolved_at IS NULL')
+    .prepare(
+      'UPDATE entity_merge_proposals SET resolved_at = ? WHERE id = ? AND resolved_at IS NULL',
+    )
     .run(resolvedAt, id);
   return result.changes > 0;
 }

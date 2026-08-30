@@ -18,9 +18,9 @@ export type EntityPair = {
 export function coOccurringPairs(entityIds: readonly string[]): readonly EntityPair[] {
   const sorted = [...new Set(entityIds)].sort();
   const pairs: EntityPair[] = [];
-  for (let i = 0; i < sorted.length; i += 1) {
-    for (let j = i + 1; j < sorted.length; j += 1) {
-      pairs.push({ sourceId: sorted[i] as string, targetId: sorted[j] as string });
+  for (const [i, sourceId] of sorted.entries()) {
+    for (const targetId of sorted.slice(i + 1)) {
+      pairs.push({ sourceId, targetId });
     }
   }
   return pairs;

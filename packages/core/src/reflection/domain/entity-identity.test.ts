@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { foldName } from '../../infrastructure/providers/unicode-fold.js';
+
 import {
   MIN_OVERLAP_NAME_LENGTH,
   NAME_FORM_OVERLAP_THRESHOLD,
   nameFormMatches,
   nameFormOverlap,
 } from './entity-identity.js';
+import { foldName } from '../../infrastructure/providers/unicode-fold.js';
 
 /**
  * The pairs carry their measured cosines: no single vector threshold separates them, which is

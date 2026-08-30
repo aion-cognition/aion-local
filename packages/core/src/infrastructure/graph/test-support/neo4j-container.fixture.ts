@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
+
 import { NEO4J_DEFAULT_USER, waitForBoltReady } from '../provision.js';
 
 const execFileAsync = promisify(execFile);

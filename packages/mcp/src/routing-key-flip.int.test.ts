@@ -1,6 +1,3 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import {
   bootstrapBackbone,
   DEFAULTS,
@@ -15,7 +12,11 @@ import {
   stopNeo4jHarness,
   type Neo4jHarness,
 } from '@aion/core/infrastructure/graph/test-support/neo4j-harness.fixture.js';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import { bootstrapService, type AionService } from './bootstrap.js';
 
 /**
@@ -63,7 +64,9 @@ function logLines(): string[] {
   if (!existsSync(logPath)) {
     return [];
   }
-  return readFileSync(logPath, 'utf8').split('\n').filter((line) => line.trim() !== '');
+  return readFileSync(logPath, 'utf8')
+    .split('\n')
+    .filter((line) => line.trim() !== '');
 }
 
 function messagesSince(offset: number): string[] {
@@ -104,7 +107,9 @@ async function waitUntil(predicate: () => Promise<boolean>, timeoutMs = 30_000):
     if (Date.now() > deadline) {
       return false;
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
   }
 }
 
@@ -143,36 +148,34 @@ describe('booting with the key and again without it', () => {
       expect(messages).toContain(
         `provider routing: cue=anthropic:${DEFAULTS.anthropic.model} reflect=anthropic:${DEFAULTS.anthropic.model}`,
       );
-      expect(messages.some((message) => message.startsWith('model reconciliation: unloaded'))).toBe(true);
+      expect(messages.some((message) => message.startsWith('model reconciliation: unloaded'))).toBe(
+        true,
+      );
       expect(await waitUntil(async () => !(await residentNames()).includes(CHAT_MODEL))).toBe(true);
       expect(await installedModels()).toEqual(installedBefore);
     },
     300_000,
   );
 
-  it(
-    'restores local routing with the key gone, and reconciliation touches nothing',
-    async () => {
-      const installedBefore = await installedModels();
-      await loadChatModel();
+  it('restores local routing with the key gone, and reconciliation touches nothing', async () => {
+    const installedBefore = await installedModels();
+    await loadChatModel();
 
-      const offset = logLines().length;
-      let started: AionService | undefined;
-      try {
-        started = await bootstrapService(env(false));
-      } finally {
-        await started?.close();
-      }
+    const offset = logLines().length;
+    let started: AionService | undefined;
+    try {
+      started = await bootstrapService(env(false));
+    } finally {
+      await started?.close();
+    }
 
-      const messages = messagesSince(offset);
-      expect(messages).toContain(
-        `provider routing: cue=ollama:${CHAT_MODEL} reflect=ollama:${CHAT_MODEL}`,
-      );
-      // Nothing to unload means Ollama is not called at all, so no reconciliation line is written.
-      expect(messages.some((message) => message.startsWith('model reconciliation:'))).toBe(false);
-      expect(await residentNames()).toContain(CHAT_MODEL);
-      expect(await installedModels()).toEqual(installedBefore);
-    },
-    300_000,
-  );
+    const messages = messagesSince(offset);
+    expect(messages).toContain(
+      `provider routing: cue=ollama:${CHAT_MODEL} reflect=ollama:${CHAT_MODEL}`,
+    );
+    // Nothing to unload means Ollama is not called at all, so no reconciliation line is written.
+    expect(messages.some((message) => message.startsWith('model reconciliation:'))).toBe(false);
+    expect(await residentNames()).toContain(CHAT_MODEL);
+    expect(await installedModels()).toEqual(installedBefore);
+  }, 300_000);
 });

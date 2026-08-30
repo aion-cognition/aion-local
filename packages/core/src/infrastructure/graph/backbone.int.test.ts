@@ -2,12 +2,17 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import { bootstrapBackbone, GLOBAL_WORKSPACE_NAME } from './backbone.js';
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { runRead } from './connection.js';
 import { BASE_NODE_LABEL } from './labels.js';
 import { runGraphMigrations } from './migrations.js';
-import { startNeo4jHarness, stopNeo4jHarness, type Neo4jHarness } from './test-support/neo4j-harness.fixture.js';
+import {
+  startNeo4jHarness,
+  stopNeo4jHarness,
+  type Neo4jHarness,
+} from './test-support/neo4j-harness.fixture.js';
 import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
 
 const EMBED_DIMENSION = 8;
@@ -31,17 +36,32 @@ afterAll(async () => {
 });
 
 async function countLabel(label: 'Member' | 'Workspace'): Promise<number> {
-  const rows = await runRead(harness.driver, `MATCH (n:${label}) RETURN count(n) AS c`, {}, (row) => row.c as number);
+  const rows = await runRead(
+    harness.driver,
+    `MATCH (n:${label}) RETURN count(n) AS c`,
+    {},
+    (row) => row.c as number,
+  );
   return rows[0] ?? 0;
 }
 
 async function nodeProperty(label: 'Member' | 'Workspace', property: string): Promise<unknown> {
-  const rows = await runRead(harness.driver, `MATCH (n:${label}) RETURN n.\`${property}\` AS value`, {}, (row) => row.value);
+  const rows = await runRead(
+    harness.driver,
+    `MATCH (n:${label}) RETURN n.\`${property}\` AS value`,
+    {},
+    (row) => row.value,
+  );
   return rows[0];
 }
 
 async function memberId(): Promise<string | undefined> {
-  const rows = await runRead(harness.driver, 'MATCH (n:Member) RETURN n.id AS id', {}, (row) => row.id as string);
+  const rows = await runRead(
+    harness.driver,
+    'MATCH (n:Member) RETURN n.id AS id',
+    {},
+    (row) => row.id as string,
+  );
   return rows[0];
 }
 
@@ -50,7 +70,9 @@ describe('backbone bootstrap', () => {
     const result = await bootstrapBackbone(harness.driver, { memberName: 'Ryan Huber', now: NOW });
 
     expect([...result.member.labels].sort()).toEqual([BASE_NODE_LABEL, 'Entity', 'Member'].sort());
-    expect([...result.workspace.labels].sort()).toEqual([BASE_NODE_LABEL, 'Entity', 'Workspace'].sort());
+    expect([...result.workspace.labels].sort()).toEqual(
+      [BASE_NODE_LABEL, 'Entity', 'Workspace'].sort(),
+    );
     expect(result.member.created).toBe(true);
     expect(result.workspace.created).toBe(true);
     expect(await countLabel('Member')).toBe(1);
@@ -72,7 +94,10 @@ describe('backbone bootstrap', () => {
   });
 
   it('running it again is a no-op: still one node each, and both report unmatched-not-created', async () => {
-    const rerun = await bootstrapBackbone(harness.driver, { memberName: 'Ryan Huber', now: new Date('2026-06-06T00:00:00.000Z') });
+    const rerun = await bootstrapBackbone(harness.driver, {
+      memberName: 'Ryan Huber',
+      now: new Date('2026-06-06T00:00:00.000Z'),
+    });
 
     expect(rerun.member.created).toBe(false);
     expect(rerun.workspace.created).toBe(false);

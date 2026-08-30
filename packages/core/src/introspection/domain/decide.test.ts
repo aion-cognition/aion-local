@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import {
   CRITICAL_PREEMPTION_GRACE_RUNS,
   decide,
@@ -117,7 +118,9 @@ describe('starvationBoost', () => {
 describe('scoreCandidate', () => {
   it('halves urgency for an operation under the effectiveness floor', () => {
     const input = baseInput({
-      health: healthFixture({ effectiveness: [stats({ runs: 10, improved: 1, effectiveness: 0.1 })] }),
+      health: healthFixture({
+        effectiveness: [stats({ runs: 10, improved: 1, effectiveness: 0.1 })],
+      }),
     });
     expect(scoreCandidate(candidate({}), input).urgency).toBeCloseTo(0.5 * DEPRIORITIZED_WEIGHT, 6);
   });
@@ -178,7 +181,9 @@ describe('decide', () => {
     const decision = decide(
       baseInput({
         health,
-        candidates: [candidate({ name: 'orphan_cleanup', answers: 'orphan_share', relevance: 0.6 })],
+        candidates: [
+          candidate({ name: 'orphan_cleanup', answers: 'orphan_share', relevance: 0.6 }),
+        ],
       }),
     );
     expect(decision).toMatchObject({ kind: 'selected', tier: 1, reason: 'critical: orphan_share' });
@@ -220,7 +225,11 @@ describe('decide', () => {
         health: healthFixture({
           graph,
           effectiveness: [
-            stats({ name: 'orphan_cleanup', runs: CRITICAL_PREEMPTION_GRACE_RUNS, effectiveness: 0 }),
+            stats({
+              name: 'orphan_cleanup',
+              runs: CRITICAL_PREEMPTION_GRACE_RUNS,
+              effectiveness: 0,
+            }),
           ],
         }),
         candidates,

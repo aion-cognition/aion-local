@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../../infrastructure/graph/backbone.js';
 import { findEpisodeEntities } from '../../../infrastructure/graph/entity-queries.js';
@@ -55,7 +56,13 @@ const LIVE_PAYLOAD = {
 /** A second episode, extracted by a stub so the graph writes are measured without the model. */
 const STUB_PAYLOAD = {
   summary: 'the canonicalization pass',
-  turns: [{ role: 'user', text: 'Ryan Huber merged the Aion entity stage', occurred_at: '2026-08-28T11:00:00Z' }],
+  turns: [
+    {
+      role: 'user',
+      text: 'Ryan Huber merged the Aion entity stage',
+      occurred_at: '2026-08-28T11:00:00Z',
+    },
+  ],
 };
 
 const STUB_EXTRACTION = {
@@ -160,7 +167,10 @@ describe('canonicalization against the live constraint', () => {
 
     expect(entities.filter((entity) => entity.nameNorm === 'ryan huber')).toHaveLength(1);
     expect(
-      entities.filter((entity) => entity.nameNorm === 'aion').map((entity) => entity.type).sort(),
+      entities
+        .filter((entity) => entity.nameNorm === 'aion')
+        .map((entity) => entity.type)
+        .sort(),
     ).toEqual(['concept', 'project']);
   });
 
