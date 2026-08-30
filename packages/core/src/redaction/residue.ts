@@ -1,5 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 import { readStoredText } from '../infrastructure/graph/introspection.js';
+import { withoutFingerprints } from './fingerprint.js';
 import { redact } from './redact.js';
 
 /**
@@ -40,7 +41,9 @@ export async function scanRedactionResidue(
   let leaking = 0;
 
   for (const row of rows) {
-    const { matches } = redact(row.text, entropyThreshold);
+    // Fingerprints out first: a node this check already had rewritten still carries a
+    // `key: value`-shaped token, and counting that as a leak makes the count unclosable.
+    const { matches } = redact(withoutFingerprints(row.text), entropyThreshold);
     if (matches.length === 0) {
       continue;
     }
