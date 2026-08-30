@@ -40,7 +40,7 @@ async function main(): Promise<void> {
     throw new Error(`${config.neo4j.uri} is unreachable: ${health.error ?? 'no detail'}`);
   }
 
-  const logger = openLogger(config.logging);
+  const logger = openLogger({ ...config.logging, name: 'aion-narrative-cleanup' });
   const deps: NarrativeDeps = {
     driver: connection.driver,
     provider: new OllamaProvider({

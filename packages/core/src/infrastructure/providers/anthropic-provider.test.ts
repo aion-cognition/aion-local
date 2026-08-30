@@ -6,6 +6,7 @@ import {
   AnthropicResponseError,
 } from './anthropic-provider.js';
 import { CircuitOpenError } from './circuit-breaker.js';
+import { ERROR_BODY_LIMIT } from './errors.js';
 import type { StructuredRequest } from './types.js';
 
 const SCHEMA = { type: 'object', properties: { ok: { type: 'boolean' } } };
@@ -233,5 +234,34 @@ describe('failures the provider has to survive', () => {
     await expect(client.generate(REQUEST)).rejects.toBeInstanceOf(CircuitOpenError);
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * The error message is what roughly a dozen `{ err }` call sites write to the JSONL log, and a
+ * reflection prompt embeds episode and claim text. A provider that echoes the request back in
+ * its error body would put that content in every one of those lines.
+ */
+describe('what a request error carries into the logs', () => {
+  const LEAKY_BODY = Array.from(
+    { length: 60 },
+    (_, line) =>
+      `{"line": ${String(line)}, "echo": "the episode text a reflection prompt embedded"}`,
+  ).join('\n');
+
+  it('caps a multi-kilobyte body and collapses it to one line', async () => {
+    expect(LEAKY_BODY.length).toBeGreaterThan(3_000);
+    const fetchImpl = vi.fn(() => Promise.resolve(new Response(LEAKY_BODY, { status: 400 })));
+
+    const err = (await provider(fetchImpl as unknown as typeof fetch)
+      .generate(REQUEST)
+      .catch((e: unknown) => e)) as AnthropicRequestError;
+
+    expect(err).toBeInstanceOf(AnthropicRequestError);
+    expect(err.message).not.toContain('\n');
+    expect(err.message).toContain('400');
+    expect(err.message.length).toBeLessThan(ERROR_BODY_LIMIT + 80);
+    // The tail, which is where an uncapped message would keep spilling the body.
+    expect(err.message).not.toContain('"line": 59');
   });
 });

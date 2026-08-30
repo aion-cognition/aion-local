@@ -399,22 +399,29 @@ export async function handleReflection(
     notifyEnqueued(deps, job.jobId);
   }
   if (job.decision !== undefined && job.decision.lane !== DEFAULT_REFLECTION_LANE) {
-    deps.logger.warn(
-      {
-        episodeId: stored.episodeId,
-        sessionId,
-        reason: job.decision.reason,
-        sessionArrivals: job.decision.sessionArrivals,
-        globalArrivals: job.decision.globalArrivals,
-      },
-      'reflection queued in the bulk lane',
-    );
+    const laneFields = {
+      episodeId: stored.episodeId,
+      sessionId,
+      reason: job.decision.reason,
+      sessionArrivals: job.decision.sessionArrivals,
+      globalArrivals: job.decision.globalArrivals,
+    };
+    // A client that asked for the bulk lane got what it asked for, which is not a problem an
+    // operator has to look at. Only the arrival-rate backstop is a demotion, so only it warns.
+    if (job.decision.reason === 'requested') {
+      deps.logger.info(laneFields, 'reflection queued in the bulk lane');
+    } else {
+      deps.logger.warn(laneFields, 'reflection queued in the bulk lane');
+    }
   }
 
   await attachVectors(deps, stored, sessionId);
 
   if (!stored.created) {
-    deps.logger.debug(
+    // Info, not debug: a caller re-pushing an experience the substrate already holds is what
+    // an operator reads to tell a retry storm from real traffic, and it is invisible at the
+    // level production runs. One line per duplicate push bounds the volume by the client.
+    deps.logger.info(
       { episodeId: stored.episodeId, sessionId, requeued: job.enqueued, lane: job.lane },
       'reflection payload already stored',
     );

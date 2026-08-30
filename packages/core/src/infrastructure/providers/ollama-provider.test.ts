@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { ERROR_BODY_LIMIT, OllamaRequestError } from './errors.js';
 import { OllamaProvider } from './ollama-provider.js';
 
 function jsonResponse(body: unknown, init: { status?: number } = {}): Response {
@@ -133,5 +134,43 @@ describe('OllamaProvider.generate', () => {
         schema: {},
       }),
     ).rejects.toThrow(/missing message content/);
+  });
+});
+
+/**
+ * The error message is what roughly a dozen `{ err }` call sites write to the JSONL log, and a
+ * reflection prompt embeds episode and claim text. A provider that echoes the request back in
+ * its error body would put that content in every one of those lines.
+ */
+describe('what a request error carries into the logs', () => {
+  const LEAKY_BODY = Array.from(
+    { length: 60 },
+    (_, line) =>
+      `{"line": ${String(line)}, "echo": "the episode text a reflection prompt embedded"}`,
+  ).join('\n');
+
+  it('caps a multi-kilobyte body and collapses it to one line', async () => {
+    expect(LEAKY_BODY.length).toBeGreaterThan(3_000);
+    const fetchImpl = vi.fn(async () => new Response(LEAKY_BODY, { status: 500 }));
+    const provider = new OllamaProvider({
+      baseUrl: 'http://localhost:11434',
+      embedModel: 'nomic-embed-text',
+      fetchImpl,
+    });
+
+    const err = (await provider
+      .generate({
+        model: 'qwen3:1.7b',
+        messages: [{ role: 'user', content: 'the episode text' }],
+        schema: {},
+      })
+      .catch((e: unknown) => e)) as OllamaRequestError;
+
+    expect(err).toBeInstanceOf(OllamaRequestError);
+    expect(err.status).toBe(500);
+    expect(err.message).not.toContain('\n');
+    expect(err.message.length).toBeLessThan(ERROR_BODY_LIMIT + 80);
+    // The tail, which is where an uncapped message would keep spilling the body.
+    expect(err.message).not.toContain('"line": 59');
   });
 });
