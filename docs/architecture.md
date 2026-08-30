@@ -39,11 +39,12 @@ cues, or memory packs, only nodes, edges, and rows.
   that apply them, `flush.ts` (bounded reinforcement of the nominated pairs) and `decay.ts`
   (weight decay against staleness, the protected relationship types exempt), plus
   `metrics.ts`. Both operations are called, never scheduled: cadence belongs to the caller.
-- **`introspection/domain/`**: `health.ts` (the snapshot every phase reads), `decide.ts`
-  (the pure three-tier decision, starvation protection, effectiveness weighting),
-  `operation.ts` (the contract a maintenance operation implements), `buckets.ts`
-  (calendar-aligned idempotency keys), `tier3.ts` (the model-guided seam, opt-in and
-  propose-only).
+- **`introspection/domain/`**: `health.ts` (the snapshot every phase reads, plus the critical
+  conditions read off it), `decide.ts` (the pure three-tier decision, starvation protection,
+  effectiveness weighting, the preemption grace), `operation.ts` (the contract a maintenance
+  operation implements), `bridge-pairs.ts` (which two communities a bridge should join),
+  `buckets.ts` (calendar-aligned idempotency keys), `tier3.ts` (the model-guided seam, opt-in
+  and propose-only).
 - **`introspection/application/`**: `observe.ts` (one health reading, assembled from the
   surfaces `doctor` and `/health` already use, every collector caught), `engine.ts` (the
   tick loop: bucket claim, run, learn, backoff), `catalog.ts` (the registration seam),
@@ -210,12 +211,17 @@ does, and one tick runs four phases: observe, decide, act, learn.
    independently; one that throws names itself in `degraded` and costs its own metrics
    rather than the reading.
 2. **Decide.** `decide` (`introspection/domain/decide.ts`) is pure: the same snapshot always
-   produces the same answer, so a decision is arguable from the numbers. Tier 1 answers a
-   condition already degrading recall (vector parity under 0.8, orphan share over 0.3,
-   episodes with no session link) and preempts the whole catalog unweighted. Tier 2 scores
-   the routine catalog by each operation's own `relevance`, halved for an operation whose
-   runs have stopped improving anything and multiplied by how many cycles it has been passed
-   over, and selects the highest above `AION_MAINTENANCE_URGENCY_THRESHOLD`. Tier 3 is the
+   produces the same answer, so a decision is arguable from the numbers. Tier is a property of
+   the cycle rather than of the operation: an operation names the critical condition it repairs
+   in `answers`, and it preempts the whole catalog unweighted on the cycles the snapshot meets
+   that condition. Three conditions, each with a responder: vector parity under 0.8
+   (`vector_backfill`), orphan share over 0.3 (`orphan_cleanup`), episodes with no session link
+   (`emergency_relationship_repair`). Preemption is not open-ended. Past a grace of three
+   resolved runs, an operation keeps preempting only while it is still moving the metric it
+   declared, because a condition can stand for weeks and nothing else may wait that long. Tier
+   2 scores the rest by each operation's own `relevance`, halved for an operation whose runs
+   have stopped improving anything and multiplied by how many cycles it has been passed over,
+   and selects the highest above `AION_MAINTENANCE_URGENCY_THRESHOLD`. Tier 3 is the
    model-guided seam: opt-in (`AION_MAINTENANCE_TIER3`), propose-only, and inert by default.
 3. **Act.** At most one operation per tick. It claims a calendar-aligned time bucket in the
    ops ledger first (`intro:<name>:<bucket>:<stamp>`), so two service instances cannot run
@@ -228,20 +234,34 @@ does, and one tick runs four phases: observe, decide, act, learn.
    anything.
 
 The catalog is one ordered list (`introspection/application/catalog.ts`), which is the only
-place an operation joins maintenance. Twelve are registered, in four groups: substrate
+place an operation joins maintenance. Fourteen are registered, in four groups: substrate
 hygiene (`vector_backfill`, `reconcile_reenqueue`, `dead_letter`,
 `redaction_residue_purge`), plasticity (`reinforcement_flush`, `memory_decay`), content
-(`narrative_cleanup`, `retro_judgment_sweep`, `description_freshness`), and topology
-(`orphan_cleanup`, `community_refresh`, `symbiosis_bridge`). List order is documentation:
-selection is by tier and urgency, and ties break on waiting time and then on name.
+(`narrative_cleanup`, `narrative_regrounding`, `retro_judgment_sweep`,
+`description_freshness`), and topology (`emergency_relationship_repair`, `orphan_cleanup`,
+`community_refresh`, `symbiosis_bridge`). List order is documentation: selection is by tier
+and urgency, and ties break on waiting time and then on name.
 
 One repair sits beside the catalog and is deliberately not in it. `entity_unmerge` splits an
 absorbed identity back out of the entity it was merged into. A bad merge is not measurable
 from inside the graph (a correct merge and a wrong one have the same shape), so a person
-names the merge to reverse and the loop never selects it.
+names the merge to reverse; `aion unmerge ls|apply` is where they name it.
 
 `aion stats` renders the loop's own record: the cycle count, and per operation the runs,
 the improved/unchanged/failed split, and the last window's outcome from the ledger.
+`aion maintain ls` lists the catalog; `aion maintain run <name>` forces one operation now,
+bypassing the relevance score and the bucket claim and nothing else. The escape hatch exists
+because one operation's subject is not proportional: thirteen leaking nodes out of two
+thousand is a small share to a scoring function and an incident to a person.
+
+**Where this departs from the whitepaper.** Appendix D names eleven operations and four are
+not registered. `entity_consolidation` the whitepaper itself labels a gated placeholder.
+`connectivity_enhance`, `association_pruning`, and `temporal_hygiene` are outside the round's
+scope: the first two overlap what `symbiosis_bridge` and `memory_decay` already do to edge
+weight, and the third has no measurable trigger in the snapshot yet. The symbiosis bridge
+follows §8.5's stages with one narrowing: it scores community pairs and asks a model for the
+bridge's summary, rationale and compatibility, but it writes one bridge per run against the
+closest cross-community pair rather than a set of specific node connections.
 
 ## Bitemporal model
 
