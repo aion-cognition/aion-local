@@ -12,6 +12,10 @@ import { upsertEdge } from '../../../infrastructure/graph/edges.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import { withCurrency } from '../../../infrastructure/graph/read-modes.js';
 import {
+  bridgeEndpoints,
+  standingBridges,
+} from '../../../infrastructure/graph/test-support/maintenance-queries.fixture.js';
+import {
   startNeo4jHarness,
   stopNeo4jHarness,
   type Neo4jHarness,
@@ -180,41 +184,11 @@ async function communityOf(id: string): Promise<number | undefined> {
 }
 
 async function bridgeIds(): Promise<string[]> {
-  return runRead(
-    harness.driver,
-    'MATCH (b:Bridge) WHERE b.forgotten_at IS NULL RETURN b.id AS id',
-    {},
-    (row) => row['id'] as string,
-  );
+  return (await standingBridges(harness.driver)).map((bridge) => bridge.id);
 }
 
 async function bridgeSummary(): Promise<string | undefined> {
-  const rows = await runRead(
-    harness.driver,
-    'MATCH (b:Bridge) WHERE b.forgotten_at IS NULL RETURN b.text AS text',
-    {},
-    (row) => row['text'] as string,
-  );
-  return rows[0];
-}
-
-async function bridgeEndpoints(): Promise<
-  { id: string; provenance: string[]; rationale: string }[]
-> {
-  return runRead(
-    harness.driver,
-    [
-      'MATCH (b:Bridge)-[r:RELATED_TO]-(n:AionNode)',
-      'WHERE b.forgotten_at IS NULL',
-      'RETURN n.id AS id, r.provenance AS provenance, r.rationale AS rationale',
-    ].join('\n'),
-    {},
-    (row) => ({
-      id: row['id'] as string,
-      provenance: row['provenance'] as string[],
-      rationale: row['rationale'] as string,
-    }),
-  );
+  return (await standingBridges(harness.driver))[0]?.text;
 }
 
 /**
@@ -295,7 +269,7 @@ describe('community refresh and the symbiosis bridge', () => {
     expect(bridges).toHaveLength(1);
     expect(await bridgeSummary()).toBe(PROPOSED_SUMMARY);
 
-    const endpoints = await bridgeEndpoints();
+    const endpoints = await bridgeEndpoints(harness.driver);
     expect(endpoints.map((endpoint) => endpoint.id).sort()).toEqual(
       [NEAREST_LEFT, NEAREST_RIGHT].sort(),
     );
@@ -344,7 +318,7 @@ describe('community refresh and the symbiosis bridge', () => {
     expect(outcome.detail).toContain('deterministic');
     expect(await bridgeSummary()).toContain('Bridge between two memory clusters');
 
-    const endpoints = await bridgeEndpoints();
+    const endpoints = await bridgeEndpoints(harness.driver);
     expect(endpoints.map((endpoint) => endpoint.id).sort()).toEqual(
       [NEAREST_LEFT, NEAREST_RIGHT].sort(),
     );

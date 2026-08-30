@@ -5,8 +5,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import { forgetNode, writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
-import { runRead } from '../../../infrastructure/graph/connection.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
+import { currentEpisodeIds } from '../../../infrastructure/graph/test-support/maintenance-queries.fixture.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
@@ -73,13 +73,7 @@ function ctxFor(overrides: Partial<OperationContext> = {}): OperationContext {
  * out of scope, and what `listStoredEpisodes` already filters on.
  */
 async function forgetExistingEpisodes(): Promise<void> {
-  const ids = await runRead(
-    harness.driver,
-    'MATCH (e:Episode) WHERE e.forgotten_at IS NULL RETURN e.id AS id',
-    {},
-    (row) => row['id'] as string,
-  );
-  for (const id of ids) {
+  for (const id of await currentEpisodeIds(harness.driver)) {
     await forgetNode(harness.driver, { id, now: NOW });
   }
 }
