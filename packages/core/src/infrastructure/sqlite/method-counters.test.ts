@@ -27,7 +27,8 @@ describe('pack method counters', () => {
     }
     // The one the protocol names and no item carries: `graph_traversal` is the fusion leg,
     // and the items it produces are scored and labelled by the activation stage.
-    expect([...RecallMethodSchema.options].filter((method) => !PACK_METHODS.includes(method))).toEqual([
+    const counted = new Set<string>(PACK_METHODS);
+    expect([...RecallMethodSchema.options].filter((method) => !counted.has(method))).toEqual([
       'graph_traversal',
     ]);
   });

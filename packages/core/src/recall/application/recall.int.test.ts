@@ -21,7 +21,11 @@ import { LaneAssigner } from '../../reflection/application/lanes.js';
 import { SessionManager } from '../../session/session-manager.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { getLastPack } from '../../infrastructure/sqlite/last-pack.js';
-import { packMethodCounters } from '../../infrastructure/sqlite/method-counters.js';
+import {
+  PACK_METHODS,
+  packMethodCounters,
+  type PackMethod,
+} from '../../infrastructure/sqlite/method-counters.js';
 import { markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import { orchestratorLedgerKey } from '../../reflection/application/orchestrator.js';
 import { CueCache } from './cues.js';
@@ -311,7 +315,11 @@ describe('per-method pack contribution counters', () => {
     });
 
     const after = packMethodCounters(db);
-    const methods = [...first.episodes ?? [], ...second.episodes ?? []].map((item) => item.rationale.method);
+    // Only the methods the counter tracks: `graph_traversal` is the fusion leg's name and no
+    // item carries it, so it is not a counter row.
+    const methods = [...(first.episodes ?? []), ...(second.episodes ?? [])]
+      .map((item) => item.rationale.method)
+      .filter((method): method is PackMethod => (PACK_METHODS as readonly string[]).includes(method));
     expect(methods.length).toBeGreaterThan(0);
     for (const method of methods) {
       expect(after[method]).toBeGreaterThan(before[method]);
