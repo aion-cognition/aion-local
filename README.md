@@ -98,6 +98,8 @@ and then runs the command in the `aion-cli` container.
 - `forget`: bitemporal close of a node, by id or by query
 - `queue`: inspect and triage the reflection queue
 - `proposals`: review judged contradictions and duplicate entities
+- `maintain`: the maintenance catalog, and forcing one operation to run now
+- `unmerge`: split an identity back out of the entity dedup absorbed it into
 
 ```
 aion queue ls [--session <id>] [--lane <l>] [--limit <n>]   # depth, age, attempts, per-lane totals
@@ -108,6 +110,12 @@ aion queue reconcile [--re-enqueue --yes]                   # episodes with no l
 aion proposals ls [--all]                                   # open judged contradictions and merge candidates
 aion proposals apply <id> [--claim-only | --episode]        # one at a time; default closes the subject family
 aion proposals dismiss <id>
+
+aion maintain ls                                            # every registered operation and what it answers
+aion maintain run <name>                                    # run one now, whatever the loop would have chosen
+
+aion unmerge ls <canonical-id>                              # what one entity has absorbed
+aion unmerge apply <merged-id>                              # split one of those identities back out
 
 aion search "<query>" [--as-of <ts>] [--knew-at <ts>] [--json]
 aion why <node_id>
@@ -123,6 +131,17 @@ reconcile count as an informational check and warns past `AION_RECONCILE_WARN_TH
 auto-supersession with an extra keystroke. Its default blade closes the judged claim and the
 siblings of the same episode that name one of its subjects; `--claim-only` closes just the
 claim, and `--episode` closes everything that observation produced.
+
+`maintain run` bypasses the operation's relevance score and its time-bucket claim, and nothing
+else: the batch bounds, the transactions, the protected relationship set and the ledger record
+all still hold. It exists because one operation's subject is not proportional. Thirteen leaking
+nodes out of two thousand is a small share to a scoring function and an incident to a person,
+and before this there was no way to say so.
+
+`unmerge` is the human end of entity deduplication, and it is deliberately not a maintenance
+operation. A bad merge is not measurable from inside the graph: the shape after a correct merge
+and after a wrong one is the same, and the only thing that separates them is a person saying the
+two names were different things.
 
 `forget` sets `forgotten_at` and deletes nothing. Default recall stops serving the node;
 `aion search --as-of` and `--knew-at` still return it, which is what keeps the act audited.
