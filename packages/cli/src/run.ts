@@ -1,5 +1,6 @@
 import { runDoctor } from './doctor.js';
 import { runForget } from './forget.js';
+import { runHooks } from './hooks-cmd.js';
 import { runInit } from './init.js';
 import { runLast } from './last.js';
 import { runMaintain } from './maintain.js';
@@ -22,6 +23,10 @@ const commands: Record<string, Command> = {
   init: {
     summary: 'provision the substrate: neo4j, models, schema, backbone',
     run: (argv) => runInit(argv),
+  },
+  hooks: {
+    summary: 'install the Claude Code harness hooks: install | uninstall | status',
+    run: (argv) => runHooks(argv),
   },
   status: {
     summary: 'services, models, routing, and graph counts',

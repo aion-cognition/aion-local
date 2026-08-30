@@ -35,6 +35,23 @@ Run that once. Every later Claude Code session then connects with no per-session
 `init` is idempotent: rerun it any time and it reports what already exists instead of
 failing or duplicating work.
 
+## Profiles
+
+`init` takes one of two profiles, and asks for it when you do not name one.
+
+- `aion init local` provisions the substrate and nothing else. Generation runs on Ollama, and
+  the agent decides for itself when to call recall and reflection.
+- `aion init full` also asks for an Anthropic key and installs the Claude Code harness hooks,
+  which turn that judgment call into a fixed cadence: recall at session start and on a
+  substantial prompt, capture on compaction, stop, subagent stop, and session end. The two
+  halves pair on purpose, since the hooks push enough small capture work to be worth routing
+  to Haiku.
+
+`aion hooks install | uninstall | status` does the hook half on its own. Every hook fails open:
+a service that is down or a payload it cannot read exits 0 and the turn proceeds.
+See [docs/harness.md](docs/harness.md) for what each hook does, the push-and-instruct trade at
+Stop, the PHI caveat on research capture, and the settings JSON for a manual install.
+
 ## Tools
 
 ### recall
@@ -88,6 +105,7 @@ Run through `./bin/aion <command>`, which builds the image when sources are newe
 and then runs the command in the `aion-cli` container.
 
 - `init`: provision the substrate (neo4j, models, schema, backbone)
+- `hooks`: install, remove, or inspect the Claude Code harness hooks
 - `status`: services, models, routing, and graph counts
 - `doctor`: check every substrate invariant and name what is broken
 - `stats`: substrate counts, queue and plasticity health, recall cadence, per-method pack

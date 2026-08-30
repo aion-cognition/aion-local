@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  AnthropicKeyUnavailableError,
   MemberNameUnavailableError,
   parseInitFlags,
   registrationCommand,
   registrationJson,
+  resolveAnthropicKey,
+  resolveInitProfile,
   resolveMemberName,
   UnknownOptionError,
 } from './init.js';
@@ -25,6 +28,113 @@ describe('parseInitFlags', () => {
 
   it('rejects an unknown option', () => {
     expect(() => parseInitFlags(['--force'])).toThrow(UnknownOptionError);
+  });
+
+  it('accepts either profile as a bare word and leaves it unset otherwise', () => {
+    expect(parseInitFlags(['local']).profile).toBe('local');
+    expect(parseInitFlags(['full', '--yes'])).toEqual({ assumeYes: true, profile: 'full' });
+    expect(parseInitFlags([]).profile).toBeUndefined();
+  });
+
+  it('rejects a word that is neither profile', () => {
+    expect(() => parseInitFlags(['medium'])).toThrow(UnknownOptionError);
+  });
+});
+
+describe('resolveInitProfile', () => {
+  it('takes the profile the command line named', async () => {
+    await expect(
+      resolveInitProfile({ requested: 'full', assumeYes: false, interactive: true, ask: never }),
+    ).resolves.toBe('full');
+  });
+
+  it('defaults to local under --yes and with no terminal', async () => {
+    await expect(
+      resolveInitProfile({ requested: undefined, assumeYes: true, interactive: true, ask: never }),
+    ).resolves.toBe('local');
+    await expect(
+      resolveInitProfile({
+        requested: undefined,
+        assumeYes: false,
+        interactive: false,
+        ask: never,
+      }),
+    ).resolves.toBe('local');
+  });
+
+  it('asks on a terminal and keeps local for anything but full', async () => {
+    await expect(
+      resolveInitProfile({
+        requested: undefined,
+        assumeYes: false,
+        interactive: true,
+        ask: async () => 'FULL',
+      }),
+    ).resolves.toBe('full');
+    await expect(
+      resolveInitProfile({
+        requested: undefined,
+        assumeYes: false,
+        interactive: true,
+        ask: async () => '',
+      }),
+    ).resolves.toBe('local');
+  });
+});
+
+describe('resolveAnthropicKey', () => {
+  it('prefers the configured key, then the one already in .env', async () => {
+    await expect(
+      resolveAnthropicKey({
+        configured: 'sk-configured',
+        fromEnvFile: 'sk-file',
+        assumeYes: false,
+        interactive: false,
+        ask: never,
+      }),
+    ).resolves.toBe('sk-configured');
+    await expect(
+      resolveAnthropicKey({
+        configured: '',
+        fromEnvFile: 'sk-file',
+        assumeYes: false,
+        interactive: false,
+        ask: never,
+      }),
+    ).resolves.toBe('sk-file');
+  });
+
+  it('asks for a missing key on a terminal', async () => {
+    await expect(
+      resolveAnthropicKey({
+        configured: '',
+        fromEnvFile: undefined,
+        assumeYes: false,
+        interactive: true,
+        ask: async () => '  sk-typed ',
+      }),
+    ).resolves.toBe('sk-typed');
+  });
+
+  it('fails by name under --yes and with no terminal to ask on', async () => {
+    await expect(
+      resolveAnthropicKey({
+        configured: '',
+        fromEnvFile: undefined,
+        assumeYes: true,
+        interactive: true,
+        ask: never,
+      }),
+    ).rejects.toBeInstanceOf(AnthropicKeyUnavailableError);
+    await expect(
+      resolveAnthropicKey({
+        configured: '',
+        fromEnvFile: undefined,
+        assumeYes: false,
+        interactive: true,
+        ask: async () => '',
+      }),
+    ).rejects.toBeInstanceOf(AnthropicKeyUnavailableError);
   });
 });
 

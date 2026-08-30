@@ -38,3 +38,37 @@ export function envFilePath(repoDir: string): string {
 export function envTemplatePath(repoDir: string): string {
   return join(repoDir, ENV_TEMPLATE_NAME);
 }
+
+/** `bin/aion` exports the host repo path into the container, where nothing else can name it. */
+export const HOST_REPO_ENV_VAR = 'AION_REPO_PATH';
+
+export const HOOK_SCRIPT_RELATIVE = join('packages', 'cli', 'dist', 'hook-main.js');
+
+export type HostRepo = {
+  readonly path: string;
+  /** False whenever the path cannot be checked from here, which is every run inside the CLI container. */
+  readonly verified: boolean;
+};
+
+/**
+ * Where the repo sits on the machine Claude Code runs on, which is not where this process
+ * sits. The declared path wins outright: inside the container it names a directory that is
+ * not there, and reading the container's own cwd instead would write container paths into
+ * host settings.
+ */
+export function resolveHostRepo(
+  env: Record<string, string | undefined> = process.env,
+  cwd: string = process.cwd(),
+): HostRepo {
+  const declared = (env[HOST_REPO_ENV_VAR] ?? '').trim();
+  const path = declared === '' ? cwd : declared;
+  return { path, verified: existsSync(join(path, COMPOSE_FILE_NAME)) };
+}
+
+export function hookScriptPath(repoPath: string): string {
+  return join(repoPath, HOOK_SCRIPT_RELATIVE);
+}
+
+export function claudeSettingsPath(home: string): string {
+  return join(home, '.claude', 'settings.json');
+}
