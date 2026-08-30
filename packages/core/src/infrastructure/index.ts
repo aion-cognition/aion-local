@@ -28,6 +28,7 @@ export { getMeta, setMeta } from './sqlite/meta.js';
 export {
   getLedgerEntry,
   isLedgerApplied,
+  latestLedgerEntry,
   listLedgerKeys,
   markLedgerApplied,
 } from './sqlite/ops-ledger.js';

@@ -529,3 +529,106 @@ and current, because it is a true record of what was said; closing it is what `-
 for. The judge did not propose this pair either time, which matches the earlier finding that
 misses trace to extraction rather than to the judge: it extracted "took over" and "transferred
 ownership", two statements that genuinely do not contradict.
+
+## P5-5: wiring, and what the live checkpoint found
+
+The twelve maintenance operations are registered in one catalog, the loop runs on the
+service's clock, and `aion stats` grew a `maintenance` section that reads the loop's own
+record: the cycle count, and per operation the runs, the improved/unchanged/failed split, and
+the last window's outcome from the ops ledger. An operation that has never been selected says
+so rather than printing zeroes, because "never selected" and "selected and changed nothing"
+are different answers. `docs/architecture.md` gained the maintenance path, `docs/degradation.md`
+gained the loop's failure modes, and the README's CLI list and status caught up with what
+`aion` actually does.
+
+The checkpoint ran against the live stack, which held 4,315 episodes across 245 sessions, with
+generation routed to `claude-haiku-4-5` and embeddings local. It found two defects. Both are
+fixed here; both were invisible to the suite.
+
+**A malformed answer wedged an episode forever.** The first experience pushed through the live
+service failed at the semantic-relationship stage with `AnthropicResponseError: carried no
+complete JSON value`, five times, then exhausted its attempts. Reproduced against the API with
+that episode's own candidates: prompt-delivered schemas only ask, and the model closed a string
+value and carried on in prose inside the JSON it was asked for.
+
+```
+"quote": "Marlin compaction is the bottleneck above four thousand partitions" enables the
+decision to "Standardise Peregrine on Halyard for checkpoint storage"
+```
+
+That is unparseable, and at temperature 0 it is identical on every retry, so the worker's five
+attempts bought nothing. The API's own structured-output mode answers the same request with
+schema-valid JSON, but only after every object node states `additionalProperties: false`, which
+none of the stages' schemas do; measured against all eight of them, closing the objects is the
+whole adaptation. Constrained mode is not the new default, because it also constrains the model
+harder: switching production to it dropped a family apply from two closed siblings to one and
+pushed a battery answer from bucket rank 2 to rank 4. So prompt delivery stays the shipped mode
+and keeps the numbers it was measured on, and an answer that will not parse is asked once more
+with the schema constrained. Re-pushing the identical payload afterwards: `semantic-relationships
+ok` in 6.26s, four relationships, episode applied.
+
+**A lost bucket claim cost the whole tick.** The engine selected the most urgent operation,
+lost the claim to a window already covered, and ended the cycle. With one tier-1 condition
+standing at relevance 1.0 and an hour-wide bucket, that meant one operation ran per hour and
+the other eleven waited it out, three ticks in four doing nothing. The tick now decides again
+without the operation whose window is taken; the set only shrinks, so it terminates, and a cycle
+where every candidate is claimed still reports itself skipped rather than idle. Observed live on
+the next tick: `orphan_cleanup` held the quarter-hour window, and the cycle fell through to
+`reconcile_reenqueue` instead of stopping.
+
+**The checkpoint, item by item.** A working session's experience pushed and enriched (12 to 21
+seconds an episode on the remote route, against 35 to 100 local); `aion why` on a minted entity
+named its source episode, `reflection_entities` as the extraction method, and its mention
+salience; a later recall's facts carried their rationale and the narratives bucket carried its
+compression. A resonant item surfaced under "which checkpoint store did we standardise
+Peregrine on and why" that shares no content word with the query, rationale `related by shape,
+not keywords`. A stated reversal produced three supersession proposals at 0.92 to 0.99; the
+default family apply closed the judged claim and two siblings, retired two entity glosses and
+reported the third as standing; the pack afterwards carried the old decision marked `superseded
+by` with its timestamp and the new one current; `as_of` before the apply returned the old truth
+and not the new one, and `knew_at` before it returned the old truth with no lineage at all.
+`aion forget` on an entity took it out of default recall and left it in a `knew_at` read.
+Regression: a paraphrase-only query ("saving replay position") reached the decision by vector,
+exact tokens reached it by bm25, a traversal-reached episode carried its `PARTICIPATES_IN` path
+in the rationale, two concurrent sessions got distinct packs stamped ten milliseconds apart, and
+an instance pointed at a cue model that does not exist answered anyway with `note: degraded cue
+extraction (model_error)`.
+
+**Maintenance, forced and observed.** The loop's own first tick took the tier-1 condition:
+`orphan_cleanup`, `critical: orphan_share` at 0.70, 200 orphans relinked, recorded under
+`intro:orphan_cleanup:quarter-hour:2026-08-29T23:45`. Stripping `content_vec` from 33 nodes of
+the checkpoint's own sessions raised `vector_backfill` to relevance 0.30 and urgency 0.525, and
+the next cycle selected it: 30 pending content vectors embedded, 20 stale context vectors
+refreshed, and the cycle after that scored it `improved` off the next snapshot. The same query
+that missed the decision entirely while the vectors were gone reached it by vector afterwards.
+Ten of the twelve operations ran green over eleven cycles. The two that did not are correctly
+below the urgency threshold: `redaction_residue_purge` at 13 leaking nodes in 5,000 scores
+0.003, and `dead_letter` at two exhausted jobs in a batch of 50 scores 0.04.
+
+**Key flip, both directions.** With the key set, boot logged `cue=anthropic:claude-haiku-4-5
+reflect=anthropic:claude-haiku-4-5` and reconciliation unloaded 5.7GB of `qwen3:8b` from Ollama
+memory while leaving `nomic-embed-text` resident and every tag on disk; `aion doctor` reported
+`no chat model routes locally; cue, reflect routed to anthropic`. The same binary run keyless
+against the same Ollama reported `routing cue=ollama:qwen3:1.7b reflect=ollama:qwen3:8b`, no
+remote banner, and a doctor round-trip through both local chat models. Nothing was pulled: the
+tags were on disk the whole time, which is what unloading rather than deleting buys.
+
+**Precision, re-measured under the shipped route.** The 24-case battery after the provider
+change: TP 12, FP 2, FN 0, TN 10, precision 0.857, recall 1.000, the same two baits missed
+(vantage disagreement, widened scope). Affirmative confidences moved from one flat value to
+0.92, 0.95, 0.99, and separation still does not exist: lowest correct 0.95, highest wrong 0.95.
+Both halves of the auto-mode rule still fail, so `AION_SUPERSEDE_MODE` keeps `propose`.
+
+**Gate.** `npm test`: 199 files, 1,941 passed, 3 skipped, 1 failed. The failure is one probe of
+the on-topic recall battery, and it is a bar sitting inside live-model variance rather than a
+regression. The probe asserts its answer lands in the top three of its bucket; on identical code
+and the same fixture it measured bucket rank 1, 3, 3, and 4 across four runs. The provider
+change is provably not the cause: the constrained retry fired zero times across a full run of
+that battery, so the path it took is the byte-identical one that shipped before. The bar is left
+where it is, and moving it is a measurement someone should make on more than four runs.
+
+**Left open.** The episode that exhausted its attempts before the provider fix is still queued
+and unenriched; `dead_letter` owns it and will relane it once its urgency clears, which at two
+exhausted rows takes 32 cycles of starvation boost. The substrate's 3,985 unenriched episodes
+and 13 redaction-residue nodes are real backlog that `aion doctor` warns on and the loop is
+working through 200 and 20 at a time.

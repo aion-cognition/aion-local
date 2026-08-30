@@ -15,16 +15,22 @@ export const DEFAULT_ANTHROPIC_MODEL = 'claude-haiku-4-5';
 /**
  * How the caller's JSON Schema reaches the model.
  *
- * `output_config` is the API's own structured-output mode. It refuses any object schema that
- * leaves `additionalProperties` unset, which every schema the reflection stages build does, so
- * it only fits schemas written for it.
- *
  * `system_prompt` states the schema as an instruction and parses whatever text comes back. It
  * accepts any schema a caller already hands to Ollama, at the cost of a validation pass the
- * caller has to run itself. This is the production mode: the stages validate their own output
- * and their schemas are the ones `output_config` refuses.
+ * caller has to run itself. This is the production mode: the stages validate their own output,
+ * and the extraction quality the gate batteries measure is the quality this mode produces.
+ *
+ * `output_config` is the API's own structured-output mode: the answer is constrained to the
+ * schema, the same guarantee the local route gets from Ollama's grammar. It constrains the
+ * model harder and measurably thins what extraction returns, so it is not the default; it is
+ * where a prompt-delivered answer that will not parse is retried. The API refuses an object
+ * schema that leaves `additionalProperties` unset, which every schema the stages build does,
+ * so `closeObjectSchemas` sets it before the call.
  */
 export type SchemaDelivery = 'output_config' | 'system_prompt';
+
+/** Stated once, so the service and the test-support client cannot drift onto different routes. */
+export const DEFAULT_SCHEMA_DELIVERY: SchemaDelivery = 'system_prompt';
 
 /** A non-2xx answer, after the retries. `status` is what a caller branches on. */
 export class AnthropicRequestError extends Error {
@@ -65,6 +71,34 @@ function splitSystem(messages: readonly ChatMessage[]): {
     rest.push({ role: message.role, content: message.content });
   }
   return { system: systemParts.length > 0 ? systemParts.join('\n\n') : undefined, rest };
+}
+
+/**
+ * The one adaptation a caller's schema needs for the API's structured-output mode: every object
+ * node states that it takes no properties beyond the ones it names. The stages leave it unset
+ * because Ollama does not ask for it, and they drop unknown keys on their own anyway, so
+ * closing the objects here narrows nothing the callers were relying on. A node that already
+ * sets it keeps what it set.
+ */
+export function closeObjectSchemas(schema: JsonSchema): JsonSchema {
+  return closeNode(schema) as JsonSchema;
+}
+
+function closeNode(node: unknown): unknown {
+  if (Array.isArray(node)) {
+    return node.map(closeNode);
+  }
+  if (typeof node !== 'object' || node === null) {
+    return node;
+  }
+  const closed: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node)) {
+    closed[key] = closeNode(value);
+  }
+  if (closed['type'] === 'object' && closed['additionalProperties'] === undefined) {
+    closed['additionalProperties'] = false;
+  }
+  return closed;
 }
 
 function schemaInstruction(schema: JsonSchema): string {
@@ -181,25 +215,18 @@ function throttled(status: number): boolean {
 }
 
 /**
- * One structured-output call over the Messages API, by raw HTTP. `req.model` names the
- * Anthropic model; the routing layer substitutes it, so callers keep reading their own
- * model from config.
- *
- * A 429, an overload, or a 5xx is a normal event on a shared key rather than a failure, so
- * three attempts absorb it with an honor-retry-after wait. Throwing on the first one hands
- * it to the reflection worker's backoff, which stretches to minutes.
- *
- * `req.think` has no counterpart here: it switches a local hybrid model's reasoning block
- * off, and this route has no such block to switch. It is dropped rather than rejected, so a
- * caller written for the local route needs no branch of its own.
+ * One call, one schema-delivery mode, parsed. A 429, an overload, or a 5xx is a normal event
+ * on a shared key rather than a failure, so three attempts absorb it with an honor-retry-after
+ * wait. Throwing on the first one hands it to the reflection worker's backoff, which stretches
+ * to minutes.
  */
-export async function requestAnthropicJson(
+async function askAnthropic(
   options: AnthropicRequestOptions,
   req: StructuredRequest,
+  viaPrompt: boolean,
 ): Promise<unknown> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const { system, rest } = splitSystem(req.messages);
-  const viaPrompt = (options.schemaDelivery ?? 'output_config') === 'system_prompt';
   const instructions = viaPrompt ? joinInstructions(system, schemaInstruction(req.schema)) : system;
 
   let response!: Response;
@@ -220,7 +247,11 @@ export async function requestAnthropicJson(
         ...(instructions === undefined ? {} : { system: instructions }),
         ...(viaPrompt
           ? {}
-          : { output_config: { format: { type: 'json_schema', schema: req.schema } } }),
+          : {
+              output_config: {
+                format: { type: 'json_schema', schema: closeObjectSchemas(req.schema) },
+              },
+            }),
         messages: rest,
       }),
       ...(req.signal === undefined ? {} : { signal: req.signal }),
@@ -244,6 +275,37 @@ export async function requestAnthropicJson(
     throw new AnthropicResponseError('missing text content');
   }
   return parseJsonPayload(textBlock.text);
+}
+
+/**
+ * One structured-output call over the Messages API, by raw HTTP. `req.model` names the
+ * Anthropic model; the routing layer substitutes it, so callers keep reading their own
+ * model from config.
+ *
+ * Prompt delivery gets one constrained retry when the answer will not parse. Asking for JSON
+ * in the system prompt is what the stages' schemas need, and it is what the shipped extraction
+ * quality was measured through, but it only asks: measured against one real episode, the model
+ * closed a string value and carried on in prose, on every attempt at temperature 0. Retrying
+ * that request unchanged returns the same text, so the retry switches to the mode the API
+ * constrains, which is the one thing that changes the shape of the answer.
+ *
+ * `req.think` has no counterpart here: it switches a local hybrid model's reasoning block
+ * off, and this route has no such block to switch. It is dropped rather than rejected, so a
+ * caller written for the local route needs no branch of its own.
+ */
+export async function requestAnthropicJson(
+  options: AnthropicRequestOptions,
+  req: StructuredRequest,
+): Promise<unknown> {
+  const viaPrompt = (options.schemaDelivery ?? DEFAULT_SCHEMA_DELIVERY) === 'system_prompt';
+  try {
+    return await askAnthropic(options, req, viaPrompt);
+  } catch (err) {
+    if (!viaPrompt || !(err instanceof AnthropicResponseError)) {
+      throw err;
+    }
+    return await askAnthropic(options, req, false);
+  }
 }
 
 export type AnthropicProviderOptions = {
@@ -277,7 +339,7 @@ export class AnthropicProvider implements GenerationBackend {
       apiKey: options.apiKey,
       ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
       ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
-      schemaDelivery: options.schemaDelivery ?? 'system_prompt',
+      ...(options.schemaDelivery === undefined ? {} : { schemaDelivery: options.schemaDelivery }),
     };
     this.#model = options.model;
     this.#breaker = new CircuitBreaker({

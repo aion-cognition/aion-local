@@ -24,6 +24,8 @@ import { Introspector } from './engine.js';
 const EMBED_DIMENSION = 8;
 const NOW = new Date('2026-08-29T14:37:00.000Z');
 const NEXT_BUCKET = new Date('2026-08-29T15:02:00.000Z');
+/** A later quarter-hour window inside the same hour, so an hour-bucketed claim still stands. */
+const NEXT_QUARTER = new Date('2026-08-29T14:52:00.000Z');
 
 let harness: Neo4jHarness;
 let db: SqliteHandle;
@@ -132,6 +134,26 @@ describe('Introspector', () => {
     // The window turns over and the second instance takes the next one.
     await engineFor([second], [healthFixture()], NEXT_BUCKET).tickOnce();
     expect(second.calls()).toBe(1);
+  });
+
+  it('falls through to the next candidate when the winner already holds its bucket', async () => {
+    // Wide bucket, top relevance: without a fall-through it would be selected every tick inside
+    // the hour and run on none of them, and the narrower operation would wait out the hour.
+    const dominant = fakeOperation('hourly_maintenance', { bucket: 'hour', relevance: () => 1 });
+    const runnerUp = fakeOperation('quarter_hourly_maintenance', { relevance: () => 0.3 });
+
+    const first = await engineFor([dominant, runnerUp], [healthFixture()]).tickOnce();
+    expect(first.decision).toMatchObject({ kind: 'selected', name: 'hourly_maintenance' });
+    expect(dominant.calls()).toBe(1);
+    expect(runnerUp.calls()).toBe(0);
+
+    // Same hour, next quarter-hour window. The hourly operation is still the top candidate.
+    const second = await engineFor([dominant, runnerUp], [healthFixture()], NEXT_QUARTER).tickOnce();
+
+    expect(second.skipped).toBe(false);
+    expect(second.decision).toMatchObject({ kind: 'selected', name: 'quarter_hourly_maintenance' });
+    expect(dominant.calls()).toBe(1);
+    expect(runnerUp.calls()).toBe(1);
   });
 
   it('scores the run against the next snapshot rather than the one it decided from', async () => {

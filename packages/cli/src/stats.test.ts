@@ -45,7 +45,30 @@ const SNAPSHOT: StatsSnapshot = {
     entity_resolution: 0,
     recency: 0,
   },
+  maintenance: {
+    cycle: 41,
+    operations: [
+      {
+        stats: {
+          name: 'vector_backfill',
+          runs: 3,
+          improved: 2,
+          unchanged: 1,
+          failed: 0,
+          lastRunAt: '2026-08-29T12:00:00.000Z',
+          selectedCycle: 39,
+        },
+        lastStatus: 'applied',
+        lastItemsAffected: 18,
+      },
+      {
+        stats: { name: 'dead_letter', runs: 0, improved: 0, unchanged: 0, failed: 0 },
+      },
+    ],
+  },
 };
+
+const NOW = Date.parse('2026-08-29T12:04:00.000Z');
 
 describe('renderStats', () => {
   it('renders substrate counts by label and the graph total', () => {
@@ -90,6 +113,27 @@ describe('renderStats', () => {
     // 30 of 50 total items served came through the vector method.
     expect(text).toMatch(/vector\s+30\s+60\.0%/);
     expect(text).toMatch(/activation\s+8\s+16\.0%/);
+  });
+
+  it('renders one maintenance line per registered operation, with the last outcome', () => {
+    const { lines, write } = collector();
+
+    renderStats(SNAPSHOT, write, NOW);
+
+    const text = lines.join('\n');
+    expect(text).toContain('cycle 41, 2 operations registered');
+    expect(text).toMatch(
+      /vector_backfill\s+runs 3\s+improved 2\s+unchanged 1\s+failed 0\s+last 4m ago applied \(18 affected\)/,
+    );
+  });
+
+  it('separates an operation that has never been selected from one that ran and changed nothing', () => {
+    const { lines, write } = collector();
+
+    renderStats(SNAPSHOT, write, NOW);
+
+    const text = lines.join('\n');
+    expect(text).toMatch(/dead_letter\s+never selected/);
   });
 
   it('says counts are unavailable when Neo4j is down, without dividing by zero on cadence', () => {

@@ -47,7 +47,9 @@ cues, or memory packs, only nodes, edges, and rows.
 - **`introspection/application/`**: `observe.ts` (one health reading, assembled from the
   surfaces `doctor` and `/health` already use, every collector caught), `engine.ts` (the
   tick loop: bucket claim, run, learn, backoff), `catalog.ts` (the registration seam),
-  `plasticity-operations.ts` (the flush and the decay sweep, adapted to the contract).
+  `plasticity-operations.ts` (the flush and the decay sweep, adapted to the contract), and
+  `operations/`, one file per registered operation plus `unmerge.ts`, the repair the loop
+  never selects on its own.
 - **`reflection/domain/`**: `content.ts`, episode/turn shaping and content hashing.
 - **`reflection/application/`**: `intake.ts` (the write path), `dispatch.ts` (the event
   emitter intake signals), `worker.ts` (the subscriber: claims queue rows and runs the
@@ -194,6 +196,53 @@ recall that already succeeded: it stamps access metadata and nominates the co-ac
 that the reinforcement flush later folds into edge weights. A time-travel read does neither,
 since asking what the substrate held last month is a question rather than a use.
 
+## Maintenance path: the introspection loop
+
+A third path, on the service's own clock rather than on a caller's request. `Introspector`
+(`introspection/application/engine.ts`) starts with the service and stops before the driver
+does, and one tick runs four phases: observe, decide, act, learn.
+
+1. **Observe.** `observeHealth` assembles one `HealthSnapshot` from the surfaces `aion
+   doctor` and `/health` already read: graph structure (node population, vector parity,
+   orphan share, episodes with no session link), queue (depth per lane, oldest unclaimed,
+   exhausted attempts, enrichment lag), enrichment (episodes with no orchestrator ledger
+   key), plasticity, proposals, redaction residue. Every collector is caught
+   independently; one that throws names itself in `degraded` and costs its own metrics
+   rather than the reading.
+2. **Decide.** `decide` (`introspection/domain/decide.ts`) is pure: the same snapshot always
+   produces the same answer, so a decision is arguable from the numbers. Tier 1 answers a
+   condition already degrading recall (vector parity under 0.8, orphan share over 0.3,
+   episodes with no session link) and preempts the whole catalog unweighted. Tier 2 scores
+   the routine catalog by each operation's own `relevance`, halved for an operation whose
+   runs have stopped improving anything and multiplied by how many cycles it has been passed
+   over, and selects the highest above `AION_MAINTENANCE_URGENCY_THRESHOLD`. Tier 3 is the
+   model-guided seam: opt-in (`AION_MAINTENANCE_TIER3`), propose-only, and inert by default.
+3. **Act.** At most one operation per tick. It claims a calendar-aligned time bucket in the
+   ops ledger first (`intro:<name>:<bucket>:<stamp>`), so two service instances cannot run
+   the same window twice, and writes the outcome back to that key when it finishes.
+4. **Learn.** An operation declares the one metric it exists to move and which direction
+   counts as better. The engine takes that reading before the run and again on a later tick,
+   which is the first snapshot that can see the system settled around the change, and records
+   `improved` / `unchanged` / `failed`. Those counts are the effectiveness weight step 2
+   reads. An operation with no metric in the snapshot is scored on whether it applied
+   anything.
+
+The catalog is one ordered list (`introspection/application/catalog.ts`), which is the only
+place an operation joins maintenance. Twelve are registered, in four groups: substrate
+hygiene (`vector_backfill`, `reconcile_reenqueue`, `dead_letter`,
+`redaction_residue_purge`), plasticity (`reinforcement_flush`, `memory_decay`), content
+(`narrative_cleanup`, `retro_judgment_sweep`, `description_freshness`), and topology
+(`orphan_cleanup`, `community_refresh`, `symbiosis_bridge`). List order is documentation:
+selection is by tier and urgency, and ties break on waiting time and then on name.
+
+One repair sits beside the catalog and is deliberately not in it. `entity_unmerge` splits an
+absorbed identity back out of the entity it was merged into. A bad merge is not measurable
+from inside the graph (a correct merge and a wrong one have the same shape), so a person
+names the merge to reverse and the loop never selects it.
+
+`aion stats` renders the loop's own record: the cycle count, and per operation the runs,
+the improved/unchanged/failed split, and the last window's outcome from the ledger.
+
 ## Bitemporal model
 
 Every node carries three time concepts, all set at write time and never rewritten except
@@ -205,8 +254,10 @@ by `supersede`:
   true. `valid_until` absent means still current.
 - **`tx_from` / `tx_until`**: system time, the interval during which the substrate held
   this belief. `tx_until` absent means still held.
-- **`forgotten_at`**: the one true suppression, written by the not-yet-built `aion
-  forget`. Default recall hides a forgotten row; `as_of`/`knew_at` still surface it.
+- **`forgotten_at`**: the one true suppression, written by `aion forget`
+  (`forgetNode` in `infrastructure/graph/bitemporal.ts`, a `SET` with a `coalesce` so a
+  repeat is a no-op). Default recall hides a forgotten row; `as_of`/`knew_at` still surface
+  it, which is what keeps forgetting an audited act rather than a deletion.
 
 `supersede(driver, { oldId, newId })` closes both intervals on the old node with a
 `coalesce` (so a repeated call is a no-op) and links

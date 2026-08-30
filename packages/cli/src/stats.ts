@@ -6,8 +6,13 @@ import {
   EDGE_WEIGHT_DISTRIBUTION_TYPES,
   edgeWeightDistribution,
   GraphConnection,
+  introspectionCycle,
+  introspectionOperations,
+  latestLedgerEntry,
   listLastPackSessions,
+  listOperationStats,
   loadConfig,
+  OPERATION_LEDGER_PREFIX,
   openLogger,
   PACK_METHODS,
   packMethodCounters,
@@ -18,6 +23,7 @@ import {
   type Config,
   type EdgeWeightDistribution,
   type GraphCounts,
+  type OperationStats,
   type PackMethodCounters,
   type PlasticityCounters,
   type QueueLagSnapshot,
@@ -33,6 +39,25 @@ import { describeError, stderrWriter, stdoutWriter, type Writer } from './output
  * claim stays a measurement, not an argument.
  */
 
+/**
+ * One maintenance operation's record: the counters the engine keeps, plus what its most
+ * recent bucket claim wrote to the ops ledger. The two come from different places on purpose.
+ * The counters answer how the operation has been doing over its life; the ledger entry is the
+ * evidence that one particular window ran and what it did in it.
+ */
+export type MaintenanceOperationReading = {
+  readonly stats: OperationStats;
+  readonly lastStatus?: string;
+  readonly lastItemsAffected?: number;
+  readonly lastDetail?: string;
+};
+
+export type MaintenanceSnapshot = {
+  /** Ticks the loop has taken. Starvation is measured in these, not in wall time. */
+  readonly cycle: number;
+  readonly operations: readonly MaintenanceOperationReading[];
+};
+
 export type StatsSnapshot = {
   readonly neo4jReachable: boolean;
   /** Label to node count; a node with several labels appears under each. */
@@ -46,7 +71,44 @@ export type StatsSnapshot = {
   readonly sessionsServed: number;
   readonly degradedRate?: number;
   readonly methodCounters: PackMethodCounters;
+  readonly maintenance: MaintenanceSnapshot;
 };
+
+/** The engine writes this object as the ledger summary; a hand-edited row may not match it. */
+type LedgerSummary = {
+  readonly status?: unknown;
+  readonly itemsAffected?: unknown;
+  readonly detail?: unknown;
+};
+
+function readLedgerSummary(summary: unknown): LedgerSummary {
+  if (typeof summary !== 'object' || summary === null) {
+    return {};
+  }
+  return summary as LedgerSummary;
+}
+
+/**
+ * Reads the catalog rather than a stored list of names, so an operation registered in
+ * `introspectionOperations` shows up here with no second place to remember to add it. One that
+ * has never run reports zeroes, which is the honest reading and not an omission.
+ */
+export function collectMaintenance(db: SqliteHandle): MaintenanceSnapshot {
+  const names = introspectionOperations().map((operation) => operation.name);
+  const operations = listOperationStats(db, names).map((stats) => {
+    const entry = latestLedgerEntry(db, `${OPERATION_LEDGER_PREFIX}${stats.name}:`);
+    const summary = readLedgerSummary(entry?.summary);
+    return {
+      stats,
+      ...(typeof summary.status === 'string' ? { lastStatus: summary.status } : {}),
+      ...(typeof summary.itemsAffected === 'number'
+        ? { lastItemsAffected: summary.itemsAffected }
+        : {}),
+      ...(typeof summary.detail === 'string' ? { lastDetail: summary.detail } : {}),
+    };
+  });
+  return { cycle: introspectionCycle(db), operations };
+}
 
 export async function collectStats(
   config: Config,
@@ -70,6 +132,7 @@ export async function collectStats(
     sessionsServed: listLastPackSessions(db).length,
     ...(degradedRate === undefined ? {} : { degradedRate }),
     methodCounters: packMethodCounters(db),
+    maintenance: collectMaintenance(db),
   };
 }
 
@@ -99,7 +162,40 @@ function totalMethodCount(counters: PackMethodCounters): number {
   return PACK_METHODS.reduce((sum, method) => sum + counters[method], 0);
 }
 
-export function renderStats(snapshot: StatsSnapshot, write: Writer): void {
+const OPERATION_NAME_WIDTH = 24;
+
+/**
+ * One line per registered operation. An operation with no runs says so rather than printing a
+ * row of zeroes that reads like a measurement, since "never selected" and "selected and did
+ * nothing" are different answers to the only question this section exists for.
+ */
+function renderMaintenance(snapshot: MaintenanceSnapshot, now: number, write: Writer): void {
+  write('');
+  write('maintenance');
+  write(
+    `  cycle ${String(snapshot.cycle)}, ${String(snapshot.operations.length)} operations registered`,
+  );
+  for (const reading of snapshot.operations) {
+    const { stats } = reading;
+    const name = stats.name.padEnd(OPERATION_NAME_WIDTH);
+    if (stats.lastRunAt === undefined) {
+      write(`  ${name} never selected`);
+      continue;
+    }
+    const age = ageOf(Math.max(0, now - Date.parse(stats.lastRunAt)));
+    const affected =
+      reading.lastItemsAffected === undefined
+        ? ''
+        : ` (${String(reading.lastItemsAffected)} affected)`;
+    write(
+      `  ${name} runs ${String(stats.runs)}  improved ${String(stats.improved)}  ` +
+        `unchanged ${String(stats.unchanged)}  failed ${String(stats.failed)}  ` +
+        `last ${age} ago ${reading.lastStatus ?? 'unrecorded'}${affected}`,
+    );
+  }
+}
+
+export function renderStats(snapshot: StatsSnapshot, write: Writer, now: number = Date.now()): void {
   write('substrate');
   if (!snapshot.neo4jReachable) {
     write('  counts unavailable while Neo4j is down');
@@ -167,6 +263,8 @@ export function renderStats(snapshot: StatsSnapshot, write: Writer): void {
     const share = total === 0 ? 0 : (count / total) * 100;
     write(`  ${method.padEnd(18)} ${String(count).padStart(6)}  ${share.toFixed(1)}%`);
   }
+
+  renderMaintenance(snapshot.maintenance, now, write);
 }
 
 export async function runStats(
