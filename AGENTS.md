@@ -145,9 +145,9 @@ doctor confirm.
 ## The re-exercise gate
 
 `packages/mcp/src/gate/` holds the seven scripted batteries the fix round is gated on, each
-one a finding from `docs/exercise/2026-08-28-p3-exercise.md` re-run against the shipped
-pipeline (`bootstrap.ts`'s own stage list, live Ollama, the run's throwaway Neo4j cleared for
-each file).
+one a finding from the first full-system exercise round re-run against the shipped pipeline
+(`bootstrap.ts`'s own stage list, live Ollama, the run's throwaway Neo4j cleared for each
+file).
 
 ```
 npx vitest run --project integration --reporter=verbose re-exercise-gate         # all seven
@@ -202,8 +202,8 @@ export AION_ANTHROPIC_API_KEY="$(grep '^AION_ANTHROPIC_API_KEY=' .env | cut -d= 
 A file whose subject is the local model itself (`cues.int.test.ts`, `ollama-provider.int.test.ts`)
 builds its own `OllamaProvider` and ignores this switch.
 
-`stages/supersession.int.test.ts` measures a real number this way. The published 0.400
-precision figure (`docs/exercise/2026-08-29-round-2.md`, R2-3) came from a live-stack run on
+`stages/supersession.int.test.ts` measures a real number this way. The recorded 0.400
+precision figure came from a live-stack exercise run on
 the local judge, not from this file, so re-measuring it means running the file with
 `TEST_AION_GENERATION=local`. The file's own assertions (propose not close, which rows land)
 hold on either model and are not what that figure describes.

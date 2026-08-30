@@ -1,5 +1,10 @@
 # Architecture
 
+How this repo is put together: packages, the read and write paths, the maintenance loop, and
+the graph schema. For what the system is and why it is built this way, see
+[whitepaper.md](whitepaper.md), which also owns the list of places this build departs
+from the design it came from.
+
 ## Packages and dependency direction
 
 `protocol` is the leaf: Zod schemas for the two tool contracts (`recall-input`,
@@ -8,7 +13,9 @@
 the rest of the workspace.
 
 `core` depends on `protocol` for wire schemas and nothing else in the workspace. `mcp` and
-`cli` both depend on `core` (and transitively on `protocol`); neither depends on the other.
+`cli` both depend on `core` (and transitively on `protocol`). The dependency between the
+top two runs one way: `cli` imports a few operational constants from `mcp` (the health
+path, the container check, the usage protocol), and `mcp` imports nothing from `cli`.
 
 ## Bounded contexts inside core
 
