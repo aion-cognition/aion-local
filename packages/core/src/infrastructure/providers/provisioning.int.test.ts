@@ -8,9 +8,10 @@ const TARGET: OllamaProvisionTarget = {
   baseUrl: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
   embedModel: DEFAULTS.models.embed,
   embedDimension: DEFAULTS.models.embedDimension,
-  cueModel: DEFAULTS.models.cue,
-  reflectModel: DEFAULTS.models.reflect,
+  chatModels: [DEFAULTS.models.cue, DEFAULTS.models.reflect],
 };
+
+const [CUE_MODEL, REFLECT_MODEL] = TARGET.chatModels;
 
 function collect(events: readonly ProvisionEvent[], type: ProvisionEvent['type']): string[] {
   return events.flatMap((event) => {
@@ -35,16 +36,12 @@ describe('provisionOllama against live host Ollama', () => {
       ).resolves.toBeUndefined();
 
       expect(events[0]).toEqual({ type: 'reachable' });
-      expect(collect(events, 'pull_done')).toEqual([
-        TARGET.embedModel,
-        TARGET.cueModel,
-        TARGET.reflectModel,
-      ]);
+      expect(collect(events, 'pull_done')).toEqual([TARGET.embedModel, CUE_MODEL, REFLECT_MODEL]);
       expect(collect(events, 'pull_progress').length).toBeGreaterThan(0);
       expect(collect(events, 'verify_done')).toEqual([
         `${TARGET.embedModel}:embed`,
-        `${TARGET.cueModel}:chat`,
-        `${TARGET.reflectModel}:chat`,
+        `${String(CUE_MODEL)}:chat`,
+        `${String(REFLECT_MODEL)}:chat`,
       ]);
     },
     600_000,

@@ -21,6 +21,15 @@ const PACKAGES = join(HERE, '..', '..');
 
 const FINDING_ID = /\bEX-\d+\b/;
 
+/**
+ * A build-plan task id: a phase, round, or workstream letter, a digit, and a task digit.
+ * Scanned only on comment lines, because a character class like `[A-Z0-9]` has the same shape
+ * and a plan id in executable code is not the failure this rule is about.
+ */
+const PLAN_ID = /\b[PRW]\d-\d[a-z]?\b/;
+
+const COMMENT_LINE = /^\s*(\/\/|\/?\*)|\/\//;
+
 function sourceFiles(): readonly string[] {
   return globSync('*/src/**/*.ts', { cwd: PACKAGES })
     .filter((path) => !path.endsWith('.test.ts'))
@@ -28,21 +37,31 @@ function sourceFiles(): readonly string[] {
     .map((path) => join(PACKAGES, path));
 }
 
-describe('comment discipline', () => {
-  it('names no exercise finding id in production source', () => {
-    const offenders: string[] = [];
-    for (const file of sourceFiles()) {
-      if (file === fileURLToPath(import.meta.url)) {
+function offendingLines(pattern: RegExp, commentsOnly = false): readonly string[] {
+  const offenders: string[] = [];
+  for (const file of sourceFiles()) {
+    if (file === fileURLToPath(import.meta.url)) {
+      continue;
+    }
+    for (const [index, line] of readFileSync(file, 'utf8').split('\n').entries()) {
+      if (commentsOnly && !COMMENT_LINE.test(line)) {
         continue;
       }
-      for (const [index, line] of readFileSync(file, 'utf8').split('\n').entries()) {
-        if (FINDING_ID.test(line)) {
-          offenders.push(`${relative(PACKAGES, file)}:${String(index + 1)}`);
-        }
+      if (pattern.test(line)) {
+        offenders.push(`${relative(PACKAGES, file)}:${String(index + 1)}`);
       }
     }
+  }
+  return offenders;
+}
 
-    expect(offenders).toEqual([]);
+describe('comment discipline', () => {
+  it('names no exercise finding id in production source', () => {
+    expect(offendingLines(FINDING_ID)).toEqual([]);
+  });
+
+  it('names no plan or task id in a production comment', () => {
+    expect(offendingLines(PLAN_ID, true)).toEqual([]);
   });
 
   it('scans the whole workspace rather than one package', () => {

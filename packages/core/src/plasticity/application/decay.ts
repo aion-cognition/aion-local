@@ -12,11 +12,11 @@ import { DEFAULT_HEBBIAN_BATCH_SIZE, DEFAULT_HEBBIAN_WEIGHT_FLOOR } from './flus
  * stalest edges each time it is called.
  *
  * There is no queue behind it. Reinforcement drains signals recall and reflection already
- * nominated; decay has no nominations to drain, so it scans the graph itself for candidates,
- * oldest-touched first (`edge-weights.ts`'s `buildEdgeWeightDecay`). One call's writes are
- * what make the next call's scan move on: every edge this call decays gets a fresh
- * `updated_at`, so it ranks behind whatever is still stale next time, with no cursor to
- * track between calls.
+ * nominated; decay has no nominations to drain, so it scans the graph itself for candidates
+ * (`edge-weights.ts`'s `buildEdgeWeightDecay`). The scan takes the edges it has gone longest
+ * without visiting, never-visited ones first, so successive calls cover the graph in turns
+ * rather than re-taking one slice. How far a weight moves is a separate question, answered by
+ * how long the edge has gone unused, which the sweep leaves alone.
  */
 
 /** Matches `hebbian.decayRate`: eta_decay in `w' = max(floor, w - eta_decay * decay)`. */

@@ -44,6 +44,23 @@ export function listLedgerKeys(db: SqliteHandle, prefix: string): string[] {
   return rows.map((row) => row.key);
 }
 
+/**
+ * The newest entry under a namespace. For a time-bucketed key that is the last window the
+ * operation ran in, which is what an operator asking "did maintenance do anything" wants.
+ * Ordered by write time first, so an operation whose bucket granularity changed still reports
+ * its most recent run rather than the last key that happens to sort highest.
+ */
+export function latestLedgerEntry(db: SqliteHandle, prefix: string): OpsLedgerEntry | undefined {
+  const escaped = prefix.replace(/[\\%_]/g, '\\$&');
+  const row = db
+    .prepare(
+      `SELECT key, applied_at, summary_json FROM ops_ledger WHERE key LIKE ? ESCAPE '\\'
+       ORDER BY applied_at DESC, key DESC LIMIT 1`,
+    )
+    .get(`${escaped}%`) as OpsLedgerRow | undefined;
+  return row === undefined ? undefined : toOpsLedgerEntry(row);
+}
+
 /** Idempotent: re-marking the same key updates appliedAt/summary rather than erroring. */
 export function markLedgerApplied(db: SqliteHandle, key: string, summary?: unknown): void {
   db.prepare(

@@ -5,6 +5,7 @@ import {
   type GraphTransaction,
   type WriteOutcome,
   inWriteTransaction,
+  runWrite,
   runWriteWithCounters,
 } from './connection.js';
 import { upsertEdgeInTransaction, type UpsertedEdge } from './edges.js';
@@ -233,4 +234,43 @@ export async function supersedeInTransaction(
     txUntil: old.txUntil,
     edge,
   };
+}
+
+export type ForgetNodeInput = {
+  readonly id: string;
+  readonly now?: Date;
+};
+
+export type ForgetNodeResult = {
+  readonly id: string;
+  readonly forgottenAt: Date;
+  /** False on a repeated forget: the first call's timestamp stands. */
+  readonly justForgotten: boolean;
+};
+
+const FORGET_NODE = [
+  `MATCH (n:${BASE_NODE_LABEL} { id: $id })`,
+  `SET n.${BITEMPORAL_PROPERTIES.forgottenAt} = coalesce(n.${BITEMPORAL_PROPERTIES.forgottenAt}, $now)`,
+  `RETURN n.id AS id, n.${BITEMPORAL_PROPERTIES.forgottenAt} AS forgottenAt,`,
+  `       n.${BITEMPORAL_PROPERTIES.forgottenAt} = $now AS justForgotten`,
+].join('\n');
+
+/**
+ * `aion forget`'s write: the one true suppression, and the only bitemporal close that touches
+ * no other node. `coalesce` keeps the first forget's timestamp, so a repeated call is a no-op
+ * on the stamp. Nothing is deleted; `as_of`/`knew_at` reads still return the row
+ * (`read-modes.ts`), which is what makes the audit trail survive an explicit forget.
+ */
+export async function forgetNode(driver: Driver, input: ForgetNodeInput): Promise<ForgetNodeResult> {
+  const now = input.now ?? new Date();
+  const rows = await runWrite(driver, FORGET_NODE, { id: input.id, now: toGraphDateTime(now) }, (row) => ({
+    id: row.id as string,
+    forgottenAt: row.forgottenAt as Date,
+    justForgotten: row.justForgotten === true,
+  }));
+  const row = rows[0];
+  if (row === undefined) {
+    throw new GraphNodeNotFoundError([input.id], 'forget');
+  }
+  return row;
 }

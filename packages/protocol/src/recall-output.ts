@@ -59,9 +59,21 @@ export const MemoryPackItemSchema = z.strictObject({
    * item, on [0,1] and comparable between queries. Zero means the item was admitted on a
    * literal match (Lucene on the verbatim cue, or an exact entity name), which is evidence
    * rather than a measurement, so no number is invented for it.
+   *
+   * On a resonant item the cosine is measured in context space rather than against the query,
+   * so it says how strongly the memory's neighborhood resembles the activated set and not how
+   * well it answers what was asked. `rationale.method` is what tells the two apart, which is
+   * why the rendered line prints the method beside the number.
    */
   confidence: z.number(),
   rationale: RationaleSchema,
+  /**
+   * The node's own stated reason, when it stored one (a Decision's `rationale` property
+   * today). Optional and absent on most items, since most node types carry no such field.
+   * Deliberately not named `rationale`: that name is `rationale` above, the retrieval
+   * rationale (method, score, path), and the two answer different questions.
+   */
+  why: z.string().min(1).optional(),
   currency: CurrencySchema,
   superseded_by: SupersededBySchema.optional(),
 });
@@ -118,13 +130,20 @@ export const CueSchema = z.strictObject({
 
 export type Cue = z.infer<typeof CueSchema>;
 
-/** The five recall stages, each timed independently. */
+/**
+ * The recall stages, each timed independently. `resonance` is the second pass and is optional
+ * for one reason only: a pack is persisted to `last_pack` and read back later, so packs written
+ * before the stage existed have to keep parsing. Recall always times it, including on the runs
+ * where it declines to search, so a pack this version produces always carries the field and a
+ * near-zero reading is the stage saying it had nothing to resonate from.
+ */
 export const StageTimingsMsSchema = z.strictObject({
   embed: z.number().nonnegative(),
   cues: z.number().nonnegative(),
   seeds: z.number().nonnegative(),
   activation: z.number().nonnegative(),
   fusion: z.number().nonnegative(),
+  resonance: z.number().nonnegative().optional(),
 });
 
 export type StageTimingsMs = z.infer<typeof StageTimingsMsSchema>;
@@ -170,8 +189,14 @@ export const AdmissionReportSchema = z.strictObject({
   admitted: z.number().int().nonnegative(),
   /** Measured by at least one method, and no measurement, exact hit or corroboration cleared. */
   dropped_below_floor: z.number().int().nonnegative(),
-  /** Reached by spreading activation alone, so no method measured it against the query. */
+  /** No method measured it against the query: a recency or plain-BM25 seed, or a pending vector. */
   dropped_unmeasured: z.number().int().nonnegative(),
+  /**
+   * The part of `dropped_unmeasured` no seed leg found: reached by spreading activation and
+   * never scored. A caller watching whether traversal contributes anything reads this one,
+   * since the whole tally is mostly the two legs that measure nothing by construction.
+   */
+  dropped_unmeasured_arrival: z.number().int().nonnegative(),
   dropped_duplicate_content: z.number().int().nonnegative(),
   /** Admitted, then bumped from a near-identical cluster that had already filled its cap. */
   dropped_near_duplicate: z.number().int().nonnegative(),

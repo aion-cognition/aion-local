@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { AdjacencyNeighbor } from '../../infrastructure/graph/adjacency.js';
 import type { CurrencyAnnotation } from '../../infrastructure/graph/read-modes.js';
 import {
@@ -135,9 +136,11 @@ describe('edgeWeight', () => {
     expect(edgeWeight(neighbor({ relationshipType: 'CONTRADICTS' }))).toBeCloseTo(0.35, 10);
   });
 
-  it('leaves every other type at its type multiplier, whatever the edge carries', () => {
-    expect(edgeWeight(neighbor({ relationshipType: 'CO_OCCURS', strength: 0.1, confidence: 0.1 }))).toBe(0.5);
-    expect(edgeWeight(neighbor({ relationshipType: 'FOLLOWS', strength: 0.2, confidence: 0.2 }))).toBe(0.8);
+  it('scales every other type by strength alone, ignoring confidence', () => {
+    expect(edgeWeight(neighbor({ relationshipType: 'CO_OCCURS', strength: 0.1, confidence: 0.1 }))).toBeCloseTo(0.05, 10);
+    expect(edgeWeight(neighbor({ relationshipType: 'FOLLOWS', strength: 0.2, confidence: 0.2 }))).toBeCloseTo(0.16, 10);
+    expect(edgeWeight(neighbor({ relationshipType: 'CO_OCCURS', strength: 1, confidence: 0.1 }))).toBe(0.5);
+    expect(edgeWeight(neighbor({ relationshipType: 'FOLLOWS', strength: 1, confidence: 0.2 }))).toBe(0.8);
   });
 
   it('falls back to the default weight for a type outside the catalog', () => {
@@ -218,6 +221,47 @@ describe('spreadActivation', () => {
 
     expect(scoreOf(run, 'seed-a')).toBe(1);
     expect(scoreOf(run, 'seed-b')).toBeCloseTo(1 + 0.9 * 0.7, 10);
+  });
+
+  it('carries a decayed edge at the weight floor under the shipped cutoff', async () => {
+    const fixture: Fixture = {
+      edges: [{ from: 'seed', to: 'faded', type: 'MENTIONS', strength: DEFAULTS.hebbian.weightFloor }],
+    };
+
+    const run = await spreadActivation(fetchOver(fixture), {
+      seeds: [{ nodeId: 'seed' }],
+      budget: withBudget({
+        maxHops: 1,
+        associationStrength: DEFAULTS.recall.associationStrength,
+        minActivation: 0,
+      }),
+    });
+
+    expect(run.activated.map((node) => node.nodeId)).toContain('faded');
+  });
+
+  it('propagates a weakened edge in proportion to what is left of it', async () => {
+    const weights = await Promise.all(
+      [1, 0.5, DEFAULTS.hebbian.weightFloor].map(async (strength) => {
+        const run = await spreadActivation(
+          fetchOver({ edges: [{ from: 'seed', to: 'reached', type: 'MENTIONS', strength }] }),
+          {
+            seeds: [{ nodeId: 'seed' }],
+            budget: withBudget({
+              maxHops: 1,
+              associationStrength: DEFAULTS.recall.associationStrength,
+              minActivation: 0,
+            }),
+          },
+        );
+        return scoreOf(run, 'reached');
+      }),
+    );
+
+    const [full, half, floored] = weights;
+    expect(half).toBeCloseTo(full / 2, 10);
+    expect(floored).toBeCloseTo(full * DEFAULTS.hebbian.weightFloor, 10);
+    expect(floored).toBeGreaterThan(0);
   });
 
   it('does not traverse an association weaker than the strength floor', async () => {

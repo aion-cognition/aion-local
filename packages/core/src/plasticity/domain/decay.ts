@@ -17,10 +17,10 @@
  * **Staleness source.** Edges carry no access-time property of their own. Recall stamps
  * `last_accessed` on the nodes a pack surfaces, never on the edges between them, so an edge's
  * `updated_at` (set by the merge policy on every write and by reinforcement's own bounded
- * step) is what stands in for "last touched" here. That choice is stated plainly rather than
- * left implicit: `application/decay.ts` bumps `updated_at` on every edge it decays, which is
- * also what lets a bounded run's own writes advance the next run past what it already
- * touched, with no separate cursor.
+ * step) is what stands in for "last touched" here. Decay must not write it: an input the
+ * sweep refreshes is an input that never grows, and the peak the curve is built around then
+ * sits past anything an edge can reach. The sweep keeps its own cursor for scan order
+ * (`edge-weights.ts`'s `decayed_at`) so the two never have to be one property.
  */
 
 /**

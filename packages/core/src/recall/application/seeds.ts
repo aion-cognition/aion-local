@@ -3,6 +3,7 @@ import type { Driver } from 'neo4j-driver';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { withCurrency, type ReadMode } from '../../infrastructure/graph/read-modes.js';
 import {
+  contextVectorSeeds,
   entityNameSeeds,
   entitySimilaritySeeds,
   escapeLuceneQuery,
@@ -40,6 +41,7 @@ import {
 
 export {
   SEED_STRATEGIES,
+  SEED_STRATEGY_METHODS,
   RECENCY_RELEVANCE,
   mergeSeeds,
   normalizeToBest,
@@ -129,6 +131,7 @@ function legLimits(config: Config, budget: number): Readonly<Record<SeedStrategy
   const reservations = legReservations(budget);
   return {
     vector: Math.max(config.recall.vectorLimit, reservations.vector),
+    context_vector: Math.max(config.recall.vectorLimit, reservations.context_vector),
     bm25: Math.max(config.recall.vectorLimit, reservations.bm25),
     entity_resolution: Math.max(config.recall.vectorLimit, reservations.entity_resolution),
     recency: budget,
@@ -210,6 +213,25 @@ async function vectorContributions(
     return rows.map((row) => contribute('vector', row, cue));
   });
   return settle(deps.logger, 'vector', 'cue vector search', tasks);
+}
+
+/**
+ * The same measurement over the other index. It is its own leg rather than extra rows on the
+ * one above because the two are reserved from each other: both rank on the query-against-content
+ * cosine, so a node the content index buried is buried again in a merged list, and the whole
+ * point of asking the context index is to reach the nodes the content index ranks badly.
+ */
+async function contextVectorContributions(
+  deps: SelectSeedsDeps,
+  cues: readonly SeedCue[],
+  mode: ReadMode,
+  limit: number,
+): Promise<SettledLeg> {
+  const tasks = embeddedCues(cues).map(async (cue) => {
+    const rows = await contextVectorSeeds(deps.driver, { vector: cue.vector, limit, mode });
+    return rows.map((row) => contribute('context_vector', row, cue));
+  });
+  return settle(deps.logger, 'context_vector', 'cue context vector search', tasks);
 }
 
 /**
@@ -330,7 +352,7 @@ async function recencyContributions(
 }
 
 function emptyByStrategy(): Record<SeedStrategy, readonly Seed[]> {
-  return { vector: [], bm25: [], entity_resolution: [], recency: [] };
+  return { vector: [], context_vector: [], bm25: [], entity_resolution: [], recency: [] };
 }
 
 /**
@@ -352,8 +374,9 @@ export async function selectSeeds(
   const budget = await budgetFor(deps);
   const limits = legLimits(deps.config, budget);
 
-  const [vector, bm25, entity, recency] = await Promise.all([
+  const [vector, contextVector, bm25, entity, recency] = await Promise.all([
     vectorContributions(deps, cues, mode, limits.vector),
+    contextVectorContributions(deps, cues, mode, limits.context_vector),
     bm25Contributions(deps, cues, mode, limits.bm25),
     entityContributions(deps, cues, mode, limits.entity_resolution),
     recencyContributions(deps, mode, limits.recency),
@@ -365,6 +388,7 @@ export async function selectSeeds(
   let failed = 0;
   for (const [strategy, leg] of [
     ['vector', vector],
+    ['context_vector', contextVector],
     ['bm25', bm25],
     ['entity_resolution', entity],
     ['recency', recency],
@@ -374,6 +398,14 @@ export async function selectSeeds(
     attempted += leg.attempted;
     failed += leg.failed;
   }
+
+  // The fusion list for the vector method is both indexes together, because both measured the
+  // same thing and RRF ranks one list per method. The per-strategy lists above stay split:
+  // that split is what the reservations are drawn from.
+  byStrategy.vector = mergeSeeds(
+    [...vector.contributions, ...contextVector.contributions],
+    vector.contributions.length + contextVector.contributions.length,
+  );
 
   const graphUnavailable = attempted > 0 && failed === attempted;
   if (graphUnavailable) {

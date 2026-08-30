@@ -5,6 +5,7 @@ import type { ScoredSeedCandidate, SeedCandidate } from '../../infrastructure/gr
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import {
   SEED_STRATEGIES,
+  SEED_STRATEGY_METHODS,
   RECENCY_RELEVANCE,
   mergeSeeds,
   normalizeToBest,
@@ -197,8 +198,18 @@ describe('mergeSeeds', () => {
 });
 
 describe('SEED_STRATEGIES', () => {
-  it('names the four strategies, each a RecallMethod fusion can put in a rationale', () => {
-    expect([...SEED_STRATEGIES]).toEqual(['vector', 'bm25', 'entity_resolution', 'recency']);
+  it('names every way a seed can be found', () => {
+    expect([...SEED_STRATEGIES]).toEqual([
+      'vector',
+      'context_vector',
+      'bm25',
+      'entity_resolution',
+      'recency',
+    ]);
+  });
+
+  it('reports the two vector indexes as one method, so one cosine cannot corroborate itself', () => {
+    expect(SEED_STRATEGY_METHODS.context_vector).toBe(SEED_STRATEGY_METHODS.vector);
   });
 });
 

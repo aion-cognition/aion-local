@@ -9,15 +9,38 @@ import type { ScoredSeedCandidate, SeedCandidate } from '../../infrastructure/gr
  * reservation arithmetic are testable without a server.
  */
 
-/** Also `RecallMethod` values, so fusion carries a provenance entry into an item rationale unchanged. */
+/**
+ * How a seed can be found. Four of the five are also `RecallMethod` values and carry their own
+ * name into an item's rationale; `context_vector` is the exception, and `SEED_STRATEGY_METHODS`
+ * below is why.
+ */
 export const SEED_STRATEGIES = [
   'vector',
+  'context_vector',
   'bm25',
   'entity_resolution',
   'recency',
-] as const satisfies readonly RecallMethod[];
+] as const;
 
 export type SeedStrategy = (typeof SEED_STRATEGIES)[number];
+
+/**
+ * What each strategy reports as the method behind its measurement.
+ *
+ * `context_vector` reports `vector`, because it is one leg searching a second index rather
+ * than a second way of measuring: it finds a node through the neighborhood its context vector
+ * describes, then scores it on the same query-against-content cosine the content index
+ * returns. Reporting it as its own method would let admission count one cosine twice, since
+ * corroboration counts independent measurements by method and cue, and a node both indexes
+ * surfaced would then admit itself on a single number seen from two directions.
+ */
+export const SEED_STRATEGY_METHODS: Readonly<Record<SeedStrategy, RecallMethod>> = {
+  vector: 'vector',
+  context_vector: 'vector',
+  bm25: 'bm25',
+  entity_resolution: 'entity_resolution',
+  recency: 'recency',
+};
 
 /** The heaviest cue bucket. Every cue-driven score is expressed as a fraction of it. */
 const MAX_CUE_WEIGHT = 3;
@@ -175,6 +198,7 @@ export function mergeSeeds(
       ...(candidate.sourceEpisodeId === undefined
         ? {}
         : { sourceEpisodeId: candidate.sourceEpisodeId }),
+      ...(candidate.why === undefined ? {} : { why: candidate.why }),
       currency: candidate.currency,
       ...(candidate.supersededBy === undefined ? {} : { supersededBy: candidate.supersededBy }),
       score: best === undefined ? 0 : best.score,
@@ -224,9 +248,16 @@ export function seedBudget(memoryCount: number, curve: SeedBudgetCurve): number 
  * matched, and the most recently touched node scores 1.0 as well, while a cosine that genuinely
  * answers the query arrives at 0.6 to 0.8. Ten slots ranked by that number are lexical, and the
  * vector leg is crowded out of its own candidate set.
+ *
+ * `context_vector` holds its own share out of what the content index used to have, for the
+ * same reason the legs are reserved from each other at all. Merged into the content leg's
+ * slots it would win none of them: both legs score on the query-against-content cosine, and a
+ * node the content index ranked well outside its own top rows is exactly the node the context
+ * index is there to find.
  */
 export const LEG_RESERVATION_SHARES: Readonly<Record<SeedStrategy, number>> = {
-  vector: 0.35,
+  vector: 0.25,
+  context_vector: 0.1,
   bm25: 0.2,
   entity_resolution: 0.15,
   recency: 0.1,
@@ -240,6 +271,7 @@ export const LEG_RESERVATION_SHARES: Readonly<Record<SeedStrategy, number>> = {
 export function legReservations(budget: number): Readonly<Record<SeedStrategy, number>> {
   const slots: Record<SeedStrategy, number> = {
     vector: 0,
+    context_vector: 0,
     bm25: 0,
     entity_resolution: 0,
     recency: 0,

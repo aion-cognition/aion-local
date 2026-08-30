@@ -1,9 +1,10 @@
 import neo4j, { type Driver } from 'neo4j-driver';
 import { runRead } from './connection.js';
 import { VectorIndexDimensionMismatchError, VectorIndexMissingError } from './errors.js';
+import { CONTENT_VECTOR_INDEX, CONTEXT_VECTOR_INDEX } from './vector-indexes.js';
 
 /** The two vector indexes migration 001 declares; both are built at the embedding model's dimension. */
-export const VECTOR_INDEX_NAMES = ['content_vec_idx', 'context_vec_idx'] as const;
+export const VECTOR_INDEX_NAMES = [CONTENT_VECTOR_INDEX, CONTEXT_VECTOR_INDEX] as const;
 
 export type VectorIndexInfo = {
   readonly name: string;
@@ -88,6 +89,21 @@ export async function countGraphElements(driver: Driver): Promise<GraphCounts> {
     (row) => ({ nodes: row['nodes'] as number, relationships: row['relationships'] as number }),
   );
   return rows[0] ?? { nodes: 0, relationships: 0 };
+}
+
+/**
+ * One row per label a node carries, `aion stats`' substrate breakdown. A node counts under
+ * every label on it (`Episode`, its `Memory` companion, and `AionNode`), so the rows are not
+ * a partition of the node total; they are each label's own share of it.
+ */
+export async function countNodesByLabel(driver: Driver): Promise<ReadonlyMap<string, number>> {
+  const rows = await runRead(
+    driver,
+    'MATCH (n) UNWIND labels(n) AS label RETURN label, count(*) AS count ORDER BY label',
+    {},
+    (row) => ({ label: row['label'] as string, count: row['count'] as number }),
+  );
+  return new Map(rows.map((row) => [row.label, row.count]));
 }
 
 /**

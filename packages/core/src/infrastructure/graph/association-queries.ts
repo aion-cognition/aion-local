@@ -32,16 +32,36 @@ const SEMANTIC_SIMILARITY_RATIONALE = 'entity content vectors are semantically s
 export type LinkCoOccurrenceInput = {
   readonly sourceId: string;
   readonly targetId: string;
+  /**
+   * What this single co-occurrence is worth, already discounted by the caller for how many
+   * entities the episode named. It is a step, not a target: see `edges.ts`'s `bounded_step`.
+   */
+  readonly observationStrength: number;
+  /** The strength a co-occurrence edge may not be written below, `hebbian.weightFloor`. */
+  readonly weightFloor: number;
   readonly now: Date;
 };
 
-/** One pair, already ledger-gated by the caller. `count: 1` is the one observation this call stands for. */
+/**
+ * One pair, already ledger-gated by the caller. `count: 1` is the one observation this call
+ * stands for, and the strength moves one bounded step rather than pinning at 1.
+ *
+ * Pinning was the bug this replaces. Every pair of an episode's all-pairs clique was written
+ * at full strength, so an episode naming twenty entities produced 190 edges each asserting as
+ * much as the single edge of an episode naming two, plasticity's bounded rule had no room to
+ * move any of them (`w + eta * (1 - w)` is `w` at `w = 1`), and a later co-occurrence between
+ * a decayed pair snapped it back to 1.0 in one write, erasing however much disuse had taken
+ * off it. A step from the current weight is all three problems at once: the discount lands,
+ * repeated co-occurrence still accumulates, and decay is not undone by a single observation.
+ */
 export async function linkCoOccurrence(driver: Driver, input: LinkCoOccurrenceInput): Promise<void> {
   await upsertEdge(driver, {
     type: CO_OCCURS_TYPE,
     sourceId: input.sourceId,
     targetId: input.targetId,
-    strength: 1,
+    strength: input.observationStrength,
+    strengthPolicy: 'bounded_step',
+    weightFloor: input.weightFloor,
     confidence: 1,
     signals: ['episodic'],
     provenance: ASSOCIATION_PROVENANCE,

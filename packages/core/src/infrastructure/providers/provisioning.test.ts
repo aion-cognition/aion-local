@@ -74,8 +74,7 @@ describe('provisionOllama', () => {
         baseUrl: 'http://localhost:11434',
         embedModel: 'nomic-embed-text',
         embedDimension: 768,
-        cueModel: 'qwen3:1.7b',
-        reflectModel: 'qwen3:8b',
+        chatModels: ['qwen3:1.7b', 'qwen3:8b'],
       },
       { fetchImpl: fetchImpl as unknown as typeof fetch, onEvent: (e) => events.push(e) },
     );
@@ -98,7 +97,7 @@ describe('provisionOllama', () => {
     expect(events.at(-1)).toEqual({ type: 'verify_done', model: 'qwen3:8b', kind: 'chat' });
   });
 
-  it('dedupes the pull and chat-verify calls when cue and reflect name the same model', async () => {
+  it('dedupes the pull and chat-verify calls when both roles name the same model', async () => {
     const pullCalls: string[] = [];
     const chatCalls: string[] = [];
     const fetchImpl = vi.fn(async (url: string | URL, init?: RequestInit) => {
@@ -127,14 +126,51 @@ describe('provisionOllama', () => {
         baseUrl: 'http://localhost:11434',
         embedModel: 'nomic-embed-text',
         embedDimension: 768,
-        cueModel: 'qwen3:1.7b',
-        reflectModel: 'qwen3:1.7b',
+        chatModels: ['qwen3:1.7b', 'qwen3:1.7b'],
       },
       { fetchImpl: fetchImpl as unknown as typeof fetch },
     );
 
     expect(pullCalls).toEqual(['nomic-embed-text', 'qwen3:1.7b']);
     expect(chatCalls).toEqual(['qwen3:1.7b']);
+  });
+
+  it('pulls the embed model alone when every generation role routes to Anthropic', async () => {
+    const pullCalls: string[] = [];
+    const chatCalls: string[] = [];
+    const fetchImpl = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const path = new URL(String(url)).pathname;
+      const body = init?.body === undefined ? {} : (JSON.parse(String(init.body)) as Record<string, unknown>);
+
+      if (path === '/api/version') {
+        return jsonResponse({ version: '0.24.0' });
+      }
+      if (path === '/api/pull') {
+        pullCalls.push(String(body.model));
+        return ndjson(PULL_SUCCESS);
+      }
+      if (path === '/api/embed') {
+        return jsonResponse({ embeddings: [new Array<number>(768).fill(0.1)] });
+      }
+      if (path === '/api/chat') {
+        chatCalls.push(String(body.model));
+        return jsonResponse({ done: true, message: { role: 'assistant', content: '' } });
+      }
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    await provisionOllama(
+      {
+        baseUrl: 'http://localhost:11434',
+        embedModel: 'nomic-embed-text',
+        embedDimension: 768,
+        chatModels: [],
+      },
+      { fetchImpl: fetchImpl as unknown as typeof fetch },
+    );
+
+    expect(pullCalls).toEqual(['nomic-embed-text']);
+    expect(chatCalls).toEqual([]);
   });
 
   it('throws ModelPullError when the pull stream reports an error line', async () => {
@@ -154,8 +190,7 @@ describe('provisionOllama', () => {
         baseUrl: 'http://localhost:11434',
         embedModel: 'nomic-embed-text',
         embedDimension: 768,
-        cueModel: 'qwen3:1.7b',
-        reflectModel: 'qwen3:8b',
+        chatModels: ['qwen3:1.7b', 'qwen3:8b'],
       },
       { fetchImpl: fetchImpl as unknown as typeof fetch },
     ).catch((e: unknown) => e);
@@ -184,8 +219,7 @@ describe('provisionOllama', () => {
         baseUrl: 'http://localhost:11434',
         embedModel: 'nomic-embed-text',
         embedDimension: 768,
-        cueModel: 'qwen3:1.7b',
-        reflectModel: 'qwen3:8b',
+        chatModels: ['qwen3:1.7b', 'qwen3:8b'],
       },
       { fetchImpl: fetchImpl as unknown as typeof fetch },
     ).catch((e: unknown) => e);

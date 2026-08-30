@@ -40,6 +40,30 @@ describe('buildEdgeUpsert policy clauses', () => {
     );
   });
 
+  it('steps the strength toward one instead of taking a maximum under bounded_step', () => {
+    const { cypher, parameters } = buildEdgeUpsert({
+      ...BASE,
+      strengthPolicy: 'bounded_step',
+      weightFloor: 0.1,
+    });
+    const stepped = 'coalesce(r.strength, 0.0) + $strength * (1.0 - coalesce(r.strength, 0.0))';
+
+    expect(clause(cypher, 'ON MATCH SET')).toContain(stepped);
+    expect(clause(cypher, 'ON MATCH SET')).not.toContain('>= $strength THEN r.strength');
+    expect(clause(cypher, 'ON CREATE SET')).toContain(
+      'r.strength = CASE WHEN $strength < $weightFloor THEN $weightFloor ELSE $strength END',
+    );
+    expect(parameters['weightFloor']).toBe(0.1);
+  });
+
+  it('leaves the weight floor at zero for the writers that do not clamp', () => {
+    expect(buildEdgeUpsert(BASE).parameters.weightFloor).toBe(0);
+  });
+
+  it('rejects a weight floor outside zero to one', () => {
+    expect(() => buildEdgeUpsert({ ...BASE, weightFloor: 1.5 })).toThrow(GraphWriteError);
+  });
+
   it('unions signals and provenance with plain list operations', () => {
     const { cypher } = buildEdgeUpsert(BASE);
     expect(cypher).toContain(

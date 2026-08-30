@@ -10,6 +10,7 @@ const positiveInt = z.number().int().positive();
 const nonNegativeInt = z.number().int().nonnegative();
 
 const searchMethod = z.enum(['vector', 'bm25', 'graph_traversal']);
+const providerPin = z.enum(['auto', 'ollama', 'anthropic']);
 
 export const ConfigSchema = z.object({
   neo4j: z.object({
@@ -29,6 +30,19 @@ export const ConfigSchema = z.object({
   anthropic: z.object({
     /** Empty string means fully local; a non-empty key opts a call class into a remote provider. */
     apiKey: z.string(),
+    /** The model every remote-routed generation names, whatever model the caller asked for. */
+    model: z.string().min(1),
+  }),
+  /**
+   * Per-role provider pins. `auto` follows the key: set, and every generation role goes to
+   * Anthropic; unset, and everything is local. A pin overrides that for one role in either
+   * direction, which is what lets cue extraction stay on the fast local model while reflection
+   * runs remotely, or the reverse. Embeddings are not a role here: one model owns the vector
+   * space for the life of the substrate.
+   */
+  routing: z.object({
+    cue: providerPin,
+    reflect: providerPin,
   }),
   recall: z.object({
     maxHops: nonNegativeInt,
@@ -147,6 +161,12 @@ export const ConfigSchema = z.object({
     /** The auto path's threshold only. In `propose` mode nothing reads it. */
     supersedeAutoConfidence: proportion,
     supersedeNeighborThreshold: proportion,
+    /**
+     * How close a sibling claim has to be to the judged one before a family apply closes it
+     * too. Two claims from one observation can name the same subject and be about different
+     * things; this is where that line sits.
+     */
+    supersedeFamilyRelatednessFloor: proportion,
     supersedeTimeoutMs: positiveInt,
     maxSupersessionSubjects: positiveInt,
     maxContradictionNeighbors: positiveInt,
@@ -175,6 +195,49 @@ export const ConfigSchema = z.object({
   }),
   maintenance: z.object({
     tier3: z.boolean(),
+    /** How often the introspection loop observes, decides, and runs at most one operation. */
+    tickMinutes: positiveInt,
+    /** Cycles of being passed over that double an operation's urgency; the anti-starvation span. */
+    starvationCycles: positiveInt,
+    /** Urgency a routine operation must reach before the loop will run it at all. */
+    urgencyThreshold: proportion,
+    /** Effectiveness under which an operation is weighted down, never excluded. */
+    effectivenessFloor: proportion,
+    /** `vector_backfill`'s content-vector pass: pending `:Memory` nodes embedded in one run. */
+    vectorBackfillBatchSize: positiveInt,
+    /** `vector_backfill`'s context-vector pass: kept small, since a stale context is a quality gap, not an outage. */
+    contextRefreshBatchSize: positiveInt,
+    /** `reconcile_reenqueue`'s bound: orphaned episodes re-enqueued in one run. */
+    reconcileBatchSize: positiveInt,
+    /** `dead_letter`'s bound: attempts-exhausted rows given their one retry cycle in one run. */
+    deadLetterBatchSize: positiveInt,
+    /** `redaction_residue_purge`'s bound: nodes rewritten in one run, kept small since every hit is a live property write. */
+    redactionPurgeBatchSize: positiveInt,
+    /** `narrative_cleanup`'s bound: sessions examined per run, for both the duplicate scan and the stale-grounding sweep. */
+    narrativeCleanupBatch: positiveInt,
+    /** `retro_judgment_sweep`'s bound: fact-bearing episodes judged per run. */
+    retroSupersessionBatch: positiveInt,
+    /** `description_freshness`'s bound: entities re-synthesized per run. */
+    descriptionRefreshBatch: positiveInt,
+    /** Mentions an entity must gain since its description was last written before it qualifies for refresh. */
+    descriptionRefreshMentionGrowth: positiveInt,
+    /** `emergency_relationship_repair`'s bound: broken episode-to-session links restored in one run. */
+    backboneRepairBatch: positiveInt,
+    /** `orphan_cleanup`'s bound: disconnected nodes examined in one run. */
+    orphanCleanupBatch: positiveInt,
+    /** How long an orphan with no relink candidate is left alone before it is forgotten. */
+    orphanForgetAfterDays: positiveInt,
+    /** `community_refresh` declines above this rather than project part of the graph and answer from it. */
+    communityNodeLimit: positiveInt,
+    /** Nodes below which a community answer describes noise rather than structure. */
+    communityMinNodes: positiveInt,
+    /** Members a community needs before `symbiosis_bridge` may use it as an endpoint. */
+    bridgeMinCommunitySize: positiveInt,
+    /**
+     * Share of the smaller community's size, in edges already crossing to the other one, above
+     * which the pair counts as connected and `symbiosis_bridge` skips it.
+     */
+    bridgeOverlapCeiling: proportion,
   }),
   sqlite: z.object({
     path: z.string().min(1),

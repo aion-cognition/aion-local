@@ -21,6 +21,11 @@ import { LaneAssigner } from '../../reflection/application/lanes.js';
 import { SessionManager } from '../../session/session-manager.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { getLastPack } from '../../infrastructure/sqlite/last-pack.js';
+import {
+  PACK_METHODS,
+  packMethodCounters,
+  type PackMethod,
+} from '../../infrastructure/sqlite/method-counters.js';
 import { markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import { orchestratorLedgerKey } from '../../reflection/application/orchestrator.js';
 import { CueCache } from './cues.js';
@@ -196,9 +201,10 @@ describe('recall over a substrate written by the real intake path', () => {
    * reaching a node is no longer a reason to serve it. This episode shares a session with the
    * one the query is about and nothing else, which is exactly the shape that filled the
    * exercise's off-topic packs to budget: one hit clears the floor and the whole activation
-   * spread rides in behind it.
+   * spread rides in behind it. It is scored against the query like any other candidate, and
+   * what keeps it out is the answer that scoring gives.
    */
-  it('refuses an episode no retrieval leg measured, however well anchored the pack is', async () => {
+  it('refuses an episode the spread reached that measures nothing like the query', async () => {
     const pack = await handleRecall(deps, { query: QUERY }, {
       identity: READ_SESSION,
       now: RECALLED_AT,
@@ -206,7 +212,7 @@ describe('recall over a substrate written by the real intake path', () => {
 
     expect(pack.episodes?.map((item) => item.id)).toEqual([webhooksEpisodeId]);
     // Refused, and said so: a pack this thin has to be readable as a floor doing its job.
-    expect(pack.metadata.admission.dropped_unmeasured).toBeGreaterThan(0);
+    expect(pack.metadata.admission.dropped_below_floor).toBeGreaterThan(0);
 
     // The claim only means something if no direct leg could have produced it.
     const direct = await vectorSeeds(harness.driver, {
@@ -292,5 +298,31 @@ describe('pending_enrichment metadata', () => {
     });
 
     expect(pack.metadata.pending_enrichment).toBeUndefined();
+  });
+});
+
+describe('per-method pack contribution counters', () => {
+  it('accumulates across separate recalls rather than resetting on each one', async () => {
+    const before = packMethodCounters(db);
+
+    const first = await handleRecall(deps, { query: QUERY }, {
+      identity: READ_SESSION,
+      now: RECALLED_AT,
+    });
+    const second = await handleRecall(deps, { query: QUERY }, {
+      identity: READ_SESSION,
+      now: RECALLED_AT,
+    });
+
+    const after = packMethodCounters(db);
+    // Only the methods the counter tracks: `graph_traversal` is the fusion leg's name and no
+    // item carries it, so it is not a counter row.
+    const methods = [...(first.episodes ?? []), ...(second.episodes ?? [])]
+      .map((item) => item.rationale.method)
+      .filter((method): method is PackMethod => (PACK_METHODS as readonly string[]).includes(method));
+    expect(methods.length).toBeGreaterThan(0);
+    for (const method of methods) {
+      expect(after[method]).toBeGreaterThan(before[method]);
+    }
   });
 });
