@@ -1,3 +1,4 @@
+import { summarizeErrorBody } from './errors.js';
 import { evictableModels, type ProviderRouting } from './routing.js';
 
 /** Ollama answers `/api/ps` with fully qualified tags, so a bare name is compared as `:latest`. */
@@ -43,7 +44,9 @@ export async function listResidentModels(
   const fetchImpl = options.fetchImpl ?? fetch;
   const response = await fetchImpl(`${normalizeBaseUrl(baseUrl)}/api/ps`);
   if (!response.ok) {
-    throw new Error(`Ollama /api/ps failed: ${String(response.status)} ${await response.text()}`);
+    throw new Error(
+      `Ollama /api/ps failed: ${String(response.status)} ${summarizeErrorBody(await response.text())}`,
+    );
   }
   const body = (await response.json()) as { models?: { name?: unknown; size?: unknown }[] };
   return (body.models ?? [])
@@ -67,7 +70,7 @@ async function unloadModel(baseUrl: string, model: string, fetchImpl: typeof fet
     body: JSON.stringify({ model, keep_alive: 0, stream: false }),
   });
   if (!response.ok) {
-    throw new Error(`${String(response.status)} ${await response.text()}`);
+    throw new Error(`${String(response.status)} ${summarizeErrorBody(await response.text())}`);
   }
   await response.text().catch(() => undefined);
 }
