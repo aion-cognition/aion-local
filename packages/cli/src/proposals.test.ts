@@ -1,4 +1,5 @@
 import {
+  getEntityMergeProposal,
   getSupersessionProposal,
   recordEntityMergeProposal,
   recordSupersessionProposal,
@@ -98,6 +99,15 @@ describe('aion proposals against a seeded review queue', () => {
     });
   }
 
+  function seedMerge(): string {
+    return recordEntityMergeProposal(store.db, {
+      subject: { id: 'ent-a', name: 'gitlab-token', type: 'credential' },
+      candidate: { id: 'ent-b', name: 'github-token', type: 'credential' },
+      similarity: 0.91,
+      episodeId: 'episode-3',
+    });
+  }
+
   /**
    * The table had never held a row, which broke reading the queue without raw SQL inside
    * the container. The first live proposal row had to be found before the queue could be
@@ -160,5 +170,37 @@ describe('aion proposals against a seeded review queue', () => {
 
   it('refuses an id nobody proposed rather than reporting a no-op as done', async () => {
     expect(await runProposals(['dismiss', 'not-a-proposal'], () => undefined)).toBe(1);
+  });
+
+  it('dismisses an entity-merge proposal without touching the graph, and drops it from the queue', async () => {
+    const id = seedMerge();
+    const { lines, write } = collector();
+
+    expect(await runProposals(['dismiss', id], write)).toBe(0);
+
+    expect(lines.join('\n')).toContain('stay separate');
+    expect(getEntityMergeProposal(store.db, id)?.resolvedAt).toEqual(expect.any(String));
+  });
+
+  /**
+   * Unlike a second supersession dismiss, which refuses, a second entity-merge dismiss says so
+   * and returns success: nothing was going to change either way, and the row was already the
+   * outcome a dismiss produces.
+   */
+  it('reports an already-resolved entity-merge row rather than refusing a second dismiss', async () => {
+    const id = seedMerge();
+    await runProposals(['dismiss', id], () => undefined);
+    const { lines, write } = collector();
+
+    expect(await runProposals(['dismiss', id], write)).toBe(0);
+
+    expect(lines.join('\n')).toContain('already resolved');
+  });
+
+  it('refuses --claim-only or --episode against an entity-merge id', async () => {
+    const id = seedMerge();
+
+    expect(await runProposals(['apply', id, '--claim-only'], () => undefined)).toBe(1);
+    expect(await runProposals(['apply', id, '--episode'], () => undefined)).toBe(1);
   });
 });

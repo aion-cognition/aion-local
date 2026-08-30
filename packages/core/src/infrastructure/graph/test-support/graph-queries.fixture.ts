@@ -295,6 +295,32 @@ export async function supersedingNodeIds(driver: Driver, supersededId: string): 
   );
 }
 
+export type SupersessionEdge = {
+  readonly sourceId: string;
+  readonly signals: readonly string[];
+  readonly provenance: readonly string[];
+};
+
+/** The `SUPERSEDES` edge into a closed node, with the signals and provenance a close stamps on it. */
+export async function supersessionEdge(
+  driver: Driver,
+  supersededId: string,
+): Promise<SupersessionEdge | undefined> {
+  return readFirst(
+    driver,
+    [
+      `MATCH (n)-[r:${SUPERSEDES_TYPE}]->({ id: $supersededId })`,
+      'RETURN n.id AS sourceId, r.signals AS signals, r.provenance AS provenance',
+    ].join('\n'),
+    { supersededId },
+    (row) => ({
+      sourceId: row.sourceId as string,
+      signals: (row.signals as string[] | null) ?? [],
+      provenance: (row.provenance as string[] | null) ?? [],
+    }),
+  );
+}
+
 export type NamedPair = {
   readonly a: string;
   readonly b: string;
