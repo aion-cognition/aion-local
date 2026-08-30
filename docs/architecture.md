@@ -254,14 +254,19 @@ bypassing the relevance score and the bucket claim and nothing else. The escape 
 because one operation's subject is not proportional: thirteen leaking nodes out of two
 thousand is a small share to a scoring function and an incident to a person.
 
-**Where this departs from the whitepaper.** Appendix D names eleven operations and four are
-not registered. `entity_consolidation` the whitepaper itself labels a gated placeholder.
-`connectivity_enhance`, `association_pruning`, and `temporal_hygiene` are outside the round's
-scope: the first two overlap what `symbiosis_bridge` and `memory_decay` already do to edge
-weight, and the third has no measurable trigger in the snapshot yet. The symbiosis bridge
-follows §8.5's stages with one narrowing: it scores community pairs and asks a model for the
-bridge's summary, rationale and compatibility, but it writes one bridge per run against the
-closest cross-community pair rather than a set of specific node connections.
+**Four operations the design names and this does not register.** `entity_consolidation` is a
+placeholder in the design itself and waits on a measure of entity fragmentation the snapshot
+does not take. `connectivity_enhance` and `association_pruning` overlap what `symbiosis_bridge`
+and `memory_decay` already do to edge weight, and building a third writer of the same property
+before the first two have a measured effect would make all three unattributable.
+`temporal_hygiene` has no trigger: nothing in the snapshot counts a validity-period violation,
+and an operation with no gauge cannot be scored or starved.
+
+**One narrowing inside the bridge.** The design describes an LLM proposing a set of specific
+node connections. This proposes the summary, rationale and compatibility, and anchors the
+bridge on the closest cross-community pair by content vector rather than on a model-chosen set.
+The vectors are the substrate's own statement that two nodes are about the same thing, they are
+already computed, and a person can re-derive the choice from the graph months later.
 
 ## Bitemporal model
 
