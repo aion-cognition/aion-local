@@ -790,3 +790,17 @@ on the live substrate, which is the correct answer for both: no narrative carrie
 and no episode is missing its session link. Neither has a live selection to point at, and both
 are covered by integration tests that force the condition. The enrichment backlog is real and
 draining at 200 an hour now that reconcile can see it.
+
+The review read the Hebbian sampling rate as a consequence of the flush being starved, and that
+was half of it. The flush now runs every few cycles, and the queue is still pinned at its 50,000
+cap with 40,803 rows dropped lifetime: `hebbian.batchSize` is 100 and the tick is fifteen
+minutes, so the drain is 400 signals an hour against an arrival rate above it. That is a
+capacity question rather than a scheduling one, and the right answer is a measurement of the
+arrival rate against the write cost of a larger batch, not a number picked here.
+
+The held-out recall battery has one probe that asserts the answering node reached the pack at
+all, and it fails intermittently: 1 red in 3 runs, on a substrate the battery rebuilds through
+live extraction each time. Nothing in this pass touches the recall path (the diff there is the
+counter call and one pure read helper), and the battery already carries a rate assertion over
+all probes for exactly this variance. The per-probe bar is the thing to re-measure, over more
+than three runs, before it is moved.
