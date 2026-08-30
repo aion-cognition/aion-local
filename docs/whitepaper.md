@@ -244,8 +244,9 @@ Where this build differs from the paper:
 - **Fourteen maintenance operations are registered**, and four the paper names are not, each
   for a reason `architecture.md` gives. Entity unmerge sits outside the catalog on
   purpose, since a bad merge and a correct one have the same shape in the graph.
-- **One implementation.** The paper describes two, TypeScript and Go. This is the TypeScript
-  one.
+- **A third implementation.** The paper describes two, TypeScript and Go, both multi-tenant
+  services. This repo is neither: it is a separate TypeScript implementation, built from the
+  paper for the local single-user shape described above.
 
 For the pipelines, bounded contexts, and graph schema, see
 [architecture.md](architecture.md). For failure modes,
