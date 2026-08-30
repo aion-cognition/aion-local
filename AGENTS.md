@@ -100,6 +100,25 @@ every command). Use it to exercise the actual binary, not as a test runner.
   A grep guard modeled on it would be the cheap way to enforce Cypher confinement to
   `infrastructure/graph/`, if that becomes worth codifying.
 
+## The gate definition
+
+A round gates on all of these, not just the suite:
+
+```
+npm run build            # tsc -b
+npm run typecheck:all    # tsc -p tsconfig.tests.json: tests and fixtures included
+npm run lint             # eslint . (departures documented in eslint/README.md)
+npm run format:check     # prettier --check .
+npm test                 # both vitest projects (or unit + chunked integration; the full
+                         #   run exceeds a 10-minute window on this machine)
+```
+
+Plus the re-exercise batteries below, and `./bin/aion doctor` green against the live stack.
+The `service-freshness` doctor check warns when the running service's build sha trails the
+repo HEAD: a rebuilt image reaches the container only on a recreate, so after any commit
+that should be live, `docker compose build && docker compose --profile mcp up -d` and let
+doctor confirm.
+
 ## The re-exercise gate
 
 `packages/mcp/src/gate/` holds the seven scripted batteries the fix round is gated on, each

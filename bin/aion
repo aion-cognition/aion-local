@@ -9,7 +9,11 @@ IMAGE="aion-local:latest"
 
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-aion}"
 AION_GIT_USER_NAME="${AION_GIT_USER_NAME:-$(git -C "$REPO_DIR" config user.name 2>/dev/null || true)}"
-export COMPOSE_PROJECT_NAME AION_GIT_USER_NAME
+# HEAD travels two ways: baked into the image at build (AION_BUILD_SHA) and handed to every
+# CLI run (AION_REPO_HEAD_SHA), so `doctor` can tell a stale running service from a fresh one.
+AION_REPO_HEAD_SHA="$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || true)"
+AION_BUILD_SHA="$AION_REPO_HEAD_SHA"
+export COMPOSE_PROJECT_NAME AION_GIT_USER_NAME AION_REPO_HEAD_SHA AION_BUILD_SHA
 export AION_REPO_PATH="$REPO_DIR"
 
 # Epoch seconds of the newest tracked source file, or empty when git cannot answer.

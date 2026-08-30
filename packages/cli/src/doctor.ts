@@ -79,6 +79,43 @@ export async function probeMcpHttp(
 }
 
 /**
+ * The running service can trail the repo: a rebuilt image only reaches the container on the
+ * next recreate, and nothing else surfaces the lag. Warns rather than fails, because an
+ * intentionally pinned older service is a choice, not a fault.
+ */
+export async function probeServiceFreshness(
+  port: number,
+  repoHeadSha: string | undefined,
+  fetchImpl: typeof fetch = fetch,
+): Promise<CheckResult> {
+  const url = `${mcpBaseUrl(port)}${HEALTH_PATH}`;
+  const response = await fetchImpl(url);
+  if (!response.ok) {
+    return { ok: false, detail: `${String(response.status)} from ${url}` };
+  }
+  const body = (await response.json()) as { build_sha?: unknown };
+  const running = typeof body.build_sha === 'string' ? body.build_sha : 'unstamped';
+  if (running === 'unstamped') {
+    return {
+      ok: true,
+      warn: true,
+      detail: 'service image carries no build sha; rebuild through bin/aion to stamp it',
+    };
+  }
+  if (repoHeadSha === undefined || repoHeadSha.length === 0) {
+    return { ok: true, warn: true, detail: `service at ${running}; repo HEAD unknown here` };
+  }
+  if (running === repoHeadSha) {
+    return { ok: true, detail: `service and repo both at ${running}` };
+  }
+  return {
+    ok: true,
+    warn: true,
+    detail: `service runs ${running} but the repo is at ${repoHeadSha}; rebuild and recreate aion-mcp`,
+  };
+}
+
+/**
  * Pure SQLite, no Neo4j: `aion doctor` printed "8 checks passed" with 4,000+ jobs pending,
  * and again with one permanently wedged job. Warn, never fail: a backlog is a thing that is
  * behind, not a thing that is broken.
@@ -158,6 +195,11 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
       name: 'mcp-http',
       dependsOn: NEO4J_BOLT,
       run: () => probeMcpHttp(config.operational.mcpPort),
+    },
+    {
+      name: 'service-freshness',
+      dependsOn: 'mcp-http',
+      run: () => probeServiceFreshness(config.operational.mcpPort, process.env.AION_REPO_HEAD_SHA),
     },
     {
       name: GRAPH_SCHEMA,
