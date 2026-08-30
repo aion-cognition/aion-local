@@ -1,5 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 import { supersede } from '../../infrastructure/graph/bitemporal.js';
+import { markNarrativesForRegrounding } from '../../infrastructure/graph/narrative-queries.js';
 import {
   findSourceEpisodeId,
   supersedeEpisode,
@@ -78,6 +79,13 @@ export type ApplyProposalResult = {
   readonly retiredGlosses: readonly ClaimSubject[];
   /** Descriptions of the same subjects that stand, because they assert something else. */
   readonly openGlosses: readonly ClaimSubject[];
+  /**
+   * Narratives of the affected sessions, marked for regrounding. A narrative compresses the
+   * claims of its session and carries no supersession lineage of its own, so a correction
+   * leaves it standing as current, restating the closed claim, with nothing to say it was
+   * corrected. The marker is what the regrounding operation reads.
+   */
+  readonly regroundedNarratives: readonly string[];
 };
 
 export class ProposalNotFoundError extends Error {
@@ -109,7 +117,7 @@ async function applyEpisode(
   driver: Driver,
   proposal: SupersessionProposal,
   now: Date,
-): Promise<Omit<ApplyProposalResult, 'proposal' | 'scope'>> {
+): Promise<Omit<ApplyProposalResult, 'proposal' | 'scope' | 'regroundedNarratives'>> {
   const sourceId = await findSourceEpisodeId(driver, proposal.oldId);
   if (sourceId === undefined) {
     throw new Error(
@@ -149,8 +157,11 @@ export async function applySupersessionProposal(
   const scope = input.scope ?? DEFAULT_APPLY_SCOPE;
 
   const applied = await applyScope(driver, proposal, scope, now, input.relatednessFloor);
+  // After the close, not inside it: the marker is a repair instruction rather than part of the
+  // correction, and a narrative left unmarked costs a stale sentence, not a wrong close.
+  const regroundedNarratives = await markNarrativesForRegrounding(driver, applied.closedIds);
   resolveSupersessionProposal(db, proposal.id, now.toISOString());
-  return { proposal, scope, ...applied };
+  return { proposal, scope, ...applied, regroundedNarratives };
 }
 
 async function applyScope(
@@ -159,7 +170,7 @@ async function applyScope(
   scope: ApplyScope,
   now: Date,
   relatednessFloor: number,
-): Promise<Omit<ApplyProposalResult, 'proposal' | 'scope'>> {
+): Promise<Omit<ApplyProposalResult, 'proposal' | 'scope' | 'regroundedNarratives'>> {
   if (scope === 'episode') {
     return applyEpisode(driver, proposal, now);
   }

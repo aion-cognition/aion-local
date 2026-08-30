@@ -118,6 +118,12 @@ export {
   narrativeCleanupOperation,
 } from './application/operations/narrative-cleanup-operation.js';
 export {
+  NARRATIVE_REGROUNDING_OPERATION,
+  narrativeRegroundingOperation,
+  narrativeRegroundingRelevance,
+} from './application/operations/narrative-regrounding.js';
+export type { NarrativeRegroundingOverrides } from './application/operations/narrative-regrounding.js';
+export {
   RETRO_JUDGMENT_SWEEP_OPERATION,
   RETRO_SWEEP_STANDING_RELEVANCE,
   retroJudgmentSweepOperation,
