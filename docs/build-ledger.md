@@ -652,7 +652,10 @@ cycles 12 through 18 are `orphan_cleanup tier 1 applied 200` and nothing else, a
 a half hours. Every operation now declares in `answers` the one critical condition it repairs
 and earns tier 1 for the cycles the snapshot meets it, and preemption is bounded: past a grace
 of three resolved runs it holds only while the operation is still moving the metric it declared.
-A pathology that stands for weeks no longer blocks the catalog for weeks.
+A pathology that stands for weeks no longer blocks the catalog for weeks. The grace alone would
+not have released this one, and it is worth being exact about why: `orphan_cleanup` scored
+`improved` on all seven runs, because relinking did lower the share it was measured on. What
+released it is the next fix, and the two are complementary rather than redundant.
 
 **Two of the three critical conditions had no responder.** `vector_backfill` shipped as tier 2,
 so a parity crisis competed on urgency with content touch-ups rather than preempting; it now
