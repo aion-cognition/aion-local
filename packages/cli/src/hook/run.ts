@@ -1,3 +1,6 @@
+import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+
 import {
   postToolUse,
   preCompact,
@@ -86,17 +89,53 @@ export function parseHookInput(raw: string): Record<string, unknown> {
   }
 }
 
+/**
+ * One JSON line per fire into `<stateDir>/hooks.log`. Hooks run where nobody watches, so
+ * this is the only durable record of whether they fired and what they did; the pino file
+ * lives on the container volume and the hook client must not depend on it. The write is
+ * fail-open like everything else here, and the log rotates once at 5MB so it stays small.
+ */
+function trace(stateDir: string, entry: Record<string, unknown>): void {
+  try {
+    mkdirSync(stateDir, { recursive: true });
+    const file = join(stateDir, 'hooks.log');
+    try {
+      if (statSync(file).size > 5 * 1024 * 1024) {
+        renameSync(file, `${file}.1`);
+      }
+    } catch {
+      // a missing file is the normal first-run case
+    }
+    appendFileSync(file, `${JSON.stringify(entry)}\n`);
+  } catch {
+    // the trace must never break a fire
+  }
+}
+
 /** The one place an exit code other than 0 can survive: everything else collapses to fail-open. */
 export async function runHook(
   input: Record<string, unknown>,
   options: HookOptions,
 ): Promise<number> {
+  const started = options.now().getTime();
+  const base = {
+    ts: options.now().toISOString(),
+    event: options.event,
+    session: typeof input.session_id === 'string' ? input.session_id : undefined,
+  };
   try {
-    return await HANDLERS[options.event]({ input, options });
+    const exit = await HANDLERS[options.event]({ input, options });
+    trace(options.stateDir, { ...base, exit, ms: options.now().getTime() - started });
+    return exit;
   } catch (err) {
-    options.stderr(
-      `aion hook ${options.event}: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    const message = err instanceof Error ? err.message : String(err);
+    options.stderr(`aion hook ${options.event}: ${message}`);
+    trace(options.stateDir, {
+      ...base,
+      exit: 0,
+      error: message,
+      ms: options.now().getTime() - started,
+    });
     return 0;
   }
 }
