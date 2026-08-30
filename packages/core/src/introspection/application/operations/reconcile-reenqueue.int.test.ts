@@ -5,6 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
+import { runWrite } from '../../../infrastructure/graph/connection.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import {
   startNeo4jHarness,
@@ -66,6 +67,11 @@ function ctxFor(overrides: Partial<OperationContext> = {}): OperationContext {
   };
 }
 
+/** The two ordering tests below assert on tx_from order, so they start from an empty graph. */
+async function clearEpisodes(): Promise<void> {
+  await runWrite(harness.driver, 'MATCH (e:Episode) DETACH DELETE e', {}, (row) => row);
+}
+
 function jobsFor(episodeId: string) {
   return listReflectionJobs(db).filter(
     (job) => (job.payload as { episode_id?: unknown })?.episode_id === episodeId,
@@ -113,9 +119,8 @@ describe('reconcile_reenqueue', () => {
     expect(jobsFor('reconcile-orphan')).toHaveLength(1);
   }, 60_000);
 
-  it('bounds the scan to reconcileBatchSize episodes, newest first', async () => {
-    // Strictly after every episode the previous test wrote (all stamped at NOW), so this
-    // pair's ordering relative to each other is the only thing the assertion depends on.
+  it('bounds the jobs it writes without narrowing what it scanned, oldest first', async () => {
+    await clearEpisodes();
     await writeStampedNode(harness.driver, {
       label: 'Episode',
       id: 'reconcile-bound-old',
@@ -133,9 +138,37 @@ describe('reconcile_reenqueue', () => {
     const operation = reconcileReenqueueOperation();
     const result = await operation.run(ctxFor({ config: boundedConfig }));
 
-    expect(result.itemsProcessed).toBe(1);
+    // Everything the substrate holds was looked at, and one job was written: the batch is a
+    // bound on the write, not a window on the scan.
+    expect(result.itemsProcessed).toBe(2);
     expect(result.itemsAffected).toBe(1);
-    expect(jobsFor('reconcile-bound-new')).toHaveLength(1);
-    expect(jobsFor('reconcile-bound-old')).toHaveLength(0);
+    // The oldest waiting episode takes the one slot. Under a scan narrowed to the batch it
+    // would sit outside the window forever while the count it is scored on kept reporting it.
+    expect(jobsFor('reconcile-bound-old')).toHaveLength(1);
+    expect(jobsFor('reconcile-bound-new')).toHaveLength(0);
+  }, 60_000);
+
+  it('reaches an episode far older than one batch of newer ones', async () => {
+    await clearEpisodes();
+    await writeStampedNode(harness.driver, {
+      label: 'Episode',
+      id: 'reconcile-stranded',
+      properties: { text: 'stranded months ago' },
+      now: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    for (let index = 0; index < 5; index += 1) {
+      await writeStampedNode(harness.driver, {
+        label: 'Episode',
+        id: `reconcile-newer-${String(index)}`,
+        properties: { text: 'stored since' },
+        now: new Date(`2026-08-29T15:0${String(index)}:00.000Z`),
+      });
+    }
+
+    const boundedConfig: Config = { ...config, maintenance: { ...config.maintenance, reconcileBatchSize: 2 } };
+    const result = await reconcileReenqueueOperation().run(ctxFor({ config: boundedConfig }));
+
+    expect(result.itemsAffected).toBe(2);
+    expect(jobsFor('reconcile-stranded')).toHaveLength(1);
   }, 60_000);
 });
