@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CueSchema,
+  MEMORY_PACK_BUCKETS,
   MemoryPackItemSchema,
   MemoryPackSchema,
+  packBuckets,
   RationaleSchema,
 } from './recall-output.js';
 
@@ -146,6 +148,48 @@ describe('MemoryPackSchema valid fixtures', () => {
     expect(MemoryPackSchema.parse(pack)).toEqual(pack);
   });
 
+  it('parses an item carrying the rule that admitted it and the evidence that qualified', () => {
+    const pack = {
+      facts: [
+        {
+          id: 'fact-3',
+          content: 'the ingest pipeline retries three times',
+          rank: 1,
+          confidence: 0.56,
+          rationale: { method: 'bm25', score: 1 },
+          admitted_by: { rule: 'corroborated', evidence: ['vector 0.56', 'bm25 exact'] },
+          currency: 'current',
+        },
+      ],
+      rendered_text: 'fact-3: the ingest pipeline retries three times',
+      metadata: baseMetadata,
+    };
+    expect(MemoryPackSchema.parse(pack)).toEqual(pack);
+  });
+
+  it('parses a resonant turn carrying the current claim from its subject family', () => {
+    const pack = {
+      resonant: [
+        {
+          id: 'turn-4',
+          content: 'background shell tasks are a reliable overnight fallback',
+          rank: 1,
+          confidence: 0.83,
+          rationale: { method: 'resonance', score: 0.83 },
+          admitted_by: { rule: 'context_threshold', evidence: ['resonance 0.83'] },
+          related_claim: {
+            id: 'insight-1',
+            text: 'Background shell tasks are not reliable overnight on this machine.',
+          },
+          currency: 'current',
+        },
+      ],
+      rendered_text: 'turn-4: background shell tasks are a reliable overnight fallback',
+      metadata: baseMetadata,
+    };
+    expect(MemoryPackSchema.parse(pack)).toEqual(pack);
+  });
+
   it("parses a fact carrying the node's own reason alongside the retrieval rationale", () => {
     const pack = {
       facts: [
@@ -234,6 +278,45 @@ describe('MemoryPackSchema invalid shapes', () => {
     expect(result.success).toBe(false);
   });
 
+  it('rejects an admission rule the gate cannot produce', () => {
+    const result = MemoryPackItemSchema.safeParse({
+      id: 'x',
+      content: 'x',
+      rank: 1,
+      confidence: 1,
+      rationale: { method: 'vector', score: 1 },
+      admitted_by: { rule: 'felt_right', evidence: ['vector 0.72'] },
+      currency: 'current',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an admission that names no evidence, which explains nothing', () => {
+    const result = MemoryPackItemSchema.safeParse({
+      id: 'x',
+      content: 'x',
+      rank: 1,
+      confidence: 1,
+      rationale: { method: 'vector', score: 1 },
+      admitted_by: { rule: 'vector_floor', evidence: [] },
+      currency: 'current',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a related claim with no text, since the text is the whole annotation', () => {
+    const result = MemoryPackItemSchema.safeParse({
+      id: 'x',
+      content: 'x',
+      rank: 1,
+      confidence: 1,
+      rationale: { method: 'resonance', score: 0.9 },
+      related_claim: { id: 'insight-1', text: '' },
+      currency: 'current',
+    });
+    expect(result.success).toBe(false);
+  });
+
   it('rejects an empty why: absence is how an item with no stored reason says so', () => {
     const result = MemoryPackItemSchema.safeParse({
       id: 'x',
@@ -245,5 +328,43 @@ describe('MemoryPackSchema invalid shapes', () => {
       currency: 'current',
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe('packBuckets', () => {
+  const item = {
+    id: 'x',
+    content: 'x',
+    rank: 1,
+    confidence: 1,
+    rationale: { method: 'vector' as const, score: 1 },
+    currency: 'current' as const,
+  };
+
+  it('fills every bucket on a pack that omitted all of them', () => {
+    const pack = MemoryPackSchema.parse({
+      rendered_text: 'No relevant memories found.',
+      metadata: baseMetadata,
+    });
+
+    const buckets = packBuckets(pack);
+
+    for (const bucket of MEMORY_PACK_BUCKETS) {
+      expect(buckets[bucket]).toEqual([]);
+    }
+  });
+
+  it('carries a present bucket through unchanged and leaves the rest empty', () => {
+    const pack = MemoryPackSchema.parse({
+      facts: [item],
+      rendered_text: 'x',
+      metadata: baseMetadata,
+    });
+
+    const buckets = packBuckets(pack);
+
+    expect(buckets.facts).toEqual([item]);
+    expect(buckets.episodes).toEqual([]);
+    expect(buckets.resonant).toEqual([]);
   });
 });

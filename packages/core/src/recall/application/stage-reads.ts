@@ -1,10 +1,12 @@
-import type { Cue, Degradation } from '@aion/protocol';
+import type { Cue, Degradation, RelatedClaim } from '@aion/protocol';
 import type { Driver } from 'neo4j-driver';
 
 import type { SeedCue } from './seeds.js';
 import type { Config } from '../../infrastructure/config/schema.js';
+import { normalizeCognitiveText } from '../../infrastructure/graph/cognitive-queries.js';
 import { listSessionEpisodeIds } from '../../infrastructure/graph/episodes.js';
 import type { ReadMode } from '../../infrastructure/graph/read-modes.js';
+import { findRelatedClaims } from '../../infrastructure/graph/related-claim-queries.js';
 import {
   contentVectors,
   nodeCandidates,
@@ -17,7 +19,7 @@ import { isLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import { orchestratorLedgerKey } from '../../reflection/application/orchestrator.js';
 import type { Measurement } from '../domain/admission.js';
 import { scoreArrivals } from '../domain/arrival-scoring.js';
-import type { RankedList } from '../domain/fusion.js';
+import type { FusedItem, RankedList } from '../domain/fusion.js';
 
 /**
  * The one embedding call recall makes and the reads it makes against ids it already holds,
@@ -114,6 +116,44 @@ export async function measureArrivals(
     vectors: new Map(rows.map((row) => [row.id, row.vector])),
     cues,
   });
+}
+
+/** The label that says a resonant hit is captured text rather than a distilled claim. */
+const TURN_LABEL = 'Turn';
+
+/**
+ * The current claim beside each raw turn resonance surfaced, keyed by the turn's id.
+ *
+ * Only resonant turns are asked about. A turn the query matched directly arrives beside
+ * whatever else the query matched, so the pack already carries its context; a turn resonance
+ * found alone carries a stated belief and nothing else, and nothing ever supersedes a turn.
+ * One query for the batch, and none at all when the bucket holds no turns.
+ *
+ * Best-effort, like the pending-enrichment count: a failure here costs the pack an annotation
+ * and never the recall itself.
+ */
+export async function relatedClaims(
+  deps: StageReadDeps,
+  resonant: readonly FusedItem[],
+  mode: ReadMode,
+): Promise<ReadonlyMap<string, RelatedClaim>> {
+  const turns = resonant
+    .filter((item) => item.labels.includes(TURN_LABEL))
+    .map((item) => ({ id: item.id, textNorm: normalizeCognitiveText(item.content) }));
+  if (turns.length === 0) {
+    return new Map();
+  }
+  try {
+    const rows = await findRelatedClaims(deps.driver, {
+      turns,
+      floor: deps.config.recall.relatedClaimFloor,
+      mode,
+    });
+    return new Map(rows.map((row) => [row.turnId, { id: row.id, text: row.text }]));
+  } catch (err) {
+    deps.logger.warn({ err }, 'related-claim lookup failed; the resonant turns go unannotated');
+    return new Map();
+  }
 }
 
 /**

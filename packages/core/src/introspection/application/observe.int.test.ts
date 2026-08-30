@@ -175,6 +175,8 @@ describe('observeHealth', () => {
     expect(snapshot.graph.vectorParity).toBeCloseTo(5 / 6, 6);
     expect(snapshot.graph.episodesWithoutSession).toBe(1);
     expect(snapshot.graph.orphanShare).toBeCloseTo(2 / 4, 6);
+    // The one CO_OCCURS edge; the two PARTICIPATES_IN and the one EXTRACTED_FROM are protected.
+    expect(snapshot.graph.decayableEdges).toBe(1);
     expect(snapshot.enrichment.unenriched).toBe(3);
     expect(snapshot.queue.depth).toBe(0);
     expect(snapshot.proposals.oldestOpenAgeMs).toBeUndefined();
@@ -203,6 +205,7 @@ describe('observeHealth', () => {
 
     expect(snapshot.degraded).toContain('graph');
     expect(snapshot.graph.vectorParity).toBe(1);
+    expect(snapshot.graph.decayableEdges).toBe(0);
     expect(snapshot.queue.depth).toBe(0);
     expect(snapshot.plasticity.reinforcementQueueDepth).toBe(0);
   });

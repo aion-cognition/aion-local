@@ -1,4 +1,4 @@
-import type { RecallMethod } from '@aion/protocol';
+import type { AdmissionRule, RecallMethod } from '@aion/protocol';
 
 /**
  * Empty beats noisy, as an absolute rule rather than a rank one. What a retrieval leg
@@ -92,6 +92,30 @@ function measurementKey(measurement: Measurement): string {
 }
 
 /**
+ * The rule that admitted an item, the measurements that qualified under it, and the score the
+ * rule actually read. A pack prints all three, so the number beside an admitted item is one
+ * the gate weighed rather than the best number anything happened to measure.
+ */
+export type AdmissionEvidence = {
+  readonly rule: AdmissionRule;
+  /**
+   * The strongest cosine the rule counted, and zero when it counted none. Zero is not low
+   * confidence, it is no measurement: a literal match carries no number and inventing one for
+   * it would put it on a scale it was never on.
+   */
+  readonly score: number;
+  /** Each qualifying measurement as the pack prints it: `vector 0.56`, `bm25 exact`. */
+  readonly qualifying: readonly string[];
+};
+
+function describe(measurement: Measurement): string {
+  if (measurement.exact === true) {
+    return `${measurement.method} exact`;
+  }
+  return `${measurement.method} ${measurement.relevance.toFixed(2)}`;
+}
+
+/**
  * Three ways in, and a rank is not one of them:
  *
  *  - a cosine at or above the calibrated floor, which is one method vouching alone;
@@ -108,25 +132,31 @@ function measurementKey(measurement: Measurement): string {
  * reached is admitted on the cosine something measured for it, exactly as a seed is, and never
  * on the strength of the path that found it: an off-topic pack fills to budget the moment one
  * incidental hit is allowed to unlock everything activation touched.
+ *
+ * `undefined` is the refusal. The three rules are reported in the order above rather than in
+ * the order the measurements arrive, so an item that cleared the vector floor is explained by
+ * the floor it cleared even when a literal hit would also have let it in.
  */
-export function admitsOnEvidence(
+export function admissionEvidence(
   measurements: readonly Measurement[],
   policy: AdmissionPolicy,
-): boolean {
-  const corroborating = new Set<string>();
-  let alone = false;
+): AdmissionEvidence | undefined {
+  const corroborating = new Map<string, Measurement>();
+  const cleared: Measurement[] = [];
+  const literal: Measurement[] = [];
+  let bm25Alone: Measurement | undefined;
 
   for (const measurement of measurements) {
     if (measurement.exact === true) {
       if (measurement.method !== 'bm25' || policy.bm25Mode !== 'corroborated') {
-        alone = true;
+        literal.push(measurement);
       }
-      corroborating.add(measurementKey(measurement));
+      corroborating.set(measurementKey(measurement), measurement);
       continue;
     }
     if (measurement.method === 'bm25') {
       if (policy.bm25Mode === 'any') {
-        alone = true;
+        bm25Alone ??= measurement;
       }
       continue;
     }
@@ -134,14 +164,43 @@ export function admitsOnEvidence(
       continue;
     }
     if (measurement.relevance >= policy.vectorFloor) {
-      alone = true;
+      cleared.push(measurement);
     }
     if (measurement.relevance >= policy.corroborationFloor) {
-      corroborating.add(measurementKey(measurement));
+      corroborating.set(measurementKey(measurement), measurement);
     }
   }
 
-  return alone || corroborating.size >= 2;
+  if (cleared.length > 0) {
+    return {
+      rule: 'vector_floor',
+      score: absoluteRelevance(cleared),
+      qualifying: cleared.map(describe),
+    };
+  }
+  if (literal.length > 0) {
+    return { rule: 'exact_match', score: 0, qualifying: literal.map(describe) };
+  }
+  if (corroborating.size >= 2) {
+    const qualifying = [...corroborating.values()];
+    return {
+      rule: 'corroborated',
+      score: absoluteRelevance(qualifying),
+      qualifying: qualifying.map(describe),
+    };
+  }
+  // The escape hatch: a plain lexical hit admits alone only where the operator asked for it.
+  if (bm25Alone !== undefined) {
+    return { rule: 'bm25_any', score: 0, qualifying: [describe(bm25Alone)] };
+  }
+  return undefined;
+}
+
+export function admitsOnEvidence(
+  measurements: readonly Measurement[],
+  policy: AdmissionPolicy,
+): boolean {
+  return admissionEvidence(measurements, policy) !== undefined;
 }
 
 /**
@@ -160,11 +219,12 @@ export function wasMeasured(measurements: readonly Measurement[]): boolean {
 }
 
 /**
- * The strongest cosine any method measured for one item, and zero when none did. This is the
- * only number about an item that is comparable between queries, so it is the one a pack may
- * print as a confidence. An item admitted by an exact lexical or entity hit alone reports
- * zero: a literal match is evidence rather than a measurement, and inventing a number for it
- * would put it on a scale it was never on.
+ * The strongest cosine in a set of measurements, and zero when none of them is one. A cosine is
+ * the only number about an item that is comparable between queries, so it is the only one a
+ * pack may print as a confidence. Applied to the measurements that qualified under the
+ * admitting rule rather than to all of them: a leg that measured 0.53 and admitted nothing is
+ * not what let the item in, and printing its number beside the item reads as a floor that
+ * leaked.
  */
 export function absoluteRelevance(measurements: readonly Measurement[]): number {
   let best = 0;
