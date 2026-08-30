@@ -5,8 +5,7 @@ import {
   findOrphanRelinkTargets,
   type OrphanRelinkTarget,
 } from '../../../infrastructure/graph/topology-queries.js';
-import { criticalConditions } from '../../domain/decide.js';
-import type { HealthSnapshot } from '../../domain/health.js';
+import { criticalConditions, type HealthSnapshot } from '../../domain/health.js';
 import type {
   IntrospectionOperation,
   OperationContext,
@@ -17,10 +16,10 @@ import type {
  * Orphan cleanup: relink what can be reconnected cheaply, forget what has been disconnected
  * long enough to say it is not coming back, and leave everything else alone.
  *
- * This is a tier-1 operation, so its relevance is zero unless the snapshot actually meets the
- * orphan condition. It reads that condition from `criticalConditions` rather than comparing
- * against the threshold itself, which is what stops the rule that selects the operation and
- * the rule the operation repairs from drifting apart.
+ * It answers the orphan condition, so its relevance is zero unless the snapshot actually meets
+ * it. It reads that condition from `criticalConditions` rather than comparing against the
+ * threshold itself, which is what stops the rule that selects the operation and the rule the
+ * operation repairs from drifting apart.
  */
 
 export const ORPHAN_CLEANUP_OPERATION = 'orphan_cleanup';
@@ -111,15 +110,15 @@ async function runOrphanCleanup(ctx: OperationContext): Promise<OperationOutcome
 }
 
 /**
- * The bucket matches the default tick. A tier-1 operation preempts the whole routine catalog
- * for as long as its condition holds, and a coarser bucket would spend most of those ticks
- * finding its window already claimed: the catalog stays blocked either way, so the emergency
- * may as well drain a batch every time it is chosen.
+ * The bucket matches the default tick, so a run that is preempting drains a batch every time
+ * it is chosen rather than finding its own window already claimed. The preemption itself is
+ * not open-ended: once the operation has run its grace out without moving `orphanShare`, the
+ * decision engine scores it routinely and the rest of the catalog gets its turns back.
  */
 export function orphanCleanupOperation(): IntrospectionOperation {
   return {
     name: ORPHAN_CLEANUP_OPERATION,
-    tier: 1,
+    answers: 'orphan_share',
     bucket: 'quarter-hour',
     relevance: orphanCleanupRelevance,
     measure: (health) => health.graph.orphanShare,

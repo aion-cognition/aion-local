@@ -84,7 +84,6 @@ export function descriptionFreshnessOperation(
 
   return {
     name: DESCRIPTION_FRESHNESS_OPERATION,
-    tier: 2,
     bucket: 'hour',
     relevance: () => DESCRIPTION_FRESHNESS_STANDING_RELEVANCE,
     run: async (ctx): Promise<OperationOutcome> => {

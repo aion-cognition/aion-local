@@ -182,6 +182,49 @@ export function neutralSnapshot(cycle: number, observedAt: string): HealthSnapsh
   };
 }
 
+/** Below this, a significant share of the substrate is invisible to vector search. */
+export const CRITICAL_VECTOR_PARITY = 0.8;
+
+/** Above this, the graph has fragmented into pieces spreading activation cannot cross. */
+export const CRITICAL_ORPHAN_SHARE = 0.3;
+
+/**
+ * Neither share means anything on a substrate this small: one unvectorized node out of five is
+ * a parity of 0.8, and the reflection worker's own pending-vector drain is already on it.
+ */
+export const CRITICAL_MIN_POPULATION = 20;
+
+export type CriticalCondition = 'vector_parity' | 'orphan_share' | 'missing_backbone_links';
+
+/**
+ * The tier-1 conditions this snapshot meets, in the order they degrade recall. An operation
+ * names the one condition it repairs and reads it from here rather than re-deriving the
+ * thresholds, so the condition that selects an operation and the condition the operation
+ * repairs cannot drift apart.
+ */
+export function criticalConditions(health: HealthSnapshot): readonly CriticalCondition[] {
+  if (health.degraded.includes(HEALTH_COLLECTORS.graph)) {
+    return [];
+  }
+  const conditions: CriticalCondition[] = [];
+  if (health.graph.episodesWithoutSession > 0) {
+    conditions.push('missing_backbone_links');
+  }
+  if (
+    health.graph.vectorExpected >= CRITICAL_MIN_POPULATION &&
+    health.graph.vectorParity < CRITICAL_VECTOR_PARITY
+  ) {
+    conditions.push('vector_parity');
+  }
+  if (
+    health.graph.nodes >= CRITICAL_MIN_POPULATION &&
+    health.graph.orphanShare > CRITICAL_ORPHAN_SHARE
+  ) {
+    conditions.push('orphan_share');
+  }
+  return conditions;
+}
+
 /** A ratio that answers 1 rather than NaN on an empty substrate: nothing missing is not a gap. */
 export function parityRatio(present: number, expected: number): number {
   if (expected <= 0) {

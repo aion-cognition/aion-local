@@ -42,7 +42,6 @@ export function retroJudgmentSweepOperation(
 
   return {
     name: RETRO_JUDGMENT_SWEEP_OPERATION,
-    tier: 2,
     bucket: 'day',
     relevance: () => RETRO_SWEEP_STANDING_RELEVANCE,
     run: async (ctx): Promise<OperationOutcome> => {

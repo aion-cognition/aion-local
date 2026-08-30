@@ -7,17 +7,14 @@ export { OPERATION_BUCKETS, bucketStamp, operationBucketKey, OPERATION_LEDGER_PR
 export type { OperationBucket } from './domain/buckets.js';
 
 export {
-  CRITICAL_MIN_POPULATION,
-  CRITICAL_ORPHAN_SHARE,
-  CRITICAL_VECTOR_PARITY,
+  CRITICAL_PREEMPTION_GRACE_RUNS,
   DEPRIORITIZED_WEIGHT,
-  criticalConditions,
   decide,
+  preemptionEarned,
   scoreCandidate,
   starvationBoost,
 } from './domain/decide.js';
 export type {
-  CriticalCondition,
   Decision,
   DecisionInput,
   OperationCandidate,
@@ -25,6 +22,10 @@ export type {
 } from './domain/decide.js';
 
 export {
+  CRITICAL_MIN_POPULATION,
+  CRITICAL_ORPHAN_SHARE,
+  CRITICAL_VECTOR_PARITY,
+  criticalConditions,
   HEALTH_COLLECTORS,
   NEUTRAL_ENRICHMENT_HEALTH,
   NEUTRAL_GRAPH_HEALTH,
@@ -37,6 +38,7 @@ export {
   share,
 } from './domain/health.js';
 export type {
+  CriticalCondition,
   EnrichmentHealth,
   GraphStructureHealth,
   HealthCollector,
@@ -123,6 +125,13 @@ export {
 export type { RetroJudgmentSweepOverrides } from './application/operations/retro-judgment-sweep-operation.js';
 export type { ProviderFactory } from './application/operations/routed-generation.js';
 
+export {
+  BACKBONE_REPAIR_OPERATION,
+  BACKBONE_REPAIR_PROVENANCE,
+  BACKBONE_REPAIR_SIGNAL,
+  backboneRepairOperation,
+  backboneRepairRelevance,
+} from './application/operations/backbone-repair.js';
 export {
   COMMUNITY_REFRESH_OPERATION,
   COMMUNITY_REFRESH_RELEVANCE,

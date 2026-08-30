@@ -32,7 +32,6 @@ export function deadLetterRelevance(health: HealthSnapshot): number {
 export function deadLetterOperation(): IntrospectionOperation {
   return {
     name: DEAD_LETTER_OPERATION,
-    tier: 2,
     bucket: 'hour',
     relevance: deadLetterRelevance,
     measure: (health) => health.queue.exhausted,

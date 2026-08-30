@@ -73,7 +73,6 @@ async function closeDuplicates(
 export function narrativeCleanupOperation(): IntrospectionOperation {
   return {
     name: NARRATIVE_CLEANUP_OPERATION,
-    tier: 2,
     bucket: 'hour',
     relevance: () => NARRATIVE_CLEANUP_STANDING_RELEVANCE,
     run: async (ctx): Promise<OperationOutcome> => {

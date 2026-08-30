@@ -240,6 +240,9 @@ export const DEFAULTS: Config = {
     // Five new mentions since the description was written is enough traffic to plausibly
     // have added something worth folding in, without refreshing on every other mention.
     descriptionRefreshMentionGrowth: 5,
+    // One indexed lookup and one edge write per break, which is the cheapest repair in the
+    // catalog, so the batch matches the orphan sweep it sits beside.
+    backboneRepairBatch: 200,
     // Two graph reads and at most one small write per orphan, so a couple of hundred is a
     // tick's work even when every one of them needs a repair.
     orphanCleanupBatch: 200,

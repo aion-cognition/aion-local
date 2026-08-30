@@ -1,4 +1,9 @@
-import { HEALTH_COLLECTORS, type HealthSnapshot, type OperationEffectiveness } from './health.js';
+import {
+  criticalConditions,
+  type CriticalCondition,
+  type HealthSnapshot,
+  type OperationEffectiveness,
+} from './health.js';
 import type { OperationTier } from './operation.js';
 
 /**
@@ -12,56 +17,31 @@ import type { OperationTier } from './operation.js';
  * lowered for operations that have not been working and raised the longer one has been passed
  * over. Tier 3 is the model-guided layer, and it is opt-in and inert here (see the engine's
  * advisor seam).
+ *
+ * Tier is a property of the cycle, not of the operation. An operation earns tier 1 for one
+ * cycle by naming a critical condition the snapshot actually meets; the rest of the time the
+ * same operation is scored routinely beside everything else. That is what stops a permanent
+ * pathology from being a permanent preemption.
  */
-
-/** Below this, a significant share of the substrate is invisible to vector search. */
-export const CRITICAL_VECTOR_PARITY = 0.8;
-
-/** Above this, the graph has fragmented into pieces spreading activation cannot cross. */
-export const CRITICAL_ORPHAN_SHARE = 0.3;
-
-/**
- * Neither share means anything on a substrate this small: one unvectorized node out of five is
- * a parity of 0.8, and the reflection worker's own pending-vector drain is already on it.
- */
-export const CRITICAL_MIN_POPULATION = 20;
 
 /** What an operation's urgency is multiplied by once its effectiveness falls under the floor. */
 export const DEPRIORITIZED_WEIGHT = 0.5;
 
-export type CriticalCondition = 'vector_parity' | 'orphan_share' | 'missing_backbone_links';
-
 /**
- * The tier-1 conditions this snapshot meets, in the order they degrade recall. A tier-1
- * operation reads this rather than re-deriving the thresholds, so the condition that selects
- * an operation and the condition the operation repairs cannot drift apart.
+ * Resolved runs a critical operation gets before its own record can cost it the preemption.
+ * A real emergency is repaired in a few bounded batches and keeps preempting throughout;
+ * an operation still selected on the same condition after this many runs that never moved
+ * its metric is not repairing it, and the rest of the catalog must not wait on it.
  */
-export function criticalConditions(health: HealthSnapshot): readonly CriticalCondition[] {
-  if (health.degraded.includes(HEALTH_COLLECTORS.graph)) {
-    return [];
-  }
-  const conditions: CriticalCondition[] = [];
-  if (health.graph.episodesWithoutSession > 0) {
-    conditions.push('missing_backbone_links');
-  }
-  if (
-    health.graph.vectorExpected >= CRITICAL_MIN_POPULATION &&
-    health.graph.vectorParity < CRITICAL_VECTOR_PARITY
-  ) {
-    conditions.push('vector_parity');
-  }
-  if (
-    health.graph.nodes >= CRITICAL_MIN_POPULATION &&
-    health.graph.orphanShare > CRITICAL_ORPHAN_SHARE
-  ) {
-    conditions.push('orphan_share');
-  }
-  return conditions;
-}
+export const CRITICAL_PREEMPTION_GRACE_RUNS = 3;
 
 export type OperationCandidate = {
   readonly name: string;
-  readonly tier: OperationTier;
+  /**
+   * The tier-1 condition this operation repairs, when it declares one. It preempts on the
+   * cycles the snapshot meets that condition and is scored routinely on every other cycle.
+   */
+  readonly answers?: CriticalCondition;
   /** What the operation's own `relevance` returned for this snapshot, on 0 to 1. */
   readonly relevance: number;
 };
@@ -82,6 +62,8 @@ export type ScoredCandidate = OperationCandidate & {
   readonly urgency: number;
   readonly cyclesSinceSelected: number;
   readonly effectiveness: number;
+  /** Runs that have resolved, which is what the preemption grace is counted in. */
+  readonly runs: number;
 };
 
 export type Decision =
@@ -100,12 +82,16 @@ const UNTRIED_EFFECTIVENESS = 1;
 function statsFor(
   health: HealthSnapshot,
   name: string,
-): Pick<OperationEffectiveness, 'effectiveness' | 'cyclesSinceSelected'> {
+): Pick<OperationEffectiveness, 'effectiveness' | 'cyclesSinceSelected' | 'runs'> {
   const found = health.effectiveness.find((entry) => entry.name === name);
   if (found === undefined) {
-    return { effectiveness: UNTRIED_EFFECTIVENESS, cyclesSinceSelected: 0 };
+    return { effectiveness: UNTRIED_EFFECTIVENESS, cyclesSinceSelected: 0, runs: 0 };
   }
-  return { effectiveness: found.effectiveness, cyclesSinceSelected: found.cyclesSinceSelected };
+  return {
+    effectiveness: found.effectiveness,
+    cyclesSinceSelected: found.cyclesSinceSelected,
+    runs: found.runs,
+  };
 }
 
 /**
@@ -125,11 +111,28 @@ export function scoreCandidate(
   candidate: OperationCandidate,
   input: DecisionInput,
 ): ScoredCandidate {
-  const { effectiveness, cyclesSinceSelected } = statsFor(input.health, candidate.name);
+  const { effectiveness, cyclesSinceSelected, runs } = statsFor(input.health, candidate.name);
   const weight = effectiveness < input.effectivenessFloor ? DEPRIORITIZED_WEIGHT : 1;
   const urgency =
     candidate.relevance * weight * starvationBoost(cyclesSinceSelected, input.starvationCycles);
-  return { ...candidate, urgency, cyclesSinceSelected, effectiveness };
+  return { ...candidate, urgency, cyclesSinceSelected, effectiveness, runs };
+}
+
+/**
+ * Whether this operation may still preempt the routine catalog on the condition it answers.
+ *
+ * Preemption is the one place urgency scoring, the effectiveness weight, and starvation
+ * protection are all bypassed, so it needs its own way out. An operation inside its grace
+ * always preempts, which is what an emergency is for. Past the grace it keeps preempting only
+ * while it is still moving the metric it declared: the condition it answers may stand for
+ * weeks (an unenriched backlog reads as fragmentation until reflection drains it), and nothing
+ * else in the catalog may be blocked for that long.
+ */
+export function preemptionEarned(candidate: ScoredCandidate, effectivenessFloor: number): boolean {
+  if (candidate.runs < CRITICAL_PREEMPTION_GRACE_RUNS) {
+    return true;
+  }
+  return candidate.effectiveness >= effectivenessFloor;
 }
 
 /** Highest urgency, then the one that has waited longest, then the name, so ties never depend on registration order. */
@@ -164,27 +167,30 @@ function bestBy(
 
 export function decide(input: DecisionInput): Decision {
   const scored = input.candidates.map((candidate) => scoreCandidate(candidate, input));
+  const conditions = criticalConditions(input.health);
 
   const critical = scored.filter(
-    (candidate) => candidate.tier === 1 && candidate.relevance > 0,
+    (candidate) =>
+      candidate.answers !== undefined &&
+      conditions.includes(candidate.answers) &&
+      candidate.relevance > 0 &&
+      preemptionEarned(candidate, input.effectivenessFloor),
   );
   const emergency = bestBy(critical, (candidate) => candidate.relevance);
   if (emergency !== undefined) {
-    const conditions = criticalConditions(input.health);
     return {
       kind: 'selected',
       name: emergency.name,
       tier: 1,
       urgency: emergency.relevance,
-      reason: `critical: ${conditions.length === 0 ? 'operation-declared' : conditions.join(', ')}`,
+      // The condition this operation repairs, not every condition the snapshot meets: the
+      // ledger has to say what the run was for, and a run answers one of them.
+      reason: `critical: ${emergency.answers ?? 'operation-declared'}`,
     };
   }
 
   const routine = scored.filter(
-    (candidate) =>
-      candidate.tier === 2 &&
-      candidate.relevance > 0 &&
-      candidate.urgency >= input.urgencyThreshold,
+    (candidate) => candidate.relevance > 0 && candidate.urgency >= input.urgencyThreshold,
   );
   const chosen = bestBy(routine, (candidate) => candidate.urgency);
   if (chosen !== undefined) {

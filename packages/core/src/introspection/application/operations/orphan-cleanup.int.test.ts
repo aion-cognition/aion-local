@@ -9,6 +9,7 @@ import { runRead } from '../../../infrastructure/graph/connection.js';
 import { upsertEdge } from '../../../infrastructure/graph/edges.js';
 import { countOrphanNodes } from '../../../infrastructure/graph/introspection-health.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
+import { findOrphanNodes } from '../../../infrastructure/graph/topology-queries.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
@@ -21,12 +22,17 @@ import type { OperationContext } from '../../domain/operation.js';
 import { orphanCleanupOperation, orphanCleanupRelevance } from './orphan-cleanup.js';
 
 /**
- * Four orphans, one per case the operation distinguishes:
+ * Five orphans, one per case the operation distinguishes:
  *
  * - an episode whose session holds a second episode, so it has a sibling to reach
  * - a decision extracted from an episode that mentions an entity, so it has an entity to reach
- * - an ancient episode alone in its own session: no candidate, and old enough to give up on
- * - a recent episode alone in its own session: the same case without the age
+ * - the insight that marks the first episode enriched, which reaches nothing and is too new
+ * - an ancient insight with no edges at all: no candidate, and old enough to give up on
+ * - a recent insight with no edges: the same case without the age
+ *
+ * Beside them sits an episode reflection has not processed. It has only its session link, so
+ * the old count read it as fragmentation; it is waiting on enrichment rather than broken, and
+ * neither the count nor the sweep may touch it.
  *
  * The mentioning episode and the mentioned entity are not orphans themselves. A mention is an
  * association, and a node that carries one is already attached to the layer activation
@@ -85,6 +91,40 @@ async function seedEpisode(id: string, sessionId: string, now: Date): Promise<vo
   });
 }
 
+/**
+ * What makes an episode enriched as far as the graph is concerned: one node extracted from it.
+ * The marker carries no other edge, so it neither hands the episode a relink candidate nor
+ * hides one.
+ */
+async function markEnriched(episodeId: string, markerId: string, now: Date): Promise<void> {
+  await writeStampedNode(harness.driver, {
+    label: 'Insight',
+    id: markerId,
+    now,
+    properties: { text: `something learned from ${episodeId}` },
+  });
+  await upsertEdge(harness.driver, {
+    type: 'EXTRACTED_FROM',
+    sourceId: markerId,
+    targetId: episodeId,
+    strength: 1,
+    confidence: 1,
+    signals: ['provenance'],
+    provenance: ['test'],
+    count: 0,
+    now,
+  });
+}
+
+async function seedLooseInsight(id: string, now: Date): Promise<void> {
+  await writeStampedNode(harness.driver, {
+    label: 'Insight',
+    id,
+    now,
+    properties: { text: `a thought with nothing attached to it: ${id}` },
+  });
+}
+
 async function relationshipTypesBetween(left: string, right: string): Promise<string[]> {
   return runRead(
     harness.driver,
@@ -92,6 +132,10 @@ async function relationshipTypesBetween(left: string, right: string): Promise<st
     { left, right },
     (row) => row['type'] as string,
   );
+}
+
+async function orphanIds(): Promise<string[]> {
+  return (await findOrphanNodes(harness.driver, 100)).map((orphan) => orphan.id);
 }
 
 async function forgottenAt(id: string): Promise<Date | undefined> {
@@ -115,6 +159,7 @@ beforeAll(async () => {
   await seedSession('shared-session', NOW);
   await seedEpisode('episode-with-sibling', 'shared-session', NOW);
   await seedEpisode('episode-sibling', 'shared-session', NOW);
+  await markEnriched('episode-sibling', 'insight-from-sibling', NOW);
 
   // The entity route: an episode that mentions an entity, and a decision extracted from that
   // same episode. The decision itself has only its provenance edge, so it is an orphan whose
@@ -154,10 +199,13 @@ beforeAll(async () => {
     now: NOW,
   });
 
+  await seedLooseInsight('insight-ancient-alone', LONG_AGO);
+  await seedLooseInsight('insight-recent-alone', NOW);
+
+  // Stored months ago and never enriched. Nothing was extracted from it, so it has only its
+  // session link, and it belongs to the enrichment backlog rather than to this sweep.
   await seedSession('lonely-old-session', LONG_AGO);
-  await seedEpisode('episode-ancient-alone', 'lonely-old-session', LONG_AGO);
-  await seedSession('lonely-new-session', NOW);
-  await seedEpisode('episode-recent-alone', 'lonely-new-session', NOW);
+  await seedEpisode('episode-unenriched-alone', 'lonely-old-session', LONG_AGO);
 }, 300_000);
 
 afterAll(async () => {
@@ -179,15 +227,18 @@ describe('orphan cleanup', () => {
     expect(orphanCleanupRelevance(fragmented)).toBeCloseTo(0.4);
   });
 
-  it('relinks what it can reach and forgets only what has waited long enough', async () => {
+  it('leaves an episode waiting on enrichment out of the count and out of the sweep', async () => {
     const before = await countOrphanNodes(harness.driver);
-    expect(before.orphans).toBe(4);
+    expect(before.orphans).toBe(5);
+    expect(await orphanIds()).not.toContain('episode-unenriched-alone');
+  });
 
+  it('relinks what it can reach and forgets only what has waited long enough', async () => {
     const outcome = await orphanCleanupOperation().run(context());
 
     expect(outcome.status).toBe('applied');
-    expect(outcome.itemsProcessed).toBe(4);
-    // Two relinked, one forgotten, one left alone because it is too new to give up on.
+    expect(outcome.itemsProcessed).toBe(5);
+    // Two relinked, one forgotten, two left alone because they are too new to give up on.
     expect(outcome.itemsAffected).toBe(3);
 
     expect(await relationshipTypesBetween('decision-orphan', 'entity-postgres')).toContain(
@@ -196,11 +247,13 @@ describe('orphan cleanup', () => {
     expect(await relationshipTypesBetween('episode-with-sibling', 'episode-sibling')).toContain(
       'RELATED_TO',
     );
-    expect(await forgottenAt('episode-ancient-alone')).toBeInstanceOf(Date);
-    expect(await forgottenAt('episode-recent-alone')).toBeUndefined();
+    expect(await forgottenAt('insight-ancient-alone')).toBeInstanceOf(Date);
+    expect(await forgottenAt('insight-recent-alone')).toBeUndefined();
+    // The unenriched episode is older than the forget threshold and was still not touched.
+    expect(await forgottenAt('episode-unenriched-alone')).toBeUndefined();
 
     const after = await countOrphanNodes(harness.driver);
-    expect(after.orphans).toBeLessThan(before.orphans);
+    expect(after.orphans).toBeLessThan(5);
   });
 
   it('finds nothing left to repair on a second run over the same substrate', async () => {

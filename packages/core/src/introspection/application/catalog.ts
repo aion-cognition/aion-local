@@ -1,4 +1,5 @@
 import type { IntrospectionOperation } from '../domain/operation.js';
+import { backboneRepairOperation } from './operations/backbone-repair.js';
 import { communityRefreshOperation } from './operations/community-refresh.js';
 import { deadLetterOperation } from './operations/dead-letter.js';
 import { descriptionFreshnessOperation } from './operations/description-freshness-operation.js';
@@ -46,6 +47,7 @@ export function introspectionOperations(): readonly IntrospectionOperation[] {
     // Topology: repair connectivity, then re-derive the neighbourhoods, then join the two the
     // graph connects least. Listed in that order because it is the order they depend on each
     // other, not because the engine reads it.
+    backboneRepairOperation(),
     orphanCleanupOperation(),
     communityRefreshOperation(),
     symbiosisBridgeOperation(),

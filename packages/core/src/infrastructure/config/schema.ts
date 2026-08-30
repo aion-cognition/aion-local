@@ -215,6 +215,8 @@ export const ConfigSchema = z.object({
     descriptionRefreshBatch: positiveInt,
     /** Mentions an entity must gain since its description was last written before it qualifies for refresh. */
     descriptionRefreshMentionGrowth: positiveInt,
+    /** `emergency_relationship_repair`'s bound: broken episode-to-session links restored in one run. */
+    backboneRepairBatch: positiveInt,
     /** `orphan_cleanup`'s bound: disconnected nodes examined in one run. */
     orphanCleanupBatch: positiveInt,
     /** How long an orphan with no relink candidate is left alone before it is forgotten. */

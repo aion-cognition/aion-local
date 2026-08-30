@@ -38,7 +38,10 @@ const config: Config = DEFAULTS;
  * shared substrate is what keeps the expected numbers stable and readable.
  *
  * The shape: two episodes in a session and one loose one, one entity each side of the vector
- * line, and one entity attached to nothing but the backbone.
+ * line, and one entity attached to nothing but the backbone. One of the episodes in the
+ * session carries an extracted insight, which is what makes it enriched: an episode nothing has
+ * been extracted from is waiting on reflection and is left out of the orphan population, so
+ * without that insight there would be no orphan episode here to count.
  */
 beforeAll(async () => {
   harness = await startNeo4jHarness();
@@ -72,6 +75,23 @@ beforeAll(async () => {
       now: NOW,
     });
   }
+  await writeStampedNode(harness.driver, {
+    label: 'Insight',
+    id: 'insight-from-episode',
+    properties: { text: 'what the first episode came to', content_vec: VECTOR },
+    now: NOW,
+  });
+  await upsertEdge(harness.driver, {
+    type: 'EXTRACTED_FROM',
+    sourceId: 'insight-from-episode',
+    targetId: 'episode-in-session',
+    strength: 1,
+    confidence: 1,
+    signals: ['provenance'],
+    provenance: ['test'],
+    count: 0,
+    now: NOW,
+  });
   await writeStampedNode(harness.driver, {
     label: 'Episode',
     id: 'episode-loose',
@@ -112,15 +132,17 @@ afterAll(async () => {
 describe('graph health counts', () => {
   it('counts the nodes that should carry a vector against the ones that do', async () => {
     const parity = await countVectorParity(harness.driver);
-    expect(parity).toEqual({ expected: 5, vectored: 4 });
+    expect(parity).toEqual({ expected: 6, vectored: 5 });
   });
 
   it('counts a node whose every edge is backbone or provenance as an orphan', async () => {
     const orphans = await countOrphanNodes(harness.driver);
-    expect(orphans.nodes).toBe(5);
-    // The two associated entities are connected; the three episodes reach nothing but their
-    // session, which is a backbone edge.
-    expect(orphans.orphans).toBe(3);
+    // Four of the six memory nodes are in scope: the two episodes nothing was extracted from
+    // are waiting on reflection rather than fragmented, and neither one is counted.
+    expect(orphans.nodes).toBe(4);
+    // The two associated entities are connected; the enriched episode and its own insight
+    // reach nothing but the backbone.
+    expect(orphans.orphans).toBe(2);
   });
 
   it('counts an episode with no session as a missing backbone link', async () => {
@@ -138,9 +160,9 @@ describe('observeHealth', () => {
     expect(snapshot.degraded).toEqual([]);
     expect(snapshot.cycle).toBe(7);
     expect(snapshot.observedAt).toBe(NOW.toISOString());
-    expect(snapshot.graph.vectorParity).toBeCloseTo(4 / 5, 6);
+    expect(snapshot.graph.vectorParity).toBeCloseTo(5 / 6, 6);
     expect(snapshot.graph.episodesWithoutSession).toBe(1);
-    expect(snapshot.graph.orphanShare).toBeCloseTo(3 / 5, 6);
+    expect(snapshot.graph.orphanShare).toBeCloseTo(2 / 4, 6);
     expect(snapshot.enrichment.unenriched).toBe(3);
     expect(snapshot.queue.depth).toBe(0);
     expect(snapshot.proposals.oldestOpenAgeMs).toBeUndefined();

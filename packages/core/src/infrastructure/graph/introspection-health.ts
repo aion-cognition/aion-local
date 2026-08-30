@@ -25,6 +25,9 @@ const CURRENT = [
 
 const BACKBONE_TYPES = PROTECTED_RELATIONSHIP_TYPES.map((type) => `'${type}'`).join(', ');
 
+/** Reflection's provenance edge, which is what makes an episode enriched rather than pending. */
+const EXTRACTION_TYPE = 'EXTRACTED_FROM';
+
 /** `LIMIT` is Cypher INTEGER; a plain JS number arrives as FLOAT and is rejected. */
 function toGraphInteger(value: number): unknown {
   return neo4j.int(Math.trunc(value));
@@ -67,9 +70,19 @@ export type OrphanCounts = {
   readonly orphans: number;
 };
 
+/**
+ * An episode nothing has been extracted from is waiting on reflection, not fragmented. It has
+ * only its backbone edges because the stage that gives it associations has not run yet, and
+ * counting it here made a growing enrichment backlog read as a structural emergency: the
+ * repair would then write a heuristic edge onto it, drop it out of the count, and leave it
+ * exactly as unenriched as before. The backlog has its own metric, and its own operation.
+ */
+const AWAITING_ENRICHMENT = `n:Episode AND NOT EXISTS { MATCH ()-[:${EXTRACTION_TYPE}]->(n) }`;
+
 const COUNT_ORPHANS = [
   'MATCH (n:Memory)',
   `WHERE ${CURRENT}`,
+  `  AND NOT (${AWAITING_ENRICHMENT})`,
   'WITH n LIMIT $limit',
   'OPTIONAL MATCH (n)-[r]-()',
   `  WHERE NOT type(r) IN [${BACKBONE_TYPES}]`,

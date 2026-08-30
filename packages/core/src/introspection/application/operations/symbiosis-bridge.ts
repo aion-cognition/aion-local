@@ -10,8 +10,11 @@ import {
 } from '../../../infrastructure/graph/community-queries.js';
 import { OllamaProvider } from '../../../infrastructure/providers/ollama-provider.js';
 import type { Vector } from '../../../infrastructure/providers/types.js';
-import { CRITICAL_MIN_POPULATION } from '../../domain/decide.js';
-import { HEALTH_COLLECTORS, type HealthSnapshot } from '../../domain/health.js';
+import {
+  CRITICAL_MIN_POPULATION,
+  HEALTH_COLLECTORS,
+  type HealthSnapshot,
+} from '../../domain/health.js';
 import type {
   IntrospectionOperation,
   OperationContext,
@@ -165,7 +168,6 @@ export function symbiosisBridgeOperation(
 ): IntrospectionOperation {
   return {
     name: SYMBIOSIS_BRIDGE_OPERATION,
-    tier: 2,
     bucket: 'day',
     relevance: symbiosisBridgeRelevance,
     run: async (ctx): Promise<OperationOutcome> =>
