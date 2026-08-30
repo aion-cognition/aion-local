@@ -1,6 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 
 import type { Config } from '../../infrastructure/config/schema.js';
+import { countDecayableEdges } from '../../infrastructure/graph/edge-weights.js';
 import {
   countEpisodesWithoutSession,
   countOrphanNodes,
@@ -95,12 +96,13 @@ async function collect<T>(
 }
 
 async function readGraph(driver: Driver, scanLimit: number): Promise<GraphStructureHealth> {
-  const [counts, parity, orphans, missing, stale] = await Promise.all([
+  const [counts, parity, orphans, missing, stale, decayableEdges] = await Promise.all([
     countGraphElements(driver),
     countVectorParity(driver, scanLimit),
     countOrphanNodes(driver, scanLimit),
     countEpisodesWithoutSession(driver, scanLimit),
     findStaleNarratives(driver, NARRATIVE_GROUNDING, scanLimit),
+    countDecayableEdges(driver),
   ]);
   return {
     nodes: counts.nodes,
@@ -112,6 +114,7 @@ async function readGraph(driver: Driver, scanLimit: number): Promise<GraphStruct
     orphanShare: share(orphans.orphans, orphans.nodes),
     episodesWithoutSession: missing,
     staleNarratives: stale.length,
+    decayableEdges,
   };
 }
 

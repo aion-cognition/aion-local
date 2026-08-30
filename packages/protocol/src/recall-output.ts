@@ -238,6 +238,12 @@ export type MemoryPackMetadata = z.infer<typeof MemoryPackMetadataSchema>;
  * Every bucket is optional and, when present, non-empty (empty categories are omitted).
  * `rendered_text` is the text block dropped straight into agent reasoning. `metadata`
  * is never omitted, even for an explicitly empty pack.
+ *
+ * The omission is deliberate and stays: a caller reading the raw JSON sees only what was
+ * served, not five keys where three are `[]`. That is the wrong shape for a typed consumer
+ * that reduces or counts across buckets, since "absent" and "empty" would otherwise both have
+ * to be handled at every call site. Such a consumer reads a pack through `packBuckets` below,
+ * which is where that handling belongs once, rather than changing what goes over the wire.
  */
 export const MemoryPackSchema = z.strictObject({
   facts: memoryPackBucket.optional(),
@@ -250,6 +256,33 @@ export const MemoryPackSchema = z.strictObject({
 });
 
 export type MemoryPack = z.infer<typeof MemoryPackSchema>;
+
+/** `MemoryPackSchema`'s bucket keys, in schema and render order. */
+export const MEMORY_PACK_BUCKETS = [
+  'facts',
+  'episodes',
+  'narratives',
+  'preferences',
+  'resonant',
+] as const satisfies readonly (keyof typeof MemoryPackSchema.shape)[];
+
+export type MemoryPackBucket = (typeof MEMORY_PACK_BUCKETS)[number];
+
+/**
+ * Every bucket as a (possibly empty) array, one stable shape a typed consumer can index
+ * without an `undefined` check at every site. Reads the wire pack; does not change it.
+ */
+export function packBuckets(
+  pack: MemoryPack,
+): Readonly<Record<MemoryPackBucket, readonly MemoryPackItem[]>> {
+  return {
+    facts: pack.facts ?? [],
+    episodes: pack.episodes ?? [],
+    narratives: pack.narratives ?? [],
+    preferences: pack.preferences ?? [],
+    resonant: pack.resonant ?? [],
+  };
+}
 
 /** The `recall` tool's output is the MemoryPack itself. */
 export const RecallOutputSchema = MemoryPackSchema;

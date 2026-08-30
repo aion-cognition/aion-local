@@ -122,6 +122,18 @@ describe('renderStats', () => {
     expect(text).toMatch(/activation\s+8\s+16\.0%/);
   });
 
+  it('lists a method with no pack items as zero rather than dropping its row', () => {
+    const { lines, write } = collector();
+
+    renderStats(SNAPSHOT, write);
+
+    const text = lines.join('\n');
+    // entity_resolution and recency are zero in the fixture; the row must still print so a
+    // method contributing nothing is a visible reading, not a silently missing line.
+    expect(text).toMatch(/entity_resolution\s+0\s+0\.0%/);
+    expect(text).toMatch(/recency\s+0\s+0\.0%/);
+  });
+
   it('renders one maintenance line per registered operation, with the last outcome', () => {
     const { lines, write } = collector();
 

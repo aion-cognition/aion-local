@@ -125,8 +125,10 @@ export { buildEdgeUpsert, upsertEdge, upsertEdgeInTransaction } from './graph/ed
 export type { EdgeUpsert, UpsertedEdge } from './graph/edges.js';
 
 export {
+  buildDecayableEdgeCount,
   buildEdgeWeightDecay,
   buildEdgeWeightReinforcement,
+  countDecayableEdges,
   decayEdgeWeights,
   reinforceEdgeWeights,
 } from './graph/edge-weights.js';
