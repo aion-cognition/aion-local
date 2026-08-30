@@ -317,6 +317,12 @@ export const KNOBS = {
   },
   maintenance: {
     tier3: ['AION_MAINTENANCE_TIER3', z.boolean(), false],
+    // `merge_auto`'s kill switch. On by default: the policy only acts on an exact-name
+    // proposal, and every exact-name pair measured against two live review batches was a
+    // merge a person went on to approve, with no disagreement the shadow judge recorded. Off
+    // stops the operation from touching a proposal at all; open proposals keep queuing and
+    // `aion proposals` stays the only way to resolve them until it is back on.
+    autoMerge: ['AION_AUTO_MERGE', z.boolean(), true],
     // How often the introspection loop observes, decides, and runs at most one operation.
     // Fifteen minutes is one bucket of the finest granularity an operation can declare, so every
     // operation gets at least one chance per window it is allowed to run in.

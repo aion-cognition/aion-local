@@ -91,12 +91,47 @@ describe('summarizeMergeShadowAgreement', () => {
       rightType: 'concept',
       verdict: 'would_apply',
       actuallyMerged: true,
+      bothCurrent: false,
       ...overrides,
     };
   }
 
   it('reads an empty run as no verdicts to compare', () => {
-    expect(summarizeMergeShadowAgreement([])).toEqual({ total: 0, agreeing: 0, disagreements: [] });
+    expect(summarizeMergeShadowAgreement([])).toEqual({
+      total: 0,
+      agreeing: 0,
+      disagreements: [],
+      staleCleared: 0,
+    });
+  });
+
+  it('counts a stale-cleared pair apart instead of scoring it against the verdict', () => {
+    const stale = judgment({
+      proposalId: 'stale-1',
+      verdict: 'would_apply',
+      actuallyMerged: false,
+      bothCurrent: false,
+    });
+    const scored = judgment({ proposalId: 'scored-1' });
+    const summary = summarizeMergeShadowAgreement([stale, scored]);
+    expect(summary.total).toBe(1);
+    expect(summary.agreeing).toBe(1);
+    expect(summary.disagreements).toEqual([]);
+    expect(summary.staleCleared).toBe(1);
+  });
+
+  it('scores a dismissal normally when both sides still hold currency', () => {
+    const dismissed = judgment({
+      proposalId: 'dismissed-1',
+      verdict: 'would_apply',
+      actuallyMerged: false,
+      bothCurrent: true,
+    });
+    const summary = summarizeMergeShadowAgreement([dismissed]);
+    expect(summary.total).toBe(1);
+    expect(summary.agreeing).toBe(0);
+    expect(summary.disagreements).toHaveLength(1);
+    expect(summary.staleCleared).toBe(0);
   });
 
   it('counts every agreeing pair and names the ones that disagree', () => {
@@ -105,6 +140,7 @@ describe('summarizeMergeShadowAgreement', () => {
       proposalId: 'disagree-1',
       verdict: 'would_apply',
       actuallyMerged: false,
+      bothCurrent: true,
     });
 
     const summary = summarizeMergeShadowAgreement([agreeing, disagreeing]);

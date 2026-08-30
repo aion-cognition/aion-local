@@ -83,6 +83,8 @@ const SNAPSHOT: StatsSnapshot = {
     mergeShadow: {
       openWouldApply: 1,
       openWouldQueue: 2,
+      autoMergeEnabled: true,
+      autoMergedCount: 5,
       agreement: {
         total: 3,
         agreeing: 2,
@@ -95,8 +97,10 @@ const SNAPSHOT: StatsSnapshot = {
             rightType: 'concept',
             verdict: 'would_apply',
             actuallyMerged: false,
+            bothCurrent: true,
           },
         ],
+        staleCleared: 0,
       },
     },
   },
@@ -212,6 +216,37 @@ describe('renderStats', () => {
     );
   });
 
+  it('renders the auto-merge knob state and the applied count', () => {
+    const { lines, write } = collector();
+
+    renderStats(SNAPSHOT, DEFAULTS, write, NOW);
+
+    const text = lines.join('\n');
+    expect(text).toContain('auto-merge  on, 5 applied to date');
+  });
+
+  it('says the auto-merge count is unavailable while Neo4j is down, next to the off state', () => {
+    const { lines, write } = collector();
+    const down: StatsSnapshot = {
+      ...SNAPSHOT,
+      extras: {
+        ...SNAPSHOT.extras,
+        mergeShadow: {
+          openWouldApply: 1,
+          openWouldQueue: 2,
+          autoMergeEnabled: false,
+          autoMergedCount: undefined,
+          agreement: undefined,
+        },
+      },
+    };
+
+    renderStats(down, DEFAULTS, write);
+
+    const text = lines.join('\n');
+    expect(text).toContain('auto-merge  off, count unavailable while Neo4j is down');
+  });
+
   it('says there are no shadow verdicts yet rather than printing 0 of 0', () => {
     const { lines, write } = collector();
     const noVerdicts: StatsSnapshot = {
@@ -221,7 +256,9 @@ describe('renderStats', () => {
         mergeShadow: {
           openWouldApply: 0,
           openWouldQueue: 0,
-          agreement: { total: 0, agreeing: 0, disagreements: [] },
+          autoMergeEnabled: true,
+          autoMergedCount: 0,
+          agreement: { total: 0, agreeing: 0, disagreements: [], staleCleared: 0 },
         },
       },
     };
@@ -239,7 +276,13 @@ describe('renderStats', () => {
       ...SNAPSHOT,
       extras: {
         ...SNAPSHOT.extras,
-        mergeShadow: { openWouldApply: 1, openWouldQueue: 2, agreement: undefined },
+        mergeShadow: {
+          openWouldApply: 1,
+          openWouldQueue: 2,
+          autoMergeEnabled: false,
+          autoMergedCount: undefined,
+          agreement: undefined,
+        },
       },
     };
 

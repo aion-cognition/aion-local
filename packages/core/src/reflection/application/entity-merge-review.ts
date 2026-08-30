@@ -39,6 +39,12 @@ export const ENTITY_MERGE_APPLY_METHOD = 'merge_proposal_apply';
 export type ApplyEntityMergeProposalInput = {
   readonly id: string;
   readonly now?: Date;
+  /**
+   * What lineage should say decided this merge. Defaults to `ENTITY_MERGE_APPLY_METHOD`,
+   * a person applying it through `aion proposals`; an automated caller passes its own method
+   * so the `SUPERSEDES` edge never claims a person decided a merge nobody reviewed.
+   */
+  readonly method?: string;
 };
 
 export type EntityMergeAlreadyResolved = {
@@ -157,7 +163,7 @@ export async function applyEntityMergeProposal(
     accessCount: mergeAccessCount(pair),
     lastAccessed: mergeLastAccessed(pair),
     supersedeSignals: ['entity_merge'],
-    supersedeProvenance: [ENTITY_MERGE_APPLY_METHOD],
+    supersedeProvenance: [input.method ?? ENTITY_MERGE_APPLY_METHOD],
     mergedRecords: pair
       .filter((member) => member.id !== canonical.id)
       .map((member) => ({
