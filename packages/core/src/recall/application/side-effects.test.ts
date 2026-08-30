@@ -1,6 +1,6 @@
 import type { MemoryPack } from '@aion/protocol';
 import type { Driver } from 'neo4j-driver';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -152,6 +152,21 @@ describe('RecallSideEffects', () => {
   let store: SqliteStore;
   let logger: Logger;
 
+  type LogLine = {
+    readonly msg: string;
+    readonly sessionId?: string;
+    readonly activated?: number;
+    readonly items?: number;
+  };
+
+  function loggedWarning(msg: string): LogLine | undefined {
+    return readFileSync(join(dir, 'aion.jsonl'), 'utf8')
+      .split('\n')
+      .filter((line) => line !== '')
+      .map((line) => JSON.parse(line) as LogLine)
+      .find((line) => line.msg === msg);
+  }
+
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'aion-side-effects-'));
     store = new SqliteStore({ filePath: join(dir, 'aion.sqlite') });
@@ -257,10 +272,15 @@ describe('RecallSideEffects', () => {
     const calls: Record<string, unknown>[] = [];
     const sideEffects = new RecallSideEffects(fakeDriver(calls, true), store.db, logger);
 
-    void sideEffects.onRecalled(completion({ items: [fusedItem('a')] }));
+    void sideEffects.onRecalled(completion({ items: [fusedItem('a'), fusedItem('b')] }));
 
     await expect(sideEffects.whenIdle()).resolves.toBeUndefined();
     expect(calls).toHaveLength(1);
+    // Which recall lost its access stamps, and how many, since `{ err }` alone named neither.
+    expect(loggedWarning('recall access-tracking write failed')).toMatchObject({
+      sessionId: 'session-1',
+      items: 2,
+    });
   });
 
   it('keeps reinforcement enqueue and access-tracking independent: a closed db still lets the graph write proceed', async () => {
@@ -277,5 +297,9 @@ describe('RecallSideEffects', () => {
     await sideEffects.whenIdle();
 
     expect(calls).toHaveLength(1);
+    expect(loggedWarning('recall reinforcement enqueue failed')).toMatchObject({
+      sessionId: 'session-1',
+      activated: 2,
+    });
   });
 });

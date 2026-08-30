@@ -315,7 +315,7 @@ idle sweep, or sits idle at negligible cost until one of the two catches it.
 ## Budgets and caps
 
 Every knob below is `AION_*`-overridable; the catalog is
-`packages/core/src/infrastructure/config/registry.ts`, typed defaults in `defaults.ts`.
+`packages/core/src/infrastructure/config/knobs.ts`, which carries each type and default.
 
 | Knob | Default | Buys (raising it) | Costs (raising it) | Vs. spec |
 |---|---|---|---|---|

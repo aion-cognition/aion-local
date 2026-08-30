@@ -1,3 +1,4 @@
+import { OllamaRequestError } from './errors.js';
 import type { Provider, StructuredRequest, Vector } from './types.js';
 import { foldForIdentity } from './unicode-fold.js';
 
@@ -48,7 +49,7 @@ export class OllamaProvider implements Provider {
       body: JSON.stringify({ model: this.embedModel, input: texts.map(foldForEmbedding) }),
     });
     if (!response.ok) {
-      throw new Error(`Ollama embed request failed: ${response.status} ${await response.text()}`);
+      throw new OllamaRequestError('embed', response.status, await response.text());
     }
 
     const body = (await response.json()) as { embeddings?: number[][] };
@@ -81,9 +82,7 @@ export class OllamaProvider implements Provider {
       ...(req.signal === undefined ? {} : { signal: req.signal }),
     });
     if (!response.ok) {
-      throw new Error(
-        `Ollama generate request failed: ${response.status} ${await response.text()}`,
-      );
+      throw new OllamaRequestError('generate', response.status, await response.text());
     }
 
     const body = (await response.json()) as { message?: { content?: string } };
