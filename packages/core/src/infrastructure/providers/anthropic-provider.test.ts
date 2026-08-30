@@ -82,12 +82,86 @@ describe('the reply the provider reads', () => {
     await expect(provider(fetchImpl as unknown as typeof fetch).generate(REQUEST)).resolves.toEqual({ n: 2 });
   });
 
-  it('names a reply that carried no JSON', async () => {
+  it('names a reply that carried no JSON, once the constrained retry has also failed', async () => {
     const fetchImpl = vi.fn(() => Promise.resolve(textResponse('I cannot answer that.')));
 
     await expect(provider(fetchImpl as unknown as typeof fetch).generate(REQUEST)).rejects.toBeInstanceOf(
       AnthropicResponseError,
     );
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('asks again with the schema constrained when the prompted answer will not parse', async () => {
+    // A string value closed, then prose: what the model actually returns, and identical on
+    // every retry of the same request.
+    const spliced = '{"quote": "the first half" and then some words}';
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(textResponse(spliced))
+      .mockResolvedValueOnce(textResponse('{"quote": "the first half"}'));
+
+    const value = await provider(fetchImpl as unknown as typeof fetch).generate(REQUEST);
+
+    expect(value).toEqual({ quote: 'the first half' });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(sentBody(fetchImpl, 0).output_config).toBeUndefined();
+    expect(sentBody(fetchImpl, 1).output_config).toEqual({
+      format: { type: 'json_schema', schema: { ...SCHEMA, additionalProperties: false } },
+    });
+    // The retry constrains the answer, so it stops restating the schema as an instruction.
+    expect(String(sentBody(fetchImpl, 1).system)).toBe('you extract entities');
+  });
+
+  it('closes every nested object on the constrained retry, and leaves one that states its own rule', async () => {
+    const nested = {
+      type: 'object',
+      properties: {
+        rows: {
+          type: 'array',
+          items: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
+        },
+        open: { type: 'object', properties: {}, additionalProperties: true },
+      },
+      required: ['rows'],
+    };
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(textResponse('not json'))
+      .mockResolvedValueOnce(textResponse('{"rows": []}'));
+
+    await provider(fetchImpl as unknown as typeof fetch).generate({ ...REQUEST, schema: nested });
+
+    const format = (sentBody(fetchImpl, 1).output_config as { format: { schema: Body } }).format;
+    expect(format.schema).toEqual({
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        rows: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: { name: { type: 'string' } },
+            required: ['name'],
+          },
+        },
+        open: { type: 'object', properties: {}, additionalProperties: true },
+      },
+      required: ['rows'],
+    });
+  });
+
+  it('does not retry a caller that already asked for the constrained mode', async () => {
+    const fetchImpl = vi.fn(() => Promise.resolve(textResponse('not json')));
+    const constrained = new AnthropicProvider({
+      apiKey: 'sk-ant-test',
+      model: 'claude-haiku-4-5',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      schemaDelivery: 'output_config',
+    });
+
+    await expect(constrained.generate(REQUEST)).rejects.toBeInstanceOf(AnthropicResponseError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it('names a reply with no text block at all', async () => {

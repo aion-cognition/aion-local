@@ -17,29 +17,35 @@ import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-
  * readable in a single function instead of assembled across a wiring file.
  *
  * Order is documentation, not priority. Selection is by tier and urgency, and ties break on
- * waiting time and then on name, so moving a line here changes nothing about what runs.
- *
- * The four substrate-hygiene operations (`vector_backfill`, `reconcile_reenqueue`,
- * `dead_letter`, `redaction_residue_purge`) were added together: each answers a gap in
- * `aion doctor`'s own checks, where the check could name the problem but nothing closed it.
+ * waiting time and then on name, so moving a line here changes nothing about what runs. The
+ * four groups below read outward from the substrate: what makes a node findable at all, then
+ * what makes the edges between nodes carry weight, then what the nodes say, then the shape the
+ * whole graph has taken.
  */
 export function introspectionOperations(): readonly IntrospectionOperation[] {
   return [
-    reinforcementFlushOperation(),
-    memoryDecayOperation(),
+    // Substrate hygiene. Each of these answers a gap `aion doctor` could already name and
+    // nothing could close: a node with no vector is invisible to search, an episode with no
+    // ledger key and no queue row is never enriched, an exhausted job blocks its own lane, and
+    // a redaction that landed after the write leaves the secret in the graph.
     vectorBackfillOperation(),
     reconcileReenqueueOperation(),
     deadLetterOperation(),
     redactionResiduePurgeOperation(),
-    // The content-maintenance set (P5-1c): narrative cleanup, the retro supersession
-    // backlog sweep, and entity description freshness. Appended after the structural set
-    // above for no reason beyond arrival order; selection does not read this list's order.
+
+    // Plasticity: the two bounded weight operations, on the loop's clock rather than a caller's.
+    reinforcementFlushOperation(),
+    memoryDecayOperation(),
+
+    // Content maintenance: duplicate narratives, the contradiction backlog older than the
+    // supersession stage, and entity glosses that stopped describing what the entity became.
     narrativeCleanupOperation(),
     retroJudgmentSweepOperation(),
     descriptionFreshnessOperation(),
-    // The graph-topology set: repair connectivity, then re-derive the neighbourhoods, then
-    // join the two the graph connects least. Registered in that order because it is the order
-    // they depend on each other, not because the engine reads it.
+
+    // Topology: repair connectivity, then re-derive the neighbourhoods, then join the two the
+    // graph connects least. Listed in that order because it is the order they depend on each
+    // other, not because the engine reads it.
     orphanCleanupOperation(),
     communityRefreshOperation(),
     symbiosisBridgeOperation(),

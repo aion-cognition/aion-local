@@ -29,10 +29,10 @@ import { observeHealth, readOperationEffectiveness, type ObserveOptions } from '
  * The introspection loop: observe, decide, act, learn, on a clock the service owns.
  *
  * Two rules shape everything below. Maintenance must not run twice for the same window, so an
- * operation claims its time bucket in the ops ledger before it starts and a second service
- * instance that loses the claim skips rather than repeats. And maintenance must not be the
- * thing that breaks: a collector that throws costs its metrics, an operation that throws costs
- * its own turn, and neither ends the loop.
+ * operation claims its time bucket in the ops ledger before it starts, and a tick that loses
+ * the claim decides again without that operation rather than repeating it or giving up its
+ * turn. And maintenance must not be the thing that breaks: a collector that throws costs its
+ * metrics, an operation that throws costs its own turn, and neither ends the loop.
  */
 
 /** How far the tick is nudged either side of the interval, so two instances drift apart instead of colliding every time. */
@@ -70,7 +70,7 @@ export type TickReport = {
   readonly decision: Decision;
   /** Absent when nothing ran: an idle cycle, a tier-3 consultation, or a bucket someone else claimed. */
   readonly outcome?: OperationOutcome;
-  /** True when the operation was selected but its bucket was already claimed. */
+  /** True when every operation the cycle selected had its bucket claimed already. */
   readonly skipped: boolean;
   /** Operations whose earlier run was scored against this snapshot. */
   readonly resolved: readonly { readonly name: string; readonly resolution: OperationResolution }[];
@@ -218,30 +218,61 @@ export class Introspector {
     };
 
     const candidates = this.#deps.operations.map((operation) => this.#candidate(operation, health));
-    const decision = decide({
-      health,
-      candidates,
-      starvationCycles: this.#deps.config.maintenance.starvationCycles,
-      urgencyThreshold: this.#deps.config.maintenance.urgencyThreshold,
-      effectivenessFloor: this.#deps.config.maintenance.effectivenessFloor,
-      tier3Enabled: this.#deps.config.maintenance.tier3,
-    });
 
-    if (decision.kind === 'tier3') {
-      await this.#consultTier3(health, candidates, decision.reason);
-      return { cycle, health, decision, skipped: false, resolved };
-    }
-    if (decision.kind === 'idle') {
-      this.#deps.logger.debug({ cycle }, 'introspection cycle idle');
-      return { cycle, health, decision, skipped: false, resolved };
+    // Deciding again when a claim is lost, rather than ending the tick. One operation whose
+    // relevance sits at the top of the catalog and whose bucket is an hour wide would otherwise
+    // be selected on every tick inside that hour and run on none of them, and the eleven other
+    // operations would wait out the hour behind it. The set only shrinks, so this terminates.
+    const claimedElsewhere = new Set<string>();
+    let skippedReport: TickReport | undefined;
+    for (let attempt = 0; attempt <= candidates.length; attempt += 1) {
+      const decision = decide({
+        health,
+        candidates: candidates.filter((candidate) => !claimedElsewhere.has(candidate.name)),
+        starvationCycles: this.#deps.config.maintenance.starvationCycles,
+        urgencyThreshold: this.#deps.config.maintenance.urgencyThreshold,
+        effectivenessFloor: this.#deps.config.maintenance.effectivenessFloor,
+        tier3Enabled: this.#deps.config.maintenance.tier3,
+      });
+
+      // Once a claim has been lost, running out of candidates means the window is covered by
+      // whoever holds it, which is a skipped cycle rather than an idle one.
+      if (decision.kind !== 'selected' && skippedReport !== undefined) {
+        return skippedReport;
+      }
+      if (decision.kind === 'tier3') {
+        await this.#consultTier3(health, candidates, decision.reason);
+        return { cycle, health, decision, skipped: false, resolved };
+      }
+      if (decision.kind === 'idle') {
+        this.#deps.logger.debug({ cycle }, 'introspection cycle idle');
+        return { cycle, health, decision, skipped: false, resolved };
+      }
+
+      const operation = this.#deps.operations.find((entry) => entry.name === decision.name);
+      if (operation === undefined) {
+        this.#deps.logger.error({ cycle, operation: decision.name }, 'selected operation is not registered');
+        return { cycle, health, decision, skipped: false, resolved };
+      }
+
+      skippedReport = await this.#act(operation, decision, health, cycle, resolved);
+      if (!skippedReport.skipped) {
+        return skippedReport;
+      }
+      claimedElsewhere.add(decision.name);
     }
 
-    const operation = this.#deps.operations.find((entry) => entry.name === decision.name);
-    if (operation === undefined) {
-      this.#deps.logger.error({ cycle, operation: decision.name }, 'selected operation is not registered');
-      return { cycle, health, decision, skipped: false, resolved };
-    }
-    return this.#act(operation, decision, health, cycle, resolved);
+    // Unreachable in practice: an empty candidate set decides idle and returns above. The
+    // report from the last claim that was lost is the honest answer if it ever is reached.
+    return (
+      skippedReport ?? {
+        cycle,
+        health,
+        decision: { kind: 'idle', reason: 'every candidate is claimed' },
+        skipped: false,
+        resolved,
+      }
+    );
   }
 
   /** Same guard as `#candidate`: a metric that throws is an unscored run, not a dead loop. */

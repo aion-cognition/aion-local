@@ -68,7 +68,9 @@ describe('reconciling live Ollama memory against the key', () => {
   it(
     'unloads the instruct model the key covers, keeps the embed model, and leaves the disk alone',
     async () => {
-      const installedBefore = await listOllamaModels(BASE_URL);
+      // Sorted, because `/api/tags` is a set and not a sequence: loading a model moves it in
+      // the order Ollama returns, which is the thing this test is about to do twice.
+      const installedBefore = [...(await listOllamaModels(BASE_URL))].sort();
       await loadModel(CHAT_MODEL);
       await loadEmbedModel();
       expect(await residentNames()).toContain(`${CHAT_MODEL}`);
@@ -85,7 +87,7 @@ describe('reconciling live Ollama memory against the key', () => {
       // The vector index runs under every route, so its model is never a candidate.
       expect(await residentNames()).toContain(`${DEFAULTS.models.embed}:latest`);
       // Unloading is a memory operation: every tag that was installed is still installed.
-      expect(await listOllamaModels(BASE_URL)).toEqual(installedBefore);
+      expect([...(await listOllamaModels(BASE_URL))].sort()).toEqual(installedBefore);
     },
     180_000,
   );

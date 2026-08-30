@@ -43,13 +43,19 @@ packages/core/src/
   infrastructure/sqlite/                reflection queue, last-pack cache, ops ledger, locks
   recall/domain/                        pure: activation, fusion (RRF/MMR), pack assembly
   recall/application/                   cue extraction, seed strategies, the recall pipeline
+  plasticity/                           reinforcement folding and the decay curve, plus the
+                                        two bounded operations that apply them
+  introspection/domain/                 pure: health snapshot, the tiered decision, the
+                                        operation contract, time-bucketed keys
+  introspection/application/            the tick loop, the catalog, one file per operation
   redaction/                            deterministic secret detection
   reflection/domain/                    pure: episode/turn shaping, content hashing, stage contract
   reflection/application/               intake (the write path), dispatch, orchestrator, worker
   reflection/application/stages/        the pipeline, in the order bootstrap.ts registers them
   session/                              identity-to-session-id resolution
 packages/mcp/src/                       MCP server: tool definitions, HTTP transport
-packages/cli/src/                       aion command: init, status, doctor, last, queue, proposals
+packages/cli/src/                       aion command: init, status, doctor, stats, last, why,
+                                        search, forget, queue, proposals
 bin/aion                                host wrapper: rebuilds the image, runs the CLI container
 ```
 
@@ -70,9 +76,8 @@ CLI container needs it set explicitly:
 export AION_OLLAMA_URL=http://127.0.0.1:11434
 ```
 
-`./bin/aion <init|status|doctor|last|queue|proposals>` runs the built CLI against the real
-compose stack.
-Use it to exercise the actual binary, not as a test runner.
+`./bin/aion <command>` runs the built CLI against the real compose stack (`aion help` lists
+every command). Use it to exercise the actual binary, not as a test runner.
 
 ## Guard tests
 

@@ -312,9 +312,9 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
     idleNarratives.start();
 
     // The introspection loop. The catalog is a plain ordered list rather than a lookup the
-    // engine owns, so an operation joins maintenance by being registered here and nowhere
-    // else. The two plasticity operations are first because they already existed as callable,
-    // bounded functions waiting on a scheduler.
+    // engine owns, so an operation joins maintenance by being registered in that one function
+    // and nowhere else. The loop starts here and stops in `close` below, ahead of the driver,
+    // because a tick that has begun can still hold a graph write.
     const maintenanceOperations = introspectionOperations();
     const introspector = new Introspector({
       driver,

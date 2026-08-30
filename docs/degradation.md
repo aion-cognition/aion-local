@@ -325,7 +325,7 @@ Every knob below is `AION_*`-overridable; the catalog is
 | `AION_PACK_CLUSTER_CAP` (`recall.clusterCap`) | 2 | Stops one near-duplicate content cluster from filling a bucket. EX-22 measured a burst of near-identical episodes taking 29.5% of a pack's slots. | Raised, a repeated shape crowds out more of a bucket's real diversity before the cap stops it. | New in the fix round. |
 | `contextResonance.seedLimit` / `.activationLimit` | 10 / 50 | Bounds the seed set and the co-activated set per recall, so activation's cost is predictable. | A true signal ranked past the cap is not considered at all, not degraded. | Not flagged as a deviation; matches the whitepaper's seed budget. |
 | `activation.maxNodesVisited` / `.hubThreshold` | 500 / 10 | Bounds worst-case traversal cost; the hub threshold keeps one high-degree node from flooding the frontier. | A legitimate multi-hop path through a dense area can be cut before it is explored. | Not flagged as a deviation. |
-| Other bucket caps: `maxFacts` / `maxNarratives` / `maxPreferences` / `maxResonant` / `vectorLimit` | 15 / 5 / 3 / 5 / 5 | Same shape as `maxEpisodes`: each decides what survives fusion for its bucket. | Same cost as `maxEpisodes`, unverified at other values: only the episode cap has a live pass/fail checkpoint behind it. `preferences` and `resonant` have no producer yet (P4), so their caps are inert today. | Not flagged as a deviation. |
+| Other bucket caps: `maxFacts` / `maxNarratives` / `maxPreferences` / `maxResonant` / `vectorLimit` | 15 / 5 / 3 / 5 / 5 | Same shape as `maxEpisodes`: each decides what survives fusion for its bucket. | Same cost as `maxEpisodes`, unverified at other values: only the episode cap has a live pass/fail checkpoint behind it. `resonant` gained its producer with the second recall pass; `preferences` still has none, so that one cap is inert today. | Not flagged as a deviation. |
 | `AION_WORKER_COUNT` (`operational.workerCount`) | 1 | Concurrent reflection claim-and-run slots on one shared queue claimant, so more than one episode enriches at once. | Every worker still calls the same host Ollama for its model stages (`AION_REFLECT_MODEL`), and nothing prioritizes between them; see the contention note below. | PRD §7 pins 1. |
 | `AION_LANE_SESSION_ARRIVAL_MAX` (`lanes.sessionArrivalMax`) | 10 | Head-room for a legitimate session-end flush of a long conversation, which arrives as several episodes at once and must stay interactive. | Raised far enough, a client flooding from one session keeps priority for longer before the backstop sees it. The measured flood ran 51 arrivals per session per minute. | New in the fix round. |
 | `AION_LANE_GLOBAL_ARRIVAL_MAX` (`lanes.globalArrivalMax`) | 120 | Arrivals across every session inside the window before the substrate counts as hot. Twelve busy sessions' worth. | Below ordinary multi-agent load, every session drops to the hot allowance for no reason. | New in the fix round. |
@@ -369,6 +369,42 @@ enqueue time), and a recall pack's metadata carries `pending_enrichment`: the ca
 session's own episodes with no orchestrator ledger key yet (EX-11), so an agent can tell its
 own last few turns are still thin before it asks why a fact from them was not found.
 
+## The maintenance loop
+
+The introspection loop runs on the service's own clock: observe the substrate, decide which
+one operation this cycle calls for, run it, score what it did. None of it is on the read or
+the write path, so every mode below costs maintenance and costs a caller nothing.
+
+**Observation fails (Neo4j down, SQLite unreadable).** The cycle falls back to a snapshot of
+nothing, which selects nothing, and the wait before the next attempt doubles up to eight
+intervals. Acting on a substrate the loop cannot see is the one thing it must not do, so a
+partial reading also parks every pending measurement instead of scoring runs against a
+collector that fell back to a neutral value.
+
+**One collector fails and the rest answer.** The snapshot names that collector in `degraded`
+and keeps the metrics it did get. An operation whose own metric came from the failed
+collector is not scored this cycle; its pre-run reading waits for a whole snapshot.
+
+**An operation throws.** It costs its own turn and nothing else. The failure is recorded
+against that operation, which lowers its effectiveness and therefore its urgency on later
+cycles, and the ledger entry for the window says `failed` with the message. The loop outlives
+every tick: a tick that could not finish is logged and the next one starts clean.
+
+**Two service instances tick at once.** Each operation claims a calendar-aligned time bucket
+in the ops ledger before it starts, and the claim is an insert that loses to whoever inserted
+first. The instance that loses skips the window. Ticks are also jittered around the interval
+so two instances started together drift apart instead of racing every time.
+
+**A crash mid-operation.** The claim lands before the run, so the window stays claimed until
+it rolls over. That is the deliberate trade: maintenance that skips a window costs one
+cadence, and maintenance that reruns over a partial first pass costs whatever the operation
+was halfway through.
+
+**Diagnose.** `aion stats` has a `maintenance` section: the cycle count, and per operation
+the runs, how many improved the metric they declared, how many changed nothing, how many
+failed, and the last window's outcome. An operation that has never been selected says so
+rather than reporting zeroes.
+
 ## Deferred gaps
 
 **Two bounded, non-lossy artifacts, not tracked as gaps.** `ensureSession` runs before the
@@ -377,8 +413,9 @@ Episode attached. And a client that disconnects without a clean MCP shutdown lea
 server-side session in the map until the 512-session cap evicts it. Neither loses data or
 grows unbounded.
 
-**A pending-vector node is a degraded state with no expiry of its own.** Nothing in the
-graph ages one out: it stays vectorless until a drain reaches it. That is deliberate (the
-marker is the absence of the property, so there is no flag to go stale), but it means an
-outage that outlives the service process is cleared by the worker's startup drain rather
-than by anything in the write path.
+**A pending-vector node still has no expiry of its own.** Nothing in the graph ages one out:
+it stays vectorless until a drain reaches it. That is deliberate (the marker is the absence
+of the property, so there is no flag to go stale). What changed is that the drain is no
+longer only the worker's startup pass: the `vector_backfill` operation reads the same parity
+the doctor reports and embeds what it finds, and a parity under 0.8 on a substrate of at
+least 20 vector-bearing nodes is a tier-1 condition that preempts the routine catalog.

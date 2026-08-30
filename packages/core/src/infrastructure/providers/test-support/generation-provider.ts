@@ -20,10 +20,9 @@ export class AnthropicTestProvider implements Provider {
   readonly #model: string;
 
   constructor(options: AnthropicTestProviderOptions) {
-    this.#client = new AnthropicHaikuClient({
-      apiKey: options.apiKey,
-      schemaDelivery: 'system_prompt',
-    });
+    // No schema-delivery pin: a test that drove the remote route a different way from the
+    // service would not see what the service sees.
+    this.#client = new AnthropicHaikuClient({ apiKey: options.apiKey });
     this.#embedder = options.embedder;
     this.#model = options.model ?? DEFAULT_ANTHROPIC_MODEL;
   }
