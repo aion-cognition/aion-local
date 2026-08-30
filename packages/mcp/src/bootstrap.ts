@@ -4,6 +4,7 @@ import {
   CognitiveExtractionStage,
   ContextVectorStage,
   CueCache,
+  deleteServedItems,
   EntityDedupStage,
   EntityExtractionStage,
   GraphConnection,
@@ -18,6 +19,7 @@ import {
   openLogger,
   plasticityCounters,
   ProviderRouter,
+  purgeServedItemsIdleSince,
   queueLagSnapshot,
   readMemberName,
   RecallSideEffects,
@@ -344,7 +346,13 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       logger,
       host: bindHost(runningInContainer()),
       port: config.operational.mcpPort,
-      onSessionClosed: narratives.onSessionClosed,
+      onSessionClosed: (sessionId) => {
+        narratives.onSessionClosed(sessionId);
+        // The served-item record describes one agent's live context, so it dies with the
+        // session it describes. Both close paths land here, the client's DELETE and the idle
+        // sweep, so the rows outlive a session by at most the idle window.
+        deleteServedItems(store.db, sessionId);
+      },
       queueLag: () => queueLagSnapshot(store.db, config.operational.workerMaxAttempts),
       plasticity: () => plasticityCounters(store.db),
     });
@@ -354,6 +362,9 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
     // depends on, so a session with no request in this long closes on its own instead.
     const idleSessions = new SessionIdleSweeper(service, {
       idleMs: config.operational.sessionIdleExpiryMinutes * MINUTE_MS,
+      purgeIdleBefore: (cutoff) => {
+        purgeServedItemsIdleSince(store.db, cutoff.toISOString());
+      },
     });
     idleSessions.start();
 

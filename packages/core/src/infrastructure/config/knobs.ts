@@ -115,6 +115,12 @@ export const KNOBS = {
     maxPreferences: ['AION_RECALL_MAX_PREFERENCES', nonNegativeInt, 3],
     maxResonant: ['AION_RECALL_MAX_RESONANT', nonNegativeInt, 5],
     useContextResonance: ['AION_RECALL_USE_CONTEXT_RESONANCE', z.boolean(), true],
+    // Whether a session is served the same unchanged memory twice. On by default: a per-prompt
+    // hook recalls many times inside one conversation, the top of the ranked list barely moves
+    // between them, and everything already served is still in the agent's context, so the
+    // repeat spends the pack's whole budget on text the agent is still reading. Off restores
+    // the full pack on every call, which is what a caller that keeps no conversation wants.
+    sessionDedup: ['AION_RECALL_SESSION_DEDUP', z.boolean(), true],
     // At `hebbian.weightFloor`, deliberately. Decay clamps a weight at the floor so a faded
     // pathway stays traversable, and a traversal cutoff above the floor would sever the whole
     // band the clamp exists to keep. Fading is proportional (spreading activation scales

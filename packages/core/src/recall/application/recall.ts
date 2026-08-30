@@ -27,6 +27,7 @@ import { fetchAdjacency } from '../../infrastructure/graph/adjacency.js';
 import {
   asOf,
   bitemporalAt,
+  isTimeTravel,
   knewAt,
   withCurrency,
   type ReadMode,
@@ -38,6 +39,7 @@ import { saveLastPack } from '../../infrastructure/sqlite/last-pack.js';
 import { recordPackMethodCounts } from '../../infrastructure/sqlite/method-counters.js';
 import { recordRecallOutcome } from '../../infrastructure/sqlite/recall-cadence.js';
 import { recordCueOutcome } from '../../infrastructure/sqlite/recall-samples.js';
+import { readServedItems, recordServedItems } from '../../infrastructure/sqlite/served-items.js';
 import type { SessionManager } from '../../session/session-manager.js';
 import {
   spreadActivation,
@@ -52,6 +54,7 @@ import { labelBoosts, queryCueTexts, queryRestatements } from '../domain/facts.j
 import { fuse, type FusedItem, type FusionResult } from '../domain/fusion.js';
 import type { BucketCaps } from '../domain/pack-buckets.js';
 import { assemblePack, packMethods } from '../domain/pack.js';
+import { servedRecords, suppressedRepeats } from '../domain/session-dedup.js';
 
 /**
  * The recall pipeline, in the order its stages run. Cue extraction spends the one generation
@@ -357,6 +360,19 @@ export async function handleRecall(
     resonance: resonance.ms,
   };
 
+  // The serving-layer subtraction, applied once the candidate set is final so that nothing
+  // above it measures a smaller set: reinforcement, access tracking and the method counters all
+  // still see everything fusion admitted. A time-traveled read is exempt, because asking what
+  // the substrate held last month is a question about the past rather than a re-serve.
+  const dedup = deps.config.recall.sessionDedup && !isTimeTravel(mode);
+  const candidates = new Map<string, FusedItem>();
+  for (const item of [...fusion.value.items, ...resonance.value.items]) {
+    candidates.set(item.id, item);
+  }
+  const suppressed = dedup
+    ? suppressedRepeats([...candidates.values()], readServedItems(deps.db, sessionId))
+    : new Set<string>();
+
   const truncated = truncationFor(activation.value.termination);
   const pack = assemblePack({
     items: fusion.value.items,
@@ -375,12 +391,23 @@ export async function handleRecall(
     entityGlossCap: deps.config.recall.entityGlossCap,
     resonant: resonance.value.items,
     ...(claims.size === 0 ? {} : { relatedClaims: claims }),
+    suppressed,
   });
 
   saveLastPack(deps.db, sessionId, pack, now.toISOString(), {
     ...(payload.as_of === undefined ? {} : { asOf: payload.as_of }),
     ...(payload.knew_at === undefined ? {} : { knewAt: payload.knew_at }),
   });
+  // A time-traveled read records nothing: it never suppresses, so recording what it served
+  // would make a historical inspection decide what the present-day pack may repeat.
+  if (dedup) {
+    recordServedItems(
+      deps.db,
+      sessionId,
+      servedRecords(pack, suppressed, candidates),
+      now.toISOString(),
+    );
+  }
   // The cue stage is 60-95% of recall wall time and the first thing contention takes; a
   // degraded pack is otherwise indistinguishable from a healthy one at the item count.
   recordCueOutcome(deps.db, cues.value.degradation !== undefined);
@@ -406,6 +433,9 @@ export async function handleRecall(
       termination: activation.value.termination,
       items: fusion.value.items.length,
       resonant: resonance.value.items.length,
+      // What the wire dropped that cognition still counted, so a pack that shrank mid-session
+      // reads as the subtraction rather than as retrieval going quiet.
+      suppressedRepeats: suppressed.size,
       // Why the second pass was quiet: a setting, a query nothing anchored, or a substrate
       // whose enrichment has not written the context vectors yet. Absent when it searched.
       resonanceSkipped: resonance.value.skipped,

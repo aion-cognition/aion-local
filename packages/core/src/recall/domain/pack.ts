@@ -54,6 +54,13 @@ const PACK_HEADING = '# Memory';
 const EMPTY_PACK_BODY = 'No memories matched this query.';
 
 /**
+ * The other way a pack empties: every match was cut at the wire because this session was
+ * already handed it. Saying "no memories matched" there would be false, and it is the one
+ * sentence a reader would act on by asking again.
+ */
+const EMPTY_AFTER_REPEATS_BODY = 'This session already holds every memory this query matched.';
+
+/**
  * What an empty pack says about itself, in the rendered text rather than only in metadata.
  *
  * The sentence alone reads the same for three states that call for three different responses:
@@ -62,9 +69,10 @@ const EMPTY_PACK_BODY = 'No memories matched this query.';
  * this is the copy that reaches a client reading only the rendered block, which is also the
  * client most likely to read a note about a truncated spread as the reason the pack is empty.
  */
-function emptyPackBody(report: AdmissionReport): string {
+function emptyPackBody(report: AdmissionReport, repeats: number): string {
+  const opening = repeats > 0 ? EMPTY_AFTER_REPEATS_BODY : EMPTY_PACK_BODY;
   if (report.considered === 0) {
-    return `${EMPTY_PACK_BODY} Nothing reached the admission gate.`;
+    return `${opening} Nothing reached the admission gate.`;
   }
 
   const clauses: string[] = [];
@@ -77,9 +85,9 @@ function emptyPackBody(report: AdmissionReport): string {
     clauses.push(`${String(report.droppedUnmeasured)} that nothing measured against it`);
   }
   if (clauses.length === 0) {
-    return EMPTY_PACK_BODY;
+    return opening;
   }
-  return `${EMPTY_PACK_BODY} Of ${String(report.considered)} candidates: ${clauses.join(', ')}.`;
+  return `${opening} Of ${String(report.considered)} candidates: ${clauses.join(', ')}.`;
 }
 
 export function estimateTokens(text: string): number {
@@ -127,6 +135,13 @@ export type AssemblePackInput = {
    * judges one.
    */
   readonly relatedClaims?: ReadonlyMap<string, RelatedClaim>;
+  /**
+   * Ids this session was already served, unchanged since (`session-dedup.ts`). They are cut
+   * here rather than upstream, so the admitted set that reaches cognition is the same set it
+   * has always been and only the wire gets smaller. Empty on a first recall, on a
+   * time-traveled read, and whenever the knob is off.
+   */
+  readonly suppressed?: ReadonlySet<string>;
 };
 
 type Selection = Map<PackBucket, PackEntry[]>;
@@ -159,6 +174,12 @@ function honestyNote(input: AssemblePackInput): string | undefined {
   const pending = input.pendingEnrichment ?? 0;
   if (pending > 0) {
     clauses.push(`${String(pending)} recent episode${pending === 1 ? '' : 's'} not yet enriched`);
+  }
+  const repeats = input.suppressed?.size ?? 0;
+  if (repeats > 0) {
+    clauses.push(
+      `${String(repeats)} item${repeats === 1 ? '' : 's'} already served this session, unchanged`,
+    );
   }
   if (clauses.length === 0) {
     return undefined;
@@ -227,6 +248,9 @@ function select(input: AssemblePackInput, note: string | undefined): Selection {
   }
 
   for (const item of input.items) {
+    if (input.suppressed?.has(item.id) === true) {
+      continue;
+    }
     const bucket = bucketFor(item.labels);
     if (bucket === undefined) {
       continue;
@@ -247,6 +271,9 @@ function select(input: AssemblePackInput, note: string | undefined): Selection {
   // could hold the same memory twice. The stage already excludes every id the first pass
   // produced; this catches the other half, a distinct node whose text says the same thing.
   for (const item of input.resonant ?? []) {
+    if (input.suppressed?.has(item.id) === true) {
+      continue;
+    }
     if (packedIds.has(item.id) || packedContent.has(hashContent(item.content))) {
       continue;
     }
@@ -260,6 +287,7 @@ function render(
   selection: Selection,
   note: string | undefined,
   admission: AdmissionReport,
+  repeats: number,
 ): string {
   const sections: string[] = [];
   if (note !== undefined) {
@@ -273,7 +301,7 @@ function render(
     sections.push(renderBucket(bucket, entries));
   }
   if (sections.length === (note === undefined ? 0 : 1)) {
-    sections.push(emptyPackBody(admission));
+    sections.push(emptyPackBody(admission, repeats));
   }
   return `${PACK_HEADING}\n\n${sections.join('\n\n')}`;
 }
@@ -318,9 +346,10 @@ export function packMethods(pack: MemoryPack): readonly string[] {
  * protocol does not describe.
  */
 export function assemblePack(input: AssemblePackInput): MemoryPack {
+  const repeats = input.suppressed?.size ?? 0;
   const note = honestyNote(input);
   const selection = select(input, note);
-  const renderedText = render(selection, note, input.admission);
+  const renderedText = render(selection, note, input.admission, repeats);
 
   const buckets: Record<string, readonly MemoryPackItem[]> = {};
   for (const bucket of PACK_BUCKETS) {
@@ -345,6 +374,7 @@ export function assemblePack(input: AssemblePackInput): MemoryPack {
         ? {}
         : { pending_enrichment: input.pendingEnrichment }),
       ...(input.truncated === undefined ? {} : { truncated: input.truncated }),
+      ...(repeats === 0 ? {} : { suppressed_repeats: repeats }),
     },
   });
 }

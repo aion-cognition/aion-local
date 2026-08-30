@@ -84,6 +84,27 @@ describe('SessionIdleSweeper', () => {
     expect(swept).not.toHaveBeenCalled();
   });
 
+  it('purges the per-session records the closes it just fired cannot reach', () => {
+    const cutoffs: Date[] = [];
+    const sweeper = new SessionIdleSweeper(service, {
+      idleMs: IDLE_MS,
+      purgeIdleBefore: (cutoff) => {
+        cutoffs.push(cutoff);
+      },
+    });
+    const now = new Date('2026-08-30T12:00:00.000Z');
+
+    sweeper.sweepOnce(now);
+
+    expect(cutoffs).toEqual([new Date(now.getTime() - IDLE_MS)]);
+  });
+
+  it('leaves the purge out entirely when the caller registered none', () => {
+    const sweeper = new SessionIdleSweeper(service, { idleMs: IDLE_MS });
+
+    expect(sweeper.sweepOnce(new Date())).toEqual([]);
+  });
+
   it('starting twice does not double the timer', () => {
     const sweeper = new SessionIdleSweeper(service, { idleMs: IDLE_MS });
     const swept = vi.spyOn(service, 'closeIdleSessions');

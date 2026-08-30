@@ -21,16 +21,24 @@ export function sessionIdleSweepIntervalMs(idleMs: number): number {
 
 export type SessionIdleSweeperOptions = {
   readonly idleMs: number;
+  /**
+   * Per-session state the close hook cannot reach, given the instant a session counts as idle
+   * from. A restart empties the session map, so records belonging to sessions that were live
+   * before it have no close left to fire and are only ever cleaned up here.
+   */
+  readonly purgeIdleBefore?: (cutoff: Date) => void;
 };
 
 export class SessionIdleSweeper {
   readonly #service: AionMcpService;
   readonly #idleMs: number;
   readonly #timer: SweepTimer;
+  readonly #purgeIdleBefore: ((cutoff: Date) => void) | undefined;
 
   constructor(service: AionMcpService, options: SessionIdleSweeperOptions) {
     this.#service = service;
     this.#idleMs = options.idleMs;
+    this.#purgeIdleBefore = options.purgeIdleBefore;
     this.#timer = new SweepTimer(sessionIdleSweepIntervalMs(options.idleMs), () => {
       this.sweepOnce();
     });
@@ -53,6 +61,12 @@ export class SessionIdleSweeper {
    * `now` is a test seam for the same reason `closeIdleSessions` takes one.
    */
   sweepOnce(now?: Date): readonly string[] {
-    return this.#service.closeIdleSessions(this.#idleMs, now?.getTime());
+    const closed = this.#service.closeIdleSessions(this.#idleMs, now?.getTime());
+    // A close runs on its own, so a session this tick just closed may still hold its records
+    // here. Dropping them is the same outcome its hook reaches, and what only the purge can
+    // reach is a session the map never knew about.
+    const at = now?.getTime() ?? Date.now();
+    this.#purgeIdleBefore?.(new Date(at - this.#idleMs));
+    return closed;
   }
 }

@@ -52,6 +52,14 @@ export { p95EnrichmentLagMs } from './sqlite/lag-samples.js';
 export { getLastPack, listLastPackSessions, saveLastPack } from './sqlite/last-pack.js';
 export type { LastPackSession } from './sqlite/last-pack.js';
 
+export {
+  deleteServedItems,
+  purgeServedItemsIdleSince,
+  readServedItems,
+  recordServedItems,
+} from './sqlite/served-items.js';
+export type { ServedItem } from './sqlite/served-items.js';
+
 export { DEFAULTS, loadConfig, ConfigError } from './config/index.js';
 export type { Config } from './config/index.js';
 

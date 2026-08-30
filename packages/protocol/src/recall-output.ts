@@ -282,6 +282,13 @@ export const MemoryPackMetadataSchema = z.strictObject({
   pending_enrichment: z.number().int().positive().optional(),
   /** Absent on a spread that converged; present means the pack is a cut-off answer. */
   truncated: PackTruncationSchema.optional(),
+  /**
+   * Matches this session was already served and that have not changed since, cut from the
+   * buckets rather than rendered again. The agent still holds them in the conversation, so
+   * repeating them buys nothing and costs the whole pack's budget. Absent at zero, and absent
+   * on a time-traveled read, which repeats everything on purpose.
+   */
+  suppressed_repeats: z.number().int().positive().optional(),
 });
 
 /**

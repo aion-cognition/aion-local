@@ -27,7 +27,8 @@ from `recall/`, `reflection/`, `session/`, or `redaction/`. It has no notion of 
 cues, or memory packs, only nodes, edges, and rows.
 
 - **`infrastructure/`**: `graph/` (every Cypher statement in the workspace), `sqlite/`
-  (the reflection queue, last-pack cache, ops ledger, claim locking, and the two proposal
+  (the reflection queue, last-pack cache, the served-item record, ops ledger, claim locking,
+  and the two proposal
   queues, whose reads share one `proposal-table.ts` because both are an id, the pair the
   proposal is about, and a `resolved_at` that is null while a person still owes the row a
   decision), `providers/` (the Ollama and Anthropic clients, the circuit breaker, the
@@ -216,6 +217,22 @@ independently for the pack's `stage_timings_ms`:
    pack's size. `preferences` has no producer yet, so it is structurally absent rather than
    empty. `narratives` gained one in P3: a session's close, or the idle sweep, compresses its
    episodes into a `Narrative` node. `resonant` gained one in P4: the second pass above.
+
+8. **Session dedup.** One subtraction between the assembled candidate set and the wire. A
+   per-prompt recall hook asks many times inside one conversation and the top of the ranked list
+   barely moves, so the same memories are rendered again into a context that is still holding
+   them (measured at nine recalls in one session, about 1,200 tokens each, heavily overlapping).
+   Every item a pack renders is recorded in SQLite's `served_items` as one row per (session,
+   item) carrying a fingerprint over what the item said. On the next recall in that session, an
+   admitted item whose fingerprint still matches is cut from the buckets, counted in
+   `metadata.suppressed_repeats`, and named in the honesty line; an item whose fingerprint moved
+   (superseded, description regrown, currency changed) is told again in full. Only the wire
+   shrinks: reinforcement, access tracking and the pack-method counters all still see everything
+   fusion admitted, because the subtraction is about what the agent already read rather than
+   about what recall found. A time-traveled read is exempt in both directions, since inspecting
+   the past neither repeats a serve nor decides what the present may repeat, and
+   `AION_RECALL_SESSION_DEDUP=false` restores the full pack on every call. The record dies with
+   the session, on the client's DELETE or on the idle sweep, whichever reaches it.
 
 Both paths inherit the driver timeouts `GraphConnection` sets: 5s to connect, 10s to acquire
 a pooled connection, 10s of transaction retries. The driver's defaults (60s and 30s) meet or
