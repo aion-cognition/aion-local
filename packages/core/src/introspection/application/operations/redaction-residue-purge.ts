@@ -35,6 +35,7 @@ function stillLeaking(text: string, entropyThreshold: number): boolean {
  * writes back only the ones that changed: a property update, never a delete, `redacted_at`
  * stamped so the rewrite itself is bitemporally honest about when it happened.
  */
+
 /**
  * A floor, not a share. Every other operation's subject is proportional hygiene, where a small
  * number out of a large scan genuinely is a small problem. This one's subject is a plaintext
