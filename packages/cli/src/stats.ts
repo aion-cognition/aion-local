@@ -1,27 +1,23 @@
 import {
-  ConfigError,
   countGraphElements,
   countNodesByLabel,
   cueDegradedRate,
   EDGE_WEIGHT_DISTRIBUTION_TYPES,
   edgeWeightDistribution,
-  GraphConnection,
   introspectionCycle,
   introspectionOperations,
   latestLedgerEntry,
   listLastPackSessions,
   listOperationStats,
-  loadConfig,
   OPERATION_LEDGER_PREFIX,
-  openLogger,
   PACK_METHODS,
   packMethodCounters,
   plasticityCounters,
   queueLagSnapshot,
   recallCadenceCounters,
-  SqliteStore,
   type Config,
   type EdgeWeightDistribution,
+  type GraphConnection,
   type GraphCounts,
   type OperationStats,
   type PackMethodCounters,
@@ -31,7 +27,10 @@ import {
   type SqliteHandle,
 } from '@aion/core';
 
-import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
+import { parseArgs, type ArgSpec } from './args.js';
+import { ageOf } from './format.js';
+import { stdoutWriter, type Writer } from './output.js';
+import { withSubstrate } from './substrate.js';
 
 /**
  * `aion stats`: everything `aion status` shows plus the two readings pinned as measured
@@ -39,6 +38,11 @@ import { describeError, stderrWriter, stdoutWriter, type Writer } from './output
  * the per-method shares are the spirit metric, permanent so the associative-mechanisms
  * claim stays a measurement, not an argument.
  */
+
+const SPEC: ArgSpec = {
+  command: 'stats',
+  usage: 'aion stats',
+};
 
 /**
  * One maintenance operation's record: the counters the engine keeps, plus what its most
@@ -139,18 +143,6 @@ export async function collectStats(
     methodCounters: packMethodCounters(db),
     maintenance: collectMaintenance(db),
   };
-}
-
-/** `12s` / `4m` / `1h`, matching `aion status`'s own age formatting. */
-function ageOf(ms: number): string {
-  const seconds = Math.max(0, Math.round(ms / 1000));
-  if (seconds < 120) {
-    return `${String(seconds)}s`;
-  }
-  if (seconds < 7200) {
-    return `${String(Math.round(seconds / 60))}m`;
-  }
-  return `${String(Math.round(seconds / 3600))}h`;
 }
 
 function formatEdgeWeights(distribution: EdgeWeightDistribution): string {
@@ -283,31 +275,25 @@ export function renderStats(
   renderMaintenance(snapshot.maintenance, now, write);
 }
 
-export async function runStats(
-  _argv: readonly string[] = [],
+export function runStats(
+  argv: readonly string[] = [],
   write: Writer = stdoutWriter,
 ): Promise<number> {
-  let config: Config;
-  try {
-    config = loadConfig(process.env);
-  } catch (err) {
-    stderrWriter(err instanceof ConfigError ? err.message : describeError(err));
-    return 1;
-  }
-
-  const logger = openLogger({ ...config.logging, name: 'aion-stats' });
-  const connection = new GraphConnection(config.neo4j);
-  const store = new SqliteStore({ filePath: config.sqlite.path });
-  try {
-    const snapshot = await collectStats(config, connection, store.db);
-    renderStats(snapshot, write);
-    logger.info(
-      { ...snapshot, labelCounts: Object.fromEntries(snapshot.labelCounts) },
-      'stats reported',
-    );
-    return snapshot.neo4jReachable ? 0 : 1;
-  } finally {
-    await connection.close();
-    store.close();
-  }
+  return withSubstrate({
+    spec: SPEC,
+    argv,
+    write,
+    parse: (args) => parseArgs(SPEC, args),
+    run: async (substrate) => {
+      const snapshot = await collectStats(substrate.config, substrate.connection(), substrate.db());
+      renderStats(snapshot, write);
+      substrate
+        .logger()
+        .info(
+          { ...snapshot, labelCounts: Object.fromEntries(snapshot.labelCounts) },
+          'stats reported',
+        );
+      return snapshot.neo4jReachable ? 0 : 1;
+    },
+  });
 }

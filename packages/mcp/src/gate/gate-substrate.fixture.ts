@@ -7,7 +7,6 @@ import {
   LaneAssigner,
   openLogger,
   openSqliteHandle,
-  ReflectionDispatch,
   ReflectionOrchestrator,
   ReflectionWorker,
   runGraphMigrations,
@@ -76,7 +75,8 @@ export class GateSubstrate {
   readonly label: string;
   readonly config: Config;
   readonly #lanes: LaneAssigner;
-  readonly dispatch = new ReflectionDispatch();
+  /** The worker `intakeDeps` wakes, set by `worker()`. A substrate with none just enqueues. */
+  #worker: ReflectionWorker | undefined;
   #harness: Neo4jHarness | undefined;
   #db: SqliteHandle | undefined;
   #logger: Logger | undefined;
@@ -169,7 +169,9 @@ export class GateSubstrate {
       db: this.db,
       sessions: this.sessions,
       provider: this.provider,
-      dispatch: this.dispatch,
+      onJobEnqueued: () => {
+        this.#worker?.wake();
+      },
       logger: this.logger,
       entropyThreshold: this.config.redaction.entropyThreshold,
       // One assigner for the substrate's life, as the service holds one. Constructed per call
@@ -189,17 +191,17 @@ export class GateSubstrate {
   }
 
   worker(): ReflectionWorker {
-    return new ReflectionWorker(
+    this.#worker = new ReflectionWorker(
       {
         driver: this.driver,
         db: this.db,
         provider: this.provider,
-        dispatch: this.dispatch,
         runner: this.orchestrator(),
         logger: this.logger,
       },
       workerOptions(this.config),
     );
+    return this.#worker;
   }
 
   store(payload: unknown, options: GateStoreOptions): Promise<ReflectionOutput> {

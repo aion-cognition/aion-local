@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { selectSeeds, type Seed, type SeedCue, type SelectSeedsDeps } from './seeds.js';
+import { waitFor } from './test-support/wait-for.fixture.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
@@ -83,19 +84,6 @@ function find(seeds: readonly Seed[], id: string): Seed | undefined {
 }
 
 /** Vector and fulltext indexes populate asynchronously, so the fixture is not queryable the instant it is written. */
-async function waitFor(label: string, ready: () => Promise<boolean>): Promise<void> {
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    if (await ready()) {
-      return;
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 250);
-    });
-  }
-  throw new Error(`timed out waiting for ${label}`);
-}
-
 async function writeEpisode(
   summary: string,
   vector: readonly number[],

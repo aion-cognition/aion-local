@@ -4,6 +4,7 @@ import type { OperationBucket } from './buckets.js';
 import type { CriticalCondition, HealthSnapshot } from './health.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
+import type { Provider } from '../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 
 /**
@@ -26,6 +27,12 @@ export type OperationContext = {
   readonly db: SqliteHandle;
   readonly config: Config;
   readonly logger: Logger;
+  /**
+   * The `reflect` role's provider, built once for the service and shared by every operation
+   * that generates or embeds. Per-run construction gave each run a fresh circuit breaker,
+   * which cannot count consecutive failures across the runs it exists to trip on.
+   */
+  readonly provider: Provider;
   /** The same reading the decision was made from. An operation must not observe again. */
   readonly health: HealthSnapshot;
   readonly now: Date;

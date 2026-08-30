@@ -20,7 +20,6 @@ export const ConfigSchema = z.object({
   }),
   ollama: z.object({
     url: z.string().min(1),
-    mode: z.enum(['baremetal', 'docker']),
   }),
   models: z.object({
     embed: z.string().min(1),
@@ -124,7 +123,6 @@ export const ConfigSchema = z.object({
     decayPeakDays: positiveInt,
     decaySigma: z.number().positive(),
     batchSize: positiveInt,
-    flushIntervalMs: positiveInt,
   }),
   contextResonance: z.object({
     /**
@@ -137,27 +135,28 @@ export const ConfigSchema = z.object({
     seedBudgetGrowth: z.number().positive(),
     activationLimit: positiveInt,
     resonantLimit: positiveInt,
-    maxHops: nonNegativeInt,
-    activationThreshold: proportion,
     contextSearchThreshold: proportion,
   }),
   /**
    * The reflection pipeline's per-stage knobs. Each stage owns its own thresholds and caps as
-   * an options type and carries the pinned default as a module constant; these are what the
-   * service threads over them at construction, so the shipped values live in one catalog
-   * rather than in nine files. The three timeouts are hang guards on `provider.generate`,
-   * not latency targets: reflection is asynchronous and the value that matters is that a
-   * model which never answers cannot hold the worker forever.
+   * an options type and carries the pinned default as a module constant, which `defaults.ts`
+   * imports rather than restates; these are what the service threads over them at
+   * construction, so the shipped values live in one catalog rather than in nine files.
    */
   reflection: z.object({
-    entityTimeoutMs: positiveInt,
+    /**
+     * One hang guard on `provider.generate` for every generating stage, not a latency target:
+     * reflection is asynchronous and the value that matters is that a model which never
+     * answers cannot hold the worker forever. Five per-stage knobs carried the same 60s and
+     * no deployment ever split them, so a stage that needs its own guard takes it as a
+     * constructor option instead of a knob nobody sets.
+     */
+    stageTimeoutMs: positiveInt,
     maxEntities: positiveInt,
     entityDedupThreshold: proportion,
     associationSemanticThreshold: proportion,
     associationSimilarLimit: positiveInt,
-    cognitiveTimeoutMs: positiveInt,
     maxCognitiveNodes: positiveInt,
-    semanticTimeoutMs: positiveInt,
     maxRelationships: positiveInt,
     /**
      * `propose` writes every detection to `supersession_proposals` and never closes a node;
@@ -174,13 +173,11 @@ export const ConfigSchema = z.object({
      * things; this is where that line sits.
      */
     supersedeFamilyRelatednessFloor: proportion,
-    supersedeTimeoutMs: positiveInt,
     maxSupersessionSubjects: positiveInt,
     maxContradictionNeighbors: positiveInt,
     maxContradictionJudgments: positiveInt,
     /** Minutes, because that is the unit the pinned trigger is stated in (30 min idle). */
     narrativeIdleMinutes: positiveInt,
-    narrativeTimeoutMs: positiveInt,
     maxNarrativeEpisodes: positiveInt,
     maxNarrativeEpisodeChars: positiveInt,
     narrativeSweepLimit: positiveInt,

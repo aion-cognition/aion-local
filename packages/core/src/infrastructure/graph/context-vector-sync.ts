@@ -1,8 +1,8 @@
-import neo4j, { type Driver } from 'neo4j-driver';
+import type { Driver } from 'neo4j-driver';
 
 import { runRead, runWrite } from './connection.js';
-import { BASE_NODE_LABEL } from './labels.js';
-import { toGraphDateTime, toGraphVector, type Row } from './values.js';
+import { BASE_NODE_LABEL, MEMORY_LABEL } from './labels.js';
+import { toGraphDateTime, toGraphInteger, toGraphVector, type Row } from './values.js';
 import type { ComputedContextVector } from '../../reflection/domain/context-vector.js';
 
 /**
@@ -17,12 +17,7 @@ import type { ComputedContextVector } from '../../reflection/domain/context-vect
  * current" from "never looked at", which the reflection stage's write has no need to do.
  */
 
-const MEMORY_LABEL = 'Memory';
 export const CONTEXT_VECTOR_SYNCED_AT_PROPERTY = 'context_vec_synced_at';
-
-function toGraphInteger(value: number): unknown {
-  return neo4j.int(Math.trunc(value));
-}
 
 /**
  * A `:Memory` node counts as stale when it has never been synced by this path, or when a

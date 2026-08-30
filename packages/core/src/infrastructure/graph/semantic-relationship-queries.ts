@@ -51,7 +51,7 @@ export type EpisodeCognitiveNode = {
   readonly text: string;
 };
 
-function episodeCognitiveNodesStatement(): GraphStatement {
+function episodeCognitiveNodesStatement(episodeId: string): GraphStatement {
   const fragment = readModeFragment(withCurrency(), 'n');
   return {
     cypher: [
@@ -61,7 +61,7 @@ function episodeCognitiveNodesStatement(): GraphStatement {
       `       n.${MEMORY_PROPERTIES.text} AS text`,
       `ORDER BY n.${TEXT_NORM_PROPERTY}, n.id`,
     ].join('\n'),
-    parameters: fragment.parameters,
+    parameters: { episodeId, labels: [...COGNITIVE_NODE_LABELS], ...fragment.parameters },
   };
 }
 
@@ -75,17 +75,11 @@ export async function findEpisodeCognitiveNodes(
   driver: Driver,
   episodeId: string,
 ): Promise<EpisodeCognitiveNode[]> {
-  const statement = episodeCognitiveNodesStatement();
-  return runRead(
-    driver,
-    statement.cypher,
-    { ...statement.parameters, episodeId, labels: [...COGNITIVE_NODE_LABELS] },
-    (row) => ({
-      id: row.id as string,
-      label: (row.label as string | null) ?? '',
-      text: (row.text as string | null) ?? '',
-    }),
-  );
+  return runRead(driver, episodeCognitiveNodesStatement(episodeId), (row) => ({
+    id: row.id as string,
+    label: (row.label as string | null) ?? '',
+    text: (row.text as string | null) ?? '',
+  }));
 }
 
 export type SemanticRelationshipWrite = {

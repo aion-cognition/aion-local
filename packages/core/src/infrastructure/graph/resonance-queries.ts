@@ -1,11 +1,11 @@
-import neo4j, { type Driver } from 'neo4j-driver';
+import type { Driver } from 'neo4j-driver';
 
 import { runRead } from './connection.js';
 import { CONTEXT_VECTOR_PROPERTY } from './context-vector-queries.js';
 import { BASE_NODE_LABEL } from './labels.js';
 import { readModeFragment, type ReadMode } from './read-modes.js';
-import { fromGraphVector, toGraphVector } from './values.js';
-import { CONTEXT_VECTOR_INDEX } from './vector-indexes.js';
+import { fromGraphVector, toGraphInteger, toGraphVector } from './values.js';
+import { asCosine, CONTEXT_VECTOR_INDEX } from './vector-indexes.js';
 import type { Vector } from '../providers/types.js';
 
 /**
@@ -20,16 +20,6 @@ import type { Vector } from '../providers/types.js';
  */
 
 export { CONTEXT_VECTOR_INDEX } from './vector-indexes.js';
-
-/** The same rescaling `seed-queries.ts` documents: Neo4j reports `(1 + cos) / 2`, thresholds are cosines. */
-function asCosine(scoreExpression: string): string {
-  return `2.0 * ${scoreExpression} - 1.0`;
-}
-
-/** Procedure arguments are Cypher INTEGER; a plain JS number arrives as FLOAT and is rejected. */
-function toGraphInteger(value: number): unknown {
-  return neo4j.int(Math.trunc(value));
-}
 
 export type NodeContextVector = {
   readonly id: string;

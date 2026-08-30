@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { ReflectionDispatch, type ReflectionJobSignal } from './dispatch.js';
 import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
 import { LaneAssigner } from './lanes.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
@@ -73,7 +72,7 @@ let harness: Neo4jHarness;
 let db: SqliteHandle;
 let dataDir: string;
 let deps: ReflectionIntakeDeps;
-let signals: ReflectionJobSignal[];
+let enqueuedJobIds: string[];
 let backboneIds: { memberId: string; workspaceId: string };
 let episodeId: string;
 
@@ -98,11 +97,7 @@ beforeAll(async () => {
   const backbone = await bootstrapBackbone(harness.driver, { memberName: 'Test User' });
   backboneIds = { memberId: backbone.member.id, workspaceId: backbone.workspace.id };
 
-  signals = [];
-  const dispatch = new ReflectionDispatch();
-  dispatch.subscribe((signal) => {
-    signals.push(signal);
-  });
+  enqueuedJobIds = [];
 
   deps = {
     driver: harness.driver,
@@ -112,7 +107,9 @@ beforeAll(async () => {
       baseUrl: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
       embedModel: DEFAULTS.models.embed,
     }),
-    dispatch,
+    onJobEnqueued: (jobId: string) => {
+      enqueuedJobIds.push(jobId);
+    },
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
@@ -192,7 +189,7 @@ describe('reflection intake against a live graph and live Ollama', () => {
     }
   });
 
-  it('enqueues one integrate job carrying the episode id, and signals the dispatcher once', () => {
+  it('enqueues one integrate job carrying the episode id, and wakes the worker once', () => {
     const jobs = listReflectionJobs(db);
 
     expect(jobs).toHaveLength(1);
@@ -200,12 +197,7 @@ describe('reflection intake against a live graph and live Ollama', () => {
     expect(jobs[0]?.payload).toEqual({ episode_id: episodeId });
     expect(jobs[0]?.claimedBy).toBeNull();
 
-    expect(signals).toHaveLength(1);
-    expect(signals[0]).toMatchObject({
-      episodeId,
-      sessionId: SESSION_IDENTITY,
-      jobId: jobs[0]?.id,
-    });
+    expect(enqueuedJobIds).toEqual([jobs[0]?.id]);
   });
 
   it('leaves the ops ledger untouched: the pipeline owns it, not intake', () => {
@@ -240,7 +232,7 @@ describe('reflection intake against a live graph and live Ollama', () => {
     expect(await countNodes(harness.driver)).toBe(nodesBefore);
     expect(await countRelationships(harness.driver)).toBe(edgesBefore);
     expect(listReflectionJobs(db)).toHaveLength(1);
-    expect(signals).toHaveLength(1);
+    expect(enqueuedJobIds).toHaveLength(1);
     expect(ledgerRowCount()).toBe(0);
   });
 
@@ -251,7 +243,7 @@ describe('reflection intake against a live graph and live Ollama', () => {
 
     expect(other.episode_id).not.toBe(episodeId);
     expect(listReflectionJobs(db)).toHaveLength(2);
-    expect(signals).toHaveLength(2);
+    expect(enqueuedJobIds).toHaveLength(2);
 
     expect(
       await countEdges(harness.driver, 'FOLLOWS', 'mcp-transport-session-2', SESSION_IDENTITY),

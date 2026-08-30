@@ -22,6 +22,7 @@ import {
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { findOrphanNodes } from '../../../infrastructure/graph/topology-queries.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
+import { refusingProvider } from '../../../infrastructure/providers/test-support/refusing-provider.fixture.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
@@ -61,6 +62,7 @@ function context(now: Date = NOW): OperationContext {
     db,
     config,
     logger,
+    provider: refusingProvider,
     health: healthFixture(),
     now,
     signal: new AbortController().signal,

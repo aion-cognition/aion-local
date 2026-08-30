@@ -1,69 +1,32 @@
 /**
- * The infrastructure layer's public surface: config, providers, SQLite, logging, and the graph
- * through `graph-index.ts`. Split out of the package entrypoint, and split again once the
- * graph half alone passed the repo's line cap; the entrypoint re-exports this verbatim, so
- * `@aion/core` is unchanged by either split.
+ * The infrastructure layer's public surface: config, providers, SQLite, logging, and the graph.
+ * Split out of the package entrypoint so `@aion/core` is unchanged by the split; the graph
+ * section used to live in its own `graph-index.ts` until pruning this barrel down to what
+ * `@aion/core` actually consumes brought the combined file back under the line cap.
  */
 
-export {
-  DEFAULT_LOG_FILE,
-  DEFAULT_LOG_LEVEL,
-  LOG_FILE_ENV_VAR,
-  LOG_LEVEL_ENV_VAR,
-  LOG_LEVELS,
-  openLogger,
-} from './logging/logger.js';
-export type { LogLevel, LogTarget, Logger } from './logging/logger.js';
+export { openLogger } from './logging/logger.js';
+export type { Logger } from './logging/logger.js';
+
+export { describeError } from './errors.js';
+
+export { halfWindowIntervalMs, MIN_SWEEP_INTERVAL_MS, SweepTimer } from './sweep-timer.js';
+
+export { SqliteStore, openSqliteHandle } from './sqlite/database.js';
+export type { SqliteHandle } from './sqlite/database.js';
+
+export { isLedgerApplied, latestLedgerEntry, markLedgerApplied } from './sqlite/ops-ledger.js';
+
+export { introspectionCycle, listOperationStats } from './sqlite/introspection-counters.js';
+export type { OperationStats } from './sqlite/introspection-counters.js';
 
 export {
-  DEFAULT_BUSY_TIMEOUT_MS,
-  DEFAULT_SQLITE_PATH,
-  SQLITE_PATH_ENV_VAR,
-  SqliteStore,
-  openSqliteHandle,
-} from './sqlite/database.js';
-export type { SqliteHandle, SqliteTarget } from './sqlite/database.js';
-
-export { getMeta, setMeta } from './sqlite/meta.js';
-
-export {
-  getLedgerEntry,
-  isLedgerApplied,
-  latestLedgerEntry,
-  listLedgerKeys,
-  markLedgerApplied,
-} from './sqlite/ops-ledger.js';
-export type { OpsLedgerEntry } from './sqlite/ops-ledger.js';
-
-export {
-  claimOperationBucket,
-  clearPendingMeasure,
-  introspectionCycle,
-  listOperationStats,
-  nextIntrospectionCycle,
-  operationStats,
-  recordOperationResolution,
-  recordOperationRun,
-  recordOperationSelected,
-  setPendingMeasure,
-} from './sqlite/introspection-counters.js';
-export type { OperationResolution, OperationStats } from './sqlite/introspection-counters.js';
-
-export {
-  DEFAULT_REFLECTION_LANE,
   REFLECTION_LANES,
   enqueueReflectionJob,
-  findPendingReflectionJob,
-  getReflectionJob,
   isReflectionLane,
   listReflectionJobs,
-  toReflectionLane,
 } from './sqlite/reflection-queue.js';
-export type {
-  EnqueueReflectionJobOptions,
-  ReflectionJob,
-  ReflectionLane,
-} from './sqlite/reflection-queue.js';
+export type { ReflectionJob, ReflectionLane } from './sqlite/reflection-queue.js';
 
 export {
   countQueueJobs,
@@ -72,165 +35,127 @@ export {
   listQueueJobs,
   promoteJobs,
 } from './sqlite/reflection-queue-admin.js';
-export type {
-  ReflectionQueueCounts,
-  ReflectionQueueFilter,
-} from './sqlite/reflection-queue-admin.js';
+export type { ReflectionQueueFilter } from './sqlite/reflection-queue-admin.js';
 
-export {
-  DEFAULT_STALE_CLAIM_TIMEOUT_MS,
-  ReflectionQueueClaimant,
-  reclaimStaleReflectionJobs,
-} from './sqlite/claim.js';
+export { ReflectionQueueClaimant } from './sqlite/claim.js';
 
-export {
-  DEFAULT_REINFORCEMENT_QUEUE_CAP,
-  claimReinforcementSignals,
-  countReinforcementSignals,
-  deleteReinforcementSignals,
-  enqueueReinforcementSignal,
-  listReinforcementSignals,
-  recordReinforcementFlush,
-  reinforcementFlushCounters,
-  reinforcementQueueDroppedCount,
-} from './sqlite/reinforcement-queue.js';
-export type {
-  ReinforcementFlushCounters,
-  ReinforcementFlushCounts,
-  ReinforcementSignal,
-} from './sqlite/reinforcement-queue.js';
+export { listReinforcementSignals } from './sqlite/reinforcement-queue.js';
 
-export { decaySweepCounters, recordDecaySweep } from './sqlite/decay-counters.js';
-export type { DecaySweepCounters, DecaySweepCounts } from './sqlite/decay-counters.js';
-
-export {
-  DEFAULT_LAG_SAMPLE_WINDOW,
-  listEnrichmentLagSamplesMs,
-  p95EnrichmentLagMs,
-  recordEnrichmentLagMs,
-} from './sqlite/lag-samples.js';
+export { p95EnrichmentLagMs } from './sqlite/lag-samples.js';
 
 export { getLastPack, listLastPackSessions, saveLastPack } from './sqlite/last-pack.js';
-export type { LastPack, LastPackSession } from './sqlite/last-pack.js';
+export type { LastPackSession } from './sqlite/last-pack.js';
+
+export { DEFAULTS, loadConfig, ConfigError } from './config/index.js';
+export type { Config } from './config/index.js';
 
 export {
-  ConfigSchema,
-  DEFAULTS,
-  KNOB_REGISTRY,
-  RESERVED_ENV_VARS,
-  knownEnvVars,
-  envVarForPath,
-  loadConfig,
-  ConfigError,
-} from './config/index.js';
-export type { Config, Knob, KnobKind, ConfigPath } from './config/index.js';
+  ensureNeo4jPassword,
+  isManagedNeo4jUri,
+  validateNeo4jEndpoint,
+  verifyGdsAvailable,
+} from './graph/provision.js';
 
-export * from './graph-index.js';
+export { latestAppliedGraphMigration, runGraphMigrations } from './graph/migrations.js';
 
-export type {
-  ChatMessage,
-  ChatRole,
-  GenerationBackend,
-  JsonSchema,
-  Provider,
-  StructuredRequest,
-  Vector,
-} from './providers/types.js';
+export { GraphConnection } from './graph/connection.js';
+
 export {
-  AnthropicProvider,
-  AnthropicRequestError,
-  AnthropicResponseError,
-  DEFAULT_ANTHROPIC_MODEL,
-} from './providers/anthropic-provider.js';
-export type { AnthropicProviderOptions, SchemaDelivery } from './providers/anthropic-provider.js';
+  assertVectorIndexDimensions,
+  countGraphElements,
+  countNodesByLabel,
+  readVectorIndexes,
+} from './graph/introspection.js';
+
+export type { GraphCounts } from './graph/introspection.js';
+
+export { fetchNodeEdges, fetchNodeProvenance } from './graph/node-provenance.js';
+
+export type { NodeEdge, NodeProvenance } from './graph/node-provenance.js';
+
+export { upsertEdge } from './graph/edges.js';
+
+export { forgetNode, supersede, writeStampedNode } from './graph/bitemporal.js';
+
+export { supersedeEpisode } from './graph/episode-supersession.js';
+
+export type { ClaimSubject, SubjectSibling } from './graph/subject-family.js';
+
+export { bootstrapBackbone, readMemberName } from './graph/backbone.js';
+
+export { ensureGraphSession } from './graph/sessions.js';
+
+export { asOf, bitemporalAt, knewAt, withCurrency } from './graph/read-modes.js';
+
+export type { ReadMode } from './graph/read-modes.js';
+
+export { loadEpisodeContext } from './graph/episode-context.js';
+
+export { NARRATIVE_PROPERTIES, findSessionNarratives } from './graph/narrative-queries.js';
+
+export { ENTITY_MENTION_TYPE, findEpisodeEntities } from './graph/entity-queries.js';
+
+export type { EpisodeEntity } from './graph/entity-queries.js';
+
+export { CO_OCCURS_TYPE } from './graph/association-queries.js';
+
+export { findEpisodeCognitiveNodes } from './graph/semantic-relationship-queries.js';
+
+export { fetchAdjacency } from './graph/adjacency.js';
+
+export { fulltextSeeds, lucenePhraseQuery, vectorSeeds } from './graph/seed-queries.js';
+
 export {
-  GENERATION_ROLES,
-  evictableModels,
+  EDGE_WEIGHT_DISTRIBUTION_TYPES,
+  edgeWeightDistribution,
+} from './graph/edge-weight-distribution.js';
+
+export type { EdgeWeightDistribution } from './graph/edge-weight-distribution.js';
+
+export type { Provider } from './providers/types.js';
+export {
   localChatModels,
-  modelsToPull,
   remoteBannerLines,
   remoteRoutes,
   resolveProviderRouting,
-  routeFor,
   routingSummary,
   unbackedPins,
 } from './providers/routing.js';
-export type {
-  GenerationRole,
-  ProviderName,
-  ProviderPin,
-  ProviderRouting,
-  RoleRoute,
-  RouteReason,
-} from './providers/routing.js';
 export { ProviderRouter } from './providers/role-provider.js';
-export type { GenerationEvent, ProviderRouterOptions } from './providers/role-provider.js';
 export { listResidentModels, reconcileResidentModels } from './providers/model-reconciliation.js';
-export type {
-  ReconciliationOptions,
-  ReconciliationReport,
-  ResidentModel,
-} from './providers/model-reconciliation.js';
-export {
-  EmbedDimensionMismatchError,
-  ModelPullError,
-  ModelVerificationError,
-  OllamaUnreachableError,
-} from './providers/errors.js';
-export { CircuitBreaker, CircuitOpenError } from './providers/circuit-breaker.js';
-export type { CircuitBreakerOptions } from './providers/circuit-breaker.js';
+export { EmbedDimensionMismatchError } from './providers/errors.js';
 export { OllamaProvider } from './providers/ollama-provider.js';
-export type { OllamaProviderOptions } from './providers/ollama-provider.js';
 export {
   checkOllamaReachable,
   listOllamaModels,
   provisionOllama,
   verifyOllamaChatModel,
 } from './providers/provisioning.js';
-export type {
-  OllamaProvisionTarget,
-  ProvisionEvent,
-  ProvisionOptions,
-} from './providers/provisioning.js';
+export type { ProvisionEvent } from './providers/provisioning.js';
 
 export {
   findSupersessionProposalsForNode,
   getSupersessionProposal,
-  countOpenSupersessionProposals,
   listSupersessionProposals,
   recordSupersessionProposal,
-  resolveSupersessionProposal,
 } from './sqlite/supersession-proposals.js';
 export type { SupersessionProposal } from './sqlite/supersession-proposals.js';
 
-export { foldForIdentity, foldName } from './providers/unicode-fold.js';
-
 export {
   findEntityMergeProposalsForNode,
-  getEntityMergeProposal,
-  countOpenEntityMergeProposals,
   listEntityMergeProposals,
   recordEntityMergeProposal,
-  resolveEntityMergeProposal,
 } from './sqlite/entity-merge-proposals.js';
-export type {
-  EntityMergeProposal,
-  EntityMergeProposalInput,
-  EntityMergeProposalSide,
-} from './sqlite/entity-merge-proposals.js';
+export type { EntityMergeProposal } from './sqlite/entity-merge-proposals.js';
 
-export {
-  cueDegradedRate,
-  DEFAULT_RECALL_SAMPLE_WINDOW,
-  recordCueOutcome,
-} from './sqlite/recall-samples.js';
+export { cueDegradedRate } from './sqlite/recall-samples.js';
 
 export {
   PACK_METHODS,
   packMethodCounters,
   recordPackMethodCounts,
 } from './sqlite/method-counters.js';
-export type { PackMethod, PackMethodCounters } from './sqlite/method-counters.js';
+export type { PackMethodCounters } from './sqlite/method-counters.js';
 
 export { recallCadenceCounters, recordRecallOutcome } from './sqlite/recall-cadence.js';
-export type { RecallCadenceCounters, RecallOutcome } from './sqlite/recall-cadence.js';
+export type { RecallCadenceCounters } from './sqlite/recall-cadence.js';

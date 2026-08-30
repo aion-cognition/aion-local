@@ -15,6 +15,7 @@ import {
   type Neo4jHarness,
 } from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
+import { refusingProvider } from '../../infrastructure/providers/test-support/refusing-provider.fixture.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { operationStats } from '../../infrastructure/sqlite/introspection-counters.js';
 import { getLedgerEntry } from '../../infrastructure/sqlite/ops-ledger.js';
@@ -103,7 +104,14 @@ function engineFor(
 ): Introspector {
   let index = 0;
   return new Introspector(
-    { driver: harness.driver, db, config: overrides.config ?? config, logger, operations },
+    {
+      driver: harness.driver,
+      db,
+      config: overrides.config ?? config,
+      logger,
+      provider: refusingProvider,
+      operations,
+    },
     {
       ...(overrides.tier3Advisor === undefined ? {} : { tier3Advisor: overrides.tier3Advisor }),
       observe: (options) => {
@@ -343,7 +351,14 @@ describe('Introspector', () => {
   it('idles and backs off when observation itself fails', async () => {
     const operation = fakeOperation('unreached_maintenance');
     const engine = new Introspector(
-      { driver: harness.driver, db, config, logger, operations: [operation] },
+      {
+        driver: harness.driver,
+        db,
+        config,
+        logger,
+        provider: refusingProvider,
+        operations: [operation],
+      },
       { observe: () => Promise.reject(new Error('bolt closed')), now: () => NOW },
     );
 

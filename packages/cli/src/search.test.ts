@@ -1,14 +1,7 @@
 import type { Seed } from '@aion/core';
 import { describe, expect, it } from 'vitest';
 
-import {
-  InvalidTimestampError,
-  MissingSearchQueryError,
-  MissingSearchValueError,
-  parseSearchFlags,
-  renderSearchResults,
-  UnknownSearchOptionError,
-} from './search.js';
+import { parseSearchFlags, renderSearchResults } from './search.js';
 
 function collector(): { lines: string[]; write: (line: string) => void } {
   const lines: string[] = [];
@@ -50,10 +43,14 @@ describe('parseSearchFlags', () => {
   });
 
   it('rejects a missing query, an unknown option, a missing value, or a bad timestamp', () => {
-    expect(() => parseSearchFlags([])).toThrow(MissingSearchQueryError);
-    expect(() => parseSearchFlags(['q', '--bogus'])).toThrow(UnknownSearchOptionError);
-    expect(() => parseSearchFlags(['q', '--as-of'])).toThrow(MissingSearchValueError);
-    expect(() => parseSearchFlags(['q', '--as-of', 'not-a-date'])).toThrow(InvalidTimestampError);
+    expect(() => parseSearchFlags([])).toThrow('search needs a query');
+    expect(() => parseSearchFlags(['q', '--bogus'])).toThrow(
+      "unknown option '--bogus' for search (supported: --as-of, --knew-at, --json)",
+    );
+    expect(() => parseSearchFlags(['q', '--as-of'])).toThrow('--as-of needs a value');
+    expect(() => parseSearchFlags(['q', '--as-of', 'not-a-date'])).toThrow(
+      "--as-of got 'not-a-date', expected an ISO timestamp",
+    );
   });
 });
 

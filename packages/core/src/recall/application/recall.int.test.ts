@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { CueCache } from './cues.js';
 import { handleRecall, type RecallDeps } from './recall.js';
+import { waitFor } from './test-support/wait-for.fixture.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
@@ -26,7 +27,6 @@ import {
   type PackMethod,
 } from '../../infrastructure/sqlite/method-counters.js';
 import { markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
-import { ReflectionDispatch } from '../../reflection/application/dispatch.js';
 import { handleReflection } from '../../reflection/application/intake.js';
 import { LaneAssigner } from '../../reflection/application/lanes.js';
 import { orchestratorLedgerKey } from '../../reflection/application/orchestrator.js';
@@ -100,19 +100,6 @@ let deps: RecallDeps;
 let webhooksEpisodeId: string;
 let unrelatedEpisodeId: string;
 
-async function waitFor(label: string, ready: () => Promise<boolean>): Promise<void> {
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    if (await ready()) {
-      return;
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 250);
-    });
-  }
-  throw new Error(`timed out waiting for ${label}`);
-}
-
 async function push(
   observation: string,
   now: Date,
@@ -124,7 +111,6 @@ async function push(
       db,
       sessions,
       provider,
-      dispatch: new ReflectionDispatch(),
       logger,
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
       lanes: new LaneAssigner(DEFAULTS.lanes),

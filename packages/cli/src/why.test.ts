@@ -6,12 +6,7 @@ import type {
 } from '@aion/core';
 import { describe, expect, it } from 'vitest';
 
-import {
-  MissingNodeIdError,
-  parseWhyFlags,
-  renderProvenance,
-  UnknownWhyOptionError,
-} from './why.js';
+import { parseWhyFlags, renderProvenance } from './why.js';
 
 function collector(): { lines: string[]; write: (line: string) => void } {
   const lines: string[] = [];
@@ -24,8 +19,10 @@ describe('parseWhyFlags', () => {
   });
 
   it('rejects no id and an extra argument', () => {
-    expect(() => parseWhyFlags([])).toThrow(MissingNodeIdError);
-    expect(() => parseWhyFlags(['node-1', 'extra'])).toThrow(UnknownWhyOptionError);
+    expect(() => parseWhyFlags([])).toThrow('why needs a node id');
+    expect(() => parseWhyFlags(['node-1', 'extra'])).toThrow(
+      "unexpected extra argument 'extra' for why",
+    );
   });
 });
 

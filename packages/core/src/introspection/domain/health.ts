@@ -115,8 +115,6 @@ export const HEALTH_COLLECTORS = {
   plasticity: 'plasticity',
 } as const;
 
-export type HealthCollector = (typeof HEALTH_COLLECTORS)[keyof typeof HEALTH_COLLECTORS];
-
 /** Neutral readings: what a collector's fields hold when it failed and its name went to `degraded`. */
 export const NEUTRAL_GRAPH_HEALTH: GraphStructureHealth = {
   nodes: 0,

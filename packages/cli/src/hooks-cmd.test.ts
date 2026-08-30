@@ -17,7 +17,6 @@ import {
   parseHooksFlags,
   statusHooks,
   uninstallHooks,
-  UnknownHooksOptionError,
   type HooksCommandOptions,
 } from './hooks-cmd.js';
 import { describeAionHooks } from './hooks-settings.js';
@@ -44,8 +43,10 @@ describe('parseHooksFlags', () => {
   });
 
   it('rejects an unknown option and an unsupported value', () => {
-    expect(() => parseHooksFlags(['--force'])).toThrow(UnknownHooksOptionError);
-    expect(() => parseHooksFlags(['--profile', 'medium'])).toThrow(UnknownHooksOptionError);
+    expect(() => parseHooksFlags(['--force'])).toThrow("unknown option '--force' for hooks");
+    expect(() => parseHooksFlags(['--profile', 'medium'])).toThrow(
+      "unknown option '--profile' for hooks",
+    );
   });
 });
 

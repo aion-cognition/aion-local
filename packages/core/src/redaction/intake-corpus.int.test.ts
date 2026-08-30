@@ -17,7 +17,6 @@ import { openLogger } from '../infrastructure/logging/logger.js';
 import { OllamaProvider } from '../infrastructure/providers/ollama-provider.js';
 import { openSqliteHandle, type SqliteHandle } from '../infrastructure/sqlite/database.js';
 import { listReflectionJobs } from '../infrastructure/sqlite/reflection-queue.js';
-import { ReflectionDispatch } from '../reflection/application/dispatch.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../reflection/application/intake.js';
 import { LaneAssigner } from '../reflection/application/lanes.js';
 import { SessionManager } from '../session/session-manager.js';
@@ -55,7 +54,6 @@ beforeAll(async () => {
       baseUrl: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
       embedModel: DEFAULTS.models.embed,
     }),
-    dispatch: new ReflectionDispatch(),
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),

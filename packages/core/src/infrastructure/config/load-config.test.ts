@@ -60,8 +60,7 @@ describe('loadConfig override precedence', () => {
   });
 
   it('overrides an enum-backed string leaf', () => {
-    const config = loadConfig({ AION_OLLAMA_MODE: 'docker', AION_SEARCH_RERANKER: 'mmr' });
-    expect(config.ollama.mode).toBe('docker');
+    const config = loadConfig({ AION_SEARCH_RERANKER: 'mmr' });
     expect(config.search.reranker).toBe('mmr');
   });
 
@@ -111,7 +110,7 @@ describe('loadConfig bad values', () => {
   });
 
   it('rejects a value outside its enum, naming the var', () => {
-    expect(() => loadConfig({ AION_OLLAMA_MODE: 'remote' })).toThrow(/AION_OLLAMA_MODE/);
+    expect(() => loadConfig({ AION_SEARCH_RERANKER: 'bm25' })).toThrow(/AION_SEARCH_RERANKER/);
   });
 
   it('rejects a non-boolean string for a boolean leaf, naming the var', () => {

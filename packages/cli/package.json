@@ -22,5 +22,8 @@
     "@aion/core": "*",
     "@aion/mcp": "*",
     "@aion/protocol": "*"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0"
   }
 }

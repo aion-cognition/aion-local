@@ -1,14 +1,9 @@
+import { describeError } from '@aion/core';
+
 import { bootstrapService, type AionService } from './bootstrap.js';
 
 /** Compose sends SIGTERM on `down`/`stop`; SIGINT is the foreground run. */
 export const SHUTDOWN_SIGNALS = ['SIGTERM', 'SIGINT'] as const;
-
-function describeError(err: unknown): string {
-  if (err instanceof Error) {
-    return `${err.name}: ${err.message}`;
-  }
-  return String(err);
-}
 
 /**
  * Closes in dependency order and leaves the event loop empty rather than calling

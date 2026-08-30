@@ -1,11 +1,11 @@
-import neo4j, { type Driver } from 'neo4j-driver';
+import type { Driver } from 'neo4j-driver';
 
-import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
-import { runRead, runWrite, type GraphStatement } from './connection.js';
+import { BITEMPORAL_PROPERTIES, currentOnly } from './bitemporal.js';
+import { runRead, runWrite } from './connection.js';
 import { ENTITY_MENTION_TYPE, ENTITY_TYPE_PROPERTY } from './entity-queries.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
 import { ENTITY_NAME_PROPERTY, STRUCTURAL_PROPERTY } from './seed-queries.js';
-import { toGraphDateTime, toGraphVector, type Row } from './values.js';
+import { toGraphDateTime, toGraphInteger, toGraphVector, type Row } from './values.js';
 import type { Vector } from '../providers/types.js';
 
 /**
@@ -35,10 +35,6 @@ export const DESCRIPTION_REFRESH_METHOD = 'introspection_description_freshness';
  */
 const IMPLICIT_BASELINE_MENTIONS = 1;
 
-function toGraphInteger(value: number): unknown {
-  return neo4j.int(Math.trunc(value));
-}
-
 export type StaleDescriptionEntity = {
   readonly id: string;
   readonly name: string;
@@ -50,7 +46,7 @@ export type StaleDescriptionEntity = {
 
 const FIND_STALE_DESCRIPTION_ENTITIES = [
   'MATCH (e:Entity)',
-  `WHERE e.${BITEMPORAL_PROPERTIES.validUntil} IS NULL AND e.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  `WHERE ${currentOnly('e')}`,
   `  AND coalesce(e.${STRUCTURAL_PROPERTY}, false) = false`,
   `OPTIONAL MATCH (ep:Episode)-[:${ENTITY_MENTION_TYPE}]->(e)`,
   // `count(ep)`, not `count(*)`: an entity with no mention edge still yields one row from
@@ -72,22 +68,25 @@ export async function findStaleDescriptionEntities(
   if (input.limit <= 0) {
     return [];
   }
-  const statement: GraphStatement = {
-    cypher: FIND_STALE_DESCRIPTION_ENTITIES,
-    parameters: {
-      growthThreshold: toGraphInteger(input.growthThreshold),
-      implicitBaseline: toGraphInteger(IMPLICIT_BASELINE_MENTIONS),
-      limit: toGraphInteger(input.limit),
+  return runRead(
+    driver,
+    {
+      cypher: FIND_STALE_DESCRIPTION_ENTITIES,
+      parameters: {
+        growthThreshold: toGraphInteger(input.growthThreshold),
+        implicitBaseline: toGraphInteger(IMPLICIT_BASELINE_MENTIONS),
+        limit: toGraphInteger(input.limit),
+      },
     },
-  };
-  return runRead(driver, statement.cypher, statement.parameters, (row: Row) => ({
-    id: row.id as string,
-    name: (row.name as string | null) ?? '',
-    type: (row.type as string | null) ?? '',
-    text: (row.text as string | null) ?? '',
-    mentions: typeof row.mentions === 'number' ? row.mentions : Number(row.mentions ?? 0),
-    baseline: typeof row.baseline === 'number' ? row.baseline : Number(row.baseline ?? 0),
-  }));
+    (row: Row) => ({
+      id: row.id as string,
+      name: (row.name as string | null) ?? '',
+      type: (row.type as string | null) ?? '',
+      text: (row.text as string | null) ?? '',
+      mentions: typeof row.mentions === 'number' ? row.mentions : Number(row.mentions ?? 0),
+      baseline: typeof row.baseline === 'number' ? row.baseline : Number(row.baseline ?? 0),
+    }),
+  );
 }
 
 export type EntityMentionContext = {
@@ -118,18 +117,21 @@ export async function findEntityMentionContexts(
   if (limit <= 0) {
     return [];
   }
-  const statement: GraphStatement = {
-    cypher: FIND_ENTITY_MENTION_CONTEXTS,
-    parameters: { entityId, limit: toGraphInteger(limit) },
-  };
-  return runRead(driver, statement.cypher, statement.parameters, (row: Row) => {
-    const occurredAt = row.occurred_at instanceof Date ? row.occurred_at : undefined;
-    return {
-      episodeId: row.episode_id as string,
-      text: (row.text as string | null) ?? '',
-      ...(occurredAt === undefined ? {} : { occurredAt }),
-    };
-  });
+  return runRead(
+    driver,
+    {
+      cypher: FIND_ENTITY_MENTION_CONTEXTS,
+      parameters: { entityId, limit: toGraphInteger(limit) },
+    },
+    (row: Row) => {
+      const occurredAt = row.occurred_at instanceof Date ? row.occurred_at : undefined;
+      return {
+        episodeId: row.episode_id as string,
+        text: (row.text as string | null) ?? '',
+        ...(occurredAt === undefined ? {} : { occurredAt }),
+      };
+    },
+  );
 }
 
 /**
@@ -162,21 +164,19 @@ export async function refreshEntityDescription(
   driver: Driver,
   input: RefreshEntityDescriptionInput,
 ): Promise<boolean> {
-  const statement: GraphStatement = {
-    cypher: REFRESH_ENTITY_DESCRIPTION,
-    parameters: {
-      id: input.id,
-      text: input.text,
-      contentVector: toGraphVector(input.contentVector),
-      mentionCount: toGraphInteger(input.mentionCount),
-      now: toGraphDateTime(input.now),
-      method: DESCRIPTION_REFRESH_METHOD,
-    },
-  };
   const rows = await runWrite(
     driver,
-    statement.cypher,
-    statement.parameters,
+    {
+      cypher: REFRESH_ENTITY_DESCRIPTION,
+      parameters: {
+        id: input.id,
+        text: input.text,
+        contentVector: toGraphVector(input.contentVector),
+        mentionCount: toGraphInteger(input.mentionCount),
+        now: toGraphDateTime(input.now),
+        method: DESCRIPTION_REFRESH_METHOD,
+      },
+    },
     (row: Row) => row.id as string,
   );
   return rows.length > 0;

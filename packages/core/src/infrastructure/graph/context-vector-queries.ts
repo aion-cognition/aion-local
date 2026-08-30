@@ -3,7 +3,7 @@ import type { Driver } from 'neo4j-driver';
 import { runRead, runWrite, type GraphStatement } from './connection.js';
 import { ENTITY_MENTION_TYPE } from './entity-queries.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from './episodes.js';
-import { BASE_NODE_LABEL } from './labels.js';
+import { BASE_NODE_LABEL, MEMORY_LABEL } from './labels.js';
 import { SUMMARIZED_BY_TYPE } from './narrative-queries.js';
 import { readModeFragment, withCurrency } from './read-modes.js';
 import { fromGraphVector, toGraphVector, type Row } from './values.js';
@@ -24,8 +24,6 @@ const EXTRACTED_FROM_TYPE = 'EXTRACTED_FROM';
 
 /** Declared by migration 001 `FOR (n:Memory)`, alongside `content_vec`; no writer has needed a shared name for it before this stage. */
 export const CONTEXT_VECTOR_PROPERTY = 'context_vec';
-
-const MEMORY_LABEL = 'Memory';
 
 /**
  * The episode itself, its turns, the entities it mentions, the cognitive nodes extracted
@@ -57,13 +55,7 @@ function affectedNodesStatement(episodeId: string): GraphStatement {
 
 /** Undefined only when the episode itself is unreadable; an episode with nothing else attached still returns its own id. */
 export async function findAffectedNodeIds(driver: Driver, episodeId: string): Promise<string[]> {
-  const statement = affectedNodesStatement(episodeId);
-  const rows = await runRead(
-    driver,
-    statement.cypher,
-    statement.parameters,
-    (row) => row.id as string,
-  );
+  const rows = await runRead(driver, affectedNodesStatement(episodeId), (row) => row.id as string);
   return [...new Set(rows)];
 }
 
@@ -110,8 +102,7 @@ export async function findNeighborContentVectors(
   if (nodeIds.length === 0) {
     return [];
   }
-  const statement = neighborContentVectorsStatement(nodeIds);
-  const rows = await runRead(driver, statement.cypher, statement.parameters, readNeighborRow);
+  const rows = await runRead(driver, neighborContentVectorsStatement(nodeIds), readNeighborRow);
   return rows.filter((row): row is NeighborContentVector => row !== undefined);
 }
 

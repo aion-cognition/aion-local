@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
+import { describeError, formatZodError, isAbortError } from '../../../infrastructure/errors.js';
 import {
   findEpisodeEntities,
   type EpisodeEntity,
@@ -24,15 +26,6 @@ import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/s
  */
 
 export const SEMANTIC_RELATIONSHIP_STAGE_NAME = 'semantic-relationships';
-
-/** `config.models.reflect`'s default; callers thread the configured value in. */
-export const DEFAULT_SEMANTIC_RELATIONSHIP_MODEL = 'qwen3:8b';
-
-/** qwen3:8b with thinking on measured 10-44s with occasional non-returns; the guard, not a target. */
-export const DEFAULT_SEMANTIC_RELATIONSHIP_TIMEOUT_MS = 60_000;
-
-/** One episode's worth of typed edges; a model that returns more is padding, not reading. */
-export const DEFAULT_MAX_RELATIONSHIPS = 40;
 
 export type SemanticRelationshipStageOptions = {
   readonly model?: string;
@@ -244,18 +237,6 @@ function resolveProposals(
   return resolved;
 }
 
-function describeError(error: unknown): string {
-  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-}
-
-function formatZodError(error: z.ZodError): string {
-  return error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ');
-}
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === 'AbortError';
-}
-
 export class SemanticRelationshipStage implements ReflectionStage {
   readonly name = SEMANTIC_RELATIONSHIP_STAGE_NAME;
   readonly #model: string;
@@ -263,9 +244,9 @@ export class SemanticRelationshipStage implements ReflectionStage {
   readonly #maxRelationships: number;
 
   constructor(options: SemanticRelationshipStageOptions = {}) {
-    this.#model = options.model ?? DEFAULT_SEMANTIC_RELATIONSHIP_MODEL;
-    this.#timeoutMs = options.timeoutMs ?? DEFAULT_SEMANTIC_RELATIONSHIP_TIMEOUT_MS;
-    this.#maxRelationships = options.maxRelationships ?? DEFAULT_MAX_RELATIONSHIPS;
+    this.#model = options.model ?? DEFAULTS.models.reflect;
+    this.#timeoutMs = options.timeoutMs ?? DEFAULTS.reflection.stageTimeoutMs;
+    this.#maxRelationships = options.maxRelationships ?? DEFAULTS.reflection.maxRelationships;
   }
 
   async run(ctx: StageContext): Promise<StageOutcome> {

@@ -173,8 +173,6 @@ export type CueWeight = z.infer<typeof CueWeightSchema>;
  */
 export const CueIntentSchema = z.enum(['decision']);
 
-export type CueIntent = z.infer<typeof CueIntentSchema>;
-
 export const CueSchema = z.strictObject({
   text: z.string().min(1),
   source: CueSourceSchema,
@@ -286,8 +284,6 @@ export const MemoryPackMetadataSchema = z.strictObject({
   truncated: PackTruncationSchema.optional(),
 });
 
-export type MemoryPackMetadata = z.infer<typeof MemoryPackMetadataSchema>;
-
 /**
  * Every bucket is optional and, when present, non-empty (empty categories are omitted).
  * `rendered_text` is the text block dropped straight into agent reasoning. `metadata`
@@ -339,6 +335,4 @@ export function packBuckets(
 }
 
 /** The `recall` tool's output is the MemoryPack itself. */
-export const RecallOutputSchema = MemoryPackSchema;
-
 export type RecallOutput = MemoryPack;

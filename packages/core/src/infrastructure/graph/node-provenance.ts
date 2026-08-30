@@ -85,47 +85,35 @@ function optionalDate(value: unknown): Date | undefined {
   return value instanceof Date ? value : undefined;
 }
 
+/** One optional field, read once: `exactOptionalPropertyTypes` needs the key absent rather than set to `undefined`. */
+function optionalField<K extends string, T>(
+  key: K,
+  value: T | undefined,
+): Readonly<Partial<Record<K, T>>> {
+  return value === undefined
+    ? ({} as Readonly<Partial<Record<K, T>>>)
+    : ({ [key]: value } as Readonly<Partial<Record<K, T>>>);
+}
+
 function mapProvenance(row: Row): NodeProvenance {
   return {
     id: row.id as string,
     labels: (row.labels as string[] | null) ?? [],
     content: typeof row.content === 'string' ? row.content : '',
-    ...(optionalString(row.extraction_method) === undefined
-      ? {}
-      : { extractionMethod: optionalString(row.extraction_method) }),
-    ...(optionalString(row.source_episode_id) === undefined
-      ? {}
-      : { sourceEpisodeId: optionalString(row.source_episode_id) }),
-    ...(optionalString(row.rationale) === undefined
-      ? {}
-      : { rationale: optionalString(row.rationale) }),
-    ...(optionalNumber(row.confidence) === undefined
-      ? {}
-      : { confidence: optionalNumber(row.confidence) }),
-    ...(optionalNumber(row.access_count) === undefined
-      ? {}
-      : { accessCount: optionalNumber(row.access_count) }),
-    ...(optionalDate(row.last_accessed) === undefined
-      ? {}
-      : { lastAccessed: optionalDate(row.last_accessed) }),
-    ...(optionalString(row.name) === undefined ? {} : { name: optionalString(row.name) }),
-    ...(optionalString(row.entity_type) === undefined
-      ? {}
-      : { entityType: optionalString(row.entity_type) }),
-    ...(optionalDate(row.occurred_at) === undefined
-      ? {}
-      : { occurredAt: optionalDate(row.occurred_at) }),
-    ...(optionalDate(row.valid_from) === undefined
-      ? {}
-      : { validFrom: optionalDate(row.valid_from) }),
-    ...(optionalDate(row.valid_until) === undefined
-      ? {}
-      : { validUntil: optionalDate(row.valid_until) }),
-    ...(optionalDate(row.tx_from) === undefined ? {} : { txFrom: optionalDate(row.tx_from) }),
-    ...(optionalDate(row.tx_until) === undefined ? {} : { txUntil: optionalDate(row.tx_until) }),
-    ...(optionalDate(row.forgotten_at) === undefined
-      ? {}
-      : { forgottenAt: optionalDate(row.forgotten_at) }),
+    ...optionalField('extractionMethod', optionalString(row.extraction_method)),
+    ...optionalField('sourceEpisodeId', optionalString(row.source_episode_id)),
+    ...optionalField('rationale', optionalString(row.rationale)),
+    ...optionalField('confidence', optionalNumber(row.confidence)),
+    ...optionalField('accessCount', optionalNumber(row.access_count)),
+    ...optionalField('lastAccessed', optionalDate(row.last_accessed)),
+    ...optionalField('name', optionalString(row.name)),
+    ...optionalField('entityType', optionalString(row.entity_type)),
+    ...optionalField('occurredAt', optionalDate(row.occurred_at)),
+    ...optionalField('validFrom', optionalDate(row.valid_from)),
+    ...optionalField('validUntil', optionalDate(row.valid_until)),
+    ...optionalField('txFrom', optionalDate(row.tx_from)),
+    ...optionalField('txUntil', optionalDate(row.tx_until)),
+    ...optionalField('forgottenAt', optionalDate(row.forgotten_at)),
     ...readCurrencyAnnotation(row),
   };
 }
@@ -136,8 +124,7 @@ export async function fetchNodeProvenance(
   id: string,
   mode: ReadMode = withCurrency(),
 ): Promise<NodeProvenance | undefined> {
-  const statement = provenanceStatement(id, mode);
-  const rows = await runRead(driver, statement.cypher, statement.parameters, mapProvenance);
+  const rows = await runRead(driver, provenanceStatement(id, mode), mapProvenance);
   return rows[0];
 }
 
@@ -212,6 +199,5 @@ export async function fetchNodeEdges(
   id: string,
   mode: ReadMode = withCurrency(),
 ): Promise<readonly NodeEdge[]> {
-  const statement = edgesStatement(id, mode);
-  return runRead(driver, statement.cypher, statement.parameters, mapEdge);
+  return runRead(driver, edgesStatement(id, mode), mapEdge);
 }

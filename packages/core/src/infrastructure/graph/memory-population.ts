@@ -1,9 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 
-import { runRead } from './connection.js';
-
-/** The label every content-bearing node carries; population counts all of them. */
-const MEMORY_LABEL = 'Memory';
+import { readFirst } from './connection.js';
+import { MEMORY_LABEL } from './labels.js';
 
 /**
  * How long one population reading stands before it is read again. The number only sizes the
@@ -34,13 +32,13 @@ const populationByDriver = new WeakMap<Driver, PopulationReading>();
  * substrate bigger.
  */
 export async function countMemoryNodes(driver: Driver): Promise<number> {
-  const rows = await runRead(
+  const count = await readFirst(
     driver,
     `MATCH (n:${MEMORY_LABEL}) RETURN count(n) AS population`,
     {},
     (row) => row.population as number,
   );
-  return rows[0] ?? 0;
+  return count ?? 0;
 }
 
 /** `countMemoryNodes` behind a short-lived per-driver cache. */

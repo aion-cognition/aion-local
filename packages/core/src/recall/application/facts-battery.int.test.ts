@@ -8,6 +8,7 @@ import { CueCache } from './cues.js';
 import { DECISION_PROBE, DECISION_SUBSTRATE } from './facts.fixtures.js';
 import { OFF_TOPIC_BATTERY } from './floors.fixtures.js';
 import { handleRecall, type RecallDeps } from './recall.js';
+import { waitFor } from './test-support/wait-for.fixture.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
 import { writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
@@ -124,19 +125,6 @@ async function probe(
 
 function decisionProbe(): Promise<MemoryPack> {
   return probe(DECISION_PROBE.query, DECISION_PROBE.intent, DECISION_PROBE.cues);
-}
-
-async function waitFor(label: string, ready: () => Promise<boolean>): Promise<void> {
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    if (await ready()) {
-      return;
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 250);
-    });
-  }
-  throw new Error(`timed out waiting for ${label}`);
 }
 
 beforeAll(async () => {

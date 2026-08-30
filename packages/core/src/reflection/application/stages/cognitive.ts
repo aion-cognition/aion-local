@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
+import { describeError, formatZodError, isAbortError } from '../../../infrastructure/errors.js';
 import {
   COGNITIVE_NODE_LABELS,
   writeCognitiveNode,
@@ -15,18 +17,6 @@ import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/s
  * rule this stage relies on for idempotency; this file owns the model call and the mapping
  * from its output to that write.
  */
-
-/** `config.models.reflect`'s default; callers thread the configured value in. */
-export const DEFAULT_COGNITIVE_MODEL = 'qwen3:8b';
-
-/**
- * qwen3:8b with thinking on measured 10-44s with occasional non-returns. Reflection's
- * latency regime is relaxed, not unbounded, so the call still carries a guard.
- */
-export const DEFAULT_COGNITIVE_TIMEOUT_MS = 60_000;
-
-/** A bound on one episode's extraction: the volume stays modest. */
-export const DEFAULT_MAX_COGNITIVE_NODES = 20;
 
 export type CognitiveExtractionStageOptions = {
   readonly model?: string;
@@ -197,18 +187,6 @@ function buildRestatementMessages(
 
 const RestatementOutputSchema = z.object({ restated: z.array(z.string()) });
 
-function describeError(error: unknown): string {
-  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-}
-
-function formatZodError(error: z.ZodError): string {
-  return error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ');
-}
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === 'AbortError';
-}
-
 export class CognitiveExtractionStage implements ReflectionStage {
   readonly name = 'cognitive';
   readonly #model: string;
@@ -216,9 +194,9 @@ export class CognitiveExtractionStage implements ReflectionStage {
   readonly #maxNodes: number;
 
   constructor(options: CognitiveExtractionStageOptions = {}) {
-    this.#model = options.model ?? DEFAULT_COGNITIVE_MODEL;
-    this.#timeoutMs = options.timeoutMs ?? DEFAULT_COGNITIVE_TIMEOUT_MS;
-    this.#maxNodes = options.maxNodes ?? DEFAULT_MAX_COGNITIVE_NODES;
+    this.#model = options.model ?? DEFAULTS.models.reflect;
+    this.#timeoutMs = options.timeoutMs ?? DEFAULTS.reflection.stageTimeoutMs;
+    this.#maxNodes = options.maxNodes ?? DEFAULTS.reflection.maxCognitiveNodes;
   }
 
   async run(ctx: StageContext): Promise<StageOutcome> {

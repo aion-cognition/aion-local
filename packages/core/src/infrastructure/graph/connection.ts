@@ -23,24 +23,94 @@ function mapRecords<T>(records: readonly RecordLike[], map: RowMapper<T>): T[] {
   return records.map((record) => map(coerceRow(record.toObject())));
 }
 
-export async function runRead<T>(
+/** Resolves the `(statement, map)` and `(cypher, parameters, map)` call shapes `runRead`/`runWrite` both accept. */
+function resolveCall<T>(
+  cypherOrStatement: string | GraphStatement,
+  parametersOrMap: Record<string, unknown> | RowMapper<T>,
+  maybeMap: RowMapper<T> | undefined,
+): { cypher: string; parameters: Record<string, unknown>; map: RowMapper<T> } {
+  if (typeof cypherOrStatement === 'string') {
+    if (maybeMap === undefined) {
+      throw new Error('runRead/runWrite: map is required when cypher and parameters are separate');
+    }
+    return {
+      cypher: cypherOrStatement,
+      parameters: parametersOrMap as Record<string, unknown>,
+      map: maybeMap,
+    };
+  }
+  return {
+    cypher: cypherOrStatement.cypher,
+    parameters: cypherOrStatement.parameters,
+    map: parametersOrMap as RowMapper<T>,
+  };
+}
+
+/** Accepts a built `GraphStatement` directly, so a caller that only builds one to destructure it back can skip the round trip. */
+export function runRead<T>(
+  driver: Driver,
+  statement: GraphStatement,
+  map: RowMapper<T>,
+): Promise<T[]>;
+export function runRead<T>(
   driver: Driver,
   cypher: string,
   parameters: Record<string, unknown>,
   map: RowMapper<T>,
+): Promise<T[]>;
+export async function runRead<T>(
+  driver: Driver,
+  cypherOrStatement: string | GraphStatement,
+  parametersOrMap: Record<string, unknown> | RowMapper<T>,
+  maybeMap?: RowMapper<T>,
 ): Promise<T[]> {
+  const { cypher, parameters, map } = resolveCall(cypherOrStatement, parametersOrMap, maybeMap);
   const result = await driver.executeQuery(cypher, parameters, { routing: neo4j.routing.READ });
   return mapRecords(result.records, map);
 }
 
-export async function runWrite<T>(
+/** The common shape behind every `rows[0] ?? default` call site: one row, or none. */
+export async function readFirst<T>(
   driver: Driver,
   cypher: string,
   parameters: Record<string, unknown>,
   map: RowMapper<T>,
+): Promise<T | undefined> {
+  const rows = await runRead(driver, cypher, parameters, map);
+  return rows[0];
+}
+
+export function runWrite<T>(
+  driver: Driver,
+  statement: GraphStatement,
+  map: RowMapper<T>,
+): Promise<T[]>;
+export function runWrite<T>(
+  driver: Driver,
+  cypher: string,
+  parameters: Record<string, unknown>,
+  map: RowMapper<T>,
+): Promise<T[]>;
+export async function runWrite<T>(
+  driver: Driver,
+  cypherOrStatement: string | GraphStatement,
+  parametersOrMap: Record<string, unknown> | RowMapper<T>,
+  maybeMap?: RowMapper<T>,
 ): Promise<T[]> {
+  const { cypher, parameters, map } = resolveCall(cypherOrStatement, parametersOrMap, maybeMap);
   const result = await driver.executeQuery(cypher, parameters, { routing: neo4j.routing.WRITE });
   return mapRecords(result.records, map);
+}
+
+/** `readFirst`'s write-routed twin: a `CALL` procedure returns one summary row, or the graph had nothing to summarize. */
+export async function writeFirst<T>(
+  driver: Driver,
+  cypher: string,
+  parameters: Record<string, unknown>,
+  map: RowMapper<T>,
+): Promise<T | undefined> {
+  const rows = await runWrite(driver, cypher, parameters, map);
+  return rows[0];
 }
 
 export type WriteOutcome<T> = {
@@ -174,18 +244,6 @@ export class GraphConnection {
     } catch (err) {
       return { reachable: false, error: err instanceof Error ? err.message : String(err) };
     }
-  }
-
-  read<T>(cypher: string, parameters: Record<string, unknown>, map: RowMapper<T>): Promise<T[]> {
-    return runRead(this.#driver, cypher, parameters, map);
-  }
-
-  write<T>(cypher: string, parameters: Record<string, unknown>, map: RowMapper<T>): Promise<T[]> {
-    return runWrite(this.#driver, cypher, parameters, map);
-  }
-
-  inWriteTransaction<T>(work: (tx: GraphTransaction) => Promise<T>): Promise<T> {
-    return inWriteTransaction(this.#driver, work);
   }
 
   async close(): Promise<void> {

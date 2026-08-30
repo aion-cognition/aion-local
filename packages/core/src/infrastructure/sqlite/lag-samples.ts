@@ -35,11 +35,16 @@ export function recordEnrichmentLagMs(
   ms: number,
   windowSize: number = DEFAULT_LAG_SAMPLE_WINDOW,
 ): void {
-  const samples = readSamples(db);
-  samples.push(Math.max(0, Math.round(ms)));
-  const trimmed =
-    samples.length > windowSize ? samples.slice(samples.length - windowSize) : samples;
-  setMeta(db, LAG_SAMPLES_META_KEY, JSON.stringify(trimmed));
+  // The whole window is read, appended to in JS, and written back whole, so the read and the
+  // write are one unit: a recorder that interleaves overwrites the other's array and its
+  // sample is gone, not merely late.
+  db.transaction(() => {
+    const samples = readSamples(db);
+    samples.push(Math.max(0, Math.round(ms)));
+    const trimmed =
+      samples.length > windowSize ? samples.slice(samples.length - windowSize) : samples;
+    setMeta(db, LAG_SAMPLES_META_KEY, JSON.stringify(trimmed));
+  }).immediate();
 }
 
 export function listEnrichmentLagSamplesMs(db: SqliteHandle): readonly number[] {

@@ -1,3 +1,6 @@
+import { PROTECTED_RELATIONSHIP_TYPES } from './protected-relationships.js';
+import type { RelationshipType } from './relationships.js';
+
 /**
  * Companion labels are a schema contract, not decoration. `Memory` is the only mechanism
  * that lets one vector index cover several node types, because a Neo4j vector index cannot
@@ -33,6 +36,12 @@ export type NodeLabel =
  * plan as all-nodes scans. Migration 001 declares the uniqueness constraint behind it.
  */
 export const BASE_NODE_LABEL = 'AionNode';
+
+/** The label migration 001 hangs the vector and range indexes on; not a primary `NodeLabel` itself, only a companion. */
+export const MEMORY_LABEL = 'Memory';
+
+/** Spelled out because a `MATCH (n:${ENTITY_LABEL})` needs the literal, not the type. */
+export const ENTITY_LABEL: NodeLabel = 'Entity';
 
 export const NODE_LABELS: readonly NodeLabel[] = [
   'Session',
@@ -99,3 +108,9 @@ export function isContentBearing(primary: NodeLabel): boolean {
 export function isNodeLabel(value: string): value is NodeLabel {
   return (NODE_LABELS as readonly string[]).includes(value);
 }
+
+/** Reflection's provenance edge, which is what makes an episode enriched rather than pending. */
+export const EXTRACTION_TYPE: RelationshipType = 'EXTRACTED_FROM';
+
+/** The protected set as a Cypher label-list literal: `NOT type(r) IN [${BACKBONE_TYPES}]`. */
+export const BACKBONE_TYPES = PROTECTED_RELATIONSHIP_TYPES.map((type) => `'${type}'`).join(', ');

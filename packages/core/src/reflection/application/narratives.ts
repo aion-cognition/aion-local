@@ -1,6 +1,8 @@
 import type { Driver } from 'neo4j-driver';
 
 import { attachContentVectors } from './vectors.js';
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import { describeError } from '../../infrastructure/errors.js';
 import { supersede, writeStampedNodeInTransaction } from '../../infrastructure/graph/bitemporal.js';
 import { inWriteTransaction } from '../../infrastructure/graph/connection.js';
 import { upsertEdgeInTransaction } from '../../infrastructure/graph/edges.js';
@@ -48,16 +50,8 @@ import type { ReflectionStage, StageContext, StageOutcome } from '../domain/stag
 
 export const NARRATIVE_STAGE_NAME = 'narratives';
 
-/**
- * Pinned defaults for the reflection pipeline. The integration task threads config over the
- * ones config carries.
- */
-export const DEFAULT_NARRATIVE_MODEL = 'qwen3:8b';
-export const DEFAULT_SESSION_IDLE_MS = 30 * 60 * 1000;
-export const DEFAULT_NARRATIVE_TIMEOUT_MS = 60_000;
-export const DEFAULT_MAX_SOURCE_EPISODES = 40;
-export const DEFAULT_MAX_EPISODE_CHARS = 2_000;
-export const DEFAULT_IDLE_SWEEP_LIMIT = 20;
+/** The idle window in the unit the closer works in; config states it in minutes. */
+export const DEFAULT_SESSION_IDLE_MS = DEFAULTS.reflection.narrativeIdleMinutes * 60 * 1000;
 
 /** Provenance: what produced the node, as distinct from what later reads it. */
 export const NARRATIVE_EXTRACTION_METHOD = 'reflection_narrative';
@@ -110,21 +104,14 @@ type NarrativeSettings = {
 
 function settingsOf(options: NarrativeOptions): NarrativeSettings {
   return {
-    model: options.model ?? DEFAULT_NARRATIVE_MODEL,
+    model: options.model ?? DEFAULTS.models.reflect,
     idleMs: options.idleMs ?? DEFAULT_SESSION_IDLE_MS,
-    timeoutMs: options.timeoutMs ?? DEFAULT_NARRATIVE_TIMEOUT_MS,
-    maxSourceEpisodes: options.maxSourceEpisodes ?? DEFAULT_MAX_SOURCE_EPISODES,
-    maxEpisodeChars: options.maxEpisodeChars ?? DEFAULT_MAX_EPISODE_CHARS,
+    timeoutMs: options.timeoutMs ?? DEFAULTS.reflection.stageTimeoutMs,
+    maxSourceEpisodes: options.maxSourceEpisodes ?? DEFAULTS.reflection.maxNarrativeEpisodes,
+    maxEpisodeChars: options.maxEpisodeChars ?? DEFAULTS.reflection.maxNarrativeEpisodeChars,
     now: options.now ?? new Date(),
     regenerate: options.regenerate ?? false,
   };
-}
-
-function errorMessage(err: unknown): string {
-  if (err instanceof Error) {
-    return `${err.name}: ${err.message}`;
-  }
-  return String(err);
 }
 
 /**
@@ -326,7 +313,7 @@ async function narrateSession(
     deps.logger.warn({ err, sessionId, episodes: episodes.length }, 'narrative compression failed');
     return {
       status: 'failed',
-      summary: `narrative compression failed: ${errorMessage(err)}`,
+      summary: `narrative compression failed: ${describeError(err)}`,
       sessionId,
       episodes: episodes.length,
     };
@@ -407,7 +394,7 @@ export async function sweepIdleSessions(
   const settings = settingsOf(options);
   const idle = await findIdleSessions(deps.driver, {
     idleBefore: new Date(settings.now.getTime() - settings.idleMs),
-    limit: options.limit ?? DEFAULT_IDLE_SWEEP_LIMIT,
+    limit: options.limit ?? DEFAULTS.reflection.narrativeSweepLimit,
   });
 
   const results: NarrativeResult[] = [];

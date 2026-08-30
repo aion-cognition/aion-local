@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ReflectionDispatch, type ReflectionJobSignal } from './dispatch.js';
 import { ReflectionNotStoredError } from './errors.js';
 import { handleReflection, type ReflectionIntakeDeps } from './intake.js';
 import { LaneAssigner } from './lanes.js';
@@ -53,7 +52,7 @@ const PAYLOAD = {
 let graph: FakeGraph;
 let db: SqliteHandle;
 let dataDir: string;
-let signals: ReflectionJobSignal[];
+let enqueuedJobIds: string[];
 let embed: ReturnType<typeof vi.fn<Provider['embed']>>;
 let generate: ReturnType<typeof vi.fn<Provider['generate']>>;
 let deps: ReflectionIntakeDeps;
@@ -72,11 +71,7 @@ beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), 'aion-reflection-intake-'));
   db = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
 
-  signals = [];
-  const dispatch = new ReflectionDispatch();
-  dispatch.subscribe((signal) => {
-    signals.push(signal);
-  });
+  enqueuedJobIds = [];
 
   embed = vi.fn((texts: readonly string[]) => Promise.resolve(fakeVectors(texts)));
   generate = vi.fn(() => Promise.reject(new Error('intake must never call generate')));
@@ -86,7 +81,9 @@ beforeEach(() => {
     db,
     sessions: new SessionManager(graph.driver, { memberId: MEMBER_ID, workspaceId: WORKSPACE_ID }),
     provider: { embed, generate },
-    dispatch,
+    onJobEnqueued: (jobId: string) => {
+      enqueuedJobIds.push(jobId);
+    },
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: 4.5,
     lanes: new LaneAssigner(LANE_LIMITS),
@@ -116,7 +113,7 @@ describe('reflection intake dedupe', () => {
     expect(second.queued).toBe(true);
     expect(graph.nodes.size).toBe(nodesAfterFirst);
     expect(listReflectionJobs(db)).toHaveLength(1);
-    expect(signals).toHaveLength(1);
+    expect(enqueuedJobIds).toHaveLength(1);
     expect(embed).toHaveBeenCalledTimes(1);
   });
 
@@ -141,7 +138,7 @@ describe('reflection intake dedupe', () => {
 
     expect(second.episode_id).toBe(first.episode_id);
     expect(listReflectionJobs(db)).toHaveLength(1);
-    expect(signals).toHaveLength(2);
+    expect(enqueuedJobIds).toHaveLength(2);
   });
 
   it('stores the same payload again when it arrives in a different session', async () => {
@@ -178,7 +175,7 @@ describe('reflection intake store-before-embed order', () => {
 
     expect(episodesAtEmbedTime).toBe(1);
     expect(jobsAtEmbedTime).toBe(1);
-    expect(signals).toHaveLength(1);
+    expect(enqueuedJobIds).toHaveLength(1);
   });
 
   it('attaches a vector to the episode and to every turn', async () => {
@@ -239,7 +236,7 @@ describe('reflection intake when a dependency is down', () => {
     expect(graph.nodesWithLabel('Turn')).toHaveLength(2);
     expect(graph.edgesOfType('PARTICIPATES_IN')).toHaveLength(3);
     expect(listReflectionJobs(db)).toHaveLength(1);
-    expect(signals).toHaveLength(1);
+    expect(enqueuedJobIds).toHaveLength(1);
   });
 
   it('leaves every pending node findable, so a later drain can backfill it', async () => {

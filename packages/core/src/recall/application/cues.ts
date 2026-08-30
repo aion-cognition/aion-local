@@ -2,6 +2,7 @@ import type { Cue, CueSource, CueWeight, Degradation, RecallTurn } from '@aion/p
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
+import { isAbortError } from '../../infrastructure/errors.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../infrastructure/providers/types.js';
 
@@ -176,10 +177,6 @@ function cacheKey(input: CueExtractionInput, model: string): string {
     .join('\u0001');
   const raw = [model, input.query, input.summary ?? '', turns].join('\u0002');
   return createHash('sha256').update(raw).digest('hex');
-}
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === 'AbortError';
 }
 
 type CueModelCallResult =

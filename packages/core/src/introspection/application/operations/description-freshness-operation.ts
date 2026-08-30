@@ -1,6 +1,5 @@
 import { z } from 'zod';
 
-import { reflectProvider, type ProviderFactory } from './routed-generation.js';
 import {
   findEntityMentionContexts,
   findStaleDescriptionEntities,
@@ -67,10 +66,6 @@ function buildMessages(
   ];
 }
 
-export type DescriptionFreshnessOverrides = {
-  readonly buildProvider?: ProviderFactory;
-};
-
 /**
  * Standing relevance, like `memory_decay`: candidates are counted fresh inside `run`, not
  * carried in the health snapshot, so relevance answers from the same waiting-time cadence
@@ -78,11 +73,7 @@ export type DescriptionFreshnessOverrides = {
  */
 export const DESCRIPTION_FRESHNESS_STANDING_RELEVANCE = 0.15;
 
-export function descriptionFreshnessOperation(
-  overrides: DescriptionFreshnessOverrides = {},
-): IntrospectionOperation {
-  const buildProvider = overrides.buildProvider ?? reflectProvider;
-
+export function descriptionFreshnessOperation(): IntrospectionOperation {
   return {
     name: DESCRIPTION_FRESHNESS_OPERATION,
     bucket: 'hour',
@@ -94,7 +85,6 @@ export function descriptionFreshnessOperation(
         limit: batch,
       });
 
-      const provider = buildProvider(ctx.config);
       let refreshed = 0;
       let failed = 0;
 
@@ -113,9 +103,9 @@ export function descriptionFreshnessOperation(
           const controller = new AbortController();
           const timer = setTimeout(() => {
             controller.abort();
-          }, ctx.config.reflection.entityTimeoutMs);
+          }, ctx.config.reflection.stageTimeoutMs);
           try {
-            const raw = await provider.generate({
+            const raw = await ctx.provider.generate({
               model: ctx.config.models.reflect,
               messages: buildMessages(entity, contexts),
               schema: DESCRIPTION_JSON_SCHEMA,
@@ -140,7 +130,7 @@ export function descriptionFreshnessOperation(
           continue;
         }
 
-        const [contentVector] = await provider.embed([description]);
+        const [contentVector] = await ctx.provider.embed([description]);
         if (contentVector === undefined) {
           failed += 1;
           continue;

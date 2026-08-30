@@ -1,10 +1,10 @@
-import neo4j, { type Driver } from 'neo4j-driver';
+import type { Driver } from 'neo4j-driver';
 
-import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
-import { runRead, type GraphStatement } from './connection.js';
+import { BITEMPORAL_PROPERTIES, currentOnly } from './bitemporal.js';
+import { runRead } from './connection.js';
 import { CONTAINMENT_TYPE } from './episodes.js';
 import { DERIVES_FROM_TYPE, NARRATIVE_PROPERTIES } from './narrative-queries.js';
-import type { Row } from './values.js';
+import { toGraphInteger, type Row } from './values.js';
 
 /**
  * The two structural pathologies `narrative_cleanup` repairs without a model call. Duplicates
@@ -15,10 +15,6 @@ import type { Row } from './values.js';
  * narratives whose session no longer holds a single live episode to have grounded them: every
  * episode that could justify the claim was later forgotten.
  */
-
-function toGraphInteger(value: number): unknown {
-  return neo4j.int(Math.trunc(value));
-}
 
 export type DuplicateNarrativeVersion = {
   readonly id: string;
@@ -33,7 +29,7 @@ export type DuplicateNarrativeGroup = {
 
 const FIND_DUPLICATE_NARRATIVE_SESSIONS = [
   `MATCH (n:Narrative)-[:${DERIVES_FROM_TYPE}]->(s:Session)`,
-  `WHERE n.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL AND n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
+  `WHERE ${currentOnly('n')}`,
   `WITH s, collect({ id: n.id, version: n.${NARRATIVE_PROPERTIES.version},` +
     ` coverage_count: n.${NARRATIVE_PROPERTIES.coverageCount} }) AS versions`,
   'WHERE size(versions) > 1',
@@ -63,14 +59,14 @@ export async function findDuplicateNarrativeSessions(
   if (limit <= 0) {
     return [];
   }
-  const statement: GraphStatement = {
-    cypher: FIND_DUPLICATE_NARRATIVE_SESSIONS,
-    parameters: { limit: toGraphInteger(limit) },
-  };
-  return runRead(driver, statement.cypher, statement.parameters, (row) => ({
-    sessionId: row.session_id as string,
-    versions: Array.isArray(row.versions) ? row.versions.map(readVersion) : [],
-  }));
+  return runRead(
+    driver,
+    { cypher: FIND_DUPLICATE_NARRATIVE_SESSIONS, parameters: { limit: toGraphInteger(limit) } },
+    (row) => ({
+      sessionId: row.session_id as string,
+      versions: Array.isArray(row.versions) ? row.versions.map(readVersion) : [],
+    }),
+  );
 }
 
 export type OrphanedNarrative = {
@@ -80,7 +76,7 @@ export type OrphanedNarrative = {
 
 const FIND_ORPHANED_NARRATIVES = [
   `MATCH (n:Narrative)-[:${DERIVES_FROM_TYPE}]->(s:Session)`,
-  `WHERE n.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL AND n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
+  `WHERE ${currentOnly('n')}`,
   '  AND NOT EXISTS {',
   `    MATCH (e:Episode)-[:${CONTAINMENT_TYPE}]->(s)`,
   `    WHERE e.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
@@ -97,12 +93,12 @@ export async function findOrphanedNarratives(
   if (limit <= 0) {
     return [];
   }
-  const statement: GraphStatement = {
-    cypher: FIND_ORPHANED_NARRATIVES,
-    parameters: { limit: toGraphInteger(limit) },
-  };
-  return runRead(driver, statement.cypher, statement.parameters, (row) => ({
-    id: row.id as string,
-    sessionId: row.session_id as string,
-  }));
+  return runRead(
+    driver,
+    { cypher: FIND_ORPHANED_NARRATIVES, parameters: { limit: toGraphInteger(limit) } },
+    (row) => ({
+      id: row.id as string,
+      sessionId: row.session_id as string,
+    }),
+  );
 }

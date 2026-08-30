@@ -5,7 +5,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { ProviderRouter, type GenerationEvent } from './role-provider.js';
 import { resolveProviderRouting } from './routing.js';
-import { ReflectionDispatch } from '../../reflection/application/dispatch.js';
 import {
   handleReflection,
   type ReflectionIntakeDeps,
@@ -104,7 +103,6 @@ beforeAll(async () => {
     }),
     // Intake embeds and never generates, so this is the local model under either route.
     provider: router.forRole('reflect'),
-    dispatch: new ReflectionDispatch(),
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),

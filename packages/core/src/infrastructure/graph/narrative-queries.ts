@@ -1,12 +1,12 @@
-import neo4j, { type Driver } from 'neo4j-driver';
+import type { Driver } from 'neo4j-driver';
 
-import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
+import { BITEMPORAL_PROPERTIES, closeFragment, currentOnly } from './bitemporal.js';
 import { runRead, runWrite, type GraphStatement } from './connection.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from './episodes.js';
 import { BASE_NODE_LABEL, type NodeLabel } from './labels.js';
 import { readModeFragment, withCurrency } from './read-modes.js';
 import type { RelationshipType } from './relationships.js';
-import { toGraphDateTime, type Row } from './values.js';
+import { toGraphDateTime, toGraphInteger, type Row } from './values.js';
 
 /**
  * The reads narrative compression needs: the episodes a session accumulated, the
@@ -88,11 +88,6 @@ export type IdleSession = {
   readonly episodeCount: number;
 };
 
-/** Procedure arguments and `LIMIT` are Cypher INTEGER; a plain JS number arrives as FLOAT and is rejected. */
-function toGraphInteger(value: number): unknown {
-  return neo4j.int(Math.trunc(value));
-}
-
 function asOptionalText(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
@@ -141,8 +136,7 @@ export async function loadSessionEpisodes(
   driver: Driver,
   sessionId: string,
 ): Promise<SessionEpisode[]> {
-  const statement = sessionEpisodesStatement(sessionId);
-  return runRead(driver, statement.cypher, statement.parameters, readSessionEpisode);
+  return runRead(driver, sessionEpisodesStatement(sessionId), readSessionEpisode);
 }
 
 /**
@@ -207,7 +201,7 @@ const FIND_IDLE_SESSIONS = [
   `WITH s, max(e.${BITEMPORAL_PROPERTIES.txFrom}) AS last_activity, count(e) AS episode_count`,
   'WHERE last_activity <= $idleBefore',
   `OPTIONAL MATCH (n:Narrative)-[:${DERIVES_FROM_TYPE}]->(s)`,
-  `WHERE n.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL AND n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
+  `WHERE ${currentOnly('n')}`,
   `WITH s, last_activity, episode_count, max(n.${NARRATIVE_PROPERTIES.coverageCount}) AS covered`,
   'WHERE covered IS NULL OR covered < episode_count',
   'RETURN s.id AS session_id, last_activity, episode_count',
@@ -263,8 +257,7 @@ export async function loadSessionSourceNodes(
   driver: Driver,
   sessionId: string,
 ): Promise<SessionSourceNode[]> {
-  const statement = sessionSourceNodesStatement(sessionId);
-  return runRead(driver, statement.cypher, statement.parameters, (row) => ({
+  return runRead(driver, sessionSourceNodesStatement(sessionId), (row) => ({
     id: row.id as string,
     kind: typeof row.kind === 'string' ? row.kind.toLowerCase() : 'note',
     text: typeof row.text === 'string' ? row.text : '',
@@ -286,8 +279,7 @@ export type StaleNarrative = {
  */
 const FIND_STALE_NARRATIVES = [
   `MATCH (n:Narrative)-[:${DERIVES_FROM_TYPE}]->(s:Session)`,
-  `WHERE n.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
-  `  AND n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
+  `WHERE ${currentOnly('n')}`,
   `  AND coalesce(n.${NARRATIVE_PROPERTIES.grounding}, '') <> $grounding`,
   `OPTIONAL MATCH (e:Episode)-[:${CONTAINMENT_TYPE}]->(s)`,
   `  WHERE e.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
@@ -325,8 +317,7 @@ export async function findStaleNarratives(
 const FORGET_NARRATIVE = [
   'MATCH (n:Narrative { id: $id })',
   `SET n.${BITEMPORAL_PROPERTIES.forgottenAt} = coalesce(n.${BITEMPORAL_PROPERTIES.forgottenAt}, $now),`,
-  `    n.${BITEMPORAL_PROPERTIES.validUntil} = coalesce(n.${BITEMPORAL_PROPERTIES.validUntil}, $now),`,
-  `    n.${BITEMPORAL_PROPERTIES.txUntil} = coalesce(n.${BITEMPORAL_PROPERTIES.txUntil}, $now)`,
+  `    ${closeFragment('n')}`,
   'RETURN n.id AS id',
 ].join('\n');
 
@@ -379,8 +370,7 @@ const MARK_NARRATIVES_REGROUND = [
   'WITH coalesce(source, CASE WHEN closed:Episode THEN closed ELSE null END) AS episode',
   'WHERE episode IS NOT NULL',
   `MATCH (episode)-[:${CONTAINMENT_TYPE}]->(s:Session)<-[:${DERIVES_FROM_TYPE}]-(n:Narrative)`,
-  `WHERE n.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
-  `  AND n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
+  `WHERE ${currentOnly('n')}`,
   `  AND coalesce(n.${NARRATIVE_PROPERTIES.grounding}, '') <> $marker`,
   `SET n.${NARRATIVE_PROPERTIES.grounding} = $marker`,
   'RETURN DISTINCT n.id AS id',

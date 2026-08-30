@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { SqliteHandle } from './database.js';
+import { proposalTable } from './proposal-table.js';
 
 /**
  * Cross-type near-duplicates found by the dedup stage. Uniqueness is on `(name_norm, type)`,
@@ -69,6 +70,12 @@ function toEntityMergeProposal(row: EntityMergeProposalRow): EntityMergeProposal
   };
 }
 
+const proposals = proposalTable<EntityMergeProposalRow, EntityMergeProposal>({
+  table: 'entity_merge_proposals',
+  pairColumns: ['left_id', 'right_id'],
+  mapRow: toEntityMergeProposal,
+});
+
 /**
  * Idempotent on the id-sorted pair: the same two entities detected again from either side
  * refresh the row rather than adding one, so a stage re-run after a crash before the ledger
@@ -123,31 +130,19 @@ export function getEntityMergeProposal(
   db: SqliteHandle,
   id: string,
 ): EntityMergeProposal | undefined {
-  const row = db.prepare('SELECT * FROM entity_merge_proposals WHERE id = ?').get(id) as
-    EntityMergeProposalRow | undefined;
-  return row === undefined ? undefined : toEntityMergeProposal(row);
+  return proposals.get(db, id);
 }
 
 /** Ordered by insertion (rowid), not created_at: same-millisecond bursts would tie on the latter. */
 export function listEntityMergeProposals(db: SqliteHandle): EntityMergeProposal[] {
-  const rows = db
-    .prepare('SELECT * FROM entity_merge_proposals ORDER BY rowid ASC')
-    .all() as EntityMergeProposalRow[];
-  return rows.map(toEntityMergeProposal);
+  return proposals.list(db);
 }
 
 export function findEntityMergeProposalsForNode(
   db: SqliteHandle,
   nodeId: string,
 ): EntityMergeProposal[] {
-  const rows = db
-    .prepare(
-      `SELECT * FROM entity_merge_proposals
-       WHERE left_id = ? OR right_id = ?
-       ORDER BY rowid ASC`,
-    )
-    .all(nodeId, nodeId) as EntityMergeProposalRow[];
-  return rows.map(toEntityMergeProposal);
+  return proposals.findForNode(db, nodeId);
 }
 
 /** Returns false when the id is unknown or the proposal was already resolved. */
@@ -156,18 +151,10 @@ export function resolveEntityMergeProposal(
   id: string,
   resolvedAt: string = new Date().toISOString(),
 ): boolean {
-  const result = db
-    .prepare(
-      'UPDATE entity_merge_proposals SET resolved_at = ? WHERE id = ? AND resolved_at IS NULL',
-    )
-    .run(resolvedAt, id);
-  return result.changes > 0;
+  return proposals.resolve(db, id, resolvedAt);
 }
 
 /** Open proposals only: a resolved row is a decision already made, not a queue for anyone. */
 export function countOpenEntityMergeProposals(db: SqliteHandle): number {
-  const row = db
-    .prepare('SELECT COUNT(*) AS count FROM entity_merge_proposals WHERE resolved_at IS NULL')
-    .get() as { count: number };
-  return row.count;
+  return proposals.countOpen(db);
 }

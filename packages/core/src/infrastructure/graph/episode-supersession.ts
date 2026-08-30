@@ -2,14 +2,12 @@ import type { Driver } from 'neo4j-driver';
 
 import {
   BITEMPORAL_PROPERTIES,
+  currentOnly,
   supersedeInTransaction,
   type SupersedeResult,
 } from './bitemporal.js';
 import { inWriteTransaction, runRead, type GraphTransaction } from './connection.js';
-import { upsertEdgeInTransaction } from './edges.js';
-import { BASE_NODE_LABEL } from './labels.js';
 import { SUPERSEDES_TYPE } from './relationships.js';
-import { toGraphDateTime } from './values.js';
 
 /**
  * Closing an Episode leaves the facts extracted from it open, so recall keeps serving the
@@ -33,21 +31,13 @@ const EPISODE_PROPAGATION_SIGNALS = ['episode_supersession'];
 const DERIVED_NODES_OF_CLOSED_EPISODE = [
   'MATCH (n)-[:EXTRACTED_FROM]->(old:Episode { id: $episodeId })',
   `WHERE old.${BITEMPORAL_PROPERTIES.validUntil} IS NOT NULL`,
-  `  AND n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
-  `  AND n.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  `  AND ${currentOnly('n')}`,
   '  AND NOT EXISTS {',
   '    MATCH (n)-[:EXTRACTED_FROM]->(other:Episode)',
   `    WHERE other.id <> $episodeId AND other.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
   '  }',
   'RETURN n.id AS id',
   'ORDER BY n.id',
-].join('\n');
-
-const CLOSE_DERIVED_NODE = [
-  `MATCH (n:${BASE_NODE_LABEL} { id: $id })`,
-  `SET n.${BITEMPORAL_PROPERTIES.validUntil} = coalesce(n.${BITEMPORAL_PROPERTIES.validUntil}, $now),`,
-  `    n.${BITEMPORAL_PROPERTIES.txUntil} = coalesce(n.${BITEMPORAL_PROPERTIES.txUntil}, $now)`,
-  'RETURN n.id AS id',
 ].join('\n');
 
 /** The replacement recorded against a closed Episode, so a repair pass can find it. */
@@ -63,8 +53,7 @@ const SUCCESSOR_OF_EPISODE = [
  * node-level judgment into the episode-level correction that closes the whole family. */
 const SOURCE_EPISODE_OF_NODE = [
   'MATCH (n { id: $nodeId })-[:EXTRACTED_FROM]->(e:Episode)',
-  `WHERE e.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
-  `  AND e.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  `WHERE ${currentOnly('e')}`,
   'RETURN e.id AS id',
   'ORDER BY e.id',
   'LIMIT 1',
@@ -112,19 +101,14 @@ async function closeDerivedFamily(
   );
 
   for (const id of derived) {
-    await tx.run(CLOSE_DERIVED_NODE, { id, now: toGraphDateTime(now) }, (row) => row.id as string);
     // The successor is the episode, not a sibling fact: nothing in the new episode restates
     // the closed claim, and a closed node with no lineage is a state the substrate forbids.
-    await upsertEdgeInTransaction(tx, {
-      type: SUPERSEDES_TYPE,
-      sourceId: supersededBy,
-      targetId: id,
-      strength: 1,
-      confidence: 1,
+    await supersedeInTransaction(tx, {
+      oldId: id,
+      newId: supersededBy,
+      now,
       signals: EPISODE_PROPAGATION_SIGNALS,
       provenance: [EPISODE_PROPAGATION_METHOD],
-      count: 0,
-      now,
     });
   }
 

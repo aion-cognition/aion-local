@@ -1,6 +1,5 @@
 import { z } from 'zod';
 
-import { reflectProvider, type ProviderFactory } from './routed-generation.js';
 import {
   countBridgesBetween,
   findClosestCrossCommunityPair,
@@ -11,8 +10,7 @@ import {
   readCommunityPairEdges,
   readCommunityProfiles,
 } from '../../../infrastructure/graph/community-queries.js';
-import { OllamaProvider } from '../../../infrastructure/providers/ollama-provider.js';
-import type { ChatMessage, JsonSchema, Vector } from '../../../infrastructure/providers/types.js';
+import type { ChatMessage, JsonSchema } from '../../../infrastructure/providers/types.js';
 import { rankCommunityPairs, type CommunityPairScore } from '../../domain/bridge-pairs.js';
 import {
   CRITICAL_MIN_POPULATION,
@@ -85,16 +83,6 @@ const SYSTEM_PROMPT = [
 
 const ENDPOINT_EXCERPT_CHARS = 400;
 
-/** The local embedder, which is what the bridge's own text is vectorized with. */
-export type BridgeEmbedder = (texts: readonly string[]) => Promise<Vector[]>;
-
-export type SymbiosisBridgeOptions = {
-  /** Test seam. Unset, the operation embeds through the configured local model. */
-  readonly embed?: BridgeEmbedder;
-  /** Test seam. Unset, the bridge sentence follows the `reflect` role like every other generation. */
-  readonly buildProvider?: ProviderFactory;
-};
-
 export function symbiosisBridgeRelevance(health: HealthSnapshot): number {
   if (health.degraded.includes(HEALTH_COLLECTORS.graph)) {
     return 0;
@@ -103,14 +91,6 @@ export function symbiosisBridgeRelevance(health: HealthSnapshot): number {
     return 0;
   }
   return SYMBIOSIS_BRIDGE_RELEVANCE;
-}
-
-function defaultEmbedder(ctx: OperationContext): BridgeEmbedder {
-  const provider = new OllamaProvider({
-    baseUrl: ctx.config.ollama.url,
-    embedModel: ctx.config.models.embed,
-  });
-  return (texts) => provider.embed(texts);
 }
 
 function clip(text: string, maxChars: number): string {
@@ -157,7 +137,6 @@ function buildMessages(pair: CommunityPairScore, closest: CrossCommunityPair): C
  */
 async function proposeBridgeText(
   ctx: OperationContext,
-  buildProvider: ProviderFactory,
   pair: CommunityPairScore,
   closest: CrossCommunityPair,
 ): Promise<BridgeText> {
@@ -165,9 +144,9 @@ async function proposeBridgeText(
   const controller = new AbortController();
   const timer = setTimeout(() => {
     controller.abort();
-  }, ctx.config.reflection.semanticTimeoutMs);
+  }, ctx.config.reflection.stageTimeoutMs);
   try {
-    const raw = await buildProvider(ctx.config).generate({
+    const raw = await ctx.provider.generate({
       model: ctx.config.models.reflect,
       messages: buildMessages(pair, closest),
       schema: BRIDGE_JSON_SCHEMA,
@@ -228,11 +207,7 @@ async function selectCandidate(
   return undefined;
 }
 
-async function runSymbiosisBridge(
-  ctx: OperationContext,
-  embed: BridgeEmbedder,
-  buildProvider: ProviderFactory,
-): Promise<OperationOutcome> {
+async function runSymbiosisBridge(ctx: OperationContext): Promise<OperationOutcome> {
   const profiles = await readCommunityProfiles(
     ctx.driver,
     ctx.config.maintenance.bridgeMinCommunitySize,
@@ -266,8 +241,9 @@ async function runSymbiosisBridge(
     return noop('shutting down before the bridge was written', processed);
   }
 
-  const text = await proposeBridgeText(ctx, buildProvider, pair, closest);
-  const vectors = await embed([text.summary]);
+  const text = await proposeBridgeText(ctx, pair, closest);
+  // The role provider embeds through the configured local model whatever `generate` routes to.
+  const vectors = await ctx.provider.embed([text.summary]);
   const vector = vectors[0];
   if (vector?.length !== ctx.config.models.embedDimension) {
     // A bridge with a mis-dimensioned vector is worse than no bridge: the vector index takes
@@ -309,18 +285,11 @@ async function runSymbiosisBridge(
  * claims it before the operation starts, so a second service instance on the same substrate
  * cannot write a second bridge into the same window.
  */
-export function symbiosisBridgeOperation(
-  options: SymbiosisBridgeOptions = {},
-): IntrospectionOperation {
+export function symbiosisBridgeOperation(): IntrospectionOperation {
   return {
     name: SYMBIOSIS_BRIDGE_OPERATION,
     bucket: 'day',
     relevance: symbiosisBridgeRelevance,
-    run: async (ctx): Promise<OperationOutcome> =>
-      runSymbiosisBridge(
-        ctx,
-        options.embed ?? defaultEmbedder(ctx),
-        options.buildProvider ?? reflectProvider,
-      ),
+    run: async (ctx): Promise<OperationOutcome> => runSymbiosisBridge(ctx),
   };
 }

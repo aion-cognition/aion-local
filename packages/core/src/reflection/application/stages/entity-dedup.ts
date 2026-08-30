@@ -1,3 +1,4 @@
+import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import {
   clearEntityVectors,
   findSimilarCurrentEntities,
@@ -39,9 +40,6 @@ import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/s
 
 export const ENTITY_DEDUP_STAGE_NAME = 'entity-dedup';
 
-/** The default threshold. Callers thread a configured value into this field. */
-export const DEFAULT_ENTITY_DEDUP_SIMILARITY_THRESHOLD = 0.85;
-
 /**
  * Enough to catch a genuine near-duplicate without turning one entity into a graph-wide scan.
  * The candidates span every type, because one real thing has been seen wearing four of them
@@ -72,7 +70,7 @@ export class EntityDedupStage implements ReflectionStage {
 
   constructor(options: Partial<EntityDedupStageOptions> = {}) {
     this.#options = {
-      similarityThreshold: DEFAULT_ENTITY_DEDUP_SIMILARITY_THRESHOLD,
+      similarityThreshold: DEFAULTS.reflection.entityDedupThreshold,
       ...options,
     };
   }

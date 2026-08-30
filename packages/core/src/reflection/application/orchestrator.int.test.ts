@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { ReflectionDispatch } from './dispatch.js';
 import { handleReflection, type ReflectionIntakeDeps } from './intake.js';
 import { LaneAssigner } from './lanes.js';
 import { orchestratorLedgerKey, ReflectionOrchestrator } from './orchestrator.js';
@@ -138,7 +137,6 @@ beforeAll(async () => {
       baseUrl: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
       embedModel: DEFAULTS.models.embed,
     }),
-    dispatch: new ReflectionDispatch(),
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),

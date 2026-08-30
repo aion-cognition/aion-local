@@ -52,8 +52,6 @@ export const ReflectionLaneSchema = z
   .enum(['interactive', 'bulk'])
   .describe('bulk queues this episode behind live turns; omit for interactive');
 
-export type ReflectionLaneInput = z.infer<typeof ReflectionLaneSchema>;
-
 const ReflectionPayloadSchema = z.strictObject({
   turns: z.array(ReflectionTurnSchema).optional(),
   tool_executions: z.array(ToolExecutionSchema).optional(),

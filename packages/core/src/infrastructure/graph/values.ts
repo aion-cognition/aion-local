@@ -27,6 +27,11 @@ export function toGraphVector(vector: Vector): number[] {
   return Array.from(vector);
 }
 
+/** Procedure arguments and `LIMIT` are Cypher INTEGER; a plain JS number arrives as FLOAT and is rejected. */
+export function toGraphInteger(value: number): unknown {
+  return neo4j.int(Math.trunc(value));
+}
+
 export function fromGraphVector(value: unknown): number[] | undefined {
   const coerced = coerceGraphValue(value);
   if (!Array.isArray(coerced)) {

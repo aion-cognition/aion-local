@@ -1,13 +1,14 @@
-import neo4j, { type Driver } from 'neo4j-driver';
+import type { Driver } from 'neo4j-driver';
 
-import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
+import { currentOnly } from './bitemporal.js';
 import { TEXT_NORM_PROPERTY, type CognitiveNodeLabel } from './cognitive-queries.js';
 import { runRead, type GraphStatement } from './connection.js';
 import { ENTITY_MENTION_TYPE } from './entity-queries.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
 import { readModeFragment, withCurrency } from './read-modes.js';
 import { ENTITY_NAME_NORM_PROPERTY } from './seed-queries.js';
-import { fromGraphVector, toGraphVector, type Row } from './values.js';
+import { fromGraphVector, toGraphInteger, toGraphVector, type Row } from './values.js';
+import { asCosine } from './vector-indexes.js';
 import type { Vector } from '../providers/types.js';
 
 /**
@@ -48,11 +49,6 @@ export function isFactNodeLabel(value: string): value is FactNodeLabel {
 /** Appendix B provenance: which pipeline path closed the old node. */
 export const SUPERSESSION_METHOD = 'reflection_supersession';
 
-/** Procedure arguments and `LIMIT` are Cypher INTEGER; a plain JS number arrives as FLOAT and is rejected. */
-function toGraphInteger(value: number): unknown {
-  return neo4j.int(Math.trunc(value));
-}
-
 export type EpisodeFactNode = {
   readonly id: string;
   readonly label: FactNodeLabel;
@@ -63,7 +59,7 @@ export type EpisodeFactNode = {
   readonly contentVector?: Vector;
 };
 
-function episodeFactNodesStatement(): GraphStatement {
+function episodeFactNodesStatement(episodeId: string): GraphStatement {
   const fragment = readModeFragment(withCurrency(), 'n');
   return {
     cypher: [
@@ -74,7 +70,7 @@ function episodeFactNodesStatement(): GraphStatement {
       `       n.${MEMORY_PROPERTIES.contentVector} AS content_vec`,
       `ORDER BY n.${TEXT_NORM_PROPERTY}, n.id`,
     ].join('\n'),
-    parameters: fragment.parameters,
+    parameters: { episodeId, labels: [...FACT_NODE_LABELS], ...fragment.parameters },
   };
 }
 
@@ -87,13 +83,7 @@ export async function findEpisodeFactNodes(
   driver: Driver,
   episodeId: string,
 ): Promise<EpisodeFactNode[]> {
-  const statement = episodeFactNodesStatement();
-  const rows = await runRead(
-    driver,
-    statement.cypher,
-    { ...statement.parameters, episodeId, labels: [...FACT_NODE_LABELS] },
-    mapEpisodeFactNode,
-  );
+  const rows = await runRead(driver, episodeFactNodesStatement(episodeId), mapEpisodeFactNode);
   return rows.filter((row): row is EpisodeFactNode => row !== undefined);
 }
 
@@ -166,15 +156,13 @@ function mapVectorCandidate(row: Row): ContradictionCandidate | undefined {
  */
 const SUBJECT_IDENTITY_CANDIDATES = [
   `MATCH (:Episode { id: $episodeId })-[:${ENTITY_MENTION_TYPE}]->(e:Entity)`,
-  `WHERE e.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
-  `  AND e.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  `WHERE ${currentOnly('e')}`,
   `  AND size(e.${ENTITY_NAME_NORM_PROPERTY}) >= $minNameLength`,
   `  AND $subjectTextNorm CONTAINS e.${ENTITY_NAME_NORM_PROPERTY}`,
   `WITH collect(DISTINCT e.id) AS subjectIds, collect(DISTINCT e.${ENTITY_NAME_NORM_PROPERTY}) AS names`,
   'WITH subjectIds, names WHERE size(subjectIds) > 0',
   `MATCH (n:${FACT_LABEL_EXPRESSION})`,
-  `WHERE n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
-  `  AND n.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  `WHERE ${currentOnly('n')}`,
   '  AND NOT n.id IN $excludeIds',
   `  AND (head([name IN names WHERE n.${TEXT_NORM_PROPERTY} CONTAINS name]) IS NOT NULL`,
   '       OR EXISTS {',
@@ -184,7 +172,7 @@ const SUBJECT_IDENTITY_CANDIDATES = [
   `WITH n, names, [label IN labels(n) WHERE label IN $labels][0] AS label,`,
   `     CASE WHEN n.${MEMORY_PROPERTIES.contentVector} IS NOT NULL`,
   `          AND size(n.${MEMORY_PROPERTIES.contentVector}) = $dimension`,
-  `          THEN (2.0 * vector.similarity.cosine(n.${MEMORY_PROPERTIES.contentVector}, $vector) - 1.0)`,
+  `          THEN ${asCosine(`vector.similarity.cosine(n.${MEMORY_PROPERTIES.contentVector}, $vector)`)}`,
   '          ELSE 0.0 END AS score',
   `RETURN n.id AS id, label, n.${MEMORY_PROPERTIES.text} AS text, score,`,
   `       head([name IN names WHERE n.${TEXT_NORM_PROPERTY} CONTAINS name]) AS shared_subject`,
@@ -239,13 +227,12 @@ export async function findSubjectIdentityCandidates(
  */
 const CONTRADICTION_CANDIDATES = [
   `MATCH (n:${FACT_LABEL_EXPRESSION})`,
-  `WHERE n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
-  `  AND n.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  `WHERE ${currentOnly('n')}`,
   '  AND NOT n.id IN $excludeIds',
   `  AND n.${MEMORY_PROPERTIES.contentVector} IS NOT NULL`,
   `  AND size(n.${MEMORY_PROPERTIES.contentVector}) = $dimension`,
   `WITH n, [label IN labels(n) WHERE label IN $labels][0] AS label,`,
-  `     (2.0 * vector.similarity.cosine(n.${MEMORY_PROPERTIES.contentVector}, $vector) - 1.0) AS score`,
+  `     ${asCosine(`vector.similarity.cosine(n.${MEMORY_PROPERTIES.contentVector}, $vector)`)} AS score`,
   'WHERE score >= $threshold',
   `RETURN n.id AS id, label, n.${MEMORY_PROPERTIES.text} AS text, score, null AS shared_subject`,
   'ORDER BY score DESC, n.id',

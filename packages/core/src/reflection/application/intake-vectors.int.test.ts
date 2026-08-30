@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { ReflectionDispatch, type ReflectionJobSignal } from './dispatch.js';
 import { ReflectionNotStoredError } from './errors.js';
 import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
 import { LaneAssigner } from './lanes.js';
@@ -71,7 +70,7 @@ let harness: Neo4jHarness;
 let deadGraph: Driver;
 let db: SqliteHandle;
 let dataDir: string;
-let signals: ReflectionJobSignal[];
+let enqueuedJobIds: string[];
 let live: ReflectionIntakeDeps;
 let deadOllama: ReflectionIntakeDeps;
 let deadNeo4j: ReflectionIntakeDeps;
@@ -99,15 +98,13 @@ beforeAll(async () => {
   const backbone = await bootstrapBackbone(harness.driver, { memberName: 'Test User' });
   const backboneIds = { memberId: backbone.member.id, workspaceId: backbone.workspace.id };
 
-  signals = [];
-  const dispatch = new ReflectionDispatch();
-  dispatch.subscribe((signal) => {
-    signals.push(signal);
-  });
+  enqueuedJobIds = [];
 
   const shared = {
     db,
-    dispatch,
+    onJobEnqueued: (jobId: string) => {
+      enqueuedJobIds.push(jobId);
+    },
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
@@ -178,12 +175,13 @@ describe('reflection intake through a total Ollama outage', () => {
     ).toBe(1);
   });
 
-  it('queues the integrate job and signals the dispatcher', async () => {
+  it('queues the integrate job and wakes the worker for it', async () => {
     const jobs = await jobsForSession(PENDING_IDENTITY);
 
     expect(jobs).toHaveLength(1);
     expect(jobs[0]?.jobType).toBe(INTEGRATE_JOB_TYPE);
-    expect(signals.map((signal) => signal.episodeId)).toContain(pendingEpisodeId);
+    expect(jobs[0]?.payload).toEqual({ episode_id: pendingEpisodeId });
+    expect(enqueuedJobIds).toContain(jobs[0]?.id);
   });
 
   it('leaves the episode and every turn without a content vector', async () => {
@@ -248,6 +246,7 @@ describe('backfilling the pending vectors once Ollama is back', () => {
  */
 describe('reflection intake against an unreachable graph', () => {
   it('refuses with the named error and writes nothing', async () => {
+    const wakeupsBeforeRefusal = enqueuedJobIds.length;
     const failure = await handleReflection(deadNeo4j, OUTAGE_PAYLOAD, {
       identity: REFUSED_IDENTITY,
     }).then(
@@ -262,6 +261,7 @@ describe('reflection intake against an unreachable graph', () => {
     expect(await countNodesInSession(harness.driver, 'Episode', REFUSED_IDENTITY)).toBe(0);
     expect(await countNodesInSession(harness.driver, 'Turn', REFUSED_IDENTITY)).toBe(0);
     expect(await jobsForSession(REFUSED_IDENTITY)).toHaveLength(0);
-    expect(signals.map((signal) => signal.sessionId)).not.toContain(REFUSED_IDENTITY);
+    // No job, so no wakeup: the refusal costs the worker nothing to claim.
+    expect(enqueuedJobIds).toHaveLength(wakeupsBeforeRefusal);
   });
 });

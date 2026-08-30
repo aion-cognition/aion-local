@@ -5,14 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import {
-  MissingOptionValueError,
-  parseLastFlags,
-  renderPack,
-  renderSessionList,
-  runLast,
-  UnknownOptionError,
-} from './last.js';
+import { parseLastFlags, renderPack, renderSessionList, runLast } from './last.js';
 
 function collector(): { lines: string[]; write: (line: string) => void } {
   const lines: string[] = [];
@@ -127,11 +120,13 @@ describe('parseLastFlags', () => {
   });
 
   it('rejects --session with no value', () => {
-    expect(() => parseLastFlags(['--session'])).toThrow(MissingOptionValueError);
+    expect(() => parseLastFlags(['--session'])).toThrow('--session needs a value');
   });
 
   it('rejects an unknown option', () => {
-    expect(() => parseLastFlags(['--bogus'])).toThrow(UnknownOptionError);
+    expect(() => parseLastFlags(['--bogus'])).toThrow(
+      "unknown option '--bogus' for last (supported: --session, --json)",
+    );
   });
 });
 

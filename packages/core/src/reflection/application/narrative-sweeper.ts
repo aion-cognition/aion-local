@@ -4,6 +4,12 @@ import {
   type NarrativeDeps,
   type NarrativeResult,
 } from './narratives.js';
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import {
+  halfWindowIntervalMs,
+  MIN_SWEEP_INTERVAL_MS as SHARED_MIN_SWEEP_INTERVAL_MS,
+  SweepTimer,
+} from '../../infrastructure/sweep-timer.js';
 
 /**
  * The pinned narrative trigger has two halves: "MCP transport session end, or 30 min idle",
@@ -16,61 +22,51 @@ import {
  * the same window the reflection stage uses.
  */
 
+/** A floor, so a small configured window cannot turn the sweep into a spin. */
+export const MIN_SWEEP_INTERVAL_MS = SHARED_MIN_SWEEP_INTERVAL_MS;
+
+export type IdleNarrativeSweeperOptions = Omit<IdleSweepOptions, 'now'>;
+
 /**
  * Half the idle window, so a session that went quiet is narrated within one and a half
  * windows of its last episode rather than whenever the process next restarts.
  */
-export const DEFAULT_SWEEP_DIVISOR = 2;
-
-/** A floor, so a small configured window cannot turn the sweep into a spin. */
-export const MIN_SWEEP_INTERVAL_MS = 60_000;
-
-export type IdleNarrativeSweeperOptions = Omit<IdleSweepOptions, 'now'>;
-
 export function sweepIntervalMs(idleMs: number): number {
-  return Math.max(MIN_SWEEP_INTERVAL_MS, Math.floor(idleMs / DEFAULT_SWEEP_DIVISOR));
+  return halfWindowIntervalMs(idleMs);
 }
 
 export class IdleNarrativeSweeper {
   readonly #deps: NarrativeDeps;
   readonly #options: IdleNarrativeSweeperOptions;
-  readonly #intervalMs: number;
-  #timer: NodeJS.Timeout | undefined;
+  readonly #timer: SweepTimer;
   #pending: Promise<void> = Promise.resolve();
   #stopped = false;
 
   constructor(deps: NarrativeDeps, options: IdleNarrativeSweeperOptions = {}) {
     this.#deps = deps;
     this.#options = options;
-    this.#intervalMs = sweepIntervalMs(options.idleMs ?? 30 * 60 * 1000);
+    const idleMs = options.idleMs ?? DEFAULTS.reflection.narrativeIdleMinutes * 60 * 1000;
+    this.#timer = new SweepTimer(sweepIntervalMs(idleMs), () => {
+      this.#schedule();
+    });
   }
 
   get intervalMs(): number {
-    return this.#intervalMs;
+    return this.#timer.intervalMs;
   }
 
   /**
-   * Unreferenced: a sweep with nothing to narrate must not be the reason the process stays
-   * alive. The first tick is one interval out, since a service that just started has nothing
-   * idle that the worker's own drain is not already about to reach.
+   * The first tick is one interval out, since a service that just started has nothing idle
+   * that the worker's own drain is not already about to reach.
    */
   start(): void {
-    if (this.#timer !== undefined) {
-      return;
-    }
     this.#stopped = false;
-    this.#timer = setInterval(() => {
-      this.#schedule();
-    }, this.#intervalMs);
-    this.#timer.unref();
+    this.#timer.start();
   }
 
   async stop(): Promise<void> {
     this.#stopped = true;
-    if (this.#timer !== undefined) {
-      clearInterval(this.#timer);
-      this.#timer = undefined;
-    }
+    this.#timer.stop();
     await this.whenIdle();
   }
 

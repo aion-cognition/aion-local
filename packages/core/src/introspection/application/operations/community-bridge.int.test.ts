@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { communityRefreshOperation } from './community-refresh.js';
-import type { ProviderFactory } from './routed-generation.js';
 import { symbiosisBridgeOperation } from './symbiosis-bridge.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
@@ -25,7 +24,7 @@ import {
   type Neo4jHarness,
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
-import type { Vector } from '../../../infrastructure/providers/types.js';
+import type { Provider, Vector } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import {
   spreadActivation,
@@ -91,7 +90,7 @@ const PROPOSED_SUMMARY = 'Both clusters describe the same ingest path, one side 
 const PROPOSED_RATIONALE = 'The two memories name the same pipeline from either end.';
 
 /** A model that answers, so the run takes the proposal path the design puts first. */
-const answeringProvider: ProviderFactory = () => ({
+const answeringProvider: Provider = {
   embed,
   generate: async (): Promise<unknown> =>
     Promise.resolve({
@@ -99,13 +98,13 @@ const answeringProvider: ProviderFactory = () => ({
       rationale: PROPOSED_RATIONALE,
       compatibility: 0.72,
     }),
-});
+};
 
 /** A model that is not there, which is the case the deterministic sentence exists for. */
-const failingProvider: ProviderFactory = () => ({
+const failingProvider: Provider = {
   embed,
   generate: (): Promise<unknown> => Promise.reject(new Error('ollama unreachable')),
-});
+};
 
 function unitVector(index: number): number[] {
   const vector = new Array<number>(EMBED_DIMENSION).fill(0);
@@ -121,12 +120,13 @@ function tiltedVector(axis: number, other: number, tilt: number): number[] {
   return vector;
 }
 
-function context(): OperationContext {
+function context(provider: Provider = answeringProvider): OperationContext {
   return {
     driver: harness.driver,
     db,
     config,
     logger,
+    provider,
     health: healthFixture(),
     now: NOW,
     signal: new AbortController().signal,
@@ -226,10 +226,7 @@ describe('community refresh and the symbiosis bridge', () => {
   });
 
   it('will not bridge before the communities have been derived', async () => {
-    const outcome = await symbiosisBridgeOperation({
-      embed,
-      buildProvider: answeringProvider,
-    }).run(context());
+    const outcome = await symbiosisBridgeOperation().run(context());
 
     expect(outcome.status).toBe('noop');
     expect(await bridgeIds()).toEqual([]);
@@ -250,10 +247,7 @@ describe('community refresh and the symbiosis bridge', () => {
   });
 
   it('bridges the closest cross-community pair and writes the sentence the model proposed', async () => {
-    const outcome = await symbiosisBridgeOperation({
-      embed,
-      buildProvider: answeringProvider,
-    }).run(context());
+    const outcome = await symbiosisBridgeOperation().run(context());
 
     expect(outcome.status).toBe('applied');
     expect(outcome.itemsAffected).toBe(1);
@@ -285,10 +279,7 @@ describe('community refresh and the symbiosis bridge', () => {
   });
 
   it('writes no second bridge between a pair it has already joined', async () => {
-    const outcome = await symbiosisBridgeOperation({
-      embed,
-      buildProvider: answeringProvider,
-    }).run(context());
+    const outcome = await symbiosisBridgeOperation().run(context());
 
     expect(outcome.status).toBe('noop');
     expect(await bridgeIds()).toHaveLength(1);
@@ -303,10 +294,7 @@ describe('community refresh and the symbiosis bridge', () => {
   it('writes a deterministic bridge when the model is unavailable', async () => {
     await forgetBridges();
 
-    const outcome = await symbiosisBridgeOperation({
-      embed,
-      buildProvider: failingProvider,
-    }).run(context());
+    const outcome = await symbiosisBridgeOperation().run(context(failingProvider));
 
     expect(outcome.status).toBe('applied');
     expect(outcome.detail).toContain('deterministic');

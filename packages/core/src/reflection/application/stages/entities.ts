@@ -1,3 +1,5 @@
+import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
+import { isAbortError } from '../../../infrastructure/errors.js';
 import {
   findStructuralEntitiesByName,
   linkEntityMentions,
@@ -29,19 +31,6 @@ import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/s
  */
 
 export const ENTITY_STAGE_NAME = 'entities';
-
-/** `config.models.reflect`; callers thread the configured value in. */
-export const DEFAULT_ENTITY_MODEL = 'qwen3:8b';
-
-/**
- * A hang guard, not a target. Reflection is asynchronous, but `qwen3:8b` occasionally does
- * not return at all, and a stage without its own signal would hold the worker forever, since
- * the orchestrator imposes no timeout.
- */
-export const DEFAULT_ENTITY_TIMEOUT_MS = 60_000;
-
-/** Enough for a long working session; a model that returns more is padding, not reading. */
-export const DEFAULT_MAX_ENTITIES = 32;
 
 /** Provenance: which pipeline path put the node in the graph. */
 export const ENTITY_EXTRACTION_METHOD = 'reflection_entities';
@@ -96,10 +85,6 @@ type ResolvedEntity = {
 
 function identityKey(nameNorm: string, type: string): string {
   return `${nameNorm} ${type}`;
-}
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === 'AbortError';
 }
 
 function describe(error: unknown): string {
@@ -297,9 +282,9 @@ export class EntityExtractionStage implements ReflectionStage {
 
   constructor(options: Partial<EntityStageOptions> = {}) {
     this.#options = {
-      model: DEFAULT_ENTITY_MODEL,
-      timeoutMs: DEFAULT_ENTITY_TIMEOUT_MS,
-      maxEntities: DEFAULT_MAX_ENTITIES,
+      model: DEFAULTS.models.reflect,
+      timeoutMs: DEFAULTS.reflection.stageTimeoutMs,
+      maxEntities: DEFAULTS.reflection.maxEntities,
       ...options,
     };
   }

@@ -91,14 +91,6 @@ export const CHANGE_BATTERY: readonly ChangeCase[] = [
   },
 ];
 
-export function changeCase(key: string): ChangeCase {
-  const found = CHANGE_BATTERY.find((entry) => entry.key === key);
-  if (found === undefined) {
-    throw new Error(`no change-battery case named ${key}`);
-  }
-  return found;
-}
-
 export type NarrativeFixture = {
   readonly identity: string;
   readonly payload: Record<string, unknown>;

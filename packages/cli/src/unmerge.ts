@@ -1,15 +1,9 @@
-import {
-  ConfigError,
-  GraphConnection,
-  listUnmergeableRecords,
-  loadConfig,
-  openLogger,
-  runEntityUnmerge,
-  SqliteStore,
-  type Config,
-} from '@aion/core';
+import { listUnmergeableRecords, runEntityUnmerge, type GraphConnection } from '@aion/core';
 
-import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
+import { CliUsageError, parseArgs, type ArgSpec } from './args.js';
+import { short } from './format.js';
+import { stdoutWriter, type Writer } from './output.js';
+import { withSubstrate } from './substrate.js';
 
 /**
  * `aion unmerge`: the human end of entity deduplication.
@@ -28,110 +22,76 @@ const SUBCOMMANDS = ['ls', 'apply'] as const;
 
 type Subcommand = (typeof SUBCOMMANDS)[number];
 
-export class UnknownUnmergeSubcommandError extends Error {
-  constructor(name: string) {
-    super(`unknown unmerge subcommand '${name}' (supported: ${SUBCOMMANDS.join(', ')})`);
-    this.name = 'UnknownUnmergeSubcommandError';
-  }
-}
-
-export class MissingUnmergeIdError extends Error {
-  constructor(subcommand: string) {
-    const needs = subcommand === 'ls' ? 'a canonical entity id' : 'the absorbed entity id';
-    super(`unmerge ${subcommand} needs ${needs}`);
-    this.name = 'MissingUnmergeIdError';
-  }
-}
+const SPEC: ArgSpec<Subcommand> = {
+  command: 'unmerge',
+  usage: 'aion unmerge [ls|apply] <id>',
+  subcommands: SUBCOMMANDS,
+  maxPositionals: 1,
+};
 
 export type UnmergeFlags = {
   readonly subcommand: Subcommand;
   readonly id: string;
 };
 
-function isSubcommand(value: string): value is Subcommand {
-  return (SUBCOMMANDS as readonly string[]).includes(value);
-}
-
 export function parseUnmergeFlags(argv: readonly string[]): UnmergeFlags {
-  const [first = 'ls', ...rest] = argv;
-  if (!isSubcommand(first)) {
-    throw new UnknownUnmergeSubcommandError(first);
-  }
-  const id = rest.find((arg) => !arg.startsWith('--'));
+  const { subcommand, positionals } = parseArgs(SPEC, argv);
+  const [id] = positionals;
   if (id === undefined) {
-    throw new MissingUnmergeIdError(first);
+    const needs = subcommand === 'ls' ? 'a canonical entity id' : 'the absorbed entity id';
+    throw new CliUsageError(`unmerge ${subcommand} needs ${needs}`);
   }
-  return { subcommand: first, id };
+  return { subcommand, id };
 }
 
-function short(id: string): string {
-  return id.slice(0, 8);
+async function runLs(connection: GraphConnection, id: string, write: Writer): Promise<number> {
+  const records = await listUnmergeableRecords(connection.driver, id);
+  if (records.length === 0) {
+    // Two states with one answer: the id names no entity, or it names one that has absorbed
+    // nothing. Neither has anything to split, and telling them apart would take a second read
+    // for an answer that is the same either way.
+    write(`${id} has no merge record with an identity left to split out`);
+    return 0;
+  }
+  write(`${id} has absorbed ${String(records.length)} identity(ies)`);
+  for (const record of records) {
+    write(
+      `  ${record.mergedId}  ${record.mergedName ?? 'name not recorded'}` +
+        ` (${record.mergedType ?? 'type not recorded'}), ` +
+        `${String(record.edges.length)} edge(s) recorded`,
+    );
+  }
+  write('');
+  write('`aion unmerge apply <id>` splits one of them back out');
+  return 0;
 }
 
-export async function runUnmerge(
+export function runUnmerge(
   argv: readonly string[] = [],
   write: Writer = stdoutWriter,
 ): Promise<number> {
-  let flags: UnmergeFlags;
-  let config: Config;
-  try {
-    flags = parseUnmergeFlags(argv);
-    config = loadConfig(process.env);
-  } catch (err) {
-    stderrWriter(err instanceof ConfigError ? err.message : describeError(err));
-    return 1;
-  }
+  return withSubstrate({
+    spec: SPEC,
+    argv,
+    write,
+    parse: parseUnmergeFlags,
+    needsGraph: 'unmerge',
+    run: async (substrate, flags) => {
+      const connection = substrate.connection();
+      if (flags.subcommand === 'ls') {
+        return await runLs(connection, flags.id, write);
+      }
 
-  const logger = openLogger({ ...config.logging, name: 'aion-unmerge' });
-  const store = new SqliteStore({ filePath: config.sqlite.path });
-  const connection = new GraphConnection(config.neo4j);
-  try {
-    const health = await connection.health();
-    if (!health.reachable) {
-      stderrWriter(
-        `unmerge needs Neo4j: ${connection.uri} unreachable: ${health.error ?? 'unknown error'}`,
+      const report = await runEntityUnmerge(
+        { driver: connection.driver, db: substrate.db(), logger: substrate.logger() },
+        { mergedId: flags.id },
       );
-      return 1;
-    }
-
-    if (flags.subcommand === 'ls') {
-      const records = await listUnmergeableRecords(connection.driver, flags.id);
-      if (records.length === 0) {
-        // Two states with one answer: the id names no entity, or it names one that has
-        // absorbed nothing. Neither has anything to split, and telling them apart would take
-        // a second read for an answer that is the same either way.
-        write(`${flags.id} has no merge record with an identity left to split out`);
-        return 0;
+      write(`${flags.id}: ${report.status}, ${report.detail}`);
+      if (report.restoredId !== undefined) {
+        write(`  restored as ${report.restoredId} out of ${short(report.canonicalId ?? '')}`);
+        write(`  ${String(report.aliasesReleased)} alias(es) released`);
       }
-      write(`${flags.id} has absorbed ${String(records.length)} identity(ies)`);
-      for (const record of records) {
-        write(
-          `  ${record.mergedId}  ${record.mergedName ?? 'name not recorded'}` +
-            ` (${record.mergedType ?? 'type not recorded'}), ` +
-            `${String(record.edges.length)} edge(s) recorded`,
-        );
-      }
-      write('');
-      write('`aion unmerge apply <id>` splits one of them back out');
       return 0;
-    }
-
-    const report = await runEntityUnmerge(
-      { driver: connection.driver, db: store.db, logger },
-      { mergedId: flags.id },
-    );
-    write(`${flags.id}: ${report.status}, ${report.detail}`);
-    if (report.restoredId !== undefined) {
-      write(`  restored as ${report.restoredId} out of ${short(report.canonicalId ?? '')}`);
-      write(`  ${String(report.aliasesReleased)} alias(es) released`);
-    }
-    return 0;
-  } catch (err) {
-    logger.error({ err: describeError(err) }, 'unmerge command failed');
-    stderrWriter(describeError(err));
-    return 1;
-  } finally {
-    await connection.close();
-    store.close();
-  }
+    },
+  });
 }

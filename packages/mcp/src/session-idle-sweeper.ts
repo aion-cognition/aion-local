@@ -1,3 +1,5 @@
+import { halfWindowIntervalMs, MIN_SWEEP_INTERVAL_MS, SweepTimer } from '@aion/core';
+
 import type { AionMcpService } from './service.js';
 
 /**
@@ -11,11 +13,10 @@ import type { AionMcpService } from './service.js';
  * configured window from turning the sweep into a spin.
  */
 
-export const MIN_SESSION_IDLE_SWEEP_INTERVAL_MS = 60_000;
-const SWEEP_DIVISOR = 2;
+export const MIN_SESSION_IDLE_SWEEP_INTERVAL_MS = MIN_SWEEP_INTERVAL_MS;
 
 export function sessionIdleSweepIntervalMs(idleMs: number): number {
-  return Math.max(MIN_SESSION_IDLE_SWEEP_INTERVAL_MS, Math.floor(idleMs / SWEEP_DIVISOR));
+  return halfWindowIntervalMs(idleMs);
 }
 
 export type SessionIdleSweeperOptions = {
@@ -25,35 +26,26 @@ export type SessionIdleSweeperOptions = {
 export class SessionIdleSweeper {
   readonly #service: AionMcpService;
   readonly #idleMs: number;
-  readonly #intervalMs: number;
-  #timer: NodeJS.Timeout | undefined;
+  readonly #timer: SweepTimer;
 
   constructor(service: AionMcpService, options: SessionIdleSweeperOptions) {
     this.#service = service;
     this.#idleMs = options.idleMs;
-    this.#intervalMs = sessionIdleSweepIntervalMs(options.idleMs);
+    this.#timer = new SweepTimer(sessionIdleSweepIntervalMs(options.idleMs), () => {
+      this.sweepOnce();
+    });
   }
 
   get intervalMs(): number {
-    return this.#intervalMs;
+    return this.#timer.intervalMs;
   }
 
-  /** Unreferenced: a sweep with nothing idle must not be the reason the process stays alive. */
   start(): void {
-    if (this.#timer !== undefined) {
-      return;
-    }
-    this.#timer = setInterval(() => {
-      this.sweepOnce();
-    }, this.#intervalMs);
-    this.#timer.unref();
+    this.#timer.start();
   }
 
   stop(): void {
-    if (this.#timer !== undefined) {
-      clearInterval(this.#timer);
-      this.#timer = undefined;
-    }
+    this.#timer.stop();
   }
 
   /**

@@ -1,8 +1,9 @@
-import neo4j, { type Driver } from 'neo4j-driver';
+import type { Driver } from 'neo4j-driver';
 
 import { ACCESS_COUNT_PROPERTY } from './access-tracking.js';
 import {
   BITEMPORAL_PROPERTIES,
+  currentOnly,
   supersedeInTransaction,
   writeStampedNodeInTransaction,
 } from './bitemporal.js';
@@ -10,7 +11,7 @@ import { type GraphTransaction, inWriteTransaction, runRead, runWrite } from './
 import { upsertEdgeInTransaction } from './edges.js';
 import { ENTITY_MENTION_TYPE, ENTITY_TYPE_PROPERTY } from './entity-queries.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
-import { BASE_NODE_LABEL } from './labels.js';
+import { BASE_NODE_LABEL, ENTITY_LABEL } from './labels.js';
 import { lockNodeInTransaction } from './locks.js';
 import { isRelationshipType } from './relationships.js';
 import {
@@ -20,7 +21,8 @@ import {
   LAST_ACCESSED_PROPERTY,
   STRUCTURAL_PROPERTY,
 } from './seed-queries.js';
-import { fromGraphVector, toGraphVector, type Row } from './values.js';
+import { fromGraphVector, toGraphInteger, toGraphVector, type Row } from './values.js';
+import { asCosine } from './vector-indexes.js';
 import type { Vector } from '../providers/types.js';
 
 /**
@@ -29,15 +31,8 @@ import type { Vector } from '../providers/types.js';
  * search needs and writes the merge once the stage has decided one.
  */
 
-const ENTITY_LABEL = 'Entity';
-
 /** The property the merged names land in. Read back by `aion why` as the identity's history. */
 export const ENTITY_ALIASES_PROPERTY = 'aliases';
-
-/** Procedure arguments and `LIMIT` are Cypher INTEGER; a plain JS number arrives as FLOAT and is rejected. */
-function toGraphInteger(value: number): unknown {
-  return neo4j.int(Math.trunc(value));
-}
 
 export type DedupEntityDetail = {
   readonly id: string;
@@ -136,11 +131,10 @@ export type SimilarCurrentEntityMatch = {
 const FIND_SIMILAR_CURRENT_ENTITIES = [
   `MATCH (n:${ENTITY_LABEL})`,
   'WHERE n.id <> $excludeId',
-  `  AND n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
-  `  AND n.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  `  AND ${currentOnly('n')}`,
   `  AND n.${ENTITY_NAME_VECTOR_PROPERTY} IS NOT NULL`,
   `  AND size(n.${ENTITY_NAME_VECTOR_PROPERTY}) = $dimension`,
-  `WITH n, (2.0 * vector.similarity.cosine(n.${ENTITY_NAME_VECTOR_PROPERTY}, $vector) - 1.0) AS score`,
+  `WITH n, ${asCosine(`vector.similarity.cosine(n.${ENTITY_NAME_VECTOR_PROPERTY}, $vector)`)} AS score`,
   'WHERE score >= $threshold',
   `RETURN n.id AS id, n.${ENTITY_TYPE_PROPERTY} AS type, score`,
   'ORDER BY score DESC',

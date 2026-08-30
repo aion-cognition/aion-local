@@ -17,7 +17,6 @@
   },
   "dependencies": {
     "@aion/protocol": "*",
-    "@neo4j/cypher-builder": "^3.3.0",
     "better-sqlite3": "^13.0.3",
     "neo4j-driver": "^6.2.0",
     "pino": "^10.3.1",

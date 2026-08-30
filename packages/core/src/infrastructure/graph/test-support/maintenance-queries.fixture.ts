@@ -1,26 +1,16 @@
 import type { Driver } from 'neo4j-driver';
 
 import { BITEMPORAL_PROPERTIES } from '../bitemporal.js';
-import { runRead } from '../connection.js';
+import { readFirst, runRead } from '../connection.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../episodes.js';
 import { BASE_NODE_LABEL } from '../labels.js';
 import { NARRATIVE_PROPERTIES } from '../narrative-queries.js';
-import type { Row } from '../values.js';
 
 /**
  * Assertion reads for the maintenance operations, kept beside the other graph test-support
  * queries so every Cypher statement that runs lives under `infrastructure/graph/`. Separate
  * from `graph-queries.fixture.ts` only because the two together pass the line cap.
  */
-
-async function readFirst<T>(
-  driver: Driver,
-  cypher: string,
-  parameters: Record<string, unknown>,
-  map: (row: Row) => T,
-): Promise<T | undefined> {
-  return (await runRead(driver, cypher, parameters, map))[0];
-}
 
 /** The sessions one episode reaches through the containment edge: what a backbone repair restores. */
 export async function sessionIdsOfEpisode(driver: Driver, episodeId: string): Promise<string[]> {

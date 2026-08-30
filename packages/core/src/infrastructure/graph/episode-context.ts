@@ -119,7 +119,6 @@ export async function loadEpisodeContext(
   driver: Driver,
   episodeId: string,
 ): Promise<EpisodeContext | undefined> {
-  const statement = loadStatement(episodeId);
-  const rows = await runRead(driver, statement.cypher, statement.parameters, readEpisodeContext);
+  const rows = await runRead(driver, loadStatement(episodeId), readEpisodeContext);
   return rows[0];
 }

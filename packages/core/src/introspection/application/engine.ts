@@ -2,7 +2,9 @@ import type { Driver } from 'neo4j-driver';
 
 import { observeHealth, readOperationEffectiveness, type ObserveOptions } from './observe.js';
 import type { Config } from '../../infrastructure/config/schema.js';
+import { errorMessage } from '../../infrastructure/errors.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
+import type { Provider } from '../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   claimOperationBucket,
@@ -49,6 +51,8 @@ export type IntrospectorDeps = {
   readonly db: SqliteHandle;
   readonly config: Config;
   readonly logger: Logger;
+  /** Handed to every operation through its context, so the whole loop shares one breaker. */
+  readonly provider: Provider;
   /**
    * The registered catalog, in order. Order decides nothing on its own: selection is by tier
    * and urgency, and ties break on waiting time and then on name.
@@ -76,10 +80,6 @@ export type TickReport = {
   /** Operations whose earlier run was scored against this snapshot. */
   readonly resolved: readonly { readonly name: string; readonly resolution: OperationResolution }[];
 };
-
-function describeError(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 export class Introspector {
   readonly #deps: IntrospectorDeps;
@@ -402,6 +402,7 @@ export class Introspector {
         db: this.#deps.db,
         config: this.#deps.config,
         logger: this.#deps.logger,
+        provider: this.#deps.provider,
         health,
         now,
         signal: this.#abort.signal,
@@ -411,7 +412,7 @@ export class Introspector {
         status: 'failed',
         itemsProcessed: 0,
         itemsAffected: 0,
-        detail: describeError(err),
+        detail: errorMessage(err),
       };
       this.#deps.logger.error(
         { err, operation: operation.name, cycle },

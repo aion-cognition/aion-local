@@ -1,5 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 
+import { errorMessage, roundMs } from '../../infrastructure/errors.js';
 import { loadEpisodeContext } from '../../infrastructure/graph/episode-context.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
@@ -49,19 +50,8 @@ export type ReflectionRunOptions = {
   readonly now?: Date;
 };
 
-function round(ms: number): number {
-  return Math.round(ms * 100) / 100;
-}
-
 function elapsed(started: number): number {
-  return round(performance.now() - started);
-}
-
-function errorMessage(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  return String(err);
+  return roundMs(performance.now() - started);
 }
 
 /**

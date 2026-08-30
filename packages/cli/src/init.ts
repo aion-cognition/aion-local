@@ -1,12 +1,10 @@
 import {
   bootstrapBackbone,
-  ConfigError,
   ensureNeo4jPassword,
   GraphConnection,
   isManagedNeo4jUri,
   loadConfig,
   localChatModels,
-  openLogger,
   provisionOllama,
   reconcileResidentModels,
   resolveProviderRouting,
@@ -22,6 +20,7 @@ import { USAGE_PROTOCOL } from '@aion/mcp';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 
+import { CliUsageError, parseArgs, unknownOption, type ArgSpec } from './args.js';
 import {
   composeRunner,
   MCP_PROFILE,
@@ -31,8 +30,9 @@ import {
   waitForMcpHealth,
 } from './compose.js';
 import { installFullProfile } from './hooks-cmd.js';
-import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
+import { stdoutWriter, type Writer } from './output.js';
 import { envFilePath, envTemplatePath, resolveRepoDir } from './paths.js';
+import { withSubstrate } from './substrate.js';
 
 export const GIT_USER_NAME_ENV_VAR = 'AION_GIT_USER_NAME';
 
@@ -41,39 +41,13 @@ export const ANTHROPIC_KEY_ENV_VAR = 'AION_ANTHROPIC_API_KEY';
 /** Neo4j's first boot downloads and installs the GDS plugin, which outlasts the 60s default. */
 const NEO4J_READY_TIMEOUT_MS = 180_000;
 
-export class UnknownOptionError extends Error {
-  constructor(option: string) {
-    super(`unknown option '${option}' for init (supported: local, full, --yes)`);
-    this.name = 'UnknownOptionError';
-  }
-}
+const MISSING_ANTHROPIC_KEY =
+  `the full profile routes generation to Anthropic and needs ${ANTHROPIC_KEY_ENV_VAR}. ` +
+  'Set it in the environment or .env, or run `aion init full` from a terminal.';
 
-export class AnthropicKeyUnavailableError extends Error {
-  constructor() {
-    super(
-      `the full profile routes generation to Anthropic and needs ${ANTHROPIC_KEY_ENV_VAR}. ` +
-        'Set it in the environment or .env, or run `aion init full` from a terminal.',
-    );
-    this.name = 'AnthropicKeyUnavailableError';
-  }
-}
-
-export class MemberNameUnavailableError extends Error {
-  constructor() {
-    super(
-      `no member name available: ${GIT_USER_NAME_ENV_VAR} is empty and there is no terminal to ask on. ` +
-        'Set `git config user.name` on the host, or run init from a terminal.',
-    );
-    this.name = 'MemberNameUnavailableError';
-  }
-}
-
-export class Neo4jPasswordMissingError extends Error {
-  constructor(uri: string) {
-    super(`AION_NEO4J_PASSWORD is required for the external Neo4j at ${uri}`);
-    this.name = 'Neo4jPasswordMissingError';
-  }
-}
+const MISSING_MEMBER_NAME =
+  `no member name available: ${GIT_USER_NAME_ENV_VAR} is empty and there is no terminal to ask on. ` +
+  'Set `git config user.name` on the host, or run init from a terminal.';
 
 /**
  * `local` is the substrate on its own: Ollama for every generation role, no harness hooks.
@@ -82,26 +56,26 @@ export class Neo4jPasswordMissingError extends Error {
  */
 export type InitProfile = 'local' | 'full';
 
+const SPEC: ArgSpec = {
+  command: 'init',
+  usage: 'aion init [local | full] [--yes]',
+  options: [{ flag: '--yes', alias: '-y' }],
+  maxPositionals: 1,
+  supported: ['local', 'full', '--yes'],
+};
+
 export type InitFlags = {
   readonly assumeYes: boolean;
   readonly profile: InitProfile | undefined;
 };
 
 export function parseInitFlags(argv: readonly string[]): InitFlags {
-  let assumeYes = false;
-  let profile: InitProfile | undefined;
-  for (const arg of argv) {
-    if (arg === '--yes' || arg === '-y') {
-      assumeYes = true;
-      continue;
-    }
-    if (arg === 'local' || arg === 'full') {
-      profile = arg;
-      continue;
-    }
-    throw new UnknownOptionError(arg);
+  const { flags, positionals } = parseArgs(SPEC, argv);
+  const [profile] = positionals;
+  if (profile !== undefined && profile !== 'local' && profile !== 'full') {
+    throw unknownOption(SPEC, profile);
   }
-  return { assumeYes, profile };
+  return { assumeYes: flags.has('--yes'), profile };
 }
 
 export type InitProfileInput = {
@@ -137,11 +111,11 @@ export async function resolveAnthropicKey(input: AnthropicKeyInput): Promise<str
     return existing;
   }
   if (input.assumeYes || !input.interactive) {
-    throw new AnthropicKeyUnavailableError();
+    throw new CliUsageError(MISSING_ANTHROPIC_KEY);
   }
   const answer = (await input.ask('Anthropic API key: ')).trim();
   if (answer === '') {
-    throw new AnthropicKeyUnavailableError();
+    throw new CliUsageError(MISSING_ANTHROPIC_KEY);
   }
   return answer;
 }
@@ -163,7 +137,7 @@ export async function resolveMemberName(input: MemberNameInput): Promise<string>
 
   if (input.assumeYes || !input.interactive) {
     if (fallback === '') {
-      throw new MemberNameUnavailableError();
+      throw new CliUsageError(MISSING_MEMBER_NAME);
     }
     return fallback;
   }
@@ -172,7 +146,7 @@ export async function resolveMemberName(input: MemberNameInput): Promise<string>
   const answer = (await input.ask(`Member name${suffix}: `)).trim();
   const chosen = answer === '' ? fallback : answer;
   if (chosen === '') {
-    throw new MemberNameUnavailableError();
+    throw new CliUsageError(MISSING_MEMBER_NAME);
   }
   return chosen;
 }
@@ -304,7 +278,9 @@ async function initialize(
   const managed = isManagedNeo4jUri(config.neo4j.uri);
 
   if (!managed && config.neo4j.password === '') {
-    throw new Neo4jPasswordMissingError(config.neo4j.uri);
+    throw new CliUsageError(
+      `AION_NEO4J_PASSWORD is required for the external Neo4j at ${config.neo4j.uri}`,
+    );
   }
   const password = managed
     ? ensureNeo4jPassword(envFilePath(repoDir), envTemplatePath(repoDir))
@@ -398,44 +374,39 @@ async function prepareFullProfile(
   return loadConfig(process.env);
 }
 
-export async function runInit(
+export function runInit(
   argv: readonly string[] = [],
   write: Writer = stdoutWriter,
 ): Promise<number> {
-  let flags: InitFlags;
-  let config: Config;
-  try {
-    flags = parseInitFlags(argv);
-    config = loadConfig(process.env);
-  } catch (err) {
-    stderrWriter(err instanceof ConfigError ? err.message : describeError(err));
-    return 1;
-  }
+  return withSubstrate({
+    spec: SPEC,
+    argv,
+    write,
+    parse: parseInitFlags,
+    run: async (substrate, flags) => {
+      // Provisioning opens its own store and connection against the password it just settled,
+      // which the shared lifecycle cannot know before this point.
+      const { config } = substrate;
+      const logger = substrate.logger();
+      const profile = await resolveInitProfile({
+        requested: flags.profile,
+        assumeYes: flags.assumeYes,
+        interactive: process.stdin.isTTY,
+        ask: askOnTerminal,
+      });
+      const resolved = profile === 'full' ? await prepareFullProfile(config, flags, write) : config;
 
-  const logger = openLogger({ ...config.logging, name: 'aion-init' });
-  try {
-    const profile = await resolveInitProfile({
-      requested: flags.profile,
-      assumeYes: flags.assumeYes,
-      interactive: process.stdin.isTTY,
-      ask: askOnTerminal,
-    });
-    const resolved = profile === 'full' ? await prepareFullProfile(config, flags, write) : config;
+      await initialize(resolved, flags, write, logger);
 
-    await initialize(resolved, flags, write, logger);
-
-    write('');
-    if (profile === 'full') {
-      installFullProfile(write);
-    } else {
-      write('Hooks are not installed on the local profile.');
-      write('`aion hooks install` wires the Claude Code shims; see docs/harness.md.');
-    }
-    write('\naion init: ready');
-    return 0;
-  } catch (err) {
-    logger.error({ err: describeError(err) }, 'init failed');
-    stderrWriter(err instanceof Error ? `${err.name}: ${err.message}` : String(err));
-    return 1;
-  }
+      write('');
+      if (profile === 'full') {
+        installFullProfile(write);
+      } else {
+        write('Hooks are not installed on the local profile.');
+        write('`aion hooks install` wires the Claude Code shims; see docs/harness.md.');
+      }
+      write('\naion init: ready');
+      return 0;
+    },
+  });
 }

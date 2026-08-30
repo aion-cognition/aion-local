@@ -1,3 +1,5 @@
+import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
+import { errorMessage } from '../../../infrastructure/errors.js';
 import {
   findSimilarEntityCandidates,
   linkCoOccurrence,
@@ -27,24 +29,11 @@ import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/s
 
 export const ASSOCIATION_STAGE_NAME = 'associations';
 
-/** `config.AION_ASSOC_SEMANTIC_THRESHOLD`; callers thread the configured value in. */
-export const DEFAULT_ASSOCIATION_SEMANTIC_THRESHOLD = 0.75;
-
-/** How many `SIMILAR` candidates one entity can gain in a single run. */
-export const DEFAULT_ASSOCIATION_SIMILAR_LIMIT = 5;
-
-/** Matches `hebbian.weightFloor`: the lower clamp on a discounted co-occurrence edge. */
-export const DEFAULT_ASSOCIATION_WEIGHT_FLOOR = 0.1;
-
 export type AssociationStageOptions = {
   readonly semanticThreshold: number;
   readonly similarLimit: number;
   readonly weightFloor: number;
 };
-
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 export class AssociationInferenceStage implements ReflectionStage {
   readonly name = ASSOCIATION_STAGE_NAME;
@@ -52,9 +41,11 @@ export class AssociationInferenceStage implements ReflectionStage {
 
   constructor(options: Partial<AssociationStageOptions> = {}) {
     this.#options = {
-      semanticThreshold: DEFAULT_ASSOCIATION_SEMANTIC_THRESHOLD,
-      similarLimit: DEFAULT_ASSOCIATION_SIMILAR_LIMIT,
-      weightFloor: DEFAULT_ASSOCIATION_WEIGHT_FLOOR,
+      semanticThreshold: DEFAULTS.reflection.associationSemanticThreshold,
+      similarLimit: DEFAULTS.reflection.associationSimilarLimit,
+      // The co-occurrence clamp is plasticity's floor, not a knob of its own: an association
+      // written under it would be an edge recall refuses to walk the moment it is made.
+      weightFloor: DEFAULTS.hebbian.weightFloor,
       ...options,
     };
   }
@@ -95,7 +86,7 @@ export class AssociationInferenceStage implements ReflectionStage {
     try {
       return { ok: true, rows: await findEpisodeEntities(ctx.driver, ctx.episodeId) };
     } catch (err) {
-      return { ok: false, summary: `could not read episode entities: ${describe(err)}` };
+      return { ok: false, summary: `could not read episode entities: ${errorMessage(err)}` };
     }
   }
 
@@ -142,7 +133,7 @@ export class AssociationInferenceStage implements ReflectionStage {
     } catch (err) {
       return {
         status: 'failed',
-        summary: `co-occurrence inference failed after writing ${written} of ${pairs.length} pair(s): ${describe(err)}`,
+        summary: `co-occurrence inference failed after writing ${written} of ${pairs.length} pair(s): ${errorMessage(err)}`,
         counts: { associations: written },
       };
     }
@@ -188,7 +179,7 @@ export class AssociationInferenceStage implements ReflectionStage {
     } catch (err) {
       return {
         status: 'failed',
-        summary: `semantic similarity inference failed: ${describe(err)}`,
+        summary: `semantic similarity inference failed: ${errorMessage(err)}`,
       };
     }
   }

@@ -1,9 +1,10 @@
 import type { Driver } from 'neo4j-driver';
 
-import type { ReflectionDispatch } from './dispatch.js';
 import { INTEGRATE_JOB_TYPE } from './intake.js';
 import type { ReflectionRun, ReflectionRunOptions } from './orchestrator.js';
 import { attachContentVectors, findPendingVectorNodes } from './vectors.js';
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import { errorMessage } from '../../infrastructure/errors.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import {
@@ -13,6 +14,7 @@ import {
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { recordEnrichmentLagMs } from '../../infrastructure/sqlite/lag-samples.js';
 import type { ReflectionJob } from '../../infrastructure/sqlite/reflection-queue.js';
+import { halfWindowIntervalMs, SweepTimer } from '../../infrastructure/sweep-timer.js';
 
 /**
  * Reflection is event-driven. A signal from intake starts a claim-and-run cycle immediately;
@@ -26,17 +28,17 @@ import type { ReflectionJob } from '../../infrastructure/sqlite/reflection-queue
  */
 
 /**
- * Pinned defaults for the reflection pipeline. The integration task threads config over the
- * ones config carries.
+ * The worker's pinned defaults, read from the catalog that names and ranges them. The service
+ * threads the configured value over each; these are what a caller that threads nothing gets.
  */
-export const DEFAULT_WORKER_COUNT = 1;
-export const DEFAULT_DRAIN_STALE_TIMEOUT_MS = 10 * 60 * 1000;
-export const DEFAULT_RETRY_BASE_MS = 5_000;
-export const DEFAULT_RETRY_CAP_MS = 5 * 60 * 1000;
-export const DEFAULT_MAX_ATTEMPTS = 5;
-export const DEFAULT_BREAKER_THRESHOLD = 5;
-export const DEFAULT_BREAKER_COOLDOWN_MS = 60_000;
-export const DEFAULT_VECTOR_BATCH_SIZE = 64;
+export const DEFAULT_WORKER_COUNT = DEFAULTS.operational.workerCount;
+export const DEFAULT_DRAIN_STALE_TIMEOUT_MS = DEFAULTS.operational.workerStaleClaimTimeoutMs;
+export const DEFAULT_RETRY_BASE_MS = DEFAULTS.operational.workerRetryBaseMs;
+export const DEFAULT_RETRY_CAP_MS = DEFAULTS.operational.workerRetryCapMs;
+export const DEFAULT_MAX_ATTEMPTS = DEFAULTS.operational.workerMaxAttempts;
+export const DEFAULT_BREAKER_THRESHOLD = DEFAULTS.operational.workerBreakerThreshold;
+export const DEFAULT_BREAKER_COOLDOWN_MS = DEFAULTS.operational.workerBreakerCooldownMs;
+export const DEFAULT_VECTOR_BATCH_SIZE = DEFAULTS.operational.workerVectorBatchSize;
 
 /** `ReflectionOrchestrator` satisfies this; the worker never constructs the pipeline it drives. */
 export type ReflectionRunner = {
@@ -47,7 +49,6 @@ export type ReflectionWorkerDeps = {
   readonly driver: Driver;
   readonly db: SqliteHandle;
   readonly provider: Provider;
-  readonly dispatch: ReflectionDispatch;
   readonly runner: ReflectionRunner;
   readonly logger: Logger;
 };
@@ -74,6 +75,12 @@ export type ReflectionDrain = {
 
 const EMPTY_DRAIN: ReflectionDrain = { reclaimed: 0, vectored: 0, ran: 0 };
 
+/**
+ * A second, well under the minutes-scale floor the idle sweeps use. This one reaps another
+ * process's abandoned claims, and a test drives it on the real clock.
+ */
+const REAPER_MIN_INTERVAL_MS = 1_000;
+
 type HeldRetry = {
   readonly timer: NodeJS.Timeout;
   readonly reason: string;
@@ -83,13 +90,6 @@ type HeldRetry = {
 export function backoffDelayMs(attempts: number, baseMs: number, capMs: number): number {
   const exponent = Math.max(0, attempts - 1);
   return Math.min(baseMs * 2 ** exponent, capMs);
-}
-
-function errorMessage(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  return String(err);
 }
 
 /**
@@ -137,10 +137,9 @@ export class ReflectionWorker {
   /** Jobs whose claim this instance holds through a backoff delay, keyed by job id. */
   readonly #retries = new Map<string, HeldRetry>();
   #cooldown: NodeJS.Timeout | undefined;
-  #reaper: NodeJS.Timeout | undefined;
+  #reaper: SweepTimer | undefined;
   #consecutiveFailures = 0;
   #paused = false;
-  #unsubscribe: (() => void) | undefined;
   #started = false;
   #stopped = false;
   #processed = 0;
@@ -177,10 +176,27 @@ export class ReflectionWorker {
   }
 
   /**
-   * Subscribes first, then drains, so a reflection that arrives mid-drain is not lost: the
-   * signal pumps the same claim loop the drain is already running. The order of the drain
-   * itself is fixed: a dead process's claims come back before anything is claimed, and
-   * pending vectors are attached before the pipeline reads the nodes that need them.
+   * What intake calls when it enqueues. It carries no job: the claim loop reads the queue,
+   * so a wakeup that arrives for a job another worker already took costs one empty claim
+   * attempt and nothing else. Installs no timer, which is what keeps the enqueue path free
+   * of any wait between the write and the run.
+   *
+   * Inert until `start()`: the dispatch seam this replaced subscribed inside `start()`, so a
+   * pre-start enqueue never reached the claim loop. The row is durable in the queue and the
+   * startup drain runs it; claiming it early would race the drain's reclaim ordering.
+   */
+  wake(): void {
+    if (!this.#started) {
+      return;
+    }
+    this.#pump();
+  }
+
+  /**
+   * A reflection that arrives mid-drain is not lost: `wake` pumps the same claim loop the
+   * drain is already running. The order of the drain itself is fixed: a dead process's claims
+   * come back before anything is claimed, and pending vectors are attached before the pipeline
+   * reads the nodes that need them.
    */
   async start(): Promise<ReflectionDrain> {
     if (this.#started) {
@@ -189,10 +205,6 @@ export class ReflectionWorker {
     }
     this.#started = true;
     this.#stopped = false;
-    this.#unsubscribe = this.#deps.dispatch.subscribe(() => {
-      this.#pump();
-    });
-
     const reclaimed = reclaimStaleReflectionJobs(this.#deps.db, this.#staleTimeoutMs);
     this.#startReaper();
     const vectored = await this.#drainPendingVectors();
@@ -213,16 +225,12 @@ export class ReflectionWorker {
    */
   async stop(): Promise<void> {
     this.#stopped = true;
-    if (this.#unsubscribe !== undefined) {
-      this.#unsubscribe();
-      this.#unsubscribe = undefined;
-    }
     if (this.#cooldown !== undefined) {
       clearTimeout(this.#cooldown);
       this.#cooldown = undefined;
     }
     if (this.#reaper !== undefined) {
-      clearInterval(this.#reaper);
+      this.#reaper.stop();
       this.#reaper = undefined;
     }
     this.#paused = false;
@@ -241,11 +249,13 @@ export class ReflectionWorker {
    * the reason the process stays alive.
    */
   #startReaper(): void {
-    const everyMs = Math.max(1_000, Math.floor(this.#staleTimeoutMs / 2));
-    this.#reaper = setInterval(() => {
-      this.#reapStaleClaims();
-    }, everyMs);
-    this.#reaper.unref();
+    this.#reaper = new SweepTimer(
+      halfWindowIntervalMs(this.#staleTimeoutMs, REAPER_MIN_INTERVAL_MS),
+      () => {
+        this.#reapStaleClaims();
+      },
+    );
+    this.#reaper.start();
   }
 
   #reapStaleClaims(): void {

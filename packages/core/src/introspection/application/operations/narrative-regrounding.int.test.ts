@@ -7,7 +7,6 @@ import {
   narrativeRegroundingOperation,
   narrativeRegroundingRelevance,
 } from './narrative-regrounding.js';
-import type { ProviderFactory } from './routed-generation.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import {
@@ -31,7 +30,7 @@ import {
   type Neo4jHarness,
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
-import type { Vector } from '../../../infrastructure/providers/types.js';
+import type { Provider, Vector } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { recordSupersessionProposal } from '../../../infrastructure/sqlite/supersession-proposals.js';
 import { applySupersessionProposal } from '../../../reflection/application/proposals.js';
@@ -69,11 +68,11 @@ const config: Config = {
   maintenance: { ...DEFAULTS.maintenance, narrativeCleanupBatch: 50 },
 };
 
-const stubProvider: ProviderFactory = () => ({
+const stubProvider: Provider = {
   embed: (texts: readonly string[]): Promise<Vector[]> =>
     Promise.resolve(texts.map(() => new Array<number>(EMBED_DIMENSION).fill(0.1))),
   generate: (): Promise<unknown> => Promise.resolve(REWRITTEN),
-});
+};
 
 function context(): OperationContext {
   return {
@@ -81,6 +80,7 @@ function context(): OperationContext {
     db,
     config,
     logger,
+    provider: stubProvider,
     health: healthFixture(),
     now: NOW,
     signal: new AbortController().signal,
@@ -217,9 +217,7 @@ describe('narrative regrounding', () => {
   }, 120_000);
 
   it('rewrites the marked narrative from the claims that are open now', async () => {
-    const outcome = await narrativeRegroundingOperation({ buildProvider: stubProvider }).run(
-      context(),
-    );
+    const outcome = await narrativeRegroundingOperation().run(context());
 
     expect(outcome.status).toBe('applied');
     expect(outcome.itemsAffected).toBeGreaterThanOrEqual(1);
@@ -229,9 +227,7 @@ describe('narrative regrounding', () => {
   }, 120_000);
 
   it('converges: a second pass finds nothing left to reground', async () => {
-    const outcome = await narrativeRegroundingOperation({ buildProvider: stubProvider }).run(
-      context(),
-    );
+    const outcome = await narrativeRegroundingOperation().run(context());
 
     expect(outcome.status).toBe('noop');
     expect(outcome.itemsAffected).toBe(0);
