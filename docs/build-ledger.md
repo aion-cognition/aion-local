@@ -785,6 +785,11 @@ starved ran inside sixteen cycles. The 60 probe rows, the 60 dead-letter ledger 
 produced, and the one-minute tick knob were all removed afterwards; the substrate carries
 nothing from the probe.
 
+**Gate.** `npm run build` clean, then `npm test`: 204 files, 203 passed, 1 skipped, 0 failed;
+1,988 tests, 1,985 passed, 3 skipped, 0 failed; 657.68s; exit 0. Both failures the review
+measured are gone, and the third file it did not see (`apply-granularity`, broken by a required
+field `tsc -b` could not check) is green as well.
+
 **Left open.** `narrative_regrounding` and `emergency_relationship_repair` read `never selected`
 on the live substrate, which is the correct answer for both: no narrative carries the marker yet
 and no episode is missing its session link. Neither has a live selection to point at, and both
