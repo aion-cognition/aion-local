@@ -8,6 +8,7 @@ import {
   CHARS_PER_TOKEN,
   estimateTokens,
   MAX_WHY_CHARS,
+  packMethods,
   type AssemblePackInput,
   type BucketCaps,
 } from './pack.js';
@@ -369,5 +370,47 @@ describe('the rendered text block', () => {
   it('omits the why line entirely for an item whose node carries no rationale', () => {
     const pack = assemble([item('e1')]);
     expect(pack.rendered_text).not.toContain('why:');
+  });
+});
+
+/**
+ * The spirit metric is only as honest as its input. Fusion and resonance offer more than a
+ * pack can hold, and the counter has to be fed by what survived assembly: crediting an
+ * associative mechanism for items the budget or a cap dropped inflates the exact claim the
+ * measurement exists to test.
+ */
+describe('packMethods', () => {
+  it('reports one method per item the pack holds, in bucket order', () => {
+    const pack = assemble([item('e1'), item('e2', { path: 'Episode-[MENTIONS]->Entity' })], {
+      resonant: [item('r1', { path: 'Episode-[RELATED_TO]->Episode' })],
+    });
+
+    expect(packMethods(pack)).toEqual(['vector', 'activation', 'activation']);
+  });
+
+  it('counts nothing for items a bucket cap dropped', () => {
+    const admitted = [
+      item('r1', { path: 'a' }),
+      item('r2', { path: 'a' }),
+      item('r3', { path: 'a' }),
+    ];
+    const pack = assemble([item('e1')], { caps: { ...CAPS, resonant: 1 }, resonant: admitted });
+
+    // Three resonant items admitted, one served: the counter follows the pack.
+    expect(pack.resonant).toHaveLength(1);
+    expect(packMethods(pack)).toEqual(['vector', 'activation']);
+  });
+
+  it('counts nothing for items the token budget dropped', () => {
+    const long = 'a long memory that costs more than the budget has left '.repeat(20);
+    const pack = assemble([item('e1'), item('e2', { content: long, path: 'a' })], {
+      tokenBudget: 60,
+    });
+
+    expect(packMethods(pack)).toEqual(['vector']);
+  });
+
+  it('is empty for a pack that served nothing', () => {
+    expect(packMethods(assemble([]))).toEqual([]);
   });
 });

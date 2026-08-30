@@ -32,7 +32,7 @@ import { buildRankedLists, toActivationSeed } from './candidates.js';
 import { extractCues, type CueCache, type CueExtractionResult } from './cues.js';
 import type { AdmissionPolicy, AdmissionReport } from '../domain/admission.js';
 import { fuse, type FusedItem, type FusionResult } from '../domain/fusion.js';
-import { assemblePack, type BucketCaps } from '../domain/pack.js';
+import { assemblePack, packMethods, type BucketCaps } from '../domain/pack.js';
 import { resonate, type ResonanceResult } from './resonance.js';
 import { selectSeeds, type Seed } from './seeds.js';
 import {
@@ -370,12 +370,11 @@ export async function handleRecall(
   // The cue stage is 60-95% of recall wall time and the first thing contention takes; a
   // degraded pack is otherwise indistinguishable from a healthy one at the item count.
   recordCueOutcome(deps.db, cues.value.degradation !== undefined);
-  // The spirit metric's raw material: both buckets a pack actually served, not just the
-  // first pass, so a resonant hit counts toward its own method rather than vanishing into it.
-  recordPackMethodCounts(
-    deps.db,
-    [...fusion.value.items, ...resonance.value.items].map((item) => item.rationale.method),
-  );
+  // The spirit metric's raw material, read off the assembled pack rather than off the stages
+  // that fed it: an item admitted by fusion or resonance and then dropped by a bucket cap or
+  // the token budget was never served, and crediting its method would inflate exactly the
+  // claim this counter exists to keep honest.
+  recordPackMethodCounts(deps.db, packMethods(pack));
   // Cadence's raw material (PRD §3.4): calls per session and the empty-pack rate, from a
   // lifetime total rather than the degraded-rate window above, which trims to the last 500.
   recordRecallOutcome(deps.db, {

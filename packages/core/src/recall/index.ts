@@ -95,7 +95,14 @@ export type {
   Measurement,
 } from './domain/admission.js';
 
-export { CHARS_PER_TOKEN, PACK_BUCKETS, assemblePack, bucketFor, estimateTokens } from './domain/pack.js';
+export {
+  CHARS_PER_TOKEN,
+  PACK_BUCKETS,
+  assemblePack,
+  bucketFor,
+  estimateTokens,
+  packMethods,
+} from './domain/pack.js';
 export type { AssemblePackInput, BucketCaps, PackBucket } from './domain/pack.js';
 
 export {

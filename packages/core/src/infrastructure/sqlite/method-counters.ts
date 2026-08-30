@@ -7,14 +7,16 @@ import { getMeta, setMeta } from './meta.js';
  * resonance carry their weight against a plain vector or lexical hit, measured from what
  * packs actually served rather than argued from design intent.
  *
- * Mirrors `RecallMethodSchema` in `@aion/protocol`; declared here rather than imported so the
- * infrastructure layer stays free of the protocol layer above it. Parity is asserted in this
- * module's test.
+ * A subset of `RecallMethodSchema` in `@aion/protocol`, and declared here rather than imported
+ * so the infrastructure layer stays free of the protocol layer above it. The protocol also
+ * names `graph_traversal`, which is the fusion leg's name rather than any item's: the leg
+ * exists, but every item it produces is labelled `activation` by the stage that scored it, so
+ * a counter row for it would print zero forever and read as a measurement. Containment is
+ * asserted in this module's test.
  */
 export const PACK_METHODS = [
   'vector',
   'bm25',
-  'graph_traversal',
   'activation',
   'resonance',
   'entity_resolution',
