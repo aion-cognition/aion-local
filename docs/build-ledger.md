@@ -730,9 +730,14 @@ the least-connected pick.
 `fusion.items + resonance.items`, the input to `assemblePack`, while assembly drops items on
 bucket caps, the token budget, the restatement filter, the gloss cap, duplicate episode keys and
 unbucketed labels. Resonance is the worst case structurally: the stage returns up to 20 and the
-pack serves at most 5. It now reads the assembled pack. `graph_traversal` also left the counter:
-it is the fusion leg's name and no item carries it, so the row printed zero forever and read as
-a measurement.
+pack serves at most 5, and the review measured a 50% over-count across five driven recalls (87
+counted against 58 served). It now reads the assembled pack. `graph_traversal` also left the
+counter: it is the fusion leg's name and no item carries it, so the row printed zero forever and
+read as a measurement. The live counters were cleared with the change rather than carried
+forward: this is the metric that exists to keep the associative-mechanisms claim honest, and a
+number blending an over-count with a correct one is worse than starting again. The readings it
+replaces, for the record, were vector 725, bm25 393, activation 236, resonance 1313,
+entity_resolution 182, recency 16.
 
 **Two operator surfaces existed only as exported functions.** `runEntityUnmerge` was reachable
 from nothing — no CLI command, no MCP tool, no operation — and no command could force a
