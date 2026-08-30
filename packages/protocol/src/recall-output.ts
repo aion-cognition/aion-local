@@ -34,6 +34,51 @@ export const RationaleSchema = z.strictObject({
 export type Rationale = z.infer<typeof RationaleSchema>;
 
 /**
+ * Which of the admission rules let the item in. The ways in are not one scale: a cosine over
+ * the vector floor is a measurement, a literal match is evidence with no number behind it,
+ * corroboration is two independent measurements agreeing, and a resonant hit cleared a
+ * threshold in context space against no query at all. `bm25_any` is the escape hatch, a plain
+ * lexical hit admitted alone because `AION_BM25_ADMISSION_MODE` was set to `any`.
+ */
+export const AdmissionRuleSchema = z.enum([
+  'vector_floor',
+  'exact_match',
+  'corroborated',
+  'bm25_any',
+  'context_threshold',
+]);
+
+export type AdmissionRule = z.infer<typeof AdmissionRuleSchema>;
+
+/**
+ * The rule that admitted the item and the measurements that qualified under it, each rendered
+ * as the method and what it returned ('vector 0.56', 'bm25 exact'). Without this an item prints
+ * one number that no floor necessarily judged: an item admitted on a verbatim lexical hit used
+ * to print whatever weak cosine some other leg happened to measure, so a pack could show 0.53
+ * under a 0.55 floor and read as a gate with a hole in it.
+ */
+export const AdmittedBySchema = z.strictObject({
+  rule: AdmissionRuleSchema,
+  evidence: z.array(z.string().min(1)).min(1),
+});
+
+export type AdmittedBy = z.infer<typeof AdmittedBySchema>;
+
+/**
+ * The current claim that answers what a raw turn is about. A turn is captured text, never a
+ * distilled claim, so supersession never judges one and a belief stated in a turn stays
+ * current however often it is later corrected. When such a turn surfaces on resonance alone,
+ * this carries the current claim from its subject family beside it and the reading agent
+ * arbitrates. No contradiction is asserted: the two may agree.
+ */
+export const RelatedClaimSchema = z.strictObject({
+  id: z.string().min(1),
+  text: z.string().min(1),
+});
+
+export type RelatedClaim = z.infer<typeof RelatedClaimSchema>;
+
+/**
  * One recalled memory, shaped identically across every bucket. `currency` and
  * `superseded_by` carry lineage annotation on every item, not just facts. Default recall
  * is currency-aware, not currency-filtered, so any bucket may surface a superseded node.
@@ -56,10 +101,12 @@ export const MemoryPackItemSchema = z.strictObject({
    */
   rank: z.number().int().positive(),
   /**
-   * The absolute measurement admission read: the strongest cosine any method returned for the
-   * item, on [0,1] and comparable between queries. Zero means the item was admitted on a
-   * literal match (Lucene on the verbatim cue, or an exact entity name), which is evidence
-   * rather than a measurement, so no number is invented for it.
+   * The measurement the admitting rule read: the strongest cosine that qualified under
+   * `admitted_by`, on [0,1] and comparable between queries. Zero means the rule counted no
+   * cosine at all, which is a literal match (Lucene on the verbatim cue, or an exact entity
+   * name): evidence rather than a measurement, so no number is invented for it. A cosine some
+   * other leg measured and no rule counted is deliberately not reported here, because a number
+   * under the floor printed beside an admitted item reads as a gate that leaks.
    *
    * On a resonant item the cosine is measured in context space rather than against the query,
    * so it says how strongly the memory's neighborhood resembles the activated set and not how
@@ -68,6 +115,13 @@ export const MemoryPackItemSchema = z.strictObject({
    */
   confidence: z.number(),
   rationale: RationaleSchema,
+  /**
+   * How the item cleared the gate. Optional because a pack is persisted to `last_pack` and
+   * read back later, so packs written before the field existed have to keep parsing.
+   */
+  admitted_by: AdmittedBySchema.optional(),
+  /** Present only on a raw turn in the resonant bucket that has a current claim in its family. */
+  related_claim: RelatedClaimSchema.optional(),
   /**
    * The node's own stated reason, when it stored one (a Decision's `rationale` property
    * today). Optional and absent on most items, since most node types carry no such field.

@@ -1,4 +1,4 @@
-import { bucketFor } from './pack.js';
+import { bucketFor } from './pack-buckets.js';
 import type { Vector } from '../../infrastructure/providers/types.js';
 import { hashContent } from '../../reflection/domain/content.js';
 

@@ -37,7 +37,7 @@ const FACT_LABEL_EXPRESSION = FACT_NODE_LABELS.join('|');
  * A one- or two-character surface form is a substring of nearly every claim, so a name that
  * short cannot establish that two statements share a subject.
  */
-const MIN_SUBJECT_NAME_LENGTH = 3;
+export const MIN_SUBJECT_NAME_LENGTH = 3;
 
 export type FactNodeLabel = (typeof FACT_NODE_LABELS)[number];
 

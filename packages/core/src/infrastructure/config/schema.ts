@@ -92,6 +92,12 @@ export const ConfigSchema = z.object({
     entityGlossCap: positiveInt,
     restatementFloor: proportion,
     decisionBoost: z.number().min(1),
+    /**
+     * Cosine at or above which the current claim in a raw turn's subject family is printed
+     * beside the turn. The family match has already established that the two name the same
+     * subject; this keeps a claim that merely shares a name off the item.
+     */
+    relatedClaimFloor: proportion,
   }),
   search: z.object({
     methods: z.array(searchMethod).min(1),

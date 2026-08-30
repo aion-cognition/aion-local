@@ -96,6 +96,7 @@ export const KNOB_REGISTRY: readonly Knob[] = [
     kind: 'number',
   },
   { envVar: 'AION_DECISION_INTENT_BOOST', path: ['recall', 'decisionBoost'], kind: 'number' },
+  { envVar: 'AION_RELATED_CLAIM_FLOOR', path: ['recall', 'relatedClaimFloor'], kind: 'number' },
 
   { envVar: 'AION_SEARCH_METHODS', path: ['search', 'methods'], kind: 'stringList' },
   { envVar: 'AION_SEARCH_RERANKER', path: ['search', 'reranker'], kind: 'string' },

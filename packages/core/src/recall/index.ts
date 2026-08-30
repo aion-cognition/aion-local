@@ -87,23 +87,19 @@ export type {
   RankedList,
 } from './domain/fusion.js';
 
-export { absoluteRelevance, admitsOnEvidence } from './domain/admission.js';
+export { absoluteRelevance, admissionEvidence, admitsOnEvidence } from './domain/admission.js';
 export type {
+  AdmissionEvidence,
   AdmissionPolicy,
   AdmissionReport,
   Bm25AdmissionMode,
   Measurement,
 } from './domain/admission.js';
 
-export {
-  CHARS_PER_TOKEN,
-  PACK_BUCKETS,
-  assemblePack,
-  bucketFor,
-  estimateTokens,
-  packMethods,
-} from './domain/pack.js';
-export type { AssemblePackInput, BucketCaps, PackBucket } from './domain/pack.js';
+export { CHARS_PER_TOKEN, assemblePack, estimateTokens, packMethods } from './domain/pack.js';
+export type { AssemblePackInput } from './domain/pack.js';
+export { PACK_BUCKETS, bucketFor } from './domain/pack-buckets.js';
+export type { BucketCaps, PackBucket } from './domain/pack-buckets.js';
 
 export {
   DECISION_INTENT_LABELS,

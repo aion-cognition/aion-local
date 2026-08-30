@@ -77,5 +77,13 @@ export function resonantItem(candidate: SeedCandidate, similarity: number): Fuse
     evidence: [{ method: 'resonance', relevance: similarity }],
     score: similarity,
     measured: similarity,
+    // Its own rule, named as such. The content floors never judged this item and the number
+    // beside it is a cosine in context space, so a reader who is told which rule admitted it
+    // cannot mistake the two scales for one.
+    admittedBy: {
+      rule: 'context_threshold',
+      score: similarity,
+      qualifying: [`resonance ${similarity.toFixed(2)}`],
+    },
   };
 }

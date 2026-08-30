@@ -417,3 +417,67 @@ describe('the admission report', () => {
     expect(result.admission.droppedUnmeasured).toBe(0);
   });
 });
+
+/**
+ * The number an item prints has to be one the admitting rule read. A verbatim lexical hit
+ * admits on evidence and measures nothing, so a weak cosine another leg happened to return
+ * used to be printed in its place: a pack served an admitted item at 0.53 under a 0.55
+ * corroboration floor and read as a gate with a hole in it.
+ */
+describe('what an admitted item reports as its measurement', () => {
+  it('reports no measurement for a literal match, whatever else measured the item', () => {
+    const fused = items(
+      [
+        list('bm25', [
+          candidate('hit', {
+            method: 'bm25',
+            relevance: 1,
+            evidence: [
+              { method: 'bm25', relevance: 1, exact: true, cue: 'SQLITE_BUSY' },
+              { method: 'vector', relevance: 0.53, cue: 'SQLITE_BUSY' },
+            ],
+          }),
+        ]),
+      ],
+      { ...RRF, admission: CALIBRATED },
+    );
+
+    expect(ids(fused)).toEqual(['hit']);
+    expect(fused[0]?.measured).toBe(0);
+    expect(fused[0]?.admittedBy).toEqual({
+      rule: 'exact_match',
+      score: 0,
+      qualifying: ['bm25 exact'],
+    });
+  });
+
+  it('reports the cosine that cleared the floor and names the floor as the rule', () => {
+    const fused = items([list('vector', [candidate('hit', { relevance: 0.72 })])], {
+      ...RRF,
+      admission: CALIBRATED,
+    });
+
+    expect(fused[0]?.measured).toBe(0.72);
+    expect(fused[0]?.admittedBy?.rule).toBe('vector_floor');
+  });
+
+  it('reports the stronger of two corroborating cosines, both over the corroboration floor', () => {
+    const fused = items(
+      [
+        list('vector', [
+          candidate('hit', {
+            relevance: 0.57,
+            evidence: [
+              { method: 'vector', relevance: 0.57, cue: 'outbox table' },
+              { method: 'vector', relevance: 0.56, cue: 'remittance ingest' },
+            ],
+          }),
+        ]),
+      ],
+      { ...RRF, admission: CALIBRATED },
+    );
+
+    expect(fused[0]?.measured).toBe(0.57);
+    expect(fused[0]?.admittedBy?.qualifying).toEqual(['vector 0.57', 'vector 0.56']);
+  });
+});

@@ -3,15 +3,14 @@ import { describe, expect, it } from 'vitest';
 
 import type { AdmissionReport } from './admission.js';
 import type { FusedItem } from './fusion.js';
+import { bucketFor, type BucketCaps } from './pack-buckets.js';
+import { MAX_WHY_CHARS } from './pack-item.js';
 import {
   assemblePack,
-  bucketFor,
   CHARS_PER_TOKEN,
   estimateTokens,
-  MAX_WHY_CHARS,
   packMethods,
   type AssemblePackInput,
-  type BucketCaps,
 } from './pack.js';
 
 const TIMINGS: StageTimingsMs = { embed: 12, cues: 340, seeds: 55, activation: 80, fusion: 4 };
