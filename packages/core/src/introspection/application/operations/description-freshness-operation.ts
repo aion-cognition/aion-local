@@ -10,11 +10,10 @@ import type { ChatMessage, JsonSchema } from '../../../infrastructure/providers/
 import type { IntrospectionOperation, OperationOutcome } from '../../domain/operation.js';
 
 /**
- * The parked C3, sanctioned as an introspector op: an entity's description is written once,
- * by whichever episode first named it, and ordinary extraction never revises it. Once enough
- * new mentions have accumulated, the description is a year-old sentence read as current fact
- * (`recall/domain/pack.ts` renders its age precisely because it never changes on its own).
- * This operation is the thing that changes it.
+ * An entity's description is written once, by whichever episode first named it, and ordinary
+ * extraction never revises it. Once enough new mentions have accumulated, the description is
+ * a year-old sentence read as current fact (`recall/domain/pack.ts` renders its age precisely
+ * because it never changes on its own). This operation is the thing that changes it.
  */
 
 export const DESCRIPTION_FRESHNESS_OPERATION = 'description_freshness';

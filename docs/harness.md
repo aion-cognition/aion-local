@@ -90,9 +90,9 @@ not to a default.
 preserving every key and every hook that is not ours. Aion entries are recognized by
 `hook-main.js` in the command path, so a second install replaces them rather than stacking.
 
-Run through `./bin/aion`, the CLI is inside a container and can reach neither the host repo nor
-the host's Claude settings. It prints the block to merge by hand instead of failing. The block
-looks like this, with the absolute path to your own checkout:
+Run through `./bin/aion`, the CLI sits inside a container that can reach neither the host repo
+nor the host's Claude settings. It prints the block to merge by hand instead of failing. The
+block looks like this, with the absolute path to your own checkout:
 
 ```json
 {

@@ -5,9 +5,12 @@ Conventions and commands for agents working in this repo.
 ## Conventions
 
 - TypeScript 5.9, strict, ESM (`NodeNext`). Every relative import ends in `.js`.
-- `type`, never `interface`.
+- `type`, never `interface`. Lint enforces it
+  (`@typescript-eslint/consistent-type-definitions`).
 - No single-line control flow: every `if`, `for`, `while` body is a block, even one line.
-- Files stay under 500 lines.
+  Lint enforces it (`curly: all`).
+- Files stay under 500 lines. Lint enforces it (`max-lines`), off for tests and fixtures,
+  where it stays a review-time rule.
 - No factory functions.
 - Comments state the why or a constraint in plain register: simple tenses, no em-dashes.
   Never cite the whitepaper, the PRD, plans, phases, findings, reviews, or the build
@@ -50,7 +53,7 @@ packages/core/src/
   introspection/application/            the tick loop, the catalog, one file per operation
   redaction/                            deterministic secret detection
   reflection/domain/                    pure: episode/turn shaping, content hashing, stage contract
-  reflection/application/               intake (the write path), dispatch, orchestrator, worker
+  reflection/application/               intake (the write path), orchestrator, worker, lanes
   reflection/application/stages/        the pipeline, in the order bootstrap.ts registers them
   session/                              identity-to-session-id resolution
 packages/mcp/src/                       MCP server: tool definitions, HTTP transport
@@ -62,20 +65,26 @@ bin/aion                                host wrapper: rebuilds the image, runs t
 ## Commands
 
 ```
-npm run build             # tsc -b, whole workspace
+npm run build              # tsc -b, whole workspace
 npm test                   # both vitest projects: unit, then integration
 npm run test:unit          # packages/*/src/**/*.test.ts, no external services
 npm run test:integration   # packages/*/src/**/*.int.test.ts, needs Docker + host Ollama
 npm run test:watch         # unit project, watch mode
 
-npx tsc -p tsconfig.tests.json   # typecheck including tests, which `tsc -b` excludes
+npm run typecheck:all      # tsc -p tsconfig.tests.json: tests and fixtures included
+npm run lint               # eslint .
+npm run lint:fix           # eslint . --fix
+npm run format             # prettier --write .
+npm run format:check       # prettier --check .
 ```
 
 `tsc -b` excludes `*.test.ts` and `*.fixture.ts`, so a change to a shared type compiles clean
-and fails at runtime in a test. `tsconfig.tests.json` is the pass that sees them. It is a
-diagnostic and not a gate: it reports 65 errors across 30 test files that predate it, mostly
-fixtures built before a type gained a field. Read it as a diff against that baseline. When you
+and fails at runtime in a test. `typecheck:all` is the pass that sees them, and it is a gate:
+the baseline is zero errors, so any error it reports is one this change introduced. When you
 change a shared type, also run the tests that construct it.
+
+Prettier does not format Markdown here: `.prettierignore` lists `*.md` and `docs/`, so
+`format:check` says nothing about the docs. Register is a review-time rule, not a tool.
 
 Integration tests read `AION_OLLAMA_URL`; running them on the host rather than inside the
 CLI container needs it set explicitly:
@@ -95,9 +104,10 @@ every command). Use it to exercise the actual binary, not as a test runner.
   finds one outside the two files it skips. Those two are itself, which has to name the
   patterns it forbids, and `test-support/neo4j-harness.fixture.ts`, which clears the test
   database between files. A test in the same file pins the skip list at exactly those two,
-  so widening it takes a deliberate edit. This is the only convention enforced by a
-  repo-wide scan.
-  A grep guard modeled on it would be the cheap way to enforce Cypher confinement to
+  so widening it takes a deliberate edit. It is the only convention enforced by a repo-wide
+  scan rather than by lint: the three lint-backed conventions are marked above, and
+  everything else in that list is a review-time rule.
+  A grep guard modeled on this one would be the cheap way to enforce Cypher confinement to
   `infrastructure/graph/`, if that becomes worth codifying.
 
 ## The gate definition

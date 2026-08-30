@@ -3,9 +3,8 @@ import { z } from 'zod';
 import { IsoTimestampSchema } from './common.js';
 
 /**
- * The example shows only `{ role: "user", text }`. See recall-input.ts for why role
- * stays a string. `occurred_at` is the per-item timestamp. Intake uses it when the caller
- * supplies it, else the wall clock at write time.
+ * See recall-input.ts for why role stays a string. `occurred_at` is the per-item timestamp.
+ * Intake uses it when the caller supplies it, else the wall clock at write time.
  */
 export const ReflectionTurnSchema = z.strictObject({
   role: z.string().min(1),
@@ -16,9 +15,9 @@ export const ReflectionTurnSchema = z.strictObject({
 export type ReflectionTurn = z.infer<typeof ReflectionTurnSchema>;
 
 /**
- * The example shows `status: "error"`. No closed vocabulary is pinned, so this stays a
- * string for the same reason `role` does. `input` and `output` are whatever the tool call
- * actually carried (string or structured). Redaction walks either shape.
+ * No closed vocabulary is pinned on `status`, so it stays a string for the same reason
+ * `role` does. `input` and `output` are whatever the tool call actually carried (string
+ * or structured). Redaction walks either shape.
  *
  * Only `tool` and `status` are required. Nothing inside a tool execution is mandated.
  * The at-least-one-of rule is across `turns`, `tool_executions`, and `observations`.

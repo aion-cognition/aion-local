@@ -132,7 +132,7 @@ describe('memoryDecayRelevance', () => {
 
 describe('decide, on fresh-graph fixtures (no live tick, no waiting)', () => {
   it('selects reinforcement_flush on the very first cycle against the round-2 backlog', () => {
-    // The exercise round's own reading: 1,099 queued, nothing else in the graph yet.
+    // A backlog large enough to select flush outright, with nothing else in the graph yet.
     const health = healthFixture({
       plasticity: {
         reinforcementQueueDepth: 1_099,

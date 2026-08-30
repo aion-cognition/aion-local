@@ -20,16 +20,21 @@ from `recall/`, `reflection/`, `session/`, or `redaction/`. It has no notion of 
 cues, or memory packs, only nodes, edges, and rows.
 
 - **`infrastructure/`**: `graph/` (every Cypher statement in the workspace), `sqlite/`
-  (the reflection queue, last-pack cache, ops ledger, claim locking), `providers/` (the
-  Ollama and Anthropic clients, the circuit breaker, the per-role routing layer and the
-  model reconciliation that follows it), `config/` (schema, defaults, the `AION_*`
-  registry, the loader), `logging/`.
+  (the reflection queue, last-pack cache, ops ledger, claim locking, and the two proposal
+  queues, whose reads share one `proposal-table.ts` because both are an id, the pair the
+  proposal is about, and a `resolved_at` that is null while a person still owes the row a
+  decision), `providers/` (the Ollama and Anthropic clients, the circuit breaker, the
+  per-role routing layer and the model reconciliation that follows it), `config/` (schema,
+  defaults, the `AION_*` registry, the loader), `logging/`.
 - **`recall/domain/`**: `activation.ts` (spreading activation over adjacency),
   `activation-weights.ts` (the per-relationship-type propagation table),
   `admission.ts` (the evidence rules and the floors), `arrival-scoring.ts` (cosines for what
   the spread reached), `seed-selection.ts` (the budget curve and the per-leg reservations),
-  `fusion.ts` (RRF/MMR ranking and the currency policy), `resonance.ts` (the centroid and the
-  shape of a resonant item), `pack.ts` (MemoryPack assembly).
+  `fusion.ts` (weighted RRF, the admission decision, and the currency policy), `ranking.ts`
+  (the ordering machinery fusion hands its admitted list to: MMR, the near-duplicate cluster
+  cap, cosine), `facts.ts` (the restatement floor and the gloss cap), `resonance.ts` (the
+  centroid and the shape of a resonant item), `pack-buckets.ts` (which bucket a node label
+  answers in), `pack.ts` (MemoryPack assembly).
 - **`recall/application/`**: `cues.ts` (cue extraction and its cache), `seeds.ts` (the
   four seed strategies' scoring and merge), `candidates.ts` (seeds plus activation into
   ranked lists), `stage-reads.ts` (the pipeline's batched graph reads), `resonance.ts` (the
@@ -51,21 +56,28 @@ cues, or memory packs, only nodes, edges, and rows.
   `plasticity-operations.ts` (the flush and the decay sweep, adapted to the contract), and
   `operations/`, one file per registered operation plus `unmerge.ts`, the repair the loop
   never selects on its own.
-- **`reflection/domain/`**: `content.ts`, episode/turn shaping and content hashing.
-- **`reflection/application/`**: `intake.ts` (the write path), `dispatch.ts` (the event
-  emitter intake signals), `worker.ts` (the subscriber: claims queue rows and runs the
-  orchestrator), `orchestrator.ts` and `stages/` (the enrichment pipeline),
-  `narratives.ts`, `lanes.ts`, `vectors.ts` (pending-vector backfill).
+- **`reflection/domain/`**: `content.ts` (episode/turn shaping and content hashing),
+  `stage.ts` (the contract every stage implements and how the orchestrator records it),
+  `entity-extraction.ts`, `entity-identity.ts` and `entity-merge.ts` (name folding, the
+  name-form half of identity, and the grouping a dedup run reduces to),
+  `associations.ts` (pair combinatorics), `context-vector.ts` (the strength-weighted mean),
+  `narrative.ts` (the session boundary and versioning rules).
+- **`reflection/application/`**: `intake.ts` (the write path), `worker.ts` (claims queue
+  rows and runs the orchestrator), `orchestrator.ts` and `stages/` (the enrichment
+  pipeline), `narratives.ts`, `lanes.ts`, `vectors.ts` (pending-vector backfill),
+  `reconcile.ts`, `lag.ts`, `proposals.ts`.
 - **`redaction/`**: `entropy.ts`, `rules.ts`, `deep-walk.ts`, `redact.ts`,
-  `fingerprint.ts`. Deterministic and rule-based by design: this is the one place inference
-  is deliberately not used, because a credential leak cannot wait on a model's judgment.
+  `fingerprint.ts`, `residue.ts`. Deterministic and rule-based by design: this is the one
+  place inference is deliberately not used, because a credential leak cannot wait on a
+  model's judgment.
 - **`session/`**: `session-manager.ts`, identity-to-session-id resolution, cached per
   process, backed by `infrastructure/graph/sessions.ts`.
 
-One edge crosses contexts: `recall/domain/fusion.ts` imports `hashContent` from
-`reflection/domain/content.ts` to dedupe fused items by content hash before packaging,
-the same hash reflection uses as its episode dedupe key. It is the sole domain-to-domain
-import in the codebase.
+One edge crosses contexts, and it runs one way: `recall/domain/` imports from
+`reflection/domain/`. `fusion.ts`, `ranking.ts` and `pack.ts` take `hashContent` from
+`content.ts` to dedupe by content hash, the same hash reflection uses as its episode dedupe
+key, and `resonance.ts` takes `weightedMeanVector` from `context-vector.ts` to build the
+centroid. Four imports, two symbols, no edge in the other direction.
 
 ## Write path: reflection intake
 
@@ -93,8 +105,10 @@ import in the codebase.
    episode id and carrying its lane. The check is against the queue, not assumed from step
    7's outcome, so a crash between the episode commit and the enqueue self-heals on the
    next identical push.
-9. If a new job was enqueued, signal `ReflectionDispatch` so a subscribed worker can start
-   immediately; the SQLite row is what a restart replays from regardless.
+9. If a new job was enqueued, call the `onJobEnqueued` callback so the worker can start
+   immediately. The service wires that callback to `worker.wake()`; the SQLite row is what a
+   restart replays from regardless. A callback that throws is logged and swallowed, since by
+   then the episode is in the graph and the job is in the queue.
 10. Return `{ episode_id, queued: true }` plus the assigned `lane` and `pending_ahead`
     (unclaimed interactive jobs ahead at enqueue time).
 11. Embed the episode text and every turn's text in one batched Ollama call and attach the
@@ -109,10 +123,12 @@ loses anything: the record commits, the job queues, and the vectors arrive when 
 does. `docs/degradation.md` holds the live-verified behavior for both modes.
 
 No generation call happens after step 7. Extraction, turning an episode into entities,
-associations, cognitive structure and narratives, is a separate pipeline that subscribes to
-the dispatch signal. `ReflectionWorker` claims the queue row the signal announces and runs
-`ReflectionOrchestrator` over the stage list `packages/mcp/src/bootstrap.ts` registers. The
-queue row is the durable truth; the signal is best-effort.
+associations, cognitive structure and narratives, is a separate pipeline. `ReflectionWorker`
+runs its own claim loop and `wake()` pumps it; the wakeup carries no job, so a wakeup for a
+row another worker already took costs one empty claim attempt and nothing else. The worker
+then runs `ReflectionOrchestrator` over the stage list `packages/mcp/src/bootstrap.ts`
+registers. The queue row is the durable truth; the wakeup is best-effort, and `wake()` is
+inert before `start()` because the startup drain picks up anything enqueued first.
 
 Which row it claims is a scheduling decision, not insertion order. Every row carries a lane
 (`interactive` by default, `bulk` when the caller flagged it or the arrival-rate backstop
@@ -129,8 +145,12 @@ into first-in-first-out after the first claim.
 independently for the pack's `stage_timings_ms`:
 
 1. **Cues.** One generation call (the cue model) turns the query, and optionally a summary
-   and recent turns, into weighted cues: query text weighs 3x, summary 2x, recent-turn
-   text 1x. If the call times out, errors, or returns something unparseable, recall falls
+   and recent turns, into weighted cues: query text weighs 3x, summary and recent-turn text
+   1x each. The summary was damped from 2x on a measurement: summary cues compete with query
+   cues for a seed budget that ran exactly full on all 1,480 logged recalls, and across four
+   summaries none improved on no summary at all while one lost the answer entirely. Nothing
+   rewrites or drops the caller's summary; it just stops outranking the question. If the call
+   times out, errors, or returns something unparseable, recall falls
    back to a raw-query/raw-summary cue instead of failing, and the pack records that
    degradation. `AION_CUE_BUDGET_MS` guards the call at 8000ms, a deliberate deviation from
    PRD §14's 2000: the pinned cue model answers in 558-811ms warm and a measured 2030ms on
@@ -174,9 +194,15 @@ independently for the pack's `stage_timings_ms`:
    fused score. The stage is skippable (`AION_RECALL_USE_CONTEXT_RESONANCE`), timed like
    every other stage, and declines to run at all on a query nothing anchored: resonating from
    an unanchored pack searches the shape of nothing.
-7. **Pack assembly.** Fused items route to a bucket by node label: `Episode`/`Turn` to
-   `episodes`, `Entity` to `facts`. Each bucket is capped, trimmed to the token budget,
-   and rendered into the pack's text block. The episode cap (`AION_RECALL_MAX_EPISODES`)
+7. **Pack assembly.** Fused items route to a bucket by node label (`pack-buckets.ts`):
+   `Episode`/`Turn` to `episodes`, `Narrative` to `narratives`, and `Entity` plus the nine
+   cognitive types (`Goal`, `Plan`, `Decision`, `Insight`, `Concept`, `Context`, `Event`,
+   `Pattern`, `Trend`) to `facts`, since a Decision carries a fact the same way an entity
+   does. `resonant` is not in that table and never will be: every other bucket answers what
+   kind of memory this is, which a label decides, and resonance answers how it was found,
+   which only the stage that found it knows. A label with no bucket is dropped. Each bucket
+   is capped, trimmed to the token budget, and rendered into the pack's text block. The
+   episode cap (`AION_RECALL_MAX_EPISODES`)
    defaults to 20, a deliberate deviation from whitepaper Appendix E's 5: the cap cuts the
    fused list, so on a populated substrate a five-item cut is filled by near-tie vector hits
    before any traversal-reached item can land. The token budget is what actually bounds a
@@ -191,7 +217,9 @@ reached the caller as a client-side timeout with the server's own error lost. A 
 answers in microseconds, so these bite only during an outage. See `docs/degradation.md` for
 every failure mode this pipeline degrades through, mode by mode, with live evidence.
 
-The pack is saved to SQLite's `last_pack` table (what `aion last` renders) and returned. A
+The pack is saved to SQLite's `last_pack` table (what `aion last` renders) and returned. The
+row carries the read mode alongside the pack, `as_of` and `knew_at` when either was set, so
+`aion last` can say the pack answered a time-traveled read rather than the present graph. A
 registered listener fires afterward and is never awaited, so a listener failure cannot fail a
 recall that already succeeded: it stamps access metadata and nominates the co-activated pairs
 that the reinforcement flush later folds into edge weights. A time-travel read does neither,
@@ -225,7 +253,11 @@ does, and one tick runs four phases: observe, decide, act, learn.
    model-guided seam: opt-in (`AION_MAINTENANCE_TIER3`), propose-only, and inert by default.
 3. **Act.** At most one operation per tick. It claims a calendar-aligned time bucket in the
    ops ledger first (`intro:<name>:<bucket>:<stamp>`), so two service instances cannot run
-   the same window twice, and writes the outcome back to that key when it finishes.
+   the same window twice, and writes the outcome back to that key when it finishes. The
+   operation reads the graph, SQLite, the config, the snapshot the decision was made from,
+   and a `provider` off one `OperationContext`. That provider is the `reflect` role's,
+   built once for the service: an operation that built its own would get a fresh circuit
+   breaker per run, which cannot count the consecutive failures it exists to trip on.
 4. **Learn.** An operation declares the one metric it exists to move and which direction
    counts as better. The engine takes that reading before the run and again on a later tick,
    which is the first snapshot that can see the system settled around the change, and records
@@ -332,29 +364,35 @@ edges) are unaffected; that guarantee holds through `MERGE`.
 
 ## Graph schema surface
 
-**Node labels.** `Session`, `Episode`, `Turn`, `Entity`, `Member`, `Workspace` are the
-primary labels. Every node also carries `AionNode`, which is what gives type-agnostic id
-lookups (both edge endpoints, the supersession close) an index to seek. Neo4j has no
-label-free property index, so without it those lookups would scan the whole graph.
-Content-bearing nodes (`Episode`, `Turn`) additionally carry `Memory`, because a Neo4j
-vector index cannot span a label union: `Memory` is the only mechanism that lets one
-vector index cover more than one node type. The backbone nodes (`Member`, `Workspace`)
-additionally carry `Entity`, so the composite `(name_norm, type)` uniqueness constraint
-and the entity-resolution seed strategy both apply to them.
+**Node labels.** Seventeen primary labels, pinned in `infrastructure/graph/labels.ts`:
+`Session`, `Episode`, `Turn`, `Entity`, `Member`, `Workspace`, `Narrative`, `Bridge`, and
+the nine cognitive types (`Goal`, `Plan`, `Decision`, `Insight`, `Concept`, `Context`,
+`Event`, `Pattern`, `Trend`). Every node also carries `AionNode`, which is what gives
+type-agnostic id lookups (both edge endpoints, the supersession close) an index to seek.
+Neo4j has no label-free property index, so without it those lookups would scan the whole
+graph. Every content-bearing label carries `Memory` as well, which is everything above
+except `Session` and the two backbone nodes, because a Neo4j vector index cannot span a
+label union: `Memory` is the only mechanism that lets one vector index cover more than one
+node type. The backbone nodes (`Member`, `Workspace`) stay out of `Memory` (they are
+connectivity, not content) and carry `Entity` instead, so the composite `(name_norm, type)`
+uniqueness constraint and the entity-resolution seed strategy both apply to them.
 
-**Indexes and constraints** (migration 001, `infrastructure/graph/migrations.ts`):
+**Indexes and constraints** (migrations 001 and 002, `infrastructure/graph/migrations.ts`):
 
-- Uniqueness constraints on `AionNode.id`, and on `.id` for `Session`, `Episode`, `Turn`,
-  `Member`, `Workspace`; a composite constraint on `Entity(name_norm, type)`.
+- Uniqueness constraints on `AionNode.id`, and on `.id` for every primary label except
+  `Entity`, which takes a composite constraint on `(name_norm, type)` instead. Migration 001
+  covers `Session`, `Episode`, `Turn`, `Member`, `Workspace`; 002 adds `Narrative`,
+  `Bridge`, and the nine cognitive types.
 - Two vector indexes, `content_vec_idx` and `context_vec_idx`, both `FOR (n:Memory)`, both
   cosine similarity at the configured embed dimension (768 by default, `nomic-embed-text`).
 - Two range indexes, `memory_valid_until_idx` and `memory_tx_until_idx`, both
   `FOR (n:Memory)`. They serve the bounded half of a time-travel filter
   (`valid_until > t`); the open-interval half (`IS NULL`) has no index to seek and is a
   scan by construction.
-- One fulltext index, `memory_content_fts`, over `Episode|Turn|Entity` plus every P3
-  cognitive label and `Narrative`, `ON [summary, text, name]`, the target of the `bm25` seed
-  strategy. It replaced migration 001's narrower `content_fts` under a new name rather than
+- One fulltext index, `memory_content_fts`, over `Episode|Turn|Entity|Narrative` plus the
+  nine cognitive labels, `ON EACH [summary, text, name]`, the target of the `bm25` seed
+  strategy. `Bridge` is the one `Memory` label it leaves out. It replaced migration 001's
+  narrower `content_fts` under a new name rather than
   by a drop-and-recreate: `runGraphMigrations` replays every statement on every `aion init`,
   so a rename is what keeps a re-init from destroying and repopulating a healthy index.
 
@@ -362,10 +400,12 @@ and the entity-resolution seed strategy both apply to them.
 through one `MERGE`, matched on endpoint ids resolved through `AionNode`: on create it
 sets strength, confidence, signal and provenance lists, and a count; on match it takes
 `max(strength)`, `max(confidence)`, set-union on signals, set-union on provenance,
-`sum(count)`, and refreshes `updated_at` while leaving `created_at` alone. Undirected
-relationship types (`SIMILAR`, `CO_OCCURS`, `RELATED_TO`, `ANALOGOUS_TO`) normalize their
-endpoint order before the merge, so writing an edge from node A to node B and later from B
-to A lands on one edge, not two. Twenty-two directed types cover containment
+`sum(count)`, and refreshes `updated_at` while leaving `created_at` alone. The five
+undirected types (`SIMILAR`, `CO_OCCURS`, `RELATED_TO`, `ANALOGOUS_TO`, `CONTRADICTS`)
+normalize their endpoint order before the merge, so writing an edge from node A to node B
+and later from B to A lands on one edge, not two. `CONTRADICTS` is undirected because
+tension is mutual: two claims in tension state the same thing from either end.
+Twenty-two directed types cover containment
 (`PARTICIPATES_IN`), temporal chaining (`FOLLOWS`, `PRECEDES`), provenance
 (`DERIVES_FROM`, `EVIDENCES`, `EXTRACTED_FROM`), the backbone (`HAS_MEMBER`,
 `HAS_WORKSPACE`), and this build's bitemporal extension, `SUPERSEDES`.
