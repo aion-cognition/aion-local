@@ -95,7 +95,14 @@ export async function runUnmerge(
 
     if (flags.subcommand === 'ls') {
       const records = await listUnmergeableRecords(connection.driver, flags.id);
-      write(`${short(flags.id)} has absorbed ${String(records.length)} identity(ies)`);
+      if (records.length === 0) {
+        // Two states with one answer: the id names no entity, or it names one that has
+        // absorbed nothing. Neither has anything to split, and telling them apart would take
+        // a second read for an answer that is the same either way.
+        write(`${flags.id} has no merge record with an identity left to split out`);
+        return 0;
+      }
+      write(`${flags.id} has absorbed ${String(records.length)} identity(ies)`);
       for (const record of records) {
         write(
           `  ${record.mergedId}  ${record.mergedName ?? 'name not recorded'}` +
@@ -103,10 +110,8 @@ export async function runUnmerge(
             `${String(record.edges.length)} edge(s) recorded`,
         );
       }
-      if (records.length > 0) {
-        write('');
-        write('`aion unmerge apply <id>` splits one of them back out');
-      }
+      write('');
+      write('`aion unmerge apply <id>` splits one of them back out');
       return 0;
     }
 
