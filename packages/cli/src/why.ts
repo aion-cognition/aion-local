@@ -64,6 +64,29 @@ function isOpen(row: { readonly resolvedAt: string | null }): boolean {
   return row.resolvedAt === null;
 }
 
+/**
+ * Edges the maintenance loop wrote, and the reason each one gives for existing.
+ *
+ * A node the loop created has no source episode, so the provenance block above it says
+ * "no source episode recorded" and stops. That is true and useless: a Bridge is not extracted
+ * from an episode, it is derived from two communities, and the story is on its edges. Same for
+ * an orphan relink and a restored backbone link. Reading the edges is the only way to answer
+ * why any of them are there.
+ */
+function renderDerivedEdges(edges: readonly NodeEdge[], write: Writer): void {
+  const derived = edges.filter((edge) => edge.rationale !== undefined);
+  if (derived.length === 0) {
+    return;
+  }
+  write('derived associations');
+  for (const edge of derived) {
+    const signals = edge.signals.length === 0 ? 'unlabelled' : edge.signals.join(', ');
+    write(`  ${edge.type} ${edge.outgoing ? '->' : '<-'} ${edge.otherId} (${signals})`);
+    write(`    strength ${edge.strength.toFixed(3)}: ${edge.rationale ?? ''}`);
+  }
+  write('');
+}
+
 export function renderProvenance(
   provenance: NodeProvenance,
   edges: readonly NodeEdge[],
@@ -112,6 +135,8 @@ export function renderProvenance(
     );
   }
   write('');
+
+  renderDerivedEdges(edges, write);
 
   write('supersession lineage');
   const lineage = edges.filter((edge) => edge.type === 'SUPERSEDES');

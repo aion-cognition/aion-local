@@ -135,6 +135,8 @@ export type NodeEdge = {
   readonly count: number;
   readonly provenance: readonly string[];
   readonly signals: readonly string[];
+  /** Why the edge exists, when whatever wrote it said so. A repair and a bridge both do. */
+  readonly rationale?: string;
   readonly createdAt?: Date;
 };
 
@@ -153,6 +155,7 @@ function edgesStatement(id: string, mode: ReadMode): GraphStatement {
     '       coalesce(r.count, 0) AS count,',
     '       coalesce(r.provenance, []) AS provenance,',
     '       coalesce(r.signals, []) AS signals,',
+    '       r.rationale AS rationale,',
     '       r.created_at AS created_at',
     'ORDER BY type(r), other_id',
   ].join('\n');
@@ -172,6 +175,9 @@ function mapEdge(row: Row): NodeEdge {
     count: row.count as number,
     provenance: (row.provenance as string[] | null) ?? [],
     signals: (row.signals as string[] | null) ?? [],
+    ...(typeof row.rationale === 'string' && row.rationale.trim().length > 0
+      ? { rationale: row.rationale }
+      : {}),
     ...(createdAt instanceof Date ? { createdAt } : {}),
   };
 }

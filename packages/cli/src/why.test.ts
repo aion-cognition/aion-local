@@ -82,6 +82,26 @@ const EDGES: readonly NodeEdge[] = [
   },
 ];
 
+/** What a bridge's own edges carry: no episode, and the whole reason it exists. */
+const BRIDGE_EDGES: NodeEdge[] = [
+  {
+    type: 'RELATED_TO',
+    outgoing: true,
+    otherId: 'concept-left',
+    otherLabels: ['Concept', 'Memory'],
+    otherContent: 'the ingest path',
+    strength: 0.597,
+    confidence: 0.597,
+    count: 0,
+    provenance: ['introspection'],
+    signals: ['symbiosis_bridge'],
+    rationale:
+      'closest pair by content vector between two clusters scored 0.412 (38 and 21 members, ' +
+      'coherence 0.90, balance 0.55, overlap 0.00, isolation 1.00), cosine 0.597',
+    createdAt: new Date('2026-06-06T00:00:00.000Z'),
+  },
+];
+
 const SUPERSESSION_PROPOSAL: SupersessionProposal = {
   id: 'prop-1',
   oldId: 'aaaaaaaa-0000-0000-0000-000000000000',
@@ -178,6 +198,23 @@ describe('renderProvenance', () => {
     expect(text).toMatch(/EXTRACTED_FROM\s+1/);
     expect(text).toMatch(/MENTIONS\s+1/);
     expect(text).toMatch(/SUPERSEDES\s+1/);
+  });
+
+  /**
+   * A Bridge is derived from two communities rather than extracted from an episode, so the
+   * provenance block above has nothing to say about it and the whole story sits on its edges.
+   * Before this the answer to "why is this here" was an edge-type count.
+   */
+  it('reads the story off the edges of a node no episode produced', () => {
+    const { lines, write } = collector();
+
+    renderProvenance(CURRENT, BRIDGE_EDGES, [], [], write);
+
+    const text = lines.join('\n');
+    expect(text).toContain('derived associations');
+    expect(text).toContain('symbiosis_bridge');
+    expect(text).toContain('closest pair by content vector between two clusters');
+    expect(text).toMatch(/strength 0\.597/);
   });
 
   it('says plainly when there is nothing on a given axis', () => {
