@@ -7,6 +7,21 @@ export { operationBucketKey, OPERATION_LEDGER_PREFIX } from './domain/buckets.js
 
 export type { IntrospectionOperation } from './domain/operation.js';
 
+export {
+  MERGE_SHADOW_LEDGER_PREFIX,
+  mergeShadowLedgerKey,
+  readMergeShadowVerdict,
+  summarizeMergeShadowAgreement,
+  verdictAgrees,
+  verdictOf,
+  wouldAutoApply,
+} from './domain/merge-shadow.js';
+export type {
+  MergeShadowAgreement,
+  MergeShadowResolvedJudgment,
+  MergeShadowVerdict,
+} from './domain/merge-shadow.js';
+
 export { observeHealth } from './application/observe.js';
 
 export { Introspector } from './application/engine.js';

@@ -15,7 +15,13 @@ export { halfWindowIntervalMs, MIN_SWEEP_INTERVAL_MS, SweepTimer } from './sweep
 export { SqliteStore, openSqliteHandle } from './sqlite/database.js';
 export type { SqliteHandle } from './sqlite/database.js';
 
-export { isLedgerApplied, latestLedgerEntry, markLedgerApplied } from './sqlite/ops-ledger.js';
+export {
+  isLedgerApplied,
+  latestLedgerEntry,
+  listLedgerEntries,
+  markLedgerApplied,
+} from './sqlite/ops-ledger.js';
+export type { OpsLedgerEntry } from './sqlite/ops-ledger.js';
 
 export { introspectionCycle, listOperationStats } from './sqlite/introspection-counters.js';
 export type { OperationStats } from './sqlite/introspection-counters.js';
@@ -71,6 +77,8 @@ export {
 export type { GraphCounts } from './graph/introspection.js';
 
 export { fetchNodeEdges, fetchNodeProvenance } from './graph/node-provenance.js';
+
+export { wasEntityMergeApplied } from './graph/merge-shadow-queries.js';
 
 export type { NodeEdge, NodeProvenance } from './graph/node-provenance.js';
 

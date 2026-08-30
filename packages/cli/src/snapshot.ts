@@ -4,25 +4,35 @@ import {
   introspectionCycle,
   introspectionOperations,
   latestLedgerEntry,
+  listEntityMergeProposals,
   listLastPackSessions,
+  listLedgerEntries,
   listOllamaModels,
   listOperationStats,
   listResidentModels,
+  mergeShadowLedgerKey,
+  MERGE_SHADOW_LEDGER_PREFIX,
   OPERATION_LEDGER_PREFIX,
   PACK_METHODS,
   packMethodCounters,
   plasticityCounters,
   queueLagSnapshot,
+  readMergeShadowVerdict,
   recallCadenceCounters,
   remoteBannerLines,
   resolveProviderRouting,
   routingSummary,
+  summarizeMergeShadowAgreement,
   unbackedPins,
+  wasEntityMergeApplied,
+  wouldAutoApply,
   edgeWeightDistribution,
   type Config,
   type EdgeWeightDistribution,
   type GraphConnection,
   type GraphCounts,
+  type MergeShadowAgreement,
+  type MergeShadowResolvedJudgment,
   type OperationStats,
   type PackMethodCounters,
   type PlasticityCounters,
@@ -31,7 +41,7 @@ import {
   type SqliteHandle,
 } from '@aion/core';
 
-import { ageOf, formatEdgeWeights } from './format.js';
+import { ageOf, formatEdgeWeights, short } from './format.js';
 import { describeError, type Writer } from './output.js';
 
 /**
@@ -61,6 +71,19 @@ export type MaintenanceSnapshot = {
   readonly operations: readonly MaintenanceOperationReading[];
 };
 
+/**
+ * What the merge-shadow introspection operation has recorded, read back for `aion stats`. The
+ * open counts are a live rule evaluation; the agreement is only ever as current as the last
+ * time the operation ran, since a resolved proposal's verdict was stamped while it was still
+ * open and is never recomputed.
+ */
+export type MergeShadowSnapshot = {
+  readonly openWouldApply: number;
+  readonly openWouldQueue: number;
+  /** Absent while Neo4j is down: the actual outcome behind each verdict comes from the graph. */
+  readonly agreement?: MergeShadowAgreement;
+};
+
 /** The verbose-only readings `stats` adds on top of the base view `status` also renders. */
 export type SnapshotExtras = {
   /** Label to node count; a node with several labels appears under each. */
@@ -70,6 +93,7 @@ export type SnapshotExtras = {
   readonly sessionsServed: number;
   readonly methodCounters: PackMethodCounters;
   readonly maintenance: MaintenanceSnapshot;
+  readonly mergeShadow: MergeShadowSnapshot;
 };
 
 export type Snapshot = {
@@ -132,6 +156,59 @@ export function collectMaintenance(db: SqliteHandle): MaintenanceSnapshot {
   return { cycle: introspectionCycle(db), operations };
 }
 
+/**
+ * The open-proposal counts are a rule evaluation, always available. The agreement is a graph
+ * read per resolved, shadow-judged pair, so it is skipped while Neo4j is down rather than
+ * reported wrong: `wasEntityMergeApplied` cannot answer, and guessing "not merged" would read
+ * every disagreement of that kind as the policy's fault.
+ */
+export async function collectMergeShadow(
+  db: SqliteHandle,
+  connection: GraphConnection,
+  reachable: boolean,
+): Promise<MergeShadowSnapshot> {
+  const proposals = listEntityMergeProposals(db);
+  const open = proposals.filter((proposal) => proposal.resolvedAt === null);
+  const openWouldApply = open.filter((proposal) =>
+    wouldAutoApply(proposal.leftName, proposal.rightName),
+  ).length;
+  const openWouldQueue = open.length - openWouldApply;
+
+  if (!reachable) {
+    return { openWouldApply, openWouldQueue };
+  }
+
+  const verdicts = new Map(
+    listLedgerEntries(db, MERGE_SHADOW_LEDGER_PREFIX).map((entry) => [entry.key, entry.summary]),
+  );
+  const judgments: MergeShadowResolvedJudgment[] = [];
+  for (const proposal of proposals) {
+    if (proposal.resolvedAt === null) {
+      continue;
+    }
+    const verdict = readMergeShadowVerdict(verdicts.get(mergeShadowLedgerKey(proposal.id)));
+    if (verdict === undefined) {
+      continue;
+    }
+    const actuallyMerged = await wasEntityMergeApplied(
+      connection.driver,
+      proposal.leftId,
+      proposal.rightId,
+    );
+    judgments.push({
+      proposalId: proposal.id,
+      leftName: proposal.leftName,
+      leftType: proposal.leftType,
+      rightName: proposal.rightName,
+      rightType: proposal.rightType,
+      verdict,
+      actuallyMerged,
+    });
+  }
+
+  return { openWouldApply, openWouldQueue, agreement: summarizeMergeShadowAgreement(judgments) };
+}
+
 export function collectSnapshot(
   config: Config,
   connection: GraphConnection,
@@ -192,6 +269,7 @@ export async function collectSnapshot(
   const labelCounts = health.reachable
     ? await countNodesByLabel(connection.driver)
     : new Map<string, number>();
+  const mergeShadow = await collectMergeShadow(db, connection, health.reachable);
 
   return {
     ...base,
@@ -201,6 +279,7 @@ export async function collectSnapshot(
       sessionsServed: listLastPackSessions(db).length,
       methodCounters: packMethodCounters(db),
       maintenance: collectMaintenance(db),
+      mergeShadow,
     },
   };
 }
@@ -238,6 +317,38 @@ function renderMaintenance(snapshot: MaintenanceSnapshot, now: number, write: Wr
       `  ${name} runs ${String(stats.runs)}  improved ${String(stats.improved)}  ` +
         `unchanged ${String(stats.unchanged)}  failed ${String(stats.failed)}  ` +
         `last ${age} ago ${reading.lastStatus ?? 'unrecorded'}${affected}`,
+    );
+  }
+}
+
+/**
+ * What an auto-merge policy would have done, next to what people actually decided. Agreement
+ * reads honest at zero: a fresh substrate with no shadow-judged resolutions yet says so instead
+ * of printing "0 of 0" as if it meant something.
+ */
+function renderMergeShadow(snapshot: MergeShadowSnapshot, write: Writer): void {
+  write('');
+  write('merge shadow');
+  write(
+    `  open        ${String(snapshot.openWouldApply)} would auto-apply, ` +
+      `${String(snapshot.openWouldQueue)} would queue`,
+  );
+  if (snapshot.agreement === undefined) {
+    write('  agreement   unavailable while Neo4j is down');
+    return;
+  }
+  if (snapshot.agreement.total === 0) {
+    write('  agreement   no shadow verdicts yet');
+    return;
+  }
+  write(
+    `  agreement   ${String(snapshot.agreement.agreeing)} of ${String(snapshot.agreement.total)}`,
+  );
+  for (const disagreement of snapshot.agreement.disagreements) {
+    write(
+      `    ${short(disagreement.proposalId)}  ${disagreement.leftName} (${disagreement.leftType}) / ` +
+        `${disagreement.rightName} (${disagreement.rightType}): shadow said ${disagreement.verdict}, ` +
+        `actual was ${disagreement.actuallyMerged ? 'merged' : 'not merged'}`,
     );
   }
 }
@@ -379,4 +490,5 @@ export function renderSnapshot(
   }
 
   renderMaintenance(extras.maintenance, now, write);
+  renderMergeShadow(extras.mergeShadow, write);
 }
