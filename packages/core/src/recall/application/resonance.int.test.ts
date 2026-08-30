@@ -138,12 +138,15 @@ const provider: Provider = {
  * One seed and one row per cue per leg. The narrow budget is what isolates the second pass: at
  * the shipped budget every node in a graph this small is a seed, the exclusion set swallows the
  * whole substrate, and the run proves nothing about resonance.
+ *
+ * The session subtraction is off: every test recalls in the same session, and what is measured
+ * is what the second pass discovers rather than what that session already holds.
  */
 function config(): Config {
   return {
     ...DEFAULTS,
     models: { ...DEFAULTS.models, embedDimension: EMBED_DIMENSION },
-    recall: { ...DEFAULTS.recall, vectorLimit: 1 },
+    recall: { ...DEFAULTS.recall, vectorLimit: 1, sessionDedup: false },
     contextResonance: { ...DEFAULTS.contextResonance, seedLimit: 1 },
   };
 }

@@ -85,6 +85,23 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     knew_at TEXT
   )`,
   /**
+   * What each session has already been handed, one row per (session, item). `last_pack` cannot
+   * answer this: it keeps only the newest pack, and the conversation holds every pack the
+   * session was ever served.
+   *
+   * `fingerprint` is what the item said when it was served, so a memory that changed since is
+   * told again rather than treated as known. `first_served_at` is never rewritten; a re-serve
+   * moves `last_served_at` only, which is what the session's rows are aged against.
+   */
+  `CREATE TABLE IF NOT EXISTS served_items (
+    session_id TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    first_served_at TEXT NOT NULL,
+    last_served_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, item_id)
+  )`,
+  /**
    * Near-duplicate entities of different types, which dedup detects and never applies: one
    * real thing typed two ways is a type mistake, and merging on the type key would pick a
    * winner the extraction never justified. Its own table rather than a `kind` column on

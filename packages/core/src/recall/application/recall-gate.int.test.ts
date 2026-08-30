@@ -76,8 +76,17 @@ const provider: Provider = {
   generate: () => Promise.resolve({ query_cues: [CUE], summary_cues: [], recent_turn_cues: [] }),
 };
 
+/**
+ * The session subtraction is off: the gate asks the same reading session several questions in
+ * a row, and each one is judged on what the substrate answers rather than on what an earlier
+ * question in the same session already handed over.
+ */
 function config(): Config {
-  return { ...DEFAULTS, models: { ...DEFAULTS.models, embedDimension: EMBED_DIMENSION } };
+  return {
+    ...DEFAULTS,
+    models: { ...DEFAULTS.models, embedDimension: EMBED_DIMENSION },
+    recall: { ...DEFAULTS.recall, sessionDedup: false },
+  };
 }
 
 let harness: Neo4jHarness;

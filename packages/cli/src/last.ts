@@ -149,6 +149,12 @@ export function renderPack(entry: LastPackEntry, write: Writer): void {
   write('');
 
   write(`token estimate  ${String(entry.pack.metadata.token_estimate)}`);
+  // What the serve withheld. Without it a pack that shrank mid-session reads as retrieval
+  // going quiet, which is the opposite of what happened.
+  const repeats = entry.pack.metadata.suppressed_repeats;
+  if (repeats !== undefined) {
+    write(`suppressed      ${String(repeats)} already served this session, unchanged`);
+  }
 }
 
 export function renderSessionList(

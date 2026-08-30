@@ -455,3 +455,100 @@ describe('the honesty line', () => {
     expect(pack.metadata.token_estimate).toBe(estimateTokens(pack.rendered_text));
   });
 });
+
+/**
+ * What the pack says about the memories it declined to repeat. A shrinking pack mid-session
+ * reads as retrieval going quiet unless the pack says out loud that it withheld a repeat, and
+ * an agent reading only the rendered block is the one that would otherwise ask again.
+ */
+describe('repeats this session already holds', () => {
+  it('leaves a suppressed item out of its bucket entirely', () => {
+    const pack = assemble([item('e1'), item('e2')], { suppressed: new Set(['e1']) });
+
+    expect(pack.episodes?.map((entry) => entry.id)).toEqual(['e2']);
+  });
+
+  it('omits a bucket whose every item was already served, rather than sending it empty', () => {
+    const pack = assemble([item('e1'), item('f1', { labels: ['Entity', 'AionNode'] })], {
+      suppressed: new Set(['e1']),
+    });
+
+    expect(pack.episodes).toBeUndefined();
+    expect(pack.facts?.map((entry) => entry.id)).toEqual(['f1']);
+  });
+
+  it('withholds a resonant discovery this session was already handed', () => {
+    const pack = assemble([], {
+      resonant: [item('r1', { path: 'a' }), item('r2', { path: 'a' })],
+      suppressed: new Set(['r2']),
+    });
+
+    expect(pack.resonant?.map((entry) => entry.id)).toEqual(['r1']);
+  });
+
+  it('counts what it withheld and names it in the line', () => {
+    const pack = assemble([item('e1'), item('e2'), item('e3')], {
+      suppressed: new Set(['e1', 'e2']),
+    });
+
+    expect(pack.metadata.suppressed_repeats).toBe(2);
+    expect(pack.rendered_text).toContain('note: 2 items already served this session, unchanged');
+  });
+
+  it('agrees with the singular when it withheld exactly one', () => {
+    const pack = assemble([item('e1'), item('e2')], { suppressed: new Set(['e1']) });
+
+    expect(pack.rendered_text).toContain('note: 1 item already served this session, unchanged');
+  });
+
+  it('says nothing when it withheld nothing, on either shape of an absent record', () => {
+    const empty = assemble([item('e1')], { suppressed: new Set() });
+    const absent = assemble([item('e1')]);
+
+    expect(empty.metadata.suppressed_repeats).toBeUndefined();
+    expect(empty).toEqual(absent);
+    expect(empty.rendered_text).not.toContain('note:');
+  });
+
+  /**
+   * An empty pack here is legal, and the reason matters: "no memories matched" would send the
+   * caller looking for a substrate problem when every match is already in front of it.
+   */
+  it('explains an empty pack that emptied because the session already holds it all', () => {
+    const pack = assemble([item('e1')], { suppressed: new Set(['e1']) });
+
+    expect(pack.episodes).toBeUndefined();
+    expect(pack.rendered_text).toBe(
+      '# Memory\n\nnote: 1 item already served this session, unchanged\n\n' +
+        'This session already holds every memory this query matched.',
+    );
+  });
+
+  it('still reports what the floor refused beside what it withheld', () => {
+    const pack = assemble([item('e1')], {
+      admission: { ...report([item('e1')]), considered: 30, admitted: 1, droppedBelowFloor: 29 },
+      suppressed: new Set(['e1']),
+    });
+
+    expect(pack.rendered_text).toContain(
+      'This session already holds every memory this query matched. ' +
+        'Of 30 candidates: 29 measured under the 0.60 floor.',
+    );
+  });
+
+  it('spends the freed budget on what the session has not seen', () => {
+    const long = 'a memory long enough that two of them will not fit together '.repeat(4);
+    const budget = 120;
+
+    const withRepeat = assemble([item('e1', { content: long }), item('e2', { content: long })], {
+      tokenBudget: budget,
+    });
+    const deduped = assemble([item('e1', { content: long }), item('e2', { content: long })], {
+      tokenBudget: budget,
+      suppressed: new Set(['e1']),
+    });
+
+    expect(withRepeat.episodes?.map((entry) => entry.id)).toEqual(['e1']);
+    expect(deduped.episodes?.map((entry) => entry.id)).toEqual(['e2']);
+  });
+});

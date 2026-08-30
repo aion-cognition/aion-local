@@ -186,6 +186,27 @@ describe('renderPack', () => {
 
     expect(lines.join('\n')).not.toContain('degraded');
   });
+
+  /** An operator reading a thin pack has to be able to see it was thin on purpose. */
+  it('says what the serve withheld as a repeat', () => {
+    const { lines, write } = collector();
+    const pack: MemoryPack = {
+      ...FIXTURE_PACK,
+      metadata: { ...FIXTURE_PACK.metadata, suppressed_repeats: 4 },
+    };
+
+    renderPack({ sessionId: 'sess-1', ts: '2026-06-02T09:00:00.000Z', pack }, write);
+
+    expect(lines.join('\n')).toContain('suppressed      4 already served this session, unchanged');
+  });
+
+  it('leaves the line out when the serve withheld nothing', () => {
+    const { lines, write } = collector();
+
+    renderPack({ sessionId: 'sess-1', ts: '2026-06-02T09:00:00.000Z', pack: FIXTURE_PACK }, write);
+
+    expect(lines.join('\n')).not.toContain('suppressed');
+  });
 });
 
 describe('renderSessionList', () => {
