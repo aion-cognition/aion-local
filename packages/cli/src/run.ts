@@ -88,7 +88,7 @@ function usage(): string {
     return `  ${name.padEnd(width)}  ${commands[name]?.summary ?? ''}`;
   });
   return [
-    `${CLI_NAME} — local memory substrate`,
+    `${CLI_NAME}... local memory substrate`,
     '',
     `usage: ${CLI_NAME} <command> [options]`,
     '',

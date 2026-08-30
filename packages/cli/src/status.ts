@@ -104,10 +104,10 @@ function formatEdgeWeights(distribution: EdgeWeightDistribution): string {
 
 export function renderStatus(snapshot: StatusSnapshot, config: Config, write: Writer): void {
   write(
-    `neo4j    ${snapshot.neo4j.reachable ? 'up' : 'down'}  ${snapshot.neo4j.uri} — ${snapshot.neo4j.detail}`,
+    `neo4j    ${snapshot.neo4j.reachable ? 'up' : 'down'}  ${snapshot.neo4j.uri} (${snapshot.neo4j.detail})`,
   );
   write(
-    `ollama   ${snapshot.ollama.reachable ? 'up' : 'down'}  ${snapshot.ollama.url}${snapshot.ollama.detail === undefined ? '' : ` — ${snapshot.ollama.detail}`}`,
+    `ollama   ${snapshot.ollama.reachable ? 'up' : 'down'}  ${snapshot.ollama.url}${snapshot.ollama.detail === undefined ? '' : ` (${snapshot.ollama.detail})`}`,
   );
 
   write('');
@@ -158,7 +158,7 @@ export function renderStatus(snapshot: StatusSnapshot, config: Config, write: Wr
   write(`recall   ${degraded}`);
   write(
     `review   ${String(queue.supersessionProposalsOpen)} supersession, ` +
-      `${String(queue.entityMergeProposalsOpen)} entity-merge proposals open — aion proposals ls`,
+      `${String(queue.entityMergeProposalsOpen)} entity-merge proposals open... aion proposals ls`,
   );
 
   write('');

@@ -358,7 +358,7 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
         const detail =
           `${String(snapshot.supersessionProposalsOpen)} supersession, ` +
           `${String(snapshot.entityMergeProposalsOpen)} entity-merge proposals open${
-            open === 0 ? '' : ' — aion proposals ls'
+            open === 0 ? '' : '... aion proposals ls'
           }`;
         return Promise.resolve({ ok: true, detail });
       },

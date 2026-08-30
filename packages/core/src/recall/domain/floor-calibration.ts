@@ -152,28 +152,28 @@ export function checkSeparation(input: SeparationInput): Separation {
     return {
       ...measured,
       separated: false,
-      detail: `${detail} — the floor sits inside the noise band and admits unrelated text; re-measure and raise it`,
+      detail: `${detail}. The floor sits inside the noise band and admits unrelated text; re-measure and raise it`,
     };
   }
   if (floorTooHigh) {
     return {
       ...measured,
       separated: false,
-      detail: `${detail} — the floor sits above what a typical genuine match scores; re-measure and lower it`,
+      detail: `${detail}. The floor sits above what a typical genuine match scores; re-measure and lower it`,
     };
   }
   if (corroborationTooLow) {
     return {
       ...measured,
       separated: false,
-      detail: `${detail} — the corroboration floor sits inside the noise band, so two readings of the same noise admit each other; re-measure and raise it`,
+      detail: `${detail}. The corroboration floor sits inside the noise band, so two readings of the same noise admit each other; re-measure and raise it`,
     };
   }
   if (relatedUnderFloor > MAX_RELATED_UNDER_FLOOR) {
     return {
       ...measured,
       separated: false,
-      detail: `${detail} — corroboration is carrying more of the genuine matches than the floor is; re-measure both distributions`,
+      detail: `${detail}. Corroboration is carrying more of the genuine matches than the floor is; re-measure both distributions`,
     };
   }
   return { ...measured, separated: true, detail };
