@@ -24,20 +24,20 @@ import { describeAionHooks } from './hooks-settings.js';
 const NOW = new Date('2026-08-30T04:05:06.789Z');
 
 describe('parseHooksFlags', () => {
-  it('defaults to the full profile, push stop mode, and no research capture', () => {
+  it('defaults to the full profile, push stop mode, and research capture on', () => {
     expect(parseHooksFlags([])).toEqual({
       profile: 'full',
-      withResearchCapture: false,
+      withResearchCapture: true,
       stopMode: 'push',
     });
   });
 
   it('reads every supported flag', () => {
     expect(
-      parseHooksFlags(['--profile', 'lite', '--stop-mode', 'instruct', '--with-research-capture']),
+      parseHooksFlags(['--profile', 'lite', '--stop-mode', 'instruct', '--no-research-capture']),
     ).toEqual({
       profile: 'lite',
-      withResearchCapture: true,
+      withResearchCapture: false,
       stopMode: 'instruct',
     });
   });

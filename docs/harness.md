@@ -73,16 +73,16 @@ processed would never settle.
 
 ## Research capture
 
-`--with-research-capture` adds a PostToolUse hook matching Slack, Linear, and Notion tool
-calls. It buffers the tool name, a summary of the arguments, and up to 2000 characters of the
+The full profile installs a PostToolUse hook matching Slack, Linear, and Notion tool calls.
+It buffers the tool name, a summary of the arguments, and up to 2000 characters of the
 result, and the next flush folds them into the reflection as tool executions. Research a
-session did once then survives the session.
+session did once then survives the session. `--no-research-capture` leaves it out.
 
-It is off by default, and the reason is PHI. Redaction is deterministic and it targets
-credentials: keys, tokens, connection strings. It does not detect patient data, and a Slack
-message at a health company can carry it. Turning this on means patient data can reach the
-graph through a channel nobody scoped for it. That decision belongs to whoever owns the data,
-not to a default.
+One caution stands. Redaction is deterministic and it targets credentials: keys, tokens,
+connection strings. It does not detect patient data or other regulated content, so the
+capture is only as clean as the channels it reads. The owner turned it on for this install
+knowing that; a deployment where sensitive data can land in those tools should pass
+`--no-research-capture` until someone scopes the channels.
 
 ## Manual install
 
