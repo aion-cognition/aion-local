@@ -4,6 +4,7 @@ import { communityRefreshOperation } from './operations/community-refresh.js';
 import { deadLetterOperation } from './operations/dead-letter.js';
 import { descriptionFreshnessOperation } from './operations/description-freshness-operation.js';
 import { narrativeCleanupOperation } from './operations/narrative-cleanup-operation.js';
+import { narrativeRegroundingOperation } from './operations/narrative-regrounding.js';
 import { orphanCleanupOperation } from './operations/orphan-cleanup.js';
 import { reconcileReenqueueOperation } from './operations/reconcile-reenqueue.js';
 import { redactionResiduePurgeOperation } from './operations/redaction-residue-purge.js';
@@ -38,9 +39,11 @@ export function introspectionOperations(): readonly IntrospectionOperation[] {
     reinforcementFlushOperation(),
     memoryDecayOperation(),
 
-    // Content maintenance: duplicate narratives, the contradiction backlog older than the
-    // supersession stage, and entity glosses that stopped describing what the entity became.
+    // Content maintenance: duplicate narratives, narratives whose claims a correction has since
+    // closed, the contradiction backlog older than the supersession stage, and entity glosses
+    // that stopped describing what the entity became.
     narrativeCleanupOperation(),
+    narrativeRegroundingOperation(),
     retroJudgmentSweepOperation(),
     descriptionFreshnessOperation(),
 

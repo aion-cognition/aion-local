@@ -230,6 +230,7 @@ async function runApply(deps: ProposalDeps, flags: ProposalFlags): Promise<numbe
         supersededBy: applied.supersededBy,
         subjects: applied.subjects,
         held: applied.heldSiblings.map((sibling) => sibling.id),
+        regroundedNarratives: applied.regroundedNarratives,
         retiredGlosses: applied.retiredGlosses.map((gloss) => gloss.entityId),
         openGlosses: applied.openGlosses.map((gloss) => gloss.entityId),
       },
@@ -243,6 +244,7 @@ async function runApply(deps: ProposalDeps, flags: ProposalFlags): Promise<numbe
     renderHeldSiblings(applied.heldSiblings, deps.write);
     renderRetiredGlosses(applied.retiredGlosses, deps.write);
     renderOpenGlosses(applied.openGlosses, deps.write);
+    renderRegrounded(applied.regroundedNarratives, deps.write);
     deps.write(SCOPE_NOTES[applied.scope]);
     return 0;
   } finally {
@@ -299,6 +301,21 @@ function renderRetiredGlosses(glosses: readonly ClaimSubject[], write: Writer): 
   for (const gloss of glosses) {
     write(`  ${short(gloss.entityId)}  ${gloss.name} no longer reads "${gloss.gloss ?? ''}"`);
   }
+}
+
+/**
+ * A narrative compresses a session's claims and carries no lineage of its own, so a correction
+ * leaves it standing and still stating the old value. It is marked here and rewritten by the
+ * maintenance loop, which is a cadence rather than an instant, so the apply says so.
+ */
+function renderRegrounded(ids: readonly string[], write: Writer): void {
+  if (ids.length === 0) {
+    return;
+  }
+  write(
+    `${String(ids.length)} narrative(s) marked for regrounding; ` +
+      'maintenance rewrites them from the claims that are open now',
+  );
 }
 
 /** Descriptions of the same subjects that assert something the correction did not touch. */

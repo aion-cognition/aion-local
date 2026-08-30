@@ -225,10 +225,12 @@ export type { EpisodeContext, EpisodeTurnContext } from './graph/episode-context
 export {
   DERIVES_FROM_TYPE,
   NARRATIVE_PROPERTIES,
+  NARRATIVE_SUPERSEDED_GROUNDING,
   SUMMARIZED_BY_TYPE,
   findIdleSessions,
   findSessionNarratives,
   loadSessionEpisodes,
+  markNarrativesForRegrounding,
 } from './graph/narrative-queries.js';
 
 export type { IdleSession, SessionEpisode, SessionNarrative } from './graph/narrative-queries.js';
