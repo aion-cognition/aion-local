@@ -20,7 +20,9 @@ because the vector space is the substrate.
 ## Quickstart
 
 Prerequisites: Docker (with Compose), git, and [Ollama](https://ollama.com) running on the
-host at its default port, 11434.
+host at its default port, 11434. No `npm install`: the image build owns every dependency.
+Node and npm come into it only for the two optional pieces below, `npm link` and the
+harness hooks.
 
 Clone this repo, then:
 
@@ -56,10 +58,16 @@ the live stack and names anything broken.
   halves pair on purpose, since the hooks push enough small capture work to be worth routing
   to Haiku.
 
-`aion hooks install | uninstall | status` does the hook half on its own. Every hook fails
-open: a service that is down or a payload it cannot read exits 0 and the turn proceeds. See
-[docs/harness.md](docs/harness.md) for what each hook does and the settings JSON for a
-manual install.
+There is no key step before init: `full` asks for the key and records it in `.env`. To add
+one to an existing `local` install, put it in `.env` as `AION_ANTHROPIC_API_KEY=...` and
+rerun `./bin/aion init`; the service restarts with the key and routing follows it. Removing
+it from `.env` and rerunning init routes everything back to local models the same way.
+
+`aion hooks install | uninstall | status` does the hook half on its own. The hook client
+runs on host Node from `packages/cli/dist`, so hooks (unlike the substrate) need one host
+build first: `npm ci && npm run build`. Every hook fails open: a service that is down or a
+payload it cannot read exits 0 and the turn proceeds. See [docs/harness.md](docs/harness.md)
+for what each hook does and the settings JSON for a manual install.
 
 ## The two tools
 
