@@ -1,9 +1,10 @@
 import type { Cue, StageTimingsMs } from '@aion/protocol';
 import { describe, expect, it } from 'vitest';
 
-import type { AdmissionReport } from './admission.js';
+import type { AdmissionEvidence, AdmissionReport } from './admission.js';
 import type { FusedItem } from './fusion.js';
-import { assemblePack, estimateTokens, type AssemblePackInput, type BucketCaps } from './pack.js';
+import type { BucketCaps } from './pack-buckets.js';
+import { assemblePack, estimateTokens, type AssemblePackInput } from './pack.js';
 
 /**
  * What a pack says about itself: which facts it declines to carry, what number it prints
@@ -33,6 +34,8 @@ type ItemOverrides = {
   readonly sourceEpisodeId?: string;
   /** The absolute cosine behind admission; zero for an item a literal match let in. */
   readonly measured?: number;
+  /** The rule that let the item in, as the gate reports it. */
+  readonly admittedBy?: AdmissionEvidence;
 };
 
 function item(id: string, overrides: ItemOverrides = {}): FusedItem {
@@ -49,6 +52,7 @@ function item(id: string, overrides: ItemOverrides = {}): FusedItem {
     },
     relevance: 0.8,
     measured: overrides.measured ?? 0.8,
+    ...(overrides.admittedBy === undefined ? {} : { admittedBy: overrides.admittedBy }),
     score: overrides.score ?? 0.02,
     ...(overrides.sourceEpisodeId === undefined
       ? {}
@@ -208,6 +212,136 @@ describe('rank and confidence', () => {
     // Rendered as what it is. "confidence 0.00" beside a verbatim match reads as no answer.
     expect(pack.rendered_text).toContain('bm25 | exact match');
     expect(pack.rendered_text).not.toContain('confidence 0.00');
+  });
+});
+
+/**
+ * A number alone cannot say which floor judged it. The gate has four ways in, and the pack
+ * that shipped without this printed the strongest cosine anything measured, so an item a
+ * verbatim lexical hit admitted could show 0.53 beside a corroboration floor of 0.55 and read
+ * as a gate with a hole in it.
+ */
+describe('the rule that admitted an item', () => {
+  function admitted(id: string, evidence: AdmissionEvidence): FusedItem {
+    return item(id, { measured: evidence.score, admittedBy: evidence });
+  }
+
+  it('prints the cosine that cleared the vector floor', () => {
+    const pack = assemble([
+      admitted('e1', { rule: 'vector_floor', score: 0.72, qualifying: ['vector 0.72'] }),
+    ]);
+
+    expect(pack.episodes?.[0]?.confidence).toBe(0.72);
+    expect(pack.episodes?.[0]?.admitted_by).toEqual({
+      rule: 'vector_floor',
+      evidence: ['vector 0.72'],
+    });
+    expect(pack.rendered_text).toContain('vector floor: vector 0.72');
+  });
+
+  it('prints the literal match and no number, since no rule read one', () => {
+    const pack = assemble([
+      admitted('e1', { rule: 'exact_match', score: 0, qualifying: ['bm25 exact'] }),
+    ]);
+
+    expect(pack.episodes?.[0]?.confidence).toBe(0);
+    expect(pack.rendered_text).toContain('exact match: bm25 exact');
+    expect(pack.rendered_text).not.toContain('confidence 0.00');
+  });
+
+  it('prints both legs that corroborated and the score the rule read', () => {
+    const pack = assemble([
+      admitted('e1', {
+        rule: 'corroborated',
+        score: 0.56,
+        qualifying: ['vector 0.56', 'bm25 exact'],
+      }),
+    ]);
+
+    expect(pack.episodes?.[0]?.confidence).toBe(0.56);
+    expect(pack.rendered_text).toContain('corroborated: vector 0.56 + bm25 exact');
+  });
+
+  it('prints the context threshold on a resonant hit, which no content floor judged', () => {
+    const pack = assemble([], {
+      resonant: [
+        admitted('r1', {
+          rule: 'context_threshold',
+          score: 0.94,
+          qualifying: ['resonance 0.94'],
+        }),
+      ],
+    });
+
+    expect(pack.rendered_text).toContain('context threshold: resonance 0.94');
+  });
+
+  it('names the escape hatch when an uncalibrated lexical hit admitted alone', () => {
+    const pack = assemble([
+      admitted('e1', { rule: 'bm25_any', score: 0, qualifying: ['bm25 1.00'] }),
+    ]);
+
+    expect(pack.rendered_text).toContain('uncalibrated lexical hit: bm25 1.00');
+  });
+
+  it('falls back to the bare measurement for an item assembled without the gate', () => {
+    const pack = assemble([item('e1', { measured: 0.62 })]);
+
+    expect(pack.episodes?.[0]?.admitted_by).toBeUndefined();
+    expect(pack.rendered_text).toContain('confidence 0.62');
+  });
+});
+
+/**
+ * A raw turn is captured text. Nothing distils it into a claim and supersession judges
+ * extracted nodes, so a belief stated in a turn answers as current for as long as the
+ * substrate holds it. When resonance surfaces one alone the pack carries that belief with
+ * nothing around it, and the annotation is what puts the current claim in front of the reader.
+ */
+describe('a raw turn in the resonant bucket', () => {
+  const TURN = ['Turn', 'Memory', 'AionNode'];
+
+  const CLAIM = {
+    id: 'insight-1',
+    text: 'Background shell tasks are not reliable overnight on this machine.',
+  };
+
+  function turn(id: string): FusedItem {
+    return item(id, { labels: TURN, content: `${id}: background shell tasks are reliable` });
+  }
+
+  it('carries the current claim from its subject family and renders it under the item', () => {
+    const pack = assemble([], {
+      resonant: [turn('t1')],
+      relatedClaims: new Map([['t1', CLAIM]]),
+    });
+
+    expect(pack.resonant?.[0]?.related_claim).toEqual(CLAIM);
+    expect(pack.rendered_text).toContain(`current related claim: ${CLAIM.text} [insight-1]`);
+  });
+
+  it('says nothing at all when the family holds no current claim', () => {
+    const pack = assemble([], { resonant: [turn('t1')], relatedClaims: new Map() });
+
+    expect(pack.resonant?.[0]?.related_claim).toBeUndefined();
+    expect(pack.rendered_text).not.toContain('current related claim');
+  });
+
+  /** The annotation answers a turn surfaced alone; a turn the query matched has its own context. */
+  it('leaves a turn the first pass admitted unannotated', () => {
+    const pack = assemble([turn('t1')], { relatedClaims: new Map([['t1', CLAIM]]) });
+
+    expect(pack.episodes?.[0]?.related_claim).toBeUndefined();
+  });
+
+  it('charges the annotation to the item that carries it', () => {
+    const withClaim = assemble([], {
+      resonant: [turn('t1')],
+      relatedClaims: new Map([['t1', CLAIM]]),
+    });
+    const without = assemble([], { resonant: [turn('t1')] });
+
+    expect(withClaim.metadata.token_estimate).toBeGreaterThan(without.metadata.token_estimate);
   });
 });
 

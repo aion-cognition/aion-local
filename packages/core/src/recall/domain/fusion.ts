@@ -1,9 +1,9 @@
 import type { Rationale } from '@aion/protocol';
 
 import {
-  absoluteRelevance,
-  admitsOnEvidence,
+  admissionEvidence,
   wasMeasured,
+  type AdmissionEvidence,
   type AdmissionPolicy,
   type AdmissionReport,
   type Measurement,
@@ -81,10 +81,16 @@ export type FusedItem = FusionCandidate & {
   /** Weighted RRF across every leg that produced the item, down-weighted when superseded. */
   readonly score: number;
   /**
-   * The strongest cosine any method measured for this item, zero when none did. Comparable
+   * The strongest cosine the admitting rule counted, zero when it counted none. Comparable
    * between queries and between items, which is what makes it the number a pack may print.
    */
   readonly measured: number;
+  /**
+   * The rule that admitted the item and the measurements that qualified under it. Optional
+   * only for a caller that assembles an item by hand; every path that runs the gate sets it,
+   * and a pack renders the rule beside the number so the two cannot drift apart.
+   */
+  readonly admittedBy?: AdmissionEvidence;
 };
 
 export type FusionOptions = {
@@ -207,7 +213,7 @@ function dedupeByContent(items: readonly FusedItem[]): FusedItem[] {
  * connectivity, not something the user ever told the substrate.
  *
  * One admission rule, and it is per item: a candidate reaches the pack when its own evidence
- * clears the absolute floors (`admitsOnEvidence`), and never otherwise. A node the spread
+ * clears the absolute floors (`admissionEvidence`), and never otherwise. A node the spread
  * reached faces that rule on its own measured cosine, so it is admitted on what it answers
  * rather than on what the rest of the pack measured. Off-topic packs used to fill to budget
  * precisely because one incidental hit unlocked every node activation had touched.
@@ -258,7 +264,8 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
   let droppedUnmeasuredArrival = 0;
   let anchored = false;
   for (const entry of merged.values()) {
-    if (!admitsOnEvidence(entry.evidence, options.admission)) {
+    const evidence = admissionEvidence(entry.evidence, options.admission);
+    if (evidence === undefined) {
       // Three counters, because they are three different answers to "why is this pack thin".
       // Something measured the first and the measurement fell short. Nothing measured the
       // second at all, which is ordinary for a seed the recency or plain-BM25 leg found, since
@@ -281,7 +288,11 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
     items.push({
       ...entry.best,
       relevance: entry.relevance,
-      measured: absoluteRelevance(entry.evidence),
+      // What the rule read, not the best number anything measured. An item admitted on a
+      // verbatim lexical hit used to print whatever weak cosine another leg returned for it,
+      // which is how a pack showed 0.53 beside a 0.55 floor and read as a gate with a hole.
+      measured: evidence.score,
+      admittedBy: evidence,
       // The merged evidence, not the winning candidate's own: the gate counted every
       // measurement, and a reader of the item downstream has to see the same set.
       evidence: [...entry.evidence],

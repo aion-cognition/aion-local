@@ -12,6 +12,7 @@ import {
 } from '@aion/core';
 import {
   MemoryPackSchema,
+  packBuckets,
   type Cue,
   type MemoryPack,
   type MemoryPackItem,
@@ -130,9 +131,10 @@ export function renderPack(entry: LastPackEntry, write: Writer): void {
   write('');
 
   let renderedAnyBucket = false;
+  const buckets = packBuckets(entry.pack);
   for (const bucket of PACK_BUCKETS) {
-    const items = entry.pack[bucket];
-    if (items === undefined || items.length === 0) {
+    const items = buckets[bucket];
+    if (items.length === 0) {
       continue;
     }
     renderedAnyBucket = true;

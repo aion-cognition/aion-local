@@ -30,6 +30,8 @@ export type GraphStructureHealth = {
   readonly episodesWithoutSession: number;
   /** Standing narratives written under an older grounding revision. */
   readonly staleNarratives: number;
+  /** Unprotected edges the decay sweep could act on. Zero on a graph of only backbone links. */
+  readonly decayableEdges: number;
 };
 
 export type QueueHealth = {
@@ -126,6 +128,7 @@ export const NEUTRAL_GRAPH_HEALTH: GraphStructureHealth = {
   orphanShare: 0,
   episodesWithoutSession: 0,
   staleNarratives: 0,
+  decayableEdges: 0,
 };
 
 export const NEUTRAL_QUEUE_HEALTH: QueueHealth = {

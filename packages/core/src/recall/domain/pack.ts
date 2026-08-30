@@ -6,12 +6,21 @@ import {
   type MemoryPack,
   type MemoryPackItem,
   type PackTruncation,
+  type RelatedClaim,
   type StageTimingsMs,
 } from '@aion/protocol';
 
 import type { AdmissionReport } from './admission.js';
 import { GLOSS_LABEL } from './facts.js';
 import type { FusedItem } from './fusion.js';
+import {
+  BUCKET_HEADINGS,
+  PACK_BUCKETS,
+  bucketFor,
+  type BucketCaps,
+  type PackBucket,
+} from './pack-buckets.js';
+import { renderBucket, renderItem, toPackItem, type PackEntry } from './pack-item.js';
 import { hashContent } from '../../reflection/domain/content.js';
 
 /**
@@ -20,56 +29,6 @@ import { hashContent } from '../../reflection/domain/content.js';
  * reasoning. Empty categories are omitted and an empty pack says so plainly rather than
  * padding itself with what the floors already rejected.
  */
-
-export type PackBucket = 'facts' | 'episodes' | 'narratives' | 'preferences' | 'resonant';
-
-/** Schema order, which is also render order. */
-export const PACK_BUCKETS: readonly PackBucket[] = [
-  'facts',
-  'episodes',
-  'narratives',
-  'preferences',
-  'resonant',
-];
-
-export type BucketCaps = Readonly<Record<PackBucket, number>>;
-
-/**
- * Which bucket a node type answers in. Entity-derived content answers in facts and
- * conversational memory in episodes; `Member` and `Workspace` carry the companion `Entity`
- * label, so the backbone resolves through the same row.
- *
- * The nine cognitive types answer in facts alongside entities. "The API redesign was decided
- * in Sprint 12" is a fact, and a Decision node carries it rather than an entity, so the
- * interpretive layer belongs where a reader looks for what is known rather than for what was
- * said. Leaving them unrouted would be worse than a taxonomy quibble: they carry content
- * vectors and sit in `content_fts`, so retrieval finds them and assembly would then drop
- * every one.
- *
- * Preferences still have no producer, since preference extraction is unbuilt, so that bucket is
- * structurally absent from a pack rather than empty. A label with no bucket cannot be packed and
- * its item is dropped.
- *
- * The resonant bucket is not in this table and never will be. Every other bucket answers "what
- * kind of memory is this", which a label decides; resonance answers "how was this found", which
- * only the stage that found it knows. A resonant Episode belongs beside the other resonant
- * discoveries, not beside the episodes the query matched directly.
- */
-const BUCKET_BY_LABEL: Readonly<Record<string, PackBucket>> = {
-  Episode: 'episodes',
-  Turn: 'episodes',
-  Entity: 'facts',
-  Narrative: 'narratives',
-  Goal: 'facts',
-  Plan: 'facts',
-  Decision: 'facts',
-  Insight: 'facts',
-  Concept: 'facts',
-  Context: 'facts',
-  Event: 'facts',
-  Pattern: 'facts',
-  Trend: 'facts',
-};
 
 /**
  * The episodes cap counts episodes, so a `Turn` folds into the episode it came from. Capture
@@ -89,22 +48,6 @@ function episodeKey(item: FusedItem): string {
  * on the agent's model and text machinery the cognitive path keeps out.
  */
 export const CHARS_PER_TOKEN = 4;
-
-/**
- * The extraction prompt asks for one sentence, so most stored rationales land well under this;
- * the cap guards the rare long one, so a single node's why can never claim a disproportionate
- * share of the token budget. Cut at the last whole word under the limit rather than mid-word.
- */
-export const MAX_WHY_CHARS = 220;
-
-function capWhy(why: string): string {
-  if (why.length <= MAX_WHY_CHARS) {
-    return why;
-  }
-  const cut = why.slice(0, MAX_WHY_CHARS);
-  const lastSpace = cut.lastIndexOf(' ');
-  return `${lastSpace > 0 ? cut.slice(0, lastSpace) : cut}…`;
-}
 
 const PACK_HEADING = '# Memory';
 
@@ -139,111 +82,8 @@ function emptyPackBody(report: AdmissionReport): string {
   return `${EMPTY_PACK_BODY} Of ${String(report.considered)} candidates: ${clauses.join(', ')}.`;
 }
 
-const BUCKET_HEADINGS: Readonly<Record<PackBucket, string>> = {
-  facts: '## Facts',
-  episodes: '## Episodes',
-  narratives: '## Narratives',
-  preferences: '## Preferences',
-  resonant: '## Resonant',
-};
-
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN);
-}
-
-export function bucketFor(labels: readonly string[]): PackBucket | undefined {
-  for (const label of labels) {
-    const bucket = BUCKET_BY_LABEL[label];
-    if (bucket !== undefined) {
-      return bucket;
-    }
-  }
-  return undefined;
-}
-
-/**
- * An item plus the one thing the wire item cannot carry: whether it is an entity gloss.
- * Labels are graph vocabulary and stay out of the protocol, but the gloss cap counts them
- * and the provenance-age annotation only applies to them.
- */
-type PackEntry = {
-  readonly item: MemoryPackItem;
-  readonly gloss: boolean;
-};
-
-function toPackItem(item: FusedItem, rank: number): MemoryPackItem {
-  return {
-    id: item.id,
-    content: item.content,
-    ...(item.occurredAt === undefined ? {} : { occurred_at: item.occurredAt.toISOString() }),
-    rank,
-    // `measured`, not `relevance`: relevance is the producing method's own number, and the
-    // BM25 leg normalizes to the best hit of its cue, so the top lexical hit of any query
-    // would print 1.00 beside a cosine of 0.62.
-    confidence: item.measured,
-    rationale: item.rationale,
-    ...(item.why === undefined ? {} : { why: capWhy(item.why) }),
-    currency: item.currency,
-    ...(item.supersededBy === undefined
-      ? {}
-      : {
-          superseded_by: {
-            id: item.supersededBy.id,
-            at: item.supersededBy.at.toISOString(),
-          },
-        }),
-  };
-}
-
-/** Calendar day only: the age is the point, and a timestamp to the millisecond hides it. */
-function renderDay(timestamp: string): string {
-  return timestamp.slice(0, 'YYYY-MM-DD'.length);
-}
-
-/**
- * Content on its own line, then the node's own reason when it stored one, then one line of
- * provenance: id, the method that found it, the absolute confidence behind admission, the
- * path for an activated item, and the lineage marker for a superseded one. The marker belongs
- * wherever superseded knowledge surfaces, so it is part of the rendered block and not only of
- * the structured item.
- *
- * The list number is the item's rank across the whole pack rather than its position in its
- * own bucket, so the reader can order two items in different buckets. `rationale.score` is
- * deliberately not printed: it is the producing method's own number and comparing two of
- * them says nothing.
- *
- * An entity gloss is annotated with the date of its first mention. The description was
- * written once, by the episode that first named the entity, and is never revised, so
- * rendering it without its age serves a year-old sentence as a current fact.
- */
-function renderItem(entry: PackEntry): string {
-  const { item } = entry;
-  // Zero is not low confidence, it is no measurement: the item was admitted on a literal
-  // match, and printing "confidence 0.00" beside a memory that answered exactly would read
-  // as the opposite of what the gate decided.
-  const measurement =
-    item.confidence === 0 ? 'exact match' : `confidence ${item.confidence.toFixed(2)}`;
-  const facts = [`[${item.id}]`, item.rationale.method, measurement];
-  if (item.occurred_at !== undefined) {
-    facts.push(
-      entry.gloss
-        ? `from first mention, ${renderDay(item.occurred_at)}`
-        : `occurred ${item.occurred_at}`,
-    );
-  }
-  if (item.rationale.path !== undefined) {
-    facts.push(`path ${item.rationale.path}`);
-  }
-  if (item.superseded_by !== undefined) {
-    facts.push(`superseded by ${item.superseded_by.id} at ${item.superseded_by.at}`);
-  }
-  const why = item.why === undefined ? '' : `\n   why: ${item.why}`;
-  return `${String(item.rank)}. ${item.content}${why}\n   ${facts.join(' | ')}`;
-}
-
-function renderBucket(bucket: PackBucket, entries: readonly PackEntry[]): string {
-  const blocks = entries.map((entry) => renderItem(entry));
-  return `${BUCKET_HEADINGS[bucket]}\n${blocks.join('\n')}`;
 }
 
 export type AssemblePackInput = {
@@ -279,6 +119,14 @@ export type AssemblePackInput = {
    * the two scores say, because the two numbers are not on one scale.
    */
   readonly resonant?: readonly FusedItem[];
+  /**
+   * The current claim in a raw turn's subject family, keyed by the turn's node id. Only the
+   * resonant bucket reads it: a turn the query matched directly arrives beside whatever else
+   * the query matched, while a turn resonance surfaced alone carries a stated belief with
+   * nothing around it, and a turn is never distilled into a claim, so supersession never
+   * judges one.
+   */
+  readonly relatedClaims?: ReadonlyMap<string, RelatedClaim>;
 };
 
 type Selection = Map<PackBucket, PackEntry[]>;
@@ -353,7 +201,10 @@ function select(input: AssemblePackInput, note: string | undefined): Selection {
       return;
     }
 
-    const entry: PackEntry = { item: toPackItem(item, ranked + 1), gloss };
+    // The annotation is charged to the item that carries it, so a claim long enough to cost
+    // the pack another memory costs this one its own slot instead.
+    const claim = bucket === 'resonant' ? input.relatedClaims?.get(item.id) : undefined;
+    const entry: PackEntry = { item: toPackItem(item, ranked + 1, claim), gloss };
     const cost =
       estimateTokens(renderItem(entry)) +
       (held.length === 0 ? estimateTokens(BUCKET_HEADINGS[bucket]) : 0);
@@ -404,6 +255,7 @@ function select(input: AssemblePackInput, note: string | undefined): Selection {
 
   return selection;
 }
+
 function render(
   selection: Selection,
   note: string | undefined,
