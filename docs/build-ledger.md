@@ -656,7 +656,7 @@ A pathology that stands for weeks no longer blocks the catalog for weeks.
 **Two of the three critical conditions had no responder.** `vector_backfill` shipped as tier 2,
 so a parity crisis competed on urgency with content touch-ups rather than preempting; it now
 answers `vector_parity`. `missing_backbone_links` was computed, reported, and answered by
-nothing at all — Appendix D's `emergency_relationship_repair` was absent. It exists now
+nothing at all. Appendix D's `emergency_relationship_repair` was absent, and it exists now
 (`operations/backbone-repair.ts`): an episode carries `session_id` from intake, so restoring the
 missing `PARTICIPATES_IN` edge is a lookup rather than a guess, and an episode naming a session
 the graph no longer holds is left alone rather than attached to something invented for it. The
@@ -666,7 +666,7 @@ engine test that certified tier-1 preemption was building a fake operation named
 **The orphan metric was mostly an unenriched-episode count.** `COUNT_ORPHANS` counted any node
 whose every edge is backbone, which is every episode reflection has not reached yet. On the live
 substrate that read 3,236 of 6,934 nodes, an orphan share of 0.467, comfortably over the 0.3
-critical threshold — and the repair wrote a heuristic `RELATED_TO` onto each one, which removed
+critical threshold, and the repair wrote a heuristic `RELATED_TO` onto each one, which removed
 it from the metric and left it exactly as unenriched as before. Both the count and the sweep now
 exclude an `:Episode` nothing has been extracted from: the same substrate reads 549 of 2,915,
 a share of 0.188, and the backlog belongs to the operation that can actually drain it.
@@ -710,7 +710,7 @@ actually re-derive one.
 
 **A correction never reached the narrative that restated it.** Narratives carry no supersession
 lineage, and the staleness scan selects on the grounding revision, which a correction does not
-change — so the pack served the closed claim's narrative beside its replacement, both marked
+change, so the pack served the closed claim's narrative beside its replacement, both marked
 current. An apply now marks the affected sessions' narratives for regrounding, and
 `narrative_regrounding` (new, registered) drains that marker through the regeneration path that
 already existed as a hand-run tool.
@@ -740,7 +740,7 @@ replaces, for the record, were vector 725, bm25 393, activation 236, resonance 1
 entity_resolution 182, recency 16.
 
 **Two operator surfaces existed only as exported functions.** `runEntityUnmerge` was reachable
-from nothing — no CLI command, no MCP tool, no operation — and no command could force a
+from nothing (no CLI command, no MCP tool, no operation), and no command could force a
 maintenance operation, which is what a person needs the moment they know something the health
 snapshot cannot express. `aion unmerge ls|apply` and `aion maintain ls|run` close both. A forced
 run bypasses the relevance score and the bucket claim and nothing else: the batch bounds, the
@@ -758,7 +758,7 @@ alike. `infrastructure/index.ts` had passed the 500-line cap and split at the gr
 `/api/tags` response as an ordered array, and that endpoint has no stable order; six back-to-back
 plain curls returned two different orders. It compares sets now. The stale-claim reaper test built
 a worker with `staleTimeoutMs: 0` and planted a claim before `start()`, then asserted the startup
-drain ran nothing — with a zero stale window the drain is entitled to reclaim it. Measured 1 red
+drain ran nothing, and with a zero stale window the drain is entitled to reclaim it. Measured 1 red
 in 6 runs before, 5 green in 5 after.
 
 **The check that caught the one break the suite would have found late.** `tsc -b` excludes
