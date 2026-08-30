@@ -22,6 +22,7 @@ import {
   type HealthSnapshot,
 } from '../domain/health.js';
 import type { IntrospectionOperation, OperationOutcome } from '../domain/operation.js';
+import type { Tier3Advisor } from '../domain/tier3.js';
 import { healthFixture } from '../domain/test-support/health.fixture.js';
 import { Introspector } from './engine.js';
 import { backboneRepairOperation } from './operations/backbone-repair.js';
@@ -88,15 +89,22 @@ function fakeOperation(
   };
 }
 
+type EngineOverrides = {
+  readonly config?: Config;
+  readonly tier3Advisor?: Tier3Advisor;
+};
+
 function engineFor(
   operations: readonly IntrospectionOperation[],
   snapshots: readonly HealthSnapshot[],
   now: Date = NOW,
+  overrides: EngineOverrides = {},
 ): Introspector {
   let index = 0;
   return new Introspector(
-    { driver: harness.driver, db, config, logger, operations },
+    { driver: harness.driver, db, config: overrides.config ?? config, logger, operations },
     {
+      ...(overrides.tier3Advisor === undefined ? {} : { tier3Advisor: overrides.tier3Advisor }),
       observe: (options) => {
         const snapshot = snapshots[Math.min(index, snapshots.length - 1)] ?? healthFixture();
         index += 1;
@@ -271,6 +279,39 @@ describe('Introspector', () => {
     );
     expect(last.decision).toMatchObject({ kind: 'selected', name: 'routine_maintenance', tier: 2 });
     expect(routine.calls()).toBeGreaterThan(0);
+  });
+
+  /**
+   * The one cycle tier 3 is for: the deterministic tiers had nothing left to offer, because
+   * the only operation with work to do is already covered by whoever holds its window. The
+   * fall-through used to answer with the skipped report before the strategic layer was read,
+   * so the layer was silent on exactly the cycles it exists for.
+   */
+  it('consults tier 3 on a cycle whose only candidate had already lost its window', async () => {
+    const strategic: Config = {
+      ...config,
+      maintenance: { ...config.maintenance, tier3: true },
+    };
+    const requests: string[] = [];
+    const advisor: Tier3Advisor = (request) => {
+      requests.push(request.reason);
+      return Promise.resolve(undefined);
+    };
+
+    const operation = fakeOperation('hourly_strategic', { bucket: 'hour', relevance: () => 1 });
+    await engineFor([operation], [healthFixture()], NOW, { config: strategic }).tickOnce();
+    expect(operation.calls()).toBe(1);
+
+    // Same hour, next quarter-hour window: the claim is lost and nothing else is relevant.
+    const report = await engineFor([operation], [healthFixture()], NEXT_QUARTER, {
+      config: strategic,
+      tier3Advisor: advisor,
+    }).tickOnce();
+
+    expect(report.decision.kind).toBe('tier3');
+    expect(report.skipped).toBe(true);
+    expect(requests).toHaveLength(1);
+    expect(operation.calls()).toBe(1);
   });
 
   it('leaves the cycle idle when nothing is relevant', async () => {
