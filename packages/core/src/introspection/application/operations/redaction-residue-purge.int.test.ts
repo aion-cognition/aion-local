@@ -113,7 +113,7 @@ describe('redaction_residue_purge', () => {
     expect(props.summary).toBe('a clean summary with nothing secret in it');
     expect(props.redacted_at).toBeTruthy();
 
-    // The exercise's acceptance bar: the raw secret is nowhere in the substrate.
+    // The real check: the raw secret is nowhere in the substrate, not just out of `text`.
     expect(await everyStoredProperty(harness.driver)).not.toContain(LEAKED_KEY);
   }, 60_000);
 

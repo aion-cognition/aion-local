@@ -188,7 +188,7 @@ describe('recall side effects over a substrate written by the real intake path',
     expect(signals.length).toBeGreaterThan(0);
 
     // Every id the spread could have co-activated. The reading session's node is not among
-    // them any more -- recall produces no content, so it mints nothing -- but the write
+    // them any more, since recall produces no content and mints nothing, but the write
     // session's is, since both episodes participate in it.
     const knownIds = new Set([
       webhooksEpisodeId,

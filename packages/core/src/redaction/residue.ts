@@ -9,8 +9,8 @@ import { readStoredText } from '../infrastructure/graph/introspection.js';
  * does nothing about plaintext credentials already written to Neo4j, which remain permanent
  * and recall-eligible since nothing is ever hard-deleted.
  *
- * Removing it is a destructive graph write and belongs to the forget operation, which this
- * phase does not ship. Counting it does not: an operator with no gauge cannot tell a substrate
+ * Removing it is a destructive graph write and belongs to a forget operation that does not
+ * exist yet. Counting it does not: an operator with no gauge cannot tell a substrate
  * that was never leaked into from one that was, and the whole point of the closures is that
  * the difference is now knowable. Redaction is deterministic by design, which is what makes
  * re-running the current rules over stored text a measurement rather than a guess.

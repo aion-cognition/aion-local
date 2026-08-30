@@ -387,7 +387,6 @@ export class FakeGraph {
     return tail === undefined ? [] : [{ id: tail.id }];
   }
 
-  /** Find all node IDs extracted from or mentioned in an episode. */
   /** The two provenance types the real statement expands, in either direction, current only. */
   #coExtractedNodeIds(parameters: Record<string, unknown>): Row[] {
     const episodeId = parameters.episodeId as string;

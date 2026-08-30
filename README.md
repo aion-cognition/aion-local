@@ -196,11 +196,17 @@ slow, and how each failure surfaces to the caller.
 ## Development
 
 ```
-npm test              # both vitest projects: unit, then integration
-npm run test:unit      # no external services required
+npm test                  # both vitest projects: unit, then integration
+npm run test:unit         # no external services required
 npm run test:integration  # needs Docker (one throwaway Neo4j per run) and host Ollama
-npm run build          # tsc -b across the workspace
+npm run build             # tsc -b across the workspace
+npm run typecheck:all     # tsc over tests and fixtures too, which `tsc -b` excludes
+npm run lint              # eslint .
+npm run format:check      # prettier --check .
 ```
+
+A round gates on all of those, plus the re-exercise batteries and `./bin/aion doctor` green
+against the live stack. `AGENTS.md` holds the full gate definition.
 
 Integration tests read `AION_OLLAMA_URL`; when running them on the host rather than in the
 container, export it first:
@@ -220,8 +226,10 @@ A few examples:
 ### Reflection concurrency
 
 `AION_WORKER_COUNT` (default `1`) sets how many episodes the reflection worker claims and
-runs at once, sharing one dispatch subscription and one queue claimant. Raising it alone
-does not raise throughput: the recall cue model, the reflection worker, and the idle
+runs at once, on one claim loop and one queue claimant. Intake wakes that loop directly:
+enqueueing a job calls the worker's `wake()`, and the SQLite row is what a restart replays
+from regardless. Raising the count alone does not raise throughput: the recall cue model,
+the reflection worker, and the idle
 narrative sweeper all call the same host Ollama, so extra workers just queue behind the one
 model each is waiting on. Set `OLLAMA_NUM_PARALLEL` on the **host** Ollama process (not a
 compose variable; Ollama runs on the host, not in a container) to raise its per-model
@@ -244,15 +252,15 @@ and a session narrative, Hebbian reinforcement and decay, the introspection loop
 schedules fourteen maintenance operations, per-role Anthropic routing with model reconciliation,
 and the CLI surface listed above.
 
-1,481 unit tests pass deterministically; the integration suite runs against a live Neo4j and
-host Ollama, with generation on Haiku when a key is set. `npm test` reports 204 files and
-1,988 tests. Three are skipped: two whose assertion turns on the reflect model's live judgment
+1,607 unit tests across 138 files pass deterministically; the integration suite adds 72 files
+and runs against a live Neo4j and host Ollama, with generation on Haiku when a key is set.
+Three tests are skipped: two whose assertion turns on the reflect model's live judgment
 (causal-edge direction, contradiction detection) flake under sampling rather than under the
 pipeline, and a third records a cross-stage entity-naming gap as a measurement. One probe of
 the on-topic recall battery asserts a rank bar that sits inside live-model variance and fails
 about one run in three; `docs/build-ledger.md` carries the measurement.
 
-`aion doctor` runs 13 checks against a live stack. `preferences` is the one pack bucket with no
+`aion doctor` runs 14 checks against a live stack. `preferences` is the one pack bucket with no
 producer, and stays structurally absent rather than empty. The full build history, including
 what review and the live checkpoint found in each phase, is in
 [docs/build-ledger.md](docs/build-ledger.md).

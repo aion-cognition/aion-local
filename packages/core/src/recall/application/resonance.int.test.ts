@@ -400,8 +400,8 @@ describe('once reflection has summarized every neighborhood', () => {
     expect(pack.metadata.admission.admitted).toBeGreaterThan(0);
   });
 
-  // The measurement the plan asks for: how much of the activated set had been through
-  // reflection's last stage when the second pass ran.
+  // How much of the activated set had been through reflection's last stage when the second
+  // pass ran, which tells a quiet stage apart from a cold substrate.
   it('reports how much of the activated set carried a context vector', async () => {
     const result = await resonate(
       { driver: harness.driver, config: config(), logger },

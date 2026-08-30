@@ -3,9 +3,8 @@ import { z } from 'zod';
 import { IsoTimestampSchema } from './common.js';
 
 /**
- * The example shows only `{ role: "user", text }`. No closed role vocabulary is pinned,
- * so this stays a plain string rather than an enum that could reject a legitimate role
- * (e.g. "system") the spec never ruled out.
+ * No closed role vocabulary is pinned, so this stays a plain string rather than an enum
+ * that could reject a legitimate role (e.g. "system") that callers are free to send.
  */
 export const RecallTurnSchema = z.strictObject({
   role: z.string().min(1),

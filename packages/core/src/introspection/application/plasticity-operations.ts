@@ -7,9 +7,8 @@ import type { HealthSnapshot } from '../domain/health.js';
 import type { IntrospectionOperation, OperationOutcome } from '../domain/operation.js';
 
 /**
- * The first two registered operations. Both already existed as callable, bounded functions
- * with the introspector named as their scheduler; this is the adapter that finally schedules
- * them, and it adds no behaviour of its own beyond the contract's relevance and outcome.
+ * Adapts the existing reinforcement flush and decay sweep to the operation contract, adding
+ * no behaviour of its own beyond relevance and outcome shape.
  */
 
 export const REINFORCEMENT_FLUSH_OPERATION = 'reinforcement_flush';

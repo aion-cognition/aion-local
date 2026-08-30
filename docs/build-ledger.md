@@ -769,10 +769,11 @@ in 6 runs before, 5 green in 5 after.
 `*.test.ts` and `*.fixture.ts`, so a required field added to `ApplyProposalInput` compiled clean
 and reached a gate as `undefined`, where `relatedness >= undefined` is NaN and nothing closed.
 `tsconfig.tests.json` is the one-command diagnostic that finds that class: `npx tsc -p
-tsconfig.tests.json`, a no-emit pass over every source file including tests. It is not a gate
-and cannot be one yet: it reports 65 errors across 30 test files that predate this pass, most of
-them fixtures built before a type gained a field. Read it as a diff against that baseline, not
-as a pass/fail.
+tsconfig.tests.json`, a no-emit pass over every source file including tests. It could not be a
+gate at this point: it reported 65 errors across 30 test files that predated the pass, most of
+them fixtures built before a type gained a field, so it read as a diff against that baseline
+rather than as a pass/fail. Those errors were cleared later, and the pass is now `npm run
+typecheck:all`, a gate at zero.
 
 **Checkpoint item d, re-driven.** The forced pathology from the review: 60 exhausted queue rows,
 which puts `dead_letter` at relevance 1.0. Before the fixes, cycles 12 to 18 all selected

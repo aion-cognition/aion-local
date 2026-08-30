@@ -251,8 +251,8 @@ describe('the decision query', () => {
     expect(ranks.length).toBeGreaterThan(0);
     for (const item of allItems(pack)) {
       // A gated item renders the rule that admitted it, not a bare confidence number: the
-      // two can diverge, and printing the number alone would be the display-vs-decision
-      // mismatch the floor-honesty fix closed. An ungated item still falls back to it.
+      // two can diverge, and printing the number alone would misrepresent what actually
+      // admitted the item. An ungated item still falls back to it.
       const expected =
         item.admitted_by === undefined
           ? `confidence ${item.confidence.toFixed(2)}`

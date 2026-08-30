@@ -261,17 +261,6 @@ type IntegrateJob = {
 };
 
 /**
- * Claimable interactive-lane rows already in the queue, measured before this call's own job
- * lands. Interactive is served strictly first (the lanes pin), so this is exactly how many
- * jobs sit ahead of a fresh interactive enqueue and, for a caller demoted to bulk, how many
- * interactive jobs it queues behind either way. The ack used to say `queued: true` with no
- * sense of how far behind that queue actually was.
- *
- * Bounded by the attempt limit, so a row the claim path will never take again is not reported
- * as something to wait for: one exhausted job once made every ack say "1 job ahead" against an
- * empty queue.
- */
-/**
  * A listener that throws is logged and swallowed: by the time it runs the episode is already
  * in the graph and the job already in the queue, so losing the wakeup costs the worker's next
  * drain a job, not the caller their write.
@@ -292,6 +281,17 @@ function notifyEnqueued(deps: ReflectionIntakeDeps, jobId: string): void {
   }
 }
 
+/**
+ * Claimable interactive-lane rows already in the queue, measured before this call's own job
+ * lands. Interactive is served strictly first (the lanes pin), so this is exactly how many
+ * jobs sit ahead of a fresh interactive enqueue and, for a caller demoted to bulk, how many
+ * interactive jobs it queues behind either way. The ack used to say `queued: true` with no
+ * sense of how far behind that queue actually was.
+ *
+ * Bounded by the attempt limit, so a row the claim path will never take again is not reported
+ * as something to wait for: one exhausted job once made every ack say "1 job ahead" against an
+ * empty queue.
+ */
 function pendingAhead(db: SqliteHandle, maxAttempts: number): number {
   return countQueueJobs(db, { lane: DEFAULT_REFLECTION_LANE }, maxAttempts).pending;
 }
@@ -349,7 +349,7 @@ async function attachVectors(
 
 /**
  * The write path. Validate, redact, store the episode and its turns with a full bitemporal
- * stamp, link the backbone, enqueue the integrate job, signal the dispatcher, then embed.
+ * stamp, link the backbone, enqueue the integrate job, wake the worker, then embed.
  *
  * Redaction runs on the parsed payload before anything reads a content field, so no raw
  * credential reaches the hash, the embedder, or the graph. The graph then takes every write

@@ -98,8 +98,8 @@ describe('a bulk load queued ahead of one live turn', () => {
 
   beforeAll(async () => {
     // The corpus above left its own episodes queued, and this battery's subject is which lane
-    // gets served first. Cleared through the operator primitive rather than by hand, since a
-    // purge is exactly what the live incident needed and E4 exists to make repeatable.
+    // gets served first. Cleared through `dropUnclaimedJobs` rather than by hand, since a
+    // purge is exactly what the live incident needed and this makes it repeatable.
     dropUnclaimedJobs(substrate.db);
 
     for (const session of BULK_SESSIONS) {

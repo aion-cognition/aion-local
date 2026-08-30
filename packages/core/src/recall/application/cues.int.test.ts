@@ -129,7 +129,7 @@ describe('cue extraction against live host Ollama', () => {
 });
 
 /**
- * The three A5 behaviours the live model has to hold up, as opposed to the ones the mocked
+ * The three prompt behaviours the live model has to hold up, as opposed to the ones the mocked
  * tests pin. The raw-query rule is code and is asserted here only because a live run is where
  * a prompt change would silently break it; the intent and genericness judgments are the
  * model's own and this is the only place they are measured.
