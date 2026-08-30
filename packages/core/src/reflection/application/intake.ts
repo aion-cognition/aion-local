@@ -1,7 +1,6 @@
 import { ReflectionInputSchema, type ReflectionOutput } from '@aion/protocol';
 import type { Driver } from 'neo4j-driver';
 
-import type { ReflectionDispatch } from './dispatch.js';
 import { ReflectionNotStoredError } from './errors.js';
 import type { LaneAssigner, LaneDecision } from './lanes.js';
 import { attachContentVectors } from './vectors.js';
@@ -52,7 +51,13 @@ export type ReflectionIntakeDeps = {
   readonly db: SqliteHandle;
   readonly sessions: SessionManager;
   readonly provider: Provider;
-  readonly dispatch: ReflectionDispatch;
+  /**
+   * Called once per newly enqueued job, which is what wakes the worker: the queue row is
+   * durability for a restart, not something a loop watches. A listener that throws never
+   * fails the intake, since the experience is already durable in the graph and the queue by
+   * the time it runs.
+   */
+  readonly onJobEnqueued?: (jobId: string) => void | Promise<void>;
   readonly logger: Logger;
   /** From `loadConfig(env).redaction.entropyThreshold`; the config module is the only env reader. */
   readonly entropyThreshold: number;
@@ -266,6 +271,27 @@ type IntegrateJob = {
  * as something to wait for: one exhausted job once made every ack say "1 job ahead" against an
  * empty queue.
  */
+/**
+ * A listener that throws is logged and swallowed: by the time it runs the episode is already
+ * in the graph and the job already in the queue, so losing the wakeup costs the worker's next
+ * drain a job, not the caller their write.
+ */
+function notifyEnqueued(deps: ReflectionIntakeDeps, jobId: string): void {
+  if (deps.onJobEnqueued === undefined) {
+    return;
+  }
+  try {
+    const result = deps.onJobEnqueued(jobId);
+    if (result instanceof Promise) {
+      result.catch((err: unknown) => {
+        deps.logger.error({ err, jobId }, 'reflection enqueue listener failed');
+      });
+    }
+  } catch (err) {
+    deps.logger.error({ err, jobId }, 'reflection enqueue listener failed');
+  }
+}
+
 function pendingAhead(db: SqliteHandle, maxAttempts: number): number {
   return countQueueJobs(db, { lane: DEFAULT_REFLECTION_LANE }, maxAttempts).pending;
 }
@@ -370,13 +396,7 @@ export async function handleReflection(
   const ahead = pendingAhead(deps.db, deps.workerMaxAttempts);
   const job = ensureIntegrateJob(deps, stored.episodeId, sessionId, requestedLane, now);
   if (job.enqueued) {
-    deps.dispatch.signal({
-      jobId: job.jobId,
-      jobType: INTEGRATE_JOB_TYPE,
-      episodeId: stored.episodeId,
-      sessionId,
-      enqueuedAt: now,
-    });
+    notifyEnqueued(deps, job.jobId);
   }
   if (job.decision !== undefined && job.decision.lane !== DEFAULT_REFLECTION_LANE) {
     deps.logger.warn(

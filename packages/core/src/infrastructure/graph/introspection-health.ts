@@ -1,9 +1,10 @@
-import neo4j, { type Driver } from 'neo4j-driver';
+import type { Driver } from 'neo4j-driver';
 
-import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
-import { runRead } from './connection.js';
+import { currentOnly } from './bitemporal.js';
+import { readFirst } from './connection.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from './episodes.js';
-import { PROTECTED_RELATIONSHIP_TYPES } from './protected-relationships.js';
+import { BACKBONE_TYPES, EXTRACTION_TYPE } from './labels.js';
+import { toGraphInteger } from './values.js';
 
 /**
  * The graph half of the introspector's health snapshot. Everything here is a count, runs on
@@ -19,21 +20,6 @@ import { PROTECTED_RELATIONSHIP_TYPES } from './protected-relationships.js';
 /** Ceiling on the scans below, so one pathological substrate cannot turn a tick into an unbounded scan. */
 export const DEFAULT_HEALTH_SCAN_LIMIT = 50_000;
 
-const CURRENT = [
-  `n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
-  `n.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
-].join(' AND ');
-
-const BACKBONE_TYPES = PROTECTED_RELATIONSHIP_TYPES.map((type) => `'${type}'`).join(', ');
-
-/** Reflection's provenance edge, which is what makes an episode enriched rather than pending. */
-const EXTRACTION_TYPE = 'EXTRACTED_FROM';
-
-/** `LIMIT` is Cypher INTEGER; a plain JS number arrives as FLOAT and is rejected. */
-function toGraphInteger(value: number): unknown {
-  return neo4j.int(Math.trunc(value));
-}
-
 export type VectorParityCounts = {
   /** Current `:Memory` nodes carrying text, which is the set that should hold a content vector. */
   readonly expected: number;
@@ -48,7 +34,7 @@ export type VectorParityCounts = {
  */
 const COUNT_VECTOR_PARITY = [
   'MATCH (n:Memory)',
-  `WHERE ${CURRENT} AND n.${MEMORY_PROPERTIES.text} IS NOT NULL`,
+  `WHERE ${currentOnly('n')} AND n.${MEMORY_PROPERTIES.text} IS NOT NULL`,
   'WITH n LIMIT $limit',
   'RETURN count(n) AS expected,',
   `  count(n.${MEMORY_PROPERTIES.contentVector}) AS vectored`,
@@ -58,7 +44,7 @@ export async function countVectorParity(
   driver: Driver,
   limit: number = DEFAULT_HEALTH_SCAN_LIMIT,
 ): Promise<VectorParityCounts> {
-  const rows = await runRead(
+  const counts = await readFirst(
     driver,
     COUNT_VECTOR_PARITY,
     { limit: toGraphInteger(limit) },
@@ -67,7 +53,7 @@ export async function countVectorParity(
       vectored: row.vectored as number,
     }),
   );
-  return rows[0] ?? { expected: 0, vectored: 0 };
+  return counts ?? { expected: 0, vectored: 0 };
 }
 
 export type OrphanCounts = {
@@ -87,7 +73,7 @@ const AWAITING_ENRICHMENT = `n:Episode AND NOT EXISTS { MATCH ()-[:${EXTRACTION_
 
 const COUNT_ORPHANS = [
   'MATCH (n:Memory)',
-  `WHERE ${CURRENT}`,
+  `WHERE ${currentOnly('n')}`,
   `  AND NOT (${AWAITING_ENRICHMENT})`,
   'WITH n LIMIT $limit',
   'OPTIONAL MATCH (n)-[r]-()',
@@ -100,11 +86,16 @@ export async function countOrphanNodes(
   driver: Driver,
   limit: number = DEFAULT_HEALTH_SCAN_LIMIT,
 ): Promise<OrphanCounts> {
-  const rows = await runRead(driver, COUNT_ORPHANS, { limit: toGraphInteger(limit) }, (row) => ({
-    nodes: row.nodes as number,
-    orphans: row.orphans as number,
-  }));
-  return rows[0] ?? { nodes: 0, orphans: 0 };
+  const counts = await readFirst(
+    driver,
+    COUNT_ORPHANS,
+    { limit: toGraphInteger(limit) },
+    (row) => ({
+      nodes: row.nodes as number,
+      orphans: row.orphans as number,
+    }),
+  );
+  return counts ?? { nodes: 0, orphans: 0 };
 }
 
 /**
@@ -115,7 +106,7 @@ export async function countOrphanNodes(
  */
 const COUNT_EPISODES_WITHOUT_SESSION = [
   'MATCH (n:Episode)',
-  `WHERE ${CURRENT}`,
+  `WHERE ${currentOnly('n')}`,
   'WITH n LIMIT $limit',
   `WITH n WHERE NOT (n)-[:${CONTAINMENT_TYPE}]->(:Session)`,
   'RETURN count(n) AS missing',
@@ -125,11 +116,11 @@ export async function countEpisodesWithoutSession(
   driver: Driver,
   limit: number = DEFAULT_HEALTH_SCAN_LIMIT,
 ): Promise<number> {
-  const rows = await runRead(
+  const missing = await readFirst(
     driver,
     COUNT_EPISODES_WITHOUT_SESSION,
     { limit: toGraphInteger(limit) },
     (row) => row.missing as number,
   );
-  return rows[0] ?? 0;
+  return missing ?? 0;
 }

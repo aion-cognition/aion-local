@@ -7,8 +7,6 @@ import { z } from 'zod';
  */
 export const IsoTimestampSchema = z.union([z.iso.datetime({ offset: true }), z.iso.date()]);
 
-export type IsoTimestamp = z.infer<typeof IsoTimestampSchema>;
-
 /** A node is either the live fact or lineage kept for time-travel. */
 export const CurrencySchema = z.enum(['current', 'superseded']);
 

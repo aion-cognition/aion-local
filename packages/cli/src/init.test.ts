@@ -1,15 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  AnthropicKeyUnavailableError,
-  MemberNameUnavailableError,
   parseInitFlags,
   registrationCommand,
   registrationJson,
   resolveAnthropicKey,
   resolveInitProfile,
   resolveMemberName,
-  UnknownOptionError,
 } from './init.js';
 
 const never = async (): Promise<string> => {
@@ -27,7 +24,9 @@ describe('parseInitFlags', () => {
   });
 
   it('rejects an unknown option', () => {
-    expect(() => parseInitFlags(['--force'])).toThrow(UnknownOptionError);
+    expect(() => parseInitFlags(['--force'])).toThrow(
+      /unknown option .* for init \(supported: local, full, --yes\)/,
+    );
   });
 
   it('accepts either profile as a bare word and leaves it unset otherwise', () => {
@@ -37,7 +36,9 @@ describe('parseInitFlags', () => {
   });
 
   it('rejects a word that is neither profile', () => {
-    expect(() => parseInitFlags(['medium'])).toThrow(UnknownOptionError);
+    expect(() => parseInitFlags(['medium'])).toThrow(
+      /unknown option .* for init \(supported: local, full, --yes\)/,
+    );
   });
 });
 
@@ -125,7 +126,7 @@ describe('resolveAnthropicKey', () => {
         interactive: true,
         ask: never,
       }),
-    ).rejects.toBeInstanceOf(AnthropicKeyUnavailableError);
+    ).rejects.toThrow(/needs AION_ANTHROPIC_API_KEY/);
     await expect(
       resolveAnthropicKey({
         configured: '',
@@ -134,7 +135,7 @@ describe('resolveAnthropicKey', () => {
         interactive: true,
         ask: async () => '',
       }),
-    ).rejects.toBeInstanceOf(AnthropicKeyUnavailableError);
+    ).rejects.toThrow(/needs AION_ANTHROPIC_API_KEY/);
   });
 });
 
@@ -186,7 +187,7 @@ describe('resolveMemberName', () => {
   it('fails by name when there is nothing to fall back to and no terminal', async () => {
     await expect(
       resolveMemberName({ envName: '  ', assumeYes: false, interactive: false, ask: never }),
-    ).rejects.toBeInstanceOf(MemberNameUnavailableError);
+    ).rejects.toThrow(/no member name available/);
   });
 
   it('fails when the terminal answer is empty and there is no git name', async () => {
@@ -197,7 +198,7 @@ describe('resolveMemberName', () => {
         interactive: true,
         ask: async () => '',
       }),
-    ).rejects.toBeInstanceOf(MemberNameUnavailableError);
+    ).rejects.toThrow(/no member name available/);
   });
 });
 

@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
-import { ReflectionDispatch } from './dispatch.js';
 import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
 import { LaneAssigner } from './lanes.js';
 import { orchestratorLedgerKey, ReflectionOrchestrator } from './orchestrator.js';
@@ -182,7 +181,6 @@ let harness: Neo4jHarness;
 let db: SqliteHandle;
 let dataDir: string;
 let logger: Logger;
-let dispatch: ReflectionDispatch;
 let live: ReflectionIntakeDeps;
 let deadOllama: ReflectionIntakeDeps;
 let worker: ReflectionWorker | undefined;
@@ -196,7 +194,7 @@ function buildWorker(
     [stage],
   );
   worker = new ReflectionWorker(
-    { driver: harness.driver, db, provider: live.provider, dispatch, runner, logger },
+    { driver: harness.driver, db, provider: live.provider, runner, logger },
     options,
   );
   return worker;
@@ -218,7 +216,6 @@ beforeAll(async () => {
 
   const backbone = await bootstrapBackbone(harness.driver, { memberName: 'Test User' });
   logger = openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' });
-  dispatch = new ReflectionDispatch();
 
   live = {
     driver: harness.driver,
@@ -228,7 +225,11 @@ beforeAll(async () => {
       workspaceId: backbone.workspace.id,
     }),
     provider: new OllamaProvider({ baseUrl: OLLAMA_URL, embedModel: DEFAULTS.models.embed }),
-    dispatch,
+    // Late-bound on purpose: the worker under test is rebuilt per case, and intake wakes
+    // whichever one is current.
+    onJobEnqueued: () => {
+      worker?.wake();
+    },
     logger,
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),

@@ -1,28 +1,32 @@
 import {
-  ConfigError,
   countGraphElements,
   EDGE_WEIGHT_DISTRIBUTION_TYPES,
   edgeWeightDistribution,
-  GraphConnection,
   listOllamaModels,
   listResidentModels,
-  loadConfig,
-  openLogger,
   plasticityCounters,
   queueLagSnapshot,
   remoteBannerLines,
   resolveProviderRouting,
   routingSummary,
-  SqliteStore,
   unbackedPins,
   type Config,
   type EdgeWeightDistribution,
+  type GraphConnection,
   type PlasticityCounters,
   type QueueLagSnapshot,
   type SqliteHandle,
 } from '@aion/core';
 
-import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
+import { parseArgs, type ArgSpec } from './args.js';
+import { ageOf } from './format.js';
+import { describeError, stdoutWriter, type Writer } from './output.js';
+import { withSubstrate } from './substrate.js';
+
+const SPEC: ArgSpec = {
+  command: 'status',
+  usage: 'aion status',
+};
 
 export type StatusSnapshot = {
   readonly neo4j: { readonly uri: string; readonly reachable: boolean; readonly detail: string };
@@ -85,18 +89,6 @@ export async function collectStatus(
     plasticity: plasticityCounters(db),
     ...(edgeWeights === undefined ? {} : { edgeWeights }),
   };
-}
-
-/** `12s` / `4m` / `1h`, matching `aion queue`'s own age formatting. */
-function ageOf(ms: number): string {
-  const seconds = Math.max(0, Math.round(ms / 1000));
-  if (seconds < 120) {
-    return `${String(seconds)}s`;
-  }
-  if (seconds < 7200) {
-    return `${String(Math.round(seconds / 60))}m`;
-  }
-  return `${String(Math.round(seconds / 3600))}h`;
 }
 
 /** One clause per type, in the fixed order the distribution reports them; a type with no live edge reads as `n=0`. */
@@ -187,28 +179,21 @@ export function renderStatus(snapshot: StatusSnapshot, config: Config, write: Wr
   }
 }
 
-export async function runStatus(
-  _argv: readonly string[] = [],
+export function runStatus(
+  argv: readonly string[] = [],
   write: Writer = stdoutWriter,
 ): Promise<number> {
-  let config: Config;
-  try {
-    config = loadConfig(process.env);
-  } catch (err) {
-    stderrWriter(err instanceof ConfigError ? err.message : describeError(err));
-    return 1;
-  }
-
-  const logger = openLogger({ ...config.logging, name: 'aion-status' });
-  const connection = new GraphConnection(config.neo4j);
-  const store = new SqliteStore({ filePath: config.sqlite.path });
-  try {
-    const snapshot = await collectStatus(config, connection, store.db);
-    renderStatus(snapshot, config, write);
-    logger.info({ snapshot }, 'status reported');
-    return snapshot.neo4j.reachable && snapshot.ollama.reachable ? 0 : 1;
-  } finally {
-    await connection.close();
-    store.close();
-  }
+  return withSubstrate({
+    spec: SPEC,
+    argv,
+    write,
+    parse: (args) => parseArgs(SPEC, args),
+    run: async (substrate) => {
+      const { config } = substrate;
+      const snapshot = await collectStatus(config, substrate.connection(), substrate.db());
+      renderStatus(snapshot, config, write);
+      substrate.logger().info({ snapshot }, 'status reported');
+      return snapshot.neo4j.reachable && snapshot.ollama.reachable ? 0 : 1;
+    },
+  });
 }

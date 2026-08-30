@@ -26,6 +26,7 @@ import {
   type Neo4jHarness,
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger } from '../../../infrastructure/logging/logger.js';
+import { refusingProvider } from '../../../infrastructure/providers/test-support/refusing-provider.fixture.js';
 import type { Provider, StructuredRequest } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import type { OperationContext } from '../../domain/operation.js';
@@ -114,12 +115,13 @@ afterAll(async () => {
   rmSync(dataDir, { recursive: true, force: true });
 });
 
-function contextFor(): OperationContext {
+function contextFor(provider: Provider = refusingProvider): OperationContext {
   return {
     driver: harness.driver,
     db,
     config,
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
+    provider,
     health: healthFixture(),
     now: NOW,
     signal: new AbortController().signal,
@@ -129,9 +131,7 @@ function contextFor(): OperationContext {
 describe('descriptionFreshnessOperation against a live graph', () => {
   it('refreshes a description that outgrew its mention baseline and keeps the old value', async () => {
     const calls: StructuredRequest[] = [];
-    const outcome = await descriptionFreshnessOperation({
-      buildProvider: () => stubProvider(calls),
-    }).run(contextFor());
+    const outcome = await descriptionFreshnessOperation().run(contextFor(stubProvider(calls)));
 
     expect(outcome.status).toBe('applied');
     expect(outcome.itemsAffected).toBe(1);
@@ -152,9 +152,7 @@ describe('descriptionFreshnessOperation against a live graph', () => {
 
   it('leaves the freshly refreshed entity alone on the next run', async () => {
     const calls: StructuredRequest[] = [];
-    const outcome = await descriptionFreshnessOperation({
-      buildProvider: () => stubProvider(calls),
-    }).run(contextFor());
+    const outcome = await descriptionFreshnessOperation().run(contextFor(stubProvider(calls)));
 
     expect(outcome.status).toBe('noop');
     expect(outcome.itemsAffected).toBe(0);

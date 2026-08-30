@@ -22,7 +22,6 @@ import {
   readMemberName,
   RecallSideEffects,
   reconcileResidentModels,
-  ReflectionDispatch,
   ReflectionOrchestrator,
   ReflectionWorker,
   ReinforcementEnqueueStage,
@@ -83,7 +82,7 @@ export function reflectionStages(config: Config): readonly ReflectionStage[] {
   return [
     new EntityExtractionStage({
       model,
-      timeoutMs: reflection.entityTimeoutMs,
+      timeoutMs: reflection.stageTimeoutMs,
       maxEntities: reflection.maxEntities,
     }),
     new EntityDedupStage({ similarityThreshold: reflection.entityDedupThreshold }),
@@ -94,17 +93,17 @@ export function reflectionStages(config: Config): readonly ReflectionStage[] {
     }),
     new CognitiveExtractionStage({
       model,
-      timeoutMs: reflection.cognitiveTimeoutMs,
+      timeoutMs: reflection.stageTimeoutMs,
       maxNodes: reflection.maxCognitiveNodes,
     }),
     new SemanticRelationshipStage({
       model,
-      timeoutMs: reflection.semanticTimeoutMs,
+      timeoutMs: reflection.stageTimeoutMs,
       maxRelationships: reflection.maxRelationships,
     }),
     new SupersessionStage({
       model,
-      timeoutMs: reflection.supersedeTimeoutMs,
+      timeoutMs: reflection.stageTimeoutMs,
       mode: reflection.supersedeMode,
       autoConfidence: reflection.supersedeAutoConfidence,
       neighborThreshold: reflection.supersedeNeighborThreshold,
@@ -122,7 +121,7 @@ export function narrativeOptions(config: Config): SessionNarrativeOptions {
   return {
     model: config.models.reflect,
     idleMs: config.reflection.narrativeIdleMinutes * MINUTE_MS,
-    timeoutMs: config.reflection.narrativeTimeoutMs,
+    timeoutMs: config.reflection.stageTimeoutMs,
     maxSourceEpisodes: config.reflection.maxNarrativeEpisodes,
     maxEpisodeChars: config.reflection.maxNarrativeEpisodeChars,
   };
@@ -246,11 +245,6 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
     }
     await reconcileModels(config, router, logger);
 
-    const dispatch = new ReflectionDispatch({
-      onListenerError: (err, signal) => {
-        logger.error({ err, jobId: signal.jobId }, 'reflection dispatch listener failed');
-      },
-    });
     const sideEffects = new RecallSideEffects(
       driver,
       store.db,
@@ -268,28 +262,12 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       logger,
       onRecalled: sideEffects.onRecalled,
     };
-    const intake: ReflectionIntakeDeps = {
-      driver,
-      db: store.db,
-      sessions,
-      // Intake only embeds, so the role it borrows changes nothing about where its calls go.
-      provider: reflectProvider,
-      dispatch,
-      logger,
-      entropyThreshold: config.redaction.entropyThreshold,
-      workerMaxAttempts: config.operational.workerMaxAttempts,
-      // One assigner for the service's life: its counters are the arrival rate, and a fresh
-      // instance per call would measure nothing.
-      lanes: new LaneAssigner(config.lanes),
-    };
-
     const stages = reflectionStages(config);
     const worker = new ReflectionWorker(
       {
         driver,
         db: store.db,
         provider: reflectProvider,
-        dispatch,
         runner: new ReflectionOrchestrator(
           { driver, db: store.db, provider: reflectProvider, logger },
           stages,
@@ -298,6 +276,25 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       },
       workerOptions(config),
     );
+
+    // Built after the worker because it wakes it: reflection is event-driven, and the queue
+    // row is what survives a restart rather than what a loop watches.
+    const intake: ReflectionIntakeDeps = {
+      driver,
+      db: store.db,
+      sessions,
+      // Intake only embeds, so the role it borrows changes nothing about where its calls go.
+      provider: reflectProvider,
+      onJobEnqueued: () => {
+        worker.wake();
+      },
+      logger,
+      entropyThreshold: config.redaction.entropyThreshold,
+      workerMaxAttempts: config.operational.workerMaxAttempts,
+      // One assigner for the service's life: its counters are the arrival rate, and a fresh
+      // instance per call would measure nothing.
+      lanes: new LaneAssigner(config.lanes),
+    };
     if (stages.length > 0) {
       // The drain runs alongside the first tool calls rather than in front of them: a long
       // backlog would otherwise hold the service off the port it is supposed to be answering.
@@ -329,6 +326,9 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       db: store.db,
       config,
       logger,
+      // One provider for the whole loop, so its circuit breaker counts failures across runs
+      // rather than starting fresh inside each one.
+      provider: reflectProvider,
       operations: maintenanceOperations,
     });
     introspector.start();

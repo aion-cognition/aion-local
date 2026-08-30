@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { SqliteHandle } from './database.js';
+import { proposalTable } from './proposal-table.js';
 
 /**
  * The supersession policy's low-confidence half. A contradiction judgment the reflection
@@ -56,6 +57,12 @@ function toSupersessionProposal(row: SupersessionProposalRow): SupersessionPropo
   };
 }
 
+const proposals = proposalTable<SupersessionProposalRow, SupersessionProposal>({
+  table: 'supersession_proposals',
+  pairColumns: ['old_id', 'new_id'],
+  mapRow: toSupersessionProposal,
+});
+
 /**
  * Idempotent on the pair: a second judgment of the same (old, new) refreshes the confidence,
  * rationale, and episode rather than adding a row, so the orchestrator's re-run after a crash
@@ -93,17 +100,12 @@ export function getSupersessionProposal(
   db: SqliteHandle,
   id: string,
 ): SupersessionProposal | undefined {
-  const row = db.prepare('SELECT * FROM supersession_proposals WHERE id = ?').get(id) as
-    SupersessionProposalRow | undefined;
-  return row === undefined ? undefined : toSupersessionProposal(row);
+  return proposals.get(db, id);
 }
 
 /** Ordered by insertion (rowid), not created_at: same-millisecond bursts would tie on the latter. */
 export function listSupersessionProposals(db: SqliteHandle): SupersessionProposal[] {
-  const rows = db
-    .prepare('SELECT * FROM supersession_proposals ORDER BY rowid ASC')
-    .all() as SupersessionProposalRow[];
-  return rows.map(toSupersessionProposal);
+  return proposals.list(db);
 }
 
 /** Both directions: `aion why <id>` shows what a node would replace and what would replace it. */
@@ -111,14 +113,7 @@ export function findSupersessionProposalsForNode(
   db: SqliteHandle,
   nodeId: string,
 ): SupersessionProposal[] {
-  const rows = db
-    .prepare(
-      `SELECT * FROM supersession_proposals
-       WHERE old_id = ? OR new_id = ?
-       ORDER BY rowid ASC`,
-    )
-    .all(nodeId, nodeId) as SupersessionProposalRow[];
-  return rows.map(toSupersessionProposal);
+  return proposals.findForNode(db, nodeId);
 }
 
 /** Returns false when the id is unknown or the proposal was already resolved. */
@@ -127,18 +122,10 @@ export function resolveSupersessionProposal(
   id: string,
   resolvedAt: string = new Date().toISOString(),
 ): boolean {
-  const result = db
-    .prepare(
-      'UPDATE supersession_proposals SET resolved_at = ? WHERE id = ? AND resolved_at IS NULL',
-    )
-    .run(resolvedAt, id);
-  return result.changes > 0;
+  return proposals.resolve(db, id, resolvedAt);
 }
 
 /** Open proposals only: a resolved row is a decision already made, not a queue for anyone. */
 export function countOpenSupersessionProposals(db: SqliteHandle): number {
-  const row = db
-    .prepare('SELECT COUNT(*) AS count FROM supersession_proposals WHERE resolved_at IS NULL')
-    .get() as { count: number };
-  return row.count;
+  return proposals.countOpen(db);
 }

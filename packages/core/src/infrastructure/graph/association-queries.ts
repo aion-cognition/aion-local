@@ -1,4 +1,4 @@
-import neo4j, { type Driver } from 'neo4j-driver';
+import type { Driver } from 'neo4j-driver';
 import { randomUUID } from 'node:crypto';
 
 import { runRead } from './connection.js';
@@ -6,7 +6,8 @@ import { upsertEdge } from './edges.js';
 import { readModeFragment, type ReadMode } from './read-modes.js';
 import type { RelationshipType } from './relationships.js';
 import { CONTENT_VECTOR_INDEX, type NodeContentVector } from './seed-queries.js';
-import { toGraphVector } from './values.js';
+import { toGraphInteger, toGraphVector } from './values.js';
+import { asCosine } from './vector-indexes.js';
 
 /**
  * Co-occurrence and semantic association edges between entities. Both flow through
@@ -137,11 +138,6 @@ export type FindSimilarEntityCandidatesInput = {
  */
 const KNN_OVERSAMPLE_FACTOR = 5;
 
-/** Procedure arguments and list-slice bounds are Cypher INTEGER; a plain JS number arrives as FLOAT and is rejected. */
-function toGraphInteger(value: number): unknown {
-  return neo4j.int(Math.trunc(value));
-}
-
 /**
  * The semantic leg of association-building, batched across every entity the caller passes in
  * one round trip: `UNWIND` the seeds, query the vector index once per seed, group back down
@@ -160,7 +156,7 @@ export async function findSimilarEntityCandidates(
   const cypher = [
     'UNWIND $seeds AS seed',
     'CALL db.index.vector.queryNodes($index, $k, seed.vector) YIELD node AS n, score AS rescaled',
-    'WITH seed, n, (2.0 * rescaled - 1.0) AS score',
+    `WITH seed, n, ${asCosine('rescaled')} AS score`,
     `WHERE n:Entity AND n.id <> seed.id AND score >= $threshold AND ${fragment.where}`,
     'WITH seed, n, score ORDER BY seed.id, score DESC',
     'WITH seed.id AS sourceId, collect({ id: n.id, score: score })[0..$limit] AS matches',

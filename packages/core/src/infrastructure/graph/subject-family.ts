@@ -1,14 +1,13 @@
 import type { Driver } from 'neo4j-driver';
-import neo4j from 'neo4j-driver';
 
 import {
   BITEMPORAL_PROPERTIES,
+  currentOnly,
   supersedeInTransaction,
   type SupersedeResult,
 } from './bitemporal.js';
 import { normalizeCognitiveText, TEXT_NORM_PROPERTY } from './cognitive-queries.js';
 import { inWriteTransaction, runRead, type GraphTransaction } from './connection.js';
-import { upsertEdgeInTransaction } from './edges.js';
 import {
   DESCRIPTION_MENTION_COUNT_PROPERTY,
   DESCRIPTION_RETIRED_AT_PROPERTY,
@@ -16,11 +15,10 @@ import {
 } from './entity-description-queries.js';
 import { ENTITY_MENTION_TYPE } from './entity-queries.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
-import { BASE_NODE_LABEL } from './labels.js';
-import { SUPERSEDES_TYPE } from './relationships.js';
 import { ENTITY_NAME_NORM_PROPERTY, ENTITY_NAME_PROPERTY } from './seed-queries.js';
 import { FACT_NODE_LABELS } from './supersession-queries.js';
-import { toGraphDateTime, type Row } from './values.js';
+import { toGraphDateTime, toGraphInteger, type Row } from './values.js';
+import { asCosine } from './vector-indexes.js';
 
 /**
  * The middle blade between closing one claim and closing a whole observation.
@@ -55,10 +53,6 @@ const SUBJECT_PROPAGATION_SIGNALS = ['subject_family'];
 /** Matches the subject-identity candidate leg: a name this short is inside nearly every claim. */
 const MIN_SUBJECT_NAME_LENGTH = 3;
 
-function toGraphInteger(value: number): unknown {
-  return neo4j.int(Math.trunc(value));
-}
-
 /**
  * The subjects a claim names: entities its own source episode mentioned whose stored fold
  * appears inside the claim's stored fold. The same test the detection leg uses to decide two
@@ -66,11 +60,9 @@ function toGraphInteger(value: number): unknown {
  */
 const SUBJECTS_OF_CLAIM = [
   `MATCH (claim { id: $claimId })-[:EXTRACTED_FROM]->(source:Episode)`,
-  `WHERE source.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
-  `  AND source.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  `WHERE ${currentOnly('source')}`,
   `MATCH (source)-[:${ENTITY_MENTION_TYPE}]->(e:Entity)`,
-  `WHERE e.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
-  `  AND e.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  `WHERE ${currentOnly('e')}`,
   `  AND size(e.${ENTITY_NAME_NORM_PROPERTY}) >= $minNameLength`,
   `  AND claim.${TEXT_NORM_PROPERTY} CONTAINS e.${ENTITY_NAME_NORM_PROPERTY}`,
   `RETURN DISTINCT e.id AS id, e.${ENTITY_NAME_PROPERTY} AS name,`,
@@ -128,11 +120,9 @@ export async function findClaimSubjects(
  */
 const SUBJECT_SIBLINGS = [
   `MATCH (claim { id: $claimId })-[:EXTRACTED_FROM]->(source:Episode)`,
-  `WHERE source.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
-  `  AND source.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  `WHERE ${currentOnly('source')}`,
   `MATCH (source)-[:${ENTITY_MENTION_TYPE}]->(e:Entity)`,
-  `WHERE e.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
-  `  AND e.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  `WHERE ${currentOnly('e')}`,
   `  AND size(e.${ENTITY_NAME_NORM_PROPERTY}) >= $minNameLength`,
   `  AND claim.${TEXT_NORM_PROPERTY} CONTAINS e.${ENTITY_NAME_NORM_PROPERTY}`,
   // `claim` is carried through: the relatedness reading below is against its own vector.
@@ -140,8 +130,7 @@ const SUBJECT_SIBLINGS = [
   'MATCH (sibling)-[:EXTRACTED_FROM]->(source)',
   'WHERE sibling.id <> $claimId',
   '  AND any(label IN labels(sibling) WHERE label IN $labels)',
-  `  AND sibling.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
-  `  AND sibling.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  `  AND ${currentOnly('sibling')}`,
   `  AND head([name IN names WHERE sibling.${TEXT_NORM_PROPERTY} CONTAINS name]) IS NOT NULL`,
   '  AND NOT EXISTS {',
   '    MATCH (sibling)-[:EXTRACTED_FROM]->(other:Episode)',
@@ -152,9 +141,9 @@ const SUBJECT_SIBLINGS = [
   `       head([name IN names WHERE sibling.${TEXT_NORM_PROPERTY} CONTAINS name]) AS subject,`,
   `       CASE WHEN claim.${MEMORY_PROPERTIES.contentVector} IS NULL`,
   `             OR sibling.${MEMORY_PROPERTIES.contentVector} IS NULL THEN null`,
-  '            ELSE 2.0 * vector.similarity.cosine(',
-  `              claim.${MEMORY_PROPERTIES.contentVector}, sibling.${MEMORY_PROPERTIES.contentVector}`,
-  '            ) - 1.0 END AS relatedness',
+  `            ELSE ${asCosine(
+    `vector.similarity.cosine(claim.${MEMORY_PROPERTIES.contentVector}, sibling.${MEMORY_PROPERTIES.contentVector})`,
+  )} END AS relatedness`,
   'ORDER BY id',
 ].join('\n');
 
@@ -209,13 +198,6 @@ export async function findSubjectSiblings(
 ): Promise<readonly SubjectSibling[]> {
   return runRead(driver, SUBJECT_SIBLINGS, siblingParameters(claimId), mapSibling);
 }
-
-const CLOSE_SIBLING = [
-  `MATCH (n:${BASE_NODE_LABEL} { id: $id })`,
-  `SET n.${BITEMPORAL_PROPERTIES.validUntil} = coalesce(n.${BITEMPORAL_PROPERTIES.validUntil}, $now),`,
-  `    n.${BITEMPORAL_PROPERTIES.txUntil} = coalesce(n.${BITEMPORAL_PROPERTIES.txUntil}, $now)`,
-  'RETURN n.id AS id',
-].join('\n');
 
 /**
  * The description and its embedding go together: a vector of a sentence the node no longer
@@ -341,17 +323,12 @@ export async function supersedeSubjectFamily(
     const siblings = candidates.filter((sibling) => siblingCloses(sibling, input.relatednessFloor));
     const held = candidates.filter((sibling) => !siblingCloses(sibling, input.relatednessFloor));
     for (const sibling of siblings) {
-      await tx.run(CLOSE_SIBLING, { id: sibling.id, now: toGraphDateTime(now) }, (row) => row.id);
-      await upsertEdgeInTransaction(tx, {
-        type: SUPERSEDES_TYPE,
-        sourceId: input.newId,
-        targetId: sibling.id,
-        strength: 1,
-        confidence: 1,
+      await supersedeInTransaction(tx, {
+        oldId: sibling.id,
+        newId: input.newId,
+        now,
         signals: SUBJECT_PROPAGATION_SIGNALS,
         provenance: [SUBJECT_PROPAGATION_METHOD],
-        count: 0,
-        now,
       });
     }
     for (const subject of retired) {

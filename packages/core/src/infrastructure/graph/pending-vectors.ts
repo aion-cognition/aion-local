@@ -1,9 +1,10 @@
-import neo4j, { type Driver } from 'neo4j-driver';
+import type { Driver } from 'neo4j-driver';
 
-import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
+import { BITEMPORAL_PROPERTIES, currentOnly } from './bitemporal.js';
 import { runRead, runWrite } from './connection.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
-import { toGraphVector } from './values.js';
+import { MEMORY_LABEL } from './labels.js';
+import { toGraphInteger, toGraphVector } from './values.js';
 import type { Vector } from '../providers/types.js';
 
 /**
@@ -15,7 +16,6 @@ import type { Vector } from '../providers/types.js';
  * `:Memory` is the label migration 001 declares `content_vec_idx` on, so it is also the
  * exact set of nodes a missing vector makes invisible to vector search.
  */
-const MEMORY_LABEL = 'Memory';
 
 export type PendingVectorNode = {
   readonly id: string;
@@ -26,11 +26,6 @@ export type ContentVectorEntry = {
   readonly id: string;
   readonly vector: Vector;
 };
-
-/** Procedure arguments and `LIMIT` are Cypher INTEGER; a plain JS number arrives as FLOAT and is rejected. */
-function toGraphInteger(value: number): unknown {
-  return neo4j.int(Math.trunc(value));
-}
 
 /**
  * Oldest first, so a backlog drains in the order it accumulated and a long outage does not
@@ -47,8 +42,7 @@ function toGraphInteger(value: number): unknown {
 const FIND_PENDING_VECTOR_NODES = [
   `MATCH (n:${MEMORY_LABEL})`,
   `WHERE n.${MEMORY_PROPERTIES.contentVector} IS NULL AND n.${MEMORY_PROPERTIES.text} IS NOT NULL`,
-  `  AND n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
-  `  AND n.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  `  AND ${currentOnly('n')}`,
   `RETURN n.id AS id, n.${MEMORY_PROPERTIES.text} AS text`,
   `ORDER BY n.${BITEMPORAL_PROPERTIES.txFrom}, n.id`,
   'LIMIT $limit',

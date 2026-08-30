@@ -6,6 +6,14 @@ export type LastPack = {
   /** The stored row's JSON exactly as written, for callers that must reproduce it byte-for-byte. */
   packJson: string;
   ts: string;
+  /** Present when the pack answered a time-traveled read; a reader of `aion last` must see that. */
+  asOf?: string;
+  knewAt?: string;
+};
+
+export type LastPackReadMode = {
+  readonly asOf?: string;
+  readonly knewAt?: string;
 };
 
 export type LastPackSession = {
@@ -17,6 +25,8 @@ type LastPackRow = {
   session_id: string;
   pack_json: string;
   ts: string;
+  as_of: string | null;
+  knew_at: string | null;
 };
 
 /** One row per session: a later call for the same sessionId replaces the prior pack. */
@@ -25,11 +35,13 @@ export function saveLastPack(
   sessionId: string,
   pack: unknown,
   ts: string = new Date().toISOString(),
+  readMode: LastPackReadMode = {},
 ): void {
   db.prepare(
-    `INSERT INTO last_pack (session_id, pack_json, ts) VALUES (?, ?, ?)
-     ON CONFLICT(session_id) DO UPDATE SET pack_json = excluded.pack_json, ts = excluded.ts`,
-  ).run(sessionId, JSON.stringify(pack), ts);
+    `INSERT INTO last_pack (session_id, pack_json, ts, as_of, knew_at) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(session_id) DO UPDATE SET pack_json = excluded.pack_json, ts = excluded.ts,
+       as_of = excluded.as_of, knew_at = excluded.knew_at`,
+  ).run(sessionId, JSON.stringify(pack), ts, readMode.asOf ?? null, readMode.knewAt ?? null);
 }
 
 export function getLastPack(db: SqliteHandle, sessionId: string): LastPack | undefined {
@@ -43,6 +55,8 @@ export function getLastPack(db: SqliteHandle, sessionId: string): LastPack | und
     pack: JSON.parse(row.pack_json) as unknown,
     packJson: row.pack_json,
     ts: row.ts,
+    ...(row.as_of === null ? {} : { asOf: row.as_of }),
+    ...(row.knew_at === null ? {} : { knewAt: row.knew_at }),
   };
 }
 

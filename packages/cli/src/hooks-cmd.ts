@@ -2,6 +2,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import { homedir } from 'node:os';
 import { dirname } from 'node:path';
 
+import { CliUsageError, wantsHelp } from './args.js';
 import type { StopMode } from './hook/options.js';
 import {
   buildAionHooks,
@@ -11,7 +12,7 @@ import {
   type HookProfile,
   type SettingsHooks,
 } from './hooks-settings.js';
-import { stderrWriter, stdoutWriter, type Writer } from './output.js';
+import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
 import { claudeSettingsPath, hookScriptPath, resolveHostRepo, type HostRepo } from './paths.js';
 
 /**
@@ -19,14 +20,11 @@ import { claudeSettingsPath, hookScriptPath, resolveHostRepo, type HostRepo } fr
  * this owns the file, the backup, and what the user is told.
  */
 
-export class UnknownHooksOptionError extends Error {
-  constructor(option: string) {
-    super(
-      `unknown option '${option}' for hooks ` +
-        '(supported: --profile full|lite, --with-research-capture, --stop-mode push|instruct)',
-    );
-    this.name = 'UnknownHooksOptionError';
-  }
+function unknownHooksOption(option: string): CliUsageError {
+  return new CliUsageError(
+    `unknown option '${option}' for hooks ` +
+      '(supported: --profile full|lite, --with-research-capture, --stop-mode push|instruct)',
+  );
 }
 
 export class SettingsUnreadableError extends Error {
@@ -68,7 +66,7 @@ export function parseHooksFlags(argv: readonly string[]): HooksFlags {
       index += 1;
       continue;
     }
-    throw new UnknownHooksOptionError(arg ?? '');
+    throw unknownHooksOption(arg ?? '');
   }
   return { profile, withResearchCapture, stopMode };
 }
@@ -235,7 +233,7 @@ function usage(): string {
 
 function dispatch(argv: readonly string[], write: Writer): number {
   const [action = '', ...rest] = argv;
-  if (action === '' || action === 'help' || action === '--help') {
+  if (action === '' || action === 'help' || wantsHelp(argv)) {
     write(usage());
     return 0;
   }
@@ -261,7 +259,11 @@ export function runHooks(
   try {
     return Promise.resolve(dispatch(argv, write));
   } catch (err) {
-    stderrWriter(err instanceof Error ? `${err.name}: ${err.message}` : String(err));
+    if (err instanceof CliUsageError) {
+      stderrWriter(`${err.message}\n\n${usage()}`);
+      return Promise.resolve(1);
+    }
+    stderrWriter(describeError(err));
     return Promise.resolve(1);
   }
 }

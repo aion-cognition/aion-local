@@ -1,12 +1,7 @@
 import {
-  ConfigError,
   getLastPack,
   listLastPackSessions,
-  loadConfig,
-  openLogger,
   PACK_BUCKETS,
-  SqliteStore,
-  type Config,
   type LastPackSession,
   type PackBucket,
 } from '@aion/core';
@@ -19,23 +14,17 @@ import {
   type StageTimingsMs,
 } from '@aion/protocol';
 
-import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
+import { parseArgs, type ArgSpec } from './args.js';
+import { stderrWriter, stdoutWriter, type Writer } from './output.js';
+import { withSubstrate } from './substrate.js';
 
 /** Render exactly the pack a session was served, not a recomputed view. */
 
-export class UnknownOptionError extends Error {
-  constructor(option: string) {
-    super(`unknown option '${option}' for last (supported: --session, --json)`);
-    this.name = 'UnknownOptionError';
-  }
-}
-
-export class MissingOptionValueError extends Error {
-  constructor(option: string) {
-    super(`--${option} needs a value`);
-    this.name = 'MissingOptionValueError';
-  }
-}
+const SPEC: ArgSpec = {
+  command: 'last',
+  usage: 'aion last [--session <id>] [--json]',
+  options: [{ flag: '--session', takesValue: true }, { flag: '--json' }],
+};
 
 export type LastFlags = {
   readonly session?: string;
@@ -43,28 +32,9 @@ export type LastFlags = {
 };
 
 export function parseLastFlags(argv: readonly string[]): LastFlags {
-  let session: string | undefined;
-  let json = false;
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === '--json') {
-      json = true;
-      continue;
-    }
-    if (arg === '--session') {
-      const value = argv[index + 1];
-      if (value === undefined) {
-        throw new MissingOptionValueError('session');
-      }
-      session = value;
-      index += 1;
-      continue;
-    }
-    throw new UnknownOptionError(arg ?? '');
-  }
-
-  return { json, ...(session === undefined ? {} : { session }) };
+  const { flags, values } = parseArgs(SPEC, argv);
+  const session = values.get('--session');
+  return { json: flags.has('--json'), ...(session === undefined ? {} : { session }) };
 }
 
 const BUCKET_LABELS: Readonly<Record<PackBucket, string>> = {
@@ -116,6 +86,8 @@ function renderCue(cue: Cue): string {
 }
 
 export type LastPackEntry = {
+  readonly asOf?: string;
+  readonly knewAt?: string;
   readonly sessionId: string;
   readonly ts: string;
   readonly pack: MemoryPack;
@@ -125,6 +97,12 @@ export type LastPackEntry = {
 export function renderPack(entry: LastPackEntry, write: Writer): void {
   write(`session  ${entry.sessionId}`);
   write(`served   ${entry.ts}`);
+  if (entry.asOf !== undefined) {
+    write(`as of    ${entry.asOf} (time-traveled read, not the present graph)`);
+  }
+  if (entry.knewAt !== undefined) {
+    write(`knew at  ${entry.knewAt} (time-traveled read, not the present graph)`);
+  }
   for (const rung of entry.pack.metadata.degraded ?? []) {
     write(`degraded  ${rung.stage}: ${rung.reason}`);
   }
@@ -190,54 +168,52 @@ export function runLast(
   argv: readonly string[] = [],
   write: Writer = stdoutWriter,
 ): Promise<number> {
-  let flags: LastFlags;
-  let config: Config;
-  try {
-    flags = parseLastFlags(argv);
-    config = loadConfig(process.env);
-  } catch (err) {
-    stderrWriter(err instanceof ConfigError ? err.message : describeError(err));
-    return Promise.resolve(1);
-  }
+  return withSubstrate({
+    spec: SPEC,
+    argv,
+    write,
+    parse: parseLastFlags,
+    run: (substrate, flags) => {
+      const db = substrate.db();
+      const sessions = listLastPackSessions(db);
+      const targetId = flags.session ?? sessions[0]?.sessionId;
+      if (targetId === undefined) {
+        stderrWriter(
+          flags.session === undefined
+            ? 'no memory packs recorded yet'
+            : `no pack recorded for session '${flags.session}'`,
+        );
+        return Promise.resolve(1);
+      }
 
-  const logger = openLogger({ ...config.logging, name: 'aion-last' });
-  const store = new SqliteStore({ filePath: config.sqlite.path });
-  try {
-    const sessions = listLastPackSessions(store.db);
-    const targetId = flags.session ?? sessions[0]?.sessionId;
-    if (targetId === undefined) {
-      stderrWriter(
-        flags.session === undefined
-          ? 'no memory packs recorded yet'
-          : `no pack recorded for session '${flags.session}'`,
+      const row = getLastPack(db, targetId);
+      if (row === undefined) {
+        stderrWriter(`no pack recorded for session '${targetId}'`);
+        return Promise.resolve(1);
+      }
+
+      if (flags.json) {
+        write(row.packJson);
+        substrate.logger().info({ sessionId: targetId }, 'last pack rendered as json');
+        return Promise.resolve(0);
+      }
+
+      const pack = MemoryPackSchema.parse(row.pack);
+      if (flags.session === undefined) {
+        renderSessionList(sessions, targetId, write);
+      }
+      renderPack(
+        {
+          sessionId: targetId,
+          ts: row.ts,
+          pack,
+          ...(row.asOf === undefined ? {} : { asOf: row.asOf }),
+          ...(row.knewAt === undefined ? {} : { knewAt: row.knewAt }),
+        },
+        write,
       );
-      return Promise.resolve(1);
-    }
-
-    const row = getLastPack(store.db, targetId);
-    if (row === undefined) {
-      stderrWriter(`no pack recorded for session '${targetId}'`);
-      return Promise.resolve(1);
-    }
-
-    if (flags.json) {
-      write(row.packJson);
-      logger.info({ sessionId: targetId }, 'last pack rendered as json');
+      substrate.logger().info({ sessionId: targetId }, 'last pack rendered');
       return Promise.resolve(0);
-    }
-
-    const pack = MemoryPackSchema.parse(row.pack);
-    if (flags.session === undefined) {
-      renderSessionList(sessions, targetId, write);
-    }
-    renderPack({ sessionId: targetId, ts: row.ts, pack }, write);
-    logger.info({ sessionId: targetId }, 'last pack rendered');
-    return Promise.resolve(0);
-  } catch (err) {
-    logger.error({ err: describeError(err) }, 'last failed');
-    stderrWriter(err instanceof Error ? `${err.name}: ${err.message}` : String(err));
-    return Promise.resolve(1);
-  } finally {
-    store.close();
-  }
+    },
+  });
 }

@@ -80,7 +80,9 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   `CREATE TABLE IF NOT EXISTS last_pack (
     session_id TEXT PRIMARY KEY,
     pack_json TEXT NOT NULL,
-    ts TEXT NOT NULL
+    ts TEXT NOT NULL,
+    as_of TEXT,
+    knew_at TEXT
   )`,
   /**
    * Near-duplicate entities of different types, which dedup detects and never applies: one
@@ -122,6 +124,8 @@ const COLUMN_ADDITIONS: readonly ColumnAddition[] = [
   { table: 'reflection_queue', column: 'lane', definition: "TEXT NOT NULL DEFAULT 'interactive'" },
   { table: 'reflection_queue', column: 'session_id', definition: 'TEXT' },
   { table: 'reflection_queue', column: 'lane_seq', definition: 'INTEGER NOT NULL DEFAULT 0' },
+  { table: 'last_pack', column: 'as_of', definition: 'TEXT' },
+  { table: 'last_pack', column: 'knew_at', definition: 'TEXT' },
 ];
 
 function tableColumns(db: SqliteHandle, table: string): ReadonlySet<string> {

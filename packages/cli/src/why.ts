@@ -1,21 +1,18 @@
 import {
-  ConfigError,
   fetchNodeEdges,
   fetchNodeProvenance,
   findEntityMergeProposalsForNode,
   findSupersessionProposalsForNode,
-  GraphConnection,
-  loadConfig,
-  openLogger,
-  SqliteStore,
-  type Config,
   type EntityMergeProposal,
   type NodeEdge,
   type NodeProvenance,
   type SupersessionProposal,
 } from '@aion/core';
 
-import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
+import { CliUsageError, parseArgs, type ArgSpec } from './args.js';
+import { short } from './format.js';
+import { stderrWriter, stdoutWriter, type Writer } from './output.js';
+import { withSubstrate } from './substrate.js';
 
 /**
  * `aion why <node_id>`: everything the substrate can say about how one node came to be and
@@ -23,38 +20,25 @@ import { describeError, stderrWriter, stdoutWriter, type Writer } from './output
  * the same as a current one and says so, rather than looking like a miss.
  */
 
-export class UnknownWhyOptionError extends Error {
-  constructor(option: string) {
-    super(`unexpected extra argument '${option}' for why (usage: aion why <node_id>)`);
-    this.name = 'UnknownWhyOptionError';
-  }
-}
-
-export class MissingNodeIdError extends Error {
-  constructor() {
-    super('why needs a node id: `aion why <node_id>` (see `aion last` or `aion search`)');
-    this.name = 'MissingNodeIdError';
-  }
-}
+const SPEC: ArgSpec = {
+  command: 'why',
+  usage: 'aion why <node_id>',
+  maxPositionals: 1,
+};
 
 export type WhyFlags = {
   readonly nodeId: string;
 };
 
 export function parseWhyFlags(argv: readonly string[]): WhyFlags {
-  const [nodeId, extra] = argv;
+  const { positionals } = parseArgs(SPEC, argv);
+  const [nodeId] = positionals;
   if (nodeId === undefined || nodeId.trim().length === 0) {
-    throw new MissingNodeIdError();
-  }
-  if (extra !== undefined) {
-    throw new UnknownWhyOptionError(extra);
+    throw new CliUsageError(
+      'why needs a node id: `aion why <node_id>` (see `aion last` or `aion search`)',
+    );
   }
   return { nodeId };
-}
-
-/** Short enough to read in a list, long enough to paste back as an unambiguous id prefix. */
-function short(id: string): string {
-  return id.slice(0, 8);
 }
 
 function iso(value: Date | undefined): string | undefined {
@@ -190,54 +174,34 @@ export function renderProvenance(
   }
 }
 
-export async function runWhy(
+export function runWhy(
   argv: readonly string[] = [],
   write: Writer = stdoutWriter,
 ): Promise<number> {
-  let flags: WhyFlags;
-  let config: Config;
-  try {
-    flags = parseWhyFlags(argv);
-    config = loadConfig(process.env);
-  } catch (err) {
-    stderrWriter(err instanceof ConfigError ? err.message : describeError(err));
-    return 1;
-  }
+  return withSubstrate({
+    spec: SPEC,
+    argv,
+    write,
+    parse: parseWhyFlags,
+    needsGraph: 'why',
+    run: async (substrate, flags) => {
+      const { driver } = substrate.connection();
+      const provenance = await fetchNodeProvenance(driver, flags.nodeId);
+      if (provenance === undefined) {
+        stderrWriter(
+          `no node found for '${flags.nodeId}' (it may not exist, or may be forgotten; ` +
+            '`aion search --knew-at <ts>` can look before a forget)',
+        );
+        return 1;
+      }
 
-  const logger = openLogger({ ...config.logging, name: 'aion-why' });
-  const store = new SqliteStore({ filePath: config.sqlite.path });
-  const connection = new GraphConnection(config.neo4j);
-  try {
-    const health = await connection.health();
-    if (!health.reachable) {
-      stderrWriter(
-        `why needs Neo4j: ${connection.uri} unreachable: ${health.error ?? 'unknown error'}`,
-      );
-      return 1;
-    }
+      const edges = await fetchNodeEdges(driver, flags.nodeId);
+      const supersessions = findSupersessionProposalsForNode(substrate.db(), flags.nodeId);
+      const merges = findEntityMergeProposalsForNode(substrate.db(), flags.nodeId);
 
-    const provenance = await fetchNodeProvenance(connection.driver, flags.nodeId);
-    if (provenance === undefined) {
-      stderrWriter(
-        `no node found for '${flags.nodeId}' (it may not exist, or may be forgotten; ` +
-          '`aion search --knew-at <ts>` can look before a forget)',
-      );
-      return 1;
-    }
-
-    const edges = await fetchNodeEdges(connection.driver, flags.nodeId);
-    const supersessions = findSupersessionProposalsForNode(store.db, flags.nodeId);
-    const merges = findEntityMergeProposalsForNode(store.db, flags.nodeId);
-
-    renderProvenance(provenance, edges, supersessions, merges, write);
-    logger.info({ nodeId: flags.nodeId, edges: edges.length }, 'why rendered');
-    return 0;
-  } catch (err) {
-    logger.error({ err: describeError(err) }, 'why failed');
-    stderrWriter(describeError(err));
-    return 1;
-  } finally {
-    await connection.close();
-    store.close();
-  }
+      renderProvenance(provenance, edges, supersessions, merges, write);
+      substrate.logger().info({ nodeId: flags.nodeId, edges: edges.length }, 'why rendered');
+      return 0;
+    },
+  });
 }

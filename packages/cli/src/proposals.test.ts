@@ -9,14 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import {
-  ConflictingApplyScopeError,
-  MissingProposalIdError,
-  parseProposalFlags,
-  runProposals,
-  UnknownProposalOptionError,
-  UnknownProposalSubcommandError,
-} from './proposals.js';
+import { parseProposalFlags, runProposals } from './proposals.js';
 
 function collector(): { lines: string[]; write: (line: string) => void } {
   const lines: string[] = [];
@@ -56,17 +49,21 @@ describe('parseProposalFlags', () => {
   });
 
   it('refuses an unknown subcommand, an unknown option, or an apply with no id', () => {
-    expect(() => parseProposalFlags(['approve'])).toThrow(UnknownProposalSubcommandError);
-    expect(() => parseProposalFlags(['ls', '--everything'])).toThrow(UnknownProposalOptionError);
-    expect(() => parseProposalFlags(['apply'])).toThrow(MissingProposalIdError);
-    expect(() => parseProposalFlags(['dismiss'])).toThrow(MissingProposalIdError);
+    expect(() => parseProposalFlags(['approve'])).toThrow(
+      "unknown proposals subcommand 'approve' (supported: ls, apply, dismiss)",
+    );
+    expect(() => parseProposalFlags(['ls', '--everything'])).toThrow(
+      "unknown option '--everything' for proposals (supported: --all, --claim-only, --episode)",
+    );
+    expect(() => parseProposalFlags(['apply'])).toThrow('proposals apply needs a proposal id');
+    expect(() => parseProposalFlags(['dismiss'])).toThrow('proposals dismiss needs a proposal id');
   });
 
   // Two scopes at once has no safe reading: one is narrower than the default and the other is
   // wider, so guessing which the operator meant would close either too little or far too much.
   it('refuses to guess between the narrow escape and the wide one', () => {
     expect(() => parseProposalFlags(['apply', 'p-1', '--claim-only', '--episode'])).toThrow(
-      ConflictingApplyScopeError,
+      'proposals apply takes one of --claim-only or --episode, not both',
     );
   });
 });

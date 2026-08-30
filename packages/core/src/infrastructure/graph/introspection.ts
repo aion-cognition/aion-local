@@ -1,6 +1,6 @@
 import neo4j, { type Driver } from 'neo4j-driver';
 
-import { runRead } from './connection.js';
+import { readFirst, runRead } from './connection.js';
 import { VectorIndexDimensionMismatchError, VectorIndexMissingError } from './errors.js';
 import { CONTENT_VECTOR_INDEX, CONTEXT_VECTOR_INDEX } from './vector-indexes.js';
 
@@ -80,7 +80,7 @@ export function assertVectorIndexDimensions(
  * row at all and report as an error rather than as zero.
  */
 export async function countGraphElements(driver: Driver): Promise<GraphCounts> {
-  const rows = await runRead(
+  const counts = await readFirst(
     driver,
     `MATCH (n)
      WITH count(n) AS nodes
@@ -89,7 +89,7 @@ export async function countGraphElements(driver: Driver): Promise<GraphCounts> {
     {},
     (row) => ({ nodes: row.nodes as number, relationships: row.relationships as number }),
   );
-  return rows[0] ?? { nodes: 0, relationships: 0 };
+  return counts ?? { nodes: 0, relationships: 0 };
 }
 
 /**

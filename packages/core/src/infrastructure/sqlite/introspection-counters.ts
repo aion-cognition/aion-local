@@ -100,9 +100,13 @@ export function recordOperationResolution(
   name: string,
   resolution: OperationResolution,
 ): void {
-  const current = operationStats(db, name);
-  setMeta(db, key(name, 'runs'), String(current.runs + 1));
-  setMeta(db, key(name, resolution), String(current[resolution] + 1));
+  // The read and both writes are one unit: split across a concurrent resolution, `runs` and
+  // the per-resolution tally increment off different bases and stop summing to each other.
+  db.transaction(() => {
+    const current = operationStats(db, name);
+    setMeta(db, key(name, 'runs'), String(current.runs + 1));
+    setMeta(db, key(name, resolution), String(current[resolution] + 1));
+  }).immediate();
 }
 
 /**

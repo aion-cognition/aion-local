@@ -1,25 +1,20 @@
 import {
   applySupersessionProposal,
-  ConfigError,
   DEFAULT_APPLY_SCOPE,
   dismissSupersessionProposal,
-  GraphConnection,
   listEntityMergeProposals,
   listSupersessionProposals,
-  loadConfig,
-  openLogger,
-  SqliteStore,
   type ApplyScope,
   type ClaimSubject,
-  type Config,
   type EntityMergeProposal,
-  type Logger,
-  type SqliteHandle,
   type SubjectSibling,
   type SupersessionProposal,
 } from '@aion/core';
 
-import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
+import { CliUsageError, parseArgs, type ArgSpec } from './args.js';
+import { short } from './format.js';
+import { stdoutWriter, type Writer } from './output.js';
+import { withSubstrate, type Substrate } from './substrate.js';
 
 /**
  * Where a judged contradiction gets decided. Supersession is propose-only, because the judge
@@ -34,40 +29,15 @@ import { describeError, stderrWriter, stdoutWriter, type Writer } from './output
 
 const SUBCOMMANDS = ['ls', 'apply', 'dismiss'] as const;
 
-const OPTIONS = ['--all', '--claim-only', '--episode'] as const;
-
 type Subcommand = (typeof SUBCOMMANDS)[number];
 
-export class UnknownProposalSubcommandError extends Error {
-  constructor(name: string) {
-    super(`unknown proposals subcommand '${name}' (supported: ${SUBCOMMANDS.join(', ')})`);
-    this.name = 'UnknownProposalSubcommandError';
-  }
-}
-
-export class UnknownProposalOptionError extends Error {
-  constructor(option: string) {
-    super(`unknown option '${option}' for proposals (supported: ${OPTIONS.join(', ')})`);
-    this.name = 'UnknownProposalOptionError';
-  }
-}
-
-export class MissingProposalIdError extends Error {
-  constructor(subcommand: string) {
-    super(`proposals ${subcommand} needs a proposal id (see \`aion proposals ls\`)`);
-    this.name = 'MissingProposalIdError';
-  }
-}
-
-export class ConflictingApplyScopeError extends Error {
-  constructor() {
-    super(
-      'proposals apply takes one of --claim-only or --episode, not both ' +
-        '(the default closes the judged claim and the siblings that name its subject)',
-    );
-    this.name = 'ConflictingApplyScopeError';
-  }
-}
+const SPEC: ArgSpec<Subcommand> = {
+  command: 'proposals',
+  usage: 'aion proposals [ls | apply <id> | dismiss <id>] [--all] [--claim-only] [--episode]',
+  subcommands: SUBCOMMANDS,
+  options: [{ flag: '--all' }, { flag: '--claim-only' }, { flag: '--episode' }],
+  maxPositionals: 1,
+};
 
 export type ProposalFlags = {
   readonly subcommand: Subcommand;
@@ -78,51 +48,30 @@ export type ProposalFlags = {
   readonly scope: ApplyScope;
 };
 
-function isSubcommand(value: string): value is Subcommand {
-  return (SUBCOMMANDS as readonly string[]).includes(value);
-}
-
 export function parseProposalFlags(argv: readonly string[]): ProposalFlags {
-  const [first = 'ls', ...rest] = argv;
-  if (!isSubcommand(first)) {
-    throw new UnknownProposalSubcommandError(first);
-  }
+  const { subcommand, flags, positionals } = parseArgs(SPEC, argv);
+  const [id] = positionals;
+  const claimOnly = flags.has('--claim-only');
+  const episode = flags.has('--episode');
 
-  let id: string | undefined;
-  let all = false;
-  let claimOnly = false;
-  let episode = false;
-
-  for (const arg of rest) {
-    if (arg === '--all') {
-      all = true;
-      continue;
-    }
-    if (arg === '--claim-only') {
-      claimOnly = true;
-      continue;
-    }
-    if (arg === '--episode') {
-      episode = true;
-      continue;
-    }
-    if (arg.startsWith('--')) {
-      throw new UnknownProposalOptionError(arg);
-    }
-    id = arg;
-  }
-
+  // Two scopes at once has no safe reading: one is narrower than the default and the other is
+  // wider, so guessing would close either too little or far too much.
   if (claimOnly && episode) {
-    throw new ConflictingApplyScopeError();
+    throw new CliUsageError(
+      'proposals apply takes one of --claim-only or --episode, not both ' +
+        '(the default closes the judged claim and the siblings that name its subject)',
+    );
   }
-  if (first !== 'ls' && id === undefined) {
-    throw new MissingProposalIdError(first);
+  if (subcommand !== 'ls' && id === undefined) {
+    throw new CliUsageError(
+      `proposals ${subcommand} needs a proposal id (see \`aion proposals ls\`)`,
+    );
   }
 
   return {
-    subcommand: first,
+    subcommand,
     ...(id === undefined ? {} : { id }),
-    all,
+    all: flags.has('--all'),
     scope: applyScope(claimOnly, episode),
   };
 }
@@ -135,18 +84,6 @@ function applyScope(claimOnly: boolean, episode: boolean): ApplyScope {
     return 'claim';
   }
   return DEFAULT_APPLY_SCOPE;
-}
-
-type ProposalDeps = {
-  readonly db: SqliteHandle;
-  readonly config: Config;
-  readonly logger: Logger;
-  readonly write: Writer;
-};
-
-/** Short enough to read in a list, long enough to paste back as an unambiguous id prefix. */
-function short(id: string): string {
-  return id.slice(0, 8);
 }
 
 function renderSupersessions(rows: readonly SupersessionProposal[], write: Writer): void {
@@ -187,16 +124,16 @@ function isOpen(row: { readonly resolvedAt: string | null }): boolean {
   return row.resolvedAt === null;
 }
 
-function runLs(deps: ProposalDeps, flags: ProposalFlags): number {
-  const supersessions = listSupersessionProposals(deps.db).filter(
-    (row) => flags.all || isOpen(row),
-  );
-  const merges = listEntityMergeProposals(deps.db).filter((row) => flags.all || isOpen(row));
-  renderSupersessions(supersessions, deps.write);
-  renderMerges(merges, deps.write);
+function runLs(substrate: Substrate, flags: ProposalFlags): number {
+  const db = substrate.db();
+  const { write } = substrate;
+  const supersessions = listSupersessionProposals(db).filter((row) => flags.all || isOpen(row));
+  const merges = listEntityMergeProposals(db).filter((row) => flags.all || isOpen(row));
+  renderSupersessions(supersessions, write);
+  renderMerges(merges, write);
   if (!flags.all) {
-    deps.write('');
-    deps.write('open rows only; --all includes what has already been decided');
+    write('');
+    write('open rows only; --all includes what has already been decided');
   }
   return 0;
 }
@@ -214,50 +151,43 @@ const SCOPE_NOTES: Readonly<Record<ApplyScope, string>> = {
     'the default closes only what names the subject of the judged claim',
 };
 
-async function runApply(deps: ProposalDeps, flags: ProposalFlags): Promise<number> {
+async function runApply(substrate: Substrate, flags: ProposalFlags): Promise<number> {
   const id = flags.id ?? '';
-  const connection = new GraphConnection(deps.config.neo4j);
-  try {
-    const health = await connection.health();
-    if (!health.reachable) {
-      stderrWriter(
-        `apply needs Neo4j: ${connection.uri} unreachable: ${health.error ?? 'unknown error'}`,
-      );
-      return 1;
-    }
-    const applied = await applySupersessionProposal(connection.driver, deps.db, {
-      id,
-      scope: flags.scope,
-      relatednessFloor: deps.config.reflection.supersedeFamilyRelatednessFloor,
-    });
-    deps.logger.warn(
-      {
-        proposalId: id,
-        scope: applied.scope,
-        closed: applied.closedIds,
-        supersededBy: applied.supersededBy,
-        subjects: applied.subjects,
-        held: applied.heldSiblings.map((sibling) => sibling.id),
-        regroundedNarratives: applied.regroundedNarratives,
-        retiredGlosses: applied.retiredGlosses.map((gloss) => gloss.entityId),
-        openGlosses: applied.openGlosses.map((gloss) => gloss.entityId),
-      },
-      'supersession proposal applied',
-    );
-    deps.write(
-      `applied ${id} (${applied.scope}): closed ${String(applied.closedIds.length)} node(s), ` +
-        `superseded by ${short(applied.supersededBy)}`,
-    );
-    renderClosed(applied.closedIds, applied.siblings, deps.write);
-    renderHeldSiblings(applied.heldSiblings, deps.write);
-    renderRetiredGlosses(applied.retiredGlosses, deps.write);
-    renderOpenGlosses(applied.openGlosses, deps.write);
-    renderRegrounded(applied.regroundedNarratives, deps.write);
-    deps.write(SCOPE_NOTES[applied.scope]);
-    return 0;
-  } finally {
-    await connection.close();
+  const { config, write } = substrate;
+  const connection = await substrate.requireGraph('apply');
+  if (connection === undefined) {
+    return 1;
   }
+  const applied = await applySupersessionProposal(connection.driver, substrate.db(), {
+    id,
+    scope: flags.scope,
+    relatednessFloor: config.reflection.supersedeFamilyRelatednessFloor,
+  });
+  substrate.logger().warn(
+    {
+      proposalId: id,
+      scope: applied.scope,
+      closed: applied.closedIds,
+      supersededBy: applied.supersededBy,
+      subjects: applied.subjects,
+      held: applied.heldSiblings.map((sibling) => sibling.id),
+      regroundedNarratives: applied.regroundedNarratives,
+      retiredGlosses: applied.retiredGlosses.map((gloss) => gloss.entityId),
+      openGlosses: applied.openGlosses.map((gloss) => gloss.entityId),
+    },
+    'supersession proposal applied',
+  );
+  write(
+    `applied ${id} (${applied.scope}): closed ${String(applied.closedIds.length)} node(s), ` +
+      `superseded by ${short(applied.supersededBy)}`,
+  );
+  renderClosed(applied.closedIds, applied.siblings, write);
+  renderHeldSiblings(applied.heldSiblings, write);
+  renderRetiredGlosses(applied.retiredGlosses, write);
+  renderOpenGlosses(applied.openGlosses, write);
+  renderRegrounded(applied.regroundedNarratives, write);
+  write(SCOPE_NOTES[applied.scope]);
+  return 0;
 }
 
 function renderClosed(
@@ -337,44 +267,33 @@ function renderOpenGlosses(glosses: readonly ClaimSubject[], write: Writer): voi
   }
 }
 
-function runDismiss(deps: ProposalDeps, flags: ProposalFlags): number {
+function runDismiss(substrate: Substrate, flags: ProposalFlags): number {
   const id = flags.id ?? '';
-  const dismissed = dismissSupersessionProposal(deps.db, id);
-  deps.logger.info({ proposalId: id, oldId: dismissed.oldId }, 'supersession proposal dismissed');
-  deps.write(`dismissed ${id}: nothing was closed and ${short(dismissed.oldId)} stands`);
+  const dismissed = dismissSupersessionProposal(substrate.db(), id);
+  substrate
+    .logger()
+    .info({ proposalId: id, oldId: dismissed.oldId }, 'supersession proposal dismissed');
+  substrate.write(`dismissed ${id}: nothing was closed and ${short(dismissed.oldId)} stands`);
   return 0;
 }
 
-export async function runProposals(
+export function runProposals(
   argv: readonly string[] = [],
   write: Writer = stdoutWriter,
 ): Promise<number> {
-  let flags: ProposalFlags;
-  let config: Config;
-  try {
-    flags = parseProposalFlags(argv);
-    config = loadConfig(process.env);
-  } catch (err) {
-    stderrWriter(err instanceof ConfigError ? err.message : describeError(err));
-    return 1;
-  }
-
-  const logger = openLogger({ ...config.logging, name: 'aion-proposals' });
-  const store = new SqliteStore({ filePath: config.sqlite.path });
-  const deps: ProposalDeps = { db: store.db, config, logger, write };
-  try {
-    if (flags.subcommand === 'apply') {
-      return await runApply(deps, flags);
-    }
-    if (flags.subcommand === 'dismiss') {
-      return runDismiss(deps, flags);
-    }
-    return runLs(deps, flags);
-  } catch (err) {
-    logger.error({ err: describeError(err) }, 'proposals command failed');
-    stderrWriter(describeError(err));
-    return 1;
-  } finally {
-    store.close();
-  }
+  return withSubstrate({
+    spec: SPEC,
+    argv,
+    write,
+    parse: parseProposalFlags,
+    run: async (substrate, flags) => {
+      if (flags.subcommand === 'apply') {
+        return await runApply(substrate, flags);
+      }
+      if (flags.subcommand === 'dismiss') {
+        return runDismiss(substrate, flags);
+      }
+      return runLs(substrate, flags);
+    },
+  });
 }

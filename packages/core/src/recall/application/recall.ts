@@ -22,6 +22,7 @@ import {
   relatedClaims,
 } from './stage-reads.js';
 import type { Config } from '../../infrastructure/config/schema.js';
+import { roundMs } from '../../infrastructure/errors.js';
 import { fetchAdjacency } from '../../infrastructure/graph/adjacency.js';
 import {
   asOf,
@@ -113,16 +114,12 @@ const NO_ACTIVATION: ActivationRun = {
   termination: 'frontier_exhausted',
 };
 
-function round(ms: number): number {
-  return Math.round(ms * 100) / 100;
-}
-
 type Timed<T> = { readonly value: T; readonly ms: number };
 
 async function timed<T>(run: () => Promise<T>): Promise<Timed<T>> {
   const started = performance.now();
   const value = await run();
-  return { value, ms: round(performance.now() - started) };
+  return { value, ms: roundMs(performance.now() - started) };
 }
 
 export function readModeFor(input: RecallInput): ReadMode {
@@ -380,7 +377,10 @@ export async function handleRecall(
     ...(claims.size === 0 ? {} : { relatedClaims: claims }),
   });
 
-  saveLastPack(deps.db, sessionId, pack, now.toISOString());
+  saveLastPack(deps.db, sessionId, pack, now.toISOString(), {
+    ...(payload.as_of === undefined ? {} : { asOf: payload.as_of }),
+    ...(payload.knew_at === undefined ? {} : { knewAt: payload.knew_at }),
+  });
   // The cue stage is 60-95% of recall wall time and the first thing contention takes; a
   // degraded pack is otherwise indistinguishable from a healthy one at the item count.
   recordCueOutcome(deps.db, cues.value.degradation !== undefined);

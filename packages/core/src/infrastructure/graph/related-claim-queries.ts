@@ -1,4 +1,4 @@
-import neo4j, { type Driver } from 'neo4j-driver';
+import type { Driver } from 'neo4j-driver';
 
 import { TEXT_NORM_PROPERTY, type CognitiveNodeLabel } from './cognitive-queries.js';
 import { runRead, type GraphStatement } from './connection.js';
@@ -8,7 +8,8 @@ import { BASE_NODE_LABEL, type NodeLabel } from './labels.js';
 import { readModeFragment, type ReadMode } from './read-modes.js';
 import { ENTITY_NAME_NORM_PROPERTY } from './seed-queries.js';
 import { MIN_SUBJECT_NAME_LENGTH } from './supersession-queries.js';
-import type { Row } from './values.js';
+import { toGraphInteger, type Row } from './values.js';
+import { asCosine } from './vector-indexes.js';
 
 /**
  * The current claim that stands beside a raw turn.
@@ -43,11 +44,6 @@ const CLAIM_LABEL_EXPRESSION = CLAIM_LABELS.join('|');
 
 /** Intake is the only writer of Turn nodes, so this label is the whole test for captured text. */
 const TURN_LABEL: NodeLabel = 'Turn';
-
-/** `LIMIT` is Cypher INTEGER; a plain JS number arrives as FLOAT and is rejected. */
-function toGraphInteger(value: number): unknown {
-  return neo4j.int(Math.trunc(value));
-}
 
 export type RelatedClaimRequest = {
   /** The raw turn's node id. */
@@ -96,10 +92,10 @@ export type RelatedClaimInput = {
  * the best one is kept, because a pack has room for the current claim and not for a reading
  * list.
  */
-function relatedClaimsStatement(mode: ReadMode): GraphStatement {
-  const turn = readModeFragment(mode, 't', 'rmt');
-  const entity = readModeFragment(mode, 'e', 'rme');
-  const claim = readModeFragment(mode, 'n', 'rmn');
+function relatedClaimsStatement(input: RelatedClaimInput): GraphStatement {
+  const turn = readModeFragment(input.mode, 't', 'rmt');
+  const entity = readModeFragment(input.mode, 'e', 'rme');
+  const claim = readModeFragment(input.mode, 'n', 'rmn');
   const cypher = [
     'UNWIND $turns AS wanted',
     `MATCH (t:${BASE_NODE_LABEL} { id: wanted.id })`,
@@ -126,9 +122,9 @@ function relatedClaimsStatement(mode: ReadMode): GraphStatement {
     `         MATCH (n)-[:EXTRACTED_FROM]->(:Episode)-[:${ENTITY_MENTION_TYPE}]->(shared:Entity)`,
     '         WHERE shared.id IN subjectIds',
     '       })',
-    'WITH wanted, n, 2.0 * vector.similarity.cosine(',
-    `       n.${MEMORY_PROPERTIES.contentVector}, t.${MEMORY_PROPERTIES.contentVector}`,
-    '     ) - 1.0 AS relatedness',
+    `WITH wanted, n, ${asCosine(
+      `vector.similarity.cosine(n.${MEMORY_PROPERTIES.contentVector}, t.${MEMORY_PROPERTIES.contentVector})`,
+    )} AS relatedness`,
     'WHERE relatedness >= $floor',
     'WITH wanted, n, relatedness',
     'ORDER BY relatedness DESC, n.id',
@@ -140,7 +136,16 @@ function relatedClaimsStatement(mode: ReadMode): GraphStatement {
 
   return {
     cypher,
-    parameters: { ...turn.parameters, ...entity.parameters, ...claim.parameters },
+    parameters: {
+      ...turn.parameters,
+      ...entity.parameters,
+      ...claim.parameters,
+      turns: input.turns.map((request) => ({ id: request.id, textNorm: request.textNorm })),
+      turnLabel: TURN_LABEL,
+      floor: input.floor,
+      minNameLength: toGraphInteger(MIN_SUBJECT_NAME_LENGTH),
+      limit: toGraphInteger(input.turns.length),
+    },
   };
 }
 
@@ -170,19 +175,6 @@ export async function findRelatedClaims(
   if (input.turns.length === 0) {
     return [];
   }
-  const statement = relatedClaimsStatement(input.mode);
-  const rows = await runRead(
-    driver,
-    statement.cypher,
-    {
-      ...statement.parameters,
-      turns: input.turns.map((request) => ({ id: request.id, textNorm: request.textNorm })),
-      turnLabel: TURN_LABEL,
-      floor: input.floor,
-      minNameLength: toGraphInteger(MIN_SUBJECT_NAME_LENGTH),
-      limit: toGraphInteger(input.turns.length),
-    },
-    mapRow,
-  );
+  const rows = await runRead(driver, relatedClaimsStatement(input), mapRow);
   return rows.filter((row): row is RelatedClaimRow => row !== undefined);
 }

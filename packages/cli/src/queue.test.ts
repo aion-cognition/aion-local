@@ -10,15 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import {
-  InvalidQueueValueError,
-  MissingQueueValueError,
-  parseQueueFlags,
-  renderQueueJobs,
-  runQueue,
-  UnknownQueueOptionError,
-  UnknownSubcommandError,
-} from './queue.js';
+import { parseQueueFlags, renderQueueJobs, runQueue } from './queue.js';
 
 function collector(): { lines: string[]; write: (line: string) => void } {
   const lines: string[] = [];
@@ -44,11 +36,17 @@ describe('parseQueueFlags', () => {
   });
 
   it('rejects an unknown subcommand, option, missing value, or bad lane', () => {
-    expect(() => parseQueueFlags(['purge'])).toThrow(UnknownSubcommandError);
-    expect(() => parseQueueFlags(['ls', '--everything'])).toThrow(UnknownQueueOptionError);
-    expect(() => parseQueueFlags(['ls', '--session'])).toThrow(MissingQueueValueError);
-    expect(() => parseQueueFlags(['ls', '--lane', 'urgent'])).toThrow(InvalidQueueValueError);
-    expect(() => parseQueueFlags(['ls', '--limit', 'lots'])).toThrow(InvalidQueueValueError);
+    expect(() => parseQueueFlags(['purge'])).toThrow("unknown queue subcommand 'purge'");
+    expect(() => parseQueueFlags(['ls', '--everything'])).toThrow(
+      "unknown option '--everything' for queue",
+    );
+    expect(() => parseQueueFlags(['ls', '--session'])).toThrow('--session needs a value');
+    expect(() => parseQueueFlags(['ls', '--lane', 'urgent'])).toThrow(
+      "--lane got 'urgent', expected",
+    );
+    expect(() => parseQueueFlags(['ls', '--limit', 'lots'])).toThrow(
+      "--limit got 'lots', expected a positive integer",
+    );
   });
 });
 

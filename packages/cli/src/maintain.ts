@@ -1,19 +1,15 @@
 import {
-  ConfigError,
-  GraphConnection,
   introspectionOperations,
-  loadConfig,
   markLedgerApplied,
   observeHealth,
-  openLogger,
   operationBucketKey,
-  SqliteStore,
-  type Config,
+  ProviderRouter,
   type IntrospectionOperation,
-  type Logger,
 } from '@aion/core';
 
-import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
+import { CliUsageError, parseArgs, type ArgSpec } from './args.js';
+import { stdoutWriter, type Writer } from './output.js';
+import { withSubstrate, type Substrate } from './substrate.js';
 
 /**
  * `aion maintain`: the human window onto the introspection loop, and the one way to make a
@@ -36,46 +32,25 @@ const SUBCOMMANDS = ['ls', 'run'] as const;
 
 type Subcommand = (typeof SUBCOMMANDS)[number];
 
-export class UnknownMaintainSubcommandError extends Error {
-  constructor(name: string) {
-    super(`unknown maintain subcommand '${name}' (supported: ${SUBCOMMANDS.join(', ')})`);
-    this.name = 'UnknownMaintainSubcommandError';
-  }
-}
-
-export class MissingOperationNameError extends Error {
-  constructor() {
-    super('maintain run needs an operation name (see `aion maintain ls`)');
-    this.name = 'MissingOperationNameError';
-  }
-}
-
-export class UnknownOperationError extends Error {
-  constructor(name: string, known: readonly string[]) {
-    super(`no maintenance operation named '${name}' (registered: ${known.join(', ')})`);
-    this.name = 'UnknownOperationError';
-  }
-}
+const SPEC: ArgSpec<Subcommand> = {
+  command: 'maintain',
+  usage: 'aion maintain [ls | run <operation>]',
+  subcommands: SUBCOMMANDS,
+  maxPositionals: 1,
+};
 
 export type MaintainFlags = {
   readonly subcommand: Subcommand;
   readonly operation?: string;
 };
 
-function isSubcommand(value: string): value is Subcommand {
-  return (SUBCOMMANDS as readonly string[]).includes(value);
-}
-
 export function parseMaintainFlags(argv: readonly string[]): MaintainFlags {
-  const [first = 'ls', ...rest] = argv;
-  if (!isSubcommand(first)) {
-    throw new UnknownMaintainSubcommandError(first);
+  const { subcommand, positionals } = parseArgs(SPEC, argv);
+  const [operation] = positionals;
+  if (subcommand === 'run' && operation === undefined) {
+    throw new CliUsageError('maintain run needs an operation name (see `aion maintain ls`)');
   }
-  const operation = rest.find((arg) => !arg.startsWith('--'));
-  if (first === 'run' && operation === undefined) {
-    throw new MissingOperationNameError();
-  }
-  return { subcommand: first, ...(operation === undefined ? {} : { operation }) };
+  return { subcommand, ...(operation === undefined ? {} : { operation }) };
 }
 
 function describeOperation(operation: IntrospectionOperation): string {
@@ -95,49 +70,44 @@ function runLs(write: Writer): number {
   return 0;
 }
 
-type MaintainDeps = {
-  readonly connection: GraphConnection;
-  readonly store: SqliteStore;
-  readonly config: Config;
-  readonly logger: Logger;
-  readonly write: Writer;
-};
-
-async function runOne(deps: MaintainDeps, name: string): Promise<number> {
+async function runOne(substrate: Substrate, name: string): Promise<number> {
   const operations = introspectionOperations();
   const operation = operations.find((entry) => entry.name === name);
   if (operation === undefined) {
-    throw new UnknownOperationError(
-      name,
-      operations.map((entry) => entry.name),
+    throw new CliUsageError(
+      `no maintenance operation named '${name}' (registered: ${operations
+        .map((entry) => entry.name)
+        .join(', ')})`,
     );
   }
 
+  const { config, write } = substrate;
+  const db = substrate.db();
+  const logger = substrate.logger();
+  const { driver } = substrate.connection();
   const now = new Date();
   // The same reading a tick would have taken. An operation is contracted never to observe for
   // itself, so a forced run has to arrive holding one.
-  const health = await observeHealth({
-    driver: deps.connection.driver,
-    db: deps.store.db,
-    config: deps.config,
-    logger: deps.logger,
-  });
+  const health = await observeHealth({ driver, db, config, logger });
   if (health.degraded.length > 0) {
-    deps.write(`health collectors that fell back: ${health.degraded.join(', ')}`);
+    write(`health collectors that fell back: ${health.degraded.join(', ')}`);
   }
 
   const controller = new AbortController();
   const outcome = await operation.run({
-    driver: deps.connection.driver,
-    db: deps.store.db,
-    config: deps.config,
-    logger: deps.logger,
+    driver,
+    db,
+    config,
+    logger,
+    // One forced run, so the breaker this router builds has nothing to count across; the
+    // service's loop is where sharing one matters.
+    provider: new ProviderRouter({ config }).forRole('reflect'),
     health,
     now,
     signal: controller.signal,
   });
 
-  markLedgerApplied(deps.store.db, operationBucketKey(operation.name, operation.bucket, now), {
+  markLedgerApplied(db, operationBucketKey(operation.name, operation.bucket, now), {
     operation: operation.name,
     forced: true,
     status: outcome.status,
@@ -145,7 +115,7 @@ async function runOne(deps: MaintainDeps, name: string): Promise<number> {
     itemsAffected: outcome.itemsAffected,
     ...(outcome.detail === undefined ? {} : { detail: outcome.detail }),
   });
-  deps.logger.warn(
+  logger.warn(
     {
       operation: operation.name,
       forced: true,
@@ -156,52 +126,36 @@ async function runOne(deps: MaintainDeps, name: string): Promise<number> {
     'maintenance operation forced by an operator',
   );
 
-  deps.write(
+  write(
     `${operation.name}: ${outcome.status}, ` +
       `${String(outcome.itemsAffected)} of ${String(outcome.itemsProcessed)} affected`,
   );
   if (outcome.detail !== undefined) {
-    deps.write(`  ${outcome.detail}`);
+    write(`  ${outcome.detail}`);
   }
   return outcome.status === 'failed' ? 1 : 0;
 }
 
-export async function runMaintain(
+export function runMaintain(
   argv: readonly string[] = [],
   write: Writer = stdoutWriter,
 ): Promise<number> {
-  let flags: MaintainFlags;
-  let config: Config;
-  try {
-    flags = parseMaintainFlags(argv);
-    config = loadConfig(process.env);
-  } catch (err) {
-    stderrWriter(err instanceof ConfigError ? err.message : describeError(err));
-    return 1;
-  }
-
-  if (flags.subcommand === 'ls') {
-    return runLs(write);
-  }
-
-  const logger = openLogger({ ...config.logging, name: 'aion-maintain' });
-  const store = new SqliteStore({ filePath: config.sqlite.path });
-  const connection = new GraphConnection(config.neo4j);
-  try {
-    const health = await connection.health();
-    if (!health.reachable) {
-      stderrWriter(
-        `maintain needs Neo4j: ${connection.uri} unreachable: ${health.error ?? 'unknown error'}`,
-      );
-      return 1;
-    }
-    return await runOne({ connection, store, config, logger, write }, flags.operation ?? '');
-  } catch (err) {
-    logger.error({ err: describeError(err) }, 'maintain command failed');
-    stderrWriter(describeError(err));
-    return 1;
-  } finally {
-    await connection.close();
-    store.close();
-  }
+  return withSubstrate({
+    spec: SPEC,
+    argv,
+    write,
+    parse: parseMaintainFlags,
+    run: async (substrate, flags) => {
+      // The catalog is a compiled-in list, so `ls` answers without a log file, a database, or
+      // a graph driver, on a machine where none of the three exists yet.
+      if (flags.subcommand === 'ls') {
+        return runLs(write);
+      }
+      const connection = await substrate.requireGraph('maintain');
+      if (connection === undefined) {
+        return 1;
+      }
+      return await runOne(substrate, flags.operation ?? '');
+    },
+  });
 }

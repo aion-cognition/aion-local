@@ -1,11 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  MissingOperationNameError,
-  parseMaintainFlags,
-  runMaintain,
-  UnknownMaintainSubcommandError,
-} from './maintain.js';
+import { parseMaintainFlags, runMaintain } from './maintain.js';
 
 function collector(): { lines: string[]; write: (line: string) => void } {
   const lines: string[] = [];
@@ -25,11 +20,13 @@ describe('parseMaintainFlags', () => {
   });
 
   it('refuses a run with no operation named', () => {
-    expect(() => parseMaintainFlags(['run'])).toThrow(MissingOperationNameError);
+    expect(() => parseMaintainFlags(['run'])).toThrow('maintain run needs an operation name');
   });
 
   it('refuses a subcommand it does not have', () => {
-    expect(() => parseMaintainFlags(['force'])).toThrow(UnknownMaintainSubcommandError);
+    expect(() => parseMaintainFlags(['force'])).toThrow(
+      "unknown maintain subcommand 'force' (supported: ls, run)",
+    );
   });
 });
 

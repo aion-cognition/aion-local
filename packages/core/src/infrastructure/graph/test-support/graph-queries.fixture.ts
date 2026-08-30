@@ -3,7 +3,7 @@ import neo4j, { type Driver } from 'neo4j-driver';
 import type { Vector } from '../../providers/types.js';
 import { ACCESS_COUNT_PROPERTY } from '../access-tracking.js';
 import { CO_OCCURS_TYPE, SIMILAR_TYPE } from '../association-queries.js';
-import { runRead, runWrite } from '../connection.js';
+import { readFirst, runRead, runWrite } from '../connection.js';
 import { CONTEXT_VECTOR_PROPERTY } from '../context-vector-queries.js';
 import { ENTITY_ALIASES_PROPERTY } from '../entity-dedup-queries.js';
 import { ENTITY_MENTION_TYPE, ENTITY_PARTICIPATION_TYPE } from '../entity-queries.js';
@@ -18,16 +18,6 @@ import { fromGraphVector, toGraphVector, type Row } from '../values.js';
  * is a query that can quietly encode a filter the adapter does not actually apply, and the
  * whole point of the rule is that there is one place to read for what the substrate does.
  */
-async function readFirst<T>(
-  driver: Driver,
-  cypher: string,
-  parameters: Record<string, unknown>,
-  map: (row: Row) => T,
-): Promise<T | undefined> {
-  const rows = await runRead(driver, cypher, parameters, map);
-  return rows[0];
-}
-
 async function count(
   driver: Driver,
   cypher: string,

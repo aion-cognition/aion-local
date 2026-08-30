@@ -17,7 +17,6 @@ import {
   openLogger,
   openSqliteHandle,
   orchestratorLedgerKey,
-  ReflectionDispatch,
   ReflectionOrchestrator,
   ReflectionWorker,
   runGraphMigrations,
@@ -45,6 +44,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { narrativeOptions, reflectionStages, workerOptions } from './bootstrap.js';
+import { waitFor } from './gate/gate-substrate.fixture.js';
 
 /**
  * The reflection pipeline's exit gate, assembled the way the service assembles itself: the
@@ -53,7 +53,7 @@ import { narrativeOptions, reflectionStages, workerOptions } from './bootstrap.j
  * live Ollama and a throwaway Neo4j; nothing here stands in for a model.
  *
  * Item 1 is the one this file exists for. Reflection is called, and nothing else: the worker
- * hears the dispatch signal, claims the row, and runs the pipeline on its own. No test drives
+ * hears the enqueue wakeup, claims the row, and runs the pipeline on its own. No test drives
  * the orchestrator until item 2, whose whole subject is what a second run does.
  */
 
@@ -104,7 +104,6 @@ let dataDir: string;
 let logger: Logger;
 let sessions: SessionManager;
 let provider: Provider;
-let dispatch: ReflectionDispatch;
 let worker: ReflectionWorker;
 let config: Config;
 let workEpisodeId: string;
@@ -116,33 +115,17 @@ const outageProvider: Provider = {
   generate: () => Promise.reject(new Error('ollama is unreachable')),
 };
 
-async function waitFor(
-  label: string,
-  deadlineMs: number,
-  ready: () => Promise<boolean>,
-): Promise<void> {
-  const deadline = Date.now() + deadlineMs;
-  while (Date.now() < deadline) {
-    if (await ready()) {
-      return;
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 1000);
-    });
-  }
-  throw new Error(`timed out waiting for ${label}`);
-}
-
 function intakeDeps(deps: {
   provider: Provider;
-  dispatch: ReflectionDispatch;
+  /** Omitted where the test wants the queue row to be the only record of the job. */
+  onJobEnqueued?: () => void;
 }): ReflectionIntakeDeps {
   return {
     driver: harness.driver,
     db,
     sessions,
     provider: deps.provider,
-    dispatch: deps.dispatch,
+    ...(deps.onJobEnqueued === undefined ? {} : { onJobEnqueued: deps.onJobEnqueued }),
     logger,
     entropyThreshold: config.redaction.entropyThreshold,
     lanes: new LaneAssigner(config.lanes),
@@ -205,21 +188,22 @@ beforeAll(async () => {
     embedModel: config.models.embed,
   });
 
-  dispatch = new ReflectionDispatch({
-    onListenerError: (err, signal) => {
-      logger.error({ err, jobId: signal.jobId }, 'reflection dispatch listener failed');
-    },
-  });
   worker = new ReflectionWorker(
-    { driver: harness.driver, db, provider, dispatch, runner: orchestrator(), logger },
+    { driver: harness.driver, db, provider, runner: orchestrator(), logger },
     workerOptions(config),
   );
   await worker.start();
 
-  const stored = await handleReflection(intakeDeps({ provider, dispatch }), WORK_PAYLOAD, {
-    identity: WORK_SESSION,
-    now: NOW,
-  });
+  const stored = await handleReflection(
+    intakeDeps({
+      provider,
+      onJobEnqueued: () => {
+        worker.wake();
+      },
+    }),
+    WORK_PAYLOAD,
+    { identity: WORK_SESSION, now: NOW },
+  );
   workEpisodeId = stored.episode_id;
 
   await waitFor('the signalled reflection run to reach the ledger', LEDGER_DEADLINE_MS, () =>
@@ -346,13 +330,12 @@ describe('gate item 4: recall serves what reflection built', () => {
 });
 
 describe('gate item 5: an inference outage defers, it never loses', () => {
-  /** Its own dispatcher, so the running worker hears nothing: the queue row is the only record. */
-  const silent = new ReflectionDispatch();
   let outageEpisodeId: string;
 
   it('stores and queues the episode with its vectors pending', async () => {
+    // No wakeup, so the running worker hears nothing: the queue row is the only record.
     const stored = await handleReflection(
-      intakeDeps({ provider: outageProvider, dispatch: silent }),
+      intakeDeps({ provider: outageProvider }),
       OUTAGE_PAYLOAD,
       {
         identity: OUTAGE_SESSION,
@@ -376,7 +359,6 @@ describe('gate item 5: an inference outage defers, it never loses', () => {
         driver: harness.driver,
         db,
         provider,
-        dispatch: new ReflectionDispatch(),
         runner: orchestrator(),
         logger,
       },

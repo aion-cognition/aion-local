@@ -1,9 +1,10 @@
-import neo4j, { type Driver } from 'neo4j-driver';
+import type { Driver } from 'neo4j-driver';
 
-import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
-import { runRead, runWrite } from './connection.js';
-import { PROTECTED_RELATIONSHIP_TYPES } from './protected-relationships.js';
+import { currentOnly } from './bitemporal.js';
+import { readFirst, runRead, runWrite, writeFirst } from './connection.js';
+import { BACKBONE_TYPES } from './labels.js';
 import { STRUCTURAL_PROPERTY } from './seed-queries.js';
+import { toGraphInteger } from './values.js';
 
 /**
  * Community detection over the content graph, through the Graph Data Science plugin the
@@ -26,36 +27,23 @@ export const CONTENT_PROJECTION_NAME = 'aion-content';
 /** Label propagation converges in a few passes; the ceiling is a guard, not a target. */
 export const COMMUNITY_MAX_ITERATIONS = 10;
 
-const BACKBONE_TYPES = PROTECTED_RELATIONSHIP_TYPES.map((type) => `'${type}'`).join(', ');
-
-const CURRENT = (variable: string): string =>
-  [
-    `${variable}.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
-    `${variable}.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
-  ].join(' AND ');
-
-/** Procedure arguments are Cypher INTEGER; a plain JS number arrives as FLOAT and is rejected. */
-function toGraphInteger(value: number): unknown {
-  return neo4j.int(Math.trunc(value));
-}
-
 /**
  * Whether the plugin is loaded at all. The image ships it, but a server someone started by
  * hand may not, and an operation that cannot run has to say so rather than fail.
  */
 export async function labelPropagationAvailable(driver: Driver): Promise<boolean> {
-  const rows = await runRead(
+  const count = await readFirst(
     driver,
     "SHOW PROCEDURES YIELD name WHERE name = 'gds.labelPropagation.write' RETURN count(*) AS count",
     {},
     (row) => row.count as number,
   );
-  return (rows[0] ?? 0) > 0;
+  return (count ?? 0) > 0;
 }
 
 const COUNT_PROJECTABLE_NODES = [
   'MATCH (n:Memory)',
-  `WHERE ${CURRENT('n')} AND coalesce(n.${STRUCTURAL_PROPERTY}, false) = false`,
+  `WHERE ${currentOnly('n')} AND coalesce(n.${STRUCTURAL_PROPERTY}, false) = false`,
   'RETURN count(n) AS count',
 ].join('\n');
 
@@ -66,20 +54,20 @@ const COUNT_PROJECTABLE_NODES = [
  * So the bound is a refusal above the cap rather than a truncation.
  */
 export async function countProjectableNodes(driver: Driver): Promise<number> {
-  const rows = await runRead(driver, COUNT_PROJECTABLE_NODES, {}, (row) => row.count as number);
-  return rows[0] ?? 0;
+  const count = await readFirst(driver, COUNT_PROJECTABLE_NODES, {}, (row) => row.count as number);
+  return count ?? 0;
 }
 
 const PROJECT_NODES = [
   'MATCH (n:Memory)',
-  `WHERE ${CURRENT('n')} AND coalesce(n.${STRUCTURAL_PROPERTY}, false) = false`,
+  `WHERE ${currentOnly('n')} AND coalesce(n.${STRUCTURAL_PROPERTY}, false) = false`,
   'RETURN id(n) AS id',
 ].join('\n');
 
 const PROJECT_RELATIONSHIPS = [
   'MATCH (a:Memory)-[r]-(b:Memory)',
   `WHERE NOT type(r) IN [${BACKBONE_TYPES}]`,
-  `  AND ${CURRENT('a')} AND ${CURRENT('b')}`,
+  `  AND ${currentOnly('a')} AND ${currentOnly('b')}`,
   `  AND coalesce(a.${STRUCTURAL_PROPERTY}, false) = false`,
   `  AND coalesce(b.${STRUCTURAL_PROPERTY}, false) = false`,
   'RETURN id(a) AS source, id(b) AS target',
@@ -99,7 +87,7 @@ export async function projectContentGraph(
   driver: Driver,
   graphName: string,
 ): Promise<ContentProjection> {
-  const rows = await runWrite(
+  const projection = await writeFirst(
     driver,
     [
       'CALL gds.graph.project.cypher($graphName, $nodeQuery, $relationshipQuery)',
@@ -112,7 +100,7 @@ export async function projectContentGraph(
       relationshipCount: row.relationshipCount as number,
     }),
   );
-  return rows[0] ?? { nodeCount: 0, relationshipCount: 0 };
+  return projection ?? { nodeCount: 0, relationshipCount: 0 };
 }
 
 export type CommunityWriteResult = {
@@ -127,7 +115,7 @@ export async function writeCommunities(
   graphName: string,
   maxIterations: number = COMMUNITY_MAX_ITERATIONS,
 ): Promise<CommunityWriteResult> {
-  const rows = await runWrite(
+  const result = await writeFirst(
     driver,
     [
       'CALL gds.labelPropagation.write($graphName, { writeProperty: $writeProperty, maxIterations: $maxIterations })',
@@ -147,7 +135,7 @@ export async function writeCommunities(
     }),
   );
   return (
-    rows[0] ?? { communityCount: 0, nodePropertiesWritten: 0, ranIterations: 0, didConverge: false }
+    result ?? { communityCount: 0, nodePropertiesWritten: 0, ranIterations: 0, didConverge: false }
   );
 }
 
@@ -184,7 +172,7 @@ export type CommunityProfile = {
  */
 const READ_COMMUNITY_PROFILES = [
   'MATCH (n:Memory)',
-  `WHERE ${CURRENT('n')} AND n.${COMMUNITY_PROPERTY} IS NOT NULL`,
+  `WHERE ${currentOnly('n')} AND n.${COMMUNITY_PROPERTY} IS NOT NULL`,
   `  AND coalesce(n.${STRUCTURAL_PROPERTY}, false) = false`,
   `WITH n.${COMMUNITY_PROPERTY} AS community, collect(n) AS members, count(n) AS size`,
   'WHERE size >= $minSize',
@@ -229,7 +217,7 @@ export type CommunityPairEdges = {
  */
 const READ_COMMUNITY_PAIR_EDGES = [
   'MATCH (a:Memory)-[r]-(b:Memory)',
-  `WHERE ${CURRENT('a')} AND ${CURRENT('b')}`,
+  `WHERE ${currentOnly('a')} AND ${currentOnly('b')}`,
   `  AND NOT type(r) IN [${BACKBONE_TYPES}]`,
   `  AND a.${COMMUNITY_PROPERTY} IS NOT NULL AND b.${COMMUNITY_PROPERTY} IS NOT NULL`,
   `  AND a.${COMMUNITY_PROPERTY} < b.${COMMUNITY_PROPERTY}`,

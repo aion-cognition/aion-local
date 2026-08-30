@@ -1,12 +1,11 @@
-import neo4j, { type Driver } from 'neo4j-driver';
+import type { Driver } from 'neo4j-driver';
 
-import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
+import { BITEMPORAL_PROPERTIES, currentOnly } from './bitemporal.js';
 import { runRead } from './connection.js';
 import { ENTITY_MENTION_TYPE } from './entity-queries.js';
-import { BASE_NODE_LABEL } from './labels.js';
-import { PROTECTED_RELATIONSHIP_TYPES } from './protected-relationships.js';
+import { BACKBONE_TYPES, BASE_NODE_LABEL, EXTRACTION_TYPE } from './labels.js';
 import { STRUCTURAL_PROPERTY } from './seed-queries.js';
-import type { Row } from './values.js';
+import { toGraphInteger, type Row } from './values.js';
 
 /**
  * The graph side of orphan cleanup. An orphan here is what the health snapshot already
@@ -19,22 +18,6 @@ import type { Row } from './values.js';
  * forgetting goes through `forgetNode`, so an orphan repair leaves the same trail any other
  * write leaves.
  */
-
-const BACKBONE_TYPES = PROTECTED_RELATIONSHIP_TYPES.map((type) => `'${type}'`).join(', ');
-
-/** Reflection's provenance edge, which is what makes an episode enriched rather than pending. */
-const EXTRACTION_TYPE = 'EXTRACTED_FROM';
-
-const CURRENT = (variable: string): string =>
-  [
-    `${variable}.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
-    `${variable}.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
-  ].join(' AND ');
-
-/** `LIMIT` is Cypher INTEGER; a plain JS number arrives as FLOAT and is rejected. */
-function toGraphInteger(value: number): unknown {
-  return neo4j.int(Math.trunc(value));
-}
 
 export type OrphanNode = {
   readonly id: string;
@@ -53,7 +36,7 @@ export type OrphanNode = {
  */
 const FIND_ORPHAN_NODES = [
   'MATCH (n:Memory)',
-  `WHERE ${CURRENT('n')}`,
+  `WHERE ${currentOnly('n')}`,
   `  AND coalesce(n.${STRUCTURAL_PROPERTY}, false) = false`,
   // Same exclusion the health count applies: an episode reflection has not processed is
   // pending, not fragmented, and a heuristic relink onto it hides the backlog it belongs to.
@@ -107,14 +90,14 @@ const FIND_ORPHAN_RELINK_TARGETS = [
   `MATCH (o:${BASE_NODE_LABEL} { id: orphanId })`,
   `OPTIONAL MATCH (o)-[b1]-(container:${BASE_NODE_LABEL})-[m:${ENTITY_MENTION_TYPE}]-(shared:Entity)`,
   `  WHERE type(b1) IN [${BACKBONE_TYPES}]`,
-  `    AND ${CURRENT('shared')}`,
+  `    AND ${currentOnly('shared')}`,
   '    AND shared.id <> orphanId',
   'WITH orphanId, o, shared, coalesce(m.count, 0) AS weight',
   'ORDER BY weight DESC, shared.id',
   'WITH orphanId, o, collect(shared.id)[0] AS sharedId',
   `OPTIONAL MATCH (o)-[b2]-(parent:${BASE_NODE_LABEL})-[b3]-(sibling:Memory)`,
   `  WHERE type(b2) IN [${BACKBONE_TYPES}] AND type(b3) IN [${BACKBONE_TYPES}]`,
-  `    AND ${CURRENT('sibling')}`,
+  `    AND ${currentOnly('sibling')}`,
   `    AND coalesce(sibling.${STRUCTURAL_PROPERTY}, false) = false`,
   '    AND sibling.id <> orphanId',
   'WITH orphanId, sharedId, sibling ORDER BY sibling.id',

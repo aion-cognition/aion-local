@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ReflectionDispatch, type ReflectionJobSignal } from './dispatch.js';
 import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
 import { LaneAssigner } from './lanes.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
@@ -53,7 +52,7 @@ const PAYLOAD = {
 let graph: FakeGraph;
 let db: SqliteHandle;
 let dataDir: string;
-let signals: ReflectionJobSignal[];
+let enqueuedJobIds: string[];
 let embed: ReturnType<typeof vi.fn>;
 let generate: ReturnType<typeof vi.fn>;
 let deps: ReflectionIntakeDeps;
@@ -72,11 +71,7 @@ beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), 'aion-reflection-intake-'));
   db = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
 
-  signals = [];
-  const dispatch = new ReflectionDispatch();
-  dispatch.subscribe((signal) => {
-    signals.push(signal);
-  });
+  enqueuedJobIds = [];
 
   embed = vi.fn((texts: readonly string[]) => Promise.resolve(fakeVectors(texts)));
   generate = vi.fn(() => Promise.reject(new Error('intake must never call generate')));
@@ -86,7 +81,9 @@ beforeEach(() => {
     db,
     sessions: new SessionManager(graph.driver, { memberId: MEMBER_ID, workspaceId: WORKSPACE_ID }),
     provider: { embed, generate } as unknown as ReflectionIntakeDeps['provider'],
-    dispatch,
+    onJobEnqueued: (jobId: string) => {
+      enqueuedJobIds.push(jobId);
+    },
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: 4.5,
     lanes: new LaneAssigner(LANE_LIMITS),
@@ -201,7 +198,7 @@ describe('reflection intake storage', () => {
     expect((embed.mock.calls[0]?.[0] as readonly string[]).length).toBe(3);
   });
 
-  it('enqueues exactly one integrate job carrying the episode id and signals the dispatcher', async () => {
+  it('enqueues exactly one integrate job carrying the episode id and wakes the worker once', async () => {
     const result = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
 
     const jobs = listReflectionJobs(db);
@@ -209,13 +206,7 @@ describe('reflection intake storage', () => {
     expect(jobs[0]?.jobType).toBe(INTEGRATE_JOB_TYPE);
     expect(jobs[0]?.payload).toEqual({ episode_id: result.episode_id });
 
-    expect(signals).toHaveLength(1);
-    expect(signals[0]).toMatchObject({
-      jobId: jobs[0]?.id,
-      jobType: INTEGRATE_JOB_TYPE,
-      episodeId: result.episode_id,
-      sessionId: 'session-a',
-    });
+    expect(enqueuedJobIds).toEqual([jobs[0]?.id]);
   });
 
   it('never calls the generation path', async () => {

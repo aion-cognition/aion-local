@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CueCache } from './cues.js';
 import { handleRecall, type RecallDeps } from './recall.js';
 import { resonate } from './resonance.js';
+import { waitFor } from './test-support/wait-for.fixture.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
@@ -152,19 +153,6 @@ let db: SqliteHandle;
 let dataDir: string;
 let logger: Logger;
 let deps: RecallDeps;
-
-async function waitFor(label: string, ready: () => Promise<boolean>): Promise<void> {
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    if (await ready()) {
-      return;
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 250);
-    });
-  }
-  throw new Error(`timed out waiting for ${label}`);
-}
 
 async function writeEpisode(id: string, text: string, vector: Vector, at: Date): Promise<void> {
   await writeStampedNode(harness.driver, {

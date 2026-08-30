@@ -19,13 +19,9 @@ export const RecallContextSchema = z.strictObject({
   recent_turns: z.array(RecallTurnSchema).optional(),
 });
 
-export type RecallContext = z.infer<typeof RecallContextSchema>;
-
 export const RecallBudgetSchema = z.strictObject({
   max_tokens: z.number().int().positive(),
 });
-
-export type RecallBudget = z.infer<typeof RecallBudgetSchema>;
 
 /**
  * `query` is the only required field. `as_of` is the world-time read mode; `knew_at` is

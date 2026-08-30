@@ -49,6 +49,5 @@ export async function findCoExtractedNodeIds(
   driver: Driver,
   episodeId: string,
 ): Promise<readonly string[]> {
-  const statement = coExtractedNodesStatement(episodeId);
-  return runRead(driver, statement.cypher, statement.parameters, (row) => row.id as string);
+  return runRead(driver, coExtractedNodesStatement(episodeId), (row) => row.id as string);
 }

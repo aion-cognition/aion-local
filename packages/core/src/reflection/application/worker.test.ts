@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ReflectionDispatch } from './dispatch.js';
 import { INTEGRATE_JOB_TYPE } from './intake.js';
 import type { ReflectionRun } from './orchestrator.js';
 import { backoffDelayMs, ReflectionWorker, type ReflectionWorkerOptions } from './worker.js';
@@ -84,14 +83,13 @@ class StubProvider implements Provider {
 let dir: string;
 let store: SqliteStore;
 let graph: FakeGraph;
-let dispatch: ReflectionDispatch;
 let provider: StubProvider;
 let logger: Logger;
 let worker: ReflectionWorker | undefined;
 
 function build(runner: StubRunner, options: ReflectionWorkerOptions = {}): ReflectionWorker {
   worker = new ReflectionWorker(
-    { driver: graph.driver, db: store.db, provider, dispatch, runner, logger },
+    { driver: graph.driver, db: store.db, provider, runner, logger },
     options,
   );
   return worker;
@@ -101,14 +99,9 @@ function enqueue(episodeId: string = EPISODE_ID): string {
   return enqueueReflectionJob(store.db, INTEGRATE_JOB_TYPE, { episode_id: episodeId });
 }
 
-function signal(jobId: string, episodeId: string = EPISODE_ID): void {
-  dispatch.signal({
-    jobId,
-    jobType: INTEGRATE_JOB_TYPE,
-    episodeId,
-    sessionId: 'session-1',
-    enqueuedAt: new Date(),
-  });
+/** What intake does on a fresh enqueue. The wakeup carries no job; the claim loop reads the queue. */
+function signal(): void {
+  worker?.wake();
 }
 
 /** A crashed process's row: claimed, and old enough that the drain's timeout has passed. */
@@ -122,7 +115,6 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'aion-worker-'));
   store = new SqliteStore({ filePath: join(dir, 'aion.sqlite') });
   graph = new FakeGraph();
-  dispatch = new ReflectionDispatch();
   provider = new StubProvider();
   logger = openLogger({ filePath: join(dir, 'aion.jsonl'), level: 'fatal' });
 });
@@ -154,7 +146,7 @@ describe('signal-driven execution', () => {
     const interval = vi.spyOn(globalThis, 'setInterval');
     const timeout = vi.spyOn(globalThis, 'setTimeout');
     const jobId = enqueue();
-    signal(jobId);
+    signal();
     await started.whenIdle();
 
     expect(runner.episodeIds).toEqual([EPISODE_ID]);
@@ -176,9 +168,9 @@ describe('signal-driven execution', () => {
     };
     await started.start();
 
-    const first = enqueue('episode-a');
+    enqueue('episode-a');
     enqueue('episode-b');
-    signal(first, 'episode-a');
+    signal();
     await started.whenIdle();
 
     expect(runner.episodeIds).toEqual(['episode-a', 'episode-b']);
@@ -197,7 +189,7 @@ describe('signal-driven execution', () => {
     await started.start();
 
     const jobId = enqueue();
-    signal(jobId);
+    signal();
     await started.whenIdle();
 
     expect(getReflectionJob(store.db, jobId)).toBeUndefined();
@@ -219,7 +211,7 @@ describe('enrichment lag', () => {
 
     const jobId = enqueue();
     backdateEnqueue(jobId, 5_000);
-    signal(jobId);
+    signal();
     await started.whenIdle();
 
     const samples = listEnrichmentLagSamplesMs(store.db);
@@ -242,8 +234,8 @@ describe('enrichment lag', () => {
     const started = build(runner);
     await started.start();
 
-    const jobId = enqueue();
-    signal(jobId);
+    enqueue();
+    signal();
     await started.whenIdle();
 
     expect(listEnrichmentLagSamplesMs(store.db)).toEqual([]);
@@ -368,7 +360,7 @@ describe('retry with backoff', () => {
     expect(parked?.lastError).toBe('the graph rejected the write');
     expect(started.retrying).toBe(0);
 
-    signal(jobId);
+    signal();
     await started.whenIdle();
 
     expect(runner.episodeIds).toHaveLength(2);
@@ -437,7 +429,7 @@ describe('stop', () => {
     expect(released?.lastError).toBe('the reflect model timed out');
     expect(started.retrying).toBe(0);
 
-    signal(jobId);
+    signal();
     await started.whenIdle();
 
     expect(runner.episodeIds).toHaveLength(1);
@@ -486,7 +478,7 @@ describe('stale-claim reaper', () => {
     await started.start();
 
     const jobId = enqueue();
-    signal(jobId);
+    signal();
     await started.whenIdle();
     expect(started.retrying).toBe(1);
 

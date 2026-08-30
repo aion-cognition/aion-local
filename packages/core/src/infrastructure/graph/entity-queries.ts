@@ -1,11 +1,11 @@
 import type { Driver } from 'neo4j-driver';
 
 import { ACCESS_COUNT_PROPERTY } from './access-tracking.js';
-import { BITEMPORAL_PROPERTIES, stampNew } from './bitemporal.js';
+import { BITEMPORAL_PROPERTIES, currentOnly, stampNew } from './bitemporal.js';
 import { inWriteTransaction, runRead, runWrite, type GraphStatement } from './connection.js';
 import { upsertEdgeInTransaction } from './edges.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from './episodes.js';
-import { BASE_NODE_LABEL, resolveLabels } from './labels.js';
+import { BASE_NODE_LABEL, ENTITY_LABEL, resolveLabels } from './labels.js';
 import { readModeFragment, withCurrency } from './read-modes.js';
 import { SUPERSEDES_TYPE } from './relationships.js';
 import {
@@ -34,9 +34,6 @@ import type { Vector } from '../providers/types.js';
  * constraint is what makes the MERGE a seek and what keeps two concurrent runs from
  * forking one identity.
  */
-
-/** The primary label the composite constraint is declared on. */
-const ENTITY_LABEL = 'Entity';
 
 export const ENTITY_TYPE_PROPERTY = 'type';
 
@@ -79,7 +76,7 @@ export type StructuralEntityMatch = {
  * is on the name alone: the structural `type` (`member`, `workspace`) is never what an
  * extraction returns, so keying on the pair would miss every collision the rule exists for.
  */
-function structuralEntitiesStatement(): GraphStatement {
+function structuralEntitiesStatement(names: readonly string[]): GraphStatement {
   const fragment = readModeFragment(withCurrency(), 'n');
   return {
     cypher: [
@@ -91,7 +88,7 @@ function structuralEntitiesStatement(): GraphStatement {
       `       n.${ENTITY_TYPE_PROPERTY} AS type,`,
       `       n.${ENTITY_NAME_VECTOR_PROPERTY} IS NOT NULL AS has_name_vec`,
     ].join('\n'),
-    parameters: fragment.parameters,
+    parameters: { names: [...new Set(names)], ...fragment.parameters },
   };
 }
 
@@ -102,18 +99,12 @@ export async function findStructuralEntitiesByName(
   if (names.length === 0) {
     return [];
   }
-  const statement = structuralEntitiesStatement();
-  return runRead(
-    driver,
-    statement.cypher,
-    { ...statement.parameters, names: [...new Set(names)] },
-    (row) => ({
-      id: row.id as string,
-      nameNorm: row.name_norm as string,
-      type: (row.type as string | null) ?? '',
-      hasNameVector: row.has_name_vec === true,
-    }),
-  );
+  return runRead(driver, structuralEntitiesStatement(names), (row) => ({
+    id: row.id as string,
+    nameNorm: row.name_norm as string,
+    type: (row.type as string | null) ?? '',
+    hasNameVector: row.has_name_vec === true,
+  }));
 }
 
 /** Confidence score, written once by whichever run created the node. */
@@ -187,8 +178,7 @@ function buildEntityMerge(entities: readonly EntityMergeInput[], now: Date): Gra
     'WITH entity.name_norm AS name_norm, entity.type AS type, entity.id AS proposed_id, n',
     `OPTIONAL MATCH (head:${ENTITY_LABEL})-[:${SUPERSEDES_TYPE}*1..${String(MERGE_CHAIN_DEPTH)}]->(n)`,
     `WHERE n.${BITEMPORAL_PROPERTIES.validUntil} IS NOT NULL`,
-    `  AND head.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
-    `  AND head.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+    `  AND ${currentOnly('head')}`,
     'WITH name_norm, type, proposed_id, n, collect(head)[0] AS head',
     'WITH name_norm, type, proposed_id, coalesce(head, n) AS resolved',
     'RETURN name_norm, type, resolved.id AS id,',
@@ -236,8 +226,7 @@ export async function mergeEntities(
   if (entities.length === 0) {
     return [];
   }
-  const statement = buildEntityMerge(entities, now);
-  return runWrite(driver, statement.cypher, statement.parameters, mapMergedEntity);
+  return runWrite(driver, buildEntityMerge(entities, now), mapMergedEntity);
 }
 
 export type EntityVectorEntry = {
@@ -377,7 +366,7 @@ export type EpisodeEntity = {
  * prevent. The mention edge onto the closed node stays; it is the record that this episode
  * named that surface form.
  */
-function episodeEntitiesStatement(): GraphStatement {
+function episodeEntitiesStatement(episodeId: string): GraphStatement {
   const fragment = readModeFragment(withCurrency(), 'n');
   return {
     cypher: [
@@ -387,7 +376,7 @@ function episodeEntitiesStatement(): GraphStatement {
       `       n.${ENTITY_NAME_NORM_PROPERTY} AS name_norm, n.${ENTITY_TYPE_PROPERTY} AS type`,
       `ORDER BY n.${ENTITY_NAME_NORM_PROPERTY}, n.id`,
     ].join('\n'),
-    parameters: fragment.parameters,
+    parameters: { episodeId, ...fragment.parameters },
   };
 }
 
@@ -395,8 +384,7 @@ export async function findEpisodeEntities(
   driver: Driver,
   episodeId: string,
 ): Promise<EpisodeEntity[]> {
-  const statement = episodeEntitiesStatement();
-  return runRead(driver, statement.cypher, { ...statement.parameters, episodeId }, (row) => ({
+  return runRead(driver, episodeEntitiesStatement(episodeId), (row) => ({
     id: row.id as string,
     name: (row.name as string | null) ?? '',
     nameNorm: (row.name_norm as string | null) ?? '',

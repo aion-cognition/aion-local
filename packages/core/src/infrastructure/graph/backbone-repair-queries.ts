@@ -1,8 +1,9 @@
-import neo4j, { type Driver } from 'neo4j-driver';
+import type { Driver } from 'neo4j-driver';
 
-import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
+import { BITEMPORAL_PROPERTIES, currentOnly } from './bitemporal.js';
 import { runRead } from './connection.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from './episodes.js';
+import { toGraphInteger } from './values.js';
 
 /**
  * The graph side of the backbone repair. An episode reaches its session through one
@@ -14,17 +15,6 @@ import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from './episodes.js';
  * Nothing here writes. The repair goes through the ordinary edge upsert, so a restored
  * backbone link leaves the same trail every other edge leaves.
  */
-
-const CURRENT = (variable: string): string =>
-  [
-    `${variable}.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
-    `${variable}.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
-  ].join(' AND ');
-
-/** `LIMIT` is Cypher INTEGER; a plain JS number arrives as FLOAT and is rejected. */
-function toGraphInteger(value: number): unknown {
-  return neo4j.int(Math.trunc(value));
-}
 
 export type BackboneRepairTarget = {
   readonly episodeId: string;
@@ -41,7 +31,7 @@ export type BackboneRepairTarget = {
  */
 const FIND_EPISODES_MISSING_SESSION_LINK = [
   'MATCH (e:Episode)',
-  `WHERE ${CURRENT('e')} AND e.${MEMORY_PROPERTIES.sessionId} IS NOT NULL`,
+  `WHERE ${currentOnly('e')} AND e.${MEMORY_PROPERTIES.sessionId} IS NOT NULL`,
   `  AND NOT (e)-[:${CONTAINMENT_TYPE}]->(:Session)`,
   `WITH e ORDER BY e.${BITEMPORAL_PROPERTIES.txFrom}, e.id LIMIT $limit`,
   `MATCH (s:Session { id: e.${MEMORY_PROPERTIES.sessionId} })`,

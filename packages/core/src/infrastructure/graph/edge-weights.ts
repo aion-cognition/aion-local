@@ -1,6 +1,6 @@
 import neo4j, { type Driver } from 'neo4j-driver';
 
-import { runRead, runWrite, type GraphStatement } from './connection.js';
+import { readFirst, runWrite, type GraphStatement } from './connection.js';
 import { GraphWriteError } from './errors.js';
 import { BASE_NODE_LABEL } from './labels.js';
 import { PROTECTED_RELATIONSHIP_TYPES } from './protected-relationships.js';
@@ -305,11 +305,11 @@ export function buildDecayableEdgeCount(): GraphStatement {
 /** Zero on a graph with no unprotected edge at all, which is a healthy answer, not a failure. */
 export async function countDecayableEdges(driver: Driver): Promise<number> {
   const statement = buildDecayableEdgeCount();
-  const rows = await runRead(
+  const count = await readFirst(
     driver,
     statement.cypher,
     statement.parameters,
     (row: Row) => row.n as number,
   );
-  return rows[0] ?? 0;
+  return count ?? 0;
 }

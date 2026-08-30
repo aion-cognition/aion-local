@@ -33,7 +33,6 @@ import {
 } from '../../../recall/domain/activation.js';
 import { SessionManager } from '../../../session/session-manager.js';
 import type { StageContext } from '../../domain/stage.js';
-import { ReflectionDispatch } from '../dispatch.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../intake.js';
 import { LaneAssigner } from '../lanes.js';
 
@@ -100,7 +99,6 @@ beforeAll(async () => {
       workspaceId: backbone.workspace.id,
     }),
     provider: provider(),
-    dispatch: new ReflectionDispatch(),
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
@@ -249,7 +247,6 @@ describe('SemanticRelationshipStage against a live graph and a live model', () =
         workspaceId: backbone.workspace.id,
       }),
       provider: provider(),
-      dispatch: new ReflectionDispatch(),
       logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
       lanes: new LaneAssigner(DEFAULTS.lanes),

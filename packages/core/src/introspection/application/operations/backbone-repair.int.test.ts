@@ -20,6 +20,7 @@ import {
   type Neo4jHarness,
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
+import { refusingProvider } from '../../../infrastructure/providers/test-support/refusing-provider.fixture.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { NEUTRAL_GRAPH_HEALTH } from '../../domain/health.js';
 import type { OperationContext } from '../../domain/operation.js';
@@ -47,6 +48,7 @@ function context(): OperationContext {
     db,
     config,
     logger,
+    provider: refusingProvider,
     health: healthFixture(),
     now: NOW,
     signal: new AbortController().signal,

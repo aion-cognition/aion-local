@@ -16,8 +16,12 @@ export type Knob = {
  * search.weights sub-fields from a single comma-separated var; every other leaf is a
  * 1:1 var. A fixed set of env var names (AION_CUE_BUDGET_MS, AION_RECALL_TOKEN_BUDGET,
  * AION_SEARCH_WEIGHTS, AION_NEO4J_URI, AION_NEO4J_PASSWORD, AION_OLLAMA_URL,
- * AION_OLLAMA_MODE, AION_ANTHROPIC_API_KEY, AION_MAINTENANCE_TIER3, AION_MCP_PORT) keep
- * their existing spelling; the rest follow AION_<GROUP>_<LEAF> for consistency.
+ * AION_ANTHROPIC_API_KEY, AION_MAINTENANCE_TIER3, AION_MCP_PORT) keep their existing
+ * spelling; the rest follow AION_<GROUP>_<LEAF> for consistency.
+ *
+ * AION_REFLECTION_STAGE_TIMEOUT_MS replaced five per-stage timeout vars that all carried
+ * 60000 and that no deployment ever split. A stage needing its own guard takes it as a
+ * constructor option, which is where a value one caller wants belongs.
  *
  * AION_MIN_RELEVANCE is gone rather than renamed. It named one floor for every search
  * method, and each method now has its own calibrated cosine floor; a stale 0.35 silently
@@ -37,7 +41,6 @@ export const KNOB_REGISTRY: readonly Knob[] = [
   { envVar: 'AION_NEO4J_PASSWORD', path: ['neo4j', 'password'], kind: 'string' },
 
   { envVar: 'AION_OLLAMA_URL', path: ['ollama', 'url'], kind: 'string' },
-  { envVar: 'AION_OLLAMA_MODE', path: ['ollama', 'mode'], kind: 'string' },
 
   { envVar: 'AION_EMBED_MODEL', path: ['models', 'embed'], kind: 'string' },
   { envVar: 'AION_EMBED_DIMENSION', path: ['models', 'embedDimension'], kind: 'number' },
@@ -128,11 +131,6 @@ export const KNOB_REGISTRY: readonly Knob[] = [
   { envVar: 'AION_HEBBIAN_DECAY_PEAK_DAYS', path: ['hebbian', 'decayPeakDays'], kind: 'number' },
   { envVar: 'AION_HEBBIAN_DECAY_SIGMA', path: ['hebbian', 'decaySigma'], kind: 'number' },
   { envVar: 'AION_HEBBIAN_BATCH_SIZE', path: ['hebbian', 'batchSize'], kind: 'number' },
-  {
-    envVar: 'AION_HEBBIAN_FLUSH_INTERVAL_MS',
-    path: ['hebbian', 'flushIntervalMs'],
-    kind: 'number',
-  },
 
   // Keeps its spelling and its group. Its meaning narrowed: it is now the ceiling on a seed
   // budget that scales with the substrate, not the budget. A deployment that pinned it low
@@ -159,24 +157,14 @@ export const KNOB_REGISTRY: readonly Knob[] = [
     kind: 'number',
   },
   {
-    envVar: 'AION_CONTEXT_RESONANCE_MAX_HOPS',
-    path: ['contextResonance', 'maxHops'],
-    kind: 'number',
-  },
-  {
-    envVar: 'AION_CONTEXT_RESONANCE_ACTIVATION_THRESHOLD',
-    path: ['contextResonance', 'activationThreshold'],
-    kind: 'number',
-  },
-  {
     envVar: 'AION_CONTEXT_RESONANCE_CONTEXT_SEARCH_THRESHOLD',
     path: ['contextResonance', 'contextSearchThreshold'],
     kind: 'number',
   },
 
   {
-    envVar: 'AION_REFLECTION_ENTITY_TIMEOUT_MS',
-    path: ['reflection', 'entityTimeoutMs'],
+    envVar: 'AION_REFLECTION_STAGE_TIMEOUT_MS',
+    path: ['reflection', 'stageTimeoutMs'],
     kind: 'number',
   },
   { envVar: 'AION_REFLECTION_MAX_ENTITIES', path: ['reflection', 'maxEntities'], kind: 'number' },
@@ -196,18 +184,8 @@ export const KNOB_REGISTRY: readonly Knob[] = [
     kind: 'number',
   },
   {
-    envVar: 'AION_REFLECTION_COGNITIVE_TIMEOUT_MS',
-    path: ['reflection', 'cognitiveTimeoutMs'],
-    kind: 'number',
-  },
-  {
     envVar: 'AION_REFLECTION_MAX_COGNITIVE_NODES',
     path: ['reflection', 'maxCognitiveNodes'],
-    kind: 'number',
-  },
-  {
-    envVar: 'AION_REFLECTION_SEMANTIC_TIMEOUT_MS',
-    path: ['reflection', 'semanticTimeoutMs'],
     kind: 'number',
   },
   {
@@ -236,11 +214,6 @@ export const KNOB_REGISTRY: readonly Knob[] = [
     kind: 'number',
   },
   {
-    envVar: 'AION_REFLECTION_SUPERSEDE_TIMEOUT_MS',
-    path: ['reflection', 'supersedeTimeoutMs'],
-    kind: 'number',
-  },
-  {
     envVar: 'AION_REFLECTION_MAX_SUPERSESSION_SUBJECTS',
     path: ['reflection', 'maxSupersessionSubjects'],
     kind: 'number',
@@ -258,11 +231,6 @@ export const KNOB_REGISTRY: readonly Knob[] = [
   {
     envVar: 'AION_REFLECTION_NARRATIVE_IDLE_MINUTES',
     path: ['reflection', 'narrativeIdleMinutes'],
-    kind: 'number',
-  },
-  {
-    envVar: 'AION_REFLECTION_NARRATIVE_TIMEOUT_MS',
-    path: ['reflection', 'narrativeTimeoutMs'],
     kind: 'number',
   },
   {
@@ -475,6 +443,24 @@ export const RESERVED_ENV_VARS: ReadonlySet<string> = new Set([
   'AION_GIT_USER_NAME',
   'AION_BUILD_SHA',
   'AION_REPO_HEAD_SHA',
+]);
+
+/**
+ * Knobs that existed and were retired. A .env written against an older checkout still
+ * sets them; refusing to boot over a setting that no longer does anything punishes the
+ * upgrade. They parse as ignored rather than unknown, and `.env.example` no longer
+ * carries them. Typos in live knobs still fail loud.
+ */
+export const RETIRED_ENV_VARS: ReadonlySet<string> = new Set([
+  'AION_OLLAMA_MODE',
+  'AION_HEBBIAN_FLUSH_INTERVAL_MS',
+  'AION_CONTEXT_RESONANCE_MAX_HOPS',
+  'AION_CONTEXT_RESONANCE_ACTIVATION_THRESHOLD',
+  'AION_REFLECTION_ENTITY_TIMEOUT_MS',
+  'AION_REFLECTION_COGNITIVE_TIMEOUT_MS',
+  'AION_REFLECTION_SEMANTIC_TIMEOUT_MS',
+  'AION_REFLECTION_SUPERSEDE_TIMEOUT_MS',
+  'AION_REFLECTION_NARRATIVE_TIMEOUT_MS',
 ]);
 
 const registryByEnvVar = new Map(KNOB_REGISTRY.map((knob) => [knob.envVar, knob]));

@@ -1,21 +1,19 @@
 import {
   asOf,
   bitemporalAt,
-  ConfigError,
-  GraphConnection,
   knewAt,
-  loadConfig,
   OllamaProvider,
-  openLogger,
   selectSeeds,
   withCurrency,
-  type Config,
   type ReadMode,
   type Seed,
   type SeedCue,
 } from '@aion/core';
 
-import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
+import { CliUsageError, parseArgs, type ArgSpec } from './args.js';
+import { preview } from './format.js';
+import { stderrWriter, stdoutWriter, type Writer } from './output.js';
+import { withSubstrate } from './substrate.js';
 
 /**
  * The seed layer with nothing built on top of it: no cue-model expansion, no traversal, no
@@ -26,33 +24,16 @@ import { describeError, stderrWriter, stdoutWriter, type Writer } from './output
  * time-travel recall would have found.
  */
 
-export class UnknownSearchOptionError extends Error {
-  constructor(option: string) {
-    super(`unknown option '${option}' for search (supported: --as-of, --knew-at, --json)`);
-    this.name = 'UnknownSearchOptionError';
-  }
-}
-
-export class MissingSearchValueError extends Error {
-  constructor(option: string) {
-    super(`${option} needs a value`);
-    this.name = 'MissingSearchValueError';
-  }
-}
-
-export class InvalidTimestampError extends Error {
-  constructor(option: string, value: string) {
-    super(`${option} got '${value}', expected an ISO timestamp`);
-    this.name = 'InvalidTimestampError';
-  }
-}
-
-export class MissingSearchQueryError extends Error {
-  constructor() {
-    super('search needs a query: `aion search "<query>"`');
-    this.name = 'MissingSearchQueryError';
-  }
-}
+const SPEC: ArgSpec = {
+  command: 'search',
+  usage: 'aion search <query> [--as-of <ts>] [--knew-at <ts>] [--json]',
+  options: [
+    { flag: '--as-of', takesValue: true },
+    { flag: '--knew-at', takesValue: true },
+    { flag: '--json' },
+  ],
+  maxPositionals: Number.POSITIVE_INFINITY,
+};
 
 export type SearchFlags = {
   readonly query: string;
@@ -61,53 +42,30 @@ export type SearchFlags = {
   readonly json: boolean;
 };
 
-function parseTimestamp(option: string, value: string): Date {
+function timestampOf(values: ReadonlyMap<string, string>, option: string): Date | undefined {
+  const value = values.get(option);
+  if (value === undefined) {
+    return undefined;
+  }
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
-    throw new InvalidTimestampError(option, value);
+    throw new CliUsageError(`${option} got '${value}', expected an ISO timestamp`);
   }
   return parsed;
 }
 
 export function parseSearchFlags(argv: readonly string[]): SearchFlags {
-  let query: string | undefined;
-  let asOfFlag: Date | undefined;
-  let knewAtFlag: Date | undefined;
-  let json = false;
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index] ?? '';
-    if (arg === '--json') {
-      json = true;
-      continue;
-    }
-    if (arg === '--as-of' || arg === '--knew-at') {
-      const value = argv[index + 1];
-      if (value === undefined) {
-        throw new MissingSearchValueError(arg);
-      }
-      const parsed = parseTimestamp(arg, value);
-      if (arg === '--as-of') {
-        asOfFlag = parsed;
-      } else {
-        knewAtFlag = parsed;
-      }
-      index += 1;
-      continue;
-    }
-    if (arg.startsWith('--')) {
-      throw new UnknownSearchOptionError(arg);
-    }
-    // An unquoted multi-word query arrives as several argv entries; join them back.
-    query = query === undefined ? arg : `${query} ${arg}`;
+  const { flags, values, positionals } = parseArgs(SPEC, argv);
+  // An unquoted multi-word query arrives as several argv entries; join them back.
+  const query = positionals.join(' ');
+  if (query.trim().length === 0) {
+    throw new CliUsageError('search needs a query: `aion search "<query>"`');
   }
-
-  if (query === undefined || query.trim().length === 0) {
-    throw new MissingSearchQueryError();
-  }
+  const asOfFlag = timestampOf(values, '--as-of');
+  const knewAtFlag = timestampOf(values, '--knew-at');
   return {
     query,
-    json,
+    json: flags.has('--json'),
     ...(asOfFlag === undefined ? {} : { asOf: asOfFlag }),
     ...(knewAtFlag === undefined ? {} : { knewAt: knewAtFlag }),
   };
@@ -129,11 +87,6 @@ function readModeFor(flags: SearchFlags): ReadMode {
 /** The best of a seed's own strategies: what a reader reads as "how this was found." */
 function methodOf(seed: Seed): string {
   return seed.provenance[0]?.strategy ?? '-';
-}
-
-function preview(text: string, max = 60): string {
-  const flat = text.replace(/\s+/g, ' ').trim();
-  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
 export function renderSearchResults(seeds: readonly Seed[], write: Writer): void {
@@ -174,60 +127,42 @@ function toJson(seeds: readonly Seed[]): unknown {
   }));
 }
 
-export async function runSearch(
+export function runSearch(
   argv: readonly string[] = [],
   write: Writer = stdoutWriter,
 ): Promise<number> {
-  let flags: SearchFlags;
-  let config: Config;
-  try {
-    flags = parseSearchFlags(argv);
-    config = loadConfig(process.env);
-  } catch (err) {
-    stderrWriter(err instanceof ConfigError ? err.message : describeError(err));
-    return 1;
-  }
+  return withSubstrate({
+    spec: SPEC,
+    argv,
+    write,
+    parse: parseSearchFlags,
+    needsGraph: 'search',
+    run: async (substrate, flags) => {
+      const { config } = substrate;
+      const logger = substrate.logger();
+      const provider = new OllamaProvider({
+        baseUrl: config.ollama.url,
+        embedModel: config.models.embed,
+      });
+      const [vector] = await provider.embed([flags.query]);
+      if (vector === undefined) {
+        stderrWriter(`${config.models.embed} returned no embedding for the query`);
+        return 1;
+      }
 
-  const logger = openLogger({ ...config.logging, name: 'aion-search' });
-  const connection = new GraphConnection(config.neo4j);
-  try {
-    const health = await connection.health();
-    if (!health.reachable) {
-      stderrWriter(
-        `search needs Neo4j: ${connection.uri} unreachable: ${health.error ?? 'unknown error'}`,
+      const cue: SeedCue = { text: flags.query, source: 'raw_query', weight: 3, vector };
+      const selection = await selectSeeds(
+        { driver: substrate.connection().driver, config, logger },
+        { cues: [cue], mode: readModeFor(flags) },
       );
-      return 1;
-    }
 
-    const provider = new OllamaProvider({
-      baseUrl: config.ollama.url,
-      embedModel: config.models.embed,
-    });
-    const [vector] = await provider.embed([flags.query]);
-    if (vector === undefined) {
-      stderrWriter(`${config.models.embed} returned no embedding for the query`);
-      return 1;
-    }
-
-    const cue: SeedCue = { text: flags.query, source: 'raw_query', weight: 3, vector };
-    const mode = readModeFor(flags);
-    const selection = await selectSeeds(
-      { driver: connection.driver, config, logger },
-      { cues: [cue], mode },
-    );
-
-    if (flags.json) {
-      write(JSON.stringify(toJson(selection.seeds)));
-    } else {
-      renderSearchResults(selection.seeds, write);
-    }
-    logger.info({ query: flags.query, results: selection.seeds.length }, 'search served');
-    return 0;
-  } catch (err) {
-    logger.error({ err: describeError(err) }, 'search failed');
-    stderrWriter(describeError(err));
-    return 1;
-  } finally {
-    await connection.close();
-  }
+      if (flags.json) {
+        write(JSON.stringify(toJson(selection.seeds)));
+      } else {
+        renderSearchResults(selection.seeds, write);
+      }
+      logger.info({ query: flags.query, results: selection.seeds.length }, 'search served');
+      return 0;
+    },
+  });
 }

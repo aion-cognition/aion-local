@@ -70,6 +70,16 @@ describe('run', () => {
     expect(String(stdout.mock.calls[0]?.[0])).toContain('hooks');
   });
 
+  // The dispatcher forwards it rather than answering it, so the line names the command the
+  // user asked about instead of the whole catalog.
+  it('forwards --help to the command named and exits 0', async () => {
+    const stdout = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+
+    await expect(run(['why', '--help'])).resolves.toBe(0);
+
+    expect(String(stdout.mock.calls[0]?.[0])).toContain('usage: aion why <node_id>');
+  });
+
   it('reports an unknown command on stderr and exits 1', async () => {
     const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
 

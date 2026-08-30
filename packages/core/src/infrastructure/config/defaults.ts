@@ -11,14 +11,18 @@ import { DEFAULT_REINFORCEMENT_QUEUE_CAP } from '../sqlite/reinforcement-queue.j
  * per process. Three values below depart from a smaller candidate default; each says why
  * at the line.
  *
+ * This is the one home for every number a reflection stage or the worker runs on. A stage
+ * takes its value as a constructor option and falls back to the leaf here, so a knob and the
+ * pipeline that reads it cannot disagree; before, each stage restated its own copy and a test
+ * asserted the two still matched.
+ *
  * Reserved knobs: `recall.compressionThreshold` is declared and overridable but has no
  * reader yet, since narrative compression lands later. It is declared now because the
  * catalog is one document, and a knob added late is a knob whose name and range were never
- * reviewed; setting one today changes nothing. The context resonance and `hebbian.*` knobs
- * were reserved the same way and now have readers: the recall second pass, the reinforcement
- * flush, and the decay sweep. `maintenance.tier3` now gates the introspector's tier-3 seam,
- * which consults the advisor and records what it would have been asked; the model call
- * itself is still unbuilt, so turning it on changes what is logged and nothing that runs.
+ * reviewed; setting one today changes nothing. `maintenance.tier3` gates the introspector's
+ * tier-3 seam, which consults the advisor and records what it would have been asked; the
+ * model call itself is still unbuilt, so turning it on changes what is logged and nothing
+ * that runs.
  */
 export const DEFAULTS: Config = {
   neo4j: {
@@ -27,7 +31,6 @@ export const DEFAULTS: Config = {
   },
   ollama: {
     url: 'http://host.docker.internal:11434',
-    mode: 'baremetal',
   },
   models: {
     embed: 'nomic-embed-text',
@@ -143,7 +146,6 @@ export const DEFAULTS: Config = {
     decayPeakDays: 30,
     decaySigma: 15,
     batchSize: 100,
-    flushIntervalMs: 5000,
   },
   contextResonance: {
     // The cap on the scaled seed budget, raised from 10, which used to be the whole budget.
@@ -157,26 +159,23 @@ export const DEFAULTS: Config = {
     seedBudgetGrowth: 2,
     activationLimit: 50,
     resonantLimit: 20,
-    maxHops: 3,
-    activationThreshold: 0.1,
     contextSearchThreshold: 0.7,
   },
   /**
-   * Every value is the pinned default its stage already carries as a module constant, and
-   * `reflection-defaults.test.ts` asserts the two agree: config is where a knob is named and
-   * ranged, the stage is where it is used, and a silent divergence between them would ship a
-   * pipeline nobody configured. Two values, `supersedeAutoConfidence` (0.85) and
-   * `associationSemanticThreshold` (0.75), have no stage-owned constant to match against.
+   * Config is where a reflection knob is named, ranged, and given its number; the stage is
+   * where it is used. A stage reads the leaf here when a caller threads nothing, so the two
+   * cannot silently disagree.
    */
   reflection: {
-    entityTimeoutMs: 60_000,
+    // One guard for every generating stage. qwen3:8b with thinking on measured 10-44s with
+    // occasional non-returns, and the orchestrator imposes no timeout of its own, so a stage
+    // that never returns would hold the worker forever.
+    stageTimeoutMs: 60_000,
     maxEntities: 32,
     entityDedupThreshold: 0.85,
     associationSemanticThreshold: 0.75,
     associationSimilarLimit: 5,
-    cognitiveTimeoutMs: 60_000,
     maxCognitiveNodes: 20,
-    semanticTimeoutMs: 60_000,
     maxRelationships: 40,
     supersedeMode: 'propose',
     supersedeAutoConfidence: 0.85,
@@ -185,12 +184,10 @@ export const DEFAULTS: Config = {
     // a named subject: the evidence a family close needs on top of that is that they are about
     // the same thing, not that they nearly restate each other.
     supersedeFamilyRelatednessFloor: 0.6,
-    supersedeTimeoutMs: 60_000,
     maxSupersessionSubjects: 6,
     maxContradictionNeighbors: 3,
     maxContradictionJudgments: 8,
     narrativeIdleMinutes: 30,
-    narrativeTimeoutMs: 60_000,
     maxNarrativeEpisodes: 40,
     maxNarrativeEpisodeChars: 2_000,
     narrativeSweepLimit: 20,

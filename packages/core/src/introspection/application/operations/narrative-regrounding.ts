@@ -1,4 +1,3 @@
-import { reflectProvider, type ProviderFactory } from './routed-generation.js';
 import { cleanupNarratives } from '../../../reflection/application/narrative-cleanup.js';
 import { HEALTH_COLLECTORS, type HealthSnapshot } from '../../domain/health.js';
 import type { IntrospectionOperation, OperationOutcome } from '../../domain/operation.js';
@@ -23,10 +22,6 @@ export const NARRATIVE_REGROUNDING_OPERATION = 'narrative_regrounding';
 /** Mirrors `maintenance.narrativeCleanupBatch`'s own default; see `defaults.ts` for why. */
 const DEFAULT_NARRATIVE_BATCH = 10;
 
-export type NarrativeRegroundingOverrides = {
-  readonly buildProvider?: ProviderFactory;
-};
-
 export function narrativeRegroundingRelevance(health: HealthSnapshot): number {
   if (health.degraded.includes(HEALTH_COLLECTORS.graph)) {
     return 0;
@@ -34,11 +29,7 @@ export function narrativeRegroundingRelevance(health: HealthSnapshot): number {
   return Math.min(1, health.graph.staleNarratives / DEFAULT_NARRATIVE_BATCH);
 }
 
-export function narrativeRegroundingOperation(
-  overrides: NarrativeRegroundingOverrides = {},
-): IntrospectionOperation {
-  const buildProvider = overrides.buildProvider ?? reflectProvider;
-
+export function narrativeRegroundingOperation(): IntrospectionOperation {
   return {
     name: NARRATIVE_REGROUNDING_OPERATION,
     bucket: 'hour',
@@ -47,11 +38,11 @@ export function narrativeRegroundingOperation(
     improves: 'lower',
     run: async (ctx): Promise<OperationOutcome> => {
       const report = await cleanupNarratives(
-        { driver: ctx.driver, provider: buildProvider(ctx.config), logger: ctx.logger },
+        { driver: ctx.driver, provider: ctx.provider, logger: ctx.logger },
         {
           limit: ctx.config.maintenance.narrativeCleanupBatch,
           model: ctx.config.models.reflect,
-          timeoutMs: ctx.config.reflection.narrativeTimeoutMs,
+          timeoutMs: ctx.config.reflection.stageTimeoutMs,
           maxSourceEpisodes: ctx.config.reflection.maxNarrativeEpisodes,
           maxEpisodeChars: ctx.config.reflection.maxNarrativeEpisodeChars,
           now: ctx.now,

@@ -55,7 +55,7 @@ async function main(): Promise<void> {
       model: config.models.reflect,
       maxSourceEpisodes: config.reflection.maxNarrativeEpisodes,
       maxEpisodeChars: config.reflection.maxNarrativeEpisodeChars,
-      timeoutMs: config.reflection.narrativeTimeoutMs,
+      timeoutMs: config.reflection.stageTimeoutMs,
     });
     const remaining = await findStaleNarratives(
       connection.driver,

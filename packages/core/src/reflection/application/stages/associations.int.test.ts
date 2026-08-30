@@ -30,7 +30,6 @@ import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sql
 import { cliqueDiscount } from '../../../plasticity/domain/reinforcement.js';
 import { SessionManager } from '../../../session/session-manager.js';
 import type { StageContext, StageOutcome } from '../../domain/stage.js';
-import { ReflectionDispatch } from '../dispatch.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../intake.js';
 import { LaneAssigner } from '../lanes.js';
 
@@ -143,7 +142,6 @@ beforeAll(async () => {
       workspaceId: backbone.workspace.id,
     }),
     provider: fakeProvider(),
-    dispatch: new ReflectionDispatch(),
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),

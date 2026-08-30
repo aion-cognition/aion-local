@@ -470,7 +470,12 @@ describe('connection lifecycle', () => {
       const health = await connection.health();
       expect(health.reachable).toBe(true);
       expect(health.address).toBeTruthy();
-      const rows = await connection.read('RETURN 1 AS one', {}, (row) => row.one as number);
+      const rows = await runRead(
+        connection.driver,
+        'RETURN 1 AS one',
+        {},
+        (row) => row.one as number,
+      );
       expect(rows).toEqual([1]);
     } finally {
       await connection.close();

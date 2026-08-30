@@ -1,12 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
-import {
-  looksLikeNodeId,
-  MissingForgetTargetError,
-  parseForgetFlags,
-  UnknownForgetOptionError,
-} from './forget.js';
+import { looksLikeNodeId, parseForgetFlags } from './forget.js';
 
 describe('parseForgetFlags', () => {
   it('reads a bare id or query as the target', () => {
@@ -25,8 +20,10 @@ describe('parseForgetFlags', () => {
   });
 
   it('rejects a missing target and an unknown option', () => {
-    expect(() => parseForgetFlags([])).toThrow(MissingForgetTargetError);
-    expect(() => parseForgetFlags(['--bogus'])).toThrow(UnknownForgetOptionError);
+    expect(() => parseForgetFlags([])).toThrow('forget needs an id or a query');
+    expect(() => parseForgetFlags(['--bogus'])).toThrow(
+      "unknown option '--bogus' for forget (supported: --yes)",
+    );
   });
 });
 

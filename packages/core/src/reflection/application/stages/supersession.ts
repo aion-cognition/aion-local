@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
 import { RunTally } from './supersession-tally.js';
+import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
+import { describeError, isAbortError } from '../../../infrastructure/errors.js';
 import { supersede } from '../../../infrastructure/graph/bitemporal.js';
 import {
   findContradictionCandidates,
@@ -37,36 +39,13 @@ import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/s
 
 export const SUPERSESSION_STAGE_NAME = 'supersession';
 
-/** `config.models.reflect`'s default; callers thread the configured value in. */
-export const DEFAULT_SUPERSESSION_MODEL = 'qwen3:8b';
-
-/** Per judgment, not per run: qwen3:8b with thinking off still owes a guard on every call. */
-export const DEFAULT_SUPERSESSION_TIMEOUT_MS = 60_000;
-
 export type SupersessionMode = 'propose' | 'auto';
 
 /** The pinned `AION_SUPERSEDE_MODE`. Propose-only until precision is measured, not assumed. */
-export const DEFAULT_SUPERSEDE_MODE: SupersessionMode = 'propose';
+export const DEFAULT_SUPERSEDE_MODE: SupersessionMode = DEFAULTS.reflection.supersedeMode;
 
 /** The pinned `AION_SUPERSEDE_AUTO_CONFIDENCE`: the `auto` mode's threshold, read nowhere else. */
-export const DEFAULT_SUPERSEDE_AUTO_CONFIDENCE = 0.85;
-
-/**
- * How close two claims must sit before the widener spends a judgment on them. This gates the
- * KNN leg only: a candidate that names the subject is judged whatever its cosine, because a
- * concise restatement of a reversal measured 0.67 against the claim it reverses.
- */
-export const DEFAULT_CONTRADICTION_NEIGHBOR_THRESHOLD = 0.75;
-
-/**
- * The run's bound on model calls. Subjects and neighbours cap the fan-out; `maxJudgments`
- * caps the product, so one episode costs at most eight generate calls however many facts it
- * carried. At the measured think-false latency that keeps the stage inside roughly a minute,
- * matching every other stage's single-call budget.
- */
-export const DEFAULT_MAX_SUPERSESSION_SUBJECTS = 6;
-export const DEFAULT_MAX_CONTRADICTION_NEIGHBORS = 3;
-export const DEFAULT_MAX_CONTRADICTION_JUDGMENTS = 8;
+export const DEFAULT_SUPERSEDE_AUTO_CONFIDENCE = DEFAULTS.reflection.supersedeAutoConfidence;
 
 /** Applied only when the model omits the optional field: an unstated confidence never auto-applies. */
 const UNSTATED_CONFIDENCE = 0.5;
@@ -232,14 +211,6 @@ export async function judgeContradiction(
   };
 }
 
-function describeError(error: unknown): string {
-  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-}
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === 'AbortError';
-}
-
 /** A fact node that can actually search: text to judge and a vector to search with. */
 type FactSubject = EpisodeFactNode & { readonly contentVector: Vector };
 
@@ -249,14 +220,14 @@ export class SupersessionStage implements ReflectionStage {
 
   constructor(options: Partial<SupersessionStageOptions> = {}) {
     this.#options = {
-      model: DEFAULT_SUPERSESSION_MODEL,
-      timeoutMs: DEFAULT_SUPERSESSION_TIMEOUT_MS,
-      mode: DEFAULT_SUPERSEDE_MODE,
-      autoConfidence: DEFAULT_SUPERSEDE_AUTO_CONFIDENCE,
-      neighborThreshold: DEFAULT_CONTRADICTION_NEIGHBOR_THRESHOLD,
-      maxSubjects: DEFAULT_MAX_SUPERSESSION_SUBJECTS,
-      maxNeighbors: DEFAULT_MAX_CONTRADICTION_NEIGHBORS,
-      maxJudgments: DEFAULT_MAX_CONTRADICTION_JUDGMENTS,
+      model: DEFAULTS.models.reflect,
+      timeoutMs: DEFAULTS.reflection.stageTimeoutMs,
+      mode: DEFAULTS.reflection.supersedeMode,
+      autoConfidence: DEFAULTS.reflection.supersedeAutoConfidence,
+      neighborThreshold: DEFAULTS.reflection.supersedeNeighborThreshold,
+      maxSubjects: DEFAULTS.reflection.maxSupersessionSubjects,
+      maxNeighbors: DEFAULTS.reflection.maxContradictionNeighbors,
+      maxJudgments: DEFAULTS.reflection.maxContradictionJudgments,
       ...options,
     };
   }

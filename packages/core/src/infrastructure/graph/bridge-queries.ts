@@ -1,13 +1,14 @@
-import neo4j, { type Driver } from 'neo4j-driver';
+import type { Driver } from 'neo4j-driver';
 
 import { ACCESS_COUNT_PROPERTY } from './access-tracking.js';
-import { BITEMPORAL_PROPERTIES, writeStampedNodeInTransaction } from './bitemporal.js';
+import { currentOnly, writeStampedNodeInTransaction } from './bitemporal.js';
 import { COMMUNITY_PROPERTY } from './community-queries.js';
-import { inWriteTransaction, runRead } from './connection.js';
+import { inWriteTransaction, readFirst, runRead } from './connection.js';
 import { upsertEdgeInTransaction } from './edges.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
 import { ENTITY_NAME_PROPERTY } from './seed-queries.js';
-import { toGraphVector } from './values.js';
+import { toGraphInteger, toGraphVector } from './values.js';
+import { asCosine } from './vector-indexes.js';
 import type { Vector } from '../providers/types.js';
 
 /**
@@ -31,30 +32,13 @@ export const BRIDGE_SIMILARITY_PROPERTY = 'similarity';
 /** Enough of an endpoint to name it in the bridge's own text, short enough to stay a label. */
 const ENDPOINT_LABEL_LENGTH = 120;
 
-const CURRENT = (variable: string): string =>
-  [
-    `${variable}.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
-    `${variable}.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
-  ].join(' AND ');
-
-/** `LIMIT` is Cypher INTEGER; a plain JS number arrives as FLOAT and is rejected. */
-function toGraphInteger(value: number): unknown {
-  return neo4j.int(Math.trunc(value));
-}
-
-/**
- * `vector.similarity.cosine` rescales onto [0,1] the same way the vector index does, so the
- * result is converted back to a true cosine before anything compares or stores it.
- */
-const AS_COSINE = (expression: string): string => `(2.0 * ${expression} - 1.0)`;
-
 const ENDPOINT_LABEL = (variable: string): string =>
   `left(coalesce(${variable}.${ENTITY_NAME_PROPERTY}, ${variable}.${MEMORY_PROPERTIES.summary},` +
   ` ${variable}.${MEMORY_PROPERTIES.text}, ${variable}.id), ${String(ENDPOINT_LABEL_LENGTH)})`;
 
 const COUNT_BRIDGES_BETWEEN = [
   'MATCH (b:Bridge)',
-  `WHERE ${CURRENT('b')}`,
+  `WHERE ${currentOnly('b')}`,
   `  AND ((b.${BRIDGE_SOURCE_COMMUNITY_PROPERTY} = $left AND b.${BRIDGE_TARGET_COMMUNITY_PROPERTY} = $right)`,
   `   OR (b.${BRIDGE_SOURCE_COMMUNITY_PROPERTY} = $right AND b.${BRIDGE_TARGET_COMMUNITY_PROPERTY} = $left))`,
   'RETURN count(b) AS count',
@@ -66,13 +50,13 @@ export async function countBridgesBetween(
   left: number,
   right: number,
 ): Promise<number> {
-  const rows = await runRead(
+  const count = await readFirst(
     driver,
     COUNT_BRIDGES_BETWEEN,
     { left: toGraphInteger(left), right: toGraphInteger(right) },
     (row) => row.count as number,
   );
-  return rows[0] ?? 0;
+  return count ?? 0;
 }
 
 export type CrossCommunityPair = {
@@ -99,20 +83,20 @@ export type CrossCommunityPairInput = {
  */
 const FIND_CLOSEST_CROSS_COMMUNITY_PAIR = [
   'MATCH (a:Memory)',
-  `WHERE ${CURRENT('a')} AND a.${COMMUNITY_PROPERTY} = $left`,
+  `WHERE ${currentOnly('a')} AND a.${COMMUNITY_PROPERTY} = $left`,
   `  AND a.${MEMORY_PROPERTIES.contentVector} IS NOT NULL`,
   `  AND size(a.${MEMORY_PROPERTIES.contentVector}) = $dimension`,
   `WITH a ORDER BY coalesce(a.${ACCESS_COUNT_PROPERTY}, 0) DESC, a.id LIMIT $candidateLimit`,
   'WITH collect(a) AS lefts',
   'MATCH (b:Memory)',
-  `WHERE ${CURRENT('b')} AND b.${COMMUNITY_PROPERTY} = $right`,
+  `WHERE ${currentOnly('b')} AND b.${COMMUNITY_PROPERTY} = $right`,
   `  AND b.${MEMORY_PROPERTIES.contentVector} IS NOT NULL`,
   `  AND size(b.${MEMORY_PROPERTIES.contentVector}) = $dimension`,
   `WITH lefts, b ORDER BY coalesce(b.${ACCESS_COUNT_PROPERTY}, 0) DESC, b.id LIMIT $candidateLimit`,
   'WITH lefts, collect(b) AS rights',
   'UNWIND lefts AS a',
   'UNWIND rights AS b',
-  `WITH a, b, ${AS_COSINE(
+  `WITH a, b, ${asCosine(
     `vector.similarity.cosine(a.${MEMORY_PROPERTIES.contentVector}, b.${MEMORY_PROPERTIES.contentVector})`,
   )} AS score`,
   `RETURN a.id AS left_id, ${ENDPOINT_LABEL('a')} AS left_label,`,

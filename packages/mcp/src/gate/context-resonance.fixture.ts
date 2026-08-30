@@ -110,12 +110,6 @@ export const DISTRACTOR_WORLD: ResonanceWorld = {
   ],
 };
 
-export const RESONANCE_WORLDS: readonly ResonanceWorld[] = [
-  TARGET_WORLD,
-  DISTRACTOR_WORLD,
-  ANCHOR_WORLD,
-];
-
 /**
  * Sessions with an episode of their own, stored between the target's session and the anchor's.
  * Sessions chain, so without them the anchor's session is two `FOLLOWS` hops from the target's

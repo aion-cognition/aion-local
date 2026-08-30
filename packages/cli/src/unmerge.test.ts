@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  MissingUnmergeIdError,
-  parseUnmergeFlags,
-  UnknownUnmergeSubcommandError,
-} from './unmerge.js';
+import { parseUnmergeFlags } from './unmerge.js';
 
 describe('parseUnmergeFlags', () => {
   it('lists what one canonical entity absorbed', () => {
@@ -19,11 +15,15 @@ describe('parseUnmergeFlags', () => {
   });
 
   it('refuses either subcommand with no id', () => {
-    expect(() => parseUnmergeFlags(['ls'])).toThrow(MissingUnmergeIdError);
-    expect(() => parseUnmergeFlags(['apply'])).toThrow(MissingUnmergeIdError);
+    expect(() => parseUnmergeFlags(['ls'])).toThrow('unmerge ls needs a canonical entity id');
+    expect(() => parseUnmergeFlags(['apply'])).toThrow(
+      'unmerge apply needs the absorbed entity id',
+    );
   });
 
   it('refuses a subcommand it does not have', () => {
-    expect(() => parseUnmergeFlags(['split', 'entity-1'])).toThrow(UnknownUnmergeSubcommandError);
+    expect(() => parseUnmergeFlags(['split', 'entity-1'])).toThrow(
+      "unknown unmerge subcommand 'split' (supported: ls, apply)",
+    );
   });
 });

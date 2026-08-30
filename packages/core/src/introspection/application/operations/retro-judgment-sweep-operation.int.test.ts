@@ -19,11 +19,11 @@ import {
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger } from '../../../infrastructure/logging/logger.js';
 import { testGenerationProvider } from '../../../infrastructure/providers/test-support/generation-provider.js';
+import { refusingProvider } from '../../../infrastructure/providers/test-support/refusing-provider.fixture.js';
 import type { Provider, StructuredRequest } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { isLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
 import { listSupersessionProposals } from '../../../infrastructure/sqlite/supersession-proposals.js';
-import { ReflectionDispatch } from '../../../reflection/application/dispatch.js';
 import {
   handleReflection,
   type ReflectionIntakeDeps,
@@ -89,7 +89,6 @@ beforeAll(async () => {
       workspaceId: backbone.workspace.id,
     }),
     provider: live,
-    dispatch: new ReflectionDispatch(),
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
@@ -160,12 +159,13 @@ afterAll(async () => {
   rmSync(dataDir, { recursive: true, force: true });
 });
 
-function contextFor(): OperationContext {
+function contextFor(provider: Provider = refusingProvider): OperationContext {
   return {
     driver: harness.driver,
     db,
     config,
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
+    provider,
     health: healthFixture(),
     now: new Date(),
     signal: new AbortController().signal,
@@ -182,9 +182,7 @@ describe('retroJudgmentSweepOperation against a live graph', () => {
 
   it('proposes rather than closing, and marks both episodes swept', async () => {
     const calls: StructuredRequest[] = [];
-    const outcome = await retroJudgmentSweepOperation({
-      buildProvider: () => stubProvider(calls),
-    }).run(contextFor());
+    const outcome = await retroJudgmentSweepOperation().run(contextFor(stubProvider(calls)));
 
     expect(outcome.status).toBe('applied');
     expect(outcome.itemsProcessed).toBe(2);
@@ -207,9 +205,7 @@ describe('retroJudgmentSweepOperation against a live graph', () => {
 
   it('converges: a second run finds nothing left in the backlog', async () => {
     const calls: StructuredRequest[] = [];
-    const outcome = await retroJudgmentSweepOperation({
-      buildProvider: () => stubProvider(calls),
-    }).run(contextFor());
+    const outcome = await retroJudgmentSweepOperation().run(contextFor(stubProvider(calls)));
 
     expect(outcome.status).toBe('noop');
     expect(outcome.itemsProcessed).toBe(0);

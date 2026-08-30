@@ -1,4 +1,3 @@
-import { reflectProvider, type ProviderFactory } from './routed-generation.js';
 import { loadEpisodeContext } from '../../../infrastructure/graph/episode-context.js';
 import { findFactBearingEpisodesOldestFirst } from '../../../infrastructure/graph/retro-supersession-queries.js';
 import { isLedgerApplied, markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
@@ -34,15 +33,7 @@ const RETRO_SWEEP_SCAN_FACTOR = 10;
 /** The scan itself stays bounded regardless of how large the batch configures. */
 const RETRO_SWEEP_SCAN_CEILING = 500;
 
-export type RetroJudgmentSweepOverrides = {
-  readonly buildProvider?: ProviderFactory;
-};
-
-export function retroJudgmentSweepOperation(
-  overrides: RetroJudgmentSweepOverrides = {},
-): IntrospectionOperation {
-  const buildProvider = overrides.buildProvider ?? reflectProvider;
-
+export function retroJudgmentSweepOperation(): IntrospectionOperation {
   return {
     name: RETRO_JUDGMENT_SWEEP_OPERATION,
     bucket: 'day',
@@ -56,10 +47,9 @@ export function retroJudgmentSweepOperation(
       );
       const toJudge = unswept.slice(0, batch);
 
-      const provider = buildProvider(ctx.config);
       const stage = new SupersessionStage({
         model: ctx.config.models.reflect,
-        timeoutMs: ctx.config.reflection.supersedeTimeoutMs,
+        timeoutMs: ctx.config.reflection.stageTimeoutMs,
         mode: 'propose',
         autoConfidence: ctx.config.reflection.supersedeAutoConfidence,
         neighborThreshold: ctx.config.reflection.supersedeNeighborThreshold,
@@ -81,7 +71,7 @@ export function retroJudgmentSweepOperation(
         const stageCtx: StageContext = {
           driver: ctx.driver,
           db: ctx.db,
-          provider,
+          provider: ctx.provider,
           episodeId,
           episode,
           logger: ctx.logger,

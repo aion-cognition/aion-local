@@ -35,8 +35,13 @@ export type DecaySweepCounts = {
  * enough to touch from a sweep that has stopped running.
  */
 export function recordDecaySweep(db: SqliteHandle, counts: DecaySweepCounts): void {
-  const current = decaySweepCounters(db);
-  setMeta(db, DECAY_META_KEYS.edgesScanned, String(current.edgesScanned + counts.edgesScanned));
-  setMeta(db, DECAY_META_KEYS.edgesDecayed, String(current.edgesDecayed + counts.edgesDecayed));
-  setMeta(db, DECAY_META_KEYS.lastRunAt, counts.at);
+  // The read and the three writes are one unit: totals added to a base another sweep has
+  // already moved past are that sweep's totals thrown away. Immediate takes the write lock
+  // at BEGIN, so a second sweep waits out busy_timeout instead of failing on a stale snapshot.
+  db.transaction(() => {
+    const current = decaySweepCounters(db);
+    setMeta(db, DECAY_META_KEYS.edgesScanned, String(current.edgesScanned + counts.edgesScanned));
+    setMeta(db, DECAY_META_KEYS.edgesDecayed, String(current.edgesDecayed + counts.edgesDecayed));
+    setMeta(db, DECAY_META_KEYS.lastRunAt, counts.at);
+  }).immediate();
 }

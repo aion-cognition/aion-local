@@ -35,6 +35,14 @@ export const BITEMPORAL_PROPERTIES = {
   forgottenAt: 'forgotten_at',
 } as const;
 
+/** A node is current when open in both world time and system time: neither superseded nor forgotten. */
+export function currentOnly(variable: string): string {
+  return [
+    `${variable}.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
+    `${variable}.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  ].join(' AND ');
+}
+
 export type StampNewInput = {
   readonly label: NodeLabel;
   readonly id?: string;
@@ -174,10 +182,20 @@ export type SupersedeResult = {
   readonly edge: UpsertedEdge;
 };
 
+/**
+ * The `SET` clause every close writes: both timelines end at `$now`, `coalesce`d so a repeat
+ * close keeps the first call's timestamps rather than pushing them later.
+ */
+export function closeFragment(variable: string): string {
+  return [
+    `${variable}.${BITEMPORAL_PROPERTIES.validUntil} = coalesce(${variable}.${BITEMPORAL_PROPERTIES.validUntil}, $now)`,
+    `${variable}.${BITEMPORAL_PROPERTIES.txUntil} = coalesce(${variable}.${BITEMPORAL_PROPERTIES.txUntil}, $now)`,
+  ].join(',\n    ');
+}
+
 const CLOSE_SUPERSEDED_NODE = [
   `MATCH (old:${BASE_NODE_LABEL} { id: $oldId })`,
-  `SET old.${BITEMPORAL_PROPERTIES.validUntil} = coalesce(old.${BITEMPORAL_PROPERTIES.validUntil}, $now),`,
-  `    old.${BITEMPORAL_PROPERTIES.txUntil} = coalesce(old.${BITEMPORAL_PROPERTIES.txUntil}, $now)`,
+  `SET ${closeFragment('old')}`,
   `RETURN old.id AS id, old.${BITEMPORAL_PROPERTIES.validUntil} AS validUntil,`,
   `       old.${BITEMPORAL_PROPERTIES.txUntil} AS txUntil`,
 ].join('\n');

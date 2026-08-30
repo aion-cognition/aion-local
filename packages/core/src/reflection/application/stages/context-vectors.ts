@@ -1,3 +1,4 @@
+import { describeError } from '../../../infrastructure/errors.js';
 import {
   findAffectedNodeIds,
   findNeighborContentVectors,
@@ -46,8 +47,4 @@ export class ContextVectorStage implements ReflectionStage {
       };
     }
   }
-}
-
-function describeError(error: unknown): string {
-  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
 }

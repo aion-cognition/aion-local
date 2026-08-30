@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { renderStats, type StatsSnapshot } from './stats.js';
+import { renderStats, runStats, type StatsSnapshot } from './stats.js';
 
 function collector(): { lines: string[]; write: (line: string) => void } {
   const lines: string[] = [];
@@ -176,5 +176,31 @@ describe('renderStats', () => {
     expect(text).toContain('calls        0 across 0 sessions');
     expect(text).toContain('empty packs  0');
     expect(text).toContain('degraded     no recalls measured yet');
+  });
+});
+
+describe('aion stats argument handling', () => {
+  it('prints its usage and exits 0 on --help', async () => {
+    const { lines, write } = collector();
+
+    expect(await runStats(['--help'], write)).toBe(0);
+
+    expect(lines).toEqual(['usage: aion stats']);
+  });
+
+  // `aion stats --help` used to run stats, so an unknown flag has to be visible rather than
+  // ignored by a command that reads no arguments.
+  it('refuses an unknown flag rather than running', async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const { lines, write } = collector();
+    try {
+      expect(await runStats(['--bogus'], write)).toBe(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
+
+    expect(lines).toEqual([]);
+    expect(String(stderr.mock.calls[0]?.[0])).toContain("unknown option '--bogus' for stats");
+    expect(String(stderr.mock.calls[1]?.[0])).toContain('usage: aion stats');
   });
 });

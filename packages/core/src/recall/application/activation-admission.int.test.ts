@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { CueCache } from './cues.js';
 import { handleRecall, type RecallDeps } from './recall.js';
+import { waitFor } from './test-support/wait-for.fixture.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
@@ -19,7 +20,6 @@ import {
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider, Vector } from '../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { ReflectionDispatch } from '../../reflection/application/dispatch.js';
 import { handleReflection } from '../../reflection/application/intake.js';
 import { LaneAssigner } from '../../reflection/application/lanes.js';
 import { SessionManager } from '../../session/session-manager.js';
@@ -105,19 +105,6 @@ let answerEpisodeId: string;
 let anchorEpisodeId: string;
 let unrelatedEpisodeId: string;
 
-async function waitFor(label: string, ready: () => Promise<boolean>): Promise<void> {
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    if (await ready()) {
-      return;
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 250);
-    });
-  }
-  throw new Error(`timed out waiting for ${label}`);
-}
-
 async function push(observation: string, now: Date): Promise<string> {
   const result = await handleReflection(
     {
@@ -125,7 +112,6 @@ async function push(observation: string, now: Date): Promise<string> {
       db,
       sessions: deps.sessions,
       provider,
-      dispatch: new ReflectionDispatch(),
       logger,
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
       lanes: new LaneAssigner(DEFAULTS.lanes),

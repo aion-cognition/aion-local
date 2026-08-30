@@ -35,13 +35,6 @@ export default defineConfig([
     rules: { 'max-lines': 'off' },
   },
   {
-    // TEMPORARY: the service class carries HTTP routing, session bookkeeping, and the
-    // health surface in one file and sits just over the cap. The quality sweep owns the
-    // split; the cap comes back when it lands.
-    files: ['packages/mcp/src/service.ts'],
-    rules: { 'max-lines': 'off' },
-  },
-  {
     // Standalone scripts that child_process spawns directly. They sit outside
     // tsconfig.tests.json on purpose, so type-aware linting cannot see them.
     files: [
@@ -49,32 +42,5 @@ export default defineConfig([
       'packages/core/src/infrastructure/sqlite/concurrent-writer.fixture.ts',
     ],
     extends: [tseslint.configs.disableTypeChecked],
-  },
-  {
-    // TEMPORARY: these files consume service and driver responses untyped, so the
-    // unsafe-* family fires on every downstream access. The fix is typing each
-    // boundary once, not annotating hundreds of sites; that lands with the
-    // boundary-typing sweep. Remove this block when it does.
-    files: [
-      'packages/mcp/src/bootstrap.ts',
-      'packages/cli/src/doctor.ts',
-      'packages/cli/src/proposals.ts',
-      'packages/cli/src/stats.ts',
-      'packages/cli/src/why.ts',
-      'packages/cli/src/status.ts',
-      'packages/cli/src/maintain.ts',
-      'packages/cli/src/queue.ts',
-      'packages/cli/src/unmerge.ts',
-      'packages/cli/src/search.ts',
-      'packages/cli/src/forget.ts',
-      'packages/cli/src/last.ts',
-    ],
-    rules: {
-      '@typescript-eslint/no-unsafe-assignment': 'off',
-      '@typescript-eslint/no-unsafe-argument': 'off',
-      '@typescript-eslint/no-unsafe-call': 'off',
-      '@typescript-eslint/no-unsafe-member-access': 'off',
-      '@typescript-eslint/no-unsafe-return': 'off',
-    },
   },
 ]);

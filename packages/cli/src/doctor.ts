@@ -1,14 +1,10 @@
 import {
   assertVectorIndexDimensions,
   checkOllamaReachable,
-  ConfigError,
   EmbedDimensionMismatchError,
-  GraphConnection,
   latestAppliedGraphMigration,
-  loadConfig,
   localChatModels,
   measureAdmissionFloor,
-  openLogger,
   OllamaProvider,
   queueLagSnapshot,
   readVectorIndexes,
@@ -16,18 +12,25 @@ import {
   remoteRoutes,
   resolveProviderRouting,
   scanRedactionResidue,
-  SqliteStore,
   verifyGdsAvailable,
   verifyOllamaChatModel,
   type Config,
+  type GraphConnection,
   type SqliteHandle,
 } from '@aion/core';
 import { HEALTH_PATH } from '@aion/mcp';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
+import { parseArgs, type ArgSpec } from './args.js';
 import { mcpBaseUrl } from './compose.js';
-import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
+import { describeError, stdoutWriter, type Writer } from './output.js';
+import { withSubstrate } from './substrate.js';
+
+const SPEC: ArgSpec = {
+  command: 'doctor',
+  usage: 'aion doctor',
+};
 
 export type CheckResult = {
   readonly ok: boolean;
@@ -58,6 +61,26 @@ export type DoctorDeps = {
   readonly db: SqliteHandle;
 };
 
+/** Everything the two probes read off `/health`, typed once at the one place it is decoded. */
+type HealthPayload = {
+  readonly status?: unknown;
+  readonly sessions?: unknown;
+  readonly build_sha?: unknown;
+};
+
+type HealthRead =
+  | { readonly url: string; readonly body: HealthPayload }
+  | { readonly url: string; readonly failure: CheckResult };
+
+async function readHealth(port: number, fetchImpl: typeof fetch): Promise<HealthRead> {
+  const url = `${mcpBaseUrl(port)}${HEALTH_PATH}`;
+  const response = await fetchImpl(url);
+  if (!response.ok) {
+    return { url, failure: { ok: false, detail: `${String(response.status)} from ${url}` } };
+  }
+  return { url, body: (await response.json()) as HealthPayload };
+}
+
 /**
  * `/health` is liveness-only (never touches Neo4j or Ollama), so a 200 here means the
  * process is up and nothing more; substrate health is the other checks' job.
@@ -66,12 +89,11 @@ export async function probeMcpHttp(
   port: number,
   fetchImpl: typeof fetch = fetch,
 ): Promise<CheckResult> {
-  const url = `${mcpBaseUrl(port)}${HEALTH_PATH}`;
-  const response = await fetchImpl(url);
-  if (!response.ok) {
-    return { ok: false, detail: `${String(response.status)} from ${url}` };
+  const read = await readHealth(port, fetchImpl);
+  if ('failure' in read) {
+    return read.failure;
   }
-  const body = (await response.json()) as { status?: unknown; sessions?: unknown };
+  const { url, body } = read;
   if (body.status !== 'ok') {
     return { ok: false, detail: `unexpected health payload from ${url}: ${JSON.stringify(body)}` };
   }
@@ -88,13 +110,11 @@ export async function probeServiceFreshness(
   repoHeadSha: string | undefined,
   fetchImpl: typeof fetch = fetch,
 ): Promise<CheckResult> {
-  const url = `${mcpBaseUrl(port)}${HEALTH_PATH}`;
-  const response = await fetchImpl(url);
-  if (!response.ok) {
-    return { ok: false, detail: `${String(response.status)} from ${url}` };
+  const read = await readHealth(port, fetchImpl);
+  if ('failure' in read) {
+    return read.failure;
   }
-  const body = (await response.json()) as { build_sha?: unknown };
-  const running = typeof body.build_sha === 'string' ? body.build_sha : 'unstamped';
+  const running = typeof read.body.build_sha === 'string' ? read.body.build_sha : 'unstamped';
   if (running === 'unstamped') {
     return {
       ok: true,
@@ -449,28 +469,25 @@ export function summarize(reports: readonly CheckReport[], write: Writer): numbe
   return 1;
 }
 
-export async function runDoctor(
-  _argv: readonly string[] = [],
+export function runDoctor(
+  argv: readonly string[] = [],
   write: Writer = stdoutWriter,
 ): Promise<number> {
-  let config: Config;
-  try {
-    config = loadConfig(process.env);
-  } catch (err) {
-    stderrWriter(err instanceof ConfigError ? err.message : describeError(err));
-    return 1;
-  }
-
-  const logger = openLogger({ ...config.logging, name: 'aion-doctor' });
-  const store = new SqliteStore({ filePath: config.sqlite.path });
-  const connection = new GraphConnection(config.neo4j);
-  try {
-    const reports = await runChecks(buildDoctorChecks({ config, connection, db: store.db }), write);
-    const code = summarize(reports, write);
-    logger.info({ reports, code }, 'doctor finished');
-    return code;
-  } finally {
-    await connection.close();
-    store.close();
-  }
+  return withSubstrate({
+    spec: SPEC,
+    argv,
+    write,
+    parse: (args) => parseArgs(SPEC, args),
+    run: async (substrate) => {
+      const deps: DoctorDeps = {
+        config: substrate.config,
+        connection: substrate.connection(),
+        db: substrate.db(),
+      };
+      const reports = await runChecks(buildDoctorChecks(deps), write);
+      const code = summarize(reports, write);
+      substrate.logger().info({ reports, code }, 'doctor finished');
+      return code;
+    },
+  });
 }

@@ -13,6 +13,7 @@ import type {
   EntityExtractionResult,
   ExtractorOutcome,
 } from './types.js';
+import { describeError, formatZodError } from '../../../infrastructure/errors.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../../infrastructure/providers/types.js';
 
 /**
@@ -26,14 +27,6 @@ export type ProviderGenerateDeps = {
   readonly model: string;
   readonly timeoutMs?: number;
 };
-
-function describeError(error: unknown): string {
-  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-}
-
-function formatZodError(error: z.ZodError): string {
-  return error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ');
-}
 
 /**
  * One structured-output call, timed and guarded. Reasoning buys nothing for extraction and

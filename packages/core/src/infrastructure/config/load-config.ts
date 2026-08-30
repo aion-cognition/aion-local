@@ -4,6 +4,7 @@ import {
   knownEnvVars,
   KNOB_REGISTRY,
   RESERVED_ENV_VARS,
+  RETIRED_ENV_VARS,
   type Knob,
   type KnobKind,
 } from './registry.js';
@@ -87,7 +88,8 @@ function collectUnknownVars(env: NodeJS.ProcessEnv): string[] {
       key.startsWith(AION_PREFIX) &&
       env[key] !== undefined &&
       !known.has(key) &&
-      !RESERVED_ENV_VARS.has(key)
+      !RESERVED_ENV_VARS.has(key) &&
+      !RETIRED_ENV_VARS.has(key)
     ) {
       unknown.push(key);
     }

@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { DedupFakeGraph } from './entity-dedup.fixture.js';
-import { DEFAULT_ENTITY_DEDUP_SIMILARITY_THRESHOLD, EntityDedupStage } from './entity-dedup.js';
+import { EntityDedupStage } from './entity-dedup.js';
+import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { ACCESS_COUNT_PROPERTY } from '../../../infrastructure/graph/access-tracking.js';
 import { BITEMPORAL_PROPERTIES } from '../../../infrastructure/graph/bitemporal.js';
 import {
@@ -296,7 +297,7 @@ describe('grouping and canonical selection', () => {
     });
     mention(EPISODE_ID, 'a', 1);
 
-    expect(DEFAULT_ENTITY_DEDUP_SIMILARITY_THRESHOLD).toBe(0.85);
+    expect(DEFAULTS.reflection.entityDedupThreshold).toBe(0.85);
     const strict = await new EntityDedupStage().run(context());
     expect(strict.counts).toMatchObject({ merges: 0 });
 

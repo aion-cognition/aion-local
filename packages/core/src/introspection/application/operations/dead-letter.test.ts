@@ -8,6 +8,7 @@ import { deadLetterOperation } from './dead-letter.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
+import { refusingProvider } from '../../../infrastructure/providers/test-support/refusing-provider.fixture.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { countDeadLetterAttention } from '../../../infrastructure/sqlite/dead-letter-queue.js';
 import {
@@ -59,6 +60,7 @@ function ctxFor(overrides: Partial<OperationContext> = {}): OperationContext {
     db,
     config,
     logger,
+    provider: refusingProvider,
     health: healthFixture(),
     now: NOW,
     signal: new AbortController().signal,

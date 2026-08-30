@@ -1,9 +1,9 @@
-import neo4j, { type Driver } from 'neo4j-driver';
+import type { Driver } from 'neo4j-driver';
 
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { runRead } from './connection.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
-import { BASE_NODE_LABEL } from './labels.js';
+import { BASE_NODE_LABEL, MEMORY_LABEL } from './labels.js';
 import {
   readCurrencyAnnotation,
   readModeFragment,
@@ -11,8 +11,8 @@ import {
   type ReadFragment,
   type ReadMode,
 } from './read-modes.js';
-import { fromGraphVector, toGraphVector, type Row } from './values.js';
-import { CONTENT_VECTOR_INDEX, CONTEXT_VECTOR_INDEX } from './vector-indexes.js';
+import { fromGraphVector, toGraphInteger, toGraphVector, type Row } from './values.js';
+import { asCosine, CONTENT_VECTOR_INDEX, CONTEXT_VECTOR_INDEX } from './vector-indexes.js';
 import type { Vector } from '../providers/types.js';
 import { foldName } from '../providers/unicode-fold.js';
 
@@ -28,9 +28,6 @@ export { countMemoryNodes, memoryPopulation } from './memory-population.js';
 
 /** Migration 001's fulltext index over `Episode.summary`, `Turn.text`, `Entity.name`. */
 export const CONTENT_FULLTEXT_INDEX = 'memory_content_fts';
-
-/** The shared label migration 001 hangs the vector and range indexes on. */
-const MEMORY_LABEL = 'Memory';
 
 export const ENTITY_NAME_PROPERTY = 'name';
 export const ENTITY_NAME_NORM_PROPERTY = 'name_norm';
@@ -50,20 +47,6 @@ export const STRUCTURAL_PROPERTY = 'is_structural';
 
 /** An exact identity match is the strongest signal a seed can carry, so it enters the merge at the ceiling. */
 export const EXACT_NAME_MATCH_SCORE = 1;
-
-/**
- * Neo4j reports cosine similarity rescaled onto [0,1] as `(1 + cos) / 2` (both the vector
- * index and `vector.similarity.cosine`), so two unrelated memories come back at 0.5 rather
- * than at 0. Every score this module returns is converted back to a true cosine, because the
- * thresholds it is measured against (`AION_VECTOR_ADMISSION_FLOOR`,
- * `AION_RECALL_ENTITY_MATCH_THRESHOLD`) are cosines: read raw, a floor of 0.5 would admit
- * every row the index cared to return.
- */
-const RESCALED_COSINE_TO_COSINE = '2.0 * %s - 1.0';
-
-function asCosine(scoreExpression: string): string {
-  return RESCALED_COSINE_TO_COSINE.replace('%s', scoreExpression);
-}
 
 export type SeedCandidate = CurrencyAnnotation & {
   readonly id: string;
@@ -137,11 +120,6 @@ export function lucenePhraseQuery(text: string): string {
     return '';
   }
   return `"${escaped}"`;
-}
-
-/** Procedure arguments and `LIMIT` are Cypher INTEGER; a plain JS number arrives as FLOAT and is rejected. */
-function toGraphInteger(value: number): unknown {
-  return neo4j.int(Math.trunc(value));
 }
 
 function candidateProjection(nodeVar: string, fragment: ReadFragment): string {

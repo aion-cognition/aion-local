@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { ReflectionDispatch } from './dispatch.js';
 import { handleReflection, type ReflectionIntakeDeps } from './intake.js';
 import { LaneAssigner } from './lanes.js';
 import {
@@ -241,7 +240,6 @@ beforeAll(async () => {
       workspaceId: backbone.workspace.id,
     }),
     provider: provider(),
-    dispatch: new ReflectionDispatch(),
     logger,
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
