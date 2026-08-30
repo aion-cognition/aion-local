@@ -31,6 +31,7 @@
       "maxResonant": 5,
       "useContextResonance": true,
       "sessionDedup": true,
+      "ownSessionFilter": true,
       "associationStrength": 0.1,
       "compressionThreshold": 512,
       "cueBudgetMs": 8000,
@@ -231,6 +232,7 @@
     "AION_RECALL_MAX_NARRATIVES -> recall.maxNarratives : number",
     "AION_RECALL_MAX_PREFERENCES -> recall.maxPreferences : number",
     "AION_RECALL_MAX_RESONANT -> recall.maxResonant : number",
+    "AION_RECALL_OWN_SESSION_FILTER -> recall.ownSessionFilter : boolean",
     "AION_RECALL_SESSION_DEDUP -> recall.sessionDedup : boolean",
     "AION_RECALL_TOKEN_BUDGET -> recall.tokenBudget : number",
     "AION_RECALL_USE_CONTEXT_RESONANCE -> recall.useContextResonance : boolean",
@@ -735,6 +737,10 @@
     "AION_RECALL_MAX_RESONANT=0.5": "ConfigError Invalid configuration:\nAION_RECALL_MAX_RESONANT: Invalid input: expected int, received number",
     "AION_RECALL_MAX_RESONANT=1.5": "ConfigError Invalid configuration:\nAION_RECALL_MAX_RESONANT: Invalid input: expected int, received number",
     "AION_RECALL_MAX_RESONANT=2": "ok 2",
+    "AION_RECALL_OWN_SESSION_FILTER=true": "ok true",
+    "AION_RECALL_OWN_SESSION_FILTER=false": "ok false",
+    "AION_RECALL_OWN_SESSION_FILTER=yes": "ConfigError Invalid configuration:\nAION_RECALL_OWN_SESSION_FILTER: Invalid input: expected boolean, received string",
+    "AION_RECALL_OWN_SESSION_FILTER=1": "ConfigError Invalid configuration:\nAION_RECALL_OWN_SESSION_FILTER: Invalid input: expected boolean, received string",
     "AION_RECALL_SESSION_DEDUP=true": "ok true",
     "AION_RECALL_SESSION_DEDUP=false": "ok false",
     "AION_RECALL_SESSION_DEDUP=yes": "ConfigError Invalid configuration:\nAION_RECALL_SESSION_DEDUP: Invalid input: expected boolean, received string",
@@ -1474,6 +1480,8 @@
     "recall.maxResonant=2": "ok",
     "recall.maxResonant=NaN": "recall.maxResonant: Invalid input: expected number, received NaN",
     "recall.maxResonant=\"text\"": "recall.maxResonant: Invalid input: expected number, received string",
+    "recall.ownSessionFilter=\"true\"": "recall.ownSessionFilter: Invalid input: expected boolean, received string",
+    "recall.ownSessionFilter=1": "recall.ownSessionFilter: Invalid input: expected boolean, received number",
     "recall.sessionDedup=\"true\"": "recall.sessionDedup: Invalid input: expected boolean, received string",
     "recall.sessionDedup=1": "recall.sessionDedup: Invalid input: expected boolean, received number",
     "recall.tokenBudget=-1": "recall.tokenBudget: Too small: expected number to be >0",
@@ -1766,6 +1774,6 @@
     "reserved var list": "AION_BUILD_SHA, AION_GIT_USER_NAME, AION_REPO_HEAD_SHA, AION_REPO_PATH",
     "schema accepts DEFAULTS": "ok",
     "schema rejects an empty object": "rejected",
-    "default key order": "neo4j: uri,password | ollama: url | models: embed,embedDimension,cue,reflect | anthropic: apiKey,model | routing: cue,reflect | recall: maxHops,vectorLimit,maxFacts,maxEpisodes,maxNarratives,maxPreferences,maxResonant,useContextResonance,sessionDedup,associationStrength,compressionThreshold,cueBudgetMs,tokenBudget,vectorAdmissionFloor,corroborationFloor,bm25AdmissionMode,entityMatchThreshold,clusterCap,entityGlossCap,restatementFloor,decisionBoost,relatedClaimFloor | search: methods,reranker,rrfConstant,mmrLambda,weights | activation: maxIterations,decayFactor,minActivation,maxNodesVisited,hubThreshold | hebbian: weightFloor,learningRate,decayRate,decayPeakDays,decaySigma,batchSize | contextResonance: seedLimit,seedBudgetBase,seedBudgetGrowth,activationLimit,resonantLimit,contextSearchThreshold | reflection: stageTimeoutMs,maxEntities,entityDedupThreshold,associationSemanticThreshold,associationSimilarLimit,maxCognitiveNodes,maxRelationships,supersedeMode,supersedeAutoConfidence,supersedeNeighborThreshold,supersedeFamilyRelatednessFloor,maxSupersessionSubjects,maxContradictionNeighbors,maxContradictionJudgments,narrativeIdleMinutes,maxNarrativeEpisodes,maxNarrativeEpisodeChars,narrativeSweepLimit | lanes: arrivalWindowMs,sessionArrivalMax,globalArrivalMax,hotSessionArrivalMax | redaction: entropyThreshold | maintenance: tier3,autoMerge,tickMinutes,starvationCycles,urgencyThreshold,effectivenessFloor,vectorBackfillBatchSize,contextRefreshBatchSize,reconcileBatchSize,deadLetterBatchSize,redactionPurgeBatchSize,narrativeCleanupBatch,retroSupersessionBatch,descriptionRefreshBatch,descriptionRefreshMentionGrowth,backboneRepairBatch,orphanCleanupBatch,orphanForgetAfterDays,communityNodeLimit,communityMinNodes,bridgeMinCommunitySize,bridgeOverlapCeiling | sqlite: path,reinforcementQueueCap | operational: dataDir,mcpPort,workerCount,workerStaleClaimTimeoutMs,workerRetryBaseMs,workerRetryCapMs,workerMaxAttempts,workerBreakerThreshold,workerBreakerCooldownMs,workerVectorBatchSize,reconcileWarnThreshold,lagOldestUnclaimedWarnMs,lagQueueDepthWarnThreshold,sessionIdleExpiryMinutes | logging: filePath,level"
+    "default key order": "neo4j: uri,password | ollama: url | models: embed,embedDimension,cue,reflect | anthropic: apiKey,model | routing: cue,reflect | recall: maxHops,vectorLimit,maxFacts,maxEpisodes,maxNarratives,maxPreferences,maxResonant,useContextResonance,sessionDedup,ownSessionFilter,associationStrength,compressionThreshold,cueBudgetMs,tokenBudget,vectorAdmissionFloor,corroborationFloor,bm25AdmissionMode,entityMatchThreshold,clusterCap,entityGlossCap,restatementFloor,decisionBoost,relatedClaimFloor | search: methods,reranker,rrfConstant,mmrLambda,weights | activation: maxIterations,decayFactor,minActivation,maxNodesVisited,hubThreshold | hebbian: weightFloor,learningRate,decayRate,decayPeakDays,decaySigma,batchSize | contextResonance: seedLimit,seedBudgetBase,seedBudgetGrowth,activationLimit,resonantLimit,contextSearchThreshold | reflection: stageTimeoutMs,maxEntities,entityDedupThreshold,associationSemanticThreshold,associationSimilarLimit,maxCognitiveNodes,maxRelationships,supersedeMode,supersedeAutoConfidence,supersedeNeighborThreshold,supersedeFamilyRelatednessFloor,maxSupersessionSubjects,maxContradictionNeighbors,maxContradictionJudgments,narrativeIdleMinutes,maxNarrativeEpisodes,maxNarrativeEpisodeChars,narrativeSweepLimit | lanes: arrivalWindowMs,sessionArrivalMax,globalArrivalMax,hotSessionArrivalMax | redaction: entropyThreshold | maintenance: tier3,autoMerge,tickMinutes,starvationCycles,urgencyThreshold,effectivenessFloor,vectorBackfillBatchSize,contextRefreshBatchSize,reconcileBatchSize,deadLetterBatchSize,redactionPurgeBatchSize,narrativeCleanupBatch,retroSupersessionBatch,descriptionRefreshBatch,descriptionRefreshMentionGrowth,backboneRepairBatch,orphanCleanupBatch,orphanForgetAfterDays,communityNodeLimit,communityMinNodes,bridgeMinCommunitySize,bridgeOverlapCeiling | sqlite: path,reinforcementQueueCap | operational: dataDir,mcpPort,workerCount,workerStaleClaimTimeoutMs,workerRetryBaseMs,workerRetryCapMs,workerMaxAttempts,workerBreakerThreshold,workerBreakerCooldownMs,workerVectorBatchSize,reconcileWarnThreshold,lagOldestUnclaimedWarnMs,lagQueueDepthWarnThreshold,sessionIdleExpiryMinutes | logging: filePath,level"
   }
 }

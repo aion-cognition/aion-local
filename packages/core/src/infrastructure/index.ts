@@ -137,6 +137,10 @@ export { findEpisodeCognitiveNodes } from './graph/semantic-relationship-queries
 
 export { fetchAdjacency } from './graph/adjacency.js';
 
+export { fetchItemOrigins } from './graph/origin-queries.js';
+
+export type { ItemOrigin } from './graph/origin-queries.js';
+
 export { fulltextSeeds, lucenePhraseQuery, vectorSeeds } from './graph/seed-queries.js';
 
 export {

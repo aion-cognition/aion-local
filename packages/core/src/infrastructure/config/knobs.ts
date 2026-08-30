@@ -121,6 +121,12 @@ export const KNOBS = {
     // repeat spends the pack's whole budget on text the agent is still reading. Off restores
     // the full pack on every call, which is what a caller that keeps no conversation wants.
     sessionDedup: ['AION_RECALL_SESSION_DEDUP', z.boolean(), true],
+    // Whether a session is handed back memories made out of its own turns. On by default: a turn
+    // is reflected into the graph at stop, and the next prompt's recall finds that turn and the
+    // claims extracted from it as memories the session has never been served, while the
+    // conversation that produced them is still holding every word. Off restores them, which is
+    // what a caller inspecting what its own session wrote wants.
+    ownSessionFilter: ['AION_RECALL_OWN_SESSION_FILTER', z.boolean(), true],
     // At `hebbian.weightFloor`, deliberately. Decay clamps a weight at the floor so a faded
     // pathway stays traversable, and a traversal cutoff above the floor would sever the whole
     // band the clamp exists to keep. Fading is proportional (spreading activation scales

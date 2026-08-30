@@ -87,14 +87,14 @@ const provider: Provider = {
  * the shipped budget the vector leg returns the answer directly and the run stops proving
  * anything about traversal.
  *
- * The session subtraction is off: every test recalls the same query in the same session, and
+ * Both session subtractions are off: every test recalls the same query in the same session, and
  * what is measured is what the spread reaches rather than what that session already holds.
  */
 function config(): Config {
   return {
     ...DEFAULTS,
     models: { ...DEFAULTS.models, embedDimension: EMBED_DIMENSION },
-    recall: { ...DEFAULTS.recall, vectorLimit: 1, sessionDedup: false },
+    recall: { ...DEFAULTS.recall, vectorLimit: 1, sessionDedup: false, ownSessionFilter: false },
     contextResonance: { ...DEFAULTS.contextResonance, seedLimit: 1 },
   };
 }

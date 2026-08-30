@@ -5,6 +5,7 @@ import type { SeedCue } from './seeds.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { normalizeCognitiveText } from '../../infrastructure/graph/cognitive-queries.js';
 import { listSessionEpisodeIds } from '../../infrastructure/graph/episodes.js';
+import { fetchItemOrigins, type ItemOrigin } from '../../infrastructure/graph/origin-queries.js';
 import type { ReadMode } from '../../infrastructure/graph/read-modes.js';
 import { findRelatedClaims } from '../../infrastructure/graph/related-claim-queries.js';
 import {
@@ -152,6 +153,33 @@ export async function relatedClaims(
     return new Map(rows.map((row) => [row.turnId, { id: row.id, text: row.text }]));
   } catch (err) {
     deps.logger.warn({ err }, 'related-claim lookup failed; the resonant turns go unannotated');
+    return new Map();
+  }
+}
+
+/**
+ * Which sessions produced each candidate, in one batched read beside the related-claim
+ * lookup rather than a question per item. It runs late because the candidate set is only final
+ * after the second pass, and it asks about ids the run already holds, so it costs the call a
+ * round trip it overlaps with the read next to it.
+ *
+ * Best-effort, and the empty answer is the safe one: an outage here leaves every item served,
+ * which is the behavior of the knob turned off rather than a pack missing memories nobody can
+ * explain.
+ */
+export async function itemOrigins(
+  deps: StageReadDeps,
+  ids: readonly string[],
+  sessionId: string,
+  mode: ReadMode,
+): Promise<ReadonlyMap<string, ItemOrigin>> {
+  if (ids.length === 0) {
+    return new Map();
+  }
+  try {
+    return await fetchItemOrigins(deps.driver, { ids, sessionId, mode });
+  } catch (err) {
+    deps.logger.warn({ err, sessionId }, 'origin lookup failed; the pack repeats what it holds');
     return new Map();
   }
 }

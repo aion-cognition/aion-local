@@ -16,6 +16,7 @@ import { selectSeeds, type Seed } from './seeds.js';
 import {
   embedCues,
   hydrate,
+  itemOrigins,
   measureArrivals,
   mmrVectors,
   pendingEnrichment,
@@ -24,6 +25,7 @@ import {
 import type { Config } from '../../infrastructure/config/schema.js';
 import { roundMs } from '../../infrastructure/errors.js';
 import { fetchAdjacency } from '../../infrastructure/graph/adjacency.js';
+import type { ItemOrigin } from '../../infrastructure/graph/origin-queries.js';
 import {
   asOf,
   bitemporalAt,
@@ -55,6 +57,7 @@ import { fuse, type FusedItem, type FusionResult } from '../domain/fusion.js';
 import type { BucketCaps } from '../domain/pack-buckets.js';
 import { assemblePack, packMethods } from '../domain/pack.js';
 import { servedRecords, suppressedRepeats } from '../domain/session-dedup.js';
+import { suppressedOwnSession } from '../domain/session-origin.js';
 
 /**
  * The recall pipeline, in the order its stages run. Cue extraction spends the one generation
@@ -109,6 +112,9 @@ export type RecallOptions = {
   readonly identity: string;
   readonly now?: Date;
 };
+
+/** What a disabled knob and a time-traveled read both hand the origin subtraction. */
+const NO_ORIGINS: ReadonlyMap<string, ItemOrigin> = new Map();
 
 const NO_ACTIVATION: ActivationRun = {
   activated: [],
@@ -347,9 +353,25 @@ export async function handleRecall(
   // assemble, so this honesty field's own graph read never adds serial latency to the call.
   const pendingEnrichmentCount = await pendingEnrichmentPromise;
 
-  // After the second pass, because only what resonance surfaced is asked about, and a pack
-  // whose resonant bucket holds no raw turn issues no query at all.
-  const claims = await relatedClaims(deps, resonance.value.items, mode);
+  const candidates = new Map<string, FusedItem>();
+  for (const item of [...fusion.value.items, ...resonance.value.items]) {
+    candidates.set(item.id, item);
+  }
+
+  // Both subtractions are exempt from a time-traveled read: asking what the substrate held last
+  // month is a question about the past rather than a re-serve, and reading back what a session
+  // itself wrote is the whole point of asking.
+  const dedup = deps.config.recall.sessionDedup && !isTimeTravel(mode);
+  const ownFilter = deps.config.recall.ownSessionFilter && !isTimeTravel(mode);
+
+  // Both run after the second pass. Claims are asked only about what resonance surfaced, and a
+  // pack whose resonant bucket holds no raw turn issues no query at all; origins are asked about
+  // the whole candidate set, which is final only now. Neither needs the other's answer, so the
+  // pair costs one round trip rather than two.
+  const [claims, origins] = await Promise.all([
+    relatedClaims(deps, resonance.value.items, mode),
+    ownFilter ? itemOrigins(deps, [...candidates.keys()], sessionId, mode) : NO_ORIGINS,
+  ]);
 
   const timings: StageTimingsMs = {
     cues: cues.ms,
@@ -360,17 +382,20 @@ export async function handleRecall(
     resonance: resonance.ms,
   };
 
-  // The serving-layer subtraction, applied once the candidate set is final so that nothing
-  // above it measures a smaller set: reinforcement, access tracking and the method counters all
-  // still see everything fusion admitted. A time-traveled read is exempt, because asking what
-  // the substrate held last month is a question about the past rather than a re-serve.
-  const dedup = deps.config.recall.sessionDedup && !isTimeTravel(mode);
-  const candidates = new Map<string, FusedItem>();
-  for (const item of [...fusion.value.items, ...resonance.value.items]) {
-    candidates.set(item.id, item);
-  }
+  // The two serving-layer subtractions, applied once the candidate set is final so that nothing
+  // above them measures a smaller set: reinforcement, access tracking and the method counters
+  // all still see everything fusion admitted.
+  //
+  // Origin decides first, and what it withholds leaves no served row: the session never read
+  // those items, so a later recall must be free to offer them the moment they stop being its own
+  // record. Dedup then judges what is left.
+  const ranked = [...candidates.values()];
+  const suppressedOwn = suppressedOwnSession({ items: ranked, origins, relatedClaims: claims });
   const suppressed = dedup
-    ? suppressedRepeats([...candidates.values()], readServedItems(deps.db, sessionId))
+    ? suppressedRepeats(
+        ranked.filter((item) => !suppressedOwn.has(item.id)),
+        readServedItems(deps.db, sessionId),
+      )
     : new Set<string>();
 
   const truncated = truncationFor(activation.value.termination);
@@ -392,6 +417,7 @@ export async function handleRecall(
     resonant: resonance.value.items,
     ...(claims.size === 0 ? {} : { relatedClaims: claims }),
     suppressed,
+    suppressedOwn,
   });
 
   saveLastPack(deps.db, sessionId, pack, now.toISOString(), {
@@ -436,6 +462,9 @@ export async function handleRecall(
       // What the wire dropped that cognition still counted, so a pack that shrank mid-session
       // reads as the subtraction rather than as retrieval going quiet.
       suppressedRepeats: suppressed.size,
+      // The other half of the same reading: how much of the answer was this session quoting
+      // itself, which is a number worth watching as the conversation gets long.
+      suppressedOwn: suppressedOwn.size,
       // Why the second pass was quiet: a setting, a query nothing anchored, or a substrate
       // whose enrichment has not written the context vectors yet. Absent when it searched.
       resonanceSkipped: resonance.value.skipped,

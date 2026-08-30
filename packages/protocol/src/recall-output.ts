@@ -289,6 +289,14 @@ export const MemoryPackMetadataSchema = z.strictObject({
    * on a time-traveled read, which repeats everything on purpose.
    */
   suppressed_repeats: z.number().int().positive().optional(),
+  /**
+   * Matches whose only source is this session's own turns: a turn it spoke, or a claim reflection
+   * extracted from one. The conversation still holds the words they came from, so the pack would
+   * be quoting the caller back to itself. An item the substrate has corrected since is served in
+   * full instead, because the correction is the part the session does not hold. Absent at zero,
+   * and absent on a time-traveled read, where inspecting one's own record is the question.
+   */
+  suppressed_own: z.number().int().positive().optional(),
 });
 
 /**
