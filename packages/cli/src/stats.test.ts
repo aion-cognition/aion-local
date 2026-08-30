@@ -39,7 +39,6 @@ const SNAPSHOT: StatsSnapshot = {
   methodCounters: {
     vector: 30,
     bm25: 10,
-    graph_traversal: 0,
     activation: 8,
     resonance: 2,
     entity_resolution: 0,

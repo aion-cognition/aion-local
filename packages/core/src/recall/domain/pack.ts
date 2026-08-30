@@ -445,6 +445,27 @@ function toAdmissionOutput(report: AdmissionReport): AdmissionReportOutput {
 }
 
 /**
+ * The producing method of every item the pack actually holds, in bucket order.
+ *
+ * Read off the assembled pack rather than off the stages that fed it, because the two differ
+ * and the difference is the whole point of the measurement. Assembly drops items on bucket
+ * caps, the token budget, the restatement filter, the gloss cap, a duplicate episode key, and
+ * an unbucketed label; resonance in particular offers up to `resonantLimit` and the pack
+ * serves at most `maxResonant`. A counter fed from the stage output would credit an
+ * associative mechanism for items no agent ever saw, which is the one thing the spirit metric
+ * exists not to do.
+ */
+export function packMethods(pack: MemoryPack): readonly string[] {
+  const methods: string[] = [];
+  for (const bucket of PACK_BUCKETS) {
+    for (const item of pack[bucket] ?? []) {
+      methods.push(item.rationale.method);
+    }
+  }
+  return methods;
+}
+
+/**
  * The pack is parsed against its own schema on the way out. Its invariants (a present bucket
  * is never empty, an item always carries content and a rationale) are this module's to hold,
  * so a violation is a defect here and failing loudly beats handing an agent a pack the

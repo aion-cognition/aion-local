@@ -20,15 +20,22 @@ describe('pack method counters', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('matches every method the recall protocol can report', () => {
-    expect([...PACK_METHODS].sort()).toEqual([...RecallMethodSchema.options].sort());
+  it('counts only methods an item can actually carry', () => {
+    const protocolMethods = new Set<string>(RecallMethodSchema.options);
+    for (const method of PACK_METHODS) {
+      expect(protocolMethods.has(method)).toBe(true);
+    }
+    // The one the protocol names and no item carries: `graph_traversal` is the fusion leg,
+    // and the items it produces are scored and labelled by the activation stage.
+    expect([...RecallMethodSchema.options].filter((method) => !PACK_METHODS.includes(method))).toEqual([
+      'graph_traversal',
+    ]);
   });
 
   it('starts every method at zero', () => {
     expect(packMethodCounters(store.db)).toEqual({
       vector: 0,
       bm25: 0,
-      graph_traversal: 0,
       activation: 0,
       resonance: 0,
       entity_resolution: 0,
