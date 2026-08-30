@@ -33,7 +33,10 @@ cd aion-local
 
 `init` provisions the whole substrate: starts Neo4j, pulls and verifies the Ollama models,
 applies the graph schema, creates the Member and Workspace backbone nodes, starts the MCP
-server, and prints a registration command:
+server, and prints a registration command. Along the way it asks which profile you want,
+and for a member name (defaulting to your git user.name): that names the graph node your
+sessions attach to... the person this memory belongs to. The registration command it
+prints at the end:
 
 ```
 claude mcp add -s user --transport http aion http://127.0.0.1:8765/mcp

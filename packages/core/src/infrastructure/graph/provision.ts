@@ -152,15 +152,24 @@ function upsertEnvVar(envPath: string, key: string, value: string): void {
 }
 
 /**
- * Init-time only. A password already present in `.env` is left untouched: re-running
- * init must not rotate credentials out from under a Neo4j container that already
- * trusts the old one. `templatePath` (`.env.example`) seeds a missing `.env` with the
- * full documented catalog; without it a fresh file holds only the password line.
+ * Seeds a missing `.env` from `.env.example` so a fresh install's file carries the full
+ * documented catalog. Every init-time writer calls this before touching the file: the
+ * first upsert into a missing `.env` would otherwise create a bare file and the seed
+ * would never happen.
  */
-export function ensureNeo4jPassword(envPath: string, templatePath?: string): string {
+export function seedEnvFromTemplate(envPath: string, templatePath?: string): void {
   if (!existsSync(envPath) && templatePath && existsSync(templatePath)) {
     copyFileSync(templatePath, envPath);
   }
+}
+
+/**
+ * Init-time only. A password already present in `.env` is left untouched: re-running
+ * init must not rotate credentials out from under a Neo4j container that already
+ * trusts the old one.
+ */
+export function ensureNeo4jPassword(envPath: string, templatePath?: string): string {
+  seedEnvFromTemplate(envPath, templatePath);
   const existing = readEnvValue(envPath, NEO4J_PASSWORD_ENV_KEY);
   if (existing) {
     return existing;
