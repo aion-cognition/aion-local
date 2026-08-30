@@ -5,10 +5,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
-import { runRead } from '../../../infrastructure/graph/connection.js';
 import { upsertEdge } from '../../../infrastructure/graph/edges.js';
 import { countEpisodesWithoutSession } from '../../../infrastructure/graph/introspection-health.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
+import {
+  sessionIdsOfEpisode,
+  sessionLinkSignals,
+} from '../../../infrastructure/graph/test-support/maintenance-queries.fixture.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
@@ -56,24 +59,6 @@ async function seedEpisode(id: string, sessionId: string): Promise<void> {
     now: NOW,
     properties: { text: `body of ${id}`, session_id: sessionId },
   });
-}
-
-async function sessionLinks(episodeId: string): Promise<string[]> {
-  return runRead(
-    harness.driver,
-    'MATCH (e:Episode { id: $id })-[:PARTICIPATES_IN]->(s:Session) RETURN s.id AS id',
-    { id: episodeId },
-    (row) => row['id'] as string,
-  );
-}
-
-async function repairSignals(episodeId: string): Promise<string[]> {
-  return runRead(
-    harness.driver,
-    'MATCH (e:Episode { id: $id })-[r:PARTICIPATES_IN]->(:Session) RETURN r.signals AS signals',
-    { id: episodeId },
-    (row) => (row['signals'] as string[] | null) ?? [],
-  ).then((rows) => rows.flat());
 }
 
 beforeAll(async () => {
@@ -125,16 +110,16 @@ describe('emergency relationship repair', () => {
 
   it('restores the link an episode already names and leaves the rest alone', async () => {
     expect(await countEpisodesWithoutSession(harness.driver)).toBe(2);
-    expect(await sessionLinks('episode-unlinked')).toEqual([]);
+    expect(await sessionIdsOfEpisode(harness.driver, 'episode-unlinked')).toEqual([]);
 
     const outcome = await backboneRepairOperation().run(context());
 
     expect(outcome).toMatchObject({ status: 'applied', itemsProcessed: 1, itemsAffected: 1 });
-    expect(await sessionLinks('episode-unlinked')).toEqual(['session-live']);
-    expect(await repairSignals('episode-unlinked')).toContain('backbone_repair');
+    expect(await sessionIdsOfEpisode(harness.driver, 'episode-unlinked')).toEqual(['session-live']);
+    expect(await sessionLinkSignals(harness.driver, 'episode-unlinked')).toContain('backbone_repair');
     // The one naming a session that is not there stays broken rather than being attached to
     // something invented for it.
-    expect(await sessionLinks('episode-sessionless')).toEqual([]);
+    expect(await sessionIdsOfEpisode(harness.driver, 'episode-sessionless')).toEqual([]);
     expect(await countEpisodesWithoutSession(harness.driver)).toBe(1);
   });
 

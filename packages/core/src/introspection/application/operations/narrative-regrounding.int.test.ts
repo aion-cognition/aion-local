@@ -6,7 +6,6 @@ import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import { BITEMPORAL_PROPERTIES, writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
 import { writeCognitiveNode } from '../../../infrastructure/graph/cognitive-queries.js';
-import { runRead } from '../../../infrastructure/graph/connection.js';
 import { upsertEdge } from '../../../infrastructure/graph/edges.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../../../infrastructure/graph/episodes.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
@@ -15,6 +14,8 @@ import {
   NARRATIVE_PROPERTIES,
   findStaleNarratives,
 } from '../../../infrastructure/graph/narrative-queries.js';
+import { nodeProperties } from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
+import { narrativeGrounding } from '../../../infrastructure/graph/test-support/maintenance-queries.fixture.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
@@ -81,25 +82,9 @@ function context(): OperationContext {
   };
 }
 
-async function narrativeGrounding(id: string): Promise<string | undefined> {
-  const rows = await runRead(
-    harness.driver,
-    `MATCH (n:Narrative { id: $id }) RETURN n.${NARRATIVE_PROPERTIES.grounding} AS grounding`,
-    { id },
-    (row) => row['grounding'],
-  );
-  const value = rows[0];
-  return typeof value === 'string' ? value : undefined;
-}
-
 async function narrativeIsOpen(id: string): Promise<boolean> {
-  const rows = await runRead(
-    harness.driver,
-    `MATCH (n:Narrative { id: $id }) RETURN n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL AS open`,
-    { id },
-    (row) => row['open'] === true,
-  );
-  return rows[0] === true;
+  const properties = await nodeProperties(harness.driver, id);
+  return properties[BITEMPORAL_PROPERTIES.validUntil] === undefined;
 }
 
 beforeAll(async () => {
@@ -206,7 +191,7 @@ describe('narrative regrounding', () => {
     });
 
     // Before the apply the narrative reads as current, which is exactly the problem.
-    expect(await narrativeGrounding('regrounding-narrative')).toBe(NARRATIVE_GROUNDING);
+    expect(await narrativeGrounding(harness.driver, 'regrounding-narrative')).toBe(NARRATIVE_GROUNDING);
     expect(await findStaleNarratives(harness.driver, NARRATIVE_GROUNDING, 50)).toEqual([]);
 
     const applied = await applySupersessionProposal(harness.driver, db, {
@@ -217,7 +202,7 @@ describe('narrative regrounding', () => {
     });
 
     expect(applied.regroundedNarratives).toEqual(['regrounding-narrative']);
-    expect(await narrativeGrounding('regrounding-narrative')).not.toBe(NARRATIVE_GROUNDING);
+    expect(await narrativeGrounding(harness.driver, 'regrounding-narrative')).not.toBe(NARRATIVE_GROUNDING);
     const found = await findStaleNarratives(harness.driver, NARRATIVE_GROUNDING, 50);
     expect(found.map((narrative) => narrative.id)).toEqual(['regrounding-narrative']);
   }, 120_000);
