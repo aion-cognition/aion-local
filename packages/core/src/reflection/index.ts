@@ -15,6 +15,21 @@ export type { QueueLagSnapshot } from './application/lag.js';
 
 export { ReflectionNotStoredError } from './application/errors.js';
 
+export {
+  applyEntityMergeProposal,
+  dismissEntityMergeProposal,
+  ENTITY_MERGE_APPLY_METHOD,
+} from './application/entity-merge-review.js';
+export type {
+  ApplyEntityMergeProposalInput,
+  ApplyEntityMergeProposalResult,
+  DismissEntityMergeProposalResult,
+  EntityMergeAlreadyApplied,
+  EntityMergeAlreadyResolved,
+  EntityMergeApplied,
+  EntityMergeStale,
+} from './application/entity-merge-review.js';
+
 export type { ReflectionStage } from './domain/stage.js';
 
 export { ReflectionOrchestrator, orchestratorLedgerKey } from './application/orchestrator.js';
@@ -55,5 +70,6 @@ export {
   applySupersessionProposal,
   DEFAULT_APPLY_SCOPE,
   dismissSupersessionProposal,
+  ProposalNotFoundError,
 } from './application/proposals.js';
 export type { ApplyScope } from './application/proposals.js';

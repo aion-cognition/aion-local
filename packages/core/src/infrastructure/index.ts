@@ -144,10 +144,15 @@ export type { SupersessionProposal } from './sqlite/supersession-proposals.js';
 
 export {
   findEntityMergeProposalsForNode,
+  getEntityMergeProposal,
   listEntityMergeProposals,
   recordEntityMergeProposal,
+  resolveEntityMergeProposal,
 } from './sqlite/entity-merge-proposals.js';
-export type { EntityMergeProposal } from './sqlite/entity-merge-proposals.js';
+export type {
+  EntityMergeProposal,
+  EntityMergeProposalSide,
+} from './sqlite/entity-merge-proposals.js';
 
 export { cueDegradedRate } from './sqlite/recall-samples.js';
 

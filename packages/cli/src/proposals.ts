@@ -1,12 +1,19 @@
 import {
+  applyEntityMergeProposal,
   applySupersessionProposal,
   DEFAULT_APPLY_SCOPE,
+  dismissEntityMergeProposal,
   dismissSupersessionProposal,
+  getEntityMergeProposal,
+  getSupersessionProposal,
   listEntityMergeProposals,
   listSupersessionProposals,
+  ProposalNotFoundError,
+  type ApplyEntityMergeProposalResult,
   type ApplyScope,
   type ClaimSubject,
   type EntityMergeProposal,
+  type SqliteHandle,
   type SubjectSibling,
   type SupersessionProposal,
 } from '@aion/core';
@@ -124,6 +131,26 @@ function isOpen(row: { readonly resolvedAt: string | null }): boolean {
   return row.resolvedAt === null;
 }
 
+type ProposalKind = 'supersession' | 'merge';
+
+/**
+ * `apply` and `dismiss` both take one bare id with nothing to say which queue it came from, so
+ * both look it up in supersession first and fall back to entity-merge. An id in neither queue
+ * throws the same not-found error either path already raises, with a message that says both
+ * queues were searched rather than naming only the one this lookup tried first.
+ */
+function locateProposal(db: SqliteHandle, id: string): ProposalKind {
+  if (getSupersessionProposal(db, id) !== undefined) {
+    return 'supersession';
+  }
+  if (getEntityMergeProposal(db, id) !== undefined) {
+    return 'merge';
+  }
+  const notFound = new ProposalNotFoundError(id);
+  notFound.message = `no proposal with id ${id}: searched supersession and entity-merge proposals, found neither`;
+  throw notFound;
+}
+
 function runLs(substrate: Substrate, flags: ProposalFlags): number {
   const db = substrate.db();
   const { write } = substrate;
@@ -151,7 +178,26 @@ const SCOPE_NOTES: Readonly<Record<ApplyScope, string>> = {
     'the default closes only what names the subject of the judged claim',
 };
 
+/**
+ * Routes on what the id names before touching the graph, so a merge id with a supersession-only
+ * scope flag is refused as a usage error rather than opening a connection first.
+ */
 async function runApply(substrate: Substrate, flags: ProposalFlags): Promise<number> {
+  const id = flags.id ?? '';
+  const kind = locateProposal(substrate.db(), id);
+  if (kind === 'merge') {
+    if (flags.scope !== DEFAULT_APPLY_SCOPE) {
+      const flag = flags.scope === 'episode' ? '--episode' : '--claim-only';
+      throw new CliUsageError(
+        `proposals apply ${id}: ${flag} is a supersession scope and does not apply to an entity merge`,
+      );
+    }
+    return await runApplyMerge(substrate, id);
+  }
+  return await runApplySupersession(substrate, flags);
+}
+
+async function runApplySupersession(substrate: Substrate, flags: ProposalFlags): Promise<number> {
   const id = flags.id ?? '';
   const { config, write } = substrate;
   const connection = await substrate.requireGraph('apply');
@@ -188,6 +234,50 @@ async function runApply(substrate: Substrate, flags: ProposalFlags): Promise<num
   renderRegrounded(applied.regroundedNarratives, write);
   write(SCOPE_NOTES[applied.scope]);
   return 0;
+}
+
+async function runApplyMerge(substrate: Substrate, id: string): Promise<number> {
+  const { write } = substrate;
+  const connection = await substrate.requireGraph('apply');
+  if (connection === undefined) {
+    return 1;
+  }
+  const result = await applyEntityMergeProposal(connection.driver, substrate.db(), { id });
+  substrate.logger().warn({ proposalId: id, ...result }, 'entity merge proposal applied');
+  renderMergeApply(result, write);
+  return 0;
+}
+
+/** One honest line per outcome; only a genuine merge earns the undo pointer and the edge count. */
+function renderMergeApply(result: ApplyEntityMergeProposalResult, write: Writer): void {
+  if (result.outcome === 'applied') {
+    write(
+      `applied ${result.id}: merged "${result.absorbed.name}" (${result.absorbed.type}, ` +
+        `${short(result.absorbed.id)}) into "${result.canonical.name}" (${result.canonical.type}, ` +
+        `${short(result.canonical.id)}), ${String(result.edgesRedirected)} edge(s) redirected`,
+    );
+    write('`aion unmerge` splits it back out');
+    if (result.vectorCleanupDeferred) {
+      write('  vector cleanup deferred; the absorbed node keeps its old vectors for now');
+    }
+    return;
+  }
+  if (result.outcome === 'already_applied') {
+    write(
+      `applied ${result.id}: already merged, "${result.absorbed.name}" is inside ` +
+        `"${result.canonical.name}"; the row is now resolved`,
+    );
+    return;
+  }
+  if (result.outcome === 'stale') {
+    const gone =
+      result.missingSide === 'both'
+        ? 'neither side still holds currency'
+        : `the ${result.missingSide} side no longer holds currency`;
+    write(`applied ${result.id}: stale, ${gone}; the row is now resolved`);
+    return;
+  }
+  write(`applied ${result.id}: already resolved at ${result.resolvedAt}; nothing to do`);
 }
 
 function renderClosed(
@@ -269,11 +359,34 @@ function renderOpenGlosses(glosses: readonly ClaimSubject[], write: Writer): voi
 
 function runDismiss(substrate: Substrate, flags: ProposalFlags): number {
   const id = flags.id ?? '';
+  const kind = locateProposal(substrate.db(), id);
+  if (kind === 'merge') {
+    return runDismissMerge(substrate, id);
+  }
   const dismissed = dismissSupersessionProposal(substrate.db(), id);
   substrate
     .logger()
     .info({ proposalId: id, oldId: dismissed.oldId }, 'supersession proposal dismissed');
   substrate.write(`dismissed ${id}: nothing was closed and ${short(dismissed.oldId)} stands`);
+  return 0;
+}
+
+function runDismissMerge(substrate: Substrate, id: string): number {
+  const result = dismissEntityMergeProposal(substrate.db(), id);
+  if (!result.dismissed) {
+    substrate.write(`dismissed ${id}: already resolved at ${result.resolvedAt}; nothing to do`);
+    return 0;
+  }
+  substrate
+    .logger()
+    .info(
+      { proposalId: id, leftId: result.left.id, rightId: result.right.id },
+      'entity merge proposal dismissed',
+    );
+  substrate.write(
+    `dismissed ${id}: ${result.left.name} (${result.left.type}) and ` +
+      `${result.right.name} (${result.right.type}) stay separate`,
+  );
   return 0;
 }
 
