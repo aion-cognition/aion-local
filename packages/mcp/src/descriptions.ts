@@ -30,13 +30,13 @@ export const RECALL_DESCRIPTION = [
   '',
   'Recall is cheap and safe to call more than once in a session. An empty pack is a real answer:',
   'nothing relevant is stored, which is not a failure. Pass the conversation context (summary and',
-  'recent turns) when you have it — it sharpens what comes back. Use `as_of` to ask what was true',
+  'recent turns) when you have it... it sharpens what comes back. Use `as_of` to ask what was true',
   'at a past date, `knew_at` to ask what memory held at a past date.',
 ].join('\n');
 
 export const REFLECTION_DESCRIPTION = [
   'Store what just happened in persistent memory so a later session can recall it. Send raw',
-  '`turns`, the `tool_executions` behind them, and/or `observations` — distilled notes stating a',
+  '`turns`, the `tool_executions` behind them, and/or `observations`... distilled notes stating a',
   'conclusion, a decision and its reason, or something learned.',
   '',
   'Call reflection:',

@@ -107,7 +107,7 @@ export function describeFailedRun(episodeId: string, run: ReflectionRun): string
   const named = failed.map((stage) => `${stage.name}: ${stage.error ?? stage.summary}`).join('; ');
   const skipped = run.summary.skippedStages;
   const context = skipped.length === 0 ? '' : ` (${String(skipped.length)} stages already applied)`;
-  return `${String(failed.length)} stage(s) failed for ${episodeId}${context} — ${named}`;
+  return `${String(failed.length)} stage(s) failed for ${episodeId}${context}: ${named}`;
 }
 
 /** Intake writes `{ episode_id }` and nothing else enqueues an integrate job. */
