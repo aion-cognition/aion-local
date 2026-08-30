@@ -1,6 +1,7 @@
 import {
   bootstrapBackbone,
   ensureNeo4jPassword,
+  seedEnvFromTemplate,
   GraphConnection,
   isManagedNeo4jUri,
   loadConfig,
@@ -357,7 +358,12 @@ async function prepareFullProfile(
   flags: InitFlags,
   write: Writer,
 ): Promise<Config> {
-  const envPath = envFilePath(resolveRepoDir());
+  const repoDir = resolveRepoDir();
+  const envPath = envFilePath(repoDir);
+  // Writing the key into a missing .env would create a bare two-line file and the
+  // template copy inside ensureNeo4jPassword would never fire; seed it here first so a
+  // fresh install's .env carries the full documented surface, not just what init wrote.
+  seedEnvFromTemplate(envPath, envTemplatePath(repoDir));
   const key = await resolveAnthropicKey({
     configured: config.anthropic.apiKey,
     fromEnvFile: envFileValue(envPath, ANTHROPIC_KEY_ENV_VAR),

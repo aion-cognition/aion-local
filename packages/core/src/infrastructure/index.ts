@@ -51,6 +51,7 @@ export type { Config } from './config/index.js';
 
 export {
   ensureNeo4jPassword,
+  seedEnvFromTemplate,
   isManagedNeo4jUri,
   validateNeo4jEndpoint,
   verifyGdsAvailable,
