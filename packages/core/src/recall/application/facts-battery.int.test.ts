@@ -256,13 +256,20 @@ describe('the decision query', () => {
     expect(glosses.length).toBeLessThanOrEqual(DEFAULTS.recall.entityGlossCap);
   }, 60_000);
 
-  it('renders every served item with a comparable confidence and a rising rank', async () => {
+  it('renders every served item with a legible provenance line and a rising rank', async () => {
     const pack = await decisionProbe();
     const ranks = allItems(pack).map((item) => item.rank);
 
     expect(ranks.length).toBeGreaterThan(0);
     for (const item of allItems(pack)) {
-      expect(pack.rendered_text).toContain(`confidence ${item.confidence.toFixed(2)}`);
+      // A gated item renders the rule that admitted it, not a bare confidence number: the
+      // two can diverge, and printing the number alone would be the display-vs-decision
+      // mismatch the floor-honesty fix closed. An ungated item still falls back to it.
+      const expected =
+        item.admitted_by === undefined
+          ? `confidence ${item.confidence.toFixed(2)}`
+          : item.admitted_by.evidence.join(' + ');
+      expect(pack.rendered_text).toContain(expected);
     }
     // Within a bucket the rank is monotonic by construction. The ordering defect this guards
     // against measured 27% of adjacent pairs out of order.
