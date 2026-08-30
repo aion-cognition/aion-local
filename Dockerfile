@@ -13,7 +13,9 @@ COPY packages/protocol/package.json ./packages/protocol/
 COPY packages/core/package.json ./packages/core/
 COPY packages/mcp/package.json ./packages/mcp/
 COPY packages/cli/package.json ./packages/cli/
-RUN npm ci
+# The lockfile is written by npm 11 on the host; the base image ships npm 10, whose ci
+# validation rejects npm 11's platform-conditional optional entries.
+RUN npm install -g npm@11 && npm ci
 
 COPY packages ./packages
 RUN npm run build && npm prune --omit=dev
