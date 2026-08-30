@@ -170,7 +170,7 @@ export AION_OLLAMA_URL=http://127.0.0.1:11434
 
 The substrate is complete and in daily use: provisioning, capture, recall with the full MCP
 surface, the reflection pipeline, Hebbian reinforcement and decay, the introspection loop
-scheduling fifteen maintenance operations, per-role Anthropic routing with model
+scheduling sixteen maintenance operations, per-role Anthropic routing with model
 reconciliation, the harness hooks, and the CLI above. 1,617 unit tests pass deterministically;
 the integration suite runs against a live Neo4j and host Ollama. Engrams, described in the
 whitepaper, are designed and not yet built, and the `preferences` pack bucket has no producer

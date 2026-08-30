@@ -8,6 +8,7 @@ export { operationBucketKey, OPERATION_LEDGER_PREFIX } from './domain/buckets.js
 export type { IntrospectionOperation } from './domain/operation.js';
 
 export {
+  AUTO_MERGE_METHOD,
   MERGE_SHADOW_LEDGER_PREFIX,
   mergeShadowLedgerKey,
   readMergeShadowVerdict,

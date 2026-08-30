@@ -38,8 +38,8 @@ function knobKind(knob: KnobDeclaration): KnobKind {
  *
  * A fixed set of env var names (AION_CUE_BUDGET_MS, AION_RECALL_TOKEN_BUDGET,
  * AION_SEARCH_WEIGHTS, AION_NEO4J_URI, AION_NEO4J_PASSWORD, AION_OLLAMA_URL,
- * AION_ANTHROPIC_API_KEY, AION_MAINTENANCE_TIER3, AION_MCP_PORT) keep their existing spelling;
- * the rest follow AION_<GROUP>_<LEAF> for consistency.
+ * AION_ANTHROPIC_API_KEY, AION_MAINTENANCE_TIER3, AION_MCP_PORT, AION_AUTO_MERGE) keep their
+ * existing spelling; the rest follow AION_<GROUP>_<LEAF> for consistency.
  *
  * AION_REFLECTION_STAGE_TIMEOUT_MS replaced five per-stage timeout vars that all carried 60000
  * and that no deployment ever split. A stage needing its own guard takes it as a constructor

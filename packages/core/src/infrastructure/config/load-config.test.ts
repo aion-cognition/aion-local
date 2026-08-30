@@ -32,6 +32,10 @@ describe('loadConfig defaults', () => {
     expect(config.recall.associationStrength).toBeLessThanOrEqual(config.hebbian.weightFloor);
   });
 
+  it('defaults auto-merge to armed', () => {
+    expect(DEFAULTS.maintenance.autoMerge).toBe(true);
+  });
+
   it('never mutates the shared DEFAULTS object across calls', () => {
     const before = DEFAULTS.recall.maxHops;
 
@@ -57,6 +61,11 @@ describe('loadConfig override precedence', () => {
   it('overrides a boolean leaf', () => {
     const config = loadConfig({ AION_MAINTENANCE_TIER3: 'true' });
     expect(config.maintenance.tier3).toBe(true);
+  });
+
+  it('overrides the auto-merge knob off', () => {
+    const config = loadConfig({ AION_AUTO_MERGE: 'false' });
+    expect(config.maintenance.autoMerge).toBe(false);
   });
 
   it('overrides an enum-backed string leaf', () => {

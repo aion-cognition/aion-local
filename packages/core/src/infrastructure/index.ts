@@ -78,7 +78,12 @@ export type { GraphCounts } from './graph/introspection.js';
 
 export { fetchNodeEdges, fetchNodeProvenance } from './graph/node-provenance.js';
 
-export { wasEntityMergeApplied } from './graph/merge-shadow-queries.js';
+export {
+  countAutoMergedEntities,
+  entityMergePairState,
+  wasEntityMergeApplied,
+} from './graph/merge-shadow-queries.js';
+export type { EntityMergePairState } from './graph/merge-shadow-queries.js';
 
 export type { NodeEdge, NodeProvenance } from './graph/node-provenance.js';
 

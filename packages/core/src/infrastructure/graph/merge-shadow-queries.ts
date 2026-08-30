@@ -15,22 +15,69 @@ import { SUPERSEDES_TYPE } from './relationships.js';
 
 const ENTITY_MERGE_SUPERSEDES_SIGNAL = 'entity_merge';
 
-const ENTITY_MERGE_APPLIED = [
-  `MATCH (a:${BASE_NODE_LABEL} { id: $idA })-[r:${SUPERSEDES_TYPE}]-(b:${BASE_NODE_LABEL} { id: $idB })`,
+const ENTITY_MERGE_PAIR_STATE = [
+  `MATCH (a:${BASE_NODE_LABEL} { id: $idA }), (b:${BASE_NODE_LABEL} { id: $idB })`,
+  `OPTIONAL MATCH (a)-[r:${SUPERSEDES_TYPE}]-(b)`,
   'WHERE $signal IN r.signals',
-  'RETURN count(r) > 0 AS applied',
+  'RETURN count(r) > 0 AS merged,',
+  '       a.valid_until IS NULL AND b.valid_until IS NULL AS both_current',
 ].join('\n');
+
+export type EntityMergePairState = {
+  readonly merged: boolean;
+  /**
+   * False once either side lost currency to anything other than a merge of this pair. A
+   * resolved, unmerged pair with a side gone was cleared as stale, not turned down by anyone,
+   * and the agreement read has to tell those apart or every stale clear reads as a policy
+   * failure.
+   */
+  readonly bothCurrent: boolean;
+};
+
+export async function entityMergePairState(
+  driver: Driver,
+  idA: string,
+  idB: string,
+): Promise<EntityMergePairState> {
+  const state = await readFirst(
+    driver,
+    ENTITY_MERGE_PAIR_STATE,
+    { idA, idB, signal: ENTITY_MERGE_SUPERSEDES_SIGNAL },
+    (row) => ({ merged: row.merged === true, bothCurrent: row.both_current === true }),
+  );
+  return state ?? { merged: false, bothCurrent: false };
+}
 
 export async function wasEntityMergeApplied(
   driver: Driver,
   idA: string,
   idB: string,
 ): Promise<boolean> {
-  const applied = await readFirst(
+  const state = await entityMergePairState(driver, idA, idB);
+  return state.merged;
+}
+
+/**
+ * The stats read behind `merge_auto`'s count. Kept as a local literal rather than an import of
+ * `AUTO_MERGE_METHOD`, the same way `ENTITY_MERGE_SUPERSEDES_SIGNAL` above restates
+ * `entity_merge` rather than importing it: the two spellings are pinned to agree by the
+ * integration test that applies a proposal and reads this count back.
+ */
+const AUTO_MERGE_PROVENANCE = 'auto_merge';
+
+const COUNT_AUTO_MERGED_ENTITIES = [
+  `MATCH ()-[r:${SUPERSEDES_TYPE}]->()`,
+  'WHERE $provenance IN r.provenance',
+  'RETURN count(r) AS count',
+].join('\n');
+
+/** How many `SUPERSEDES` edges `merge_auto` has written, for `aion stats`. */
+export async function countAutoMergedEntities(driver: Driver): Promise<number> {
+  const count = await readFirst(
     driver,
-    ENTITY_MERGE_APPLIED,
-    { idA, idB, signal: ENTITY_MERGE_SUPERSEDES_SIGNAL },
-    (row) => row.applied as boolean,
+    COUNT_AUTO_MERGED_ENTITIES,
+    { provenance: AUTO_MERGE_PROVENANCE },
+    (row) => row.count as number,
   );
-  return applied === true;
+  return count ?? 0;
 }
