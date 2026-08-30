@@ -11,24 +11,30 @@ import {
   handleRecall,
   handleReflection,
   IdleNarrativeSweeper,
+  Introspector,
+  introspectionOperations,
   LaneAssigner,
   latestAppliedGraphMigration,
   loadConfig,
   openLogger,
-  OllamaProvider,
+  plasticityCounters,
+  ProviderRouter,
   queueLagSnapshot,
   readMemberName,
   RecallSideEffects,
+  reconcileResidentModels,
   ReflectionDispatch,
   ReflectionOrchestrator,
   ReflectionWorker,
   ReinforcementEnqueueStage,
+  routingSummary,
   SemanticRelationshipStage,
   SessionManager,
   SessionNarrativeCloser,
   SessionNarrativeStage,
   SqliteStore,
   SupersessionStage,
+  unbackedPins,
   type Config,
   type Logger,
   type RecallDeps,
@@ -83,6 +89,7 @@ export function reflectionStages(config: Config): readonly ReflectionStage[] {
     new AssociationInferenceStage({
       semanticThreshold: reflection.associationSemanticThreshold,
       similarLimit: reflection.associationSimilarLimit,
+      weightFloor: config.hebbian.weightFloor,
     }),
     new CognitiveExtractionStage({
       model,
@@ -155,6 +162,26 @@ export type AionService = {
 };
 
 /**
+ * Boot's half of model reconciliation: a local model no role still routes to leaves memory,
+ * so a key-covered install does not hold instruct weights it will never call. `aion init` runs
+ * the other half. Failures are logged and nothing else: the service does not depend on this,
+ * and a machine with Ollama down has nothing resident to unload.
+ */
+async function reconcileModels(config: Config, router: ProviderRouter, logger: Logger): Promise<void> {
+  try {
+    const report = await reconcileResidentModels({
+      baseUrl: config.ollama.url,
+      routing: router.routing,
+    });
+    if (report.checked) {
+      logger.info({ reconciliation: report }, `model reconciliation: ${report.detail}`);
+    }
+  } catch (err) {
+    logger.warn({ err }, 'model reconciliation failed');
+  }
+}
+
+/**
  * Only used when the substrate has no Member yet, which the schema check above makes nearly
  * unreachable: an initialized substrate always has one, and its stored name wins.
  */
@@ -193,10 +220,24 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       workspaceId: backbone.workspace.id,
     });
 
-    const provider = new OllamaProvider({
-      baseUrl: config.ollama.url,
-      embedModel: config.models.embed,
+    const router = new ProviderRouter({
+      config,
+      onGeneration: (event) => {
+        logger.debug({ generation: event }, 'generation routed');
+      },
     });
+    // Both roles embed through the same local model; only `generate` differs between them.
+    const cueProvider = router.forRole('cue');
+    const reflectProvider = router.forRole('reflect');
+    logger.info({ routing: router.routing.roles }, `provider routing: ${routingSummary(router.routing)}`);
+    for (const route of unbackedPins(router.routing)) {
+      logger.warn(
+        { role: route.role },
+        `${route.role} is pinned to anthropic with no AION_ANTHROPIC_API_KEY set; routing it to ${route.localModel} instead`,
+      );
+    }
+    await reconcileModels(config, router, logger);
+
     const dispatch = new ReflectionDispatch({
       onListenerError: (err, signal) => {
         logger.error({ err, jobId: signal.jobId }, 'reflection dispatch listener failed');
@@ -213,7 +254,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       driver,
       db: store.db,
       sessions,
-      provider,
+      provider: cueProvider,
       config,
       cueCache: new CueCache(),
       logger,
@@ -223,7 +264,8 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       driver,
       db: store.db,
       sessions,
-      provider,
+      // Intake only embeds, so the role it borrows changes nothing about where its calls go.
+      provider: reflectProvider,
       dispatch,
       logger,
       entropyThreshold: config.redaction.entropyThreshold,
@@ -238,9 +280,12 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       {
         driver,
         db: store.db,
-        provider,
+        provider: reflectProvider,
         dispatch,
-        runner: new ReflectionOrchestrator({ driver, db: store.db, provider, logger }, stages),
+        runner: new ReflectionOrchestrator(
+          { driver, db: store.db, provider: reflectProvider, logger },
+          stages,
+        ),
         logger,
       },
       workerOptions(config),
@@ -258,13 +303,27 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
     // Both halves of the pinned trigger. The transport close is the boundary the substrate
     // can observe; the sweep is what a client that disconnects without a DELETE (an editor
     // that exits) leaves behind.
-    const narrativeDeps = { driver, provider, logger };
+    const narrativeDeps = { driver, provider: reflectProvider, logger };
     const narratives = new SessionNarrativeCloser(narrativeDeps, narrativeOptions(config));
     const idleNarratives = new IdleNarrativeSweeper(narrativeDeps, {
       ...narrativeOptions(config),
       limit: config.reflection.narrativeSweepLimit,
     });
     idleNarratives.start();
+
+    // The introspection loop. The catalog is a plain ordered list rather than a lookup the
+    // engine owns, so an operation joins maintenance by being registered in that one function
+    // and nowhere else. The loop starts here and stops in `close` below, ahead of the driver,
+    // because a tick that has begun can still hold a graph write.
+    const maintenanceOperations = introspectionOperations();
+    const introspector = new Introspector({
+      driver,
+      db: store.db,
+      config,
+      logger,
+      operations: maintenanceOperations,
+    });
+    introspector.start();
 
     const backend: ToolBackend = {
       recall: (args, identity) => handleRecall(recall, args, { identity }),
@@ -278,6 +337,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       port: config.operational.mcpPort,
       onSessionClosed: narratives.onSessionClosed,
       queueLag: () => queueLagSnapshot(store.db, config.operational.workerMaxAttempts),
+      plasticity: () => plasticityCounters(store.db),
     });
 
     // The primary trigger, not the fallback: a client's close() tears down its own
@@ -295,9 +355,12 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
         sqlite: config.sqlite.path,
         member: memberName,
         models: config.models,
+        routing: routingSummary(router.routing),
         stages: stages.map((stage) => stage.name),
         narrativeSweepMs: idleNarratives.intervalMs,
         sessionIdleSweepMs: idleSessions.intervalMs,
+        maintenanceTickMs: introspector.tickMs,
+        maintenanceOperations: maintenanceOperations.map((operation) => operation.name),
       },
       'mcp service ready',
     );
@@ -310,6 +373,9 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
         // Stop the idle sweep before the service closes its own transports, so shutdown
         // cannot race a sweep tick into closing a session the drain is already tearing down.
         idleSessions.stop();
+        // Maintenance stops before the driver does: a tick that started can still be holding
+        // a graph write, and its own abort signal is what lets an operation cut that short.
+        await introspector.stop();
         // The service first, so every transport closes and its narrative is scheduled before
         // the closer is awaited; the driver goes last, since both are still writing to it.
         await service.close();

@@ -6,8 +6,12 @@ import {
   GraphConnection,
   isManagedNeo4jUri,
   loadConfig,
+  localChatModels,
   openLogger,
   provisionOllama,
+  reconcileResidentModels,
+  resolveProviderRouting,
+  routingSummary,
   runGraphMigrations,
   SqliteStore,
   validateNeo4jEndpoint,
@@ -201,17 +205,26 @@ async function initialize(config: Config, flags: InitFlags, write: Writer, logge
 
   await provisionGraph(config, password, write, repoDir);
 
+  // Routing decides what is worth downloading: a role that routes to Anthropic has no local
+  // model to pull, and reconciliation then unloads whatever an earlier local run left resident.
+  const routing = resolveProviderRouting(config);
   write(`provisioning ollama models at ${config.ollama.url}`);
+  write(`  routing ${routingSummary(routing)}`);
   await provisionOllama(
     {
       baseUrl: config.ollama.url,
       embedModel: config.models.embed,
       embedDimension: config.models.embedDimension,
-      cueModel: config.models.cue,
-      reflectModel: config.models.reflect,
+      chatModels: localChatModels(routing),
     },
     { onEvent: provisionReporter(write, logger) },
   );
+
+  const reconciliation = await reconcileResidentModels({ baseUrl: config.ollama.url, routing });
+  logger.info({ reconciliation }, 'model reconciliation finished');
+  if (reconciliation.checked) {
+    write(`  reconcile ${reconciliation.detail}`);
+  }
 
   const memberName = await resolveMemberName({
     envName: process.env[GIT_USER_NAME_ENV_VAR],

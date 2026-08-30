@@ -9,6 +9,7 @@ import {
 } from '@aion/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  ConflictingApplyScopeError,
   MissingProposalIdError,
   parseProposalFlags,
   runProposals,
@@ -23,15 +24,33 @@ function collector(): { lines: string[]; write: (line: string) => void } {
 
 describe('parseProposalFlags', () => {
   it('defaults to listing the open rows', () => {
-    expect(parseProposalFlags([])).toEqual({ subcommand: 'ls', all: false, episode: false });
+    expect(parseProposalFlags([])).toEqual({ subcommand: 'ls', all: false, scope: 'family' });
   });
 
-  it('reads an id and both flags', () => {
+  /**
+   * The default widened after a claim-level apply measured no change in what recall answered,
+   * so an apply with no flag now closes the siblings naming the same subject. Both escapes
+   * stay reachable in one keystroke, and neither is the thing a hurried operator gets by
+   * accident.
+   */
+  it('applies the subject family unless a flag narrows or widens it', () => {
+    expect(parseProposalFlags(['apply', 'p-1'])).toEqual({
+      subcommand: 'apply',
+      id: 'p-1',
+      all: false,
+      scope: 'family',
+    });
+    expect(parseProposalFlags(['apply', 'p-1', '--claim-only'])).toEqual({
+      subcommand: 'apply',
+      id: 'p-1',
+      all: false,
+      scope: 'claim',
+    });
     expect(parseProposalFlags(['apply', 'p-1', '--episode'])).toEqual({
       subcommand: 'apply',
       id: 'p-1',
       all: false,
-      episode: true,
+      scope: 'episode',
     });
   });
 
@@ -40,6 +59,14 @@ describe('parseProposalFlags', () => {
     expect(() => parseProposalFlags(['ls', '--everything'])).toThrow(UnknownProposalOptionError);
     expect(() => parseProposalFlags(['apply'])).toThrow(MissingProposalIdError);
     expect(() => parseProposalFlags(['dismiss'])).toThrow(MissingProposalIdError);
+  });
+
+  // Two scopes at once has no safe reading: one is narrower than the default and the other is
+  // wider, so guessing which the operator meant would close either too little or far too much.
+  it('refuses to guess between the narrow escape and the wide one', () => {
+    expect(() => parseProposalFlags(['apply', 'p-1', '--claim-only', '--episode'])).toThrow(
+      ConflictingApplyScopeError,
+    );
   });
 });
 

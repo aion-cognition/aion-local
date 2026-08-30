@@ -95,7 +95,14 @@ export type {
   Measurement,
 } from './domain/admission.js';
 
-export { CHARS_PER_TOKEN, PACK_BUCKETS, assemblePack, bucketFor, estimateTokens } from './domain/pack.js';
+export {
+  CHARS_PER_TOKEN,
+  PACK_BUCKETS,
+  assemblePack,
+  bucketFor,
+  estimateTokens,
+  packMethods,
+} from './domain/pack.js';
 export type { AssemblePackInput, BucketCaps, PackBucket } from './domain/pack.js';
 
 export {
@@ -116,6 +123,16 @@ export {
   RESTATING_GOALS,
 } from './application/facts.fixtures.js';
 export type { FactsPair, SubstrateNode } from './application/facts.fixtures.js';
+
+export { RESONANCE_PATH, contextCentroid, resonantItem } from './domain/resonance.js';
+export type { ActivationWeight } from './domain/resonance.js';
+export { resonate } from './application/resonance.js';
+export type {
+  ResonanceDeps,
+  ResonanceInput,
+  ResonanceResult,
+  ResonanceSkip,
+} from './application/resonance.js';
 
 export { handleRecall, readModeFor } from './application/recall.js';
 export type { RecallCompletion, RecallDeps, RecallListener, RecallOptions } from './application/recall.js';

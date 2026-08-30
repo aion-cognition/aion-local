@@ -1,4 +1,5 @@
 import { DEFAULT_LOG_FILE, DEFAULT_LOG_LEVEL } from '../logging/logger.js';
+import { DEFAULT_ANTHROPIC_MODEL } from '../providers/anthropic-provider.js';
 import { DEFAULT_SQLITE_PATH } from '../sqlite/database.js';
 import { DEFAULT_REINFORCEMENT_QUEUE_CAP } from '../sqlite/reinforcement-queue.js';
 import type { Config } from './schema.js';
@@ -10,12 +11,14 @@ import type { Config } from './schema.js';
  * per process. Three values below depart from a smaller candidate default; each says why
  * at the line.
  *
- * Reserved knobs: `recall.useContextResonance`, `recall.compressionThreshold`,
- * `contextResonance.{resonantLimit,maxHops,activationThreshold,contextSearchThreshold}`,
- * `hebbian.*` and `maintenance.tier3` are declared and overridable but have no reader yet:
- * context resonance, narrative compression, plasticity flush, and tier-3 maintenance land
- * later. They are declared now because the catalog is one document, and a knob added late
- * is a knob whose name and range were never reviewed; setting one today changes nothing.
+ * Reserved knobs: `recall.compressionThreshold` is declared and overridable but has no
+ * reader yet, since narrative compression lands later. It is declared now because the
+ * catalog is one document, and a knob added late is a knob whose name and range were never
+ * reviewed; setting one today changes nothing. The context resonance and `hebbian.*` knobs
+ * were reserved the same way and now have readers: the recall second pass, the reinforcement
+ * flush, and the decay sweep. `maintenance.tier3` now gates the introspector's tier-3 seam,
+ * which consults the advisor and records what it would have been asked; the model call
+ * itself is still unbuilt, so turning it on changes what is logged and nothing that runs.
  */
 export const DEFAULTS: Config = {
   neo4j: {
@@ -34,6 +37,11 @@ export const DEFAULTS: Config = {
   },
   anthropic: {
     apiKey: '',
+    model: DEFAULT_ANTHROPIC_MODEL,
+  },
+  routing: {
+    cue: 'auto',
+    reflect: 'auto',
   },
   recall: {
     // Raised from 2 to 3: the cross-session graph routes every path through a Session hub.
@@ -54,7 +62,11 @@ export const DEFAULTS: Config = {
     maxPreferences: 3,
     maxResonant: 5,
     useContextResonance: true,
-    associationStrength: 0.5,
+    // At `hebbian.weightFloor`, deliberately. Decay clamps a weight at the floor so a faded
+    // pathway stays traversable, and a traversal cutoff above the floor would sever the whole
+    // band the clamp exists to keep. Fading is proportional (spreading activation scales
+    // propagation by strength); this number is only the point at which an edge counts as gone.
+    associationStrength: 0.1,
     compressionThreshold: 512,
     // 8000 because a hang guard must not fire on ordinary calls. The cue model's cold-start
     // round trip measured 2288ms on host Ollama against 527-937ms warm, and a guard that
@@ -164,6 +176,10 @@ export const DEFAULTS: Config = {
     supersedeMode: 'propose',
     supersedeAutoConfidence: 0.85,
     supersedeNeighborThreshold: 0.75,
+    // Under the neighbour threshold, because these two claims already share an observation and
+    // a named subject: the evidence a family close needs on top of that is that they are about
+    // the same thing, not that they nearly restate each other.
+    supersedeFamilyRelatednessFloor: 0.6,
     supersedeTimeoutMs: 60_000,
     maxSupersessionSubjects: 6,
     maxContradictionNeighbors: 3,
@@ -194,6 +210,61 @@ export const DEFAULTS: Config = {
   },
   maintenance: {
     tier3: false,
+    // Fifteen minutes is one bucket of the finest granularity an operation can declare, so
+    // every operation gets at least one chance per window it is allowed to run in.
+    tickMinutes: 15,
+    // Two hours of ticks. An operation with real but small relevance reaches the threshold
+    // inside a working session rather than inside a week.
+    starvationCycles: 8,
+    urgencyThreshold: 0.2,
+    // The deprioritization line: at or above it an operation scores at full weight, under
+    // it at half, and starvation still eventually runs it either way.
+    effectivenessFloor: 0.5,
+    // At hebbian.batchSize's own default: a content-vector backfill is the same shape of
+    // work as a reinforcement flush, one bounded pass over a pending queue.
+    vectorBackfillBatchSize: 100,
+    // A fifth of the content-vector batch. Context staleness is a quality gap the next
+    // pipeline run corrects anyway, not a hole in vector search, so each tick spends little
+    // on it.
+    contextRefreshBatchSize: 20,
+    reconcileBatchSize: 200,
+    deadLetterBatchSize: 50,
+    // Small: every hit rewrites a live node property, and a wrong redaction destroys
+    // content permanently since nothing in the substrate is hard-deleted.
+    redactionPurgeBatchSize: 20,
+    // Sessions, not narratives: a session with duplicates costs one supersede per straggler,
+    // a stale one a regeneration call, so ten sessions is a modest tick even at the worst mix.
+    narrativeCleanupBatch: 10,
+    // Each episode costs up to eight judgment calls (supersession's own ceiling), so five
+    // keeps one tick's model spend in line with an ordinary reflection run.
+    retroSupersessionBatch: 5,
+    // Each entity costs one generation call and one embed. Small on purpose: a refresh a
+    // tick behind is a staleness window, not an outage.
+    descriptionRefreshBatch: 3,
+    // Five new mentions since the description was written is enough traffic to plausibly
+    // have added something worth folding in, without refreshing on every other mention.
+    descriptionRefreshMentionGrowth: 5,
+    // One indexed lookup and one edge write per break, which is the cheapest repair in the
+    // catalog, so the batch matches the orphan sweep it sits beside.
+    backboneRepairBatch: 200,
+    // Two graph reads and at most one small write per orphan, so a couple of hundred is a
+    // tick's work even when every one of them needs a repair.
+    orphanCleanupBatch: 200,
+    // A month with no candidate and no new edge. Anything the pipeline was going to attach
+    // has long since attached, and forgetting is reversible in the sense that matters here:
+    // the node stays readable under `as_of`.
+    orphanForgetAfterDays: 30,
+    // The projection is in-memory and all-or-nothing. Twenty thousand nodes is well past a
+    // laptop-scale substrate and still inside a heap the compose file caps at 1G.
+    communityNodeLimit: 20_000,
+    // The same floor the critical rules use: under twenty nodes, communities describe noise.
+    communityMinNodes: 20,
+    // Three members is the smallest group that can be a neighbourhood rather than a pair.
+    bridgeMinCommunitySize: 3,
+    // One crossing edge for every four members of the smaller side. Below that the two are
+    // joined by a thread; at or above it activation already has a way across and a bridge
+    // would be a write that buys nothing.
+    bridgeOverlapCeiling: 0.25,
   },
   sqlite: {
     path: DEFAULT_SQLITE_PATH,

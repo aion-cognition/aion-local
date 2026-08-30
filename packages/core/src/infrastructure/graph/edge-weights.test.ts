@@ -96,13 +96,21 @@ describe('bell curve edge weight decay', () => {
     expect(cypher).not.toContain('UNWIND');
   });
 
-  it('orders candidates by staleness and bounds them to the batch size', () => {
+  it('takes the least recently swept edges first and bounds them to the batch size', () => {
     const { cypher, parameters } = buildEdgeWeightDecay(DECAY_INPUT);
-    expect(cypher).toContain('duration.inDays(r.updated_at, $now).days AS daysSinceAccess');
-    expect(cypher).toContain('ORDER BY daysSinceAccess DESC');
+    expect(cypher).toContain('r.decayed_at AS sweptAt');
+    expect(cypher).toContain('ORDER BY CASE WHEN sweptAt IS NULL THEN 0 ELSE 1 END, sweptAt ASC');
     expect(cypher).toContain('LIMIT $batchSize');
     // LIMIT rejects a float, so this crosses the driver as a Neo4j Integer, not a plain number.
     expect(parameters['batchSize']).toEqual(neo4j.int(100));
+  });
+
+  it('measures staleness off the last write rather than off its own cursor', () => {
+    const { cypher } = buildEdgeWeightDecay(DECAY_INPUT);
+    expect(cypher).toContain(
+      'duration.inDays(coalesce(r.updated_at, $now), $now).days AS daysSinceAccess',
+    );
+    expect(cypher).toContain('daysSinceAccess DESC');
   });
 
   it('applies the bell curve as one read-and-write statement', () => {
@@ -131,9 +139,10 @@ describe('bell curve edge weight decay', () => {
     expect(cypher).toContain('b.forgotten_at IS NULL');
   });
 
-  it('refreshes updated_at so the next run advances past what this one touched', () => {
+  it('stamps its own cursor and leaves the last-used time alone', () => {
     const { cypher } = buildEdgeWeightDecay(DECAY_INPUT);
-    expect(cypher).toContain('r.updated_at = $now');
+    expect(cypher).toContain('r.decayed_at = $now');
+    expect(cypher).not.toContain('r.updated_at = $now');
   });
 
   it('returns the weight before the step alongside the result', () => {

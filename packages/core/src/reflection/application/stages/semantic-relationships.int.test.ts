@@ -168,9 +168,9 @@ describe('SemanticRelationshipStage against a live graph and a live model', () =
     const target = run.activated.find((node) => node.nodeId === causal!.targetId);
     expect(target).toBeDefined();
     expect(target?.pathSummary).toContain(`-[${causal!.type}]->`);
-    // CAUSES carries 0.35, ENABLES 0.3 (recall/domain/activation.ts, MODEL_INFERRED_PENALTY
-    // applied); either way the edge propagates a type-specific fraction of the seed's full
-    // activation, not the raw 1.0.
+    // CAUSES carries 0.35, ENABLES 0.3 (recall/domain/activation-weights.ts,
+    // MODEL_INFERRED_PENALTY applied); either way the edge propagates a type-specific
+    // fraction of the seed's full activation, not the raw 1.0.
     expect(target?.score).toBeGreaterThan(0);
     expect(target?.score).toBeLessThan(1);
     // The edge is written with a quoted justification, stored as its rationale.

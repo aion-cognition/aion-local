@@ -14,11 +14,34 @@ import {
 } from './relationships.js';
 import { toGraphDateTime, type Row } from './values.js';
 
+/**
+ * How a repeated write moves an edge's strength.
+ *
+ * `max` is the default and the right rule for a writer restating a fact: the strongest claim
+ * anyone has made about the edge stands, and saying it again changes nothing.
+ *
+ * `bounded_step` is for a writer whose every call is one observation rather than a claim about
+ * the total. `strength` is then what a single observation is worth on its own, and the edge
+ * moves `w' = w + s * (1 - w)`: the first observation lands at `s`, later ones close the
+ * remaining gap and never reach 1. It is the rule co-occurrence needs, because an episode
+ * naming twenty entities asserts far less about any one of its 190 pairs than an episode
+ * naming two asserts about its only pair, and under `max` both land at the same number.
+ */
+export type EdgeStrengthPolicy = 'max' | 'bounded_step';
+
 export type EdgeUpsert = {
   readonly type: RelationshipType;
   readonly sourceId: string;
   readonly targetId: string;
+  /** A target strength under `max`; what one observation is worth under `bounded_step`. */
   readonly strength: number;
+  /** Defaults to `max`. */
+  readonly strengthPolicy?: EdgeStrengthPolicy;
+  /**
+   * Lower clamp under `bounded_step`, so a heavily discounted observation still writes a
+   * traversable edge rather than one recall treats as absent. Ignored under `max`.
+   */
+  readonly weightFloor?: number;
   readonly confidence: number;
   readonly signals: readonly string[];
   readonly provenance: readonly string[];
@@ -58,11 +81,31 @@ function uniqueStrings(values: readonly string[]): string[] {
   return [...new Set(values)];
 }
 
+/** The strength expressions each policy writes, on create and on match. */
+function strengthPolicyFragments(policy: EdgeStrengthPolicy): {
+  readonly onCreate: string;
+  readonly onMatch: string;
+} {
+  if (policy === 'max') {
+    return {
+      onCreate: 'r.strength = $strength',
+      onMatch:
+        'r.strength = CASE WHEN coalesce(r.strength, 0.0) >= $strength THEN r.strength ELSE $strength END',
+    };
+  }
+  const stepped = 'coalesce(r.strength, 0.0) + $strength * (1.0 - coalesce(r.strength, 0.0))';
+  return {
+    onCreate: 'r.strength = CASE WHEN $strength < $weightFloor THEN $weightFloor ELSE $strength END',
+    onMatch: `r.strength = CASE WHEN ${stepped} > 1.0 THEN 1.0 WHEN ${stepped} < $weightFloor THEN $weightFloor ELSE ${stepped} END`,
+  };
+}
+
 /**
- * The one merge policy every relationship write goes through: max(strength),
- * max(confidence), set-union(signals), set-union(provenance), sum(count), earliest
- * created_at preserved, updated_at refreshed. The unions are list comprehensions rather
- * than APOC, which is not installed and is not a dependency this project takes on.
+ * The one merge policy every relationship write goes through: strength by the write's own
+ * `strengthPolicy` (max by default), max(confidence), set-union(signals),
+ * set-union(provenance), sum(count), earliest created_at preserved, updated_at refreshed. The
+ * unions are list comprehensions rather than APOC, which is not installed and is not a
+ * dependency this project takes on.
  *
  * Endpoints resolve through `BASE_NODE_LABEL` because an unlabelled `{ id: … }` match has
  * no index to seek: every relationship write would scan the whole graph twice.
@@ -76,6 +119,9 @@ export function buildEdgeUpsert(input: EdgeUpsert): GraphStatement {
   }
   assertProportion('strength', input.strength);
   assertProportion('confidence', input.confidence);
+  const policy = input.strengthPolicy ?? 'max';
+  const weightFloor = input.weightFloor ?? 0;
+  assertProportion('weightFloor', weightFloor);
 
   const count = input.count ?? 1;
   if (!Number.isInteger(count) || count < 0) {
@@ -89,11 +135,13 @@ export function buildEdgeUpsert(input: EdgeUpsert): GraphStatement {
   const now = input.now ?? new Date();
   const hasRationale = input.rationale !== undefined;
 
+  const strength = strengthPolicyFragments(policy);
+
   const onCreate = [
     'r.id = $id',
     'r.created_at = $now',
     'r.updated_at = $now',
-    'r.strength = $strength',
+    strength.onCreate,
     'r.confidence = $confidence',
     'r.signals = $signals',
     'r.provenance = $provenance',
@@ -103,7 +151,7 @@ export function buildEdgeUpsert(input: EdgeUpsert): GraphStatement {
 
   const onMatch = [
     'r.updated_at = $now',
-    'r.strength = CASE WHEN coalesce(r.strength, 0.0) >= $strength THEN r.strength ELSE $strength END',
+    strength.onMatch,
     'r.confidence = CASE WHEN coalesce(r.confidence, 0.0) >= $confidence THEN r.confidence ELSE $confidence END',
     'r.signals = coalesce(r.signals, []) + [s IN $signals WHERE NOT s IN coalesce(r.signals, [])]',
     'r.provenance = coalesce(r.provenance, []) + [p IN $provenance WHERE NOT p IN coalesce(r.provenance, [])]',
@@ -131,6 +179,7 @@ export function buildEdgeUpsert(input: EdgeUpsert): GraphStatement {
       id: input.id ?? randomUUID(),
       now: toGraphDateTime(now),
       strength: input.strength,
+      weightFloor,
       confidence: input.confidence,
       signals: uniqueStrings(input.signals),
       provenance: uniqueStrings(input.provenance),

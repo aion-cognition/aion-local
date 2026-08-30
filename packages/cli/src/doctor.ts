@@ -8,15 +8,19 @@ import {
   GraphConnection,
   latestAppliedGraphMigration,
   loadConfig,
+  localChatModels,
   measureAdmissionFloor,
   openLogger,
   OllamaProvider,
   queueLagSnapshot,
   readVectorIndexes,
   reconcileEnrichment,
+  remoteRoutes,
+  resolveProviderRouting,
   scanRedactionResidue,
   SqliteStore,
   verifyGdsAvailable,
+  verifyOllamaChatModel,
   type Config,
   type SqliteHandle,
 } from '@aion/core';
@@ -158,6 +162,12 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
       },
     },
     {
+      /**
+       * The embed model is checked under every route: it is the vector index. Chat models are
+       * checked only where a role still routes to Ollama, so a key-covered install that never
+       * pulled the instruct weights reads as healthy rather than as a missing model, and the
+       * same install with the key removed reports the model it now needs.
+       */
       name: 'ollama-round-trip',
       run: async () => {
         await checkOllamaReachable(config.ollama.url);
@@ -169,7 +179,23 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
         if (vector.length !== config.models.embedDimension) {
           throw new EmbedDimensionMismatchError(config.models.embed, config.models.embedDimension, vector.length);
         }
-        return { ok: true, detail: `${config.models.embed} → ${vector.length} dimensions` };
+
+        const routing = resolveProviderRouting(config);
+        const local = localChatModels(routing);
+        for (const model of local) {
+          await verifyOllamaChatModel(config.ollama.url, model);
+        }
+        const remote = remoteRoutes(routing);
+        const chat =
+          local.length === 0 ? 'no chat model routes locally' : `chat ${local.join(', ')} ok`;
+        const routed =
+          remote.length === 0
+            ? ''
+            : `; ${remote.map((route) => route.role).join(', ')} routed to anthropic (${remote[0]?.model ?? ''})`;
+        return {
+          ok: true,
+          detail: `${config.models.embed} → ${vector.length} dimensions, ${chat}${routed}`,
+        };
       },
     },
     {

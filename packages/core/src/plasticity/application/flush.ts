@@ -27,7 +27,10 @@ export const DEFAULT_HEBBIAN_BATCH_SIZE = 100;
 /** Matches `hebbian.learningRate`: eta in `w' = w + eta * (1 - w)`. */
 export const DEFAULT_HEBBIAN_LEARNING_RATE = 0.1;
 
-/** Matches `hebbian.weightFloor`: no edge is ever written below it, so nothing becomes untraversable. */
+/**
+ * Matches `hebbian.weightFloor`: no edge is ever written below it, and `recall.associationStrength`
+ * sits at the same number, so nothing plasticity writes becomes untraversable.
+ */
 export const DEFAULT_HEBBIAN_WEIGHT_FLOOR = 0.1;
 
 export type HebbianFlushDeps = {

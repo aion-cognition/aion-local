@@ -19,6 +19,7 @@ export function admittedAll(count: number): AdmissionReport {
     admitted: count,
     droppedBelowFloor: 0,
     droppedUnmeasured: 0,
+    droppedUnmeasuredArrival: 0,
     droppedDuplicateContent: 0,
     droppedNearDuplicate: 0,
     anchored: count > 0,

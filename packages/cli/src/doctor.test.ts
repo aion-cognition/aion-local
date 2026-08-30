@@ -1,9 +1,25 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULTS, enqueueReflectionJob, SqliteStore, type Config, type SqliteHandle } from '@aion/core';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { probeMcpHttp, queueLagCheck, runChecks, summarize, type Check, type CheckReport } from './doctor.js';
+import {
+  DEFAULTS,
+  enqueueReflectionJob,
+  GraphConnection,
+  SqliteStore,
+  type Config,
+  type SqliteHandle,
+} from '@aion/core';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  buildDoctorChecks,
+  probeMcpHttp,
+  queueLagCheck,
+  runChecks,
+  summarize,
+  type Check,
+  type CheckReport,
+  type CheckResult,
+} from './doctor.js';
 
 function collector(): { lines: string[]; write: (line: string) => void } {
   const lines: string[] = [];
@@ -13,6 +29,80 @@ function collector(): { lines: string[]; write: (line: string) => void } {
 function passing(name: string, detail = 'fine'): Check {
   return { name, run: async () => ({ ok: true, detail }) };
 }
+
+/**
+ * The one check that talks to Ollama, run against a stubbed host. Neo4j and SQLite are never
+ * touched by it, which is why the other two dependencies can be absent here.
+ */
+async function runOllamaCheck(config: Config): Promise<{ result: CheckResult; paths: string[] }> {
+  const paths: string[] = [];
+  const fetchImpl = vi.fn((url: string | URL) => {
+    const path = new URL(String(url)).pathname;
+    paths.push(path);
+    if (path === '/api/version') {
+      return Promise.resolve(new Response(JSON.stringify({ version: '0.24.0' })));
+    }
+    if (path === '/api/embed') {
+      return Promise.resolve(
+        new Response(JSON.stringify({ embeddings: [new Array<number>(768).fill(0.1)] })),
+      );
+    }
+    return Promise.resolve(
+      new Response(JSON.stringify({ done: true, message: { role: 'assistant', content: 'hi' } })),
+    );
+  });
+  vi.stubGlobal('fetch', fetchImpl);
+  try {
+    const checks = buildDoctorChecks({
+      config,
+      connection: undefined as unknown as GraphConnection,
+      db: undefined as unknown as SqliteHandle,
+    });
+    const check = checks.find((candidate) => candidate.name === 'ollama-round-trip');
+    if (check === undefined) {
+      throw new Error('no ollama-round-trip check');
+    }
+    return { result: await check.run(), paths };
+  } finally {
+    vi.unstubAllGlobals();
+  }
+}
+
+describe('the Ollama round-trip check under routing', () => {
+  it('round-trips the embed model and every chat model that still routes locally', async () => {
+    const { result, paths } = await runOllamaCheck(DEFAULTS);
+
+    expect(result.ok).toBe(true);
+    expect(result.detail).toContain('768 dimensions');
+    expect(result.detail).toContain(`chat ${DEFAULTS.models.cue}, ${DEFAULTS.models.reflect} ok`);
+    expect(paths.filter((path) => path === '/api/chat')).toHaveLength(2);
+  });
+
+  it('checks no chat model the key covers, and names where those roles went', async () => {
+    const keyed: Config = { ...DEFAULTS, anthropic: { ...DEFAULTS.anthropic, apiKey: 'sk-ant-test' } };
+
+    const { result, paths } = await runOllamaCheck(keyed);
+
+    expect(result.ok).toBe(true);
+    expect(paths).not.toContain('/api/chat');
+    expect(result.detail).toContain('no chat model routes locally');
+    expect(result.detail).toContain(`cue, reflect routed to anthropic (${DEFAULTS.anthropic.model})`);
+  });
+
+  it('still checks the chat model a pin kept local', async () => {
+    const split: Config = {
+      ...DEFAULTS,
+      anthropic: { ...DEFAULTS.anthropic, apiKey: 'sk-ant-test' },
+      routing: { cue: 'ollama', reflect: 'auto' },
+    };
+
+    const { result, paths } = await runOllamaCheck(split);
+
+    expect(paths.filter((path) => path === '/api/chat')).toHaveLength(1);
+    expect(result.detail).toContain(`chat ${DEFAULTS.models.cue} ok`);
+    expect(result.detail).toContain('reflect routed to anthropic');
+  });
+});
 
 describe('runChecks', () => {
   it('runs every check in order and reports each result', async () => {

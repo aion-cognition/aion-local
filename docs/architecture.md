@@ -21,13 +21,36 @@ cues, or memory packs, only nodes, edges, and rows.
 
 - **`infrastructure/`**: `graph/` (every Cypher statement in the workspace), `sqlite/`
   (the reflection queue, last-pack cache, ops ledger, claim locking), `providers/` (the
-  Ollama client and its circuit breaker), `config/` (schema, defaults, the `AION_*`
+  Ollama and Anthropic clients, the circuit breaker, the per-role routing layer and the
+  model reconciliation that follows it), `config/` (schema, defaults, the `AION_*`
   registry, the loader), `logging/`.
 - **`recall/domain/`**: `activation.ts` (spreading activation over adjacency),
-  `fusion.ts` (RRF/MMR ranking and the currency policy), `pack.ts` (MemoryPack assembly).
+  `activation-weights.ts` (the per-relationship-type propagation table),
+  `admission.ts` (the evidence rules and the floors), `arrival-scoring.ts` (cosines for what
+  the spread reached), `seed-selection.ts` (the budget curve and the per-leg reservations),
+  `fusion.ts` (RRF/MMR ranking and the currency policy), `resonance.ts` (the centroid and the
+  shape of a resonant item), `pack.ts` (MemoryPack assembly).
 - **`recall/application/`**: `cues.ts` (cue extraction and its cache), `seeds.ts` (the
   four seed strategies' scoring and merge), `candidates.ts` (seeds plus activation into
-  ranked lists), `recall.ts` (the pipeline), `side-effects.ts` (post-recall listeners).
+  ranked lists), `stage-reads.ts` (the pipeline's batched graph reads), `resonance.ts` (the
+  second pass), `recall.ts` (the pipeline), `side-effects.ts` (post-recall listeners).
+- **`plasticity/`**: `domain/` folds a window of co-activation signals into per-pair
+  learning rates and computes the staleness curve; `application/` runs the two operations
+  that apply them, `flush.ts` (bounded reinforcement of the nominated pairs) and `decay.ts`
+  (weight decay against staleness, the protected relationship types exempt), plus
+  `metrics.ts`. Both operations are called, never scheduled: cadence belongs to the caller.
+- **`introspection/domain/`**: `health.ts` (the snapshot every phase reads, plus the critical
+  conditions read off it), `decide.ts` (the pure three-tier decision, starvation protection,
+  effectiveness weighting, the preemption grace), `operation.ts` (the contract a maintenance
+  operation implements), `bridge-pairs.ts` (which two communities a bridge should join),
+  `buckets.ts` (calendar-aligned idempotency keys), `tier3.ts` (the model-guided seam, opt-in
+  and propose-only).
+- **`introspection/application/`**: `observe.ts` (one health reading, assembled from the
+  surfaces `doctor` and `/health` already use, every collector caught), `engine.ts` (the
+  tick loop: bucket claim, run, learn, backoff), `catalog.ts` (the registration seam),
+  `plasticity-operations.ts` (the flush and the decay sweep, adapted to the contract), and
+  `operations/`, one file per registered operation plus `unmerge.ts`, the repair the loop
+  never selects on its own.
 - **`reflection/domain/`**: `content.ts`, episode/turn shaping and content hashing.
 - **`reflection/application/`**: `intake.ts` (the write path), `dispatch.ts` (the event
   emitter intake signals), `worker.ts` (the subscriber: claims queue rows and runs the
@@ -123,7 +146,10 @@ independently for the pack's `stage_timings_ms`:
    by more than one strategy keeps every strategy that found it. A rejected query costs its
    own leg and nothing else, but the rejections are counted: when every query issued was
    rejected the graph is gone, and the pack says so (`degraded: [{stage: graph, reason:
-   unavailable}]`) instead of reporting an outage as an empty substrate.
+   unavailable}]`) instead of reporting an outage as an empty substrate. The budget scales
+   with the substrate (`base + growth * ln(population)`, capped by
+   `AION_CONTEXT_RESONANCE_SEED_LIMIT`) and reserves a share of it per leg, so a graph of a
+   few thousand memories still measures candidates a fixed ten-seed budget never saw.
 4. **Activation.** Every seed enters at full activation. Spreading runs in TypeScript over
    batched adjacency reads: the graph answers one question per frontier iteration, and
    everything else (per-relationship-type weighting, decay, the minimum-activation floor,
@@ -136,16 +162,27 @@ independently for the pack's `stage_timings_ms`:
    `AION_VECTOR_ADMISSION_FLOOR`, a Lucene match on the verbatim cue, two independent
    measurements at or above `AION_CORROBORATION_FLOOR`, or traversal from a pack something
    else anchored, however well it ranks. Duplicates collapse by content hash, keeping the
-   higher-ranked instance.
-6. **Pack assembly.** Fused items route to a bucket by node label: `Episode`/`Turn` to
+   higher-ranked instance. An item the spread reached and no strategy seeded is scored
+   against the query cues on its own content vector, so traversal supplies candidates and
+   never admission.
+6. **Context resonance.** A second pass, after fusion because it needs to know the first one
+   anchored: the activation-weighted mean of the activated set's context vectors becomes a
+   query against the context vector index, above
+   `AION_CONTEXT_RESONANCE_CONTEXT_SEARCH_THRESHOLD` and excluding every id the first pass
+   already produced. What comes back is related by the shape of its neighborhood rather than
+   by its words, so it lands in `resonant` under its own rationale and never competes with a
+   fused score. The stage is skippable (`AION_RECALL_USE_CONTEXT_RESONANCE`), timed like
+   every other stage, and declines to run at all on a query nothing anchored: resonating from
+   an unanchored pack searches the shape of nothing.
+7. **Pack assembly.** Fused items route to a bucket by node label: `Episode`/`Turn` to
    `episodes`, `Entity` to `facts`. Each bucket is capped, trimmed to the token budget,
    and rendered into the pack's text block. The episode cap (`AION_RECALL_MAX_EPISODES`)
    defaults to 20, a deliberate deviation from whitepaper Appendix E's 5: the cap cuts the
    fused list, so on a populated substrate a five-item cut is filled by near-tie vector hits
    before any traversal-reached item can land. The token budget is what actually bounds a
-   pack's size. `preferences` and `resonant` have no producer yet (P4 work), so they are
-   structurally absent rather than empty. `narratives` gained one in P3: a session's close,
-   or the idle sweep, compresses its episodes into a `Narrative` node.
+   pack's size. `preferences` has no producer yet, so it is structurally absent rather than
+   empty. `narratives` gained one in P3: a session's close, or the idle sweep, compresses its
+   episodes into a `Narrative` node. `resonant` gained one in P4: the second pass above.
 
 Both paths inherit the driver timeouts `GraphConnection` sets: 5s to connect, 10s to acquire
 a pooled connection, 10s of transaction retries. The driver's defaults (60s and 30s) meet or
@@ -155,9 +192,81 @@ answers in microseconds, so these bite only during an outage. See `docs/degradat
 every failure mode this pipeline degrades through, mode by mode, with live evidence.
 
 The pack is saved to SQLite's `last_pack` table (what `aion last` renders) and returned. A
-registered listener, access-tracking today and eventually Hebbian reinforcement, fires
-afterward and is never awaited, so a listener failure cannot fail a recall that already
-succeeded.
+registered listener fires afterward and is never awaited, so a listener failure cannot fail a
+recall that already succeeded: it stamps access metadata and nominates the co-activated pairs
+that the reinforcement flush later folds into edge weights. A time-travel read does neither,
+since asking what the substrate held last month is a question rather than a use.
+
+## Maintenance path: the introspection loop
+
+A third path, on the service's own clock rather than on a caller's request. `Introspector`
+(`introspection/application/engine.ts`) starts with the service and stops before the driver
+does, and one tick runs four phases: observe, decide, act, learn.
+
+1. **Observe.** `observeHealth` assembles one `HealthSnapshot` from the surfaces `aion
+   doctor` and `/health` already read: graph structure (node population, vector parity,
+   orphan share, episodes with no session link), queue (depth per lane, oldest unclaimed,
+   exhausted attempts, enrichment lag), enrichment (episodes with no orchestrator ledger
+   key), plasticity, proposals, redaction residue. Every collector is caught
+   independently; one that throws names itself in `degraded` and costs its own metrics
+   rather than the reading.
+2. **Decide.** `decide` (`introspection/domain/decide.ts`) is pure: the same snapshot always
+   produces the same answer, so a decision is arguable from the numbers. Tier is a property of
+   the cycle rather than of the operation: an operation names the critical condition it repairs
+   in `answers`, and it preempts the whole catalog unweighted on the cycles the snapshot meets
+   that condition. Three conditions, each with a responder: vector parity under 0.8
+   (`vector_backfill`), orphan share over 0.3 (`orphan_cleanup`), episodes with no session link
+   (`emergency_relationship_repair`). Preemption is not open-ended. Past a grace of three
+   resolved runs, an operation keeps preempting only while it is still moving the metric it
+   declared, because a condition can stand for weeks and nothing else may wait that long. Tier
+   2 scores the rest by each operation's own `relevance`, halved for an operation whose runs
+   have stopped improving anything and multiplied by how many cycles it has been passed over,
+   and selects the highest above `AION_MAINTENANCE_URGENCY_THRESHOLD`. Tier 3 is the
+   model-guided seam: opt-in (`AION_MAINTENANCE_TIER3`), propose-only, and inert by default.
+3. **Act.** At most one operation per tick. It claims a calendar-aligned time bucket in the
+   ops ledger first (`intro:<name>:<bucket>:<stamp>`), so two service instances cannot run
+   the same window twice, and writes the outcome back to that key when it finishes.
+4. **Learn.** An operation declares the one metric it exists to move and which direction
+   counts as better. The engine takes that reading before the run and again on a later tick,
+   which is the first snapshot that can see the system settled around the change, and records
+   `improved` / `unchanged` / `failed`. Those counts are the effectiveness weight step 2
+   reads. An operation with no metric in the snapshot is scored on whether it applied
+   anything.
+
+The catalog is one ordered list (`introspection/application/catalog.ts`), which is the only
+place an operation joins maintenance. Fourteen are registered, in four groups: substrate
+hygiene (`vector_backfill`, `reconcile_reenqueue`, `dead_letter`,
+`redaction_residue_purge`), plasticity (`reinforcement_flush`, `memory_decay`), content
+(`narrative_cleanup`, `narrative_regrounding`, `retro_judgment_sweep`,
+`description_freshness`), and topology (`emergency_relationship_repair`, `orphan_cleanup`,
+`community_refresh`, `symbiosis_bridge`). List order is documentation: selection is by tier
+and urgency, and ties break on waiting time and then on name.
+
+One repair sits beside the catalog and is deliberately not in it. `entity_unmerge` splits an
+absorbed identity back out of the entity it was merged into. A bad merge is not measurable
+from inside the graph (a correct merge and a wrong one have the same shape), so a person
+names the merge to reverse; `aion unmerge ls|apply` is where they name it.
+
+`aion stats` renders the loop's own record: the cycle count, and per operation the runs,
+the improved/unchanged/failed split, and the last window's outcome from the ledger.
+`aion maintain ls` lists the catalog; `aion maintain run <name>` forces one operation now,
+bypassing the relevance score and the bucket claim and nothing else. The escape hatch exists
+because one operation's subject is not proportional: thirteen leaking nodes out of two
+thousand is a small share to a scoring function and an incident to a person.
+
+**Four operations the design names and this does not register.** `entity_consolidation` is a
+placeholder in the design itself and waits on a measure of entity fragmentation the snapshot
+does not take. `connectivity_enhance` and `association_pruning` overlap what `symbiosis_bridge`
+and `memory_decay` already do to edge weight, and building a third writer of the same property
+before the first two have a measured effect would make all three unattributable.
+`temporal_hygiene` has no trigger: nothing in the snapshot counts a validity-period violation,
+and an operation with no gauge cannot be scored or starved.
+
+**One narrowing inside the bridge.** The design describes an LLM proposing a set of specific
+node connections. This proposes the summary, rationale and compatibility, and anchors the
+bridge on the closest cross-community pair by content vector rather than on a model-chosen set.
+The vectors are the substrate's own statement that two nodes are about the same thing, they are
+already computed, and a person can re-derive the choice from the graph months later.
 
 ## Bitemporal model
 
@@ -170,8 +279,10 @@ by `supersede`:
   true. `valid_until` absent means still current.
 - **`tx_from` / `tx_until`**: system time, the interval during which the substrate held
   this belief. `tx_until` absent means still held.
-- **`forgotten_at`**: the one true suppression, written by the not-yet-built `aion
-  forget`. Default recall hides a forgotten row; `as_of`/`knew_at` still surface it.
+- **`forgotten_at`**: the one true suppression, written by `aion forget`
+  (`forgetNode` in `infrastructure/graph/bitemporal.ts`, a `SET` with a `coalesce` so a
+  repeat is a no-op). Default recall hides a forgotten row; `as_of`/`knew_at` still surface
+  it, which is what keeps forgetting an audited act rather than a deletion.
 
 `supersede(driver, { oldId, newId })` closes both intervals on the old node with a
 `coalesce` (so a repeated call is a no-op) and links
@@ -185,6 +296,17 @@ links each to the new episode with provenance `supersession_episode_propagation`
 episode alone leaves its facts open, and recall then serves the corrected value as `current`.
 `propagateEpisodeSupersession` runs the second half over an episode something else already
 closed.
+
+`supersedeSubjectFamily(driver, { claimId, newId })` is the middle blade
+(`infrastructure/graph/subject-family.ts`), and the default an applied proposal takes. It
+closes the judged claim and only those siblings of the same episode that name one of its
+subjects, where a subject is an entity that episode mentioned whose stored fold appears inside
+the claim's, with provenance `supersession_subject_propagation`. A definition of a neighbouring
+term and a record of a benchmark stay open, which is what separates it from closing the
+episode. The same call retires the description of a subject entity whose gloss names another
+subject of the closed claim: an entity is never closed, since one outlives every episode that
+named it, but a frozen sentence restating a claim that just closed is cleared so recall stops
+serving it as a current fact.
 
 Four read modes, all built from one composable fragment
 (`infrastructure/graph/read-modes.ts`) so every seed strategy and the traversal share one

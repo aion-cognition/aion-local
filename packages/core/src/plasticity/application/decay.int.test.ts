@@ -3,10 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
-import { runRead } from '../../infrastructure/graph/connection.js';
 import { upsertEdge } from '../../infrastructure/graph/edges.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
 import type { RelationshipType } from '../../infrastructure/graph/relationships.js';
+import { edgeStrength as edgeStrengthBetween } from '../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
@@ -79,19 +79,12 @@ async function seedEdge(
   });
 }
 
-async function edgeStrength(
+function edgeStrength(
   type: RelationshipType,
   sourceId: string,
   targetId: string,
 ): Promise<number | undefined> {
-  const rows = await runRead(
-    harness.driver,
-    `MATCH (a:AionNode { id: $sourceId })-[r:${type}]-(b:AionNode { id: $targetId })
-     RETURN r.strength AS strength`,
-    { sourceId, targetId },
-    (row) => row.strength as number,
-  );
-  return rows[0];
+  return edgeStrengthBetween(harness.driver, type, sourceId, targetId);
 }
 
 function sweep(batchSize = 100) {
@@ -247,6 +240,42 @@ describe('hebbian decay against the graph', () => {
     expect(await edgeStrength('SIMILAR', 'e2-a', 'e2-b')).toBe(e2AfterFirst);
     expect(await edgeStrength('SIMILAR', 'e3-a', 'e3-b')).toBeLessThan(0.5);
     expect(await edgeStrength('SIMILAR', 'e4-a', 'e4-b')).toBeLessThan(0.5);
+  });
+
+  it('applies the same step again when a later sweep reaches the same edge', async () => {
+    await seedEntity('twice-a');
+    await seedEntity('twice-b');
+    await seedEdge('SIMILAR', 'twice-a', 'twice-b', 0.9, PEAK_DAYS);
+
+    await sweep();
+    const afterFirst = (await edgeStrength('SIMILAR', 'twice-a', 'twice-b')) ?? 0.9;
+    await sweep();
+    const afterSecond = (await edgeStrength('SIMILAR', 'twice-a', 'twice-b')) ?? afterFirst;
+
+    // The edge went unused across both sweeps, so both steps are the same size. A sweep that
+    // read staleness off a property it writes would flatten the second step to the curve's
+    // left tail and report an edge nobody touched as freshly used.
+    expect(0.9 - afterFirst).toBeCloseTo(afterFirst - afterSecond, 6);
+    expect(0.9 - afterFirst).toBeCloseTo(DECAY_RATE * decayFactor(PEAK_DAYS, PEAK_DAYS, SIGMA), 6);
+  });
+
+  it('covers every edge in turn when they are all the same whole number of days stale', async () => {
+    const pairs = ['tie-1', 'tie-2', 'tie-3'];
+    for (const pair of pairs) {
+      await seedEntity(`${pair}-a`);
+      await seedEntity(`${pair}-b`);
+      await seedEdge('SIMILAR', `${pair}-a`, `${pair}-b`, 0.9, 0);
+    }
+
+    // One edge per call, three calls. Staleness truncates to whole days, so these three tie on
+    // it exactly; what has to advance the scan is the sweep's own cursor, not the staleness.
+    await sweep(1);
+    await sweep(1);
+    await sweep(1);
+
+    for (const pair of pairs) {
+      expect(await edgeStrength('SIMILAR', `${pair}-a`, `${pair}-b`)).toBeLessThan(0.9);
+    }
   });
 
   it('records what it did in meta for the operator surfaces', async () => {

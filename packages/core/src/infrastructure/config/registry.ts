@@ -45,6 +45,12 @@ export const KNOB_REGISTRY: readonly Knob[] = [
   { envVar: 'AION_REFLECT_MODEL', path: ['models', 'reflect'], kind: 'string' },
 
   { envVar: 'AION_ANTHROPIC_API_KEY', path: ['anthropic', 'apiKey'], kind: 'string' },
+  { envVar: 'AION_ANTHROPIC_MODEL', path: ['anthropic', 'model'], kind: 'string' },
+
+  // Named for the role they pin rather than AION_ROUTING_*, so they read next to
+  // AION_CUE_MODEL and AION_REFLECT_MODEL, which are the models they route.
+  { envVar: 'AION_CUE_PROVIDER', path: ['routing', 'cue'], kind: 'string' },
+  { envVar: 'AION_REFLECT_PROVIDER', path: ['routing', 'reflect'], kind: 'string' },
 
   { envVar: 'AION_RECALL_MAX_HOPS', path: ['recall', 'maxHops'], kind: 'number' },
   { envVar: 'AION_RECALL_VECTOR_LIMIT', path: ['recall', 'vectorLimit'], kind: 'number' },
@@ -208,6 +214,11 @@ export const KNOB_REGISTRY: readonly Knob[] = [
     kind: 'number',
   },
   {
+    envVar: 'AION_REFLECTION_SUPERSEDE_FAMILY_RELATEDNESS_FLOOR',
+    path: ['reflection', 'supersedeFamilyRelatednessFloor'],
+    kind: 'number',
+  },
+  {
     envVar: 'AION_REFLECTION_SUPERSEDE_TIMEOUT_MS',
     path: ['reflection', 'supersedeTimeoutMs'],
     kind: 'number',
@@ -265,6 +276,106 @@ export const KNOB_REGISTRY: readonly Knob[] = [
   { envVar: 'AION_REDACTION_ENTROPY_THRESHOLD', path: ['redaction', 'entropyThreshold'], kind: 'number' },
 
   { envVar: 'AION_MAINTENANCE_TIER3', path: ['maintenance', 'tier3'], kind: 'boolean' },
+  {
+    envVar: 'AION_MAINTENANCE_TICK_MINUTES',
+    path: ['maintenance', 'tickMinutes'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_MAINTENANCE_STARVATION_CYCLES',
+    path: ['maintenance', 'starvationCycles'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_MAINTENANCE_URGENCY_THRESHOLD',
+    path: ['maintenance', 'urgencyThreshold'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_MAINTENANCE_EFFECTIVENESS_FLOOR',
+    path: ['maintenance', 'effectivenessFloor'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_MAINTENANCE_VECTOR_BACKFILL_BATCH_SIZE',
+    path: ['maintenance', 'vectorBackfillBatchSize'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_MAINTENANCE_CONTEXT_REFRESH_BATCH_SIZE',
+    path: ['maintenance', 'contextRefreshBatchSize'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_MAINTENANCE_RECONCILE_BATCH_SIZE',
+    path: ['maintenance', 'reconcileBatchSize'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_MAINTENANCE_DEAD_LETTER_BATCH_SIZE',
+    path: ['maintenance', 'deadLetterBatchSize'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_MAINTENANCE_REDACTION_PURGE_BATCH_SIZE',
+    path: ['maintenance', 'redactionPurgeBatchSize'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_MAINTENANCE_NARRATIVE_CLEANUP_BATCH',
+    path: ['maintenance', 'narrativeCleanupBatch'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_MAINTENANCE_RETRO_SUPERSESSION_BATCH',
+    path: ['maintenance', 'retroSupersessionBatch'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_MAINTENANCE_DESCRIPTION_REFRESH_BATCH',
+    path: ['maintenance', 'descriptionRefreshBatch'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_MAINTENANCE_DESCRIPTION_REFRESH_MENTION_GROWTH',
+    path: ['maintenance', 'descriptionRefreshMentionGrowth'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_MAINTENANCE_BACKBONE_REPAIR_BATCH',
+    path: ['maintenance', 'backboneRepairBatch'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_MAINTENANCE_ORPHAN_CLEANUP_BATCH',
+    path: ['maintenance', 'orphanCleanupBatch'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_MAINTENANCE_ORPHAN_FORGET_AFTER_DAYS',
+    path: ['maintenance', 'orphanForgetAfterDays'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_MAINTENANCE_COMMUNITY_NODE_LIMIT',
+    path: ['maintenance', 'communityNodeLimit'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_MAINTENANCE_COMMUNITY_MIN_NODES',
+    path: ['maintenance', 'communityMinNodes'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_MAINTENANCE_BRIDGE_OVERLAP_CEILING',
+    path: ['maintenance', 'bridgeOverlapCeiling'],
+    kind: 'number',
+  },
+  {
+    envVar: 'AION_MAINTENANCE_BRIDGE_MIN_COMMUNITY_SIZE',
+    path: ['maintenance', 'bridgeMinCommunitySize'],
+    kind: 'number',
+  },
 
   { envVar: SQLITE_PATH_ENV_VAR, path: ['sqlite', 'path'], kind: 'string' },
   {

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { Logger, QueueLagSnapshot } from '@aion/core';
+import type { Logger, PlasticityCounters, QueueLagSnapshot } from '@aion/core';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
@@ -85,6 +85,12 @@ export type AionMcpServiceOptions = {
    * construction that predates it gets.
    */
   readonly queueLag?: () => QueueLagSnapshot;
+  /**
+   * Same reasoning as `queueLag`: SQLite-only, so calling it on every liveness probe never
+   * touches the graph. The edge-weight distribution is graph-bound and stays out of `/health`
+   * on purpose; `aion status` is where it belongs.
+   */
+  readonly plasticity?: () => PlasticityCounters;
 };
 
 export class AionMcpService {
@@ -97,6 +103,7 @@ export class AionMcpService {
   readonly #drainTimeoutMs: number;
   readonly #onSessionClosed: ((sessionId: string) => void) | undefined;
   readonly #queueLag: (() => QueueLagSnapshot) | undefined;
+  readonly #plasticity: (() => PlasticityCounters) | undefined;
   /** Tool calls that have started and not yet settled. Shutdown waits on these. */
   readonly #inFlight = new Set<Promise<unknown>>();
   #stopping = false;
@@ -109,6 +116,7 @@ export class AionMcpService {
     this.#drainTimeoutMs = options.drainTimeoutMs ?? DRAIN_TIMEOUT_MS;
     this.#onSessionClosed = options.onSessionClosed;
     this.#queueLag = options.queueLag;
+    this.#plasticity = options.plasticity;
     this.#http = createServer((req, res) => {
       void this.#route(req, res);
     });
@@ -240,6 +248,28 @@ export class AionMcpService {
     };
   }
 
+  /**
+   * Reinforcement and decay counters plus the reinforcement queue depth; no edge-weight
+   * distribution (see `plasticity` above). `reinforcement_dropped` is not repeated here: it is
+   * already one of `#queueLagFields`'s keys, read from the same counter.
+   */
+  #plasticityFields(): Record<string, unknown> {
+    if (this.#plasticity === undefined) {
+      return {};
+    }
+    const counters = this.#plasticity();
+    return {
+      reinforcement_signals_applied: counters.reinforcement.signalsApplied,
+      reinforcement_pairs_applied: counters.reinforcement.pairsApplied,
+      reinforcement_edges_updated: counters.reinforcement.edgesUpdated,
+      reinforcement_last_run_at: counters.reinforcement.lastRunAt ?? null,
+      reinforcement_queue_depth: counters.reinforcementQueueDepth,
+      decay_edges_scanned: counters.decay.edgesScanned,
+      decay_edges_decayed: counters.decay.edgesDecayed,
+      decay_last_run_at: counters.decay.lastRunAt ?? null,
+    };
+  }
+
   async #route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
       const path = new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
@@ -249,6 +279,7 @@ export class AionMcpService {
           sessions: this.#sessions.size,
           descriptions_version: DESCRIPTIONS_VERSION,
           ...this.#queueLagFields(),
+          ...this.#plasticityFields(),
         });
         return;
       }

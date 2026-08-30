@@ -1,11 +1,16 @@
 # Aion Local
 
-Aion Local is a local-only cognitive memory substrate for AI coding agents. It exposes two
+Aion Local is a local-first cognitive memory substrate for AI coding agents. It exposes two
 MCP tools, `recall` and `reflection`, backed by a Neo4j graph, a SQLite queue, and Ollama
 models running on the host. Every graph write is bitemporal and idempotent: correcting a
 fact supersedes the old node instead of deleting it, so nothing is ever hard-deleted. The
 design follows the Aion whitepaper, adapted here from a multi-tenant service to a single
 user running a single local stack.
+
+The substrate never leaves the machine. Generation is the one part that can: set
+`AION_ANTHROPIC_API_KEY` and cue extraction, reflection, and narratives route to
+`claude-haiku-4-5` instead of the local instruct model. Embeddings stay local either way,
+because the vector space is the substrate.
 
 ## Quickstart
 
@@ -83,22 +88,63 @@ Run through `./bin/aion <command>`, which builds the image when sources are newe
 and then runs the command in the `aion-cli` container.
 
 - `init`: provision the substrate (neo4j, models, schema, backbone)
-- `status`: services, models, and graph counts
+- `status`: services, models, routing, and graph counts
 - `doctor`: check every substrate invariant and name what is broken
+- `stats`: substrate counts, queue and plasticity health, recall cadence, per-method pack
+  shares, and the maintenance loop's own record
 - `last`: the last MemoryPack served per session, with rationale
+- `why`: provenance, lineage, and open proposals for one node
+- `search`: direct hybrid search through the seed layer, bypassing pack assembly
+- `forget`: bitemporal close of a node, by id or by query
 - `queue`: inspect and triage the reflection queue
+- `proposals`: review judged contradictions and duplicate entities
+- `maintain`: the maintenance catalog, and forcing one operation to run now
+- `unmerge`: split an identity back out of the entity dedup absorbed it into
 
 ```
 aion queue ls [--session <id>] [--lane <l>] [--limit <n>]   # depth, age, attempts, per-lane totals
 aion queue promote --session <id>                           # move a session's bulk jobs to interactive
 aion queue drop --session <id> [--yes]                      # unclaimed rows only; prints the count first
 aion queue reconcile [--re-enqueue --yes]                   # episodes with no ledger key and no queue row
+
+aion proposals ls [--all]                                   # open judged contradictions and merge candidates
+aion proposals apply <id> [--claim-only | --episode]        # one at a time; default closes the subject family
+aion proposals dismiss <id>
+
+aion maintain ls                                            # every registered operation and what it answers
+aion maintain run <name>                                    # run one now, whatever the loop would have chosen
+
+aion unmerge ls <canonical-id>                              # what one entity has absorbed
+aion unmerge apply <merged-id>                              # split one of those identities back out
+
+aion search "<query>" [--as-of <ts>] [--knew-at <ts>] [--json]
+aion why <node_id>
+aion forget <id | query> [--yes]
 ```
 
 `drop` and `reconcile --re-enqueue` report what they would do and stop unless `--yes` is
 passed. `drop` never touches a claimed row: that job is running, and deleting it under its
 worker produces exactly the orphan `reconcile` exists to repair. `aion doctor` runs the same
 reconcile count as an informational check and warns past `AION_RECONCILE_WARN_THRESHOLD`.
+
+`proposals apply` takes one id at a time on purpose: applying them in bulk would reinstate
+auto-supersession with an extra keystroke. Its default blade closes the judged claim and the
+siblings of the same episode that name one of its subjects; `--claim-only` closes just the
+claim, and `--episode` closes everything that observation produced.
+
+`maintain run` bypasses the operation's relevance score and its time-bucket claim, and nothing
+else: the batch bounds, the transactions, the protected relationship set and the ledger record
+all still hold. It exists because one operation's subject is not proportional. Thirteen leaking
+nodes out of two thousand is a small share to a scoring function and an incident to a person,
+and before this there was no way to say so.
+
+`unmerge` is the human end of entity deduplication, and it is deliberately not a maintenance
+operation. A bad merge is not measurable from inside the graph: the shape after a correct merge
+and after a wrong one is the same, and the only thing that separates them is a person saying the
+two names were different things.
+
+`forget` sets `forgotten_at` and deletes nothing. Default recall stops serving the node;
+`aion search --as-of` and `--knew-at` still return it, which is what keeps the act audited.
 
 ## Architecture
 
@@ -171,20 +217,24 @@ See `docs/degradation.md` for the measured cost of shared-Ollama contention.
 
 ## Status
 
-P0 through P3 are built and gated: substrate provisioning (`init`, schema migrations, the
-backbone), experience capture (reflection intake: validate, redact, dedupe, store
-bitemporally), recall with the full MCP surface (four seed strategies, spreading activation,
-RRF fusion, MemoryPack assembly), and the reflection pipeline that turns a stored episode
-into entities, associations, cognitive structure, typed relationships, supersession
-judgments, and a session narrative. 1,135 unit tests pass deterministically; the 331-test
-integration suite runs against a live Neo4j and host Ollama, and two tests whose assertion
-turns on the reflect model's live judgment (causal-edge direction, contradiction detection)
-are known to flake under Ollama's sampling rather than the pipeline under test. `aion doctor`
-runs 13 checks against a live stack. The full build history, including what review found in
-each phase, is in [docs/build-ledger.md](docs/build-ledger.md).
+P0 through P5 are built and gated. That covers substrate provisioning (`init`, schema
+migrations, the backbone), experience capture (validate, redact, dedupe, store bitemporally),
+recall with the full MCP surface (four seed strategies, spreading activation, RRF fusion,
+context resonance, MemoryPack assembly), the reflection pipeline that turns a stored episode
+into entities, associations, cognitive structure, typed relationships, supersession judgments
+and a session narrative, Hebbian reinforcement and decay, the introspection loop that
+schedules fourteen maintenance operations, per-role Anthropic routing with model reconciliation,
+and the CLI surface listed above.
 
-P4 and later are not yet built: Hebbian edge plasticity (recall and reflection both queue
-the signals; nothing flushes them yet), context resonance, and maintenance passes. Their
-config knobs are declared and validated but unread. Recall serves `facts`, `episodes`, and
-`narratives`; `preferences` and `resonant` have no producer yet and stay structurally absent
-from a pack rather than empty.
+1,481 unit tests pass deterministically; the integration suite runs against a live Neo4j and
+host Ollama, with generation on Haiku when a key is set. `npm test` reports 204 files and
+1,988 tests. Three are skipped: two whose assertion turns on the reflect model's live judgment
+(causal-edge direction, contradiction detection) flake under sampling rather than under the
+pipeline, and a third records a cross-stage entity-naming gap as a measurement. One probe of
+the on-topic recall battery asserts a rank bar that sits inside live-model variance and fails
+about one run in three; `docs/build-ledger.md` carries the measurement.
+
+`aion doctor` runs 13 checks against a live stack. `preferences` is the one pack bucket with no
+producer, and stays structurally absent rather than empty. The full build history, including
+what review and the live checkpoint found in each phase, is in
+[docs/build-ledger.md](docs/build-ledger.md).

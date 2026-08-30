@@ -32,11 +32,18 @@ export type StructuredRequest = {
 };
 
 /**
- * `embed` always runs locally; `generate` is provider-routed and may leave the machine
- * once the Anthropic provider lands. One interface covers both so callers never branch
- * on which implementation is behind it.
+ * `embed` always runs locally; `generate` is provider-routed and may leave the machine when
+ * an Anthropic key is set. One interface covers both so callers never branch on which
+ * implementation is behind it.
  */
 export type Provider = {
   embed(texts: readonly string[]): Promise<Vector[]>;
   generate(req: StructuredRequest): Promise<unknown>;
 };
+
+/**
+ * Half a provider: what a remote route can offer. Anthropic has no embeddings API, and the
+ * embedding model is the vector index, so the routing layer pairs one of these with the local
+ * embedder rather than letting a second implementation of `Provider` exist without `embed`.
+ */
+export type GenerationBackend = Pick<Provider, 'generate'>;

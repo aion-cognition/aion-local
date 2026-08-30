@@ -13,6 +13,7 @@ import {
   type ReadMode,
 } from './read-modes.js';
 import { fromGraphVector, toGraphVector, type Row } from './values.js';
+import { CONTENT_VECTOR_INDEX, CONTEXT_VECTOR_INDEX } from './vector-indexes.js';
 
 /**
  * Four seed strategies, one query each, plus the two reads recall makes against ids it
@@ -21,8 +22,8 @@ import { fromGraphVector, toGraphVector, type Row } from './values.js';
  * forget suppression have exactly one definition behind every entry point into recall.
  */
 
-/** Declared by migration 001 on `:Memory`; a node written without that label is invisible to it. */
-export const CONTENT_VECTOR_INDEX = 'content_vec_idx';
+export { CONTENT_VECTOR_INDEX } from './vector-indexes.js';
+export { countMemoryNodes, memoryPopulation } from './memory-population.js';
 
 /** Migration 001's fulltext index over `Episode.summary`, `Turn.text`, `Entity.name`. */
 export const CONTENT_FULLTEXT_INDEX = 'memory_content_fts';
@@ -76,6 +77,13 @@ export type SeedCandidate = CurrencyAnnotation & {
   readonly isStructural?: boolean;
   /** A Turn's parent episode. Absent on everything else, including the Episode itself. */
   readonly sourceEpisodeId?: string;
+  /**
+   * The node's own `rationale` property (a Decision today; `cognitive-queries.ts` lets any
+   * cognitive type carry one). Named `why` rather than `rationale` on purpose: `rationale` is
+   * already the retrieval rationale (method, score, path) on a pack item, and the two would
+   * collide under one name from here on.
+   */
+  readonly why?: string;
 };
 
 export type ScoredSeedCandidate = SeedCandidate & {
@@ -144,6 +152,10 @@ function candidateProjection(nodeVar: string, fragment: ReadFragment): string {
     `${nodeVar}.${BITEMPORAL_PROPERTIES.occurredAt} AS occurred_at`,
     `${nodeVar}.${STRUCTURAL_PROPERTY} AS is_structural`,
     `${nodeVar}.${MEMORY_PROPERTIES.sourceEpisodeId} AS source_episode_id`,
+    // `rationale` is only ever written by `cognitive-queries.ts`, so this reads `null` for
+    // every node type that never carries it; the property name stays `rationale` in the
+    // graph, `why` is the wire name that keeps it distinct from a retrieval rationale.
+    `${nodeVar}.rationale AS why`,
     fragment.projection,
   ].join(', ');
 }
@@ -151,6 +163,7 @@ function candidateProjection(nodeVar: string, fragment: ReadFragment): string {
 function mapCandidate(row: Row): SeedCandidate {
   const occurredAt = row.occurred_at;
   const sourceEpisodeId = row.source_episode_id;
+  const why = row.why;
   return {
     id: row.id as string,
     labels: (row.labels as string[] | null) ?? [],
@@ -158,6 +171,7 @@ function mapCandidate(row: Row): SeedCandidate {
     ...(occurredAt instanceof Date ? { occurredAt } : {}),
     ...(row.is_structural === true ? { isStructural: true } : {}),
     ...(typeof sourceEpisodeId === 'string' ? { sourceEpisodeId } : {}),
+    ...(typeof why === 'string' && why.trim().length > 0 ? { why } : {}),
     ...readCurrencyAnnotation(row),
   };
 }
@@ -196,6 +210,60 @@ export async function vectorSeeds(
       ...fragment.parameters,
       index: CONTENT_VECTOR_INDEX,
       limit: toGraphInteger(input.limit),
+      vector: toGraphVector(input.vector),
+    },
+    mapScoredCandidate,
+  );
+}
+
+/**
+ * The same input the content-index leg takes; the difference is which index is searched, not
+ * what the caller has to hand it.
+ */
+export type ContextVectorSeedInput = VectorSeedInput;
+
+/**
+ * The second index the vector leg searches: `context_vec_idx`, whose vectors describe a node's
+ * neighborhood rather than its own text.
+ *
+ * Two indexes, one measurement. The search finds candidates by neighborhood, and the score
+ * returned is the ordinary query-against-content cosine, so a row from here is admitted, ranked
+ * and corroborated on exactly the number a row from the content index carries. Scoring on the
+ * context cosine instead would put a second distribution in front of a floor calibrated on the
+ * first.
+ *
+ * The leg exists because the two indexes disagree about rank in a way that matters. Measured on
+ * the live substrate for "how did we fix the checkout latency": the nodes stating the fix sit at
+ * ranks 1 to 5 in the context index and at 12, 15, 19, 44 and 55 in the content index, all with
+ * content cosines at or above the admission floor. They were admissible all along and never
+ * became candidates, which is what left the round's "how did we fix" questions answerless.
+ *
+ * A node with no content vector is skipped rather than scored at zero: it has no measurement to
+ * be admitted on, and the traversal leg already carries nodes whose embeddings are pending.
+ */
+export async function contextVectorSeeds(
+  driver: Driver,
+  input: ContextVectorSeedInput,
+): Promise<ScoredSeedCandidate[]> {
+  const fragment = readModeFragment(input.mode, 'n');
+  const contentVector = `n.${MEMORY_PROPERTIES.contentVector}`;
+  const cypher = [
+    'CALL db.index.vector.queryNodes($index, $limit, $vector) YIELD node AS n',
+    `WHERE ${contentVector} IS NOT NULL AND size(${contentVector}) = $dimension`,
+    `  AND ${fragment.where}`,
+    `WITH n, ${asCosine(`vector.similarity.cosine(${contentVector}, $vector)`)} AS score`,
+    `RETURN ${candidateProjection('n', fragment)}, score`,
+    'ORDER BY score DESC',
+  ].join('\n');
+
+  return runRead(
+    driver,
+    cypher,
+    {
+      ...fragment.parameters,
+      index: CONTEXT_VECTOR_INDEX,
+      limit: toGraphInteger(input.limit),
+      dimension: toGraphInteger(input.vector.length),
       vector: toGraphVector(input.vector),
     },
     mapScoredCandidate,
@@ -353,9 +421,11 @@ export type NodeContentVector = {
 };
 
 /**
- * Content embeddings for ids already ranked. Read only when the reranker is MMR, which is
- * off by default: 768 floats per row is the reason recall does not carry vectors through
- * the ordinary path.
+ * Content embeddings for a set of ids, batched: 768 floats per row is the reason recall does
+ * not carry vectors through the ordinary path and asks for them where it needs them. Two
+ * callers need them, the MMR reranker over the ranked set and arrival scoring over what the
+ * spread reached. A row comes back only for a node that carries a vector, so an id missing
+ * from the answer is a pending embedding rather than a zero.
  */
 export async function contentVectors(
   driver: Driver,
@@ -376,55 +446,6 @@ export async function contentVectors(
     id: row.id as string,
     vector: fromGraphVector(row.vector) ?? [],
   }));
-}
-
-/**
- * How long one population reading stands before it is read again. The number only sizes the
- * seed budget, and a budget computed from a count thirty seconds old is the same budget: a
- * substrate does not double in a minute, and a per-recall count would put a round trip in
- * front of every seed query to learn nothing new.
- */
-const POPULATION_TTL_MS = 30_000;
-
-type PopulationReading = {
-  readonly count: number;
-  readonly readAt: number;
-};
-
-/**
- * Keyed on the driver rather than held as one module value, so two connections (a test
- * substrate and the service, or two test files in one run) never read each other's count, and
- * the reading is collected with the driver that produced it.
- */
-const populationByDriver = new WeakMap<Driver, PopulationReading>();
-
-/**
- * Every node carrying the `:Memory` label, unfiltered. Neo4j answers a bare label count from
- * its count store without touching a node, which is what makes this cheap enough to run on a
- * read path; adding a currency or forget predicate would turn it into a scan of the whole
- * substrate. Unfiltered is also the right question: this measures how large the graph is, not
- * how many of its nodes a given read mode would return, and a forgotten node still made the
- * substrate bigger.
- */
-export async function countMemoryNodes(driver: Driver): Promise<number> {
-  const rows = await runRead(
-    driver,
-    `MATCH (n:${MEMORY_LABEL}) RETURN count(n) AS population`,
-    {},
-    (row) => row.population as number,
-  );
-  return rows[0] ?? 0;
-}
-
-/** `countMemoryNodes` behind a short-lived per-driver cache. */
-export async function memoryPopulation(driver: Driver, now: number = Date.now()): Promise<number> {
-  const held = populationByDriver.get(driver);
-  if (held !== undefined && now - held.readAt < POPULATION_TTL_MS) {
-    return held.count;
-  }
-  const count = await countMemoryNodes(driver);
-  populationByDriver.set(driver, { count, readAt: now });
-  return count;
 }
 
 export type RecencySeedInput = {

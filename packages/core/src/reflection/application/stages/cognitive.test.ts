@@ -183,14 +183,42 @@ describe('CognitiveExtractionStage', () => {
     expect(graph.nodesWithLabel('Concept')).toHaveLength(2);
   });
 
-  it('fails on a response that does not match the extraction schema', async () => {
+  it('fails on a response that is not a list of nodes at all', async () => {
+    const stage = new CognitiveExtractionStage();
+    const outcome = await stage.run(
+      buildContext(stubProvider(async () => ({ nodes: 'a decision was made' }))),
+    );
+
+    expect(outcome.status).toBe('failed');
+    expect(outcome.summary).toContain('invalid shape');
+  });
+
+  it('fails when every node the model returned carries a type outside the nine', async () => {
     const stage = new CognitiveExtractionStage();
     const outcome = await stage.run(
       buildContext(stubProvider(async () => ({ nodes: [{ type: 'NotAType', text: 'x' }] }))),
     );
 
     expect(outcome.status).toBe('failed');
-    expect(outcome.summary).toContain('invalid shape');
+    expect(outcome.summary).toContain('none of them a described type');
+  });
+
+  it('keeps the described nodes when one of them carries an invented type', async () => {
+    const stage = new CognitiveExtractionStage();
+    const outcome = await stage.run(
+      buildContext(
+        stubProvider(async () => ({
+          nodes: [
+            { type: 'Problem', text: 'two workers can process one refund' },
+            { type: 'Decision', text: 'use a row-level lock', rationale: 'one system, not two' },
+          ],
+        })),
+      ),
+    );
+
+    expect(outcome.status).toBe('ok');
+    expect(outcome.counts).toEqual({ cognitive: 1 });
+    expect(graph.nodesWithLabel('Decision')).toHaveLength(1);
   });
 
   it('fails when the model call throws, without throwing itself', async () => {

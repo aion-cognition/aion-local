@@ -43,13 +43,19 @@ packages/core/src/
   infrastructure/sqlite/                reflection queue, last-pack cache, ops ledger, locks
   recall/domain/                        pure: activation, fusion (RRF/MMR), pack assembly
   recall/application/                   cue extraction, seed strategies, the recall pipeline
+  plasticity/                           reinforcement folding and the decay curve, plus the
+                                        two bounded operations that apply them
+  introspection/domain/                 pure: health snapshot, the tiered decision, the
+                                        operation contract, time-bucketed keys
+  introspection/application/            the tick loop, the catalog, one file per operation
   redaction/                            deterministic secret detection
   reflection/domain/                    pure: episode/turn shaping, content hashing, stage contract
   reflection/application/               intake (the write path), dispatch, orchestrator, worker
   reflection/application/stages/        the pipeline, in the order bootstrap.ts registers them
   session/                              identity-to-session-id resolution
 packages/mcp/src/                       MCP server: tool definitions, HTTP transport
-packages/cli/src/                       aion command: init, status, doctor, last, queue, proposals
+packages/cli/src/                       aion command: init, status, doctor, stats, last, why,
+                                        search, forget, queue, proposals, maintain, unmerge
 bin/aion                                host wrapper: rebuilds the image, runs the CLI container
 ```
 
@@ -61,7 +67,15 @@ npm test                   # both vitest projects: unit, then integration
 npm run test:unit          # packages/*/src/**/*.test.ts, no external services
 npm run test:integration   # packages/*/src/**/*.int.test.ts, needs Docker + host Ollama
 npm run test:watch         # unit project, watch mode
+
+npx tsc -p tsconfig.tests.json   # typecheck including tests, which `tsc -b` excludes
 ```
+
+`tsc -b` excludes `*.test.ts` and `*.fixture.ts`, so a change to a shared type compiles clean
+and fails at runtime in a test. `tsconfig.tests.json` is the pass that sees them. It is a
+diagnostic and not a gate: it reports 65 errors across 30 test files that predate it, mostly
+fixtures built before a type gained a field. Read it as a diff against that baseline. When you
+change a shared type, also run the tests that construct it.
 
 Integration tests read `AION_OLLAMA_URL`; running them on the host rather than inside the
 CLI container needs it set explicitly:
@@ -70,9 +84,8 @@ CLI container needs it set explicitly:
 export AION_OLLAMA_URL=http://127.0.0.1:11434
 ```
 
-`./bin/aion <init|status|doctor|last|queue|proposals>` runs the built CLI against the real
-compose stack.
-Use it to exercise the actual binary, not as a test runner.
+`./bin/aion <command>` runs the built CLI against the real compose stack (`aion help` lists
+every command). Use it to exercise the actual binary, not as a test runner.
 
 ## Guard tests
 

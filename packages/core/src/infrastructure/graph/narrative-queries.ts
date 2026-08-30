@@ -2,7 +2,7 @@ import neo4j, { type Driver } from 'neo4j-driver';
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { runRead, runWrite, type GraphStatement } from './connection.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from './episodes.js';
-import type { NodeLabel } from './labels.js';
+import { BASE_NODE_LABEL, type NodeLabel } from './labels.js';
 import { readModeFragment, withCurrency } from './read-modes.js';
 import type { RelationshipType } from './relationships.js';
 import { toGraphDateTime, type Row } from './values.js';
@@ -359,4 +359,44 @@ export async function findIdleSessions(
       episodeCount: typeof row.episode_count === 'number' ? row.episode_count : 0,
     }),
   );
+}
+
+/**
+ * The grounding marker a correction leaves. A narrative compresses the claims of its session,
+ * so closing one of those claims makes the narrative state something the substrate no longer
+ * holds. Nothing else notices: narratives carry no supersession lineage of their own, and the
+ * staleness scan selects on the grounding revision, which a correction does not change. So the
+ * apply stamps this marker, the scan sees the narrative as written under a revision that is
+ * not current, and the regrounding pass rewrites it from the claims that are open now.
+ */
+export const NARRATIVE_SUPERSEDED_GROUNDING = 'grounding-superseded';
+
+const MARK_NARRATIVES_REGROUND = [
+  'UNWIND $ids AS closedId',
+  `MATCH (closed:${BASE_NODE_LABEL} { id: closedId })`,
+  'OPTIONAL MATCH (closed)-[:EXTRACTED_FROM]->(source:Episode)',
+  'WITH coalesce(source, CASE WHEN closed:Episode THEN closed ELSE null END) AS episode',
+  'WHERE episode IS NOT NULL',
+  `MATCH (episode)-[:${CONTAINMENT_TYPE}]->(s:Session)<-[:${DERIVES_FROM_TYPE}]-(n:Narrative)`,
+  `WHERE n.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  `  AND n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
+  `  AND coalesce(n.${NARRATIVE_PROPERTIES.grounding}, '') <> $marker`,
+  `SET n.${NARRATIVE_PROPERTIES.grounding} = $marker`,
+  'RETURN DISTINCT n.id AS id',
+].join('\n');
+
+/**
+ * Marks the narratives of every session the closed nodes came from, and answers with the ids.
+ * Idempotent: a narrative already carrying the marker is filtered out rather than rewritten.
+ */
+export async function markNarrativesForRegrounding(
+  driver: Driver,
+  closedIds: readonly string[],
+  marker: string = NARRATIVE_SUPERSEDED_GROUNDING,
+): Promise<readonly string[]> {
+  const ids = [...new Set(closedIds)];
+  if (ids.length === 0) {
+    return [];
+  }
+  return runWrite(driver, MARK_NARRATIVES_REGROUND, { ids, marker }, (row) => row.id as string);
 }
