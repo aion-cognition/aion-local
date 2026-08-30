@@ -10,7 +10,14 @@ import {
   type LastPackSession,
   type PackBucket,
 } from '@aion/core';
-import { MemoryPackSchema, type Cue, type MemoryPack, type MemoryPackItem, type StageTimingsMs } from '@aion/protocol';
+import {
+  MemoryPackSchema,
+  type Cue,
+  type MemoryPack,
+  type MemoryPackItem,
+  type StageTimingsMs,
+} from '@aion/protocol';
+
 import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
 
 /** Render exactly the pack a session was served, not a recomputed view. */
@@ -177,7 +184,10 @@ export function renderSessionList(
   write('');
 }
 
-export async function runLast(argv: readonly string[] = [], write: Writer = stdoutWriter): Promise<number> {
+export function runLast(
+  argv: readonly string[] = [],
+  write: Writer = stdoutWriter,
+): Promise<number> {
   let flags: LastFlags;
   let config: Config;
   try {
@@ -185,7 +195,7 @@ export async function runLast(argv: readonly string[] = [], write: Writer = stdo
     config = loadConfig(process.env);
   } catch (err) {
     stderrWriter(err instanceof ConfigError ? err.message : describeError(err));
-    return 1;
+    return Promise.resolve(1);
   }
 
   const logger = openLogger({ ...config.logging, name: 'aion-last' });
@@ -199,19 +209,19 @@ export async function runLast(argv: readonly string[] = [], write: Writer = stdo
           ? 'no memory packs recorded yet'
           : `no pack recorded for session '${flags.session}'`,
       );
-      return 1;
+      return Promise.resolve(1);
     }
 
     const row = getLastPack(store.db, targetId);
     if (row === undefined) {
       stderrWriter(`no pack recorded for session '${targetId}'`);
-      return 1;
+      return Promise.resolve(1);
     }
 
     if (flags.json) {
       write(row.packJson);
       logger.info({ sessionId: targetId }, 'last pack rendered as json');
-      return 0;
+      return Promise.resolve(0);
     }
 
     const pack = MemoryPackSchema.parse(row.pack);
@@ -220,11 +230,11 @@ export async function runLast(argv: readonly string[] = [], write: Writer = stdo
     }
     renderPack({ sessionId: targetId, ts: row.ts, pack }, write);
     logger.info({ sessionId: targetId }, 'last pack rendered');
-    return 0;
+    return Promise.resolve(0);
   } catch (err) {
     logger.error({ err: describeError(err) }, 'last failed');
     stderrWriter(err instanceof Error ? `${err.name}: ${err.message}` : String(err));
-    return 1;
+    return Promise.resolve(1);
   } finally {
     store.close();
   }

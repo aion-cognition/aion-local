@@ -1,5 +1,9 @@
 import type { CueWeight, RecallMethod } from '@aion/protocol';
-import type { ScoredSeedCandidate, SeedCandidate } from '../../infrastructure/graph/seed-queries.js';
+
+import type {
+  ScoredSeedCandidate,
+  SeedCandidate,
+} from '../../infrastructure/graph/seed-queries.js';
 
 /**
  * The pure half of seed selection: what a seed is, how one node's contributions merge into
@@ -303,10 +307,7 @@ function cueOf(seed: Seed, strategy: SeedStrategy): string {
  * Groups are ordered by first appearance, which is the leg's own rank order, so the cue
  * holding the leg's best hit still deals first.
  */
-export function roundRobinByCue(
-  seeds: readonly Seed[],
-  strategy: SeedStrategy,
-): readonly Seed[] {
+export function roundRobinByCue(seeds: readonly Seed[], strategy: SeedStrategy): readonly Seed[] {
   const groups = new Map<string, Seed[]>();
   for (const seed of seeds) {
     const cue = cueOf(seed, strategy);

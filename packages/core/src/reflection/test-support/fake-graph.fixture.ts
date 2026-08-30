@@ -1,4 +1,5 @@
 import type { Driver } from 'neo4j-driver';
+
 import { BITEMPORAL_PROPERTIES } from '../../infrastructure/graph/bitemporal.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
 import { LOCK_PROPERTY } from '../../infrastructure/graph/locks.js';
@@ -74,12 +75,16 @@ export class FakeGraph {
    * against a real server in the integration suites.
    */
   session(): unknown {
-    const run = async (cypher: string, parameters: Record<string, unknown> = {}): Promise<unknown> =>
-      this.executeQuery(cypher, parameters);
+    const run = async (
+      cypher: string,
+      parameters: Record<string, unknown> = {},
+    ): Promise<unknown> => this.executeQuery(cypher, parameters);
     return {
       executeWrite: async (work: (tx: { run: typeof run }) => Promise<unknown>): Promise<unknown> =>
         work({ run }),
-      close: async (): Promise<void> => {},
+      close: async (): Promise<void> => {
+        // Nothing to release: the fake holds no real connection.
+      },
     };
   }
 
@@ -123,12 +128,12 @@ export class FakeGraph {
 
     const nodeMerge = /MERGE \(n:(\w+) \{ id: \$id \}\)/.exec(cypher);
     if (nodeMerge !== null) {
-      return this.#mergeNode(nodeMerge[1] as string, cypher, parameters);
+      return this.#mergeNode(nodeMerge[1]!, cypher, parameters);
     }
 
     const edgeMerge = /MERGE \(a\)-\[r:(\w+)\]->\(b\)/.exec(cypher);
     if (edgeMerge !== null) {
-      return this.#mergeEdge(edgeMerge[1] as string, parameters);
+      return this.#mergeEdge(edgeMerge[1]!, parameters);
     }
 
     if (cypher.includes(`SET n.${LOCK_PROPERTY}`)) {
@@ -182,7 +187,7 @@ export class FakeGraph {
     }
 
     const companions = /SET n:([\w:]+)/.exec(cypher);
-    const labels = [label, ...(companions === null ? [] : (companions[1] as string).split(':'))];
+    const labels = [label, ...(companions === null ? [] : companions[1]!.split(':'))];
     const properties = {
       ...(parameters.properties as Row),
       ...(parameters.mergeProperties as Row | undefined),
@@ -227,14 +232,16 @@ export class FakeGraph {
       existing.strength = Math.max(existing.strength, parameters.strength as number);
       existing.confidence = Math.max(existing.confidence, parameters.confidence as number);
       existing.signals = [...new Set([...existing.signals, ...asStrings(parameters.signals)])];
-      existing.provenance = [...new Set([...existing.provenance, ...asStrings(parameters.provenance)])];
+      existing.provenance = [
+        ...new Set([...existing.provenance, ...asStrings(parameters.provenance)]),
+      ];
       existing.count += count;
       // Matches the real merge policy's `coalesce(r.rationale, $rationale)`: first write wins.
       existing.rationale = existing.rationale ?? rationale;
       existing.updatedAt = parameters.now;
     }
 
-    const edge = this.edges.get(key) as FakeEdge;
+    const edge = this.edges.get(key)!;
     return toResult([{ ...edge }]);
   }
 
@@ -249,7 +256,7 @@ export class FakeGraph {
   }
 
   #writeContentVectors(parameters: Record<string, unknown>): Row[] {
-    const entries = (parameters.entries ?? []) as Array<{ id: string; vector: number[] }>;
+    const entries = (parameters.entries ?? []) as { id: string; vector: number[] }[];
     const written: Row[] = [];
     for (const entry of entries) {
       const node = this.nodes.get(entry.id);
@@ -274,7 +281,7 @@ export class FakeGraph {
       }))
       .sort((left, right) => {
         const byName = String(left.name_norm).localeCompare(String(right.name_norm));
-        return byName !== 0 ? byName : String(left.id).localeCompare(String(right.id));
+        return byName === 0 ? left.id.localeCompare(right.id) : byName;
       });
   }
 
@@ -370,7 +377,9 @@ export class FakeGraph {
   #priorSession(parameters: Record<string, unknown>): Row[] {
     const sessionId = parameters.sessionId as string;
     const followed = new Set(
-      [...this.edges.values()].filter((edge) => edge.type === 'FOLLOWS').map((edge) => edge.targetId),
+      [...this.edges.values()]
+        .filter((edge) => edge.type === 'FOLLOWS')
+        .map((edge) => edge.targetId),
     );
     const tail = this.nodesWithLabel('Session').find(
       (node) => node.id !== sessionId && !followed.has(node.id),
@@ -388,17 +397,17 @@ export class FakeGraph {
       if (edge.type !== 'MENTIONS' && edge.type !== 'EXTRACTED_FROM') {
         continue;
       }
-      const otherId =
-        edge.sourceId === episodeId
-          ? edge.targetId
-          : edge.targetId === episodeId
-            ? edge.sourceId
-            : undefined;
+      let otherId: string | undefined;
+      if (edge.sourceId === episodeId) {
+        otherId = edge.targetId;
+      } else if (edge.targetId === episodeId) {
+        otherId = edge.sourceId;
+      }
       if (otherId === undefined) {
         continue;
       }
       const node = this.nodes.get(otherId);
-      if (node === undefined || !node.labels.includes('AionNode')) {
+      if (!node?.labels.includes('AionNode')) {
         continue;
       }
       if (node.properties[BITEMPORAL_PROPERTIES.validUntil] != null) {

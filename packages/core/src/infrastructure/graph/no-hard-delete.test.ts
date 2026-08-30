@@ -63,13 +63,23 @@ describe('no code path hard-deletes a node', () => {
 
   it('scans every TypeScript source file in the workspace', () => {
     expect(files.length).toBeGreaterThan(10);
-    expect(files.some((file) => relative(REPO_ROOT, file).startsWith(`packages${sep}core`))).toBe(true);
+    expect(files.some((file) => relative(REPO_ROOT, file).startsWith(`packages${sep}core`))).toBe(
+      true,
+    );
   });
 
   it('skips exactly two files: itself and the harness that clears the shared test database', () => {
     expect(EXEMPT.map((file) => relative(REPO_ROOT, file))).toEqual([
       join('packages', 'core', 'src', 'infrastructure', 'graph', 'no-hard-delete.test.ts'),
-      join('packages', 'core', 'src', 'infrastructure', 'graph', 'test-support', 'neo4j-harness.fixture.ts'),
+      join(
+        'packages',
+        'core',
+        'src',
+        'infrastructure',
+        'graph',
+        'test-support',
+        'neo4j-harness.fixture.ts',
+      ),
     ]);
     for (const file of EXEMPT) {
       expect(existsSync(file)).toBe(true);
@@ -112,7 +122,9 @@ describe('no code path hard-deletes a node', () => {
     const operator = stripComments("delete process.env['AION_LOG_FILE'];\ndelete cache[key];\n");
     expect(FORBIDDEN.some(({ pattern }) => pattern.test(operator))).toBe(false);
 
-    const prose = stripComments('// never delete a node; supersession closes it instead\nconst x = 1;\n');
+    const prose = stripComments(
+      '// never delete a node; supersession closes it instead\nconst x = 1;\n',
+    );
     expect(FORBIDDEN.some(({ pattern }) => pattern.test(prose))).toBe(false);
   });
 });

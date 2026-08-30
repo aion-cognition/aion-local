@@ -1,11 +1,10 @@
 import type { RecallMethod } from '@aion/protocol';
 import { describe, expect, it } from 'vitest';
-import type { Vector } from '../../infrastructure/providers/types.js';
+
 import type { AdmissionPolicy, Measurement } from './admission.js';
 import {
   fuse,
   reciprocalRank,
-  SUPERSEDED_RANK_WEIGHT,
   type FusedItem,
   type FusionCandidate,
   type FusionOptions,
@@ -115,7 +114,9 @@ describe('RRF across ranked lists', () => {
   });
 
   it('keeps a contentless hit out of the pack without promoting what ranked under it', () => {
-    const withGap = items([list('vector', [candidate('blank', { content: '   ' }), candidate('b')])]);
+    const withGap = items([
+      list('vector', [candidate('blank', { content: '   ' }), candidate('b')]),
+    ]);
     const control = items([list('vector', [candidate('a'), candidate('b')])]);
 
     expect(ids(withGap)).toEqual(['b']);
@@ -169,7 +170,12 @@ describe('traversal admission', () => {
         list('vector', [candidate('anchor', { relevance: anchorRelevance })]),
         list('graph_traversal', [
           candidate('anchor', { relevance: anchorRelevance }),
-          candidate('reached', { method: 'activation', relevance: 0, activation: 0.29, evidence: [] }),
+          candidate('reached', {
+            method: 'activation',
+            relevance: 0,
+            activation: 0.29,
+            evidence: [],
+          }),
         ]),
       ],
       { ...RRF, admission: CALIBRATED },
@@ -200,7 +206,10 @@ describe('traversal admission', () => {
     const fused = items(
       [
         list('vector', [candidate('anchor', { relevance: 0.9 })]),
-        list('graph_traversal', [candidate('anchor', { relevance: 0.9 }), arrival('reached', 0.71)]),
+        list('graph_traversal', [
+          candidate('anchor', { relevance: 0.9 }),
+          arrival('reached', 0.71),
+        ]),
       ],
       { ...RRF, admission: CALIBRATED },
     );
@@ -216,7 +225,10 @@ describe('traversal admission', () => {
     const fused = items(
       [
         list('vector', [candidate('anchor', { relevance: 0.9 })]),
-        list('graph_traversal', [candidate('anchor', { relevance: 0.9 }), arrival('reached', 0.44)]),
+        list('graph_traversal', [
+          candidate('anchor', { relevance: 0.9 }),
+          arrival('reached', 0.44),
+        ]),
       ],
       { ...RRF, admission: CALIBRATED },
     );
@@ -257,7 +269,12 @@ describe('traversal admission', () => {
           candidate('reached', { relevance: 0.72 }),
         ]),
         list('graph_traversal', [
-          candidate('reached', { method: 'activation', relevance: 0, activation: 0.29, evidence: [] }),
+          candidate('reached', {
+            method: 'activation',
+            relevance: 0,
+            activation: 0.29,
+            evidence: [],
+          }),
         ]),
       ],
       { ...RRF, admission: CALIBRATED },
@@ -293,7 +310,12 @@ describe('the admission report', () => {
         ]),
         list('graph_traversal', [
           candidate('kept', { relevance: 0.8 }),
-          candidate('reached', { method: 'activation', relevance: 0, activation: 0.2, evidence: [] }),
+          candidate('reached', {
+            method: 'activation',
+            relevance: 0,
+            activation: 0.2,
+            evidence: [],
+          }),
         ]),
       ],
       { ...RRF, admission: CALIBRATED },
@@ -329,7 +351,12 @@ describe('the admission report', () => {
     const result = fuse(
       [
         list('graph_traversal', [
-          candidate('reached', { method: 'activation', relevance: 0, activation: 0.4, evidence: [] }),
+          candidate('reached', {
+            method: 'activation',
+            relevance: 0,
+            activation: 0.4,
+            evidence: [],
+          }),
         ]),
       ],
       { ...RRF, admission: CALIBRATED },
@@ -351,7 +378,12 @@ describe('the admission report', () => {
       [
         list('bm25', [candidate('lexical', { method: 'bm25', relevance: 0.9, evidence: [] })]),
         list('graph_traversal', [
-          candidate('reached', { method: 'activation', relevance: 0, activation: 0.4, evidence: [] }),
+          candidate('reached', {
+            method: 'activation',
+            relevance: 0,
+            activation: 0.4,
+            evidence: [],
+          }),
         ]),
       ],
       { ...RRF, admission: CALIBRATED },

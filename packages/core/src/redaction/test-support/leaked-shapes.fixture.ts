@@ -45,7 +45,9 @@ export const LEAKED_SHAPES: readonly LeakedShape[] = [
     material: AWS_SECRET_WITH_SLASH,
     rule: 'high-entropy',
     payload: {
-      turns: [{ role: 'user', text: `the runbook still has ${AWS_SECRET_WITH_SLASH} pasted beside it` }],
+      turns: [
+        { role: 'user', text: `the runbook still has ${AWS_SECRET_WITH_SLASH} pasted beside it` },
+      ],
       summary: 'runbook credential review',
     },
   },
@@ -165,6 +167,8 @@ export const SURVIVING_TEXT: Readonly<Record<string, string>> = {
   'a non-credential env assignment': 'NODE_OPTIONS=--max_old_space_size=8000',
   'a repository env assignment': 'GITHUB_REPOSITORY=solace-health/solace-health-server',
   'a code reference in key position': 'api_key: process.env.API_KEY',
+  // The literal shell syntax is the point of this case, not a forgotten template literal.
+  // eslint-disable-next-line no-template-curly-in-string -- see comment above
   'a shell interpolation': 'client_secret=${CLIENT_SECRET}',
   'an absent value': 'client_secret: undefined',
 };
@@ -175,6 +179,8 @@ export const SURVIVING_TEXT: Readonly<Record<string, string>> = {
  */
 export const SURVIVING_FIELDS: readonly { readonly key: string; readonly value: string }[] = [
   { key: 'api_key', value: 'process.env.API_KEY' },
+  // The literal shell syntax is the point of this case, not a forgotten template literal.
+  // eslint-disable-next-line no-template-curly-in-string -- see comment above
   { key: 'client_secret', value: '${CLIENT_SECRET}' },
   { key: 'token', value: 'undefined' },
   { key: 'password', value: 'z.string().min(8)' },

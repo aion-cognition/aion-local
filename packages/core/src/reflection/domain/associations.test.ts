@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import { coOccurringPairs, coOccursLedgerKey } from './associations.js';
 
 describe('coOccurringPairs', () => {

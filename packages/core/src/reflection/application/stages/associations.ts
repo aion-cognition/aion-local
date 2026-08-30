@@ -3,7 +3,10 @@ import {
   linkCoOccurrence,
   linkSimilarity,
 } from '../../../infrastructure/graph/association-queries.js';
-import { findEpisodeEntities, type EpisodeEntity } from '../../../infrastructure/graph/entity-queries.js';
+import {
+  findEpisodeEntities,
+  type EpisodeEntity,
+} from '../../../infrastructure/graph/entity-queries.js';
 import { withCurrency } from '../../../infrastructure/graph/read-modes.js';
 import { contentVectors } from '../../../infrastructure/graph/seed-queries.js';
 import { isLedgerApplied, markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
@@ -111,7 +114,10 @@ export class AssociationInferenceStage implements ReflectionStage {
   async #linkCoOccurrences(
     ctx: StageContext,
     entityIds: readonly string[],
-  ): Promise<{ status: 'ok'; written: number } | { status: 'failed'; summary: string; counts: { associations: number } }> {
+  ): Promise<
+    | { status: 'ok'; written: number }
+    | { status: 'failed'; summary: string; counts: { associations: number } }
+  > {
     const key = coOccursLedgerKey(ctx.episodeId);
     if (isLedgerApplied(ctx.db, key)) {
       return { status: 'ok', written: 0 };
@@ -180,7 +186,10 @@ export class AssociationInferenceStage implements ReflectionStage {
       }
       return { status: 'ok', created };
     } catch (err) {
-      return { status: 'failed', summary: `semantic similarity inference failed: ${describe(err)}` };
+      return {
+        status: 'failed',
+        summary: `semantic similarity inference failed: ${describe(err)}`,
+      };
     }
   }
 }

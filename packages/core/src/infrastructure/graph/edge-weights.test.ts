@@ -1,5 +1,6 @@
 import neo4j from 'neo4j-driver';
 import { describe, expect, it } from 'vitest';
+
 import { buildEdgeWeightDecay, buildEdgeWeightReinforcement } from './edge-weights.js';
 import { GraphWriteError } from './errors.js';
 import { BASE_NODE_LABEL } from './labels.js';
@@ -33,7 +34,7 @@ describe('bounded edge weight reinforcement', () => {
   it('excludes the protected types by parameter rather than by query text', () => {
     const { cypher, parameters } = buildEdgeWeightReinforcement({ pairs: PAIRS, weightFloor: 0.1 });
     expect(cypher).toContain('WHERE NOT type(r) IN $protected');
-    expect(parameters['protected']).toEqual([...PROTECTED_RELATIONSHIP_TYPES]);
+    expect(parameters.protected).toEqual([...PROTECTED_RELATIONSHIP_TYPES]);
   });
 
   it('skips an edge onto a forgotten node at either end', () => {
@@ -58,7 +59,7 @@ describe('bounded edge weight reinforcement', () => {
       ],
       weightFloor: 0.1,
     });
-    expect(parameters['pairs']).toEqual([
+    expect(parameters.pairs).toEqual([
       { sourceId: 'a', targetId: 'b', learningRate: 0.1 },
       { sourceId: 'c', targetId: 'd', learningRate: 0.03 },
     ]);
@@ -102,7 +103,7 @@ describe('bell curve edge weight decay', () => {
     expect(cypher).toContain('ORDER BY CASE WHEN sweptAt IS NULL THEN 0 ELSE 1 END, sweptAt ASC');
     expect(cypher).toContain('LIMIT $batchSize');
     // LIMIT rejects a float, so this crosses the driver as a Neo4j Integer, not a plain number.
-    expect(parameters['batchSize']).toEqual(neo4j.int(100));
+    expect(parameters.batchSize).toEqual(neo4j.int(100));
   });
 
   it('measures staleness off the last write rather than off its own cursor', () => {
@@ -130,7 +131,7 @@ describe('bell curve edge weight decay', () => {
   it('excludes the protected types by the same parameter reinforcement uses', () => {
     const { cypher, parameters } = buildEdgeWeightDecay(DECAY_INPUT);
     expect(cypher).toContain('WHERE NOT type(r) IN $protected');
-    expect(parameters['protected']).toEqual([...PROTECTED_RELATIONSHIP_TYPES]);
+    expect(parameters.protected).toEqual([...PROTECTED_RELATIONSHIP_TYPES]);
   });
 
   it('skips an edge onto a forgotten node at either end', () => {
@@ -151,9 +152,7 @@ describe('bell curve edge weight decay', () => {
   });
 
   it('rejects a decay rate outside zero to one', () => {
-    expect(() => buildEdgeWeightDecay({ ...DECAY_INPUT, decayRate: 1.5 })).toThrow(
-      GraphWriteError,
-    );
+    expect(() => buildEdgeWeightDecay({ ...DECAY_INPUT, decayRate: 1.5 })).toThrow(GraphWriteError);
   });
 
   it('rejects a weight floor outside zero to one', () => {
@@ -164,9 +163,7 @@ describe('bell curve edge weight decay', () => {
 
   it('rejects a batch size that is not a positive integer', () => {
     expect(() => buildEdgeWeightDecay({ ...DECAY_INPUT, batchSize: 0 })).toThrow(GraphWriteError);
-    expect(() => buildEdgeWeightDecay({ ...DECAY_INPUT, batchSize: 1.5 })).toThrow(
-      GraphWriteError,
-    );
+    expect(() => buildEdgeWeightDecay({ ...DECAY_INPUT, batchSize: 1.5 })).toThrow(GraphWriteError);
   });
 
   it('rejects a peak that is not a positive integer', () => {

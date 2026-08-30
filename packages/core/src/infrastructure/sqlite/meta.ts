@@ -6,8 +6,7 @@ import type { SqliteHandle } from './database.js';
  */
 export function getMeta(db: SqliteHandle, key: string): string | undefined {
   const row = db.prepare('SELECT value FROM meta WHERE key = ?').get(key) as
-    | { value: string }
-    | undefined;
+    { value: string } | undefined;
   return row?.value;
 }
 

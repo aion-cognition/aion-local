@@ -1,17 +1,10 @@
-import { randomUUID } from 'node:crypto';
 import type { Driver } from 'neo4j-driver';
-import {
-  type GraphStatement,
-  type GraphTransaction,
-  runWrite,
-} from './connection.js';
+import { randomUUID } from 'node:crypto';
+
+import { type GraphStatement, type GraphTransaction, runWrite } from './connection.js';
 import { GraphNodeNotFoundError, GraphWriteError } from './errors.js';
 import { BASE_NODE_LABEL } from './labels.js';
-import {
-  isRelationshipType,
-  normalizeEndpoints,
-  type RelationshipType,
-} from './relationships.js';
+import { isRelationshipType, normalizeEndpoints, type RelationshipType } from './relationships.js';
 import { toGraphDateTime, type Row } from './values.js';
 
 /**
@@ -95,7 +88,8 @@ function strengthPolicyFragments(policy: EdgeStrengthPolicy): {
   }
   const stepped = 'coalesce(r.strength, 0.0) + $strength * (1.0 - coalesce(r.strength, 0.0))';
   return {
-    onCreate: 'r.strength = CASE WHEN $strength < $weightFloor THEN $weightFloor ELSE $strength END',
+    onCreate:
+      'r.strength = CASE WHEN $strength < $weightFloor THEN $weightFloor ELSE $strength END',
     onMatch: `r.strength = CASE WHEN ${stepped} > 1.0 THEN 1.0 WHEN ${stepped} < $weightFloor THEN $weightFloor ELSE ${stepped} END`,
   };
 }
@@ -190,7 +184,7 @@ export function buildEdgeUpsert(input: EdgeUpsert): GraphStatement {
 }
 
 function mapUpsertedEdge(type: RelationshipType, row: Row): UpsertedEdge {
-  const rationale = row.rationale;
+  const { rationale } = row;
   return {
     id: row.id as string,
     type,

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+
 import type { SqliteHandle } from './database.js';
 import type { ReflectionJob } from './reflection-queue.js';
 
@@ -100,8 +101,7 @@ export class ReflectionQueueClaimant {
   claimNext(db: SqliteHandle, maxAttempts?: number): ReflectionJob | undefined {
     const attemptBound = maxAttempts ?? Number.MAX_SAFE_INTEGER;
     const row = db.prepare(CLAIM_NEXT).get(new Date().toISOString(), this.id, attemptBound) as
-      | ReflectionJobRow
-      | undefined;
+      ReflectionJobRow | undefined;
     return row === undefined ? undefined : toReflectionJob(row);
   }
 
@@ -164,6 +164,8 @@ export function reclaimStaleReflectionJobs(
        WHERE claimed_at IS NOT NULL AND claimed_at < ?${ownership}`,
   );
   const result =
-    exceptClaimant === undefined ? statement.run(threshold) : statement.run(threshold, exceptClaimant);
+    exceptClaimant === undefined
+      ? statement.run(threshold)
+      : statement.run(threshold, exceptClaimant);
   return result.changes;
 }

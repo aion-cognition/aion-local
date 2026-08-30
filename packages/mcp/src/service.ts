@@ -1,6 +1,3 @@
-import { randomUUID } from 'node:crypto';
-import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http';
-import type { AddressInfo } from 'node:net';
 import type { Logger, PlasticityCounters, QueueLagSnapshot } from '@aion/core';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -11,6 +8,14 @@ import {
   ListToolsRequestSchema,
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
+import { randomUUID } from 'node:crypto';
+import {
+  createServer,
+  type IncomingMessage,
+  type Server as HttpServer,
+  type ServerResponse,
+} from 'node:http';
+
 import { DESCRIPTIONS_VERSION, USAGE_PROTOCOL } from './descriptions.js';
 import {
   HEALTH_PATH,
@@ -57,6 +62,7 @@ export const DRAIN_TIMEOUT_MS = 7000;
 
 type McpSession = {
   readonly transport: StreamableHTTPServerTransport;
+  // eslint-disable-next-line @typescript-eslint/no-deprecated -- Server is the SDK's documented escape hatch for custom request handlers; McpServer's tool API can't express the raw JSON Schema contract tools.ts builds.
   readonly server: Server;
   /** Last time this session handled a request. What `closeIdleSessions` measures against. */
   lastActivityAt: number;
@@ -128,7 +134,7 @@ export class AionMcpService {
     if (address === null || typeof address === 'string') {
       return this.#configuredPort;
     }
-    return (address as AddressInfo).port;
+    return address.port;
   }
 
   get sessionCount(): number {
@@ -151,7 +157,12 @@ export class AionMcpService {
       });
     });
     this.#logger.info(
-      { host: this.#host, port: this.port, path: MCP_PATH, descriptionsVersion: DESCRIPTIONS_VERSION },
+      {
+        host: this.#host,
+        port: this.port,
+        path: MCP_PATH,
+        descriptionsVersion: DESCRIPTIONS_VERSION,
+      },
       'mcp service listening',
     );
     return this.port;
@@ -169,7 +180,9 @@ export class AionMcpService {
     this.#logger.info({ inFlight: this.#inFlight.size }, 'mcp service draining tool calls');
     let timer: NodeJS.Timeout | undefined;
     const deadline = new Promise<'timeout'>((resolve) => {
-      timer = setTimeout(() => resolve('timeout'), this.#drainTimeoutMs);
+      timer = setTimeout(() => {
+        resolve('timeout');
+      }, this.#drainTimeoutMs);
       timer.unref();
     });
     try {
@@ -197,7 +210,7 @@ export class AionMcpService {
    * would otherwise hold the HTTP close callback open until the client noticed.
    */
   async close(): Promise<void> {
-    const port = this.port;
+    const { port } = this;
     this.#stopping = true;
     await this.#drain();
 
@@ -215,7 +228,7 @@ export class AionMcpService {
     }
     await new Promise<void>((resolve, reject) => {
       this.#http.close((err) => {
-        if (err === undefined || err === null) {
+        if (err === undefined) {
           resolve();
           return;
         }
@@ -295,7 +308,12 @@ export class AionMcpService {
         await this.#existingSession(req, res);
         return;
       }
-      writeJsonRpcError(res, 405, JSONRPC_INVALID_REQUEST, `method not allowed: ${req.method ?? 'unknown'}`);
+      writeJsonRpcError(
+        res,
+        405,
+        JSONRPC_INVALID_REQUEST,
+        `method not allowed: ${req.method ?? 'unknown'}`,
+      );
     } catch (err) {
       this.#logger.error({ err, method: req.method }, 'mcp request failed');
       if (!res.headersSent) {
@@ -311,7 +329,12 @@ export class AionMcpService {
     try {
       body = await readJsonBody(req);
     } catch (err) {
-      writeJsonRpcError(res, 400, JSONRPC_PARSE_ERROR, err instanceof Error ? err.message : String(err));
+      writeJsonRpcError(
+        res,
+        400,
+        JSONRPC_PARSE_ERROR,
+        err instanceof Error ? err.message : String(err),
+      );
       return;
     }
 
@@ -352,6 +375,9 @@ export class AionMcpService {
   }
 
   async #openSession(): Promise<McpSession> {
+    // `onsessioninitialized` below closes over `server`, which needs `transport` to build first.
+    // eslint-disable-next-line prefer-const -- circular with transport; assigned once, below.
+    let server: McpSession['server'];
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (id) => {
@@ -364,7 +390,7 @@ export class AionMcpService {
       },
     });
 
-    const server = this.#buildServer(transport);
+    server = this.#buildServer(transport);
     // `connect` takes over `transport.onclose`; the protocol's own hook is the one a caller owns.
     server.onclose = () => {
       const id = transport.sessionId;
@@ -462,6 +488,8 @@ export class AionMcpService {
   }
 
   #buildServer(transport: StreamableHTTPServerTransport): Server {
+    // eslint-disable-line @typescript-eslint/no-deprecated -- Server is the SDK's documented escape hatch for custom request handlers; McpServer's tool API can't express the raw JSON Schema contract tools.ts builds.
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- same escape hatch as the return type above.
     const server = new Server(SERVER_INFO, {
       capabilities: { tools: {} },
       instructions: USAGE_PROTOCOL,
@@ -472,12 +500,18 @@ export class AionMcpService {
     server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       const identity = extra.sessionId ?? transport.sessionId;
       if (identity === undefined) {
-        throw new McpError(ErrorCode.InternalError, 'tool call arrived without a transport session id');
+        throw new McpError(
+          ErrorCode.InternalError,
+          'tool call arrived without a transport session id',
+        );
       }
       // Refused rather than started: the substrate this call would touch is about to close,
       // and a named error now beats a socket that dies mid-response.
       if (this.#stopping) {
-        throw new McpError(ErrorCode.InternalError, 'aion-mcp is shutting down; retry once it is back');
+        throw new McpError(
+          ErrorCode.InternalError,
+          'aion-mcp is shutting down; retry once it is back',
+        );
       }
       return this.#track(
         callTool(

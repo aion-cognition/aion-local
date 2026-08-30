@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import { ReflectionInputSchema } from './reflection-input.js';
 
 describe('ReflectionInputSchema valid fixtures', () => {
@@ -40,7 +41,10 @@ describe('ReflectionInputSchema valid fixtures', () => {
   });
 
   it('rejects a lane outside the vocabulary', () => {
-    const result = ReflectionInputSchema.safeParse({ observations: ['a decision'], lane: 'urgent' });
+    const result = ReflectionInputSchema.safeParse({
+      observations: ['a decision'],
+      lane: 'urgent',
+    });
     expect(result.success).toBe(false);
   });
 
@@ -95,7 +99,11 @@ describe('ReflectionInputSchema at-least-one rule', () => {
   });
 
   it('rejects when every present bucket is an empty array', () => {
-    const result = ReflectionInputSchema.safeParse({ turns: [], tool_executions: [], observations: [] });
+    const result = ReflectionInputSchema.safeParse({
+      turns: [],
+      tool_executions: [],
+      observations: [],
+    });
     expect(result.success).toBe(false);
   });
 
@@ -113,7 +121,9 @@ describe('ReflectionInputSchema invalid shapes', () => {
 
   it('rejects a negative duration_ms', () => {
     const result = ReflectionInputSchema.safeParse({
-      tool_executions: [{ tool: 'bash', input: 'x', status: 'error', output: 'x', duration_ms: -1 }],
+      tool_executions: [
+        { tool: 'bash', input: 'x', status: 'error', output: 'x', duration_ms: -1 },
+      ],
     });
     expect(result.success).toBe(false);
   });

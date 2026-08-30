@@ -1,17 +1,15 @@
+import type { Driver } from 'neo4j-driver';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import type { Driver } from 'neo4j-driver';
+
+import { ReinforcementEnqueueStage, REFLECTION_CO_EXTRACTION_TRIGGER } from './reinforcement.js';
+import { openLogger } from '../../../infrastructure/logging/logger.js';
 import { SqliteStore } from '../../../infrastructure/sqlite/database.js';
 import { listReinforcementSignals } from '../../../infrastructure/sqlite/reinforcement-queue.js';
-import { FakeGraph } from '../../test-support/fake-graph.fixture.js';
 import type { StageContext } from '../../domain/stage.js';
-import {
-  ReinforcementEnqueueStage,
-  REFLECTION_CO_EXTRACTION_TRIGGER,
-} from './reinforcement.js';
-import { openLogger } from '../../../infrastructure/logging/logger.js';
+import { FakeGraph } from '../../test-support/fake-graph.fixture.js';
 
 describe('ReinforcementEnqueueStage', () => {
   let driver: Driver;
@@ -21,7 +19,7 @@ describe('ReinforcementEnqueueStage', () => {
 
   beforeEach(async () => {
     graph = new FakeGraph();
-    driver = graph.driver;
+    ({ driver } = graph);
     dataDir = mkdtempSync(join(tmpdir(), 'aion-reinforcement-test-'));
     store = new SqliteStore({ filePath: join(dataDir, 'aion.sqlite') });
   });
@@ -113,11 +111,14 @@ describe('ReinforcementEnqueueStage', () => {
     }
 
     // Deterministic pair order: sorted node ids, never (b,a) when (a,b) exists.
-    const sorted = [...nodeIds].sort();
-    const expectedPairs: Array<[string, string]> = [
-      [sorted[0], sorted[1]],
-      [sorted[0], sorted[2]],
-      [sorted[1], sorted[2]],
+    const [first, second, third] = [...nodeIds].sort();
+    if (first === undefined || second === undefined || third === undefined) {
+      throw new Error('expected exactly three sorted node ids');
+    }
+    const expectedPairs: [string, string][] = [
+      [first, second],
+      [first, third],
+      [second, third],
     ];
 
     const actualPairs = signals.map((s) => [s.sourceId, s.targetId] as [string, string]);
@@ -184,6 +185,6 @@ describe('ReinforcementEnqueueStage', () => {
 
     const signals = listReinforcementSignals(store.db);
     expect(signals).toHaveLength(1);
-    expect(signals[0].trigger).toBe(REFLECTION_CO_EXTRACTION_TRIGGER);
+    expect(signals[0]?.trigger).toBe(REFLECTION_CO_EXTRACTION_TRIGGER);
   });
 });

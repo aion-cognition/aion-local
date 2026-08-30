@@ -66,7 +66,11 @@ function parseRaw(raw: string, kind: KnobKind, envVar: string): unknown {
   }
 }
 
-function setAtPath(target: Record<string, Record<string, unknown>>, knob: Knob, value: unknown): void {
+function setAtPath(
+  target: Record<string, Record<string, unknown>>,
+  knob: Knob,
+  value: unknown,
+): void {
   const [group, leaf] = knob.path;
   const section = target[group];
   if (section === undefined) {

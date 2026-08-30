@@ -1,6 +1,7 @@
 import neo4j, { type Driver } from 'neo4j-driver';
-import { BASE_NODE_LABEL } from './labels.js';
+
 import { runRead, runWrite } from './connection.js';
+import { BASE_NODE_LABEL } from './labels.js';
 import { toGraphDateTime, toGraphVector, type Row } from './values.js';
 import type { ComputedContextVector } from '../../reflection/domain/context-vector.js';
 
@@ -48,7 +49,12 @@ export async function findStaleContextVectorNodes(
   if (limit <= 0) {
     return [];
   }
-  return runRead(driver, FIND_STALE_CONTEXT_VECTOR_NODES, { limit: toGraphInteger(limit) }, (row) => row.id as string);
+  return runRead(
+    driver,
+    FIND_STALE_CONTEXT_VECTOR_NODES,
+    { limit: toGraphInteger(limit) },
+    (row) => row.id as string,
+  );
 }
 
 const WRITE_CONTEXT_VECTOR_SYNC = [

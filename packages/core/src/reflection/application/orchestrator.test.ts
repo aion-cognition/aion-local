@@ -2,6 +2,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import {
+  orchestratorLedgerKey,
+  ReflectionOrchestrator,
+  type ReflectionOrchestratorDeps,
+} from './orchestrator.js';
 import { BITEMPORAL_PROPERTIES } from '../../infrastructure/graph/bitemporal.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
 import { openLogger } from '../../infrastructure/logging/logger.js';
@@ -14,13 +20,8 @@ import type {
   StageContext,
   StageOutcome,
 } from '../domain/stage.js';
-import { FakeGraph } from '../test-support/fake-graph.fixture.js';
 import { stageLedgerKey } from '../domain/stage.js';
-import {
-  orchestratorLedgerKey,
-  ReflectionOrchestrator,
-  type ReflectionOrchestratorDeps,
-} from './orchestrator.js';
+import { FakeGraph } from '../test-support/fake-graph.fixture.js';
 
 const EPISODE_ID = 'episode-1';
 const SESSION_ID = 'session-1';
@@ -90,8 +91,7 @@ function poisoned(name: string, message: string): ReflectionStage {
 
 function ledgerSummary(): ReflectionSummary | undefined {
   return getLedgerEntry(store.db, orchestratorLedgerKey(EPISODE_ID))?.summary as
-    | ReflectionSummary
-    | undefined;
+    ReflectionSummary | undefined;
 }
 
 /** How many times the run read the episode, which is what "loaded once" is measured by. */
@@ -171,7 +171,7 @@ describe('ReflectionOrchestrator', () => {
     expect(contexts).toHaveLength(2);
     expect(contexts[0]).toBe(contexts[1]);
 
-    const context = contexts[0] as StageContext;
+    const context = contexts[0]!;
     expect(context.episodeId).toBe(EPISODE_ID);
     expect(context.now).toBe(NOW);
     expect(context.provider).toBe(provider);
@@ -208,7 +208,11 @@ describe('ReflectionOrchestrator', () => {
     const orchestrator = new ReflectionOrchestrator(deps, [
       stage('entities', { status: 'ok', summary: 'extracted 2 entities', counts: { entities: 2 } }),
       poisoned('cognitive', 'the model returned nonsense'),
-      stage('associations', { status: 'ok', summary: 'linked 3 pairs', counts: { associations: 3 } }),
+      stage('associations', {
+        status: 'ok',
+        summary: 'linked 3 pairs',
+        counts: { associations: 3 },
+      }),
     ]);
 
     const run = await orchestrator.run(EPISODE_ID, { now: NOW });

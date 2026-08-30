@@ -1,11 +1,12 @@
 import neo4j, { type Driver } from 'neo4j-driver';
-import type { Vector } from '../providers/types.js';
+
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { runRead, runWrite, type GraphStatement } from './connection.js';
 import { ENTITY_MENTION_TYPE, ENTITY_TYPE_PROPERTY } from './entity-queries.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
 import { ENTITY_NAME_PROPERTY, STRUCTURAL_PROPERTY } from './seed-queries.js';
 import { toGraphDateTime, toGraphVector, type Row } from './values.js';
+import type { Vector } from '../providers/types.js';
 
 /**
  * The reads and the one write behind description freshness. An entity's description is
@@ -81,9 +82,9 @@ export async function findStaleDescriptionEntities(
   };
   return runRead(driver, statement.cypher, statement.parameters, (row: Row) => ({
     id: row.id as string,
-    name: String(row.name ?? ''),
-    type: String(row.type ?? ''),
-    text: String(row.text ?? ''),
+    name: (row.name as string | null) ?? '',
+    type: (row.type as string | null) ?? '',
+    text: (row.text as string | null) ?? '',
     mentions: typeof row.mentions === 'number' ? row.mentions : Number(row.mentions ?? 0),
     baseline: typeof row.baseline === 'number' ? row.baseline : Number(row.baseline ?? 0),
   }));
@@ -125,7 +126,7 @@ export async function findEntityMentionContexts(
     const occurredAt = row.occurred_at instanceof Date ? row.occurred_at : undefined;
     return {
       episodeId: row.episode_id as string,
-      text: String(row.text ?? ''),
+      text: (row.text as string | null) ?? '',
       ...(occurredAt === undefined ? {} : { occurredAt }),
     };
   });
@@ -172,6 +173,11 @@ export async function refreshEntityDescription(
       method: DESCRIPTION_REFRESH_METHOD,
     },
   };
-  const rows = await runWrite(driver, statement.cypher, statement.parameters, (row: Row) => row.id as string);
+  const rows = await runWrite(
+    driver,
+    statement.cypher,
+    statement.parameters,
+    (row: Row) => row.id as string,
+  );
   return rows.length > 0;
 }

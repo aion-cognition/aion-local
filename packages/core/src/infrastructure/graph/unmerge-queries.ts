@@ -1,4 +1,5 @@
 import type { Driver } from 'neo4j-driver';
+
 import { ACCESS_COUNT_PROPERTY } from './access-tracking.js';
 import { supersedeInTransaction, writeStampedNodeInTransaction } from './bitemporal.js';
 import { inWriteTransaction, runRead, type GraphTransaction } from './connection.js';
@@ -65,21 +66,21 @@ function readEdge(value: unknown): MergeProvenanceEdge | undefined {
     return undefined;
   }
   const edge = value as Record<string, unknown>;
-  const type = edge['type'];
-  const otherId = edge['other_id'];
+  const { type } = edge;
+  const otherId = edge.other_id;
   if (typeof type !== 'string' || typeof otherId !== 'string') {
     return undefined;
   }
-  const rationale = edge['rationale'];
+  const { rationale } = edge;
   return {
     type,
-    direction: edge['direction'] === 'in' ? 'in' : 'out',
+    direction: edge.direction === 'in' ? 'in' : 'out',
     otherId,
-    strength: typeof edge['strength'] === 'number' ? edge['strength'] : 0,
-    confidence: typeof edge['confidence'] === 'number' ? edge['confidence'] : 0,
-    count: typeof edge['count'] === 'number' ? edge['count'] : 0,
-    signals: readStringArray(edge['signals']),
-    provenance: readStringArray(edge['provenance']),
+    strength: typeof edge.strength === 'number' ? edge.strength : 0,
+    confidence: typeof edge.confidence === 'number' ? edge.confidence : 0,
+    count: typeof edge.count === 'number' ? edge.count : 0,
+    signals: readStringArray(edge.signals),
+    provenance: readStringArray(edge.provenance),
     ...(typeof rationale === 'string' ? { rationale } : {}),
   };
 }
@@ -96,23 +97,25 @@ function readRecord(serialized: string): MergeProvenanceRecord | undefined {
     return undefined;
   }
   const raw = parsed as Record<string, unknown>;
-  const mergedId = raw['merged_id'];
+  const mergedId = raw.merged_id;
   if (typeof mergedId !== 'string') {
     return undefined;
   }
-  const edges = Array.isArray(raw['edges'])
-    ? (raw['edges'] as unknown[]).map(readEdge).filter((edge): edge is MergeProvenanceEdge => edge !== undefined)
+  const edges = Array.isArray(raw.edges)
+    ? (raw.edges as unknown[])
+        .map(readEdge)
+        .filter((edge): edge is MergeProvenanceEdge => edge !== undefined)
     : [];
-  const name = raw['merged_name'];
-  const nameNorm = raw['merged_name_norm'];
-  const type = raw['merged_type'];
-  const unmergedAt = raw['unmerged_at'];
+  const name = raw.merged_name;
+  const nameNorm = raw.merged_name_norm;
+  const type = raw.merged_type;
+  const unmergedAt = raw.unmerged_at;
   return {
     mergedId,
     ...(typeof name === 'string' ? { mergedName: name } : {}),
     ...(typeof nameNorm === 'string' ? { mergedNameNorm: nameNorm } : {}),
     ...(typeof type === 'string' ? { mergedType: type } : {}),
-    mergedAliases: readStringArray(raw['merged_aliases']),
+    mergedAliases: readStringArray(raw.merged_aliases),
     edges,
     ...(typeof unmergedAt === 'string' ? { unmergedAt } : {}),
     raw,
@@ -138,9 +141,9 @@ export async function readCanonicalMerge(
   mergedId: string,
 ): Promise<CanonicalMerge | undefined> {
   const rows = await runRead(driver, FIND_CANONICAL_FOR_MERGED, { mergedId }, (row) => ({
-    canonicalId: row['canonical_id'] as string,
-    aliases: readStringArray(row['aliases']),
-    records: readStringArray(row['records'])
+    canonicalId: row.canonical_id as string,
+    aliases: readStringArray(row.aliases),
+    records: readStringArray(row.records)
       .map(readRecord)
       .filter((record): record is MergeProvenanceRecord => record !== undefined),
   }));
@@ -160,9 +163,9 @@ export async function readCanonicalMergeRecords(
   canonicalId: string,
 ): Promise<CanonicalMerge | undefined> {
   const rows = await runRead(driver, READ_CANONICAL_MERGE_RECORDS, { canonicalId }, (row) => ({
-    canonicalId: row['canonical_id'] as string,
-    aliases: readStringArray(row['aliases']),
-    records: readStringArray(row['records'])
+    canonicalId: row.canonical_id as string,
+    aliases: readStringArray(row.aliases),
+    records: readStringArray(row.records)
       .map(readRecord)
       .filter((record): record is MergeProvenanceRecord => record !== undefined),
   }));
@@ -220,7 +223,7 @@ async function existingNodeIds(
   if (unique.length === 0) {
     return new Set();
   }
-  const rows = await tx.run(FIND_EXISTING_NODES, { ids: unique }, (row) => row['id'] as string);
+  const rows = await tx.run(FIND_EXISTING_NODES, { ids: unique }, (row) => row.id as string);
   return new Set(rows);
 }
 
@@ -267,7 +270,7 @@ export async function applyUnmerge(driver: Driver, input: UnmergeInput): Promise
     await tx.run(
       RELEASE_IDENTITY_KEY,
       { mergedId: record.mergedId, released: releasedNameNorm(nameNorm, record.mergedId) },
-      (row) => row['id'] as string,
+      (row) => row.id as string,
     );
 
     const restored = await writeStampedNodeInTransaction(tx, {

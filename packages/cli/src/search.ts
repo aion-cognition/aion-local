@@ -14,6 +14,7 @@ import {
   type Seed,
   type SeedCue,
 } from '@aion/core';
+
 import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
 
 /**
@@ -140,7 +141,9 @@ export function renderSearchResults(seeds: readonly Seed[], write: Writer): void
     write('no matches');
     return;
   }
-  write('score   method              currency    label          id                                    content');
+  write(
+    'score   method              currency    label          id                                    content',
+  );
   for (const seed of seeds) {
     write(
       [
@@ -190,11 +193,16 @@ export async function runSearch(
   try {
     const health = await connection.health();
     if (!health.reachable) {
-      stderrWriter(`search needs Neo4j: ${connection.uri} unreachable: ${health.error ?? 'unknown error'}`);
+      stderrWriter(
+        `search needs Neo4j: ${connection.uri} unreachable: ${health.error ?? 'unknown error'}`,
+      );
       return 1;
     }
 
-    const provider = new OllamaProvider({ baseUrl: config.ollama.url, embedModel: config.models.embed });
+    const provider = new OllamaProvider({
+      baseUrl: config.ollama.url,
+      embedModel: config.models.embed,
+    });
     const [vector] = await provider.embed([flags.query]);
     if (vector === undefined) {
       stderrWriter(`${config.models.embed} returned no embedding for the query`);
@@ -203,7 +211,10 @@ export async function runSearch(
 
     const cue: SeedCue = { text: flags.query, source: 'raw_query', weight: 3, vector };
     const mode = readModeFor(flags);
-    const selection = await selectSeeds({ driver: connection.driver, config, logger }, { cues: [cue], mode });
+    const selection = await selectSeeds(
+      { driver: connection.driver, config, logger },
+      { cues: [cue], mode },
+    );
 
     if (flags.json) {
       write(JSON.stringify(toJson(selection.seeds)));

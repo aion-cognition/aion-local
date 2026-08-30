@@ -46,7 +46,9 @@ export function summarizeEntities(outcome: ExtractorOutcome<EntityExtractionResu
   };
 }
 
-export function summarizeCognitive(outcome: ExtractorOutcome<CognitiveExtractionResult>): CallMetrics {
+export function summarizeCognitive(
+  outcome: ExtractorOutcome<CognitiveExtractionResult>,
+): CallMetrics {
   if (!outcome.ok) {
     return { ok: false, count: 0, byType: {}, latencyMs: outcome.latencyMs, error: outcome.error };
   }
@@ -59,7 +61,10 @@ export function summarizeCognitive(outcome: ExtractorOutcome<CognitiveExtraction
 }
 
 /** Jaccard similarity of trimmed, lowercased names. Two empty sets agree completely. */
-export function nameOverlap(a: readonly { readonly name: string }[], b: readonly { readonly name: string }[]): number {
+export function nameOverlap(
+  a: readonly { readonly name: string }[],
+  b: readonly { readonly name: string }[],
+): number {
   const setA = new Set(a.map((item) => item.name.trim().toLowerCase()));
   const setB = new Set(b.map((item) => item.name.trim().toLowerCase()));
   if (setA.size === 0 && setB.size === 0) {

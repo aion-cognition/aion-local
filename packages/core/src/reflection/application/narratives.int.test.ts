@@ -2,11 +2,21 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { ReflectionDispatch } from './dispatch.js';
+import { handleReflection, type ReflectionIntakeDeps } from './intake.js';
+import { LaneAssigner } from './lanes.js';
+import {
+  closeSessionNarrative,
+  DEFAULT_SESSION_IDLE_MS,
+  sweepIdleSessions,
+  type NarrativeDeps,
+} from './narratives.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
-import { BITEMPORAL_PROPERTIES } from '../../infrastructure/graph/bitemporal.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
-import { MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
+import { BITEMPORAL_PROPERTIES } from '../../infrastructure/graph/bitemporal.js';
 import { writeCognitiveNode } from '../../infrastructure/graph/cognitive-queries.js';
+import { MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
 import {
   DERIVES_FROM_TYPE,
@@ -17,8 +27,12 @@ import {
   NARRATIVE_PROPERTIES,
   SUMMARIZED_BY_TYPE,
 } from '../../infrastructure/graph/narrative-queries.js';
-import { escapeLuceneQuery, fulltextSeeds, vectorSeeds } from '../../infrastructure/graph/seed-queries.js';
 import { withCurrency } from '../../infrastructure/graph/read-modes.js';
+import {
+  escapeLuceneQuery,
+  fulltextSeeds,
+  vectorSeeds,
+} from '../../infrastructure/graph/seed-queries.js';
 import {
   countEdges,
   countOutgoingEdges,
@@ -37,15 +51,6 @@ import { testGenerationProvider } from '../../infrastructure/providers/test-supp
 import type { Provider } from '../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { SessionManager } from '../../session/session-manager.js';
-import { ReflectionDispatch } from './dispatch.js';
-import { handleReflection, type ReflectionIntakeDeps } from './intake.js';
-import { LaneAssigner } from './lanes.js';
-import {
-  closeSessionNarrative,
-  DEFAULT_SESSION_IDLE_MS,
-  sweepIdleSessions,
-  type NarrativeDeps,
-} from './narratives.js';
 
 // The structural describes (versioning, provenance edges, idle-sweep bookkeeping) prove
 // Cypher and orchestration, not prose quality, and the suite must never depend on model
@@ -63,7 +68,10 @@ function deterministicNarrativeProvider(): NarrativeDeps['provider'] {
       const cited = handles.slice(0, 2);
       return Promise.resolve({
         sentences: [
-          { text: 'The session staged, migrated, and held the Ariadne rollout.', source_ids: cited },
+          {
+            text: 'The session staged, migrated, and held the Ariadne rollout.',
+            source_ids: cited,
+          },
         ],
       });
     },
@@ -99,23 +107,47 @@ const EPISODES = [
   {
     summary: 'planning the Ariadne rollout',
     turns: [
-      { role: 'user', text: 'we need the Ariadne rollout staged behind a flag', occurred_at: '2026-04-02T09:00:00Z' },
-      { role: 'assistant', text: 'staging it behind AION_ARIADNE and defaulting it off', occurred_at: '2026-04-02T09:00:30Z' },
+      {
+        role: 'user',
+        text: 'we need the Ariadne rollout staged behind a flag',
+        occurred_at: '2026-04-02T09:00:00Z',
+      },
+      {
+        role: 'assistant',
+        text: 'staging it behind AION_ARIADNE and defaulting it off',
+        occurred_at: '2026-04-02T09:00:30Z',
+      },
     ],
   },
   {
     summary: 'the Ariadne migration ran',
     turns: [
-      { role: 'user', text: 'run the Ariadne migration against the staging substrate', occurred_at: '2026-04-02T09:20:00Z' },
-      { role: 'assistant', text: 'migration applied, every constraint came back green', occurred_at: '2026-04-02T09:21:00Z' },
+      {
+        role: 'user',
+        text: 'run the Ariadne migration against the staging substrate',
+        occurred_at: '2026-04-02T09:20:00Z',
+      },
+      {
+        role: 'assistant',
+        text: 'migration applied, every constraint came back green',
+        occurred_at: '2026-04-02T09:21:00Z',
+      },
     ],
     observations: ['The migration is idempotent: the second run created nothing'],
   },
   {
     summary: 'we decided to hold the Ariadne launch',
     turns: [
-      { role: 'user', text: 'hold the launch until the backfill finishes', occurred_at: '2026-04-02T09:40:00Z' },
-      { role: 'assistant', text: 'holding it; the backfill has about a day left', occurred_at: '2026-04-02T09:41:00Z' },
+      {
+        role: 'user',
+        text: 'hold the launch until the backfill finishes',
+        occurred_at: '2026-04-02T09:40:00Z',
+      },
+      {
+        role: 'assistant',
+        text: 'holding it; the backfill has about a day left',
+        occurred_at: '2026-04-02T09:41:00Z',
+      },
     ],
   },
 ];
@@ -162,7 +194,11 @@ const LATE_EPISODE = {
   summary: 'the backfill finished and Ariadne launched',
   turns: [
     { role: 'user', text: 'backfill is done, launch Ariadne', occurred_at: '2026-04-02T18:00:00Z' },
-    { role: 'assistant', text: 'flag flipped on, launch is live', occurred_at: '2026-04-02T18:01:00Z' },
+    {
+      role: 'assistant',
+      text: 'flag flipped on, launch is live',
+      occurred_at: '2026-04-02T18:01:00Z',
+    },
   ],
 };
 
@@ -241,7 +277,7 @@ describe('session close against a live substrate', () => {
     expect(result.status).toBe('created');
     expect(result.version).toBe(1);
     expect(result.episodes).toBe(3);
-    firstNarrativeId = result.narrativeId as string;
+    firstNarrativeId = result.narrativeId!;
 
     expect(await nodeLabels(harness.driver, firstNarrativeId)).toEqual([
       'AionNode',
@@ -254,8 +290,12 @@ describe('session close against a live substrate', () => {
     expect(properties[NARRATIVE_PROPERTIES.version]).toBe(1);
     expect(properties[NARRATIVE_PROPERTIES.coverageCount]).toBe(3);
     expect(properties[NARRATIVE_PROPERTIES.coverage]).toBe(1);
-    expect(String(properties[MEMORY_PROPERTIES.summary] ?? '').length).toBeGreaterThan(0);
-    expect(String(properties[MEMORY_PROPERTIES.text] ?? '').length).toBeGreaterThan(0);
+    expect(
+      ((properties[MEMORY_PROPERTIES.summary] as string | undefined) ?? '').length,
+    ).toBeGreaterThan(0);
+    expect(
+      ((properties[MEMORY_PROPERTIES.text] as string | undefined) ?? '').length,
+    ).toBeGreaterThan(0);
     expect(properties[MEMORY_PROPERTIES.contentVector]).toHaveLength(
       DEFAULTS.models.embedDimension,
     );
@@ -263,9 +303,9 @@ describe('session close against a live substrate', () => {
     const episodeIds = await episodeIdsInSession(harness.driver, SESSION_IDENTITY);
     expect(episodeIds).toHaveLength(3);
     for (const episodeId of episodeIds) {
-      expect(await countEdges(harness.driver, SUMMARIZED_BY_TYPE, episodeId, firstNarrativeId)).toBe(
-        1,
-      );
+      expect(
+        await countEdges(harness.driver, SUMMARIZED_BY_TYPE, episodeId, firstNarrativeId),
+      ).toBe(1);
     }
     expect(await countOutgoingEdges(harness.driver, DERIVES_FROM_TYPE, firstNarrativeId)).toBe(1);
     expect(await edgeTargetId(harness.driver, DERIVES_FROM_TYPE, firstNarrativeId)).toBe(
@@ -291,9 +331,8 @@ describe('session close against a live substrate', () => {
     // all, which is the half a migration can get wrong.
     const summary =
       byVector.find((seed) => seed.id === firstNarrativeId)?.content ??
-      ((await nodeProperties(harness.driver, firstNarrativeId))[
-        MEMORY_PROPERTIES.summary
-      ] as string) ??
+      ((await nodeProperties(harness.driver, firstNarrativeId))[MEMORY_PROPERTIES.summary] as
+        string | undefined) ??
       '';
     const byText = await fulltextSeeds(harness.driver, {
       query: escapeLuceneQuery(summary),
@@ -319,12 +358,14 @@ describe('session close against a live substrate', () => {
     expect(result.version).toBe(2);
 
     const versions = await findSessionNarratives(harness.driver, SESSION_IDENTITY);
-    expect(versions.map((version) => [version.version, version.open, version.coverageCount])).toEqual([
+    expect(
+      versions.map((version) => [version.version, version.open, version.coverageCount]),
+    ).toEqual([
       [2, true, 4],
       [1, false, 3],
     ]);
 
-    expect(await edgeTargetId(harness.driver, 'SUPERSEDES', result.narrativeId as string)).toBe(
+    expect(await edgeTargetId(harness.driver, 'SUPERSEDES', result.narrativeId!)).toBe(
       firstNarrativeId,
     );
     const closed = await nodeProperties(harness.driver, firstNarrativeId);
@@ -397,7 +438,7 @@ describe('grounding against a live substrate', () => {
     const result = await closeWithGroundingRetry(deps, THIN_SESSION_IDENTITY);
 
     expect(result.status).toBe('created');
-    const properties = await nodeProperties(harness.driver, result.narrativeId as string);
+    const properties = await nodeProperties(harness.driver, result.narrativeId!);
     const citations = properties[NARRATIVE_PROPERTIES.citations] as string[];
 
     expect(properties[NARRATIVE_PROPERTIES.sentenceCount]).toBe(1);
@@ -415,7 +456,7 @@ describe('grounding against a live substrate', () => {
     const result = await closeWithGroundingRetry(deps, PLANNING_SESSION_IDENTITY);
 
     expect(result.status).toBe('created');
-    const properties = await nodeProperties(harness.driver, result.narrativeId as string);
+    const properties = await nodeProperties(harness.driver, result.narrativeId!);
     const citations = properties[NARRATIVE_PROPERTIES.citations] as string[];
     const sourceIds = new Set([planningEpisodeId, ...sources.map((source) => source.id)]);
 

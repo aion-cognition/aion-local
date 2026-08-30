@@ -72,9 +72,12 @@ async function runOrphanCleanup(ctx: OperationContext): Promise<OperationOutcome
   }
 
   const targets = new Map(
-    (await findOrphanRelinkTargets(ctx.driver, orphans.map((orphan) => orphan.id))).map(
-      (target) => [target.orphanId, target],
-    ),
+    (
+      await findOrphanRelinkTargets(
+        ctx.driver,
+        orphans.map((orphan) => orphan.id),
+      )
+    ).map((target) => [target.orphanId, target]),
   );
   const forgetBefore = ctx.now.getTime() - ctx.config.maintenance.orphanForgetAfterDays * DAY_MS;
 

@@ -2,6 +2,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import {
+  REDACTION_RESIDUE_MIN_RELEVANCE,
+  redactionResiduePurgeOperation,
+  redactionResiduePurgeRelevance,
+} from './redaction-residue-purge.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
@@ -17,13 +23,8 @@ import {
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
-import { healthFixture } from '../../domain/test-support/health.fixture.js';
 import type { OperationContext } from '../../domain/operation.js';
-import {
-  REDACTION_RESIDUE_MIN_RELEVANCE,
-  redactionResiduePurgeOperation,
-  redactionResiduePurgeRelevance,
-} from './redaction-residue-purge.js';
+import { healthFixture } from '../../domain/test-support/health.fixture.js';
 
 const EMBED_DIMENSION = 8;
 const NOW = new Date('2026-08-29T14:00:00.000Z');

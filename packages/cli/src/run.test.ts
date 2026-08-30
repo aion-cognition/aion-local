@@ -2,6 +2,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
 import { CLI_NAME, run } from './run.js';
 
 describe('run', () => {
@@ -11,13 +12,13 @@ describe('run', () => {
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'aion-cli-'));
     logFile = join(dir, 'aion.jsonl');
-    process.env['AION_LOG_FILE'] = logFile;
+    process.env.AION_LOG_FILE = logFile;
   });
 
   afterEach(() => {
-    delete process.env['AION_LOG_FILE'];
-    delete process.env['AION_LOG_LEVEL'];
-    delete process.env['AION_NOT_A_KNOB'];
+    delete process.env.AION_LOG_FILE;
+    delete process.env.AION_LOG_LEVEL;
+    delete process.env.AION_NOT_A_KNOB;
     rmSync(dir, { recursive: true, force: true });
     vi.restoreAllMocks();
   });
@@ -70,7 +71,7 @@ describe('run', () => {
   });
 
   it('reads no environment of its own, so a bad AION_* value cannot slip past config', async () => {
-    process.env['AION_LOG_LEVEL'] = 'totally-bogus';
+    process.env.AION_LOG_LEVEL = 'totally-bogus';
     const stdout = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
 
     await expect(run(['help'])).resolves.toBe(0);
@@ -80,7 +81,7 @@ describe('run', () => {
   });
 
   it('leaves an unknown AION_* variable for the command to reject', async () => {
-    process.env['AION_NOT_A_KNOB'] = 'nonsense';
+    process.env.AION_NOT_A_KNOB = 'nonsense';
     const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
 
     await expect(run(['init'])).resolves.toBe(1);

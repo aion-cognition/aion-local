@@ -1,14 +1,18 @@
 import type { Driver } from 'neo4j-driver';
-import { ReflectionQueueClaimant, reclaimStaleReflectionJobs } from '../../infrastructure/sqlite/claim.js';
-import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { recordEnrichmentLagMs } from '../../infrastructure/sqlite/lag-samples.js';
-import type { ReflectionJob } from '../../infrastructure/sqlite/reflection-queue.js';
-import type { Logger } from '../../infrastructure/logging/logger.js';
-import type { Provider } from '../../infrastructure/providers/types.js';
+
 import type { ReflectionDispatch } from './dispatch.js';
 import { INTEGRATE_JOB_TYPE } from './intake.js';
 import type { ReflectionRun, ReflectionRunOptions } from './orchestrator.js';
 import { attachContentVectors, findPendingVectorNodes } from './vectors.js';
+import type { Logger } from '../../infrastructure/logging/logger.js';
+import type { Provider } from '../../infrastructure/providers/types.js';
+import {
+  ReflectionQueueClaimant,
+  reclaimStaleReflectionJobs,
+} from '../../infrastructure/sqlite/claim.js';
+import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { recordEnrichmentLagMs } from '../../infrastructure/sqlite/lag-samples.js';
+import type { ReflectionJob } from '../../infrastructure/sqlite/reflection-queue.js';
 
 /**
  * Reflection is event-driven. A signal from intake starts a claim-and-run cycle immediately;
@@ -100,9 +104,7 @@ export function describeFailedRun(episodeId: string, run: ReflectionRun): string
   if (failed.length === 0) {
     return `no stage enriched ${episodeId}`;
   }
-  const named = failed
-    .map((stage) => `${stage.name}: ${stage.error ?? stage.summary}`)
-    .join('; ');
+  const named = failed.map((stage) => `${stage.name}: ${stage.error ?? stage.summary}`).join('; ');
   const skipped = run.summary.skippedStages;
   const context = skipped.length === 0 ? '' : ` (${String(skipped.length)} stages already applied)`;
   return `${String(failed.length)} stage(s) failed for ${episodeId}${context} — ${named}`;
@@ -250,7 +252,7 @@ export class ReflectionWorker {
     if (this.#stopped) {
       return;
     }
-    let reclaimed = 0;
+    let reclaimed: number;
     try {
       reclaimed = reclaimStaleReflectionJobs(
         this.#deps.db,
@@ -314,7 +316,10 @@ export class ReflectionWorker {
    */
   #launch(job: ReflectionJob): void {
     const settled = this.#execute(job).catch((err: unknown) => {
-      this.#deps.logger.error({ err, jobId: job.id }, 'reflection worker lost a job to an unhandled failure');
+      this.#deps.logger.error(
+        { err, jobId: job.id },
+        'reflection worker lost a job to an unhandled failure',
+      );
     });
     this.#running.add(settled);
     void settled.then(() => {
@@ -356,7 +361,13 @@ export class ReflectionWorker {
       recordEnrichmentLagMs(this.#deps.db, Date.now() - Date.parse(job.enqueuedAt));
     }
     this.#deps.logger.info(
-      { jobId: job.id, episodeId, status: run.status, applied: run.applied, counts: run.summary.counts },
+      {
+        jobId: job.id,
+        episodeId,
+        status: run.status,
+        applied: run.applied,
+        counts: run.summary.counts,
+      },
       'reflection job complete',
     );
   }
@@ -390,7 +401,10 @@ export class ReflectionWorker {
       this.#pump();
     }, delayMs);
     this.#retries.set(job.id, { timer, reason });
-    this.#deps.logger.warn({ jobId: job.id, attempts, delayMs, reason }, 'reflection job failed; retry scheduled');
+    this.#deps.logger.warn(
+      { jobId: job.id, attempts, delayMs, reason },
+      'reflection job failed; retry scheduled',
+    );
   }
 
   /**
@@ -437,7 +451,10 @@ export class ReflectionWorker {
         }
       }
     } catch (err) {
-      this.#deps.logger.warn({ err, attached }, 'pending content vectors deferred; the drain continues');
+      this.#deps.logger.warn(
+        { err, attached },
+        'pending content vectors deferred; the drain continues',
+      );
       return attached;
     }
   }

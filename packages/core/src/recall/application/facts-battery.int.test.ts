@@ -1,8 +1,13 @@
+import type { MemoryPack, MemoryPackItem } from '@aion/protocol';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { MemoryPack, MemoryPackItem } from '@aion/protocol';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { CueCache } from './cues.js';
+import { DECISION_PROBE, DECISION_SUBSTRATE } from './facts.fixtures.js';
+import { OFF_TOPIC_BATTERY } from './floors.fixtures.js';
+import { handleRecall, type RecallDeps } from './recall.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
 import { writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
@@ -26,10 +31,6 @@ import { OllamaProvider } from '../../infrastructure/providers/ollama-provider.j
 import type { Provider } from '../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { SessionManager } from '../../session/session-manager.js';
-import { CueCache } from './cues.js';
-import { DECISION_PROBE, DECISION_SUBSTRATE } from './facts.fixtures.js';
-import { OFF_TOPIC_BATTERY } from './floors.fixtures.js';
-import { handleRecall, type RecallDeps } from './recall.js';
 
 /**
  * The measured facts-bucket scenario, end to end on real embeddings. The substrate holds the
@@ -131,7 +132,9 @@ async function waitFor(label: string, ready: () => Promise<boolean>): Promise<vo
     if (await ready()) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
   }
   throw new Error(`timed out waiting for ${label}`);
 }
@@ -271,11 +274,15 @@ describe('the decision query', () => {
 });
 
 describe('the floors still hold under the facts rules', () => {
-  it.each(OFF_TOPIC_BATTERY)('returns a thin or empty pack for: %s', async (query) => {
-    const pack = await probe(query, 'other');
-    console.log(`off-topic "${query}": ${String(allItems(pack).length)} items`);
-    expect(allItems(pack)).toHaveLength(0);
-  }, 60_000);
+  it.each(OFF_TOPIC_BATTERY)(
+    'returns a thin or empty pack for: %s',
+    async (query) => {
+      const pack = await probe(query, 'other');
+      console.log(`off-topic "${query}": ${String(allItems(pack).length)} items`);
+      expect(allItems(pack)).toHaveLength(0);
+    },
+    60_000,
+  );
 
   // The boost is the lever most likely to leak: a decision-shaped query against a substrate
   // that holds no answer must still come back empty rather than promoting whatever is nearest.

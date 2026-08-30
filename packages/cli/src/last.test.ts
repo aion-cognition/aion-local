@@ -1,9 +1,10 @@
+import { saveLastPack, SqliteStore } from '@aion/core';
+import type { MemoryPack } from '@aion/protocol';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { saveLastPack, SqliteStore } from '@aion/core';
-import type { MemoryPack } from '@aion/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
 import {
   MissingOptionValueError,
   parseLastFlags,
@@ -115,8 +116,14 @@ describe('parseLastFlags', () => {
   });
 
   it('combines --session and --json in either order', () => {
-    expect(parseLastFlags(['--session', 'sess-1', '--json'])).toEqual({ session: 'sess-1', json: true });
-    expect(parseLastFlags(['--json', '--session', 'sess-1'])).toEqual({ session: 'sess-1', json: true });
+    expect(parseLastFlags(['--session', 'sess-1', '--json'])).toEqual({
+      session: 'sess-1',
+      json: true,
+    });
+    expect(parseLastFlags(['--json', '--session', 'sess-1'])).toEqual({
+      session: 'sess-1',
+      json: true,
+    });
   });
 
   it('rejects --session with no value', () => {
@@ -146,7 +153,9 @@ describe('renderPack', () => {
     expect(text).toContain(
       'id=ep-2 rank=3 method=activation confidence=0.000 score=0.412 path=session-1 -[PARTICIPATES_IN]-> ep-2 currency=superseded superseded_by=ep-3@2026-06-02T09:00:00.000Z',
     );
-    expect(text).toContain('id=fact-1 rank=2 method=bm25 confidence=0.620 score=0.620 currency=current');
+    expect(text).toContain(
+      'id=fact-1 rank=2 method=bm25 confidence=0.620 score=0.620 currency=current',
+    );
   });
 
   it('lists the cue set, stage timings, and token estimate', () => {
@@ -209,13 +218,13 @@ describe('runLast', () => {
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'aion-cli-last-'));
-    process.env['AION_SQLITE_PATH'] = join(dir, 'aion.sqlite');
-    process.env['AION_LOG_FILE'] = join(dir, 'aion.jsonl');
+    process.env.AION_SQLITE_PATH = join(dir, 'aion.sqlite');
+    process.env.AION_LOG_FILE = join(dir, 'aion.jsonl');
   });
 
   afterEach(() => {
-    delete process.env['AION_SQLITE_PATH'];
-    delete process.env['AION_LOG_FILE'];
+    delete process.env.AION_SQLITE_PATH;
+    delete process.env.AION_LOG_FILE;
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -229,7 +238,7 @@ describe('runLast', () => {
   });
 
   it('rejects an unknown session id', async () => {
-    const store = new SqliteStore({ filePath: process.env['AION_SQLITE_PATH'] ?? '' });
+    const store = new SqliteStore({ filePath: process.env.AION_SQLITE_PATH ?? '' });
     saveLastPack(store.db, 'sess-1', FIXTURE_PACK, '2026-06-02T09:00:00.000Z');
     store.close();
 
@@ -239,7 +248,7 @@ describe('runLast', () => {
   });
 
   it('with no --session, lists sessions and renders the most recent pack', async () => {
-    const store = new SqliteStore({ filePath: process.env['AION_SQLITE_PATH'] ?? '' });
+    const store = new SqliteStore({ filePath: process.env.AION_SQLITE_PATH ?? '' });
     saveLastPack(store.db, 'sess-older', EMPTY_PACK, '2026-06-01T00:00:00.000Z');
     saveLastPack(store.db, 'sess-newer', FIXTURE_PACK, '2026-06-02T09:00:00.000Z');
     store.close();
@@ -256,7 +265,7 @@ describe('runLast', () => {
   });
 
   it('with --session, renders that session without the session list', async () => {
-    const store = new SqliteStore({ filePath: process.env['AION_SQLITE_PATH'] ?? '' });
+    const store = new SqliteStore({ filePath: process.env.AION_SQLITE_PATH ?? '' });
     saveLastPack(store.db, 'sess-older', EMPTY_PACK, '2026-06-01T00:00:00.000Z');
     saveLastPack(store.db, 'sess-newer', FIXTURE_PACK, '2026-06-02T09:00:00.000Z');
     store.close();
@@ -272,7 +281,7 @@ describe('runLast', () => {
   });
 
   it('--json emits the stored JSON unchanged', async () => {
-    const store = new SqliteStore({ filePath: process.env['AION_SQLITE_PATH'] ?? '' });
+    const store = new SqliteStore({ filePath: process.env.AION_SQLITE_PATH ?? '' });
     saveLastPack(store.db, 'sess-1', FIXTURE_PACK, '2026-06-02T09:00:00.000Z');
     store.close();
 

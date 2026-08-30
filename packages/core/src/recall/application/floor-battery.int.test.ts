@@ -2,6 +2,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { CueCache } from './cues.js';
+import { BATTERY_SUBSTRATE, OFF_TOPIC_BATTERY, ON_TOPIC_BATTERY } from './floors.fixtures.js';
+import { handleRecall, type RecallDeps } from './recall.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
@@ -24,9 +28,6 @@ import { ReflectionDispatch } from '../../reflection/application/dispatch.js';
 import { handleReflection } from '../../reflection/application/intake.js';
 import { LaneAssigner } from '../../reflection/application/lanes.js';
 import { SessionManager } from '../../session/session-manager.js';
-import { CueCache } from './cues.js';
-import { BATTERY_SUBSTRATE, OFF_TOPIC_BATTERY, ON_TOPIC_BATTERY } from './floors.fixtures.js';
-import { handleRecall, type RecallDeps } from './recall.js';
 
 /**
  * The paired gate, end to end on real embeddings: the floor has to starve the off-topic
@@ -98,7 +99,9 @@ async function waitFor(label: string, ready: () => Promise<boolean>): Promise<vo
     if (await ready()) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
   }
   throw new Error(`timed out waiting for ${label}`);
 }
@@ -207,25 +210,33 @@ afterAll(async () => {
 });
 
 describe('the off-topic battery that used to fill a pack to budget', () => {
-  it.each(OFF_TOPIC_BATTERY)('returns a thin or empty pack for: %s', async (query) => {
-    const shape = await probe(query);
-    console.log(`off-topic "${query}": ${String(shape.items)} items`);
-    expect(shape.items).toBe(0);
-  }, 60_000);
+  it.each(OFF_TOPIC_BATTERY)(
+    'returns a thin or empty pack for: %s',
+    async (query) => {
+      const shape = await probe(query);
+      console.log(`off-topic "${query}": ${String(shape.items)} items`);
+      expect(shape.items).toBe(0);
+    },
+    60_000,
+  );
 });
 
 describe('the paired on-topic battery', () => {
-  it.each(ON_TOPIC_BATTERY)('still answers: $query', async (entry) => {
-    const shape = await probe(entry.query);
-    const rank = shape.rankOf(storedIds.get(entry.expects));
-    onTopicRows.push({ query: entry.query, items: shape.items, rank });
-    console.log(
-      `on-topic "${entry.query}": ${String(shape.items)} items, answer at rank ` +
-        `${String(rank + 1)}${rank === 0 ? '' : `, top: ${String(shape.topContent)}`}`,
-    );
-    expect(shape.items).toBeGreaterThan(0);
-    expect(rank).toBeGreaterThanOrEqual(0);
-  }, 60_000);
+  it.each(ON_TOPIC_BATTERY)(
+    'still answers: $query',
+    async (entry) => {
+      const shape = await probe(entry.query);
+      const rank = shape.rankOf(storedIds.get(entry.expects));
+      onTopicRows.push({ query: entry.query, items: shape.items, rank });
+      console.log(
+        `on-topic "${entry.query}": ${String(shape.items)} items, answer at rank ` +
+          `${String(rank + 1)}${rank === 0 ? '' : `, top: ${String(shape.topContent)}`}`,
+      );
+      expect(shape.items).toBeGreaterThan(0);
+      expect(rank).toBeGreaterThanOrEqual(0);
+    },
+    60_000,
+  );
 
   // Last, so every probe above has already pushed its row.
   it('keeps most of them ranked first, not merely admitted', () => {

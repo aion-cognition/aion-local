@@ -1,15 +1,9 @@
-import { MemoryPackSchema, type Cue, type StageTimingsMs } from '@aion/protocol';
+import type { Cue, StageTimingsMs } from '@aion/protocol';
 import { describe, expect, it } from 'vitest';
+
 import type { AdmissionReport } from './admission.js';
 import type { FusedItem } from './fusion.js';
-import {
-  assemblePack,
-  bucketFor,
-  CHARS_PER_TOKEN,
-  estimateTokens,
-  type AssemblePackInput,
-  type BucketCaps,
-} from './pack.js';
+import { assemblePack, estimateTokens, type AssemblePackInput, type BucketCaps } from './pack.js';
 
 /**
  * What a pack says about itself: which facts it declines to carry, what number it prints
@@ -42,7 +36,7 @@ type ItemOverrides = {
 };
 
 function item(id: string, overrides: ItemOverrides = {}): FusedItem {
-  const path = overrides.path;
+  const { path } = overrides;
   return {
     id,
     labels: overrides.labels ?? ['Episode', 'Memory', 'AionNode'],
@@ -97,7 +91,10 @@ function assemble(items: readonly FusedItem[], overrides: Partial<AssemblePackIn
 
 describe('the facts bucket', () => {
   function gloss(id: string): FusedItem {
-    return item(id, { labels: ['Entity', 'Memory', 'AionNode'], content: `${id} (concept): a gloss` });
+    return item(id, {
+      labels: ['Entity', 'Memory', 'AionNode'],
+      content: `${id} (concept): a gloss`,
+    });
   }
 
   function goal(id: string): FusedItem {
@@ -142,9 +139,7 @@ describe('the facts bucket', () => {
   });
 
   it('dates an entity gloss by its first mention rather than by an occurrence', () => {
-    const pack = assemble([
-      { ...gloss('g1'), occurredAt: new Date('2025-11-14T08:30:00.000Z') },
-    ]);
+    const pack = assemble([{ ...gloss('g1'), occurredAt: new Date('2025-11-14T08:30:00.000Z') }]);
 
     expect(pack.rendered_text).toContain('from first mention, 2025-11-14');
     expect(pack.rendered_text).not.toContain('occurred 2025-11-14');
@@ -172,7 +167,11 @@ describe('rank and confidence', () => {
   });
 
   it('leaves no gap in the ranks when an item is dropped before it is packed', () => {
-    const pack = assemble([item('s1', { labels: ['Session', 'AionNode'] }), item('e1'), item('e2')]);
+    const pack = assemble([
+      item('s1', { labels: ['Session', 'AionNode'] }),
+      item('e1'),
+      item('e2'),
+    ]);
 
     expect(pack.episodes?.map((entry) => entry.rank)).toEqual([1, 2]);
   });
@@ -264,11 +263,18 @@ describe('the honesty line', () => {
       truncated: 'activation_budget',
     });
     const nothingMeasured = assemble([], {
-      admission: { ...report([]), considered: 15, droppedUnmeasured: 15, droppedUnmeasuredArrival: 15 },
+      admission: {
+        ...report([]),
+        considered: 15,
+        droppedUnmeasured: 15,
+        droppedUnmeasuredArrival: 15,
+      },
     });
 
     expect(nothingStored.rendered_text).toContain('Nothing reached the admission gate.');
-    expect(floorDidItsJob.rendered_text).toContain('Of 29 candidates: 29 measured under the 0.60 floor.');
+    expect(floorDidItsJob.rendered_text).toContain(
+      'Of 29 candidates: 29 measured under the 0.60 floor.',
+    );
     expect(floorDidItsJob.rendered_text).toContain('spread truncated on the activation budget');
     expect(nothingMeasured.rendered_text).toContain(
       'Of 15 candidates: 15 that nothing measured against it.',

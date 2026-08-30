@@ -2,17 +2,18 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { CueCache } from './cues.js';
+import { handleRecall, readModeFor, type RecallCompletion, type RecallDeps } from './recall.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { buildAdjacencyStatement } from '../../infrastructure/graph/adjacency.js';
 import { withCurrency } from '../../infrastructure/graph/read-modes.js';
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
-import { FakeGraph } from '../../reflection/test-support/fake-graph.fixture.js';
-import { SessionManager } from '../../session/session-manager.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import { getLastPack } from '../../infrastructure/sqlite/last-pack.js';
-import { CueCache } from './cues.js';
-import { handleRecall, readModeFor, type RecallCompletion, type RecallDeps } from './recall.js';
+import { FakeGraph } from '../../reflection/test-support/fake-graph.fixture.js';
+import { SessionManager } from '../../session/session-manager.js';
 
 const MEMBER_ID = 'member-1';
 const WORKSPACE_ID = 'workspace-global';
@@ -119,10 +120,14 @@ describe('read mode', () => {
 
 describe('recall against an empty substrate', () => {
   it('returns an explicitly empty pack instead of padding it', async () => {
-    const pack = await handleRecall(deps(), { query: 'why did we pick webhooks' }, {
-      identity: IDENTITY,
-      now: NOW,
-    });
+    const pack = await handleRecall(
+      deps(),
+      { query: 'why did we pick webhooks' },
+      {
+        identity: IDENTITY,
+        now: NOW,
+      },
+    );
 
     expect(pack.facts).toBeUndefined();
     expect(pack.episodes).toBeUndefined();
@@ -157,10 +162,14 @@ describe('recall against an empty substrate', () => {
   });
 
   it('records a timing for every stage', async () => {
-    const pack = await handleRecall(deps(), { query: 'why webhooks' }, {
-      identity: IDENTITY,
-      now: NOW,
-    });
+    const pack = await handleRecall(
+      deps(),
+      { query: 'why webhooks' },
+      {
+        identity: IDENTITY,
+        now: NOW,
+      },
+    );
 
     for (const stage of ['cues', 'embed', 'seeds', 'activation', 'fusion'] as const) {
       expect(pack.metadata.stage_timings_ms[stage]).toBeGreaterThanOrEqual(0);
@@ -170,10 +179,14 @@ describe('recall against an empty substrate', () => {
 
 describe('session identity and persistence', () => {
   it('persists the pack it served under the transport session', async () => {
-    const pack = await handleRecall(deps(), { query: 'why webhooks' }, {
-      identity: IDENTITY,
-      now: NOW,
-    });
+    const pack = await handleRecall(
+      deps(),
+      { query: 'why webhooks' },
+      {
+        identity: IDENTITY,
+        now: NOW,
+      },
+    );
 
     const saved = getLastPack(store.db, IDENTITY);
     expect(saved?.pack).toEqual(pack);
@@ -196,10 +209,14 @@ describe('degradation', () => {
   it('answers on the raw query and names the ladder when the cue model fails', async () => {
     generate.mockRejectedValueOnce(new Error('ollama is down'));
 
-    const pack = await handleRecall(deps(), { query: 'why did we pick webhooks' }, {
-      identity: IDENTITY,
-      now: NOW,
-    });
+    const pack = await handleRecall(
+      deps(),
+      { query: 'why did we pick webhooks' },
+      {
+        identity: IDENTITY,
+        now: NOW,
+      },
+    );
 
     expect(pack.metadata.degraded).toEqual([{ stage: 'cues', reason: 'model_error' }]);
     expect(pack.metadata.cues).toEqual([
@@ -211,10 +228,14 @@ describe('degradation', () => {
   it('still serves a pack when embedding is unavailable, and says the vector leg is gone', async () => {
     embed.mockRejectedValueOnce(new Error('ollama is down'));
 
-    const pack = await handleRecall(deps(), { query: 'why webhooks' }, {
-      identity: IDENTITY,
-      now: NOW,
-    });
+    const pack = await handleRecall(
+      deps(),
+      { query: 'why webhooks' },
+      {
+        identity: IDENTITY,
+        now: NOW,
+      },
+    );
 
     expect(pack.metadata.degraded).toEqual([{ stage: 'embed', reason: 'model_error' }]);
     expect(pack.metadata.cues).toHaveLength(2);
@@ -228,10 +249,14 @@ describe('degradation', () => {
     generate.mockRejectedValueOnce(new Error('fetch failed'));
     embed.mockRejectedValueOnce(new Error('fetch failed'));
 
-    const pack = await handleRecall(deps(), { query: 'why webhooks' }, {
-      identity: IDENTITY,
-      now: NOW,
-    });
+    const pack = await handleRecall(
+      deps(),
+      { query: 'why webhooks' },
+      {
+        identity: IDENTITY,
+        now: NOW,
+      },
+    );
 
     expect(pack.metadata.degraded).toEqual([
       { stage: 'cues', reason: 'model_error' },
@@ -249,20 +274,28 @@ describe('degradation', () => {
     await handleRecall(shared, { query: 'why webhooks' }, { identity: IDENTITY, now: NOW });
 
     graph.offline = true;
-    const pack = await handleRecall(shared, { query: 'why webhooks' }, {
-      identity: IDENTITY,
-      now: NOW,
-    });
+    const pack = await handleRecall(
+      shared,
+      { query: 'why webhooks' },
+      {
+        identity: IDENTITY,
+        now: NOW,
+      },
+    );
 
     expect(pack.metadata.degraded).toEqual([{ stage: 'graph', reason: 'unavailable' }]);
     expect(pack.rendered_text).toContain('No memories matched this query.');
   });
 
   it('leaves the marker absent when the substrate is simply empty', async () => {
-    const pack = await handleRecall(deps(), { query: 'why webhooks' }, {
-      identity: IDENTITY,
-      now: NOW,
-    });
+    const pack = await handleRecall(
+      deps(),
+      { query: 'why webhooks' },
+      {
+        identity: IDENTITY,
+        now: NOW,
+      },
+    );
 
     expect(pack.metadata.degraded).toBeUndefined();
     expect(pack.rendered_text).toContain('No memories matched this query.');

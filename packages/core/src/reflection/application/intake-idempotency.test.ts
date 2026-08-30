@@ -2,18 +2,19 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULTS } from '../../infrastructure/config/defaults.js';
-import { openLogger } from '../../infrastructure/logging/logger.js';
-import type { Vector } from '../../infrastructure/providers/types.js';
-import { SessionManager } from '../../session/session-manager.js';
-import { ReflectionQueueClaimant } from '../../infrastructure/sqlite/claim.js';
-import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { enqueueReflectionJob, listReflectionJobs } from '../../infrastructure/sqlite/reflection-queue.js';
+
 import { ReflectionDispatch, type ReflectionJobSignal } from './dispatch.js';
 import { ReflectionNotStoredError } from './errors.js';
-import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
+import { handleReflection, type ReflectionIntakeDeps } from './intake.js';
 import { LaneAssigner } from './lanes.js';
 import { attachContentVectors, findPendingVectorNodes } from './vectors.js';
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import { openLogger } from '../../infrastructure/logging/logger.js';
+import type { Provider, Vector } from '../../infrastructure/providers/types.js';
+import { ReflectionQueueClaimant } from '../../infrastructure/sqlite/claim.js';
+import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { listReflectionJobs } from '../../infrastructure/sqlite/reflection-queue.js';
+import { SessionManager } from '../../session/session-manager.js';
 import { FakeGraph } from '../test-support/fake-graph.fixture.js';
 
 const MEMBER_ID = 'member-1';
@@ -53,8 +54,8 @@ let graph: FakeGraph;
 let db: SqliteHandle;
 let dataDir: string;
 let signals: ReflectionJobSignal[];
-let embed: ReturnType<typeof vi.fn>;
-let generate: ReturnType<typeof vi.fn>;
+let embed: ReturnType<typeof vi.fn<Provider['embed']>>;
+let generate: ReturnType<typeof vi.fn<Provider['generate']>>;
 let deps: ReflectionIntakeDeps;
 
 function fakeVectors(texts: readonly string[]): Vector[] {
@@ -84,7 +85,7 @@ beforeEach(() => {
     driver: graph.driver,
     db,
     sessions: new SessionManager(graph.driver, { memberId: MEMBER_ID, workspaceId: WORKSPACE_ID }),
-    provider: { embed, generate } as unknown as ReflectionIntakeDeps['provider'],
+    provider: { embed, generate },
     dispatch,
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: 4.5,
@@ -97,10 +98,6 @@ afterEach(() => {
   db.close();
   rmSync(dataDir, { recursive: true, force: true });
 });
-
-function embeddedTexts(call: number): string {
-  return (embed.mock.calls[call]?.[0] as readonly string[]).join('\n');
-}
 
 /**
  * Intake's idempotency and its failure modes: a payload the substrate already holds, the

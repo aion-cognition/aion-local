@@ -2,6 +2,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { observeHealth } from './observe.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
@@ -19,7 +21,6 @@ import {
 } from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { observeHealth } from './observe.js';
 
 const EMBED_DIMENSION = 8;
 const NOW = new Date('2026-08-29T14:00:00.000Z');
@@ -101,13 +102,24 @@ beforeAll(async () => {
   await writeStampedNode(harness.driver, {
     label: 'Entity',
     id: 'entity-unvectorized',
-    properties: { name: 'unvectorized', name_norm: 'unvectorized', type: 'concept', text: 'waiting on an embed' },
+    properties: {
+      name: 'unvectorized',
+      name_norm: 'unvectorized',
+      type: 'concept',
+      text: 'waiting on an embed',
+    },
     now: NOW,
   });
   await writeStampedNode(harness.driver, {
     label: 'Entity',
     id: 'entity-associated',
-    properties: { name: 'associated', name_norm: 'associated', type: 'concept', text: 'linked', content_vec: VECTOR },
+    properties: {
+      name: 'associated',
+      name_norm: 'associated',
+      type: 'concept',
+      text: 'linked',
+      content_vec: VECTOR,
+    },
     now: NOW,
   });
   await upsertEdge(harness.driver, {
@@ -180,7 +192,10 @@ describe('observeHealth', () => {
   });
 
   it('names the collector that failed and keeps the rest of the reading', async () => {
-    const broken = { ...harness.driver, executeQuery: () => Promise.reject(new Error('bolt closed')) };
+    // Every collector reaches the driver through `executeQuery` alone, so a fake exposing
+    // only that method exercises the same failure path a spread of the real instance would
+    // (a spread would copy no prototype method anyway, `executeQuery` included).
+    const broken = { executeQuery: () => Promise.reject(new Error('bolt closed')) };
     const snapshot = await observeHealth(
       { driver: broken as unknown as Neo4jHarness['driver'], db, config, logger },
       { now: NOW },

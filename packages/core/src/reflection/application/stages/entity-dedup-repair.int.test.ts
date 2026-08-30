@@ -9,20 +9,18 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
  * The merge itself and what it has to stay merged against are `entity-dedup.int.test.ts`;
  * this file carries its own harness because an integration file owns its own container.
  */
+import { EntityDedupStage } from './entity-dedup.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
 import { redirectAndAbsorb } from '../../../infrastructure/graph/entity-dedup-queries.js';
 import {
-  findEpisodeEntities,
   linkEntityMentions,
   mergeEntities,
   writeEntityVectors,
   type EntityMergeInput,
 } from '../../../infrastructure/graph/entity-queries.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
-import { findPendingVectorNodes } from '../../../infrastructure/graph/pending-vectors.js';
 import {
-  mentionCounts,
   participatingEpisodeIds,
   storedEntity,
   supersedingNodeIds,
@@ -37,10 +35,7 @@ import { OllamaProvider } from '../../../infrastructure/providers/ollama-provide
 import type { Vector } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { listEntityMergeProposals } from '../../../infrastructure/sqlite/entity-merge-proposals.js';
-import { getLedgerEntry } from '../../../infrastructure/sqlite/ops-ledger.js';
-import { entityMergeLedgerKey } from '../../domain/entity-merge.js';
 import type { StageContext } from '../../domain/stage.js';
-import { EntityDedupStage } from './entity-dedup.js';
 
 /**
  * The similarity search, mention-count aggregation, edge redirection and `supersede` close
@@ -67,16 +62,10 @@ function nearDuplicateVector(): number[] {
   return vector;
 }
 
-/** Cosine against `unitVector(0)` is exactly 0, nowhere near any reasonable threshold. */
-function unrelatedVector(): number[] {
-  return unitVector(2);
-}
-
 let harness: Neo4jHarness;
 let db: SqliteHandle;
 let dataDir: string;
 let episodeId: string;
-let otherEpisodeId: string;
 
 async function seedEntity(input: EntityMergeInput, vector: readonly number[]): Promise<string> {
   const [merged] = await mergeEntities(harness.driver, [input], NOW);

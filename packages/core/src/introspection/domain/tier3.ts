@@ -1,6 +1,6 @@
-import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { OperationCandidate } from './decide.js';
 import type { HealthSnapshot } from './health.js';
+import type { Logger } from '../../infrastructure/logging/logger.js';
 
 /**
  * The seam tier 3 will land on, and nothing more. The full layer composes a schema-aware

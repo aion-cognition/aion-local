@@ -1,9 +1,10 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
 import { BITEMPORAL_PROPERTIES } from '../../../infrastructure/graph/bitemporal.js';
-import { MEMORY_PROPERTIES } from '../../../infrastructure/graph/episodes.js';
 import { TEXT_NORM_PROPERTY } from '../../../infrastructure/graph/cognitive-queries.js';
+import { MEMORY_PROPERTIES } from '../../../infrastructure/graph/episodes.js';
 import { SUPERSEDES_TYPE } from '../../../infrastructure/graph/relationships.js';
 import type { Row } from '../../../infrastructure/graph/values.js';
 import { openLogger } from '../../../infrastructure/logging/logger.js';
@@ -55,7 +56,10 @@ export class SupersessionFakeGraph extends FakeGraph {
     cypher: string,
     parameters: Record<string, unknown> = {},
   ): Promise<unknown> {
-    if (cypher.includes('<-[:EXTRACTED_FROM]-(n)') && cypher.includes('content_vec AS content_vec')) {
+    if (
+      cypher.includes('<-[:EXTRACTED_FROM]-(n)') &&
+      cypher.includes('content_vec AS content_vec')
+    ) {
       this.statements.push({ cypher, parameters });
       return toResult(this.#episodeFactNodes(parameters));
     }
@@ -91,7 +95,7 @@ export class SupersessionFakeGraph extends FakeGraph {
       }))
       .sort((left, right) => {
         const byText = String(left.text_norm).localeCompare(String(right.text_norm));
-        return byText !== 0 ? byText : String(left.id).localeCompare(String(right.id));
+        return byText === 0 ? left.id.localeCompare(right.id) : byText;
       });
   }
 
@@ -122,7 +126,7 @@ export class SupersessionFakeGraph extends FakeGraph {
         shared_subject: null,
       }))
       .filter((row) => row.score >= threshold)
-      .sort((left, right) => right.score - left.score || String(left.id).localeCompare(String(right.id)))
+      .sort((left, right) => right.score - left.score || left.id.localeCompare(right.id))
       .slice(0, limit);
   }
 
@@ -138,7 +142,9 @@ export class SupersessionFakeGraph extends FakeGraph {
       .filter((node) => this.edges.has(`MENTIONS:${episodeId}:${node.id}`))
       .filter((node) => node.properties[BITEMPORAL_PROPERTIES.validUntil] === undefined)
       .filter((node) => node.properties[BITEMPORAL_PROPERTIES.forgottenAt] === undefined)
-      .filter((node) => String(node.properties.name_norm ?? '').length >= minNameLength)
+      .filter(
+        (node) => ((node.properties.name_norm as string | null) ?? '').length >= minNameLength,
+      )
       .filter((node) => subjectTextNorm.includes(String(node.properties.name_norm)));
     if (subjects.length === 0) {
       return [];
@@ -150,9 +156,13 @@ export class SupersessionFakeGraph extends FakeGraph {
     return this.#currentFactNodes(parameters)
       .map((entry) => ({
         entry,
-        named: names.find((name) => String(entry.node.properties[TEXT_NORM_PROPERTY]).includes(name)),
+        named: names.find((name) =>
+          String(entry.node.properties[TEXT_NORM_PROPERTY]).includes(name),
+        ),
       }))
-      .filter((row) => row.named !== undefined || this.#sharesEpisodeSubject(row.entry.node, subjectIds))
+      .filter(
+        (row) => row.named !== undefined || this.#sharesEpisodeSubject(row.entry.node, subjectIds),
+      )
       .map((row) => ({
         id: row.entry.node.id,
         label: row.entry.label,
@@ -162,7 +172,7 @@ export class SupersessionFakeGraph extends FakeGraph {
           : 0,
         shared_subject: row.named ?? null,
       }))
-      .sort((left, right) => right.score - left.score || String(left.id).localeCompare(String(right.id)))
+      .sort((left, right) => right.score - left.score || left.id.localeCompare(right.id))
       .slice(0, limit);
   }
 

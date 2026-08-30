@@ -1,11 +1,11 @@
-import type { AdjacencyNeighbor } from '../../infrastructure/graph/adjacency.js';
-import type { CurrencyAnnotation } from '../../infrastructure/graph/read-modes.js';
-import { isRelationshipType } from '../../infrastructure/graph/relationships.js';
 import {
   ACTIVATION_WEIGHTS,
   CONFIDENCE_SCALED_TYPES,
   DEFAULT_ACTIVATION_WEIGHT,
 } from './activation-weights.js';
+import type { AdjacencyNeighbor } from '../../infrastructure/graph/adjacency.js';
+import type { CurrencyAnnotation } from '../../infrastructure/graph/read-modes.js';
+import { isRelationshipType } from '../../infrastructure/graph/relationships.js';
 
 export { MODEL_INFERRED_PENALTY, MODEL_INFERRED_TYPES } from './activation-weights.js';
 
@@ -85,11 +85,7 @@ export type ActivatedNode = {
  * is the small-graph case, which is the ordinary one while the graph is still sparse.
  */
 export type ActivationTermination =
-  | 'frontier_exhausted'
-  | 'below_min_activation'
-  | 'hop_limit'
-  | 'node_budget'
-  | 'max_iterations';
+  'frontier_exhausted' | 'below_min_activation' | 'hop_limit' | 'node_budget' | 'max_iterations';
 
 export type ActivationRun = {
   /** Seeds included, ordered by score descending, filtered to `minActivation` and above. */
@@ -204,7 +200,11 @@ function initialize(seeds: readonly ActivationSeed[]): SpreadState {
  * the neighbour is superseded. Contributions add: reaching one node down several paths is
  * evidence reinforcing relevance, not double counting.
  */
-function propagate(state: SpreadState, neighbor: AdjacencyNeighbor, budget: ActivationBudget): void {
+function propagate(
+  state: SpreadState,
+  neighbor: AdjacencyNeighbor,
+  budget: ActivationBudget,
+): void {
   // The hard bottom, not the fade. An edge under it is treated as absent; everything above it
   // propagates in proportion to its strength through `edgeWeight`.
   if (neighbor.strength < budget.associationStrength) {
@@ -293,8 +293,7 @@ function selectBatch(state: SpreadState, budget: ActivationBudget): BatchSelecti
     .filter((nodeId) => (state.scores.get(nodeId) ?? 0) >= budget.minActivation)
     .sort(
       (left, right) =>
-        (state.scores.get(right) ?? 0) - (state.scores.get(left) ?? 0) ||
-        left.localeCompare(right),
+        (state.scores.get(right) ?? 0) - (state.scores.get(left) ?? 0) || left.localeCompare(right),
     );
   if (eligible.length === 0) {
     return { kind: 'stop', termination: 'below_min_activation' };
@@ -357,9 +356,9 @@ export async function spreadActivation(
   const state = initialize(input.seeds);
 
   let iterations = 0;
-  let termination: ActivationTermination = 'frontier_exhausted';
+  let termination: ActivationTermination;
 
-  while (true) {
+  for (;;) {
     if (iterations >= budget.maxIterations) {
       termination = 'max_iterations';
       break;
@@ -371,7 +370,7 @@ export async function spreadActivation(
 
     const selection = selectBatch(state, budget);
     if (selection.kind === 'stop') {
-      termination = selection.termination;
+      ({ termination } = selection);
       break;
     }
 

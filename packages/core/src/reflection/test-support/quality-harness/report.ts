@@ -1,5 +1,5 @@
-import type { ExtractionRoute } from './types.js';
 import type { CallMetrics, FixtureAgreement, FixtureRouteMetrics } from './scorer.js';
+import type { ExtractionRoute } from './types.js';
 
 export type FixtureReport = {
   readonly id: string;
@@ -41,7 +41,9 @@ function renderFixture(fixture: FixtureReport): string[] {
   const lines: string[] = [];
   lines.push(`## ${fixture.title} (\`${fixture.id}\`)`, '');
   lines.push(`Episode length: ${fixture.charCount} chars`, '');
-  lines.push('| Route | Model | Entities | Cognitive nodes | Entity latency (ms) | Cognitive latency (ms) |');
+  lines.push(
+    '| Route | Model | Entities | Cognitive nodes | Entity latency (ms) | Cognitive latency (ms) |',
+  );
   lines.push('|---|---|---|---|---|---|');
   for (const route of fixture.routes) {
     lines.push(

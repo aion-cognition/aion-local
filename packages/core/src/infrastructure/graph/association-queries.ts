@@ -1,5 +1,6 @@
-import { randomUUID } from 'node:crypto';
 import neo4j, { type Driver } from 'neo4j-driver';
+import { randomUUID } from 'node:crypto';
+
 import { runRead } from './connection.js';
 import { upsertEdge } from './edges.js';
 import { readModeFragment, type ReadMode } from './read-modes.js';
@@ -54,7 +55,10 @@ export type LinkCoOccurrenceInput = {
  * off it. A step from the current weight is all three problems at once: the discount lands,
  * repeated co-occurrence still accumulates, and decay is not undone by a single observation.
  */
-export async function linkCoOccurrence(driver: Driver, input: LinkCoOccurrenceInput): Promise<void> {
+export async function linkCoOccurrence(
+  driver: Driver,
+  input: LinkCoOccurrenceInput,
+): Promise<void> {
   await upsertEdge(driver, {
     type: CO_OCCURS_TYPE,
     sourceId: input.sourceId,
@@ -169,7 +173,10 @@ export async function findSimilarEntityCandidates(
     cypher,
     {
       ...fragment.parameters,
-      seeds: input.entities.map((entity) => ({ id: entity.id, vector: toGraphVector(entity.vector) })),
+      seeds: input.entities.map((entity) => ({
+        id: entity.id,
+        vector: toGraphVector(entity.vector),
+      })),
       index: CONTENT_VECTOR_INDEX,
       k: toGraphInteger(input.limit * KNN_OVERSAMPLE_FACTOR),
       threshold: input.threshold,

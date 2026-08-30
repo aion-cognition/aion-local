@@ -1,4 +1,5 @@
 import neo4j, { type Driver } from 'neo4j-driver';
+
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { runRead, type GraphStatement } from './connection.js';
 import { CONTAINMENT_TYPE } from './episodes.js';
@@ -44,7 +45,7 @@ const FIND_DUPLICATE_NARRATIVE_SESSIONS = [
 function readVersion(value: unknown): DuplicateNarrativeVersion {
   const row = (value ?? {}) as Row;
   return {
-    id: String(row.id ?? ''),
+    id: (row.id as string | null) ?? '',
     version: typeof row.version === 'number' ? row.version : 0,
     coverageCount: typeof row.coverage_count === 'number' ? row.coverage_count : 0,
   };

@@ -1,8 +1,9 @@
 import type { Driver } from 'neo4j-driver';
-import type { SqliteHandle } from '../sqlite/database.js';
-import { getMeta, setMeta } from '../sqlite/meta.js';
+
 import { BASE_NODE_LABEL } from './labels.js';
 import { CONTENT_FULLTEXT_INDEX } from './seed-queries.js';
+import type { SqliteHandle } from '../sqlite/database.js';
+import { getMeta, setMeta } from '../sqlite/meta.js';
 
 /**
  * Backbone nodes (the single Member and the global Workspace) must carry BOTH their
@@ -110,7 +111,10 @@ export type GraphMigrationOutcome = {
 
 async function schemaObjectNames(driver: Driver): Promise<readonly string[]> {
   const names = new Set<string>();
-  for (const statement of ['SHOW CONSTRAINTS YIELD name RETURN name', 'SHOW INDEXES YIELD name RETURN name']) {
+  for (const statement of [
+    'SHOW CONSTRAINTS YIELD name RETURN name',
+    'SHOW INDEXES YIELD name RETURN name',
+  ]) {
     const result = await driver.executeQuery(statement);
     for (const record of result.records) {
       names.add(record.get('name') as string);

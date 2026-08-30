@@ -1,9 +1,9 @@
-import { createServer } from 'node:http';
-import type { AddressInfo } from 'node:net';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { bootstrapBackbone, openSqliteHandle, runGraphMigrations, type SqliteHandle } from '@aion/core';
+import {
+  bootstrapBackbone,
+  openSqliteHandle,
+  runGraphMigrations,
+  type SqliteHandle,
+} from '@aion/core';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
@@ -13,7 +13,13 @@ import { bootstrapService, MCP_PATH, type AionService } from '@aion/mcp';
 import { ReflectionOutputSchema } from '@aion/protocol';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import { runLast } from './last.js';
 
 /**
@@ -42,7 +48,7 @@ async function freePort(): Promise<number> {
       resolve();
     });
   });
-  const port = (probe.address() as AddressInfo).port;
+  const { port } = probe.address() as AddressInfo;
   await new Promise<void>((resolve) => {
     probe.close(() => {
       resolve();
@@ -76,7 +82,10 @@ beforeAll(async () => {
   const transport = new StreamableHTTPClientTransport(url);
   await client.connect(transport);
   try {
-    const ack = await client.callTool({ name: 'reflection', arguments: { observations: [OBSERVATION] } });
+    const ack = await client.callTool({
+      name: 'reflection',
+      arguments: { observations: [OBSERVATION] },
+    });
     ReflectionOutputSchema.parse(ack.structuredContent);
 
     const recalled = await client.callTool({ name: 'recall', arguments: { query: QUERY } });
@@ -101,15 +110,15 @@ afterAll(async () => {
 
 describe('aion last against a pack served over the real MCP wire', () => {
   it('emits --json content identical to what the MCP client received', async () => {
-    process.env['AION_SQLITE_PATH'] = sqlitePath;
-    process.env['AION_LOG_FILE'] = join(dir, 'aion-cli.jsonl');
+    process.env.AION_SQLITE_PATH = sqlitePath;
+    process.env.AION_LOG_FILE = join(dir, 'aion-cli.jsonl');
     const lines: string[] = [];
     try {
       const code = await runLast(['--session', sessionId, '--json'], (line) => lines.push(line));
       expect(code).toBe(0);
     } finally {
-      delete process.env['AION_SQLITE_PATH'];
-      delete process.env['AION_LOG_FILE'];
+      delete process.env.AION_SQLITE_PATH;
+      delete process.env.AION_LOG_FILE;
     }
 
     expect(lines).toHaveLength(1);
@@ -117,20 +126,20 @@ describe('aion last against a pack served over the real MCP wire', () => {
   });
 
   it('renders the same session and item ids in text mode', async () => {
-    process.env['AION_SQLITE_PATH'] = sqlitePath;
-    process.env['AION_LOG_FILE'] = join(dir, 'aion-cli.jsonl');
+    process.env.AION_SQLITE_PATH = sqlitePath;
+    process.env.AION_LOG_FILE = join(dir, 'aion-cli.jsonl');
     const lines: string[] = [];
     try {
       const code = await runLast(['--session', sessionId], (line) => lines.push(line));
       expect(code).toBe(0);
     } finally {
-      delete process.env['AION_SQLITE_PATH'];
-      delete process.env['AION_LOG_FILE'];
+      delete process.env.AION_SQLITE_PATH;
+      delete process.env.AION_LOG_FILE;
     }
 
     const text = lines.join('\n');
     expect(text).toContain(`session  ${sessionId}`);
-    const pack = mcpPack as { episodes?: ReadonlyArray<{ id: string }> };
+    const pack = mcpPack as { episodes?: readonly { id: string }[] };
     for (const episode of pack.episodes ?? []) {
       expect(text).toContain(`id=${episode.id}`);
     }

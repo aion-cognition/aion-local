@@ -1,5 +1,3 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { MemoryPackItem } from '@aion/protocol';
 import {
   closeSessionNarrative,
   findEpisodeCognitiveNodes,
@@ -15,6 +13,9 @@ import {
   nodeProperties,
   relationshipsByProvenance,
 } from '@aion/core/infrastructure/graph/test-support/graph-queries.fixture.js';
+import type { MemoryPackItem } from '@aion/protocol';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import { narrativeOptions } from '../bootstrap.js';
 import {
   CHANGE_BATTERY,
@@ -103,8 +104,7 @@ function bestRank(
   const needle = answer?.toLowerCase();
   const hit = items.find(
     (item) =>
-      owned.has(item.id) ||
-      (needle !== undefined && item.content.toLowerCase().includes(needle)),
+      owned.has(item.id) || (needle !== undefined && item.content.toLowerCase().includes(needle)),
   );
   return hit === undefined ? -1 : hit.rank;
 }
@@ -223,11 +223,10 @@ describe('the four corrections, read back', () => {
     console.log(
       `correction ${phase} "${entry.query}": corrected (${entry.answer}) at rank ` +
         `${String(ranks.corrected)}, pre-correction at rank ${String(ranks.stale)}, ` +
-        `${String(ranks.items)} items; top: ` +
-        result.items
+        `${String(ranks.items)} items; top: ${result.items
           .slice(0, 3)
           .map((item) => `[${String(item.rank)} ${item.currency}] ${item.content.slice(0, 50)}`)
-          .join(' | '),
+          .join(' | ')}`,
     );
     return ranks;
   }
@@ -238,45 +237,53 @@ describe('the four corrections, read back', () => {
    * These numbers are re-measured against the current pipeline; the gate is the assertion
    * below, on what recall answers once the correction has actually been applied.
    */
-  it.each(corrections)('records where $key ranks before the correction is applied', async (entry) => {
-    const before = await ask(entry, 'before');
-    expect(before.items).toBeGreaterThan(0);
-  }, 180_000);
+  it.each(corrections)(
+    'records where $key ranks before the correction is applied',
+    async (entry) => {
+      const before = await ask(entry, 'before');
+      expect(before.items).toBeGreaterThan(0);
+    },
+    180_000,
+  );
 
-  it.each(corrections)('answers $query with the corrected value once applied', async (entry) => {
-    const row = held(entry);
-    const applied = await supersedeEpisode(substrate.driver, {
-      oldId: row.baselineEpisodeId,
-      newId: row.correctionEpisodeId,
-      now: RECALLED_AT,
-    });
-    expect(applied.supersession.newId).toBe(row.correctionEpisodeId);
+  it.each(corrections)(
+    'answers $query with the corrected value once applied',
+    async (entry) => {
+      const row = held(entry);
+      const applied = await supersedeEpisode(substrate.driver, {
+        oldId: row.baselineEpisodeId,
+        newId: row.correctionEpisodeId,
+        now: RECALLED_AT,
+      });
+      expect(applied.supersession.newId).toBe(row.correctionEpisodeId);
 
-    // The derived family closes with its episode, which is what stops a stale extracted fact
-    // from answering as `current` long after its episode was corrected.
-    const closed = new Set(applied.propagation.closedIds);
-    for (const id of row.baselineNodeIds) {
-      const properties = await nodeProperties(substrate.driver, id);
-      const stillOpen = (properties.valid_until ?? undefined) === undefined;
-      expect(stillOpen).toBe(!closed.has(id));
-    }
-
-    const after = await ask(entry, 'after ');
-    expect(after.corrected).toBeGreaterThan(0);
-    // A superseded memory is still served, with its lineage: currency-aware, not
-    // currency-filtered. It may no longer outrank the correction, and it may no longer claim
-    // to be current. The reverse was measured on three of four questions.
-    if (after.stale > 0) {
-      expect(after.corrected).toBeLessThan(after.stale);
-    }
-    const stale = new Set([row.baselineEpisodeId, ...closed]);
-    for (const item of after.served) {
-      if (stale.has(item.id)) {
-        expect(item.currency).toBe('superseded');
-        expect(item.superseded_by?.id).toBeDefined();
+      // The derived family closes with its episode, which is what stops a stale extracted fact
+      // from answering as `current` long after its episode was corrected.
+      const closed = new Set(applied.propagation.closedIds);
+      for (const id of row.baselineNodeIds) {
+        const properties = await nodeProperties(substrate.driver, id);
+        const stillOpen = (properties.valid_until ?? undefined) === undefined;
+        expect(stillOpen).toBe(!closed.has(id));
       }
-    }
-  }, 180_000);
+
+      const after = await ask(entry, 'after ');
+      expect(after.corrected).toBeGreaterThan(0);
+      // A superseded memory is still served, with its lineage: currency-aware, not
+      // currency-filtered. It may no longer outrank the correction, and it may no longer claim
+      // to be current. The reverse was measured on three of four questions.
+      if (after.stale > 0) {
+        expect(after.corrected).toBeLessThan(after.stale);
+      }
+      const stale = new Set([row.baselineEpisodeId, ...closed]);
+      for (const item of after.served) {
+        if (stale.has(item.id)) {
+          expect(item.currency).toBe('superseded');
+          expect(item.superseded_by?.id).toBeDefined();
+        }
+      }
+    },
+    180_000,
+  );
 });
 
 describe('narrative grounding on the fabrication fixtures', () => {
@@ -303,12 +310,13 @@ describe('narrative grounding on the fabrication fixtures', () => {
     );
     expect(result.status).toBe('created');
 
-    const properties = await nodeProperties(substrate.driver, result.narrativeId as string);
+    const properties = await nodeProperties(substrate.driver, result.narrativeId!);
     const sources = await loadSessionSourceNodes(substrate.driver, fixture.identity);
     const claims = new Set(sources.map((source) => source.id));
     const citable = new Set([stored.episode_id, ...claims]);
     const citations = properties[NARRATIVE_PROPERTIES.citations] as string[];
-    const text = String(properties.text ?? '');
+    const rawText = properties.text;
+    const text = typeof rawText === 'string' ? rawText : '';
     const narration: Narration = {
       sentences: Number(properties[NARRATIVE_PROPERTIES.sentenceCount]),
       chars: text.length,

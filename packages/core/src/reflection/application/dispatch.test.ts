@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+
 import { ReflectionDispatch, type ReflectionJobSignal } from './dispatch.js';
 
 const SIGNAL: ReflectionJobSignal = {

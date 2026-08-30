@@ -1,4 +1,6 @@
 import { z } from 'zod';
+
+import { reflectProvider, type ProviderFactory } from './routed-generation.js';
 import {
   findEntityMentionContexts,
   findStaleDescriptionEntities,
@@ -7,7 +9,6 @@ import {
 } from '../../../infrastructure/graph/entity-description-queries.js';
 import type { ChatMessage, JsonSchema } from '../../../infrastructure/providers/types.js';
 import type { IntrospectionOperation, OperationOutcome } from '../../domain/operation.js';
-import { reflectProvider, type ProviderFactory } from './routed-generation.js';
 
 /**
  * The parked C3, sanctioned as an introspector op: an entity's description is written once,
@@ -101,12 +102,18 @@ export function descriptionFreshnessOperation(
         if (ctx.signal.aborted) {
           break;
         }
-        const contexts = await findEntityMentionContexts(ctx.driver, entity.id, MENTION_CONTEXT_LIMIT);
+        const contexts = await findEntityMentionContexts(
+          ctx.driver,
+          entity.id,
+          MENTION_CONTEXT_LIMIT,
+        );
 
         let description: string;
         try {
           const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), ctx.config.reflection.entityTimeoutMs);
+          const timer = setTimeout(() => {
+            controller.abort();
+          }, ctx.config.reflection.entityTimeoutMs);
           try {
             const raw = await provider.generate({
               model: ctx.config.models.reflect,

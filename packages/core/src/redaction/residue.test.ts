@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import { buildFingerprint, withoutFingerprints } from './fingerprint.js';
 import { DEFAULT_ENTROPY_THRESHOLD, redact } from './redact.js';
 
@@ -43,7 +44,7 @@ describe('what a residue scan would find', () => {
       `api_key: ${buildFingerprint('generic-secret-assignment', 'the old value')}\n` +
       'aws_access_key_id: AKIAIOSFODNN7EXAMPLE';
 
-    const matches = redact(withoutFingerprints(mixed), DEFAULT_ENTROPY_THRESHOLD).matches;
+    const { matches } = redact(withoutFingerprints(mixed), DEFAULT_ENTROPY_THRESHOLD);
     expect(matches.map((match) => match.rule)).toContain('aws-access-key');
   });
 });

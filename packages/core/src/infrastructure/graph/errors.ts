@@ -16,7 +16,7 @@ export function isGraphUnavailable(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
   }
-  const code = (error as { code?: unknown }).code;
+  const { code } = error as { code?: unknown };
   if (typeof code !== 'string') {
     return false;
   }
@@ -44,7 +44,12 @@ export class VectorIndexDimensionMismatchError extends Error {
   readonly indexDimension: number;
   readonly expectedDimension: number;
 
-  constructor(indexName: string, indexDimension: number, expectedDimension: number, embedModel: string) {
+  constructor(
+    indexName: string,
+    indexDimension: number,
+    expectedDimension: number,
+    embedModel: string,
+  ) {
     super(
       `vector index ${indexName} was created at ${indexDimension} dimensions but ${embedModel} produces ${expectedDimension}; reindex is required`,
     );

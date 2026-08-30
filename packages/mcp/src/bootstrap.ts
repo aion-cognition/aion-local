@@ -1,4 +1,3 @@
-import { userInfo } from 'node:os';
 import {
   AssociationInferenceStage,
   bootstrapBackbone,
@@ -43,6 +42,8 @@ import {
   type ReflectionWorkerOptions,
   type SessionNarrativeOptions,
 } from '@aion/core';
+import { userInfo } from 'node:os';
+
 import { bindHost, runningInContainer } from './http.js';
 import { AionMcpService } from './service.js';
 import { SessionIdleSweeper } from './session-idle-sweeper.js';
@@ -78,7 +79,7 @@ const MINUTE_MS = 60 * 1000;
  */
 export function reflectionStages(config: Config): readonly ReflectionStage[] {
   const model = config.models.reflect;
-  const reflection = config.reflection;
+  const { reflection } = config;
   return [
     new EntityExtractionStage({
       model,
@@ -167,7 +168,11 @@ export type AionService = {
  * the other half. Failures are logged and nothing else: the service does not depend on this,
  * and a machine with Ollama down has nothing resident to unload.
  */
-async function reconcileModels(config: Config, router: ProviderRouter, logger: Logger): Promise<void> {
+async function reconcileModels(
+  config: Config,
+  router: ProviderRouter,
+  logger: Logger,
+): Promise<void> {
   try {
     const report = await reconcileResidentModels({
       baseUrl: config.ollama.url,
@@ -212,7 +217,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       throw new SchemaNotInitializedError(config.sqlite.path);
     }
 
-    const driver = connection.driver;
+    const { driver } = connection;
     const memberName = (await readMemberName(driver)) ?? fallbackMemberName(env);
     const backbone = await bootstrapBackbone(driver, { memberName });
     const sessions = new SessionManager(driver, {
@@ -229,7 +234,10 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
     // Both roles embed through the same local model; only `generate` differs between them.
     const cueProvider = router.forRole('cue');
     const reflectProvider = router.forRole('reflect');
-    logger.info({ routing: router.routing.roles }, `provider routing: ${routingSummary(router.routing)}`);
+    logger.info(
+      { routing: router.routing.roles },
+      `provider routing: ${routingSummary(router.routing)}`,
+    );
     for (const route of unbackedPins(router.routing)) {
       logger.warn(
         { role: route.role },

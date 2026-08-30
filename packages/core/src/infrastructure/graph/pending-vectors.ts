@@ -1,9 +1,10 @@
 import neo4j, { type Driver } from 'neo4j-driver';
+
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { runRead, runWrite } from './connection.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
-import type { Vector } from '../providers/types.js';
 import { toGraphVector } from './values.js';
+import type { Vector } from '../providers/types.js';
 
 /**
  * A `:Memory` node whose `content_vec` is absent is the pending-vector marker: intake

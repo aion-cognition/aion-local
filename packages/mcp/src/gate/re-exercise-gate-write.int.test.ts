@@ -1,4 +1,3 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   buildFingerprint,
   countQueueJobs,
@@ -7,13 +6,15 @@ import {
   listReflectionJobs,
   p95EnrichmentLagMs,
   queueLagSnapshot,
-  type ReflectionOutput,
 } from '@aion/core';
+import { everyStoredProperty } from '@aion/core/infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
   LEAKED_SHAPES,
   SURVIVING_TEXT,
 } from '@aion/core/redaction/test-support/leaked-shapes.fixture.js';
-import { everyStoredProperty } from '@aion/core/infrastructure/graph/test-support/graph-queries.fixture.js';
+import type { ReflectionOutput } from '@aion/protocol';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import { CROSS_STAGE_ENTITY_MISS } from './gate-batteries.fixture.js';
 import { GateSubstrate, waitFor } from './gate-substrate.fixture.js';
 
@@ -53,7 +54,10 @@ beforeAll(async () => {
     expect(stored.queued).toBe(true);
   }
   await substrate.store(
-    { observations: Object.values(SURVIVING_TEXT), summary: 'material that must survive redaction' },
+    {
+      observations: Object.values(SURVIVING_TEXT),
+      summary: 'material that must survive redaction',
+    },
     { identity: `${REDACTION_SESSION}-survivors` },
   );
 

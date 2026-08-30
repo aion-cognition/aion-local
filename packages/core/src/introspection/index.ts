@@ -3,7 +3,12 @@
  * operation contract every maintenance operation implements, and the loop that runs them.
  */
 
-export { OPERATION_BUCKETS, bucketStamp, operationBucketKey, OPERATION_LEDGER_PREFIX } from './domain/buckets.js';
+export {
+  OPERATION_BUCKETS,
+  bucketStamp,
+  operationBucketKey,
+  OPERATION_LEDGER_PREFIX,
+} from './domain/buckets.js';
 export type { OperationBucket } from './domain/buckets.js';
 
 export {

@@ -2,9 +2,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { EntityDedupStage } from './entity-dedup.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
-import { redirectAndAbsorb } from '../../../infrastructure/graph/entity-dedup-queries.js';
 import {
   findEpisodeEntities,
   linkEntityMentions,
@@ -26,14 +27,10 @@ import {
   type Neo4jHarness,
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger } from '../../../infrastructure/logging/logger.js';
-import { OllamaProvider } from '../../../infrastructure/providers/ollama-provider.js';
-import type { Vector } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
-import { listEntityMergeProposals } from '../../../infrastructure/sqlite/entity-merge-proposals.js';
 import { getLedgerEntry } from '../../../infrastructure/sqlite/ops-ledger.js';
 import { entityMergeLedgerKey } from '../../domain/entity-merge.js';
 import type { StageContext } from '../../domain/stage.js';
-import { EntityDedupStage } from './entity-dedup.js';
 
 /**
  * The similarity search, mention-count aggregation, edge redirection and `supersede` close

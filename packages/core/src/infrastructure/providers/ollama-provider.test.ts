@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+
 import { OllamaProvider } from './ollama-provider.js';
 
 function jsonResponse(body: unknown, init: { status?: number } = {}): Response {
@@ -12,11 +13,16 @@ describe('OllamaProvider.embed', () => {
   it('posts to /api/embed and returns the vectors in order', async () => {
     const fetchImpl = vi.fn(async (url: string | URL, init?: RequestInit) => {
       expect(String(url)).toBe('http://localhost:11434/api/embed');
-      expect(JSON.parse(String(init?.body))).toEqual({
+      expect(JSON.parse(init?.body as string)).toEqual({
         model: 'nomic-embed-text',
         input: ['a', 'b'],
       });
-      return jsonResponse({ embeddings: [[1, 2, 3], [4, 5, 6]] });
+      return jsonResponse({
+        embeddings: [
+          [1, 2, 3],
+          [4, 5, 6],
+        ],
+      });
     });
     const provider = new OllamaProvider({
       baseUrl: 'http://localhost:11434/',
@@ -32,7 +38,7 @@ describe('OllamaProvider.embed', () => {
 
   it('folds case before the request, so a proper noun is not sent as an out-of-vocabulary token', async () => {
     const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => {
-      expect(JSON.parse(String(init?.body)).input).toEqual([
+      expect(JSON.parse(init?.body as string).input).toEqual([
         'redis',
         'thandiwe baptiste',
         'postgres (tool): the graph store',
@@ -54,7 +60,7 @@ describe('OllamaProvider.embed', () => {
     const provider = new OllamaProvider({
       baseUrl: 'http://localhost:11434',
       embedModel: 'nomic-embed-text',
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      fetchImpl,
     });
 
     await expect(provider.embed([])).resolves.toEqual([]);
@@ -66,7 +72,7 @@ describe('OllamaProvider.embed', () => {
     const provider = new OllamaProvider({
       baseUrl: 'http://localhost:11434',
       embedModel: 'nomic-embed-text',
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      fetchImpl,
     });
 
     await expect(provider.embed(['a'])).rejects.toThrow(/missing or mismatched/);
@@ -77,7 +83,7 @@ describe('OllamaProvider.embed', () => {
     const provider = new OllamaProvider({
       baseUrl: 'http://localhost:11434',
       embedModel: 'nomic-embed-text',
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      fetchImpl,
     });
 
     await expect(provider.embed(['a'])).rejects.toThrow(/404/);
@@ -88,7 +94,7 @@ describe('OllamaProvider.generate', () => {
   it('posts the schema as the chat format and parses the returned JSON content', async () => {
     const fetchImpl = vi.fn(async (url: string | URL, init?: RequestInit) => {
       expect(String(url)).toBe('http://localhost:11434/api/chat');
-      const parsed = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      const parsed = JSON.parse(init?.body as string) as Record<string, unknown>;
       expect(parsed.model).toBe('qwen3:1.7b');
       expect(parsed.format).toEqual({ type: 'object', properties: { cues: { type: 'array' } } });
       expect(parsed.stream).toBe(false);
@@ -117,7 +123,7 @@ describe('OllamaProvider.generate', () => {
     const provider = new OllamaProvider({
       baseUrl: 'http://localhost:11434',
       embedModel: 'nomic-embed-text',
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      fetchImpl,
     });
 
     await expect(

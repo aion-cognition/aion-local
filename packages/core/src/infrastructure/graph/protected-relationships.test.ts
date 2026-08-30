@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import {
   PROTECTED_RELATIONSHIP_TYPES,
   isProtectedRelationshipType,
@@ -37,7 +38,9 @@ describe('protected relationship set', () => {
 
   it('protects nothing outside the pinned list', () => {
     const unprotected = RELATIONSHIP_TYPES.filter((type) => !isProtectedRelationshipType(type));
-    expect(unprotected.length).toBe(RELATIONSHIP_TYPES.length - PROTECTED_RELATIONSHIP_TYPES.length);
+    expect(unprotected.length).toBe(
+      RELATIONSHIP_TYPES.length - PROTECTED_RELATIONSHIP_TYPES.length,
+    );
   });
 
   it('reports an unknown type as unprotected rather than throwing', () => {

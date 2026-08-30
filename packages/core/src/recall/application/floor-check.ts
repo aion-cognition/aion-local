@@ -1,4 +1,11 @@
+import {
+  RELATED_PAIRS,
+  UNRELATED_PAIRS,
+  UNRELATED_SENTENCES,
+  type ScoredPair,
+} from './floors.fixtures.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
+import type { AdmissionPolicy } from '../domain/admission.js';
 import {
   CALIBRATION_TOLERANCE,
   checkSeparation,
@@ -6,13 +13,6 @@ import {
   pairwiseCosines,
   type Separation,
 } from '../domain/floor-calibration.js';
-import type { AdmissionPolicy } from '../domain/admission.js';
-import {
-  RELATED_PAIRS,
-  UNRELATED_PAIRS,
-  UNRELATED_SENTENCES,
-  type ScoredPair,
-} from './floors.fixtures.js';
 
 /**
  * The doctor's re-measurement of the committed floors, on whatever model this machine actually

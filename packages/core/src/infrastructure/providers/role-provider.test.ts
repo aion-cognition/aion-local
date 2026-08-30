@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { DEFAULTS } from '../config/defaults.js';
-import type { Config } from '../config/schema.js';
+
 import { ProviderRouter, type GenerationEvent } from './role-provider.js';
 import type { ProviderPin } from './routing.js';
+import { DEFAULTS } from '../config/defaults.js';
+import type { Config } from '../config/schema.js';
 
 const SCHEMA = { type: 'object' };
 
@@ -18,20 +19,28 @@ function config(setup: Setup = {}): Config {
 }
 
 /** Answers both APIs in the one shape each of them returns, and records where the call went. */
-function recordingFetch(): { calls: { url: string; body: Record<string, unknown> }[]; impl: typeof fetch } {
+function recordingFetch(): {
+  calls: { url: string; body: Record<string, unknown> }[];
+  impl: typeof fetch;
+} {
   const calls: { url: string; body: Record<string, unknown> }[] = [];
   const impl = vi.fn((url: string | URL, init?: RequestInit) => {
     const target = String(url);
     calls.push({
       url: target,
-      body: init?.body === undefined ? {} : (JSON.parse(String(init.body)) as Record<string, unknown>),
+      body:
+        init?.body === undefined
+          ? {}
+          : (JSON.parse(init.body as string) as Record<string, unknown>),
     });
     if (target.includes('/api/embed')) {
       return Promise.resolve(new Response(JSON.stringify({ embeddings: [[0.1, 0.2]] })));
     }
     if (target.includes('anthropic.com')) {
       return Promise.resolve(
-        new Response(JSON.stringify({ content: [{ type: 'text', text: '{"from": "anthropic"}' }] })),
+        new Response(
+          JSON.stringify({ content: [{ type: 'text', text: '{"from": "anthropic"}' }] }),
+        ),
       );
     }
     return Promise.resolve(
@@ -57,7 +66,10 @@ describe('what each role generates against', () => {
       'http://ollama.test:11434/api/chat',
       'http://ollama.test:11434/api/chat',
     ]);
-    expect(calls.map((call) => call.body.model)).toEqual([DEFAULTS.models.cue, DEFAULTS.models.reflect]);
+    expect(calls.map((call) => call.body.model)).toEqual([
+      DEFAULTS.models.cue,
+      DEFAULTS.models.reflect,
+    ]);
   });
 
   it('sends both roles to Anthropic under the configured model when the key is set', async () => {
@@ -118,7 +130,12 @@ describe('the telemetry a caller reads the route from', () => {
     await router.forRole('reflect').generate(request(DEFAULTS.models.reflect));
 
     expect(events).toEqual([
-      expect.objectContaining({ role: 'cue', provider: 'ollama', model: DEFAULTS.models.cue, ok: true }),
+      expect.objectContaining({
+        role: 'cue',
+        provider: 'ollama',
+        model: DEFAULTS.models.cue,
+        ok: true,
+      }),
       expect.objectContaining({
         role: 'reflect',
         provider: 'anthropic',
@@ -133,12 +150,14 @@ describe('the telemetry a caller reads the route from', () => {
     const events: GenerationEvent[] = [];
     const router = new ProviderRouter({
       config: config(),
-      fetchImpl: impl as unknown as typeof fetch,
+      fetchImpl: impl,
       onGeneration: (event) => events.push(event),
     });
 
     await expect(router.forRole('cue').generate(request(DEFAULTS.models.cue))).rejects.toThrow();
 
-    expect(events).toEqual([expect.objectContaining({ role: 'cue', provider: 'ollama', ok: false })]);
+    expect(events).toEqual([
+      expect.objectContaining({ role: 'cue', provider: 'ollama', ok: false }),
+    ]);
   });
 });

@@ -1,5 +1,6 @@
-import { randomUUID } from 'node:crypto';
 import type { Driver } from 'neo4j-driver';
+import { randomUUID } from 'node:crypto';
+
 import {
   type GraphStatement,
   type GraphTransaction,
@@ -96,8 +97,7 @@ export function buildStampedNodeWrite(input: StampedNodeWrite): GraphStatement {
   const stamped = stampNew(input);
   const companions = stamped.labels.filter((label) => label !== input.label);
   const labelClause = companions.length > 0 ? [`n:${companions.join(':')}`] : [];
-  const mergeClause =
-    input.mergeProperties === undefined ? [] : ['n += $mergeProperties'];
+  const mergeClause = input.mergeProperties === undefined ? [] : ['n += $mergeProperties'];
   const onMatch = [...labelClause, ...mergeClause];
 
   const cypher = [
@@ -135,7 +135,12 @@ export async function writeStampedNode(
   input: StampedNodeWrite,
 ): Promise<StampedNodeResult> {
   const statement = buildStampedNodeWrite(input);
-  const outcome = await runWriteWithCounters(driver, statement.cypher, statement.parameters, mapNodeRow);
+  const outcome = await runWriteWithCounters(
+    driver,
+    statement.cypher,
+    statement.parameters,
+    mapNodeRow,
+  );
   return toStampedNodeResult(statement, outcome);
 }
 
@@ -261,13 +266,21 @@ const FORGET_NODE = [
  * on the stamp. Nothing is deleted; `as_of`/`knew_at` reads still return the row
  * (`read-modes.ts`), which is what makes the audit trail survive an explicit forget.
  */
-export async function forgetNode(driver: Driver, input: ForgetNodeInput): Promise<ForgetNodeResult> {
+export async function forgetNode(
+  driver: Driver,
+  input: ForgetNodeInput,
+): Promise<ForgetNodeResult> {
   const now = input.now ?? new Date();
-  const rows = await runWrite(driver, FORGET_NODE, { id: input.id, now: toGraphDateTime(now) }, (row) => ({
-    id: row.id as string,
-    forgottenAt: row.forgottenAt as Date,
-    justForgotten: row.justForgotten === true,
-  }));
+  const rows = await runWrite(
+    driver,
+    FORGET_NODE,
+    { id: input.id, now: toGraphDateTime(now) },
+    (row) => ({
+      id: row.id as string,
+      forgottenAt: row.forgottenAt as Date,
+      justForgotten: row.justForgotten === true,
+    }),
+  );
   const row = rows[0];
   if (row === undefined) {
     throw new GraphNodeNotFoundError([input.id], 'forget');

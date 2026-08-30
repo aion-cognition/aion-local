@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { DEFAULTS } from '../config/defaults.js';
-import type { Config } from '../config/schema.js';
+
 import { listResidentModels, reconcileResidentModels } from './model-reconciliation.js';
 import { resolveProviderRouting, type ProviderPin } from './routing.js';
+import { DEFAULTS } from '../config/defaults.js';
+import type { Config } from '../config/schema.js';
 
 const BASE_URL = 'http://ollama.test:11434';
 
@@ -19,14 +20,18 @@ function routing(setup: Setup = {}): ReturnType<typeof resolveProviderRouting> {
 
 type Call = { path: string; body: Record<string, unknown> };
 
-function ollama(resident: readonly string[], options: { psStatus?: number; unloadStatus?: number } = {}): {
+function ollama(
+  resident: readonly string[],
+  options: { psStatus?: number; unloadStatus?: number } = {},
+): {
   calls: Call[];
   impl: typeof fetch;
 } {
   const calls: Call[] = [];
   const impl = vi.fn((url: string | URL, init?: RequestInit) => {
     const path = new URL(String(url)).pathname;
-    const body = init?.body === undefined ? {} : (JSON.parse(String(init.body)) as Record<string, unknown>);
+    const body =
+      init?.body === undefined ? {} : (JSON.parse(init.body as string) as Record<string, unknown>);
     calls.push({ path, body });
 
     if (path === '/api/ps') {
@@ -59,7 +64,11 @@ describe('reconciling memory against the route', () => {
   it('asks Ollama nothing at all when every role is local', async () => {
     const { calls, impl } = ollama(['qwen3:8b']);
 
-    const report = await reconcileResidentModels({ baseUrl: BASE_URL, routing: routing(), fetchImpl: impl });
+    const report = await reconcileResidentModels({
+      baseUrl: BASE_URL,
+      routing: routing(),
+      fetchImpl: impl,
+    });
 
     expect(report.checked).toBe(false);
     expect(calls).toEqual([]);
@@ -76,15 +85,23 @@ describe('reconciling memory against the route', () => {
 
     expect(report.evicted).toEqual([DEFAULTS.models.reflect]);
     expect(calls.map((call) => call.path)).toEqual(['/api/ps', '/api/generate']);
-    expect(calls[1]?.body).toEqual({ model: DEFAULTS.models.reflect, keep_alive: 0, stream: false });
+    expect(calls[1]?.body).toEqual({
+      model: DEFAULTS.models.reflect,
+      keep_alive: 0,
+      stream: false,
+    });
     expect(report.detail).toContain('models stay on disk');
   });
 
   it('matches a bare configured name against the tag Ollama reports', async () => {
     const embedRouting = routing({ key: 'sk-ant-test' });
-    const { calls, impl } = ollama([`${DEFAULTS.models.cue}`, `${DEFAULTS.models.reflect}`]);
+    const { calls, impl } = ollama([DEFAULTS.models.cue, DEFAULTS.models.reflect]);
 
-    const report = await reconcileResidentModels({ baseUrl: BASE_URL, routing: embedRouting, fetchImpl: impl });
+    const report = await reconcileResidentModels({
+      baseUrl: BASE_URL,
+      routing: embedRouting,
+      fetchImpl: impl,
+    });
 
     expect(report.evicted).toEqual([DEFAULTS.models.cue, DEFAULTS.models.reflect]);
     expect(calls.filter((call) => call.path === '/api/generate')).toHaveLength(2);

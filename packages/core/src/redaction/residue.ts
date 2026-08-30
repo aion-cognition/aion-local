@@ -1,7 +1,8 @@
 import type { Driver } from 'neo4j-driver';
-import { readStoredText } from '../infrastructure/graph/introspection.js';
+
 import { withoutFingerprints } from './fingerprint.js';
 import { redact } from './redact.js';
+import { readStoredText } from '../infrastructure/graph/introspection.js';
 
 /**
  * What an older, leakier ruleset already wrote. Closing a leak path stops the next write; it

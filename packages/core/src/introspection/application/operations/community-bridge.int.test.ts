@@ -2,10 +2,14 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { communityRefreshOperation } from './community-refresh.js';
+import type { ProviderFactory } from './routed-generation.js';
+import { symbiosisBridgeOperation } from './symbiosis-bridge.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
-import { forgetNode, writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
 import { fetchAdjacency } from '../../../infrastructure/graph/adjacency.js';
+import { forgetNode, writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
 import { COMMUNITY_PROPERTY } from '../../../infrastructure/graph/community-queries.js';
 import { upsertEdge } from '../../../infrastructure/graph/edges.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
@@ -28,11 +32,8 @@ import {
   type ActivationBudget,
   type AdjacencyFetch,
 } from '../../../recall/domain/activation.js';
-import { healthFixture } from '../../domain/test-support/health.fixture.js';
 import type { OperationContext } from '../../domain/operation.js';
-import { communityRefreshOperation } from './community-refresh.js';
-import type { ProviderFactory } from './routed-generation.js';
-import { symbiosisBridgeOperation } from './symbiosis-bridge.js';
+import { healthFixture } from '../../domain/test-support/health.fixture.js';
 
 /**
  * Two knowledge islands: five concepts each, densely joined inside and joined to nothing
@@ -84,8 +85,7 @@ const config: Config = {
 };
 
 /** A deterministic stand-in for the local embedder: the bridge's own vector is not the subject. */
-const embed = async (texts: readonly string[]): Promise<Vector[]> =>
-  texts.map(() => unitVector(2));
+const embed = async (texts: readonly string[]): Promise<Vector[]> => texts.map(() => unitVector(2));
 
 const PROPOSED_SUMMARY = 'Both clusters describe the same ingest path, one side batching it.';
 const PROPOSED_RATIONALE = 'The two memories name the same pipeline from either end.';

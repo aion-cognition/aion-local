@@ -1,15 +1,16 @@
+import type { Driver } from 'neo4j-driver';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Driver } from 'neo4j-driver';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { ContextVectorStage } from './context-vectors.js';
 import { CONTEXT_VECTOR_PROPERTY } from '../../../infrastructure/graph/context-vector-queries.js';
+import type { Row } from '../../../infrastructure/graph/values.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import type { Provider } from '../../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
-import type { Row } from '../../../infrastructure/graph/values.js';
 import type { StageContext } from '../../domain/stage.js';
-import { ContextVectorStage } from './context-vectors.js';
 
 /**
  * Exercises the stage's control flow against a minimal stand-in for the driver, dispatched
@@ -21,9 +22,14 @@ import { ContextVectorStage } from './context-vectors.js';
 type QueryHandler = (cypher: string, parameters: Record<string, unknown>) => Row[];
 
 function stubDriver(handler: QueryHandler): Driver {
-  const executeQuery = async (cypher: string, parameters: Record<string, unknown> = {}): Promise<unknown> => ({
+  const executeQuery = async (
+    cypher: string,
+    parameters: Record<string, unknown> = {},
+  ): Promise<unknown> => ({
     records: handler(cypher, parameters).map((row) => ({ toObject: () => row })),
-    summary: { counters: { updates: () => ({ nodesCreated: 0, relationshipsCreated: 0, propertiesSet: 0 }) } },
+    summary: {
+      counters: { updates: () => ({ nodesCreated: 0, relationshipsCreated: 0, propertiesSet: 0 }) },
+    },
   });
   return { executeQuery } as unknown as Driver;
 }
@@ -61,7 +67,12 @@ function buildContext(driver: Driver): StageContext {
     db: undefined as unknown as SqliteHandle,
     provider: undefined as unknown as Provider,
     episodeId: EPISODE_ID,
-    episode: { id: EPISODE_ID, sessionId: 'session-1', text: 'irrelevant to this stage', turns: [] },
+    episode: {
+      id: EPISODE_ID,
+      sessionId: 'session-1',
+      text: 'irrelevant to this stage',
+      turns: [],
+    },
     logger,
     now: NOW,
   };
@@ -82,7 +93,10 @@ describe('ContextVectorStage', () => {
 
     const outcome = await new ContextVectorStage().run(buildContext(driver));
 
-    expect(outcome).toEqual({ status: 'skipped', summary: 'no affected memory nodes to recompute' });
+    expect(outcome).toEqual({
+      status: 'skipped',
+      summary: 'no affected memory nodes to recompute',
+    });
     expect(neighborQueryIssued).toBe(false);
   });
 
@@ -103,12 +117,15 @@ describe('ContextVectorStage', () => {
 
     const outcome = await new ContextVectorStage().run(buildContext(driver));
 
-    expect(outcome).toEqual({ status: 'skipped', summary: 'no affected node has a vectored neighbor' });
+    expect(outcome).toEqual({
+      status: 'skipped',
+      summary: 'no affected node has a vectored neighbor',
+    });
     expect(writeQueryIssued).toBe(false);
   });
 
   it('computes the weighted mean per affected node and writes it in one batch', async () => {
-    const written: Array<{ id: string; vector: number[] }> = [];
+    const written: { id: string; vector: number[] }[] = [];
     const driver = stubDriver((cypher, parameters) => {
       if (isAffectedIdsQuery(cypher)) {
         return [{ id: EPISODE_ID }, { id: 'entity-a' }];
@@ -121,7 +138,7 @@ describe('ContextVectorStage', () => {
         ];
       }
       if (isWriteQuery(cypher)) {
-        const entries = parameters.entries as Array<{ id: string; vector: number[] }>;
+        const entries = parameters.entries as { id: string; vector: number[] }[];
         written.push(...entries);
         return entries.map((entry) => ({ id: entry.id }));
       }

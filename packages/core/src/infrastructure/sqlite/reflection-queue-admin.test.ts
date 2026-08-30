@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
 import { ReflectionQueueClaimant } from './claim.js';
 import { SqliteStore } from './database.js';
 import {
@@ -11,7 +12,11 @@ import {
   listQueueJobs,
   promoteJobs,
 } from './reflection-queue-admin.js';
-import { enqueueReflectionJob, listReflectionJobs, type ReflectionLane } from './reflection-queue.js';
+import {
+  enqueueReflectionJob,
+  listReflectionJobs,
+  type ReflectionLane,
+} from './reflection-queue.js';
 
 describe('reflection queue administration', () => {
   let dir: string;

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+
 import type { SqliteHandle } from './database.js';
 
 /**
@@ -93,8 +94,7 @@ export function getSupersessionProposal(
   id: string,
 ): SupersessionProposal | undefined {
   const row = db.prepare('SELECT * FROM supersession_proposals WHERE id = ?').get(id) as
-    | SupersessionProposalRow
-    | undefined;
+    SupersessionProposalRow | undefined;
   return row === undefined ? undefined : toSupersessionProposal(row);
 }
 
@@ -128,7 +128,9 @@ export function resolveSupersessionProposal(
   resolvedAt: string = new Date().toISOString(),
 ): boolean {
   const result = db
-    .prepare('UPDATE supersession_proposals SET resolved_at = ? WHERE id = ? AND resolved_at IS NULL')
+    .prepare(
+      'UPDATE supersession_proposals SET resolved_at = ? WHERE id = ? AND resolved_at IS NULL',
+    )
     .run(resolvedAt, id);
   return result.changes > 0;
 }

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import { redactPayload } from './deep-walk.js';
 import { buildFingerprint } from './fingerprint.js';
 import {
@@ -43,7 +44,9 @@ describe('redaction corpus: material that must survive untouched', () => {
   for (const field of SURVIVING_FIELDS) {
     it(`leaves \`${field.key}\` = \`${field.value}\` alone`, () => {
       const result = redactPayload({
-        tool_executions: [{ tool: 'read_file', status: 'ok', output: { [field.key]: field.value } }],
+        tool_executions: [
+          { tool: 'read_file', status: 'ok', output: { [field.key]: field.value } },
+        ],
       });
 
       expect(JSON.stringify(result.value)).toContain(JSON.stringify(field.value).slice(1, -1));

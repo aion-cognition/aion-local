@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import {
   mergeStageCounts,
   shouldMarkApplied,
@@ -87,7 +88,10 @@ describe('shouldMarkApplied', () => {
 
 describe('summarizeRun', () => {
   it('carries the episode, the duration, every stage, and the merged counts', () => {
-    const stages = [record('entities', 'ok', { entities: 2 }), record('dedup', 'ok', { merges: 1 })];
+    const stages = [
+      record('entities', 'ok', { entities: 2 }),
+      record('dedup', 'ok', { merges: 1 }),
+    ];
     const summary = summarizeRun('episode-1', 42.5, stages);
 
     expect(summary).toEqual({

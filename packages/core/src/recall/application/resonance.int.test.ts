@@ -1,8 +1,12 @@
+import type { Driver } from 'neo4j-driver';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Driver } from 'neo4j-driver';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { CueCache } from './cues.js';
+import { handleRecall, type RecallDeps } from './recall.js';
+import { resonate } from './resonance.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
@@ -24,10 +28,8 @@ import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite
 import { ContextVectorStage } from '../../reflection/application/stages/context-vectors.js';
 import type { StageContext } from '../../reflection/domain/stage.js';
 import { SessionManager } from '../../session/session-manager.js';
+import type { ActivatedNode } from '../domain/activation.js';
 import { RESONANCE_PATH } from '../domain/resonance.js';
-import { CueCache } from './cues.js';
-import { handleRecall, type RecallDeps } from './recall.js';
-import { resonate } from './resonance.js';
 
 /**
  * Context resonance's mechanism, built as its own scenario. Two memories that share
@@ -157,7 +159,9 @@ async function waitFor(label: string, ready: () => Promise<boolean>): Promise<vo
     if (await ready()) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
   }
   throw new Error(`timed out waiting for ${label}`);
 }
@@ -287,12 +291,14 @@ function recall(query = QUERY): Promise<Awaited<ReturnType<typeof handleRecall>>
   return handleRecall(deps, { query }, { identity: READ_SESSION, now: RECALLED_AT });
 }
 
-function activationOf(...ids: readonly string[]): { nodeId: string; score: number; hops: number; pathSummary: string }[] {
+function activationOf(...ids: readonly string[]): readonly ActivatedNode[] {
   return ids.map((nodeId, index) => ({
     nodeId,
     score: 1 - index * 0.1,
     hops: index,
     pathSummary: '(seed)',
+    currency: { currency: 'current' },
+    isStructural: false,
   }));
 }
 
@@ -346,7 +352,9 @@ describe('once reflection has summarized every neighborhood', () => {
       return true;
     });
     // The index is eventually consistent; a probe that runs while it catches up measures lag.
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 2000);
+    });
   }, 120_000);
 
   /** The claim is worth nothing unless the target is genuinely out of reach of the first pass. */
@@ -454,10 +462,14 @@ describe('with context resonance disabled', () => {
       cueCache: new CueCache(),
     };
 
-    const pack = await handleRecall(disabled, { query: QUERY }, {
-      identity: READ_SESSION,
-      now: RECALLED_AT,
-    });
+    const pack = await handleRecall(
+      disabled,
+      { query: QUERY },
+      {
+        identity: READ_SESSION,
+        now: RECALLED_AT,
+      },
+    );
 
     expect(pack.resonant).toBeUndefined();
     expect(pack.episodes?.map((item) => item.id)).toContain(ANCHOR_ID);
@@ -465,7 +477,10 @@ describe('with context resonance disabled', () => {
 });
 
 /** Reads the driver directly so the fixture's own claim about the graph is checked, not assumed. */
-async function contextVectorsOf(driver: Driver, ids: readonly string[]): Promise<(Vector | undefined)[]> {
+async function contextVectorsOf(
+  driver: Driver,
+  ids: readonly string[],
+): Promise<(Vector | undefined)[]> {
   const found: (Vector | undefined)[] = [];
   for (const id of ids) {
     found.push(await contextVector(driver, id));

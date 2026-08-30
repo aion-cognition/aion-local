@@ -8,27 +8,17 @@
     "sourceMap": false,
     "baseUrl": ".",
     "paths": {
-      "@aion/core": [
-        "packages/core/src/index.ts"
-      ],
-      "@aion/core/*": [
-        "packages/core/src/*"
-      ],
-      "@aion/protocol": [
-        "packages/protocol/src/index.ts"
-      ],
-      "@aion/protocol/*": [
-        "packages/protocol/src/*"
-      ],
-      "@aion/mcp": [
-        "packages/mcp/src/index.ts"
-      ],
-      "@aion/cli": [
-        "packages/cli/src/index.ts"
-      ]
+      "@aion/core": ["packages/core/src/index.ts"],
+      "@aion/core/*": ["packages/core/src/*"],
+      "@aion/protocol": ["packages/protocol/src/index.ts"],
+      "@aion/protocol/*": ["packages/protocol/src/*"],
+      "@aion/mcp": ["packages/mcp/src/index.ts"],
+      "@aion/cli": ["packages/cli/src/index.ts"]
     }
   },
-  "include": [
-    "packages/*/src/**/*.ts"
+  "include": ["packages/*/src/**/*.ts"],
+  "exclude": [
+    "packages/core/src/infrastructure/sqlite/claim-worker.fixture.ts",
+    "packages/core/src/infrastructure/sqlite/concurrent-writer.fixture.ts"
   ]
 }

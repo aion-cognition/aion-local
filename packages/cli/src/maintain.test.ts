@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import {
   MissingOperationNameError,
   parseMaintainFlags,
@@ -41,9 +42,15 @@ describe('aion maintain ls', () => {
     // The escape hatch exists for this one: a leak is an incident to a person and a small
     // share to a scoring function.
     expect(listing).toContain('redaction_residue_purge');
-    expect(listing).toContain('emergency_relationship_repair  quarter-hour window, critical responder for missing_backbone_links');
-    expect(listing).toContain('orphan_cleanup  quarter-hour window, critical responder for orphan_share');
-    expect(listing).toContain('vector_backfill  quarter-hour window, critical responder for vector_parity');
+    expect(listing).toContain(
+      'emergency_relationship_repair  quarter-hour window, critical responder for missing_backbone_links',
+    );
+    expect(listing).toContain(
+      'orphan_cleanup  quarter-hour window, critical responder for orphan_share',
+    );
+    expect(listing).toContain(
+      'vector_backfill  quarter-hour window, critical responder for vector_parity',
+    );
     expect(listing).toContain('community_refresh  day window, routine');
   });
 });

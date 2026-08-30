@@ -1,4 +1,5 @@
 import neo4j from 'neo4j-driver';
+
 import type { Vector } from '../providers/types.js';
 
 /**
@@ -7,13 +8,7 @@ import type { Vector } from '../providers/types.js';
  * bitemporal read modes rely on "open" meaning "property absent" (`valid_until IS NULL`).
  */
 export type GraphWritable =
-  | string
-  | number
-  | boolean
-  | Date
-  | readonly string[]
-  | readonly number[]
-  | readonly boolean[];
+  string | number | boolean | Date | readonly string[] | readonly number[] | readonly boolean[];
 
 export type GraphProperties = Record<string, GraphWritable | undefined>;
 
@@ -37,7 +32,7 @@ export function fromGraphVector(value: unknown): number[] | undefined {
   if (!Array.isArray(coerced)) {
     return undefined;
   }
-  return coerced.every((entry) => typeof entry === 'number') ? (coerced as number[]) : undefined;
+  return coerced.every((entry) => typeof entry === 'number') ? coerced : undefined;
 }
 
 /** A JS Date is rejected as a query parameter; the driver's DateTime is the only accepted form. */
@@ -50,11 +45,22 @@ export function fromGraphDateTime(value: unknown): Date | undefined {
   return coerced instanceof Date ? coerced : undefined;
 }
 
+/**
+ * `Array.isArray` narrows to `any[]` in lib.es5 regardless of the input union, so a spread
+ * behind that guard reads as spreading `any`. This restates the same runtime check with the
+ * honest element type, which is what a `GraphWritable` array actually holds.
+ */
+function isGraphWritableArray(
+  value: GraphWritable,
+): value is readonly string[] | readonly number[] | readonly boolean[] {
+  return Array.isArray(value);
+}
+
 function toGraphValue(value: GraphWritable): unknown {
   if (value instanceof Date) {
     return toGraphDateTime(value);
   }
-  if (Array.isArray(value)) {
+  if (isGraphWritableArray(value)) {
     return [...value];
   }
   return value;

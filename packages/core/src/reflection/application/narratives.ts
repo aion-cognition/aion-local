@@ -1,11 +1,10 @@
 import type { Driver } from 'neo4j-driver';
-import {
-  supersede,
-  writeStampedNodeInTransaction,
-} from '../../infrastructure/graph/bitemporal.js';
+
+import { attachContentVectors } from './vectors.js';
+import { supersede, writeStampedNodeInTransaction } from '../../infrastructure/graph/bitemporal.js';
 import { inWriteTransaction } from '../../infrastructure/graph/connection.js';
-import { MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
 import { upsertEdgeInTransaction } from '../../infrastructure/graph/edges.js';
+import { MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
 import {
   DERIVES_FROM_TYPE,
   findIdleSessions,
@@ -38,7 +37,6 @@ import {
   type NarrativeSpan,
 } from '../domain/narrative.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../domain/stage.js';
-import { attachContentVectors } from './vectors.js';
 
 /**
  * The pinned trigger: a session's close produces a session-scope narrative. Two entry points
@@ -142,7 +140,9 @@ async function compress(
   source: NarrativeSource,
 ): Promise<GroundedNarrative> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), settings.timeoutMs);
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, settings.timeoutMs);
   try {
     const raw = await deps.provider.generate({
       model: settings.model,
@@ -264,11 +264,7 @@ async function closeSuperseded(
  * ends here without its `content_vec` is the same pending-vector marker intake leaves, and
  * the worker's drain resolves it on the next pass.
  */
-async function attachVector(
-  deps: NarrativeDeps,
-  narrativeId: string,
-  text: string,
-): Promise<void> {
+async function attachVector(deps: NarrativeDeps, narrativeId: string, text: string): Promise<void> {
   try {
     await attachContentVectors(deps.driver, deps.provider, [{ id: narrativeId, text }]);
   } catch (err) {

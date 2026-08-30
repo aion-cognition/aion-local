@@ -1,11 +1,9 @@
+import { CueSchema, DegradationSchema } from '@aion/protocol';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CueSchema, DegradationSchema } from '@aion/protocol';
 import { afterAll, describe, expect, it } from 'vitest';
-import { DEFAULTS } from '../../infrastructure/config/defaults.js';
-import { openLogger } from '../../infrastructure/logging/logger.js';
-import { OllamaProvider } from '../../infrastructure/providers/ollama-provider.js';
+
 import {
   BARE_QUERY_FIXTURES,
   CUE_FIXTURES,
@@ -13,6 +11,9 @@ import {
   SUMMARY_TONE_QUERY,
 } from './cues.fixtures.js';
 import { CueCache, extractCues, type CueExtractionDeps } from './cues.js';
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import { openLogger } from '../../infrastructure/logging/logger.js';
+import { OllamaProvider } from '../../infrastructure/providers/ollama-provider.js';
 
 /**
  * Live smoke test against host Ollama: proves the one `generate` call round-trips against
@@ -73,30 +74,34 @@ afterAll(() => {
 });
 
 describe('cue extraction against live host Ollama', () => {
-  it.each(CUE_FIXTURES)('extracts a structurally valid result for: $description', async (fixture) => {
-    const start = Date.now();
-    const result = await extractCues(deps, fixture.input);
-    const latencyMs = Date.now() - start;
+  it.each(CUE_FIXTURES)(
+    'extracts a structurally valid result for: $description',
+    async (fixture) => {
+      const start = Date.now();
+      const result = await extractCues(deps, fixture.input);
+      const latencyMs = Date.now() - start;
 
-    rows.push({
-      id: fixture.id,
-      cues: result.cues.length,
-      degraded: result.degraded,
-      reason: result.degradation?.reason ?? '',
-      latencyMs,
-    });
+      rows.push({
+        id: fixture.id,
+        cues: result.cues.length,
+        degraded: result.degraded,
+        reason: result.degradation?.reason ?? '',
+        latencyMs,
+      });
 
-    expect(Array.isArray(result.cues)).toBe(true);
-    for (const cue of result.cues) {
-      expect(CueSchema.parse(cue)).toEqual(cue);
-    }
-    expect(typeof result.degraded).toBe('boolean');
-    if (result.degraded) {
-      expect(DegradationSchema.parse(result.degradation)).toEqual(result.degradation);
-    } else {
-      expect(result.degradation).toBeUndefined();
-    }
-  }, 30_000);
+      expect(Array.isArray(result.cues)).toBe(true);
+      for (const cue of result.cues) {
+        expect(CueSchema.parse(cue)).toEqual(cue);
+      }
+      expect(typeof result.degraded).toBe('boolean');
+      if (result.degraded) {
+        expect(DegradationSchema.parse(result.degradation)).toEqual(result.degradation);
+      } else {
+        expect(result.degradation).toBeUndefined();
+      }
+    },
+    30_000,
+  );
 
   // Last, so every fixture above has already pushed its row. Vitest runs a file's tests in
   // declaration order, which is what makes an aggregate assertion a test rather than a hook.
@@ -135,9 +140,7 @@ describe('the hardened prompt against the live cue model', () => {
     async (fixture) => {
       const result = await extractCues(deps, fixture.input);
 
-      console.log(
-        `"${fixture.input.query}" -> ${result.cues.map((cue) => cue.text).join(' | ')}`,
-      );
+      console.log(`"${fixture.input.query}" -> ${result.cues.map((cue) => cue.text).join(' | ')}`);
       expect(result.cues[0]).toEqual({
         text: fixture.input.query,
         source: 'query',

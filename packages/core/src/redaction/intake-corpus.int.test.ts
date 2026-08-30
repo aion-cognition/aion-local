@@ -2,6 +2,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { buildFingerprint } from './fingerprint.js';
 import { DEFAULTS } from '../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../infrastructure/graph/backbone.js';
 import { runGraphMigrations } from '../infrastructure/graph/migrations.js';
@@ -19,7 +21,6 @@ import { ReflectionDispatch } from '../reflection/application/dispatch.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../reflection/application/intake.js';
 import { LaneAssigner } from '../reflection/application/lanes.js';
 import { SessionManager } from '../session/session-manager.js';
-import { buildFingerprint } from './fingerprint.js';
 import { LEAKED_SHAPES, SURVIVING_TEXT } from './test-support/leaked-shapes.fixture.js';
 
 /**

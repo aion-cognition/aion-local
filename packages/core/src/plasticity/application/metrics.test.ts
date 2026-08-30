@@ -2,10 +2,14 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { plasticityCounters } from './metrics.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import { recordDecaySweep } from '../../infrastructure/sqlite/decay-counters.js';
-import { enqueueReinforcementSignal, recordReinforcementFlush } from '../../infrastructure/sqlite/reinforcement-queue.js';
-import { plasticityCounters } from './metrics.js';
+import {
+  enqueueReinforcementSignal,
+  recordReinforcementFlush,
+} from '../../infrastructure/sqlite/reinforcement-queue.js';
 
 describe('plasticity counters, sqlite-only', () => {
   let dir: string;

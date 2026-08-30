@@ -2,15 +2,21 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { CognitiveExtractionStage } from './cognitive.js';
+import { EntityExtractionStage } from './entities.js';
+import { SemanticRelationshipStage } from './semantic-relationships.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
-import { bootstrapBackbone } from '../../../infrastructure/graph/backbone.js';
-import { runRead } from '../../../infrastructure/graph/connection.js';
 import { fetchAdjacency } from '../../../infrastructure/graph/adjacency.js';
+import { bootstrapBackbone } from '../../../infrastructure/graph/backbone.js';
 import { loadEpisodeContext } from '../../../infrastructure/graph/episode-context.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import { withCurrency } from '../../../infrastructure/graph/read-modes.js';
 import { SEMANTIC_RELATIONSHIP_METHOD } from '../../../infrastructure/graph/semantic-relationship-queries.js';
-import { nodeProperties, relationshipsByProvenance } from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
+import {
+  nodeProperties,
+  relationshipsByProvenance,
+} from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
@@ -20,15 +26,16 @@ import { openLogger } from '../../../infrastructure/logging/logger.js';
 import { testGenerationProvider } from '../../../infrastructure/providers/test-support/generation-provider.js';
 import type { Provider } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
-import { spreadActivation, type ActivationBudget, type AdjacencyFetch } from '../../../recall/domain/activation.js';
+import {
+  spreadActivation,
+  type ActivationBudget,
+  type AdjacencyFetch,
+} from '../../../recall/domain/activation.js';
 import { SessionManager } from '../../../session/session-manager.js';
 import type { StageContext } from '../../domain/stage.js';
 import { ReflectionDispatch } from '../dispatch.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../intake.js';
 import { LaneAssigner } from '../lanes.js';
-import { CognitiveExtractionStage } from './cognitive.js';
-import { EntityExtractionStage } from './entities.js';
-import { SemanticRelationshipStage } from './semantic-relationships.js';
 
 const SESSION_IDENTITY = 'mcp-transport-session-semantic-relationships';
 
@@ -119,9 +126,13 @@ beforeAll(async () => {
     now: new Date(),
   };
 
-  const entityOutcome = await new EntityExtractionStage({ model: DEFAULTS.models.reflect }).run(setupCtx);
+  const entityOutcome = await new EntityExtractionStage({ model: DEFAULTS.models.reflect }).run(
+    setupCtx,
+  );
   expect(entityOutcome.status).toBe('ok');
-  const cognitiveOutcome = await new CognitiveExtractionStage({ model: DEFAULTS.models.reflect }).run(setupCtx);
+  const cognitiveOutcome = await new CognitiveExtractionStage({
+    model: DEFAULTS.models.reflect,
+  }).run(setupCtx);
   expect(cognitiveOutcome.status).toBe('ok');
 }, 300_000);
 
@@ -187,9 +198,17 @@ describe('SemanticRelationshipStage against a live graph and a live model', () =
     const directions = await Promise.all(
       causalEdges.map(async (edge) => {
         const source = await nodeProperties(harness.driver, edge.sourceId);
-        const target = await nodeProperties(harness.driver, edge.targetId);
-        const sourceText = String(source.text ?? source.name ?? '').toLowerCase();
-        const targetText = String(target.text ?? target.name ?? '').toLowerCase();
+        const targetProps = await nodeProperties(harness.driver, edge.targetId);
+        const sourceText = (
+          (source.text as string | null) ??
+          (source.name as string | null) ??
+          ''
+        ).toLowerCase();
+        const targetText = (
+          (targetProps.text as string | null) ??
+          (targetProps.name as string | null) ??
+          ''
+        ).toLowerCase();
         const inverted = sourceText.includes('deadlock') && targetText.includes('transaction');
         return { type: edge.type, sourceText, targetText, inverted };
       }),
@@ -217,7 +236,8 @@ describe('SemanticRelationshipStage against a live graph and a live model', () =
             'the ingest service and the appeals service both read from the same Postgres database.',
         },
       ],
-      summary: 'rejected Redix for Redis incompatibility; noted the ingest and appeals services share Postgres',
+      summary:
+        'rejected Redix for Redis incompatibility; noted the ingest and appeals services share Postgres',
     };
 
     const backbone = await bootstrapBackbone(harness.driver, { memberName: 'Test User' });
@@ -252,9 +272,13 @@ describe('SemanticRelationshipStage against a live graph and a live model', () =
       now: new Date(),
     };
 
-    const entityOutcome = await new EntityExtractionStage({ model: DEFAULTS.models.reflect }).run(setupCtx);
+    const entityOutcome = await new EntityExtractionStage({ model: DEFAULTS.models.reflect }).run(
+      setupCtx,
+    );
     expect(entityOutcome.status).toBe('ok');
-    const cognitiveOutcome = await new CognitiveExtractionStage({ model: DEFAULTS.models.reflect }).run(setupCtx);
+    const cognitiveOutcome = await new CognitiveExtractionStage({
+      model: DEFAULTS.models.reflect,
+    }).run(setupCtx);
     expect(cognitiveOutcome.status).toBe('ok');
 
     const stage = new SemanticRelationshipStage({ model: DEFAULTS.models.reflect });
@@ -270,9 +294,15 @@ describe('SemanticRelationshipStage against a live graph and a live model', () =
       contradicts.map(async (edge) => {
         const source = await nodeProperties(harness.driver, edge.sourceId);
         const target = await nodeProperties(harness.driver, edge.targetId);
-        return { source: source.text ?? source.name, target: target.text ?? target.name, rationale: edge.rationale };
+        return {
+          source: source.text ?? source.name,
+          target: target.text ?? target.name,
+          rationale: edge.rationale,
+        };
       }),
     );
-    expect(contradicts, `expected no CONTRADICTS; got ${JSON.stringify(described)}`).toHaveLength(0);
+    expect(contradicts, `expected no CONTRADICTS; got ${JSON.stringify(described)}`).toHaveLength(
+      0,
+    );
   }, 120_000);
 });

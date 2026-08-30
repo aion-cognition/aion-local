@@ -1,17 +1,21 @@
+import type { Driver } from 'neo4j-driver';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Driver } from 'neo4j-driver';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+
+import { deadLetterOperation } from './dead-letter.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { countDeadLetterAttention } from '../../../infrastructure/sqlite/dead-letter-queue.js';
-import { enqueueReflectionJob, getReflectionJob } from '../../../infrastructure/sqlite/reflection-queue.js';
-import { healthFixture } from '../../domain/test-support/health.fixture.js';
+import {
+  enqueueReflectionJob,
+  getReflectionJob,
+} from '../../../infrastructure/sqlite/reflection-queue.js';
 import type { OperationContext } from '../../domain/operation.js';
-import { deadLetterOperation } from './dead-letter.js';
+import { healthFixture } from '../../domain/test-support/health.fixture.js';
 
 /**
  * `dead_letter` never touches the graph, only `reflection_queue` and `ops_ledger`. A real
@@ -68,7 +72,12 @@ function exhaust(jobId: string): void {
 
 describe('dead_letter', () => {
   it('gives an exhausted row one retry: bulk lane, attempts reset', async () => {
-    const jobId = enqueueReflectionJob(db, 'integrate', { episode_id: 'ep-1' }, { lane: 'interactive' });
+    const jobId = enqueueReflectionJob(
+      db,
+      'integrate',
+      { episode_id: 'ep-1' },
+      { lane: 'interactive' },
+    );
     exhaust(jobId);
 
     const operation = deadLetterOperation();
@@ -84,7 +93,12 @@ describe('dead_letter', () => {
   });
 
   it('leaves a row alone once it exhausts a second time, and surfaces it instead', async () => {
-    const jobId = enqueueReflectionJob(db, 'integrate', { episode_id: 'ep-2' }, { lane: 'interactive' });
+    const jobId = enqueueReflectionJob(
+      db,
+      'integrate',
+      { episode_id: 'ep-2' },
+      { lane: 'interactive' },
+    );
     exhaust(jobId);
     await deadLetterOperation().run(ctxFor());
 

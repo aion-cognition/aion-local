@@ -1,9 +1,9 @@
-import { redact } from '../../../redaction/redact.js';
-import { renderEpisodeText } from '../../domain/content.js';
 import { QUALITY_FIXTURES, type QualityFixture } from './fixtures.js';
 import type { FixtureReport, QualityReport, SkippedRoute } from './report.js';
 import { computeAgreement, summarizeCognitive, summarizeEntities } from './scorer.js';
 import type { CognitiveExtractorFn, EntityExtractorFn, ExtractionRoute } from './types.js';
+import { redact } from '../../../redaction/redact.js';
+import { renderEpisodeText } from '../../domain/content.js';
 
 export type RouteConfig = {
   readonly route: ExtractionRoute;
@@ -20,8 +20,11 @@ export type QualityHarnessOptions = {
   readonly now?: () => Date;
 };
 
-async function runFixture(fixture: QualityFixture, routes: readonly RouteConfig[]): Promise<FixtureReport> {
-  const text = redact(renderEpisodeText(fixture.content)).text;
+async function runFixture(
+  fixture: QualityFixture,
+  routes: readonly RouteConfig[],
+): Promise<FixtureReport> {
+  const { text } = redact(renderEpisodeText(fixture.content));
 
   const outcomes = await Promise.all(
     routes.map(async (route) => {
@@ -43,7 +46,9 @@ async function runFixture(fixture: QualityFixture, routes: readonly RouteConfig[
       entities: summarizeEntities(entities),
       cognitive: summarizeCognitive(cognitive),
     })),
-    agreement: computeAgreement(outcomes.map(({ entities, cognitive }) => ({ entities, cognitive }))),
+    agreement: computeAgreement(
+      outcomes.map(({ entities, cognitive }) => ({ entities, cognitive })),
+    ),
   };
 }
 

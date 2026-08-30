@@ -2,6 +2,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { CueCache } from './cues.js';
+import { handleRecall, type RecallDeps } from './recall.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { bootstrapBackbone, GLOBAL_WORKSPACE_NAME } from '../../infrastructure/graph/backbone.js';
@@ -16,13 +19,11 @@ import {
 } from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider, Vector } from '../../infrastructure/providers/types.js';
+import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { ReflectionDispatch } from '../../reflection/application/dispatch.js';
 import { handleReflection } from '../../reflection/application/intake.js';
 import { LaneAssigner } from '../../reflection/application/lanes.js';
 import { SessionManager } from '../../session/session-manager.js';
-import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { CueCache } from './cues.js';
-import { handleRecall, type RecallDeps } from './recall.js';
 
 /**
  * A realistic substrate scale: 21 episodes across 3 chained sessions, most of them carrying
@@ -94,7 +95,9 @@ async function waitFor(label: string, ready: () => Promise<boolean>): Promise<vo
     if (await ready()) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
   }
   throw new Error(`timed out waiting for ${label}`);
 }
@@ -240,10 +243,14 @@ describe('gate item 2: an item only traversal connects to the query', () => {
    * retrieval leg measured it as well.
    */
   it('reaches prior sessions over the FOLLOWS chain without admitting on the reach alone', async () => {
-    const pack = await handleRecall(narrowSeeding(), { query: QUERY }, {
-      identity: READ_SESSION,
-      now: RECALLED_AT,
-    });
+    const pack = await handleRecall(
+      narrowSeeding(),
+      { query: QUERY },
+      {
+        identity: READ_SESSION,
+        now: RECALLED_AT,
+      },
+    );
 
     expect(pack.metadata.admission.dropped_unmeasured).toBeGreaterThan(0);
     for (const item of pack.episodes ?? []) {
@@ -258,10 +265,14 @@ describe('gate item 2: an item only traversal connects to the query', () => {
    * older episodes surface, never whether the pack is padded with merely-recent ones.
    */
   it('never pads the pack with a memory whose only claim is that it is recent', async () => {
-    const pack = await handleRecall(deps, { query: QUERY }, {
-      identity: READ_SESSION,
-      now: RECALLED_AT,
-    });
+    const pack = await handleRecall(
+      deps,
+      { query: QUERY },
+      {
+        identity: READ_SESSION,
+        now: RECALLED_AT,
+      },
+    );
 
     expect(pack.episodes?.length).toBeGreaterThan(0);
     for (const item of pack.episodes ?? []) {
@@ -288,10 +299,14 @@ describe('gate item 2: an item only traversal connects to the query', () => {
   });
 
   it('spends one episode slot on the seed and its own turns', async () => {
-    const pack = await handleRecall(deps, { query: QUERY }, {
-      identity: READ_SESSION,
-      now: RECALLED_AT,
-    });
+    const pack = await handleRecall(
+      deps,
+      { query: QUERY },
+      {
+        identity: READ_SESSION,
+        now: RECALLED_AT,
+      },
+    );
 
     const fromSeedEpisode = (pack.episodes ?? []).filter(
       (item) => item.id === seedEpisodeId || item.content.includes(SEED_OBSERVATION),
@@ -301,10 +316,14 @@ describe('gate item 2: an item only traversal connects to the query', () => {
   });
 
   it('keeps the backbone out of the pack entirely', async () => {
-    const pack = await handleRecall(deps, { query: QUERY }, {
-      identity: READ_SESSION,
-      now: RECALLED_AT,
-    });
+    const pack = await handleRecall(
+      deps,
+      { query: QUERY },
+      {
+        identity: READ_SESSION,
+        now: RECALLED_AT,
+      },
+    );
 
     expect(pack.facts).toBeUndefined();
     expect(pack.rendered_text).not.toContain(MEMBER_NAME);
@@ -349,10 +368,14 @@ describe('gate item 5: supersession lineage through the whole pipeline', () => {
   }, 120_000);
 
   it('ranks the current fact ahead of the one it replaced and marks the lineage', async () => {
-    const pack = await handleRecall({ ...deps, cueCache: new CueCache() }, { query: QUERY }, {
-      identity: READ_SESSION,
-      now: RECALLED_AT,
-    });
+    const pack = await handleRecall(
+      { ...deps, cueCache: new CueCache() },
+      { query: QUERY },
+      {
+        identity: READ_SESSION,
+        now: RECALLED_AT,
+      },
+    );
 
     const ids = (pack.episodes ?? []).map((item) => item.id);
     expect(ids).toContain(correctionId);

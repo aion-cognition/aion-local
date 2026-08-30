@@ -1,9 +1,9 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
 import { openSqliteHandle } from './database.js';
 import { listReflectionJobs } from './reflection-queue.js';
 
@@ -41,7 +41,13 @@ function spawnWriter(filePath: string, label: string, rows: number): WriterHandl
     worker.on('error', reject);
   });
 
-  return { ready, done, go: () => worker.postMessage('go') };
+  return {
+    ready,
+    done,
+    go: () => {
+      worker.postMessage('go');
+    },
+  };
 }
 
 describe('two connections racing a fresh file under WAL', () => {

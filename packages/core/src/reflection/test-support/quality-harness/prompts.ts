@@ -1,6 +1,7 @@
 import { z } from 'zod';
-import type { ChatMessage, JsonSchema } from '../../../infrastructure/providers/types.js';
+
 import { COGNITIVE_TYPES, ENTITY_TYPES } from './types.js';
+import type { ChatMessage, JsonSchema } from '../../../infrastructure/providers/types.js';
 
 export const ENTITY_EXTRACTION_JSON_SCHEMA: JsonSchema = {
   type: 'object',
@@ -61,7 +62,7 @@ export const CognitiveExtractionOutputSchema = z.object({
 const ENTITY_EXTRACTION_SYSTEM_PROMPT = [
   'You extract named entities from a memory episode recorded by an AI coding agent.',
   `An entity is a person, organization, project, tool, concept, location, or event explicitly present in the text.`,
-  'Use the entity\'s most specific mentioned name. Do not invent an entity that the text does not name.',
+  "Use the entity's most specific mentioned name. Do not invent an entity that the text does not name.",
   'Return each distinct entity once.',
 ].join(' ');
 

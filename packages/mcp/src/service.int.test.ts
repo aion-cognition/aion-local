@@ -1,8 +1,3 @@
-import { createServer } from 'node:http';
-import type { AddressInfo } from 'node:net';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import {
   bootstrapBackbone,
   ensureGraphSession,
@@ -23,7 +18,13 @@ import { MemoryPackSchema, ReflectionOutputSchema } from '@aion/protocol';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { ErrorCode } from '@modelcontextprotocol/sdk/types.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import { bootstrapService, type AionService } from './bootstrap.js';
 import { HEALTH_PATH, MCP_PATH } from './http.js';
 
@@ -72,7 +73,7 @@ async function freePort(): Promise<number> {
       resolve();
     });
   });
-  const port = (probe.address() as AddressInfo).port;
+  const { port } = probe.address() as AddressInfo;
   await new Promise<void>((resolve) => {
     probe.close(() => {
       resolve();
@@ -98,7 +99,7 @@ async function storeThenRecall(observation: string, query: string): Promise<Exch
     });
     const stored = ReflectionOutputSchema.parse(ack.structuredContent);
     const recalled = await client.callTool({ name: 'recall', arguments: { query } });
-    const sessionId = transport.sessionId;
+    const { sessionId } = transport;
     if (sessionId === undefined) {
       throw new Error('client transport never received a session id');
     }
@@ -149,7 +150,11 @@ describe('two concurrent client sessions', () => {
     expect(exchangeA.sessionId).not.toBe(exchangeB.sessionId);
 
     for (const sessionId of [exchangeA.sessionId, exchangeB.sessionId]) {
-      const resolved = await ensureGraphSession(harness.driver, { sessionId, memberId, workspaceId });
+      const resolved = await ensureGraphSession(harness.driver, {
+        sessionId,
+        memberId,
+        workspaceId,
+      });
       expect(resolved.created).toBe(false);
     }
   });
@@ -174,7 +179,9 @@ describe('two concurrent client sessions', () => {
 
     expect(links).toHaveLength(1);
     const head = links[0];
-    expect(head?.follows).toBe(head?.id === exchangeA.sessionId ? exchangeB.sessionId : exchangeA.sessionId);
+    expect(head?.follows).toBe(
+      head?.id === exchangeA.sessionId ? exchangeB.sessionId : exchangeA.sessionId,
+    );
   });
 
   it('links each Session node to the backbone and to the episode it stored', async () => {
@@ -202,7 +209,7 @@ describe('two concurrent client sessions', () => {
 describe('tool results over the wire', () => {
   it('acks each reflection with its episode id and a one-line summary', () => {
     for (const exchange of [exchangeA, exchangeB]) {
-      const ack = exchange.ack as { content: ReadonlyArray<{ type: string; text: string }> };
+      const ack = exchange.ack as { content: readonly { type: string; text: string }[] };
       expect(ack.content[0]?.type).toBe('text');
       // Not an exact match: the two pushes race, so which one's queue insert lands first
       // (and therefore whether the ack names a `pending_ahead` clause) is nondeterministic.

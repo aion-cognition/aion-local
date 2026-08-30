@@ -1,10 +1,11 @@
 import type { Driver } from 'neo4j-driver';
+
 import { ACCESS_COUNT_PROPERTY } from './access-tracking.js';
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { runRead, type GraphStatement } from './connection.js';
-import { BASE_NODE_LABEL } from './labels.js';
-import { MEMORY_PROPERTIES } from './episodes.js';
 import { ENTITY_TYPE_PROPERTY } from './entity-queries.js';
+import { MEMORY_PROPERTIES } from './episodes.js';
+import { BASE_NODE_LABEL } from './labels.js';
 import {
   readCurrencyAnnotation,
   readModeFragment,
@@ -95,18 +96,36 @@ function mapProvenance(row: Row): NodeProvenance {
     ...(optionalString(row.source_episode_id) === undefined
       ? {}
       : { sourceEpisodeId: optionalString(row.source_episode_id) }),
-    ...(optionalString(row.rationale) === undefined ? {} : { rationale: optionalString(row.rationale) }),
-    ...(optionalNumber(row.confidence) === undefined ? {} : { confidence: optionalNumber(row.confidence) }),
-    ...(optionalNumber(row.access_count) === undefined ? {} : { accessCount: optionalNumber(row.access_count) }),
-    ...(optionalDate(row.last_accessed) === undefined ? {} : { lastAccessed: optionalDate(row.last_accessed) }),
+    ...(optionalString(row.rationale) === undefined
+      ? {}
+      : { rationale: optionalString(row.rationale) }),
+    ...(optionalNumber(row.confidence) === undefined
+      ? {}
+      : { confidence: optionalNumber(row.confidence) }),
+    ...(optionalNumber(row.access_count) === undefined
+      ? {}
+      : { accessCount: optionalNumber(row.access_count) }),
+    ...(optionalDate(row.last_accessed) === undefined
+      ? {}
+      : { lastAccessed: optionalDate(row.last_accessed) }),
     ...(optionalString(row.name) === undefined ? {} : { name: optionalString(row.name) }),
-    ...(optionalString(row.entity_type) === undefined ? {} : { entityType: optionalString(row.entity_type) }),
-    ...(optionalDate(row.occurred_at) === undefined ? {} : { occurredAt: optionalDate(row.occurred_at) }),
-    ...(optionalDate(row.valid_from) === undefined ? {} : { validFrom: optionalDate(row.valid_from) }),
-    ...(optionalDate(row.valid_until) === undefined ? {} : { validUntil: optionalDate(row.valid_until) }),
+    ...(optionalString(row.entity_type) === undefined
+      ? {}
+      : { entityType: optionalString(row.entity_type) }),
+    ...(optionalDate(row.occurred_at) === undefined
+      ? {}
+      : { occurredAt: optionalDate(row.occurred_at) }),
+    ...(optionalDate(row.valid_from) === undefined
+      ? {}
+      : { validFrom: optionalDate(row.valid_from) }),
+    ...(optionalDate(row.valid_until) === undefined
+      ? {}
+      : { validUntil: optionalDate(row.valid_until) }),
     ...(optionalDate(row.tx_from) === undefined ? {} : { txFrom: optionalDate(row.tx_from) }),
     ...(optionalDate(row.tx_until) === undefined ? {} : { txUntil: optionalDate(row.tx_until) }),
-    ...(optionalDate(row.forgotten_at) === undefined ? {} : { forgottenAt: optionalDate(row.forgotten_at) }),
+    ...(optionalDate(row.forgotten_at) === undefined
+      ? {}
+      : { forgottenAt: optionalDate(row.forgotten_at) }),
     ...readCurrencyAnnotation(row),
   };
 }

@@ -1,5 +1,3 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { MemoryPackItem } from '@aion/protocol';
 import {
   applySupersessionProposal,
   DEFAULTS,
@@ -9,6 +7,9 @@ import {
   type SupersessionProposal,
 } from '@aion/core';
 import { nodeProperties } from '@aion/core/infrastructure/graph/test-support/graph-queries.fixture.js';
+import type { MemoryPackItem } from '@aion/protocol';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import { OWNERSHIP_CORRECTION } from './apply-granularity.fixture.js';
 import { GateSubstrate, waitFor } from './gate-substrate.fixture.js';
 
@@ -90,8 +91,8 @@ async function reviewRow(): Promise<SupersessionProposal | undefined> {
 }
 
 async function nodeText(id: string): Promise<string> {
-  const properties = await nodeProperties(substrate.driver, id);
-  return String(properties.text ?? '').toLowerCase();
+  const { text } = await nodeProperties(substrate.driver, id);
+  return (typeof text === 'string' ? text : '').toLowerCase();
 }
 
 async function staleOwnershipNode(): Promise<string | undefined> {
@@ -167,8 +168,11 @@ describe('a correction applied at the default granularity', () => {
         `${String(baselineNodeIds.length)} baseline claims; ${describeItems(before.items)}`,
     );
     console.log(
-      `review row: ${proposal === undefined ? 'none' : proposal.id}, ` +
-        `${proposalWasJudged ? 'proposed by the judge' : 'built from the extracted claims after the judge missed the pair'}`,
+      `review row: ${proposal === undefined ? 'none' : proposal.id}, ${
+        proposalWasJudged
+          ? 'proposed by the judge'
+          : 'built from the extracted claims after the judge missed the pair'
+      }`,
     );
 
     expect(before.items.length).toBeGreaterThan(0);
@@ -219,7 +223,8 @@ describe('a correction applied at the default granularity', () => {
       now: APPLIED_AT,
     });
     const stale = (item: MemoryPackItem): boolean =>
-      names(item, OWNERSHIP_CORRECTION.staleOwner) && !names(item, OWNERSHIP_CORRECTION.currentOwner);
+      names(item, OWNERSHIP_CORRECTION.staleOwner) &&
+      !names(item, OWNERSHIP_CORRECTION.currentOwner);
 
     const current = after.items.find((item) => names(item, OWNERSHIP_CORRECTION.currentOwner));
     const staleFacts = (after.pack.facts ?? []).filter(stale);
@@ -230,8 +235,9 @@ describe('a correction applied at the default granularity', () => {
         `${String(staleFacts.length)} stale fact(s) ` +
         `(${staleFacts.map((item) => `${String(item.rank)}:${item.currency}`).join(', ') || 'none'}), ` +
         `${String(staleRecords.length)} stale record(s) ` +
-        `(${staleRecords.map((item) => `${String(item.rank)}:${item.currency}`).join(', ') || 'none'}); ` +
-        describeItems(after.items),
+        `(${staleRecords.map((item) => `${String(item.rank)}:${item.currency}`).join(', ') || 'none'}); ${describeItems(
+          after.items,
+        )}`,
     );
 
     expect(current).toBeDefined();

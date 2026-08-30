@@ -1,11 +1,12 @@
 import type { Driver } from 'neo4j-driver';
+
 import type { Config } from '../../infrastructure/config/schema.js';
-import { countGraphElements } from '../../infrastructure/graph/introspection.js';
 import {
   countEpisodesWithoutSession,
   countOrphanNodes,
   countVectorParity,
 } from '../../infrastructure/graph/introspection-health.js';
+import { countGraphElements } from '../../infrastructure/graph/introspection.js';
 import { findStaleNarratives } from '../../infrastructure/graph/narrative-queries.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
@@ -93,10 +94,7 @@ async function collect<T>(
   }
 }
 
-async function readGraph(
-  driver: Driver,
-  scanLimit: number,
-): Promise<GraphStructureHealth> {
+async function readGraph(driver: Driver, scanLimit: number): Promise<GraphStructureHealth> {
   const [counts, parity, orphans, missing, stale] = await Promise.all([
     countGraphElements(driver),
     countVectorParity(driver, scanLimit),
@@ -240,12 +238,8 @@ export async function observeHealth(
       collect(HEALTH_COLLECTORS.queue, deps.logger, degraded, NEUTRAL_QUEUE_HEALTH, () =>
         Promise.resolve(readQueue(deps.db, deps.config, now)),
       ),
-      collect(
-        HEALTH_COLLECTORS.enrichment,
-        deps.logger,
-        degraded,
-        NEUTRAL_ENRICHMENT_HEALTH,
-        () => readEnrichment(deps.driver, deps.db, scanLimit),
+      collect(HEALTH_COLLECTORS.enrichment, deps.logger, degraded, NEUTRAL_ENRICHMENT_HEALTH, () =>
+        readEnrichment(deps.driver, deps.db, scanLimit),
       ),
       collect(HEALTH_COLLECTORS.redaction, deps.logger, degraded, NEUTRAL_REDACTION_HEALTH, () =>
         readRedaction(deps.driver, deps.config, residueLimit),
@@ -256,12 +250,8 @@ export async function observeHealth(
       collect(HEALTH_COLLECTORS.plasticity, deps.logger, degraded, NEUTRAL_PLASTICITY_HEALTH, () =>
         Promise.resolve(readPlasticity(deps.db)),
       ),
-      collect(
-        'effectiveness',
-        deps.logger,
-        degraded,
-        [] as readonly OperationEffectiveness[],
-        () => Promise.resolve(readOperationEffectiveness(deps.db, names, cycle)),
+      collect('effectiveness', deps.logger, degraded, [] as readonly OperationEffectiveness[], () =>
+        Promise.resolve(readOperationEffectiveness(deps.db, names, cycle)),
       ),
     ]);
 

@@ -1,4 +1,5 @@
 import type { Driver } from 'neo4j-driver';
+
 import { writeStampedNodeInTransaction } from './bitemporal.js';
 import { inWriteTransaction, type GraphTransaction } from './connection.js';
 import { upsertEdgeInTransaction } from './edges.js';

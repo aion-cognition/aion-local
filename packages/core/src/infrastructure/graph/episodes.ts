@@ -1,4 +1,5 @@
 import neo4j, { type Driver } from 'neo4j-driver';
+
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { runRead, type GraphTransaction } from './connection.js';
 import { readModeFragment, withCurrency, type ReadMode } from './read-modes.js';

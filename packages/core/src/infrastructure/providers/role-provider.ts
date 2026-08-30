@@ -1,4 +1,3 @@
-import type { Config } from '../config/schema.js';
 import { AnthropicProvider } from './anthropic-provider.js';
 import { OllamaProvider } from './ollama-provider.js';
 import {
@@ -9,6 +8,7 @@ import {
   type RoleRoute,
 } from './routing.js';
 import type { GenerationBackend, Provider, StructuredRequest, Vector } from './types.js';
+import type { Config } from '../config/schema.js';
 
 /**
  * Emitted once per generation. This is how a caller answers "did that enrichment leave the
@@ -132,8 +132,16 @@ export class ProviderRouter {
     const route = this.routing.roles[role];
     // A remote route with no client cannot happen: routing resolves to Ollama without a key.
     const generator: GenerationBackend =
-      route.provider === 'anthropic' && this.#anthropic !== undefined ? this.#anthropic : this.#ollama;
-    const provider = new RoutedProvider(this.#ollama, generator, route, this.#onGeneration, this.#now);
+      route.provider === 'anthropic' && this.#anthropic !== undefined
+        ? this.#anthropic
+        : this.#ollama;
+    const provider = new RoutedProvider(
+      this.#ollama,
+      generator,
+      route,
+      this.#onGeneration,
+      this.#now,
+    );
     this.#byRole.set(role, provider);
     return provider;
   }

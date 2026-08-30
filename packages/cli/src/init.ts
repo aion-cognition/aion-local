@@ -1,4 +1,3 @@
-import { createInterface } from 'node:readline/promises';
 import {
   bootstrapBackbone,
   ConfigError,
@@ -20,7 +19,16 @@ import {
   type ProvisionEvent,
 } from '@aion/core';
 import { USAGE_PROTOCOL } from '@aion/mcp';
-import { composeRunner, MCP_PROFILE, MCP_SERVICE, NEO4J_SERVICE, startService, waitForMcpHealth } from './compose.js';
+import { createInterface } from 'node:readline/promises';
+
+import {
+  composeRunner,
+  MCP_PROFILE,
+  MCP_SERVICE,
+  NEO4J_SERVICE,
+  startService,
+  waitForMcpHealth,
+} from './compose.js';
 import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
 import { envFilePath, envTemplatePath, resolveRepoDir } from './paths.js';
 
@@ -173,7 +181,12 @@ async function provisionMcpService(config: Config, write: Writer, repoDir: strin
   write('  aion-mcp healthy');
 }
 
-async function provisionGraph(config: Config, password: string, write: Writer, repoDir: string): Promise<void> {
+async function provisionGraph(
+  config: Config,
+  password: string,
+  write: Writer,
+  repoDir: string,
+): Promise<void> {
   if (isManagedNeo4jUri(config.neo4j.uri)) {
     write(`starting compose service ${NEO4J_SERVICE}`);
     await startService(composeRunner(repoDir), NEO4J_SERVICE);
@@ -189,7 +202,12 @@ async function provisionGraph(config: Config, password: string, write: Writer, r
   write(`  bolt ready, graph-data-science ${gdsVersion}`);
 }
 
-async function initialize(config: Config, flags: InitFlags, write: Writer, logger: Logger): Promise<void> {
+async function initialize(
+  config: Config,
+  flags: InitFlags,
+  write: Writer,
+  logger: Logger,
+): Promise<void> {
   const repoDir = resolveRepoDir();
   const managed = isManagedNeo4jUri(config.neo4j.uri);
 
@@ -229,7 +247,7 @@ async function initialize(config: Config, flags: InitFlags, write: Writer, logge
   const memberName = await resolveMemberName({
     envName: process.env[GIT_USER_NAME_ENV_VAR],
     assumeYes: flags.assumeYes,
-    interactive: process.stdin.isTTY === true,
+    interactive: process.stdin.isTTY,
     ask: askOnTerminal,
   });
 
@@ -260,7 +278,10 @@ async function initialize(config: Config, flags: InitFlags, write: Writer, logge
   renderRegistration(config.operational.mcpPort, write);
 }
 
-export async function runInit(argv: readonly string[] = [], write: Writer = stdoutWriter): Promise<number> {
+export async function runInit(
+  argv: readonly string[] = [],
+  write: Writer = stdoutWriter,
+): Promise<number> {
   let flags: InitFlags;
   let config: Config;
   try {

@@ -1,4 +1,12 @@
 import { describe, expect, it } from 'vitest';
+
+import {
+  RELATED_PAIRS,
+  UNRELATED_PAIRS,
+  UNRELATED_SENTENCES,
+  WEAK_RELATED_PAIRS,
+  type ScoredPair,
+} from './floors.fixtures.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { OllamaProvider } from '../../infrastructure/providers/ollama-provider.js';
 import type { AdmissionPolicy } from '../domain/admission.js';
@@ -10,13 +18,6 @@ import {
   pairwiseCosines,
   type Distribution,
 } from '../domain/floor-calibration.js';
-import {
-  RELATED_PAIRS,
-  UNRELATED_PAIRS,
-  UNRELATED_SENTENCES,
-  WEAK_RELATED_PAIRS,
-  type ScoredPair,
-} from './floors.fixtures.js';
 
 /**
  * The committed calibration. It measures both distributions against the live embedding model

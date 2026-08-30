@@ -35,7 +35,9 @@ export default defineConfig({
           // Starts the one throwaway Neo4j the whole run shares and publishes its address to
           // every file. A file run outside this project finds no address and starts a
           // container of its own instead.
-          globalSetup: [`${root}packages/core/src/infrastructure/graph/test-support/neo4j-global-setup.fixture.ts`],
+          globalSetup: [
+            `${root}packages/core/src/infrastructure/graph/test-support/neo4j-global-setup.fixture.ts`,
+          ],
           // Files lease that one container one at a time, and each clears the database on the
           // way in. Two files at once would wipe each other's graph mid-test, so serial
           // execution is what makes sharing safe rather than a resource-contention workaround.

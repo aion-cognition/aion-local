@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import { verifyGdsAvailable } from './provision.js';
 import { countNodes, countRelationships } from './test-support/graph-queries.fixture.js';
 import {
@@ -56,7 +57,12 @@ describe('a neo4j container the test file owns', () => {
     await expect(execFileAsync('docker', ['inspect', harness.containerName])).rejects.toThrow();
 
     const { stdout } = await execFileAsync('docker', ['volume', 'ls', '-q']);
-    const remainingVolumes = new Set(stdout.trim().split('\n').filter((name) => name.length > 0));
+    const remainingVolumes = new Set(
+      stdout
+        .trim()
+        .split('\n')
+        .filter((name) => name.length > 0),
+    );
     for (const volumeName of anonymousVolumes) {
       expect(remainingVolumes.has(volumeName)).toBe(false);
     }
@@ -85,7 +91,9 @@ describe('the database a test file is handed', () => {
   });
 
   it('carries no constraints and no indexes beyond the token lookups neo4j owns', async () => {
-    const constraints = await harness.driver.executeQuery('SHOW CONSTRAINTS YIELD name RETURN name');
+    const constraints = await harness.driver.executeQuery(
+      'SHOW CONSTRAINTS YIELD name RETURN name',
+    );
     expect(constraints.records).toEqual([]);
 
     const indexes = await harness.driver.executeQuery(

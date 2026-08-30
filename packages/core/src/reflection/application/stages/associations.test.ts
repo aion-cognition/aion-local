@@ -2,12 +2,13 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { AssociationInferenceStage } from './associations.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import type { Provider } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import type { StageContext } from '../../domain/stage.js';
 import { FakeGraph } from '../../test-support/fake-graph.fixture.js';
-import { AssociationInferenceStage } from './associations.js';
 
 const EPISODE_ID = 'episode-1';
 const NOW = new Date('2026-08-28T09:05:00.000Z');
@@ -21,6 +22,11 @@ const NOOP_PROVIDER: Provider = {
   },
 };
 
+let graph: FakeGraph;
+let dataDir: string;
+let db: SqliteHandle;
+let logger: Logger;
+
 function entity(id: string, name: string): void {
   graph.seedNode(id, ['Entity', 'Memory', 'AionNode'], {
     name,
@@ -32,11 +38,6 @@ function entity(id: string, name: string): void {
 function mention(entityId: string, episodeId = EPISODE_ID): void {
   graph.seedEdge('MENTIONS', episodeId, entityId);
 }
-
-let graph: FakeGraph;
-let dataDir: string;
-let db: SqliteHandle;
-let logger: Logger;
 
 beforeEach(() => {
   graph = new FakeGraph();
@@ -183,7 +184,7 @@ describe('AssociationInferenceStage', () => {
     mention('e3');
     const original = graph.executeQuery.bind(graph);
     let writes = 0;
-    graph.executeQuery = async (cypher: string, parameters: Record<string, unknown> = {}) => {
+    graph.executeQuery = async (cypher: string, parameters: Record<string, unknown>) => {
       if (/MERGE \(a\)-\[r:CO_OCCURS\]->\(b\)/.exec(cypher) !== null) {
         writes += 1;
         if (writes === 2) {

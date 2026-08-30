@@ -1,5 +1,5 @@
 import neo4j, { type Driver } from 'neo4j-driver';
-import type { Vector } from '../providers/types.js';
+
 import { ACCESS_COUNT_PROPERTY } from './access-tracking.js';
 import { BITEMPORAL_PROPERTIES, writeStampedNodeInTransaction } from './bitemporal.js';
 import { COMMUNITY_PROPERTY } from './community-queries.js';
@@ -8,6 +8,7 @@ import { upsertEdgeInTransaction } from './edges.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
 import { ENTITY_NAME_PROPERTY } from './seed-queries.js';
 import { toGraphVector } from './values.js';
+import type { Vector } from '../providers/types.js';
 
 /**
  * The symbiosis bridge: one node that joins two neighbourhoods nothing else connects, so
@@ -69,7 +70,7 @@ export async function countBridgesBetween(
     driver,
     COUNT_BRIDGES_BETWEEN,
     { left: toGraphInteger(left), right: toGraphInteger(right) },
-    (row) => row['count'] as number,
+    (row) => row.count as number,
   );
   return rows[0] ?? 0;
 }
@@ -134,11 +135,11 @@ export async function findClosestCrossCommunityPair(
       dimension: toGraphInteger(input.dimension),
     },
     (row) => ({
-      leftId: row['left_id'] as string,
-      leftLabel: String(row['left_label'] ?? ''),
-      rightId: row['right_id'] as string,
-      rightLabel: String(row['right_label'] ?? ''),
-      similarity: row['score'] as number,
+      leftId: row.left_id as string,
+      leftLabel: (row.left_label as string | null) ?? '',
+      rightId: row.right_id as string,
+      rightLabel: (row.right_label as string | null) ?? '',
+      similarity: row.score as number,
     }),
   );
   return rows[0];

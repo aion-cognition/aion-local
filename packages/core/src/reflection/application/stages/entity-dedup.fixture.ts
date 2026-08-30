@@ -1,10 +1,13 @@
-import { BITEMPORAL_PROPERTIES } from '../../../infrastructure/graph/bitemporal.js';
 import { ACCESS_COUNT_PROPERTY } from '../../../infrastructure/graph/access-tracking.js';
+import { BITEMPORAL_PROPERTIES } from '../../../infrastructure/graph/bitemporal.js';
 import {
   ENTITY_ALIASES_PROPERTY,
   MERGE_PROVENANCE_PROPERTY,
 } from '../../../infrastructure/graph/entity-dedup-queries.js';
-import { ENTITY_MENTION_TYPE, ENTITY_TYPE_PROPERTY } from '../../../infrastructure/graph/entity-queries.js';
+import {
+  ENTITY_MENTION_TYPE,
+  ENTITY_TYPE_PROPERTY,
+} from '../../../infrastructure/graph/entity-queries.js';
 import { MEMORY_PROPERTIES } from '../../../infrastructure/graph/episodes.js';
 import {
   ENTITY_NAME_NORM_PROPERTY,
@@ -181,8 +184,8 @@ export class DedupFakeGraph extends FakeGraph {
       if (node === undefined) {
         continue;
       }
-      delete node.properties[ENTITY_NAME_VECTOR_PROPERTY];
-      delete node.properties[MEMORY_PROPERTIES.contentVector];
+      Reflect.deleteProperty(node.properties, ENTITY_NAME_VECTOR_PROPERTY);
+      Reflect.deleteProperty(node.properties, MEMORY_PROPERTIES.contentVector);
       written.push({ id });
     }
     return written;

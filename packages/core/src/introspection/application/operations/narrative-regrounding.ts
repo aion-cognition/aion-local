@@ -1,7 +1,7 @@
+import { reflectProvider, type ProviderFactory } from './routed-generation.js';
 import { cleanupNarratives } from '../../../reflection/application/narrative-cleanup.js';
 import { HEALTH_COLLECTORS, type HealthSnapshot } from '../../domain/health.js';
 import type { IntrospectionOperation, OperationOutcome } from '../../domain/operation.js';
-import { reflectProvider, type ProviderFactory } from './routed-generation.js';
 
 /**
  * Rewrites a narrative that no longer matches the claims underneath it.

@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
 import { SqliteStore } from './database.js';
 import { enqueueReflectionJob, getReflectionJob, listReflectionJobs } from './reflection-queue.js';
 
@@ -35,10 +36,15 @@ describe('reflection queue accessors', () => {
   });
 
   it('records the lane and session a job was enqueued for', () => {
-    const id = enqueueReflectionJob(store.db, 'integrate', { episodeId: 'ep-1' }, {
-      lane: 'bulk',
-      sessionId: 'session-a',
-    });
+    const id = enqueueReflectionJob(
+      store.db,
+      'integrate',
+      { episodeId: 'ep-1' },
+      {
+        lane: 'bulk',
+        sessionId: 'session-a',
+      },
+    );
 
     expect(getReflectionJob(store.db, id)).toMatchObject({ lane: 'bulk', sessionId: 'session-a' });
   });

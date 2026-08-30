@@ -1,5 +1,3 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { MemoryPackItem } from '@aion/protocol';
 import {
   countQueueJobs,
   findEpisodeCognitiveNodes,
@@ -9,6 +7,9 @@ import {
   withCurrency,
 } from '@aion/core';
 import { countStatedReasons } from '@aion/core/infrastructure/graph/test-support/graph-queries.fixture.js';
+import type { MemoryPackItem } from '@aion/protocol';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import { GateSubstrate, waitFor, type GateRecallResult } from './gate-substrate.fixture.js';
 import { DISTRACTORS, HELD_OUT_CASES, HELD_OUT_PROBES } from './held-out-recall.fixture.js';
 
@@ -168,16 +169,24 @@ beforeAll(async () => {
   // enriched before its neighbours exist and the entity graph is one graph rather than fourteen.
   const worker = substrate.worker();
   await worker.start();
-  await waitFor('the shipped pipeline to work through the held-out substrate', ENRICH_DEADLINE_MS, () => {
-    if ([...storedIds.values()].every((id) => substrate.enriched(id))) {
-      return Promise.resolve(true);
-    }
-    // An episode whose extraction never returns a shape the schema accepts retries until its
-    // attempts run out, and waiting past that point waits forever. A drained queue is as far
-    // as the pipeline goes, and the episode is still stored, embedded and findable.
-    const queue = countQueueJobs(substrate.db, {}, substrate.config.operational.workerMaxAttempts);
-    return Promise.resolve(queue.pending === 0 && queue.claimed === 0);
-  });
+  await waitFor(
+    'the shipped pipeline to work through the held-out substrate',
+    ENRICH_DEADLINE_MS,
+    () => {
+      if ([...storedIds.values()].every((id) => substrate.enriched(id))) {
+        return Promise.resolve(true);
+      }
+      // An episode whose extraction never returns a shape the schema accepts retries until its
+      // attempts run out, and waiting past that point waits forever. A drained queue is as far
+      // as the pipeline goes, and the episode is still stored, embedded and findable.
+      const queue = countQueueJobs(
+        substrate.db,
+        {},
+        substrate.config.operational.workerMaxAttempts,
+      );
+      return Promise.resolve(queue.pending === 0 && queue.claimed === 0);
+    },
+  );
   await worker.stop();
 
   const unenriched = [...storedIds.entries()].filter(([, id]) => !substrate.enriched(id));
@@ -229,56 +238,62 @@ afterAll(async () => {
 });
 
 describe('a claim stored in one session answers the natural question asked in another', () => {
-  it.each(HELD_OUT_PROBES)('answers: $question', async (probe) => {
-    const result = await substrate.recall(probe.question, {
-      identity: READ_SESSION,
-      now: RECALLED_AT,
-    });
-    const expected = new Set(derivedIds.get(probe.key) ?? []);
-    const rank = rankOf(result.items, expected);
-    const answered = statesTheAnswer(result.items, probe.answerTerms);
+  it.each(HELD_OUT_PROBES)(
+    'answers: $question',
+    async (probe) => {
+      const result = await substrate.recall(probe.question, {
+        identity: READ_SESSION,
+        now: RECALLED_AT,
+      });
+      const expected = new Set(derivedIds.get(probe.key) ?? []);
+      const rank = rankOf(result.items, expected);
+      const answered = statesTheAnswer(result.items, probe.answerTerms);
 
-    for (const item of result.items) {
-      methods.set(item.rationale.method, (methods.get(item.rationale.method) ?? 0) + 1);
-    }
-    const activated = result.items.filter((item) => item.rationale.method === 'activation');
-    const whys = result.items.filter((item) => item.why !== undefined);
-    rows.push({
-      key: probe.key,
-      question: probe.question,
-      items: result.items.length,
-      rank,
-      statesTheAnswer: answered,
-      activation: activated.length,
-      activationPaths: activated.filter((item) => (item.rationale.path ?? '') !== '').length,
-      considered: result.admission.considered,
-      unmeasured: result.admission.droppedUnmeasured,
-      unmeasurableSeeds: unmeasurableSeeds(result.seeds),
-      whys: whys.length,
-      whysRendered: whys.filter((item) => result.pack.rendered_text.includes(`why: ${item.why ?? ''}`))
-        .length,
-    });
+      for (const item of result.items) {
+        methods.set(item.rationale.method, (methods.get(item.rationale.method) ?? 0) + 1);
+      }
+      const activated = result.items.filter((item) => item.rationale.method === 'activation');
+      const whys = result.items.filter((item) => item.why !== undefined);
+      rows.push({
+        key: probe.key,
+        question: probe.question,
+        items: result.items.length,
+        rank,
+        statesTheAnswer: answered,
+        activation: activated.length,
+        activationPaths: activated.filter((item) => (item.rationale.path ?? '') !== '').length,
+        considered: result.admission.considered,
+        unmeasured: result.admission.droppedUnmeasured,
+        unmeasurableSeeds: unmeasurableSeeds(result.seeds),
+        whys: whys.length,
+        whysRendered: whys.filter((item) =>
+          result.pack.rendered_text.includes(`why: ${item.why ?? ''}`),
+        ).length,
+      });
 
-    console.log(
-      `"${probe.question}": ${String(result.items.length)} items, ` +
-        `answer at rank ${String(rank)}, states the answer: ${String(answered)}, ` +
-        `seeds ${String(result.seeds.length)}, considered ${String(result.admission.considered)}` +
-        result.items
-          .slice(0, TOP_N)
-          .map(
-            (item) =>
-              `\n    [${item.rationale.method} ${item.confidence.toFixed(2)}] ` +
-              `${item.content.slice(0, 70)}`,
-          )
-          .join(''),
-    );
+      console.log(
+        `"${probe.question}": ${String(result.items.length)} items, ` +
+          `answer at rank ${String(rank)}, states the answer: ${String(answered)}, ` +
+          `seeds ${String(result.seeds.length)}, considered ${String(result.admission.considered)}${result.items
+            .slice(0, TOP_N)
+            .map(
+              (item) =>
+                `\n    [${item.rationale.method} ${item.confidence.toFixed(2)}] ${item.content.slice(
+                  0,
+                  70,
+                )}`,
+            )
+            .join('')}`,
+      );
 
-    // What every probe owes on its own: the episode holding the claim reached the pack. Rank
-    // zero is the failure this battery exists to catch: a genuinely on-topic recall that comes
-    // back with no answer in it. Whether the words of the answer land in the top five is judged
-    // over the whole battery below, because the substrate is rebuilt by live model calls.
-    expect(rank).toBeGreaterThan(0);
-  }, 180_000);
+      // What every probe owes on its own: the episode holding the claim reached the pack. Rank
+      // zero is the failure this battery exists to catch: a genuinely on-topic recall that comes
+      // back with no answer in it. Whether the words of the answer land in the top five is judged
+      // over the whole battery below, because the substrate is rebuilt by live model calls.
+      expect(rank).toBeGreaterThan(0);
+    },
+    180_000,
+  );
 
   // Last, so every probe above has already pushed its row.
   it('answers out of the episode that holds the claim, not only out of a gloss', () => {
@@ -297,8 +312,12 @@ describe('a claim stored in one session answers the natural question asked in an
   it('carries the answer in words, not only the episode it came from', () => {
     const answering = rows.filter((row) => row.statesTheAnswer).length;
     console.log(
-      `answered in words: ${String(answering)}/${String(rows.length)}; silent on ` +
-        `${rows.filter((row) => !row.statesTheAnswer).map((row) => `"${row.question}"`).join(', ') || 'nothing'}`,
+      `answered in words: ${String(answering)}/${String(rows.length)}; silent on ${
+        rows
+          .filter((row) => !row.statesTheAnswer)
+          .map((row) => `"${row.question}"`)
+          .join(', ') || 'nothing'
+      }`,
     );
 
     expect(answering / rows.length).toBeGreaterThanOrEqual(MIN_ANSWERING_RATE);

@@ -12,7 +12,11 @@ import {
   STRUCTURAL_PROPERTY,
 } from '../../../infrastructure/graph/seed-queries.js';
 import type { Row } from '../../../infrastructure/graph/values.js';
-import type { Provider, StructuredRequest, Vector } from '../../../infrastructure/providers/types.js';
+import type {
+  Provider,
+  StructuredRequest,
+  Vector,
+} from '../../../infrastructure/providers/types.js';
 import { FakeGraph, type FakeNode } from '../../test-support/fake-graph.fixture.js';
 
 /**
@@ -143,7 +147,10 @@ export class EntityFakeGraph extends FakeGraph {
       if (node.properties[ENTITY_NAME_VECTOR_PROPERTY] === undefined && entry.name_vec !== null) {
         node.properties[ENTITY_NAME_VECTOR_PROPERTY] = entry.name_vec;
       }
-      if (node.properties[MEMORY_PROPERTIES.contentVector] === undefined && entry.content_vec !== null) {
+      if (
+        node.properties[MEMORY_PROPERTIES.contentVector] === undefined &&
+        entry.content_vec !== null
+      ) {
         node.properties[MEMORY_PROPERTIES.contentVector] = entry.content_vec;
       }
       written.push({ id: entry.id });
@@ -176,9 +183,11 @@ export class EntityFakeGraph extends FakeGraph {
         name_norm: node.properties[ENTITY_NAME_NORM_PROPERTY],
         type: node.properties[ENTITY_TYPE_PROPERTY],
       }))
-      .sort((left, right) => `${left.name_norm as string}${left.id}`.localeCompare(
-        `${right.name_norm as string}${right.id}`,
-      ));
+      .sort((left, right) =>
+        `${left.name_norm as string}${left.id}`.localeCompare(
+          `${right.name_norm as string}${right.id}`,
+        ),
+      );
   }
 }
 

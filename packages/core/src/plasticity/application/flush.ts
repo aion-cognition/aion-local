@@ -1,5 +1,9 @@
 import type { Driver } from 'neo4j-driver';
-import { reinforceEdgeWeights, type WeightReinforcement } from '../../infrastructure/graph/edge-weights.js';
+
+import {
+  reinforceEdgeWeights,
+  type WeightReinforcement,
+} from '../../infrastructure/graph/edge-weights.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {

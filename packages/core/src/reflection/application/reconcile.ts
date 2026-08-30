@@ -1,10 +1,14 @@
 import type { Driver } from 'neo4j-driver';
+
+import { INTEGRATE_JOB_TYPE } from './intake.js';
+import { orchestratorLedgerKey } from './orchestrator.js';
 import { listStoredEpisodes, type StoredEpisodeRef } from '../../infrastructure/graph/episodes.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { listLedgerKeys } from '../../infrastructure/sqlite/ops-ledger.js';
-import { enqueueReflectionJob, listReflectionJobs } from '../../infrastructure/sqlite/reflection-queue.js';
-import { INTEGRATE_JOB_TYPE } from './intake.js';
-import { orchestratorLedgerKey } from './orchestrator.js';
+import {
+  enqueueReflectionJob,
+  listReflectionJobs,
+} from '../../infrastructure/sqlite/reflection-queue.js';
 
 /**
  * Episodes the substrate stored and will never enrich: no orchestrator ledger key, and no
@@ -110,7 +114,10 @@ export async function reconcileEnrichment(
         db,
         INTEGRATE_JOB_TYPE,
         { episode_id: episode.id },
-        { lane: 'bulk', ...(episode.sessionId === undefined ? {} : { sessionId: episode.sessionId }) },
+        {
+          lane: 'bulk',
+          ...(episode.sessionId === undefined ? {} : { sessionId: episode.sessionId }),
+        },
       );
       reEnqueued += 1;
     }

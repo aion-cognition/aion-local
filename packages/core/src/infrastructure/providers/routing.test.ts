@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULTS } from '../config/defaults.js';
-import type { Config } from '../config/schema.js';
+
 import {
   evictableModels,
   localChatModels,
@@ -11,6 +10,8 @@ import {
   unbackedPins,
   type ProviderPin,
 } from './routing.js';
+import { DEFAULTS } from '../config/defaults.js';
+import type { Config } from '../config/schema.js';
 
 const HAIKU = DEFAULTS.anthropic.model;
 const CUE_MODEL = DEFAULTS.models.cue;
@@ -43,7 +44,11 @@ describe('the routing matrix', () => {
     const routing = resolveProviderRouting(config());
 
     expect(routing.keyPresent).toBe(false);
-    expect(routing.roles.cue).toMatchObject({ provider: 'ollama', model: CUE_MODEL, reason: 'local-default' });
+    expect(routing.roles.cue).toMatchObject({
+      provider: 'ollama',
+      model: CUE_MODEL,
+      reason: 'local-default',
+    });
     expect(routing.roles.reflect).toMatchObject({ provider: 'ollama', model: REFLECT_MODEL });
     expect(localChatModels(routing)).toEqual([CUE_MODEL, REFLECT_MODEL]);
     expect(evictableModels(routing)).toEqual([]);
@@ -53,7 +58,11 @@ describe('the routing matrix', () => {
     const routing = resolveProviderRouting(config({ key: 'sk-ant-test' }));
 
     expect(routing.roles.cue).toMatchObject({ provider: 'anthropic', model: HAIKU, reason: 'key' });
-    expect(routing.roles.reflect).toMatchObject({ provider: 'anthropic', model: HAIKU, reason: 'key' });
+    expect(routing.roles.reflect).toMatchObject({
+      provider: 'anthropic',
+      model: HAIKU,
+      reason: 'key',
+    });
     // The local tag travels with the route, which is what reconciliation unloads.
     expect(routing.roles.reflect.localModel).toBe(REFLECT_MODEL);
     expect(localChatModels(routing)).toEqual([]);
@@ -62,13 +71,19 @@ describe('the routing matrix', () => {
   it('honours a per-role pin back to Ollama with the key still set', () => {
     const routing = resolveProviderRouting(config({ key: 'sk-ant-test', cue: 'ollama' }));
 
-    expect(routing.roles.cue).toMatchObject({ provider: 'ollama', model: CUE_MODEL, reason: 'pinned-local' });
+    expect(routing.roles.cue).toMatchObject({
+      provider: 'ollama',
+      model: CUE_MODEL,
+      reason: 'pinned-local',
+    });
     expect(routing.roles.reflect).toMatchObject({ provider: 'anthropic', model: HAIKU });
     expect(localChatModels(routing)).toEqual([CUE_MODEL]);
   });
 
   it('honours a per-role pin to Anthropic while the other role stays local', () => {
-    const routing = resolveProviderRouting(config({ key: 'sk-ant-test', cue: 'ollama', reflect: 'anthropic' }));
+    const routing = resolveProviderRouting(
+      config({ key: 'sk-ant-test', cue: 'ollama', reflect: 'anthropic' }),
+    );
 
     expect(routing.roles.reflect).toMatchObject({ provider: 'anthropic', reason: 'pinned-remote' });
     expect(routing.roles.cue.provider).toBe('ollama');
@@ -87,7 +102,9 @@ describe('the routing matrix', () => {
   });
 
   it('reports no unbacked pin when the key backs it', () => {
-    expect(unbackedPins(resolveProviderRouting(config({ key: 'sk-ant-test', reflect: 'anthropic' })))).toEqual([]);
+    expect(
+      unbackedPins(resolveProviderRouting(config({ key: 'sk-ant-test', reflect: 'anthropic' }))),
+    ).toEqual([]);
   });
 });
 
@@ -116,7 +133,9 @@ describe('what routing asks init and reconciliation to do', () => {
   });
 
   it('never evicts the embedding model, even when a role names it', () => {
-    const routing = resolveProviderRouting(config({ key: 'sk-ant-test', reflectModel: EMBED_MODEL }));
+    const routing = resolveProviderRouting(
+      config({ key: 'sk-ant-test', reflectModel: EMBED_MODEL }),
+    );
 
     expect(evictableModels(routing)).toEqual([CUE_MODEL]);
   });
@@ -124,9 +143,9 @@ describe('what routing asks init and reconciliation to do', () => {
 
 describe('what a person reads about the route', () => {
   it('summarizes each role as provider and model', () => {
-    expect(routingSummary(resolveProviderRouting(config({ key: 'sk-ant-test', cue: 'ollama' })))).toBe(
-      `cue=ollama:${CUE_MODEL} reflect=anthropic:${HAIKU}`,
-    );
+    expect(
+      routingSummary(resolveProviderRouting(config({ key: 'sk-ant-test', cue: 'ollama' }))),
+    ).toBe(`cue=ollama:${CUE_MODEL} reflect=anthropic:${HAIKU}`);
   });
 
   it('prints no banner on a fully local install', () => {
@@ -134,7 +153,9 @@ describe('what a person reads about the route', () => {
   });
 
   it('names the call classes that leave the machine and the ones that do not', () => {
-    const banner = remoteBannerLines(resolveProviderRouting(config({ key: 'sk-ant-test' }))).join('\n');
+    const banner = remoteBannerLines(resolveProviderRouting(config({ key: 'sk-ant-test' }))).join(
+      '\n',
+    );
 
     expect(banner).toContain('Anthropic API');
     expect(banner).toContain(HAIKU);

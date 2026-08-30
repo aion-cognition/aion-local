@@ -57,7 +57,7 @@ export const REFLECTION_DESCRIPTION = [
  * user pasting anything.
  */
 export const USAGE_PROTOCOL = [
-  'Aion is this agent\'s persistent memory across sessions.',
+  "Aion is this agent's persistent memory across sessions.",
   '',
   'Recall at the start of a session and before each new topic; reflection after meaningful work,',
   'before a context switch, and at session end. Recall costs little and answers honestly when it',

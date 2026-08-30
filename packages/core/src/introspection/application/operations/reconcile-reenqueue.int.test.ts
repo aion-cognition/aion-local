@@ -2,6 +2,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+
+import { reconcileReenqueueOperation } from './reconcile-reenqueue.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import { forgetNode, writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
@@ -15,12 +17,14 @@ import {
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
-import { enqueueReflectionJob, listReflectionJobs } from '../../../infrastructure/sqlite/reflection-queue.js';
+import {
+  enqueueReflectionJob,
+  listReflectionJobs,
+} from '../../../infrastructure/sqlite/reflection-queue.js';
 import { INTEGRATE_JOB_TYPE } from '../../../reflection/application/intake.js';
 import { orchestratorLedgerKey } from '../../../reflection/application/orchestrator.js';
-import { healthFixture } from '../../domain/test-support/health.fixture.js';
 import type { OperationContext } from '../../domain/operation.js';
-import { reconcileReenqueueOperation } from './reconcile-reenqueue.js';
+import { healthFixture } from '../../domain/test-support/health.fixture.js';
 
 const EMBED_DIMENSION = 8;
 const NOW = new Date('2026-08-29T14:00:00.000Z');
@@ -80,7 +84,7 @@ async function forgetExistingEpisodes(): Promise<void> {
 
 function jobsFor(episodeId: string) {
   return listReflectionJobs(db).filter(
-    (job) => (job.payload as { episode_id?: unknown })?.episode_id === episodeId,
+    (job) => (job.payload as { episode_id?: unknown } | null | undefined)?.episode_id === episodeId,
   );
 }
 
@@ -140,7 +144,10 @@ describe('reconcile_reenqueue', () => {
       now: new Date('2026-08-29T14:10:00.000Z'),
     });
 
-    const boundedConfig: Config = { ...config, maintenance: { ...config.maintenance, reconcileBatchSize: 1 } };
+    const boundedConfig: Config = {
+      ...config,
+      maintenance: { ...config.maintenance, reconcileBatchSize: 1 },
+    };
     const operation = reconcileReenqueueOperation();
     const result = await operation.run(ctxFor({ config: boundedConfig }));
 
@@ -171,7 +178,10 @@ describe('reconcile_reenqueue', () => {
       });
     }
 
-    const boundedConfig: Config = { ...config, maintenance: { ...config.maintenance, reconcileBatchSize: 2 } };
+    const boundedConfig: Config = {
+      ...config,
+      maintenance: { ...config.maintenance, reconcileBatchSize: 2 },
+    };
     const result = await reconcileReenqueueOperation().run(ctxFor({ config: boundedConfig }));
 
     expect(result.itemsAffected).toBe(2);

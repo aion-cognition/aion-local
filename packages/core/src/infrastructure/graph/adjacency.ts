@@ -1,13 +1,14 @@
 import type { Driver } from 'neo4j-driver';
+
 import { runRead, type GraphStatement } from './connection.js';
 import { BASE_NODE_LABEL } from './labels.js';
-import { STRUCTURAL_PROPERTY } from './seed-queries.js';
 import {
   readCurrencyAnnotation,
   readModeFragment,
   type CurrencyAnnotation,
   type ReadMode,
 } from './read-modes.js';
+import { STRUCTURAL_PROPERTY } from './seed-queries.js';
 import type { Row } from './values.js';
 
 /**

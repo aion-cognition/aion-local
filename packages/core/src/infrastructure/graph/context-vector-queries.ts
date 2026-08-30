@@ -1,5 +1,5 @@
 import type { Driver } from 'neo4j-driver';
-import type { ComputedContextVector, NeighborContentVector } from '../../reflection/domain/context-vector.js';
+
 import { runRead, runWrite, type GraphStatement } from './connection.js';
 import { ENTITY_MENTION_TYPE } from './entity-queries.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from './episodes.js';
@@ -7,6 +7,10 @@ import { BASE_NODE_LABEL } from './labels.js';
 import { SUMMARIZED_BY_TYPE } from './narrative-queries.js';
 import { readModeFragment, withCurrency } from './read-modes.js';
 import { fromGraphVector, toGraphVector, type Row } from './values.js';
+import type {
+  ComputedContextVector,
+  NeighborContentVector,
+} from '../../reflection/domain/context-vector.js';
 
 /**
  * Reflection's last stage recomputes `context_vec` for every `:Memory` node this run's
@@ -54,7 +58,12 @@ function affectedNodesStatement(episodeId: string): GraphStatement {
 /** Undefined only when the episode itself is unreadable; an episode with nothing else attached still returns its own id. */
 export async function findAffectedNodeIds(driver: Driver, episodeId: string): Promise<string[]> {
   const statement = affectedNodesStatement(episodeId);
-  const rows = await runRead(driver, statement.cypher, statement.parameters, (row) => row.id as string);
+  const rows = await runRead(
+    driver,
+    statement.cypher,
+    statement.parameters,
+    (row) => row.id as string,
+  );
   return [...new Set(rows)];
 }
 

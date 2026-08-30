@@ -2,9 +2,14 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { orphanCleanupOperation, orphanCleanupRelevance } from './orphan-cleanup.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
-import { BITEMPORAL_PROPERTIES, writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
+import {
+  BITEMPORAL_PROPERTIES,
+  writeStampedNode,
+} from '../../../infrastructure/graph/bitemporal.js';
 import { upsertEdge } from '../../../infrastructure/graph/edges.js';
 import { countOrphanNodes } from '../../../infrastructure/graph/introspection-health.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
@@ -18,9 +23,8 @@ import {
 import { findOrphanNodes } from '../../../infrastructure/graph/topology-queries.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
-import { healthFixture } from '../../domain/test-support/health.fixture.js';
 import type { OperationContext } from '../../domain/operation.js';
-import { orphanCleanupOperation, orphanCleanupRelevance } from './orphan-cleanup.js';
+import { healthFixture } from '../../domain/test-support/health.fixture.js';
 
 /**
  * Five orphans, one per case the operation distinguishes:

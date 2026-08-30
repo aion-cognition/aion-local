@@ -1,4 +1,5 @@
 import type { Cue } from '@aion/protocol';
+
 import type { Measurement } from './admission.js';
 
 /**
@@ -55,10 +56,7 @@ export type RestatementCandidate = {
   readonly evidence?: readonly Measurement[];
 };
 
-function restates(
-  candidate: RestatementCandidate,
-  policy: RestatementPolicy,
-): boolean {
+function restates(candidate: RestatementCandidate, policy: RestatementPolicy): boolean {
   if (!candidate.labels.some((label) => RESTATEMENT_LABELS.includes(label))) {
     return false;
   }
@@ -114,10 +112,7 @@ export function hasDecisionIntent(cues: readonly Cue[]): boolean {
  * ranked reaches the bucket) and it is deliberately not larger, since an item no leg ranked
  * should not displace the top hit however well its label fits the question.
  */
-export function labelBoosts(
-  cues: readonly Cue[],
-  boost: number,
-): Readonly<Record<string, number>> {
+export function labelBoosts(cues: readonly Cue[], boost: number): Readonly<Record<string, number>> {
   if (!hasDecisionIntent(cues)) {
     return {};
   }

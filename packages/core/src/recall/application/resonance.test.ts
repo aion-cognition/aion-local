@@ -1,17 +1,20 @@
 import type { Driver } from 'neo4j-driver';
 import { describe, expect, it } from 'vitest';
+
+import { resonate, type ResonanceInput } from './resonance.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { withCurrency } from '../../infrastructure/graph/read-modes.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { ActivatedNode } from '../domain/activation.js';
 import { RESONANCE_PATH } from '../domain/resonance.js';
-import { resonate, type ResonanceInput } from './resonance.js';
 
 type FakeRow = Record<string, unknown>;
 
 function silentLogger(): Logger {
-  const noop = (): void => {};
+  const noop = (): void => {
+    // A test logger that prints nothing, on purpose.
+  };
   return { debug: noop, info: noop, warn: noop, error: noop } as unknown as Logger;
 }
 
@@ -40,6 +43,8 @@ function activated(...ids: readonly string[]): readonly ActivatedNode[] {
     score: 1 - index * 0.1,
     hops: index,
     pathSummary: '(seed)',
+    currency: { currency: 'current' },
+    isStructural: false,
   }));
 }
 
@@ -204,7 +209,7 @@ describe('context resonance when it searches', () => {
     const recording = {
       executeQuery: (cypher: string, parameters: Record<string, unknown>) => {
         if (routed(cypher) === 'context-vectors') {
-          asked.push(...(parameters['ids'] as string[]));
+          asked.push(...(parameters.ids as string[]));
         }
         return (driver as unknown as { executeQuery: (c: string) => unknown }).executeQuery(cypher);
       },
@@ -235,7 +240,11 @@ describe('context resonance when it searches', () => {
     const recording = {
       executeQuery: (cypher: string, parameters: Record<string, unknown>) => {
         if (routed(cypher) === 'search') {
-          limits.push(Number((parameters['limit'] as { toNumber?: () => number }).toNumber?.() ?? parameters['limit']));
+          limits.push(
+            Number(
+              (parameters.limit as { toNumber?: () => number }).toNumber?.() ?? parameters.limit,
+            ),
+          );
         }
         return (driver as unknown as { executeQuery: (c: string) => unknown }).executeQuery(cypher);
       },

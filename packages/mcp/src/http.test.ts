@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Readable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
+
 import {
   bindHost,
   headerValue,
@@ -62,7 +63,9 @@ describe('body reading', () => {
 
 describe('headers', () => {
   it('takes the first value when a header repeats', () => {
-    const req = { headers: { 'mcp-session-id': ['first', 'second'] } } as unknown as IncomingMessage;
+    const req = {
+      headers: { 'mcp-session-id': ['first', 'second'] },
+    } as unknown as IncomingMessage;
     expect(headerValue(req, 'mcp-session-id')).toBe('first');
   });
 

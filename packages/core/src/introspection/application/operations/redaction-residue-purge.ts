@@ -4,14 +4,15 @@ import {
   writeRedactedProperties,
   type RedactedPropertyUpdate,
 } from '../../../infrastructure/graph/redaction-residue-writes.js';
-import {
-  FINGERPRINT_PATTERN,
-  withoutFingerprints,
-} from '../../../redaction/fingerprint.js';
+import { FINGERPRINT_PATTERN, withoutFingerprints } from '../../../redaction/fingerprint.js';
 import { redact } from '../../../redaction/redact.js';
 import { DEFAULT_RESIDUE_SCAN_LIMIT } from '../../../redaction/residue.js';
 import type { HealthSnapshot } from '../../domain/health.js';
-import type { IntrospectionOperation, OperationContext, OperationOutcome } from '../../domain/operation.js';
+import type {
+  IntrospectionOperation,
+  OperationContext,
+  OperationOutcome,
+} from '../../domain/operation.js';
 
 export const REDACTION_RESIDUE_PURGE_OPERATION = 'redaction_residue_purge';
 
@@ -72,7 +73,7 @@ function redactAroundFingerprints(
   let matches = 0;
   let cursor = 0;
   for (const found of text.matchAll(FINGERPRINT_PATTERN)) {
-    const at = found.index ?? 0;
+    const at = found.index;
     const segment = redact(text.slice(cursor, at), entropyThreshold);
     matches += segment.matches.length;
     parts.push(segment.text, found[0]);
@@ -113,7 +114,9 @@ export function redactionResiduePurgeOperation(): IntrospectionOperation {
       const threshold = ctx.config.redaction.entropyThreshold;
       const scanned = await readStoredText(ctx.driver, DEFAULT_RESIDUE_SCAN_LIMIT);
 
-      const leakingIds = scanned.filter((row) => stillLeaking(row.text, threshold)).map((row) => row.id);
+      const leakingIds = scanned
+        .filter((row) => stillLeaking(row.text, threshold))
+        .map((row) => row.id);
       const batchIds = leakingIds.slice(0, ctx.config.maintenance.redactionPurgeBatchSize);
 
       if (batchIds.length === 0 || ctx.signal.aborted) {

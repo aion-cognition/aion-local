@@ -2,9 +2,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { AssociationInferenceStage } from './associations.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../../infrastructure/graph/backbone.js';
-import { runRead } from '../../../infrastructure/graph/connection.js';
 import {
   linkEntityMentions,
   mergeEntities,
@@ -26,13 +27,12 @@ import {
 import { openLogger } from '../../../infrastructure/logging/logger.js';
 import type { Provider, Vector } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import { cliqueDiscount } from '../../../plasticity/domain/reinforcement.js';
 import { SessionManager } from '../../../session/session-manager.js';
 import type { StageContext, StageOutcome } from '../../domain/stage.js';
 import { ReflectionDispatch } from '../dispatch.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../intake.js';
 import { LaneAssigner } from '../lanes.js';
-import { cliqueDiscount } from '../../../plasticity/domain/reinforcement.js';
-import { AssociationInferenceStage } from './associations.js';
 
 const NOW = new Date('2026-08-28T12:00:00.000Z');
 const DIMENSION = DEFAULTS.models.embedDimension;
@@ -49,7 +49,8 @@ function fakeVector(seed: number): Vector {
 function fakeProvider(): Provider {
   let counter = 0;
   return {
-    embed: async (texts: readonly string[]): Promise<Vector[]> => texts.map(() => fakeVector(++counter)),
+    embed: async (texts: readonly string[]): Promise<Vector[]> =>
+      texts.map(() => fakeVector(++counter)),
     generate: async (): Promise<unknown> => {
       throw new Error('this suite never extracts entities through the model');
     },
@@ -91,7 +92,12 @@ async function seedEntity(input: {
     confidence: 0.8,
   };
   const [merged] = await mergeEntities(harness.driver, [merge], NOW);
-  const id = merged?.id as string;
+  if (merged === undefined) {
+    // One input entity always merges to exactly one result; this fixture only ever calls
+    // mergeEntities with a single-element array.
+    throw new Error('mergeEntities returned no result for a single-entity merge');
+  }
+  const { id } = merged;
   if (input.vector !== undefined) {
     await writeEntityVectors(harness.driver, [{ id, contentVector: input.vector }]);
   }
@@ -183,7 +189,7 @@ describe('co-occurrence', () => {
     expect(priyaAion?.count).toBe(2);
   }, 180_000);
 
-  it('writes a wide episode\'s pairs weaker than a focused episode\'s, and grows them on repeat', async () => {
+  it("writes a wide episode's pairs weaker than a focused episode's, and grows them on repeat", async () => {
     const wide = await newEpisode('a wide episode');
     const wideNames = ['W1', 'W2', 'W3', 'W4', 'W5'];
     for (const name of wideNames) {
@@ -223,7 +229,7 @@ describe('co-occurrence', () => {
 
   it('does not restore a decayed pair to full strength on the next co-occurrence', async () => {
     const first = await newEpisode('a pair that will fade');
-    for (const name of ['D1', 'D2', 'D3'] ) {
+    for (const name of ['D1', 'D2', 'D3']) {
       await seedEntity({ name, type: 'concept', episodeId: first });
     }
     await runStage(first);
@@ -247,14 +253,33 @@ describe('co-occurrence', () => {
 describe('semantic similarity', () => {
   it('links entities at or above the threshold and leaves entities below it unlinked', async () => {
     const episode = await newEpisode('semantic similarity fixture');
-    await seedEntity({ name: 'Postgres', type: 'tool', episodeId: episode, vector: basisVector(0) });
-    await seedEntity({ name: 'PostgresAlias', type: 'tool', episodeId: episode, vector: basisVector(0) });
-    await seedEntity({ name: 'Unrelated', type: 'concept', episodeId: episode, vector: basisVector(200) });
+    await seedEntity({
+      name: 'Postgres',
+      type: 'tool',
+      episodeId: episode,
+      vector: basisVector(0),
+    });
+    await seedEntity({
+      name: 'PostgresAlias',
+      type: 'tool',
+      episodeId: episode,
+      vector: basisVector(0),
+    });
+    await seedEntity({
+      name: 'Unrelated',
+      type: 'concept',
+      episodeId: episode,
+      vector: basisVector(200),
+    });
 
     const outcome = await runStage(episode);
 
     expect(outcome.status).toBe('ok');
-    const similar = await similarPairsAmong(harness.driver, ['Postgres', 'PostgresAlias', 'Unrelated']);
+    const similar = await similarPairsAmong(harness.driver, [
+      'Postgres',
+      'PostgresAlias',
+      'Unrelated',
+    ]);
     // SIMILAR is undirected; the edge-upsert normalizes endpoints by id, not by name, so
     // either entity can land on either side.
     expect(similar).toHaveLength(1);
@@ -265,7 +290,12 @@ describe('semantic similarity', () => {
 
   it('is idempotent: re-running finds the same candidates and leaves the edge a no-op', async () => {
     const episode = await newEpisode('semantic similarity re-run fixture');
-    await seedEntity({ name: 'Kubernetes', type: 'tool', episodeId: episode, vector: basisVector(50) });
+    await seedEntity({
+      name: 'Kubernetes',
+      type: 'tool',
+      episodeId: episode,
+      vector: basisVector(50),
+    });
     await seedEntity({ name: 'K8s', type: 'tool', episodeId: episode, vector: basisVector(50) });
 
     const first = await runStage(episode);

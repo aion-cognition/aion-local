@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { fetchAdjacency } from '../../infrastructure/graph/adjacency.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';

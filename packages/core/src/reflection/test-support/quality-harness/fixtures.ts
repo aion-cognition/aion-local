@@ -54,7 +54,10 @@ export const QUALITY_FIXTURES: readonly QualityFixture[] = [
     content: {
       summary: 'picked a refresh-token rotation strategy for the mobile client',
       turns: [
-        { role: 'user', text: 'should we do silent refresh or rotate the refresh token on every use' },
+        {
+          role: 'user',
+          text: 'should we do silent refresh or rotate the refresh token on every use',
+        },
         {
           role: 'assistant',
           text: 'rotation is safer: a stolen refresh token becomes useless after its first replay, and we can detect reuse as a compromise signal',
@@ -146,13 +149,28 @@ export const QUALITY_FIXTURES: readonly QualityFixture[] = [
     id: 'oncall-incident',
     title: 'Oncall incident retro',
     content: {
-      summary: "retro on a deploy-time healthcheck flap that paged oncall",
+      summary: 'retro on a deploy-time healthcheck flap that paged oncall',
       tool_executions: [
-        { tool: 'bash', input: 'curl -sf https://internal/healthz', status: 'error', output: 'connection refused', duration_ms: 1200 },
-        { tool: 'bash', input: 'curl -sf https://internal/healthz', status: 'ok', output: '{"status":"ok"}', duration_ms: 90 },
+        {
+          tool: 'bash',
+          input: 'curl -sf https://internal/healthz',
+          status: 'error',
+          output: 'connection refused',
+          duration_ms: 1200,
+        },
+        {
+          tool: 'bash',
+          input: 'curl -sf https://internal/healthz',
+          status: 'ok',
+          output: '{"status":"ok"}',
+          duration_ms: 90,
+        },
       ],
       turns: [
-        { role: 'user', text: "the pager went off again during last night's deploy, same as the last three deploys" },
+        {
+          role: 'user',
+          text: "the pager went off again during last night's deploy, same as the last three deploys",
+        },
         {
           role: 'assistant',
           text: 'the healthcheck starts polling before the new pod finishes its migration step, so it sees a connection refused for a few seconds every time',
@@ -175,7 +193,10 @@ export const QUALITY_FIXTURES: readonly QualityFixture[] = [
     content: {
       summary: 'scoped a plan to split the billing module into sub-modules',
       turns: [
-        { role: 'user', text: 'billing.service.ts is over two thousand lines now, what is the plan to break it up' },
+        {
+          role: 'user',
+          text: 'billing.service.ts is over two thousand lines now, what is the plan to break it up',
+        },
         {
           role: 'assistant',
           text: 'goal is to split it along the three things it currently does: invoicing, payouts, and reconciliation',
@@ -197,7 +218,13 @@ export const QUALITY_FIXTURES: readonly QualityFixture[] = [
     content: {
       summary: 'pinned a test-runner dependency after an upgrade broke parallel runs',
       tool_executions: [
-        { tool: 'bash', input: 'npm install vitest@latest', status: 'ok', output: 'added vitest@4.2.0', duration_ms: 8000 },
+        {
+          tool: 'bash',
+          input: 'npm install vitest@latest',
+          status: 'ok',
+          output: 'added vitest@4.2.0',
+          duration_ms: 8000,
+        },
         {
           tool: 'bash',
           input: 'npm test',
@@ -223,13 +250,19 @@ export const QUALITY_FIXTURES: readonly QualityFixture[] = [
     content: {
       summary: 'design review notes on a response cache for the search endpoint',
       turns: [
-        { role: 'user', text: 'walk me through the cache invalidation approach for the new search cache' },
+        {
+          role: 'user',
+          text: 'walk me through the cache invalidation approach for the new search cache',
+        },
         {
           role: 'assistant',
           text: 'key on the query plus a version stamp from the underlying index; a write bumps the stamp so every cached entry for that index goes stale in one step instead of a scan-and-delete',
         },
         { role: 'user', text: 'and read latency has been creeping up this week, is that related' },
-        { role: 'assistant', text: 'no, that is the unrelated growth in result set size; the cache does not touch that' },
+        {
+          role: 'assistant',
+          text: 'no, that is the unrelated growth in result set size; the cache does not touch that',
+        },
       ],
       observations: [
         'concept: version-stamp invalidation avoids a scan over cached keys on write',

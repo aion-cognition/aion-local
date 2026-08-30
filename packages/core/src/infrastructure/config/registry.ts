@@ -103,9 +103,17 @@ export const KNOB_REGISTRY: readonly Knob[] = [
   { envVar: 'AION_SEARCH_MMR_LAMBDA', path: ['search', 'mmrLambda'], kind: 'number' },
   { envVar: 'AION_SEARCH_WEIGHTS', path: ['search', 'weights'], kind: 'weights' },
 
-  { envVar: 'AION_ACTIVATION_MAX_ITERATIONS', path: ['activation', 'maxIterations'], kind: 'number' },
+  {
+    envVar: 'AION_ACTIVATION_MAX_ITERATIONS',
+    path: ['activation', 'maxIterations'],
+    kind: 'number',
+  },
   { envVar: 'AION_ACTIVATION_DECAY_FACTOR', path: ['activation', 'decayFactor'], kind: 'number' },
-  { envVar: 'AION_ACTIVATION_MIN_ACTIVATION', path: ['activation', 'minActivation'], kind: 'number' },
+  {
+    envVar: 'AION_ACTIVATION_MIN_ACTIVATION',
+    path: ['activation', 'minActivation'],
+    kind: 'number',
+  },
   {
     envVar: 'AION_ACTIVATION_MAX_NODES_VISITED',
     path: ['activation', 'maxNodesVisited'],
@@ -119,7 +127,11 @@ export const KNOB_REGISTRY: readonly Knob[] = [
   { envVar: 'AION_HEBBIAN_DECAY_PEAK_DAYS', path: ['hebbian', 'decayPeakDays'], kind: 'number' },
   { envVar: 'AION_HEBBIAN_DECAY_SIGMA', path: ['hebbian', 'decaySigma'], kind: 'number' },
   { envVar: 'AION_HEBBIAN_BATCH_SIZE', path: ['hebbian', 'batchSize'], kind: 'number' },
-  { envVar: 'AION_HEBBIAN_FLUSH_INTERVAL_MS', path: ['hebbian', 'flushIntervalMs'], kind: 'number' },
+  {
+    envVar: 'AION_HEBBIAN_FLUSH_INTERVAL_MS',
+    path: ['hebbian', 'flushIntervalMs'],
+    kind: 'number',
+  },
 
   // Keeps its spelling and its group. Its meaning narrowed: it is now the ceiling on a seed
   // budget that scales with the substrate, not the budget. A deployment that pinned it low
@@ -145,7 +157,11 @@ export const KNOB_REGISTRY: readonly Knob[] = [
     path: ['contextResonance', 'resonantLimit'],
     kind: 'number',
   },
-  { envVar: 'AION_CONTEXT_RESONANCE_MAX_HOPS', path: ['contextResonance', 'maxHops'], kind: 'number' },
+  {
+    envVar: 'AION_CONTEXT_RESONANCE_MAX_HOPS',
+    path: ['contextResonance', 'maxHops'],
+    kind: 'number',
+  },
   {
     envVar: 'AION_CONTEXT_RESONANCE_ACTIVATION_THRESHOLD',
     path: ['contextResonance', 'activationThreshold'],
@@ -273,7 +289,11 @@ export const KNOB_REGISTRY: readonly Knob[] = [
     kind: 'number',
   },
 
-  { envVar: 'AION_REDACTION_ENTROPY_THRESHOLD', path: ['redaction', 'entropyThreshold'], kind: 'number' },
+  {
+    envVar: 'AION_REDACTION_ENTROPY_THRESHOLD',
+    path: ['redaction', 'entropyThreshold'],
+    kind: 'number',
+  },
 
   { envVar: 'AION_MAINTENANCE_TIER3', path: ['maintenance', 'tier3'], kind: 'boolean' },
   {
@@ -392,9 +412,17 @@ export const KNOB_REGISTRY: readonly Knob[] = [
     path: ['operational', 'workerStaleClaimTimeoutMs'],
     kind: 'number',
   },
-  { envVar: 'AION_WORKER_RETRY_BASE_MS', path: ['operational', 'workerRetryBaseMs'], kind: 'number' },
+  {
+    envVar: 'AION_WORKER_RETRY_BASE_MS',
+    path: ['operational', 'workerRetryBaseMs'],
+    kind: 'number',
+  },
   { envVar: 'AION_WORKER_RETRY_CAP_MS', path: ['operational', 'workerRetryCapMs'], kind: 'number' },
-  { envVar: 'AION_WORKER_MAX_ATTEMPTS', path: ['operational', 'workerMaxAttempts'], kind: 'number' },
+  {
+    envVar: 'AION_WORKER_MAX_ATTEMPTS',
+    path: ['operational', 'workerMaxAttempts'],
+    kind: 'number',
+  },
   {
     envVar: 'AION_WORKER_BREAKER_THRESHOLD',
     path: ['operational', 'workerBreakerThreshold'],
@@ -441,7 +469,10 @@ export const KNOB_REGISTRY: readonly Knob[] = [
  * from, and the `git config user.name` the backbone bootstrap confirms. They are listed
  * here so the unknown-variable check keeps catching typos in real knobs.
  */
-export const RESERVED_ENV_VARS: ReadonlySet<string> = new Set(['AION_REPO_PATH', 'AION_GIT_USER_NAME']);
+export const RESERVED_ENV_VARS: ReadonlySet<string> = new Set([
+  'AION_REPO_PATH',
+  'AION_GIT_USER_NAME',
+]);
 
 const registryByEnvVar = new Map(KNOB_REGISTRY.map((knob) => [knob.envVar, knob]));
 

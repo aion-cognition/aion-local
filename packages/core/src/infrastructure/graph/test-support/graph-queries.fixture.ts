@@ -1,4 +1,5 @@
 import neo4j, { type Driver } from 'neo4j-driver';
+
 import type { Vector } from '../../providers/types.js';
 import { ACCESS_COUNT_PROPERTY } from '../access-tracking.js';
 import { CO_OCCURS_TYPE, SIMILAR_TYPE } from '../association-queries.js';
@@ -57,7 +58,12 @@ export async function nodeLabels(driver: Driver, id: string): Promise<string[]> 
 
 /** Every property of every node, serialized: what a "the raw secret is nowhere" assertion scans. */
 export async function everyStoredProperty(driver: Driver): Promise<string> {
-  const rows = await runRead(driver, 'MATCH (n) RETURN properties(n) AS props', {}, (row) => row.props);
+  const rows = await runRead(
+    driver,
+    'MATCH (n) RETURN properties(n) AS props',
+    {},
+    (row) => row.props,
+  );
   return JSON.stringify(rows);
 }
 
@@ -133,7 +139,7 @@ export async function episodeIdsInSession(driver: Driver, sessionId: string): Pr
 export async function turnsOfEpisode(
   driver: Driver,
   episodeId: string,
-): Promise<Array<Record<string, unknown>>> {
+): Promise<Record<string, unknown>[]> {
   return runRead(
     driver,
     [
@@ -159,9 +165,9 @@ export async function accessMetadata(driver: Driver, id: string): Promise<Access
       `RETURN n.${LAST_ACCESSED_PROPERTY} AS lastAccessed, n.${ACCESS_COUNT_PROPERTY} AS accessCount`,
     ].join('\n'),
     { id },
-    (row) => ({
-      ...(row.lastAccessed instanceof Date ? { lastAccessed: row.lastAccessed } : {}),
-      ...(typeof row.accessCount === 'number' ? { accessCount: row.accessCount } : {}),
+    (mapped) => ({
+      ...(mapped.lastAccessed instanceof Date ? { lastAccessed: mapped.lastAccessed } : {}),
+      ...(typeof mapped.accessCount === 'number' ? { accessCount: mapped.accessCount } : {}),
     }),
   );
   return row ?? {};

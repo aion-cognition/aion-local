@@ -1,6 +1,3 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import {
   bootstrapBackbone,
   CueCache,
@@ -34,7 +31,11 @@ import {
 } from '@aion/core/infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import { MCP_PATH } from './http.js';
 import { AionMcpService } from './service.js';
 import { SessionIdleSweeper } from './session-idle-sweeper.js';
@@ -210,7 +211,10 @@ describe('FOLLOWS chain integrity across mixed empty/content sessions', () => {
     await probeBefore.client.close();
 
     const first = await open();
-    await first.client.callTool({ name: 'reflection', arguments: { observations: ['chain link A'] } });
+    await first.client.callTool({
+      name: 'reflection',
+      arguments: { observations: ['chain link A'] },
+    });
     const sessionA = first.transport.sessionId ?? '';
     await first.transport.terminateSession();
     await first.client.close();
@@ -220,7 +224,10 @@ describe('FOLLOWS chain integrity across mixed empty/content sessions', () => {
     await probeBetween.client.close();
 
     const second = await open();
-    await second.client.callTool({ name: 'reflection', arguments: { observations: ['chain link B'] } });
+    await second.client.callTool({
+      name: 'reflection',
+      arguments: { observations: ['chain link B'] },
+    });
     const sessionB = second.transport.sessionId ?? '';
     await second.transport.terminateSession();
     await second.client.close();
@@ -260,7 +267,10 @@ describe('reliable close', () => {
 
   it('answers a late call on an idle-expired session with the clean unknown-session error', async () => {
     const { client, transport } = await open();
-    await client.callTool({ name: 'reflection', arguments: { observations: ['about to go quiet'] } });
+    await client.callTool({
+      name: 'reflection',
+      arguments: { observations: ['about to go quiet'] },
+    });
     const sessionId = transport.sessionId ?? '';
 
     sweeper.sweepOnce(new Date(Date.now() + IDLE_MS + 50));

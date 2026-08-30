@@ -1,26 +1,25 @@
+import { CueSchema, DegradationSchema } from '@aion/protocol';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CueSchema, DegradationSchema } from '@aion/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { BARE_QUERY_FIXTURES, SUMMARY_TONE_FIXTURES, SUMMARY_TONE_QUERY } from './cues.fixtures.js';
+import { CueCache, extractCues, type CueExtractionDeps } from './cues.js';
 import { openLogger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
-import { CueCache, extractCues, type CueExtractionDeps } from './cues.js';
-import {
-  BARE_QUERY_FIXTURES,
-  SUMMARY_TONE_FIXTURES,
-  SUMMARY_TONE_QUERY,
-} from './cues.fixtures.js';
 
 const MODEL = 'qwen3:1.7b';
 const BUDGET_MS = 2000;
 
 let dataDir: string;
-let generate: ReturnType<typeof vi.fn>;
+let generate: ReturnType<typeof vi.fn<Provider['generate']>>;
 let embed: ReturnType<typeof vi.fn>;
 let deps: CueExtractionDeps;
 
-function fullOutput(overrides: Partial<Record<'query_cues' | 'summary_cues' | 'recent_turn_cues', string[]>> = {}) {
+function fullOutput(
+  overrides: Partial<Record<'query_cues' | 'summary_cues' | 'recent_turn_cues', string[]>> = {},
+) {
   return {
     query_cues: overrides.query_cues ?? ['migration deadlock', 'per-table split'],
     summary_cues: overrides.summary_cues ?? ['production deploy'],
@@ -30,7 +29,7 @@ function fullOutput(overrides: Partial<Record<'query_cues' | 'summary_cues' | 'r
 
 beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), 'aion-cues-test-'));
-  generate = vi.fn();
+  generate = vi.fn<Provider['generate']>();
   embed = vi.fn(() => Promise.reject(new Error('cue extraction must never call embed')));
   const provider: Provider = {
     embed: embed as Provider['embed'],
@@ -233,7 +232,11 @@ describe('degradation ladder', () => {
   });
 
   it('degrades with reason invalid_output when a required bucket has the wrong type', async () => {
-    generate.mockResolvedValue({ query_cues: 'not an array', summary_cues: [], recent_turn_cues: [] });
+    generate.mockResolvedValue({
+      query_cues: 'not an array',
+      summary_cues: [],
+      recent_turn_cues: [],
+    });
 
     const result = await extractCues(deps, { query: 'why did the migration deadlock' });
 
@@ -293,8 +296,8 @@ describe('the one generate() call', () => {
 
     expect(generate).toHaveBeenCalledTimes(1);
     const request = generate.mock.calls[0]?.[0];
-    expect(request.model).toBe(MODEL);
-    expect(request.schema).toMatchObject({
+    expect(request?.model).toBe(MODEL);
+    expect(request?.schema).toMatchObject({
       type: 'object',
       required: ['query_cues', 'summary_cues', 'recent_turn_cues', 'query_intent'],
     });
@@ -345,8 +348,10 @@ describe('the raw query is always a cue', () => {
 
     await extractCues(deps, { query: 'why did the migration deadlock' });
 
-    const prompt = String(generate.mock.calls[0]?.[0]?.messages?.[0]?.content ?? '');
-    expect(prompt).toContain('Never introduce a topic, domain, or entity the section does not mention');
+    const prompt = generate.mock.calls[0]?.[0]?.messages[0]?.content ?? '';
+    expect(prompt).toContain(
+      'Never introduce a topic, domain, or entity the section does not mention',
+    );
     expect(prompt).toContain('never guess what the user might have meant');
     expect(prompt).toContain('return an empty array');
   });
@@ -427,9 +432,9 @@ describe('summary cues are damped by weight, not by wording', () => {
       summary: 'recalling my own recent work',
     });
 
-    expect(result.cues.filter((cue) => cue.source === 'query').every((cue) => cue.weight === 3)).toBe(
-      true,
-    );
+    expect(
+      result.cues.filter((cue) => cue.source === 'query').every((cue) => cue.weight === 3),
+    ).toBe(true);
   });
 
   it('damps the raw summary on the degraded path too', async () => {

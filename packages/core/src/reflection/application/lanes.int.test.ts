@@ -2,6 +2,13 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+
+import { ReflectionDispatch } from './dispatch.js';
+import { handleReflection, type ReflectionIntakeDeps } from './intake.js';
+import { LaneAssigner } from './lanes.js';
+import { ReflectionOrchestrator } from './orchestrator.js';
+import { reconcileEnrichment } from './reconcile.js';
+import { ReflectionWorker } from './worker.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
@@ -16,12 +23,6 @@ import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite
 import { listReflectionJobs } from '../../infrastructure/sqlite/reflection-queue.js';
 import { SessionManager } from '../../session/session-manager.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../domain/stage.js';
-import { ReflectionDispatch } from './dispatch.js';
-import { handleReflection, type ReflectionIntakeDeps } from './intake.js';
-import { LaneAssigner } from './lanes.js';
-import { ReflectionOrchestrator } from './orchestrator.js';
-import { reconcileEnrichment } from './reconcile.js';
-import { ReflectionWorker } from './worker.js';
 
 /**
  * The live incident, reproduced small: a bulk load queued ahead of a live turn, and the
@@ -104,8 +105,9 @@ beforeAll(async () => {
 }, 300_000);
 
 afterEach(async () => {
-  await worker?.stop();
+  const current = worker;
   worker = undefined;
+  await current?.stop();
 });
 
 afterAll(async () => {
@@ -125,7 +127,9 @@ describe('a bulk-flagged flood ahead of one live turn', () => {
       expect(flooded.lane).toBe('bulk');
     }
 
-    const live = await handleReflection(intake, episodePayload('live'), { identity: LIVE_IDENTITY });
+    const live = await handleReflection(intake, episodePayload('live'), {
+      identity: LIVE_IDENTITY,
+    });
     expect(live.lane).toBe('interactive');
 
     const queued = listReflectionJobs(db);

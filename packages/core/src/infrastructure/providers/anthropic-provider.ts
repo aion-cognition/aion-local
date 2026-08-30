@@ -95,8 +95,8 @@ function closeNode(node: unknown): unknown {
   for (const [key, value] of Object.entries(node)) {
     closed[key] = closeNode(value);
   }
-  if (closed['type'] === 'object' && closed['additionalProperties'] === undefined) {
-    closed['additionalProperties'] = false;
+  if (closed.type === 'object' && closed.additionalProperties === undefined) {
+    closed.additionalProperties = false;
   }
   return closed;
 }
@@ -260,16 +260,19 @@ async function askAnthropic(
       break;
     }
     const retryAfter = Number(response.headers.get('retry-after'));
-    const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : attempt * 2000;
+    const waitMs =
+      Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : attempt * 2000;
     await response.text().catch(() => undefined);
-    await new Promise((resolve) => setTimeout(resolve, Math.min(waitMs, MAX_BACKOFF_MS)));
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.min(waitMs, MAX_BACKOFF_MS));
+    });
   }
 
   if (!response.ok) {
     throw new AnthropicRequestError(response.status, await response.text());
   }
 
-  const body = (await response.json()) as { content?: Array<{ type: string; text?: string }> };
+  const body = (await response.json()) as { content?: { type: string; text?: string }[] };
   const textBlock = body.content?.find((block) => block.type === 'text');
   if (textBlock?.text === undefined) {
     throw new AnthropicResponseError('missing text content');
@@ -355,6 +358,8 @@ export class AnthropicProvider implements GenerationBackend {
   }
 
   generate(req: StructuredRequest): Promise<unknown> {
-    return this.#breaker.run(() => requestAnthropicJson(this.#options, { ...req, model: this.#model }));
+    return this.#breaker.run(() =>
+      requestAnthropicJson(this.#options, { ...req, model: this.#model }),
+    );
   }
 }

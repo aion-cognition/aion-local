@@ -1,7 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { DEFAULTS } from '../../infrastructure/config/defaults.js';
-import type { AdjacencyNeighbor } from '../../infrastructure/graph/adjacency.js';
-import type { CurrencyAnnotation } from '../../infrastructure/graph/read-modes.js';
+
 import {
   edgeWeight,
   hubInhibition,
@@ -11,6 +9,9 @@ import {
   type ActivationRun,
   type AdjacencyFetch,
 } from './activation.js';
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import type { AdjacencyNeighbor } from '../../infrastructure/graph/adjacency.js';
+import type { CurrencyAnnotation } from '../../infrastructure/graph/read-modes.js';
 
 type FixtureEdge = {
   readonly from: string;
@@ -124,9 +125,15 @@ describe('edgeWeight', () => {
 
   it('scales SIMILAR and RELATED_TO by strength × confidence', () => {
     // SIMILAR's base weight carries MODEL_INFERRED_PENALTY (0.6 tuned x 0.5 discount = 0.3).
-    expect(edgeWeight(neighbor({ relationshipType: 'SIMILAR', strength: 0.5, confidence: 0.5 }))).toBeCloseTo(0.075, 10);
-    expect(edgeWeight(neighbor({ relationshipType: 'RELATED_TO', strength: 0.4, confidence: 0.5 }))).toBeCloseTo(0.1, 10);
-    expect(edgeWeight(neighbor({ relationshipType: 'SIMILAR', strength: 1, confidence: 1 }))).toBe(0.3);
+    expect(
+      edgeWeight(neighbor({ relationshipType: 'SIMILAR', strength: 0.5, confidence: 0.5 })),
+    ).toBeCloseTo(0.075, 10);
+    expect(
+      edgeWeight(neighbor({ relationshipType: 'RELATED_TO', strength: 0.4, confidence: 0.5 })),
+    ).toBeCloseTo(0.1, 10);
+    expect(edgeWeight(neighbor({ relationshipType: 'SIMILAR', strength: 1, confidence: 1 }))).toBe(
+      0.3,
+    );
   });
 
   it('halves CAUSES, ENABLES, PRECEDES, CONTRADICTS, and SIMILAR pending a precision-cleared harness', () => {
@@ -137,10 +144,18 @@ describe('edgeWeight', () => {
   });
 
   it('scales every other type by strength alone, ignoring confidence', () => {
-    expect(edgeWeight(neighbor({ relationshipType: 'CO_OCCURS', strength: 0.1, confidence: 0.1 }))).toBeCloseTo(0.05, 10);
-    expect(edgeWeight(neighbor({ relationshipType: 'FOLLOWS', strength: 0.2, confidence: 0.2 }))).toBeCloseTo(0.16, 10);
-    expect(edgeWeight(neighbor({ relationshipType: 'CO_OCCURS', strength: 1, confidence: 0.1 }))).toBe(0.5);
-    expect(edgeWeight(neighbor({ relationshipType: 'FOLLOWS', strength: 1, confidence: 0.2 }))).toBe(0.8);
+    expect(
+      edgeWeight(neighbor({ relationshipType: 'CO_OCCURS', strength: 0.1, confidence: 0.1 })),
+    ).toBeCloseTo(0.05, 10);
+    expect(
+      edgeWeight(neighbor({ relationshipType: 'FOLLOWS', strength: 0.2, confidence: 0.2 })),
+    ).toBeCloseTo(0.16, 10);
+    expect(
+      edgeWeight(neighbor({ relationshipType: 'CO_OCCURS', strength: 1, confidence: 0.1 })),
+    ).toBe(0.5);
+    expect(
+      edgeWeight(neighbor({ relationshipType: 'FOLLOWS', strength: 1, confidence: 0.2 })),
+    ).toBe(0.8);
   });
 
   it('falls back to the default weight for a type outside the catalog', () => {
@@ -225,7 +240,9 @@ describe('spreadActivation', () => {
 
   it('carries a decayed edge at the weight floor under the shipped cutoff', async () => {
     const fixture: Fixture = {
-      edges: [{ from: 'seed', to: 'faded', type: 'MENTIONS', strength: DEFAULTS.hebbian.weightFloor }],
+      edges: [
+        { from: 'seed', to: 'faded', type: 'MENTIONS', strength: DEFAULTS.hebbian.weightFloor },
+      ],
     };
 
     const run = await spreadActivation(fetchOver(fixture), {
@@ -241,24 +258,27 @@ describe('spreadActivation', () => {
   });
 
   it('propagates a weakened edge in proportion to what is left of it', async () => {
-    const weights = await Promise.all(
-      [1, 0.5, DEFAULTS.hebbian.weightFloor].map(async (strength) => {
-        const run = await spreadActivation(
-          fetchOver({ edges: [{ from: 'seed', to: 'reached', type: 'MENTIONS', strength }] }),
-          {
-            seeds: [{ nodeId: 'seed' }],
-            budget: withBudget({
-              maxHops: 1,
-              associationStrength: DEFAULTS.recall.associationStrength,
-              minActivation: 0,
-            }),
-          },
-        );
-        return scoreOf(run, 'reached');
-      }),
-    );
+    async function scoreAtStrength(strength: number): Promise<number> {
+      const run = await spreadActivation(
+        fetchOver({ edges: [{ from: 'seed', to: 'reached', type: 'MENTIONS', strength }] }),
+        {
+          seeds: [{ nodeId: 'seed' }],
+          budget: withBudget({
+            maxHops: 1,
+            associationStrength: DEFAULTS.recall.associationStrength,
+            minActivation: 0,
+          }),
+        },
+      );
+      return scoreOf(run, 'reached');
+    }
 
-    const [full, half, floored] = weights;
+    const [full, half, floored] = await Promise.all([
+      scoreAtStrength(1),
+      scoreAtStrength(0.5),
+      scoreAtStrength(DEFAULTS.hebbian.weightFloor),
+    ]);
+
     expect(half).toBeCloseTo(full / 2, 10);
     expect(floored).toBeCloseTo(full * DEFAULTS.hebbian.weightFloor, 10);
     expect(floored).toBeGreaterThan(0);
@@ -342,7 +362,9 @@ describe('spreadActivation', () => {
     });
 
     const reached = run.activated.find((node) => node.nodeId === 'session-1');
-    expect(reached?.pathSummary).toBe('episode -[PARTICIPATES_IN]-> session-2 -[FOLLOWS]-> session-1');
+    expect(reached?.pathSummary).toBe(
+      'episode -[PARTICIPATES_IN]-> session-2 -[FOLLOWS]-> session-1',
+    );
     expect(reached?.hops).toBe(2);
   });
 
@@ -355,7 +377,9 @@ describe('spreadActivation', () => {
         { from: 'mid', to: 'far', type: 'FOLLOWS' },
       ],
     };
-    const fetch = vi.fn<AdjacencyFetch>((request) => Promise.resolve(neighborsFor(fixture, request)));
+    const fetch = vi.fn<AdjacencyFetch>((request) =>
+      Promise.resolve(neighborsFor(fixture, request)),
+    );
 
     const run = await spreadActivation(fetch, {
       seeds: [{ nodeId: 'seed-a' }, { nodeId: 'seed-b' }, { nodeId: 'seed-c' }],
@@ -364,7 +388,11 @@ describe('spreadActivation', () => {
 
     expect(run.iterations).toBe(2);
     expect(fetch).toHaveBeenCalledTimes(2);
-    expect([...(fetch.mock.calls[0]?.[0].frontier ?? [])].sort()).toEqual(['seed-a', 'seed-b', 'seed-c']);
+    expect([...(fetch.mock.calls[0]?.[0].frontier ?? [])].sort()).toEqual([
+      'seed-a',
+      'seed-b',
+      'seed-c',
+    ]);
     expect(fetch.mock.calls[1]?.[0].frontier).toEqual(['mid']);
     expect(fetch.mock.calls[1]?.[0].visited).toContain('seed-a');
   });
@@ -399,12 +427,20 @@ describe('spreadActivation superseded handling', () => {
       budget: BASE_BUDGET,
     });
 
-    expect(scoreOf(run, 'beyond')).toBeCloseTo(0.9 * 0.7 * SUPERSEDED_ACTIVATION_WEIGHT * 0.9 * 0.7, 10);
+    expect(scoreOf(run, 'beyond')).toBeCloseTo(
+      0.9 * 0.7 * SUPERSEDED_ACTIVATION_WEIGHT * 0.9 * 0.7,
+      10,
+    );
   });
 
   it('starts a superseded seed at the down-weighted activation', async () => {
     const run = await spreadActivation(fetchOver({ edges: [] }), {
-      seeds: [{ nodeId: 'seed', currency: { currency: 'superseded', supersededBy: { id: 'newer', at: SUPERSEDED_AT } } }],
+      seeds: [
+        {
+          nodeId: 'seed',
+          currency: { currency: 'superseded', supersededBy: { id: 'newer', at: SUPERSEDED_AT } },
+        },
+      ],
       budget: BASE_BUDGET,
     });
 

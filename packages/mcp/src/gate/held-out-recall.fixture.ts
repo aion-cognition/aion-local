@@ -94,10 +94,7 @@ export const HELD_OUT_CASES: readonly HeldOutCase[] = [
       'The nightly reconciliation job runs at 02:15 UTC.',
       'Reconciliation waits for the processor settlement file, which lands at 01:50 UTC.',
     ],
-    questions: [
-      'when does reconciliation run',
-      'why is reconciliation scheduled so late at night',
-    ],
+    questions: ['when does reconciliation run', 'why is reconciliation scheduled so late at night'],
     answerTerms: ['02:15', 'settlement'],
   },
   {
@@ -118,10 +115,7 @@ export const HELD_OUT_CASES: readonly HeldOutCase[] = [
       'Payments on-call hands over on Wednesday morning.',
       'A Tuesday payments deploy is owned by whoever shipped it, because the rotation has not turned over yet.',
     ],
-    questions: [
-      'who owns a tuesday payments deploy',
-      'when does payments on-call change hands',
-    ],
+    questions: ['who owns a tuesday payments deploy', 'when does payments on-call change hands'],
     answerTerms: ['wednesday', 'shipped it'],
   },
   {

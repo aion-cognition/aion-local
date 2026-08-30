@@ -1,4 +1,5 @@
 import neo4j, { type Driver } from 'neo4j-driver';
+
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { runRead, runWrite } from './connection.js';
 import { PROTECTED_RELATIONSHIP_TYPES } from './protected-relationships.js';
@@ -47,7 +48,7 @@ export async function labelPropagationAvailable(driver: Driver): Promise<boolean
     driver,
     "SHOW PROCEDURES YIELD name WHERE name = 'gds.labelPropagation.write' RETURN count(*) AS count",
     {},
-    (row) => row['count'] as number,
+    (row) => row.count as number,
   );
   return (rows[0] ?? 0) > 0;
 }
@@ -65,7 +66,7 @@ const COUNT_PROJECTABLE_NODES = [
  * So the bound is a refusal above the cap rather than a truncation.
  */
 export async function countProjectableNodes(driver: Driver): Promise<number> {
-  const rows = await runRead(driver, COUNT_PROJECTABLE_NODES, {}, (row) => row['count'] as number);
+  const rows = await runRead(driver, COUNT_PROJECTABLE_NODES, {}, (row) => row.count as number);
   return rows[0] ?? 0;
 }
 
@@ -107,8 +108,8 @@ export async function projectContentGraph(
     ].join('\n'),
     { graphName, nodeQuery: PROJECT_NODES, relationshipQuery: PROJECT_RELATIONSHIPS },
     (row) => ({
-      nodeCount: row['nodeCount'] as number,
-      relationshipCount: row['relationshipCount'] as number,
+      nodeCount: row.nodeCount as number,
+      relationshipCount: row.relationshipCount as number,
     }),
   );
   return rows[0] ?? { nodeCount: 0, relationshipCount: 0 };
@@ -139,13 +140,15 @@ export async function writeCommunities(
       maxIterations: toGraphInteger(maxIterations),
     },
     (row) => ({
-      communityCount: row['communityCount'] as number,
-      nodePropertiesWritten: row['nodePropertiesWritten'] as number,
-      ranIterations: row['ranIterations'] as number,
-      didConverge: row['didConverge'] === true,
+      communityCount: row.communityCount as number,
+      nodePropertiesWritten: row.nodePropertiesWritten as number,
+      ranIterations: row.ranIterations as number,
+      didConverge: row.didConverge === true,
     }),
   );
-  return rows[0] ?? { communityCount: 0, nodePropertiesWritten: 0, ranIterations: 0, didConverge: false };
+  return (
+    rows[0] ?? { communityCount: 0, nodePropertiesWritten: 0, ranIterations: 0, didConverge: false }
+  );
 }
 
 /**
@@ -157,7 +160,7 @@ export async function dropProjection(driver: Driver, graphName: string): Promise
     driver,
     'CALL gds.graph.drop($graphName, false) YIELD graphName AS dropped RETURN dropped',
     { graphName },
-    (row) => row['dropped'] as string,
+    (row) => row.dropped as string,
   );
 }
 
@@ -202,10 +205,10 @@ export async function readCommunityProfiles(
   minSize: number,
 ): Promise<CommunityProfile[]> {
   return runRead(driver, READ_COMMUNITY_PROFILES, { minSize: toGraphInteger(minSize) }, (row) => ({
-    community: row['community'] as number,
-    size: row['size'] as number,
-    externalEdges: row['external_edges'] as number,
-    internalEdges: row['internal_edges'] as number,
+    community: row.community as number,
+    size: row.size as number,
+    externalEdges: row.external_edges as number,
+    internalEdges: row.internal_edges as number,
   }));
 }
 
@@ -238,8 +241,8 @@ const READ_COMMUNITY_PAIR_EDGES = [
 
 export async function readCommunityPairEdges(driver: Driver): Promise<CommunityPairEdges[]> {
   return runRead(driver, READ_COMMUNITY_PAIR_EDGES, {}, (row) => ({
-    left: row['left'] as number,
-    right: row['right'] as number,
-    edges: row['edges'] as number,
+    left: row.left as number,
+    right: row.right as number,
+    edges: row.edges as number,
   }));
 }

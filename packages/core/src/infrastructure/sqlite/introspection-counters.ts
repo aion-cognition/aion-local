@@ -128,12 +128,20 @@ export function clearPendingMeasure(db: SqliteHandle, name: string): void {
  * that skips a window costs one cadence, and maintenance that runs twice on a partial first
  * pass costs whatever the operation was halfway through.
  */
-export function claimOperationBucket(db: SqliteHandle, bucketKey: string, summary?: unknown): boolean {
+export function claimOperationBucket(
+  db: SqliteHandle,
+  bucketKey: string,
+  summary?: unknown,
+): boolean {
   const result = db
     .prepare(
       `INSERT INTO ops_ledger (key, applied_at, summary_json) VALUES (?, ?, ?)
        ON CONFLICT(key) DO NOTHING`,
     )
-    .run(bucketKey, new Date().toISOString(), summary === undefined ? null : JSON.stringify(summary));
+    .run(
+      bucketKey,
+      new Date().toISOString(),
+      summary === undefined ? null : JSON.stringify(summary),
+    );
   return result.changes === 1;
 }

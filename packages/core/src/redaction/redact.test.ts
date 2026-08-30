@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
+
 import { redact, redactKeyedValue } from './redact.js';
 
 describe('redact: true positives, one per rule', () => {
-  const cases: Array<{ rule: string; secret: string; text: string }> = [
+  const cases: { rule: string; secret: string; text: string }[] = [
     {
       rule: 'aws-access-key',
       secret: 'AKIAIOSFODNN7EXAMPLE',
@@ -92,7 +93,7 @@ describe('redact: true positives, one per rule', () => {
 // The 8-22 character band is where most real API keys, DB passwords, and client secrets
 // live, and it is unreachable for any entropy threshold above log2(22) = 4.46 bits/char.
 describe('redact: short generic secrets, the band an entropy gate cannot reach', () => {
-  const cases: Array<{ label: string; text: string; secret: string }> = [
+  const cases: { label: string; text: string; secret: string }[] = [
     { label: 'a shell password', text: 'password=hunter2secret', secret: 'hunter2secret' },
     { label: 'a password with symbols', text: 'password: Tr0ub4dor&3', secret: 'Tr0ub4dor&3' },
     { label: 'a quoted api key', text: 'api_key="abcd1234efgh"', secret: 'abcd1234efgh' },
@@ -135,6 +136,8 @@ describe('redact: false positives that must survive unredacted', () => {
     'a code reference in key position': 'api_key: process.env.API_KEY',
     'a zod schema declaration': 'password: z.string().min(8)',
     'an absent value': 'client_secret: undefined',
+    // The literal shell syntax is the point of this case, not a forgotten template literal.
+    // eslint-disable-next-line no-template-curly-in-string -- see comment above
     'a shell interpolation': 'client_secret=${CLIENT_SECRET}',
   };
 

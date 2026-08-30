@@ -122,14 +122,16 @@ export const RESONANCE_WORLDS: readonly ResonanceWorld[] = [
  * and the spread reaches the target inside the shipped hop budget: the battery would then be
  * measuring an exclusion rather than a discovery.
  */
-export const SPACER_EPISODES: readonly { readonly session: string; readonly observation: string }[] =
-  [
-    {
-      session: 'gate-resonance-spacer-one',
-      observation: 'the design review moved to thursday afternoon',
-    },
-    {
-      session: 'gate-resonance-spacer-two',
-      observation: 'the laptop refresh order shipped on monday',
-    },
-  ];
+export const SPACER_EPISODES: readonly {
+  readonly session: string;
+  readonly observation: string;
+}[] = [
+  {
+    session: 'gate-resonance-spacer-one',
+    observation: 'the design review moved to thursday afternoon',
+  },
+  {
+    session: 'gate-resonance-spacer-two',
+    observation: 'the laptop refresh order shipped on monday',
+  },
+];

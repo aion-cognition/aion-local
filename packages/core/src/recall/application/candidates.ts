@@ -1,3 +1,4 @@
+import type { Seed, SeedProvenance } from './seeds.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import type { CurrencyAnnotation } from '../../infrastructure/graph/read-modes.js';
 import type { SeedCandidate } from '../../infrastructure/graph/seed-queries.js';
@@ -5,7 +6,6 @@ import type { ActivatedNode, ActivationSeed } from '../domain/activation.js';
 import type { Measurement } from '../domain/admission.js';
 import type { FusionCandidate, RankedList } from '../domain/fusion.js';
 import { SEED_STRATEGY_METHODS } from '../domain/seed-selection.js';
-import type { Seed, SeedProvenance } from './seeds.js';
 
 /**
  * The adapter between the retrieval stages and fusion: seed selection and spreading
@@ -144,9 +144,7 @@ export function traversalCandidates(input: TraversalInput): readonly FusionCandi
     const hit = input.hydrated.get(node.nodeId);
     if (hit !== undefined) {
       placed.add(node.nodeId);
-      candidates.push(
-        activatedCandidate(node, hit, input.arrivalEvidence?.get(node.nodeId) ?? []),
-      );
+      candidates.push(activatedCandidate(node, hit, input.arrivalEvidence?.get(node.nodeId) ?? []));
     }
   }
 

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+
 import type { SqliteHandle } from './database.js';
 
 /**
@@ -104,7 +105,16 @@ export function enqueueReflectionJob(
        SELECT COALESCE(MAX(lane_seq), 0) + 1 FROM reflection_queue
        WHERE lane = ? AND session_id IS ?
      ))`,
-  ).run(id, jobType, JSON.stringify(payload), new Date().toISOString(), lane, sessionId, lane, sessionId);
+  ).run(
+    id,
+    jobType,
+    JSON.stringify(payload),
+    new Date().toISOString(),
+    lane,
+    sessionId,
+    lane,
+    sessionId,
+  );
   return id;
 }
 
@@ -134,13 +144,14 @@ export function findPendingReflectionJob(
 
 export function getReflectionJob(db: SqliteHandle, id: string): ReflectionJob | undefined {
   const row = db.prepare('SELECT * FROM reflection_queue WHERE id = ?').get(id) as
-    | ReflectionJobRow
-    | undefined;
+    ReflectionJobRow | undefined;
   return row === undefined ? undefined : toReflectionJob(row);
 }
 
 /** Ordered by insertion (rowid), not enqueued_at: same-millisecond bursts would tie on the latter. */
 export function listReflectionJobs(db: SqliteHandle): ReflectionJob[] {
-  const rows = db.prepare('SELECT * FROM reflection_queue ORDER BY rowid ASC').all() as ReflectionJobRow[];
+  const rows = db
+    .prepare('SELECT * FROM reflection_queue ORDER BY rowid ASC')
+    .all() as ReflectionJobRow[];
   return rows.map(toReflectionJob);
 }

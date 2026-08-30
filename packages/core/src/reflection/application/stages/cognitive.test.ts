@@ -2,6 +2,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { CognitiveExtractionStage } from './cognitive.js';
 import { BITEMPORAL_PROPERTIES } from '../../../infrastructure/graph/bitemporal.js';
 import {
   deriveCognitiveNodeId,
@@ -10,11 +12,14 @@ import {
 import { MEMORY_PROPERTIES } from '../../../infrastructure/graph/episodes.js';
 import { fromGraphDateTime } from '../../../infrastructure/graph/values.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
-import type { Provider, StructuredRequest, Vector } from '../../../infrastructure/providers/types.js';
+import type {
+  Provider,
+  StructuredRequest,
+  Vector,
+} from '../../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import type { StageContext } from '../../domain/stage.js';
 import { FakeGraph } from '../../test-support/fake-graph.fixture.js';
-import { CognitiveExtractionStage } from './cognitive.js';
 
 const EPISODE_ID = 'episode-1';
 const NOW = new Date('2026-08-28T09:05:00.000Z');
@@ -71,7 +76,12 @@ function buildContext(
 describe('CognitiveExtractionStage', () => {
   it('skips an episode with no text', async () => {
     const stage = new CognitiveExtractionStage();
-    const outcome = await stage.run(buildContext(stubProvider(async () => ({ nodes: [] })), '   '));
+    const outcome = await stage.run(
+      buildContext(
+        stubProvider(async () => ({ nodes: [] })),
+        '   ',
+      ),
+    );
 
     expect(outcome).toEqual({ status: 'skipped', summary: 'episode has no text to extract from' });
     expect(graph.nodesWithLabel('Goal')).toHaveLength(0);
@@ -81,7 +91,10 @@ describe('CognitiveExtractionStage', () => {
     const stage = new CognitiveExtractionStage();
     const outcome = await stage.run(buildContext(stubProvider(async () => ({ nodes: [] }))));
 
-    expect(outcome).toEqual({ status: 'skipped', summary: 'no cognitive structure found in the episode' });
+    expect(outcome).toEqual({
+      status: 'skipped',
+      summary: 'no cognitive structure found in the episode',
+    });
   });
 
   it('extracts, embeds, and links each node type with its modest per-type fields', async () => {
@@ -104,7 +117,9 @@ describe('CognitiveExtractionStage', () => {
     expect(outcome.status).toBe('ok');
     expect(outcome.summary).toBe('extracted 3 cognitive node(s), 3 new');
     expect(outcome.counts).toEqual({ cognitive: 3 });
-    expect(embedded).toEqual([['ship the worker', 'use SQLite for the queue', 'idempotency needs two levels']]);
+    expect(embedded).toEqual([
+      ['ship the worker', 'use SQLite for the queue', 'idempotency needs two levels'],
+    ]);
 
     const goal = graph.nodesWithLabel('Goal')[0];
     expect(goal?.labels).toEqual(expect.arrayContaining(['Goal', 'Memory', 'AionNode']));
@@ -112,7 +127,9 @@ describe('CognitiveExtractionStage', () => {
     expect(goal?.properties.status).toBe('active');
     expect(goal?.properties.priority).toBe('high');
     expect(goal?.properties[MEMORY_PROPERTIES.contentVector]).toEqual([1, 0.1, 0.2]);
-    expect(fromGraphDateTime(goal?.properties[BITEMPORAL_PROPERTIES.occurredAt])).toEqual(OCCURRED_AT);
+    expect(fromGraphDateTime(goal?.properties[BITEMPORAL_PROPERTIES.occurredAt])).toEqual(
+      OCCURRED_AT,
+    );
 
     const decision = graph.nodesWithLabel('Decision')[0];
     expect(decision?.properties[MEMORY_PROPERTIES.text]).toBe('use SQLite for the queue');
@@ -236,7 +253,9 @@ describe('CognitiveExtractionStage', () => {
   });
 
   it('writes nodes without a content vector when embedding fails, rather than failing the stage', async () => {
-    const generate = async (): Promise<unknown> => ({ nodes: [{ type: 'Concept', text: 'graceful degradation' }] });
+    const generate = async (): Promise<unknown> => ({
+      nodes: [{ type: 'Concept', text: 'graceful degradation' }],
+    });
     const embed: EmbedFn = async () => {
       throw new Error('embed model unavailable');
     };
@@ -259,7 +278,7 @@ describe('CognitiveExtractionStage', () => {
     const stage = new CognitiveExtractionStage();
     const original = graph.executeQuery.bind(graph);
     let calls = 0;
-    graph.executeQuery = async (cypher: string, parameters: Record<string, unknown> = {}) => {
+    graph.executeQuery = async (cypher: string, parameters: Record<string, unknown>) => {
       calls += 1;
       // The first node's write is one transaction (node merge + edge merge); the second
       // node's write fails on its first statement.
@@ -288,7 +307,11 @@ describe('CognitiveExtractionStage', () => {
           return {
             nodes: [
               { type: 'Goal', text: 'Close out the duplicate remittance investigation.' },
-              { type: 'Decision', text: 'use SQLite for the queue', rationale: 'no Redis dependency' },
+              {
+                type: 'Decision',
+                text: 'use SQLite for the queue',
+                rationale: 'no Redis dependency',
+              },
             ],
           };
         }
@@ -312,7 +335,9 @@ describe('CognitiveExtractionStage', () => {
       const generate = async (): Promise<unknown> => {
         calls += 1;
         if (calls === 1) {
-          return { nodes: [{ type: 'Goal', text: 'Migrate the remaining callers before the flag flips.' }] };
+          return {
+            nodes: [{ type: 'Goal', text: 'Migrate the remaining callers before the flag flips.' }],
+          };
         }
         return { restated: [] };
       };
@@ -345,7 +370,9 @@ describe('CognitiveExtractionStage', () => {
       const generate = async (): Promise<unknown> => {
         calls += 1;
         if (calls === 1) {
-          return { nodes: [{ type: 'Plan', text: 'Close out the duplicate remittance investigation.' }] };
+          return {
+            nodes: [{ type: 'Plan', text: 'Close out the duplicate remittance investigation.' }],
+          };
         }
         // Neither validation attempt matches the RestatementOutputSchema shape.
         return { restated: 'not-an-array' };
@@ -356,7 +383,9 @@ describe('CognitiveExtractionStage', () => {
 
       expect(calls).toBe(3);
       expect(outcome.status).toBe('ok');
-      expect(outcome.summary).toBe('every extracted node restated the episode summary and was dropped');
+      expect(outcome.summary).toBe(
+        'every extracted node restated the episode summary and was dropped',
+      );
       expect(outcome.counts).toEqual({ cognitive: 0 });
       expect(graph.nodesWithLabel('Plan')).toHaveLength(0);
     });

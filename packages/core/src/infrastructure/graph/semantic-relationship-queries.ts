@@ -1,4 +1,5 @@
 import type { Driver } from 'neo4j-driver';
+
 import { COGNITIVE_NODE_LABELS, TEXT_NORM_PROPERTY } from './cognitive-queries.js';
 import { runRead, type GraphStatement } from './connection.js';
 import { upsertEdge, type UpsertedEdge } from './edges.js';
@@ -81,8 +82,8 @@ export async function findEpisodeCognitiveNodes(
     { ...statement.parameters, episodeId, labels: [...COGNITIVE_NODE_LABELS] },
     (row) => ({
       id: row.id as string,
-      label: String(row.label ?? ''),
-      text: String(row.text ?? ''),
+      label: (row.label as string | null) ?? '',
+      text: (row.text as string | null) ?? '',
     }),
   );
 }

@@ -8,10 +8,11 @@ import {
   type PackTruncation,
   type StageTimingsMs,
 } from '@aion/protocol';
-import { hashContent } from '../../reflection/domain/content.js';
+
 import type { AdmissionReport } from './admission.js';
 import { GLOSS_LABEL } from './facts.js';
 import type { FusedItem } from './fusion.js';
+import { hashContent } from '../../reflection/domain/content.js';
 
 /**
  * The ranked candidate set becomes the MemoryPack: routed to buckets, capped per bucket, cut
@@ -309,9 +310,7 @@ function honestyNote(input: AssemblePackInput): string | undefined {
   }
   const pending = input.pendingEnrichment ?? 0;
   if (pending > 0) {
-    clauses.push(
-      `${String(pending)} recent episode${pending === 1 ? '' : 's'} not yet enriched`,
-    );
+    clauses.push(`${String(pending)} recent episode${pending === 1 ? '' : 's'} not yet enriched`);
   }
   if (clauses.length === 0) {
     return undefined;

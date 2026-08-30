@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { LOG_FILE_ENV_VAR, LOG_LEVEL_ENV_VAR } from '../logging/logger.js';
+
 import { DEFAULTS } from './defaults.js';
 import { ConfigError, loadConfig } from './load-config.js';
+import { LOG_FILE_ENV_VAR, LOG_LEVEL_ENV_VAR } from '../logging/logger.js';
 
 describe('loadConfig defaults', () => {
   it('returns the built-in defaults when no AION_* vars are set', () => {
@@ -75,7 +76,10 @@ describe('loadConfig override precedence', () => {
   });
 
   it('routes logging overrides through the shared logger env var names', () => {
-    const config = loadConfig({ [LOG_FILE_ENV_VAR]: '/tmp/aion.jsonl', [LOG_LEVEL_ENV_VAR]: 'debug' });
+    const config = loadConfig({
+      [LOG_FILE_ENV_VAR]: '/tmp/aion.jsonl',
+      [LOG_LEVEL_ENV_VAR]: 'debug',
+    });
     expect(config.logging).toEqual({ filePath: '/tmp/aion.jsonl', level: 'debug' });
   });
 
@@ -95,11 +99,15 @@ describe('loadConfig override precedence', () => {
 describe('loadConfig bad values', () => {
   it('rejects a non-numeric value for a numeric leaf, naming the var', () => {
     expect(() => loadConfig({ AION_RECALL_MAX_HOPS: 'not-a-number' })).toThrow(ConfigError);
-    expect(() => loadConfig({ AION_RECALL_MAX_HOPS: 'not-a-number' })).toThrow(/AION_RECALL_MAX_HOPS/);
+    expect(() => loadConfig({ AION_RECALL_MAX_HOPS: 'not-a-number' })).toThrow(
+      /AION_RECALL_MAX_HOPS/,
+    );
   });
 
   it('rejects an out-of-range proportion, naming the var', () => {
-    expect(() => loadConfig({ AION_VECTOR_ADMISSION_FLOOR: '1.5' })).toThrow(/AION_VECTOR_ADMISSION_FLOOR/);
+    expect(() => loadConfig({ AION_VECTOR_ADMISSION_FLOOR: '1.5' })).toThrow(
+      /AION_VECTOR_ADMISSION_FLOOR/,
+    );
   });
 
   it('rejects a value outside its enum, naming the var', () => {
@@ -126,7 +134,7 @@ describe('loadConfig bad values', () => {
       caught = error;
     }
     expect(caught).toBeInstanceOf(ConfigError);
-    const message = (caught as ConfigError).message;
+    const { message } = caught as ConfigError;
     expect(message).toMatch(/AION_RECALL_MAX_HOPS/);
     expect(message).toMatch(/AION_VECTOR_ADMISSION_FLOOR/);
   });
@@ -168,6 +176,8 @@ describe('loadConfig sqlite', () => {
   });
 
   it('takes AION_SQLITE_PATH as an override', () => {
-    expect(loadConfig({ AION_SQLITE_PATH: '/tmp/aion.sqlite' }).sqlite.path).toBe('/tmp/aion.sqlite');
+    expect(loadConfig({ AION_SQLITE_PATH: '/tmp/aion.sqlite' }).sqlite.path).toBe(
+      '/tmp/aion.sqlite',
+    );
   });
 });

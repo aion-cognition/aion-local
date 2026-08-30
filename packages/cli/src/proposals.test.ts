@@ -1,13 +1,14 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import {
   getSupersessionProposal,
   recordEntityMergeProposal,
   recordSupersessionProposal,
   SqliteStore,
 } from '@aion/core';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
 import {
   ConflictingApplyScopeError,
   MissingProposalIdError,
@@ -76,17 +77,17 @@ describe('aion proposals against a seeded review queue', () => {
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'aion-cli-proposals-'));
-    process.env['AION_SQLITE_PATH'] = join(dir, 'aion.sqlite');
-    process.env['AION_LOG_FILE'] = join(dir, 'aion.jsonl');
-    process.env['AION_LOG_LEVEL'] = 'fatal';
+    process.env.AION_SQLITE_PATH = join(dir, 'aion.sqlite');
+    process.env.AION_LOG_FILE = join(dir, 'aion.jsonl');
+    process.env.AION_LOG_LEVEL = 'fatal';
     store = new SqliteStore({ filePath: join(dir, 'aion.sqlite') });
   });
 
   afterEach(() => {
     store.close();
-    delete process.env['AION_SQLITE_PATH'];
-    delete process.env['AION_LOG_FILE'];
-    delete process.env['AION_LOG_LEVEL'];
+    delete process.env.AION_SQLITE_PATH;
+    delete process.env.AION_LOG_FILE;
+    delete process.env.AION_LOG_LEVEL;
     rmSync(dir, { recursive: true, force: true });
   });
 

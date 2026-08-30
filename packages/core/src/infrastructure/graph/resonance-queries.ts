@@ -1,11 +1,12 @@
 import neo4j, { type Driver } from 'neo4j-driver';
-import type { Vector } from '../providers/types.js';
+
 import { runRead } from './connection.js';
 import { CONTEXT_VECTOR_PROPERTY } from './context-vector-queries.js';
 import { BASE_NODE_LABEL } from './labels.js';
 import { readModeFragment, type ReadMode } from './read-modes.js';
 import { fromGraphVector, toGraphVector } from './values.js';
 import { CONTEXT_VECTOR_INDEX } from './vector-indexes.js';
+import type { Vector } from '../providers/types.js';
 
 /**
  * The two reads context resonance makes: the activated set's context vectors, which the
@@ -64,10 +65,15 @@ export async function contextVectors(
     `RETURN n.id AS id, n.${CONTEXT_VECTOR_PROPERTY} AS vector`,
   ].join('\n');
 
-  return runRead(driver, cypher, { ...fragment.parameters, ids: [...new Set(input.ids)] }, (row) => ({
-    id: row.id as string,
-    vector: fromGraphVector(row.vector) ?? [],
-  }));
+  return runRead(
+    driver,
+    cypher,
+    { ...fragment.parameters, ids: [...new Set(input.ids)] },
+    (row) => ({
+      id: row.id as string,
+      vector: fromGraphVector(row.vector) ?? [],
+    }),
+  );
 }
 
 export type ResonantHit = {

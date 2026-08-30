@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
+
 import { BITEMPORAL_PROPERTIES, supersede, writeStampedNode } from './bitemporal.js';
 import { writeCognitiveNode } from './cognitive-queries.js';
 import { upsertEdge } from './edges.js';
@@ -13,12 +13,17 @@ import {
 } from './episode-supersession.js';
 import { runGraphMigrations } from './migrations.js';
 import { SUPERSEDES_TYPE } from './relationships.js';
+import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
 import {
   nodeProperties,
   relationshipsByProvenance,
   supersedingNodeIds,
 } from './test-support/graph-queries.fixture.js';
-import { startNeo4jHarness, stopNeo4jHarness, type Neo4jHarness } from './test-support/neo4j-harness.fixture.js';
+import {
+  startNeo4jHarness,
+  stopNeo4jHarness,
+  type Neo4jHarness,
+} from './test-support/neo4j-harness.fixture.js';
 
 const EMBED_DIMENSION = 8;
 const NOW = new Date('2026-08-28T12:00:00.000Z');
@@ -92,7 +97,10 @@ describe('supersedeEpisode', () => {
     await seedEpisode('ep-shared-old');
     await seedEpisode('ep-shared-other');
     await seedEpisode('ep-shared-new');
-    const shared = await seedDerived('ep-shared-old', 'Feature flags are evaluated at request start.');
+    const shared = await seedDerived(
+      'ep-shared-old',
+      'Feature flags are evaluated at request start.',
+    );
     await upsertEdge(harness.driver, {
       type: 'EXTRACTED_FROM',
       sourceId: shared,
@@ -125,7 +133,9 @@ describe('supersedeEpisode', () => {
       newId: 'ep-repeat-new',
       now: NOW,
     });
-    const closedAt = (await nodeProperties(harness.driver, derived))[BITEMPORAL_PROPERTIES.validUntil];
+    const closedAt = (await nodeProperties(harness.driver, derived))[
+      BITEMPORAL_PROPERTIES.validUntil
+    ];
 
     const repeat = await supersedeEpisode(harness.driver, {
       oldId: 'ep-repeat-old',
@@ -134,9 +144,9 @@ describe('supersedeEpisode', () => {
     });
 
     expect(repeat.propagation.closedIds).toEqual([]);
-    expect((await nodeProperties(harness.driver, derived))[BITEMPORAL_PROPERTIES.validUntil]).toEqual(
-      closedAt,
-    );
+    expect(
+      (await nodeProperties(harness.driver, derived))[BITEMPORAL_PROPERTIES.validUntil],
+    ).toEqual(closedAt);
     expect(await supersedingNodeIds(harness.driver, derived)).toEqual(['ep-repeat-new']);
   }, 120_000);
 

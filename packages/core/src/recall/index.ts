@@ -4,7 +4,11 @@
  */
 
 export { CueCache, extractCues } from './application/cues.js';
-export type { CueExtractionDeps, CueExtractionInput, CueExtractionResult } from './application/cues.js';
+export type {
+  CueExtractionDeps,
+  CueExtractionInput,
+  CueExtractionResult,
+} from './application/cues.js';
 
 export {
   CALIBRATION_TOLERANCE,
@@ -25,11 +29,7 @@ export {
   UNRELATED_SENTENCES,
   WEAK_RELATED_PAIRS,
 } from './application/floors.fixtures.js';
-export type {
-  BatteryEpisode,
-  OnTopicProbe,
-  ScoredPair,
-} from './application/floors.fixtures.js';
+export type { BatteryEpisode, OnTopicProbe, ScoredPair } from './application/floors.fixtures.js';
 
 export {
   SEED_STRATEGIES,
@@ -135,7 +135,12 @@ export type {
 } from './application/resonance.js';
 
 export { handleRecall, readModeFor } from './application/recall.js';
-export type { RecallCompletion, RecallDeps, RecallListener, RecallOptions } from './application/recall.js';
+export type {
+  RecallCompletion,
+  RecallDeps,
+  RecallListener,
+  RecallOptions,
+} from './application/recall.js';
 
 export {
   REINFORCEMENT_TOP_N,

@@ -1,8 +1,14 @@
+import neo4j, { type Driver } from 'neo4j-driver';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import neo4j, { type Driver } from 'neo4j-driver';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { ReflectionDispatch, type ReflectionJobSignal } from './dispatch.js';
+import { ReflectionNotStoredError } from './errors.js';
+import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
+import { LaneAssigner } from './lanes.js';
+import { attachContentVectors, findPendingVectorNodes } from './vectors.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
@@ -23,13 +29,11 @@ import {
 import { openLogger } from '../../infrastructure/logging/logger.js';
 import { OllamaProvider } from '../../infrastructure/providers/ollama-provider.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { listReflectionJobs, type ReflectionJob } from '../../infrastructure/sqlite/reflection-queue.js';
+import {
+  listReflectionJobs,
+  type ReflectionJob,
+} from '../../infrastructure/sqlite/reflection-queue.js';
 import { SessionManager } from '../../session/session-manager.js';
-import { ReflectionDispatch, type ReflectionJobSignal } from './dispatch.js';
-import { ReflectionNotStoredError } from './errors.js';
-import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
-import { LaneAssigner } from './lanes.js';
-import { attachContentVectors, findPendingVectorNodes } from './vectors.js';
 
 /**
  * The episode commits before anything embeds, so a reflection pushed through a total
@@ -169,7 +173,9 @@ describe('reflection intake through a total Ollama outage', () => {
     expect(await edgeTargetId(harness.driver, 'PARTICIPATES_IN', pendingEpisodeId)).toBe(
       PENDING_IDENTITY,
     );
-    expect(await countEdges(harness.driver, 'PARTICIPATES_IN', pendingEpisodeId, PENDING_IDENTITY)).toBe(1);
+    expect(
+      await countEdges(harness.driver, 'PARTICIPATES_IN', pendingEpisodeId, PENDING_IDENTITY),
+    ).toBe(1);
   });
 
   it('queues the integrate job and signals the dispatcher', async () => {
@@ -218,7 +224,10 @@ describe('backfilling the pending vectors once Ollama is back', () => {
     const before = await contentVectorOf(pendingEpisodeId);
 
     const again = await attachContentVectors(harness.driver, live.provider, [
-      { id: pendingEpisodeId, text: (await nodeProperties(harness.driver, pendingEpisodeId)).text as string },
+      {
+        id: pendingEpisodeId,
+        text: (await nodeProperties(harness.driver, pendingEpisodeId)).text as string,
+      },
     ]);
 
     expect(again).toEqual([pendingEpisodeId]);

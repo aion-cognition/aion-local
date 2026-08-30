@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import {
   hashContent,
   prepareEpisode,
@@ -57,7 +58,13 @@ describe('renderEpisodeText', () => {
   it('serializes structured tool input and output canonically', () => {
     const text = renderEpisodeText({
       tool_executions: [
-        { tool: 'http', input: { url: 'x', method: 'GET' }, status: 'ok', output: { code: 200 }, duration_ms: 12 },
+        {
+          tool: 'http',
+          input: { url: 'x', method: 'GET' },
+          status: 'ok',
+          output: { code: 200 },
+          duration_ms: 12,
+        },
       ],
     });
 

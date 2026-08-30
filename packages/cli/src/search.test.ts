@@ -1,5 +1,6 @@
 import type { Seed } from '@aion/core';
 import { describe, expect, it } from 'vitest';
+
 import {
   InvalidTimestampError,
   MissingSearchQueryError,
@@ -16,11 +17,17 @@ function collector(): { lines: string[]; write: (line: string) => void } {
 
 describe('parseSearchFlags', () => {
   it('reads a plain query with no flags', () => {
-    expect(parseSearchFlags(['webhooks ingestion'])).toEqual({ query: 'webhooks ingestion', json: false });
+    expect(parseSearchFlags(['webhooks ingestion'])).toEqual({
+      query: 'webhooks ingestion',
+      json: false,
+    });
   });
 
   it('joins an unquoted multi-word query back into one string', () => {
-    expect(parseSearchFlags(['webhooks', 'ingestion'])).toEqual({ query: 'webhooks ingestion', json: false });
+    expect(parseSearchFlags(['webhooks', 'ingestion'])).toEqual({
+      query: 'webhooks ingestion',
+      json: false,
+    });
   });
 
   it('reads --json and --as-of/--knew-at as ISO timestamps', () => {

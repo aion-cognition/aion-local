@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import { renderStats, type StatsSnapshot } from './stats.js';
 
 function collector(): { lines: string[]; write: (line: string) => void } {
@@ -25,13 +26,20 @@ const SNAPSHOT: StatsSnapshot = {
     entityMergeProposalsOpen: 0,
   },
   plasticity: {
-    reinforcement: { signalsApplied: 10, pairsApplied: 4, edgesUpdated: 4, lastRunAt: '2026-08-27T00:00:00.000Z' },
+    reinforcement: {
+      signalsApplied: 10,
+      pairsApplied: 4,
+      edgesUpdated: 4,
+      lastRunAt: '2026-08-27T00:00:00.000Z',
+    },
     reinforcementDropped: 0,
     reinforcementQueueDepth: 2,
     decay: { edgesScanned: 20, edgesDecayed: 3, lastRunAt: '2026-08-27T00:00:00.000Z' },
   },
   edgeWeights: {
-    CO_OCCURS: { p50: 0.4, min: 0.1, max: 0.9, count: 5 },
+    SIMILAR: undefined,
+    CO_OCCURS: { p50: 0.4, min: 0.1, p10: 0.15, p90: 0.85, max: 0.9, count: 5 },
+    RELATED_TO: undefined,
   },
   cadence: { totalCalls: 20, emptyPacks: 2 },
   sessionsServed: 4,

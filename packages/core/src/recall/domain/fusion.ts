@@ -1,7 +1,5 @@
 import type { Rationale } from '@aion/protocol';
-import type { Currency, SupersededBy } from '../../infrastructure/graph/read-modes.js';
-import type { Vector } from '../../infrastructure/providers/types.js';
-import { hashContent } from '../../reflection/domain/content.js';
+
 import {
   absoluteRelevance,
   admitsOnEvidence,
@@ -11,6 +9,9 @@ import {
   type Measurement,
 } from './admission.js';
 import { applyClusterCap, mmrOrder } from './ranking.js';
+import type { Currency, SupersededBy } from '../../infrastructure/graph/read-modes.js';
+import type { Vector } from '../../infrastructure/providers/types.js';
+import { hashContent } from '../../reflection/domain/content.js';
 
 /**
  * Each retrieval leg hands over its own ranked list; this module turns them into one ordered

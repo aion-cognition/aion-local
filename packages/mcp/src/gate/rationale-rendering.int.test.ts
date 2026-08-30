@@ -1,6 +1,7 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { countQueueJobs, findEpisodeCognitiveNodes } from '@aion/core';
 import { nodeProperties } from '@aion/core/infrastructure/graph/test-support/graph-queries.fixture.js';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import { GateSubstrate, waitFor } from './gate-substrate.fixture.js';
 import { heldOutCase } from './held-out-recall.fixture.js';
 
@@ -58,8 +59,8 @@ beforeAll(async () => {
   const decision = cognitive.find((node) => node.label === 'Decision');
   decisionId = decision?.id ?? '';
   if (decisionId !== '') {
-    const properties = await nodeProperties(substrate.driver, decisionId);
-    storedReason = String(properties.rationale ?? '');
+    const { rationale } = await nodeProperties(substrate.driver, decisionId);
+    storedReason = typeof rationale === 'string' ? rationale : '';
   }
 }, 600_000);
 
@@ -75,13 +76,12 @@ describe('a decision node renders the reason behind it', () => {
     );
 
     console.log(
-      `decision ${decisionId.slice(0, 8)} stored reason: ${storedReason}\n` +
-        result.items
-          .map(
-            (item) =>
-              `    rank ${String(item.rank)} why=${String(item.why)} ${item.content.slice(0, 60)}`,
-          )
-          .join('\n'),
+      `decision ${decisionId.slice(0, 8)} stored reason: ${storedReason}\n${result.items
+        .map(
+          (item) =>
+            `    rank ${String(item.rank)} why=${String(item.why)} ${item.content.slice(0, 60)}`,
+        )
+        .join('\n')}`,
     );
 
     // Extraction wrote a reason for the choice, so the pack has to carry that node and the

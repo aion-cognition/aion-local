@@ -1,8 +1,9 @@
+import type { Driver } from 'neo4j-driver';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { Driver } from 'neo4j-driver';
+
 import {
   MANAGED_NEO4J_URI,
   Neo4jGdsUnavailableError,
@@ -46,7 +47,7 @@ describe('waitForBoltReady', () => {
 });
 
 describe('verifyGdsAvailable', () => {
-  function fakeDriver(records: Array<{ gdsVersion?: string }>): Driver {
+  function fakeDriver(records: { gdsVersion?: string }[]): Driver {
     return {
       executeQuery: async () => ({
         records: records.map((row) => ({
@@ -85,7 +86,10 @@ describe('ensureNeo4jPassword', () => {
     dir = mkdtempSync(join(tmpdir(), 'aion-provision-'));
     envPath = join(dir, '.env');
     templatePath = join(dir, '.env.example');
-    writeFileSync(templatePath, 'AION_OLLAMA_URL=http://host.docker.internal:11434\nAION_NEO4J_PASSWORD=\n');
+    writeFileSync(
+      templatePath,
+      'AION_OLLAMA_URL=http://host.docker.internal:11434\nAION_NEO4J_PASSWORD=\n',
+    );
   });
 
   afterEach(() => {
@@ -109,7 +113,9 @@ describe('ensureNeo4jPassword', () => {
     writeFileSync(envPath, 'AION_NEO4J_PASSWORD=already-set\nAION_MCP_PORT=8765\n');
     const password = ensureNeo4jPassword(envPath, templatePath);
     expect(password).toBe('already-set');
-    expect(readFileSync(envPath, 'utf8')).toBe('AION_NEO4J_PASSWORD=already-set\nAION_MCP_PORT=8765\n');
+    expect(readFileSync(envPath, 'utf8')).toBe(
+      'AION_NEO4J_PASSWORD=already-set\nAION_MCP_PORT=8765\n',
+    );
   });
 
   it('generates once and returns the same value on a second call', () => {

@@ -10,6 +10,7 @@
     "build": "tsc -b",
     "build:watch": "tsc -b --watch",
     "clean": "tsc -b --clean",
+    "typecheck:all": "tsc -p tsconfig.tests.json",
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",

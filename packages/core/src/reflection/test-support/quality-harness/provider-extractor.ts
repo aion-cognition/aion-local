@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import type { ChatMessage, JsonSchema, Provider } from '../../../infrastructure/providers/types.js';
+
 import {
   buildCognitiveExtractionMessages,
   buildEntityExtractionMessages,
@@ -8,7 +8,12 @@ import {
   ENTITY_EXTRACTION_JSON_SCHEMA,
   EntityExtractionOutputSchema,
 } from './prompts.js';
-import type { CognitiveExtractionResult, EntityExtractionResult, ExtractorOutcome } from './types.js';
+import type {
+  CognitiveExtractionResult,
+  EntityExtractionResult,
+  ExtractorOutcome,
+} from './types.js';
+import type { ChatMessage, JsonSchema, Provider } from '../../../infrastructure/providers/types.js';
 
 /**
  * qwen3:8b with thinking on measured 10-44s with occasional non-returns; reflection's
@@ -44,7 +49,9 @@ async function runStructuredExtraction<T>(
 ): Promise<ExtractorOutcome<T>> {
   const startedAt = Date.now();
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), deps.timeoutMs ?? DEFAULT_GENERATE_TIMEOUT_MS);
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, deps.timeoutMs ?? DEFAULT_GENERATE_TIMEOUT_MS);
   try {
     const data = await deps.generate({
       model: deps.model,
@@ -56,7 +63,11 @@ async function runStructuredExtraction<T>(
     const parsed = outputSchema.safeParse(data);
     const latencyMs = Date.now() - startedAt;
     if (!parsed.success) {
-      return { ok: false, error: `invalid extraction output: ${formatZodError(parsed.error)}`, latencyMs };
+      return {
+        ok: false,
+        error: `invalid extraction output: ${formatZodError(parsed.error)}`,
+        latencyMs,
+      };
     }
     return { ok: true, value: parsed.data, latencyMs };
   } catch (error) {

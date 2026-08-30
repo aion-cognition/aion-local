@@ -1,5 +1,5 @@
 import type { Driver } from 'neo4j-driver';
-import type { Vector } from '../providers/types.js';
+
 import { ACCESS_COUNT_PROPERTY } from './access-tracking.js';
 import { BITEMPORAL_PROPERTIES, stampNew } from './bitemporal.js';
 import { inWriteTransaction, runRead, runWrite, type GraphStatement } from './connection.js';
@@ -15,7 +15,14 @@ import {
   LAST_ACCESSED_PROPERTY,
   STRUCTURAL_PROPERTY,
 } from './seed-queries.js';
-import { toGraphDateTime, toGraphParameters, toGraphVector, type GraphProperties, type Row } from './values.js';
+import {
+  toGraphDateTime,
+  toGraphParameters,
+  toGraphVector,
+  type GraphProperties,
+  type Row,
+} from './values.js';
+import type { Vector } from '../providers/types.js';
 
 /**
  * The writes that turn an extraction into canonical Entity nodes, the edges that tie them
@@ -103,7 +110,7 @@ export async function findStructuralEntitiesByName(
     (row) => ({
       id: row.id as string,
       nameNorm: row.name_norm as string,
-      type: String(row.type ?? ''),
+      type: (row.type as string | null) ?? '',
       hasNameVector: row.has_name_vec === true,
     }),
   );
@@ -391,8 +398,8 @@ export async function findEpisodeEntities(
   const statement = episodeEntitiesStatement();
   return runRead(driver, statement.cypher, { ...statement.parameters, episodeId }, (row) => ({
     id: row.id as string,
-    name: String(row.name ?? ''),
-    nameNorm: String(row.name_norm ?? ''),
-    type: String(row.type ?? ''),
+    name: (row.name as string | null) ?? '',
+    nameNorm: (row.name_norm as string | null) ?? '',
+    type: (row.type as string | null) ?? '',
   }));
 }

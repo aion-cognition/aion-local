@@ -18,6 +18,7 @@ import {
   type SubjectSibling,
   type SupersessionProposal,
 } from '@aion/core';
+
 import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
 
 /**
@@ -118,7 +119,12 @@ export function parseProposalFlags(argv: readonly string[]): ProposalFlags {
     throw new MissingProposalIdError(first);
   }
 
-  return { subcommand: first, ...(id === undefined ? {} : { id }), all, scope: applyScope(claimOnly, episode) };
+  return {
+    subcommand: first,
+    ...(id === undefined ? {} : { id }),
+    all,
+    scope: applyScope(claimOnly, episode),
+  };
 }
 
 function applyScope(claimOnly: boolean, episode: boolean): ApplyScope {
@@ -182,7 +188,9 @@ function isOpen(row: { readonly resolvedAt: string | null }): boolean {
 }
 
 function runLs(deps: ProposalDeps, flags: ProposalFlags): number {
-  const supersessions = listSupersessionProposals(deps.db).filter((row) => flags.all || isOpen(row));
+  const supersessions = listSupersessionProposals(deps.db).filter(
+    (row) => flags.all || isOpen(row),
+  );
   const merges = listEntityMergeProposals(deps.db).filter((row) => flags.all || isOpen(row));
   renderSupersessions(supersessions, deps.write);
   renderMerges(merges, deps.write);

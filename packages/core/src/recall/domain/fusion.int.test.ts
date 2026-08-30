@@ -2,7 +2,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import type { AdmissionPolicy } from './admission.js';
+import { fuse, type FusionCandidate, type RankedList } from './fusion.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
 import { writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
@@ -20,7 +22,6 @@ import { toGraphVector } from '../../infrastructure/graph/values.js';
 import { OllamaProvider } from '../../infrastructure/providers/ollama-provider.js';
 import type { Vector } from '../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { fuse, type FusionCandidate, type RankedList } from './fusion.js';
 
 /**
  * The near-duplicate repro against a live substrate: a burst cluster written with a real
@@ -127,8 +128,12 @@ describe('the near-duplicate cluster cap against real embeddings', () => {
       vectors,
     });
 
-    const burstIds = new Set(candidates.slice(0, BURST_TEXT.length).map((candidate) => candidate.id));
-    const distinctIds = new Set(candidates.slice(BURST_TEXT.length).map((candidate) => candidate.id));
+    const burstIds = new Set(
+      candidates.slice(0, BURST_TEXT.length).map((candidate) => candidate.id),
+    );
+    const distinctIds = new Set(
+      candidates.slice(BURST_TEXT.length).map((candidate) => candidate.id),
+    );
     const survivingBurst = result.items.filter((item) => burstIds.has(item.id));
     const survivingDistinct = result.items.filter((item) => distinctIds.has(item.id));
 

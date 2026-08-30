@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
 import { seedEntity, seedFactNode, SupersessionTestBed } from './supersession.fixture.js';
 import { SupersessionStage } from './supersession.js';
 

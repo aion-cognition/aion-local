@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import { findHighEntropyTokens, shannonEntropy } from './entropy.js';
 
 describe('shannonEntropy', () => {

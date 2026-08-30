@@ -2,6 +2,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+
+import { sweepEdgeDecay } from './decay.js';
+import { flushReinforcementQueue } from './flush.js';
+import { plasticityCounters, plasticitySnapshot } from './metrics.js';
 import { writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
 import { upsertEdge } from '../../infrastructure/graph/edges.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
@@ -14,9 +18,6 @@ import {
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { enqueueReinforcementSignal } from '../../infrastructure/sqlite/reinforcement-queue.js';
-import { sweepEdgeDecay } from './decay.js';
-import { flushReinforcementQueue } from './flush.js';
-import { plasticityCounters, plasticitySnapshot } from './metrics.js';
 
 const EMBED_DIMENSION = 8;
 const NOW = new Date('2026-03-01T00:00:00.000Z');
@@ -88,7 +89,13 @@ describe('plasticity metrics against the graph', () => {
     await seedEntity('cycle-d');
     await seedEdge('SIMILAR', 'cycle-a', 'cycle-b', 0.5);
     await seedEdge('SIMILAR', 'cycle-c', 'cycle-d', 0.5, 30);
-    enqueueReinforcementSignal(db, 'cycle-a', 'cycle-b', RECALL_TRIGGER, '2026-02-28T00:00:00.000Z');
+    enqueueReinforcementSignal(
+      db,
+      'cycle-a',
+      'cycle-b',
+      RECALL_TRIGGER,
+      '2026-02-28T00:00:00.000Z',
+    );
 
     expect(plasticityCounters(db).reinforcementQueueDepth).toBe(1);
 

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { buildEdgeWeightDistribution, EDGE_WEIGHT_DISTRIBUTION_TYPES } from './edge-weight-distribution.js';
+
+import {
+  buildEdgeWeightDistribution,
+  EDGE_WEIGHT_DISTRIBUTION_TYPES,
+} from './edge-weight-distribution.js';
 import { BASE_NODE_LABEL } from './labels.js';
 
 describe('bounded edge weight distribution', () => {
@@ -15,7 +19,7 @@ describe('bounded edge weight distribution', () => {
   it('scopes the read to the three named types', () => {
     const { cypher, parameters } = buildEdgeWeightDistribution();
     expect(cypher).toContain('WHERE type(r) IN $types');
-    expect(parameters['types']).toEqual([...EDGE_WEIGHT_DISTRIBUTION_TYPES]);
+    expect(parameters.types).toEqual([...EDGE_WEIGHT_DISTRIBUTION_TYPES]);
   });
 
   it('skips an edge onto a forgotten node at either end', () => {

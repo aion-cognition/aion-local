@@ -1,4 +1,5 @@
 import type { Driver } from 'neo4j-driver';
+
 import { runWriteWithCounters, type GraphStatement } from './connection.js';
 import { BASE_NODE_LABEL } from './labels.js';
 import { LAST_ACCESSED_PROPERTY } from './seed-queries.js';

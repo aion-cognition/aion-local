@@ -1,7 +1,3 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import type { MemoryPack, MemoryPackItem, ReflectionOutput } from '@aion/protocol';
 import {
   bootstrapBackbone,
   CueCache,
@@ -33,6 +29,11 @@ import {
   type Neo4jHarness,
 } from '@aion/core/infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { testGenerationProvider } from '@aion/core/infrastructure/providers/test-support/generation-provider.js';
+import type { MemoryPack, MemoryPackItem, ReflectionOutput } from '@aion/protocol';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { reflectionStages, workerOptions } from '../bootstrap.js';
 
 /**
@@ -228,10 +229,14 @@ export class GateSubstrate {
       },
     };
 
-    const pack = await handleRecall(deps, { query }, {
-      identity: options.identity,
-      ...(options.now === undefined ? {} : { now: options.now }),
-    });
+    const pack = await handleRecall(
+      deps,
+      { query },
+      {
+        identity: options.identity,
+        ...(options.now === undefined ? {} : { now: options.now }),
+      },
+    );
     if (completion === undefined) {
       throw new Error('recall completed without reporting an admission decision');
     }
@@ -273,7 +278,9 @@ export async function waitFor(
     if (await ready()) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
   throw new Error(`timed out waiting for ${label}`);
 }

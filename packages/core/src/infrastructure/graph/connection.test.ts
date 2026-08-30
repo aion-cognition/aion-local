@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
+
 import { GraphConnection } from './connection.js';
 
-const driverFactory = vi.fn(() => ({ close: vi.fn() }));
+const driverFactory = vi.fn((..._args: unknown[]) => ({ close: vi.fn() }));
 
 vi.mock('neo4j-driver', () => ({
   default: {
@@ -40,6 +41,6 @@ describe('the driver timeouts a tool call inherits', () => {
     new GraphConnection({ uri: 'bolt://neo4j:7687', password: 'secret' });
 
     const options = driverFactory.mock.calls[0]?.[2] as Record<string, number>;
-    expect(options['connectionAcquisitionTimeout']).toBeGreaterThan(options['connectionTimeout'] ?? 0);
+    expect(options.connectionAcquisitionTimeout).toBeGreaterThan(options.connectionTimeout ?? 0);
   });
 });

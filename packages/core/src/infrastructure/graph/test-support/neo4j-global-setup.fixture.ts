@@ -32,9 +32,12 @@ export async function setup(): Promise<void> {
 }
 
 export async function teardown(): Promise<void> {
-  if (container === undefined) {
+  const current = container;
+  if (current === undefined) {
     return;
   }
-  await removeNeo4jContainer(container.containerName);
+  // Cleared before the await, not after: a `setup()` that races this teardown then hands
+  // out a fresh container instead of losing its assignment to this function's own cleanup.
   container = undefined;
+  await removeNeo4jContainer(current.containerName);
 }

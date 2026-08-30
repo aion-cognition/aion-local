@@ -90,7 +90,9 @@ export function groupDuplicates(pairs: readonly DuplicatePair[]): string[][] {
 export function selectCanonical<T extends DedupCandidate>(members: readonly T[]): T {
   const structural = members.filter((member) => member.isStructural);
   const pool = structural.length > 0 ? structural : members;
-  return pool.reduce((strongest, candidate) => (isStronger(candidate, strongest) ? candidate : strongest));
+  return pool.reduce((strongest, candidate) =>
+    isStronger(candidate, strongest) ? candidate : strongest,
+  );
 }
 
 function isStronger(candidate: DedupCandidate, current: DedupCandidate): boolean {

@@ -1,6 +1,5 @@
 import neo4j, { type Driver } from 'neo4j-driver';
-import type { Vector } from '../providers/types.js';
-import { foldName } from '../providers/unicode-fold.js';
+
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { runRead } from './connection.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
@@ -14,6 +13,8 @@ import {
 } from './read-modes.js';
 import { fromGraphVector, toGraphVector, type Row } from './values.js';
 import { CONTENT_VECTOR_INDEX, CONTEXT_VECTOR_INDEX } from './vector-indexes.js';
+import type { Vector } from '../providers/types.js';
+import { foldName } from '../providers/unicode-fold.js';
 
 /**
  * Four seed strategies, one query each, plus the two reads recall makes against ids it
@@ -163,7 +164,7 @@ function candidateProjection(nodeVar: string, fragment: ReadFragment): string {
 function mapCandidate(row: Row): SeedCandidate {
   const occurredAt = row.occurred_at;
   const sourceEpisodeId = row.source_episode_id;
-  const why = row.why;
+  const { why } = row;
   return {
     id: row.id as string,
     labels: (row.labels as string[] | null) ?? [],
@@ -442,10 +443,15 @@ export async function contentVectors(
     `RETURN n.id AS id, n.${MEMORY_PROPERTIES.contentVector} AS vector`,
   ].join('\n');
 
-  return runRead(driver, cypher, { ...fragment.parameters, ids: [...new Set(input.ids)] }, (row) => ({
-    id: row.id as string,
-    vector: fromGraphVector(row.vector) ?? [],
-  }));
+  return runRead(
+    driver,
+    cypher,
+    { ...fragment.parameters, ids: [...new Set(input.ids)] },
+    (row) => ({
+      id: row.id as string,
+      vector: fromGraphVector(row.vector) ?? [],
+    }),
+  );
 }
 
 export type RecencySeedInput = {

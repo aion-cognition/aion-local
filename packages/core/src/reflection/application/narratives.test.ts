@@ -2,7 +2,16 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  closeSessionNarrative,
+  SessionNarrativeCloser,
+  SessionNarrativeStage,
+  sweepIdleSessions,
+  type NarrativeDeps,
+} from './narratives.js';
 import { BITEMPORAL_PROPERTIES } from '../../infrastructure/graph/bitemporal.js';
+import type { EpisodeContext } from '../../infrastructure/graph/episode-context.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
 import {
   DERIVES_FROM_TYPE,
@@ -12,18 +21,10 @@ import {
 import { openLogger } from '../../infrastructure/logging/logger.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider, Vector } from '../../infrastructure/providers/types.js';
-import { coverageKey, narrativeNodeId } from '../domain/narrative.js';
-import type { EpisodeContext } from '../../infrastructure/graph/episode-context.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { coverageKey, narrativeNodeId } from '../domain/narrative.js';
 import type { StageContext } from '../domain/stage.js';
 import { NarrativeFakeGraph } from '../test-support/narrative-graph.fixture.js';
-import {
-  closeSessionNarrative,
-  SessionNarrativeCloser,
-  SessionNarrativeStage,
-  sweepIdleSessions,
-  type NarrativeDeps,
-} from './narratives.js';
 
 const SESSION_ID = 'mcp-transport-session-1';
 const OTHER_SESSION_ID = 'mcp-transport-session-2';
@@ -44,7 +45,7 @@ let graph: NarrativeFakeGraph;
 let dataDir: string;
 let logger: Logger;
 let embed: ReturnType<typeof vi.fn>;
-let generate: ReturnType<typeof vi.fn>;
+let generate: ReturnType<typeof vi.fn<Provider['generate']>>;
 let deps: NarrativeDeps;
 
 function fakeVectors(texts: readonly string[]): Vector[] {
@@ -66,7 +67,11 @@ function seedDecision(id: string, episodeId: string, text: string): void {
   graph.seedEdge('EXTRACTED_FROM', id, episodeId);
 }
 
-function narrativeNode(): { id: string; labels: readonly string[]; properties: Record<string, unknown> } {
+function narrativeNode(): {
+  id: string;
+  labels: readonly string[];
+  properties: Record<string, unknown>;
+} {
   const node = graph.nodesWithLabel('Narrative')[0];
   expect(node).toBeDefined();
   return node as { id: string; labels: readonly string[]; properties: Record<string, unknown> };
@@ -143,9 +148,9 @@ describe('session close', () => {
       ['episode-1', node.id],
       ['episode-2', node.id],
     ]);
-    expect(graph.edgesOfType(DERIVES_FROM_TYPE).map((edge) => [edge.sourceId, edge.targetId])).toEqual(
-      [[node.id, SESSION_ID]],
-    );
+    expect(
+      graph.edgesOfType(DERIVES_FROM_TYPE).map((edge) => [edge.sourceId, edge.targetId]),
+    ).toEqual([[node.id, SESSION_ID]]);
   });
 
   it('embeds the narrative body, which is the property a later backfill would embed', async () => {
@@ -242,7 +247,9 @@ describe('regeneration', () => {
     expect(second.status).toBe('created');
     expect(second.version).toBe(2);
     expect(second.narrativeId).not.toBe(first.narrativeId);
-    expect(graph.nodes.get(first.narrativeId as string)?.properties[BITEMPORAL_PROPERTIES.validUntil]).toBeDefined();
+    expect(
+      graph.nodes.get(first.narrativeId!)?.properties[BITEMPORAL_PROPERTIES.validUntil],
+    ).toBeDefined();
     expect(graph.edgesOfType('SUPERSEDES').map((edge) => [edge.sourceId, edge.targetId])).toEqual([
       [second.narrativeId, first.narrativeId],
     ]);
@@ -262,11 +269,11 @@ describe('versioning', () => {
     expect(second.version).toBe(2);
     expect(second.narrativeId).not.toBe(first.narrativeId);
 
-    const closed = graph.nodes.get(first.narrativeId as string);
+    const closed = graph.nodes.get(first.narrativeId!);
     expect(closed?.properties[BITEMPORAL_PROPERTIES.validUntil]).toBeDefined();
-    expect(
-      graph.edgesOfType('SUPERSEDES').map((edge) => [edge.sourceId, edge.targetId]),
-    ).toEqual([[second.narrativeId, first.narrativeId]]);
+    expect(graph.edgesOfType('SUPERSEDES').map((edge) => [edge.sourceId, edge.targetId])).toEqual([
+      [second.narrativeId, first.narrativeId],
+    ]);
 
     const standing = graph
       .nodesWithLabel('Narrative')
@@ -399,6 +406,9 @@ describe('the transport close hook', () => {
   it('narrates the closed session without the caller awaiting it', async () => {
     const closer = new SessionNarrativeCloser(deps);
 
+    // A void return, not a promise, is the guarantee under test: a caller that never awaits
+    // this must never end up awaiting the narrative write it schedules.
+    // eslint-disable-next-line @typescript-eslint/no-confusing-void-expression -- see comment above
     expect(closer.onSessionClosed(SESSION_ID)).toBeUndefined();
     await closer.whenIdle();
 

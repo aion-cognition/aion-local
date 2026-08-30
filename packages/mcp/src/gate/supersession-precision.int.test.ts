@@ -1,4 +1,3 @@
-import { beforeAll, describe, expect, it } from 'vitest';
 import {
   DEFAULTS,
   judgeContradiction,
@@ -11,6 +10,8 @@ import {
   DEFAULT_SUPERSEDE_AUTO_CONFIDENCE,
   DEFAULT_SUPERSEDE_MODE,
 } from '@aion/core/reflection/application/stages/supersession.js';
+import { beforeAll, describe, expect, it } from 'vitest';
+
 import {
   casesOfClass,
   PRECISION_BATTERY,
@@ -109,7 +110,7 @@ beforeAll(async () => {
     rows.push({
       entry,
       judgment,
-      correct: judgment !== undefined && judgment.contradicts === entry.contradicts,
+      correct: judgment?.contradicts === entry.contradicts,
     });
   }
   scored = rows;
@@ -178,8 +179,12 @@ describe('the 24-case supersession battery', () => {
     const confidences = claimed
       .map((row) => row.judgment?.confidence ?? 0)
       .sort((left, right) => left - right);
-    const rightOnes = claimed.filter((row) => row.correct).map((row) => row.judgment?.confidence ?? 0);
-    const wrongOnes = claimed.filter((row) => !row.correct).map((row) => row.judgment?.confidence ?? 0);
+    const rightOnes = claimed
+      .filter((row) => row.correct)
+      .map((row) => row.judgment?.confidence ?? 0);
+    const wrongOnes = claimed
+      .filter((row) => !row.correct)
+      .map((row) => row.judgment?.confidence ?? 0);
     const distinct = [...new Set(confidences.map((value) => value.toFixed(2)))];
     const lowestRight = Math.min(...rightOnes, Number.POSITIVE_INFINITY);
     const highestWrong = Math.max(...wrongOnes, Number.NEGATIVE_INFINITY);
@@ -190,8 +195,9 @@ describe('the 24-case supersession battery', () => {
         `min ${confidences[0]?.toFixed(2) ?? 'n/a'}, ` +
         `max ${confidences[confidences.length - 1]?.toFixed(2) ?? 'n/a'}, ` +
         `distinct values [${distinct.join(', ')}], ` +
-        `at or above the ${String(DEFAULT_SUPERSEDE_AUTO_CONFIDENCE)} gate ` +
-        `${String(confidences.filter((value) => value >= DEFAULT_SUPERSEDE_AUTO_CONFIDENCE).length)}`,
+        `at or above the ${String(DEFAULT_SUPERSEDE_AUTO_CONFIDENCE)} gate ${String(
+          confidences.filter((value) => value >= DEFAULT_SUPERSEDE_AUTO_CONFIDENCE).length,
+        )}`,
     );
     console.log(
       `separation: lowest correct ${rightOnes.length === 0 ? 'n/a' : lowestRight.toFixed(2)}, ` +
@@ -208,9 +214,14 @@ describe('the 24-case supersession battery', () => {
     const denominator = truePositives + falsePositives;
     const precision = denominator === 0 ? 0 : truePositives / denominator;
     const claimed = positives(scored);
-    const lowestRight = Math.min(...claimed.filter((row) => row.correct).map((row) => row.judgment?.confidence ?? 0));
-    const highestWrong = Math.max(...claimed.filter((row) => !row.correct).map((row) => row.judgment?.confidence ?? 0));
-    const separable = Number.isFinite(lowestRight) && Number.isFinite(highestWrong) && lowestRight > highestWrong;
+    const lowestRight = Math.min(
+      ...claimed.filter((row) => row.correct).map((row) => row.judgment?.confidence ?? 0),
+    );
+    const highestWrong = Math.max(
+      ...claimed.filter((row) => !row.correct).map((row) => row.judgment?.confidence ?? 0),
+    );
+    const separable =
+      Number.isFinite(lowestRight) && Number.isFinite(highestWrong) && lowestRight > highestWrong;
 
     console.log(
       `auto-mode rule: precision ${precision.toFixed(3)} against the 0.9 bar, ` +

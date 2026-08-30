@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
 import { openSqliteHandle } from './database.js';
 import { enqueueReflectionJob, listReflectionJobs } from './reflection-queue.js';
 
@@ -112,7 +113,9 @@ describe('two processes claiming against one substrate', () => {
     db.close();
     expect(remaining).toHaveLength(totalJobs);
     for (const job of remaining) {
-      expect(job.claimedBy === resultA.claimantId || job.claimedBy === resultB.claimantId).toBe(true);
+      expect(job.claimedBy === resultA.claimantId || job.claimedBy === resultB.claimantId).toBe(
+        true,
+      );
     }
   }, 30_000);
 });

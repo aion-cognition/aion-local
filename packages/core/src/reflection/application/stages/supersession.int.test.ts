@@ -2,13 +2,11 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../../infrastructure/graph/backbone.js';
 import { writeCognitiveNode } from '../../../infrastructure/graph/cognitive-queries.js';
-import {
-  linkEntityMentions,
-  mergeEntities,
-} from '../../../infrastructure/graph/entity-queries.js';
+import { linkEntityMentions, mergeEntities } from '../../../infrastructure/graph/entity-queries.js';
 import { loadEpisodeContext } from '../../../infrastructure/graph/episode-context.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import { withCurrency } from '../../../infrastructure/graph/read-modes.js';
@@ -115,7 +113,11 @@ function stubProvider(confidence: number, calls: StructuredRequest[]): Provider 
     embed: async () => [],
     generate: async (req: StructuredRequest) => {
       calls.push(req);
-      return { contradicts: true, confidence, rationale: 'the later statement reverses the earlier one' };
+      return {
+        contradicts: true,
+        confidence,
+        rationale: 'the later statement reverses the earlier one',
+      };
     },
   };
 }
@@ -195,6 +197,11 @@ beforeAll(async () => {
       ],
       now,
     );
+    // `as const` narrows every current fixture entry's flag to the literal `true`, and a
+    // local widening (a typed variable, a cast) does not survive TS's own control-flow
+    // narrowing back to that literal. The field is a genuine boolean: some future pair
+    // exercises the KNN-only widener leg with this set to `false`.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- see comment above
     const mentionedBy = pair.priorNamesSubject
       ? [priorEpisode.episode_id, nextEpisode.episode_id]
       : [nextEpisode.episode_id];
@@ -279,8 +286,9 @@ describe('SupersessionStage against a live graph', () => {
     expect(proposal).toMatchObject({ newId: pair.nextId, episodeId: pair.nextEpisodeId });
 
     const hits = await vectorSeeds(harness.driver, {
-      vector: (await contentVectors(harness.driver, { ids: [pair.nextId], mode: withCurrency() }))[0]!
-        .vector,
+      vector: (
+        await contentVectors(harness.driver, { ids: [pair.nextId], mode: withCurrency() })
+      )[0]!.vector,
       limit: 25,
       mode: withCurrency(),
     });
@@ -325,8 +333,9 @@ describe('SupersessionStage against a live graph', () => {
     expect(outcome.counts?.supersessions).toBe(0);
 
     const hits = await vectorSeeds(harness.driver, {
-      vector: (await contentVectors(harness.driver, { ids: [distractorId], mode: withCurrency() }))[0]!
-        .vector,
+      vector: (
+        await contentVectors(harness.driver, { ids: [distractorId], mode: withCurrency() })
+      )[0]!.vector,
       limit: 25,
       mode: withCurrency(),
     });
@@ -371,8 +380,9 @@ describe('SupersessionStage against a live graph', () => {
     });
 
     const hits = await vectorSeeds(harness.driver, {
-      vector: (await contentVectors(harness.driver, { ids: [pair.nextId], mode: withCurrency() }))[0]!
-        .vector,
+      vector: (
+        await contentVectors(harness.driver, { ids: [pair.nextId], mode: withCurrency() })
+      )[0]!.vector,
       limit: 25,
       mode: withCurrency(),
     });

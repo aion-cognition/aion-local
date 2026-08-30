@@ -1,4 +1,5 @@
 import type { Driver } from 'neo4j-driver';
+
 import type { Config } from '../../infrastructure/config/schema.js';
 import type { ReadMode } from '../../infrastructure/graph/read-modes.js';
 import { contextVectors, resonantNodes } from '../../infrastructure/graph/resonance-queries.js';
@@ -74,11 +75,7 @@ export type ResonanceInput = {
  * an outage in a stage the caller is not entitled to lose a pack over.
  */
 export type ResonanceSkip =
-  | 'disabled'
-  | 'no_activation'
-  | 'no_anchor'
-  | 'no_context_vectors'
-  | 'unavailable';
+  'disabled' | 'no_activation' | 'no_anchor' | 'no_context_vectors' | 'unavailable';
 
 export type ResonanceResult = {
   /** Best first, by context similarity. Empty whenever `skipped` is set. */

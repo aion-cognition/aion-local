@@ -1,4 +1,5 @@
 import neo4j, { type Driver } from 'neo4j-driver';
+
 import { NEO4J_DEFAULT_USER } from '../provision.js';
 import {
   removeNeo4jContainer,
@@ -60,7 +61,7 @@ async function schemaObjectNames(driver: Driver, cypher: string): Promise<readon
  * code can reach this function, and correcting a real fact still supersedes it.
  */
 async function resetDatabase(driver: Driver): Promise<void> {
-  let deleted = 0;
+  let deleted: number;
   do {
     const result = await driver.executeQuery(
       `MATCH (n) WITH n LIMIT ${RESET_BATCH_SIZE} DETACH DELETE n`,

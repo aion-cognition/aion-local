@@ -34,8 +34,7 @@ export function saveLastPack(
 
 export function getLastPack(db: SqliteHandle, sessionId: string): LastPack | undefined {
   const row = db.prepare('SELECT * FROM last_pack WHERE session_id = ?').get(sessionId) as
-    | LastPackRow
-    | undefined;
+    LastPackRow | undefined;
   if (row === undefined) {
     return undefined;
   }
@@ -49,8 +48,9 @@ export function getLastPack(db: SqliteHandle, sessionId: string): LastPack | und
 
 /** Every session with a saved pack, most recently served first (ISO timestamps sort lexicographically). */
 export function listLastPackSessions(db: SqliteHandle): LastPackSession[] {
-  const rows = db
-    .prepare('SELECT session_id, ts FROM last_pack ORDER BY ts DESC')
-    .all() as Array<{ session_id: string; ts: string }>;
+  const rows = db.prepare('SELECT session_id, ts FROM last_pack ORDER BY ts DESC').all() as {
+    session_id: string;
+    ts: string;
+  }[];
   return rows.map((row) => ({ sessionId: row.session_id, ts: row.ts }));
 }

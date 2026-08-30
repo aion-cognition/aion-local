@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import {
   MemberNameUnavailableError,
   parseInitFlags,
@@ -30,7 +31,12 @@ describe('parseInitFlags', () => {
 describe('resolveMemberName', () => {
   it('takes the git name as-is without a terminal', async () => {
     await expect(
-      resolveMemberName({ envName: 'Ryan Huber', assumeYes: false, interactive: false, ask: never }),
+      resolveMemberName({
+        envName: 'Ryan Huber',
+        assumeYes: false,
+        interactive: false,
+        ask: never,
+      }),
     ).resolves.toBe('Ryan Huber');
   });
 
@@ -58,7 +64,12 @@ describe('resolveMemberName', () => {
 
   it('prefers the typed answer over the git name', async () => {
     await expect(
-      resolveMemberName({ envName: 'Ryan Huber', assumeYes: false, interactive: true, ask: async () => '  Someone Else ' }),
+      resolveMemberName({
+        envName: 'Ryan Huber',
+        assumeYes: false,
+        interactive: true,
+        ask: async () => '  Someone Else ',
+      }),
     ).resolves.toBe('Someone Else');
   });
 
@@ -70,7 +81,12 @@ describe('resolveMemberName', () => {
 
   it('fails when the terminal answer is empty and there is no git name', async () => {
     await expect(
-      resolveMemberName({ envName: undefined, assumeYes: false, interactive: true, ask: async () => '' }),
+      resolveMemberName({
+        envName: undefined,
+        assumeYes: false,
+        interactive: true,
+        ask: async () => '',
+      }),
     ).rejects.toBeInstanceOf(MemberNameUnavailableError);
   });
 });

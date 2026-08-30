@@ -1,4 +1,5 @@
 import neo4j, { type Driver } from 'neo4j-driver';
+
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { runRead } from './connection.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from './episodes.js';
@@ -60,8 +61,8 @@ export async function findEpisodesMissingSessionLink(
     FIND_EPISODES_MISSING_SESSION_LINK,
     { limit: toGraphInteger(limit) },
     (row) => ({
-      episodeId: row['episode_id'] as string,
-      sessionId: row['session_id'] as string,
+      episodeId: row.episode_id as string,
+      sessionId: row.session_id as string,
     }),
   );
 }

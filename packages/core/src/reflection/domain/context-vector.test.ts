@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import { computeContextVectors, weightedMeanVector } from './context-vector.js';
 
 describe('weightedMeanVector', () => {

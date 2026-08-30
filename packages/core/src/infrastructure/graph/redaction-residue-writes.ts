@@ -1,6 +1,7 @@
 import type { Driver } from 'neo4j-driver';
-import { BASE_NODE_LABEL } from './labels.js';
+
 import { runRead, runWrite } from './connection.js';
+import { BASE_NODE_LABEL } from './labels.js';
 import { toGraphDateTime, type Row } from './values.js';
 
 /**
@@ -73,7 +74,9 @@ export async function writeRedactedProperties(
   const safe = updates
     .map((update) => ({
       id: update.id,
-      properties: Object.fromEntries(Object.entries(update.properties).filter(([key]) => key !== 'id')),
+      properties: Object.fromEntries(
+        Object.entries(update.properties).filter(([key]) => key !== 'id'),
+      ),
     }))
     .filter((update) => Object.keys(update.properties).length > 0);
   if (safe.length === 0) {

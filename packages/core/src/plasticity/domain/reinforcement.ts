@@ -129,9 +129,7 @@ export function signalWeight(signal: QueuedSignal, cliqueSize: number): number {
  * ids join on the same NUL escape `signalGroupKey` uses, and for the same two reasons.
  */
 export function pairKey(sourceId: string, targetId: string): string {
-  return sourceId <= targetId
-    ? `${sourceId}\u0000${targetId}`
-    : `${targetId}\u0000${sourceId}`;
+  return sourceId <= targetId ? `${sourceId}\u0000${targetId}` : `${targetId}\u0000${sourceId}`;
 }
 
 export type AggregatedPair = {
@@ -159,7 +157,10 @@ export function aggregateWindow(
   baseLearningRate: number,
 ): readonly AggregatedPair[] {
   const sizes = cliqueSizes(signals);
-  const totals = new Map<string, { sourceId: string; targetId: string; count: number; signal: number }>();
+  const totals = new Map<
+    string,
+    { sourceId: string; targetId: string; count: number; signal: number }
+  >();
 
   for (const signal of signals) {
     if (signal.sourceId === signal.targetId) {

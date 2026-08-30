@@ -1,10 +1,13 @@
+import { reflectProvider, type ProviderFactory } from './routed-generation.js';
 import { loadEpisodeContext } from '../../../infrastructure/graph/episode-context.js';
 import { findFactBearingEpisodesOldestFirst } from '../../../infrastructure/graph/retro-supersession-queries.js';
 import { isLedgerApplied, markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
-import { SupersessionStage, SUPERSESSION_STAGE_NAME } from '../../../reflection/application/stages/supersession.js';
+import {
+  SupersessionStage,
+  SUPERSESSION_STAGE_NAME,
+} from '../../../reflection/application/stages/supersession.js';
 import { stageLedgerKey, type StageContext } from '../../../reflection/domain/stage.js';
 import type { IntrospectionOperation, OperationOutcome } from '../../domain/operation.js';
-import { reflectProvider, type ProviderFactory } from './routed-generation.js';
 
 /**
  * The backlog this operation drains: episodes reflected before the supersession stage joined

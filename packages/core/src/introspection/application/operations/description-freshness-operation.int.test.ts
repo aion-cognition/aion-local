@@ -2,6 +2,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { descriptionFreshnessOperation } from './description-freshness-operation.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
@@ -28,7 +30,6 @@ import type { Provider, StructuredRequest } from '../../../infrastructure/provid
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
-import { descriptionFreshnessOperation } from './description-freshness-operation.js';
 
 /**
  * Mentions are seeded as plain Episode nodes linked directly, not through the full reflection
@@ -128,9 +129,9 @@ function contextFor(): OperationContext {
 describe('descriptionFreshnessOperation against a live graph', () => {
   it('refreshes a description that outgrew its mention baseline and keeps the old value', async () => {
     const calls: StructuredRequest[] = [];
-    const outcome = await descriptionFreshnessOperation({ buildProvider: () => stubProvider(calls) }).run(
-      contextFor(),
-    );
+    const outcome = await descriptionFreshnessOperation({
+      buildProvider: () => stubProvider(calls),
+    }).run(contextFor());
 
     expect(outcome.status).toBe('applied');
     expect(outcome.itemsAffected).toBe(1);
@@ -151,9 +152,9 @@ describe('descriptionFreshnessOperation against a live graph', () => {
 
   it('leaves the freshly refreshed entity alone on the next run', async () => {
     const calls: StructuredRequest[] = [];
-    const outcome = await descriptionFreshnessOperation({ buildProvider: () => stubProvider(calls) }).run(
-      contextFor(),
-    );
+    const outcome = await descriptionFreshnessOperation({
+      buildProvider: () => stubProvider(calls),
+    }).run(contextFor());
 
     expect(outcome.status).toBe('noop');
     expect(outcome.itemsAffected).toBe(0);
