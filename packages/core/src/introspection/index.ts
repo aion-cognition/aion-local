@@ -148,7 +148,15 @@ export {
   orphanCleanupRelevance,
 } from './application/operations/orphan-cleanup.js';
 export {
+  communityCoherence,
+  communityIsolation,
+  rankCommunityPairs,
+  scoreCommunityPair,
+} from './domain/bridge-pairs.js';
+export type { CommunityPairScore, RankCommunityPairsInput } from './domain/bridge-pairs.js';
+export {
   BRIDGE_CANDIDATE_LIMIT,
+  BRIDGE_PAIR_ATTEMPTS,
   SYMBIOSIS_BRIDGE_OPERATION,
   SYMBIOSIS_BRIDGE_RELEVANCE,
   symbiosisBridgeOperation,

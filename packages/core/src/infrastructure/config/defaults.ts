@@ -261,6 +261,10 @@ export const DEFAULTS: Config = {
     communityMinNodes: 20,
     // Three members is the smallest group that can be a neighbourhood rather than a pair.
     bridgeMinCommunitySize: 3,
+    // One crossing edge for every four members of the smaller side. Below that the two are
+    // joined by a thread; at or above it activation already has a way across and a bridge
+    // would be a write that buys nothing.
+    bridgeOverlapCeiling: 0.25,
   },
   sqlite: {
     path: DEFAULT_SQLITE_PATH,
