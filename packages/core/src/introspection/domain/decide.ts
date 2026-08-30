@@ -135,12 +135,15 @@ export function preemptionEarned(candidate: ScoredCandidate, effectivenessFloor:
   return candidate.effectiveness >= effectivenessFloor;
 }
 
+/** An operation whose declared condition the snapshot meets, so the reason can name it outright. */
+type CriticalCandidate = ScoredCandidate & { readonly answers: CriticalCondition };
+
 /** Highest urgency, then the one that has waited longest, then the name, so ties never depend on registration order. */
-function bestBy(
-  candidates: readonly ScoredCandidate[],
-  score: (candidate: ScoredCandidate) => number,
-): ScoredCandidate | undefined {
-  let best: ScoredCandidate | undefined;
+function bestBy<T extends ScoredCandidate>(
+  candidates: readonly T[],
+  score: (candidate: T) => number,
+): T | undefined {
+  let best: T | undefined;
   for (const candidate of candidates) {
     if (best === undefined) {
       best = candidate;
@@ -170,7 +173,7 @@ export function decide(input: DecisionInput): Decision {
   const conditions = criticalConditions(input.health);
 
   const critical = scored.filter(
-    (candidate) =>
+    (candidate): candidate is CriticalCandidate =>
       candidate.answers !== undefined &&
       conditions.includes(candidate.answers) &&
       candidate.relevance > 0 &&
@@ -185,7 +188,7 @@ export function decide(input: DecisionInput): Decision {
       urgency: emergency.relevance,
       // The condition this operation repairs, not every condition the snapshot meets: the
       // ledger has to say what the run was for, and a run answers one of them.
-      reason: `critical: ${emergency.answers ?? 'operation-declared'}`,
+      reason: `critical: ${emergency.answers}`,
     };
   }
 
