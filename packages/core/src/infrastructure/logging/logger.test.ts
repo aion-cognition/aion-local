@@ -1,7 +1,8 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import pino from 'pino';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { openLogger } from './logger.js';
 
@@ -29,6 +30,22 @@ describe('openLogger', () => {
     const first: unknown = JSON.parse(lines[0] ?? '');
     expect(first).toMatchObject({ name: 'test', msg: 'stored', episode_id: 'abc' });
     expect(JSON.parse(lines[1] ?? '')).toMatchObject({ msg: 'quiet' });
+  });
+
+  it('opens both stdout (fd 1) and the file, each at the configured level', () => {
+    const destinationSpy = vi.spyOn(pino, 'destination');
+    const filePath = join(dir, 'aion.jsonl');
+
+    const logger = openLogger({ filePath, level: 'debug' });
+    logger.debug('both sinks');
+
+    const destCalls = destinationSpy.mock.calls.map(([opts]) => opts);
+    expect(destCalls).toContainEqual(expect.objectContaining({ dest: 1, sync: true }));
+    expect(destCalls).toContainEqual(expect.objectContaining({ dest: filePath, sync: true }));
+
+    const lines = readFileSync(filePath, 'utf8').trimEnd().split('\n');
+    expect(JSON.parse(lines[0] ?? '')).toMatchObject({ msg: 'both sinks' });
+    destinationSpy.mockRestore();
   });
 
   it('drops records below the configured level', () => {

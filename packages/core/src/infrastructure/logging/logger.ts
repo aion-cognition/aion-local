@@ -22,17 +22,24 @@ export type LogTarget = {
 };
 
 /**
- * Opens the JSONL log destination and returns the logger bound to it. Writes are
- * synchronous so a crash never loses the tail that explains it.
+ * Opens the JSONL log destinations and returns the logger teed to both. stdout (fd 1) is what
+ * `docker logs` reads; the file on the data volume is the durable copy a human tails. Writes
+ * are synchronous so a crash never loses the tail that explains it. Each stream states the
+ * level explicitly: a multistream entry with no level defaults to info and would drop
+ * debug/trace even when the logger is configured to pass them.
  */
 export function openLogger(target: LogTarget): Logger {
-  const destination = pino.destination({ dest: target.filePath, mkdir: true, sync: true });
+  const stdout = pino.destination({ dest: 1, sync: true });
+  const file = pino.destination({ dest: target.filePath, mkdir: true, sync: true });
   return pino(
     {
       level: target.level,
       ...(target.name === undefined ? {} : { name: target.name }),
       timestamp: pino.stdTimeFunctions.isoTime,
     },
-    destination,
+    pino.multistream([
+      { stream: stdout, level: target.level },
+      { stream: file, level: target.level },
+    ]),
   );
 }

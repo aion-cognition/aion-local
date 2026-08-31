@@ -33,6 +33,14 @@ services:
     # Compose's 10s default would SIGKILL it partway through that, which is the failure the
     # drain exists to prevent.
     stop_grace_period: 20s
+    # The logger tees to stdout as well as the data-volume file (see logger.ts). Docker's
+    # json-file driver keeps container logs unbounded by default, so the stdout copy would
+    # grow without limit on a laptop. Cap it; the file on aion-data stays the durable copy.
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
     build:
       context: .
       args:
