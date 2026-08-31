@@ -5,9 +5,11 @@ import type { AdmissionPolicy, Measurement } from './admission.js';
 import {
   fuse,
   reciprocalRank,
+  withSoleMethod,
   type FusedItem,
   type FusionCandidate,
   type FusionOptions,
+  type MethodLegStats,
   type RankedList,
 } from './fusion.js';
 
@@ -415,6 +417,100 @@ describe('the admission report', () => {
     expect(result.items).toEqual([]);
     expect(result.admission.droppedBelowFloor).toBe(1);
     expect(result.admission.droppedUnmeasured).toBe(0);
+  });
+});
+
+/**
+ * `methodStats` is instrumentation: it reports what already happened without moving anything.
+ * Every case here reruns a fixture from above and checks that `items` (rank and score both)
+ * comes back exactly as it did before this field existed, alongside the new counts.
+ */
+describe('the per-method leg stats', () => {
+  it('counts a find no other leg made as sole, credited to the leg that made it', () => {
+    const result = fuse([list('vector', [candidate('solo', { relevance: 0.8 })])], RRF);
+
+    expect(ids(result.items)).toEqual(['solo']);
+    expect(result.items[0]?.score).toBeCloseTo(reciprocalRank(0, RRF_CONSTANT), 10);
+    expect(result.methodStats).toEqual({
+      vector: { sole: 1, shared: 0, rrfContribution: reciprocalRank(0, RRF_CONSTANT) },
+    });
+  });
+
+  it('credits every leg that found an item as shared, not only the one prefer explains it by', () => {
+    // The exact fixture from "measures each leg on its own" above: two legs find the same
+    // item, and `prefer` explains it as the vector hit because it scores higher.
+    const result = fuse(
+      [
+        list('vector', [candidate('both', { relevance: 0.6 })]),
+        list('bm25', [candidate('both', { method: 'bm25', relevance: 0.2 })]),
+      ],
+      { ...RRF, admission: CALIBRATED },
+    );
+
+    expect(ids(result.items)).toEqual(['both']);
+    expect(result.items[0]?.rationale.method).toBe('vector');
+    const contribution = reciprocalRank(0, RRF_CONSTANT);
+    expect(result.methodStats).toEqual({
+      vector: { sole: 0, shared: 1, rrfContribution: contribution },
+      bm25: { sole: 0, shared: 1, rrfContribution: contribution },
+    });
+  });
+
+  it('sums contribution across ranks rather than keeping only the strongest one', () => {
+    // 'shared' ranks first in vector (found it) and second in bm25 (also found it, weaker);
+    // both contributions belong to the two legs' own totals, and shared beats solo on score.
+    const result = fuse(
+      [
+        list('vector', [candidate('shared', { relevance: 0.9 })]),
+        list('bm25', [
+          candidate('solo', { method: 'bm25', relevance: 0.5 }),
+          candidate('shared', { method: 'bm25', relevance: 0.3 }),
+        ]),
+      ],
+      RRF,
+    );
+
+    expect(ids(result.items)).toEqual(['shared', 'solo']);
+    expect(result.methodStats.vector).toEqual({
+      sole: 0,
+      shared: 1,
+      rrfContribution: reciprocalRank(0, RRF_CONSTANT),
+    });
+    expect(result.methodStats.bm25).toEqual({
+      sole: 1,
+      shared: 1,
+      // bm25's own two contributions: rank 0 for 'solo', rank 1 for 'shared'.
+      rrfContribution: reciprocalRank(0, RRF_CONSTANT) + reciprocalRank(1, RRF_CONSTANT),
+    });
+  });
+
+  it('never counts a candidate the floor refused, so a thin pack reports no phantom finds', () => {
+    const result = fuse([list('vector', [candidate('weak', { relevance: 0.2 })])], {
+      ...RRF,
+      admission: CALIBRATED,
+    });
+
+    expect(result.items).toEqual([]);
+    expect(result.methodStats).toEqual({});
+  });
+
+  it('folds resonance in as a sole find with no RRF contribution of its own', () => {
+    const withResonance = withSoleMethod(
+      { vector: { sole: 1, shared: 0, rrfContribution: 0.5 } },
+      'resonance',
+      2,
+    );
+
+    expect(withResonance).toEqual({
+      vector: { sole: 1, shared: 0, rrfContribution: 0.5 },
+      resonance: { sole: 2, shared: 0, rrfContribution: 0 },
+    });
+  });
+
+  it('leaves the stats untouched when there is nothing to fold in', () => {
+    const stats: MethodLegStats = { vector: { sole: 1, shared: 0, rrfContribution: 0.5 } };
+
+    expect(withSoleMethod(stats, 'resonance', 0)).toBe(stats);
   });
 });
 

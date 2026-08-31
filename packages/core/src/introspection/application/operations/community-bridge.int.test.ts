@@ -134,7 +134,12 @@ function context(provider: Provider = answeringProvider): OperationContext {
 }
 
 const adjacency: AdjacencyFetch = async (request) =>
-  fetchAdjacency(harness.driver, { ...request, mode: withCurrency() });
+  fetchAdjacency(harness.driver, {
+    ...request,
+    mode: withCurrency(),
+    minStrength: DEFAULTS.recall.associationStrength,
+    topK: DEFAULTS.recall.adjacencyTopK,
+  });
 
 async function seedCluster(ids: readonly string[], axis: number, other: number): Promise<void> {
   for (const [index, id] of ids.entries()) {

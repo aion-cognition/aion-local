@@ -198,9 +198,16 @@ export { cueDegradedRate } from './sqlite/recall-samples.js';
 export {
   PACK_METHODS,
   packMethodCounters,
+  packMethodLegStats,
   recordPackMethodCounts,
+  recordPackMethodLegStats,
+  recordPackMethodMetrics,
 } from './sqlite/method-counters.js';
-export type { PackMethodCounters } from './sqlite/method-counters.js';
+export type {
+  PackMethodCounters,
+  PackMethodLegStat,
+  PackMethodLegStats,
+} from './sqlite/method-counters.js';
 
 export { recallCadenceCounters, recordRecallOutcome } from './sqlite/recall-cadence.js';
 export type { RecallCadenceCounters } from './sqlite/recall-cadence.js';

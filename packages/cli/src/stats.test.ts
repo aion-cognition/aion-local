@@ -59,6 +59,14 @@ const SNAPSHOT: StatsSnapshot = {
       entity_resolution: 0,
       recency: 0,
     },
+    methodLegStats: {
+      vector: { sole: 22, shared: 8, rrfContribution: 1.234 },
+      bm25: { sole: 6, shared: 4, rrfContribution: 0.456 },
+      activation: { sole: 3, shared: 5, rrfContribution: 0.789 },
+      resonance: { sole: 2, shared: 0, rrfContribution: 0 },
+      entity_resolution: { sole: 0, shared: 0, rrfContribution: 0 },
+      recency: { sole: 0, shared: 0, rrfContribution: 0 },
+    },
     maintenance: {
       cycle: 41,
       operations: [
@@ -168,6 +176,19 @@ describe('renderStats', () => {
     // 30 of 50 total items served came through the vector method.
     expect(text).toMatch(/vector\s+30\s+60\.0%/);
     expect(text).toMatch(/activation\s+8\s+16\.0%/);
+  });
+
+  it('renders sole finds, shared finds, and summed RRF contribution beside each method', () => {
+    const { lines, write } = collector();
+
+    renderStats(SNAPSHOT, DEFAULTS, write);
+
+    const text = lines.join('\n');
+    // Activation's real share: `prefer` in fusion.ts explains 3 admitted items as activation's
+    // own find and credits 5 more it shared with another leg, which the plain share above
+    // could not distinguish from finding nothing on those 5.
+    expect(text).toMatch(/activation\s+8\s+16\.0%\s+sole 3\s+shared 5\s+rrf 0\.789/);
+    expect(text).toMatch(/vector\s+30\s+60\.0%\s+sole 22\s+shared 8\s+rrf 1\.234/);
   });
 
   it('lists a method with no pack items as zero rather than dropping its row', () => {

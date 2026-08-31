@@ -149,6 +149,8 @@ describe('recall against an empty substrate', () => {
       frontier: ['any'],
       visited: [],
       mode: withCurrency(),
+      minStrength: DEFAULTS.recall.associationStrength,
+      topK: DEFAULTS.recall.adjacencyTopK,
     });
     expect(statementsMatching(adjacency.cypher.split('\n')[0] ?? '')).toBe(0);
   });

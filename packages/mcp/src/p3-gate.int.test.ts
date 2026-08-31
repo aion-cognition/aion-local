@@ -163,6 +163,8 @@ async function coOccurrenceCount(entityIds: readonly string[]): Promise<number> 
     frontier: [...entityIds],
     visited: [],
     mode: withCurrency(),
+    minStrength: DEFAULTS.recall.associationStrength,
+    topK: DEFAULTS.recall.adjacencyTopK,
   });
   return neighbors.filter((neighbor) => neighbor.relationshipType === CO_OCCURS_TYPE).length;
 }
