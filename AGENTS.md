@@ -139,9 +139,21 @@ npm test                 # both vitest projects (or unit + chunked integration; 
 
 Plus the re-exercise batteries below, and `./bin/aion doctor` green against the live stack.
 The `service-freshness` doctor check warns when the running service's build sha trails the
-repo HEAD: a rebuilt image reaches the container only on a recreate, so after any commit
-that should be live, `docker compose build && docker compose --profile mcp up -d` and let
-doctor confirm.
+repo HEAD: a rebuilt image reaches the container only on a recreate. After any commit that
+should be live:
+
+```
+AION_BUILD_SHA="$(git rev-parse --short HEAD)" docker compose build
+docker compose --profile mcp up -d
+```
+
+A bare `docker compose build` stamps the image `unstamped`: the sha reaches the image only
+through that env var, which `bin/aion` exports and compose alone does not. The sha must be
+the short form, because doctor compares the running stamp against `git rev-parse --short
+HEAD`, so a full-length sha never matches and the service reads stale forever. Any
+`./bin/aion` command also rebuilds the image, correctly stamped, when sources are newer
+than it; the recreate is still a separate step, and doctor's freshness warning is the
+reminder.
 
 ## The re-exercise gate
 
