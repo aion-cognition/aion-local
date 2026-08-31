@@ -228,3 +228,9 @@ above 0.9 precision and 0.9 recall ships `unanimous`, under either bar ships `pr
 failure there means the judge moved, and the fix is to change the default rather than the
 assertion. It also prints a separate RETRO line scoring the two-pass judge against proposals
 a person already ruled on, which is a hindsight figure and never mixed into the first.
+
+`gate/tier3-advisor-selection.int.test.ts` is the same shape for
+`AION_MAINTENANCE_TIER3_MODE`. It reads 24 health snapshots the deterministic tiers all leave
+idle, scores the advisor alone and the advisor with its review against the answer each case was
+built with, and asserts the shipped default against a bar written before the numbers: agreement
+at or above 0.9 with no invalid selection ships `act`, anything less ships `propose`.

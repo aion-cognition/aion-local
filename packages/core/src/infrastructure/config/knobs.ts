@@ -54,12 +54,9 @@ const providerPin = z.enum(['auto', 'ollama', 'anthropic']);
  * comma-separated var feeds all three sub-fields, which is what the trailing `'weights'`
  * declares.
  *
- * Two knobs are declared ahead of a reader. `recall.compressionThreshold` is overridable and
+ * One knob is declared ahead of a reader. `recall.compressionThreshold` is overridable and
  * unread until narrative compression lands; it is here now because a knob added late is a knob
  * whose name and range were never reviewed, and setting one today changes nothing.
- * `maintenance.tier3` gates the introspector's tier-3 seam, which consults the advisor and
- * records what it would have been asked; the model call itself is unbuilt, so turning it on
- * changes what is logged and nothing that runs.
  *
  * `redaction.entropyThreshold` and `operational.dataDir` have no pinned spec default; they
  * follow common secret-scanner practice (4.5 bits/char) and the compose data volume mount
@@ -328,7 +325,28 @@ export const KNOBS = {
     entropyThreshold: ['AION_REDACTION_ENTROPY_THRESHOLD', positive, 4.5],
   },
   maintenance: {
-    tier3: ['AION_MAINTENANCE_TIER3', z.boolean(), false],
+    // The strategic layer's kill switch. On by default: a cycle the deterministic tiers left
+    // idle consults the model, and the standing cost is one reflect-model generation on any
+    // tick that reaches tier 3 with a candidate whose relevance is above zero. A tick where
+    // every candidate reads zero, and a tick on a degraded snapshot, skip the call entirely.
+    // Off stops the consultation at the branch, which is what the loop did before.
+    tier3: ['AION_MAINTENANCE_TIER3', z.boolean(), true],
+    // What an accepted recommendation is allowed to do. `propose` logs it and runs nothing,
+    // which makes it the kill switch inside the kill switch. `act` sends it to a second model
+    // call that argues the other side on the same reading, and runs it only when both passes
+    // agree, through the same claim, bound, and scoring path a deterministic selection takes.
+    //
+    // The default is set by measurement rather than by hand. The rule was pre-registered:
+    // two-pass selection agreement at or above 0.9 with no invalid selection over the
+    // twenty-four-case corpus ships `act`, anything less ships `propose`, and
+    // `tier3-advisor-selection.int.test.ts` asserts the shipped value still matches what it
+    // measures, in both directions.
+    //
+    // Measured 2026-08-31 against claude-haiku-4-5, 24 readings: one call agreed with the
+    // pre-committed answer on 12 of 24 and the two passes together on 12 of 24, with no
+    // invalid selection. The second pass vetoed 20 of 23 recommendations, including ones the
+    // corpus calls correct, so the advisor recommends and the loop runs nothing.
+    tier3Mode: ['AION_MAINTENANCE_TIER3_MODE', z.enum(['propose', 'act']), 'propose'],
     // `merge_auto`'s kill switch. On by default: the policy only acts on an exact-name
     // proposal, and every exact-name pair measured against two live review batches was a
     // merge a person went on to approve, with no disagreement the shadow judge recorded. Off

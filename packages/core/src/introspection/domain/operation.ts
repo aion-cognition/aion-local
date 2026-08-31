@@ -20,7 +20,13 @@ import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
  * which is what stops a standing pathology from being a standing preemption.
  */
 
-export type OperationTier = 1 | 2;
+/**
+ * Tier 3 is a run the model recommended and the acceptance gates cleared, so it is a tier the
+ * ledger, the bucket claim, and the run log can record. `decide()` never returns a selected
+ * tier-3 decision: the consultation synthesizes it after the deterministic tiers select
+ * nothing, and it runs through the same claim and learn path as any other selection.
+ */
+export type OperationTier = 1 | 2 | 3;
 
 export type OperationContext = {
   readonly driver: Driver;

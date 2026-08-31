@@ -25,6 +25,33 @@ export type {
 
 export { observeHealth } from './application/observe.js';
 
+export { decide } from './domain/decide.js';
+export type { Decision, OperationCandidate } from './domain/decide.js';
+
+export type { HealthSnapshot, OperationEffectiveness } from './domain/health.js';
+
+export {
+  acceptTier3Proposal,
+  proposeOnlyAdvisor,
+  TIER3_ACTABLE_OPERATIONS,
+} from './domain/tier3.js';
+export type {
+  Tier3Acceptance,
+  Tier3Advisor,
+  Tier3Outcome,
+  Tier3Proposal,
+  Tier3Request,
+} from './domain/tier3.js';
+
+export {
+  adviseTier3,
+  DEFAULT_TIER3_MODE,
+  modelAdvisor,
+  reviewTier3Proposal,
+  TIER3_NO_OPERATION,
+} from './application/tier3-advisor.js';
+export type { Tier3CallOptions, Tier3Mode, Tier3Review } from './application/tier3-advisor.js';
+
 export { Introspector } from './application/engine.js';
 
 export { introspectionOperations } from './application/catalog.js';

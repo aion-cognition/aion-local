@@ -59,8 +59,8 @@ describe('loadConfig override precedence', () => {
   });
 
   it('overrides a boolean leaf', () => {
-    const config = loadConfig({ AION_MAINTENANCE_TIER3: 'true' });
-    expect(config.maintenance.tier3).toBe(true);
+    const config = loadConfig({ AION_MAINTENANCE_TIER3: 'false' });
+    expect(config.maintenance.tier3).toBe(false);
   });
 
   it('overrides the auto-merge knob off', () => {

@@ -16,6 +16,7 @@ import {
   LaneAssigner,
   latestAppliedGraphMigration,
   loadConfig,
+  modelAdvisor,
   openLogger,
   plasticityCounters,
   ProviderRouter,
@@ -324,16 +325,23 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
     // and nowhere else. The loop starts here and stops in `close` below, ahead of the driver,
     // because a tick that has begun can still hold a graph write.
     const maintenanceOperations = introspectionOperations();
-    const introspector = new Introspector({
-      driver,
-      db: store.db,
-      config,
-      logger,
-      // One provider for the whole loop, so its circuit breaker counts failures across runs
-      // rather than starting fresh inside each one.
-      provider: reflectProvider,
-      operations: maintenanceOperations,
-    });
+    const introspector = new Introspector(
+      {
+        driver,
+        db: store.db,
+        config,
+        logger,
+        // One provider for the whole loop, so its circuit breaker counts failures across runs
+        // rather than starting fresh inside each one.
+        provider: reflectProvider,
+        operations: maintenanceOperations,
+      },
+      {
+        // The strategic tier's model call, wired here for the same reason every other provider
+        // reaches its caller through construction: the loop never builds one of its own.
+        tier3Advisor: modelAdvisor({ provider: reflectProvider, logger, config }),
+      },
+    );
     introspector.start();
 
     const backend: ToolBackend = {
