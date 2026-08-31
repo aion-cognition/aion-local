@@ -1,5 +1,6 @@
 import {
   bootstrapBackbone,
+  DEFAULTS,
   ensureGraphSession,
   fetchAdjacency,
   getLastPack,
@@ -189,6 +190,8 @@ describe('two concurrent client sessions', () => {
       frontier: [exchangeA.sessionId, exchangeB.sessionId],
       visited: [],
       mode: withCurrency(),
+      minStrength: DEFAULTS.recall.associationStrength,
+      topK: DEFAULTS.recall.adjacencyTopK,
     });
 
     for (const exchange of [exchangeA, exchangeB]) {

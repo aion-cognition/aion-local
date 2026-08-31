@@ -207,6 +207,12 @@ function propagate(
 ): void {
   // The hard bottom, not the fade. An edge under it is treated as absent; everything above it
   // propagates in proportion to its strength through `edgeWeight`.
+  //
+  // The shipped adjacency read already filters this in Cypher, so a live run never hands this
+  // function an edge under the floor. The check stays anyway: this is the algorithm's own
+  // contract on whatever `AdjacencyFetch` it is given, not a guarantee about one query's
+  // behaviour, and every fixture-driven test in this file exercises it directly against edges
+  // a fake fetch hands back unfiltered.
   if (neighbor.strength < budget.associationStrength) {
     return;
   }

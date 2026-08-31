@@ -48,3 +48,82 @@ export function packMethodCounters(db: SqliteHandle): PackMethodCounters {
     PACK_METHODS.map((method) => [method, Number(getMeta(db, methodCountKey(method)) ?? '0')]),
   ) as PackMethodCounters;
 }
+
+/**
+ * One method's showing across every pack ever served: admitted items it found with no other
+ * method also finding them, admitted items it shared credit for, and the RRF weight it carried
+ * into admitted items either way. The counter above only ever credits the method `prefer` in
+ * `fusion.ts` picked to explain an item several methods found, so a method that helps rank an
+ * item without winning its rationale reads as contributing nothing there. This is the fix.
+ */
+export type PackMethodLegStat = {
+  readonly sole: number;
+  readonly shared: number;
+  readonly rrfContribution: number;
+};
+
+export type PackMethodLegStats = Readonly<Record<PackMethod, PackMethodLegStat>>;
+
+const SOLE_KEY_PREFIX = 'pack_method_sole:';
+const SHARED_KEY_PREFIX = 'pack_method_shared:';
+const RRF_KEY_PREFIX = 'pack_method_rrf:';
+
+function soleKey(method: string): string {
+  return `${SOLE_KEY_PREFIX}${method}`;
+}
+
+function sharedKey(method: string): string {
+  return `${SHARED_KEY_PREFIX}${method}`;
+}
+
+function rrfKey(method: string): string {
+  return `${RRF_KEY_PREFIX}${method}`;
+}
+
+/** Adds one pack's leg stats to the running total. Call once, at pack persistence. */
+export function recordPackMethodLegStats(
+  db: SqliteHandle,
+  stats: Readonly<Partial<Record<PackMethod, PackMethodLegStat>>>,
+): void {
+  for (const method of PACK_METHODS) {
+    const stat = stats[method];
+    if (stat === undefined) {
+      continue;
+    }
+    setMeta(db, soleKey(method), String(Number(getMeta(db, soleKey(method)) ?? '0') + stat.sole));
+    setMeta(
+      db,
+      sharedKey(method),
+      String(Number(getMeta(db, sharedKey(method)) ?? '0') + stat.shared),
+    );
+    setMeta(
+      db,
+      rrfKey(method),
+      String(Number(getMeta(db, rrfKey(method)) ?? '0') + stat.rrfContribution),
+    );
+  }
+}
+
+/** Cumulative sole finds, shared finds, and RRF contribution per method, zero where never recorded. */
+export function packMethodLegStats(db: SqliteHandle): PackMethodLegStats {
+  return Object.fromEntries(
+    PACK_METHODS.map((method) => [
+      method,
+      {
+        sole: Number(getMeta(db, soleKey(method)) ?? '0'),
+        shared: Number(getMeta(db, sharedKey(method)) ?? '0'),
+        rrfContribution: Number(getMeta(db, rrfKey(method)) ?? '0'),
+      },
+    ]),
+  ) as PackMethodLegStats;
+}
+
+/** Both counters for one served pack: the plain per-method share and the leg-share detail. */
+export function recordPackMethodMetrics(
+  db: SqliteHandle,
+  methods: readonly string[],
+  legStats: Readonly<Partial<Record<PackMethod, PackMethodLegStat>>>,
+): void {
+  recordPackMethodCounts(db, methods);
+  recordPackMethodLegStats(db, legStats);
+}

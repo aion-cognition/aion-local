@@ -89,7 +89,12 @@ async function seedEpisode(sessionId: string, summary: string): Promise<string> 
  * algorithm sees one call that answers for a whole frontier.
  */
 const fetch: AdjacencyFetch = (request) =>
-  fetchAdjacency(harness.driver, { ...request, mode: withCurrency() });
+  fetchAdjacency(harness.driver, {
+    ...request,
+    mode: withCurrency(),
+    minStrength: DEFAULTS.recall.associationStrength,
+    topK: DEFAULTS.recall.adjacencyTopK,
+  });
 
 beforeAll(async () => {
   harness = await startNeo4jHarness();
@@ -189,5 +194,104 @@ describe('spreading activation over a live graph', () => {
     expect(stale?.currency.supersededBy?.id).toBe(episodeFresh);
     expect(fresh?.currency).toEqual({ currency: 'current' });
     expect(stale?.score).toBeCloseTo((fresh?.score ?? 0) * SUPERSEDED_ACTIVATION_WEIGHT, 10);
+  });
+
+  /**
+   * The cutoff moved into the adjacency read's own `WHERE` clause; this pins that the spread's
+   * result is the same either side of that move. `propagate`'s own floor in `activation.ts`
+   * would produce the identical split on an unfiltered fetch, which is what keeps this a
+   * measure of the whole pipeline's behaviour rather than of one layer alone.
+   */
+  it('reaches a neighbour above the association-strength cutoff and not one below it', async () => {
+    const anchor = await seedEpisode(SESSION_BETA, 'the cutoff test anchor');
+    const above = await seedEpisode(SESSION_BETA, 'the neighbour above the cutoff');
+    const below = await seedEpisode(SESSION_BETA, 'the neighbour below the cutoff');
+    const floor = DEFAULTS.recall.associationStrength;
+
+    await upsertEdge(harness.driver, {
+      type: 'RELATED_TO',
+      sourceId: anchor,
+      targetId: above,
+      strength: floor + 0.2,
+      confidence: 1,
+      signals: ['test'],
+      provenance: ['activation_int_test'],
+      count: 0,
+      now: SEEDED_AT,
+    });
+    await upsertEdge(harness.driver, {
+      type: 'RELATED_TO',
+      sourceId: anchor,
+      targetId: below,
+      strength: floor - 0.05,
+      confidence: 1,
+      signals: ['test'],
+      provenance: ['activation_int_test'],
+      count: 0,
+      now: SEEDED_AT,
+    });
+
+    const run = await spreadActivation(fetch, {
+      seeds: [{ nodeId: anchor }],
+      budget: { ...BUDGET, maxHops: 1 },
+    });
+
+    const activated = run.activated.map((node) => node.nodeId);
+    expect(activated).toContain(above);
+    expect(activated).not.toContain(below);
+  });
+
+  /**
+   * A live hub's degree grows without bound; this is what keeps its cost bounded instead. The
+   * read still finds every neighbour a small `topK` excludes, so nothing about reachability
+   * changes, only how much of a hub's own edge list one frontier ring pays to fetch and score.
+   */
+  it('caps a hub to its strongest K edges rather than returning every incident one', async () => {
+    // Written directly rather than through `seedEpisode`, which also writes a CONTAINMENT
+    // edge to the session: this hub's only edges are the ones the test asserts on below.
+    const hubNode = await writeStampedNode(harness.driver, {
+      label: 'Episode',
+      now: SEEDED_AT,
+      occurredAt: SEEDED_AT,
+      properties: {
+        [MEMORY_PROPERTIES.summary]: 'a hub with more edges than the cap',
+        [MEMORY_PROPERTIES.text]: 'a hub with more edges than the cap',
+        [MEMORY_PROPERTIES.sessionId]: SESSION_BETA,
+      },
+    });
+    const hub = hubNode.id;
+    const neighbours = await Promise.all(
+      [0.9, 0.8, 0.7, 0.6, 0.5].map((strength, index) =>
+        seedEpisode(SESSION_BETA, `hub neighbour ${String(index)}`).then(async (id) => {
+          await upsertEdge(harness.driver, {
+            type: 'RELATED_TO',
+            sourceId: hub,
+            targetId: id,
+            strength,
+            confidence: 1,
+            signals: ['test'],
+            provenance: ['activation_int_test'],
+            count: 0,
+            now: SEEDED_AT,
+          });
+          return { id, strength };
+        }),
+      ),
+    );
+
+    const capped = await fetchAdjacency(harness.driver, {
+      frontier: [hub],
+      visited: [],
+      mode: withCurrency(),
+      minStrength: 0,
+      topK: 3,
+    });
+
+    const strongest = neighbours
+      .slice()
+      .sort((left, right) => right.strength - left.strength)
+      .slice(0, 3)
+      .map((neighbour) => neighbour.id);
+    expect(capped.map((neighbour) => neighbour.nodeId).sort()).toEqual(strongest.sort());
   });
 });

@@ -82,7 +82,12 @@ const BUDGET: ActivationBudget = {
 };
 
 const fetch: AdjacencyFetch = (request) =>
-  fetchAdjacency(harness.driver, { ...request, mode: withCurrency() });
+  fetchAdjacency(harness.driver, {
+    ...request,
+    mode: withCurrency(),
+    minStrength: DEFAULTS.recall.associationStrength,
+    topK: DEFAULTS.recall.adjacencyTopK,
+  });
 
 beforeAll(async () => {
   harness = await startNeo4jHarness();

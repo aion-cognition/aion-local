@@ -9,7 +9,7 @@ import {
   type ReadMode,
 } from './read-modes.js';
 import { STRUCTURAL_PROPERTY } from './seed-queries.js';
-import type { Row } from './values.js';
+import { toGraphInteger, type Row } from './values.js';
 
 /**
  * One edge out of the activation frontier, carrying everything spreading activation needs
@@ -41,6 +41,17 @@ export type AdjacencyRequest = {
    */
   readonly visited: readonly string[];
   readonly mode: ReadMode;
+  /**
+   * `config.recall.associationStrength`: an edge under it stops being an edge at all. Reads
+   * the same value `propagate` in `activation.ts` floors on, so the two cannot drift apart.
+   */
+  readonly minStrength: number;
+  /**
+   * `config.recall.adjacencyTopK`, applied per frontier node after the strength cutoff above.
+   * A hub's every incident edge used to come back, each costing its own degree subquery; this
+   * bounds that to the strongest K, which is what a hub's growing degree can no longer inflate.
+   */
+  readonly topK: number;
 };
 
 /** Namespaces the read mode's parameters and comprehension variables inside this statement. */
@@ -59,8 +70,20 @@ const ABSENT_PROPORTION = '1.0';
  * because activation spreads both ways along an edge: direction is the semantics of the
  * relationship, not of the association it implies.
  *
- * Degree is counted per neighbour rather than joined in, since hub inhibition needs the
- * node's connectivity in the whole graph, not the part of it this traversal has reached.
+ * The strength cutoff is a `WHERE` predicate rather than a filter downstream: an edge under
+ * the floor used to be fetched, priced against a degree subquery, and only then discarded by
+ * `propagate` in `activation.ts`. Edges sitting exactly at the floor still return, since the
+ * floor is inclusive on both sides. That JS-side floor stays; it is the algorithm's own
+ * contract on whatever an `AdjacencyFetch` hands it, not a mirror of this one query's
+ * behaviour.
+ *
+ * The top-K cap is per frontier node, strongest edges first, and applied before the degree
+ * subquery below rather than after: the classic Cypher shape for it is `ORDER BY` into one
+ * `WITH` that groups on the node and slices a `collect()`, which is what the three `WITH`
+ * clauses here do. Degree stays counted per neighbour rather than joined in, since hub
+ * inhibition needs the node's connectivity in the whole graph, not the part this traversal
+ * reached, and counting it after the cap is what keeps a hub's cost bounded by K rather than
+ * by its whole degree.
  *
  * The read mode is spliced in against the neighbour: a forgotten node is suppressed here
  * and never enters the frontier, while a superseded one stays traversable and comes back
@@ -72,11 +95,17 @@ export function buildAdjacencyStatement(request: AdjacencyRequest): GraphStateme
   const cypher = [
     'UNWIND $frontier AS frontierId',
     `MATCH (n:${BASE_NODE_LABEL} { id: frontierId })-[r]-(m:${BASE_NODE_LABEL})`,
-    `WHERE m.id <> frontierId AND NOT m.id IN $visited AND ${fragment.where}`,
+    'WHERE m.id <> frontierId AND NOT m.id IN $visited' +
+      ` AND coalesce(r.strength, ${ABSENT_PROPORTION}) >= $minStrength AND ${fragment.where}`,
+    `WITH frontierId, r, m, coalesce(r.strength, ${ABSENT_PROPORTION}) AS strength`,
+    'ORDER BY strength DESC',
+    'WITH frontierId, collect({ r: r, m: m, strength: strength })[0..$topK] AS ranked',
+    'UNWIND ranked AS edge',
+    'WITH frontierId, edge.r AS r, edge.m AS m, edge.strength AS strength',
     'RETURN frontierId AS sourceId,',
     '       m.id AS nodeId,',
     '       type(r) AS relationshipType,',
-    `       coalesce(r.strength, ${ABSENT_PROPORTION}) AS strength,`,
+    '       strength,',
     `       coalesce(r.confidence, ${ABSENT_PROPORTION}) AS confidence,`,
     '       COUNT { (m)--() } AS degree,',
     `       m.${STRUCTURAL_PROPERTY} AS is_structural,`,
@@ -88,6 +117,8 @@ export function buildAdjacencyStatement(request: AdjacencyRequest): GraphStateme
     parameters: {
       frontier: [...new Set(request.frontier)],
       visited: [...new Set(request.visited)],
+      minStrength: request.minStrength,
+      topK: toGraphInteger(request.topK),
       ...fragment.parameters,
     },
   };
@@ -120,4 +151,21 @@ export async function fetchAdjacency(
   }
   const statement = buildAdjacencyStatement(request);
   return runRead(driver, statement.cypher, statement.parameters, mapNeighbor);
+}
+
+/**
+ * Binds the driver, the read mode, and the two config-derived floors into the one-call shape
+ * spreading activation asks for, so a caller states them once rather than at every frontier
+ * ring. Structurally typed rather than named after `AdjacencyFetch`: that type lives in
+ * `activation.ts`, and this module does not depend on the domain layer above it.
+ */
+export function adjacencyFetchFor(
+  driver: Driver,
+  mode: ReadMode,
+  minStrength: number,
+  topK: number,
+): (
+  request: Pick<AdjacencyRequest, 'frontier' | 'visited'>,
+) => Promise<readonly AdjacencyNeighbor[]> {
+  return (request) => fetchAdjacency(driver, { ...request, mode, minStrength, topK });
 }

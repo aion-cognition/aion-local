@@ -5,7 +5,13 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { SqliteStore } from './database.js';
-import { PACK_METHODS, packMethodCounters, recordPackMethodCounts } from './method-counters.js';
+import {
+  PACK_METHODS,
+  packMethodCounters,
+  packMethodLegStats,
+  recordPackMethodCounts,
+  recordPackMethodLegStats,
+} from './method-counters.js';
 
 describe('pack method counters', () => {
   let dir: string;
@@ -67,5 +73,58 @@ describe('pack method counters', () => {
     recordPackMethodCounts(store.db, []);
 
     expect(Object.values(packMethodCounters(store.db)).every((count) => count === 0)).toBe(true);
+  });
+});
+
+describe('pack method leg stats', () => {
+  let dir: string;
+  let store: SqliteStore;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'aion-method-leg-stats-'));
+    store = new SqliteStore({ filePath: join(dir, 'aion.sqlite') });
+  });
+
+  afterEach(() => {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('starts every method at zero', () => {
+    const stats = packMethodLegStats(store.db);
+    for (const method of PACK_METHODS) {
+      expect(stats[method]).toEqual({ sole: 0, shared: 0, rrfContribution: 0 });
+    }
+  });
+
+  it('records what one pack found, leaving an unmentioned method at zero', () => {
+    recordPackMethodLegStats(store.db, {
+      vector: { sole: 2, shared: 1, rrfContribution: 0.5 },
+      activation: { sole: 0, shared: 1, rrfContribution: 0.2 },
+    });
+
+    const stats = packMethodLegStats(store.db);
+    expect(stats.vector).toEqual({ sole: 2, shared: 1, rrfContribution: 0.5 });
+    expect(stats.activation).toEqual({ sole: 0, shared: 1, rrfContribution: 0.2 });
+    expect(stats.bm25).toEqual({ sole: 0, shared: 0, rrfContribution: 0 });
+  });
+
+  it('accumulates across separate packs rather than overwriting the running total', () => {
+    recordPackMethodLegStats(store.db, { vector: { sole: 1, shared: 0, rrfContribution: 0.1 } });
+    recordPackMethodLegStats(store.db, { vector: { sole: 1, shared: 1, rrfContribution: 0.2 } });
+
+    const { vector } = packMethodLegStats(store.db);
+    expect(vector.sole).toBe(2);
+    expect(vector.shared).toBe(1);
+    expect(vector.rrfContribution).toBeCloseTo(0.3, 10);
+  });
+
+  it('does nothing for a pack that credited no method', () => {
+    recordPackMethodLegStats(store.db, {});
+
+    const stats = packMethodLegStats(store.db);
+    for (const method of PACK_METHODS) {
+      expect(stats[method]).toEqual({ sole: 0, shared: 0, rrfContribution: 0 });
+    }
   });
 });

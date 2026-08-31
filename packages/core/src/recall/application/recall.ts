@@ -24,7 +24,7 @@ import {
 } from './stage-reads.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { roundMs } from '../../infrastructure/errors.js';
-import { fetchAdjacency } from '../../infrastructure/graph/adjacency.js';
+import { adjacencyFetchFor } from '../../infrastructure/graph/adjacency.js';
 import type { ItemOrigin } from '../../infrastructure/graph/origin-queries.js';
 import {
   asOf,
@@ -38,7 +38,7 @@ import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { saveLastPack } from '../../infrastructure/sqlite/last-pack.js';
-import { recordPackMethodCounts } from '../../infrastructure/sqlite/method-counters.js';
+import { recordPackMethodMetrics } from '../../infrastructure/sqlite/method-counters.js';
 import { recordRecallOutcome } from '../../infrastructure/sqlite/recall-cadence.js';
 import { recordCueOutcome } from '../../infrastructure/sqlite/recall-samples.js';
 import { readServedItems, recordServedItems } from '../../infrastructure/sqlite/served-items.js';
@@ -49,11 +49,10 @@ import {
   type ActivationBudget,
   type ActivationRun,
   type ActivationTermination,
-  type AdjacencyFetch,
 } from '../domain/activation.js';
 import type { AdmissionPolicy, AdmissionReport } from '../domain/admission.js';
 import { labelBoosts, queryCueTexts, queryRestatements } from '../domain/facts.js';
-import { fuse, type FusedItem, type FusionResult } from '../domain/fusion.js';
+import { fuse, withSoleMethod, type FusedItem, type FusionResult } from '../domain/fusion.js';
 import type { BucketCaps } from '../domain/pack-buckets.js';
 import { assemblePack, packMethods } from '../domain/pack.js';
 import { servedRecords, suppressedRepeats } from '../domain/session-dedup.js';
@@ -299,7 +298,8 @@ export async function handleRecall(
     degradations.push({ stage: 'graph', reason: 'unavailable' });
   }
 
-  const adjacency: AdjacencyFetch = (request) => fetchAdjacency(deps.driver, { ...request, mode });
+  const { associationStrength, adjacencyTopK } = deps.config.recall;
+  const adjacency = adjacencyFetchFor(deps.driver, mode, associationStrength, adjacencyTopK);
   const activation = await timed(() =>
     seeds.length === 0
       ? Promise.resolve(NO_ACTIVATION)
@@ -437,11 +437,15 @@ export async function handleRecall(
   // The cue stage is 60-95% of recall wall time and the first thing contention takes; a
   // degraded pack is otherwise indistinguishable from a healthy one at the item count.
   recordCueOutcome(deps.db, cues.value.degradation !== undefined);
-  // The spirit metric's raw material, read off the assembled pack rather than off the stages
-  // that fed it: an item admitted by fusion or resonance and then dropped by a bucket cap or
-  // the token budget was never served, and crediting its method would inflate exactly the
-  // claim this counter exists to keep honest.
-  recordPackMethodCounts(deps.db, packMethods(pack));
+  // Read off the assembled pack, not the stages that fed it: a bucket cap or the token budget can
+  // still drop what fusion admitted, and crediting a dropped item's method would lie about the
+  // spirit metric. The leg stats widen that to every contributing method, not just the one the
+  // rationale names; resonance is folded in as a sole find, since it skips fusion's merge.
+  recordPackMethodMetrics(
+    deps.db,
+    packMethods(pack),
+    withSoleMethod(fusion.value.methodStats, 'resonance', resonance.value.items.length),
+  );
   // Cadence's raw material: calls per session and the empty-pack rate, from a lifetime
   // total rather than the degraded-rate window above, which trims to the last 500.
   recordRecallOutcome(deps.db, {

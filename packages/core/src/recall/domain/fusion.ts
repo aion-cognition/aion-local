@@ -27,7 +27,25 @@ export type FusionLeg = 'vector' | 'bm25' | 'graph_traversal';
 export type FusionResult = {
   readonly items: readonly FusedItem[];
   readonly admission: AdmissionReport;
+  /** Per-method sole/shared find counts and summed RRF contribution, admitted items only. */
+  readonly methodStats: MethodLegStats;
 };
+
+/**
+ * One method's showing in one pack: how many admitted items it found with no other method
+ * also finding them, how many it shared credit for, and how much RRF weight it carried into
+ * admitted items either way. `prefer` below still picks one method to explain an item's
+ * rationale, but every method that helped find it counts here, which is what lets a method
+ * that never wins the rationale still show up as contributing.
+ */
+export type MethodLegStat = {
+  readonly sole: number;
+  readonly shared: number;
+  readonly rrfContribution: number;
+};
+
+/** Keyed by `rationale.method`; a method that found nothing this pack carries no key at all. */
+export type MethodLegStats = Readonly<Partial<Record<Rationale['method'], MethodLegStat>>>;
 
 export type FusionCandidate = {
   readonly id: string;
@@ -134,6 +152,8 @@ type Accumulator = {
   relevance: number;
   evidence: Measurement[];
   activation?: number;
+  /** RRF contribution summed per producing method, the leg-share stats `fuse` reports. */
+  methodContribution: Map<Rationale['method'], number>;
 };
 
 /** A candidate that names no evidence carries exactly one measurement: the one that found it. */
@@ -234,6 +254,7 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
         continue;
       }
 
+      const { method } = candidate.rationale;
       const held = merged.get(candidate.id);
       if (held === undefined) {
         merged.set(candidate.id, {
@@ -241,6 +262,7 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
           score: contribution,
           relevance: candidate.relevance,
           evidence: [...measurementsOf(candidate)],
+          methodContribution: new Map([[method, contribution]]),
           ...(candidate.activation === undefined ? {} : { activation: candidate.activation }),
         });
         continue;
@@ -252,6 +274,10 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
       }
       held.relevance = Math.max(held.relevance, candidate.relevance);
       held.evidence.push(...measurementsOf(candidate));
+      held.methodContribution.set(
+        method,
+        (held.methodContribution.get(method) ?? 0) + contribution,
+      );
       if (candidate.activation !== undefined) {
         held.activation = Math.max(held.activation ?? 0, candidate.activation);
       }
@@ -259,6 +285,7 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
   }
 
   const items: FusedItem[] = [];
+  const methodStats = new Map<Rationale['method'], MethodLegStat>();
   let droppedBelowFloor = 0;
   let droppedUnmeasured = 0;
   let droppedUnmeasuredArrival = 0;
@@ -298,6 +325,20 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
       evidence: [...entry.evidence],
       score: superseded ? ranked * SUPERSEDED_RANK_WEIGHT : ranked,
     });
+
+    // A find two or more methods both made is shared for every one of them, not credited to
+    // whichever `prefer` picked to explain the item: that credited a shared find to its
+    // strongest leg alone and left every other contributing method reading as a sole find of
+    // zero, which is what made activation's real share invisible in `aion stats`.
+    const shared = entry.methodContribution.size > 1;
+    for (const [method, contribution] of entry.methodContribution) {
+      const stat = methodStats.get(method) ?? { sole: 0, shared: 0, rrfContribution: 0 };
+      methodStats.set(method, {
+        sole: stat.sole + (shared ? 0 : 1),
+        shared: stat.shared + (shared ? 1 : 0),
+        rrfContribution: stat.rrfContribution + contribution,
+      });
+    }
   }
 
   items.sort(compareFused);
@@ -319,5 +360,24 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
       droppedNearDuplicate: deduped.length - capped.length,
       anchored,
     },
+    methodStats: Object.fromEntries(methodStats),
   };
+}
+
+/**
+ * Folds in a method whose admitted items never pass through `fuse`'s own merge, namely
+ * resonance: it runs after fusion, over what activation reached but this pass never admitted,
+ * so its finds would otherwise carry no leg-share stats at all. Always sole, since resonance
+ * excludes every id fusion or a seed strategy already reached, and it never competes in RRF.
+ */
+export function withSoleMethod(
+  stats: MethodLegStats,
+  method: Rationale['method'],
+  count: number,
+): MethodLegStats {
+  if (count === 0) {
+    return stats;
+  }
+  const existing = stats[method] ?? { sole: 0, shared: 0, rrfContribution: 0 };
+  return { ...stats, [method]: { ...existing, sole: existing.sole + count } };
 }

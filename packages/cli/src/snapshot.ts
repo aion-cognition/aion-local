@@ -11,6 +11,7 @@ import {
   OPERATION_LEDGER_PREFIX,
   PACK_METHODS,
   packMethodCounters,
+  packMethodLegStats,
   plasticityCounters,
   queueLagSnapshot,
   recallCadenceCounters,
@@ -25,6 +26,7 @@ import {
   type GraphCounts,
   type OperationStats,
   type PackMethodCounters,
+  type PackMethodLegStats,
   type PlasticityCounters,
   type QueueLagSnapshot,
   type RecallCadenceCounters,
@@ -74,6 +76,9 @@ export type SnapshotExtras = {
   /** Distinct sessions a pack has ever been served to, for the calls-per-session reading. */
   readonly sessionsServed: number;
   readonly methodCounters: PackMethodCounters;
+  /** Per-method sole/shared find counts and summed RRF contribution, the leg-share detail
+   * behind the plain share above (see `fusion.ts`'s `MethodLegStats`). */
+  readonly methodLegStats: PackMethodLegStats;
   readonly maintenance: MaintenanceSnapshot;
   readonly mergeShadow: MergeShadowSnapshot;
 };
@@ -212,6 +217,7 @@ export async function collectSnapshot(
       cadence: recallCadenceCounters(db),
       sessionsServed: listLastPackSessions(db).length,
       methodCounters: packMethodCounters(db),
+      methodLegStats: packMethodLegStats(db),
       maintenance: collectMaintenance(db),
       mergeShadow,
     },
@@ -429,7 +435,12 @@ export function renderSnapshot(
   for (const method of PACK_METHODS) {
     const count = extras.methodCounters[method];
     const share = total === 0 ? 0 : (count / total) * 100;
-    write(`  ${method.padEnd(18)} ${String(count).padStart(6)}  ${share.toFixed(1)}%`);
+    const legStat = extras.methodLegStats[method];
+    write(
+      `  ${method.padEnd(18)} ${String(count).padStart(6)}  ${share.toFixed(1)}%` +
+        `  sole ${String(legStat.sole)}  shared ${String(legStat.shared)}` +
+        `  rrf ${legStat.rrfContribution.toFixed(3)}`,
+    );
   }
 
   renderMaintenance(extras.maintenance, now, write);

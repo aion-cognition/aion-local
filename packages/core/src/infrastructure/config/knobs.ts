@@ -129,6 +129,10 @@ export const KNOBS = {
     // band the clamp exists to keep. Fading is proportional (spreading activation scales
     // propagation by strength); this number is only the point at which an edge counts as gone.
     associationStrength: ['AION_RECALL_ASSOCIATION_STRENGTH', proportion, 0.1],
+    // The adjacency read's per-node cap: strongest edges only, taken after the strength
+    // cutoff above. A live hub sat at degree 267 and growing; an ordinary node is far under
+    // 64, so the cap changes nothing there and only trims what a hub was returning in full.
+    adjacencyTopK: ['AION_RECALL_ADJACENCY_TOP_K', positiveInt, 64],
     compressionThreshold: ['AION_RECALL_COMPRESSION_THRESHOLD', positiveInt, 512],
     // A hang guard, not a latency target: the failure it catches is a call that never returns,
     // so it must not fire on ordinary calls. The cue model's cold-start round trip measured
