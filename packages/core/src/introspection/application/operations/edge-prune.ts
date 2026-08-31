@@ -10,8 +10,8 @@ import type {
 } from '../../domain/operation.js';
 
 /**
- * `edge_prune` (doc-12 B2, posture (a)): closes `CO_OCCURS`/`SIMILAR` edges the decay sweep has
- * driven to the floor and nothing has reinforced in `edgePruneUnreinforcedDays`. See
+ * `edge_prune` closes `CO_OCCURS`/`SIMILAR` edges the decay sweep has driven to the floor and
+ * nothing has reinforced in `edgePruneUnreinforcedDays`. See
  * `edge-prune-queries.ts` for why this scope and why closing rather than deleting; this file is
  * only the adapter to the maintenance-operation contract, the same split decay and
  * reinforcement already follow.

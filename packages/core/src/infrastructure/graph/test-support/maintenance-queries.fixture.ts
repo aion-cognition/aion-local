@@ -1,9 +1,9 @@
 import type { Driver } from 'neo4j-driver';
 
-import { BITEMPORAL_PROPERTIES } from '../bitemporal.js';
+import { BITEMPORAL_PROPERTIES, CLOSURE_PROVENANCE_PROPERTY } from '../bitemporal.js';
 import { readFirst, runRead } from '../connection.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../episodes.js';
-import { BASE_NODE_LABEL } from '../labels.js';
+import { BASE_NODE_LABEL, ENTITY_LABEL } from '../labels.js';
 import { NARRATIVE_PROPERTIES } from '../narrative-queries.js';
 import type { RelationshipType } from '../relationships.js';
 
@@ -124,6 +124,37 @@ export async function edgePruneState(
     }),
   );
   return row ?? { strength: undefined, validUntil: undefined, updatedAt: undefined };
+}
+
+/** An entity's own bitemporal stamps, for asserting `identifier_decay` closed it to the full
+ * extent of its timeline (both stamps) rather than only forgetting it, and whether a maintenance
+ * close still marks it (`closedBy`) or a mention has since reopened it. */
+export type IdentifierEntityState = {
+  readonly forgottenAt: Date | undefined;
+  readonly validUntil: Date | undefined;
+  readonly closedBy: string | undefined;
+};
+
+export async function identifierEntityState(
+  driver: Driver,
+  id: string,
+): Promise<IdentifierEntityState> {
+  const row = await readFirst(
+    driver,
+    [
+      `MATCH (n:${ENTITY_LABEL} { id: $id })`,
+      `RETURN n.${BITEMPORAL_PROPERTIES.forgottenAt} AS forgotten_at,`,
+      `       n.${BITEMPORAL_PROPERTIES.validUntil} AS valid_until,`,
+      `       n.${CLOSURE_PROVENANCE_PROPERTY} AS closed_by`,
+    ].join('\n'),
+    { id },
+    (row2) => ({
+      forgottenAt: row2.forgotten_at instanceof Date ? row2.forgotten_at : undefined,
+      validUntil: row2.valid_until instanceof Date ? row2.valid_until : undefined,
+      closedBy: typeof row2.closed_by === 'string' ? row2.closed_by : undefined,
+    }),
+  );
+  return row ?? { forgottenAt: undefined, validUntil: undefined, closedBy: undefined };
 }
 
 /** Current episode ids, oldest first, for a test that has to clear the field before it seeds. */

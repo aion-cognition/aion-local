@@ -1,7 +1,12 @@
 import type { Driver } from 'neo4j-driver';
 
 import { ACCESS_COUNT_PROPERTY } from './access-tracking.js';
-import { BITEMPORAL_PROPERTIES, currentOnly, stampNew } from './bitemporal.js';
+import {
+  BITEMPORAL_PROPERTIES,
+  CLOSURE_PROVENANCE_PROPERTY,
+  currentOnly,
+  stampNew,
+} from './bitemporal.js';
 import { inWriteTransaction, runRead, runWrite, type GraphStatement } from './connection.js';
 import { upsertEdgeInTransaction } from './edges.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from './episodes.js';
@@ -166,15 +171,37 @@ const MERGE_CHAIN_DEPTH = 8;
  * away resolves forward to the canonical identity, so a later episode naming "PostgreSQL"
  * reaches the "Postgres" node instead of reviving the closed duplicate and re-forking an
  * identity dedup already collapsed.
+ *
+ * `ON MATCH` also reopens a node a maintenance close marked with `CLOSURE_PROVENANCE_PROPERTY`
+ * (`bitemporal.ts`): the mention landing here is the next real signal that close was always
+ * betting on, so the node returns to fully current, `closed_by` and all, and the mention edge
+ * and companion labels below apply to it exactly as they would to a node that was never closed.
+ * A node closed without that marker, human forget or a supersession absorb, keeps its stamps:
+ * `aion forget` is a person's choice a mention must never override, and an absorbed duplicate's
+ * canonical identity is the node the chain walk below resolves to, not this one.
  */
-function buildEntityMerge(entities: readonly EntityMergeInput[], now: Date): GraphStatement {
+export function buildEntityMerge(entities: readonly EntityMergeInput[], now: Date): GraphStatement {
   const companions = companionLabels();
+  const reopenCondition =
+    `n.${BITEMPORAL_PROPERTIES.validUntil} IS NOT NULL` +
+    ` AND n.${CLOSURE_PROVENANCE_PROPERTY} IS NOT NULL`;
+  const onMatch = [
+    `n:${companions}`,
+    `n.${BITEMPORAL_PROPERTIES.validUntil} = CASE WHEN ${reopenCondition} THEN null` +
+      ` ELSE n.${BITEMPORAL_PROPERTIES.validUntil} END`,
+    `n.${BITEMPORAL_PROPERTIES.txUntil} = CASE WHEN ${reopenCondition} THEN null` +
+      ` ELSE n.${BITEMPORAL_PROPERTIES.txUntil} END`,
+    `n.${BITEMPORAL_PROPERTIES.forgottenAt} = CASE WHEN ${reopenCondition} THEN null` +
+      ` ELSE n.${BITEMPORAL_PROPERTIES.forgottenAt} END`,
+    `n.${CLOSURE_PROVENANCE_PROPERTY} = CASE WHEN ${reopenCondition} THEN null` +
+      ` ELSE n.${CLOSURE_PROVENANCE_PROPERTY} END`,
+  ];
   const cypher = [
     'UNWIND $entities AS entity',
     `MERGE (n:${ENTITY_LABEL} { ${ENTITY_NAME_NORM_PROPERTY}: entity.name_norm,` +
       ` ${ENTITY_TYPE_PROPERTY}: entity.type })`,
     `ON CREATE SET n:${companions}, n += entity.properties`,
-    `ON MATCH SET n:${companions}`,
+    `ON MATCH SET ${onMatch.join(', ')}`,
     'WITH entity.name_norm AS name_norm, entity.type AS type, entity.id AS proposed_id, n',
     `OPTIONAL MATCH (head:${ENTITY_LABEL})-[:${SUPERSEDES_TYPE}*1..${String(MERGE_CHAIN_DEPTH)}]->(n)`,
     `WHERE n.${BITEMPORAL_PROPERTIES.validUntil} IS NOT NULL`,

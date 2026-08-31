@@ -368,26 +368,21 @@ export const KNOBS = {
     // The deprioritization line: at or above it an operation scores at full weight, under it at
     // half, and starvation still eventually runs it either way. Never an exclusion.
     effectivenessFloor: ['AION_MAINTENANCE_EFFECTIVENESS_FLOOR', proportion, 0.5],
-    // `vector_backfill`'s content-vector pass: pending `:Memory` nodes embedded in one run. At
-    // hebbian.batchSize's own default, since a content-vector backfill is the same shape of work
-    // as a reinforcement flush, one bounded pass over a pending queue.
+    // `vector_backfill`'s content-vector pass: pending `:Memory` nodes embedded in one run, at
+    // hebbian.batchSize's own default, since this is the same shape of work as a reinforcement flush.
     vectorBackfillBatchSize: ['AION_MAINTENANCE_VECTOR_BACKFILL_BATCH_SIZE', positiveInt, 100],
-    // `vector_backfill`'s context-vector pass, a fifth of the content-vector batch. Context
-    // staleness is a quality gap the next pipeline run corrects anyway, not a hole in vector
-    // search, so each tick spends little on it.
+    // `vector_backfill`'s context-vector pass, a fifth of the content-vector batch: staleness
+    // here is a quality gap the next pipeline run corrects anyway, not a hole in vector search.
     contextRefreshBatchSize: ['AION_MAINTENANCE_CONTEXT_REFRESH_BATCH_SIZE', positiveInt, 20],
     /** `reconcile_reenqueue`'s bound: orphaned episodes re-enqueued in one run. */
     reconcileBatchSize: ['AION_MAINTENANCE_RECONCILE_BATCH_SIZE', positiveInt, 200],
     /** `dead_letter`'s bound: attempts-exhausted rows given their one retry cycle in one run. */
     deadLetterBatchSize: ['AION_MAINTENANCE_DEAD_LETTER_BATCH_SIZE', positiveInt, 50],
-    // `redaction_residue_purge`'s bound: nodes rewritten in one run. Small, because every hit is
-    // a live property write and a wrong redaction destroys content permanently, since nothing in
-    // the substrate is hard-deleted.
+    // `redaction_residue_purge`'s bound: nodes rewritten in one run. Small, since every hit is a
+    // live property write and a wrong redaction destroys content permanently (nothing here hard-deletes).
     redactionPurgeBatchSize: ['AION_MAINTENANCE_REDACTION_PURGE_BATCH_SIZE', positiveInt, 20],
-    // `narrative_cleanup`'s bound: sessions examined per run, for both the duplicate scan and
-    // the stale-grounding sweep. Sessions, not narratives: a session with duplicates costs one
-    // supersede per straggler and a stale one a regeneration call, so ten sessions is a modest
-    // tick even at the worst mix.
+    // `narrative_cleanup`'s bound: sessions (not narratives) examined per run, for both the
+    // duplicate scan and the stale-grounding sweep; ten is a modest tick even at the worst mix.
     narrativeCleanupBatch: ['AION_MAINTENANCE_NARRATIVE_CLEANUP_BATCH', positiveInt, 10],
     // `retro_judgment_sweep`'s bound: fact-bearing episodes judged per run. Each episode costs
     // up to eight judgment calls (supersession's own ceiling), so five keeps one tick's model
@@ -453,6 +448,11 @@ export const KNOBS = {
     edgePrune: ['AION_MAINTENANCE_EDGE_PRUNE', z.boolean(), true],
     edgePruneUnreinforcedDays: ['AION_MAINTENANCE_EDGE_PRUNE_UNREINFORCED_DAYS', positiveInt, 14],
     edgePruneBatch: ['AION_MAINTENANCE_EDGE_PRUNE_BATCH', positiveInt, 1000],
+    /** `identifier_decay`'s four; identifier-shape.ts and identifier-decay.ts state the arithmetic. */
+    identifierDecay: ['AION_MAINTENANCE_IDENTIFIER_DECAY', z.boolean(), true],
+    identifierDecayBatch: ['AION_MAINTENANCE_IDENTIFIER_DECAY_BATCH', positiveInt, 500],
+    identifierHalfLifeDays: ['AION_MAINTENANCE_IDENTIFIER_HALF_LIFE_DAYS', positiveInt, 7],
+    identifierMentionFloor: ['AION_MAINTENANCE_IDENTIFIER_MENTION_FLOOR', positiveInt, 5],
   },
   sqlite: {
     path: [SQLITE_PATH_ENV_VAR, text, DEFAULT_SQLITE_PATH],

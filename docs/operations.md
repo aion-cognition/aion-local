@@ -152,6 +152,11 @@ a proposal whose source episode was pure tool exhaust; `AION_MAINTENANCE_HYGIENE
 (default `14`) is the ordinary horizon for everything else. `AION_MAINTENANCE_HYGIENE_JUDGE_BATCH`
 (default `5`) caps how many fuzzy entity-merge pairs the op puts through a model call in one run.
 
+`identifier_decay` bitemporally closes an identifier-shaped entity (a commit SHA, a UUID, a
+path, an agent id) once `AION_MAINTENANCE_IDENTIFIER_HALF_LIFE_DAYS` (default `7`) passes with
+no fresh mention, unless it is a merge target, carries a typed-knowledge edge, or more than
+`AION_MAINTENANCE_IDENTIFIER_MENTION_FLOOR` (default `5`) episodes have mentioned it.
+
 ## Reflection concurrency
 
 `AION_WORKER_COUNT` (default `1`) sets how many episodes the reflection worker claims and
