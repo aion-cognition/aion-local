@@ -24,7 +24,7 @@ host at its default port, 11434. No `npm install`: the image build owns every de
 Node and npm come into it only for the two optional pieces below, `npm link` and the
 harness hooks.
 
-Clone this repo, then:
+Clone this repo (or unpack the release archive), then:
 
 ```
 cd aion-local
@@ -47,7 +47,8 @@ Run that once. Every later Claude Code session then connects with no per-session
 failing or duplicating work.
 
 Check the install with `./bin/aion doctor`, which verifies every substrate invariant against
-the live stack and names anything broken.
+the live stack and names anything broken. An archive install has no git history to stamp the
+image with, so `doctor` reports one service-freshness warning there; it is cosmetic.
 
 ## Profiles
 
