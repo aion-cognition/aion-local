@@ -23,5 +23,6 @@ export function admittedAll(count: number): AdmissionReport {
     droppedDuplicateContent: 0,
     droppedNearDuplicate: 0,
     anchored: count > 0,
+    typedAdmitted: 0,
   };
 }

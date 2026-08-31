@@ -354,6 +354,7 @@ function toAdmissionOutput(report: AdmissionReport): AdmissionReportOutput {
     dropped_unmeasured_arrival: report.droppedUnmeasuredArrival,
     dropped_duplicate_content: report.droppedDuplicateContent,
     dropped_near_duplicate: report.droppedNearDuplicate,
+    typed_admitted: report.typedAdmitted,
     vector_floor: report.policy.vectorFloor,
     corroboration_floor: report.policy.corroborationFloor,
     bm25_mode: report.policy.bm25Mode,

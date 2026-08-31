@@ -78,6 +78,7 @@ const NOTHING_ADMITTED: AdmissionReport = {
   droppedDuplicateContent: 0,
   droppedNearDuplicate: 0,
   anchored: false,
+  typedAdmitted: 0,
 };
 
 function completion(overrides: Partial<RecallCompletion> = {}): RecallCompletion {

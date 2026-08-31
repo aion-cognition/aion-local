@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   admissionEvidence,
   admitsOnEvidence,
+  isTypedAdmissionEdgeType,
   wasMeasured,
   type AdmissionPolicy,
   type Measurement,
+  type TypedInboundEvidence,
 } from './admission.js';
 
 /** The shipped shape: a calibrated cosine floor, a lower corroboration floor, exact-only BM25. */
@@ -15,11 +17,19 @@ const CALIBRATED: AdmissionPolicy = {
   bm25Mode: 'exact',
 };
 
+/** `CALIBRATED` with the typed tier turned on at a floor that admits a full-strength one-hop. */
+const TYPED_ON: AdmissionPolicy = {
+  ...CALIBRATED,
+  typedAdmissionEnabled: true,
+  typedAdmissionActivationFloor: 0.2,
+};
+
 function admits(
   measurements: readonly Measurement[],
   policy: AdmissionPolicy = CALIBRATED,
+  typedEvidence?: TypedInboundEvidence,
 ): boolean {
-  return admitsOnEvidence(measurements, policy);
+  return admitsOnEvidence(measurements, policy, typedEvidence);
 }
 
 describe('a cosine on its own', () => {
@@ -241,5 +251,69 @@ describe('telling a refusal apart from a candidate nothing judged', () => {
     expect(wasMeasured([{ method: 'recency', relevance: 0 }])).toBe(false);
     expect(wasMeasured([{ method: 'activation', relevance: 0.7 }])).toBe(false);
     expect(wasMeasured([{ method: 'bm25', relevance: 1, cue: 'outbox' }])).toBe(false);
+  });
+});
+
+/**
+ * The narrow fourth door: a cosine that already fell short of every other rule still admits
+ * when the graph itself argues for the node. `CONTRADICTS` at 0.245 stands in for a
+ * full-strength seed's one-hop typed contribution throughout; the exact number is not the
+ * point, only that it clears the 0.2 floor these tests set.
+ */
+describe('typed admission', () => {
+  const typed: TypedInboundEvidence = { edgeType: 'CONTRADICTS', contribution: 0.245 };
+  const cosineBetweenFloors: Measurement = {
+    method: 'vector',
+    relevance: 0.47,
+    cue: 'outbox table',
+  };
+
+  it('admits at the corroboration floor when nothing alone would clear the vector floor', () => {
+    expect(admits([cosineBetweenFloors], TYPED_ON, typed)).toBe(true);
+  });
+
+  it('refuses the same node under the corroboration floor, typed evidence or not', () => {
+    const belowCorroboration: Measurement = { ...cosineBetweenFloors, relevance: 0.44 };
+    expect(admits([belowCorroboration], TYPED_ON, typed)).toBe(false);
+  });
+
+  it('never lowers the vector floor for a node with no typed evidence at all', () => {
+    expect(admits([cosineBetweenFloors], TYPED_ON)).toBe(false);
+  });
+
+  it("refuses typed evidence that falls short of the tier's own activation floor", () => {
+    const weak: TypedInboundEvidence = { edgeType: 'CONTRADICTS', contribution: 0.1 };
+    expect(admits([cosineBetweenFloors], TYPED_ON, weak)).toBe(false);
+  });
+
+  it('reads SUPERSEDES and CAUSES the same way as CONTRADICTS', () => {
+    for (const edgeType of ['SUPERSEDES', 'CAUSES'] as const) {
+      expect(admits([cosineBetweenFloors], TYPED_ON, { edgeType, contribution: 0.245 })).toBe(true);
+    }
+  });
+
+  it('restores single-tier admission exactly when the knob is off', () => {
+    expect(admits([cosineBetweenFloors], CALIBRATED, typed)).toBe(false);
+    expect(
+      admits([cosineBetweenFloors], { ...TYPED_ON, typedAdmissionEnabled: false }, typed),
+    ).toBe(false);
+  });
+
+  it('names the typed edge and the cosine it cleared, not the floor it would have failed', () => {
+    expect(admissionEvidence([cosineBetweenFloors], TYPED_ON, typed)).toEqual({
+      rule: 'typed_admission',
+      score: 0.47,
+      qualifying: ['typed-edge: CONTRADICTS', 'vector 0.47'],
+    });
+  });
+
+  it('only CONTRADICTS, SUPERSEDES, and CAUSES qualify as typed evidence at all', () => {
+    expect(isTypedAdmissionEdgeType('CONTRADICTS')).toBe(true);
+    expect(isTypedAdmissionEdgeType('SUPERSEDES')).toBe(true);
+    expect(isTypedAdmissionEdgeType('CAUSES')).toBe(true);
+    // CO_OCCURS and SIMILAR are what a cosine already measures, so they never qualify: an
+    // arrival's only path is one of them, and it is refused on the cosine alone, as before.
+    expect(isTypedAdmissionEdgeType('CO_OCCURS')).toBe(false);
+    expect(isTypedAdmissionEdgeType('SIMILAR')).toBe(false);
   });
 });

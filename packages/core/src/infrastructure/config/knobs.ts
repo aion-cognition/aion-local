@@ -101,12 +101,11 @@ export const KNOBS = {
     maxHops: ['AION_RECALL_MAX_HOPS', nonNegativeInt, 3],
     vectorLimit: ['AION_RECALL_VECTOR_LIMIT', positiveInt, 5],
     maxFacts: ['AION_RECALL_MAX_FACTS', nonNegativeInt, 15],
-    // Twenty, raised from five. The cap cuts the fused list, so it decides what survives fusion
+    // Twenty, raised from five. The cap cuts the fused list, deciding what survives fusion
     // competition rather than how big a pack gets: on a populated substrate (~40 episodes)
     // near-tie vector hits fill the first five, and the one traversal-reached item ranked 13th
-    // is absent at 5, 8, and 12 and present at 20. Activation runs on every recall either way;
-    // the cap decides whether the caller sees what it found. The token budget, not this number,
-    // is what actually bounds a pack.
+    // is absent at 5, 8, and 12 and present at 20 (activation runs regardless). The token
+    // budget, not this number, is what actually bounds a pack.
     maxEpisodes: ['AION_RECALL_MAX_EPISODES', nonNegativeInt, 20],
     maxNarratives: ['AION_RECALL_MAX_NARRATIVES', nonNegativeInt, 5],
     maxPreferences: ['AION_RECALL_MAX_PREFERENCES', nonNegativeInt, 3],
@@ -141,17 +140,16 @@ export const KNOBS = {
     cueBudgetMs: ['AION_CUE_BUDGET_MS', positiveInt, 8000],
     tokenBudget: ['AION_RECALL_TOKEN_BUDGET', positiveInt, 1200],
     // Absolute cosine floors, measured against the embedding model's noise rather than pinned.
-    // Against nomic-embed-text on 28 unrelated pairs and 10 genuine matches
-    // (`floors.fixtures.ts`): unrelated p50 0.408, p95 0.530, max 0.547; related min 0.451, p50
-    // 0.773. The tails overlap, so no floor separates them, and the answer to an overlap is
-    // corroboration rather than a lower floor. `vectorAdmissionFloor` sits above the whole noise
-    // sample and admits one measurement alone; a floor at 0.50 sat inside the overlap band and
-    // admitted off-topic text on one leg. `corroborationFloor` is the lower bar a measurement
-    // clears to count as one of the two an item can be corroborated on, and it too sits above
-    // the noise range: two readings at 0.46 and 0.51 are two readings of the same noise, which
-    // is what admitted every surviving item on the gate's off-topic probes.
-    // `floor-calibration.int.test.ts` re-measures both and fails when the committed values stop
-    // separating the distributions.
+    // Against nomic-embed-text on 28 unrelated pairs and 10 genuine matches (`floors.fixtures.ts`):
+    // unrelated p50 0.408, p95 0.530, max 0.547; related min 0.451, p50 0.773. The tails overlap,
+    // so no floor separates them, and the answer to an overlap is corroboration rather than a lower
+    // floor. `vectorAdmissionFloor` sits above the whole noise sample and admits one measurement
+    // alone; a floor at 0.50 sat inside the overlap band and admitted off-topic text on one leg.
+    // `corroborationFloor` is the lower bar a measurement clears to count as one of the two an item
+    // can be corroborated on, and it too sits above the noise range: two readings at 0.46 and 0.51
+    // are two readings of the same noise, which is what admitted every surviving item on the gate's
+    // off-topic probes. `floor-calibration.int.test.ts` re-measures both and fails when the
+    // committed values stop separating the distributions.
     vectorAdmissionFloor: ['AION_VECTOR_ADMISSION_FLOOR', proportion, 0.6],
     corroborationFloor: ['AION_CORROBORATION_FLOOR', proportion, 0.55],
     /** A Lucene score is corpus-relative, so the lexical leg admits by rule, not by number. */
@@ -176,13 +174,12 @@ export const KNOBS = {
     // four: a pack that answers "who is involved in X" needs room for more than one name while
     // still leaving eleven of fifteen fact slots to content that states something.
     entityGlossCap: ['AION_PACK_ENTITY_GLOSS_CAP', positiveInt, 4],
-    // `restatementFloor` is the cosine at or above which a Goal or Plan is judged to be the
-    // query said back rather than answered. Measured against nomic-embed-text on two
-    // distributions of Goal/Plan text, both scored against the query that would retrieve them
+    // `restatementFloor` is the cosine at or above which a Goal or Plan is judged to be the query
+    // said back rather than answered. Measured against nomic-embed-text on two distributions
+    // of Goal/Plan text, both scored against the query that would retrieve them
     // (`facts.fixtures.ts`): nodes that restate the query min 0.841 p50 0.909, nodes that answer
     // it p50 0.552 max 0.729. 0.80 sits in the gap and caught 8 of 8 restatements with 0 of 8
-    // misfires. `facts-calibration.int.test.ts` re-measures both and fails if they stop
-    // separating.
+    // misfires. `facts-calibration.int.test.ts` re-measures both and fails if they stop separating.
     restatementFloor: ['AION_FACTS_RESTATEMENT_FLOOR', proportion, 0.8],
     // `decisionBoost` multiplies the fused score of Decision and Insight when the cue model
     // judged the query decision-shaped. At rrfConstant 60 a factor of 1.25 is worth about
@@ -196,6 +193,9 @@ export const KNOBS = {
     // contradicting pair this was built for measured 0.79 turn to claim, and the next claim in
     // the same family 0.68.
     relatedClaimFloor: ['AION_RELATED_CLAIM_FLOOR', proportion, 0.55],
+    // Typed-admission kill switch and floor; admission.ts's AdmissionPolicy has the reasoning.
+    typedAdmission: ['AION_RECALL_TYPED_ADMISSION', z.boolean(), true],
+    typedAdmissionActivationFloor: ['AION_TYPED_ADMISSION_ACTIVATION_FLOOR', proportion, 0.14],
   },
   search: {
     methods: [

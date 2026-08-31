@@ -30,6 +30,29 @@ export type Measurement = {
 export type Bm25AdmissionMode = 'exact' | 'corroborated' | 'any';
 
 /**
+ * The knowledge-bearing edge types the typed-admission tier reads. A partner that contradicts,
+ * supersedes, or causally follows is evidence a cosine cannot see; CO_OCCURS and SIMILAR are
+ * excluded on purpose, since their evidence is exactly what embedding already measures.
+ */
+export const TYPED_ADMISSION_EDGE_TYPES = ['CONTRADICTS', 'SUPERSEDES', 'CAUSES'] as const;
+
+export type TypedAdmissionEdgeType = (typeof TYPED_ADMISSION_EDGE_TYPES)[number];
+
+export function isTypedAdmissionEdgeType(type: string): type is TypedAdmissionEdgeType {
+  return (TYPED_ADMISSION_EDGE_TYPES as readonly string[]).includes(type);
+}
+
+/**
+ * The strongest single hop of typed evidence that reached an activation-only arrival: which of
+ * the three qualifying types carried it, and the propagated contribution that one edge alone
+ * delivered, isolated from whatever else the spread accumulated for the same node.
+ */
+export type TypedInboundEvidence = {
+  readonly edgeType: TypedAdmissionEdgeType;
+  readonly contribution: number;
+};
+
+/**
  * Cosines are comparable across queries, so they get numbers; a Lucene score moves with the
  * corpus and the query, so the lexical leg gets a rule instead.
  */
@@ -39,6 +62,24 @@ export type AdmissionPolicy = {
   /** Cosine at or above which a measurement counts as one unit of corroboration. */
   readonly corroborationFloor: number;
   readonly bm25Mode: Bm25AdmissionMode;
+  /**
+   * The typed-admission tier's kill switch. Optional: a caller that never passes typed evidence
+   * to `admissionEvidence` cannot reach the tier regardless, which is every test written before
+   * it existed.
+   */
+  readonly typedAdmissionEnabled?: boolean;
+  /**
+   * The contribution one typed edge alone must carry, apart from whatever else the spread
+   * accumulated for the node. Shipped at 0.14: at the default decay (0.7, no hub inhibition) a
+   * full-strength seed's strongest single hop through CONTRADICTS or CAUSES (halved as
+   * model-inferred) propagates 1 x 0.35 x 0.7 = 0.245, and through SUPERSEDES (halved again for
+   * landing on superseded lineage) 1 x 0.4 x 0.7 x 0.5 = 0.14. That SUPERSEDES ceiling is the
+   * lowest of the three, so it is the highest floor every qualifying type can still clear. One
+   * ordinary hop before the typed edge still clears it (0.63 x 0.35 x 0.7 = 0.154, the "three
+   * hops away" case the tier exists for); a second typed hop in the chain does not (0.245 x 0.35
+   * x 0.7 = 0.06). `admission.test.ts` pins this arithmetic.
+   */
+  readonly typedAdmissionActivationFloor?: number;
 };
 
 /** What the gate did, so a thin pack can say why it is thin rather than looking like an outage. */
@@ -70,6 +111,14 @@ export type AdmissionReport = {
   readonly droppedNearDuplicate: number;
   /** At least one candidate cleared admission on its own evidence. */
   readonly anchored: boolean;
+  /**
+   * Admitted on typed evidence rather than a vector floor: an activation-only arrival whose
+   * strongest inbound CONTRADICTS, SUPERSEDES, or CAUSES edge cleared the tier's own activation
+   * floor, at a cosine that cleared the lower corroboration floor instead of the higher vector
+   * one. Counted apart so a thin pack can say the graph itself found something a cosine alone
+   * would have refused.
+   */
+  readonly typedAdmitted: number;
 };
 
 /**
@@ -116,7 +165,7 @@ function describe(measurement: Measurement): string {
 }
 
 /**
- * Three ways in, and a rank is not one of them:
+ * Three ways in on measurement alone, and a rank is not one of them:
  *
  *  - a cosine at or above the calibrated floor, which is one method vouching alone;
  *  - a literal match, Lucene on the verbatim cue or an exact entity name, which is evidence
@@ -133,13 +182,22 @@ function describe(measurement: Measurement): string {
  * on the strength of the path that found it: an off-topic pack fills to budget the moment one
  * incidental hit is allowed to unlock everything activation touched.
  *
- * `undefined` is the refusal. The three rules are reported in the order above rather than in
- * the order the measurements arrive, so an item that cleared the vector floor is explained by
- * the floor it cleared even when a literal hit would also have let it in.
+ * A fourth way in exists for an activation-only arrival carrying `typedEvidence`, and it is
+ * narrower than the three above rather than an alternative to them: it only runs once none of
+ * the three has admitted the item, and it still reads a cosine, just at the lower corroboration
+ * floor instead of the vector one. What earns that discount is the strongest CONTRADICTS,
+ * SUPERSEDES, or CAUSES edge that reached the node clearing its own activation floor, which is
+ * evidence the query's own embedding cannot see: a contradicting or superseding node three hops
+ * away that says nothing lexically or vectorially similar to the cue.
+ *
+ * `undefined` is the refusal. The rules are reported in the order above rather than in the
+ * order the measurements arrive, so an item that cleared the vector floor is explained by the
+ * floor it cleared even when a literal hit would also have let it in.
  */
 export function admissionEvidence(
   measurements: readonly Measurement[],
   policy: AdmissionPolicy,
+  typedEvidence?: TypedInboundEvidence,
 ): AdmissionEvidence | undefined {
   const corroborating = new Map<string, Measurement>();
   const cleared: Measurement[] = [];
@@ -193,14 +251,46 @@ export function admissionEvidence(
   if (bm25Alone !== undefined) {
     return { rule: 'bm25_any', score: 0, qualifying: [describe(bm25Alone)] };
   }
+
+  // The narrow fourth door. It runs last and only for an arrival carrying typed evidence: the
+  // knob is off, or nothing propagated a qualifying edge into this node, and it is exactly the
+  // refusal above.
+  if (
+    policy.typedAdmissionEnabled === true &&
+    typedEvidence !== undefined &&
+    policy.typedAdmissionActivationFloor !== undefined &&
+    typedEvidence.contribution >= policy.typedAdmissionActivationFloor
+  ) {
+    let strongestCosine: Measurement | undefined;
+    for (const measurement of measurements) {
+      if (!COSINE_METHODS.has(measurement.method)) {
+        continue;
+      }
+      if (measurement.relevance < policy.corroborationFloor) {
+        continue;
+      }
+      if (strongestCosine === undefined || measurement.relevance > strongestCosine.relevance) {
+        strongestCosine = measurement;
+      }
+    }
+    if (strongestCosine !== undefined) {
+      return {
+        rule: 'typed_admission',
+        score: strongestCosine.relevance,
+        qualifying: [`typed-edge: ${typedEvidence.edgeType}`, describe(strongestCosine)],
+      };
+    }
+  }
+
   return undefined;
 }
 
 export function admitsOnEvidence(
   measurements: readonly Measurement[],
   policy: AdmissionPolicy,
+  typedEvidence?: TypedInboundEvidence,
 ): boolean {
-  return admissionEvidence(measurements, policy) !== undefined;
+  return admissionEvidence(measurements, policy, typedEvidence) !== undefined;
 }
 
 /**
