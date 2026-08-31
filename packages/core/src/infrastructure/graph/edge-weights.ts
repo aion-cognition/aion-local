@@ -1,5 +1,6 @@
 import neo4j, { type Driver } from 'neo4j-driver';
 
+import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { readFirst, runWrite, type GraphStatement } from './connection.js';
 import { GraphWriteError } from './errors.js';
 import { BASE_NODE_LABEL } from './labels.js';
@@ -60,6 +61,11 @@ function assertPair(pair: WeightReinforcement): void {
  *
  * Both endpoints go through the currency predicate, so an edge onto a forgotten node is left
  * where it is: reinforcing it would strengthen a path recall already refuses to return.
+ *
+ * A matched edge `edge_prune` has bitemporally closed reopens here too: the base weight the
+ * bounded step starts from is zero rather than the closed edge's own remnant, and the write
+ * clears `valid_until`/`tx_until` the same way the merge policy in `edges.ts` does. An
+ * already-open matched edge takes neither path.
  */
 export function buildEdgeWeightReinforcement(input: ReinforceEdgeWeightsInput): GraphStatement {
   assertProportion('weightFloor', input.weightFloor);
@@ -70,16 +76,25 @@ export function buildEdgeWeightReinforcement(input: ReinforceEdgeWeightsInput): 
   const source = readModeFragment(withCurrency(), 'a', 'src');
   const target = readModeFragment(withCurrency(), 'b', 'tgt');
   const now = input.now ?? new Date();
+  const reopenCondition = `r.${BITEMPORAL_PROPERTIES.validUntil} IS NOT NULL`;
 
   const cypher = [
     'UNWIND $pairs AS pair',
     `MATCH (a:${BASE_NODE_LABEL} { id: pair.sourceId })-[r]-(b:${BASE_NODE_LABEL} { id: pair.targetId })`,
     `WHERE NOT type(r) IN $protected AND ${source.where} AND ${target.where}`,
-    'WITH r, coalesce(r.strength, $weightFloor) AS w, pair.learningRate AS eta',
+    // A reopen starts the bounded step from zero instead of the closed edge's own remnant: that
+    // remnant sat at the floor with nothing to show for it, so stepping from it would leave the
+    // reopened edge exactly where the close left it.
+    `WITH r, CASE WHEN ${reopenCondition} THEN 0.0 ELSE coalesce(r.strength, $weightFloor) END AS w,`,
+    '     pair.learningRate AS eta',
     'WITH r, w + eta * (1.0 - w) AS raw',
     'SET r.strength = CASE WHEN raw < $weightFloor THEN $weightFloor',
     '                      WHEN raw > 1.0 THEN 1.0',
     '                      ELSE raw END,',
+    `    r.${BITEMPORAL_PROPERTIES.validUntil} = CASE WHEN ${reopenCondition} THEN null`,
+    `                          ELSE r.${BITEMPORAL_PROPERTIES.validUntil} END,`,
+    `    r.${BITEMPORAL_PROPERTIES.txUntil} = CASE WHEN ${reopenCondition} THEN null`,
+    `                       ELSE r.${BITEMPORAL_PROPERTIES.txUntil} END,`,
     '    r.updated_at = $now',
     'RETURN r.id AS id, type(r) AS type, startNode(r).id AS sourceId,',
     '       endNode(r).id AS targetId, r.strength AS strength',
@@ -203,6 +218,10 @@ function assertPositive(name: string, value: number): void {
  * A null `updated_at` coalesces to `$now`, which reads as zero days stale rather than
  * poisoning the arithmetic: `duration.inDays(null, ...)` is null, and a null flows through the
  * exponent and the comparison to write `r.strength = null`, which no reader can interpret.
+ *
+ * `r.valid_until IS NULL` excludes an edge `edge_prune` has closed, the same predicate
+ * `adjacency.ts` reads: a closed edge is traversable by nothing, so decaying it further or
+ * spending a sweep slot on it is pure waste until reinforcement or a fresh signal reopens it.
  */
 export function buildEdgeWeightDecay(input: WeightDecayInput): GraphStatement {
   assertProportion('weightFloor', input.weightFloor);
@@ -218,6 +237,7 @@ export function buildEdgeWeightDecay(input: WeightDecayInput): GraphStatement {
   const cypher = [
     `MATCH (a:${BASE_NODE_LABEL})-[r]->(b:${BASE_NODE_LABEL})`,
     `WHERE NOT type(r) IN $protected AND ${source.where} AND ${target.where}`,
+    `  AND r.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
     'WITH r, duration.inDays(coalesce(r.updated_at, $now), $now).days AS daysSinceAccess,',
     `     r.${DECAYED_AT_PROPERTY} AS sweptAt`,
     // Two tiers rather than a coalesce, because Cypher sorts nulls last under ASC and an edge
@@ -281,6 +301,8 @@ export async function decayEdgeWeights(
  * write: whether the sweep has anything to do at all. A graph made only of backbone and
  * provenance edges, which a fresh session-only substrate is, has none, and the maintenance
  * loop's relevance scoring needs that answer before it decides whether decay is worth a turn.
+ * A closed edge is excluded here too, so a graph whose only unprotected edges edge_prune has
+ * closed reads as nothing left to decay rather than a sweep worth scheduling.
  */
 export function buildDecayableEdgeCount(): GraphStatement {
   const source = readModeFragment(withCurrency(), 'a', 'src');
@@ -289,6 +311,7 @@ export function buildDecayableEdgeCount(): GraphStatement {
   const cypher = [
     `MATCH (a:${BASE_NODE_LABEL})-[r]->(b:${BASE_NODE_LABEL})`,
     `WHERE NOT type(r) IN $protected AND ${source.where} AND ${target.where}`,
+    `  AND r.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
     'RETURN count(r) AS n',
   ].join('\n');
 

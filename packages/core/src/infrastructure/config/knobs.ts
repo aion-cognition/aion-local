@@ -274,12 +274,10 @@ export const KNOBS = {
     // affirm. `auto` is the confidence gate both predate, still valid and superseded by
     // `unanimous`: the judge answers 0.95 to every affirmative, so its threshold is a
     // pass-through or a wall and never a discriminator.
-    //
     // The default is set by measurement rather than by hand. The rule was pre-registered:
     // two-pass precision at or above 0.9 and recall at or above 0.9 on the 24-case battery
     // ships `unanimous`, anything less ships `propose`, and `supersession-precision.int.test.ts`
     // asserts the shipped value still matches what it measures, in both directions.
-    //
     // Measured 2026-08-30 against claude-haiku-4-5, 24 pairs: two-pass TP 12, FP 0, FN 0,
     // TN 12, precision 1.000, recall 1.000. The second pass saw 14 affirmatives and vetoed 2,
     // both on survival, both the false positives the single pass emitted (precision 0.857 on
@@ -341,13 +339,11 @@ export const KNOBS = {
     // which makes it the kill switch inside the kill switch. `act` sends it to a second model
     // call that argues the other side on the same reading, and runs it only when both passes
     // agree, through the same claim, bound, and scoring path a deterministic selection takes.
-    //
     // The default is set by measurement rather than by hand. The rule was pre-registered:
     // two-pass selection agreement at or above 0.9 with no invalid selection over the
     // twenty-four-case corpus ships `act`, anything less ships `propose`, and
     // `tier3-advisor-selection.int.test.ts` asserts the shipped value still matches what it
     // measures, in both directions.
-    //
     // Measured 2026-08-31 against claude-haiku-4-5, 24 readings: one call agreed with the
     // pre-committed answer on 12 of 24 and the two passes together on 12 of 24, with no
     // invalid selection. The second pass vetoed 20 of 23 recommendations, including ones the
@@ -453,6 +449,10 @@ export const KNOBS = {
     // ceiling. Matches `retroSupersessionBatch`'s own reasoning: bound the cost of a run
     // that finds a full page of ordinary-residue pairs needing a verdict.
     hygieneJudgeBatch: ['AION_MAINTENANCE_HYGIENE_JUDGE_BATCH', positiveInt, 5],
+    // `edge_prune`'s kill switch, aging threshold, and batch; edge-prune.ts states the arithmetic.
+    edgePrune: ['AION_MAINTENANCE_EDGE_PRUNE', z.boolean(), true],
+    edgePruneUnreinforcedDays: ['AION_MAINTENANCE_EDGE_PRUNE_UNREINFORCED_DAYS', positiveInt, 14],
+    edgePruneBatch: ['AION_MAINTENANCE_EDGE_PRUNE_BATCH', positiveInt, 1000],
   },
   sqlite: {
     path: [SQLITE_PATH_ENV_VAR, text, DEFAULT_SQLITE_PATH],

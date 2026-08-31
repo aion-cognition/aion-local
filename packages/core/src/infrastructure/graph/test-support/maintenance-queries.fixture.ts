@@ -5,6 +5,14 @@ import { readFirst, runRead } from '../connection.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../episodes.js';
 import { BASE_NODE_LABEL } from '../labels.js';
 import { NARRATIVE_PROPERTIES } from '../narrative-queries.js';
+import type { RelationshipType } from '../relationships.js';
+
+/** One typed edge's prune-relevant properties, for asserting `edge_prune` closed exactly what it should. */
+export type EdgePruneState = {
+  readonly strength: number | undefined;
+  readonly validUntil: Date | undefined;
+  readonly updatedAt: Date | undefined;
+};
 
 /**
  * Assertion reads for the maintenance operations, kept beside the other graph test-support
@@ -92,6 +100,30 @@ export async function relationshipTypesBetween(
     { left, right },
     (row) => row.type as string,
   );
+}
+
+/** `undefined` for every field when the named typed edge does not exist between the two nodes. */
+export async function edgePruneState(
+  driver: Driver,
+  sourceId: string,
+  targetId: string,
+  type: RelationshipType,
+): Promise<EdgePruneState> {
+  const row = await readFirst(
+    driver,
+    [
+      `MATCH (a:${BASE_NODE_LABEL} { id: $sourceId })-[r:${type}]->(b:${BASE_NODE_LABEL} { id: $targetId })`,
+      `RETURN r.strength AS strength, r.${BITEMPORAL_PROPERTIES.validUntil} AS valid_until,`,
+      '       r.updated_at AS updated_at',
+    ].join('\n'),
+    { sourceId, targetId },
+    (record) => ({
+      strength: typeof record.strength === 'number' ? record.strength : undefined,
+      validUntil: record.valid_until instanceof Date ? record.valid_until : undefined,
+      updatedAt: record.updated_at instanceof Date ? record.updated_at : undefined,
+    }),
+  );
+  return row ?? { strength: undefined, validUntil: undefined, updatedAt: undefined };
 }
 
 /** Current episode ids, oldest first, for a test that has to clear the field before it seeds. */
