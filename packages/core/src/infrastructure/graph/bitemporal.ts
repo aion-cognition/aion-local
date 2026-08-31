@@ -43,6 +43,17 @@ export function currentOnly(variable: string): string {
   ].join(' AND ');
 }
 
+/**
+ * Which maintenance operation closed a node, set only by a close that a later mention should
+ * undo. `aion forget` (`forgetNode`, `forgotten_at` alone) and a merge absorb
+ * (`supersedeInTransaction`'s `closeFragment` alone) never write it, because neither close is
+ * provisional: a person's forget stands until a person reverses it, and an absorbed duplicate's
+ * identity is the surviving node, not this one. `identifier_decay` writes it precisely because
+ * its close is a bet on silence rather than a verdict, and `entity-queries.ts`'s `buildEntityMerge`
+ * reads it to tell the two apart before deciding whether the next mention reopens the node.
+ */
+export const CLOSURE_PROVENANCE_PROPERTY = 'closed_by';
+
 export type StampNewInput = {
   readonly label: NodeLabel;
   readonly id?: string;
