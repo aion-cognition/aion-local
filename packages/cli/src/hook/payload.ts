@@ -101,12 +101,23 @@ export function toolExecutions(buffered: readonly BufferedTool[]): readonly Tool
   });
 }
 
+/**
+ * The hook subtree imports node builtins and its own siblings only (`imports.test.ts`), so
+ * this names the one channel a hook fire can ever claim rather than importing the protocol's
+ * enum for it.
+ */
+export type ReflectionOriginPayload = {
+  readonly channel: 'hook';
+  readonly event: string;
+};
+
 export function reflectionArgs(
   turns: readonly ReflectionTurnPayload[],
   executions: readonly ToolExecutionPayload[],
   sessionId: string | undefined,
+  origin: ReflectionOriginPayload,
 ): Record<string, unknown> {
-  const args: Record<string, unknown> = {};
+  const args: Record<string, unknown> = { origin };
   if (turns.length > 0) {
     args.turns = turns;
   }

@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
  * the dedupe window is the session, not because the hash differs. `lane` is scheduling, and
  * the same experience is the same experience whichever queue it waited in.
  */
-export type ReflectionContent = Omit<ReflectionInput, 'session_id' | 'lane'>;
+export type ReflectionContent = Omit<ReflectionInput, 'session_id' | 'lane' | 'origin'>;
 
 export type PreparedTurn = {
   readonly role: string;

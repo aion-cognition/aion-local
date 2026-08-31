@@ -23,6 +23,9 @@ export const MEMORY_PROPERTIES = {
   turnCount: 'turn_count',
   toolExecutionCount: 'tool_execution_count',
   observationCount: 'observation_count',
+  /** Record-only: how the reflection call that wrote this episode reached intake. */
+  originChannel: 'origin_channel',
+  originEvent: 'origin_event',
 } as const;
 
 /** `PARTICIPATES_IN` is member-to-container for Turn→Episode and Episode→Session alike. */

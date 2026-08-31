@@ -1,4 +1,8 @@
-import { ReflectionInputSchema, type ReflectionOutput } from '@aion/protocol';
+import {
+  ReflectionInputSchema,
+  type ReflectionOrigin,
+  type ReflectionOutput,
+} from '@aion/protocol';
 import type { Driver } from 'neo4j-driver';
 
 import { ReflectionNotStoredError } from './errors.js';
@@ -73,7 +77,11 @@ export type ReflectionIntakeOptions = {
   readonly now?: Date;
 };
 
-function episodeProperties(prepared: PreparedEpisode, sessionId: string): GraphProperties {
+function episodeProperties(
+  prepared: PreparedEpisode,
+  sessionId: string,
+  origin: ReflectionOrigin | undefined,
+): GraphProperties {
   return {
     [MEMORY_PROPERTIES.text]: prepared.text,
     [MEMORY_PROPERTIES.summary]: prepared.summary,
@@ -83,6 +91,9 @@ function episodeProperties(prepared: PreparedEpisode, sessionId: string): GraphP
     [MEMORY_PROPERTIES.turnCount]: prepared.turnCount,
     [MEMORY_PROPERTIES.toolExecutionCount]: prepared.toolExecutionCount,
     [MEMORY_PROPERTIES.observationCount]: prepared.observationCount,
+    // Undefined when the caller named none: absent origin is an absent property, no sentinel.
+    [MEMORY_PROPERTIES.originChannel]: origin?.channel,
+    [MEMORY_PROPERTIES.originEvent]: origin?.event,
   };
 }
 
@@ -145,6 +156,7 @@ async function storeEpisode(
   prepared: PreparedEpisode,
   sessionId: string,
   now: Date,
+  origin: ReflectionOrigin | undefined,
 ): Promise<StoredEpisode> {
   return inWriteTransaction(driver, async (tx) => {
     await lockNodeInTransaction(tx, sessionId, now);
@@ -161,7 +173,7 @@ async function storeEpisode(
       label: 'Episode',
       now,
       occurredAt: prepared.occurredAt,
-      properties: episodeProperties(prepared, sessionId),
+      properties: episodeProperties(prepared, sessionId, origin),
     });
     const pending: PendingVectorNode[] = [{ id: episode.id, text: prepared.text }];
 
@@ -198,6 +210,7 @@ async function resolveEpisode(
   prepared: PreparedEpisode,
   sessionId: string,
   now: Date,
+  origin: ReflectionOrigin | undefined,
 ): Promise<StoredEpisode> {
   const known = await findEpisodeByContentHash(deps.driver, {
     sessionId,
@@ -206,7 +219,7 @@ async function resolveEpisode(
   if (known !== undefined) {
     return { episodeId: known, created: false, pending: [] };
   }
-  return storeEpisode(deps.driver, prepared, sessionId, now);
+  return storeEpisode(deps.driver, prepared, sessionId, now, origin);
 }
 
 type DurableWrite = {
@@ -229,10 +242,11 @@ async function storeDurably(
   prepared: PreparedEpisode,
   identity: string,
   now: Date,
+  origin: ReflectionOrigin | undefined,
 ): Promise<DurableWrite> {
   try {
     const { sessionId } = await deps.sessions.ensureSession({ identity, now });
-    const stored = await resolveEpisode(deps, prepared, sessionId, now);
+    const stored = await resolveEpisode(deps, prepared, sessionId, now, origin);
     return { sessionId, stored };
   } catch (err) {
     if (isGraphUnavailable(err)) {
@@ -375,7 +389,9 @@ export async function handleReflection(
   // `session_id` and `lane` are routing, not content. Redacting an identity would fork the
   // session and break the FOLLOWS chain; leaving either in would put scheduling metadata in
   // the content hash, so the same experience pushed on two lanes would be two episodes.
-  const { session_id: suppliedIdentity, lane: requestedLane, ...content } = payload;
+  // `origin` is provenance about the call, not about what happened, so it is carved out the
+  // same way: pushing the same experience via a hook and via the MCP client stays one episode.
+  const { session_id: suppliedIdentity, lane: requestedLane, origin, ...content } = payload;
   const redacted = redactPayload(content, deps.entropyThreshold);
   if (redacted.matches.length > 0) {
     deps.logger.warn(
@@ -390,6 +406,7 @@ export async function handleReflection(
     prepared,
     suppliedIdentity ?? options.identity,
     now,
+    origin,
   );
   // Measured before this call's own row lands, so a fresh enqueue is not counted against
   // itself; a duplicate payload reads the same figure the already-queued job would.

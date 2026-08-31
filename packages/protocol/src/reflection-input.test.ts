@@ -75,6 +75,35 @@ describe('ReflectionInputSchema valid fixtures', () => {
     expect(ReflectionInputSchema.parse(input)).toEqual(input);
   });
 
+  it('parses an origin naming a channel and an event', () => {
+    const input = {
+      observations: ['a decision'],
+      origin: { channel: 'hook', event: 'stop' },
+    };
+    expect(ReflectionInputSchema.parse(input)).toEqual(input);
+  });
+
+  it('parses an origin with no event', () => {
+    const input = { observations: ['a decision'], origin: { channel: 'cli' } };
+    expect(ReflectionInputSchema.parse(input)).toEqual(input);
+  });
+
+  it('rejects an origin channel outside the vocabulary', () => {
+    const result = ReflectionInputSchema.safeParse({
+      observations: ['a decision'],
+      origin: { channel: 'browser' },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an unknown key on origin', () => {
+    const result = ReflectionInputSchema.safeParse({
+      observations: ['a decision'],
+      origin: { channel: 'mcp', transport: 'http' },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it('accepts a non-standard tool_execution status', () => {
     const input = {
       tool_executions: [

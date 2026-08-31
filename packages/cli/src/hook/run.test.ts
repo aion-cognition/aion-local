@@ -222,6 +222,21 @@ describe('hook events', () => {
     expect(state.offset).toBe(Buffer.byteLength(`${USER_LINE}\n${ASSISTANT_LINE}\n`));
   });
 
+  it.each(['pre-compact', 'stop', 'subagent-stop', 'session-end'] as const)(
+    'carries the origin channel and the %s event name on that push',
+    async (event) => {
+      writeFileSync(transcriptPath, `${USER_LINE}\n${ASSISTANT_LINE}\n`);
+      const { fetchImpl, calls } = transport({ structuredContent: { episode_id: 'e1' } });
+
+      await runHook(
+        { session_id: SESSION_ID, transcript_path: transcriptPath },
+        options(event, { fetchImpl }),
+      );
+
+      expect(toolArgsIn(calls).origin).toEqual({ channel: 'hook', event });
+    },
+  );
+
   it('pushes nothing when only the user spoke', async () => {
     writeFileSync(transcriptPath, `${USER_LINE}\n`);
     const { fetchImpl, calls } = transport({ structuredContent: {} });
