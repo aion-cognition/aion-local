@@ -1,5 +1,6 @@
 import type { IntrospectionOperation } from '../domain/operation.js';
 import { backboneRepairOperation } from './operations/backbone-repair.js';
+import { claimDedupOperation } from './operations/claim-dedup.js';
 import { communityRefreshOperation } from './operations/community-refresh.js';
 import { deadLetterOperation } from './operations/dead-letter.js';
 import { descriptionFreshnessOperation } from './operations/description-freshness-operation.js';
@@ -65,8 +66,10 @@ export function introspectionOperations(): readonly IntrospectionOperation[] {
 
     // Entity-merge policy: merges the exact-name pairs a person going on to approve every one
     // of, measured over two live review batches, already proved safe. A fuzzy pair passes
-    // through untouched and stays queued for `aion proposals`.
+    // through untouched and stays queued for `aion proposals`. Claim-merge policy sits beside
+    // it: a nearest-neighbor pair a two-pass judge unanimously calls one assertion restated.
     mergeAutoOperation(),
+    claimDedupOperation(),
 
     // The queue's own hygiene: ages a proposal out once nobody has acted on it inside its
     // horizon, ledgered and reversible with `aion proposals reopen`.

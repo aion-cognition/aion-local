@@ -296,6 +296,10 @@ function renderLanes(config: Config, write: Writer): void {
     `  ${'proposal_hygiene'.padEnd(LANE_NAME_WIDTH)} MODE: ${laneMode(config.maintenance.proposalHygiene)}`,
   );
 
+  write(
+    `  ${'claim_dedup'.padEnd(LANE_NAME_WIDTH)} MODE: ${laneMode(config.maintenance.claimDedup)}`,
+  );
+
   const tier3Acting = config.maintenance.tier3 && config.maintenance.tier3Mode === 'act';
   write(`  ${'tier3'.padEnd(LANE_NAME_WIDTH)} MODE: ${laneMode(tier3Acting)}`);
 }

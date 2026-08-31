@@ -157,6 +157,16 @@ path, an agent id) once `AION_MAINTENANCE_IDENTIFIER_HALF_LIFE_DAYS` (default `7
 no fresh mention, unless it is a merge target, carries a typed-knowledge edge, or more than
 `AION_MAINTENANCE_IDENTIFIER_MENTION_FLOOR` (default `5`) episodes have mentioned it.
 
+`claim_dedup` merges a recently-extracted claim into its nearest current neighbor once a
+two-pass judge unanimously calls the pair one assertion restated: the older claim survives, the
+newer one's source episode folds onto it, and the newer closes with the same `SUPERSEDES`
+lineage a contradiction close writes, so `aion unsupersede` reverses it like any other close.
+`AION_MAINTENANCE_CLAIM_DEDUP` (default `true`) is its kill switch. `AION_MAINTENANCE_CLAIM_DEDUP_BATCH`
+(default `5`) bounds pairs judged per run, since every pair costs up to two model calls.
+`AION_MAINTENANCE_CLAIM_DEDUP_COSINE_FLOOR` (default `0.95`) is the nearest-neighbor floor a
+pair must clear before the judge is asked at all. A pair is judged once, ever: the verdict is
+ledgered under a permanent key on the unordered pair, so a re-run never pays for it twice.
+
 ## Reflection concurrency
 
 `AION_WORKER_COUNT` (default `1`) sets how many episodes the reflection worker claims and
