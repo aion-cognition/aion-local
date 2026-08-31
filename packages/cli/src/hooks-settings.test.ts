@@ -49,8 +49,12 @@ describe('buildAionHooks', () => {
     ]);
   });
 
-  it('matches the three session-start sources', () => {
+  it('matches all four session-start sources', () => {
     expect(buildAionHooks(spec()).SessionStart?.[0]?.matcher).toBe(SESSION_START_MATCHER);
+    const pattern = new RegExp(`^(${SESSION_START_MATCHER})$`);
+    for (const source of ['startup', 'resume', 'clear', 'compact']) {
+      expect(source).toMatch(pattern);
+    }
   });
 
   it('leaves research capture out unless it is asked for', () => {

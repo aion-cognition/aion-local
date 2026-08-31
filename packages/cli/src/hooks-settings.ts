@@ -16,7 +16,7 @@ export const AION_HOOK_MARKER = 'hook-main.js';
 /** The three research tools whose results are worth capturing. Nothing else fires PostToolUse. */
 export const RESEARCH_MATCHER = 'mcp__slack__.*|mcp__linear-mcp-server__.*|mcp__Notion__.*';
 
-export const SESSION_START_MATCHER = 'startup|resume|compact';
+export const SESSION_START_MATCHER = 'startup|resume|clear|compact';
 
 export type HookCommand = {
   readonly type: 'command';
