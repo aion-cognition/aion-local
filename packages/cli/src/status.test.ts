@@ -229,6 +229,7 @@ describe('renderStatus', () => {
       `supersession       MODE: acting (${DEFAULTS.reflection.supersedeMode})`,
     );
     expect(text).toContain('proposal_hygiene   MODE: acting');
+    expect(text).toContain('claim_dedup        MODE: acting');
     // tier3Mode ships `propose`: the advisor runs, but an accepted recommendation runs nothing.
     expect(text).toContain('tier3              MODE: off');
   });

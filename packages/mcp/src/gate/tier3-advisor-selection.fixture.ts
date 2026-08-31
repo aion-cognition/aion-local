@@ -335,13 +335,14 @@ export const TIER3_SELECTION_BATTERY: readonly Tier3Case[] = [
       enrichment: enrichment({ episodes: 96 }),
       proposals: proposals({
         supersessionOpen: 7,
-        oldestOpenAgeMs: 604_800_000,
-        medianOpenAgeMs: 259_200_000,
+        oldestOpenAgeMs: 10_800_000,
+        medianOpenAgeMs: 3_600_000,
       }),
       effectiveness: POPULATED_RECORD,
     }),
     expected: NO_OPERATION,
-    truthNote: 'open supersession proposals wait on a person and no operation drains them',
+    truthNote:
+      'fresh open proposals are under every hygiene horizon, so nothing should run for them yet',
   },
   {
     key: 'slow-worker-shallow-queue',
