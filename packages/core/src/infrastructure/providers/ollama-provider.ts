@@ -23,12 +23,15 @@ function foldForEmbedding(text: string): string {
 }
 
 /**
- * nomic-bert's trained context is 2048 tokens, and Ollama enforces that ceiling on every
- * /api/embed call. One input over the limit fails the whole batch with a 400, not just the
- * offending row, so an oversized node stalls every node queued with it. Cap at ~4 chars per
- * token with headroom for denser technical text and the model's special tokens.
+ * A subword token spans at least one character, so an input of at most 2048 characters can
+ * never exceed nomic-bert's 2048-token context, whatever its density or language. Ollama
+ * rejects an over-length embed with a 400 and does not truncate it (the `truncate` option
+ * does not save this model), and one rejected input fails the whole batch, so the cap has to
+ * hold for every input rather than on average. A char budget below the token ceiling is the
+ * only guarantee that holds for a dense node, not just a prose one. Long text embeds from its
+ * prefix; windowing the remainder into a pooled vector is a later enhancement.
  */
-const MAX_EMBED_INPUT_CHARS = 6000;
+const MAX_EMBED_INPUT_CHARS = 2000;
 
 function capForEmbedding(text: string): string {
   return text.length > MAX_EMBED_INPUT_CHARS ? text.slice(0, MAX_EMBED_INPUT_CHARS) : text;
