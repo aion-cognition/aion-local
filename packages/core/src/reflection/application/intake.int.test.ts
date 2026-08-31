@@ -204,6 +204,13 @@ describe('reflection intake against a live graph and live Ollama', () => {
     expect(ledgerRowCount()).toBe(0);
   });
 
+  it('writes no origin property at all when the caller names none', async () => {
+    const props = await nodeProperties(harness.driver, episodeId);
+
+    expect(props.origin_channel).toBeUndefined();
+    expect(props.origin_event).toBeUndefined();
+  });
+
   it('never stores the raw secret in any node property, only its fingerprint', async () => {
     const stored = await everyStoredProperty(harness.driver);
 
@@ -248,6 +255,18 @@ describe('reflection intake against a live graph and live Ollama', () => {
     expect(
       await countEdges(harness.driver, 'FOLLOWS', 'mcp-transport-session-2', SESSION_IDENTITY),
     ).toBe(1);
+  });
+
+  it('stores the origin channel and event when the caller names one', async () => {
+    const result = await handleReflection(
+      deps,
+      { ...MIXED_PAYLOAD, origin: { channel: 'hook', event: 'session-end' } },
+      { identity: 'origin-session' },
+    );
+
+    const props = await nodeProperties(harness.driver, result.episode_id);
+    expect(props.origin_channel).toBe('hook');
+    expect(props.origin_event).toBe('session-end');
   });
 });
 

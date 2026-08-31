@@ -204,6 +204,28 @@ describe('reflection intake storage', () => {
     expect(turnFollows[0]?.targetId).toBe(turns[0]?.id);
   });
 
+  it('stores the origin channel and event when the caller names one', async () => {
+    const result = await handleReflection(
+      deps,
+      { ...PAYLOAD, origin: { channel: 'hook', event: 'subagent-stop' } },
+      { identity: 'session-a' },
+    );
+
+    const episode = graph.nodes.get(result.episode_id);
+    expect(episode?.properties).toMatchObject({
+      origin_channel: 'hook',
+      origin_event: 'subagent-stop',
+    });
+  });
+
+  it('writes no origin property at all when the caller names none', async () => {
+    const result = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+
+    const episode = graph.nodes.get(result.episode_id);
+    expect(episode?.properties.origin_channel).toBeUndefined();
+    expect(episode?.properties.origin_event).toBeUndefined();
+  });
+
   it('embeds the episode body and every turn in one batched call', async () => {
     await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
 
@@ -321,6 +343,20 @@ describe('reflection intake lanes', () => {
     );
 
     expect(bulk.episode_id).toBe(interactive.episode_id);
+    expect(listReflectionJobs(db)).toHaveLength(1);
+  });
+
+  // Origin is provenance about the call, not about what happened. In the content hash it
+  // would make the same experience two episodes depending on which transport pushed it.
+  it('keeps origin out of the content hash', async () => {
+    const bare = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+    const withOrigin = await handleReflection(
+      deps,
+      { ...PAYLOAD, origin: { channel: 'hook', event: 'stop' } },
+      { identity: 'session-a' },
+    );
+
+    expect(withOrigin.episode_id).toBe(bare.episode_id);
     expect(listReflectionJobs(db)).toHaveLength(1);
   });
 

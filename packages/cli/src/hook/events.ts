@@ -144,8 +144,12 @@ async function push(context: HookContext, taken: Capture): Promise<boolean> {
   if (taken.turns.length === 0 && taken.executions.length === 0) {
     return false;
   }
+  const origin = { channel: 'hook' as const, event: context.options.event };
   await withMcp(context, (client) =>
-    client.call(REFLECTION_TOOL, reflectionArgs(taken.turns, taken.executions, taken.sessionId)),
+    client.call(
+      REFLECTION_TOOL,
+      reflectionArgs(taken.turns, taken.executions, taken.sessionId, origin),
+    ),
   );
   advance(context, taken);
   return true;

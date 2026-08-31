@@ -51,6 +51,19 @@ export const ReflectionLaneSchema = z
   .enum(['interactive', 'bulk'])
   .describe('bulk queues this episode behind live turns; omit for interactive');
 
+/**
+ * Record-only provenance: how the reflection call reached intake. It never gates a
+ * dismissal or any other policy decision, so a caller-settable field is not a trust hole.
+ * `event` names the hook event or transport call that pushed the payload; a caller that
+ * does not know one omits it.
+ */
+export const ReflectionOriginSchema = z.strictObject({
+  channel: z.enum(['hook', 'mcp', 'cli', 'verification']),
+  event: z.string().optional(),
+});
+
+export type ReflectionOrigin = z.infer<typeof ReflectionOriginSchema>;
+
 const ReflectionPayloadSchema = z.strictObject({
   turns: z.array(ReflectionTurnSchema).optional(),
   tool_executions: z.array(ToolExecutionSchema).optional(),
@@ -58,6 +71,7 @@ const ReflectionPayloadSchema = z.strictObject({
   summary: z.string().min(1).optional(),
   session_id: z.string().min(1).optional(),
   lane: ReflectionLaneSchema.optional(),
+  origin: ReflectionOriginSchema.optional(),
 });
 
 /**

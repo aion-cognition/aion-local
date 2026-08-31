@@ -113,6 +113,7 @@ describe('tool definitions', () => {
       'summary',
       'session_id',
       'lane',
+      'origin',
     ]);
   });
 
