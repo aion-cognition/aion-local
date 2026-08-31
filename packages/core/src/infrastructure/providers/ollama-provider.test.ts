@@ -56,11 +56,11 @@ describe('OllamaProvider.embed', () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
-  it('caps an input over the model context budget before sending it', async () => {
+  it('caps an input to the token ceiling budget before sending it', async () => {
     const longText = 'a'.repeat(9000);
     const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => {
       const sent = JSON.parse(init?.body as string).input as string[];
-      expect((sent[0] ?? '').length).toBeLessThanOrEqual(6000);
+      expect((sent[0] ?? '').length).toBeLessThanOrEqual(2000);
       expect(sent[1]).toBe('short');
       return jsonResponse({ embeddings: [[1], [2]] });
     });
