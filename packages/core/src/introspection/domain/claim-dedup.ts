@@ -11,6 +11,20 @@ export function claimDedupPairKey(a: string, b: string): string {
   return `${CLAIM_DEDUP_PAIR_PREFIX}${[a, b].sort().join(':')}`;
 }
 
+/**
+ * Permanent, keyed on one node: this node has stood as the scan's subject and its fate is
+ * settled, whether that meant a judged pair or no qualifying neighbor at all. Stamping only
+ * retires a node from being picked as a subject again; it stays eligible to turn up as someone
+ * else's neighbor, so a future restatement is a new node whose own turn as subject finds this
+ * one waiting for it. Without this mark the scan re-examines the same subjects forever and never
+ * reaches deeper into the current population.
+ */
+export const CLAIM_DEDUP_SCAN_PREFIX = 'claim_dedup.scan:';
+
+export function claimDedupScanKey(nodeId: string): string {
+  return `${CLAIM_DEDUP_SCAN_PREFIX}${nodeId}`;
+}
+
 export type ClaimDedupNode = {
   readonly id: string;
   readonly occurredAt: Date;
