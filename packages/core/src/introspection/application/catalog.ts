@@ -3,6 +3,7 @@ import { backboneRepairOperation } from './operations/backbone-repair.js';
 import { communityRefreshOperation } from './operations/community-refresh.js';
 import { deadLetterOperation } from './operations/dead-letter.js';
 import { descriptionFreshnessOperation } from './operations/description-freshness-operation.js';
+import { edgePruneOperation } from './operations/edge-prune.js';
 import { mergeAutoOperation } from './operations/merge-auto-operation.js';
 import { narrativeCleanupOperation } from './operations/narrative-cleanup-operation.js';
 import { narrativeRegroundingOperation } from './operations/narrative-regrounding.js';
@@ -37,9 +38,12 @@ export function introspectionOperations(): readonly IntrospectionOperation[] {
     deadLetterOperation(),
     redactionResiduePurgeOperation(),
 
-    // Plasticity: the two bounded weight operations, on the loop's clock rather than a caller's.
+    // Plasticity: the two bounded weight operations, on the loop's clock rather than a
+    // caller's, then the sweep that closes what decay's own floor clamp leaves traversable
+    // in name only.
     reinforcementFlushOperation(),
     memoryDecayOperation(),
+    edgePruneOperation(),
 
     // Content maintenance: duplicate narratives, narratives whose claims a correction has since
     // closed, the contradiction backlog older than the supersession stage, and entity glosses

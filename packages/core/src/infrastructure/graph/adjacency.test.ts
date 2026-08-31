@@ -58,6 +58,10 @@ describe('buildAdjacencyStatement', () => {
     expect(statement.cypher).toContain('COUNT { (m)--() } AS degree');
   });
 
+  it('excludes an edge edge_prune has bitemporally closed', () => {
+    expect(statement.cypher).toContain(`r.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`);
+  });
+
   it('suppresses forgotten nodes and annotates currency on the neighbour by default', () => {
     expect(statement.cypher).toContain(`m.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`);
     expect(statement.cypher).toContain('AS currency');

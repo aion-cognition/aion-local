@@ -34,7 +34,7 @@ describe('buildEdgeUpsert policy clauses', () => {
   it('takes the maximum of strength and confidence on collision', () => {
     const { cypher } = buildEdgeUpsert(BASE);
     expect(cypher).toContain(
-      'r.strength = CASE WHEN coalesce(r.strength, 0.0) >= $strength THEN r.strength ELSE $strength END',
+      'CASE WHEN coalesce(r.strength, 0.0) >= $strength THEN r.strength ELSE $strength END',
     );
     expect(cypher).toContain(
       'r.confidence = CASE WHEN coalesce(r.confidence, 0.0) >= $confidence THEN r.confidence ELSE $confidence END',
@@ -149,5 +149,54 @@ describe('buildEdgeUpsert validation', () => {
 
   it('rejects an empty endpoint id', () => {
     expect(() => buildEdgeUpsert({ ...BASE, sourceId: '' })).toThrow(GraphWriteError);
+  });
+});
+
+describe('buildEdgeUpsert reopening a closed edge', () => {
+  it('resets strength through the create expression under max, gated on valid_until', () => {
+    const onMatch = clause(buildEdgeUpsert(BASE).cypher, 'ON MATCH SET');
+    expect(onMatch).toContain(
+      'r.strength = CASE WHEN r.valid_until IS NOT NULL THEN $strength ELSE',
+    );
+  });
+
+  it('resets strength through the create expression under bounded_step, not the stepped remnant', () => {
+    const onMatch = clause(
+      buildEdgeUpsert({ ...BASE, strengthPolicy: 'bounded_step', weightFloor: 0.1 }).cypher,
+      'ON MATCH SET',
+    );
+    expect(onMatch).toContain(
+      'r.strength = CASE WHEN r.valid_until IS NOT NULL ' +
+        'THEN CASE WHEN $strength < $weightFloor THEN $weightFloor ELSE $strength END ELSE',
+    );
+  });
+
+  it('clears valid_until and tx_until on the same branch that resets strength', () => {
+    const onMatch = clause(buildEdgeUpsert(BASE).cypher, 'ON MATCH SET');
+    expect(onMatch).toContain(
+      'r.valid_until = CASE WHEN r.valid_until IS NOT NULL THEN null ELSE r.valid_until END',
+    );
+    expect(onMatch).toContain(
+      'r.tx_until = CASE WHEN r.valid_until IS NOT NULL THEN null ELSE r.tx_until END',
+    );
+  });
+
+  it('leaves an open matched edge on exactly the prior strength expression', () => {
+    // The ELSE arm is what an open edge (valid_until IS NULL) actually evaluates. Pinning it
+    // byte-for-byte against the expression this suite already checked pre-reopen is what makes
+    // an open edge's write provably unchanged, not just plausibly unchanged.
+    const onMatch = clause(buildEdgeUpsert(BASE).cypher, 'ON MATCH SET');
+    expect(onMatch).toContain(
+      'ELSE CASE WHEN coalesce(r.strength, 0.0) >= $strength THEN r.strength ELSE $strength END END',
+    );
+
+    const stepped = 'coalesce(r.strength, 0.0) + $strength * (1.0 - coalesce(r.strength, 0.0))';
+    const boundedOnMatch = clause(
+      buildEdgeUpsert({ ...BASE, strengthPolicy: 'bounded_step', weightFloor: 0.1 }).cypher,
+      'ON MATCH SET',
+    );
+    expect(boundedOnMatch).toContain(
+      `ELSE CASE WHEN ${stepped} > 1.0 THEN 1.0 WHEN ${stepped} < $weightFloor THEN $weightFloor ELSE ${stepped} END END`,
+    );
   });
 });

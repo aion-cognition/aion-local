@@ -47,7 +47,7 @@ describe('bounded edge weight reinforcement', () => {
     expect(cypher).toContain('b.forgotten_at IS NULL');
   });
 
-  it('refreshes updated_at and writes no other edge property', () => {
+  it('refreshes updated_at and touches no property outside strength and the reopen stamps', () => {
     const { cypher } = buildEdgeWeightReinforcement({ pairs: PAIRS, weightFloor: 0.1 });
     expect(cypher).toContain('r.updated_at = $now');
     expect(cypher).not.toContain('r.count');
@@ -94,6 +94,31 @@ describe('bounded edge weight reinforcement', () => {
   });
 });
 
+describe('bounded edge weight reinforcement reopening a closed edge', () => {
+  it('starts the bounded step from zero instead of the matched remnant, gated on valid_until', () => {
+    const { cypher } = buildEdgeWeightReinforcement({ pairs: PAIRS, weightFloor: 0.1 });
+    expect(cypher).toContain(
+      'WITH r, CASE WHEN r.valid_until IS NOT NULL THEN 0.0 ELSE coalesce(r.strength, $weightFloor) END AS w,',
+    );
+  });
+
+  it('clears valid_until and tx_until on the same branch that resets the base weight', () => {
+    const { cypher } = buildEdgeWeightReinforcement({ pairs: PAIRS, weightFloor: 0.1 });
+    expect(cypher).toContain('r.valid_until = CASE WHEN r.valid_until IS NOT NULL THEN null');
+    expect(cypher).toContain('ELSE r.valid_until END,');
+    expect(cypher).toContain('r.tx_until = CASE WHEN r.valid_until IS NOT NULL THEN null');
+    expect(cypher).toContain('ELSE r.tx_until END,');
+  });
+
+  it('leaves an open matched edge on exactly the prior base weight', () => {
+    // The ELSE arm is what an open edge (valid_until IS NULL) actually evaluates: pinning it
+    // against `coalesce(r.strength, $weightFloor)`, the whole of the prior base weight
+    // expression, is what makes an open edge's step provably unchanged.
+    const { cypher } = buildEdgeWeightReinforcement({ pairs: PAIRS, weightFloor: 0.1 });
+    expect(cypher).toContain('ELSE coalesce(r.strength, $weightFloor) END AS w,');
+  });
+});
+
 describe('bell curve edge weight decay', () => {
   it('scans the graph for its own candidates rather than taking named pairs', () => {
     const { cypher } = buildEdgeWeightDecay(DECAY_INPUT);
@@ -136,6 +161,11 @@ describe('bell curve edge weight decay', () => {
     const { cypher, parameters } = buildEdgeWeightDecay(DECAY_INPUT);
     expect(cypher).toContain('WHERE NOT type(r) IN $protected');
     expect(parameters.protected).toEqual([...PROTECTED_RELATIONSHIP_TYPES]);
+  });
+
+  it('excludes a closed edge from the scan, the same predicate adjacency reads', () => {
+    const { cypher } = buildEdgeWeightDecay(DECAY_INPUT);
+    expect(cypher).toContain('r.valid_until IS NULL');
   });
 
   it('skips an edge onto a forgotten node at either end', () => {
@@ -190,6 +220,11 @@ describe('decayable edge count', () => {
   it('excludes the same protected types by the same parameter', () => {
     const { parameters } = buildDecayableEdgeCount();
     expect(parameters.protected).toEqual([...PROTECTED_RELATIONSHIP_TYPES]);
+  });
+
+  it('excludes a closed edge from the gauge, the same predicate the scan uses', () => {
+    const { cypher } = buildDecayableEdgeCount();
+    expect(cypher).toContain('r.valid_until IS NULL');
   });
 
   it('skips an edge onto a forgotten node at either end', () => {

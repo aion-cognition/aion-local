@@ -1,5 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 
+import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { runRead, type GraphStatement } from './connection.js';
 import { BASE_NODE_LABEL } from './labels.js';
 import {
@@ -88,6 +89,11 @@ const ABSENT_PROPORTION = '1.0';
  * The read mode is spliced in against the neighbour: a forgotten node is suppressed here
  * and never enters the frontier, while a superseded one stays traversable and comes back
  * annotated with what replaced it.
+ *
+ * `r.valid_until IS NULL` excludes an edge `edge_prune` has bitemporally closed. No writer
+ * before it ever set that property on a relationship, so this is a no-op for every edge type
+ * that predates it; it is what makes a pruned edge actually vanish from this read rather than
+ * merely from decay's floor clamp, which left it traversable at zero cost saved.
  */
 export function buildAdjacencyStatement(request: AdjacencyRequest): GraphStatement {
   const fragment = readModeFragment(request.mode, 'm', NEIGHBOUR_PREFIX);
@@ -96,7 +102,8 @@ export function buildAdjacencyStatement(request: AdjacencyRequest): GraphStateme
     'UNWIND $frontier AS frontierId',
     `MATCH (n:${BASE_NODE_LABEL} { id: frontierId })-[r]-(m:${BASE_NODE_LABEL})`,
     'WHERE m.id <> frontierId AND NOT m.id IN $visited' +
-      ` AND coalesce(r.strength, ${ABSENT_PROPORTION}) >= $minStrength AND ${fragment.where}`,
+      ` AND coalesce(r.strength, ${ABSENT_PROPORTION}) >= $minStrength AND ${fragment.where}` +
+      ` AND r.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
     `WITH frontierId, r, m, coalesce(r.strength, ${ABSENT_PROPORTION}) AS strength`,
     'ORDER BY strength DESC',
     'WITH frontierId, collect({ r: r, m: m, strength: strength })[0..$topK] AS ranked',

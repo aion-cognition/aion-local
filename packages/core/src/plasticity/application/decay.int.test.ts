@@ -5,6 +5,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { sweepEdgeDecay } from './decay.js';
 import { writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
+import { closeEligibleAssociationEdges } from '../../infrastructure/graph/edge-prune-queries.js';
+import { countDecayableEdges, decayEdgeWeights } from '../../infrastructure/graph/edge-weights.js';
 import { upsertEdge } from '../../infrastructure/graph/edges.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
 import type { RelationshipType } from '../../infrastructure/graph/relationships.js';
@@ -294,5 +296,37 @@ describe('hebbian decay against the graph', () => {
       edgesDecayed: 1,
       lastRunAt: NOW.toISOString(),
     });
+  });
+
+  it('excludes a closed edge from both the scan and the decayable count', async () => {
+    await seedEntity('closed-a');
+    await seedEntity('closed-b');
+    await seedEdge('CO_OCCURS', 'closed-a', 'closed-b', WEIGHT_FLOOR, 999);
+
+    const countBefore = await countDecayableEdges(harness.driver);
+
+    // A high `unreinforcedDays` keeps this call from also closing an edge an earlier test in
+    // this file already decayed down to the floor: none of those are anywhere near 999 days
+    // unreinforced, so only the pair seeded above is eligible.
+    const closed = await closeEligibleAssociationEdges(harness.driver, {
+      batchSize: 100,
+      weightFloor: WEIGHT_FLOOR,
+      unreinforcedDays: 900,
+      now: NOW,
+    });
+    expect(closed).toHaveLength(1);
+    expect(closed[0]?.sourceId).toBe('closed-a');
+
+    expect(await countDecayableEdges(harness.driver)).toBe(countBefore - 1);
+
+    const scanned = await decayEdgeWeights(harness.driver, {
+      batchSize: 10_000,
+      decayRate: DECAY_RATE,
+      peakDays: PEAK_DAYS,
+      sigma: SIGMA,
+      weightFloor: WEIGHT_FLOOR,
+      now: NOW,
+    });
+    expect(scanned.some((edge) => edge.sourceId === 'closed-a')).toBe(false);
   });
 });

@@ -1,6 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 import { randomUUID } from 'node:crypto';
 
+import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { type GraphStatement, type GraphTransaction, runWrite } from './connection.js';
 import { GraphNodeNotFoundError, GraphWriteError } from './errors.js';
 import { BASE_NODE_LABEL } from './labels.js';
@@ -74,23 +75,27 @@ function uniqueStrings(values: readonly string[]): string[] {
   return [...new Set(values)];
 }
 
-/** The strength expressions each policy writes, on create and on match. */
+/**
+ * The strength expression each policy writes: the value a fresh edge is created with, and the
+ * value an ordinary repeat write (one that lands on an already-open edge) moves it to. Bare
+ * expressions rather than full assignments, so the `ON MATCH` reopen branch below can fall
+ * back to the create expression without restating the merge policy's own cases.
+ */
 function strengthPolicyFragments(policy: EdgeStrengthPolicy): {
   readonly onCreate: string;
   readonly onMatch: string;
 } {
   if (policy === 'max') {
     return {
-      onCreate: 'r.strength = $strength',
+      onCreate: '$strength',
       onMatch:
-        'r.strength = CASE WHEN coalesce(r.strength, 0.0) >= $strength THEN r.strength ELSE $strength END',
+        'CASE WHEN coalesce(r.strength, 0.0) >= $strength THEN r.strength ELSE $strength END',
     };
   }
   const stepped = 'coalesce(r.strength, 0.0) + $strength * (1.0 - coalesce(r.strength, 0.0))';
   return {
-    onCreate:
-      'r.strength = CASE WHEN $strength < $weightFloor THEN $weightFloor ELSE $strength END',
-    onMatch: `r.strength = CASE WHEN ${stepped} > 1.0 THEN 1.0 WHEN ${stepped} < $weightFloor THEN $weightFloor ELSE ${stepped} END`,
+    onCreate: 'CASE WHEN $strength < $weightFloor THEN $weightFloor ELSE $strength END',
+    onMatch: `CASE WHEN ${stepped} > 1.0 THEN 1.0 WHEN ${stepped} < $weightFloor THEN $weightFloor ELSE ${stepped} END`,
   };
 }
 
@@ -100,6 +105,11 @@ function strengthPolicyFragments(policy: EdgeStrengthPolicy): {
  * set-union(provenance), sum(count), earliest created_at preserved, updated_at refreshed. The
  * unions are list comprehensions rather than APOC, which is not installed and is not a
  * dependency this project takes on.
+ *
+ * A matched edge `edge_prune` has bitemporally closed reopens as part of this write rather
+ * than staying invisible while still absorbing it: the `ON MATCH` branch below clears
+ * `valid_until`/`tx_until` and resets strength through the create expression. An already-open
+ * matched edge takes neither path and writes exactly as it always has.
  *
  * Endpoints resolve through `BASE_NODE_LABEL` because an unlabelled `{ id: … }` match has
  * no index to seek: every relationship write would scan the whole graph twice.
@@ -130,12 +140,13 @@ export function buildEdgeUpsert(input: EdgeUpsert): GraphStatement {
   const hasRationale = input.rationale !== undefined;
 
   const strength = strengthPolicyFragments(policy);
+  const reopenCondition = `r.${BITEMPORAL_PROPERTIES.validUntil} IS NOT NULL`;
 
   const onCreate = [
     'r.id = $id',
     'r.created_at = $now',
     'r.updated_at = $now',
-    strength.onCreate,
+    `r.strength = ${strength.onCreate}`,
     'r.confidence = $confidence',
     'r.signals = $signals',
     'r.provenance = $provenance',
@@ -145,7 +156,12 @@ export function buildEdgeUpsert(input: EdgeUpsert): GraphStatement {
 
   const onMatch = [
     'r.updated_at = $now',
-    strength.onMatch,
+    // A reopen resets strength through the create expression instead of moving the match
+    // expression's own remnant: the edge was closed because that remnant sat at the floor with
+    // nothing to show for it, so restarting it under the match rule would leave it there again.
+    `r.strength = CASE WHEN ${reopenCondition} THEN ${strength.onCreate} ELSE ${strength.onMatch} END`,
+    `r.${BITEMPORAL_PROPERTIES.validUntil} = CASE WHEN ${reopenCondition} THEN null ELSE r.${BITEMPORAL_PROPERTIES.validUntil} END`,
+    `r.${BITEMPORAL_PROPERTIES.txUntil} = CASE WHEN ${reopenCondition} THEN null ELSE r.${BITEMPORAL_PROPERTIES.txUntil} END`,
     'r.confidence = CASE WHEN coalesce(r.confidence, 0.0) >= $confidence THEN r.confidence ELSE $confidence END',
     'r.signals = coalesce(r.signals, []) + [s IN $signals WHERE NOT s IN coalesce(r.signals, [])]',
     'r.provenance = coalesce(r.provenance, []) + [p IN $provenance WHERE NOT p IN coalesce(r.provenance, [])]',
