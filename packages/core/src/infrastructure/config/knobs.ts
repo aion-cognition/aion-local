@@ -228,6 +228,8 @@ export const KNOBS = {
     decayPeakDays: ['AION_HEBBIAN_DECAY_PEAK_DAYS', positiveInt, 30],
     decaySigma: ['AION_HEBBIAN_DECAY_SIGMA', positive, 15],
     batchSize: ['AION_HEBBIAN_BATCH_SIZE', positiveInt, 100],
+    flushCeiling: ['AION_HEBBIAN_FLUSH_CEILING', positiveInt, 2_000],
+    decayScanFraction: ['AION_HEBBIAN_DECAY_SCAN_FRACTION', proportion, 0.15],
   },
   contextResonance: {
     // The ceiling on the seed budget rather than the budget itself. The budget is
@@ -424,8 +426,7 @@ export const KNOBS = {
     // from it. The projection is in-memory and all-or-nothing, and twenty thousand nodes is well
     // past a laptop-scale substrate and still inside a heap the compose file caps at 1G.
     communityNodeLimit: ['AION_MAINTENANCE_COMMUNITY_NODE_LIMIT', positiveInt, 20_000],
-    // Nodes below which a community answer describes noise rather than structure. The same floor
-    // the critical rules use.
+    // Nodes below which a community answer is noise, not structure. The critical rules' own floor.
     communityMinNodes: ['AION_MAINTENANCE_COMMUNITY_MIN_NODES', positiveInt, 20],
     // Members a community needs before `symbiosis_bridge` may use it as an endpoint. Three is
     // the smallest group that can be a neighbourhood rather than a pair.
