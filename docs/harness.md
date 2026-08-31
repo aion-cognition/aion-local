@@ -99,7 +99,7 @@ block looks like this, with the absolute path to your own checkout:
   "hooks": {
     "SessionStart": [
       {
-        "matcher": "startup|resume|compact",
+        "matcher": "startup|resume|clear|compact",
         "hooks": [
           {
             "type": "command",
