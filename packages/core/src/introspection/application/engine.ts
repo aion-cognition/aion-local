@@ -1,6 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 
 import { observeHealth, readOperationEffectiveness, type ObserveOptions } from './observe.js';
+import { consultTier3 } from './tier3-consult.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { errorMessage } from '../../infrastructure/errors.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
@@ -73,7 +74,10 @@ export type TickReport = {
   readonly cycle: number;
   readonly health: HealthSnapshot;
   readonly decision: Decision;
-  /** Absent when nothing ran: an idle cycle, a tier-3 consultation, or a bucket someone else claimed. */
+  /**
+   * Absent when nothing ran: an idle cycle, a consultation that recommended nothing or could
+   * not act, or a bucket someone else claimed. A tier-3 cycle that acted carries its outcome.
+   */
   readonly outcome?: OperationOutcome;
   /** True when every operation the cycle selected had its bucket claimed already. */
   readonly skipped: boolean;
@@ -230,20 +234,24 @@ export class Introspector {
     const claimedElsewhere = new Set<string>();
     let skippedReport: TickReport | undefined;
     for (let attempt = 0; attempt <= candidates.length; attempt += 1) {
+      const available = candidates.filter((candidate) => !claimedElsewhere.has(candidate.name));
       const decision = decide({
         health,
-        candidates: candidates.filter((candidate) => !claimedElsewhere.has(candidate.name)),
+        candidates: available,
         starvationCycles: this.#deps.config.maintenance.starvationCycles,
         urgencyThreshold: this.#deps.config.maintenance.urgencyThreshold,
         effectivenessFloor: this.#deps.config.maintenance.effectivenessFloor,
         tier3Enabled: this.#deps.config.maintenance.tier3,
       });
 
-      // The strategic layer is consulted first, before the skipped-claim fall-through below.
-      // A cycle that lost a claim is exactly the cycle where the deterministic tiers had the
-      // least to offer, which is what tier 3 is there for.
+      // The strategic layer is consulted first, before the skipped-claim fall-through below: a
+      // cycle that lost a claim is exactly the cycle the deterministic tiers had least to offer
+      // on. It sees the candidates the decision saw, so it cannot name a claimed operation.
       if (decision.kind === 'tier3') {
-        await this.#consultTier3(health, candidates, decision.reason);
+        const acted = await this.#consultTier3(health, available, decision.reason, cycle, resolved);
+        if (acted !== undefined) {
+          return acted;
+        }
         return { cycle, health, decision, skipped: skippedReport !== undefined, resolved };
       }
       // Once a claim has been lost, running out of candidates means the window is covered by
@@ -351,15 +359,27 @@ export class Introspector {
     return resolved;
   }
 
+  /** Answers a report only when the consultation ran an operation; otherwise the cycle is idle. */
   async #consultTier3(
     health: HealthSnapshot,
     candidates: readonly OperationCandidate[],
     reason: string,
-  ): Promise<void> {
+    cycle: number,
+    resolved: readonly { readonly name: string; readonly resolution: OperationResolution }[],
+  ): Promise<TickReport | undefined> {
     try {
-      await this.#tier3Advisor({ health, candidates, reason });
+      return await consultTier3(
+        {
+          ...this.#deps,
+          advisor: this.#tier3Advisor,
+          signal: this.#abort.signal,
+          act: (operation, decision) => this.#act(operation, decision, health, cycle, resolved),
+        },
+        { health, candidates, reason, cycle },
+      );
     } catch (err) {
-      this.#deps.logger.warn({ err }, 'introspection tier 3 advisor failed');
+      this.#deps.logger.warn({ err }, 'introspection tier 3 consultation failed');
+      return undefined;
     }
   }
 

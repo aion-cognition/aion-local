@@ -1,139 +1,56 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { Introspector } from './engine.js';
 import { backboneRepairOperation } from './operations/backbone-repair.js';
 import { vectorBackfillOperation } from './operations/vector-backfill.js';
-import { DEFAULTS } from '../../infrastructure/config/defaults.js';
-import type { Config } from '../../infrastructure/config/schema.js';
-import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
 import {
-  startNeo4jHarness,
-  stopNeo4jHarness,
-  type Neo4jHarness,
-} from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
-import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
+  clearIntrospectionState,
+  deterministicConfig,
+  engineFor,
+  fakeOperation,
+  NEXT_BUCKET,
+  NEXT_QUARTER,
+  NOW,
+  startEngineBed,
+  stopEngineBed,
+  type EngineBed,
+} from './test-support/engine-bed.fixture.js';
 import { refusingProvider } from '../../infrastructure/providers/test-support/refusing-provider.fixture.js';
-import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { operationStats } from '../../infrastructure/sqlite/introspection-counters.js';
 import { getLedgerEntry } from '../../infrastructure/sqlite/ops-ledger.js';
 import { operationBucketKey } from '../domain/buckets.js';
 import { CRITICAL_PREEMPTION_GRACE_RUNS } from '../domain/decide.js';
-import {
-  CRITICAL_MIN_POPULATION,
-  NEUTRAL_GRAPH_HEALTH,
-  type HealthSnapshot,
-} from '../domain/health.js';
+import { CRITICAL_MIN_POPULATION, NEUTRAL_GRAPH_HEALTH } from '../domain/health.js';
 import type { IntrospectionOperation, OperationOutcome } from '../domain/operation.js';
 import { healthFixture } from '../domain/test-support/health.fixture.js';
-import type { Tier3Advisor } from '../domain/tier3.js';
 
-const EMBED_DIMENSION = 8;
-const NOW = new Date('2026-08-29T14:37:00.000Z');
-const NEXT_BUCKET = new Date('2026-08-29T15:02:00.000Z');
-/** A later quarter-hour window inside the same hour, so an hour-bucketed claim still stands. */
-const NEXT_QUARTER = new Date('2026-08-29T14:52:00.000Z');
-
-let harness: Neo4jHarness;
-let db: SqliteHandle;
-let logger: Logger;
-let dataDir: string;
+let bed: EngineBed;
 
 beforeAll(async () => {
-  harness = await startNeo4jHarness();
-  dataDir = mkdtempSync(join(tmpdir(), 'aion-introspector-'));
-  db = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
-  logger = openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'error' });
-  await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
+  bed = await startEngineBed();
 }, 300_000);
 
 afterAll(async () => {
-  await stopNeo4jHarness(harness);
-  db.close();
-  rmSync(dataDir, { recursive: true, force: true });
+  await stopEngineBed(bed);
 });
 
 beforeEach(() => {
-  db.exec("DELETE FROM meta WHERE key LIKE 'introspection:%'");
-  db.exec("DELETE FROM ops_ledger WHERE key LIKE 'intro:%'");
+  clearIntrospectionState(bed.db);
 });
-
-const config: Config = {
-  ...DEFAULTS,
-  maintenance: { ...DEFAULTS.maintenance, tickMinutes: 15, urgencyThreshold: 0.2 },
-};
-
-type FakeOperation = IntrospectionOperation & { readonly calls: () => number };
-
-/**
- * A counted stand-in for a real maintenance operation. `queueDepth` is what it reports moving,
- * so the engine's learning path is exercised against a metric it can actually see change.
- */
-function fakeOperation(
-  name: string,
-  overrides: Partial<IntrospectionOperation> = {},
-): FakeOperation {
-  let calls = 0;
-  return {
-    name,
-    bucket: 'quarter-hour',
-    relevance: () => 1,
-    measure: (health) => health.plasticity.reinforcementQueueDepth,
-    improves: 'lower',
-    run: (): Promise<OperationOutcome> => {
-      calls += 1;
-      return Promise.resolve({ status: 'applied', itemsProcessed: 3, itemsAffected: 2 });
-    },
-    calls: () => calls,
-    ...overrides,
-  };
-}
-
-type EngineOverrides = {
-  readonly config?: Config;
-  readonly tier3Advisor?: Tier3Advisor;
-};
-
-function engineFor(
-  operations: readonly IntrospectionOperation[],
-  snapshots: readonly HealthSnapshot[],
-  now: Date = NOW,
-  overrides: EngineOverrides = {},
-): Introspector {
-  let index = 0;
-  return new Introspector(
-    {
-      driver: harness.driver,
-      db,
-      config: overrides.config ?? config,
-      logger,
-      provider: refusingProvider,
-      operations,
-    },
-    {
-      ...(overrides.tier3Advisor === undefined ? {} : { tier3Advisor: overrides.tier3Advisor }),
-      observe: (options) => {
-        const snapshot = snapshots[Math.min(index, snapshots.length - 1)] ?? healthFixture();
-        index += 1;
-        return Promise.resolve({ ...snapshot, cycle: options.cycle ?? 0 });
-      },
-      now: () => now,
-    },
-  );
-}
 
 describe('Introspector', () => {
   it('runs the selected operation and records what it did in the ledger', async () => {
     const operation = fakeOperation('fake_maintenance');
-    const report = await engineFor([operation], [healthFixture()]).tickOnce();
+    const report = await engineFor(bed, [operation], [healthFixture()]).tickOnce();
 
     expect(report.decision).toMatchObject({ kind: 'selected', name: 'fake_maintenance', tier: 2 });
     expect(report.outcome).toMatchObject({ status: 'applied', itemsAffected: 2 });
     expect(operation.calls()).toBe(1);
 
-    const entry = getLedgerEntry(db, operationBucketKey('fake_maintenance', 'quarter-hour', NOW));
+    const entry = getLedgerEntry(
+      bed.db,
+      operationBucketKey('fake_maintenance', 'quarter-hour', NOW),
+    );
     expect(entry?.summary).toMatchObject({
       operation: 'fake_maintenance',
       status: 'applied',
@@ -146,15 +63,15 @@ describe('Introspector', () => {
     const first = fakeOperation('shared_maintenance');
     const second = fakeOperation('shared_maintenance');
 
-    await engineFor([first], [healthFixture()]).tickOnce();
-    const losing = await engineFor([second], [healthFixture()]).tickOnce();
+    await engineFor(bed, [first], [healthFixture()]).tickOnce();
+    const losing = await engineFor(bed, [second], [healthFixture()]).tickOnce();
 
     expect(first.calls()).toBe(1);
     expect(second.calls()).toBe(0);
     expect(losing.skipped).toBe(true);
 
     // The window turns over and the second instance takes the next one.
-    await engineFor([second], [healthFixture()], NEXT_BUCKET).tickOnce();
+    await engineFor(bed, [second], [healthFixture()], NEXT_BUCKET).tickOnce();
     expect(second.calls()).toBe(1);
   });
 
@@ -164,13 +81,14 @@ describe('Introspector', () => {
     const dominant = fakeOperation('hourly_maintenance', { bucket: 'hour', relevance: () => 1 });
     const runnerUp = fakeOperation('quarter_hourly_maintenance', { relevance: () => 0.3 });
 
-    const first = await engineFor([dominant, runnerUp], [healthFixture()]).tickOnce();
+    const first = await engineFor(bed, [dominant, runnerUp], [healthFixture()]).tickOnce();
     expect(first.decision).toMatchObject({ kind: 'selected', name: 'hourly_maintenance' });
     expect(dominant.calls()).toBe(1);
     expect(runnerUp.calls()).toBe(0);
 
     // Same hour, next quarter-hour window. The hourly operation is still the top candidate.
     const second = await engineFor(
+      bed,
       [dominant, runnerUp],
       [healthFixture()],
       NEXT_QUARTER,
@@ -203,16 +121,16 @@ describe('Introspector', () => {
     const operation = fakeOperation('measured_maintenance', {
       relevance: (health) => (health.plasticity.reinforcementQueueDepth > 10 ? 1 : 0),
     });
-    await engineFor([operation], [before]).tickOnce();
+    await engineFor(bed, [operation], [before]).tickOnce();
 
-    const pending = operationStats(db, 'measured_maintenance');
+    const pending = operationStats(bed.db, 'measured_maintenance');
     expect(pending.pendingMeasure).toBe(40);
     expect(pending.runs).toBe(0);
 
-    const second = await engineFor([operation], [after], NEXT_BUCKET).tickOnce();
+    const second = await engineFor(bed, [operation], [after], NEXT_BUCKET).tickOnce();
     expect(second.decision.kind).toBe('idle');
     expect(second.resolved).toEqual([{ name: 'measured_maintenance', resolution: 'improved' }]);
-    const scored = operationStats(db, 'measured_maintenance');
+    const scored = operationStats(bed.db, 'measured_maintenance');
     expect(scored).toMatchObject({ runs: 1, improved: 1 });
     expect(scored.pendingMeasure).toBeUndefined();
   });
@@ -224,10 +142,10 @@ describe('Introspector', () => {
       relevance: () => 1,
       run: () => Promise.reject(new Error('graph unavailable')),
     };
-    const report = await engineFor([operation], [healthFixture()]).tickOnce();
+    const report = await engineFor(bed, [operation], [healthFixture()]).tickOnce();
 
     expect(report.outcome).toMatchObject({ status: 'failed', detail: 'graph unavailable' });
-    expect(operationStats(db, 'broken_maintenance')).toMatchObject({ runs: 1, failed: 1 });
+    expect(operationStats(bed.db, 'broken_maintenance')).toMatchObject({ runs: 1, failed: 1 });
   });
 
   it('preempts a fully relevant routine operation with the registered parity responder', async () => {
@@ -244,7 +162,11 @@ describe('Introspector', () => {
       },
     });
 
-    const report = await engineFor([routine, vectorBackfillOperation()], [pathological]).tickOnce();
+    const report = await engineFor(
+      bed,
+      [routine, vectorBackfillOperation()],
+      [pathological],
+    ).tickOnce();
 
     expect(report.decision).toMatchObject({ kind: 'selected', name: 'vector_backfill', tier: 1 });
     expect(report.decision).toMatchObject({ reason: 'critical: vector_parity' });
@@ -261,7 +183,7 @@ describe('Introspector', () => {
       },
     });
 
-    const report = await engineFor([routine, backboneRepairOperation()], [broken]).tickOnce();
+    const report = await engineFor(bed, [routine, backboneRepairOperation()], [broken]).tickOnce();
 
     expect(report.decision).toMatchObject({
       kind: 'selected',
@@ -293,55 +215,22 @@ describe('Introspector', () => {
     });
 
     let at = NOW;
-    let last = await engineFor([routine, emergency], [standing], at).tickOnce();
+    let last = await engineFor(bed, [routine, emergency], [standing], at).tickOnce();
     for (let cycle = 0; cycle < 8; cycle += 1) {
       at = new Date(at.getTime() + 15 * 60 * 1000);
-      last = await engineFor([routine, emergency], [standing], at).tickOnce();
+      last = await engineFor(bed, [routine, emergency], [standing], at).tickOnce();
     }
 
-    expect(operationStats(db, 'orphan_cleanup').unchanged).toBeGreaterThanOrEqual(
+    expect(operationStats(bed.db, 'orphan_cleanup').unchanged).toBeGreaterThanOrEqual(
       CRITICAL_PREEMPTION_GRACE_RUNS,
     );
     expect(last.decision).toMatchObject({ kind: 'selected', name: 'routine_maintenance', tier: 2 });
     expect(routine.calls()).toBeGreaterThan(0);
   });
 
-  /**
-   * The one cycle tier 3 is for: the deterministic tiers had nothing left to offer, because
-   * the only operation with work to do is already covered by whoever holds its window. The
-   * fall-through used to answer with the skipped report before the strategic layer was read,
-   * so the layer was silent on exactly the cycles it exists for.
-   */
-  it('consults tier 3 on a cycle whose only candidate had already lost its window', async () => {
-    const strategic: Config = {
-      ...config,
-      maintenance: { ...config.maintenance, tier3: true },
-    };
-    const requests: string[] = [];
-    const advisor: Tier3Advisor = (request) => {
-      requests.push(request.reason);
-      return Promise.resolve(undefined);
-    };
-
-    const operation = fakeOperation('hourly_strategic', { bucket: 'hour', relevance: () => 1 });
-    await engineFor([operation], [healthFixture()], NOW, { config: strategic }).tickOnce();
-    expect(operation.calls()).toBe(1);
-
-    // Same hour, next quarter-hour window: the claim is lost and nothing else is relevant.
-    const report = await engineFor([operation], [healthFixture()], NEXT_QUARTER, {
-      config: strategic,
-      tier3Advisor: advisor,
-    }).tickOnce();
-
-    expect(report.decision.kind).toBe('tier3');
-    expect(report.skipped).toBe(true);
-    expect(requests).toHaveLength(1);
-    expect(operation.calls()).toBe(1);
-  });
-
   it('leaves the cycle idle when nothing is relevant', async () => {
     const operation = fakeOperation('quiet_maintenance', { relevance: () => 0 });
-    const report = await engineFor([operation], [healthFixture()]).tickOnce();
+    const report = await engineFor(bed, [operation], [healthFixture()]).tickOnce();
 
     expect(report.decision.kind).toBe('idle');
     expect(operation.calls()).toBe(0);
@@ -352,10 +241,10 @@ describe('Introspector', () => {
     const operation = fakeOperation('unreached_maintenance');
     const engine = new Introspector(
       {
-        driver: harness.driver,
-        db,
-        config,
-        logger,
+        driver: bed.harness.driver,
+        db: bed.db,
+        config: deterministicConfig,
+        logger: bed.logger,
         provider: refusingProvider,
         operations: [operation],
       },
@@ -381,7 +270,7 @@ describe('Introspector', () => {
         return Promise.resolve({ status: 'noop', itemsProcessed: 0, itemsAffected: 0 });
       },
     });
-    const engine = engineFor([operation], [healthFixture()]);
+    const engine = engineFor(bed, [operation], [healthFixture()]);
     engine.start();
     await engine.tickOnce();
     expect(seen?.aborted).toBe(false);

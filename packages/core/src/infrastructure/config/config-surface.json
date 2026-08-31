@@ -110,7 +110,8 @@
       "entropyThreshold": 4.5
     },
     "maintenance": {
-      "tier3": false,
+      "tier3": true,
+      "tier3Mode": "propose",
       "autoMerge": true,
       "tickMinutes": 15,
       "starvationCycles": 8,
@@ -215,6 +216,7 @@
     "AION_MAINTENANCE_STARVATION_CYCLES -> maintenance.starvationCycles : number",
     "AION_MAINTENANCE_TICK_MINUTES -> maintenance.tickMinutes : number",
     "AION_MAINTENANCE_TIER3 -> maintenance.tier3 : boolean",
+    "AION_MAINTENANCE_TIER3_MODE -> maintenance.tier3Mode : string",
     "AION_MAINTENANCE_URGENCY_THRESHOLD -> maintenance.urgencyThreshold : number",
     "AION_MAINTENANCE_VECTOR_BACKFILL_BATCH_SIZE -> maintenance.vectorBackfillBatchSize : number",
     "AION_MCP_PORT -> operational.mcpPort : number",
@@ -630,6 +632,9 @@
     "AION_MAINTENANCE_TIER3=false": "ok false",
     "AION_MAINTENANCE_TIER3=yes": "ConfigError Invalid configuration:\nAION_MAINTENANCE_TIER3: Invalid input: expected boolean, received string",
     "AION_MAINTENANCE_TIER3=1": "ConfigError Invalid configuration:\nAION_MAINTENANCE_TIER3: Invalid input: expected boolean, received string",
+    "AION_MAINTENANCE_TIER3_MODE=": "ConfigError Invalid configuration:\nAION_MAINTENANCE_TIER3_MODE: Invalid option: expected one of \"propose\"|\"act\"",
+    "AION_MAINTENANCE_TIER3_MODE=zzz": "ConfigError Invalid configuration:\nAION_MAINTENANCE_TIER3_MODE: Invalid option: expected one of \"propose\"|\"act\"",
+    "AION_MAINTENANCE_TIER3_MODE=x": "ConfigError Invalid configuration:\nAION_MAINTENANCE_TIER3_MODE: Invalid option: expected one of \"propose\"|\"act\"",
     "AION_MAINTENANCE_URGENCY_THRESHOLD=not-a-number": "ConfigError Invalid configuration:\nAION_MAINTENANCE_URGENCY_THRESHOLD: Invalid input: expected number, received NaN",
     "AION_MAINTENANCE_URGENCY_THRESHOLD=": "ConfigError Invalid configuration:\nAION_MAINTENANCE_URGENCY_THRESHOLD: Invalid input: expected number, received NaN",
     "AION_MAINTENANCE_URGENCY_THRESHOLD=-1": "ConfigError Invalid configuration:\nAION_MAINTENANCE_URGENCY_THRESHOLD: Too small: expected number to be >=0",
@@ -1373,6 +1378,9 @@
     "maintenance.tickMinutes=\"text\"": "maintenance.tickMinutes: Invalid input: expected number, received string",
     "maintenance.tier3=\"true\"": "maintenance.tier3: Invalid input: expected boolean, received string",
     "maintenance.tier3=1": "maintenance.tier3: Invalid input: expected boolean, received number",
+    "maintenance.tier3Mode=\"\"": "maintenance.tier3Mode: Invalid option: expected one of \"propose\"|\"act\"",
+    "maintenance.tier3Mode=42": "maintenance.tier3Mode: Invalid option: expected one of \"propose\"|\"act\"",
+    "maintenance.tier3Mode=null": "maintenance.tier3Mode: Invalid option: expected one of \"propose\"|\"act\"",
     "maintenance.urgencyThreshold=-1": "maintenance.urgencyThreshold: Too small: expected number to be >=0",
     "maintenance.urgencyThreshold=0": "ok",
     "maintenance.urgencyThreshold=0.5": "ok",
@@ -1774,6 +1782,6 @@
     "reserved var list": "AION_BUILD_SHA, AION_GIT_USER_NAME, AION_REPO_HEAD_SHA, AION_REPO_PATH",
     "schema accepts DEFAULTS": "ok",
     "schema rejects an empty object": "rejected",
-    "default key order": "neo4j: uri,password | ollama: url | models: embed,embedDimension,cue,reflect | anthropic: apiKey,model | routing: cue,reflect | recall: maxHops,vectorLimit,maxFacts,maxEpisodes,maxNarratives,maxPreferences,maxResonant,useContextResonance,sessionDedup,ownSessionFilter,associationStrength,compressionThreshold,cueBudgetMs,tokenBudget,vectorAdmissionFloor,corroborationFloor,bm25AdmissionMode,entityMatchThreshold,clusterCap,entityGlossCap,restatementFloor,decisionBoost,relatedClaimFloor | search: methods,reranker,rrfConstant,mmrLambda,weights | activation: maxIterations,decayFactor,minActivation,maxNodesVisited,hubThreshold | hebbian: weightFloor,learningRate,decayRate,decayPeakDays,decaySigma,batchSize | contextResonance: seedLimit,seedBudgetBase,seedBudgetGrowth,activationLimit,resonantLimit,contextSearchThreshold | reflection: stageTimeoutMs,maxEntities,entityDedupThreshold,associationSemanticThreshold,associationSimilarLimit,maxCognitiveNodes,maxRelationships,supersedeMode,supersedeAutoConfidence,supersedeNeighborThreshold,supersedeFamilyRelatednessFloor,maxSupersessionSubjects,maxContradictionNeighbors,maxContradictionJudgments,narrativeIdleMinutes,maxNarrativeEpisodes,maxNarrativeEpisodeChars,narrativeSweepLimit | lanes: arrivalWindowMs,sessionArrivalMax,globalArrivalMax,hotSessionArrivalMax | redaction: entropyThreshold | maintenance: tier3,autoMerge,tickMinutes,starvationCycles,urgencyThreshold,effectivenessFloor,vectorBackfillBatchSize,contextRefreshBatchSize,reconcileBatchSize,deadLetterBatchSize,redactionPurgeBatchSize,narrativeCleanupBatch,retroSupersessionBatch,descriptionRefreshBatch,descriptionRefreshMentionGrowth,backboneRepairBatch,orphanCleanupBatch,orphanForgetAfterDays,communityNodeLimit,communityMinNodes,bridgeMinCommunitySize,bridgeOverlapCeiling | sqlite: path,reinforcementQueueCap | operational: dataDir,mcpPort,workerCount,workerStaleClaimTimeoutMs,workerRetryBaseMs,workerRetryCapMs,workerMaxAttempts,workerBreakerThreshold,workerBreakerCooldownMs,workerVectorBatchSize,reconcileWarnThreshold,lagOldestUnclaimedWarnMs,lagQueueDepthWarnThreshold,sessionIdleExpiryMinutes | logging: filePath,level"
+    "default key order": "neo4j: uri,password | ollama: url | models: embed,embedDimension,cue,reflect | anthropic: apiKey,model | routing: cue,reflect | recall: maxHops,vectorLimit,maxFacts,maxEpisodes,maxNarratives,maxPreferences,maxResonant,useContextResonance,sessionDedup,ownSessionFilter,associationStrength,compressionThreshold,cueBudgetMs,tokenBudget,vectorAdmissionFloor,corroborationFloor,bm25AdmissionMode,entityMatchThreshold,clusterCap,entityGlossCap,restatementFloor,decisionBoost,relatedClaimFloor | search: methods,reranker,rrfConstant,mmrLambda,weights | activation: maxIterations,decayFactor,minActivation,maxNodesVisited,hubThreshold | hebbian: weightFloor,learningRate,decayRate,decayPeakDays,decaySigma,batchSize | contextResonance: seedLimit,seedBudgetBase,seedBudgetGrowth,activationLimit,resonantLimit,contextSearchThreshold | reflection: stageTimeoutMs,maxEntities,entityDedupThreshold,associationSemanticThreshold,associationSimilarLimit,maxCognitiveNodes,maxRelationships,supersedeMode,supersedeAutoConfidence,supersedeNeighborThreshold,supersedeFamilyRelatednessFloor,maxSupersessionSubjects,maxContradictionNeighbors,maxContradictionJudgments,narrativeIdleMinutes,maxNarrativeEpisodes,maxNarrativeEpisodeChars,narrativeSweepLimit | lanes: arrivalWindowMs,sessionArrivalMax,globalArrivalMax,hotSessionArrivalMax | redaction: entropyThreshold | maintenance: tier3,tier3Mode,autoMerge,tickMinutes,starvationCycles,urgencyThreshold,effectivenessFloor,vectorBackfillBatchSize,contextRefreshBatchSize,reconcileBatchSize,deadLetterBatchSize,redactionPurgeBatchSize,narrativeCleanupBatch,retroSupersessionBatch,descriptionRefreshBatch,descriptionRefreshMentionGrowth,backboneRepairBatch,orphanCleanupBatch,orphanForgetAfterDays,communityNodeLimit,communityMinNodes,bridgeMinCommunitySize,bridgeOverlapCeiling | sqlite: path,reinforcementQueueCap | operational: dataDir,mcpPort,workerCount,workerStaleClaimTimeoutMs,workerRetryBaseMs,workerRetryCapMs,workerMaxAttempts,workerBreakerThreshold,workerBreakerCooldownMs,workerVectorBatchSize,reconcileWarnThreshold,lagOldestUnclaimedWarnMs,lagQueueDepthWarnThreshold,sessionIdleExpiryMinutes | logging: filePath,level"
   }
 }
