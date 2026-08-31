@@ -49,5 +49,9 @@ describe('aion maintain ls', () => {
       'vector_backfill  quarter-hour window, critical responder for vector_parity',
     );
     expect(listing).toContain('community_refresh  day window, routine');
+    expect(listing).toContain('proposal_hygiene  day window, routine');
+    // merge_shadow judged what merge_auto would do without ever acting on it; merge_auto
+    // itself already acts, so the shadow judge is retired rather than a selectable lane.
+    expect(listing).not.toContain('merge_shadow');
   });
 });

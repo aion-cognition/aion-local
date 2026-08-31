@@ -8,7 +8,10 @@ import {
   getSupersessionProposal,
   listEntityMergeProposals,
   listSupersessionProposals,
+  markLedgerApplied,
   ProposalNotFoundError,
+  reopenEntityMergeProposal,
+  reopenSupersessionProposal,
   type ApplyEntityMergeProposalResult,
   type ApplyScope,
   type ClaimSubject,
@@ -34,13 +37,14 @@ import { withSubstrate, type Substrate } from './substrate.js';
  * in bulk would reinstate auto-apply with an extra keystroke.
  */
 
-const SUBCOMMANDS = ['ls', 'apply', 'dismiss'] as const;
+const SUBCOMMANDS = ['ls', 'apply', 'dismiss', 'reopen'] as const;
 
 type Subcommand = (typeof SUBCOMMANDS)[number];
 
 const SPEC: ArgSpec<Subcommand> = {
   command: 'proposals',
-  usage: 'aion proposals [ls | apply <id> | dismiss <id>] [--all] [--claim-only] [--episode]',
+  usage:
+    'aion proposals [ls | apply <id> | dismiss <id> | reopen <id>] [--all] [--claim-only] [--episode]',
   subcommands: SUBCOMMANDS,
   options: [{ flag: '--all' }, { flag: '--claim-only' }, { flag: '--episode' }],
   maxPositionals: 1,
@@ -390,6 +394,38 @@ function runDismissMerge(substrate: Substrate, id: string): number {
   return 0;
 }
 
+/**
+ * The undo for a dismissal, whoever made it: hygiene aging a row out, or a person clicking
+ * dismiss on one that deserved another look. `reopen()` guards the same way `resolve()` does,
+ * in the other direction, so a row already open is refused rather than silently accepted.
+ * The ledger entry is permanent and separate from any dismissal stamp: it names what reopened
+ * and when, without touching or needing to know about whatever stamped the row resolved.
+ */
+function reopenLedgerKey(kind: ProposalKind, id: string): string {
+  const table = kind === 'merge' ? 'entity_merge' : 'supersession';
+  return `proposal_reopen:${table}:${id}`;
+}
+
+function runReopen(substrate: Substrate, flags: ProposalFlags): number {
+  const id = flags.id ?? '';
+  const db = substrate.db();
+  const kind = locateProposal(db, id);
+  const reopened =
+    kind === 'merge' ? reopenEntityMergeProposal(db, id) : reopenSupersessionProposal(db, id);
+  if (!reopened) {
+    substrate.write(`reopen ${id}: already open; nothing to do`);
+    return 0;
+  }
+  markLedgerApplied(db, reopenLedgerKey(kind, id), {
+    id,
+    kind,
+    reopenedAt: new Date().toISOString(),
+  });
+  substrate.logger().info({ proposalId: id, kind }, 'proposal reopened');
+  substrate.write(`reopened ${id}: back in the open queue for \`aion proposals ls\``);
+  return 0;
+}
+
 export function runProposals(
   argv: readonly string[] = [],
   write: Writer = stdoutWriter,
@@ -405,6 +441,9 @@ export function runProposals(
       }
       if (flags.subcommand === 'dismiss') {
         return runDismiss(substrate, flags);
+      }
+      if (flags.subcommand === 'reopen') {
+        return runReopen(substrate, flags);
       }
       return runLs(substrate, flags);
     },

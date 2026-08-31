@@ -56,7 +56,7 @@ function ctxFor(config: Config): OperationContext {
 }
 
 describe('mergeAutoRelevance', () => {
-  it('scales linearly with open entity-merge proposals, same divisor as merge_shadow', () => {
+  it('scales linearly with open entity-merge proposals', () => {
     const health = healthFixture({
       proposals: {
         supersessionOpen: 0,

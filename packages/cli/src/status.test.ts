@@ -216,4 +216,70 @@ describe('renderStatus', () => {
       'weights  SIMILAR p50=0.50 (min=0.20 max=0.80, n=4), CO_OCCURS n=0, RELATED_TO n=0',
     );
   });
+
+  it('prints every lane at the mode the shipped defaults leave it in', () => {
+    const { lines, write } = collector();
+
+    renderStatus(healthy, DEFAULTS, write);
+
+    const text = lines.join('\n');
+    expect(text).toContain('lanes');
+    expect(text).toContain('merge_auto         MODE: acting');
+    expect(text).toContain(
+      `supersession       MODE: acting (${DEFAULTS.reflection.supersedeMode})`,
+    );
+    expect(text).toContain('proposal_hygiene   MODE: acting');
+    // tier3Mode ships `propose`: the advisor runs, but an accepted recommendation runs nothing.
+    expect(text).toContain('tier3              MODE: off');
+  });
+
+  it('reads off, not the mode name, for supersession under propose', () => {
+    const { lines, write } = collector();
+    const proposeOnly: Config = {
+      ...DEFAULTS,
+      reflection: { ...DEFAULTS.reflection, supersedeMode: 'propose' },
+    };
+
+    renderStatus(healthy, proposeOnly, write);
+
+    expect(lines.join('\n')).toContain('supersession       MODE: off');
+  });
+
+  it('reads acting for tier3 only when the kill switch and the mode knob both agree', () => {
+    const { lines, write } = collector();
+    const acting: Config = {
+      ...DEFAULTS,
+      maintenance: { ...DEFAULTS.maintenance, tier3: true, tier3Mode: 'act' },
+    };
+
+    renderStatus(healthy, acting, write);
+
+    expect(lines.join('\n')).toContain('tier3              MODE: acting');
+  });
+
+  it('reads off for tier3 when the kill switch is off, whatever the mode knob says', () => {
+    const { lines, write } = collector();
+    const killed: Config = {
+      ...DEFAULTS,
+      maintenance: { ...DEFAULTS.maintenance, tier3: false, tier3Mode: 'act' },
+    };
+
+    renderStatus(healthy, killed, write);
+
+    expect(lines.join('\n')).toContain('tier3              MODE: off');
+  });
+
+  it('reads off for merge_auto and proposal_hygiene with their knobs off', () => {
+    const { lines, write } = collector();
+    const off: Config = {
+      ...DEFAULTS,
+      maintenance: { ...DEFAULTS.maintenance, autoMerge: false, proposalHygiene: false },
+    };
+
+    renderStatus(healthy, off, write);
+
+    const text = lines.join('\n');
+    expect(text).toContain('merge_auto         MODE: off');
+    expect(text).toContain('proposal_hygiene   MODE: off');
+  });
 });

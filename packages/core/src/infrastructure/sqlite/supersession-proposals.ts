@@ -129,3 +129,8 @@ export function resolveSupersessionProposal(
 export function countOpenSupersessionProposals(db: SqliteHandle): number {
   return proposals.countOpen(db);
 }
+
+/** Returns false when the id is unknown or the proposal is already open. */
+export function reopenSupersessionProposal(db: SqliteHandle, id: string): boolean {
+  return proposals.reopen(db, id);
+}

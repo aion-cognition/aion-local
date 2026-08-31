@@ -431,6 +431,23 @@ export const KNOBS = {
     // every four members of the smaller side: below that the two are joined by a thread, and at
     // or above it activation already has a way across, so a bridge would buy nothing.
     bridgeOverlapCeiling: ['AION_MAINTENANCE_BRIDGE_OVERLAP_CEILING', proportion, 0.25],
+    // `proposal_hygiene`'s kill switch. On by default: the op only ever resolves a row past
+    // its age horizon, and every dismissal is ledgered with the pair's identity, so a wrong
+    // one is retro-judged from a real record rather than guessed at. Off leaves every
+    // proposal queued for a person, same as before this op existed.
+    proposalHygiene: ['AION_MAINTENANCE_PROPOSAL_HYGIENE', z.boolean(), true],
+    // The fast horizon: how long a proposal detected from a pure tool-exhaust episode (no
+    // turns, only tool calls) sits open before hygiene dismisses it. A day is enough for a
+    // person to notice a genuine one; the source episode carries no conversation to judge.
+    hygienePollutedAgeHours: ['AION_MAINTENANCE_HYGIENE_POLLUTED_AGE_HOURS', positiveInt, 24],
+    // The ordinary horizon: how long any other open proposal sits before hygiene dismisses
+    // it. Two weeks, long enough that a person who checks proposals occasionally still gets
+    // to them first.
+    hygieneResidueAgeDays: ['AION_MAINTENANCE_HYGIENE_RESIDUE_AGE_DAYS', positiveInt, 14],
+    // A tick's ceiling on model calls the entity-merge judge makes, independent of the scan
+    // ceiling. Matches `retroSupersessionBatch`'s own reasoning: bound the cost of a run
+    // that finds a full page of ordinary-residue pairs needing a verdict.
+    hygieneJudgeBatch: ['AION_MAINTENANCE_HYGIENE_JUDGE_BATCH', positiveInt, 5],
   },
   sqlite: {
     path: [SQLITE_PATH_ENV_VAR, text, DEFAULT_SQLITE_PATH],

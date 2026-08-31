@@ -51,13 +51,14 @@ describe('parseProposalFlags', () => {
 
   it('refuses an unknown subcommand, an unknown option, or an apply with no id', () => {
     expect(() => parseProposalFlags(['approve'])).toThrow(
-      "unknown proposals subcommand 'approve' (supported: ls, apply, dismiss)",
+      "unknown proposals subcommand 'approve' (supported: ls, apply, dismiss, reopen)",
     );
     expect(() => parseProposalFlags(['ls', '--everything'])).toThrow(
       "unknown option '--everything' for proposals (supported: --all, --claim-only, --episode)",
     );
     expect(() => parseProposalFlags(['apply'])).toThrow('proposals apply needs a proposal id');
     expect(() => parseProposalFlags(['dismiss'])).toThrow('proposals dismiss needs a proposal id');
+    expect(() => parseProposalFlags(['reopen'])).toThrow('proposals reopen needs a proposal id');
   });
 
   // Two scopes at once has no safe reading: one is narrower than the default and the other is
@@ -202,5 +203,45 @@ describe('aion proposals against a seeded review queue', () => {
 
     expect(await runProposals(['apply', id, '--claim-only'], () => undefined)).toBe(1);
     expect(await runProposals(['apply', id, '--episode'], () => undefined)).toBe(1);
+  });
+
+  it('reopens a dismissed supersession proposal back into the open queue', async () => {
+    const id = seedSupersession();
+    await runProposals(['dismiss', id], () => undefined);
+    const { lines, write } = collector();
+
+    expect(await runProposals(['reopen', id], write)).toBe(0);
+
+    expect(lines.join('\n')).toContain('reopened');
+    expect(getSupersessionProposal(store.db, id)?.resolvedAt).toBeNull();
+
+    const listed = collector();
+    await runProposals(['ls'], listed.write);
+    expect(listed.lines.join('\n')).toContain('supersession proposals (1)');
+  });
+
+  it('reopens a dismissed entity-merge proposal back into the open queue', async () => {
+    const id = seedMerge();
+    await runProposals(['dismiss', id], () => undefined);
+    const { lines, write } = collector();
+
+    expect(await runProposals(['reopen', id], write)).toBe(0);
+
+    expect(lines.join('\n')).toContain('reopened');
+    expect(getEntityMergeProposal(store.db, id)?.resolvedAt).toBeNull();
+  });
+
+  it('says so plainly rather than reopening a row that is already open', async () => {
+    const id = seedSupersession();
+    const { lines, write } = collector();
+
+    expect(await runProposals(['reopen', id], write)).toBe(0);
+
+    expect(lines.join('\n')).toContain('already open');
+    expect(getSupersessionProposal(store.db, id)?.resolvedAt).toBeNull();
+  });
+
+  it('refuses an id nobody proposed rather than reporting a no-op as done', async () => {
+    expect(await runProposals(['reopen', 'not-a-proposal'], () => undefined)).toBe(1);
   });
 });

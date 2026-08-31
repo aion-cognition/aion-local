@@ -9,6 +9,7 @@ import {
   getEntityMergeProposal,
   listEntityMergeProposals,
   recordEntityMergeProposal,
+  reopenEntityMergeProposal,
   resolveEntityMergeProposal,
 } from './entity-merge-proposals.js';
 
@@ -101,6 +102,18 @@ describe('entity merge proposal accessors', () => {
       similarity: 0.5,
       resolvedAt: '2026-08-29T00:00:00.000Z',
     });
+  });
+
+  it('reopens a resolved row and refuses an already-open one', () => {
+    const id = record();
+
+    expect(reopenEntityMergeProposal(store.db, id)).toBe(false);
+
+    resolveEntityMergeProposal(store.db, id, '2026-08-29T00:00:00.000Z');
+    expect(reopenEntityMergeProposal(store.db, id)).toBe(true);
+    expect(getEntityMergeProposal(store.db, id)?.resolvedAt).toBeNull();
+
+    expect(reopenEntityMergeProposal(store.db, id)).toBe(false);
   });
 
   it('returns nothing for an id it never issued', () => {

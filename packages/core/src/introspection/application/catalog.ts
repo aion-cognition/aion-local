@@ -4,10 +4,10 @@ import { communityRefreshOperation } from './operations/community-refresh.js';
 import { deadLetterOperation } from './operations/dead-letter.js';
 import { descriptionFreshnessOperation } from './operations/description-freshness-operation.js';
 import { mergeAutoOperation } from './operations/merge-auto-operation.js';
-import { mergeShadowOperation } from './operations/merge-shadow-operation.js';
 import { narrativeCleanupOperation } from './operations/narrative-cleanup-operation.js';
 import { narrativeRegroundingOperation } from './operations/narrative-regrounding.js';
 import { orphanCleanupOperation } from './operations/orphan-cleanup.js';
+import { proposalHygieneOperation } from './operations/proposal-hygiene.js';
 import { reconcileReenqueueOperation } from './operations/reconcile-reenqueue.js';
 import { redactionResiduePurgeOperation } from './operations/redaction-residue-purge.js';
 import { retroJudgmentSweepOperation } from './operations/retro-judgment-sweep-operation.js';
@@ -57,11 +57,13 @@ export function introspectionOperations(): readonly IntrospectionOperation[] {
     communityRefreshOperation(),
     symbiosisBridgeOperation(),
 
-    // Entity-merge policy, judge and actor: the shadow judges every proposal and writes its
-    // verdict to the ops ledger without touching the graph, and the auto operation merges the
-    // exact-name pairs the shadow already proved safe. A fuzzy pair passes through both
-    // untouched and stays queued for `aion proposals`.
-    mergeShadowOperation(),
+    // Entity-merge policy: merges the exact-name pairs a person going on to approve every one
+    // of, measured over two live review batches, already proved safe. A fuzzy pair passes
+    // through untouched and stays queued for `aion proposals`.
     mergeAutoOperation(),
+
+    // The queue's own hygiene: ages a proposal out once nobody has acted on it inside its
+    // horizon, ledgered and reversible with `aion proposals reopen`.
+    proposalHygieneOperation(),
   ];
 }
