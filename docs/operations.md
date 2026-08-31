@@ -25,6 +25,7 @@ reconcile count as an informational check and warns past `AION_RECONCILE_WARN_TH
 aion proposals ls [--all]                                   # open judged contradictions and merge candidates
 aion proposals apply <id> [--claim-only | --episode]        # one at a time; default closes the subject family
 aion proposals dismiss <id>
+aion proposals reopen <id>                                  # undo a dismissal, hygiene's or a person's
 ```
 
 `proposals apply` takes one id at a time on purpose: applying them in bulk would reinstate
@@ -34,9 +35,15 @@ claim, and `--episode` closes everything that observation produced.
 
 An entity-merge proposal whose two names match exactly never reaches this list: `merge_auto`
 merges it on its own. `aion proposals` is where a person decides the fuzzy remainder, the
-pairs whose names differ. `AION_AUTO_MERGE=false` turns that off and leaves every proposal
-queued for a person instead; `aion unmerge` reverses a merge `merge_auto` made, one at a
-time, the same as any other entity merge.
+pairs whose names differ, until `proposal_hygiene` ages one out: past
+`AION_MAINTENANCE_HYGIENE_RESIDUE_AGE_DAYS` (or the shorter
+`AION_MAINTENANCE_HYGIENE_POLLUTED_AGE_HOURS` for a proposal whose source episode was pure
+tool exhaust, no conversation to judge) it dismisses the row and ledgers the class, the
+reason, and the pair, so a wrong dismissal is judged from a real record. `aion proposals
+reopen <id>` undoes any dismissal, hygiene's or a person's, and puts the row back in this
+queue. `AION_AUTO_MERGE=false` turns merge_auto off and leaves every proposal queued for a
+person instead; `aion unmerge` reverses a merge `merge_auto` made, one at a time, the same
+as any other entity merge.
 
 What reaches this queue depends on `AION_SUPERSEDE_MODE`. Under the shipped `unanimous`, the
 pipeline closes what two independent judgments agree on and queues the rest, so a row here is
@@ -96,6 +103,11 @@ all still hold. It exists because one operation's subject is not proportional. T
 nodes out of two thousand is a small share to a scoring function and an incident to a person,
 and before this there was no way to say so.
 
+`aion status` prints a `lanes` section: one line per operation that acts on its own between
+ticks (`merge_auto`, `supersession`, `proposal_hygiene`, `tier3`), each read as `acting` or
+`off` from its own live knobs. Two states only, so the line answers "would this touch
+anything right now" without a third reading to interpret.
+
 ## Unmerging entities
 
 ```
@@ -133,6 +145,12 @@ what an install has to decide: endpoints, models, the key, the behavior switches
 copied into `.env` stop following the code that calibrated them, so leave a tuning knob
 alone unless a measurement says otherwise. An unknown `AION_*` variable fails the boot
 loudly; a knob that once existed and was retired is ignored with no complaint.
+
+`proposal_hygiene`'s four: `AION_MAINTENANCE_PROPOSAL_HYGIENE` (default `true`) is its kill
+switch. `AION_MAINTENANCE_HYGIENE_POLLUTED_AGE_HOURS` (default `24`) is the fast horizon for
+a proposal whose source episode was pure tool exhaust; `AION_MAINTENANCE_HYGIENE_RESIDUE_AGE_DAYS`
+(default `14`) is the ordinary horizon for everything else. `AION_MAINTENANCE_HYGIENE_JUDGE_BATCH`
+(default `5`) caps how many fuzzy entity-merge pairs the op puts through a model call in one run.
 
 ## Reflection concurrency
 

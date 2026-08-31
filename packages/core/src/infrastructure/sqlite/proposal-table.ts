@@ -28,6 +28,8 @@ export type ProposalTableQueries<TProposal> = {
   list: (db: SqliteHandle) => TProposal[];
   findForNode: (db: SqliteHandle, nodeId: string) => TProposal[];
   resolve: (db: SqliteHandle, id: string, resolvedAt: string) => boolean;
+  /** The undo for `resolve`: flips a resolved row back open. A no-op on a row still open. */
+  reopen: (db: SqliteHandle, id: string) => boolean;
   countOpen: (db: SqliteHandle) => number;
 };
 
@@ -64,6 +66,14 @@ export function proposalTable<TRow, TProposal>(
       const result = db
         .prepare(`UPDATE ${table} SET resolved_at = ? WHERE id = ? AND resolved_at IS NULL`)
         .run(resolvedAt, id);
+      return result.changes > 0;
+    },
+
+    /** The mirror guard: only a currently resolved row has anything to reopen. */
+    reopen(db, id) {
+      const result = db
+        .prepare(`UPDATE ${table} SET resolved_at = NULL WHERE id = ? AND resolved_at IS NOT NULL`)
+        .run(id);
       return result.changes > 0;
     },
 

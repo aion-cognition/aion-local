@@ -176,6 +176,7 @@ export {
   getSupersessionProposal,
   listSupersessionProposals,
   recordSupersessionProposal,
+  reopenSupersessionProposal,
 } from './sqlite/supersession-proposals.js';
 export type { SupersessionProposal } from './sqlite/supersession-proposals.js';
 
@@ -184,6 +185,7 @@ export {
   getEntityMergeProposal,
   listEntityMergeProposals,
   recordEntityMergeProposal,
+  reopenEntityMergeProposal,
   resolveEntityMergeProposal,
 } from './sqlite/entity-merge-proposals.js';
 export type {

@@ -255,6 +255,45 @@ function renderMaintenance(snapshot: MaintenanceSnapshot, now: number, write: Wr
   }
 }
 
+const LANE_NAME_WIDTH = 18;
+
+/**
+ * The lanes that act on their own between two ticks of a person looking, with the two-word
+ * verdict `aion status` gives every one of them: `acting` or `off`, never a third state a
+ * knob's own vocabulary might suggest. `merge_auto` and `proposal_hygiene` read their one
+ * dedicated boolean. Supersession has no boolean of its own: `propose` queues everything and
+ * closes nothing, so `unanimous` and the legacy `auto` are what "acting" means for it, and the
+ * mode name is shown alongside for the same reason `queue` shows a lane's own depth rather
+ * than just a total. Tier 3 only acts when its kill switch is on and its own mode knob says
+ * `act`; `propose` records a recommendation and runs nothing, which reads as `off` here for
+ * the same reason it reads as `off` in `docs/operations.md`.
+ */
+function laneMode(acting: boolean): 'acting' | 'off' {
+  return acting ? 'acting' : 'off';
+}
+
+function renderLanes(config: Config, write: Writer): void {
+  write('');
+  write('lanes');
+  write(
+    `  ${'merge_auto'.padEnd(LANE_NAME_WIDTH)} MODE: ${laneMode(config.maintenance.autoMerge)}`,
+  );
+
+  const supersessionMode = config.reflection.supersedeMode;
+  const supersessionActing = supersessionMode !== 'propose';
+  const supersessionDetail = supersessionActing ? ` (${supersessionMode})` : '';
+  write(
+    `  ${'supersession'.padEnd(LANE_NAME_WIDTH)} MODE: ${laneMode(supersessionActing)}${supersessionDetail}`,
+  );
+
+  write(
+    `  ${'proposal_hygiene'.padEnd(LANE_NAME_WIDTH)} MODE: ${laneMode(config.maintenance.proposalHygiene)}`,
+  );
+
+  const tier3Acting = config.maintenance.tier3 && config.maintenance.tier3Mode === 'act';
+  write(`  ${'tier3'.padEnd(LANE_NAME_WIDTH)} MODE: ${laneMode(tier3Acting)}`);
+}
+
 /** Skipped while Neo4j is down: the base `graph` line above already reported that. */
 function renderLabelCounts(
   reachable: boolean,
@@ -338,6 +377,8 @@ export function renderSnapshot(
     `review   ${String(queue.supersessionProposalsOpen)} supersession, ` +
       `${String(queue.entityMergeProposalsOpen)} entity-merge proposals open... aion proposals ls`,
   );
+
+  renderLanes(config, write);
 
   write('');
   const { plasticity } = snapshot;

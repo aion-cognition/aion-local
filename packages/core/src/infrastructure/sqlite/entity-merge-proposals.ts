@@ -159,3 +159,8 @@ export function resolveEntityMergeProposal(
 export function countOpenEntityMergeProposals(db: SqliteHandle): number {
   return proposals.countOpen(db);
 }
+
+/** Returns false when the id is unknown or the proposal is already open. */
+export function reopenEntityMergeProposal(db: SqliteHandle, id: string): boolean {
+  return proposals.reopen(db, id);
+}

@@ -9,6 +9,7 @@ import {
   getSupersessionProposal,
   listSupersessionProposals,
   recordSupersessionProposal,
+  reopenSupersessionProposal,
   resolveSupersessionProposal,
 } from './supersession-proposals.js';
 
@@ -87,6 +88,18 @@ describe('supersession proposal accessors', () => {
     expect(resolveSupersessionProposal(store.db, id)).toBe(true);
     expect(resolveSupersessionProposal(store.db, id)).toBe(false);
     expect(resolveSupersessionProposal(store.db, 'missing')).toBe(false);
+  });
+
+  it('reopens a resolved row and refuses an already-open one', () => {
+    const id = record();
+
+    expect(reopenSupersessionProposal(store.db, id)).toBe(false);
+
+    resolveSupersessionProposal(store.db, id, '2026-08-29T00:00:00.000Z');
+    expect(reopenSupersessionProposal(store.db, id)).toBe(true);
+    expect(getSupersessionProposal(store.db, id)?.resolvedAt).toBeNull();
+
+    expect(reopenSupersessionProposal(store.db, id)).toBe(false);
   });
 
   it('finds proposals from either end of the pair', () => {
