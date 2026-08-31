@@ -131,11 +131,14 @@ aion forget <id | query> [--yes]
 
 ## Logs
 
-Everything writes structured JSONL to one file on the data volume, `/data/logs/aion.jsonl`
-by default: the service under the name `aion-mcp`, and every CLI run under its command's
-name. `AION_LOG_LEVEL` moves the level (`debug` through `fatal`); writes are synchronous, so
-a crash keeps the tail that explains it. The harness hooks are the one component outside the
-containers; each fire appends one line to `~/.aion/hook-state/hooks.log` on the host.
+Everything writes structured JSONL to two places at once: stdout, which `docker logs
+aion-aion-mcp-1` reads, and one file on the data volume, `/data/logs/aion.jsonl` by default.
+The service logs under the name `aion-mcp`, and every CLI run under its command's name.
+`AION_LOG_LEVEL` moves the level (`debug` through `fatal`); writes are synchronous, so a
+crash keeps the tail that explains it. The container's stdout copy is capped by the compose
+`logging` block (10 MB × 3); the file on the volume is the uncapped durable record. The
+harness hooks are the one component outside the containers; each fire appends one line to
+`~/.aion/hook-state/hooks.log` on the host.
 
 ## Configuration
 
