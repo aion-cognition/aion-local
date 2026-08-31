@@ -38,7 +38,10 @@ export type Rationale = z.infer<typeof RationaleSchema>;
  * the vector floor is a measurement, a literal match is evidence with no number behind it,
  * corroboration is two independent measurements agreeing, and a resonant hit cleared a
  * threshold in context space against no query at all. `bm25_any` is the escape hatch, a plain
- * lexical hit admitted alone because `AION_BM25_ADMISSION_MODE` was set to `any`.
+ * lexical hit admitted alone because `AION_BM25_ADMISSION_MODE` was set to `any`. `typed_admission`
+ * is an activation-only arrival whose strongest inbound CONTRADICTS, SUPERSEDES, or CAUSES edge
+ * cleared its own activation floor, admitted at the lower corroboration floor instead of the
+ * vector one: evidence the graph carries that a cosine against the query cannot see.
  */
 export const AdmissionRuleSchema = z.enum([
   'vector_floor',
@@ -46,6 +49,7 @@ export const AdmissionRuleSchema = z.enum([
   'corroborated',
   'bm25_any',
   'context_threshold',
+  'typed_admission',
 ]);
 
 export type AdmissionRule = z.infer<typeof AdmissionRuleSchema>;
@@ -253,6 +257,15 @@ export const AdmissionReportSchema = z.strictObject({
   dropped_duplicate_content: z.number().int().nonnegative(),
   /** Admitted, then bumped from a near-identical cluster that had already filled its cap. */
   dropped_near_duplicate: z.number().int().nonnegative(),
+  /**
+   * Admitted on typed evidence rather than a vector floor (`typed_admission` in `admitted_by`).
+   * Counted apart so a thin pack can say the graph itself found something a cosine alone would
+   * have refused, rather than folding it into `admitted` where it reads the same as every
+   * other rule. Optional for the same reason `admitted_by` is: a pack is persisted to
+   * `last_pack` and read back later, and one written before this tier existed has to keep
+   * parsing.
+   */
+  typed_admitted: z.number().int().nonnegative().optional(),
   /** Cosine at or above which one measurement admits an item on its own. */
   vector_floor: z.number(),
   /** Cosine at or above which a measurement counts as one unit of corroboration. */

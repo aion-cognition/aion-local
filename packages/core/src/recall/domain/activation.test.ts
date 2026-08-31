@@ -513,6 +513,80 @@ describe('spreadActivation termination', () => {
   });
 });
 
+function typedEvidenceOf(run: ActivationRun, nodeId: string) {
+  return run.activated.find((node) => node.nodeId === nodeId)?.typedEvidence;
+}
+
+describe('typed evidence', () => {
+  it('records the contribution a CONTRADICTS edge alone propagated', async () => {
+    const run = await spreadActivation(
+      fetchOver({ edges: [{ from: 'seed', to: 'partner', type: 'CONTRADICTS' }] }),
+      { seeds: [{ nodeId: 'seed' }], budget: BASE_BUDGET },
+    );
+
+    expect(typedEvidenceOf(run, 'partner')).toEqual({
+      edgeType: 'CONTRADICTS',
+      contribution: edgeWeight(neighbor({ relationshipType: 'CONTRADICTS' })) * 0.7,
+    });
+  });
+
+  it('tracks typed evidence apart from whichever path is strongest overall', async () => {
+    const run = await spreadActivation(
+      fetchOver({
+        edges: [
+          { from: 'anchor', to: 'target', type: 'PARTICIPATES_IN' },
+          { from: 'partner', to: 'target', type: 'CONTRADICTS' },
+        ],
+      }),
+      { seeds: [{ nodeId: 'anchor' }, { nodeId: 'partner' }], budget: BASE_BUDGET },
+    );
+
+    // PARTICIPATES_IN (0.9) carries more than CONTRADICTS (0.35), so it is the reported path.
+    const target = run.activated.find((node) => node.nodeId === 'target');
+    expect(target?.pathSummary).toContain('-[PARTICIPATES_IN]->');
+    expect(typedEvidenceOf(run, 'target')).toEqual({
+      edgeType: 'CONTRADICTS',
+      contribution: edgeWeight(neighbor({ relationshipType: 'CONTRADICTS' })) * 0.7,
+    });
+  });
+
+  it('keeps the stronger of two typed hops reaching the same node', async () => {
+    const run = await spreadActivation(
+      fetchOver({
+        edges: [
+          { from: 'causal-source', to: 'target', type: 'CAUSES' },
+          { from: 'lineage-source', to: 'target', type: 'SUPERSEDES' },
+        ],
+      }),
+      {
+        seeds: [{ nodeId: 'causal-source' }, { nodeId: 'lineage-source' }],
+        budget: BASE_BUDGET,
+      },
+    );
+
+    // CAUSES (0.35) is halved as model-inferred; SUPERSEDES (0.4) is not, so it wins here.
+    expect(typedEvidenceOf(run, 'target')).toEqual({
+      edgeType: 'SUPERSEDES',
+      contribution: edgeWeight(neighbor({ relationshipType: 'SUPERSEDES' })) * 0.7,
+    });
+  });
+
+  it('never attaches typed evidence for CO_OCCURS or SIMILAR, which a cosine already measures', async () => {
+    const run = await spreadActivation(
+      fetchOver({
+        edges: [
+          { from: 'seed', to: 'co-occurring', type: 'CO_OCCURS' },
+          { from: 'seed', to: 'similar', type: 'SIMILAR' },
+        ],
+      }),
+      { seeds: [{ nodeId: 'seed' }], budget: BASE_BUDGET },
+    );
+
+    expect(typedEvidenceOf(run, 'co-occurring')).toBeUndefined();
+    expect(typedEvidenceOf(run, 'similar')).toBeUndefined();
+  });
+});
+
 function neighbor(overrides: Partial<AdjacencyNeighbor>): AdjacencyNeighbor {
   return {
     sourceId: 'source',

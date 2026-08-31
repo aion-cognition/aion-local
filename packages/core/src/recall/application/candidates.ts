@@ -117,6 +117,7 @@ function activatedCandidate(
     relevance: 0,
     evidence,
     activation: node.score,
+    ...(node.typedEvidence === undefined ? {} : { typedEvidence: node.typedEvidence }),
   };
 }
 

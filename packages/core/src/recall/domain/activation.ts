@@ -3,6 +3,7 @@ import {
   CONFIDENCE_SCALED_TYPES,
   DEFAULT_ACTIVATION_WEIGHT,
 } from './activation-weights.js';
+import { isTypedAdmissionEdgeType, type TypedInboundEvidence } from './admission.js';
 import type { AdjacencyNeighbor } from '../../infrastructure/graph/adjacency.js';
 import type { CurrencyAnnotation } from '../../infrastructure/graph/read-modes.js';
 import { isRelationshipType } from '../../infrastructure/graph/relationships.js';
@@ -78,6 +79,14 @@ export type ActivatedNode = {
   readonly currency: CurrencyAnnotation;
   /** The Member and the global Workspace: traversed, never packed, never reinforced. */
   readonly isStructural: boolean;
+  /**
+   * The strongest single hop of CONTRADICTS, SUPERSEDES, or CAUSES evidence that reached this
+   * node, independent of which path is `pathSummary`'s: a node whose strongest overall route is
+   * an ordinary containment hop can still carry typed evidence from a weaker edge that also
+   * reached it. Absent when no qualifying edge ever propagated into it. What the typed-admission
+   * tier in `admission.ts` reads; every other consumer of `ActivatedNode` is unaffected.
+   */
+  readonly typedEvidence?: TypedInboundEvidence;
 };
 
 /**
@@ -154,6 +163,8 @@ type SpreadState = {
   readonly structural: Set<string>;
   /** The strongest single contribution seen per node; decides which path is reported. */
   readonly strongest: Map<string, number>;
+  /** The strongest single typed-edge contribution seen per node, tracked apart from `strongest`. */
+  readonly typedEvidence: Map<string, TypedInboundEvidence>;
   readonly seeds: Set<string>;
   readonly visited: Set<string>;
   readonly frontier: Set<string>;
@@ -167,6 +178,7 @@ function initialize(seeds: readonly ActivationSeed[]): SpreadState {
     currency: new Map(),
     structural: new Set(),
     strongest: new Map(),
+    typedEvidence: new Map(),
     seeds: new Set(),
     visited: new Set(),
     frontier: new Set(),
@@ -236,6 +248,19 @@ function propagate(
     state.structural.add(neighbor.nodeId);
   }
 
+  // Tracked apart from `strongest` below: a node's dominant route can be an ordinary
+  // containment hop while a weaker CONTRADICTS or CAUSES edge also reaches it, and the
+  // typed-admission tier needs that edge's own contribution, not whichever path won overall.
+  if (isTypedAdmissionEdgeType(neighbor.relationshipType)) {
+    const existingTyped = state.typedEvidence.get(neighbor.nodeId);
+    if (existingTyped === undefined || propagated > existingTyped.contribution) {
+      state.typedEvidence.set(neighbor.nodeId, {
+        edgeType: neighbor.relationshipType,
+        contribution: propagated,
+      });
+    }
+  }
+
   // A seed's origin is where the spread began; no later path rewrites it, however strong.
   if (state.seeds.has(neighbor.nodeId)) {
     return;
@@ -263,6 +288,7 @@ function collect(state: SpreadState, budget: ActivationBudget): ActivatedNode[] 
     if (score < budget.minActivation) {
       continue;
     }
+    const typedEvidence = state.typedEvidence.get(nodeId);
     activated.push({
       nodeId,
       score,
@@ -270,6 +296,7 @@ function collect(state: SpreadState, budget: ActivationBudget): ActivatedNode[] 
       pathSummary: state.paths.get(nodeId) ?? nodeId,
       currency: state.currency.get(nodeId) ?? CURRENT,
       isStructural: state.structural.has(nodeId),
+      ...(typedEvidence === undefined ? {} : { typedEvidence }),
     });
   }
   // Ties break on id so a run over the same graph produces the same order twice.

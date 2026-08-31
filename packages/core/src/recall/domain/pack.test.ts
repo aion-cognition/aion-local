@@ -79,6 +79,7 @@ function report(items: readonly FusedItem[]): AdmissionReport {
     droppedDuplicateContent: 0,
     droppedNearDuplicate: 0,
     anchored: items.length > 0,
+    typedAdmitted: 0,
   };
 }
 

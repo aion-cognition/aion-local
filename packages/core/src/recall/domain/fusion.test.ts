@@ -1,7 +1,7 @@
 import type { RecallMethod } from '@aion/protocol';
 import { describe, expect, it } from 'vitest';
 
-import type { AdmissionPolicy, Measurement } from './admission.js';
+import type { AdmissionPolicy, Measurement, TypedInboundEvidence } from './admission.js';
 import {
   fuse,
   reciprocalRank,
@@ -45,6 +45,7 @@ type CandidateOverrides = {
   readonly structural?: boolean;
   readonly labels?: readonly string[];
   readonly evidence?: readonly Measurement[];
+  readonly typedEvidence?: TypedInboundEvidence;
 };
 
 function candidate(id: string, overrides: CandidateOverrides = {}): FusionCandidate {
@@ -59,6 +60,7 @@ function candidate(id: string, overrides: CandidateOverrides = {}): FusionCandid
     ...(overrides.evidence === undefined ? {} : { evidence: overrides.evidence }),
     ...(overrides.activation === undefined ? {} : { activation: overrides.activation }),
     ...(overrides.structural === undefined ? {} : { isStructural: overrides.structural }),
+    ...(overrides.typedEvidence === undefined ? {} : { typedEvidence: overrides.typedEvidence }),
   };
   if (overrides.superseded !== true) {
     return { ...base, currency: 'current' as const };
@@ -301,6 +303,63 @@ describe('traversal admission', () => {
   });
 });
 
+/** `CALIBRATED` with the typed tier on at a floor a full-strength one-hop CONTRADICTS clears. */
+const TYPED_CALIBRATED: AdmissionPolicy = {
+  ...CALIBRATED,
+  typedAdmissionEnabled: true,
+  typedAdmissionActivationFloor: 0.2,
+};
+
+describe('typed admission', () => {
+  /** A CONTRADICTS-only arrival measured between the corroboration and vector floors. */
+  function typedArrival(id: string, measured: number, contribution = 0.245): FusionCandidate {
+    return candidate(id, {
+      method: 'activation',
+      relevance: 0,
+      activation: 0.245,
+      evidence: [{ method: 'vector', relevance: measured, cue: 'outbox table' }],
+      typedEvidence: { edgeType: 'CONTRADICTS', contribution },
+    });
+  }
+
+  it('admits on a CONTRADICTS partner a cosine alone would refuse', () => {
+    const result = fuse([list('graph_traversal', [typedArrival('partner', 0.56)])], {
+      ...RRF,
+      admission: TYPED_CALIBRATED,
+    });
+
+    expect(ids(result.items)).toEqual(['partner']);
+    expect(result.items[0]?.admittedBy).toEqual({
+      rule: 'typed_admission',
+      score: 0.56,
+      qualifying: ['typed-edge: CONTRADICTS', 'vector 0.56'],
+    });
+    expect(result.admission.typedAdmitted).toBe(1);
+    expect(result.admission.droppedBelowFloor).toBe(0);
+  });
+
+  it('refuses the same partner once the knob is off', () => {
+    const result = fuse([list('graph_traversal', [typedArrival('partner', 0.56)])], {
+      ...RRF,
+      admission: CALIBRATED,
+    });
+
+    expect(ids(result.items)).toEqual([]);
+    expect(result.admission.typedAdmitted).toBe(0);
+    expect(result.admission.droppedBelowFloor).toBe(1);
+  });
+
+  it("refuses typed evidence too weak to clear the tier's own activation floor", () => {
+    const result = fuse([list('graph_traversal', [typedArrival('partner', 0.56, 0.1)])], {
+      ...RRF,
+      admission: TYPED_CALIBRATED,
+    });
+
+    expect(ids(result.items)).toEqual([]);
+    expect(result.admission.typedAdmitted).toBe(0);
+  });
+});
+
 describe('the admission report', () => {
   it('names the floor it used and counts what it dropped', () => {
     const result = fuse(
@@ -333,6 +392,7 @@ describe('the admission report', () => {
       droppedDuplicateContent: 1,
       droppedNearDuplicate: 0,
       anchored: true,
+      typedAdmitted: 0,
     });
   });
 

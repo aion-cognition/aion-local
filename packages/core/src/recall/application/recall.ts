@@ -22,6 +22,7 @@ import {
   pendingEnrichment,
   relatedClaims,
 } from './stage-reads.js';
+import { recordTypedAdmissions } from './typed-admission-ledger.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { roundMs } from '../../infrastructure/errors.js';
 import { adjacencyFetchFor } from '../../infrastructure/graph/adjacency.js';
@@ -150,6 +151,8 @@ function admissionFor(config: Config): AdmissionPolicy {
     vectorFloor: config.recall.vectorAdmissionFloor,
     corroborationFloor: config.recall.corroborationFloor,
     bm25Mode: config.recall.bm25AdmissionMode,
+    typedAdmissionEnabled: config.recall.typedAdmission,
+    typedAdmissionActivationFloor: config.recall.typedAdmissionActivationFloor,
   };
 }
 
@@ -308,7 +311,7 @@ export async function handleRecall(
           budget: activationBudget(deps.config),
         }),
   );
-
+  const admissionPolicy = admissionFor(deps.config);
   const fusion = await timed<FusionResult>(async () => {
     const arrivals = arrivalIds(seeds, activation.value.activated);
     const [hydrated, arrivalEvidence] = await Promise.all([
@@ -325,7 +328,7 @@ export async function handleRecall(
     const vectors = await mmrVectors(deps, lists, mode);
     return fuse(lists, {
       rrfConstant: deps.config.search.rrfConstant,
-      admission: admissionFor(deps.config),
+      admission: admissionPolicy,
       reranker: deps.config.search.reranker,
       mmrLambda: deps.config.search.mmrLambda,
       clusterCap: deps.config.recall.clusterCap,
@@ -424,6 +427,7 @@ export async function handleRecall(
     ...(payload.as_of === undefined ? {} : { asOf: payload.as_of }),
     ...(payload.knew_at === undefined ? {} : { knewAt: payload.knew_at }),
   });
+  recordTypedAdmissions(deps.db, sessionId, now, mode, fusion.value.items, admissionPolicy);
   // A time-traveled read records nothing: it never suppresses, so recording what it served
   // would make a historical inspection decide what the present-day pack may repeat.
   if (dedup) {

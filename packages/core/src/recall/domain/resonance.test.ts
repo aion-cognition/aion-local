@@ -31,6 +31,7 @@ const ADMISSION: AdmissionReport = {
   droppedDuplicateContent: 0,
   droppedNearDuplicate: 0,
   anchored: true,
+  typedAdmitted: 0,
 };
 
 function candidate(id: string, content = `content of ${id}`, why?: string): SeedCandidate {

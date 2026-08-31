@@ -7,6 +7,7 @@ import {
   type AdmissionPolicy,
   type AdmissionReport,
   type Measurement,
+  type TypedInboundEvidence,
 } from './admission.js';
 import { applyClusterCap, mmrOrder } from './ranking.js';
 import type { Currency, SupersededBy } from '../../infrastructure/graph/read-modes.js';
@@ -86,6 +87,12 @@ export type FusionCandidate = {
    * different failures, and this is the only field that tells them apart.
    */
   readonly activation?: number;
+  /**
+   * The strongest typed edge (CONTRADICTS, SUPERSEDES, CAUSES) that reached this arrival during
+   * spreading activation, when one did. What the typed-admission tier in `admissionEvidence`
+   * reads for an item no seed strategy found and no cosine alone would clear.
+   */
+  readonly typedEvidence?: TypedInboundEvidence;
 };
 
 export type RankedList = {
@@ -152,6 +159,7 @@ type Accumulator = {
   relevance: number;
   evidence: Measurement[];
   activation?: number;
+  typedEvidence?: TypedInboundEvidence;
   /** RRF contribution summed per producing method, the leg-share stats `fuse` reports. */
   methodContribution: Map<Rationale['method'], number>;
 };
@@ -264,6 +272,9 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
           evidence: [...measurementsOf(candidate)],
           methodContribution: new Map([[method, contribution]]),
           ...(candidate.activation === undefined ? {} : { activation: candidate.activation }),
+          ...(candidate.typedEvidence === undefined
+            ? {}
+            : { typedEvidence: candidate.typedEvidence }),
         });
         continue;
       }
@@ -281,6 +292,13 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
       if (candidate.activation !== undefined) {
         held.activation = Math.max(held.activation ?? 0, candidate.activation);
       }
+      if (
+        candidate.typedEvidence !== undefined &&
+        (held.typedEvidence === undefined ||
+          candidate.typedEvidence.contribution > held.typedEvidence.contribution)
+      ) {
+        held.typedEvidence = candidate.typedEvidence;
+      }
     }
   }
 
@@ -290,8 +308,9 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
   let droppedUnmeasured = 0;
   let droppedUnmeasuredArrival = 0;
   let anchored = false;
+  let typedAdmitted = 0;
   for (const entry of merged.values()) {
-    const evidence = admissionEvidence(entry.evidence, options.admission);
+    const evidence = admissionEvidence(entry.evidence, options.admission, entry.typedEvidence);
     if (evidence === undefined) {
       // Three counters, because they are three different answers to "why is this pack thin".
       // Something measured the first and the measurement fell short. Nothing measured the
@@ -310,6 +329,9 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
       continue;
     }
     anchored = true;
+    if (evidence.rule === 'typed_admission') {
+      typedAdmitted += 1;
+    }
     const superseded = entry.best.currency === 'superseded';
     const ranked = entry.score * boostFor(entry.best.labels, options.labelBoosts);
     items.push({
@@ -323,6 +345,9 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
       // The merged evidence, not the winning candidate's own: the gate counted every
       // measurement, and a reader of the item downstream has to see the same set.
       evidence: [...entry.evidence],
+      // The merged typed evidence, for the same reason: the ledger writer downstream reads this
+      // off the item rather than re-deriving it from the rationale string.
+      ...(entry.typedEvidence === undefined ? {} : { typedEvidence: entry.typedEvidence }),
       score: superseded ? ranked * SUPERSEDED_RANK_WEIGHT : ranked,
     });
 
@@ -359,6 +384,7 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
       droppedDuplicateContent: items.length - deduped.length,
       droppedNearDuplicate: deduped.length - capped.length,
       anchored,
+      typedAdmitted,
     },
     methodStats: Object.fromEntries(methodStats),
   };
