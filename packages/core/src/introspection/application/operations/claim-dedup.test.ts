@@ -1,4 +1,4 @@
-import type { Driver } from 'neo4j-driver';
+import neo4j, { type Driver } from 'neo4j-driver';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,7 +12,7 @@ import { refusingProvider } from '../../../infrastructure/providers/test-support
 import type { Provider } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { getLedgerEntry, markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
-import { claimDedupPairKey } from '../../domain/claim-dedup.js';
+import { claimDedupPairKey, claimDedupScanKey } from '../../domain/claim-dedup.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
 
@@ -79,6 +79,79 @@ function fakeDriver(subject: FakeClaim, neighbor?: FakeClaim): Driver {
       return Promise.resolve({ records });
     }
     throw new Error(`claim-dedup fake driver does not model this query: ${cypher}`);
+  };
+  return { executeQuery } as unknown as Driver;
+}
+
+/**
+ * A fake modeling a whole pool of recent claims plus a subject-to-neighbor pairing map, for
+ * exercising the growing-fetch scan rather than a single pair. A fake has no real cosine math,
+ * so each claim gets a distinct placeholder vector and the neighbor lookup keys off that vector
+ * to recover which claim is asking, then answers from `neighborOf`. Respects `$limit` on the
+ * recent-claims query, which is what the growing fetch in `findUnscannedRecentClaims` depends on.
+ */
+function poolDriver(input: {
+  readonly claims: readonly FakeClaim[];
+  readonly neighborOf: ReadonlyMap<string, string>;
+  readonly onRecentFetch?: (limit: number) => void;
+}): Driver {
+  const byId = new Map(input.claims.map((claim) => [claim.id, claim]));
+  const vectorOf = new Map(input.claims.map((claim, index) => [claim.id, [index, 0]]));
+  const idOfVectorKey = new Map(input.claims.map((claim, index) => [`${index},0`, claim.id]));
+  const executeQuery = (cypher: string, parameters: Record<string, unknown>): Promise<unknown> => {
+    if (cypher.includes('ORDER BY n.occurred_at DESC')) {
+      const limit = neo4j.isInt(parameters.limit)
+        ? parameters.limit.toNumber()
+        : (parameters.limit as number);
+      input.onRecentFetch?.(limit);
+      const sorted = [...input.claims].sort(
+        (a, b) => b.occurredAt.getTime() - a.occurredAt.getTime(),
+      );
+      const records = sorted.slice(0, limit).map((claim) => ({
+        toObject: () => ({
+          id: claim.id,
+          label: claim.label,
+          text: claim.text,
+          content_vec: vectorOf.get(claim.id),
+          occurred_at: claim.occurredAt,
+        }),
+      }));
+      return Promise.resolve({ records });
+    }
+    if (cypher.includes('AND NOT n.id IN $excludeIds')) {
+      const vector = parameters.vector as number[];
+      const subjectId = idOfVectorKey.get(vector.join(','));
+      const excludeIds = (parameters.excludeIds as string[] | undefined) ?? [];
+      const neighborId = subjectId === undefined ? undefined : input.neighborOf.get(subjectId);
+      const neighbor = neighborId === undefined ? undefined : byId.get(neighborId);
+      if (neighbor === undefined || excludeIds.includes(neighbor.id)) {
+        return Promise.resolve({ records: [] });
+      }
+      return Promise.resolve({
+        records: [
+          {
+            toObject: () => ({
+              id: neighbor.id,
+              label: neighbor.label,
+              text: neighbor.text,
+              score: 0.97,
+              shared_subject: null,
+            }),
+          },
+        ],
+      });
+    }
+    if (cypher.includes('UNWIND $ids AS wantedId')) {
+      const ids = (parameters.ids as string[] | undefined) ?? [];
+      const records = ids
+        .map((id) => byId.get(id))
+        .filter((claim): claim is FakeClaim => claim !== undefined)
+        .map((claim) => ({
+          toObject: () => ({ id: claim.id, occurred_at: claim.occurredAt, current: true }),
+        }));
+      return Promise.resolve({ records });
+    }
+    throw new Error(`claim-dedup pool fake does not model this query: ${cypher}`);
   };
   return { executeQuery } as unknown as Driver;
 }
@@ -235,6 +308,9 @@ describe('claim_dedup judge routing', () => {
     expect(result.itemsAffected).toBe(0);
     expect(result.detail).toContain('1 failed');
     expect(getLedgerEntry(db, claimDedupPairKey(SUBJECT.id, NEIGHBOR.id))).toBeUndefined();
+    // A failed judge leaves the subject itself unstamped too, not just the pair: the next run
+    // must see it as a subject again, or the retry the pair ledger promises never happens.
+    expect(getLedgerEntry(db, claimDedupScanKey(SUBJECT.id))).toBeUndefined();
   });
 
   it('does not ledger a pair when the second pass fails, so a later run retries it', async () => {
@@ -256,9 +332,10 @@ describe('claim_dedup judge routing', () => {
     expect(result.itemsAffected).toBe(0);
     expect(result.detail).toContain('1 failed');
     expect(getLedgerEntry(db, claimDedupPairKey(SUBJECT.id, NEIGHBOR.id))).toBeUndefined();
+    expect(getLedgerEntry(db, claimDedupScanKey(SUBJECT.id))).toBeUndefined();
   });
 
-  it('never calls the judge on a pair already ledgered from an earlier run', async () => {
+  it('never calls the judge on a pair already ledgered from an earlier run, and stamps the subject scanned', async () => {
     const driver = fakeDriver(subjectAt(NOW), neighborAt(new Date(NOW.getTime() - 1000)));
     markLedgerApplied(db, claimDedupPairKey(SUBJECT.id, NEIGHBOR.id), { verdict: 'related' });
 
@@ -269,6 +346,117 @@ describe('claim_dedup judge routing', () => {
       itemsProcessed: 0,
       itemsAffected: 0,
       detail: '0 pair(s) judged: 0 merged, 0 related, 0 vetoed, 0 stale, 0 failed',
+    });
+    // The subject's true nearest neighbor is already fully resolved, so the subject itself is
+    // settled too: a later run must not spend a vector search re-discovering the same answer.
+    expect(getLedgerEntry(db, claimDedupScanKey(SUBJECT.id))?.summary).toMatchObject({
+      verdict: 'already-paired',
+    });
+  });
+});
+
+describe('claim_dedup scan progress across runs', () => {
+  const RECENT_WINDOW = 10;
+  const configWithBatch = (batch: number): Config => ({
+    ...DEFAULTS,
+    maintenance: { ...DEFAULTS.maintenance, claimDedupBatch: batch },
+  });
+
+  /** Twelve claims, newest first: the top ten have no qualifying neighbor, and the only
+   * near-duplicate pair sits at ranks 11 and 12, past the batch-1 scan window (limit 10). */
+  function twelveClaimPool(): FakeClaim[] {
+    return Array.from({ length: 12 }, (_, index) => ({
+      id: `claim-${String(index)}`,
+      label: 'Decision',
+      text: `claim number ${String(index)}`,
+      occurredAt: new Date(NOW.getTime() - index * 60_000),
+    }));
+  }
+
+  it('stamps the newest window scanned when none of it has a qualifying neighbor', async () => {
+    const claims = twelveClaimPool();
+    const driver = poolDriver({ claims, neighborOf: new Map() });
+
+    const result = await claimDedupOperation().run(
+      ctxFor({ driver, provider: refusingProvider }, configWithBatch(1)),
+    );
+
+    expect(result.status).toBe('noop');
+    expect(result.itemsProcessed).toBe(0);
+    for (const claim of claims.slice(0, RECENT_WINDOW)) {
+      expect(getLedgerEntry(db, claimDedupScanKey(claim.id))?.summary).toMatchObject({
+        verdict: 'clean',
+      });
+    }
+    for (const claim of claims.slice(RECENT_WINDOW)) {
+      expect(getLedgerEntry(db, claimDedupScanKey(claim.id))).toBeUndefined();
+    }
+  });
+
+  it('grows the fetch past the stamped window on the next run and reaches the older pair', async () => {
+    const claims = twelveClaimPool();
+    const [older, newer] = [claims[11]!, claims[10]!];
+    // Run one settles the newest ten as clean, exactly like the previous test, without needing
+    // to re-run the judge to get there.
+    for (const claim of claims.slice(0, RECENT_WINDOW)) {
+      markLedgerApplied(db, claimDedupScanKey(claim.id), { verdict: 'clean' });
+    }
+
+    const fetchLimits: number[] = [];
+    const driver = poolDriver({
+      claims,
+      neighborOf: new Map([[newer.id, older.id]]),
+      onRecentFetch: (limit) => {
+        fetchLimits.push(limit);
+      },
+    });
+    const provider = answering({ same: false, rationale: 'coincidental wording overlap' });
+
+    const result = await claimDedupOperation().run(
+      ctxFor({ driver, provider }, configWithBatch(1)),
+    );
+
+    // The first fetch (limit 10) comes back entirely stamped, so the scan grows the window
+    // rather than reporting an empty batch.
+    expect(fetchLimits).toEqual([10, 100]);
+    expect(result.itemsProcessed).toBe(1);
+    expect(result.detail).toBe(
+      '1 pair(s) judged: 0 merged, 1 related, 0 vetoed, 0 stale, 0 failed',
+    );
+    expect(getLedgerEntry(db, claimDedupPairKey(older.id, newer.id))?.summary).toMatchObject({
+      verdict: 'related',
+    });
+    expect(getLedgerEntry(db, claimDedupScanKey(newer.id))?.summary).toMatchObject({
+      verdict: 'related',
+    });
+    // The older half of the pair was only ever a neighbor this run, never a subject: it earns
+    // its own scan turn (and its own stamp) later, on the batch cadence, not here.
+    expect(getLedgerEntry(db, claimDedupScanKey(older.id))).toBeUndefined();
+  });
+
+  it('lets a new node find an older clean-stamped node as its neighbor', async () => {
+    const older = { id: 'old-claim', label: 'Decision', text: 'we use Postgres', occurredAt: NOW };
+    markLedgerApplied(db, claimDedupScanKey(older.id), { verdict: 'clean' });
+
+    const newer = {
+      id: 'new-claim',
+      label: 'Decision',
+      text: 'Postgres is what we use',
+      occurredAt: new Date(NOW.getTime() + 60_000),
+    };
+    const driver = poolDriver({
+      claims: [newer, older],
+      neighborOf: new Map([[newer.id, older.id]]),
+    });
+    const provider = answering({ same: false, rationale: 'restated with different emphasis' });
+
+    const result = await claimDedupOperation().run(ctxFor({ driver, provider }));
+
+    // A stamp only retires a node from being picked as a subject again; the older node, though
+    // already scanned clean, is still found as the new claim's nearest neighbor.
+    expect(result.itemsProcessed).toBe(1);
+    expect(getLedgerEntry(db, claimDedupPairKey(older.id, newer.id))?.summary).toMatchObject({
+      verdict: 'related',
     });
   });
 });

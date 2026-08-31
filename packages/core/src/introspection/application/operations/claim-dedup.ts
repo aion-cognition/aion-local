@@ -1,11 +1,23 @@
+import type { Driver } from 'neo4j-driver';
+
 import {
   findRecentCurrentClaims,
   loadClaimDedupDetails,
   mergeClaimPair,
+  type RecentClaim,
 } from '../../../infrastructure/graph/claim-dedup-queries.js';
 import { findContradictionCandidates } from '../../../infrastructure/graph/supersession-queries.js';
-import { isLedgerApplied, markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
-import { claimDedupPairKey, selectClaimDedupSurvivor } from '../../domain/claim-dedup.js';
+import {
+  isLedgerApplied,
+  listLedgerKeys,
+  markLedgerApplied,
+} from '../../../infrastructure/sqlite/ops-ledger.js';
+import {
+  claimDedupPairKey,
+  claimDedupScanKey,
+  CLAIM_DEDUP_SCAN_PREFIX,
+  selectClaimDedupSurvivor,
+} from '../../domain/claim-dedup.js';
 import type { IntrospectionOperation, OperationOutcome } from '../../domain/operation.js';
 import {
   judgeClaimDedup,
@@ -39,8 +51,38 @@ export const CLAIM_DEDUP_STANDING_RELEVANCE = 0.1;
 const SCAN_FACTOR = 10;
 const SCAN_CEILING = 500;
 
+/** How far the fetch itself is allowed to grow, within one run, chasing `scanLimit` worth of
+ * unstamped subjects. Bigger than `SCAN_CEILING` on purpose: `scanLimit` bounds how many
+ * candidates a run judges, this bounds how deep into the current population it is willing to
+ * read past subjects earlier runs already settled. */
+const SCAN_FETCH_CEILING = 5000;
+
 export function claimDedupRelevance(): number {
   return CLAIM_DEDUP_STANDING_RELEVANCE;
+}
+
+/**
+ * The scan population, minus whatever earlier runs already settled. `findRecentCurrentClaims`
+ * itself stays ledger-blind, the same way `retro_judgment_sweep`'s own history-walking scan keeps
+ * its graph read separate from the sqlite ledger it filters against; the fetch here just grows
+ * past `scanLimit` when the newest slice is mostly already-stamped subjects, so a run reaches
+ * genuinely unexamined nodes instead of re-reading the same settled ones every tick.
+ */
+async function findUnscannedRecentClaims(
+  driver: Driver,
+  scanned: ReadonlySet<string>,
+  scanLimit: number,
+): Promise<RecentClaim[]> {
+  let fetchLimit = scanLimit;
+  for (;;) {
+    const rows = await findRecentCurrentClaims(driver, fetchLimit);
+    const unscanned = rows.filter((row) => !scanned.has(row.id));
+    const exhausted = rows.length < fetchLimit;
+    if (unscanned.length >= scanLimit || exhausted || fetchLimit >= SCAN_FETCH_CEILING) {
+      return unscanned.slice(0, scanLimit);
+    }
+    fetchLimit = Math.min(SCAN_FETCH_CEILING, fetchLimit * SCAN_FACTOR);
+  }
 }
 
 function toPair(
@@ -73,7 +115,12 @@ export function claimDedupOperation(): IntrospectionOperation {
       const batch = ctx.config.maintenance.claimDedupBatch;
       const floor = ctx.config.maintenance.claimDedupCosineFloor;
       const scanLimit = Math.min(SCAN_CEILING, batch * SCAN_FACTOR);
-      const recent = await findRecentCurrentClaims(ctx.driver, scanLimit);
+      const scanned = new Set(
+        listLedgerKeys(ctx.db, CLAIM_DEDUP_SCAN_PREFIX).map((key) =>
+          key.slice(CLAIM_DEDUP_SCAN_PREFIX.length),
+        ),
+      );
+      const recent = await findUnscannedRecentClaims(ctx.driver, scanned, scanLimit);
       const callOptions: ClaimDedupCallOptions = {
         model: ctx.config.models.reflect,
         timeoutMs: ctx.config.reflection.stageTimeoutMs,
@@ -99,6 +146,11 @@ export function claimDedupOperation(): IntrospectionOperation {
         if (takenLosers.has(subject.id)) {
           continue;
         }
+        // Marks this subject settled under every outcome below except a judge failure: a failed
+        // call leaves it unstamped so the next run gives the same pairing another try.
+        const stampScanned = (verdict: string): void => {
+          markLedgerApplied(ctx.db, claimDedupScanKey(subject.id), { verdict });
+        };
 
         const neighbors = await findContradictionCandidates(ctx.driver, {
           vector: subject.contentVector,
@@ -108,11 +160,13 @@ export function claimDedupOperation(): IntrospectionOperation {
         });
         const neighbor = neighbors[0];
         if (neighbor === undefined) {
+          stampScanned('clean');
           continue;
         }
 
         const pairKey = claimDedupPairKey(subject.id, neighbor.id);
         if (attempted.has(pairKey) || isLedgerApplied(ctx.db, pairKey)) {
+          stampScanned('already-paired');
           continue;
         }
         attempted.add(pairKey);
@@ -134,6 +188,7 @@ export function claimDedupOperation(): IntrospectionOperation {
             verdict: 'related',
             rationale: detection.judgment.rationale,
           });
+          stampScanned('related');
           continue;
         }
 
@@ -149,6 +204,7 @@ export function claimDedupOperation(): IntrospectionOperation {
         if (review.review.outcome === 'vetoed') {
           vetoed += 1;
           markLedgerApplied(ctx.db, pairKey, { verdict: 'vetoed', reason: review.review.reason });
+          stampScanned('vetoed');
           continue;
         }
 
@@ -161,6 +217,7 @@ export function claimDedupOperation(): IntrospectionOperation {
         if (subjectDetail?.current !== true || candidateDetail?.current !== true) {
           stale += 1;
           markLedgerApplied(ctx.db, pairKey, { verdict: 'stale' });
+          stampScanned('stale');
           continue;
         }
 
@@ -175,6 +232,7 @@ export function claimDedupOperation(): IntrospectionOperation {
         });
         takenLosers.add(loser.id);
         merged += 1;
+        stampScanned('merged');
         markLedgerApplied(ctx.db, pairKey, {
           verdict: 'merged',
           survivorId: survivor.id,
