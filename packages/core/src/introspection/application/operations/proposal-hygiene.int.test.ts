@@ -322,11 +322,14 @@ describe('proposal_hygiene against a live graph', () => {
 
   it('resolves a merge proposal the moment a side is absorbed, without waiting a horizon', async () => {
     await seedEpisode('ep-sweep-fresh', NOW, 2, 1);
+    // Two names, not one twice: `mergeEntities` upserts on the folded name, so seeding one
+    // name twice returns one node, and a merge of a node into itself is a merge the writer
+    // refuses. The sweep only needs a side that is genuinely gone.
     const absorbedId = await seedEntity('Sweep Legacy', 'topic');
-    const canonicalId = await seedEntity('Sweep Legacy', 'topic');
+    const canonicalId = await seedEntity('Sweep Legacy Successor', 'topic');
     const setupId = recordEntityMergeProposal(db, {
       subject: { id: absorbedId, name: 'Sweep Legacy', type: 'topic' },
-      candidate: { id: canonicalId, name: 'Sweep Legacy', type: 'topic' },
+      candidate: { id: canonicalId, name: 'Sweep Legacy Successor', type: 'topic' },
       similarity: 1,
       similaritySource: 'name_cosine',
       episodeId: 'ep-sweep-fresh',
@@ -336,7 +339,7 @@ describe('proposal_hygiene against a live graph', () => {
       { id: setupId },
     );
     if (applied.outcome !== 'applied') {
-      throw new Error('setup expected the exact-name pair to merge');
+      throw new Error(`setup expected the pair to merge, got ${applied.outcome}`);
     }
     const partnerId = await seedEntity('Sweep Partner', 'topic');
     // Created now, so no horizon has passed and no judge call is owed.
