@@ -88,7 +88,12 @@ export function reflectionStages(config: Config): readonly ReflectionStage[] {
       timeoutMs: reflection.stageTimeoutMs,
       maxEntities: reflection.maxEntities,
     }),
-    new EntityDedupStage({ similarityThreshold: reflection.entityDedupThreshold }),
+    new EntityDedupStage({
+      model,
+      timeoutMs: reflection.stageTimeoutMs,
+      similarityThreshold: reflection.entityDedupThreshold,
+      sharedEpisodeJaccardFloor: reflection.entityNominationJaccardFloor,
+    }),
     new AssociationInferenceStage({
       semanticThreshold: reflection.associationSemanticThreshold,
       similarLimit: reflection.associationSimilarLimit,

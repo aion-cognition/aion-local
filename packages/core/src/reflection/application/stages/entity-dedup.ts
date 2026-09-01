@@ -1,68 +1,91 @@
+import {
+  assembleEvidence,
+  EntityDetailCache,
+  findTier0Groups,
+  nominatePairs,
+  type NominatedPair,
+} from './entity-dedup-cascade.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
-import {
-  clearEntityVectors,
-  findSimilarCurrentEntities,
-  loadEntityDedupDetails,
-  redirectAndAbsorb,
-  type DedupEntityDetail,
-} from '../../../infrastructure/graph/entity-dedup-queries.js';
+import type { DedupEntityDetail } from '../../../infrastructure/graph/entity-dedup-queries.js';
 import { findEpisodeEntities } from '../../../infrastructure/graph/entity-queries.js';
+import type { EntityMergeJudgeVerdicts } from '../../../infrastructure/sqlite/entity-merge-decisions.js';
 import { recordEntityMergeProposal } from '../../../infrastructure/sqlite/entity-merge-proposals.js';
-import { isLedgerApplied, markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
-import { nameFormMatches } from '../../domain/entity-identity.js';
-import {
-  entityMergeLedgerKey,
-  groupDuplicates,
-  mergeAccessCount,
-  mergeAliases,
-  mergeLastAccessed,
-  selectCanonical,
-  type DuplicatePair,
-} from '../../domain/entity-merge.js';
+import { describeEntityPairFacts, nameFormRelation } from '../../domain/entity-cascade.js';
+import { selectCanonical } from '../../domain/entity-merge.js';
+import { parseTypeCounts } from '../../domain/entity-reconciliation.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
+import {
+  judgeEntityMerge,
+  reviewEntityMerge,
+  type EntityMergePair,
+  type EntityMergeSide,
+} from '../entity-merge-judge.js';
+import { applyEntityMerge, collectMergeSignals } from '../entity-merge-writer.js';
 
 /**
- * After extraction, an entity is checked against the rest of the graph for a near-duplicate
- * identity (a name typed differently, a nickname, a casing extraction missed) and duplicates
- * collapse into one canonical node. Grouping and canonical selection are pure
- * (`reflection/domain/entity-merge.ts`); this stage does the graph reads that feed them and
- * the writes their decision requires.
+ * The entity dedup cascade, four tiers deep, run over the entities this episode mentioned.
  *
- * Scope is this episode's mentioned entities against the whole graph: newly created entities
- * are checked against existing graph residents, not a full graph sweep, which maintenance
- * operations own instead.
+ * Tier 0 merges what the graph is already holding twice: two spellings of one name that the
+ * `name_norm` uniqueness key cannot see, and an identity that already answers to another's name
+ * as an alias. No model call, and a decision record all the same.
  *
- * A merge needs two independent pieces of evidence, vector proximity and name form
- * (`reflection/domain/entity-identity.ts`), because either alone is measurably wrong: prose
- * similarity merges `gitlab-token` into `github-token`, and one constant embedding for whole
- * classes of out-of-vocabulary text collapses eight distinct emoji entities into one.
+ * Tier 1 nominates and decides nothing, from two independent directions: a name-vector search
+ * per subject, and one bulk shared-episode pass that reaches the duplicates no vector compares.
+ * Tier 2 measures what each nominated pair shares. Tier 3 puts the facts to a two-pass judge:
+ * one call proposes, a second argues the other side on the same evidence, and only unanimity
+ * merges. A pair the two passes split on lands as a proposal, which is the only thing that
+ * fills that queue now.
+ *
+ * Type is evidence in the prompt and nothing else. It used to gate the merge path, and for as
+ * long as two extractions disagreed about what kind of thing something was, its duplicate was
+ * invisible: Postgres existed as tool, topic and organization at once with no run able to see
+ * it. Type reconciliation on the surviving node is what settles the label afterwards.
  */
 
 export const ENTITY_DEDUP_STAGE_NAME = 'entity-dedup';
 
-/**
- * Enough to catch a genuine near-duplicate without turning one entity into a graph-wide scan.
- * The candidates span every type, because one real thing has been seen wearing four of them
- * at once.
- */
-const CANDIDATE_SEARCH_LIMIT = 8;
-
 /** Provenance for the merge edge `supersede` writes and the aliasing signal. */
 export const ENTITY_DEDUP_METHOD = 'reflection_entity_dedup';
 
+/** Provenance for a merge no model was asked about, so lineage says which tier decided. */
+export const ENTITY_DEDUP_TIER0_METHOD = 'reflection_entity_dedup_tier0';
+
 export type EntityDedupStageOptions = {
   readonly similarityThreshold: number;
+  readonly sharedEpisodeJaccardFloor: number;
+  readonly model: string;
+  readonly timeoutMs: number;
+  /**
+   * A run's ceiling on judged pairs, which is two model calls each at worst. Its own option
+   * rather than a knob: every deployment has run the one number, and a stage that needs a
+   * different guard takes it from its constructor.
+   */
+  readonly maxJudgments: number;
 };
 
-/** A same-type pair that cleared both legs, carried with the score the proposal path needs. */
-type ScoredPair = DuplicatePair & {
-  readonly score: number;
+const DEFAULT_MAX_JUDGMENTS = 8;
+
+/** What one run of the cascade did, summed across its tiers. */
+type CascadeTally = {
+  readonly merges: number;
+  readonly groups: number;
+  readonly proposals: number;
+  readonly judged: number;
 };
 
-type CandidateSplit = {
-  readonly pairs: ScoredPair[];
-  readonly crossType: ScoredPair[];
-};
+const NOTHING_DONE: CascadeTally = { merges: 0, groups: 0, proposals: 0, judged: 0 };
+
+function addTallies(left: CascadeTally, right: CascadeTally): CascadeTally {
+  return {
+    merges: left.merges + right.merges,
+    groups: left.groups + right.groups,
+    proposals: left.proposals + right.proposals,
+    judged: left.judged + right.judged,
+  };
+}
+
+/** What one judged pair came to, before it is folded into the run's tally. */
+type PairOutcome = { readonly tally: CascadeTally };
 
 export class EntityDedupStage implements ReflectionStage {
   readonly name = ENTITY_DEDUP_STAGE_NAME;
@@ -71,6 +94,10 @@ export class EntityDedupStage implements ReflectionStage {
   constructor(options: Partial<EntityDedupStageOptions> = {}) {
     this.#options = {
       similarityThreshold: DEFAULTS.reflection.entityDedupThreshold,
+      sharedEpisodeJaccardFloor: DEFAULTS.reflection.entityNominationJaccardFloor,
+      model: DEFAULTS.models.reflect,
+      timeoutMs: DEFAULTS.reflection.stageTimeoutMs,
+      maxJudgments: DEFAULT_MAX_JUDGMENTS,
       ...options,
     };
   }
@@ -82,206 +109,228 @@ export class EntityDedupStage implements ReflectionStage {
     }
 
     const subjectIds = [...new Set(mentioned.map((entity) => entity.id))];
-    const details = new Map<string, DedupEntityDetail>();
-    for (const detail of await loadEntityDedupDetails(ctx.driver, subjectIds)) {
-      details.set(detail.id, detail);
-    }
+    const cache = new EntityDetailCache(ctx.driver);
+    await cache.require(subjectIds);
 
-    const split = await this.#findCandidates(ctx, subjectIds, details);
-    const proposed = this.#recordCrossTypeProposals(ctx, split.crossType, details);
-    if (split.pairs.length === 0) {
-      return {
-        status: 'ok',
-        summary: 'no near-duplicate entities found',
-        counts: { merges: 0, cross_type_proposals: proposed },
-      };
-    }
-
-    let merged = 0;
-    let groupCount = 0;
-    for (const group of groupDuplicates(split.pairs)) {
-      const members = group
-        .map((id) => details.get(id))
-        .filter((detail): detail is DedupEntityDetail => detail !== undefined);
-      if (members.length < 2) {
-        continue;
-      }
-
-      const canonical = selectCanonical(members);
-      const merging = members.filter(
-        (member) => member.id === canonical.id || nameFormMatches(canonical.name, member.name),
-      );
-      const mergedIds = merging
-        .filter((member) => member.id !== canonical.id)
-        .map((member) => member.id);
-      if (mergedIds.length === 0) {
-        continue;
-      }
-
-      const key = entityMergeLedgerKey(canonical.id, mergedIds);
-      if (isLedgerApplied(ctx.db, key)) {
-        continue;
-      }
-
-      await this.#mergeGroup(ctx, canonical, merging, mergedIds, key);
-      merged += mergedIds.length;
-      groupCount += 1;
-    }
+    const tier0 = await this.#runTier0(ctx, cache, subjectIds);
+    const judged = await this.#runJudgedTiers(ctx, cache, subjectIds);
+    const tally = addTallies(tier0, judged);
 
     return {
       status: 'ok',
-      summary: `${merged} entities merged across ${groupCount} groups`,
-      counts: { merges: merged, cross_type_proposals: proposed },
+      summary:
+        tally.merges === 0
+          ? `no duplicate entities merged, ${String(tally.judged)} pair(s) judged`
+          : `${String(tally.merges)} entities merged across ${String(tally.groups)} groups`,
+      counts: {
+        merges: tally.merges,
+        merge_proposals: tally.proposals,
+        merge_judgments: tally.judged,
+      },
     };
   }
 
-  /**
-   * One similarity search per eligible subject; a subject already superseded or unvectorized
-   * cannot search. Every hit is then held to the name-form check before it counts as anything:
-   * a candidate whose name the subject's name does not corroborate is neither a merge nor a
-   * proposal, because the only evidence for it is a vector, and a vector alone is what put
-   * `Redis` and `Valkey` inside one `Postgres` node.
-   */
-  async #findCandidates(
+  /** Tier 0: deterministic, model-free, and recorded exactly like a judged merge. */
+  async #runTier0(
     ctx: StageContext,
+    cache: EntityDetailCache,
     subjectIds: readonly string[],
-    details: Map<string, DedupEntityDetail>,
-  ): Promise<CandidateSplit> {
-    const pairs: ScoredPair[] = [];
-    const crossType: ScoredPair[] = [];
-
-    for (const id of subjectIds) {
-      const subject = details.get(id);
-      if (subject === undefined || !subject.current || subject.nameVector === undefined) {
-        continue;
-      }
-
-      const matches = await findSimilarCurrentEntities(ctx.driver, {
-        excludeId: subject.id,
-        vector: subject.nameVector,
-        threshold: this.#options.similarityThreshold,
-        limit: CANDIDATE_SEARCH_LIMIT,
-      });
-      await this.#hydrateMissing(
-        ctx,
-        matches.map((match) => match.id),
-        details,
+  ): Promise<CascadeTally> {
+    let tally = NOTHING_DONE;
+    for (const group of await findTier0Groups(ctx.driver, cache, { subjectIds })) {
+      const signals = await collectMergeSignals(ctx.driver, group.canonical, group.members);
+      const result = await applyEntityMerge(
+        { driver: ctx.driver, db: ctx.db, logger: ctx.logger },
+        {
+          canonical: group.canonical,
+          members: group.members,
+          tier: 'tier0',
+          reasons: group.reasons,
+          signals,
+          method: ENTITY_DEDUP_TIER0_METHOD,
+          now: ctx.now,
+        },
       );
-
-      for (const match of matches) {
-        const candidate = details.get(match.id);
-        if (candidate === undefined || !nameFormMatches(subject.name, candidate.name)) {
-          continue;
-        }
-        const pair: ScoredPair = { a: subject.id, b: match.id, score: match.score };
-        if (candidate.type === subject.type) {
-          pairs.push(pair);
-        } else {
-          crossType.push(pair);
-        }
-      }
-    }
-
-    return { pairs, crossType };
-  }
-
-  /** Candidates a similarity search turned up that were not already subjects need their own detail row. */
-  async #hydrateMissing(
-    ctx: StageContext,
-    ids: readonly string[],
-    details: Map<string, DedupEntityDetail>,
-  ): Promise<void> {
-    const missing = [...new Set(ids)].filter((id) => !details.has(id));
-    if (missing.length === 0) {
-      return;
-    }
-    for (const detail of await loadEntityDedupDetails(ctx.driver, missing)) {
-      details.set(detail.id, detail);
-    }
-  }
-
-  /**
-   * A cross-type near-duplicate is never merged here. Identity keys on `name_norm` alone since
-   * migration 003, so two nodes reaching this point have genuinely different names, and joining
-   * them means deciding they are one referent, a judgment about the world rather than about
-   * strings. The pair lands as a proposal a person resolves; nothing in the pipeline reads it
-   * back. Phase 2 replaces this split with the evidence cascade, which weighs type as one signal
-   * among several rather than as a gate.
-   */
-  #recordCrossTypeProposals(
-    ctx: StageContext,
-    crossType: readonly ScoredPair[],
-    details: ReadonlyMap<string, DedupEntityDetail>,
-  ): number {
-    let recorded = 0;
-    for (const pair of crossType) {
-      const subject = details.get(pair.a);
-      const candidate = details.get(pair.b);
-      if (subject === undefined || candidate === undefined) {
+      if (result.status !== 'merged') {
         continue;
       }
-      recordEntityMergeProposal(ctx.db, {
-        subject: { id: subject.id, name: subject.name, type: subject.type },
-        candidate: { id: candidate.id, name: candidate.name, type: candidate.type },
-        similarity: pair.score,
-        episodeId: ctx.episodeId,
-        createdAt: ctx.now.toISOString(),
+      for (const id of result.mergedIds) {
+        cache.absorb(id);
+      }
+      tally = addTallies(tally, {
+        ...NOTHING_DONE,
+        merges: result.mergedIds.length,
+        groups: 1,
       });
-      recorded += 1;
     }
-    return recorded;
+    return tally;
   }
 
   /**
-   * An atomic merge: redirect, absorb and close all commit together in `redirectAndAbsorb`,
-   * so the group is never observable half-merged. Vector cleanup is the one part deliberately
-   * outside it, since index cleanup runs post-commit with best-effort semantics, and it never
-   * fails the stage. The ledger is written only once every graph write above has committed.
-   *
-   * `mergedRecords` is what makes the merge reversible: the absorbed node's own identity, and
-   * (built inside the transaction) the edges it carried, land on the canonical. The unmerge
-   * operation runs later as maintenance and the data has to be written now, because a
-   * redirected edge that collides with one the canonical already held sums into it and stops
-   * being separable.
+   * Tiers 1 to 3. Every nominated pair is measured and then judged one pair at a time, because
+   * a group merge decided by a chain of separate judgments claims an agreement no call made.
+   * A side absorbed earlier in the same run drops out before its pair is spent on a model call.
    */
-  async #mergeGroup(
+  async #runJudgedTiers(
     ctx: StageContext,
-    canonical: DedupEntityDetail,
-    members: readonly DedupEntityDetail[],
-    mergedIds: readonly string[],
-    ledgerKey: string,
-  ): Promise<void> {
-    await redirectAndAbsorb(ctx.driver, {
-      canonicalId: canonical.id,
-      canonicalNameNorm: canonical.nameNorm,
-      mergedIds,
-      aliases: mergeAliases(canonical.name, members),
-      accessCount: mergeAccessCount(members),
-      lastAccessed: mergeLastAccessed(members),
-      supersedeSignals: ['entity_merge'],
-      supersedeProvenance: [ENTITY_DEDUP_METHOD],
-      mergedRecords: members
-        .filter((member) => member.id !== canonical.id)
-        .map((member) => ({
-          id: member.id,
-          name: member.name,
-          nameNorm: member.nameNorm,
-          type: member.type,
-          aliases: member.aliases,
-        })),
-      ledgerKey,
-      now: ctx.now,
+    cache: EntityDetailCache,
+    subjectIds: readonly string[],
+  ): Promise<CascadeTally> {
+    const live = subjectIds.filter((id) => cache.isCurrent(id));
+    if (live.length === 0) {
+      return NOTHING_DONE;
+    }
+    const nominated = await nominatePairs(ctx.driver, cache, {
+      subjectIds: live,
+      similarityThreshold: this.#options.similarityThreshold,
+      sharedEpisodeJaccardFloor: this.#options.sharedEpisodeJaccardFloor,
+      logger: ctx.logger,
     });
+    const evidence = await assembleEvidence(ctx.driver, nominated);
 
-    try {
-      await clearEntityVectors(ctx.driver, mergedIds);
-    } catch (err) {
-      ctx.logger.warn(
-        { err, canonicalId: canonical.id, mergedIds },
-        'entity merge vector cleanup deferred',
-      );
+    let tally = NOTHING_DONE;
+    for (const pair of evidence.slice(0, this.#options.maxJudgments)) {
+      if (!cache.isCurrent(pair.leftId) || !cache.isCurrent(pair.rightId)) {
+        continue;
+      }
+      const outcome = await this.#judgePair(ctx, cache, pair);
+      tally = addTallies(tally, outcome.tally);
+    }
+    return tally;
+  }
+
+  async #judgePair(
+    ctx: StageContext,
+    cache: EntityDetailCache,
+    pair: NominatedPair,
+  ): Promise<PairOutcome> {
+    const left = cache.get(pair.leftId);
+    const right = cache.get(pair.rightId);
+    if (left === undefined || right === undefined) {
+      return { tally: NOTHING_DONE };
     }
 
-    markLedgerApplied(ctx.db, ledgerKey, { canonicalId: canonical.id, mergedIds });
+    const options = { model: this.#options.model, timeoutMs: this.#options.timeoutMs };
+    const prompt = buildJudgePair(left, right, pair);
+    const asked: CascadeTally = { ...NOTHING_DONE, judged: 1 };
+
+    const detect = await judgeEntityMerge(ctx.provider, prompt, options);
+    if (detect.status === 'failed') {
+      ctx.logger.warn(
+        { leftId: left.id, rightId: right.id, detail: detect.detail },
+        'entity merge judge did not answer',
+      );
+      return { tally: asked };
+    }
+    if (!detect.judgment.same) {
+      return { tally: asked };
+    }
+
+    const review = await reviewEntityMerge(ctx.provider, prompt, options);
+    // An unanswered second pass is a split, not a pass: a merge the substrate cannot defend is
+    // a merge it does not make, and the pair goes to the residue lane rather than through.
+    if (review.status === 'failed' || !review.review.same) {
+      this.#recordProposal(ctx, left, right, pair);
+      return { tally: addTallies(asked, { ...NOTHING_DONE, proposals: 1 }) };
+    }
+
+    const merged = await this.#mergeJudged(ctx, cache, left, right, pair, {
+      detect: detect.judgment,
+      review: review.review,
+    });
+    return {
+      tally: addTallies(asked, merged ? { ...NOTHING_DONE, merges: 1, groups: 1 } : NOTHING_DONE),
+    };
   }
+
+  async #mergeJudged(
+    ctx: StageContext,
+    cache: EntityDetailCache,
+    left: DedupEntityDetail,
+    right: DedupEntityDetail,
+    pair: NominatedPair,
+    judge: EntityMergeJudgeVerdicts,
+  ): Promise<boolean> {
+    const members = [left, right];
+    const canonical = selectCanonical(members);
+    const absorbed = canonical.id === left.id ? right : left;
+    const cosines =
+      pair.nominatingCosine === undefined
+        ? new Map<string, number>()
+        : new Map([[absorbed.id, pair.nominatingCosine]]);
+    const signals = await collectMergeSignals(ctx.driver, canonical, members, cosines);
+
+    const result = await applyEntityMerge(
+      { driver: ctx.driver, db: ctx.db, logger: ctx.logger },
+      {
+        canonical,
+        members,
+        tier: 'tier3',
+        reasons: [judge.detect.rationale, judge.review.rationale],
+        signals,
+        judge,
+        method: ENTITY_DEDUP_METHOD,
+        now: ctx.now,
+      },
+    );
+    if (result.status !== 'merged') {
+      return false;
+    }
+    for (const id of result.mergedIds) {
+      cache.absorb(id);
+    }
+    return true;
+  }
+
+  /**
+   * The residue lane. A pair the two passes split on is the one case left for a person, and it
+   * is the only thing that writes here now: the cross-type queue this used to fill was an
+   * artifact of an identity key that no longer exists.
+   */
+  #recordProposal(
+    ctx: StageContext,
+    left: DedupEntityDetail,
+    right: DedupEntityDetail,
+    pair: NominatedPair,
+  ): void {
+    recordEntityMergeProposal(ctx.db, {
+      subject: { id: left.id, name: left.name, type: left.type },
+      candidate: { id: right.id, name: right.name, type: right.type },
+      // Whichever signal nominated the pair, on its own scale. A pair the graph put forward has
+      // no cosine, and writing a zero for one would state a measurement nobody took.
+      similarity: pair.nominatingCosine ?? pair.sharedEpisodeJaccard ?? 0,
+      episodeId: ctx.episodeId,
+      createdAt: ctx.now.toISOString(),
+    });
+  }
+}
+
+function toJudgeSide(detail: DedupEntityDetail): EntityMergeSide {
+  const description = detail.description.trim();
+  return {
+    name: detail.name,
+    aliases: detail.aliases,
+    type: detail.type,
+    typeCounts: parseTypeCounts(detail.typeCounts),
+    ...(description.length === 0 ? {} : { description }),
+  };
+}
+
+function buildJudgePair(
+  left: DedupEntityDetail,
+  right: DedupEntityDetail,
+  pair: NominatedPair,
+): EntityMergePair {
+  return {
+    subject: toJudgeSide(left),
+    candidate: toJudgeSide(right),
+    facts: describeEntityPairFacts({
+      leftName: left.name,
+      rightName: right.name,
+      relation: nameFormRelation(left.name, right.name),
+      leftMentionCount: left.mentionCount,
+      rightMentionCount: right.mentionCount,
+      ...(pair.signals === undefined ? {} : { signals: pair.signals }),
+    }),
+  };
 }

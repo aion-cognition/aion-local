@@ -52,3 +52,73 @@ export function nameFormRelation(left: string, right: string): NameFormRelation 
   }
   return 'none';
 }
+
+const RELATION_SENTENCES: Readonly<Record<NameFormRelation, string>> = {
+  fold: 'The two names are one string once case and spacing are set aside.',
+  squash: 'The two names differ only in the separators they are spelled with.',
+  bigram:
+    'The two names share most of their characters but are not one string. Names can overlap ' +
+    'this far and still belong to two different things.',
+  none: 'The two names have no measured relation to each other.',
+};
+
+export type EntityPairFactInput = {
+  readonly leftName: string;
+  readonly rightName: string;
+  readonly relation: NameFormRelation;
+  readonly leftMentionCount: number;
+  readonly rightMentionCount: number;
+  /** Absent when the pair signal read returned nothing, which is not the same as returning zero. */
+  readonly signals?: {
+    readonly sharedEpisodeCount: number;
+    readonly neighborOverlapCount: number;
+    readonly temporalGapDays?: number;
+    readonly leftEpisodeCount: number;
+    readonly rightEpisodeCount: number;
+  };
+};
+
+function plural(count: number, singular: string): string {
+  return `${String(count)} ${singular}${count === 1 ? '' : 's'}`;
+}
+
+/**
+ * Tier 2's evidence as sentences a judge can read, one fact per sentence, nothing averaged and
+ * nothing combined. Absence is stated as absence: a pair nobody could measure says so, rather
+ * than reporting a zero that reads as evidence against the merge.
+ *
+ * The nominating cosine is deliberately not in here. It belongs in the decision record, where
+ * it is a measurement; in a prompt it is a number inviting the judge to treat a threshold as
+ * the answer, and the whole point of the tier is that the vector does not decide.
+ */
+export function describeEntityPairFacts(input: EntityPairFactInput): string[] {
+  const facts = [RELATION_SENTENCES[input.relation]];
+  const { signals } = input;
+  if (signals === undefined) {
+    facts.push('Nothing about the two together could be measured in the graph.');
+    return facts;
+  }
+
+  const union = signals.leftEpisodeCount + signals.rightEpisodeCount - signals.sharedEpisodeCount;
+  facts.push(
+    signals.sharedEpisodeCount === 0
+      ? 'No episode mentions both of them.'
+      : `They are mentioned together in ${plural(signals.sharedEpisodeCount, 'episode')} of the ` +
+          `${plural(union, 'episode')} that mention either.`,
+  );
+  facts.push(
+    signals.neighborOverlapCount === 0
+      ? 'They are connected to none of the same nodes.'
+      : `They are both connected to ${plural(signals.neighborOverlapCount, 'other node')}.`,
+  );
+  facts.push(
+    signals.temporalGapDays === undefined
+      ? 'Neither has a dated mention, so nothing says how far apart they were seen.'
+      : `Their closest mentions are ${signals.temporalGapDays.toFixed(1)} days apart.`,
+  );
+  facts.push(
+    `${input.leftName} is mentioned in ${plural(input.leftMentionCount, 'episode')}, ` +
+      `${input.rightName} in ${plural(input.rightMentionCount, 'episode')}.`,
+  );
+  return facts;
+}
