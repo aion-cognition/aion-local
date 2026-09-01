@@ -259,10 +259,10 @@ const ADD_ENTITY_ALIASES = [
   `MATCH (n:${ENTITY_LABEL} { id: entry.id })`,
   `WITH n, entry, coalesce(n.${ENTITY_ALIASES_PROPERTY}, []) AS held,`,
   `     coalesce(n.${ENTITY_ALIASES_NORM_PROPERTY}, []) AS held_keys`,
-  `SET n.${ENTITY_ALIASES_PROPERTY} =`,
-  '      (held + [alias IN entry.aliases WHERE NOT alias IN held])[..$max],',
-  `    n.${ENTITY_ALIASES_NORM_PROPERTY} =`,
-  '      (held_keys + [alias IN entry.aliases_norm WHERE NOT alias IN held_keys])[..$max]',
+  'WITH n, held + [alias IN entry.aliases WHERE NOT alias IN held] AS merged,',
+  '     held_keys + [alias IN entry.aliases_norm WHERE NOT alias IN held_keys] AS merged_keys',
+  `SET n.${ENTITY_ALIASES_PROPERTY} = merged[..$max],`,
+  `    n.${ENTITY_ALIASES_NORM_PROPERTY} = merged_keys[..$max]`,
   'RETURN n.id AS id',
 ].join('\n');
 
