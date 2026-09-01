@@ -172,6 +172,20 @@ describe('the name-vector hash', () => {
     expect(unchanged.name).toBeUndefined();
   });
 
+  it('never stamps a hash the write did not store a vector for', async () => {
+    const stored = (await nodeProperties(harness.driver, harborId))[
+      ENTITY_NAME_VECTOR_HASH_PROPERTY
+    ];
+
+    await writeEntityVectors(harness.driver, [{ id: harborId, nameVectorHash: 'no vector here' }]);
+
+    // The hash is the claim that the stored vector was taken over a known text. A caller that
+    // hands in one without the other is answered by leaving both where they are.
+    expect((await nodeProperties(harness.driver, harborId))[ENTITY_NAME_VECTOR_HASH_PROPERTY]).toBe(
+      stored,
+    );
+  });
+
   it('marks the node again once an alias changes the text the vector was taken over', async () => {
     const stale = (await nodeProperties(harness.driver, harborId))[
       ENTITY_NAME_VECTOR_HASH_PROPERTY

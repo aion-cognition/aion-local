@@ -61,7 +61,7 @@ export const CognitiveExtractionOutputSchema = z.object({
 
 const ENTITY_EXTRACTION_SYSTEM_PROMPT = [
   'You extract named entities from a memory episode recorded by an AI coding agent.',
-  `An entity is a person, organization, project, tool, concept, location, or event explicitly present in the text.`,
+  `An entity is a person, organization, project, tool, topic, location, or event explicitly present in the text.`,
   "Use the entity's most specific mentioned name. Do not invent an entity that the text does not name.",
   'Return each distinct entity once.',
 ].join(' ');

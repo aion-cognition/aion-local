@@ -120,7 +120,11 @@ const MIGRATION_003_IDENTITY_REKEY: GraphMigration = {
   ],
 };
 
-/** Ordered oldest-first; the runner applies whichever versions the meta table has no record of yet. */
+/**
+ * Ordered oldest-first, and the runner replays every version's statements on every call. The
+ * meta table records first application rather than gating the run, which is what lets 003 drop
+ * a constraint 001 no longer creates.
+ */
 export const GRAPH_MIGRATIONS: readonly GraphMigration[] = [
   MIGRATION_001_BACKBONE_SCHEMA,
   MIGRATION_002_COGNITIVE_SCHEMA,
