@@ -1,7 +1,7 @@
 /**
  * The single fold behind every identity comparison in the product: the text an embedding is
- * computed over, and the `name_norm` key the graph's `(name_norm, type)` uniqueness
- * constraint is declared on. Both sides of a comparison have to fold identically, or a stored
+ * computed over, and the `name_norm` key the graph's `entity_name_unique` constraint is
+ * declared on. Both sides of a comparison have to fold identically, or a stored
  * vector scores against a differently-tokenized query and a re-extracted name forks a second
  * node. Every writer of `name_norm` calls `foldName`; the embedding path calls
  * `foldForIdentity` on whole text.

@@ -34,7 +34,7 @@ import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/s
  * and touches nothing, which makes it the kill switch. `auto` is the confidence-gated
  * predecessor, kept valid for a deployment that pinned it.
  *
- * Entities are deliberately out of scope: extraction merges them on `(name_norm, type)`, so a
+ * Entities are deliberately out of scope: extraction merges them on `name_norm`, so a
  * second episode naming the same entity reuses the same node and there is no new node to
  * supersede it with. Near-duplicate identities are the dedup stage's job.
  */

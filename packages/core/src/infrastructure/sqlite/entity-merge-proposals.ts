@@ -4,11 +4,11 @@ import type { SqliteHandle } from './database.js';
 import { proposalTable } from './proposal-table.js';
 
 /**
- * Cross-type near-duplicates found by the dedup stage. Uniqueness is on `(name_norm, type)`,
- * so `Postgres (tool)` and `Postgres (concept)` are two permanently separate identities and no
- * merge can join them without deciding which type was the mistake. That decision is a person's;
- * detection lands here, and the operator apply reached from `aion proposals` is the one reader
- * that applies these rows. Nothing in the pipeline reads them back on its own.
+ * Near-duplicates the dedup stage found but would not merge. Since migration 003 identity keys
+ * on `name_norm` alone, so a pair reaching here has two genuinely different names and joining
+ * them means deciding they are one referent. That decision is a person's; detection lands here,
+ * and the operator apply reached from `aion proposals` is the one reader that applies these
+ * rows. Nothing in the pipeline reads them back on its own.
  */
 
 export type EntityMergeProposal = {

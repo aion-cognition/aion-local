@@ -12,8 +12,8 @@ import { normalizeEntityName } from '../../reflection/domain/entity-extraction.j
  * the two groups, because a cross-type proposal only exists once its two sides already matched
  * on name; name is the whole criterion.
  *
- * The comparison is exact equality on the same fold the graph's `(name_norm, type)` uniqueness
- * key is built from, not the character-overlap rule in `entity-identity.ts` that finds merge
+ * The comparison is exact equality on the same fold the graph's `name_norm` uniqueness key is
+ * built from, not the character-overlap rule in `entity-identity.ts` that finds merge
  * *candidates*. That rule scores "UserPromptSubmit" against "UserPromptSubmit hook" above its
  * own threshold; a shadow that reused it would auto-apply a pair no reviewer approved.
  */

@@ -4,9 +4,9 @@ import type { RelationshipType } from './relationships.js';
 /**
  * Companion labels are a schema contract, not decoration. `Memory` is the only mechanism
  * that lets one vector index cover several node types, because a Neo4j vector index cannot
- * span a label union; `Entity` is what puts the backbone nodes under the composite
- * `(name_norm, type)` uniqueness constraint. Migration 001 declares indexes and constraints
- * against those labels, so a node written without them is invisible to both.
+ * span a label union; `Entity` is what puts the backbone nodes under the `name_norm`
+ * uniqueness constraint. Migrations 001 and 003 declare indexes and constraints against those
+ * labels, so a node written without them is invisible to both.
  * Cognitive node types extend this table rather than writing their labels by hand.
  */
 
