@@ -1,4 +1,3 @@
-import type { Driver } from 'neo4j-driver';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,22 +9,23 @@ import type { Config } from '../../../infrastructure/config/schema.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import { refusingProvider } from '../../../infrastructure/providers/test-support/refusing-provider.fixture.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
-import { recordEntityMergeProposal } from '../../../infrastructure/sqlite/entity-merge-proposals.js';
+import { listEntityMergeDecisions } from '../../../infrastructure/sqlite/entity-merge-decisions.js';
+import { DedupFakeGraph } from '../../../reflection/application/stages/entity-dedup.fixture.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
 
 /**
- * A disabled knob and a fuzzy-only queue never reach `applyEntityMergeProposal`, so both cases
- * here stub the driver the way `dead-letter.test.ts` does. An exact-name pair that actually
- * merges needs a live graph to check the write, which belongs in the integration file.
+ * The operation is a graph sweep now, not a queue walk, so what it does on a graph holding a
+ * duplicate belongs in the integration file where a real server answers the tier-0 predicates.
+ * What is provable here is the knob, the empty sweep, and what the engine scores the run on.
  */
-const driver = {} as Driver;
 
 const NOW = new Date('2026-08-29T14:00:00.000Z');
 
 let db: SqliteHandle;
 let logger: Logger;
 let dataDir: string;
+let graph: DedupFakeGraph;
 
 beforeAll(() => {
   dataDir = mkdtempSync(join(tmpdir(), 'aion-merge-auto-'));
@@ -40,11 +40,13 @@ afterAll(() => {
 
 beforeEach(() => {
   db.exec('DELETE FROM entity_merge_proposals');
+  db.exec('DELETE FROM entity_merge_decisions');
+  graph = new DedupFakeGraph();
 });
 
 function ctxFor(config: Config): OperationContext {
   return {
-    driver,
+    driver: graph.driver,
     db,
     config,
     logger,
@@ -55,40 +57,38 @@ function ctxFor(config: Config): OperationContext {
   };
 }
 
+function healthWithOpen(entityMergeOpen: number): ReturnType<typeof healthFixture> {
+  return healthFixture({
+    proposals: {
+      supersessionOpen: 0,
+      entityMergeOpen,
+      oldestOpenAgeMs: undefined,
+      medianOpenAgeMs: undefined,
+    },
+  });
+}
+
 describe('mergeAutoRelevance', () => {
   it('scales linearly with open entity-merge proposals', () => {
-    const health = healthFixture({
-      proposals: {
-        supersessionOpen: 0,
-        entityMergeOpen: 5,
-        oldestOpenAgeMs: undefined,
-        medianOpenAgeMs: undefined,
-      },
-    });
-    expect(mergeAutoRelevance(health)).toBeCloseTo(0.5, 6);
+    expect(mergeAutoRelevance(healthWithOpen(5))).toBeCloseTo(0.5, 6);
   });
 
   it('caps at one past ten open proposals', () => {
-    const health = healthFixture({
-      proposals: {
-        supersessionOpen: 0,
-        entityMergeOpen: 40,
-        oldestOpenAgeMs: undefined,
-        medianOpenAgeMs: undefined,
-      },
-    });
-    expect(mergeAutoRelevance(health)).toBe(1);
+    expect(mergeAutoRelevance(healthWithOpen(40))).toBe(1);
+  });
+});
+
+describe('what the engine scores merge_auto on', () => {
+  it('declares the open entity-merge queue as the number it exists to move down', () => {
+    const operation = mergeAutoOperation();
+
+    expect(operation.measure?.(healthWithOpen(7))).toBe(7);
+    expect(operation.improves ?? 'lower').toBe('lower');
   });
 });
 
 describe('merge_auto with AION_AUTO_MERGE off', () => {
-  it('examines nothing and says the knob is why', async () => {
-    recordEntityMergeProposal(db, {
-      subject: { id: 'left-1', name: 'Ledger Cache', type: 'tool' },
-      candidate: { id: 'right-1', name: 'Ledger Cache', type: 'concept' },
-      similarity: 0.95,
-      episodeId: 'ep-1',
-    });
+  it('sweeps nothing and says the knob is why', async () => {
     const config: Config = {
       ...DEFAULTS,
       maintenance: { ...DEFAULTS.maintenance, autoMerge: false },
@@ -100,19 +100,13 @@ describe('merge_auto with AION_AUTO_MERGE off', () => {
       status: 'noop',
       itemsProcessed: 0,
       itemsAffected: 0,
-      detail: 'auto-merge disabled by AION_AUTO_MERGE; no proposals examined',
+      detail: 'auto-merge disabled by AION_AUTO_MERGE; nothing swept',
     });
   });
 });
 
-describe('merge_auto with only a fuzzy proposal open', () => {
-  it('leaves the pair queued without calling the graph', async () => {
-    recordEntityMergeProposal(db, {
-      subject: { id: 'left-2', name: 'Fenwick Loader', type: 'service' },
-      candidate: { id: 'right-2', name: 'Fenwick Batch', type: 'concept' },
-      similarity: 0.87,
-      episodeId: 'ep-2',
-    });
+describe('merge_auto on a graph holding no duplicate spelling', () => {
+  it('reports a clean sweep and records no decision', async () => {
     const config: Config = {
       ...DEFAULTS,
       maintenance: { ...DEFAULTS.maintenance, autoMerge: true },
@@ -121,10 +115,8 @@ describe('merge_auto with only a fuzzy proposal open', () => {
     const result = await mergeAutoOperation().run(ctxFor(config));
 
     expect(result.status).toBe('noop');
-    expect(result.itemsProcessed).toBe(1);
+    expect(result.itemsProcessed).toBe(0);
     expect(result.itemsAffected).toBe(0);
-    expect(result.detail).toBe(
-      '0 exact-name proposal(s) auto-merged, 0 cleared, 1 left queued for review',
-    );
+    expect(listEntityMergeDecisions(db)).toHaveLength(0);
   });
 });

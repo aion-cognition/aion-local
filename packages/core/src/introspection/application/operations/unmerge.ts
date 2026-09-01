@@ -8,6 +8,7 @@ import {
 } from '../../../infrastructure/graph/unmerge-queries.js';
 import type { Logger } from '../../../infrastructure/logging/logger.js';
 import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import { getEntityMergeDecisionByKey } from '../../../infrastructure/sqlite/entity-merge-decisions.js';
 import { isLedgerApplied, markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
 
 /**
@@ -41,6 +42,16 @@ export type UnmergeRequest = {
   readonly now?: Date;
 };
 
+/**
+ * What the merge said it knew, for the person reversing it. Absent on a merge written before
+ * the cascade recorded decisions, and on one whose record has since been cleared.
+ */
+export type UnmergedDecision = {
+  readonly id: string;
+  readonly tier: string;
+  readonly reasons: readonly string[];
+};
+
 export type UnmergeReport = {
   readonly status: 'applied' | 'noop';
   readonly detail: string;
@@ -51,7 +62,28 @@ export type UnmergeReport = {
   /** Recorded edges whose other endpoint has since left the graph. */
   readonly edgesSkipped: number;
   readonly aliasesReleased: number;
+  readonly decision?: UnmergedDecision;
 };
+
+/**
+ * The merge stamps the decision record's idempotency key into its own provenance, so the
+ * evidence is one lookup away rather than a key recomputed from a membership the graph no
+ * longer states in one place.
+ */
+function decisionFor(
+  db: SqliteHandle,
+  record: MergeProvenanceRecord,
+): UnmergedDecision | undefined {
+  const key = record.raw.decision_key;
+  if (typeof key !== 'string') {
+    return undefined;
+  }
+  const decision = getEntityMergeDecisionByKey(db, key);
+  if (decision === undefined) {
+    return undefined;
+  }
+  return { id: decision.id, tier: decision.tier, reasons: decision.reasons };
+}
 
 /** Mirrors the merge's own key, so the two halves of one repair read as a pair in the ledger. */
 export function entityUnmergeLedgerKey(canonicalId: string, mergedId: string): string {
@@ -146,11 +178,13 @@ export async function runEntityUnmerge(
     'entity unmerge applied',
   );
 
+  const decision = decisionFor(deps.db, record);
   return {
     status: 'applied',
     detail:
       `restored one identity with ${String(result.edgesRestored)} edges, ` +
       `${String(result.edgesSkipped)} skipped`,
+    ...(decision === undefined ? {} : { decision }),
     canonicalId: canonical.canonicalId,
     restoredId: result.restoredId,
     edgesRestored: result.edgesRestored,
