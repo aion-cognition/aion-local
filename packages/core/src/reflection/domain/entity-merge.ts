@@ -9,6 +9,11 @@ export type DedupCandidate = {
   readonly id: string;
   readonly name: string;
   readonly isStructural: boolean;
+  /**
+   * Distinct current episodes that mention the identity. Every caller has to count it that way
+   * or the rule below reads a different question: a sum over mention counts lets one episode
+   * naming something forty times outweigh a year of history that named it once a week.
+   */
   readonly mentionCount: number;
   readonly txFrom?: Date;
   readonly aliases: readonly string[];
@@ -81,11 +86,11 @@ export function groupDuplicates(pairs: readonly DuplicatePair[]): string[][] {
 }
 
 /**
- * Merge on collision: a structural node is never the absorbed side, so it wins whenever the
- * group has one (there should be at most one, since duplicate structural identities of the
- * same type cannot arise from `bootstrapBackbone`). Otherwise the stronger identity wins:
- * more episodes have mentioned it, or, on a tie, it is the older of the two. `id` breaks
- * anything still tied, so the choice is always deterministic.
+ * Merge on collision: a structural node is never the absorbed side, so it wins outright
+ * whenever the group has one (there should be at most one, since duplicate structural
+ * identities of the same type cannot arise from `bootstrapBackbone`). Otherwise the stronger
+ * identity wins: more distinct episodes have mentioned it, or, on a tie, it is the older of the
+ * two. `id` breaks anything still tied, so the choice is always deterministic.
  */
 export function selectCanonical<T extends DedupCandidate>(members: readonly T[]): T {
   const structural = members.filter((member) => member.isStructural);
