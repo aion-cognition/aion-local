@@ -89,7 +89,7 @@ export class DedupFakeGraph extends FakeGraph {
     }
     if (cypher.includes(`coalesce(n.${MERGE_PROVENANCE_PROPERTY}, [])`)) {
       this.statements.push({ cypher, parameters });
-      return toResult(this.#mergeProvenance(parameters));
+      return toResult(this.#canonicalAbsorbState(parameters));
     }
     if (cypher.includes('UNWIND $ids AS wanted')) {
       this.statements.push({ cypher, parameters });
@@ -97,7 +97,10 @@ export class DedupFakeGraph extends FakeGraph {
     }
     if (cypher.includes('UNWIND $mergedIds AS mergedId') && cypher.includes('startNode(r).id')) {
       this.statements.push({ cypher, parameters });
-      return toResult(this.#mergedNodeEdges(parameters));
+      // The fake carries no relationship stamps, so every edge it holds is open and the
+      // merge's closed-edge read finds none.
+      const closedOnly = cypher.includes(`r.${BITEMPORAL_PROPERTIES.validUntil} IS NOT NULL`);
+      return toResult(closedOnly ? [] : this.#mergedNodeEdges(parameters));
     }
     if (cypher.includes(`SET n.${ENTITY_NAME_VECTOR_PROPERTY} = null`)) {
       this.statements.push({ cypher, parameters });
@@ -313,9 +316,21 @@ export class DedupFakeGraph extends FakeGraph {
     return scored;
   }
 
-  #mergeProvenance(parameters: Record<string, unknown>): Row[] {
+  /** The merge transaction's post-lock read of everything it folds a contribution into. */
+  #canonicalAbsorbState(parameters: Record<string, unknown>): Row[] {
     const node = this.nodes.get(parameters.id as string);
-    return [{ records: node?.properties[MERGE_PROVENANCE_PROPERTY] ?? [] }];
+    if (node === undefined) {
+      return [];
+    }
+    return [
+      {
+        records: node.properties[MERGE_PROVENANCE_PROPERTY] ?? [],
+        aliases: node.properties[ENTITY_ALIASES_PROPERTY] ?? [],
+        aliasesNorm: node.properties[ENTITY_ALIASES_NORM_PROPERTY] ?? [],
+        accessCount: node.properties[ACCESS_COUNT_PROPERTY] ?? 0,
+        lastAccessed: node.properties[LAST_ACCESSED_PROPERTY] ?? null,
+      },
+    ];
   }
 
   #mergedNodeEdges(parameters: Record<string, unknown>): Row[] {
