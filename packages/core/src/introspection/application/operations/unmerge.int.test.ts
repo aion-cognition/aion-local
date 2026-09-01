@@ -1,3 +1,4 @@
+import type { Driver } from 'neo4j-driver';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -319,5 +320,92 @@ describe('what a reversal can cite', () => {
 
     expect(report.status).toBe('applied');
     expect(report.decision).toBeUndefined();
+  }, 120_000);
+});
+
+const HOST_NAME_NORM = 'hydra';
+
+async function absorbInto(
+  hostId: string,
+  mergedId: string,
+  name: string,
+  aliases: readonly string[],
+): Promise<void> {
+  await redirectAndAbsorb(harness.driver, {
+    canonicalId: hostId,
+    canonicalNameNorm: HOST_NAME_NORM,
+    mergedIds: [mergedId],
+    aliases,
+    accessCount: 0,
+    mergedRecords: [
+      { id: mergedId, name, nameNorm: name.toLowerCase(), type: 'tool', aliases: [] },
+    ],
+    now: NOW,
+  });
+}
+
+/**
+ * A driver that lands one more merge on the canonical the moment the unmerge's first read
+ * returns, which is the window the real system runs in: the reflection worker and the
+ * introspector share one driver and merge into the same canonical while a person is deciding.
+ */
+function driverThatMergesAfterFirstRead(driver: Driver, land: () => Promise<void>): Driver {
+  let pending: (() => Promise<void>) | undefined = land;
+  return new Proxy(driver, {
+    get(target, property) {
+      const value: unknown = Reflect.get(target, property);
+      if (typeof value !== 'function') {
+        return value;
+      }
+      const method = value.bind(target) as (...args: never[]) => Promise<unknown>;
+      if (property !== 'executeQuery') {
+        return method;
+      }
+      return async (...args: never[]): Promise<unknown> => {
+        const result = await method(...args);
+        const next = pending;
+        pending = undefined;
+        await next?.();
+        return result;
+      };
+    },
+  });
+}
+
+describe('a merge that lands while an unmerge is being decided', () => {
+  it('keeps the record and the aliases that merge wrote', async () => {
+    const hostId = await seedEntity(entityInput('Hydra', HOST_NAME_NORM, CANONICAL_EPISODE));
+    const firstId = await seedEntity(entityInput('Hydra DB', 'hydra db', CANONICAL_EPISODE));
+    const secondId = await seedEntity(entityInput('HydraStore', 'hydrastore', CANONICAL_EPISODE));
+    const lateId = await seedEntity(entityInput('Hydra Cache', 'hydra cache', CANONICAL_EPISODE));
+
+    await absorbInto(hostId, firstId, 'Hydra DB', ['Hydra DB']);
+    await absorbInto(hostId, secondId, 'HydraStore', ['Hydra DB', 'HydraStore']);
+
+    const report = await runEntityUnmerge(
+      {
+        driver: driverThatMergesAfterFirstRead(harness.driver, async () => {
+          await absorbInto(hostId, lateId, 'Hydra Cache', [
+            'Hydra DB',
+            'HydraStore',
+            'Hydra Cache',
+          ]);
+        }),
+        db,
+        logger,
+      },
+      { mergedId: firstId, now: LATER },
+    );
+
+    expect(report.status).toBe('applied');
+
+    // The late merge's record is the only statement of what that identity contributed, so a
+    // rewrite off the pre-transaction read would erase it along with the alias it absorbed.
+    const remaining = await listUnmergeableRecords(harness.driver, hostId);
+    expect(remaining.map((record) => record.mergedId)).toEqual([secondId, lateId]);
+
+    const host = await storedEntity(harness.driver, hostId);
+    expect(host?.aliases).toEqual(expect.arrayContaining(['HydraStore', 'Hydra Cache']));
+    expect(host?.aliases).not.toContain('Hydra DB');
   }, 120_000);
 });
