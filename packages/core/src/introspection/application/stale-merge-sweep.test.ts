@@ -62,6 +62,7 @@ function propose(left: string, right: string, episodeId = 'ep-1'): string {
     subject: { id: left, name: left, type: 'tool' },
     candidate: { id: right, name: right, type: 'topic' },
     similarity: 0.9,
+    similaritySource: 'name_cosine',
     episodeId,
     createdAt: NOW.toISOString(),
   });

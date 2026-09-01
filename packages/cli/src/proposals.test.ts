@@ -105,6 +105,7 @@ describe('aion proposals against a seeded review queue', () => {
       subject: { id: 'ent-a', name: 'gitlab-token', type: 'credential' },
       candidate: { id: 'ent-b', name: 'github-token', type: 'credential' },
       similarity: 0.91,
+      similaritySource: 'name_cosine',
       episodeId: 'episode-3',
     });
   }
@@ -120,6 +121,7 @@ describe('aion proposals against a seeded review queue', () => {
       subject: { id: 'ent-a', name: 'gitlab-token', type: 'credential' },
       candidate: { id: 'ent-b', name: 'github-token', type: 'credential' },
       similarity: 0.91,
+      similaritySource: 'name_cosine',
       episodeId: 'episode-3',
     });
     const { lines, write } = collector();

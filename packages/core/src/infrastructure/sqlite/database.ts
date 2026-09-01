@@ -102,12 +102,16 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     PRIMARY KEY (session_id, item_id)
   )`,
   /**
-   * Near-duplicate entities of different types, which dedup detects and never applies: one
-   * real thing typed two ways is a type mistake, and merging on the type key would pick a
-   * winner the extraction never justified. Its own table rather than a `kind` column on
-   * `supersession_proposals` because the columns do not overlap: no contradiction judgment,
-   * no model confidence, and a pair of names and types the reviewer has to see to decide.
-   * The pair is stored id-sorted, so discovery from either side is one row.
+   * The cascade's residue: pairs the two judge passes split on, which is the one case left for
+   * a person. Its own table rather than a `kind` column on `supersession_proposals` because the
+   * columns do not overlap: no contradiction judgment, no model confidence, and a pair of names
+   * and types the reviewer has to see to decide. The pair is stored id-sorted, so discovery
+   * from either side is one row.
+   *
+   * `similarity` needs `similarity_source` beside it to mean anything. A vector nomination
+   * stores a cosine and a graph nomination stores a shared-episode Jaccard; the two are not on
+   * one scale, and a column read as a cosine that sometimes holds a set-overlap ratio is worse
+   * than no number at all.
    */
   `CREATE TABLE IF NOT EXISTS entity_merge_proposals (
     id TEXT PRIMARY KEY,
@@ -118,6 +122,7 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     right_name TEXT NOT NULL,
     right_type TEXT NOT NULL,
     similarity REAL NOT NULL,
+    similarity_source TEXT NOT NULL DEFAULT 'name_cosine',
     episode_id TEXT NOT NULL,
     created_at TEXT NOT NULL,
     resolved_at TEXT,
@@ -173,6 +178,11 @@ const COLUMN_ADDITIONS: readonly ColumnAddition[] = [
   { table: 'reflection_queue', column: 'lane_seq', definition: 'INTEGER NOT NULL DEFAULT 0' },
   { table: 'last_pack', column: 'as_of', definition: 'TEXT' },
   { table: 'last_pack', column: 'knew_at', definition: 'TEXT' },
+  {
+    table: 'entity_merge_proposals',
+    column: 'similarity_source',
+    definition: "TEXT NOT NULL DEFAULT 'name_cosine'",
+  },
 ];
 
 function tableColumns(db: SqliteHandle, table: string): ReadonlySet<string> {

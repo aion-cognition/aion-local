@@ -130,6 +130,7 @@ const ENTITY_MERGE_PROPOSAL: EntityMergeProposal = {
   rightName: 'PostgreSQL',
   rightType: 'technology',
   similarity: 0.94,
+  similaritySource: 'name_cosine',
   episodeId: 'episode-3',
   createdAt: '2026-06-05T00:00:00.000Z',
   resolvedAt: null,
