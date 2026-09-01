@@ -26,16 +26,16 @@ import {
  * signal that the constant has gone stale. A floor tuned on noise alone cannot tell "rejects
  * unrelated text" from "rejects everything".
  *
- * Measured 2026-08-29, nomic-embed-text on host Ollama, and printed on every run:
- *   unrelated  n=28  p50 0.408  p95 0.530  max 0.547
- *   related    n=10  min 0.451  p05 0.513  p50 0.773
- *   weak       n=4   0.355 0.390 0.458 0.522   (related, under the floor, corroboration's job)
+ * Measured 2026-09-01, snowflake-arctic-embed2 on host Ollama, and printed on every run:
+ *   unrelated  n=28  p50 0.094  p95 0.285  max 0.299
+ *   related    n=10  min 0.382  p05 0.438  p50 0.769
+ *   weak       n=4   0.154 0.222 0.244 0.393   (related, under the floor, corroboration's job)
  *
- * The tails overlap: unrelated technical prose reaches 0.547 and two genuine matches sit at
- * 0.451 and 0.588. No floor separates that. Both floors are set above the whole noise sample
- * and the overlap is handed to the narrow corroboration band (0.55 to 0.60) and to exact
- * lexical hits; the one genuine match under both floors is reported on every run rather than
- * assumed away.
+ * The tails no longer overlap on this model, and the committed floors are still nomic's: 0.60
+ * sits far above a noise sample that stops at 0.299, so 3 of 10 genuine matches fall under it
+ * and are carried by corroboration and exact lexical hits. That is inside what this file
+ * tolerates and it is not calibration. Phase 4.4 re-derives every distribution-coupled number
+ * against this model; until it does, the numbers printed here are the evidence for it.
  */
 
 const OLLAMA_URL = process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434';

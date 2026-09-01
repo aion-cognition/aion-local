@@ -37,10 +37,10 @@ const PROFILES: Readonly<Record<string, EmbedModelProfile>> = {
   // arctic2 ships a "query: " retrieval prefix and this install does not use it. Measured
   // against the admission fixtures on 2026-09-01, query side prefixed and content side raw:
   // unrelated p95 0.210 max 0.224, related min 0.233 p50 0.634, half the genuine matches under
-  // the committed 0.60 floor. Raw on both sides: unrelated p95 0.412 max 0.442, related min
-  // 0.454 p50 0.749. The prefix compresses the band it is supposed to open, on the asymmetric
-  // shape it is meant for. Phase 4.4 re-derives the floors and owns this row; whichever way it
-  // goes, one row decides it for every query-shaped embed in the product.
+  // the committed 0.60 floor. Raw on both sides: unrelated p95 0.285 max 0.299, related min
+  // 0.382 p50 0.769, 30% under it. The prefix compresses the band the floor reads, on the
+  // asymmetric shape it is meant for. Phase 4.4 re-derives the floors and owns this row;
+  // whichever way it goes, one row decides it for every query-shaped embed in the product.
   'snowflake-arctic-embed2': { contextTokens: 8192, queryPrefix: '' },
 };
 
