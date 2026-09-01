@@ -85,9 +85,17 @@ type CascadeTally = {
   readonly groups: number;
   readonly proposals: number;
   readonly judged: number;
+  /** Pairs tier 1 put forward, which is what `judged` has to be read against. */
+  readonly nominated: number;
 };
 
-const NOTHING_DONE: CascadeTally = { merges: 0, groups: 0, proposals: 0, judged: 0 };
+const NOTHING_DONE: CascadeTally = {
+  merges: 0,
+  groups: 0,
+  proposals: 0,
+  judged: 0,
+  nominated: 0,
+};
 
 function addTallies(left: CascadeTally, right: CascadeTally): CascadeTally {
   return {
@@ -95,6 +103,7 @@ function addTallies(left: CascadeTally, right: CascadeTally): CascadeTally {
     groups: left.groups + right.groups,
     proposals: left.proposals + right.proposals,
     judged: left.judged + right.judged,
+    nominated: left.nominated + right.nominated,
   };
 }
 
@@ -143,6 +152,7 @@ export class EntityDedupStage implements ReflectionStage {
         merges: tally.merges,
         merge_proposals: tally.proposals,
         merge_judgments: tally.judged,
+        merge_nominations: tally.nominated,
       },
     };
   }
@@ -204,9 +214,23 @@ export class EntityDedupStage implements ReflectionStage {
       logger: ctx.logger,
     });
     const evidence = await assembleEvidence(ctx.driver, nominated);
+    const affordable = evidence.slice(0, this.#options.maxJudgments);
+    // A run that could not afford its nominations says so. The dropped pairs write no proposal
+    // and leave no other trace, so without this line the counts read as a quiet graph rather
+    // than as a budget that ran out.
+    if (evidence.length > affordable.length) {
+      ctx.logger.info(
+        {
+          nominated: evidence.length,
+          judged: affordable.length,
+          unjudged: evidence.length - affordable.length,
+        },
+        'entity dedup judge budget spent before the nominations ran out',
+      );
+    }
 
-    let tally = NOTHING_DONE;
-    for (const pair of evidence.slice(0, this.#options.maxJudgments)) {
+    let tally: CascadeTally = { ...NOTHING_DONE, nominated: evidence.length };
+    for (const pair of affordable) {
       if (!cache.isCurrent(pair.leftId) || !cache.isCurrent(pair.rightId)) {
         continue;
       }
@@ -316,12 +340,18 @@ export class EntityDedupStage implements ReflectionStage {
     right: DedupEntityDetail,
     pair: NominatedPair,
   ): void {
+    // Whichever nominator put the pair forward, on its own scale, with the scale named beside
+    // it. A pair the graph put forward has no cosine, and a set-overlap ratio stored in a
+    // column every reader takes for a cosine is a number that lies quietly.
+    const nominated =
+      pair.nominatingCosine === undefined
+        ? { similarity: pair.sharedEpisodeJaccard ?? 0, source: 'shared_episode_jaccard' as const }
+        : { similarity: pair.nominatingCosine, source: 'name_cosine' as const };
     recordEntityMergeProposal(ctx.db, {
       subject: { id: left.id, name: left.name, type: left.type },
       candidate: { id: right.id, name: right.name, type: right.type },
-      // Whichever signal nominated the pair, on its own scale. A pair the graph put forward has
-      // no cosine, and writing a zero for one would state a measurement nobody took.
-      similarity: pair.nominatingCosine ?? pair.sharedEpisodeJaccard ?? 0,
+      similarity: nominated.similarity,
+      similaritySource: nominated.source,
       episodeId: ctx.episodeId,
       createdAt: ctx.now.toISOString(),
     });

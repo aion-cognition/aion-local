@@ -267,26 +267,77 @@ export async function nominatePairs(
 
   const pairs = [...nominated.values()];
   await cache.require(pairs.flatMap((pair) => [pair.leftId, pair.rightId]));
+  return orderNominations(
+    pairs.filter((pair) => cache.isCurrent(pair.leftId) && cache.isCurrent(pair.rightId)),
+  );
+}
+
+type Nominator = 'vector' | 'graph';
+
+function otherNominator(nominator: Nominator): Nominator {
+  return nominator === 'vector' ? 'graph' : 'vector';
+}
+
+function strengthOf(pair: NominatedPair, nominator: Nominator): number | undefined {
+  return nominator === 'vector' ? pair.nominatingCosine : pair.sharedEpisodeJaccard;
+}
+
+/** One nominator's own list, strongest first, ties broken on the pair key so replays agree. */
+function rankFor(pairs: readonly NominatedPair[], nominator: Nominator): NominatedPair[] {
   return pairs
-    .filter((pair) => cache.isCurrent(pair.leftId) && cache.isCurrent(pair.rightId))
-    .sort(comparePairs);
+    .filter((pair) => strengthOf(pair, nominator) !== undefined)
+    .sort((left, right) => {
+      const byStrength = (strengthOf(right, nominator) ?? 0) - (strengthOf(left, nominator) ?? 0);
+      if (byStrength !== 0) {
+        return byStrength;
+      }
+      return pairKey(left.leftId, left.rightId).localeCompare(pairKey(right.leftId, right.rightId));
+    });
 }
 
 /**
- * Strongest first, so a run that cannot afford to judge every pair spends its calls on the
- * ones two nominators or one high cosine put forward. Ties break on the ids, so the order is
- * the same on every replay of the same graph.
+ * The order a judge budget is spent in. Each nominator keeps its own ranking and the two take
+ * turns, because the alternative ranks one above the other on a number the other never
+ * produced: a cosine and a set-overlap ratio are not on one scale, and sorting on the cosine
+ * first put every graph-only nomination below every vector one however strong the overlap was.
+ *
+ * That mattered in the measured direction. The highest name cosines on real data belong to
+ * identifier-shaped traps (two digests differing in one byte), so a cosine-first budget was
+ * handed the traps and starved the shared-episode nominations that carried the battery.
  */
-function comparePairs(left: NominatedPair, right: NominatedPair): number {
-  const byCosine = (right.nominatingCosine ?? 0) - (left.nominatingCosine ?? 0);
-  if (byCosine !== 0) {
-    return byCosine;
+export function orderNominations(pairs: readonly NominatedPair[]): NominatedPair[] {
+  const queues: Record<Nominator, NominatedPair[]> = {
+    vector: rankFor(pairs, 'vector'),
+    graph: rankFor(pairs, 'graph'),
+  };
+  const taken = new Set<string>();
+  const ordered: NominatedPair[] = [];
+
+  const takeFrom = (nominator: Nominator): NominatedPair | undefined => {
+    const queue = queues[nominator];
+    while (queue.length > 0) {
+      const next = queue.shift();
+      if (next !== undefined && !taken.has(pairKey(next.leftId, next.rightId))) {
+        return next;
+      }
+    }
+    return undefined;
+  };
+
+  let turn: Nominator = 'vector';
+  while (ordered.length < pairs.length) {
+    const next = takeFrom(turn) ?? takeFrom(otherNominator(turn));
+    if (next === undefined) {
+      break;
+    }
+    taken.add(pairKey(next.leftId, next.rightId));
+    ordered.push(next);
+    turn = otherNominator(turn);
   }
-  const byJaccard = (right.sharedEpisodeJaccard ?? 0) - (left.sharedEpisodeJaccard ?? 0);
-  if (byJaccard !== 0) {
-    return byJaccard;
-  }
-  return pairKey(left.leftId, left.rightId).localeCompare(pairKey(right.leftId, right.rightId));
+
+  // A pair no nominator claimed cannot reach here, since a nomination is what makes one. If the
+  // shape ever changes it goes last rather than disappearing from the run without a word.
+  return [...ordered, ...pairs.filter((pair) => !taken.has(pairKey(pair.leftId, pair.rightId)))];
 }
 
 /**
