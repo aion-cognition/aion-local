@@ -2,6 +2,7 @@ import type { Driver } from 'neo4j-driver';
 
 import { ACCESS_COUNT_PROPERTY } from './access-tracking.js';
 import {
+  BITEMPORAL_PROPERTIES,
   currentOnly,
   supersedeInTransaction,
   writeStampedNodeInTransaction,
@@ -45,19 +46,32 @@ export type RedirectableEdge = {
 };
 
 /**
- * Every relationship touching a node about to be absorbed, whichever direction it runs.
- * `startNode(r).id = mergedId` reads the direction back off the relationship itself rather
- * than issuing two matches, since a merged node's own edges are read exactly once either way.
+ * Every relationship touching a node about to be absorbed, whichever direction it runs, on one
+ * side of the currency line. `startNode(r).id = mergedId` reads the direction back off the
+ * relationship itself rather than issuing two matches, since a merged node's own edges are read
+ * exactly once either way.
  */
-const FIND_MERGED_NODE_EDGES = [
-  'UNWIND $mergedIds AS mergedId',
-  `MATCH (m:${BASE_NODE_LABEL} { id: mergedId })-[r]-(o:${BASE_NODE_LABEL})`,
-  'WHERE o.id <> mergedId',
-  'RETURN mergedId AS mergedId, elementId(r) AS edgeId, type(r) AS type,',
-  "       CASE WHEN startNode(r).id = mergedId THEN 'out' ELSE 'in' END AS direction,",
-  '       o.id AS otherId, r.strength AS strength, r.confidence AS confidence,',
-  '       r.signals AS signals, r.provenance AS provenance, r.count AS count, r.rationale AS rationale',
-].join('\n');
+function findMergedNodeEdges(open: boolean): string {
+  return [
+    'UNWIND $mergedIds AS mergedId',
+    `MATCH (m:${BASE_NODE_LABEL} { id: mergedId })-[r]-(o:${BASE_NODE_LABEL})`,
+    `WHERE o.id <> mergedId AND r.${BITEMPORAL_PROPERTIES.validUntil} IS ${open ? '' : 'NOT '}NULL`,
+    'RETURN mergedId AS mergedId, elementId(r) AS edgeId, type(r) AS type,',
+    "       CASE WHEN startNode(r).id = mergedId THEN 'out' ELSE 'in' END AS direction,",
+    '       o.id AS otherId, r.strength AS strength, r.confidence AS confidence,',
+    '       r.signals AS signals, r.provenance AS provenance, r.count AS count, r.rationale AS rationale',
+  ].join('\n');
+}
+
+const FIND_OPEN_MERGED_NODE_EDGES = findMergedNodeEdges(true);
+
+/**
+ * The edges `edge_prune` closed on an absorbed node. They are read so the unmerge trail can
+ * state them, never so they can be written: `upsertEdgeInTransaction`'s reopen branch would
+ * clear both stamps and put every pruned association back on the canonical at floor strength,
+ * which is the traversable mass the close measured and removed.
+ */
+const FIND_CLOSED_MERGED_NODE_EDGES = findMergedNodeEdges(false);
 
 function mapRedirectableEdge(row: Row): RedirectableEdge {
   const { rationale } = row;
@@ -79,11 +93,12 @@ function mapRedirectableEdge(row: Row): RedirectableEdge {
 async function findMergedNodeEdgesInTransaction(
   tx: GraphTransaction,
   mergedIds: readonly string[],
+  cypher: string,
 ): Promise<RedirectableEdge[]> {
   if (mergedIds.length === 0) {
     return [];
   }
-  return tx.run(FIND_MERGED_NODE_EDGES, { mergedIds: [...mergedIds] }, mapRedirectableEdge);
+  return tx.run(cypher, { mergedIds: [...mergedIds] }, mapRedirectableEdge);
 }
 
 /** The property carrying one JSON record per absorbed identity. Read by the unmerge operation. */
@@ -103,9 +118,16 @@ export type MergeEntityGroupInput = {
   /** The canonical's own folded name, which is the one name its alias keys must not contain. */
   readonly canonicalNameNorm: string;
   readonly mergedIds: readonly string[];
-  /** The full, final alias list: this call sets the property, it does not append to it. */
+  /**
+   * What the absorbed identities contribute, not the final value. The canonical's own side of
+   * each of these is read inside the transaction and folded in here, because alias routing and
+   * recall's access tracking reach the same node while the caller is deciding, take no lock,
+   * and a whole-property write from the caller's snapshot would drop whatever they landed.
+   */
   readonly aliases: readonly string[];
+  /** Added to what the canonical already carries, so the write is a delta rather than a total. */
   readonly accessCount: number;
+  /** Loses to a later stored access time: a merge never moves an identity's access backwards. */
   readonly lastAccessed?: Date;
   /** Carried onto the `SUPERSEDES` edge each merged node gets, so lineage names the merge. */
   readonly supersedeSignals?: readonly string[];
@@ -191,26 +213,59 @@ function toProvenanceEdge(edge: RedirectableEdge, redirected: boolean): Provenan
   };
 }
 
-const READ_MERGE_PROVENANCE = [
+/** The canonical's own side of every property the merge folds a contribution into. */
+type CanonicalAbsorbState = {
+  readonly records: readonly string[];
+  readonly aliases: readonly string[];
+  readonly aliasesNorm: readonly string[];
+  readonly accessCount: number;
+  readonly lastAccessed?: Date;
+};
+
+const READ_CANONICAL_ABSORB_STATE = [
   `MATCH (n:${ENTITY_LABEL} { id: $id })`,
-  `RETURN coalesce(n.${MERGE_PROVENANCE_PROPERTY}, []) AS records`,
+  `RETURN coalesce(n.${MERGE_PROVENANCE_PROPERTY}, []) AS records,`,
+  `       coalesce(n.${ENTITY_ALIASES_PROPERTY}, []) AS aliases,`,
+  `       coalesce(n.${ENTITY_ALIASES_NORM_PROPERTY}, []) AS aliasesNorm,`,
+  `       coalesce(n.${ACCESS_COUNT_PROPERTY}, 0) AS accessCount,`,
+  `       n.${LAST_ACCESSED_PROPERTY} AS lastAccessed`,
 ].join('\n');
 
-/**
- * Read inside the merge transaction, not from the detail load that fed the decision: the
- * property is appended to, and a concurrent merge into the same canonical would otherwise
- * overwrite the record it wrote while this one was deciding.
- */
-async function readMergeProvenanceInTransaction(
-  tx: GraphTransaction,
-  canonicalId: string,
-): Promise<string[]> {
-  const rows = await tx.run(READ_MERGE_PROVENANCE, { id: canonicalId }, (row) => row.records);
-  const records = rows[0];
-  if (!Array.isArray(records)) {
+function storedStrings(value: unknown): string[] {
+  if (!Array.isArray(value)) {
     return [];
   }
-  return records.filter((record): record is string => typeof record === 'string');
+  return value.filter((entry): entry is string => typeof entry === 'string');
+}
+
+/**
+ * Read inside the merge transaction and under its locks, not from the detail load that fed the
+ * decision. Every property here is one some other writer moves: `merge_provenance` by a
+ * concurrent merge into the same canonical, `aliases` and `aliases_norm` by alias routing,
+ * `access_count` and `last_accessed` by recall. None of those writers take this lock, so the
+ * read is the only place their work can be seen, and a whole-property write from the caller's
+ * snapshot would discard it.
+ */
+async function readCanonicalAbsorbState(
+  tx: GraphTransaction,
+  canonicalId: string,
+): Promise<CanonicalAbsorbState> {
+  const rows = await tx.run(READ_CANONICAL_ABSORB_STATE, { id: canonicalId }, (row) => ({
+    records: storedStrings(row.records),
+    aliases: storedStrings(row.aliases),
+    aliasesNorm: storedStrings(row.aliasesNorm),
+    accessCount: (row.accessCount as number | null) ?? 0,
+    ...(row.lastAccessed instanceof Date ? { lastAccessed: row.lastAccessed } : {}),
+  }));
+  return rows[0] ?? { records: [], aliases: [], aliasesNorm: [], accessCount: 0 };
+}
+
+/** The later of the two, so absorbing an identity nobody touched recently moves nothing back. */
+function latestAccess(stored?: Date, contributed?: Date): Date | undefined {
+  if (stored === undefined || contributed === undefined) {
+    return stored ?? contributed;
+  }
+  return stored > contributed ? stored : contributed;
 }
 
 /**
@@ -245,16 +300,26 @@ function buildMergeProvenance(
 }
 
 /**
- * The merge executes inside a graph transaction for atomicity, as one transaction: lock
- * canonical and every merged node (stable order, so two concurrent merges cannot deadlock on
- * each other), confirm under those locks that every side still holds currency (a group whose
- * member was absorbed elsewhere is reported `stale`, not written), read the merged nodes'
- * relationships, redirect each through the ordinary
- * edge-upsert (which is what makes a collision with an edge canonical already holds sum and
- * max rather than overwrite), absorb the aliases and salience, and close each merged node
- * with its lineage edge. An edge whose other endpoint is itself part of this group, including
- * a direct canonical/merged edge, is dropped rather than redirected: after the merge both
- * ends are the same node, and a self-loop records nothing.
+ * The merge runs as one transaction, in this order:
+ *
+ * 1. Lock the whole group in one pass sorted by id. Sorting the canonical in with the members
+ *    rather than ahead of them is what makes the order total: two overlapping groups can pick
+ *    different canonicals, and canonical-first would have them request the same two nodes in
+ *    opposite orders.
+ * 2. Confirm under those locks that every side still holds currency. A group whose member
+ *    another writer absorbed is reported `stale` and nothing is written for any of it.
+ * 3. Read the merged nodes' open relationships and redirect each through the ordinary
+ *    edge-upsert, which is what makes a collision with an edge the canonical already holds sum
+ *    and max rather than overwrite. An edge whose other endpoint is also in this group,
+ *    including a direct canonical/merged edge, is dropped: after the merge both ends are the
+ *    same node, and a self-loop records nothing.
+ * 4. Read the merged nodes' closed relationships and record them without writing them. A
+ *    relationship `edge_prune` closed comes back open at floor strength if it is fed to the
+ *    upsert, so a closed edge moves as a record and never as a write.
+ * 5. Read the canonical's own aliases, salience and merge records, fold the group's
+ *    contribution into what the read returned, and write the union: aliases and keys unioned,
+ *    `access_count` a delta on the stored total, `last_accessed` the later of the two.
+ * 6. Close each merged node with its lineage edge.
  *
  * Redirect and close belong to the same commit because either alone is an invalid state. A
  * crash between them used to leave the duplicate stripped of every relationship and still
@@ -269,12 +334,15 @@ export async function redirectAndAbsorb(
   if (mergedIds.length === 0) {
     return { status: 'applied', edgesRedirected: 0, superseded: [] };
   }
-  const absorbed = new Set([input.canonicalId, ...mergedIds]);
+  const groupIds = [...new Set([input.canonicalId, ...mergedIds])].sort();
+  const absorbed = new Set(groupIds);
 
   return inWriteTransaction(driver, async (tx) => {
-    await lockNodeInTransaction(tx, input.canonicalId, input.now);
-    for (const mergedId of mergedIds) {
-      await lockNodeInTransaction(tx, mergedId, input.now);
+    // Sorted over the whole group rather than canonical-first: two overlapping groups can
+    // pick different canonicals, and canonical-first would then have them request the same
+    // two nodes in opposite orders. Sorting by id is the one order every caller agrees on.
+    for (const id of groupIds) {
+      await lockNodeInTransaction(tx, id, input.now);
     }
 
     // The caller decided this group off a snapshot that may be minutes old; the sibling
@@ -283,14 +351,18 @@ export async function redirectAndAbsorb(
     // makes the whole group's evidence stale, so nothing is written for any of it.
     const staleIds = await tx.run(
       FIND_SIDES_WITHOUT_CURRENCY,
-      { ids: [input.canonicalId, ...mergedIds] },
+      { ids: groupIds },
       (row) => row.id as string,
     );
     if (staleIds.length > 0) {
       return { status: 'stale', staleIds };
     }
 
-    const edges = await findMergedNodeEdgesInTransaction(tx, mergedIds);
+    const edges = await findMergedNodeEdgesInTransaction(
+      tx,
+      mergedIds,
+      FIND_OPEN_MERGED_NODE_EDGES,
+    );
     const trail = new Map<string, ProvenanceEdge[]>();
     let redirected = 0;
     for (const edge of edges) {
@@ -320,26 +392,39 @@ export async function redirectAndAbsorb(
       redirected += 1;
     }
 
-    const provenance = [
-      ...(await readMergeProvenanceInTransaction(tx, input.canonicalId)),
-      ...buildMergeProvenance(input, mergedIds, trail),
-    ];
+    // Recorded, never written. An unmerge has to put a closed edge back on the identity it
+    // belonged to, and the graph stops answering for that identity once the merge commits.
+    const closedEdges = await findMergedNodeEdgesInTransaction(
+      tx,
+      mergedIds,
+      FIND_CLOSED_MERGED_NODE_EDGES,
+    );
+    for (const edge of closedEdges) {
+      const record = trail.get(edge.mergedId) ?? [];
+      record.push(toProvenanceEdge(edge, false));
+      trail.set(edge.mergedId, record);
+    }
 
-    // The absorbed names go through the same record the write path uses, so the merge cannot
-    // push an identity past the stored alias cap that resolution honours.
-    const aliases = aliasRecord(input.aliases, input.canonicalNameNorm);
+    const stored = await readCanonicalAbsorbState(tx, input.canonicalId);
+    const provenance = [...stored.records, ...buildMergeProvenance(input, mergedIds, trail)];
+
+    // The absorbed names join what the node already answers to and go through the same record
+    // the write path uses, so the merge cannot push an identity past the stored alias cap that
+    // resolution honours. The stored keys join the union in their own right: a key is what
+    // routes another identity's mentions here, and dropping one unroutes them silently.
+    const aliases = aliasRecord([...stored.aliases, ...input.aliases], input.canonicalNameNorm);
+    const aliasesNorm = aliasKeys([...stored.aliasesNorm, ...aliases], input.canonicalNameNorm);
+    const lastAccessed = latestAccess(stored.lastAccessed, input.lastAccessed);
     await writeStampedNodeInTransaction(tx, {
       label: 'Entity',
       id: input.canonicalId,
       now: input.now,
       mergeProperties: {
         [ENTITY_ALIASES_PROPERTY]: aliases,
-        [ENTITY_ALIASES_NORM_PROPERTY]: aliasKeys(aliases, input.canonicalNameNorm),
-        [ACCESS_COUNT_PROPERTY]: input.accessCount,
+        [ENTITY_ALIASES_NORM_PROPERTY]: aliasesNorm,
+        [ACCESS_COUNT_PROPERTY]: stored.accessCount + input.accessCount,
         [MERGE_PROVENANCE_PROPERTY]: provenance,
-        ...(input.lastAccessed === undefined
-          ? {}
-          : { [LAST_ACCESSED_PROPERTY]: input.lastAccessed }),
+        ...(lastAccessed === undefined ? {} : { [LAST_ACCESSED_PROPERTY]: lastAccessed }),
       },
     });
     await clearNameVectorHashInTransaction(tx, input.canonicalId);

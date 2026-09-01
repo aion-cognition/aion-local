@@ -113,9 +113,10 @@ function isStronger(candidate: DedupCandidate, current: DedupCandidate): boolean
 }
 
 /**
- * The absorbed names, plus whatever either side already answered to, minus the canonical's
- * own current name (that is an identity, not an alias of itself). Sorted for a deterministic
- * property write.
+ * The names the given members carry and the spellings they already answered to, minus the
+ * canonical's own current name (that is an identity, not an alias of itself). Sorted for a
+ * deterministic property write. Callers pass the absorbed side alone when the canonical's own
+ * spellings come from a read the graph write does under its locks.
  */
 export function mergeAliases(canonicalName: string, members: readonly DedupCandidate[]): string[] {
   const collected = new Set<string>();
@@ -129,12 +130,16 @@ export function mergeAliases(canonicalName: string, members: readonly DedupCandi
   return [...collected].sort();
 }
 
-/** Sum, not max: every mention any merged identity carried belongs to the one identity that remains. */
+/**
+ * Sum, not max: every mention any merged identity carried belongs to the one identity that
+ * remains. Over the absorbed members alone this is the delta the graph write adds to whatever
+ * the canonical already counts.
+ */
 export function mergeAccessCount(members: readonly DedupCandidate[]): number {
   return members.reduce((total, member) => total + member.accessCount, 0);
 }
 
-/** The most recent access across the group; absent when nothing in the group has ever been accessed. */
+/** The most recent access across the given members; absent when none has ever been accessed. */
 export function mergeLastAccessed(members: readonly DedupCandidate[]): Date | undefined {
   return members.reduce<Date | undefined>((latest, member) => {
     if (member.lastAccessed === undefined) {

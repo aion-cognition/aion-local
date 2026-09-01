@@ -141,9 +141,12 @@ export async function applyEntityMerge(
     canonicalId: input.canonical.id,
     canonicalNameNorm: input.canonical.nameNorm,
     mergedIds,
-    aliases: mergeAliases(input.canonical.name, input.members),
-    accessCount: mergeAccessCount(input.members),
-    lastAccessed: mergeLastAccessed(input.members),
+    // The absorbed side only. The canonical's own aliases and salience are read inside the
+    // merge transaction, where a write that landed after this stage's detail load is visible;
+    // computing them here would hand the graph a value taken minutes before the lock.
+    aliases: mergeAliases(input.canonical.name, absorbed),
+    accessCount: mergeAccessCount(absorbed),
+    lastAccessed: mergeLastAccessed(absorbed),
     supersedeSignals: ['entity_merge'],
     supersedeProvenance: [input.method],
     mergedRecords: absorbed.map((member) => ({
