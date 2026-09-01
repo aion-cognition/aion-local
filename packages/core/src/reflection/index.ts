@@ -41,8 +41,11 @@ export { findPendingVectorNodes } from './application/vectors.js';
 
 export { EntityExtractionStage } from './application/stages/entities.js';
 
-export { EntityDedupStage } from './application/stages/entity-dedup.js';
-export type { EntityDedupStageOptions } from './application/stages/entity-dedup.js';
+export { DEFAULT_ENTITY_MERGE_MODE, EntityDedupStage } from './application/stages/entity-dedup.js';
+export type {
+  EntityDedupStageOptions,
+  EntityMergeMode,
+} from './application/stages/entity-dedup.js';
 
 export {
   describeEntityMergePair,

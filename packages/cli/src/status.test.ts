@@ -226,6 +226,9 @@ describe('renderStatus', () => {
     expect(text).toContain('lanes');
     expect(text).toContain('merge_auto         MODE: acting');
     expect(text).toContain(
+      `entity_dedup       MODE: acting (${DEFAULTS.reflection.entityMergeMode})`,
+    );
+    expect(text).toContain(
       `supersession       MODE: acting (${DEFAULTS.reflection.supersedeMode})`,
     );
     expect(text).toContain('proposal_hygiene   MODE: acting');
@@ -244,6 +247,21 @@ describe('renderStatus', () => {
     renderStatus(healthy, proposeOnly, write);
 
     expect(lines.join('\n')).toContain('supersession       MODE: off');
+  });
+
+  it('reads off for the cascade judge tier under propose, with merge_auto still acting', () => {
+    const { lines, write } = collector();
+    const proposeOnly: Config = {
+      ...DEFAULTS,
+      reflection: { ...DEFAULTS.reflection, entityMergeMode: 'propose' },
+    };
+
+    renderStatus(healthy, proposeOnly, write);
+
+    const text = lines.join('\n');
+    expect(text).toContain('entity_dedup       MODE: off');
+    // The deterministic tier is a separate switch and the mode over judgments does not reach it.
+    expect(text).toContain('merge_auto         MODE: acting');
   });
 
   it('reads acting for tier3 only when the kill switch and the mode knob both agree', () => {

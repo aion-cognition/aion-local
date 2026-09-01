@@ -93,6 +93,7 @@ export function reflectionStages(config: Config): readonly ReflectionStage[] {
       timeoutMs: reflection.stageTimeoutMs,
       similarityThreshold: reflection.entityDedupThreshold,
       sharedEpisodeJaccardFloor: reflection.entityNominationJaccardFloor,
+      mode: reflection.entityMergeMode,
     }),
     new AssociationInferenceStage({
       semanticThreshold: reflection.associationSemanticThreshold,

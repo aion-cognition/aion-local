@@ -50,9 +50,23 @@ export const ENTITY_DEDUP_METHOD = 'reflection_entity_dedup';
 /** Provenance for a merge no model was asked about, so lineage says which tier decided. */
 export const ENTITY_DEDUP_TIER0_METHOD = 'reflection_entity_dedup_tier0';
 
+/**
+ * What tier 3 does with a pair both passes called one thing. `unanimous` merges it; `propose`
+ * queues it for a person and writes nothing to the graph, which is the kill switch.
+ *
+ * Tier 0 is outside the choice by construction. It asks no model, so there is no judgment for a
+ * mode over judgments to gate, and a name that squashes onto another is the same name whichever
+ * way the judge is running.
+ */
+export type EntityMergeMode = 'propose' | 'unanimous';
+
+/** The pinned `AION_ENTITY_MERGE_MODE`, set by the battery's measurement rather than by hand. */
+export const DEFAULT_ENTITY_MERGE_MODE: EntityMergeMode = DEFAULTS.reflection.entityMergeMode;
+
 export type EntityDedupStageOptions = {
   readonly similarityThreshold: number;
   readonly sharedEpisodeJaccardFloor: number;
+  readonly mode: EntityMergeMode;
   readonly model: string;
   readonly timeoutMs: number;
   /**
@@ -95,6 +109,7 @@ export class EntityDedupStage implements ReflectionStage {
     this.#options = {
       similarityThreshold: DEFAULTS.reflection.entityDedupThreshold,
       sharedEpisodeJaccardFloor: DEFAULTS.reflection.entityNominationJaccardFloor,
+      mode: DEFAULT_ENTITY_MERGE_MODE,
       model: DEFAULTS.models.reflect,
       timeoutMs: DEFAULTS.reflection.stageTimeoutMs,
       maxJudgments: DEFAULT_MAX_JUDGMENTS,
@@ -120,8 +135,10 @@ export class EntityDedupStage implements ReflectionStage {
       status: 'ok',
       summary:
         tally.merges === 0
-          ? `no duplicate entities merged, ${String(tally.judged)} pair(s) judged`
-          : `${String(tally.merges)} entities merged across ${String(tally.groups)} groups`,
+          ? `no duplicate entities merged, ${String(tally.judged)} pair(s) judged in ` +
+            `${this.#options.mode} mode`
+          : `${String(tally.merges)} entities merged across ${String(tally.groups)} groups, ` +
+            `${String(tally.judged)} pair(s) judged in ${this.#options.mode} mode`,
       counts: {
         merges: tally.merges,
         merge_proposals: tally.proposals,
@@ -230,6 +247,12 @@ export class EntityDedupStage implements ReflectionStage {
     // An unanswered second pass is a split, not a pass: a merge the substrate cannot defend is
     // a merge it does not make, and the pair goes to the residue lane rather than through.
     if (review.status === 'failed' || !review.review.same) {
+      this.#recordProposal(ctx, left, right, pair);
+      return { tally: addTallies(asked, { ...NOTHING_DONE, proposals: 1 }) };
+    }
+    // The kill switch stops the write and nothing else. Both passes still run, so a deployment
+    // holding the tier back keeps the queue it would have merged and the reasons behind it.
+    if (this.#options.mode === 'propose') {
       this.#recordProposal(ctx, left, right, pair);
       return { tally: addTallies(asked, { ...NOTHING_DONE, proposals: 1 }) };
     }

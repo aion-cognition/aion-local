@@ -250,6 +250,39 @@ describe('tier 3, the two-pass judge', () => {
     expect(listEntityMergeDecisions(store.db)).toHaveLength(0);
   });
 
+  it('queues a unanimous pair instead of merging it when the mode says propose', async () => {
+    seedNearDuplicatePair();
+
+    const outcome = await new EntityDedupStage({ mode: 'propose' }).run(context());
+
+    expect(outcome.counts).toMatchObject({ merges: 0, merge_proposals: 1, merge_judgments: 1 });
+    expect(graph.nodes.get('weak')?.properties[BITEMPORAL_PROPERTIES.validUntil]).toBeUndefined();
+    expect(listEntityMergeProposals(store.db)).toHaveLength(1);
+    // The kill switch stops the write, not the reasoning: the pair was still judged twice, and
+    // a record of a merge nobody made would claim one.
+    expect(listEntityMergeDecisions(store.db)).toHaveLength(0);
+  });
+
+  it('keeps the deterministic tier acting when the judge tier is set to propose', async () => {
+    seedEntity({ id: 'dashed', name: 'held-out-recall', type: 'topic', vector: [1, 0] });
+    seedEntity({
+      id: 'scored',
+      name: 'held_out_recall',
+      type: 'topic',
+      vector: [0, 1],
+      txFrom: NEWER,
+    });
+    mention(EPISODE_ID, 'dashed', 1);
+    mention(EPISODE_ID, 'scored', 1);
+
+    const outcome = await new EntityDedupStage({ mode: 'propose' }).run(
+      context(unreachableProvider()),
+    );
+
+    expect(outcome.counts).toMatchObject({ merges: 1, merge_proposals: 0, merge_judgments: 0 });
+    expect(listEntityMergeDecisions(store.db)).toHaveLength(1);
+  });
+
   it('proposes nothing when the first pass says the two are different things', async () => {
     seedNearDuplicatePair();
 
