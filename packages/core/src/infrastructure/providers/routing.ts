@@ -98,10 +98,6 @@ export function resolveProviderRouting(config: Config): ProviderRouting {
   };
 }
 
-export function routeFor(routing: ProviderRouting, role: GenerationRole): RoleRoute {
-  return routing.roles[role];
-}
-
 function routeList(routing: ProviderRouting): readonly RoleRoute[] {
   return GENERATION_ROLES.map((role) => routing.roles[role]);
 }

@@ -117,9 +117,5 @@ export const REDACTION_RULES: readonly RedactionRule[] = [
   { id: 'generic-secret-assignment', pattern: GENERIC_SECRET_ASSIGNMENT },
 ];
 
-export const REDACTION_RULE_IDS: readonly string[] = Array.from(
-  new Set(REDACTION_RULES.map((rule) => rule.id)),
-);
-
 /** The high-entropy backstop (`entropy.ts`) tags its own matches with this id. */
 export const HIGH_ENTROPY_RULE_ID = 'high-entropy';

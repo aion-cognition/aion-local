@@ -1,8 +1,8 @@
 /**
  * The infrastructure layer's public surface: config, providers, SQLite, logging, and the graph.
  * Split out of the package entrypoint so `@aion/core` is unchanged by the split; the graph
- * section used to live in its own `graph-index.ts` until pruning this barrel down to what
- * `@aion/core` actually consumes brought the combined file back under the line cap.
+ * section used to live in its own `graph-index.ts` until pruning this barrel down to what the
+ * consuming packages actually import brought the combined file back under the line cap.
  */
 
 export { openLogger } from './logging/logger.js';
@@ -21,7 +21,6 @@ export {
   listLedgerEntries,
   markLedgerApplied,
 } from './sqlite/ops-ledger.js';
-export type { OpsLedgerEntry } from './sqlite/ops-ledger.js';
 
 export { introspectionCycle, listOperationStats } from './sqlite/introspection-counters.js';
 export type { OperationStats } from './sqlite/introspection-counters.js';
@@ -56,9 +55,7 @@ export {
   deleteServedItems,
   purgeServedItemsIdleSince,
   readServedItems,
-  recordServedItems,
 } from './sqlite/served-items.js';
-export type { ServedItem } from './sqlite/served-items.js';
 
 export { DEFAULTS, loadConfig, ConfigError } from './config/index.js';
 export type { Config } from './config/index.js';
@@ -86,12 +83,7 @@ export type { GraphCounts } from './graph/introspection.js';
 
 export { fetchNodeEdges, fetchNodeProvenance } from './graph/node-provenance.js';
 
-export {
-  countAutoMergedEntities,
-  entityMergePairState,
-  wasEntityMergeApplied,
-} from './graph/merge-shadow-queries.js';
-export type { EntityMergePairState } from './graph/merge-shadow-queries.js';
+export { countAutoMergedEntities, entityMergePairState } from './graph/merge-shadow-queries.js';
 
 export type { NodeEdge, NodeProvenance } from './graph/node-provenance.js';
 
@@ -101,17 +93,9 @@ export { forgetNode, supersede, writeStampedNode } from './graph/bitemporal.js';
 
 export { supersedeEpisode } from './graph/episode-supersession.js';
 
-export {
-  EDGE_REOPENED_AT_PROPERTY,
-  previewSupersession,
-  unsupersedeNode,
-} from './graph/unsupersede.js';
+export { previewSupersession, unsupersedeNode } from './graph/unsupersede.js';
 
-export type {
-  ReopenedLineage,
-  SupersessionPreview,
-  UnsupersedeResult,
-} from './graph/unsupersede.js';
+export type { SupersessionPreview } from './graph/unsupersede.js';
 
 export type { ClaimSubject, SubjectSibling } from './graph/subject-family.js';
 
@@ -151,7 +135,7 @@ export {
 export type { EdgeWeightDistribution } from './graph/edge-weight-distribution.js';
 
 export type { Provider } from './providers/types.js';
-export { embedQueryPrefix, maxEmbedInputChars } from './providers/embed-models.js';
+export { embedQueryPrefix } from './providers/embed-models.js';
 export {
   localChatModels,
   remoteBannerLines,
@@ -187,12 +171,8 @@ export {
   listEntityMergeProposals,
   recordEntityMergeProposal,
   reopenEntityMergeProposal,
-  resolveEntityMergeProposal,
 } from './sqlite/entity-merge-proposals.js';
-export type {
-  EntityMergeProposal,
-  EntityMergeProposalSide,
-} from './sqlite/entity-merge-proposals.js';
+export type { EntityMergeProposal } from './sqlite/entity-merge-proposals.js';
 
 export { cueDegradedRate } from './sqlite/recall-samples.js';
 
@@ -201,14 +181,8 @@ export {
   packMethodCounters,
   packMethodLegStats,
   recordPackMethodCounts,
-  recordPackMethodLegStats,
-  recordPackMethodMetrics,
 } from './sqlite/method-counters.js';
-export type {
-  PackMethodCounters,
-  PackMethodLegStat,
-  PackMethodLegStats,
-} from './sqlite/method-counters.js';
+export type { PackMethodCounters, PackMethodLegStats } from './sqlite/method-counters.js';
 
 export { recallCadenceCounters, recordRecallOutcome } from './sqlite/recall-cadence.js';
 export type { RecallCadenceCounters } from './sqlite/recall-cadence.js';

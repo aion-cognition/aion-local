@@ -28,10 +28,6 @@ export const COGNITIVE_NODE_LABELS = [
 
 export type CognitiveNodeLabel = (typeof COGNITIVE_NODE_LABELS)[number];
 
-export function isCognitiveNodeLabel(value: string): value is CognitiveNodeLabel {
-  return (COGNITIVE_NODE_LABELS as readonly string[]).includes(value);
-}
-
 /** Stored alongside `text` so a future reader can match on it without recomputing the fold. */
 export const TEXT_NORM_PROPERTY = 'text_norm';
 
