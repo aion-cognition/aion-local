@@ -6,6 +6,7 @@ import {
 } from '../../../infrastructure/graph/entity-dedup-queries.js';
 import {
   ENTITY_MENTION_TYPE,
+  ENTITY_NAME_VECTOR_HASH_PROPERTY,
   ENTITY_TYPE_PROPERTY,
 } from '../../../infrastructure/graph/entity-queries.js';
 import { MEMORY_PROPERTIES } from '../../../infrastructure/graph/episodes.js';
@@ -66,6 +67,10 @@ export class DedupFakeGraph extends FakeGraph {
     if (cypher.includes(`SET n.${ENTITY_NAME_VECTOR_PROPERTY} = null`)) {
       this.statements.push({ cypher, parameters });
       return toResult(this.#clearVectors(parameters));
+    }
+    if (cypher.includes(`SET n.${ENTITY_NAME_VECTOR_HASH_PROPERTY} = null`)) {
+      this.statements.push({ cypher, parameters });
+      return toResult(this.#clearNameVectorHash(parameters));
     }
     if (cypher.includes(`SET old.${BITEMPORAL_PROPERTIES.validUntil} = coalesce(`)) {
       this.statements.push({ cypher, parameters });
@@ -189,6 +194,16 @@ export class DedupFakeGraph extends FakeGraph {
       written.push({ id });
     }
     return written;
+  }
+
+  /** The vector stays; only the hash goes, which is how the next resolution sees it as stale. */
+  #clearNameVectorHash(parameters: Record<string, unknown>): Row[] {
+    const node = this.nodes.get(parameters.id as string);
+    if (node === undefined) {
+      return [];
+    }
+    Reflect.deleteProperty(node.properties, ENTITY_NAME_VECTOR_HASH_PROPERTY);
+    return [{ id: node.id }];
   }
 
   #closeSupersededNode(parameters: Record<string, unknown>): Row[] {
