@@ -126,7 +126,8 @@ function renderMerges(rows: readonly EntityMergeProposal[], write: Writer): void
     write(`  ${row.id}  ${state}`);
     write(
       `    ${row.leftName} (${row.leftType}, ${short(row.leftId)}) and ` +
-        `${row.rightName} (${row.rightType}, ${short(row.rightId)}) at ${row.similarity.toFixed(3)}`,
+        `${row.rightName} (${row.rightType}, ${short(row.rightId)}) at ` +
+        `${row.similarity.toFixed(3)} ${row.similaritySource}`,
     );
   }
 }
@@ -246,8 +247,12 @@ async function runApplyMerge(substrate: Substrate, id: string): Promise<number> 
   if (connection === undefined) {
     return 1;
   }
-  const result = await applyEntityMergeProposal(connection.driver, substrate.db(), { id });
-  substrate.logger().warn({ proposalId: id, ...result }, 'entity merge proposal applied');
+  const logger = substrate.logger();
+  const result = await applyEntityMergeProposal(
+    { driver: connection.driver, db: substrate.db(), logger },
+    { id },
+  );
+  logger.warn({ proposalId: id, ...result }, 'entity merge proposal applied');
   renderMergeApply(result, write);
   return 0;
 }
@@ -260,7 +265,7 @@ function renderMergeApply(result: ApplyEntityMergeProposalResult, write: Writer)
         `${short(result.absorbed.id)}) into "${result.canonical.name}" (${result.canonical.type}, ` +
         `${short(result.canonical.id)}), ${String(result.edgesRedirected)} edge(s) redirected`,
     );
-    write('`aion unmerge` splits it back out');
+    write(`\`aion unmerge\` splits it back out, citing decision ${short(result.decisionId)}`);
     if (result.vectorCleanupDeferred) {
       write('  vector cleanup deferred; the absorbed node keeps its old vectors for now');
     }

@@ -22,13 +22,19 @@ import {
   stopNeo4jHarness,
   type Neo4jHarness,
 } from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
+import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import {
+  entityMergeDecisionKey,
+  getEntityMergeDecision,
+  getEntityMergeDecisionByKey,
+} from '../../infrastructure/sqlite/entity-merge-decisions.js';
 import {
   getEntityMergeProposal,
   recordEntityMergeProposal,
 } from '../../infrastructure/sqlite/entity-merge-proposals.js';
 import { getLedgerEntry } from '../../infrastructure/sqlite/ops-ledger.js';
-import { entityMergeLedgerKey } from '../domain/entity-merge.js';
+import { ENTITY_CASCADE_VERSION, entityMergeLedgerKey } from '../domain/entity-merge.js';
 
 /**
  * The path a cross-type merge proposal takes once a person agrees the pair is one identity.
@@ -43,6 +49,7 @@ const NOW = new Date('2026-08-29T12:00:00.000Z');
 let harness: Neo4jHarness;
 let db: SqliteHandle;
 let dataDir: string;
+let logger: Logger;
 
 async function seedEntity(name: string, type: string): Promise<string> {
   const entity: EntityMergeInput = {
@@ -65,6 +72,7 @@ beforeAll(async () => {
   harness = await startNeo4jHarness();
   dataDir = mkdtempSync(join(tmpdir(), 'aion-entity-merge-review-'));
   db = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
+  logger = openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'error' });
   await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
 }, 300_000);
 
@@ -105,10 +113,14 @@ describe('applying an entity-merge proposal', () => {
       subject: { id: ingestId, name: 'Zephyr Ingest', type: 'service' },
       candidate: { id: queueId, name: 'Zephyr Queue', type: 'concept' },
       similarity: 0.91,
+      similaritySource: 'name_cosine',
       episodeId: 'ep-zephyr',
     });
 
-    const result = await applyEntityMergeProposal(harness.driver, db, { id: proposalId, now: NOW });
+    const result = await applyEntityMergeProposal(
+      { driver: harness.driver, db, logger },
+      { id: proposalId, now: NOW },
+    );
 
     if (result.outcome !== 'applied') {
       throw new Error(`expected the merge to apply, got ${result.outcome}`);
@@ -131,6 +143,20 @@ describe('applying an entity-merge proposal', () => {
     expect(getEntityMergeProposal(db, proposalId)?.resolvedAt).toEqual(expect.any(String));
     const key = entityMergeLedgerKey(result.canonical.id, [result.absorbed.id]);
     expect(getLedgerEntry(db, key)).toBeDefined();
+
+    // The merge a person made is the one a reversal most wants to cite, so the record and the
+    // key the graph carries to reach it are both part of the apply, not of the tiers only.
+    const decision = getEntityMergeDecision(db, result.decisionId);
+    expect(decision?.tier).toBe('human');
+    expect(decision?.canonicalId).toBe(result.canonical.id);
+    expect(decision?.memberIds).toEqual([result.absorbed.id]);
+    expect(decision?.judge).toBeNull();
+    expect(
+      getEntityMergeDecisionByKey(
+        db,
+        entityMergeDecisionKey(result.canonical.id, [result.absorbed.id], ENTITY_CASCADE_VERSION),
+      )?.id,
+    ).toBe(result.decisionId);
   }, 120_000);
 
   it('returns already_resolved on a second apply, and writes nothing further', async () => {
@@ -140,15 +166,22 @@ describe('applying an entity-merge proposal', () => {
       subject: { id: loaderId, name: 'Fenwick Loader', type: 'service' },
       candidate: { id: batchId, name: 'Fenwick Batch', type: 'concept' },
       similarity: 0.88,
+      similaritySource: 'name_cosine',
       episodeId: 'ep-fenwick',
     });
-    const first = await applyEntityMergeProposal(harness.driver, db, { id: proposalId, now: NOW });
+    const first = await applyEntityMergeProposal(
+      { driver: harness.driver, db, logger },
+      { id: proposalId, now: NOW },
+    );
     if (first.outcome !== 'applied') {
       throw new Error(`expected the first apply to merge, got ${first.outcome}`);
     }
     const canonicalBefore = await storedEntity(harness.driver, first.canonical.id);
 
-    const second = await applyEntityMergeProposal(harness.driver, db, { id: proposalId, now: NOW });
+    const second = await applyEntityMergeProposal(
+      { driver: harness.driver, db, logger },
+      { id: proposalId, now: NOW },
+    );
 
     expect(second).toEqual({
       outcome: 'already_resolved',
@@ -180,6 +213,7 @@ describe('applying an entity-merge proposal', () => {
       subject: { id: cacheId, name: 'Harrow Cache', type: 'tool' },
       candidate: { id: storeId, name: 'Harrow Store', type: 'concept' },
       similarity: 0.87,
+      similaritySource: 'name_cosine',
       episodeId: 'ep-harrow',
     });
     const proposal = getEntityMergeProposal(db, proposalId);
@@ -188,7 +222,10 @@ describe('applying an entity-merge proposal', () => {
     }
     const expectedSide = proposal.leftId === storeId ? 'left' : 'right';
 
-    const result = await applyEntityMergeProposal(harness.driver, db, { id: proposalId, now: NOW });
+    const result = await applyEntityMergeProposal(
+      { driver: harness.driver, db, logger },
+      { id: proposalId, now: NOW },
+    );
 
     expect(result).toEqual({ outcome: 'stale', id: proposalId, missingSide: expectedSide });
     expect(getEntityMergeProposal(db, proposalId)?.resolvedAt).toEqual(expect.any(String));
@@ -196,7 +233,10 @@ describe('applying an entity-merge proposal', () => {
 
   it('throws for an id in neither queue', async () => {
     await expect(
-      applyEntityMergeProposal(harness.driver, db, { id: 'no-such-merge-proposal', now: NOW }),
+      applyEntityMergeProposal(
+        { driver: harness.driver, db, logger },
+        { id: 'no-such-merge-proposal', now: NOW },
+      ),
     ).rejects.toBeInstanceOf(ProposalNotFoundError);
   }, 120_000);
 });
@@ -209,6 +249,7 @@ describe('dismissing an entity-merge proposal', () => {
       subject: { id: workerId, name: 'Solstice Worker', type: 'service' },
       candidate: { id: runnerId, name: 'Solstice Runner', type: 'concept' },
       similarity: 0.86,
+      similaritySource: 'name_cosine',
       episodeId: 'ep-solstice',
     });
     const workerBefore = await storedEntity(harness.driver, workerId);
