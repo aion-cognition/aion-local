@@ -54,20 +54,45 @@ export function describeDistribution(scores: readonly number[]): Distribution {
 }
 
 /**
- * Cosine between every unordered pair of the set, which is what "mutually unrelated" measures.
- * Each sentence stands in for a query on one side and for stored content on the other, so the
- * two arrays are the same sentences embedded in the two spellings the runtime uses: an
- * asymmetric model reads its query prefix on the left and nothing on the right. Pass the same
- * array twice for a model with no prefix, which is what symmetric measurement means here.
+ * Cosine between every pair of the set, which is what "mutually unrelated" measures. Each
+ * sentence stands in for a query on one side and for stored content on the other, so the two
+ * arrays are the same sentences embedded in the two spellings the runtime uses: an asymmetric
+ * model reads its query prefix on the left and nothing on the right. Pass one array, or the
+ * same array twice, for a model with no prefix.
+ *
+ * Two spellings make the cosine directional, so the cross measurement runs every ordered pair
+ * `i != j`: cue i against content j and cue j against content i are two readings, and taking
+ * the `i < j` half of them measures half the noise the floor is set above. One spelling is
+ * symmetric by construction and stays at the unordered count. The diagonal is never scored on
+ * either branch, since a sentence against its own content is a related reading.
  */
 export function pairwiseCosines(
   queries: readonly Vector[],
-  contents: readonly Vector[] = queries,
+  contents?: readonly Vector[],
 ): number[] {
+  if (contents === undefined || contents === queries) {
+    return symmetricCosines(queries);
+  }
+  return crossCosines(queries, contents);
+}
+
+function symmetricCosines(vectors: readonly Vector[]): number[] {
+  const scores: number[] = [];
+  for (let left = 0; left < vectors.length; left += 1) {
+    for (let right = left + 1; right < vectors.length; right += 1) {
+      scores.push(cosineSimilarity(vectors[left] ?? [], vectors[right] ?? []));
+    }
+  }
+  return scores;
+}
+
+function crossCosines(queries: readonly Vector[], contents: readonly Vector[]): number[] {
   const scores: number[] = [];
   for (let left = 0; left < queries.length; left += 1) {
-    for (let right = left + 1; right < contents.length; right += 1) {
-      scores.push(cosineSimilarity(queries[left] ?? [], contents[right] ?? []));
+    for (let right = 0; right < contents.length; right += 1) {
+      if (left !== right) {
+        scores.push(cosineSimilarity(queries[left] ?? [], contents[right] ?? []));
+      }
     }
   }
   return scores;
