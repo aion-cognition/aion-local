@@ -143,6 +143,14 @@ export function mergeLastAccessed(members: readonly DedupCandidate[]): Date | un
 }
 
 /**
+ * Stamped on every decision record the cascade writes, and part of that record's idempotency
+ * key. Bump it whenever a tier's rule or a judge prompt changes, so a re-decided merge lands
+ * beside the old record instead of overwriting what the old prompts said. Phase 0.3's replay
+ * runner is what reads two versions of the same decision against each other.
+ */
+export const ENTITY_CASCADE_VERSION = 'cascade-1';
+
+/**
  * The operation-level idempotency key: `entity.merge:{canonicalId}:{sortedMergedIds}`.
  * Sorted and de-duplicated so the same group produces the same key regardless of discovery
  * order.

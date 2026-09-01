@@ -123,6 +123,36 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     resolved_at TEXT,
     UNIQUE (left_id, right_id)
   )`,
+  /**
+   * What the dedup cascade knew when it merged. One row per merge, whichever tier decided it,
+   * so the unmerge operation can cite the evidence that was wrong and a prompt change can be
+   * replayed against past decisions rather than against a graph that has moved on.
+   *
+   * There is no confidence column by doctrine: model certainty is not a quantity anything may
+   * threshold on, and the surest way to stop a later caller reading one is for there to be
+   * nothing to read. `reasons`, the measured `signals`, and the judge's two booleans with the
+   * prose behind them are what a decision is made of.
+   *
+   * `idempotency_key` is sha256 over the canonical, the sorted members and the cascade version.
+   * A replay of the same merge refreshes one row; a merge re-decided under a new cascade version
+   * writes its own record beside the old one rather than erasing what the old prompts said.
+   */
+  `CREATE TABLE IF NOT EXISTS entity_merge_decisions (
+    id TEXT PRIMARY KEY,
+    canonical_id TEXT NOT NULL,
+    member_ids TEXT NOT NULL,
+    tier TEXT NOT NULL,
+    reasons TEXT NOT NULL,
+    signals TEXT NOT NULL,
+    judge_verdicts TEXT,
+    cascade_version TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+  )`,
+  // The canonical arm of the decision lookup. The member arm walks the stored JSON list, which
+  // no index covers; at one row per merge that scan is cheaper than a second table to join.
+  `CREATE INDEX IF NOT EXISTS entity_merge_decisions_canonical_idx
+     ON entity_merge_decisions (canonical_id)`,
 ];
 
 type ColumnAddition = {
