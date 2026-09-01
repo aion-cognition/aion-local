@@ -4,6 +4,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { embedCues, type StageReadDeps } from './stage-reads.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
+import {
+  embedQueryPrefix,
+  QUERY_PREFIX_SEAM_MODEL,
+} from '../../infrastructure/providers/embed-models.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 
 const CUES: readonly Cue[] = [
@@ -30,9 +34,23 @@ describe('embedCues', () => {
   /**
    * The spelling comes from `embed-models.ts` and from nowhere else, so that one row decides it
    * for recall, `aion search`, `aion forget`, the doctor's field check and the committed
-   * calibrations at once. Every row in the table is raw today: arctic2 ships a "query: " prefix
-   * and this install measured it compressing the band the admission floor reads.
+   * calibrations at once. Every row a model can be configured onto is raw today, which is why
+   * the composition is asserted against the seam row: raw text is also what a build with the
+   * prefix deleted would send, and Phase 4.4 turns a real row on.
    */
+  it("composes the table's prefix in front of every cue, and leaves the cue text alone", async () => {
+    const prefix = embedQueryPrefix(QUERY_PREFIX_SEAM_MODEL);
+    const embed = vi.fn(async () => [[1], [2]]);
+    const result = await embedCues(deps(QUERY_PREFIX_SEAM_MODEL, embed), CUES);
+
+    expect(prefix).not.toBe('');
+    expect(embed).toHaveBeenCalledWith(CUES.map((cue) => `${prefix}${cue.text}`));
+    // The prefix marks the text sent to the model. What travels on with the seed is the cue the
+    // caller asked with, and a prefix leaking into it would be matched and logged downstream.
+    expect(result.cues.map((cue) => cue.text)).toEqual(CUES.map((cue) => cue.text));
+    expect(result.cues[0]?.vector).toEqual([1]);
+  });
+
   it('sends every cue in the spelling the table names for the configured model', async () => {
     const embed = vi.fn(async () => [[1], [2]]);
     const result = await embedCues(deps('snowflake-arctic-embed2', embed), CUES);

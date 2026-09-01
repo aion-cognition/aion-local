@@ -414,7 +414,13 @@ describe('the 24-pair entity cascade battery', () => {
       );
     }
 
-    expect(tp + fp + fn + tn).toBe(scored.length + crossCaseDecisions().length);
+    // The four buckets partition the run by construction and cannot disagree with it. What can
+    // is the run itself: a pair the cascade both merged and left in the residue lane is counted
+    // here as a merge while the operator is asked to decide it, and precision would be measured
+    // over a population the queue contradicts.
+    expect(scored.filter((row) => row.merged && row.proposed).map((row) => row.entry.key)).toEqual(
+      [],
+    );
     // Every case is scoreable by construction, so a battery that scored fewer has a fixture
     // problem rather than a measurement.
     expect(CASCADE_BATTERY.filter((entry) => entry.duplicate)).toHaveLength(12);
@@ -450,7 +456,10 @@ describe('the 24-pair entity cascade battery', () => {
       );
     }
 
-    expect(same.length + other.length).toBe(scored.length);
+    // A pair whose name vectors never landed reads as 0.000 and prints as a band separating
+    // cleanly at the floor, which is the one way this report can describe a space nobody
+    // measured. Every pair is embedded in `beforeAll`, so a zero here is a missing vector.
+    expect(scored.filter((row) => row.cosine <= 0).map((row) => row.entry.key)).toEqual([]);
   });
 
   /**
