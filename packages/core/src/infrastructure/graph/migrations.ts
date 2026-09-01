@@ -7,8 +7,8 @@ import { getMeta, setMeta } from '../sqlite/meta.js';
 
 /**
  * Backbone nodes (the single Member and the global Workspace) must carry BOTH their
- * structural label (`Member`/`Workspace`) and `Entity`, so the `Entity` composite
- * uniqueness constraint and the `Member.id`/`Workspace.id` constraints all apply to the
+ * structural label (`Member`/`Workspace`) and `Entity`, so the `Entity` name uniqueness
+ * constraint and the `Member.id`/`Workspace.id` constraints all apply to the
  * same node. Every content-bearing memory node (Episode, Turn, and the cognitive types
  * that follow) must carry a shared `Memory` label: Neo4j vector indexes cannot span a
  * label union, so `Memory` is the only way `content_vec_idx`/`context_vec_idx` cover more
@@ -34,7 +34,10 @@ const MIGRATION_001_BACKBONE_SCHEMA: GraphMigration = {
     'CREATE CONSTRAINT session_id_unique IF NOT EXISTS FOR (n:Session) REQUIRE n.id IS UNIQUE',
     'CREATE CONSTRAINT episode_id_unique IF NOT EXISTS FOR (n:Episode) REQUIRE n.id IS UNIQUE',
     'CREATE CONSTRAINT turn_id_unique IF NOT EXISTS FOR (n:Turn) REQUIRE n.id IS UNIQUE',
-    'CREATE CONSTRAINT entity_name_type_unique IF NOT EXISTS FOR (n:Entity) REQUIRE (n.name_norm, n.type) IS UNIQUE',
+    // Migration 003 owns Entity identity and retires the composite `(name_norm, type)`
+    // constraint this migration used to declare. Declaring it here as well would create it
+    // and drop it again on every init, rebuilding its backing index over every Entity for
+    // nothing.
     'CREATE CONSTRAINT member_id_unique IF NOT EXISTS FOR (n:Member) REQUIRE n.id IS UNIQUE',
     'CREATE CONSTRAINT workspace_id_unique IF NOT EXISTS FOR (n:Workspace) REQUIRE n.id IS UNIQUE',
     `CREATE VECTOR INDEX content_vec_idx IF NOT EXISTS FOR (n:Memory) ON (n.content_vec)
@@ -90,10 +93,38 @@ const MIGRATION_002_COGNITIVE_SCHEMA: GraphMigration = {
   ],
 };
 
+/**
+ * The identity re-key. `type` stops being half of the key. The extractor is unstable in the
+ * type it picks, so one referent forked into a tool node and a topic node, and everything the
+ * merge queue then surfaced was cross-type near-name pairs of its own making. Name alone is
+ * the key; `type` becomes a reconciled label backed by counted observations, which is a
+ * property update rather than an identity event.
+ *
+ * This deploys together with the planned graph reset, and only works that way. Neo4j refuses
+ * `CREATE CONSTRAINT` against data that already violates it, so a pre-reset graph carrying
+ * cross-type duplicates fails this migration. That is by design: those duplicates are the
+ * exact thing the re-key exists to stop, and nothing in the old graph needs preserving.
+ *
+ * The drop is a no-op from the second run onward, the same shape as 001's `content_fts`
+ * retirement, so replaying every statement on every init stays free. `name_squash` gets a
+ * plain index and not a constraint: separator variants are duplicate evidence for the dedup
+ * cascade to weigh, never a uniqueness rule the write path has to satisfy.
+ */
+const MIGRATION_003_IDENTITY_REKEY: GraphMigration = {
+  version: 3,
+  name: 'entity identity keyed on name alone, squashed-name lookup index',
+  statements: (_ctx) => [
+    'DROP CONSTRAINT entity_name_type_unique IF EXISTS',
+    'CREATE CONSTRAINT entity_name_unique IF NOT EXISTS FOR (n:Entity) REQUIRE n.name_norm IS UNIQUE',
+    'CREATE INDEX entity_name_squash_idx IF NOT EXISTS FOR (n:Entity) ON (n.name_squash)',
+  ],
+};
+
 /** Ordered oldest-first; the runner applies whichever versions the meta table has no record of yet. */
 export const GRAPH_MIGRATIONS: readonly GraphMigration[] = [
   MIGRATION_001_BACKBONE_SCHEMA,
   MIGRATION_002_COGNITIVE_SCHEMA,
+  MIGRATION_003_IDENTITY_REKEY,
 ];
 
 const META_KEY_PREFIX = 'graph:migration:';
