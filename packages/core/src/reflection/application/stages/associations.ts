@@ -109,7 +109,7 @@ export class AssociationInferenceStage implements ReflectionStage {
     | { status: 'ok'; written: number }
     | { status: 'failed'; summary: string; counts: { associations: number } }
   > {
-    const key = coOccursLedgerKey(ctx.episodeId);
+    const key = coOccursLedgerKey(ctx.pipelineVersion, ctx.episodeId);
     if (isLedgerApplied(ctx.db, key)) {
       return { status: 'ok', written: 0 };
     }

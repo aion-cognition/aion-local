@@ -2,6 +2,7 @@ import {
   DEFAULTS,
   EntityDedupStage,
   listEntityMergeProposals,
+  PIPELINE_VERSION,
   resolveProviderRouting,
   writeStampedNode,
 } from '@aion/core';
@@ -240,6 +241,8 @@ async function runCase(row: Omit<SeededCase, 'cosine' | 'judged'>): Promise<numb
     episode: { id: episodeId, sessionId: SESSION_ID, text: '', turns: [] },
     logger: substrate.logger,
     now: NOW,
+    occurredAt: NOW,
+    pipelineVersion: PIPELINE_VERSION,
   });
   if (outcome.status !== 'ok') {
     throw new Error(`the cascade did not run on ${row.entry.key}: ${outcome.summary}`);

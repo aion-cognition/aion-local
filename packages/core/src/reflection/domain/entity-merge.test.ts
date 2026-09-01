@@ -119,6 +119,14 @@ describe('mergeAccessCount and mergeLastAccessed', () => {
 
 describe('entityMergeLedgerKey', () => {
   it('sorts and dedupes the merged ids so discovery order cannot change the key', () => {
-    expect(entityMergeLedgerKey('canonical', ['b', 'a', 'b'])).toBe('entity.merge:canonical:a,b');
+    expect(entityMergeLedgerKey('cascade-1', 'canonical', ['b', 'a', 'b'])).toBe(
+      'entity.merge:cascade-1:canonical:a,b',
+    );
+  });
+
+  it('gives one group a key per cascade version, so a re-decision reaches its own record', () => {
+    expect(entityMergeLedgerKey('cascade-2', 'canonical', ['a'])).not.toBe(
+      entityMergeLedgerKey('cascade-1', 'canonical', ['a']),
+    );
   });
 });

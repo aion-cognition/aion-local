@@ -9,6 +9,8 @@ import { openSqliteHandle } from './database.js';
 import { enqueueReflectionJob, listReflectionJobs } from './reflection-queue.js';
 
 const fixturePath = fileURLToPath(new URL('./claim-worker.fixture.ts', import.meta.url));
+/** Resolves the `.js` specifiers the sources under the fixture are written against. */
+const specifierHook = fileURLToPath(new URL('./ts-specifier-hook.fixture.ts', import.meta.url));
 
 type WorkerResult = { claimantId: string; claimedIds: string[] };
 
@@ -26,7 +28,9 @@ type WorkerHandle = {
  * contend through the POSIX file locks that do.
  */
 function spawnClaimant(filePath: string): WorkerHandle {
-  const child = fork(fixturePath, [filePath], { execArgv: ['--experimental-strip-types'] });
+  const child = fork(fixturePath, [filePath], {
+    execArgv: ['--experimental-strip-types', '--import', specifierHook],
+  });
 
   const failed = new Promise<never>((_, reject) => {
     child.once('error', reject);

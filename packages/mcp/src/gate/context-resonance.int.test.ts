@@ -3,6 +3,7 @@ import {
   ContextVectorStage,
   ENTITY_MENTION_TYPE,
   OFF_TOPIC_BATTERY,
+  PIPELINE_VERSION,
   RESONANCE_PATH,
   cosineSimilarity,
   fulltextSeeds,
@@ -156,6 +157,8 @@ async function summarizeNeighborhood(episodeId: string, at: Date): Promise<void>
     episode,
     logger: substrate.logger,
     now: at,
+    occurredAt: at,
+    pipelineVersion: PIPELINE_VERSION,
   });
   expect(outcome.status).toBe('ok');
 }

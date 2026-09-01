@@ -13,6 +13,7 @@ import {
   SessionManager,
   isLedgerApplied,
   orchestratorLedgerKey,
+  PIPELINE_VERSION,
   type AdmissionReport,
   type Config,
   type Logger,
@@ -257,7 +258,7 @@ export class GateSubstrate {
 
   /** True once the orchestrator has recorded a run for the episode, whatever it produced. */
   enriched(episodeId: string): boolean {
-    return isLedgerApplied(this.db, orchestratorLedgerKey(episodeId));
+    return isLedgerApplied(this.db, orchestratorLedgerKey(PIPELINE_VERSION, episodeId));
   }
 }
 

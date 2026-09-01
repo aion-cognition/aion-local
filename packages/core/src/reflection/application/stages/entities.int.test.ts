@@ -27,6 +27,7 @@ import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sql
 import { SessionManager } from '../../../session/session-manager.js';
 import { ENTITY_TYPES } from '../../domain/entity-extraction.js';
 import type { StageContext, StageOutcome } from '../../domain/stage.js';
+import { PIPELINE_VERSION } from '../../domain/version.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../intake.js';
 import { LaneAssigner } from '../lanes.js';
 import { EntityExtractionStage } from './entities.js';
@@ -123,6 +124,8 @@ async function runStage(episodeId: string, stageProvider: Provider): Promise<Sta
     episode,
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     now: NOW,
+    occurredAt: NOW,
+    pipelineVersion: PIPELINE_VERSION,
   };
   return new EntityExtractionStage().run(context);
 }

@@ -16,10 +16,14 @@ import {
   type StageContext,
   type StageRecord,
 } from '../domain/stage.js';
+import { PIPELINE_VERSION } from '../domain/version.js';
 
-/** The key that gates one episode's whole pipeline. */
-export function orchestratorLedgerKey(episodeId: string): string {
-  return `reflection:orchestrator:${episodeId}`;
+/**
+ * The key that gates one episode's whole pipeline, forked by pipeline version so a prompt or
+ * extraction change re-enters an episode the old version already closed.
+ */
+export function orchestratorLedgerKey(pipelineVersion: string, episodeId: string): string {
+  return `reflection:orchestrator:${pipelineVersion}:${episodeId}`;
 }
 
 /**
@@ -48,6 +52,8 @@ export type ReflectionOrchestratorDeps = {
 
 export type ReflectionRunOptions = {
   readonly now?: Date;
+  /** Which fork of the ledger key space this run gates on. Defaults to the shipped version. */
+  readonly pipelineVersion?: string;
 };
 
 function elapsed(started: number): number {
@@ -82,7 +88,8 @@ export class ReflectionOrchestrator {
 
   async run(episodeId: string, options: ReflectionRunOptions = {}): Promise<ReflectionRun> {
     const started = performance.now();
-    const key = orchestratorLedgerKey(episodeId);
+    const pipelineVersion = options.pipelineVersion ?? PIPELINE_VERSION;
+    const key = orchestratorLedgerKey(pipelineVersion, episodeId);
 
     if (isLedgerApplied(this.#deps.db, key)) {
       this.#deps.logger.debug({ episodeId }, 'reflection already applied');
@@ -95,6 +102,7 @@ export class ReflectionOrchestrator {
       return this.#empty(episodeId, 'episode_unavailable', elapsed(started));
     }
 
+    const now = options.now ?? new Date();
     const context: StageContext = {
       driver: this.#deps.driver,
       db: this.#deps.db,
@@ -102,7 +110,11 @@ export class ReflectionOrchestrator {
       episodeId,
       episode,
       logger: this.#deps.logger,
-      now: options.now ?? new Date(),
+      now,
+      // The episode's own clock where it has one, so a derived node's world time is the world
+      // time of what it was derived from rather than the moment the run happened.
+      occurredAt: episode.occurredAt ?? now,
+      pipelineVersion,
     };
 
     const stages: StageRecord[] = [];
@@ -145,7 +157,7 @@ export class ReflectionOrchestrator {
    * mirroring `shouldMarkApplied`'s view that only `failed` leaves something to retry.
    */
   async #runOrSkip(stage: ReflectionStage, context: StageContext): Promise<StageRecord> {
-    const key = stageLedgerKey(stage.name, context.episodeId);
+    const key = stageLedgerKey(context.pipelineVersion, stage.name, context.episodeId);
     if (isLedgerApplied(this.#deps.db, key)) {
       return stageAlreadyAppliedRecord(stage.name);
     }

@@ -33,6 +33,7 @@ import {
 } from '../../../recall/domain/activation.js';
 import { SessionManager } from '../../../session/session-manager.js';
 import type { StageContext } from '../../domain/stage.js';
+import { PIPELINE_VERSION } from '../../domain/version.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../intake.js';
 import { LaneAssigner } from '../lanes.js';
 
@@ -127,6 +128,8 @@ beforeAll(async () => {
     episode,
     logger: intake.logger,
     now: new Date(),
+    occurredAt: new Date(),
+    pipelineVersion: PIPELINE_VERSION,
   };
 
   const entityOutcome = await new EntityExtractionStage({ model: DEFAULTS.models.reflect }).run(
@@ -162,6 +165,8 @@ describe('SemanticRelationshipStage against a live graph and a live model', () =
       episode: episode!,
       logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
       now: new Date(),
+      occurredAt: new Date(),
+      pipelineVersion: PIPELINE_VERSION,
     };
 
     const stage = new SemanticRelationshipStage({ model: DEFAULTS.models.reflect });
@@ -272,6 +277,8 @@ describe('SemanticRelationshipStage against a live graph and a live model', () =
       episode,
       logger: intake.logger,
       now: new Date(),
+      occurredAt: new Date(),
+      pipelineVersion: PIPELINE_VERSION,
     };
 
     const entityOutcome = await new EntityExtractionStage({ model: DEFAULTS.models.reflect }).run(

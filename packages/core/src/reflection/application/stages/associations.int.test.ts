@@ -30,6 +30,7 @@ import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sql
 import { cliqueDiscount } from '../../../plasticity/domain/reinforcement.js';
 import { SessionManager } from '../../../session/session-manager.js';
 import type { StageContext, StageOutcome } from '../../domain/stage.js';
+import { PIPELINE_VERSION } from '../../domain/version.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../intake.js';
 import { LaneAssigner } from '../lanes.js';
 
@@ -123,6 +124,8 @@ async function runStage(episodeId: string): Promise<StageOutcome> {
     episode,
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     now: NOW,
+    occurredAt: NOW,
+    pipelineVersion: PIPELINE_VERSION,
   };
   return new AssociationInferenceStage().run(context);
 }

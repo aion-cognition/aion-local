@@ -32,14 +32,20 @@ describe('coOccurringPairs', () => {
 
 describe('coOccursLedgerKey', () => {
   it('scopes the key to the episode, and to nothing finer', () => {
-    const key = coOccursLedgerKey('episode-1');
+    const key = coOccursLedgerKey('v1', 'episode-1');
 
-    expect(key).toBe('association.co_occurs:episode-1');
-    expect(coOccursLedgerKey('episode-2')).not.toBe(key);
+    expect(key).toBe('association.co_occurs:v1:episode-1');
+    expect(coOccursLedgerKey('v1', 'episode-2')).not.toBe(key);
+  });
+
+  it('gives one episode a key per pipeline version', () => {
+    expect(coOccursLedgerKey('v2', 'episode-1')).not.toBe(coOccursLedgerKey('v1', 'episode-1'));
   });
 
   it('is one row per episode however many entities the episode named', () => {
-    const keys = new Set(coOccurringPairs(['a', 'b', 'c', 'd']).map(() => coOccursLedgerKey('e')));
+    const keys = new Set(
+      coOccurringPairs(['a', 'b', 'c', 'd']).map(() => coOccursLedgerKey('v1', 'e')),
+    );
 
     expect(keys.size).toBe(1);
   });

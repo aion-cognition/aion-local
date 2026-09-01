@@ -161,10 +161,18 @@ export function mergeLastAccessed(members: readonly DedupCandidate[]): Date | un
 export const ENTITY_CASCADE_VERSION = 'cascade-1';
 
 /**
- * The operation-level idempotency key: `entity.merge:{canonicalId}:{sortedMergedIds}`.
- * Sorted and de-duplicated so the same group produces the same key regardless of discovery
- * order.
+ * The operation-level idempotency key:
+ * `entity.merge:{cascadeVersion}:{canonicalId}:{sortedMergedIds}`. Sorted and de-duplicated so
+ * the same group produces the same key regardless of discovery order.
+ *
+ * The cascade version is in the key because the decision record's own key already carries it: a
+ * gate that left it out would stop a merge re-decided under new prompts before it could write
+ * the record the decision table is shaped to hold beside the old one.
  */
-export function entityMergeLedgerKey(canonicalId: string, mergedIds: readonly string[]): string {
-  return `entity.merge:${canonicalId}:${[...new Set(mergedIds)].sort().join(',')}`;
+export function entityMergeLedgerKey(
+  cascadeVersion: string,
+  canonicalId: string,
+  mergedIds: readonly string[],
+): string {
+  return `entity.merge:${cascadeVersion}:${canonicalId}:${[...new Set(mergedIds)].sort().join(',')}`;
 }

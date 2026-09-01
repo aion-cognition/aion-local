@@ -141,7 +141,9 @@ describe('applying an entity-merge proposal', () => {
     expect(canonical?.aliases).toContain(result.absorbed.name);
 
     expect(getEntityMergeProposal(db, proposalId)?.resolvedAt).toEqual(expect.any(String));
-    const key = entityMergeLedgerKey(result.canonical.id, [result.absorbed.id]);
+    const key = entityMergeLedgerKey(ENTITY_CASCADE_VERSION, result.canonical.id, [
+      result.absorbed.id,
+    ]);
     expect(getLedgerEntry(db, key)).toBeDefined();
 
     // The merge a person made is the one a reversal most wants to cite, so the record and the

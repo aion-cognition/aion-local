@@ -29,6 +29,7 @@ import {
   type ExtractedEntity,
 } from '../../domain/entity-extraction.js';
 import type { StageContext } from '../../domain/stage.js';
+import { PIPELINE_VERSION } from '../../domain/version.js';
 
 /**
  * The resolution tiers against a real server. Alias routing and the ownership rule that comes
@@ -101,6 +102,8 @@ beforeAll(async () => {
     },
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     now: NOW,
+    occurredAt: NOW,
+    pipelineVersion: PIPELINE_VERSION,
   };
 }, 300_000);
 

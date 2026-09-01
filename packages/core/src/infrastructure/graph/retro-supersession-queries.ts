@@ -9,7 +9,7 @@ import { toGraphInteger } from './values.js';
  * The candidate window for the retro supersession sweep: episodes carrying a current
  * fact-bearing node, oldest occurrence first. Whether any one of them has already faced the
  * supersession stage lives in the ops ledger, not the graph, so this read hands back a window
- * of candidates for the caller to filter against `reflection:stage:supersession:{episodeId}`
+ * of candidates for the caller to filter against `reflection:stage:{version}:supersession:{id}`
  * rather than trying to join the two stores in one query.
  */
 

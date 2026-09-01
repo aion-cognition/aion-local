@@ -30,6 +30,7 @@ import {
 import { openLogger } from '../../../infrastructure/logging/logger.js';
 import { SqliteStore } from '../../../infrastructure/sqlite/database.js';
 import type { StageContext } from '../../domain/stage.js';
+import { PIPELINE_VERSION } from '../../domain/version.js';
 
 const EPISODE_ID = 'episode-1';
 const SESSION_ID = 'session-1';
@@ -73,6 +74,8 @@ function context(provider: FakeProvider, text?: string): StageContext {
     episode: episode(text),
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     now: NOW,
+    occurredAt: NOW,
+    pipelineVersion: PIPELINE_VERSION,
   };
 }
 

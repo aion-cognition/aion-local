@@ -8,6 +8,7 @@ import { openLogger, type Logger } from '../../../infrastructure/logging/logger.
 import type { Provider } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import type { StageContext } from '../../domain/stage.js';
+import { PIPELINE_VERSION } from '../../domain/version.js';
 import { FakeGraph } from '../../test-support/fake-graph.fixture.js';
 
 const EPISODE_ID = 'episode-1';
@@ -61,6 +62,8 @@ function buildContext(episodeId = EPISODE_ID): StageContext {
     episode: { id: episodeId, sessionId: 'session-1', text: 'irrelevant to this stage', turns: [] },
     logger,
     now: NOW,
+    occurredAt: NOW,
+    pipelineVersion: PIPELINE_VERSION,
   };
 }
 

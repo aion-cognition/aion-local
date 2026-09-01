@@ -34,6 +34,7 @@ import { openLogger } from '../../../infrastructure/logging/logger.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { listEntityMergeProposals } from '../../../infrastructure/sqlite/entity-merge-proposals.js';
 import type { StageContext } from '../../domain/stage.js';
+import { PIPELINE_VERSION } from '../../domain/version.js';
 import {
   judgedNames,
   refusingEntityJudge,
@@ -104,6 +105,8 @@ function context(judge: ScriptedEntityJudge = refusingEntityJudge()): StageConte
     episode: { id: episodeId, sessionId: 'session-1', text: '', turns: [] },
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     now: NOW,
+    occurredAt: NOW,
+    pipelineVersion: PIPELINE_VERSION,
   };
 }
 

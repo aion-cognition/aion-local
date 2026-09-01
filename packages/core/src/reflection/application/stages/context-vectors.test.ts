@@ -11,6 +11,7 @@ import { openLogger, type Logger } from '../../../infrastructure/logging/logger.
 import type { Provider } from '../../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import type { StageContext } from '../../domain/stage.js';
+import { PIPELINE_VERSION } from '../../domain/version.js';
 
 /**
  * Exercises the stage's control flow against a minimal stand-in for the driver, dispatched
@@ -75,6 +76,8 @@ function buildContext(driver: Driver): StageContext {
     },
     logger,
     now: NOW,
+    occurredAt: NOW,
+    pipelineVersion: PIPELINE_VERSION,
   };
 }
 

@@ -16,6 +16,7 @@ import {
   type SupersessionProposal,
 } from '../../../infrastructure/sqlite/supersession-proposals.js';
 import type { StageContext } from '../../domain/stage.js';
+import { PIPELINE_VERSION } from '../../domain/version.js';
 import {
   FakeGraph,
   type FakeNode,
@@ -410,6 +411,8 @@ export class SupersessionTestBed {
       episode: { id: episodeId, sessionId: this.sessionId, text: 'episode body', turns: [] },
       logger: openLogger({ filePath: join(this.#dataDir, 'aion.jsonl'), level: 'fatal' }),
       now: this.now,
+      occurredAt: this.now,
+      pipelineVersion: PIPELINE_VERSION,
     };
   }
 

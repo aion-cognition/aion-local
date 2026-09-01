@@ -9,6 +9,7 @@ import { openLogger } from '../../../infrastructure/logging/logger.js';
 import { SqliteStore } from '../../../infrastructure/sqlite/database.js';
 import { listReinforcementSignals } from '../../../infrastructure/sqlite/reinforcement-queue.js';
 import type { StageContext } from '../../domain/stage.js';
+import { PIPELINE_VERSION } from '../../domain/version.js';
 import { FakeGraph } from '../../test-support/fake-graph.fixture.js';
 
 describe('ReinforcementEnqueueStage', () => {
@@ -42,6 +43,8 @@ describe('ReinforcementEnqueueStage', () => {
       episode: { id: episodeId, sessionId: 'session-1', text: '', turns: [] },
       logger: openLogger({ filePath: join(dataDir, 'test.jsonl'), level: 'fatal' }),
       now: new Date(),
+      occurredAt: new Date(),
+      pipelineVersion: PIPELINE_VERSION,
     };
 
     const result = await stage.run(ctx);
@@ -68,6 +71,8 @@ describe('ReinforcementEnqueueStage', () => {
       episode: { id: episodeId, sessionId: 'session-1', text: '', turns: [] },
       logger: openLogger({ filePath: join(dataDir, 'test.jsonl'), level: 'fatal' }),
       now: new Date(),
+      occurredAt: new Date(),
+      pipelineVersion: PIPELINE_VERSION,
     };
 
     const result = await stage.run(ctx);
@@ -96,6 +101,8 @@ describe('ReinforcementEnqueueStage', () => {
       episode: { id: episodeId, sessionId: 'session-1', text: '', turns: [] },
       logger: openLogger({ filePath: join(dataDir, 'test.jsonl'), level: 'fatal' }),
       now: new Date('2025-01-15T10:00:00Z'),
+      occurredAt: new Date('2025-01-15T10:00:00Z'),
+      pipelineVersion: PIPELINE_VERSION,
     };
 
     const result = await stage.run(ctx);
@@ -144,6 +151,8 @@ describe('ReinforcementEnqueueStage', () => {
       episode: { id: episodeId, sessionId: 'session-1', text: '', turns: [] },
       logger: openLogger({ filePath: join(dataDir, 'test.jsonl'), level: 'fatal' }),
       now: new Date('2025-01-15T10:00:00Z'),
+      occurredAt: new Date('2025-01-15T10:00:00Z'),
+      pipelineVersion: PIPELINE_VERSION,
     };
 
     await stage.run(ctx);
@@ -176,6 +185,8 @@ describe('ReinforcementEnqueueStage', () => {
       episode: { id: episodeId, sessionId: 'session-1', text: '', turns: [] },
       logger: openLogger({ filePath: join(dataDir, 'test.jsonl'), level: 'fatal' }),
       now: new Date(),
+      occurredAt: new Date(),
+      pipelineVersion: PIPELINE_VERSION,
     };
 
     const result = await stage.run(ctx);

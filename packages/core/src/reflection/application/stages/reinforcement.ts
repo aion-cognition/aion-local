@@ -25,9 +25,12 @@ export const REFLECTION_CO_EXTRACTION_TRIGGER = 'reflection:co-extraction';
  * fresh uuid with no uniqueness constraint behind it, so without this the orchestrator's
  * crash-before-ledger-mark window doubles every pair the episode produced, and the flush
  * reinforces each of them twice.
+ *
+ * The pipeline version forks the key: a run under new extraction rules co-extracts a different
+ * node set and owes the queue its own signals.
  */
-export function coExtractionLedgerKey(episodeId: string): string {
-  return `reinforcement.co_extraction:${episodeId}`;
+export function coExtractionLedgerKey(pipelineVersion: string, episodeId: string): string {
+  return `reinforcement.co_extraction:${pipelineVersion}:${episodeId}`;
 }
 
 export type ReinforcementEnqueueStageOptions = {
@@ -43,7 +46,7 @@ export class ReinforcementEnqueueStage implements ReflectionStage {
   }
 
   async run(ctx: StageContext): Promise<StageOutcome> {
-    const key = coExtractionLedgerKey(ctx.episodeId);
+    const key = coExtractionLedgerKey(ctx.pipelineVersion, ctx.episodeId);
     if (isLedgerApplied(ctx.db, key)) {
       return { status: 'skipped', summary: 'co-extraction signals already enqueued' };
     }

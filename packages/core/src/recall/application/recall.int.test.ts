@@ -30,6 +30,7 @@ import { markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import { handleReflection } from '../../reflection/application/intake.js';
 import { LaneAssigner } from '../../reflection/application/lanes.js';
 import { orchestratorLedgerKey } from '../../reflection/application/orchestrator.js';
+import { PIPELINE_VERSION } from '../../reflection/domain/version.js';
 import { SessionManager } from '../../session/session-manager.js';
 
 const EMBED_DIMENSION = 8;
@@ -296,7 +297,7 @@ describe('pending_enrichment metadata', () => {
 
     // Only `second` is marked enriched; the orchestrator never runs in this file, so the
     // other two stay open the way a fresh episode always does before the worker reaches it.
-    markLedgerApplied(db, orchestratorLedgerKey(second));
+    markLedgerApplied(db, orchestratorLedgerKey(PIPELINE_VERSION, second));
 
     const pack = await handleRecall(
       deps,
@@ -313,7 +314,7 @@ describe('pending_enrichment metadata', () => {
   it("omits pending_enrichment once every one of the session's episodes is enriched", async () => {
     const session = 'recall-int-fully-enriched-session';
     const episodeId = await push('a fully enriched observation', PENDING_AT, session);
-    markLedgerApplied(db, orchestratorLedgerKey(episodeId));
+    markLedgerApplied(db, orchestratorLedgerKey(PIPELINE_VERSION, episodeId));
 
     const pack = await handleRecall(
       deps,

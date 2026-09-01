@@ -6,13 +6,14 @@ import {
   SUPERSESSION_STAGE_NAME,
 } from '../../../reflection/application/stages/supersession.js';
 import { stageLedgerKey, type StageContext } from '../../../reflection/domain/stage.js';
+import { PIPELINE_VERSION } from '../../../reflection/domain/version.js';
 import type { IntrospectionOperation, OperationOutcome } from '../../domain/operation.js';
 
 /**
  * The backlog this operation drains: episodes reflected before the supersession stage joined
  * the pipeline (or before its subject-identity fix landed) carry facts that were never
- * compared against what came after them. `reflection:stage:supersession:{episodeId}` is the
- * same key the live orchestrator sets the moment its own supersession stage finishes an
+ * compared against what came after them. `reflection:stage:{version}:supersession:{episodeId}` is
+ * the same key the live orchestrator sets the moment its own supersession stage finishes an
  * episode, so a fact-bearing episode missing it is, by definition, one the fix never reached.
  *
  * The sweep is deliberately a query over the true backlog rather than a stored cursor: each
@@ -43,7 +44,8 @@ export function retroJudgmentSweepOperation(): IntrospectionOperation {
       const scanLimit = Math.min(RETRO_SWEEP_SCAN_CEILING, batch * RETRO_SWEEP_SCAN_FACTOR);
       const candidates = await findFactBearingEpisodesOldestFirst(ctx.driver, scanLimit);
       const unswept = candidates.filter(
-        (id) => !isLedgerApplied(ctx.db, stageLedgerKey(SUPERSESSION_STAGE_NAME, id)),
+        (id) =>
+          !isLedgerApplied(ctx.db, stageLedgerKey(PIPELINE_VERSION, SUPERSESSION_STAGE_NAME, id)),
       );
       const toJudge = unswept.slice(0, batch);
 
@@ -76,6 +78,8 @@ export function retroJudgmentSweepOperation(): IntrospectionOperation {
           episode,
           logger: ctx.logger,
           now: ctx.now,
+          occurredAt: episode.occurredAt ?? ctx.now,
+          pipelineVersion: PIPELINE_VERSION,
         };
         const outcome = await stage.run(stageCtx);
         judged += 1;
@@ -84,10 +88,11 @@ export function retroJudgmentSweepOperation(): IntrospectionOperation {
         // retry earns the key, so a transient model or write failure leaves the episode in
         // the backlog for the next tick instead of skipping it forever.
         if (outcome.status !== 'failed') {
-          markLedgerApplied(ctx.db, stageLedgerKey(SUPERSESSION_STAGE_NAME, episodeId), {
-            status: outcome.status,
-            summary: outcome.summary,
-          });
+          markLedgerApplied(
+            ctx.db,
+            stageLedgerKey(PIPELINE_VERSION, SUPERSESSION_STAGE_NAME, episodeId),
+            { status: outcome.status, summary: outcome.summary },
+          );
         }
       }
 

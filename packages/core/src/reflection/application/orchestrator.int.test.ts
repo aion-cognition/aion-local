@@ -26,6 +26,7 @@ import { getLedgerEntry, isLedgerApplied } from '../../infrastructure/sqlite/ops
 import { SessionManager } from '../../session/session-manager.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../domain/stage.js';
 import { stageLedgerKey } from '../domain/stage.js';
+import { PIPELINE_VERSION } from '../domain/version.js';
 
 const SESSION_IDENTITY = 'mcp-transport-session-orchestrator';
 
@@ -201,7 +202,9 @@ describe('reflection orchestrator against a live graph', () => {
     expect(run.status).toBe('completed');
     expect(run.summary.counts).toEqual({ entities: 2, associations: 3 });
     expect(run.applied).toBe(false);
-    expect(getLedgerEntry(db, orchestratorLedgerKey(throwingEpisodeId))).toBeUndefined();
+    expect(
+      getLedgerEntry(db, orchestratorLedgerKey(PIPELINE_VERSION, throwingEpisodeId)),
+    ).toBeUndefined();
     entered = [];
   }, 60_000);
 
@@ -225,7 +228,7 @@ describe('reflection orchestrator against a live graph', () => {
     expect(first.summary.counts).toEqual({ entities: 2, associations: 3 });
     expect(contexts[0]?.episode.turns).toHaveLength(2);
 
-    const recorded = getLedgerEntry(db, orchestratorLedgerKey(enrichEpisodeId));
+    const recorded = getLedgerEntry(db, orchestratorLedgerKey(PIPELINE_VERSION, enrichEpisodeId));
     expect(recorded?.summary).toEqual(JSON.parse(JSON.stringify(first.summary)));
 
     entered = [];
@@ -287,8 +290,12 @@ describe('reflection orchestrator against a live graph', () => {
     expect(entityCalls).toBe(1);
     expect(cognitiveCalls).toBe(1);
     expect(entered).toEqual(['semantic-relationships']);
-    expect(isLedgerApplied(db, stageLedgerKey('entities', remintEpisodeId))).toBe(true);
-    expect(isLedgerApplied(db, stageLedgerKey('cognitive', remintEpisodeId))).toBe(true);
+    expect(isLedgerApplied(db, stageLedgerKey(PIPELINE_VERSION, 'entities', remintEpisodeId))).toBe(
+      true,
+    );
+    expect(
+      isLedgerApplied(db, stageLedgerKey(PIPELINE_VERSION, 'cognitive', remintEpisodeId)),
+    ).toBe(true);
 
     const entitiesAfterSecond = await findEpisodeEntities(harness.driver, remintEpisodeId);
     const cognitiveAfterSecond = await findEpisodeCognitiveNodes(harness.driver, remintEpisodeId);

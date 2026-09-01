@@ -9,6 +9,7 @@ import {
   enqueueReflectionJob,
   listReflectionJobs,
 } from '../../infrastructure/sqlite/reflection-queue.js';
+import { PIPELINE_VERSION } from '../domain/version.js';
 
 /**
  * Episodes the substrate stored and will never enrich: no orchestrator ledger key, and no
@@ -23,7 +24,13 @@ import {
 /** One pass reads this many episodes. Above it the answer is "the backlog", not a number. */
 export const DEFAULT_RECONCILE_LIMIT = 20_000;
 
-const LEDGER_PREFIX = orchestratorLedgerKey('');
+/**
+ * The current version's arm of the key space, and the episode id is whatever follows it. Scoping
+ * the scan to one version is what makes the answer mean "enriched by the pipeline running now":
+ * a bump forks the keys, and an episode enriched under the old rules is one this pass is right
+ * to hand back for re-enrichment.
+ */
+const LEDGER_PREFIX = orchestratorLedgerKey(PIPELINE_VERSION, '');
 
 export type ReconcileOptions = {
   readonly limit?: number;

@@ -57,6 +57,11 @@ export type EntityMergeWriteInput = {
   readonly judge?: EntityMergeJudgeVerdicts;
   /** What the `SUPERSEDES` lineage should say decided this merge. */
   readonly method: string;
+  /**
+   * Which cascade decided it, stamped on the record and on the gate in front of it. Defaults to
+   * the shipped version; a replay of an old decision under new prompts passes its own.
+   */
+  readonly cascadeVersion?: string;
   readonly now: Date;
 };
 
@@ -131,11 +136,12 @@ export async function applyEntityMerge(
     return { status: 'skipped', reason: 'nothing_to_merge' };
   }
 
-  const ledgerKey = entityMergeLedgerKey(input.canonical.id, mergedIds);
+  const cascadeVersion = input.cascadeVersion ?? ENTITY_CASCADE_VERSION;
+  const ledgerKey = entityMergeLedgerKey(cascadeVersion, input.canonical.id, mergedIds);
   if (isLedgerApplied(deps.db, ledgerKey)) {
     return { status: 'skipped', reason: 'already_applied' };
   }
-  const decisionKey = entityMergeDecisionKey(input.canonical.id, mergedIds, ENTITY_CASCADE_VERSION);
+  const decisionKey = entityMergeDecisionKey(input.canonical.id, mergedIds, cascadeVersion);
 
   const merged = await redirectAndAbsorb(deps.driver, {
     canonicalId: input.canonical.id,
@@ -179,7 +185,7 @@ export async function applyEntityMerge(
     reasons: input.reasons,
     signals: input.signals,
     ...(input.judge === undefined ? {} : { judge: input.judge }),
-    cascadeVersion: ENTITY_CASCADE_VERSION,
+    cascadeVersion,
     createdAt: input.now.toISOString(),
   });
 

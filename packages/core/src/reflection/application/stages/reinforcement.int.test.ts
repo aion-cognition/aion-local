@@ -20,6 +20,7 @@ import { openLogger } from '../../../infrastructure/logging/logger.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { listReinforcementSignals } from '../../../infrastructure/sqlite/reinforcement-queue.js';
 import type { StageContext } from '../../domain/stage.js';
+import { PIPELINE_VERSION } from '../../domain/version.js';
 
 /**
  * The trigger is entities and cognitive structures extracted from one episode. The episode
@@ -49,6 +50,8 @@ function context(): StageContext {
     episode: { id: EPISODE_ID, sessionId: SESSION_ID, text: '', turns: [] },
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     now: NOW,
+    occurredAt: NOW,
+    pipelineVersion: PIPELINE_VERSION,
   };
 }
 

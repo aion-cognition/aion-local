@@ -23,6 +23,7 @@ import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sql
 import { listSupersessionProposals } from '../../../infrastructure/sqlite/supersession-proposals.js';
 import { SessionManager } from '../../../session/session-manager.js';
 import type { StageContext } from '../../domain/stage.js';
+import { PIPELINE_VERSION } from '../../domain/version.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../intake.js';
 import { LaneAssigner } from '../lanes.js';
 import { SupersessionStage } from './supersession.js';
@@ -142,6 +143,8 @@ async function contextFor(episodeId: string, provider: Provider): Promise<StageC
     episode: episode!,
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     now: new Date(),
+    occurredAt: new Date(),
+    pipelineVersion: PIPELINE_VERSION,
   };
 }
 
