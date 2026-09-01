@@ -49,10 +49,14 @@ export type EmbeddedCues = {
  * ladder's deeper rung. The rung is reported, because a pack answered without its semantic
  * leg is a thinner answer than the caller has any other way to see.
  *
- * Recall embeds a query here and nowhere else, so this is where the model's query prefix goes.
- * Stored vectors and every symmetric comparison stay raw. The prefix marks the text sent to the
- * model and never the cue: what is stored, logged, and matched on downstream is the cue the
- * caller asked with.
+ * Recall embeds a query here, and the model's query prefix goes on it. Stored vectors and every
+ * symmetric comparison stay raw. The prefix marks the text sent to the model and never the cue:
+ * what is stored, logged, and matched on downstream is the cue the caller asked with.
+ *
+ * This is not the only query-shaped embed in the product. `aion search`, `aion forget`, the
+ * doctor's floor check and the committed calibrations all take the same prefix from the same
+ * table, because a query spelled two ways scores against one set of stored vectors under one
+ * set of floors.
  */
 export async function embedCues(deps: StageReadDeps, cues: readonly Cue[]): Promise<EmbeddedCues> {
   if (cues.length === 0) {

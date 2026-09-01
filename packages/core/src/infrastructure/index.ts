@@ -151,6 +151,7 @@ export {
 export type { EdgeWeightDistribution } from './graph/edge-weight-distribution.js';
 
 export type { Provider } from './providers/types.js';
+export { embedQueryPrefix, maxEmbedInputChars } from './providers/embed-models.js';
 export {
   localChatModels,
   remoteBannerLines,

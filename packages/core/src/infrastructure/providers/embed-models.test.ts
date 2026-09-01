@@ -24,9 +24,15 @@ describe('embed input cap', () => {
 });
 
 describe('query prefix', () => {
-  it('marks a query for a model trained on asymmetric retrieval', () => {
-    expect(embedQueryPrefix('snowflake-arctic-embed2')).toBe('query: ');
-    expect(embedQueryPrefix('snowflake-arctic-embed2:latest')).toBe('query: ');
+  /**
+   * One row decides the spelling for every query-shaped embed: recall's cue batch, `aion
+   * search`, `aion forget`, the doctor's field check and the committed calibrations. The
+   * spelling and the floors are one decision, so a row that disagrees with the harness is a
+   * runtime measuring against numbers nobody took for it.
+   */
+  it('spells a query the way the committed floors were measured', () => {
+    expect(embedQueryPrefix('snowflake-arctic-embed2')).toBe('');
+    expect(embedQueryPrefix('snowflake-arctic-embed2:latest')).toBe('');
   });
 
   it('leaves nomic-embed-text unprefixed, which is what its floors were measured against', () => {
