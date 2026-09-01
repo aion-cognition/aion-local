@@ -25,6 +25,7 @@ const ENTITY: EntityMergeInput = {
   sourceEpisodeId: 'ep-1',
   extractionMethod: 'test',
   confidence: 0.8,
+  occurredAt: new Date('2026-08-30T00:00:00.000Z'),
 };
 
 const NOW = new Date('2026-08-31T00:00:00.000Z');

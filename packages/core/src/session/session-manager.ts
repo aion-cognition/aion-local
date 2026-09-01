@@ -12,6 +12,8 @@ export type EnsureSessionInput = {
   /** Caller-supplied identity: the MCP transport's session id in production, an explicit id in tests. */
   readonly identity: string;
   readonly now?: Date;
+  /** The experience's own clock, stamped as the Session node's world time. Defaults to `now`. */
+  readonly occurredAt?: Date;
 };
 
 export type EnsureSessionResult = {
@@ -67,7 +69,7 @@ export class SessionManager {
       return inFlight;
     }
 
-    const promise = this.#create(identity, input.now);
+    const promise = this.#create(identity, input);
     this.#inFlight.set(identity, promise);
     try {
       return await promise;
@@ -76,12 +78,13 @@ export class SessionManager {
     }
   }
 
-  async #create(identity: string, now: Date | undefined): Promise<EnsureSessionResult> {
+  async #create(identity: string, input: EnsureSessionInput): Promise<EnsureSessionResult> {
     const result = await ensureGraphSession(this.#driver, {
       sessionId: identity,
       memberId: this.#backbone.memberId,
       workspaceId: this.#backbone.workspaceId,
-      now,
+      ...(input.now === undefined ? {} : { now: input.now }),
+      ...(input.occurredAt === undefined ? {} : { occurredAt: input.occurredAt }),
     });
     this.#resolved.set(identity, result.sessionId);
     return { sessionId: result.sessionId, created: result.created };

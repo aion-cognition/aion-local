@@ -1,7 +1,12 @@
 import neo4j from 'neo4j-driver';
 import { describe, expect, it } from 'vitest';
 
-import { BITEMPORAL_PROPERTIES, buildStampedNodeWrite, stampNew } from './bitemporal.js';
+import {
+  BITEMPORAL_PROPERTIES,
+  buildStampedNodeWrite,
+  closeFragment,
+  stampNew,
+} from './bitemporal.js';
 import { BASE_NODE_LABEL, isContentBearing, NODE_LABELS, resolveLabels } from './labels.js';
 import { fromGraphDateTime } from './values.js';
 
@@ -119,5 +124,17 @@ describe('buildStampedNodeWrite', () => {
     expect(txFrom).not.toBeInstanceOf(Date);
     expect(neo4j.isDateTime(txFrom)).toBe(true);
     expect(fromGraphDateTime(txFrom)).toEqual(NOW);
+  });
+});
+
+describe('closeFragment', () => {
+  it('ends world time and system time on parameters the caller binds apart', () => {
+    const fragment = closeFragment('old');
+    expect(fragment).toContain(
+      `old.${BITEMPORAL_PROPERTIES.validUntil} = coalesce(old.${BITEMPORAL_PROPERTIES.validUntil}, $validUntil)`,
+    );
+    expect(fragment).toContain(
+      `old.${BITEMPORAL_PROPERTIES.txUntil} = coalesce(old.${BITEMPORAL_PROPERTIES.txUntil}, $txUntil)`,
+    );
   });
 });

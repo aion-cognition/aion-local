@@ -91,6 +91,18 @@ export function stampNew(input: StampNewInput): StampedNode {
   };
 }
 
+/**
+ * The stamp a node derived from an experience takes. `occurredAt` is required here and
+ * optional on `StampNewInput`, because a derived node's world time is the world time of what
+ * it was derived from: defaulting it to the write clock dates a replayed episode's structure
+ * to the replay. A backbone node, which is derived from nothing, keeps the looser type.
+ */
+export type StampDerivedInput = Omit<StampNewInput, 'occurredAt'> & { readonly occurredAt: Date };
+
+export function stampDerived(input: StampDerivedInput): StampedNode {
+  return stampNew(input);
+}
+
 export type StampedNodeWrite = StampNewInput & {
   /**
    * Applied on create and on match alike: the structural-entity upgrade, and singleton
@@ -173,6 +185,18 @@ export async function writeStampedNodeInTransaction(
   return toStampedNodeResult(statement, outcome);
 }
 
+export type StampedDerivedWrite = StampDerivedInput & {
+  readonly mergeProperties?: GraphProperties;
+};
+
+/** The same transaction write, narrowed so a derived node cannot reach the graph without its world time. */
+export async function writeStampedDerivedNodeInTransaction(
+  tx: GraphTransaction,
+  input: StampedDerivedWrite,
+): Promise<StampedNodeResult> {
+  return writeStampedNodeInTransaction(tx, input);
+}
+
 function mapNodeRow(row: Row): { id: string; labels: readonly string[] } {
   return { id: row.id as string, labels: row.labels as string[] };
 }
@@ -181,6 +205,12 @@ export type SupersedeInput = {
   readonly oldId: string;
   readonly newId: string;
   readonly now?: Date;
+  /**
+   * When the correcting experience happened, which is when the old fact stopped being true.
+   * Defaults to `now` for a close whose reason is the write itself, such as a maintenance
+   * sweep or a person's correction.
+   */
+  readonly validUntil?: Date;
   readonly signals?: readonly string[];
   readonly provenance?: readonly string[];
 };
@@ -194,13 +224,16 @@ export type SupersedeResult = {
 };
 
 /**
- * The `SET` clause every close writes: both timelines end at `$now`, `coalesce`d so a repeat
- * close keeps the first call's timestamps rather than pushing them later.
+ * The `SET` clause every close writes, `coalesce`d so a repeat close keeps the first call's
+ * timestamps rather than pushing them later. The two timelines bind separate parameters: a
+ * fact stops being true when the experience that corrected it happened, and stops being what
+ * the substrate holds at the moment of the write, and those are the same value only when the
+ * correction is the write. A caller with one clock for both binds it twice.
  */
 export function closeFragment(variable: string): string {
   return [
-    `${variable}.${BITEMPORAL_PROPERTIES.validUntil} = coalesce(${variable}.${BITEMPORAL_PROPERTIES.validUntil}, $now)`,
-    `${variable}.${BITEMPORAL_PROPERTIES.txUntil} = coalesce(${variable}.${BITEMPORAL_PROPERTIES.txUntil}, $now)`,
+    `${variable}.${BITEMPORAL_PROPERTIES.validUntil} = coalesce(${variable}.${BITEMPORAL_PROPERTIES.validUntil}, $validUntil)`,
+    `${variable}.${BITEMPORAL_PROPERTIES.txUntil} = coalesce(${variable}.${BITEMPORAL_PROPERTIES.txUntil}, $txUntil)`,
   ].join(',\n    ');
 }
 
@@ -234,10 +267,15 @@ export async function supersedeInTransaction(
   input: SupersedeInput,
 ): Promise<SupersedeResult> {
   const now = input.now ?? new Date();
+  const validUntil = input.validUntil ?? now;
 
   const closed = await tx.run(
     CLOSE_SUPERSEDED_NODE,
-    { oldId: input.oldId, now: toGraphDateTime(now) },
+    {
+      oldId: input.oldId,
+      validUntil: toGraphDateTime(validUntil),
+      txUntil: toGraphDateTime(now),
+    },
     (row) => ({
       id: row.id as string,
       validUntil: row.validUntil as Date,

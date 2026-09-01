@@ -3,7 +3,10 @@ import type { Driver } from 'neo4j-driver';
 import { attachContentVectors } from './vectors.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { describeError } from '../../infrastructure/errors.js';
-import { supersede, writeStampedNodeInTransaction } from '../../infrastructure/graph/bitemporal.js';
+import {
+  supersede,
+  writeStampedDerivedNodeInTransaction,
+} from '../../infrastructure/graph/bitemporal.js';
 import { inWriteTransaction } from '../../infrastructure/graph/connection.js';
 import { upsertEdgeInTransaction } from '../../infrastructure/graph/edges.js';
 import { MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
@@ -72,6 +75,11 @@ export type NarrativeOptions = {
   readonly maxSourceEpisodes?: number;
   readonly maxEpisodeChars?: number;
   readonly now?: Date;
+  /**
+   * The world time to fall back on when the session's episodes carry no span end. Defaults
+   * to `now`, which dates the narrative to the write.
+   */
+  readonly occurredAt?: Date;
   /** Cleanup only: rewrite the standing narrative over the same episodes, superseding it. */
   readonly regenerate?: boolean;
 };
@@ -99,17 +107,20 @@ type NarrativeSettings = {
   readonly maxSourceEpisodes: number;
   readonly maxEpisodeChars: number;
   readonly now: Date;
+  readonly occurredAt: Date;
   readonly regenerate: boolean;
 };
 
 function settingsOf(options: NarrativeOptions): NarrativeSettings {
+  const now = options.now ?? new Date();
   return {
     model: options.model ?? DEFAULTS.models.reflect,
     idleMs: options.idleMs ?? DEFAULT_SESSION_IDLE_MS,
     timeoutMs: options.timeoutMs ?? DEFAULTS.reflection.stageTimeoutMs,
     maxSourceEpisodes: options.maxSourceEpisodes ?? DEFAULTS.reflection.maxNarrativeEpisodes,
     maxEpisodeChars: options.maxEpisodeChars ?? DEFAULTS.reflection.maxNarrativeEpisodeChars,
-    now: options.now ?? new Date(),
+    now,
+    occurredAt: options.occurredAt ?? now,
     regenerate: options.regenerate ?? false,
   };
 }
@@ -153,6 +164,8 @@ type NarrativeWrite = {
   readonly source: NarrativeSource;
   readonly span: NarrativeSpan;
   readonly now: Date;
+  /** The end of the span the narrative covers, else the run's world time. */
+  readonly occurredAt: Date;
 };
 
 /**
@@ -190,11 +203,11 @@ function narrativeProperties(input: NarrativeWrite): GraphProperties {
  */
 async function writeNarrative(deps: NarrativeDeps, input: NarrativeWrite): Promise<void> {
   await inWriteTransaction(deps.driver, async (tx) => {
-    await writeStampedNodeInTransaction(tx, {
+    await writeStampedDerivedNodeInTransaction(tx, {
       label: 'Narrative',
       id: input.narrativeId,
       now: input.now,
-      ...(input.span.end === undefined ? {} : { occurredAt: input.span.end }),
+      occurredAt: input.occurredAt,
       properties: narrativeProperties(input),
     });
 
@@ -231,14 +244,18 @@ async function closeSuperseded(
   deps: NarrativeDeps,
   decision: NarrativeDecision,
   narrativeId: string,
-  now: Date,
+  settings: NarrativeSettings,
+  occurredAt: Date,
 ): Promise<void> {
   for (const oldId of decision.supersedes) {
     if (oldId !== narrativeId) {
       await supersede(deps.driver, {
         oldId,
         newId: narrativeId,
-        now,
+        now: settings.now,
+        // An older version stopped covering the session at the replacement's own world time,
+        // which is not the moment the rewrite ran.
+        validUntil: occurredAt,
         signals: NARRATIVE_SIGNALS,
         provenance: NARRATIVE_PROVENANCE,
       });
@@ -274,7 +291,7 @@ async function narrateSession(
   settings: NarrativeSettings,
   requireIdle: boolean,
 ): Promise<NarrativeResult> {
-  const episodes = await loadSessionEpisodes(deps.driver, sessionId);
+  const episodes = await loadSessionEpisodes(deps.driver, sessionId, settings.now);
   if (episodes.length === 0) {
     return skipped(sessionId, 0, 'the session holds no episodes');
   }
@@ -289,19 +306,23 @@ async function narrateSession(
     }
   }
 
+  const span = narrativeSpan(episodes);
+  // The narrative's world time is the end of what it compresses; a session whose episodes
+  // carry no timestamps falls back to the run's.
+  const occurredAt = span.end ?? settings.occurredAt;
   const existing = await findSessionNarratives(deps.driver, sessionId);
   const decision = decideSessionNarrative(episodes, existing, { regenerate: settings.regenerate });
   const generation = settings.regenerate ? NARRATIVE_GROUNDING : '';
   const narrativeId = narrativeNodeId(sessionId, decision.coverageKey, generation);
 
   if (decision.action === 'skip') {
-    await closeSuperseded(deps, decision, narrativeId, settings.now);
+    await closeSuperseded(deps, decision, narrativeId, settings, occurredAt);
     return skipped(sessionId, episodes.length, decision.reason);
   }
 
   const source = renderNarrativeSource(
     episodes,
-    await loadSessionSourceNodes(deps.driver, sessionId),
+    await loadSessionSourceNodes(deps.driver, sessionId, settings.now),
     settings.maxSourceEpisodes,
     settings.maxEpisodeChars,
   );
@@ -338,11 +359,12 @@ async function narrateSession(
     decision,
     output,
     source,
-    span: narrativeSpan(episodes),
+    span,
     now: settings.now,
+    occurredAt,
   };
   await writeNarrative(deps, write);
-  await closeSuperseded(deps, decision, narrativeId, settings.now);
+  await closeSuperseded(deps, decision, narrativeId, settings, occurredAt);
   await attachVector(deps, narrativeId, output.narrative);
 
   deps.logger.info(
@@ -404,7 +426,7 @@ export async function sweepIdleSessions(
   return results;
 }
 
-export type SessionNarrativeOptions = Omit<NarrativeOptions, 'now'>;
+export type SessionNarrativeOptions = Omit<NarrativeOptions, 'now' | 'occurredAt'>;
 
 /**
  * The stage carries the idle rule rather than the close: by the time an episode reflects,
@@ -427,7 +449,7 @@ export class SessionNarrativeStage implements ReflectionStage {
       provider: ctx.provider,
       logger: ctx.logger,
     };
-    const settings = settingsOf({ ...this.#options, now: ctx.now });
+    const settings = settingsOf({ ...this.#options, now: ctx.now, occurredAt: ctx.occurredAt });
     const result = await narrateSession(deps, ctx.episode.sessionId, settings, true);
 
     if (result.status === 'created') {

@@ -256,8 +256,8 @@ export class SemanticRelationshipStage implements ReflectionStage {
     }
 
     const [entities, cognitive] = await Promise.all([
-      findEpisodeEntities(ctx.driver, ctx.episodeId),
-      findEpisodeCognitiveNodes(ctx.driver, ctx.episodeId),
+      findEpisodeEntities(ctx.driver, ctx.episodeId, ctx.now),
+      findEpisodeCognitiveNodes(ctx.driver, ctx.episodeId, ctx.now),
     ]);
     const candidates = buildCandidates(entities, cognitive);
     if (candidates.length < 2) {

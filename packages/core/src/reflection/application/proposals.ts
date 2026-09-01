@@ -80,6 +80,11 @@ export type ApplyProposalInput = {
    */
   readonly relatednessFloor: number;
   readonly now?: Date;
+  /**
+   * When the correcting experience happened, which is when the closed claims stopped being
+   * true. Defaults to `now`, which is right for a person applying a proposal by hand.
+   */
+  readonly validUntil?: Date;
   /** Who is closing this. Absent means a person did, which is what `aion proposals apply` means. */
   readonly attribution?: ApplyAttribution;
 };
@@ -142,6 +147,7 @@ async function applyEpisode(
   driver: Driver,
   proposal: SupersessionProposal,
   now: Date,
+  validUntil: Date,
   attribution: ApplyAttribution,
 ): Promise<Omit<ApplyProposalResult, 'proposal' | 'scope' | 'regroundedNarratives'>> {
   const sourceId = await findSourceEpisodeId(driver, proposal.oldId);
@@ -154,6 +160,7 @@ async function applyEpisode(
     oldId: sourceId,
     newId: proposal.episodeId,
     now,
+    validUntil,
     signals: attribution.signals,
     provenance: attribution.provenance,
   });
@@ -184,6 +191,7 @@ export async function applySupersessionProposal(
 
   const applied = await applyScope(driver, proposal, scope, now, {
     relatednessFloor: input.relatednessFloor,
+    validUntil: input.validUntil ?? now,
     attribution: input.attribution ?? HUMAN_REVIEW,
   });
   // After the close, not inside it: the marker is a repair instruction rather than part of the
@@ -195,6 +203,7 @@ export async function applySupersessionProposal(
 
 type ScopeInput = {
   readonly relatednessFloor: number;
+  readonly validUntil: Date;
   readonly attribution: ApplyAttribution;
 };
 
@@ -205,9 +214,9 @@ async function applyScope(
   now: Date,
   input: ScopeInput,
 ): Promise<Omit<ApplyProposalResult, 'proposal' | 'scope' | 'regroundedNarratives'>> {
-  const { attribution } = input;
+  const { attribution, validUntil } = input;
   if (scope === 'episode') {
-    return applyEpisode(driver, proposal, now, attribution);
+    return applyEpisode(driver, proposal, now, validUntil, attribution);
   }
 
   if (scope === 'claim') {
@@ -215,6 +224,7 @@ async function applyScope(
       oldId: proposal.oldId,
       newId: proposal.newId,
       now,
+      validUntil,
       signals: attribution.signals,
       provenance: attribution.provenance,
     });
@@ -234,6 +244,7 @@ async function applyScope(
     newId: proposal.newId,
     relatednessFloor: input.relatednessFloor,
     now,
+    validUntil,
     signals: attribution.signals,
     provenance: attribution.provenance,
   });

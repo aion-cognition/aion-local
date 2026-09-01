@@ -294,7 +294,7 @@ export class CognitiveExtractionStage implements ReflectionStage {
           text: node.text.trim(),
           metadata: metadataFor(node),
           contentVector: vectors[index],
-          occurredAt: ctx.episode.occurredAt,
+          occurredAt: ctx.occurredAt,
           now: ctx.now,
         });
         written += 1;

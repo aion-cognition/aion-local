@@ -51,7 +51,7 @@ export class ReinforcementEnqueueStage implements ReflectionStage {
       return { status: 'skipped', summary: 'co-extraction signals already enqueued' };
     }
 
-    const nodeIds = await findCoExtractedNodeIds(ctx.driver, ctx.episodeId);
+    const nodeIds = await findCoExtractedNodeIds(ctx.driver, ctx.episodeId, ctx.now);
 
     if (nodeIds.length === 0) {
       return { status: 'skipped', summary: 'no entities or cognitive nodes extracted' };

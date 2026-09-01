@@ -247,7 +247,7 @@ export class SupersessionStage implements ReflectionStage {
   }
 
   async run(ctx: StageContext): Promise<StageOutcome> {
-    const facts = await findEpisodeFactNodes(ctx.driver, ctx.episodeId);
+    const facts = await findEpisodeFactNodes(ctx.driver, ctx.episodeId, ctx.now);
     if (facts.length === 0) {
       return { status: 'skipped', summary: 'episode has no fact-bearing nodes to check' };
     }

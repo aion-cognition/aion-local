@@ -104,6 +104,7 @@ async function seedEntity(name: string, type: string): Promise<string> {
     sourceEpisodeId: 'seed-episode',
     extractionMethod: 'test',
     confidence: 0.8,
+    occurredAt: NOW,
   };
   const [merged] = await mergeEntities(harness.driver, [entity], NOW);
   if (merged === undefined) {

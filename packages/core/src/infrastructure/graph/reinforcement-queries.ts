@@ -27,8 +27,8 @@ const CO_EXTRACTED_EDGE_TYPES = `${ENTITY_MENTION_TYPE}|EXTRACTED_FROM`;
  * reflection run, so its cost would grow with everything ever stored rather than with the
  * episode being reflected.
  */
-function coExtractedNodesStatement(episodeId: string): GraphStatement {
-  const fragment = readModeFragment(withCurrency(), 'n');
+function coExtractedNodesStatement(episodeId: string, reference?: Date): GraphStatement {
+  const fragment = readModeFragment(withCurrency(reference), 'n');
   return {
     cypher: [
       'MATCH (e:Episode { id: $episodeId })',
@@ -48,6 +48,12 @@ function coExtractedNodesStatement(episodeId: string): GraphStatement {
 export async function findCoExtractedNodeIds(
   driver: Driver,
   episodeId: string,
+  /** The clock currency is judged from; the wall clock when a caller holds none. */
+  reference?: Date,
 ): Promise<readonly string[]> {
-  return runRead(driver, coExtractedNodesStatement(episodeId), (row) => row.id as string);
+  return runRead(
+    driver,
+    coExtractedNodesStatement(episodeId, reference),
+    (row) => row.id as string,
+  );
 }

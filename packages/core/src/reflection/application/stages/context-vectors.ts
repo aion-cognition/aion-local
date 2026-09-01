@@ -19,12 +19,12 @@ export class ContextVectorStage implements ReflectionStage {
 
   async run(ctx: StageContext): Promise<StageOutcome> {
     try {
-      const affectedIds = await findAffectedNodeIds(ctx.driver, ctx.episodeId);
+      const affectedIds = await findAffectedNodeIds(ctx.driver, ctx.episodeId, ctx.now);
       if (affectedIds.length === 0) {
         return { status: 'skipped', summary: 'no affected memory nodes to recompute' };
       }
 
-      const neighbors = await findNeighborContentVectors(ctx.driver, affectedIds);
+      const neighbors = await findNeighborContentVectors(ctx.driver, affectedIds, ctx.now);
       const computed = computeContextVectors(neighbors);
       if (computed.length === 0) {
         return { status: 'skipped', summary: 'no affected node has a vectored neighbor' };

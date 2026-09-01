@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { INTEGRATE_JOB_TYPE } from './intake.js';
-import type { ReflectionRun } from './orchestrator.js';
+import type { ReflectionRun, ReflectionRunOptions } from './orchestrator.js';
 import { backoffDelayMs, ReflectionWorker, type ReflectionWorkerOptions } from './worker.js';
 import { MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
@@ -53,15 +53,17 @@ function completedRun(episodeId: string, applied: boolean): ReflectionRun {
 
 class StubRunner {
   readonly episodeIds: string[] = [];
+  readonly runOptions: (ReflectionRunOptions | undefined)[] = [];
   outcome: (episodeId: string, call: number) => ReflectionRun = (episodeId) =>
     completedRun(episodeId, true);
 
   constructor(private readonly latch?: RunLatch) {}
 
   /** Yields first, so the worker has registered the run before the outcome is decided. */
-  async run(episodeId: string): Promise<ReflectionRun> {
+  async run(episodeId: string, options?: ReflectionRunOptions): Promise<ReflectionRun> {
     await Promise.resolve();
     this.episodeIds.push(episodeId);
+    this.runOptions.push(options);
     this.latch?.tick();
     return this.outcome(episodeId, this.episodeIds.length);
   }
@@ -156,6 +158,24 @@ describe('signal-driven execution', () => {
 
     interval.mockRestore();
     timeout.mockRestore();
+  });
+
+  /**
+   * The run clock is the wall clock in live operation and a value the caller supplies, which
+   * is what leaves an elapsed-time decision inside a stage measuring real elapsed time while
+   * a replay of the same episode can hand the pipeline the episode's own clock.
+   */
+  it('runs the episode on the clock it was given rather than one it reads itself', async () => {
+    const runner = new StubRunner();
+    const dequeued = new Date('2026-07-04T09:15:00.000Z');
+    const started = build(runner, { clock: () => dequeued });
+    await started.start();
+
+    enqueue();
+    signal();
+    await started.whenIdle();
+
+    expect(runner.runOptions).toEqual([{ now: dequeued }]);
   });
 
   it('runs one job at a time at the default worker count', async () => {

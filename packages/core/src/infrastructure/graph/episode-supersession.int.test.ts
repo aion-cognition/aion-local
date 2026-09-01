@@ -46,6 +46,7 @@ async function seedDerived(episodeId: string, text: string): Promise<string> {
     episodeId,
     label: 'Concept',
     text,
+    occurredAt: NOW,
     now: NOW,
   });
   return result.node.id;

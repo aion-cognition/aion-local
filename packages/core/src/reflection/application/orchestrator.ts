@@ -96,13 +96,13 @@ export class ReflectionOrchestrator {
       return this.#empty(episodeId, 'already_applied', elapsed(started));
     }
 
-    const episode = await loadEpisodeContext(this.#deps.driver, episodeId);
+    const now = options.now ?? new Date();
+    const episode = await loadEpisodeContext(this.#deps.driver, episodeId, now);
     if (episode === undefined) {
       this.#deps.logger.warn({ episodeId }, 'reflection skipped: no readable episode');
       return this.#empty(episodeId, 'episode_unavailable', elapsed(started));
     }
 
-    const now = options.now ?? new Date();
     const context: StageContext = {
       driver: this.#deps.driver,
       db: this.#deps.db,

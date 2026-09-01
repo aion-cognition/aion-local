@@ -79,6 +79,11 @@ export type SupersedeEpisodeInput = {
   readonly oldId: string;
   readonly newId: string;
   readonly now?: Date;
+  /**
+   * When the correcting experience happened, which is when the closed claims stopped being
+   * true. Defaults to `now`.
+   */
+  readonly validUntil?: Date;
   readonly signals?: readonly string[];
   readonly provenance?: readonly string[];
 };
@@ -93,6 +98,7 @@ async function closeDerivedFamily(
   episodeId: string,
   supersededBy: string,
   now: Date,
+  validUntil: Date,
 ): Promise<EpisodePropagationResult> {
   const derived = await tx.run(
     DERIVED_NODES_OF_CLOSED_EPISODE,
@@ -107,6 +113,7 @@ async function closeDerivedFamily(
       oldId: id,
       newId: supersededBy,
       now,
+      validUntil,
       signals: EPISODE_PROPAGATION_SIGNALS,
       provenance: [EPISODE_PROPAGATION_METHOD],
     });
@@ -124,15 +131,17 @@ export async function supersedeEpisode(
   input: SupersedeEpisodeInput,
 ): Promise<SupersedeEpisodeResult> {
   const now = input.now ?? new Date();
+  const validUntil = input.validUntil ?? now;
   return inWriteTransaction(driver, async (tx) => {
     const supersession = await supersedeInTransaction(tx, {
       oldId: input.oldId,
       newId: input.newId,
       now,
+      validUntil,
       ...(input.signals === undefined ? {} : { signals: input.signals }),
       ...(input.provenance === undefined ? {} : { provenance: input.provenance }),
     });
-    const propagation = await closeDerivedFamily(tx, input.oldId, input.newId, now);
+    const propagation = await closeDerivedFamily(tx, input.oldId, input.newId, now, validUntil);
     return { supersession, propagation };
   });
 }
@@ -157,6 +166,8 @@ export async function propagateEpisodeSupersession(
     if (supersededBy === undefined) {
       return undefined;
     }
-    return closeDerivedFamily(tx, input.episodeId, supersededBy, now);
+    // A repair carries no world time of its own: the episode closed before this existed, so
+    // both timelines on the family it should have taken with it end at the repair.
+    return closeDerivedFamily(tx, input.episodeId, supersededBy, now, now);
   });
 }

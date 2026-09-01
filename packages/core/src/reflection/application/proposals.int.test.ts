@@ -117,6 +117,7 @@ async function seedClaim(
     episodeId,
     label: 'Concept',
     text,
+    occurredAt: NOW,
     now: NOW,
     ...(contentVector === undefined ? {} : { contentVector: [...contentVector] }),
   });

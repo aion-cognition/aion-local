@@ -55,10 +55,13 @@ describe('buildCloseStatement', () => {
   });
 
   it('closes the entity to the full extent of its own timeline: forgotten_at, valid_until, tx_until', () => {
-    const { cypher } = buildCloseStatement(['e1'], NOW);
+    const { cypher, parameters } = buildCloseStatement(['e1'], NOW);
     expect(cypher).toContain('n.forgotten_at = coalesce(n.forgotten_at, $now)');
-    expect(cypher).toContain('n.valid_until = coalesce(n.valid_until, $now)');
-    expect(cypher).toContain('n.tx_until = coalesce(n.tx_until, $now)');
+    expect(cypher).toContain('n.valid_until = coalesce(n.valid_until, $validUntil)');
+    expect(cypher).toContain('n.tx_until = coalesce(n.tx_until, $txUntil)');
+    // A decay close is a bet on silence taken at the sweep, so both timelines end there.
+    expect(parameters.validUntil).toEqual(parameters.now);
+    expect(parameters.txUntil).toEqual(parameters.now);
     expect(cypher).not.toMatch(/DETACH\s+DELETE/i);
   });
 

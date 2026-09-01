@@ -101,6 +101,7 @@ beforeAll(async () => {
         sourceEpisodeId: EPISODE_ID,
         extractionMethod: 'test',
         confidence: 0.8,
+        occurredAt: NOW,
       },
       {
         name: 'Neo4J',
@@ -110,6 +111,7 @@ beforeAll(async () => {
         sourceEpisodeId: EPISODE_ID,
         extractionMethod: 'test',
         confidence: 0.8,
+        occurredAt: NOW,
       },
     ],
     NOW,

@@ -84,7 +84,7 @@ export class AssociationInferenceStage implements ReflectionStage {
     ctx: StageContext,
   ): Promise<{ ok: true; rows: readonly EpisodeEntity[] } | { ok: false; summary: string }> {
     try {
-      return { ok: true, rows: await findEpisodeEntities(ctx.driver, ctx.episodeId) };
+      return { ok: true, rows: await findEpisodeEntities(ctx.driver, ctx.episodeId, ctx.now) };
     } catch (err) {
       return { ok: false, summary: `could not read episode entities: ${errorMessage(err)}` };
     }
@@ -151,7 +151,10 @@ export class AssociationInferenceStage implements ReflectionStage {
     entityIds: readonly string[],
   ): Promise<{ status: 'ok'; created: number } | { status: 'failed'; summary: string }> {
     try {
-      const seeds = await contentVectors(ctx.driver, { ids: entityIds, mode: withCurrency() });
+      const seeds = await contentVectors(ctx.driver, {
+        ids: entityIds,
+        mode: withCurrency(ctx.now),
+      });
       if (seeds.length === 0) {
         return { status: 'ok', created: 0 };
       }
@@ -160,7 +163,7 @@ export class AssociationInferenceStage implements ReflectionStage {
         entities: seeds,
         threshold: this.#options.semanticThreshold,
         limit: this.#options.similarLimit,
-        mode: withCurrency(),
+        mode: withCurrency(ctx.now),
       });
 
       let created = 0;

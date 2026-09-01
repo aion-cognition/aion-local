@@ -37,9 +37,9 @@ export type EpisodeContext = {
  * keeps an episode with no turns loadable, which is what a payload of tool executions and
  * observations alone stores.
  */
-function loadStatement(episodeId: string): GraphStatement {
-  const episode = readModeFragment(withCurrency(), 'e', 'rme');
-  const turn = readModeFragment(withCurrency(), 't', 'rmt');
+function loadStatement(episodeId: string, reference?: Date): GraphStatement {
+  const episode = readModeFragment(withCurrency(reference), 'e', 'rme');
+  const turn = readModeFragment(withCurrency(reference), 't', 'rmt');
   const cypher = [
     'MATCH (e:Episode { id: $episodeId })',
     `WHERE ${episode.where}`,
@@ -118,7 +118,9 @@ function readEpisodeContext(row: Row): EpisodeContext {
 export async function loadEpisodeContext(
   driver: Driver,
   episodeId: string,
+  /** The clock currency is judged from; the wall clock when a caller holds none. */
+  reference?: Date,
 ): Promise<EpisodeContext | undefined> {
-  const rows = await runRead(driver, loadStatement(episodeId), readEpisodeContext);
+  const rows = await runRead(driver, loadStatement(episodeId, reference), readEpisodeContext);
   return rows[0];
 }

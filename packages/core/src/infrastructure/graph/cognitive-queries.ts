@@ -1,7 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 import { createHash } from 'node:crypto';
 
-import { writeStampedNodeInTransaction, type StampedNodeResult } from './bitemporal.js';
+import { writeStampedDerivedNodeInTransaction, type StampedNodeResult } from './bitemporal.js';
 import { inWriteTransaction } from './connection.js';
 import { upsertEdgeInTransaction, type UpsertedEdge } from './edges.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
@@ -75,8 +75,12 @@ export type CognitiveNodeWrite = {
   readonly metadata?: CognitiveNodeMetadata;
   /** Absent on an embed failure: the node lands without `content_vec`, the same pending-vector marker intake leaves on its own outage path. */
   readonly contentVector?: Vector;
-  /** Defaults to `now`: an episode with no `occurred_at` of its own has no better world-time to give the structure extracted from it. */
-  readonly occurredAt?: Date;
+  /**
+   * The world time of the episode this was extracted from. Required rather than defaulted:
+   * a node that silently took the write clock dates a replayed episode's structure to the
+   * replay, and the caller is the only one that knows the episode's own clock.
+   */
+  readonly occurredAt: Date;
   readonly now: Date;
 };
 
@@ -115,11 +119,11 @@ export async function writeCognitiveNode(
   };
 
   return inWriteTransaction(driver, async (tx) => {
-    const node = await writeStampedNodeInTransaction(tx, {
+    const node = await writeStampedDerivedNodeInTransaction(tx, {
       label: input.label,
       id,
       now: input.now,
-      occurredAt: input.occurredAt ?? input.now,
+      occurredAt: input.occurredAt,
       properties,
     });
 

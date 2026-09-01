@@ -194,6 +194,7 @@ beforeAll(async () => {
           sourceEpisodeId: nextEpisode.episode_id,
           extractionMethod: 'test-seed',
           confidence: 1,
+          occurredAt: now,
         },
       ],
       now,
@@ -222,6 +223,7 @@ beforeAll(async () => {
       label: 'Concept',
       text: pair.prior,
       contentVector: priorVector,
+      occurredAt: now,
       now,
     });
     const next = await writeCognitiveNode(harness.driver, {
@@ -229,6 +231,7 @@ beforeAll(async () => {
       label: 'Decision',
       text: pair.next,
       contentVector: nextVector,
+      occurredAt: now,
       now,
     });
 
@@ -245,12 +248,14 @@ beforeAll(async () => {
     { identity: 'mcp-supersession-distractor' },
   );
   const [distractorVector] = await live.embed([DISTRACTOR]);
+  const distractorAt = new Date();
   const distractor = await writeCognitiveNode(harness.driver, {
     episodeId: distractorEpisode.episode_id,
     label: 'Decision',
     text: DISTRACTOR,
     contentVector: distractorVector,
-    now: new Date(),
+    occurredAt: distractorAt,
+    now: distractorAt,
   });
   distractorId = distractor.node.id;
 }, 300_000);

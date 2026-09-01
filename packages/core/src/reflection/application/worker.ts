@@ -62,6 +62,12 @@ export type ReflectionWorkerOptions = {
   readonly breakerThreshold?: number;
   readonly breakerCooldownMs?: number;
   readonly vectorBatchSize?: number;
+  /**
+   * Read once per job and handed to the run as its clock. The wall clock in live operation,
+   * which is what keeps a stage's elapsed-time decision measuring real elapsed time; a test
+   * or a replay supplies its own.
+   */
+  readonly clock?: () => Date;
 };
 
 export type ReflectionDrain = {
@@ -131,6 +137,7 @@ export class ReflectionWorker {
   readonly #breakerThreshold: number;
   readonly #breakerCooldownMs: number;
   readonly #vectorBatchSize: number;
+  readonly #clock: () => Date;
 
   /** Runs in flight. Its size is the pool occupancy the claim loop reads. */
   readonly #running = new Set<Promise<void>>();
@@ -154,6 +161,7 @@ export class ReflectionWorker {
     this.#breakerThreshold = options.breakerThreshold ?? DEFAULT_BREAKER_THRESHOLD;
     this.#breakerCooldownMs = options.breakerCooldownMs ?? DEFAULT_BREAKER_COOLDOWN_MS;
     this.#vectorBatchSize = options.vectorBatchSize ?? DEFAULT_VECTOR_BATCH_SIZE;
+    this.#clock = options.clock ?? ((): Date => new Date());
   }
 
   /** The claimant id this instance stamps, which is what makes its own claims recoverable. */
@@ -348,7 +356,10 @@ export class ReflectionWorker {
     }
 
     try {
-      const run = await this.#deps.runner.run(episodeId);
+      // The dequeue moment, passed rather than read inside the run, so every stamp and every
+      // elapsed-time decision in the pipeline shares one reading and a replay can hand the
+      // same pipeline the episode's clock instead.
+      const run = await this.#deps.runner.run(episodeId, { now: this.#clock() });
       // `applied` and not `status` decides: a completed run that enriched nothing left the
       // ledger open, which is the orchestrator saying the episode is still worth a retry.
       if (run.applied || run.status !== 'completed') {

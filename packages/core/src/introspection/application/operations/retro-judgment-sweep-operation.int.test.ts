@@ -121,6 +121,7 @@ beforeAll(async () => {
         sourceEpisodeId: nextEpisodeId,
         extractionMethod: 'test-seed',
         confidence: 1,
+        occurredAt: now,
       },
     ],
     now,
@@ -141,6 +142,7 @@ beforeAll(async () => {
     label: 'Concept',
     text: PRIOR_TEXT,
     contentVector: priorVector,
+    occurredAt: now,
     now,
   });
   const nextNode = await writeCognitiveNode(harness.driver, {
@@ -148,6 +150,7 @@ beforeAll(async () => {
     label: 'Decision',
     text: NEXT_TEXT,
     contentVector: nextVector,
+    occurredAt: now,
     now,
   });
   priorFactId = priorNode.node.id;

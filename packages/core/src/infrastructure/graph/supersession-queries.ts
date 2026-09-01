@@ -60,8 +60,8 @@ export type EpisodeFactNode = {
   readonly contentVector?: Vector;
 };
 
-function episodeFactNodesStatement(episodeId: string): GraphStatement {
-  const fragment = readModeFragment(withCurrency(), 'n');
+function episodeFactNodesStatement(episodeId: string, reference?: Date): GraphStatement {
+  const fragment = readModeFragment(withCurrency(reference), 'n');
   return {
     cypher: [
       'MATCH (:Episode { id: $episodeId })<-[:EXTRACTED_FROM]-(n)',
@@ -83,8 +83,14 @@ function episodeFactNodesStatement(episodeId: string): GraphStatement {
 export async function findEpisodeFactNodes(
   driver: Driver,
   episodeId: string,
+  /** The clock currency is judged from; the wall clock when a caller holds none. */
+  reference?: Date,
 ): Promise<EpisodeFactNode[]> {
-  const rows = await runRead(driver, episodeFactNodesStatement(episodeId), mapEpisodeFactNode);
+  const rows = await runRead(
+    driver,
+    episodeFactNodesStatement(episodeId, reference),
+    mapEpisodeFactNode,
+  );
   return rows.filter((row): row is EpisodeFactNode => row !== undefined);
 }
 

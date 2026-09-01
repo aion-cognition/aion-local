@@ -14,6 +14,12 @@ export type ReadMode = {
   readonly validAt?: Date;
   /** System time: what the substrate knew then. */
   readonly knownAt?: Date;
+  /**
+   * The vantage point a default read judges currency from, for a caller that holds a clock
+   * rather than reading one. It moves no predicate and slices no row set, so a read that
+   * supplies it is still a default read.
+   */
+  readonly reference?: Date;
 };
 
 export type Currency = 'current' | 'superseded';
@@ -40,8 +46,13 @@ export type ReadFragment = {
   readonly parameters: Record<string, unknown>;
 };
 
-export function withCurrency(): ReadMode {
-  return {};
+/**
+ * The default read. `reference` is the caller's clock: a run that reads it once and threads it
+ * gets one currency judgment across every read it issues, and a replay judges the episode
+ * against its own moment instead of the moment the replay happens.
+ */
+export function withCurrency(reference?: Date): ReadMode {
+  return reference === undefined ? {} : { reference };
 }
 
 export function asOf(validAt: Date): ReadMode {
@@ -85,10 +96,11 @@ export function readModeFragment(mode: ReadMode, nodeVar: string, prefix = 'rm')
   const knownAtParam = `${prefix}_known_at`;
   /**
    * Currency is judged from the read's own vantage point: the pinned world time, else the
-   * pinned knowledge time, else now. Judging a `knew_at` read against the wall clock marks
-   * rows superseded by facts the substrate did not hold yet at that moment.
+   * pinned knowledge time, else the caller's own clock, else now. Judging a `knew_at` read
+   * against the wall clock marks rows superseded by facts the substrate did not hold yet at
+   * that moment.
    */
-  const reference = mode.validAt ?? mode.knownAt ?? new Date();
+  const reference = mode.validAt ?? mode.knownAt ?? mode.reference ?? new Date();
   const parameters: Record<string, unknown> = {
     [referenceParam]: toGraphDateTime(reference),
   };

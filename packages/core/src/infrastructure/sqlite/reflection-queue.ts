@@ -74,6 +74,12 @@ export type EnqueueReflectionJobOptions = {
   readonly lane?: ReflectionLane;
   /** The graph Session the job's episode belongs to; what round-robin claiming groups by. */
   readonly sessionId?: string;
+  /**
+   * The moment stamped on the row. A queue row is a system-time record, so this is the wall
+   * clock; the caller passes it rather than the writer reading one, so an intake's archive
+   * stamp and its queue stamp agree exactly.
+   */
+  readonly now?: Date;
 };
 
 /**
@@ -98,6 +104,7 @@ export function enqueueReflectionJob(
   const id = randomUUID();
   const lane = options.lane ?? DEFAULT_REFLECTION_LANE;
   const sessionId = options.sessionId ?? null;
+  const enqueuedAt = options.now ?? new Date();
   db.prepare(
     `INSERT INTO reflection_queue
        (id, job_type, payload_json, enqueued_at, attempts, lane, session_id, lane_seq)
@@ -109,7 +116,7 @@ export function enqueueReflectionJob(
     id,
     jobType,
     JSON.stringify(payload),
-    new Date().toISOString(),
+    enqueuedAt.toISOString(),
     lane,
     sessionId,
     lane,

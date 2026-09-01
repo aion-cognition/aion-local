@@ -26,6 +26,7 @@ import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
 
 const EMBED_DIMENSION = 768;
 const NOW = new Date('2026-08-31T00:00:00.000Z');
+const OCCURRED_AT = new Date('2026-08-30T00:00:00.000Z');
 
 let harness: Neo4jHarness;
 let db: SqliteHandle;
@@ -40,6 +41,7 @@ function reading(name: string, type: string): EntityMergeInput {
     sourceEpisodeId: 'identity-episode',
     extractionMethod: 'test',
     confidence: 0.8,
+    occurredAt: OCCURRED_AT,
   };
 }
 
