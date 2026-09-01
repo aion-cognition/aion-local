@@ -27,7 +27,7 @@ const EXPECTED_CONSTRAINTS = [
   { name: 'concept_id_unique', labelsOrTypes: ['Concept'], properties: ['id'] },
   { name: 'context_id_unique', labelsOrTypes: ['Context'], properties: ['id'] },
   { name: 'decision_id_unique', labelsOrTypes: ['Decision'], properties: ['id'] },
-  { name: 'entity_name_type_unique', labelsOrTypes: ['Entity'], properties: ['name_norm', 'type'] },
+  { name: 'entity_name_unique', labelsOrTypes: ['Entity'], properties: ['name_norm'] },
   { name: 'episode_id_unique', labelsOrTypes: ['Episode'], properties: ['id'] },
   { name: 'event_id_unique', labelsOrTypes: ['Event'], properties: ['id'] },
   { name: 'goal_id_unique', labelsOrTypes: ['Goal'], properties: ['id'] },
@@ -49,6 +49,12 @@ const EXPECTED_NON_LOOKUP_INDEXES = [
     labelsOrTypes: c.labelsOrTypes,
     properties: c.properties,
   })),
+  {
+    name: 'entity_name_squash_idx',
+    type: 'RANGE',
+    labelsOrTypes: ['Entity'],
+    properties: ['name_squash'],
+  },
   {
     name: 'content_vec_idx',
     type: 'VECTOR',
@@ -134,7 +140,7 @@ async function fetchNonLookupIndexes(harness: Neo4jHarness): Promise<IndexRow[]>
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-describe('graph schema migrations 001 + 002', () => {
+describe('graph schema migrations 001 + 002 + 003', () => {
   let harness: Neo4jHarness;
   let db: SqliteHandle;
   let dir: string;
@@ -151,21 +157,27 @@ describe('graph schema migrations 001 + 002', () => {
     await stopNeo4jHarness(harness);
   });
 
-  it('applies both migrations on first run and records both in the meta table', async () => {
+  it('applies every migration on first run and records each in the meta table', async () => {
     expect(latestAppliedGraphMigration(db)).toBeUndefined();
 
     const { applied, created } = await runGraphMigrations(harness.driver, db, {
       embedDimension: EMBED_DIMENSION,
     });
 
-    expect(applied).toEqual([1, 2]);
+    expect(applied).toEqual([1, 2, 3]);
     expect(created).toContain('content_vec_idx');
     expect(created).toContain('aion_node_id_unique');
     expect(created).toContain('goal_id_unique');
     expect(created).toContain(CONTENT_FULLTEXT_INDEX);
+    expect(created).toContain('entity_name_unique');
+    expect(created).toContain('entity_name_squash_idx');
+    // The composite key 003 retires is never created in the first place, so a fresh graph
+    // never carries it and the drop has nothing to do.
+    expect(created).not.toContain('entity_name_type_unique');
     expect(getMeta(db, graphMigrationMetaKey(1))).toBeDefined();
     expect(getMeta(db, graphMigrationMetaKey(2))).toBeDefined();
-    expect(latestAppliedGraphMigration(db)).toBe(2);
+    expect(getMeta(db, graphMigrationMetaKey(3))).toBeDefined();
+    expect(latestAppliedGraphMigration(db)).toBe(3);
   });
 
   it('creates exactly the pinned constraints, including one id constraint per new cognitive label', async () => {
@@ -246,8 +258,55 @@ describe('graph schema migrations 001 + 002', () => {
     ).toEqual(EXPECTED_NON_LOOKUP_INDEXES);
   });
 
-  it('the pinned migration list is exactly migrations 1 and 2', () => {
-    expect(GRAPH_MIGRATIONS.map((m) => m.version)).toEqual([1, 2]);
+  it('the pinned migration list is exactly migrations 1, 2 and 3', () => {
+    expect(GRAPH_MIGRATIONS.map((m) => m.version)).toEqual([1, 2, 3]);
+  });
+});
+
+describe('migration 003 identity re-key', () => {
+  let harness: Neo4jHarness;
+  let db: SqliteHandle;
+  let dir: string;
+
+  beforeAll(async () => {
+    harness = await startNeo4jHarness();
+    dir = mkdtempSync(join(tmpdir(), 'aion-graph-migrations-003-'));
+    db = openSqliteHandle({ filePath: join(dir, 'aion.sqlite') });
+  });
+
+  afterAll(async () => {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+    await stopNeo4jHarness(harness);
+  });
+
+  async function createEntity(nameNorm: string, type: string): Promise<void> {
+    await harness.driver.executeQuery(
+      `CREATE (n:Entity:Memory:${BASE_NODE_LABEL} {id: $id, name: $name, name_norm: $name, type: $type})`,
+      { id: `${nameNorm}-${type}`, name: nameNorm, type },
+    );
+  }
+
+  it('drops the composite constraint a pre-003 graph carries, and keys on the name alone after', async () => {
+    // A substrate built before this change: migration 001's statements as they were, composite
+    // Entity constraint included.
+    for (const statement of [
+      `CREATE CONSTRAINT aion_node_id_unique IF NOT EXISTS FOR (n:${BASE_NODE_LABEL}) REQUIRE n.id IS UNIQUE`,
+      'CREATE CONSTRAINT entity_name_type_unique IF NOT EXISTS FOR (n:Entity) REQUIRE (n.name_norm, n.type) IS UNIQUE',
+    ]) {
+      await harness.driver.executeQuery(statement);
+    }
+    await createEntity('harbor index', 'tool');
+
+    await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
+
+    const names = (await fetchConstraints(harness)).map((row) => row.name);
+    expect(names).not.toContain('entity_name_type_unique');
+    expect(names).toContain('entity_name_unique');
+
+    // The fork the old key permitted: the same name under a second type. It is a constraint
+    // violation now, which is the whole point of the re-key.
+    await expect(createEntity('harbor index', 'topic')).rejects.toThrow(/already exists/i);
   });
 });
 
