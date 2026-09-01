@@ -4,12 +4,19 @@ import { ACCESS_COUNT_PROPERTY } from './access-tracking.js';
 import { supersedeInTransaction, writeStampedNodeInTransaction } from './bitemporal.js';
 import { inWriteTransaction, runRead, type GraphTransaction } from './connection.js';
 import { upsertEdgeInTransaction } from './edges.js';
-import { ENTITY_ALIASES_PROPERTY, MERGE_PROVENANCE_PROPERTY } from './entity-dedup-queries.js';
-import { ENTITY_TYPE_PROPERTY } from './entity-queries.js';
+import { MERGE_PROVENANCE_PROPERTY } from './entity-dedup-queries.js';
+import {
+  ENTITY_ALIASES_NORM_PROPERTY,
+  ENTITY_ALIASES_PROPERTY,
+  ENTITY_NAME_SQUASH_PROPERTY,
+  ENTITY_TYPE_PROPERTY,
+} from './entity-queries.js';
 import { BASE_NODE_LABEL } from './labels.js';
 import { lockNodeInTransaction } from './locks.js';
 import { isRelationshipType } from './relationships.js';
 import { ENTITY_NAME_NORM_PROPERTY, ENTITY_NAME_PROPERTY } from './seed-queries.js';
+import { squashName } from '../../reflection/domain/entity-reconciliation.js';
+import { foldName } from '../providers/unicode-fold.js';
 
 /**
  * Splitting a merged entity back out, from the record the merge wrote at merge time. The
@@ -22,6 +29,23 @@ import { ENTITY_NAME_NORM_PROPERTY, ENTITY_NAME_PROPERTY } from './seed-queries.
  * canonical keeps every edge it holds, and the split identity comes back as a new node. That
  * is why the protected relationship set is not consulted: an unmerge only adds.
  */
+
+/**
+ * The folded lookup half of an alias record. An unmerge has to rewrite it on both sides or the
+ * released name keeps answering cues on behalf of the canonical it just left. No name is
+ * excluded here: an alias that folds onto the holder's own name is already reachable by the
+ * exact-name branch, so a duplicate key changes no answer.
+ */
+function aliasLookupKeys(aliases: readonly string[]): string[] {
+  const keys = new Set<string>();
+  for (const alias of aliases) {
+    const folded = foldName(alias);
+    if (folded.length > 0) {
+      keys.add(folded);
+    }
+  }
+  return [...keys].sort();
+}
 
 export type MergeProvenanceEdge = {
   readonly type: string;
@@ -173,9 +197,9 @@ export async function readCanonicalMergeRecords(
 }
 
 /**
- * The suffix that releases an identity key. `entity_name_type_unique` covers every Entity
- * node whatever its currency, and entity extraction leans on that: a closed duplicate still
- * owns its `(name_norm, type)` key and the MERGE walks the lineage chain forward from it to
+ * The suffix that releases an identity key. `entity_name_unique` covers every Entity node
+ * whatever its currency, and entity extraction leans on that: a closed duplicate still owns
+ * its `name_norm` key and the MERGE walks the lineage chain forward from it to
  * the canonical. So an unmerge that left the key where it is would restore the node and then
  * watch the next extraction resolve straight past it to the canonical again. The closed node
  * hands the key over and keeps its display name, and the original spelling stays on the
@@ -279,8 +303,10 @@ export async function applyUnmerge(driver: Driver, input: UnmergeInput): Promise
       properties: {
         [ENTITY_NAME_PROPERTY]: record.mergedName ?? nameNorm,
         [ENTITY_NAME_NORM_PROPERTY]: nameNorm,
+        [ENTITY_NAME_SQUASH_PROPERTY]: squashName(nameNorm),
         [ENTITY_TYPE_PROPERTY]: type,
         [ENTITY_ALIASES_PROPERTY]: [...record.mergedAliases],
+        [ENTITY_ALIASES_NORM_PROPERTY]: aliasLookupKeys(record.mergedAliases),
         [ACCESS_COUNT_PROPERTY]: 0,
       },
     });
@@ -335,6 +361,7 @@ export async function applyUnmerge(driver: Driver, input: UnmergeInput): Promise
       now: input.now,
       mergeProperties: {
         [ENTITY_ALIASES_PROPERTY]: aliases,
+        [ENTITY_ALIASES_NORM_PROPERTY]: aliasLookupKeys(aliases),
         [MERGE_PROVENANCE_PROPERTY]: rewriteRecords(
           input.records,
           record.mergedId,

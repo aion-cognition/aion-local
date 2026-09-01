@@ -201,10 +201,12 @@ export class EntityDedupStage implements ReflectionStage {
   }
 
   /**
-   * A cross-type near-duplicate is never merged. Uniqueness is on `(name_norm, type)`, so the
-   * two nodes are separate identities and joining them means deciding which type the extraction
-   * got wrong, a judgment about the world, not about strings. The pair lands as a proposal a
-   * person resolves; nothing in the pipeline reads it back.
+   * A cross-type near-duplicate is never merged here. Identity keys on `name_norm` alone since
+   * migration 003, so two nodes reaching this point have genuinely different names, and joining
+   * them means deciding they are one referent, a judgment about the world rather than about
+   * strings. The pair lands as a proposal a person resolves; nothing in the pipeline reads it
+   * back. Phase 2 replaces this split with the evidence cascade, which weighs type as one signal
+   * among several rather than as a gate.
    */
   #recordCrossTypeProposals(
     ctx: StageContext,
@@ -251,6 +253,7 @@ export class EntityDedupStage implements ReflectionStage {
   ): Promise<void> {
     await redirectAndAbsorb(ctx.driver, {
       canonicalId: canonical.id,
+      canonicalNameNorm: canonical.nameNorm,
       mergedIds,
       aliases: mergeAliases(canonical.name, members),
       accessCount: mergeAccessCount(members),

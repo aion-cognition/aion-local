@@ -35,6 +35,16 @@ export const ENTITY_NAME_NORM_PROPERTY = 'name_norm';
 /** Written by entity extraction. Absent when extraction has not produced it yet, which the similarity leg handles as a normal state. */
 export const ENTITY_NAME_VECTOR_PROPERTY = 'name_vec';
 
+/** Every surface form an identity answers to: the extractor's aliases plus whatever a merge absorbed. */
+export const ENTITY_ALIASES_PROPERTY = 'aliases';
+
+/**
+ * `aliases` folded through the same `foldName` a cue is, the identity's own name excluded.
+ * Derived rather than accumulated on its own, which is what makes a name a merge absorbed
+ * reachable by the cue that used to reach it.
+ */
+export const ENTITY_ALIASES_NORM_PROPERTY = 'aliases_norm';
+
 /** Written by recall's own access-tracking side effects; absent on a substrate that has served no recall yet. */
 export const LAST_ACCESSED_PROPERTY = 'last_accessed';
 
@@ -283,7 +293,7 @@ export async function fulltextSeeds(
 }
 
 export type EntityNameSeedInput = {
-  /** Normalized through `normalizeSeedName`; matched against `name_norm` exactly. */
+  /** Normalized through `normalizeSeedName`; matched against `name_norm` and every alias key. */
   readonly names: readonly string[];
   readonly mode: ReadMode;
 };
@@ -291,19 +301,31 @@ export type EntityNameSeedInput = {
 /**
  * Structural entities are in scope deliberately: the Member and the global Workspace are the
  * backbone every session hangs off, so a cue naming either is a legitimate way into the graph.
- * The `(name_norm, type)` constraint lets one name resolve to several entities of different
- * types, and each is returned.
+ *
+ * The alias branch is what keeps an absorbed name admissible. A merge folds "PostgreSQL" into
+ * "Postgres" and the surface form survives only in `aliases_norm`; without this branch the cue
+ * that used to land an exact match would fall through to the vector leg and be admitted, or
+ * not, on a cosine. An alias hit is the same evidence as a name hit (the graph is asserting
+ * these are one identity), so it carries the same score, and the matched cue comes back rather
+ * than the node's own name, since the cue is what the caller attributes the hit to.
  */
 export async function entityNameSeeds(
   driver: Driver,
   input: EntityNameSeedInput,
 ): Promise<EntityNameMatch[]> {
   const fragment = readModeFragment(input.mode, 'n');
+  const aliases = `coalesce(n.${ENTITY_ALIASES_NORM_PROPERTY}, [])`;
   const cypher = [
     'MATCH (n:Entity)',
-    `WHERE n.${ENTITY_NAME_NORM_PROPERTY} IN $names AND ${fragment.where}`,
+    `WHERE (n.${ENTITY_NAME_NORM_PROPERTY} IN $names`,
+    `       OR any(alias IN ${aliases} WHERE alias IN $names))`,
+    `  AND ${fragment.where}`,
+    // The identity's own name first, so a node matched both ways attributes to the exact cue.
+    `WITH n, [name IN $names WHERE name = n.${ENTITY_NAME_NORM_PROPERTY}] +`,
+    `        [name IN $names WHERE name <> n.${ENTITY_NAME_NORM_PROPERTY}` +
+      ` AND name IN ${aliases}] AS matched`,
     `RETURN ${candidateProjection('n', fragment)},`,
-    `       n.${ENTITY_NAME_NORM_PROPERTY} AS name_norm`,
+    '       matched[0] AS name_norm',
   ].join('\n');
 
   return runRead(driver, cypher, { ...fragment.parameters, names: [...input.names] }, (row) => ({

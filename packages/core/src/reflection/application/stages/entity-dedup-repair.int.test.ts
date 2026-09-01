@@ -153,6 +153,7 @@ describe('merge atomicity', () => {
   it('closes each merged node in the transaction that moved its edges', async () => {
     const result = await redirectAndAbsorb(harness.driver, {
       canonicalId: survivorId,
+      canonicalNameNorm: 'valkey',
       mergedIds: [doomedId],
       aliases: ['Valkey Server'],
       accessCount: 2,
@@ -175,6 +176,7 @@ describe('merge atomicity', () => {
     await expect(
       redirectAndAbsorb(harness.driver, {
         canonicalId: survivorId,
+        canonicalNameNorm: 'valkey',
         mergedIds: ['an-id-no-node-answers-to'],
         aliases: ['rolled back'],
         accessCount: 99,
@@ -273,7 +275,7 @@ describe('the degenerate embedding case', () => {
 describe('cross-type near-duplicates', () => {
   const crossTypeEpisodeId = 'live-episode-cross-type';
 
-  it('proposes the pair the type key made unmergeable, and merges nothing', async () => {
+  it('never sees a same-name pair at all, because the second reading is the same identity', async () => {
     await seedEpisode(crossTypeEpisodeId);
     const toolId = await seedEntity(
       {
@@ -287,12 +289,12 @@ describe('cross-type near-duplicates', () => {
       },
       unitVector(0),
     );
-    const conceptId = await seedEntity(
+    const topicId = await seedEntity(
       {
         name: 'Kubernetes',
         nameNorm: 'kubernetes',
-        type: 'concept',
-        text: 'Kubernetes (concept): the orchestrator',
+        type: 'topic',
+        text: 'Kubernetes (topic): the orchestrator',
         sourceEpisodeId: crossTypeEpisodeId,
         extractionMethod: 'test',
         confidence: 0.8,
@@ -310,15 +312,49 @@ describe('cross-type near-duplicates', () => {
     episodeId = crossTypeEpisodeId;
     const outcome = await new EntityDedupStage().run(context());
 
+    // The duplicate factory is gone at the source: there is no second node to propose against.
+    expect(topicId).toBe(toolId);
+    expect(outcome.counts).toMatchObject({ merges: 0, cross_type_proposals: 0 });
+    expect((await storedEntity(harness.driver, toolId))?.typeCounts).toBe('{"tool":1,"topic":1}');
+    expect(
+      listEntityMergeProposals(db).filter((proposal) => proposal.episodeId === crossTypeEpisodeId),
+    ).toEqual([]);
+  }, 120_000);
+
+  it('still proposes a near-duplicate that is genuinely two names typed differently', async () => {
+    const twoNameEpisodeId = 'live-episode-cross-type-two-names';
+    await seedEpisode(twoNameEpisodeId);
+    const engineId = await seedEntity(
+      {
+        name: 'Kubernetes Engine',
+        nameNorm: 'kubernetes engine',
+        type: 'topic',
+        text: 'Kubernetes Engine (topic): the hosted orchestrator',
+        sourceEpisodeId: twoNameEpisodeId,
+        extractionMethod: 'test',
+        confidence: 0.8,
+      },
+      nearDuplicateVector(),
+    );
+    await linkEntityMentions(harness.driver, {
+      episodeId: twoNameEpisodeId,
+      entityIds: [engineId],
+      now: NOW,
+      confidence: 0.8,
+      provenance: ['test'],
+    });
+
+    episodeId = twoNameEpisodeId;
+    const outcome = await new EntityDedupStage().run(context());
+
     expect(outcome.counts).toMatchObject({ merges: 0, cross_type_proposals: 1 });
-    expect((await storedEntity(harness.driver, toolId))?.validUntil).toBeNull();
-    expect((await storedEntity(harness.driver, conceptId))?.validUntil).toBeNull();
+    expect((await storedEntity(harness.driver, engineId))?.validUntil).toBeNull();
 
     const proposals = listEntityMergeProposals(db).filter(
-      (proposal) => proposal.episodeId === crossTypeEpisodeId,
+      (proposal) => proposal.episodeId === twoNameEpisodeId,
     );
     expect(proposals).toHaveLength(1);
-    expect([proposals[0]?.leftType, proposals[0]?.rightType].sort()).toEqual(['concept', 'tool']);
+    expect([proposals[0]?.leftType, proposals[0]?.rightType].sort()).toEqual(['tool', 'topic']);
     expect(proposals[0]?.resolvedAt).toBeNull();
   }, 120_000);
 });

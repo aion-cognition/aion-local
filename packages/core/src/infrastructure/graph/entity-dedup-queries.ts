@@ -9,7 +9,13 @@ import {
 } from './bitemporal.js';
 import { type GraphTransaction, inWriteTransaction, runRead, runWrite } from './connection.js';
 import { upsertEdgeInTransaction } from './edges.js';
-import { ENTITY_MENTION_TYPE, ENTITY_TYPE_PROPERTY } from './entity-queries.js';
+import {
+  ENTITY_ALIASES_NORM_PROPERTY,
+  ENTITY_ALIASES_PROPERTY,
+  ENTITY_MENTION_TYPE,
+  ENTITY_NAME_VECTOR_HASH_PROPERTY,
+  ENTITY_TYPE_PROPERTY,
+} from './entity-queries.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
 import { BASE_NODE_LABEL, ENTITY_LABEL } from './labels.js';
 import { lockNodeInTransaction } from './locks.js';
@@ -24,6 +30,7 @@ import {
 import { fromGraphVector, toGraphInteger, toGraphVector, type Row } from './values.js';
 import { asCosine } from './vector-indexes.js';
 import type { Vector } from '../providers/types.js';
+import { foldName } from '../providers/unicode-fold.js';
 
 /**
  * The graph side of entity deduplication. Everything that decides who is canonical lives in
@@ -32,7 +39,7 @@ import type { Vector } from '../providers/types.js';
  */
 
 /** The property the merged names land in. Read back by `aion why` as the identity's history. */
-export const ENTITY_ALIASES_PROPERTY = 'aliases';
+export { ENTITY_ALIASES_PROPERTY } from './entity-queries.js';
 
 export type DedupEntityDetail = {
   readonly id: string;
@@ -119,10 +126,10 @@ export type SimilarCurrentEntityMatch = {
  * must still hold currency, or the search would propose absorbing into (or out of) an
  * identity a previous run already closed.
  *
- * The search used to filter on the subject's own type, which made a cross-type duplicate
- * invisible: PostgreSQL existed as tool, concept and organization at once and no run could
- * see it. Type comes back on the row instead, and the stage routes a same-type hit to a merge
- * and a cross-type hit to a proposal.
+ * The search carries no predicate on type and never will: it used to filter on the subject's
+ * own type, which made a cross-type duplicate invisible, and PostgreSQL existed as tool, topic
+ * and organization at once with no run able to see it. Type comes back on the row as data for
+ * the stage to weigh.
  *
  * `vector.similarity.cosine` rescales onto [0,1] the same way the vector index does
  * (`(1 + cos) / 2`), so the result is converted back to a true cosine before it is compared
@@ -234,6 +241,8 @@ export type MergedEntityRecord = {
 
 export type MergeEntityGroupInput = {
   readonly canonicalId: string;
+  /** The canonical's own folded name, which is the one name its alias keys must not contain. */
+  readonly canonicalNameNorm: string;
   readonly mergedIds: readonly string[];
   /** The full, final alias list: this call sets the property, it does not append to it. */
   readonly aliases: readonly string[];
@@ -315,6 +324,22 @@ async function readMergeProvenanceInTransaction(
     return [];
   }
   return records.filter((record): record is string => typeof record === 'string');
+}
+
+/**
+ * The lookup half of the alias record, derived rather than accumulated separately: a name this
+ * merge absorbs has to answer the cue that used to reach it, and `entityNameSeeds` reads the
+ * folded list. The canonical's own name is an identity, not an alias of itself.
+ */
+function aliasLookupKeys(aliases: readonly string[], canonicalNameNorm: string): string[] {
+  const keys = new Set<string>();
+  for (const alias of aliases) {
+    const folded = foldName(alias);
+    if (folded.length > 0 && folded !== canonicalNameNorm) {
+      keys.add(folded);
+    }
+  }
+  return [...keys].sort();
 }
 
 /**
@@ -419,6 +444,7 @@ export async function redirectAndAbsorb(
       now: input.now,
       mergeProperties: {
         [ENTITY_ALIASES_PROPERTY]: input.aliases,
+        [ENTITY_ALIASES_NORM_PROPERTY]: aliasLookupKeys(input.aliases, input.canonicalNameNorm),
         [ACCESS_COUNT_PROPERTY]: input.accessCount,
         [MERGE_PROVENANCE_PROPERTY]: provenance,
         ...(input.lastAccessed === undefined
@@ -446,7 +472,8 @@ export async function redirectAndAbsorb(
 const CLEAR_ENTITY_VECTORS = [
   'UNWIND $ids AS id',
   `MATCH (n:${BASE_NODE_LABEL} { id: id })`,
-  `SET n.${ENTITY_NAME_VECTOR_PROPERTY} = null, n.${MEMORY_PROPERTIES.contentVector} = null`,
+  `SET n.${ENTITY_NAME_VECTOR_PROPERTY} = null, n.${ENTITY_NAME_VECTOR_HASH_PROPERTY} = null,`,
+  `    n.${MEMORY_PROPERTIES.contentVector} = null, n.${MEMORY_PROPERTIES.contentVectorHash} = null`,
   'RETURN n.id AS id',
 ].join('\n');
 

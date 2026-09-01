@@ -134,6 +134,7 @@ beforeAll(async () => {
 
   await redirectAndAbsorb(harness.driver, {
     canonicalId,
+    canonicalNameNorm: 'postgres',
     mergedIds: [duplicateId],
     aliases: ['PostgreSQL'],
     accessCount: 0,

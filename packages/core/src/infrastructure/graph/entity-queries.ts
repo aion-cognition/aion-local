@@ -1,65 +1,92 @@
 import type { Driver } from 'neo4j-driver';
 
-import { ACCESS_COUNT_PROPERTY } from './access-tracking.js';
 import {
   BITEMPORAL_PROPERTIES,
   CLOSURE_PROVENANCE_PROPERTY,
   currentOnly,
   stampNew,
 } from './bitemporal.js';
-import { inWriteTransaction, runRead, runWrite, type GraphStatement } from './connection.js';
-import { upsertEdgeInTransaction } from './edges.js';
-import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from './episodes.js';
+import { inWriteTransaction, runWrite, type GraphStatement } from './connection.js';
+import {
+  aliasKeys,
+  aliasRecord,
+  ENTITY_NAME_SQUASH_PROPERTY,
+  ENTITY_NAME_VECTOR_HASH_PROPERTY,
+  ENTITY_TYPE_COUNTS_PROPERTY,
+  ENTITY_TYPE_PROPERTY,
+  observedTypes,
+  reconcileMergedEntities,
+  type EntityMergeRow,
+  type EntityReading,
+  type MergedEntity,
+} from './entity-identity-queries.js';
+import { MEMORY_PROPERTIES } from './episodes.js';
 import { BASE_NODE_LABEL, ENTITY_LABEL, resolveLabels } from './labels.js';
-import { readModeFragment, withCurrency } from './read-modes.js';
+import { LOCK_PROPERTY } from './locks.js';
 import { SUPERSEDES_TYPE } from './relationships.js';
 import {
+  ENTITY_ALIASES_NORM_PROPERTY,
+  ENTITY_ALIASES_PROPERTY,
   ENTITY_NAME_NORM_PROPERTY,
   ENTITY_NAME_PROPERTY,
   ENTITY_NAME_VECTOR_PROPERTY,
-  LAST_ACCESSED_PROPERTY,
   STRUCTURAL_PROPERTY,
 } from './seed-queries.js';
 import {
+  identityRow,
   toGraphDateTime,
   toGraphParameters,
   toGraphVector,
   type GraphProperties,
   type Row,
 } from './values.js';
+import {
+  recordTypeObservations,
+  serializeTypeCounts,
+  squashName,
+} from '../../reflection/domain/entity-reconciliation.js';
 import type { Vector } from '../providers/types.js';
 
 /**
- * The writes that turn an extraction into canonical Entity nodes, the edges that tie them
- * to their episode, and the salience those mentions carry.
+ * The writes that turn an extraction into canonical Entity nodes and the two vectors those
+ * nodes carry.
  *
- * Canonicalization keys on `(name_norm, type)` rather than on an id, because the identity
- * an extraction produces is the name: the id is this run's proposal, and it survives only
- * when nothing already answers to that name. Migration 001's `entity_name_type_unique`
- * constraint is what makes the MERGE a seek and what keeps two concurrent runs from
- * forking one identity.
+ * Canonicalization keys on `name_norm` rather than on an id, because the identity an
+ * extraction produces is the name: the id is this run's proposal, and it survives only when
+ * nothing already answers to that name. Migration 003's `entity_name_unique` constraint is
+ * what makes the MERGE a seek and what keeps two concurrent runs from forking one identity.
+ *
+ * The type is not part of that key. The extractor is unstable in the label it picks, and
+ * keying on the pair made one referent fork into as many nodes as the model had moods. What
+ * the label follows instead is counted evidence: every reading lands in `type_counts` and
+ * `entity-identity-queries.ts` decides which one the node wears.
  */
 
-export const ENTITY_TYPE_PROPERTY = 'type';
-
-/**
- * Each extracted entity links to its source episode via a PARTICIPATES_IN relationship.
- * Direction follows this adapter's existing use of the type: member to container, as
- * Turn→Episode and Episode→Session already are, so the entity points at the experience it
- * took part in. It is in the pinned protected set: never pruned, never decayed.
- */
-export const ENTITY_PARTICIPATION_TYPE = CONTAINMENT_TYPE;
-
-/**
- * A MENTIONS relationship is created from the episode to the entity. It is the opposite
- * direction from PARTICIPATES_IN by design: one records that the entity belongs to the
- * experience, the other that this episode is evidence of the entity. It is the one of the
- * two that carries an observation count and decays.
- */
-export const ENTITY_MENTION_TYPE = 'MENTIONS';
-
-const STRUCTURAL_SIGNALS = ['structural'];
-const MENTION_SIGNALS = ['episodic'];
+/** The names other modules have always imported from here; they are declared with their queries now. */
+export {
+  addEntityAliases,
+  ENTITY_NAME_SQUASH_PROPERTY,
+  ENTITY_NAME_VECTOR_HASH_PROPERTY,
+  ENTITY_TYPE_COUNTS_PROPERTY,
+  ENTITY_TYPE_PROPERTY,
+  findEntityNameForms,
+  findSpeakerEntity,
+  reconcileMergedEntities,
+  type EntityAliasEntry,
+  type EntityIdentityMatch,
+  type EntityIdentityUpdate,
+  type EntityMergeRow,
+  type MergedEntity,
+} from './entity-identity-queries.js';
+export {
+  ENTITY_MENTION_TYPE,
+  ENTITY_PARTICIPATION_TYPE,
+  findEpisodeEntities,
+  linkEntityMentions,
+  type EntityMentionInput,
+  type EpisodeEntity,
+} from './entity-mention-queries.js';
+export { ENTITY_ALIASES_NORM_PROPERTY, ENTITY_ALIASES_PROPERTY } from './seed-queries.js';
 
 /** Companions are applied on both MERGE branches, so an entity written before a label rule picks it up. */
 function companionLabels(): string {
@@ -68,57 +95,11 @@ function companionLabels(): string {
     .join(':');
 }
 
-export type StructuralEntityMatch = {
-  readonly id: string;
-  readonly nameNorm: string;
-  readonly type: string;
-  readonly hasNameVector: boolean;
-};
-
-/**
- * Merge-on-collision, read side: a name the backbone already answers to resolves to the
- * structural node instead of forking a second identity under an extracted type. The match
- * is on the name alone: the structural `type` (`member`, `workspace`) is never what an
- * extraction returns, so keying on the pair would miss every collision the rule exists for.
- */
-function structuralEntitiesStatement(names: readonly string[]): GraphStatement {
-  const fragment = readModeFragment(withCurrency(), 'n');
-  return {
-    cypher: [
-      `MATCH (n:${ENTITY_LABEL})`,
-      `WHERE n.${ENTITY_NAME_NORM_PROPERTY} IN $names`,
-      `  AND n.${STRUCTURAL_PROPERTY} = true`,
-      `  AND ${fragment.where}`,
-      `RETURN n.id AS id, n.${ENTITY_NAME_NORM_PROPERTY} AS name_norm,`,
-      `       n.${ENTITY_TYPE_PROPERTY} AS type,`,
-      `       n.${ENTITY_NAME_VECTOR_PROPERTY} IS NOT NULL AS has_name_vec`,
-    ].join('\n'),
-    parameters: { names: [...new Set(names)], ...fragment.parameters },
-  };
-}
-
-export async function findStructuralEntitiesByName(
-  driver: Driver,
-  names: readonly string[],
-): Promise<StructuralEntityMatch[]> {
-  if (names.length === 0) {
-    return [];
-  }
-  return runRead(driver, structuralEntitiesStatement(names), (row) => ({
-    id: row.id as string,
-    nameNorm: row.name_norm as string,
-    type: (row.type as string | null) ?? '',
-    hasNameVector: row.has_name_vec === true,
-  }));
-}
-
 /** Confidence score, written once by whichever run created the node. */
 const ENTITY_CONFIDENCE_PROPERTY = 'confidence';
 
-export type EntityMergeInput = {
+export type EntityMergeInput = EntityReading & {
   readonly name: string;
-  readonly nameNorm: string;
-  readonly type: string;
   /** The node's body: what `content_fts` indexes and what its content vector is an embedding of. */
   readonly text: string;
   readonly sourceEpisodeId: string;
@@ -129,26 +110,23 @@ export type EntityMergeInput = {
 
 /** Property naming stays in this module, so a stage never spells a graph property itself. */
 function entityCreateProperties(entity: EntityMergeInput): GraphProperties {
+  const aliases = aliasRecord(entity.aliases ?? [], entity.nameNorm);
   return {
     [ENTITY_NAME_PROPERTY]: entity.name,
     [ENTITY_NAME_NORM_PROPERTY]: entity.nameNorm,
+    [ENTITY_NAME_SQUASH_PROPERTY]: squashName(entity.nameNorm),
     [ENTITY_TYPE_PROPERTY]: entity.type,
+    [ENTITY_TYPE_COUNTS_PROPERTY]: serializeTypeCounts(
+      recordTypeObservations({}, observedTypes(entity)),
+    ),
+    [ENTITY_ALIASES_PROPERTY]: aliases,
+    [ENTITY_ALIASES_NORM_PROPERTY]: aliasKeys(aliases, entity.nameNorm),
     [MEMORY_PROPERTIES.text]: entity.text,
     [MEMORY_PROPERTIES.sourceEpisodeId]: entity.sourceEpisodeId,
     [MEMORY_PROPERTIES.extractionMethod]: entity.extractionMethod,
     [ENTITY_CONFIDENCE_PROPERTY]: entity.confidence,
   };
 }
-
-export type MergedEntity = {
-  readonly id: string;
-  readonly nameNorm: string;
-  readonly type: string;
-  /** True when this call's proposed id is the one the node kept, which only a creation does. */
-  readonly created: boolean;
-  readonly hasNameVector: boolean;
-  readonly hasContentVector: boolean;
-};
 
 /**
  * How far a merge chain is followed to reach the identity that answers today. A depth this
@@ -157,6 +135,12 @@ export type MergedEntity = {
  */
 const MERGE_CHAIN_DEPTH = 8;
 
+export type PreparedEntityMerge = {
+  readonly statement: GraphStatement;
+  /** Per input, in order: the id this run proposed, which is how a returned row pairs back to it. */
+  readonly proposedIds: readonly string[];
+};
+
 /**
  * One statement for the whole extraction. `ON CREATE` writes the bitemporal stamp and
  * never rewrites it on a match: an entity already in the graph is the same entity, and a
@@ -164,13 +148,13 @@ const MERGE_CHAIN_DEPTH = 8;
  * the id rather than off a counter, since the batch's counters cannot say which row made a
  * node.
  *
- * The MERGE cannot carry a currency predicate: `entity_name_type_unique` is declared on
- * `(name_norm, type)` alone, so a node dedup closed still owns that key and a MERGE
- * restricted to current nodes would violate the constraint rather than miss it. The chain
- * walk after the MERGE is what makes the merge stick: a surface form a previous run merged
- * away resolves forward to the canonical identity, so a later episode naming "PostgreSQL"
- * reaches the "Postgres" node instead of reviving the closed duplicate and re-forking an
- * identity dedup already collapsed.
+ * The MERGE cannot carry a currency predicate: `entity_name_unique` is declared on
+ * `name_norm` alone, so a node dedup closed still owns that key and a MERGE restricted to
+ * current nodes would violate the constraint rather than miss it. The chain walk after the
+ * MERGE is what makes the merge stick: a surface form a previous run merged away resolves
+ * forward to the canonical identity, so a later episode naming "PostgreSQL" reaches the
+ * "Postgres" node instead of reviving the closed duplicate and re-forking an identity dedup
+ * already collapsed.
  *
  * `ON MATCH` also reopens a node a maintenance close marked with `CLOSURE_PROVENANCE_PROPERTY`
  * (`bitemporal.ts`): the mention landing here is the next real signal that close was always
@@ -179,8 +163,16 @@ const MERGE_CHAIN_DEPTH = 8;
  * A node closed without that marker, human forget or a supersession absorb, keeps its stamps:
  * `aion forget` is a person's choice a mention must never override, and an absorbed duplicate's
  * canonical identity is the node the chain walk below resolves to, not this one.
+ *
+ * The lock write on the resolved node is what makes the reconciliation that follows safe. The
+ * MERGE locks whatever it created or matched, but a chain walk lands on a node this statement
+ * never wrote, and a type count read without that lock is a lost update the next extraction
+ * cannot notice (`locks.ts`).
  */
-export function buildEntityMerge(entities: readonly EntityMergeInput[], now: Date): GraphStatement {
+export function prepareEntityMerge(
+  entities: readonly EntityMergeInput[],
+  now: Date,
+): PreparedEntityMerge {
   const companions = companionLabels();
   const reopenCondition =
     `n.${BITEMPORAL_PROPERTIES.validUntil} IS NOT NULL` +
@@ -198,53 +190,92 @@ export function buildEntityMerge(entities: readonly EntityMergeInput[], now: Dat
   ];
   const cypher = [
     'UNWIND $entities AS entity',
-    `MERGE (n:${ENTITY_LABEL} { ${ENTITY_NAME_NORM_PROPERTY}: entity.name_norm,` +
-      ` ${ENTITY_TYPE_PROPERTY}: entity.type })`,
+    `MERGE (n:${ENTITY_LABEL} { ${ENTITY_NAME_NORM_PROPERTY}: entity.name_norm })`,
     `ON CREATE SET n:${companions}, n += entity.properties`,
     `ON MATCH SET ${onMatch.join(', ')}`,
-    'WITH entity.name_norm AS name_norm, entity.type AS type, entity.id AS proposed_id, n',
+    'WITH entity.name_norm AS name_norm, entity.id AS proposed_id, n',
     `OPTIONAL MATCH (head:${ENTITY_LABEL})-[:${SUPERSEDES_TYPE}*1..${String(MERGE_CHAIN_DEPTH)}]->(n)`,
     `WHERE n.${BITEMPORAL_PROPERTIES.validUntil} IS NOT NULL`,
     `  AND ${currentOnly('head')}`,
-    'WITH name_norm, type, proposed_id, n, collect(head)[0] AS head',
-    'WITH name_norm, type, proposed_id, coalesce(head, n) AS resolved',
-    'RETURN name_norm, type, resolved.id AS id,',
+    'WITH name_norm, proposed_id, n, collect(head)[0] AS head',
+    'WITH name_norm, proposed_id, coalesce(head, n) AS resolved',
+    `SET resolved.${LOCK_PROPERTY} = $now`,
+    'RETURN name_norm, proposed_id, resolved.id AS id,',
     '       resolved.id = proposed_id AS created,',
+    `       resolved.${ENTITY_NAME_NORM_PROPERTY} AS canonical_name_norm,`,
+    `       resolved.${ENTITY_TYPE_PROPERTY} AS type,`,
+    `       resolved.${ENTITY_TYPE_COUNTS_PROPERTY} AS type_counts,`,
+    `       coalesce(resolved.${ENTITY_ALIASES_PROPERTY}, []) AS aliases,`,
+    `       coalesce(resolved.${STRUCTURAL_PROPERTY}, false) AS is_structural,`,
     `       resolved.${ENTITY_NAME_VECTOR_PROPERTY} IS NOT NULL AS has_name_vec,`,
+    `       resolved.${ENTITY_NAME_VECTOR_HASH_PROPERTY} AS name_vec_hash,`,
     `       resolved.${MEMORY_PROPERTIES.contentVector} IS NOT NULL AS has_content_vec`,
   ].join('\n');
 
-  const parameters = {
-    entities: entities.map((entity) => {
-      const stamped = stampNew({
-        label: ENTITY_LABEL,
-        properties: entityCreateProperties(entity),
-        ...(entity.occurredAt === undefined ? {} : { occurredAt: entity.occurredAt }),
-        now,
-      });
-      return {
-        name_norm: entity.nameNorm,
-        type: entity.type,
-        id: stamped.id,
-        properties: toGraphParameters(stamped.properties),
-      };
+  const stamped = entities.map((entity) =>
+    stampNew({
+      label: ENTITY_LABEL,
+      properties: entityCreateProperties(entity),
+      ...(entity.occurredAt === undefined ? {} : { occurredAt: entity.occurredAt }),
+      now,
     }),
-  };
+  );
 
-  return { cypher, parameters };
+  return {
+    statement: {
+      cypher,
+      parameters: {
+        now: toGraphDateTime(now),
+        entities: entities.map((entity, index) => ({
+          name_norm: entity.nameNorm,
+          id: stamped[index]?.id ?? '',
+          properties: toGraphParameters(stamped[index]?.properties ?? {}),
+        })),
+      },
+    },
+    proposedIds: stamped.map((node) => node.id),
+  };
 }
 
-function mapMergedEntity(row: Row): MergedEntity {
+/** The statement alone, for callers that only want to read what reaches the graph. */
+export function buildEntityMerge(entities: readonly EntityMergeInput[], now: Date): GraphStatement {
+  return prepareEntityMerge(entities, now).statement;
+}
+
+function mapEntityMergeRow(row: Row): EntityMergeRow {
+  const nameVectorHash = row.name_vec_hash;
   return {
-    id: row.id as string,
+    proposedId: row.proposed_id as string,
     nameNorm: row.name_norm as string,
-    type: row.type as string,
+    id: row.id as string,
     created: row.created === true,
+    canonicalNameNorm: (row.canonical_name_norm as string | null) ?? '',
+    type: (row.type as string | null) ?? '',
+    typeCounts: typeof row.type_counts === 'string' ? row.type_counts : '',
+    aliases: (row.aliases as string[] | null) ?? [],
+    isStructural: row.is_structural === true,
     hasNameVector: row.has_name_vec === true,
     hasContentVector: row.has_content_vec === true,
+    ...(typeof nameVectorHash === 'string' ? { nameVectorHash } : {}),
   };
 }
 
+const WRITE_ENTITY_IDENTITY = [
+  'UNWIND $updates AS update',
+  `MATCH (n:${ENTITY_LABEL} { id: update.id })`,
+  `SET n.${ENTITY_TYPE_PROPERTY} = update.type,`,
+  `    n.${ENTITY_TYPE_COUNTS_PROPERTY} = update.type_counts,`,
+  `    n.${ENTITY_NAME_SQUASH_PROPERTY} = update.name_squash,`,
+  `    n.${ENTITY_ALIASES_PROPERTY} = update.aliases,`,
+  `    n.${ENTITY_ALIASES_NORM_PROPERTY} = update.aliases_norm`,
+  'RETURN n.id AS id',
+].join('\n');
+
+/**
+ * Merge and reconcile in one transaction. The read the reconciliation runs on comes out of the
+ * merge statement itself, under the lock that statement took, so no second reader can land
+ * between the reading and the label it decides.
+ */
 export async function mergeEntities(
   driver: Driver,
   entities: readonly EntityMergeInput[],
@@ -253,28 +284,70 @@ export async function mergeEntities(
   if (entities.length === 0) {
     return [];
   }
-  return runWrite(driver, buildEntityMerge(entities, now), mapMergedEntity);
+
+  const prepared = prepareEntityMerge(entities, now);
+  return inWriteTransaction(driver, async (tx) => {
+    const rows = await tx.run(
+      prepared.statement.cypher,
+      prepared.statement.parameters,
+      mapEntityMergeRow,
+    );
+    const { merged, updates } = reconcileMergedEntities(entities, prepared.proposedIds, rows);
+    if (updates.length > 0) {
+      await tx.run(
+        WRITE_ENTITY_IDENTITY,
+        {
+          updates: updates.map((update) => ({
+            id: update.id,
+            type: update.type,
+            type_counts: update.typeCounts,
+            name_squash: update.nameSquash,
+            aliases: [...update.aliases],
+            aliases_norm: [...update.aliasesNorm],
+          })),
+        },
+        identityRow,
+      );
+    }
+    return merged;
+  });
 }
 
 export type EntityVectorEntry = {
   readonly id: string;
   /** The name-only embedding the entity-resolution seed strategy scans. */
   readonly nameVector?: Vector;
+  /** sha256 of the exact text `nameVector` was taken over. */
+  readonly nameVectorHash?: string;
   /** The embedding of the node's `text`, which is what `content_vec_idx` covers. */
   readonly contentVector?: Vector;
+  readonly contentVectorHash?: string;
 };
 
 /**
- * Fills a vector that is absent and never replaces one that is present. Both are functions
- * of text this run did not write: the name and `text` belong to whichever run created the
- * node, so overwriting would spend an embed to store the same floats, and a concurrent
- * writer's result is as good as this one's.
+ * The name vector is replaced whenever one is handed in, because the caller only computes one
+ * after finding the stored hash stale: aliases accumulate, the embedded text changes with them,
+ * and the old write-if-absent rule meant a name was embedded once and never again, losing
+ * nomination recall for exactly the identities that attract duplicates.
+ *
+ * The content vector keeps the write-if-absent rule. It is a function of `text`, which belongs
+ * to whichever run created the node, so a concurrent writer's result is as good as this one's.
+ * Its hash travels with it rather than beside it: a hash written over a vector that was not
+ * stored would claim the node is in sync with text it never embedded.
  */
 const WRITE_ENTITY_VECTORS = [
   'UNWIND $entries AS entry',
   `MATCH (n:${BASE_NODE_LABEL} { id: entry.id })`,
-  `SET n.${ENTITY_NAME_VECTOR_PROPERTY} = coalesce(n.${ENTITY_NAME_VECTOR_PROPERTY}, entry.name_vec),`,
-  `    n.${MEMORY_PROPERTIES.contentVector} = coalesce(n.${MEMORY_PROPERTIES.contentVector}, entry.content_vec)`,
+  `WITH n, entry, n.${MEMORY_PROPERTIES.contentVector} IS NULL AS content_missing`,
+  `SET n.${ENTITY_NAME_VECTOR_PROPERTY} = coalesce(entry.name_vec, n.${ENTITY_NAME_VECTOR_PROPERTY}),`,
+  `    n.${ENTITY_NAME_VECTOR_HASH_PROPERTY} =` +
+    ` coalesce(entry.name_vec_hash, n.${ENTITY_NAME_VECTOR_HASH_PROPERTY}),`,
+  `    n.${MEMORY_PROPERTIES.contentVector} = CASE WHEN content_missing` +
+    ` THEN coalesce(entry.content_vec, n.${MEMORY_PROPERTIES.contentVector})` +
+    ` ELSE n.${MEMORY_PROPERTIES.contentVector} END,`,
+  `    n.${MEMORY_PROPERTIES.contentVectorHash} = CASE WHEN content_missing` +
+    ` AND entry.content_vec IS NOT NULL THEN entry.content_vec_hash` +
+    ` ELSE n.${MEMORY_PROPERTIES.contentVectorHash} END`,
   'RETURN n.id AS id',
 ].join('\n');
 
@@ -292,129 +365,11 @@ export async function writeEntityVectors(
       entries: entries.map((entry) => ({
         id: entry.id,
         name_vec: entry.nameVector === undefined ? null : toGraphVector(entry.nameVector),
+        name_vec_hash: entry.nameVectorHash ?? null,
         content_vec: entry.contentVector === undefined ? null : toGraphVector(entry.contentVector),
+        content_vec_hash: entry.contentVectorHash ?? null,
       })),
     },
     (row) => row.id as string,
   );
-}
-
-/**
- * Salience signals for mentions. Deliberately not idempotent, exactly like recall's
- * access tracking and the edge merge policy's `count`: each call stands for one episode
- * that mentioned the entity, so a replay of the same run counts twice rather than
- * pretending the mention did not happen. The pipeline's ledger gate is what keeps a
- * re-enqueued job from replaying it.
- */
-const RECORD_MENTION_SALIENCE = [
-  'UNWIND $ids AS entityId',
-  `MATCH (n:${BASE_NODE_LABEL} { id: entityId })`,
-  `SET n.${LAST_ACCESSED_PROPERTY} = $now,`,
-  `    n.${ACCESS_COUNT_PROPERTY} = coalesce(n.${ACCESS_COUNT_PROPERTY}, 0) + 1`,
-].join('\n');
-
-export type EntityMentionInput = {
-  readonly episodeId: string;
-  readonly entityIds: readonly string[];
-  readonly now: Date;
-  /** How sure the extraction is that this episode mentions these entities. */
-  readonly confidence: number;
-  readonly provenance: readonly string[];
-};
-
-/**
- * Both edges and the salience bump for one episode, in one transaction: an entity linked to
- * an episode it is not recorded as mentioned by would misreport the salience signals that
- * maintenance reads to decide what to prune.
- *
- * PARTICIPATES_IN carries count 0, so a replay is a total no-op on it; MENTIONS carries 1,
- * which the merge policy sums into the observation count.
- */
-export async function linkEntityMentions(
-  driver: Driver,
-  input: EntityMentionInput,
-): Promise<number> {
-  const entityIds = [...new Set(input.entityIds)];
-  if (entityIds.length === 0) {
-    return 0;
-  }
-
-  return inWriteTransaction(driver, async (tx) => {
-    for (const entityId of entityIds) {
-      await upsertEdgeInTransaction(tx, {
-        type: ENTITY_PARTICIPATION_TYPE,
-        sourceId: entityId,
-        targetId: input.episodeId,
-        strength: 1,
-        confidence: 1,
-        signals: STRUCTURAL_SIGNALS,
-        provenance: [...input.provenance],
-        count: 0,
-        now: input.now,
-      });
-      await upsertEdgeInTransaction(tx, {
-        type: ENTITY_MENTION_TYPE,
-        sourceId: input.episodeId,
-        targetId: entityId,
-        strength: 1,
-        confidence: input.confidence,
-        signals: MENTION_SIGNALS,
-        provenance: [...input.provenance],
-        count: 1,
-        now: input.now,
-      });
-    }
-
-    await tx.run(
-      RECORD_MENTION_SALIENCE,
-      { ids: entityIds, now: toGraphDateTime(input.now) },
-      () => undefined,
-    );
-
-    return entityIds.length;
-  });
-}
-
-export type EpisodeEntity = {
-  readonly id: string;
-  readonly name: string;
-  readonly nameNorm: string;
-  readonly type: string;
-};
-
-/**
- * The entities one episode mentions, current only. Every stage after this one takes its
- * input from the graph keyed on the episode rather than from an in-memory handoff, so this
- * is the read deduplication, association inference, and reinforcement start from.
- *
- * Currency-filtered, not merely currency-aware: recall shows a superseded row annotated,
- * but a pipeline stage that pairs, links, or judges one writes the duplication back into
- * the graph as structure, which is the fragmentation that running dedup early is meant to
- * prevent. The mention edge onto the closed node stays; it is the record that this episode
- * named that surface form.
- */
-function episodeEntitiesStatement(episodeId: string): GraphStatement {
-  const fragment = readModeFragment(withCurrency(), 'n');
-  return {
-    cypher: [
-      `MATCH (:Episode { id: $episodeId })-[:${ENTITY_MENTION_TYPE}]->(n:${ENTITY_LABEL})`,
-      `WHERE n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL AND ${fragment.where}`,
-      `RETURN n.id AS id, n.${ENTITY_NAME_PROPERTY} AS name,`,
-      `       n.${ENTITY_NAME_NORM_PROPERTY} AS name_norm, n.${ENTITY_TYPE_PROPERTY} AS type`,
-      `ORDER BY n.${ENTITY_NAME_NORM_PROPERTY}, n.id`,
-    ].join('\n'),
-    parameters: { episodeId, ...fragment.parameters },
-  };
-}
-
-export async function findEpisodeEntities(
-  driver: Driver,
-  episodeId: string,
-): Promise<EpisodeEntity[]> {
-  return runRead(driver, episodeEntitiesStatement(episodeId), (row) => ({
-    id: row.id as string,
-    name: (row.name as string | null) ?? '',
-    nameNorm: (row.name_norm as string | null) ?? '',
-    type: (row.type as string | null) ?? '',
-  }));
 }

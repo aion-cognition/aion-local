@@ -1,10 +1,16 @@
 import { ACCESS_COUNT_PROPERTY } from '../../../infrastructure/graph/access-tracking.js';
+import { BITEMPORAL_PROPERTIES } from '../../../infrastructure/graph/bitemporal.js';
 import {
   ENTITY_MENTION_TYPE,
+  ENTITY_NAME_SQUASH_PROPERTY,
+  ENTITY_NAME_VECTOR_HASH_PROPERTY,
+  ENTITY_TYPE_COUNTS_PROPERTY,
   ENTITY_TYPE_PROPERTY,
 } from '../../../infrastructure/graph/entity-queries.js';
 import { MEMORY_PROPERTIES } from '../../../infrastructure/graph/episodes.js';
 import {
+  ENTITY_ALIASES_NORM_PROPERTY,
+  ENTITY_ALIASES_PROPERTY,
   ENTITY_NAME_NORM_PROPERTY,
   ENTITY_NAME_PROPERTY,
   ENTITY_NAME_VECTOR_PROPERTY,
@@ -24,6 +30,9 @@ import { FakeGraph, type FakeNode } from '../../test-support/fake-graph.fixture.
  * the id-keyed node merge, the edge merge policy, and the episode read. Anything neither
  * models still throws, so a changed write fails loudly rather than being answered by a fake
  * that does not know it changed. Live behaviour is proven in `entities.int.test.ts`.
+ *
+ * The merge chain walk has no model here: a lineage edge is graph shape, and resolving one is
+ * exactly the behaviour a fake would get wrong quietly.
  */
 
 type Counters = {
@@ -43,16 +52,36 @@ function toResult(rows: readonly Row[], counters: Counters = NO_CHANGES): unknow
 
 type MergeRow = {
   readonly name_norm: string;
-  readonly type: string;
   readonly id: string;
   readonly properties: Record<string, unknown>;
+};
+
+type IdentityUpdate = {
+  readonly id: string;
+  readonly type: string;
+  readonly type_counts: string;
+  readonly name_squash: string;
+  readonly aliases: string[];
+  readonly aliases_norm: string[];
+};
+
+type AliasEntry = {
+  readonly id: string;
+  readonly aliases: string[];
+  readonly aliases_norm: string[];
 };
 
 type VectorRow = {
   readonly id: string;
   readonly name_vec: number[] | null;
+  readonly name_vec_hash: string | null;
   readonly content_vec: number[] | null;
+  readonly content_vec_hash: string | null;
 };
+
+function strings(value: unknown): string[] {
+  return Array.isArray(value) ? (value as string[]) : [];
+}
 
 export class EntityFakeGraph extends FakeGraph {
   override async executeQuery(
@@ -63,11 +92,23 @@ export class EntityFakeGraph extends FakeGraph {
       this.statements.push({ cypher, parameters });
       return toResult(this.#mergeEntities(parameters));
     }
-    if (cypher.includes(`n.${STRUCTURAL_PROPERTY} = true`)) {
+    if (cypher.includes(`SET n.${ENTITY_TYPE_PROPERTY} = update.type`)) {
       this.statements.push({ cypher, parameters });
-      return toResult(this.#structuralEntities(parameters));
+      return toResult(this.#writeIdentity(parameters));
     }
-    if (cypher.includes(`SET n.${ENTITY_NAME_VECTOR_PROPERTY} = coalesce(`)) {
+    if (cypher.includes(`n.${ENTITY_NAME_SQUASH_PROPERTY} IN $squashes`)) {
+      this.statements.push({ cypher, parameters });
+      return toResult(this.#nameForms(parameters));
+    }
+    if (cypher.includes('MATCH (n:Member:Entity)')) {
+      this.statements.push({ cypher, parameters });
+      return toResult(this.#speaker());
+    }
+    if (cypher.includes(`SET n.${ENTITY_ALIASES_PROPERTY} = coalesce(`)) {
+      this.statements.push({ cypher, parameters });
+      return toResult(this.#addAliases(parameters));
+    }
+    if (cypher.includes(`SET n.${ENTITY_NAME_VECTOR_PROPERTY} = coalesce(entry.name_vec`)) {
       this.statements.push({ cypher, parameters });
       return toResult(this.#writeVectors(parameters));
     }
@@ -87,11 +128,29 @@ export class EntityFakeGraph extends FakeGraph {
     return this.nodesWithLabel('Entity');
   }
 
-  #findEntity(nameNorm: string, type: string): FakeNode | undefined {
-    return this.entities().find(
-      (node) =>
-        node.properties[ENTITY_NAME_NORM_PROPERTY] === nameNorm &&
-        node.properties[ENTITY_TYPE_PROPERTY] === type,
+  #findEntity(nameNorm: string): FakeNode | undefined {
+    return this.entities().find((node) => node.properties[ENTITY_NAME_NORM_PROPERTY] === nameNorm);
+  }
+
+  /** The identity projection every resolution tier reads, off one node. */
+  #identityRow(node: FakeNode): Row {
+    return {
+      id: node.id,
+      name: node.properties[ENTITY_NAME_PROPERTY],
+      name_norm: node.properties[ENTITY_NAME_NORM_PROPERTY],
+      name_squash: node.properties[ENTITY_NAME_SQUASH_PROPERTY] ?? null,
+      type: node.properties[ENTITY_TYPE_PROPERTY],
+      aliases_norm: strings(node.properties[ENTITY_ALIASES_NORM_PROPERTY]),
+      is_structural: node.properties[STRUCTURAL_PROPERTY] === true,
+      has_name_vec: node.properties[ENTITY_NAME_VECTOR_PROPERTY] !== undefined,
+      name_vec_hash: node.properties[ENTITY_NAME_VECTOR_HASH_PROPERTY] ?? null,
+    };
+  }
+
+  #current(node: FakeNode): boolean {
+    return (
+      node.properties[BITEMPORAL_PROPERTIES.validUntil] == null &&
+      node.properties[BITEMPORAL_PROPERTIES.forgottenAt] == null
     );
   }
 
@@ -100,18 +159,23 @@ export class EntityFakeGraph extends FakeGraph {
     const rows: Row[] = [];
 
     for (const entity of entities) {
-      const existing = this.#findEntity(entity.name_norm, entity.type);
-      if (existing === undefined) {
+      if (this.#findEntity(entity.name_norm) === undefined) {
         this.seedNode(entity.id, ['Entity', 'Memory', 'AionNode'], entity.properties);
       }
-      const node = existing ?? this.#findEntity(entity.name_norm, entity.type);
+      const node = this.#findEntity(entity.name_norm);
       const properties = node?.properties ?? {};
       rows.push({
         name_norm: entity.name_norm,
-        type: entity.type,
+        proposed_id: entity.id,
         id: node?.id ?? entity.id,
         created: node?.id === entity.id,
+        canonical_name_norm: properties[ENTITY_NAME_NORM_PROPERTY],
+        type: properties[ENTITY_TYPE_PROPERTY],
+        type_counts: properties[ENTITY_TYPE_COUNTS_PROPERTY] ?? null,
+        aliases: strings(properties[ENTITY_ALIASES_PROPERTY]),
+        is_structural: properties[STRUCTURAL_PROPERTY] === true,
         has_name_vec: properties[ENTITY_NAME_VECTOR_PROPERTY] !== undefined,
+        name_vec_hash: properties[ENTITY_NAME_VECTOR_HASH_PROPERTY] ?? null,
         has_content_vec: properties[MEMORY_PROPERTIES.contentVector] !== undefined,
       });
     }
@@ -119,23 +183,74 @@ export class EntityFakeGraph extends FakeGraph {
     return rows;
   }
 
-  #structuralEntities(parameters: Record<string, unknown>): Row[] {
-    const names = (parameters.names ?? []) as readonly string[];
-    return this.entities()
-      .filter(
-        (node) =>
-          node.properties[STRUCTURAL_PROPERTY] === true &&
-          names.includes(node.properties[ENTITY_NAME_NORM_PROPERTY] as string),
-      )
-      .map((node) => ({
-        id: node.id,
-        name_norm: node.properties[ENTITY_NAME_NORM_PROPERTY],
-        type: node.properties[ENTITY_TYPE_PROPERTY],
-        has_name_vec: node.properties[ENTITY_NAME_VECTOR_PROPERTY] !== undefined,
-      }));
+  #writeIdentity(parameters: Record<string, unknown>): Row[] {
+    const updates = (parameters.updates ?? []) as readonly IdentityUpdate[];
+    const written: Row[] = [];
+    for (const update of updates) {
+      const node = this.nodes.get(update.id);
+      if (node === undefined) {
+        continue;
+      }
+      node.properties[ENTITY_TYPE_PROPERTY] = update.type;
+      node.properties[ENTITY_TYPE_COUNTS_PROPERTY] = update.type_counts;
+      node.properties[ENTITY_NAME_SQUASH_PROPERTY] = update.name_squash;
+      node.properties[ENTITY_ALIASES_PROPERTY] = update.aliases;
+      node.properties[ENTITY_ALIASES_NORM_PROPERTY] = update.aliases_norm;
+      written.push({ id: update.id });
+    }
+    return written;
   }
 
-  /** `coalesce` semantics: a vector already on the node wins over the one being written. */
+  #nameForms(parameters: Record<string, unknown>): Row[] {
+    const names = strings(parameters.names);
+    const squashes = strings(parameters.squashes);
+    return this.entities()
+      .filter((node) => this.#current(node))
+      .filter((node) => {
+        const nameNorm = node.properties[ENTITY_NAME_NORM_PROPERTY] as string | undefined;
+        const squash = node.properties[ENTITY_NAME_SQUASH_PROPERTY] as string | undefined;
+        return (
+          (nameNorm !== undefined && names.includes(nameNorm)) ||
+          (squash !== undefined && squashes.includes(squash)) ||
+          strings(node.properties[ENTITY_ALIASES_NORM_PROPERTY]).some((alias) =>
+            names.includes(alias),
+          )
+        );
+      })
+      .map((node) => this.#identityRow(node))
+      .sort((left, right) => String(left.id).localeCompare(String(right.id)));
+  }
+
+  #speaker(): Row[] {
+    const member = this.nodesWithLabel('Member').find((node) => this.#current(node));
+    return member === undefined ? [] : [this.#identityRow(member)];
+  }
+
+  /** Append-if-absent, the same union the statement runs in Cypher. */
+  #addAliases(parameters: Record<string, unknown>): Row[] {
+    const entries = (parameters.entries ?? []) as readonly AliasEntry[];
+    const written: Row[] = [];
+    for (const entry of entries) {
+      const node = this.nodes.get(entry.id);
+      if (node === undefined) {
+        continue;
+      }
+      const aliases = strings(node.properties[ENTITY_ALIASES_PROPERTY]);
+      const aliasKeys = strings(node.properties[ENTITY_ALIASES_NORM_PROPERTY]);
+      node.properties[ENTITY_ALIASES_PROPERTY] = [
+        ...aliases,
+        ...entry.aliases.filter((alias) => !aliases.includes(alias)),
+      ];
+      node.properties[ENTITY_ALIASES_NORM_PROPERTY] = [
+        ...aliasKeys,
+        ...entry.aliases_norm.filter((alias) => !aliasKeys.includes(alias)),
+      ];
+      written.push({ id: entry.id });
+    }
+    return written;
+  }
+
+  /** The name vector is replaced whenever one is handed in; the content vector is write-if-absent. */
   #writeVectors(parameters: Record<string, unknown>): Row[] {
     const entries = (parameters.entries ?? []) as readonly VectorRow[];
     const written: Row[] = [];
@@ -144,14 +259,16 @@ export class EntityFakeGraph extends FakeGraph {
       if (node === undefined) {
         continue;
       }
-      if (node.properties[ENTITY_NAME_VECTOR_PROPERTY] === undefined && entry.name_vec !== null) {
+      if (entry.name_vec !== null) {
         node.properties[ENTITY_NAME_VECTOR_PROPERTY] = entry.name_vec;
+        node.properties[ENTITY_NAME_VECTOR_HASH_PROPERTY] = entry.name_vec_hash;
       }
       if (
         node.properties[MEMORY_PROPERTIES.contentVector] === undefined &&
         entry.content_vec !== null
       ) {
         node.properties[MEMORY_PROPERTIES.contentVector] = entry.content_vec;
+        node.properties[MEMORY_PROPERTIES.contentVectorHash] = entry.content_vec_hash;
       }
       written.push({ id: entry.id });
     }
