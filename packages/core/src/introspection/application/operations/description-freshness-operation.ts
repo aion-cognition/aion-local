@@ -6,6 +6,7 @@ import {
   refreshEntityDescription,
   type StaleDescriptionEntity,
 } from '../../../infrastructure/graph/entity-description-queries.js';
+import { deadlineFor } from '../../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema } from '../../../infrastructure/providers/types.js';
 import type { IntrospectionOperation, OperationOutcome } from '../../domain/operation.js';
 
@@ -99,10 +100,7 @@ export function descriptionFreshnessOperation(): IntrospectionOperation {
 
         let description: string;
         try {
-          const controller = new AbortController();
-          const timer = setTimeout(() => {
-            controller.abort();
-          }, ctx.config.reflection.stageTimeoutMs);
+          const deadline = deadlineFor(ctx.config.reflection.stageTimeoutMs, ctx.signal);
           try {
             const raw = await ctx.provider.generate({
               model: ctx.config.models.reflect,
@@ -110,11 +108,11 @@ export function descriptionFreshnessOperation(): IntrospectionOperation {
               schema: DESCRIPTION_JSON_SCHEMA,
               maxTokens: DESCRIPTION_MAX_TOKENS,
               think: false,
-              signal: controller.signal,
+              signal: deadline.signal,
             });
             description = DescriptionSchema.parse(raw).description.trim();
           } finally {
-            clearTimeout(timer);
+            deadline.clear();
           }
         } catch (err) {
           failed += 1;

@@ -10,6 +10,7 @@ import {
   readCommunityPairEdges,
   readCommunityProfiles,
 } from '../../../infrastructure/graph/community-queries.js';
+import { deadlineFor } from '../../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema } from '../../../infrastructure/providers/types.js';
 import { rankCommunityPairs, type CommunityPairScore } from '../../domain/bridge-pairs.js';
 import {
@@ -141,10 +142,7 @@ async function proposeBridgeText(
   closest: CrossCommunityPair,
 ): Promise<BridgeText> {
   const fallback = deterministicText(pair, closest);
-  const controller = new AbortController();
-  const timer = setTimeout(() => {
-    controller.abort();
-  }, ctx.config.reflection.stageTimeoutMs);
+  const deadline = deadlineFor(ctx.config.reflection.stageTimeoutMs, ctx.signal);
   try {
     const raw = await ctx.provider.generate({
       model: ctx.config.models.reflect,
@@ -152,7 +150,7 @@ async function proposeBridgeText(
       schema: BRIDGE_JSON_SCHEMA,
       maxTokens: BRIDGE_MAX_TOKENS,
       think: false,
-      signal: controller.signal,
+      signal: deadline.signal,
     });
     const proposal = BridgeProposalSchema.parse(raw);
     const summary = proposal.summary.trim();
@@ -165,7 +163,7 @@ async function proposeBridgeText(
     ctx.logger.warn({ err }, 'bridge proposal generation failed; writing the deterministic bridge');
     return fallback;
   } finally {
-    clearTimeout(timer);
+    deadline.clear();
   }
 }
 

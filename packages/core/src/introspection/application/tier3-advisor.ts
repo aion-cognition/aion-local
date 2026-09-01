@@ -4,6 +4,7 @@ import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { errorMessage } from '../../infrastructure/errors.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
+import { deadlineFor } from '../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../infrastructure/providers/types.js';
 import type { OperationCandidate } from '../domain/decide.js';
 import type { HealthSnapshot } from '../domain/health.js';
@@ -179,40 +180,6 @@ function buildReviewMessages(request: Tier3Request, proposal: Tier3Proposal): Ch
   ];
 }
 
-type Deadline = {
-  readonly signal: AbortSignal;
-  readonly clear: () => void;
-};
-
-/**
- * The call's own timeout, aborted early when the loop is shutting down. Both are one signal,
- * so `stop()` never waits out a model call with a minute left on it.
- */
-function deadlineFor(options: Tier3CallOptions): Deadline {
-  const controller = new AbortController();
-  const timer = setTimeout(() => {
-    controller.abort();
-  }, options.timeoutMs);
-  const caller = options.signal;
-  const onAbort = (): void => {
-    controller.abort();
-  };
-  if (caller !== undefined) {
-    if (caller.aborted) {
-      controller.abort();
-    } else {
-      caller.addEventListener('abort', onAbort, { once: true });
-    }
-  }
-  return {
-    signal: controller.signal,
-    clear: (): void => {
-      clearTimeout(timer);
-      caller?.removeEventListener('abort', onAbort);
-    },
-  };
-}
-
 /**
  * One recommendation, prompt and schema included. The schema restricts the answer to the
  * operations this cycle actually offered, so an operation the loop could not run is a shape
@@ -224,7 +191,7 @@ export async function adviseTier3(
   options: Tier3CallOptions,
 ): Promise<Tier3Outcome> {
   const names = request.candidates.map((candidate) => candidate.name);
-  const deadline = deadlineFor(options);
+  const deadline = deadlineFor(options.timeoutMs, options.signal);
   // Already aborted means the loop is stopping, and a call started now is a call the caller
   // is waiting on for nothing.
   if (deadline.signal.aborted) {
@@ -292,7 +259,7 @@ export async function reviewTier3Proposal(
   proposal: Tier3Proposal,
   options: Tier3CallOptions,
 ): Promise<Tier3Review> {
-  const deadline = deadlineFor(options);
+  const deadline = deadlineFor(options.timeoutMs, options.signal);
   if (deadline.signal.aborted) {
     deadline.clear();
     return { status: 'failed', reason: 'the loop stopped before the call started' };

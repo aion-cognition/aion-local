@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { errorMessage } from '../../infrastructure/errors.js';
+import { deadlineFor } from '../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../infrastructure/providers/types.js';
 
 /**
@@ -68,41 +69,12 @@ export type HygieneJudgeVerdict =
 
 const NO_REASON_GIVEN = 'the judge gave no reason';
 
-/**
- * Aborts on the call's own timeout, layered under the caller's signal so a loop shutdown
- * never waits out a model call with time left on it.
- */
-function deadlineFor(options: HygieneJudgeOptions): { signal: AbortSignal; clear: () => void } {
-  const controller = new AbortController();
-  const timer = setTimeout(() => {
-    controller.abort();
-  }, options.timeoutMs);
-  const caller = options.signal;
-  const onAbort = (): void => {
-    controller.abort();
-  };
-  if (caller !== undefined) {
-    if (caller.aborted) {
-      controller.abort();
-    } else {
-      caller.addEventListener('abort', onAbort, { once: true });
-    }
-  }
-  return {
-    signal: controller.signal,
-    clear: (): void => {
-      clearTimeout(timer);
-      caller?.removeEventListener('abort', onAbort);
-    },
-  };
-}
-
 export async function judgeHygienePair(
   provider: Pick<Provider, 'generate'>,
   pair: HygienePair,
   options: HygieneJudgeOptions,
 ): Promise<HygieneJudgeVerdict> {
-  const deadline = deadlineFor(options);
+  const deadline = deadlineFor(options.timeoutMs, options.signal);
   if (deadline.signal.aborted) {
     deadline.clear();
     return { status: 'failed', reason: 'the loop stopped before the call started' };

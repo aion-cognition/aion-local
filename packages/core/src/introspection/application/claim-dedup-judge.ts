@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { errorMessage } from '../../infrastructure/errors.js';
+import { deadlineFor } from '../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../infrastructure/providers/types.js';
 
 /**
@@ -138,37 +139,6 @@ export type ClaimDedupReviewOutcome =
   | { readonly status: 'reviewed'; readonly review: ClaimDedupReview }
   | { readonly status: 'failed'; readonly detail: string };
 
-type Deadline = { readonly signal: AbortSignal; readonly clear: () => void };
-
-/**
- * The call's own timeout, aborted early when the tick is shutting down. Both are one signal, so
- * a stopped operation never waits out a model call with time left on it.
- */
-function deadlineFor(options: ClaimDedupCallOptions): Deadline {
-  const controller = new AbortController();
-  const timer = setTimeout(() => {
-    controller.abort();
-  }, options.timeoutMs);
-  const caller = options.signal;
-  const onAbort = (): void => {
-    controller.abort();
-  };
-  if (caller !== undefined) {
-    if (caller.aborted) {
-      controller.abort();
-    } else {
-      caller.addEventListener('abort', onAbort, { once: true });
-    }
-  }
-  return {
-    signal: controller.signal,
-    clear: (): void => {
-      clearTimeout(timer);
-      caller?.removeEventListener('abort', onAbort);
-    },
-  };
-}
-
 /**
  * Pass one, prompt and schema included. Exported for the same reason `judgeContradiction` is:
  * a battery that rebuilt the prompt would report a number for a judge the service does not run.
@@ -178,7 +148,7 @@ export async function judgeClaimDedup(
   pair: ClaimDedupPair,
   options: ClaimDedupCallOptions,
 ): Promise<ClaimDedupJudgeOutcome> {
-  const deadline = deadlineFor(options);
+  const deadline = deadlineFor(options.timeoutMs, options.signal);
   if (deadline.signal.aborted) {
     deadline.clear();
     return { status: 'failed', detail: 'the tick stopped before the call started' };
@@ -225,7 +195,7 @@ export async function reviewClaimDedup(
   pair: ClaimDedupPair,
   options: ClaimDedupCallOptions,
 ): Promise<ClaimDedupReviewOutcome> {
-  const deadline = deadlineFor(options);
+  const deadline = deadlineFor(options.timeoutMs, options.signal);
   if (deadline.signal.aborted) {
     deadline.clear();
     return { status: 'failed', detail: 'the tick stopped before the call started' };
