@@ -105,10 +105,6 @@ export function isContentBearing(primary: NodeLabel): boolean {
   return COMPANION_LABELS[primary].includes('Memory');
 }
 
-export function isNodeLabel(value: string): value is NodeLabel {
-  return (NODE_LABELS as readonly string[]).includes(value);
-}
-
 /** Reflection's provenance edge, which is what makes an episode enriched rather than pending. */
 export const EXTRACTION_TYPE: RelationshipType = 'EXTRACTED_FROM';
 
