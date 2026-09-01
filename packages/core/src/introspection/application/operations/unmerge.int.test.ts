@@ -321,6 +321,44 @@ describe('what a reversal can cite', () => {
     expect(report.status).toBe('applied');
     expect(report.decision).toBeUndefined();
   }, 120_000);
+
+  it('cites nothing once the decision row a merge stamped has since been cleared', async () => {
+    const holderId = await seedEntity(entityInput('Kepler', 'kepler', CANONICAL_EPISODE));
+    const absorbedId = await seedEntity(entityInput('kep-ler', 'kep-ler', CANONICAL_EPISODE));
+    const [holder, absorbed] = await loadEntityDedupDetails(harness.driver, [holderId, absorbedId]);
+    if (holder === undefined || absorbed === undefined) {
+      throw new Error('failed to load the pair to merge');
+    }
+
+    const merge = await applyEntityMerge(
+      { driver: harness.driver, db, logger },
+      {
+        canonical: holder,
+        members: [holder, absorbed],
+        tier: 'tier0',
+        reasons: ['both names squash to kepler'],
+        signals: await collectMergeSignals(harness.driver, holder, [holder, absorbed]),
+        method: 'test_merge',
+        now: NOW,
+      },
+    );
+    expect(merge.status).toBe('merged');
+
+    // A delete on the test's own sqlite file, not a product operation: it stands in for
+    // whatever cleared the row (a retention sweep, a manual cleanup) while the merge's
+    // provenance on the canonical, which still carries the decision key, is untouched.
+    if (merge.status === 'merged') {
+      db.prepare('DELETE FROM entity_merge_decisions WHERE id = ?').run(merge.decisionId);
+    }
+
+    const report = await runEntityUnmerge(
+      { driver: harness.driver, db, logger },
+      { mergedId: absorbedId, now: LATER },
+    );
+
+    expect(report.status).toBe('applied');
+    expect(report.decision).toBeUndefined();
+  }, 120_000);
 });
 
 const HOST_NAME_NORM = 'hydra';
