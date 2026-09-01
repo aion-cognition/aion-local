@@ -7,6 +7,7 @@ import { upsertEdgeInTransaction, type UpsertedEdge } from './edges.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
 import type { NodeLabel } from './labels.js';
 import { toGraphVector, type GraphProperties } from './values.js';
+import { vectorInputHash } from '../../reflection/domain/vector-input.js';
 import type { Vector } from '../providers/types.js';
 
 /**
@@ -111,7 +112,10 @@ export async function writeCognitiveNode(
     rationale: input.metadata?.rationale,
     ...(input.contentVector === undefined
       ? {}
-      : { [MEMORY_PROPERTIES.contentVector]: toGraphVector(input.contentVector) }),
+      : {
+          [MEMORY_PROPERTIES.contentVector]: toGraphVector(input.contentVector),
+          [MEMORY_PROPERTIES.contentVectorHash]: vectorInputHash(input.text),
+        }),
   };
 
   return inWriteTransaction(driver, async (tx) => {

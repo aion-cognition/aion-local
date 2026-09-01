@@ -221,6 +221,7 @@ const RETIRE_GLOSS = [
   `      coalesce(e.${PRIOR_DESCRIPTIONS_PROPERTY}, []) + [e.${MEMORY_PROPERTIES.text}],`,
   `    e.${MEMORY_PROPERTIES.text} = null,`,
   `    e.${MEMORY_PROPERTIES.contentVector} = null,`,
+  `    e.${MEMORY_PROPERTIES.contentVectorHash} = null,`,
   `    e.${DESCRIPTION_MENTION_COUNT_PROPERTY} = 0,`,
   `    e.${DESCRIPTION_RETIRED_AT_PROPERTY} = $now`,
   'RETURN e.id AS id',

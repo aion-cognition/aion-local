@@ -6,6 +6,7 @@ import { ENTITY_MENTION_TYPE, ENTITY_TYPE_PROPERTY } from './entity-queries.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
 import { ENTITY_NAME_PROPERTY, STRUCTURAL_PROPERTY } from './seed-queries.js';
 import { toGraphDateTime, toGraphInteger, toGraphVector, type Row } from './values.js';
+import { vectorInputHash } from '../../reflection/domain/vector-input.js';
 import type { Vector } from '../providers/types.js';
 
 /**
@@ -146,6 +147,7 @@ const REFRESH_ENTITY_DESCRIPTION = [
   `SET e.${PRIOR_DESCRIPTIONS_PROPERTY} = coalesce(e.${PRIOR_DESCRIPTIONS_PROPERTY}, []) + [e.${MEMORY_PROPERTIES.text}],`,
   `    e.${MEMORY_PROPERTIES.text} = $text,`,
   `    e.${MEMORY_PROPERTIES.contentVector} = $contentVector,`,
+  `    e.${MEMORY_PROPERTIES.contentVectorHash} = $contentVectorHash,`,
   `    e.${DESCRIPTION_MENTION_COUNT_PROPERTY} = $mentionCount,`,
   `    e.${DESCRIPTION_REFRESHED_AT_PROPERTY} = $now,`,
   `    e.${DESCRIPTION_REFRESH_METHOD_PROPERTY} = $method`,
@@ -172,6 +174,7 @@ export async function refreshEntityDescription(
         id: input.id,
         text: input.text,
         contentVector: toGraphVector(input.contentVector),
+        contentVectorHash: vectorInputHash(input.text),
         mentionCount: toGraphInteger(input.mentionCount),
         now: toGraphDateTime(input.now),
         method: DESCRIPTION_REFRESH_METHOD,

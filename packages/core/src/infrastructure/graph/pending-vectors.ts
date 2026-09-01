@@ -13,6 +13,13 @@ import type { Vector } from '../providers/types.js';
  * node is durable and unvectorized. There is no flag property to keep in sync with it:
  * the missing vector is the state, and writing the vector clears it.
  *
+ * A node whose `content_vec_hash` is absent is pending for the same reason. The hash is what
+ * the vector was taken over, so its absence says the stored floats cannot be shown to match
+ * the node's own text: a vector written before the hash existed, or one a re-enqueue cleared
+ * because the embedding model or the embedded text changed. Neo4j has no hash function, so
+ * the comparison itself happens where the text is (`writeContentVectors` stamps what it
+ * embedded, `entities.ts` compares before it embeds) and the scan reads the verdict.
+ *
  * `:Memory` is the label migration 001 declares `content_vec_idx` on, so it is also the
  * exact set of nodes a missing vector makes invisible to vector search.
  */
@@ -25,6 +32,8 @@ export type PendingVectorNode = {
 export type ContentVectorEntry = {
   readonly id: string;
   readonly vector: Vector;
+  /** sha256 of the exact text embedded, stored so a later run can tell this vector is stale. */
+  readonly inputHash: string;
 };
 
 /**
@@ -41,7 +50,9 @@ export type ContentVectorEntry = {
  */
 const FIND_PENDING_VECTOR_NODES = [
   `MATCH (n:${MEMORY_LABEL})`,
-  `WHERE n.${MEMORY_PROPERTIES.contentVector} IS NULL AND n.${MEMORY_PROPERTIES.text} IS NOT NULL`,
+  `WHERE (n.${MEMORY_PROPERTIES.contentVector} IS NULL` +
+    ` OR n.${MEMORY_PROPERTIES.contentVectorHash} IS NULL)`,
+  `  AND n.${MEMORY_PROPERTIES.text} IS NOT NULL`,
   `  AND ${currentOnly('n')}`,
   `RETURN n.id AS id, n.${MEMORY_PROPERTIES.text} AS text`,
   `ORDER BY n.${BITEMPORAL_PROPERTIES.txFrom}, n.id`,
@@ -70,7 +81,8 @@ export async function findPendingVectorNodes(
 const WRITE_CONTENT_VECTORS = [
   'UNWIND $entries AS entry',
   `MATCH (n:${MEMORY_LABEL} { id: entry.id })`,
-  `SET n.${MEMORY_PROPERTIES.contentVector} = entry.vector`,
+  `SET n.${MEMORY_PROPERTIES.contentVector} = entry.vector,`,
+  `    n.${MEMORY_PROPERTIES.contentVectorHash} = entry.input_hash`,
   'RETURN n.id AS id',
 ].join('\n');
 
@@ -85,7 +97,13 @@ export async function writeContentVectors(
   return runWrite(
     driver,
     WRITE_CONTENT_VECTORS,
-    { entries: entries.map((entry) => ({ id: entry.id, vector: toGraphVector(entry.vector) })) },
+    {
+      entries: entries.map((entry) => ({
+        id: entry.id,
+        vector: toGraphVector(entry.vector),
+        input_hash: entry.inputHash,
+      })),
+    },
     (row) => row.id as string,
   );
 }

@@ -9,6 +9,7 @@ import { MEMORY_PROPERTIES } from './episodes.js';
 import { ENTITY_NAME_PROPERTY } from './seed-queries.js';
 import { toGraphInteger, toGraphVector } from './values.js';
 import { asCosine } from './vector-indexes.js';
+import { vectorInputHash } from '../../reflection/domain/vector-input.js';
 import type { Vector } from '../providers/types.js';
 
 /**
@@ -163,6 +164,7 @@ export async function writeBridge(driver: Driver, input: BridgeWrite): Promise<s
       properties: {
         [MEMORY_PROPERTIES.text]: input.summary,
         [MEMORY_PROPERTIES.contentVector]: toGraphVector(input.vector),
+        [MEMORY_PROPERTIES.contentVectorHash]: vectorInputHash(input.summary),
         [BRIDGE_SOURCE_COMMUNITY_PROPERTY]: input.sourceCommunity,
         [BRIDGE_TARGET_COMMUNITY_PROPERTY]: input.targetCommunity,
         [BRIDGE_SIMILARITY_PROPERTY]: input.similarity,
