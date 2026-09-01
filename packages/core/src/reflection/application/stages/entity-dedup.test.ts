@@ -46,6 +46,11 @@ import {
   type ScriptedEntityJudge,
 } from '../entity-merge-judge.fixture.js';
 
+/** The shape `runRead` expects back from a statement the fake answers itself. */
+const SUMMARY_STUB = {
+  counters: { updates: () => ({ nodesCreated: 0, relationshipsCreated: 0, propertiesSet: 0 }) },
+};
+
 const EPISODE_ID = 'episode-1';
 const SESSION_ID = 'session-1';
 const OTHER_EPISODE_ID = 'episode-0';
@@ -306,6 +311,33 @@ describe('tier 3, the two-pass judge', () => {
     expect(prompt).toContain('tool 3');
     expect(prompt).toContain('topic 1');
     expect(prompt).toContain('the relational store');
+  });
+
+  it('carries on with the vector nominator when the bulk pass cannot run', async () => {
+    // Two reflections at once share one projection name, so a bulk pass can be dropped out from
+    // under itself. A nominator that cannot run must not take the run's other nominator with it.
+    class BrokenBulkGraph extends DedupFakeGraph {
+      override async executeQuery(
+        cypher: string,
+        parameters: Record<string, unknown> = {},
+      ): Promise<unknown> {
+        if (cypher.includes('SHOW PROCEDURES')) {
+          return { records: [{ toObject: () => ({ count: 1 }) }], summary: SUMMARY_STUB };
+        }
+        if (cypher.includes('gds.')) {
+          throw new Error('the projection was dropped by another run');
+        }
+        return super.executeQuery(cypher, parameters);
+      }
+    }
+    graph = new BrokenBulkGraph();
+    seedEpisode(EPISODE_ID);
+    seedNearDuplicatePair();
+
+    const outcome = await new EntityDedupStage().run(context());
+
+    expect(outcome.status).toBe('ok');
+    expect(outcome.counts).toMatchObject({ merges: 1 });
   });
 
   it('spends no model call on a pair no nominator put forward', async () => {
