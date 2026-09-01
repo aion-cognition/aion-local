@@ -6,8 +6,8 @@ import type { ChatMessage, JsonSchema, Provider } from '../../infrastructure/pro
 /**
  * The one model call `proposal_hygiene` makes: a fuzzy entity-merge pair nobody resolved
  * within the residue horizon, judged once so the dismissal reason says something sharper
- * than "it aged out". Neither verdict merges or blocks anything; `wouldAutoApply`'s exact-fold
- * rule stays the only sanctioned auto-apply. This call only decides what the ledger records
+ * than "it aged out". Neither verdict merges or blocks anything; the cascade's deterministic
+ * tier stays the only sanctioned auto-apply. This call only decides what the ledger records
  * on the way to a resolve `aion proposals reopen` can always undo.
  */
 
