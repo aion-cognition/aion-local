@@ -31,6 +31,12 @@ import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sql
 import { getLedgerEntry } from '../../../infrastructure/sqlite/ops-ledger.js';
 import { entityMergeLedgerKey } from '../../domain/entity-merge.js';
 import type { StageContext } from '../../domain/stage.js';
+import {
+  judgedNames,
+  refusingEntityJudge,
+  scriptedEntityJudge,
+  type ScriptedEntityJudge,
+} from '../entity-merge-judge.fixture.js';
 
 /**
  * The similarity search, mention-count aggregation, edge redirection and `supersede` close
@@ -86,11 +92,16 @@ async function seedEpisode(id: string): Promise<void> {
   });
 }
 
-function context(): StageContext {
+/**
+ * Tier 3 decides every pair here, so the run needs a judge. It is scripted rather than live:
+ * what these cases prove is the Cypher (the search, the redirect, the close), and a real model
+ * would make the merge boundary a measurement of the model instead.
+ */
+function context(judge: ScriptedEntityJudge = scriptedEntityJudge()): StageContext {
   return {
     driver: harness.driver,
     db,
-    provider: { embed: async () => [], generate: async () => ({}) },
+    provider: { embed: async () => [], generate: judge.generate },
     episodeId,
     episode: { id: episodeId, sessionId: 'session-1', text: '', turns: [] },
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
@@ -115,6 +126,7 @@ describe('entity dedup against a live graph', () => {
   it('merges a near-duplicate into the more-mentioned identity, redirecting every edge type', async () => {
     episodeId = 'live-episode-1';
     otherEpisodeId = 'live-episode-0';
+    const thirdEpisodeId = 'live-episode-2';
     await seedEpisode(episodeId);
     await seedEpisode(otherEpisodeId);
 
@@ -150,10 +162,11 @@ describe('entity dedup against a live graph', () => {
       confidence: 0.8,
       provenance: ['test'],
     });
-    // Three mentions on the canonical-to-be against one on the duplicate, so mention count
-    // alone decides which side wins.
+    // Two episodes name the canonical-to-be against one naming the duplicate, so the
+    // distinct-episode count alone decides which side wins.
+    await seedEpisode(thirdEpisodeId);
     await linkEntityMentions(harness.driver, {
-      episodeId,
+      episodeId: thirdEpisodeId,
       entityIds: [canonicalId],
       now: NOW,
       confidence: 0.8,
@@ -187,7 +200,7 @@ describe('entity dedup against a live graph', () => {
 
     // PARTICIPATES_IN moved: the duplicate's episode is now claimed by the canonical too.
     expect(await participatingEpisodeIds(harness.driver, canonicalId)).toEqual(
-      [episodeId, otherEpisodeId].sort(),
+      [episodeId, thirdEpisodeId, otherEpisodeId].sort(),
     );
 
     // MENTIONS moved too, in the opposite direction, and the old edge off the closed node survives.
@@ -244,9 +257,13 @@ describe('entity dedup against a live graph', () => {
     });
 
     episodeId = soloEpisodeId;
-    const outcome = await new EntityDedupStage().run(context());
+    const judge = refusingEntityJudge();
+    const outcome = await new EntityDedupStage().run(context(judge));
 
     expect(outcome.counts).toMatchObject({ merges: 0 });
+    // The unrelated name is never even a pair: its vector is nowhere near the subject's, so no
+    // nominator puts it forward and no model call is spent deciding about it.
+    expect(judge.calls.flatMap(judgedNames)).not.toContain('MySQL');
     const unrelated = await storedEntity(harness.driver, unrelatedId);
     expect(unrelated?.validUntil).toBeNull();
   }, 60_000);
@@ -294,7 +311,15 @@ describe('what a merge has to stay merged against', () => {
       provenance: ['test'],
     });
 
-    const outcome = await new EntityDedupStage().run(context());
+    // The judge answers for this pair alone. Every entity in this database carries a
+    // hand-built vector, so a blanket yes would merge the whole file's cast into one node.
+    const pairOnly = scriptedEntityJudge({
+      same: (left, right) =>
+        [left, right].every((name) => name.toLowerCase().startsWith('postgre')),
+      review: (left, right) =>
+        [left, right].every((name) => name.toLowerCase().startsWith('postgre')),
+    });
+    const outcome = await new EntityDedupStage().run(context(pairOnly));
     expect(outcome.counts).toMatchObject({ merges: 1 });
     expect((await storedEntity(harness.driver, mergedAwayId))?.validUntil).not.toBeNull();
   }, 120_000);
