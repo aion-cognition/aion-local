@@ -62,3 +62,4 @@ export { introspectionOperations } from './application/catalog.js';
  * measurable trigger, so a person names the merge to reverse.
  */
 export { listUnmergeableRecords, runEntityUnmerge } from './application/operations/unmerge.js';
+export type { UnmergedDecision, UnmergeReport } from './application/operations/unmerge.js';

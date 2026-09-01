@@ -1,24 +1,34 @@
-import { listEntityMergeProposals } from '../../../infrastructure/sqlite/entity-merge-proposals.js';
-import { applyEntityMergeProposal } from '../../../reflection/application/entity-merge-review.js';
+import {
+  applyEntityMerge,
+  collectMergeSignals,
+} from '../../../reflection/application/entity-merge-writer.js';
+import {
+  EntityDetailCache,
+  findTier0Groups,
+} from '../../../reflection/application/stages/entity-dedup-cascade.js';
 import type { HealthSnapshot } from '../../domain/health.js';
-import { AUTO_MERGE_METHOD, wouldAutoApply } from '../../domain/merge-shadow.js';
+import { AUTO_MERGE_METHOD } from '../../domain/merge-shadow.js';
 import type { IntrospectionOperation, OperationOutcome } from '../../domain/operation.js';
 
 /**
- * Applies exact-name entity-merge proposals the way a person applying them by hand would: the
- * two names fold to the same string, so there is no judgment call left for a reviewer to make.
- * `merge_shadow` measured this rule against two live review batches before anything was allowed
- * to act on it. Every exact-name pair in both batches was a merge a person went on to approve,
- * and the rule never disagreed with a person on one; that measurement is what earned this
- * operation the right to merge rather than only record.
+ * Tier 0 of the entity cascade, swept over the whole current graph rather than over one
+ * episode's entities. The reflection stage runs the same two readings on what it just touched;
+ * this catches the pair neither side of which any recent episode mentioned, which is most of
+ * them once a graph has some history.
  *
- * A fuzzy pair, where the names differ, is left alone here. It stays open for `aion proposals`,
- * which is still where a person decides those.
+ * What it merges is what the graph is already holding twice: two spellings of one name that the
+ * `name_norm` uniqueness key cannot see, and an identity that already answers to another's name
+ * as an alias. No model call is made and none is wanted, because neither reading is a judgment
+ * about the world.
  *
- * The `AION_AUTO_MERGE` knob turns this operation off without touching the shadow judge or the
- * queue: proposals keep arriving and stay open, nothing merges them, and flipping the knob is
- * the fast way back to fully manual review if something looks wrong. A merge this operation made
- * is reversed one at a time with `aion unmerge`, the same as any other entity merge.
+ * The exact-name rule this operation used to carry is retired with the identity key that made
+ * it necessary. Two current entities can no longer hold one folded name, so an exact-name pair
+ * is a shape the graph stopped producing; the spellings that key apart are what is left, and
+ * they are exactly what the old rule could not see.
+ *
+ * The `AION_AUTO_MERGE` knob turns the sweep off without touching anything else. A merge this
+ * operation made is reversed one at a time with `aion unmerge`, which cites the decision record
+ * written here, the same as any other entity merge.
  */
 
 export const MERGE_AUTO_OPERATION = 'merge_auto';
@@ -26,8 +36,8 @@ export const MERGE_AUTO_OPERATION = 'merge_auto';
 /** Matches `merge_shadow`'s own divisor: ten open proposals reads as a full queue. */
 const MERGE_AUTO_RELEVANCE_DIVISOR = 10;
 
-/** A tick's ceiling on how many proposals get applied at once, independent of the knob. */
-const MERGE_AUTO_BATCH_CEILING = 200;
+/** A tick's ceiling on groups swept at once, independent of the knob. */
+const MERGE_AUTO_GROUP_CEILING = 200;
 
 export function mergeAutoRelevance(health: HealthSnapshot): number {
   return Math.min(1, health.proposals.entityMergeOpen / MERGE_AUTO_RELEVANCE_DIVISOR);
@@ -38,78 +48,70 @@ export function mergeAutoOperation(): IntrospectionOperation {
     name: MERGE_AUTO_OPERATION,
     bucket: 'hour',
     relevance: mergeAutoRelevance,
+    // The residue lane is what this is scored on: every identity the deterministic sweep
+    // absorbs is a side some open proposal was asking about, and the stale sweep resolves the
+    // row once the side is gone. An operation with no metric in the snapshot is scored on
+    // whether it applied anything, which is a measure that cannot fail.
+    measure: (health) => health.proposals.entityMergeOpen,
     run: async (ctx): Promise<OperationOutcome> => {
       if (!ctx.config.maintenance.autoMerge) {
         return {
           status: 'noop',
           itemsProcessed: 0,
           itemsAffected: 0,
-          detail: 'auto-merge disabled by AION_AUTO_MERGE; no proposals examined',
+          detail: 'auto-merge disabled by AION_AUTO_MERGE; nothing swept',
         };
       }
 
-      const open = listEntityMergeProposals(ctx.db)
-        .filter((proposal) => proposal.resolvedAt === null)
-        .slice(0, MERGE_AUTO_BATCH_CEILING);
+      const cache = new EntityDetailCache(ctx.driver);
+      const groups = await findTier0Groups(ctx.driver, cache, { limit: MERGE_AUTO_GROUP_CEILING });
 
       let seen = 0;
+      let merged = 0;
       let applied = 0;
-      let cleared = 0;
-      let queued = 0;
-      for (const proposal of open) {
+      for (const group of groups) {
         if (ctx.signal.aborted) {
           break;
         }
         seen += 1;
 
-        if (!wouldAutoApply(proposal.leftName, proposal.rightName)) {
-          queued += 1;
-          ctx.logger.info(
-            {
-              proposalId: proposal.id,
-              leftName: proposal.leftName,
-              leftType: proposal.leftType,
-              rightName: proposal.rightName,
-              rightType: proposal.rightType,
-              similarity: proposal.similarity,
-              outcome: 'queued',
-            },
-            'merge auto left a fuzzy proposal for review',
-          );
+        const signals = await collectMergeSignals(ctx.driver, group.canonical, group.members);
+        const result = await applyEntityMerge(
+          { driver: ctx.driver, db: ctx.db, logger: ctx.logger },
+          {
+            canonical: group.canonical,
+            members: group.members,
+            tier: 'tier0',
+            reasons: group.reasons,
+            signals,
+            method: AUTO_MERGE_METHOD,
+            now: ctx.now,
+          },
+        );
+        if (result.status !== 'merged') {
           continue;
         }
-
-        const result = await applyEntityMergeProposal(ctx.driver, ctx.db, {
-          id: proposal.id,
-          method: AUTO_MERGE_METHOD,
-          now: ctx.now,
-        });
-        if (result.outcome === 'applied') {
-          applied += 1;
-        } else {
-          cleared += 1;
+        for (const id of result.mergedIds) {
+          cache.absorb(id);
         }
+        merged += result.mergedIds.length;
+        applied += 1;
         ctx.logger.info(
           {
-            proposalId: proposal.id,
-            leftName: proposal.leftName,
-            leftType: proposal.leftType,
-            rightName: proposal.rightName,
-            rightType: proposal.rightType,
-            similarity: proposal.similarity,
-            outcome: result.outcome,
+            canonicalId: group.canonical.id,
+            mergedIds: result.mergedIds,
+            decisionId: result.decisionId,
+            reasons: group.reasons,
           },
-          'merge auto judged an exact-name proposal',
+          'merge auto absorbed a duplicate spelling',
         );
       }
 
       return {
-        status: applied === 0 ? 'noop' : 'applied',
+        status: merged === 0 ? 'noop' : 'applied',
         itemsProcessed: seen,
-        itemsAffected: applied,
-        detail:
-          `${String(applied)} exact-name proposal(s) auto-merged, ${String(cleared)} cleared, ` +
-          `${String(queued)} left queued for review`,
+        itemsAffected: merged,
+        detail: `${String(merged)} identity(ies) merged across ${String(applied)} deterministic group(s)`,
       };
     },
   };

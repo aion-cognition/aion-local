@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseUnmergeFlags } from './unmerge.js';
+import { describeUnmergedDecision, parseUnmergeFlags } from './unmerge.js';
 
 describe('parseUnmergeFlags', () => {
   it('lists what one canonical entity absorbed', () => {
@@ -24,6 +24,24 @@ describe('parseUnmergeFlags', () => {
   it('refuses a subcommand it does not have', () => {
     expect(() => parseUnmergeFlags(['split', 'entity-1'])).toThrow(
       "unknown unmerge subcommand 'split' (supported: ls, apply)",
+    );
+  });
+});
+
+describe('describeUnmergedDecision', () => {
+  it('names the tier that merged and every reason it recorded', () => {
+    expect(
+      describeUnmergedDecision({
+        id: 'decision-1',
+        tier: 'tier0',
+        reasons: ['both names squash to aionlocal'],
+      }),
+    ).toBe('merged by tier0: both names squash to aionlocal');
+  });
+
+  it('says a record with no reasons has none rather than printing an empty tail', () => {
+    expect(describeUnmergedDecision({ id: 'decision-2', tier: 'tier3', reasons: [] })).toBe(
+      'merged by tier3: no reason recorded',
     );
   });
 });

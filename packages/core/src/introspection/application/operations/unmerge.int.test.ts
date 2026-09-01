@@ -6,7 +6,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { entityUnmergeLedgerKey, listUnmergeableRecords, runEntityUnmerge } from './unmerge.js';
 import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
 import { upsertEdge } from '../../../infrastructure/graph/edges.js';
-import { redirectAndAbsorb } from '../../../infrastructure/graph/entity-dedup-queries.js';
+import {
+  loadEntityDedupDetails,
+  redirectAndAbsorb,
+} from '../../../infrastructure/graph/entity-dedup-queries.js';
 import {
   mergeEntities,
   type EntityMergeInput,
@@ -25,6 +28,10 @@ import {
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { isLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
+import {
+  applyEntityMerge,
+  collectMergeSignals,
+} from '../../../reflection/application/entity-merge-writer.js';
 
 /**
  * A merge and its reversal, end to end. Two spellings of one tool are merged, then split back
@@ -252,4 +259,65 @@ describe('entity unmerge', () => {
     expect(second.status).toBe('noop');
     expect(second.detail).toContain('already been split back out');
   });
+});
+
+describe('what a reversal can cite', () => {
+  it('names the tier that merged and the reasons it recorded', async () => {
+    const holderId = await seedEntity(entityInput('Valkey', 'valkey', CANONICAL_EPISODE));
+    const absorbedId = await seedEntity(entityInput('val-key', 'val-key', CANONICAL_EPISODE));
+    const [holder, absorbed] = await loadEntityDedupDetails(harness.driver, [holderId, absorbedId]);
+    if (holder === undefined || absorbed === undefined) {
+      throw new Error('failed to load the pair to merge');
+    }
+
+    const merge = await applyEntityMerge(
+      { driver: harness.driver, db, logger },
+      {
+        canonical: holder,
+        members: [holder, absorbed],
+        tier: 'tier0',
+        reasons: ['both names squash to valkey'],
+        signals: await collectMergeSignals(harness.driver, holder, [holder, absorbed]),
+        method: 'test_merge',
+        now: NOW,
+      },
+    );
+    expect(merge.status).toBe('merged');
+
+    const report = await runEntityUnmerge(
+      { driver: harness.driver, db, logger },
+      { mergedId: absorbedId, now: LATER },
+    );
+
+    expect(report.status).toBe('applied');
+    expect(report.decision).toEqual({
+      id: merge.status === 'merged' ? merge.decisionId : '',
+      tier: 'tier0',
+      reasons: ['both names squash to valkey'],
+    });
+  }, 120_000);
+
+  it('cites nothing on a merge written before the cascade recorded decisions', async () => {
+    const keptId = await seedEntity(entityInput('Fenwick', 'fenwick', CANONICAL_EPISODE));
+    const goneId = await seedEntity(entityInput('fen-wick', 'fen-wick', CANONICAL_EPISODE));
+    await redirectAndAbsorb(harness.driver, {
+      canonicalId: keptId,
+      canonicalNameNorm: 'fenwick',
+      mergedIds: [goneId],
+      aliases: ['fen-wick'],
+      accessCount: 0,
+      mergedRecords: [
+        { id: goneId, name: 'fen-wick', nameNorm: 'fen-wick', type: 'tool', aliases: [] },
+      ],
+      now: NOW,
+    });
+
+    const report = await runEntityUnmerge(
+      { driver: harness.driver, db, logger },
+      { mergedId: goneId, now: LATER },
+    );
+
+    expect(report.status).toBe('applied');
+    expect(report.decision).toBeUndefined();
+  }, 120_000);
 });

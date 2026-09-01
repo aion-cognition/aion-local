@@ -1,4 +1,9 @@
-import { listUnmergeableRecords, runEntityUnmerge, type GraphConnection } from '@aion/core';
+import {
+  listUnmergeableRecords,
+  runEntityUnmerge,
+  type GraphConnection,
+  type UnmergedDecision,
+} from '@aion/core';
 
 import { CliUsageError, parseArgs, type ArgSpec } from './args.js';
 import { short } from './format.js';
@@ -15,8 +20,16 @@ import { withSubstrate } from './substrate.js';
  * things. So the loop never selects it, and this command is where that person says so.
  *
  * `ls <canonical-id>` shows what one entity has absorbed, which is what a decision needs.
- * `apply <merged-id>` splits one of those identities back out.
+ * `apply <merged-id>` splits one of those identities back out, and says what the merge thought
+ * it knew, so the reversal names the evidence that was wrong rather than only the node.
  */
+
+/** One line naming the tier that merged and the reasons it recorded. */
+export function describeUnmergedDecision(decision: UnmergedDecision): string {
+  const reasons =
+    decision.reasons.length === 0 ? 'no reason recorded' : decision.reasons.join('; ');
+  return `merged by ${decision.tier}: ${reasons}`;
+}
 
 const SUBCOMMANDS = ['ls', 'apply'] as const;
 
@@ -90,6 +103,10 @@ export function runUnmerge(
       if (report.restoredId !== undefined) {
         write(`  restored as ${report.restoredId} out of ${short(report.canonicalId ?? '')}`);
         write(`  ${String(report.aliasesReleased)} alias(es) released`);
+      }
+      if (report.decision !== undefined) {
+        write(`  ${describeUnmergedDecision(report.decision)}`);
+        write(`  decision record ${short(report.decision.id)}`);
       }
       return 0;
     },

@@ -64,9 +64,9 @@ export function introspectionOperations(): readonly IntrospectionOperation[] {
     communityRefreshOperation(),
     symbiosisBridgeOperation(),
 
-    // Entity-merge policy: merges the exact-name pairs a person going on to approve every one
-    // of, measured over two live review batches, already proved safe. A fuzzy pair passes
-    // through untouched and stays queued for `aion proposals`. Claim-merge policy sits beside
+    // Entity-merge policy: tier 0 of the dedup cascade, swept over the whole graph rather than
+    // over one episode. It absorbs the spellings the identity key cannot tell apart and asks no
+    // model, since neither reading is a judgment about the world. Claim-merge policy sits beside
     // it: a nearest-neighbor pair a two-pass judge unanimously calls one assertion restated.
     mergeAutoOperation(),
     claimDedupOperation(),

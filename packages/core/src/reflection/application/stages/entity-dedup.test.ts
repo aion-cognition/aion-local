@@ -840,7 +840,8 @@ describe('what a vector alone cannot merge', () => {
     mention(EPISODE_ID, 'postgresql', 1);
 
     const judge = scriptedJudge({
-      same: (left, right) => [left, right].every((name) => name.toLowerCase().startsWith('postgre')),
+      same: (left, right) =>
+        [left, right].every((name) => name.toLowerCase().startsWith('postgre')),
       review: (left, right) =>
         [left, right].every((name) => name.toLowerCase().startsWith('postgre')),
     });
