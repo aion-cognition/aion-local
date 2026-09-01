@@ -157,10 +157,11 @@ reminder.
 
 ## The re-exercise gate
 
-`packages/mcp/src/gate/` holds the seven scripted batteries the fix round is gated on, each
-one a finding from the first full-system exercise round re-run against the shipped pipeline
+`packages/mcp/src/gate/` holds ten int test files. Seven scripted batteries, each one a
+finding from the first full-system exercise round re-run against the shipped pipeline
 (`bootstrap.ts`'s own stage list, live Ollama, a pooled throwaway Neo4j cleared for each
-file).
+file), are split across three of them, listed below. The other seven gate one behavior each,
+three of them the mode-setting batteries further down.
 
 ```
 npx vitest run --project integration --reporter=verbose re-exercise-gate         # all seven
@@ -244,3 +245,12 @@ a person already ruled on, which is a hindsight figure and never mixed into the 
 idle, scores the advisor alone and the advisor with its review against the answer each case was
 built with, and asserts the shipped default against a bar written before the numbers: agreement
 at or above 0.9 with no invalid selection ships `act`, anything less ships `propose`.
+
+`gate/entity-cascade-precision.int.test.ts` is the same shape for `AION_ENTITY_MERGE_MODE`. It
+runs the 24-pair cascade battery pinned to `unanimous` and asserts the shipped default against
+a bar written before the numbers: precision at or above 0.9 on the headline, tier 0 included,
+and at or above 0.9 on the judge tier alone ships `unanimous`, under either bar ships
+`propose`. `JUDGED_SAMPLE_FLOOR` (4) is the smallest judged sample the rule trusts, since tier
+0's deterministic merges alone can carry the headline to 1.000 without judging anything. A
+failure there means the cascade moved, and the fix is to change the knob rather than the
+assertion.
