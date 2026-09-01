@@ -76,6 +76,7 @@ export {
   type EntityIdentityMatch,
   type EntityIdentityUpdate,
   type EntityMergeRow,
+  type EntityNameForms,
   type MergedEntity,
 } from './entity-identity-queries.js';
 export {

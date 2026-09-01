@@ -96,7 +96,7 @@ export class EntityFakeGraph extends FakeGraph {
       this.statements.push({ cypher, parameters });
       return toResult(this.#writeIdentity(parameters));
     }
-    if (cypher.includes(`n.${ENTITY_NAME_SQUASH_PROPERTY} IN $squashes`)) {
+    if (cypher.includes(`WHERE is_current OR n.${ENTITY_NAME_NORM_PROPERTY} IN $names`)) {
       this.statements.push({ cypher, parameters });
       return toResult(this.#nameForms(parameters));
     }
@@ -138,7 +138,6 @@ export class EntityFakeGraph extends FakeGraph {
       id: node.id,
       name: node.properties[ENTITY_NAME_PROPERTY],
       name_norm: node.properties[ENTITY_NAME_NORM_PROPERTY],
-      name_squash: node.properties[ENTITY_NAME_SQUASH_PROPERTY] ?? null,
       type: node.properties[ENTITY_TYPE_PROPERTY],
       aliases_norm: strings(node.properties[ENTITY_ALIASES_NORM_PROPERTY]),
       is_structural: node.properties[STRUCTURAL_PROPERTY] === true,
@@ -201,23 +200,23 @@ export class EntityFakeGraph extends FakeGraph {
     return written;
   }
 
+  /** The name branch answers whatever the node's currency; the alias branch is current-only. */
   #nameForms(parameters: Record<string, unknown>): Row[] {
     const names = strings(parameters.names);
-    const squashes = strings(parameters.squashes);
     return this.entities()
-      .filter((node) => this.#current(node))
       .filter((node) => {
         const nameNorm = node.properties[ENTITY_NAME_NORM_PROPERTY] as string | undefined;
-        const squash = node.properties[ENTITY_NAME_SQUASH_PROPERTY] as string | undefined;
+        if (nameNorm !== undefined && names.includes(nameNorm)) {
+          return true;
+        }
         return (
-          (nameNorm !== undefined && names.includes(nameNorm)) ||
-          (squash !== undefined && squashes.includes(squash)) ||
+          this.#current(node) &&
           strings(node.properties[ENTITY_ALIASES_NORM_PROPERTY]).some((alias) =>
             names.includes(alias),
           )
         );
       })
-      .map((node) => this.#identityRow(node))
+      .map((node): Row => ({ ...this.#identityRow(node), is_current: this.#current(node) }))
       .sort((left, right) => String(left.id).localeCompare(String(right.id)));
   }
 

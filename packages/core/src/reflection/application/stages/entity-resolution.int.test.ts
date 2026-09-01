@@ -8,11 +8,13 @@ import {
   ENTITY_NAME_VECTOR_HASH_PROPERTY,
   writeEntityVectors,
 } from '../../../infrastructure/graph/entity-queries.js';
+import { closeIdentifierEntities } from '../../../infrastructure/graph/identifier-decay-queries.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import {
   nodeProperties,
   storedEntities,
 } from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
+import { identifierEntityState } from '../../../infrastructure/graph/test-support/maintenance-queries.fixture.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
@@ -29,9 +31,10 @@ import {
 import type { StageContext } from '../../domain/stage.js';
 
 /**
- * The resolution tiers against a real server. Squash routing and alias routing are Cypher
- * predicates over stored name forms, and the re-embed decision reads a hash the graph holds,
- * so both are claims about the substrate rather than about the pure helpers beside them.
+ * The resolution tiers against a real server. Alias routing and the ownership rule that comes
+ * before it are Cypher predicates over stored name forms, and the re-embed decision reads a
+ * hash the graph holds, so all of it is a claim about the substrate rather than about the pure
+ * helpers beside them.
  *
  * Resolution never embeds; the provider is here to satisfy the stage contract and fails the
  * test loudly if that ever stops being true.
@@ -107,9 +110,11 @@ afterAll(async () => {
   rmSync(dataDir, { recursive: true, force: true });
 });
 
-describe('the squashed-name tier', () => {
-  it('routes a separator variant onto the identity already holding the squashed form', async () => {
-    const seeded = await resolveOne(extracted('proposal_hygiene', 'tool'));
+describe('the alias tier', () => {
+  it('routes a spelling onto the identity that already answers to it', async () => {
+    const seeded = await resolveOne(
+      extracted('proposal_hygiene', 'tool', { aliases: ['proposal-hygiene'] }),
+    );
     expect(seeded.created).toBe(true);
 
     const routed = await resolveOne(extracted('proposal-hygiene', 'topic'));
@@ -120,12 +125,33 @@ describe('the squashed-name tier', () => {
     const stored = (await storedEntities(harness.driver)).filter(
       (entity) => entity.nameSquash === 'proposalhygiene',
     );
+    // Squash equality routes nothing at write, so the identity is one node because a record
+    // named it both ways, not because two spellings squash alike.
     expect(stored).toHaveLength(1);
-    // Routing rewrites the MERGE key, so the spelling this record used lands as an alias and
-    // the next record spelling it that way needs no lookup at all.
     expect(stored[0]?.aliasesNorm).toContain('proposal-hygiene');
     // The routed reading still counts toward the label; only the identity was decided by name.
     expect(stored[0]?.typeCounts).toBe('{"tool":1,"topic":1}');
+  });
+});
+
+describe('a name a maintenance close still keys', () => {
+  it('routes nothing off it, so the mention reopens the identity holding it', async () => {
+    const closed = await resolveOne(extracted('edge-prune', 'tool'));
+    await closeIdentifierEntities(harness.driver, [closed.id], NOW);
+
+    // A current identity holding that spelling as an alias is what the alias tier would answer
+    // with, and answering it would strand the closed node holding the key forever.
+    const holder = await resolveOne(extracted('edge prune', 'topic', { aliases: ['edge-prune'] }));
+    expect(holder.id).not.toBe(closed.id);
+
+    const routed = await resolveOne(extracted('edge-prune', 'tool'));
+
+    expect(routed.id).toBe(closed.id);
+    expect(await identifierEntityState(harness.driver, closed.id)).toEqual({
+      forgottenAt: undefined,
+      validUntil: undefined,
+      closedBy: undefined,
+    });
   });
 });
 

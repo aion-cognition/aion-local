@@ -451,8 +451,9 @@ constraint and the entity-resolution seed strategy both apply to them.
   constraint the entity key used to carry. One name is one identity whatever type the
   extractor picked for it, and `type` follows counted readings as an ordinary property.
 - One range index, `entity_name_squash_idx` on `Entity.name_squash`, the separator-stripped
-  second lookup key. Never a uniqueness rule: `re-mark` and `remark` squash together and are
-  two words, so the squash routes a lookup and decides no duplicate on its own.
+  second lookup key. Never a uniqueness rule and never a write-time route: `re-mark` and
+  `remark` squash together and are two words, so squash equality is evidence the dedup
+  cascade weighs into a merge that carries a provenance record and an undo.
 - Two vector indexes, `content_vec_idx` and `context_vec_idx`, both `FOR (n:Memory)`, both
   cosine similarity at the configured embed dimension (768 by default, `nomic-embed-text`).
 - Two range indexes, `memory_valid_until_idx` and `memory_tx_until_idx`, both
