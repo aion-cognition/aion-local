@@ -438,15 +438,21 @@ graph. Every content-bearing label carries `Memory` as well, which is everything
 except `Session` and the two backbone nodes, because a Neo4j vector index cannot span a
 label union: `Memory` is the only mechanism that lets one vector index cover more than one
 node type. The backbone nodes (`Member`, `Workspace`) stay out of `Memory` (they are
-connectivity, not content) and carry `Entity` instead, so the composite `(name_norm, type)`
-uniqueness constraint and the entity-resolution seed strategy both apply to them.
+connectivity, not content) and carry `Entity` instead, so the `name_norm` uniqueness
+constraint and the entity-resolution seed strategy both apply to them.
 
-**Indexes and constraints** (migrations 001 and 002, `infrastructure/graph/migrations.ts`):
+**Indexes and constraints** (migrations 001, 002 and 003,
+`infrastructure/graph/migrations.ts`):
 
 - Uniqueness constraints on `AionNode.id`, and on `.id` for every primary label except
-  `Entity`, which takes a composite constraint on `(name_norm, type)` instead. Migration 001
+  `Entity`, which takes `entity_name_unique` on `name_norm` alone instead. Migration 001
   covers `Session`, `Episode`, `Turn`, `Member`, `Workspace`; 002 adds `Narrative`,
-  `Bridge`, and the nine cognitive types.
+  `Bridge`, and the nine cognitive types; 003 drops the composite `(name_norm, type)`
+  constraint the entity key used to carry. One name is one identity whatever type the
+  extractor picked for it, and `type` follows counted readings as an ordinary property.
+- One range index, `entity_name_squash_idx` on `Entity.name_squash`, the separator-stripped
+  second lookup key. Never a uniqueness rule: `re-mark` and `remark` squash together and are
+  two words, so the squash routes a lookup and decides no duplicate on its own.
 - Two vector indexes, `content_vec_idx` and `context_vec_idx`, both `FOR (n:Memory)`, both
   cosine similarity at the configured embed dimension (768 by default, `nomic-embed-text`).
 - Two range indexes, `memory_valid_until_idx` and `memory_tx_until_idx`, both
