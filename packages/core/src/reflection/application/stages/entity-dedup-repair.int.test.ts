@@ -170,6 +170,10 @@ describe('merge atomicity', () => {
       now: NOW,
     });
 
+    expect(result.status).toBe('applied');
+    if (result.status !== 'applied') {
+      return;
+    }
     expect(result.superseded).toEqual([doomedId]);
     expect(result.edgesRedirected).toBeGreaterThan(0);
 
@@ -180,21 +184,22 @@ describe('merge atomicity', () => {
     expect(await participatingEpisodeIds(harness.driver, survivorId)).toContain(atomicEpisodeId);
   }, 60_000);
 
-  it('rolls the redirect back when any member of the group cannot be closed', async () => {
+  it('writes nothing when a member of the group is not a node the graph answers for', async () => {
     const before = await storedEntity(harness.driver, survivorId);
 
-    await expect(
-      redirectAndAbsorb(harness.driver, {
-        canonicalId: survivorId,
-        canonicalNameNorm: 'valkey',
-        mergedIds: ['an-id-no-node-answers-to'],
-        aliases: ['rolled back'],
-        accessCount: 99,
-        now: NOW,
-      }),
-    ).rejects.toThrow();
+    // The post-lock currency read treats an unknown id as holding no currency, so the group
+    // is refused before any redirect work rather than failing partway and rolling back.
+    const result = await redirectAndAbsorb(harness.driver, {
+      canonicalId: survivorId,
+      canonicalNameNorm: 'valkey',
+      mergedIds: ['an-id-no-node-answers-to'],
+      aliases: ['rolled back'],
+      accessCount: 99,
+      now: NOW,
+    });
+    expect(result).toEqual({ status: 'stale', staleIds: ['an-id-no-node-answers-to'] });
 
-    // The alias and salience write is in the same transaction as the close, so neither landed.
+    // The alias and salience write shares the transaction with the close, so neither landed.
     const after = await storedEntity(harness.driver, survivorId);
     expect(after?.aliases).toEqual(before?.aliases);
     expect(after?.accessCount).toBe(before?.accessCount);

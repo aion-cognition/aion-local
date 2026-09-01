@@ -91,6 +91,10 @@ export class DedupFakeGraph extends FakeGraph {
       this.statements.push({ cypher, parameters });
       return toResult(this.#mergeProvenance(parameters));
     }
+    if (cypher.includes('UNWIND $ids AS wanted')) {
+      this.statements.push({ cypher, parameters });
+      return toResult(this.#sidesWithoutCurrency(parameters));
+    }
     if (cypher.includes('UNWIND $mergedIds AS mergedId') && cypher.includes('startNode(r).id')) {
       this.statements.push({ cypher, parameters });
       return toResult(this.#mergedNodeEdges(parameters));
@@ -137,6 +141,22 @@ export class DedupFakeGraph extends FakeGraph {
         );
       });
     return [...new Set(episodes)].sort();
+  }
+
+  /** The merge transaction's post-lock currency read: ids that are missing or closed. */
+  #sidesWithoutCurrency(parameters: Record<string, unknown>): Row[] {
+    const wanted = [...new Set((parameters.ids as string[] | undefined) ?? [])];
+    return wanted
+      .filter((id) => {
+        const node = this.nodes.get(id);
+        return (
+          node === undefined ||
+          node.properties[BITEMPORAL_PROPERTIES.validUntil] !== undefined ||
+          node.properties[BITEMPORAL_PROPERTIES.forgottenAt] !== undefined
+        );
+      })
+      .sort()
+      .map((id) => ({ id }));
   }
 
   #squashGroups(parameters: Record<string, unknown>): Row[] {

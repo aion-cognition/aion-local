@@ -69,7 +69,13 @@ export type EntityMergeWriteResult =
       /** True when the post-commit vector cleanup was swallowed rather than run. */
       readonly vectorCleanupDeferred: boolean;
     }
-  | { readonly status: 'skipped'; readonly reason: 'already_applied' | 'nothing_to_merge' };
+  | { readonly status: 'skipped'; readonly reason: 'already_applied' | 'nothing_to_merge' }
+  | {
+      readonly status: 'skipped';
+      readonly reason: 'stale';
+      /** The sides that lost currency between the decision's snapshot and the merge's locks. */
+      readonly staleIds: readonly string[];
+    };
 
 /**
  * The measured evidence for each absorbed member against the canonical, in one graph read for
@@ -151,6 +157,17 @@ export async function applyEntityMerge(
     decisionKey,
     now: input.now,
   });
+
+  // The ledger is not marked: the merge did not happen. The candidate reads filter on
+  // currency, so a group with a closed side cannot re-form; one a reopen resurrects
+  // deserves a fresh decision rather than a stamp saying this one applied.
+  if (merged.status === 'stale') {
+    deps.logger.info(
+      { canonicalId: input.canonical.id, mergedIds, staleIds: merged.staleIds },
+      'entity merge skipped, a side lost currency since the decision',
+    );
+    return { status: 'skipped', reason: 'stale', staleIds: merged.staleIds };
+  }
 
   const decisionId = recordEntityMergeDecision(deps.db, {
     canonicalId: input.canonical.id,

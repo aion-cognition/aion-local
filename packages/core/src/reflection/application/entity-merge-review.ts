@@ -162,6 +162,19 @@ export async function applyEntityMergeProposal(
   });
 
   resolveEntityMergeProposal(db, input.id, now.toISOString());
+  if (result.status === 'skipped' && result.reason === 'stale') {
+    // The pre-check above passed and a writer took a side's currency in the window since;
+    // the merge transaction's own post-lock read caught it. Same answer as the pre-check.
+    const leftGone = result.staleIds.includes(proposal.leftId);
+    const rightGone = result.staleIds.includes(proposal.rightId);
+    let missingSide: 'left' | 'right' | 'both' = 'right';
+    if (leftGone && rightGone) {
+      missingSide = 'both';
+    } else if (leftGone) {
+      missingSide = 'left';
+    }
+    return { outcome: 'stale', id: input.id, missingSide };
+  }
   if (result.status !== 'merged') {
     return {
       outcome: 'already_applied',

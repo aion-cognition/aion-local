@@ -1,7 +1,11 @@
 import type { Driver } from 'neo4j-driver';
 
 import { ACCESS_COUNT_PROPERTY } from './access-tracking.js';
-import { supersedeInTransaction, writeStampedNodeInTransaction } from './bitemporal.js';
+import {
+  currentOnly,
+  supersedeInTransaction,
+  writeStampedNodeInTransaction,
+} from './bitemporal.js';
 import { type GraphTransaction, inWriteTransaction, runWrite } from './connection.js';
 import { upsertEdgeInTransaction } from './edges.js';
 import { aliasKeys, aliasRecord } from './entity-identity-queries.js';
@@ -125,10 +129,32 @@ export type MergeEntityGroupInput = {
   readonly now: Date;
 };
 
-export type MergeEntityGroupResult = {
-  readonly edgesRedirected: number;
-  readonly superseded: readonly string[];
-};
+export type MergeEntityGroupResult =
+  | {
+      readonly status: 'applied';
+      readonly edgesRedirected: number;
+      readonly superseded: readonly string[];
+    }
+  | {
+      /** A side lost currency between the caller's snapshot and this transaction's locks. */
+      readonly status: 'stale';
+      readonly staleIds: readonly string[];
+    };
+
+/**
+ * Of the group's ids, the ones that no longer hold currency. Read after the locks are taken,
+ * so the answer is authoritative for the rest of the transaction: a writer that would take a
+ * side's currency is blocked on the same lock until this transaction commits.
+ */
+const FIND_SIDES_WITHOUT_CURRENCY = [
+  'UNWIND $ids AS wanted',
+  `OPTIONAL MATCH (n:${BASE_NODE_LABEL} { id: wanted })`,
+  `WHERE ${currentOnly('n')}`,
+  'WITH wanted, n',
+  'WHERE n IS NULL',
+  'RETURN wanted AS id',
+  'ORDER BY id',
+].join('\n');
 
 /**
  * One edge as it stood on the absorbed node. `redirected` is false for the edges a merge
@@ -221,7 +247,9 @@ function buildMergeProvenance(
 /**
  * The merge executes inside a graph transaction for atomicity, as one transaction: lock
  * canonical and every merged node (stable order, so two concurrent merges cannot deadlock on
- * each other), read the merged nodes' relationships, redirect each through the ordinary
+ * each other), confirm under those locks that every side still holds currency (a group whose
+ * member was absorbed elsewhere is reported `stale`, not written), read the merged nodes'
+ * relationships, redirect each through the ordinary
  * edge-upsert (which is what makes a collision with an edge canonical already holds sum and
  * max rather than overwrite), absorb the aliases and salience, and close each merged node
  * with its lineage edge. An edge whose other endpoint is itself part of this group, including
@@ -239,7 +267,7 @@ export async function redirectAndAbsorb(
 ): Promise<MergeEntityGroupResult> {
   const mergedIds = [...new Set(input.mergedIds)].sort();
   if (mergedIds.length === 0) {
-    return { edgesRedirected: 0, superseded: [] };
+    return { status: 'applied', edgesRedirected: 0, superseded: [] };
   }
   const absorbed = new Set([input.canonicalId, ...mergedIds]);
 
@@ -247,6 +275,19 @@ export async function redirectAndAbsorb(
     await lockNodeInTransaction(tx, input.canonicalId, input.now);
     for (const mergedId of mergedIds) {
       await lockNodeInTransaction(tx, mergedId, input.now);
+    }
+
+    // The caller decided this group off a snapshot that may be minutes old; the sibling
+    // paths (claim-dedup, supersession-apply) re-read currency just before writing and this
+    // path must too. A side another writer absorbed or a person forgot in the meantime
+    // makes the whole group's evidence stale, so nothing is written for any of it.
+    const staleIds = await tx.run(
+      FIND_SIDES_WITHOUT_CURRENCY,
+      { ids: [input.canonicalId, ...mergedIds] },
+      (row) => row.id as string,
+    );
+    if (staleIds.length > 0) {
+      return { status: 'stale', staleIds };
     }
 
     const edges = await findMergedNodeEdgesInTransaction(tx, mergedIds);
@@ -315,7 +356,7 @@ export async function redirectAndAbsorb(
       superseded.push(result.oldId);
     }
 
-    return { edgesRedirected: redirected, superseded };
+    return { status: 'applied', edgesRedirected: redirected, superseded };
   });
 }
 
