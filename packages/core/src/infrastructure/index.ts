@@ -12,8 +12,10 @@ export { describeError } from './errors.js';
 
 export { halfWindowIntervalMs, MIN_SWEEP_INTERVAL_MS, SweepTimer } from './sweep-timer.js';
 
-export { SqliteStore, openSqliteHandle } from './sqlite/database.js';
+export { DEFAULT_SQLITE_PATH, SqliteStore, openSqliteHandle } from './sqlite/database.js';
 export type { SqliteHandle } from './sqlite/database.js';
+
+export { countExperiencesByVersion, experienceArchiveSpan } from './sqlite/experience-archive.js';
 
 export {
   isLedgerApplied,

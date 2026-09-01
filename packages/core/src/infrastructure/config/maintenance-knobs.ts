@@ -57,6 +57,11 @@ export const MAINTENANCE_KNOBS = {
   contextRefreshBatchSize: ['AION_MAINTENANCE_CONTEXT_REFRESH_BATCH_SIZE', positiveInt, 20],
   /** `reconcile_reenqueue`'s bound: orphaned episodes re-enqueued in one run. */
   reconcileBatchSize: ['AION_MAINTENANCE_RECONCILE_BATCH_SIZE', positiveInt, 200],
+  // `aion replay`'s page over the experience archive: rows read and put back through the
+  // pipeline before the next keyset page. Fifty matches `reconcileBatchSize`'s reasoning at a
+  // quarter of the size, since every row here can cost a full pipeline run rather than one
+  // enqueue, and the page is also the abort granularity: a smaller page loses less work.
+  replayBatchSize: ['AION_MAINTENANCE_REPLAY_BATCH_SIZE', positiveInt, 50],
   /** `dead_letter`'s bound: attempts-exhausted rows given their one retry cycle in one run. */
   deadLetterBatchSize: ['AION_MAINTENANCE_DEAD_LETTER_BATCH_SIZE', positiveInt, 50],
   // `redaction_residue_purge`'s bound: nodes rewritten in one run. Small, since every hit is a

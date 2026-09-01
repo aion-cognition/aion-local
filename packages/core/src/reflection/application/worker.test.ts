@@ -162,8 +162,9 @@ describe('signal-driven execution', () => {
 
   /**
    * The run clock is the wall clock in live operation and a value the caller supplies, which
-   * is what leaves an elapsed-time decision inside a stage measuring real elapsed time while
-   * a replay of the same episode can hand the pipeline the episode's own clock.
+   * is what leaves an elapsed-time decision inside a stage measuring real elapsed time. A
+   * replay supplies its own reading of the same wall clock; the episode's own clock reaches
+   * the pipeline through the episode node, never through here.
    */
   it('runs the episode on the clock it was given rather than one it reads itself', async () => {
     const runner = new StubRunner();

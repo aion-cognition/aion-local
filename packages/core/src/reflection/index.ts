@@ -27,6 +27,14 @@ export { PIPELINE_VERSION } from './domain/version.js';
 
 export { ReflectionOrchestrator, orchestratorLedgerKey } from './application/orchestrator.js';
 
+export { replayExperiences } from './application/replay.js';
+export type {
+  ReplayDeps,
+  ReplayProgress,
+  ReplayReport,
+  ReplaySelection,
+} from './application/replay.js';
+
 export { ReflectionWorker } from './application/worker.js';
 export type { ReflectionWorkerOptions } from './application/worker.js';
 

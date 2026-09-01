@@ -30,6 +30,7 @@ export {
   GraphUnreachableError,
   SchemaNotInitializedError,
   bootstrapService,
+  reflectionStages,
 } from './bootstrap.js';
 export type { AionService } from './bootstrap.js';
 
