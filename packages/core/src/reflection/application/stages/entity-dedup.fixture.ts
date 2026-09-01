@@ -408,10 +408,10 @@ export class DedupFakeGraph extends FakeGraph {
       return [];
     }
     if (node.properties[BITEMPORAL_PROPERTIES.validUntil] === undefined) {
-      node.properties[BITEMPORAL_PROPERTIES.validUntil] = parameters.now;
+      node.properties[BITEMPORAL_PROPERTIES.validUntil] = parameters.validUntil;
     }
     if (node.properties[BITEMPORAL_PROPERTIES.txUntil] === undefined) {
-      node.properties[BITEMPORAL_PROPERTIES.txUntil] = parameters.now;
+      node.properties[BITEMPORAL_PROPERTIES.txUntil] = parameters.txUntil;
     }
     return [
       {

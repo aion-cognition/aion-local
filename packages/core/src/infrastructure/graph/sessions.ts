@@ -1,6 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 
-import { writeStampedNodeInTransaction } from './bitemporal.js';
+import { writeStampedDerivedNodeInTransaction } from './bitemporal.js';
 import { inWriteTransaction, type GraphTransaction } from './connection.js';
 import { upsertEdgeInTransaction } from './edges.js';
 import { lockNodeInTransaction } from './locks.js';
@@ -17,6 +17,12 @@ export type EnsureGraphSessionInput = {
   readonly memberId: string;
   readonly workspaceId: string;
   readonly now?: Date;
+  /**
+   * When the experience that created the session happened. Defaults to `now`, which dates the
+   * session to the write; a caller replaying an old experience passes the experience's clock
+   * so the node's world time is not the moment of the replay.
+   */
+  readonly occurredAt?: Date;
 };
 
 export type EnsureGraphSessionResult = {
@@ -91,12 +97,14 @@ export async function ensureGraphSession(
   input: EnsureGraphSessionInput,
 ): Promise<EnsureGraphSessionResult> {
   const now = input.now ?? new Date();
+  const occurredAt = input.occurredAt ?? now;
 
   return inWriteTransaction(driver, async (tx) => {
-    const node = await writeStampedNodeInTransaction(tx, {
+    const node = await writeStampedDerivedNodeInTransaction(tx, {
       label: 'Session',
       id: input.sessionId,
       now,
+      occurredAt,
     });
 
     if (!node.created) {

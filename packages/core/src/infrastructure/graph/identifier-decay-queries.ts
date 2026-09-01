@@ -161,6 +161,9 @@ export function buildCloseStatement(ids: readonly string[], now: Date): GraphSta
     parameters: {
       ids: [...ids],
       now: toGraphDateTime(now),
+      // A decay close is a bet on silence taken at the sweep, so both timelines end there.
+      validUntil: toGraphDateTime(now),
+      txUntil: toGraphDateTime(now),
       closedBy: CLOSED_BY_IDENTIFIER_DECAY,
     },
   };

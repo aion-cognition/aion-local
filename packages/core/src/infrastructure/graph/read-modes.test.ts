@@ -14,6 +14,7 @@ import { fromGraphDateTime } from './values.js';
 
 const VALID_AT = new Date('2026-03-01T00:00:00.000Z');
 const KNOWN_AT = new Date('2026-04-01T00:00:00.000Z');
+const REFERENCE = new Date('2025-05-06T07:08:09.000Z');
 
 describe('withCurrency', () => {
   it('suppresses only forgotten rows, so superseded knowledge stays eligible', () => {
@@ -113,6 +114,22 @@ describe('composition', () => {
     expect(isTimeTravel(withCurrency())).toBe(false);
     expect(isTimeTravel(asOf(VALID_AT))).toBe(true);
     expect(isTimeTravel(knewAt(KNOWN_AT))).toBe(true);
+  });
+
+  it('judges currency against the reference the caller passed rather than the wall clock', () => {
+    const fragment = readModeFragment(withCurrency(REFERENCE), 'n');
+    expect(fromGraphDateTime(fragment.parameters.rm_reference)).toEqual(REFERENCE);
+    expect(fragment.currency).toContain('$rm_reference');
+  });
+
+  /**
+   * A reference moves the currency judgment and nothing else: the row set a default read
+   * returns is the same one, so a replay reading on the episode's clock still sees every
+   * unforgotten row.
+   */
+  it('keeps a referenced read out of time travel and off the temporal predicates', () => {
+    expect(isTimeTravel(withCurrency(REFERENCE))).toBe(false);
+    expect(readModeFragment(withCurrency(REFERENCE), 'n').where).toBe('n.forgotten_at IS NULL');
   });
 
   it('refuses anything but a plain identifier for the node variable or prefix', () => {

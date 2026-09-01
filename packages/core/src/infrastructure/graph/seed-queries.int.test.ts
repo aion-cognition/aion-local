@@ -48,6 +48,7 @@ beforeAll(async () => {
         sourceEpisodeId: 'seed-episode',
         extractionMethod: 'test',
         confidence: 0.8,
+        occurredAt: NOW,
       },
       {
         name: 'Redis',
@@ -57,6 +58,7 @@ beforeAll(async () => {
         sourceEpisodeId: 'seed-episode',
         extractionMethod: 'test',
         confidence: 0.8,
+        occurredAt: NOW,
       },
     ],
     NOW,

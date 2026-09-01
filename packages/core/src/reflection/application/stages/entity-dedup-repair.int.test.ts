@@ -73,8 +73,11 @@ let db: SqliteHandle;
 let dataDir: string;
 let episodeId: string;
 
-async function seedEntity(input: EntityMergeInput, vector: readonly number[]): Promise<string> {
-  const [merged] = await mergeEntities(harness.driver, [input], NOW);
+async function seedEntity(
+  input: Omit<EntityMergeInput, 'occurredAt'>,
+  vector: readonly number[],
+): Promise<string> {
+  const [merged] = await mergeEntities(harness.driver, [{ ...input, occurredAt: NOW }], NOW);
   if (merged === undefined) {
     throw new Error(`failed to seed entity ${input.name}`);
   }

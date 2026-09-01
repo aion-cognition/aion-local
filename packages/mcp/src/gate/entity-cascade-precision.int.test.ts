@@ -148,6 +148,7 @@ async function seedSide(entry: CascadeCase, side: CascadeSide, episodeId: string
         sourceEpisodeId: episodeId,
         extractionMethod: 'cascade_battery',
         confidence: 1,
+        occurredAt: NOW,
       },
     ],
     NOW,

@@ -51,8 +51,8 @@ export type EpisodeCognitiveNode = {
   readonly text: string;
 };
 
-function episodeCognitiveNodesStatement(episodeId: string): GraphStatement {
-  const fragment = readModeFragment(withCurrency(), 'n');
+function episodeCognitiveNodesStatement(episodeId: string, reference?: Date): GraphStatement {
+  const fragment = readModeFragment(withCurrency(reference), 'n');
   return {
     cypher: [
       'MATCH (:Episode { id: $episodeId })<-[:EXTRACTED_FROM]-(n)',
@@ -74,8 +74,10 @@ function episodeCognitiveNodesStatement(episodeId: string): GraphStatement {
 export async function findEpisodeCognitiveNodes(
   driver: Driver,
   episodeId: string,
+  /** The clock currency is judged from; the wall clock when a caller holds none. */
+  reference?: Date,
 ): Promise<EpisodeCognitiveNode[]> {
-  return runRead(driver, episodeCognitiveNodesStatement(episodeId), (row) => ({
+  return runRead(driver, episodeCognitiveNodesStatement(episodeId, reference), (row) => ({
     id: row.id as string,
     label: (row.label as string | null) ?? '',
     text: (row.text as string | null) ?? '',

@@ -133,8 +133,8 @@ export type EpisodeEntity = {
  * prevent. The mention edge onto the closed node stays; it is the record that this episode
  * named that surface form.
  */
-function episodeEntitiesStatement(episodeId: string): GraphStatement {
-  const fragment = readModeFragment(withCurrency(), 'n');
+function episodeEntitiesStatement(episodeId: string, reference?: Date): GraphStatement {
+  const fragment = readModeFragment(withCurrency(reference), 'n');
   return {
     cypher: [
       `MATCH (:Episode { id: $episodeId })-[:${ENTITY_MENTION_TYPE}]->(n:${ENTITY_LABEL})`,
@@ -150,8 +150,10 @@ function episodeEntitiesStatement(episodeId: string): GraphStatement {
 export async function findEpisodeEntities(
   driver: Driver,
   episodeId: string,
+  /** The clock currency is judged from; the wall clock when a caller holds none. */
+  reference?: Date,
 ): Promise<EpisodeEntity[]> {
-  return runRead(driver, episodeEntitiesStatement(episodeId), (row) => ({
+  return runRead(driver, episodeEntitiesStatement(episodeId, reference), (row) => ({
     id: row.id as string,
     name: (row.name as string | null) ?? '',
     nameNorm: (row.name_norm as string | null) ?? '',

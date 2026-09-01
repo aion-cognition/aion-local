@@ -115,6 +115,10 @@ export function buildEdgePruneClose(input: EdgePruneInput): GraphStatement {
       unreinforcedDays: input.unreinforcedDays,
       batchSize: neo4j.int(input.batchSize),
       now: toGraphDateTime(now),
+      // A prune closes an edge because it went unreinforced up to the sweep, so the world
+      // time it stops holding and the moment the substrate stops holding it are one value.
+      validUntil: toGraphDateTime(now),
+      txUntil: toGraphDateTime(now),
     },
   };
 }

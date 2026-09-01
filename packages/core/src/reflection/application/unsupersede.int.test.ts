@@ -54,6 +54,7 @@ async function seedClaim(episodeId: string, text: string): Promise<string> {
     episodeId,
     label: 'Concept',
     text,
+    occurredAt: CLOSED_AT,
     now: CLOSED_AT,
   });
   return result.node.id;

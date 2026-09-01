@@ -79,7 +79,7 @@ function mergeInput(
     sourceEpisodeId: ctx.episodeId,
     extractionMethod: ENTITY_EXTRACTION_METHOD,
     confidence: EXTRACTION_CONFIDENCE,
-    ...(ctx.episode.occurredAt === undefined ? {} : { occurredAt: ctx.episode.occurredAt }),
+    occurredAt: ctx.occurredAt,
   };
 }
 

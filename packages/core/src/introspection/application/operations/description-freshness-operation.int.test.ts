@@ -85,6 +85,7 @@ beforeAll(async () => {
         sourceEpisodeId: 'seed-episode-0',
         extractionMethod: 'test-seed',
         confidence: 1,
+        occurredAt: NOW,
       },
     ],
     NOW,

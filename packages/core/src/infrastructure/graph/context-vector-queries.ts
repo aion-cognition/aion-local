@@ -33,8 +33,8 @@ export const CONTEXT_VECTOR_PROPERTY = 'context_vec';
  * branches. The same read-mode fragment, built once against a shared `n`, is spliced into
  * every branch so a forgotten row in any category is excluded the same way.
  */
-function affectedNodesStatement(episodeId: string): GraphStatement {
-  const fragment = readModeFragment(withCurrency(), 'n', 'aff');
+function affectedNodesStatement(episodeId: string, reference?: Date): GraphStatement {
+  const fragment = readModeFragment(withCurrency(reference), 'n', 'aff');
   const branch = (match: string): string =>
     [match, `WHERE ${fragment.where}`, 'RETURN n.id AS id'].join('\n');
 
@@ -54,8 +54,17 @@ function affectedNodesStatement(episodeId: string): GraphStatement {
 }
 
 /** Undefined only when the episode itself is unreadable; an episode with nothing else attached still returns its own id. */
-export async function findAffectedNodeIds(driver: Driver, episodeId: string): Promise<string[]> {
-  const rows = await runRead(driver, affectedNodesStatement(episodeId), (row) => row.id as string);
+export async function findAffectedNodeIds(
+  driver: Driver,
+  episodeId: string,
+  /** The clock currency is judged from; the wall clock when a caller holds none. */
+  reference?: Date,
+): Promise<string[]> {
+  const rows = await runRead(
+    driver,
+    affectedNodesStatement(episodeId, reference),
+    (row) => row.id as string,
+  );
   return [...new Set(rows)];
 }
 
@@ -68,8 +77,11 @@ export async function findAffectedNodeIds(driver: Driver, episodeId: string): Pr
  * structural backbone node) contributes nothing and is filtered out here, before the vector
  * ever reaches the domain math.
  */
-function neighborContentVectorsStatement(nodeIds: readonly string[]): GraphStatement {
-  const fragment = readModeFragment(withCurrency(), 'm', 'nb');
+function neighborContentVectorsStatement(
+  nodeIds: readonly string[],
+  reference?: Date,
+): GraphStatement {
+  const fragment = readModeFragment(withCurrency(reference), 'm', 'nb');
   const cypher = [
     'UNWIND $nodeIds AS nodeId',
     `MATCH (n:${BASE_NODE_LABEL} { id: nodeId })-[r]-(m:${BASE_NODE_LABEL})`,
@@ -98,11 +110,17 @@ function readNeighborRow(row: Row): NeighborContentVector | undefined {
 export async function findNeighborContentVectors(
   driver: Driver,
   nodeIds: readonly string[],
+  /** The clock currency is judged from; the wall clock when a caller holds none. */
+  reference?: Date,
 ): Promise<NeighborContentVector[]> {
   if (nodeIds.length === 0) {
     return [];
   }
-  const rows = await runRead(driver, neighborContentVectorsStatement(nodeIds), readNeighborRow);
+  const rows = await runRead(
+    driver,
+    neighborContentVectorsStatement(nodeIds, reference),
+    readNeighborRow,
+  );
   return rows.filter((row): row is NeighborContentVector => row !== undefined);
 }
 

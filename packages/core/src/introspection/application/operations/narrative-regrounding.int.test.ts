@@ -180,12 +180,14 @@ describe('narrative regrounding', () => {
       episodeId: 'regrounding-episode-1',
       label: 'Decision',
       text: 'Thistledown will use Quillfeather as its checkpoint store',
+      occurredAt: NOW,
       now: NOW,
     });
     const corrected = await writeCognitiveNode(harness.driver, {
       episodeId: 'regrounding-episode-2',
       label: 'Decision',
       text: 'Thistledown will use Larkspur as its checkpoint store',
+      occurredAt: NOW,
       now: NOW,
     });
     const proposalId = recordSupersessionProposal(db, {

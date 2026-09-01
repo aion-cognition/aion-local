@@ -149,8 +149,8 @@ export class NarrativeFakeGraph extends FakeGraph {
       return [];
     }
     node.properties[BITEMPORAL_PROPERTIES.forgottenAt] ??= parameters.now;
-    node.properties[BITEMPORAL_PROPERTIES.validUntil] ??= parameters.now;
-    node.properties[BITEMPORAL_PROPERTIES.txUntil] ??= parameters.now;
+    node.properties[BITEMPORAL_PROPERTIES.validUntil] ??= parameters.validUntil;
+    node.properties[BITEMPORAL_PROPERTIES.txUntil] ??= parameters.txUntil;
     return [{ id: node.id }];
   }
 
@@ -207,9 +207,8 @@ export class NarrativeFakeGraph extends FakeGraph {
     if (node === undefined) {
       return [];
     }
-    const { now } = parameters;
-    node.properties[BITEMPORAL_PROPERTIES.validUntil] ??= now;
-    node.properties[BITEMPORAL_PROPERTIES.txUntil] ??= now;
+    node.properties[BITEMPORAL_PROPERTIES.validUntil] ??= parameters.validUntil;
+    node.properties[BITEMPORAL_PROPERTIES.txUntil] ??= parameters.txUntil;
     return [
       {
         id: node.id,

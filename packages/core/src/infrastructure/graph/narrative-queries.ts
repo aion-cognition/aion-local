@@ -101,8 +101,8 @@ function asDate(value: unknown): Date | undefined {
  * what happened in the session. Only an explicit forget removes an episode from its
  * narrative, which is the default read mode's own rule.
  */
-function sessionEpisodesStatement(sessionId: string): GraphStatement {
-  const episode = readModeFragment(withCurrency(), 'e', 'rme');
+function sessionEpisodesStatement(sessionId: string, reference?: Date): GraphStatement {
+  const episode = readModeFragment(withCurrency(reference), 'e', 'rme');
   const cypher = [
     `MATCH (e:Episode)-[:${CONTAINMENT_TYPE}]->(:Session { id: $sessionId })`,
     `WHERE ${episode.where}`,
@@ -135,8 +135,10 @@ function readSessionEpisode(row: Row): SessionEpisode {
 export async function loadSessionEpisodes(
   driver: Driver,
   sessionId: string,
+  /** The clock currency is judged from; the wall clock when a caller holds none. */
+  reference?: Date,
 ): Promise<SessionEpisode[]> {
-  return runRead(driver, sessionEpisodesStatement(sessionId), readSessionEpisode);
+  return runRead(driver, sessionEpisodesStatement(sessionId, reference), readSessionEpisode);
 }
 
 /**
@@ -225,9 +227,9 @@ const NARRATIVE_SOURCE_LIMIT = 120;
  * order the episodes happened. A superseded node stays in the set for the same reason a
  * superseded episode does: it is still part of what the session held.
  */
-function sessionSourceNodesStatement(sessionId: string): GraphStatement {
-  const node = readModeFragment(withCurrency(), 'n', 'rmn');
-  const episode = readModeFragment(withCurrency(), 'e', 'rme');
+function sessionSourceNodesStatement(sessionId: string, reference?: Date): GraphStatement {
+  const node = readModeFragment(withCurrency(reference), 'n', 'rmn');
+  const episode = readModeFragment(withCurrency(reference), 'e', 'rme');
   const cypher = [
     `MATCH (n)-[:EXTRACTED_FROM]->(e:Episode)-[:${CONTAINMENT_TYPE}]->(:Session { id: $sessionId })`,
     `WHERE ${node.where} AND ${episode.where}`,
@@ -256,8 +258,10 @@ function sessionSourceNodesStatement(sessionId: string): GraphStatement {
 export async function loadSessionSourceNodes(
   driver: Driver,
   sessionId: string,
+  /** The clock currency is judged from; the wall clock when a caller holds none. */
+  reference?: Date,
 ): Promise<SessionSourceNode[]> {
-  return runRead(driver, sessionSourceNodesStatement(sessionId), (row) => ({
+  return runRead(driver, sessionSourceNodesStatement(sessionId, reference), (row) => ({
     id: row.id as string,
     kind: typeof row.kind === 'string' ? row.kind.toLowerCase() : 'note',
     text: typeof row.text === 'string' ? row.text : '',
@@ -325,7 +329,14 @@ export async function forgetNarrative(driver: Driver, id: string, now: Date): Pr
   const rows = await runWrite(
     driver,
     FORGET_NARRATIVE,
-    { id, now: toGraphDateTime(now) },
+    {
+      id,
+      now: toGraphDateTime(now),
+      // A narrative is forgotten because its session cannot ground a rewrite now, so both
+      // timelines end at the sweep rather than at anything the narrative describes.
+      validUntil: toGraphDateTime(now),
+      txUntil: toGraphDateTime(now),
+    },
     (row) => row.id as string,
   );
   return rows.length > 0;

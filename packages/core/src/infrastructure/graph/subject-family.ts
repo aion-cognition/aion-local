@@ -265,6 +265,11 @@ export type SupersedeSubjectFamilyInput = {
   /** Cosine against the judged claim a sibling must reach before the correction closes it too. */
   readonly relatednessFloor: number;
   readonly now?: Date;
+  /**
+   * When the correcting experience happened, which is when the closed claims stopped being
+   * true. Defaults to `now`.
+   */
+  readonly validUntil?: Date;
   readonly signals?: readonly string[];
   readonly provenance?: readonly string[];
 };
@@ -300,6 +305,7 @@ export async function supersedeSubjectFamily(
   input: SupersedeSubjectFamilyInput,
 ): Promise<SubjectFamilyResult> {
   const now = input.now ?? new Date();
+  const validUntil = input.validUntil ?? now;
 
   // Subjects are read inside the write transaction with everything they decide, so a
   // concurrent entity write cannot land between the read that chose the family and the writes
@@ -316,6 +322,7 @@ export async function supersedeSubjectFamily(
       oldId: input.claimId,
       newId: input.newId,
       now,
+      validUntil,
       ...(input.signals === undefined ? {} : { signals: input.signals }),
       ...(input.provenance === undefined ? {} : { provenance: input.provenance }),
     });
@@ -328,6 +335,7 @@ export async function supersedeSubjectFamily(
         oldId: sibling.id,
         newId: input.newId,
         now,
+        validUntil,
         signals: SUBJECT_PROPAGATION_SIGNALS,
         provenance: [SUBJECT_PROPAGATION_METHOD],
       });

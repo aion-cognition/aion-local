@@ -90,6 +90,7 @@ async function seedEntity(input: {
     sourceEpisodeId: input.episodeId,
     extractionMethod: 'test-fixture',
     confidence: 0.8,
+    occurredAt: NOW,
   };
   const [merged] = await mergeEntities(harness.driver, [merge], NOW);
   if (merged === undefined) {

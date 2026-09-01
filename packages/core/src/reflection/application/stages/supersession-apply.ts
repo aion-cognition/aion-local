@@ -190,6 +190,9 @@ async function applyUnanimous(
     id: record(ctx, pair, second),
     relatednessFloor: policy.familyRelatednessFloor,
     now: ctx.now,
+    // The correcting episode is what ended the old claim's truth, so world time closes at
+    // the episode's clock while the row's system time closes at the write.
+    validUntil: ctx.occurredAt,
     attribution: { provenance: [UNANIMOUS_APPLY_METHOD], signals: UNANIMOUS_APPLY_SIGNALS },
   });
   tally.recordSupersession();
@@ -224,6 +227,7 @@ export async function applyJudgment(
       oldId: pair.candidate.id,
       newId: pair.subject.id,
       now: ctx.now,
+      validUntil: ctx.occurredAt,
       signals: ['contradiction'],
       provenance: [SUPERSESSION_METHOD],
     });

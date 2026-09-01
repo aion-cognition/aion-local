@@ -59,9 +59,12 @@ describe('buildEdgePruneClose: the eligibility predicate (floor, age, protected 
   });
 
   it('closes bitemporally rather than deleting, and returns what it closed', () => {
-    const { cypher } = buildEdgePruneClose(CLOSE_INPUT);
-    expect(cypher).toContain('r.valid_until = coalesce(r.valid_until, $now)');
-    expect(cypher).toContain('r.tx_until = coalesce(r.tx_until, $now)');
+    const { cypher, parameters } = buildEdgePruneClose(CLOSE_INPUT);
+    expect(cypher).toContain('r.valid_until = coalesce(r.valid_until, $validUntil)');
+    expect(cypher).toContain('r.tx_until = coalesce(r.tx_until, $txUntil)');
+    // An edge pruned for going unreinforced stops holding at the sweep on both timelines.
+    expect(parameters.validUntil).toEqual(parameters.now);
+    expect(parameters.txUntil).toEqual(parameters.now);
     expect(cypher).not.toMatch(/DETACH\s+DELETE/i);
     expect(cypher).toContain('RETURN r.id AS id, type(r) AS type');
   });

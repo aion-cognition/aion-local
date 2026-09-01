@@ -420,6 +420,7 @@ describe('grounding against a live substrate', () => {
         episodeId: planningEpisodeId,
         label: 'Decision',
         text,
+        occurredAt: now,
         now,
       });
       decisionIds.push(written.node.id);
@@ -428,6 +429,7 @@ describe('grounding against a live substrate', () => {
       episodeId: planningEpisodeId,
       label: 'Insight',
       text: PLANNING_INSIGHT,
+      occurredAt: now,
       now,
     });
   }, 120_000);

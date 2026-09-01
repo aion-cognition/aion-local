@@ -4,7 +4,7 @@ import {
   BITEMPORAL_PROPERTIES,
   CLOSURE_PROVENANCE_PROPERTY,
   currentOnly,
-  stampNew,
+  stampDerived,
 } from './bitemporal.js';
 import {
   inWriteTransaction,
@@ -111,7 +111,12 @@ export type EntityMergeInput = EntityReading & {
   readonly sourceEpisodeId: string;
   readonly extractionMethod: string;
   readonly confidence: number;
-  readonly occurredAt?: Date;
+  /**
+   * The world time of the record this reading came from. Required rather than defaulted: an
+   * entity that silently took the write clock dates a replayed episode's identities to the
+   * replay, and only the caller knows the record's own clock.
+   */
+  readonly occurredAt: Date;
 };
 
 /** Property naming stays in this module, so a stage never spells a graph property itself. */
@@ -219,10 +224,10 @@ export function prepareEntityMerge(
   ].join('\n');
 
   const stamped = entities.map((entity) =>
-    stampNew({
+    stampDerived({
       label: ENTITY_LABEL,
       properties: entityCreateProperties(entity),
-      ...(entity.occurredAt === undefined ? {} : { occurredAt: entity.occurredAt }),
+      occurredAt: entity.occurredAt,
       now,
     }),
   );

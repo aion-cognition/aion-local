@@ -137,7 +137,7 @@ export class EntityDedupStage implements ReflectionStage {
   }
 
   async run(ctx: StageContext): Promise<StageOutcome> {
-    const mentioned = await findEpisodeEntities(ctx.driver, ctx.episodeId);
+    const mentioned = await findEpisodeEntities(ctx.driver, ctx.episodeId, ctx.now);
     if (mentioned.length === 0) {
       return { status: 'skipped', summary: 'episode mentions no entities to deduplicate' };
     }

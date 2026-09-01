@@ -20,6 +20,7 @@ import { NarrativeFakeGraph } from '../test-support/narrative-graph.fixture.js';
 const SESSION_ID = 'session-with-episodes';
 const EMPTY_SESSION_ID = 'session-without-episodes';
 const NOW = new Date('2026-04-02T12:00:00Z');
+const EPISODE_OCCURRED_AT = new Date('2026-04-02T10:00:00Z');
 
 const OUTPUT = {
   sentences: [{ text: 'The orders table was left unsharded.', source_ids: ['S1'] }],
@@ -39,8 +40,8 @@ function seedEpisode(id: string, sessionId: string): void {
   graph.seedNode(id, ['Episode', 'Memory', 'AionNode'], {
     [MEMORY_PROPERTIES.text]: `body of ${id}`,
     [MEMORY_PROPERTIES.sessionId]: sessionId,
-    [BITEMPORAL_PROPERTIES.occurredAt]: new Date('2026-04-02T10:00:00Z'),
-    [BITEMPORAL_PROPERTIES.txFrom]: new Date('2026-04-02T10:00:00Z'),
+    [BITEMPORAL_PROPERTIES.occurredAt]: EPISODE_OCCURRED_AT,
+    [BITEMPORAL_PROPERTIES.txFrom]: EPISODE_OCCURRED_AT,
   });
   graph.seedEdge(CONTAINMENT_TYPE, id, sessionId);
 }
@@ -116,14 +117,19 @@ describe('narrative cleanup', () => {
     expect(standing[0]?.properties[NARRATIVE_PROPERTIES.version]).toBe(2);
   });
 
-  it('supersedes the old narrative rather than deleting it', async () => {
+  it('supersedes the old narrative rather than deleting it, on both timelines apart', async () => {
     seedEpisode('episode-1', SESSION_ID);
     seedOldNarrative('old-narrative', SESSION_ID);
 
     await cleanupNarratives(deps, { now: NOW });
 
     const old = graph.nodes.get('old-narrative');
-    expect(coerceGraphValue(old?.properties[BITEMPORAL_PROPERTIES.validUntil])).toEqual(NOW);
+    // The old version stopped covering the session at the end of what the replacement
+    // compresses; the substrate stopped holding it at the rewrite.
+    expect(coerceGraphValue(old?.properties[BITEMPORAL_PROPERTIES.validUntil])).toEqual(
+      EPISODE_OCCURRED_AT,
+    );
+    expect(coerceGraphValue(old?.properties[BITEMPORAL_PROPERTIES.txUntil])).toEqual(NOW);
     expect(old?.properties[BITEMPORAL_PROPERTIES.forgottenAt]).toBeUndefined();
     expect(graph.edgesOfType('SUPERSEDES').map((edge) => edge.targetId)).toEqual(['old-narrative']);
   });
