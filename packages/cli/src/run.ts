@@ -6,6 +6,7 @@ import { runLast } from './last.js';
 import { runMaintain } from './maintain.js';
 import { runProposals } from './proposals.js';
 import { runQueue } from './queue.js';
+import { runReplayCommand } from './replay.js';
 import { runSearch } from './search.js';
 import { runStats } from './stats.js';
 import { runStatus } from './status.js';
@@ -44,6 +45,10 @@ const commands: Record<string, Command> = {
   queue: {
     summary: 'inspect the reflection queue: ls | drop | promote | reconcile',
     run: (argv) => runQueue(argv),
+  },
+  replay: {
+    summary: 'put archived experiences back through the pipeline: ls | run',
+    run: (argv) => runReplayCommand(argv),
   },
   proposals: {
     summary: 'review judged contradictions and duplicate entities: ls | apply | dismiss',

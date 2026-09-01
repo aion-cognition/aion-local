@@ -356,9 +356,10 @@ export class ReflectionWorker {
     }
 
     try {
-      // The dequeue moment, passed rather than read inside the run, so every stamp and every
-      // elapsed-time decision in the pipeline shares one reading and a replay can hand the
-      // same pipeline the episode's clock instead.
+      // The dequeue moment, passed rather than read inside the run, so every transaction stamp
+      // and every elapsed-time decision in the pipeline shares one reading. World time is not
+      // this: the orchestrator takes it from the episode, which is what lets a replay run a
+      // years-old episode on today's clock without dating its writes to the conversation.
       const run = await this.#deps.runner.run(episodeId, { now: this.#clock() });
       // `applied` and not `status` decides: a completed run that enriched nothing left the
       // ledger open, which is the orchestrator saying the episode is still worth a retry.

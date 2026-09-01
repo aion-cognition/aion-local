@@ -46,6 +46,14 @@ export type ExperienceArchiveCursor = {
 export type ExperienceArchiveFilter = {
   /** Selects rows archived under any other pipeline version; omit to select every row. */
   readonly excludePipelineVersion?: string;
+  readonly episodeId?: string;
+  readonly sessionId?: string;
+};
+
+/** The oldest and newest experience the archive holds, by the clock the episodes happened on. */
+export type ExperienceArchiveSpan = {
+  readonly oldestOccurredAt: string;
+  readonly newestOccurredAt: string;
 };
 
 type ExperienceArchiveRowData = {
@@ -169,6 +177,14 @@ export function listExperiencesAfter(
     clauses.push('pipeline_version <> ?');
     parameters.push(filter.excludePipelineVersion);
   }
+  if (filter.episodeId !== undefined) {
+    clauses.push('episode_id = ?');
+    parameters.push(filter.episodeId);
+  }
+  if (filter.sessionId !== undefined) {
+    clauses.push('session_id = ?');
+    parameters.push(filter.sessionId);
+  }
 
   const where = clauses.length === 0 ? '' : `WHERE ${clauses.join(' AND ')}`;
   const rows = db
@@ -179,6 +195,23 @@ export function listExperiencesAfter(
     )
     .all(...parameters, limit) as ExperienceArchiveRowData[];
   return rows.map(toExperienceArchiveRow);
+}
+
+/**
+ * How far back the archive reaches, or `undefined` when it holds nothing. Both stamps are
+ * world time, so the span says which experiences a replay covers rather than when they were
+ * archived.
+ */
+export function experienceArchiveSpan(db: SqliteHandle): ExperienceArchiveSpan | undefined {
+  const row = db
+    .prepare(
+      `SELECT MIN(occurred_at) AS oldest, MAX(occurred_at) AS newest FROM experience_archive`,
+    )
+    .get() as { oldest: string | null; newest: string | null } | undefined;
+  if (row?.oldest == null || row.newest == null) {
+    return undefined;
+  }
+  return { oldestOccurredAt: row.oldest, newestOccurredAt: row.newest };
 }
 
 /** How many archived rows sit under each pipeline version, for `aion replay ls`'s summary. */
