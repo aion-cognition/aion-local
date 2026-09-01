@@ -306,6 +306,12 @@ export function observedTypes(reading: EntityReading): EntityType[] {
 
 export type MergedEntity = {
   readonly id: string;
+  /**
+   * Which of the handed-in readings this row answers, so a caller pairs back by position. The
+   * name cannot do it: alias routing rewrites two readings onto one holder's key, and a caller
+   * keyed on the name would read one row for both and plan its work twice.
+   */
+  readonly reading: number;
   /** The `name_norm` the caller handed in, which is the key it looks the row back up by. */
   readonly nameNorm: string;
   /** The identity's own folded name, which differs when a merge chain routed this name forward. */
@@ -363,7 +369,7 @@ export function reconcileMergedEntities(
   rows: readonly EntityMergeRow[],
 ): { readonly merged: MergedEntity[]; readonly updates: EntityIdentityUpdate[] } {
   const byProposedId = new Map(rows.map((row) => [row.proposedId, row]));
-  const paired: { input: EntityReading; row: EntityMergeRow }[] = [];
+  const paired: { reading: number; input: EntityReading; row: EntityMergeRow }[] = [];
   const groups = new Map<
     string,
     { row: EntityMergeRow; observed: EntityType[]; aliases: string[] }
@@ -374,7 +380,7 @@ export function reconcileMergedEntities(
     if (row === undefined) {
       continue;
     }
-    paired.push({ input, row });
+    paired.push({ reading: index, input, row });
 
     let group = groups.get(row.id);
     if (group === undefined) {
@@ -414,10 +420,11 @@ export function reconcileMergedEntities(
     });
   }
 
-  const merged = paired.map(({ input, row }) => {
+  const merged = paired.map(({ reading, input, row }) => {
     const final = settled.get(row.id);
     return {
       id: row.id,
+      reading,
       nameNorm: input.nameNorm,
       canonicalNameNorm: row.canonicalNameNorm,
       type: final?.type ?? row.type,

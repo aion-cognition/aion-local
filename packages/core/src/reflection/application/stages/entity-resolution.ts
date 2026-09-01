@@ -66,9 +66,9 @@ function mergeInput(
 ): EntityMergeInput {
   // Routing rewrites the identity key, not the reading: the holder's name is what the MERGE
   // seeks, and the spelling this record used joins the holder's aliases so the next record
-  // spelling it that way lands here without a second lookup.
-  const aliases =
-    holder === undefined ? entity.aliases : [...entity.aliases, entity.nameNorm, entity.name];
+  // spelling it that way lands here without a second lookup. The surface form alone, since
+  // `aliases` is identity history a person reads and `aliasKeys` derives the lookup half.
+  const aliases = holder === undefined ? entity.aliases : [...entity.aliases, entity.name];
   return {
     name: holder?.name ?? entity.name,
     nameNorm: holder?.nameNorm ?? entity.nameNorm,
@@ -160,7 +160,7 @@ function resolveTarget(
 
 /** What the backbone gains from a record that named it: the spellings it was named by. */
 function structuralAliases(entity: ExtractedEntity, match: EntityIdentityMatch): string[] {
-  return [entity.name, entity.nameNorm, ...entity.aliases].filter(
+  return [entity.name, ...entity.aliases].filter(
     (alias) => alias.length > 0 && normalizeEntityName(alias) !== match.nameNorm,
   );
 }
@@ -229,16 +229,19 @@ async function resolveStructural(
   return resolved;
 }
 
+/**
+ * Rows pair back to readings by position rather than by name: alias routing rewrites several
+ * readings onto one holder's key, and a lookup by that key would answer them all with one row.
+ */
 function resolveOrganic(
   pairs: readonly { extracted: ExtractedEntity; input: EntityMergeInput }[],
   merged: readonly MergedEntity[],
 ): ResolvedEntity[] {
-  const byName = new Map(merged.map((row) => [row.nameNorm, row]));
   const resolved: ResolvedEntity[] = [];
 
-  for (const pair of pairs) {
-    const row = byName.get(pair.input.nameNorm);
-    if (row === undefined) {
+  for (const row of merged) {
+    const pair = pairs[row.reading];
+    if (pair === undefined) {
       continue;
     }
     const name = nameVector(row.canonicalNameNorm, row.aliasesNorm);
@@ -308,15 +311,24 @@ type VectorPlan = {
   readonly slots: readonly VectorSlot[];
 };
 
-/** One embed call for the whole extraction, over exactly the vectors whose input has changed. */
+/**
+ * One embed call for the whole extraction, over exactly the vectors whose input has changed.
+ * One slot per node, not per reading: several readings of one record can name one identity,
+ * and its vectors are a function of the node rather than of how often it was named.
+ */
 function planVectors(resolved: readonly ResolvedEntity[]): VectorPlan {
   const texts: string[] = [];
   const slots: VectorSlot[] = [];
+  const planned = new Set<string>();
 
   for (const entity of resolved) {
     if (entity.name === undefined && entity.content === undefined) {
       continue;
     }
+    if (planned.has(entity.id)) {
+      continue;
+    }
+    planned.add(entity.id);
     slots.push({
       id: entity.id,
       ...(entity.name === undefined

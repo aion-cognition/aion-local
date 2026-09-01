@@ -315,7 +315,9 @@ describe('structural upgrade', () => {
     expect(graph.entities()).toHaveLength(1);
     expect(outcome.counts).toEqual({ entities: 0, mentions: 1 });
     const member = graph.nodes.get(MEMBER_ID);
-    expect(member?.properties.aliases).toEqual(['Ry', 'ry']);
+    // The record's own spelling, which is what `aion why` reads back as identity history. The
+    // folded half is a lookup key and lives in `aliases_norm`, not twice in both.
+    expect(member?.properties.aliases).toEqual(['Ry']);
     expect(member?.properties.aliases_norm).toEqual(['ry']);
   });
 
@@ -410,6 +412,45 @@ describe('name-form routing', () => {
     expect(graph.edgesOfType(ENTITY_MENTION_TYPE).map((edge) => edge.targetId)).toEqual([
       'closed-1',
     ]);
+  });
+
+  it('embeds one name once when two spellings in a record reach one identity', async () => {
+    await new EntityExtractionStage().run(
+      context(
+        fakeProvider({
+          generate: [
+            {
+              entities: [
+                {
+                  name: 'Aion',
+                  type: 'project',
+                  context: '',
+                  aliases: ['the graph', 'the substrate'],
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+    );
+
+    const provider = fakeProvider({
+      generate: [
+        {
+          entities: [
+            { name: 'the graph', type: 'topic', context: '', aliases: ['g one'] },
+            { name: 'the substrate', type: 'topic', context: '', aliases: ['s one'] },
+          ],
+        },
+      ],
+    });
+    await new EntityExtractionStage().run(context(provider));
+
+    expect(entityNames()).toEqual(['Aion']);
+    // Both readings pair back to their own row, and one node plans one embed however many
+    // readings landed on it.
+    const texts = provider.embedCalls[0] ?? [];
+    expect(new Set(texts).size).toBe(texts.length);
   });
 
   it('mints its own identity when several holders answer to the name', async () => {

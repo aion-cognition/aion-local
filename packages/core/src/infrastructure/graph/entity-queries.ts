@@ -338,16 +338,18 @@ export type EntityVectorEntry = {
  *
  * The content vector keeps the write-if-absent rule. It is a function of `text`, which belongs
  * to whichever run created the node, so a concurrent writer's result is as good as this one's.
- * Its hash travels with it rather than beside it: a hash written over a vector that was not
- * stored would claim the node is in sync with text it never embedded.
+ *
+ * Both hashes travel with their vector rather than beside it: a hash written over a vector that
+ * was not stored would claim the node is in sync with text it never embedded, which is the one
+ * drift this whole mechanism exists to make impossible.
  */
 const WRITE_ENTITY_VECTORS = [
   'UNWIND $entries AS entry',
   `MATCH (n:${BASE_NODE_LABEL} { id: entry.id })`,
   `WITH n, entry, n.${MEMORY_PROPERTIES.contentVector} IS NULL AS content_missing`,
   `SET n.${ENTITY_NAME_VECTOR_PROPERTY} = coalesce(entry.name_vec, n.${ENTITY_NAME_VECTOR_PROPERTY}),`,
-  `    n.${ENTITY_NAME_VECTOR_HASH_PROPERTY} =` +
-    ` coalesce(entry.name_vec_hash, n.${ENTITY_NAME_VECTOR_HASH_PROPERTY}),`,
+  `    n.${ENTITY_NAME_VECTOR_HASH_PROPERTY} = CASE WHEN entry.name_vec IS NOT NULL` +
+    ` THEN entry.name_vec_hash ELSE n.${ENTITY_NAME_VECTOR_HASH_PROPERTY} END,`,
   `    n.${MEMORY_PROPERTIES.contentVector} = CASE WHEN content_missing` +
     ` THEN coalesce(entry.content_vec, n.${MEMORY_PROPERTIES.contentVector})` +
     ` ELSE n.${MEMORY_PROPERTIES.contentVector} END,`,

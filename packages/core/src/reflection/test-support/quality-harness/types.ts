@@ -1,5 +1,5 @@
 /**
- * Seven entity types: person, organization, project, tool, concept, location, event.
+ * Seven entity types: person, organization, project, tool, topic, location, event.
  * The harness's own copy of the taxonomy, not a shared source with the real extraction stage, which is free to diverge.
  */
 export const ENTITY_TYPES = [
@@ -7,7 +7,7 @@ export const ENTITY_TYPES = [
   'organization',
   'project',
   'tool',
-  'concept',
+  'topic',
   'location',
   'event',
 ] as const;
