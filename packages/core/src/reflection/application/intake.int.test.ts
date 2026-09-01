@@ -31,10 +31,15 @@ import { openLogger } from '../../infrastructure/logging/logger.js';
 import { OllamaProvider } from '../../infrastructure/providers/ollama-provider.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
+  ARCHIVE_SCHEMA_VERSION,
+  getExperienceByEpisode,
+} from '../../infrastructure/sqlite/experience-archive.js';
+import {
   listReflectionJobs,
   type ReflectionJob,
 } from '../../infrastructure/sqlite/reflection-queue.js';
 import { SessionManager } from '../../session/session-manager.js';
+import { PIPELINE_VERSION } from '../domain/version.js';
 
 const EMBED_DIMENSION = DEFAULTS.models.embedDimension;
 const SESSION_IDENTITY = 'mcp-transport-session-1';
@@ -202,6 +207,30 @@ describe('reflection intake against a live graph and live Ollama', () => {
 
   it('leaves the ops ledger untouched: the pipeline owns it, not intake', () => {
     expect(ledgerRowCount()).toBe(0);
+  });
+
+  it('archives the redacted payload beside the episode, stamped at the payload clock', async () => {
+    const row = getExperienceByEpisode(db, episodeId);
+    const props = await nodeProperties(harness.driver, episodeId);
+
+    expect(row).toMatchObject({
+      schemaVersion: ARCHIVE_SCHEMA_VERSION,
+      pipelineVersion: PIPELINE_VERSION,
+      identity: SESSION_IDENTITY,
+      sessionId: SESSION_IDENTITY,
+      episodeId,
+      contentHash: props.content_hash as string,
+      occurredAt: (props.occurred_at as Date).toISOString(),
+    });
+    // The archive moment is the wall clock, which is months after this payload happened.
+    expect(Date.parse(row?.archivedAt ?? '')).toBeGreaterThan(Date.parse(row?.occurredAt ?? ''));
+
+    const archived = JSON.stringify(row?.payload);
+    expect(archived).not.toContain(AWS_KEY);
+    expect(archived).not.toContain(GITHUB_TOKEN);
+    expect(archived).not.toContain(SLACK_TOKEN);
+    expect(archived).toContain('⟨secret:aws-access-key:');
+    expect(archived).toContain('⟨secret:slack-token:');
   });
 
   it('writes no origin property at all when the caller names none', async () => {
