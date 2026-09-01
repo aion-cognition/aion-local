@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 /**
  * Dedup's harder half: what a merge must survive concurrently, the embedding model's
- * degenerate classes, and the cross-type near-duplicates it reports rather than merges.
+ * degenerate classes, and the pairs a judge splits on rather than merges.
  * The merge itself and what it has to stay merged against are `entity-dedup.int.test.ts`;
  * this file carries its own harness because an integration file owns its own container.
  */
@@ -31,11 +31,16 @@ import {
   type Neo4jHarness,
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger } from '../../../infrastructure/logging/logger.js';
-import { OllamaProvider } from '../../../infrastructure/providers/ollama-provider.js';
-import type { Vector } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { listEntityMergeProposals } from '../../../infrastructure/sqlite/entity-merge-proposals.js';
 import type { StageContext } from '../../domain/stage.js';
+import {
+  judgedNames,
+  refusingEntityJudge,
+  scriptedEntityJudge,
+  unreachableEntityJudge,
+  type ScriptedEntityJudge,
+} from '../entity-merge-judge.fixture.js';
 
 /**
  * The similarity search, mention-count aggregation, edge redirection and `supersede` close
@@ -85,11 +90,16 @@ async function seedEpisode(id: string): Promise<void> {
   });
 }
 
-function context(): StageContext {
+/**
+ * Tier 3 decides every nominated pair, so a run needs a judge. Each case scripts its own: this
+ * database accumulates every entity the file seeds, and a blanket answer would say more about
+ * the script than about the predicate under test.
+ */
+function context(judge: ScriptedEntityJudge = refusingEntityJudge()): StageContext {
   return {
     driver: harness.driver,
     db,
-    provider: { embed: async () => [], generate: async () => ({}) },
+    provider: { embed: async () => [], generate: judge.generate },
     episodeId,
     episode: { id: episodeId, sessionId: 'session-1', text: '', turns: [] },
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
@@ -192,44 +202,23 @@ describe('merge atomicity', () => {
 });
 
 /**
- * The original reproduction, against the real embedding model rather than hand-built
- * vectors: `nomic-embed-text` returns one constant vector for whole classes of out-of-vocabulary
- * text, so these names score 1.0000 against each other and eight distinct emoji entities were
- * closed into one node in the live product. The fold cannot fix a model that has no tokens for
- * the input; the name-form leg is what has to refuse it.
+ * The degenerate-embedding case, constructed rather than measured. `nomic-embed-text` returned
+ * one constant vector for whole classes of out-of-vocabulary text, so these two names scored
+ * 1.0000 against each other and eight distinct emoji entities were closed into one node in the
+ * live product. The vectors are hand-built now because the invariant is about what the cascade
+ * does with a perfect vector match on two unrelated names, not about which model produces one:
+ * `snowflake-arctic-embed2` scores this pair 0.391 and the next model will score it something
+ * else again.
+ *
+ * What has to hold either way: the pair is nominated, no deterministic tier will touch it, and
+ * a judge that reads the names is the only thing that could ever merge it.
  */
 describe('the degenerate embedding case', () => {
   const degenerateEpisodeId = 'live-episode-degenerate';
-  let vectors: Vector[];
 
-  function cosine(a: Vector, b: Vector): number {
-    let dot = 0;
-    let normA = 0;
-    let normB = 0;
-    for (let index = 0; index < a.length; index += 1) {
-      dot += (a[index] ?? 0) * (b[index] ?? 0);
-      normA += (a[index] ?? 0) ** 2;
-      normB += (b[index] ?? 0) ** 2;
-    }
-    return dot / (Math.sqrt(normA) * Math.sqrt(normB));
-  }
-
-  beforeAll(async () => {
-    const provider = new OllamaProvider({
-      baseUrl: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
-      embedModel: DEFAULTS.models.embed,
-    });
-    vectors = await provider.embed(['Zoë Müller', 'José Álvarez']);
+  it('nominates two unrelated non-ASCII names with one vector and merges neither', async () => {
     await seedEpisode(degenerateEpisodeId);
-  }, 120_000);
-
-  it('refuses two unrelated non-ASCII names the model embeds identically', async () => {
-    const [subjectVector, candidateVector] = vectors;
-    expect(subjectVector).toBeDefined();
-    expect(candidateVector).toBeDefined();
-    // The premise: still degenerate, well over the 0.85 threshold the vector leg applies.
-    expect(cosine(subjectVector ?? [], candidateVector ?? [])).toBeGreaterThan(0.85);
-
+    const identical = unitVector(4);
     const subjectId = await seedEntity(
       {
         name: 'Zoë Müller',
@@ -240,7 +229,7 @@ describe('the degenerate embedding case', () => {
         extractionMethod: 'test',
         confidence: 0.8,
       },
-      subjectVector ?? [],
+      identical,
     );
     const otherId = await seedEntity(
       {
@@ -252,7 +241,7 @@ describe('the degenerate embedding case', () => {
         extractionMethod: 'test',
         confidence: 0.8,
       },
-      candidateVector ?? [],
+      identical,
     );
     await linkEntityMentions(harness.driver, {
       episodeId: degenerateEpisodeId,
@@ -263,12 +252,24 @@ describe('the degenerate embedding case', () => {
     });
 
     episodeId = degenerateEpisodeId;
-    const outcome = await new EntityDedupStage().run(context());
+    const judge = refusingEntityJudge();
+    const outcome = await new EntityDedupStage().run(context(judge));
 
-    expect(outcome.counts).toMatchObject({ merges: 0, cross_type_proposals: 0 });
+    // The vector put the pair forward, which is the whole point: nomination is cheap and wrong,
+    // and every tier after it is what keeps the two identities apart.
+    expect(judge.calls.flatMap(judgedNames)).toContain('José Álvarez');
+    expect(outcome.counts).toMatchObject({ merges: 0, merge_proposals: 0 });
     expect((await storedEntity(harness.driver, subjectId))?.validUntil).toBeNull();
     expect((await storedEntity(harness.driver, otherId))?.validUntil).toBeNull();
     expect(listEntityMergeProposals(db)).toEqual([]);
+  }, 120_000);
+
+  it('will not merge them with no model reachable at all', async () => {
+    episodeId = degenerateEpisodeId;
+
+    const outcome = await new EntityDedupStage().run(context(unreachableEntityJudge()));
+
+    expect(outcome.counts).toMatchObject({ merges: 0 });
   }, 120_000);
 });
 
@@ -314,7 +315,7 @@ describe('cross-type near-duplicates', () => {
 
     // The duplicate factory is gone at the source: there is no second node to propose against.
     expect(topicId).toBe(toolId);
-    expect(outcome.counts).toMatchObject({ merges: 0, cross_type_proposals: 0 });
+    expect(outcome.counts).toMatchObject({ merges: 0, merge_proposals: 0 });
     expect((await storedEntity(harness.driver, toolId))?.typeCounts).toBe('{"tool":1,"topic":1}');
     expect(
       listEntityMergeProposals(db).filter((proposal) => proposal.episodeId === crossTypeEpisodeId),
@@ -345,9 +346,16 @@ describe('cross-type near-duplicates', () => {
     });
 
     episodeId = twoNameEpisodeId;
-    const outcome = await new EntityDedupStage().run(context());
+    // The two passes split on this pair alone: one says the hosted product is the orchestrator,
+    // the other says a product named after a tool is not that tool. Everything else this
+    // database holds is refused outright, so the queue carries the split and nothing more.
+    const split = scriptedEntityJudge({
+      same: (left, right) => [left, right].every((name) => name.startsWith('Kubernetes')),
+      review: () => false,
+    });
+    const outcome = await new EntityDedupStage().run(context(split));
 
-    expect(outcome.counts).toMatchObject({ merges: 0, cross_type_proposals: 1 });
+    expect(outcome.counts).toMatchObject({ merges: 0, merge_proposals: 1 });
     expect((await storedEntity(harness.driver, engineId))?.validUntil).toBeNull();
 
     const proposals = listEntityMergeProposals(db).filter(

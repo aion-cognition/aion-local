@@ -31,7 +31,6 @@ import {
 } from '../../../infrastructure/graph/seed-queries.js';
 import { toGraphDateTime } from '../../../infrastructure/graph/values.js';
 import { openLogger } from '../../../infrastructure/logging/logger.js';
-import type { StructuredRequest } from '../../../infrastructure/providers/types.js';
 import { foldName } from '../../../infrastructure/providers/unicode-fold.js';
 import { SqliteStore } from '../../../infrastructure/sqlite/database.js';
 import { listEntityMergeDecisions } from '../../../infrastructure/sqlite/entity-merge-decisions.js';
@@ -40,6 +39,12 @@ import { getLedgerEntry } from '../../../infrastructure/sqlite/ops-ledger.js';
 import { entityMergeLedgerKey } from '../../domain/entity-merge.js';
 import { squashName } from '../../domain/entity-reconciliation.js';
 import type { StageContext } from '../../domain/stage.js';
+import {
+  refusingEntityJudge as refusingJudge,
+  scriptedEntityJudge as scriptedJudge,
+  unreachableEntityJudge as unreachableProvider,
+  type ScriptedEntityJudge,
+} from '../entity-merge-judge.fixture.js';
 
 const EPISODE_ID = 'episode-1';
 const SESSION_ID = 'session-1';
@@ -53,62 +58,11 @@ let graph: DedupFakeGraph;
 let store: SqliteStore;
 let dataDir: string;
 
-/**
- * The two-pass judge, scripted. `same` decides the detect pass and `review` decides whether the
- * adversarial pass agrees, so a run can be told to be unanimous, to split, or to refuse
- * outright. Every call is recorded, which is how a test asserts that a tier decided without one.
- */
-type JudgeScript = {
-  readonly same?: (left: string, right: string) => boolean;
-  readonly review?: (left: string, right: string) => boolean;
-};
-
-type ScriptedJudge = {
-  readonly generate: (request: StructuredRequest) => Promise<unknown>;
-  readonly calls: StructuredRequest[];
-};
-
-function namesIn(request: StructuredRequest): [string, string] {
-  const prompt = request.messages.map((message) => message.content).join('\n');
-  const names = [...prompt.matchAll(/^Entity [AB]: (.+)$/gm)].map((match) => match[1] ?? '');
-  return [names[0] ?? '', names[1] ?? ''];
-}
-
-function scriptedJudge(script: JudgeScript = {}): ScriptedJudge {
-  const calls: StructuredRequest[] = [];
-  const same = script.same ?? ((): boolean => true);
-  const review = script.review ?? ((): boolean => true);
-  return {
-    calls,
-    generate: async (request: StructuredRequest) => {
-      calls.push(request);
-      const [left, right] = namesIn(request);
-      const isReview = JSON.stringify(request.schema).includes('different_referent');
-      if (isReview) {
-        return { different_referent: !review(left, right), reason: 'scripted review' };
-      }
-      return { same: same(left, right), rationale: 'scripted detection' };
-    },
-  };
-}
-
-const refusingJudge = (): ScriptedJudge => scriptedJudge({ same: () => false });
-
-/** A provider that fails the moment anything asks it to generate: proof a tier used no model. */
-function unreachableProvider(): ScriptedJudge {
-  return {
-    calls: [],
-    generate: async (): Promise<unknown> => {
-      throw new Error('no model call belongs on this path');
-    },
-  };
-}
-
 function episode(): EpisodeContext {
   return { id: EPISODE_ID, sessionId: SESSION_ID, text: '', turns: [] };
 }
 
-function context(judge: ScriptedJudge = scriptedJudge()): StageContext {
+function context(judge: ScriptedEntityJudge = scriptedJudge()): StageContext {
   return {
     driver: graph.driver,
     db: store.db,
@@ -303,7 +257,7 @@ describe('tier 3, the two-pass judge', () => {
   it('treats a second pass that never answered as a split rather than as agreement', async () => {
     seedNearDuplicatePair();
     let call = 0;
-    const flaky: ScriptedJudge = {
+    const flaky: ScriptedEntityJudge = {
       calls: [],
       generate: async (): Promise<unknown> => {
         call += 1;
