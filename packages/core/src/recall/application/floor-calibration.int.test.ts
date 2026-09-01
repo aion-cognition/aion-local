@@ -27,9 +27,13 @@ import {
  * unrelated text" from "rejects everything".
  *
  * Measured 2026-09-01, snowflake-arctic-embed2 on host Ollama, and printed on every run:
- *   unrelated  n=28  p50 0.094  p95 0.285  max 0.299
+ *   unrelated  n=43  p50 0.086  p95 0.267  max 0.299
  *   related    n=10  min 0.382  p05 0.438  p50 0.769
  *   weak       n=4   0.154 0.222 0.244 0.393   (related, under the floor, corroboration's job)
+ *
+ * The unrelated sample is 13 off-topic query/content pairs plus all 30 ordered cross pairs of
+ * the six mutually unrelated sentences, which score far lower (p95 0.128) than the off-topic
+ * pairs (p95 0.296) and pull the combined p95 down with them.
  *
  * The tails no longer overlap on this model, and the committed floors are still nomic's: 0.60
  * sits far above a noise sample that stops at 0.299, so 3 of 10 genuine matches fall under it
@@ -107,7 +111,11 @@ describe('the admission floor against this embedding model', () => {
       ].join('\n'),
     );
 
-    expect(unrelated.count).toBe(UNRELATED_PAIRS.length + 15);
+    // Six sentences in two spellings are 30 ordered cross pairs, not the 15 unordered ones:
+    // the cue side carries the query prefix, so cos(cue i, content j) is its own reading and
+    // cos(cue j, content i) is another. The literal is pinned because the printed numbers
+    // above are a sample of this size.
+    expect(unrelated.count).toBe(UNRELATED_PAIRS.length + 30);
     expect(relatedScores).toHaveLength(RELATED_PAIRS.length);
   }, 120_000);
 
