@@ -19,12 +19,18 @@ path, the container check, the usage protocol), and `mcp` imports nothing from `
 
 ## Bounded contexts inside core
 
-Each context that has both pure logic and orchestration splits into `domain/` (no I/O, no
-config, no logger) and `application/` (everything that touches the graph, SQLite, or a
-model). The layering rule holds everywhere: `domain/` never imports `application/`;
-`application/` imports `domain/` and `infrastructure/`; `infrastructure/` imports nothing
-from `recall/`, `reflection/`, `session/`, or `redaction/`. It has no notion of episodes,
-cues, or memory packs, only nodes, edges, and rows.
+Each context that has both pure logic and orchestration splits into `domain/` and
+`application/` (everything that touches the graph, SQLite, or a model). `domain/` is not free
+of infrastructure: twenty-one of its modules import from `infrastructure/`, most for type-only DI
+contracts (`Config`, `Logger`, `Driver`, `SqliteHandle`, `Provider`, the shape `operation.ts`
+and `stage.ts` declare for what a stage or operation receives). Two cross into value coupling:
+`introspection/domain/proposal-hygiene.ts` imports the `DEFAULTS` config object and reads two
+of its fields as fallback horizons, and `introspection/domain/tier3.ts`'s `proposeOnlyAdvisor`
+takes a `Logger` and calls `logger.info`, I/O executed from inside domain code rather than
+merely typed against it. What still holds: `domain/` never imports `application/`;
+`application/` imports `domain/` and `infrastructure/`; `infrastructure/` imports nothing from
+the six contexts above it, and has no notion of episodes, cues, or memory packs, only nodes,
+edges, and rows.
 
 - **`infrastructure/`**: `graph/` (every Cypher statement in the workspace), `sqlite/`
   (the reflection queue, last-pack cache, the served-item record, ops ledger, claim locking,
@@ -81,11 +87,18 @@ cues, or memory packs, only nodes, edges, and rows.
 - **`session/`**: `session-manager.ts`, identity-to-session-id resolution, cached per
   process, backed by `infrastructure/graph/sessions.ts`.
 
-One edge crosses contexts, and it runs one way: `recall/domain/` imports from
-`reflection/domain/`. `fusion.ts`, `ranking.ts` and `pack.ts` take `hashContent` from
-`content.ts` to dedupe by content hash, the same hash reflection uses as its episode dedupe
-key, and `resonance.ts` takes `weightedMeanVector` from `context-vector.ts` to build the
-centroid. Four imports, two symbols, no edge in the other direction.
+Cross-context imports are not one edge; eight directed pairs exist, about thirty imports
+total. `introspection/` is the heaviest importer: twelve from `reflection/` (queue lag,
+reconciliation, vector backfill, narrative cleanup, and the entity-merge and dedup machinery
+`merge_auto` and `retro_judgment_sweep` read directly, reached from both `domain/` and
+`application/`), four from `redaction/`, three from `plasticity/`. `recall/domain/` still
+imports from `reflection/domain/`, in five files now rather than four: `fusion.ts`, `pack.ts`,
+`ranking.ts` and `session-dedup.ts` take `hashContent` from `content.ts`, and `resonance.ts`
+takes `weightedMeanVector` from `context-vector.ts`; `recall/application/stage-reads.ts` adds
+a sixth import, of `orchestratorLedgerKey` from `reflection/application/orchestrator.ts`.
+`recall/` also imports once from `session/`, and `reflection/` imports once from
+`plasticity/`, twice from `redaction/`, and once from `session/`. Nothing crosses back into
+`recall/domain/`, and `infrastructure/` still imports from none of the six.
 
 ## Write path: reflection intake
 
