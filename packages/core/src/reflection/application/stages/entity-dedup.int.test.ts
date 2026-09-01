@@ -7,6 +7,10 @@ import { EntityDedupStage } from './entity-dedup.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
 import {
+  loadEntityDedupDetails,
+  type DedupEntityDetail,
+} from '../../../infrastructure/graph/entity-dedup-queries.js';
+import {
   findEpisodeEntities,
   linkEntityMentions,
   mergeEntities,
@@ -37,6 +41,7 @@ import {
   scriptedEntityJudge,
   type ScriptedEntityJudge,
 } from '../entity-merge-judge.fixture.js';
+import { collectMergeSignals } from '../entity-merge-writer.js';
 
 /**
  * The similarity search, mention-count aggregation, edge redirection and `supersede` close
@@ -371,5 +376,88 @@ describe('what a merge has to stay merged against', () => {
 
     expect((await storedEntity(harness.driver, mergedAwayId))?.nameVectorLength).toBe(0);
     expect(pending.map((node) => node.id)).not.toContain(mergedAwayId);
+  }, 60_000);
+});
+
+/**
+ * The record is the artifact that makes a merge arguable later, so what it says about a signal
+ * nobody could take has to be "nobody took it". A concurrent reflection can absorb a member
+ * between the tier that nominated the pair and the read that measures it, and the pair read
+ * then returns no row at all.
+ */
+describe('what a decision record says about evidence nobody could measure', () => {
+  it('leaves the graph signals absent when the pair read returns no row', async () => {
+    const canonicalId = await seedEntity(
+      {
+        name: 'Signal Canonical',
+        nameNorm: 'signal canonical',
+        type: 'tool',
+        text: 'Signal Canonical (tool)',
+        sourceEpisodeId: episodeId,
+        extractionMethod: 'test',
+        confidence: 0.8,
+      },
+      unitVector(4),
+    );
+    const [canonical] = await loadEntityDedupDetails(harness.driver, [canonicalId]);
+    if (canonical === undefined) {
+      throw new Error('failed to load the canonical detail');
+    }
+    const absorbedElsewhere: DedupEntityDetail = {
+      ...canonical,
+      id: 'absorbed-before-the-read',
+      name: 'Signal Member',
+      nameNorm: 'signal member',
+    };
+
+    const [signals] = await collectMergeSignals(harness.driver, canonical, [
+      canonical,
+      absorbedElsewhere,
+    ]);
+
+    expect(signals?.memberId).toBe('absorbed-before-the-read');
+    expect(signals).not.toHaveProperty('sharedEpisodeCount');
+    expect(signals).not.toHaveProperty('sharedEpisodeJaccard');
+    expect(signals).not.toHaveProperty('neighborOverlapCount');
+    expect(signals).not.toHaveProperty('neighborOverlapJaccard');
+    expect(signals?.nameFormRelation).toBe('none');
+  }, 60_000);
+
+  it('keeps a measured zero, which is a different statement', async () => {
+    const leftId = await seedEntity(
+      {
+        name: 'Measured Left',
+        nameNorm: 'measured left',
+        type: 'tool',
+        text: 'Measured Left (tool)',
+        sourceEpisodeId: episodeId,
+        extractionMethod: 'test',
+        confidence: 0.8,
+      },
+      unitVector(5),
+    );
+    const rightId = await seedEntity(
+      {
+        name: 'Measured Right',
+        nameNorm: 'measured right',
+        type: 'tool',
+        text: 'Measured Right (tool)',
+        sourceEpisodeId: episodeId,
+        extractionMethod: 'test',
+        confidence: 0.8,
+      },
+      unitVector(6),
+    );
+    const details = await loadEntityDedupDetails(harness.driver, [leftId, rightId]);
+    const left = details.find((detail) => detail.id === leftId);
+    const right = details.find((detail) => detail.id === rightId);
+    if (left === undefined || right === undefined) {
+      throw new Error('failed to load both details');
+    }
+
+    const [signals] = await collectMergeSignals(harness.driver, left, [left, right]);
+
+    expect(signals?.sharedEpisodeCount).toBe(0);
+    expect(signals?.neighborOverlapJaccard).toBe(0);
   }, 60_000);
 });

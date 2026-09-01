@@ -16,11 +16,13 @@ import type { SqliteHandle } from './database.js';
  */
 
 /**
- * Which tier decided. Tier 1 is absent on purpose: it nominates pairs and decides nothing, so
- * a nomination never produces a record. Tier 0 is deterministic name-form equality, tier 2 the
- * evidence tiers that settle without a model call, tier 3 the two-pass judge.
+ * Who decided. Tier 0 is deterministic name-form equality, tier 3 the two-pass judge, and
+ * `human` a person applying a row from the review queue. Tiers 1 and 2 are absent because
+ * neither decides anything: tier 1 nominates pairs and tier 2 assembles the facts tier 3 reads,
+ * so a value for either would name a tier that never fires. A deterministic tier-2 rule would
+ * add its own value when it exists.
  */
-export type EntityMergeTier = 'tier0' | 'tier2' | 'tier3';
+export type EntityMergeTier = 'tier0' | 'tier3' | 'human';
 
 /** How the two names relate, as the name-form math reads them, never as prose about them. */
 export type NameFormRelation = 'fold' | 'squash' | 'bigram' | 'none';
@@ -30,18 +32,21 @@ export type NameFormRelation = 'fold' | 'squash' | 'bigram' | 'none';
  * carries one of these per absorbed member, so the record stays citable whether the tier
  * settled a pair or a chain.
  *
- * Absence is not zero. `nominatingCosine` is missing when a graph signal nominated the pair and
- * no vector did; `temporalGapDays` is missing when neither side has an episode to measure
- * against. Zero-filling either would turn a thing nobody looked at into evidence against the
- * merge, which is backwards for two entities first seen in different episodes.
+ * Absence is not zero, and every field that can go unmeasured is optional so the record can say
+ * so. `nominatingCosine` is missing when a graph signal nominated the pair and no vector did;
+ * the four overlap fields are missing when the pair read returned no row at all, which happens
+ * when a side lost currency between nomination and measurement; `temporalGapDays` is missing
+ * when neither side has an episode to measure against. Zero-filling any of them would turn a
+ * thing nobody looked at into evidence against the merge, which is backwards for two entities
+ * first seen in different episodes, and a replay could not tell the fill from a measured zero.
  */
 export type EntityMergeSignals = {
   readonly memberId: string;
   readonly nominatingCosine?: number;
-  readonly sharedEpisodeCount: number;
-  readonly sharedEpisodeJaccard: number;
-  readonly neighborOverlapCount: number;
-  readonly neighborOverlapJaccard: number;
+  readonly sharedEpisodeCount?: number;
+  readonly sharedEpisodeJaccard?: number;
+  readonly neighborOverlapCount?: number;
+  readonly neighborOverlapJaccard?: number;
   readonly temporalGapDays?: number;
   readonly nameFormRelation: NameFormRelation;
   /** Distinct episodes that mention each side: the strength signal canonical selection reads. */
