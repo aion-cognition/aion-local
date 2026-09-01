@@ -150,12 +150,12 @@ export async function runEntityUnmerge(
     return nothingToDo('an earlier run already applied this unmerge', canonical.canonicalId);
   }
 
+  // The read above answers the guards and the caller's preview. What the write rewrites whole,
+  // the canonical's aliases and its record list, applyUnmerge re-reads under its own lock: a
+  // merge that lands while this decision is being made appends to both.
   const result = await applyUnmerge(deps.driver, {
     canonicalId: canonical.canonicalId,
-    canonicalNameNorm: canonical.canonicalNameNorm,
     record,
-    canonicalAliases: canonical.aliases,
-    records: canonical.records,
     now,
   });
 

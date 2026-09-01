@@ -212,12 +212,8 @@ const FIND_EXISTING_NODES = [
 
 export type UnmergeInput = {
   readonly canonicalId: string;
-  readonly canonicalNameNorm: string;
   /** The record being split back out; it must carry the absorbed node's identity. */
   readonly record: MergeProvenanceRecord;
-  readonly canonicalAliases: readonly string[];
-  /** Every record on the canonical, rewritten together so the property is set once. */
-  readonly records: readonly MergeProvenanceRecord[];
   readonly now: Date;
 };
 
@@ -241,15 +237,57 @@ async function existingNodeIds(
   return new Set(rows);
 }
 
+type CanonicalState = {
+  readonly nameNorm: string;
+  readonly aliases: readonly string[];
+  /** The stored records verbatim, so the rewrite below keeps every one this reader does not name. */
+  readonly records: readonly string[];
+};
+
+const READ_CANONICAL_STATE = [
+  'MATCH (canonical:Entity { id: $canonicalId })',
+  `RETURN canonical.${ENTITY_NAME_NORM_PROPERTY} AS canonical_name_norm,`,
+  `       coalesce(canonical.${ENTITY_ALIASES_PROPERTY}, []) AS aliases,`,
+  `       coalesce(canonical.${MERGE_PROVENANCE_PROPERTY}, []) AS records`,
+].join('\n');
+
+/**
+ * Read under the canonical's lock rather than from the read that fed the caller's preview:
+ * the alias list and the record list are both set whole below, so a merge that landed in
+ * between would otherwise have its alias and its record erased by this write. The merge path
+ * re-reads the same property inside its own transaction for the same reason.
+ */
+async function readCanonicalStateInTransaction(
+  tx: GraphTransaction,
+  canonicalId: string,
+): Promise<CanonicalState> {
+  const rows = await tx.run(READ_CANONICAL_STATE, { canonicalId }, (row) => ({
+    nameNorm: (row.canonical_name_norm as string | null) ?? '',
+    aliases: readStringArray(row.aliases),
+    records: readStringArray(row.records),
+  }));
+  const state = rows[0];
+  if (state === undefined) {
+    throw new Error(`canonical ${canonicalId} is no longer in the graph`);
+  }
+  return state;
+}
+
+/**
+ * The stored list with the split record stamped and every other record passed through byte for
+ * byte, including one this reader cannot parse: the property is set whole, so anything the
+ * rewrite drops is gone.
+ */
 function rewriteRecords(
-  records: readonly MergeProvenanceRecord[],
+  stored: readonly string[],
   mergedId: string,
   restoredId: string,
   now: Date,
 ): string[] {
-  return records.map((record) => {
-    if (record.mergedId !== mergedId) {
-      return JSON.stringify(record.raw);
+  return stored.map((serialized) => {
+    const record = readRecord(serialized);
+    if (record?.mergedId !== mergedId) {
+      return serialized;
     }
     return JSON.stringify({
       ...record.raw,
@@ -280,6 +318,7 @@ export async function applyUnmerge(driver: Driver, input: UnmergeInput): Promise
   return inWriteTransaction(driver, async (tx) => {
     await lockNodeInTransaction(tx, input.canonicalId, input.now);
     await lockNodeInTransaction(tx, record.mergedId, input.now);
+    const canonical = await readCanonicalStateInTransaction(tx, input.canonicalId);
 
     await tx.run(
       RELEASE_IDENTITY_KEY,
@@ -343,17 +382,17 @@ export async function applyUnmerge(driver: Driver, input: UnmergeInput): Promise
       ...(record.mergedName === undefined ? [] : [record.mergedName]),
       ...record.mergedAliases,
     ]);
-    const aliases = input.canonicalAliases.filter((alias) => !released.has(alias));
+    const aliases = canonical.aliases.filter((alias) => !released.has(alias));
 
     await writeStampedNodeInTransaction(tx, {
       label: 'Entity',
       id: input.canonicalId,
       now: input.now,
       mergeProperties: {
-        [ENTITY_ALIASES_PROPERTY]: aliasRecord(aliases, input.canonicalNameNorm),
-        [ENTITY_ALIASES_NORM_PROPERTY]: aliasKeys(aliases, input.canonicalNameNorm),
+        [ENTITY_ALIASES_PROPERTY]: aliasRecord(aliases, canonical.nameNorm),
+        [ENTITY_ALIASES_NORM_PROPERTY]: aliasKeys(aliases, canonical.nameNorm),
         [MERGE_PROVENANCE_PROPERTY]: rewriteRecords(
-          input.records,
+          canonical.records,
           record.mergedId,
           restored.id,
           input.now,
@@ -366,7 +405,7 @@ export async function applyUnmerge(driver: Driver, input: UnmergeInput): Promise
       restoredId: restored.id,
       edgesRestored,
       edgesSkipped,
-      aliasesReleased: input.canonicalAliases.length - aliases.length,
+      aliasesReleased: canonical.aliases.length - aliases.length,
     };
   });
 }
