@@ -28,6 +28,7 @@ import {
   type HygieneProposalTable,
 } from '../../domain/proposal-hygiene.js';
 import { judgeHygienePair } from '../proposal-hygiene-judge.js';
+import { sweepStaleMergeProposals } from '../stale-merge-sweep.js';
 
 /**
  * Ages a proposal out of the review queue once nobody has acted on it inside its horizon.
@@ -102,7 +103,6 @@ function summaryFor(
 const POLLUTED_REASON =
   'the source episode carried no turns, only tool calls, and this aged past the fast horizon';
 const RESIDUE_REASON = 'aged past the residue horizon with no resolution';
-const STALE_SIDE_REASON = 'a side of this pair no longer holds currency';
 
 /**
  * The one judgment call in this operation, made only for a fuzzy entity-merge pair both
@@ -130,7 +130,11 @@ async function reasonForOrdinaryResidue(
   const bothCurrent =
     byId.get(proposal.leftId)?.current === true && byId.get(proposal.rightId)?.current === true;
   if (!bothCurrent) {
-    return { reasoned: { reason: STALE_SIDE_REASON }, consumedJudgeCall: false };
+    // The sweep at the top of the run owns this case and has already resolved every row it
+    // could see. Reaching it here means the pair went stale inside this run, so the row is
+    // left unstamped for the next tick's sweep rather than spending a judge call on a pair
+    // with nothing left to merge.
+    return { reasoned: undefined, consumedJudgeCall: false };
   }
   if (judgeBudgetRemaining <= 0) {
     return { reasoned: undefined, consumedJudgeCall: false };
@@ -183,6 +187,18 @@ export function proposalHygieneOperation(): IntrospectionOperation {
         pollutedHours: ctx.config.maintenance.hygienePollutedAgeHours,
         residueDays: ctx.config.maintenance.hygieneResidueAgeDays,
       };
+      // Before the horizon pass, not after: a pair with a closed side is finished rather than
+      // undecided, and resolving it first keeps the judge budget for rows a person could still
+      // act on. It rides under the same kill switch as everything else here, so off still means
+      // this operation touches no proposal.
+      const swept = ctx.signal.aborted
+        ? { examined: 0, resolved: 0 }
+        : await sweepStaleMergeProposals({
+            db: ctx.db,
+            driver: ctx.driver,
+            logger: ctx.logger,
+            now: ctx.now,
+          });
       const candidates = loadCandidates(ctx.db);
       const episodeIds = [...new Set(candidates.map((candidate) => candidate.proposal.episodeId))];
       const episodes = await fetchHygieneEpisodeProvenance(ctx.driver, episodeIds);
@@ -258,11 +274,16 @@ export function proposalHygieneOperation(): IntrospectionOperation {
         );
       }
 
+      const affected = dismissed + swept.resolved;
       return {
-        status: dismissed === 0 ? 'noop' : 'applied',
-        itemsProcessed: seen,
-        itemsAffected: dismissed,
-        detail: `${String(dismissed)} of ${String(seen)} open proposal(s) dismissed past their hygiene horizon`,
+        status: affected === 0 ? 'noop' : 'applied',
+        // The rows the sweep resolved are gone from the horizon pass's own load, so the two
+        // counts are of disjoint rows and adding them counts nothing twice.
+        itemsProcessed: seen + swept.resolved,
+        itemsAffected: affected,
+        detail:
+          `${String(dismissed)} of ${String(seen)} open proposal(s) dismissed past their hygiene horizon; ` +
+          `${String(swept.resolved)} of ${String(swept.examined)} merge proposal(s) resolved with a side that lost currency`,
       };
     },
   };
