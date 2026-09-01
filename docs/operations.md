@@ -33,9 +33,12 @@ auto-supersession with an extra keystroke. Its default blade closes the judged c
 siblings of the same episode that name one of its subjects; `--claim-only` closes just the
 claim, and `--episode` closes everything that observation produced.
 
-An entity-merge proposal whose two names match exactly never reaches this list: `merge_auto`
-merges it on its own. `aion proposals` is where a person decides the fuzzy remainder, the
-pairs whose names differ, until `proposal_hygiene` ages one out: past
+Only an entity-merge pair the dedup cascade's two judge passes split on reaches this list. A
+pair both passes agree on is merged during reflection, and the spellings one identity key
+cannot tell apart (`re-mark` against `remark`, an identity already answering to the other's
+name as an alias) are merged with no model call at all, by the cascade's tier 0 during
+reflection and by `merge_auto` sweeping the whole graph on the hour. `aion proposals` is
+where a person decides the residue, until `proposal_hygiene` ages one out: past
 `AION_MAINTENANCE_HYGIENE_RESIDUE_AGE_DAYS` (or the shorter
 `AION_MAINTENANCE_HYGIENE_POLLUTED_AGE_HOURS` for a proposal whose source episode was pure
 tool exhaust, no conversation to judge) it dismisses the row and ledgers the class, the
@@ -44,9 +47,9 @@ reopen <id>` undoes any dismissal, hygiene's or a person's, and puts the row bac
 queue. A merge proposal one of whose entities a later merge has since absorbed waits for no
 horizon at all: hygiene sweeps those at the top of every run and resolves each one with the
 side that went, because a pair with a closed side has nothing left for a person to decide.
-`AION_AUTO_MERGE=false` turns merge_auto off and leaves every proposal queued for a
-person instead; `aion unmerge` reverses a merge `merge_auto` made, one at a time, the same
-as any other entity merge.
+`AION_AUTO_MERGE=false` turns the `merge_auto` sweep off, leaving the duplicate spellings in
+the graph for the next reflection to catch. `aion unmerge` reverses any entity merge one at a
+time and names the tier that made it, with the reasons that tier recorded.
 
 What reaches this queue depends on `AION_SUPERSEDE_MODE`. Under the shipped `unanimous`, the
 pipeline closes what two independent judgments agree on and queues the rest, so a row here is
@@ -121,7 +124,8 @@ aion unmerge apply <merged-id>                              # split one of those
 `unmerge` is the human end of entity deduplication, and it is deliberately not a maintenance
 operation. A bad merge is not measurable from inside the graph: the shape after a correct merge
 and after a wrong one is the same, and the only thing that separates them is a person saying the
-two names were different things.
+two names were different things. `apply` prints the tier that made the merge and the reasons it
+recorded, so the reversal names the evidence that was wrong rather than only the node.
 
 ## Forgetting
 
