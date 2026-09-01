@@ -3,30 +3,21 @@ import {
   type ReflectionOrigin,
   type ReflectionOutput,
 } from '@aion/protocol';
-import type { Driver } from 'neo4j-driver';
 
-import { ReflectionNotStoredError } from './errors.js';
+import {
+  storeExperience,
+  type ExperienceStoreDeps,
+  type StoredEpisode,
+} from './experience-store.js';
 import type { LaneAssigner, LaneDecision } from './lanes.js';
 import { attachContentVectors } from './vectors.js';
-import { writeStampedNodeInTransaction } from '../../infrastructure/graph/bitemporal.js';
-import {
-  inWriteTransaction,
-  type GraphTransaction,
-} from '../../infrastructure/graph/connection.js';
-import { upsertEdgeInTransaction } from '../../infrastructure/graph/edges.js';
-import {
-  CONTAINMENT_TYPE,
-  findEpisodeByContentHash,
-  findEpisodeByContentHashInTransaction,
-  MEMORY_PROPERTIES,
-} from '../../infrastructure/graph/episodes.js';
-import { isGraphUnavailable } from '../../infrastructure/graph/errors.js';
-import { lockNodeInTransaction } from '../../infrastructure/graph/locks.js';
-import type { PendingVectorNode } from '../../infrastructure/graph/pending-vectors.js';
-import type { GraphProperties } from '../../infrastructure/graph/values.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import {
+  ARCHIVE_SCHEMA_VERSION,
+  insertExperience,
+} from '../../infrastructure/sqlite/experience-archive.js';
 import { countQueueJobs } from '../../infrastructure/sqlite/reflection-queue-admin.js';
 import {
   DEFAULT_REFLECTION_LANE,
@@ -35,8 +26,8 @@ import {
   type ReflectionLane,
 } from '../../infrastructure/sqlite/reflection-queue.js';
 import { redactPayload } from '../../redaction/deep-walk.js';
-import type { SessionManager } from '../../session/session-manager.js';
-import { prepareEpisode, type PreparedEpisode, type PreparedTurn } from '../domain/content.js';
+import { prepareEpisode, type PreparedEpisode, type ReflectionContent } from '../domain/content.js';
+import { PIPELINE_VERSION } from '../domain/version.js';
 
 /** The one job intake enqueues. The reflection pipeline's stages fan out from it; intake never runs them. */
 export const INTEGRATE_JOB_TYPE = 'integrate';
@@ -44,16 +35,8 @@ export const INTEGRATE_JOB_TYPE = 'integrate';
 /** The payload field the integrate job is keyed on, and how a queued job is matched back to its episode. */
 const EPISODE_ID_FIELD = 'episode_id';
 
-/** Provenance: how the node got into the graph, as opposed to what extracted it later. */
-export const INTAKE_EXTRACTION_METHOD = 'reflection_intake';
-
-const STRUCTURAL_SIGNALS = ['structural'];
-const STRUCTURAL_PROVENANCE = ['reflection_intake'];
-
-export type ReflectionIntakeDeps = {
-  readonly driver: Driver;
+export type ReflectionIntakeDeps = ExperienceStoreDeps & {
   readonly db: SqliteHandle;
-  readonly sessions: SessionManager;
   readonly provider: Provider;
   /**
    * Called once per newly enqueued job, which is what wakes the worker: the queue row is
@@ -76,185 +59,6 @@ export type ReflectionIntakeOptions = {
   readonly identity: string;
   readonly now?: Date;
 };
-
-function episodeProperties(
-  prepared: PreparedEpisode,
-  sessionId: string,
-  origin: ReflectionOrigin | undefined,
-): GraphProperties {
-  return {
-    [MEMORY_PROPERTIES.text]: prepared.text,
-    [MEMORY_PROPERTIES.summary]: prepared.summary,
-    [MEMORY_PROPERTIES.contentHash]: prepared.contentHash,
-    [MEMORY_PROPERTIES.sessionId]: sessionId,
-    [MEMORY_PROPERTIES.extractionMethod]: INTAKE_EXTRACTION_METHOD,
-    [MEMORY_PROPERTIES.turnCount]: prepared.turnCount,
-    [MEMORY_PROPERTIES.toolExecutionCount]: prepared.toolExecutionCount,
-    [MEMORY_PROPERTIES.observationCount]: prepared.observationCount,
-    // Undefined when the caller named none: absent origin is an absent property, no sentinel.
-    [MEMORY_PROPERTIES.originChannel]: origin?.channel,
-    [MEMORY_PROPERTIES.originEvent]: origin?.event,
-  };
-}
-
-function turnProperties(turn: PreparedTurn, episodeId: string, sessionId: string): GraphProperties {
-  return {
-    [MEMORY_PROPERTIES.text]: turn.text,
-    [MEMORY_PROPERTIES.role]: turn.role,
-    [MEMORY_PROPERTIES.sequence]: turn.sequence,
-    [MEMORY_PROPERTIES.contentHash]: turn.contentHash,
-    [MEMORY_PROPERTIES.sessionId]: sessionId,
-    [MEMORY_PROPERTIES.sourceEpisodeId]: episodeId,
-    [MEMORY_PROPERTIES.extractionMethod]: INTAKE_EXTRACTION_METHOD,
-  };
-}
-
-async function linkStructural(
-  tx: GraphTransaction,
-  type: typeof CONTAINMENT_TYPE | 'FOLLOWS',
-  sourceId: string,
-  targetId: string,
-  now: Date,
-): Promise<void> {
-  await upsertEdgeInTransaction(tx, {
-    type,
-    sourceId,
-    targetId,
-    strength: 1,
-    confidence: 1,
-    signals: STRUCTURAL_SIGNALS,
-    provenance: STRUCTURAL_PROVENANCE,
-    count: 0,
-    now,
-  });
-}
-
-type StoredEpisode = {
-  readonly episodeId: string;
-  readonly created: boolean;
-  /** The nodes this call committed without a `content_vec`; empty for a duplicate. */
-  readonly pending: readonly PendingVectorNode[];
-};
-
-/**
- * Every graph write of one intake, in one transaction: the episode, its turns, and the
- * edges that reach them. Nothing here is separately visible, so a failure at any point
- * leaves the graph exactly as it was and a retry starts clean.
- *
- * No embedding is involved. The nodes commit without `content_vec` and the caller attaches
- * vectors afterward, which is what makes an inference outage cost the vectors rather than
- * the experience.
- *
- * The session is locked first. Dedupe is a read that decides a write, and the read alone
- * is not enough: two concurrent pushes of the same payload would each find no duplicate
- * and each store one. Locking the session serializes intake for that session, which is the
- * grain that matters: it is one agent conversation, and different sessions still run in
- * parallel.
- */
-async function storeEpisode(
-  driver: Driver,
-  prepared: PreparedEpisode,
-  sessionId: string,
-  now: Date,
-  origin: ReflectionOrigin | undefined,
-): Promise<StoredEpisode> {
-  return inWriteTransaction(driver, async (tx) => {
-    await lockNodeInTransaction(tx, sessionId, now);
-
-    const duplicate = await findEpisodeByContentHashInTransaction(tx, {
-      sessionId,
-      contentHash: prepared.contentHash,
-    });
-    if (duplicate !== undefined) {
-      return { episodeId: duplicate, created: false, pending: [] };
-    }
-
-    const episode = await writeStampedNodeInTransaction(tx, {
-      label: 'Episode',
-      now,
-      occurredAt: prepared.occurredAt,
-      properties: episodeProperties(prepared, sessionId, origin),
-    });
-    const pending: PendingVectorNode[] = [{ id: episode.id, text: prepared.text }];
-
-    await linkStructural(tx, CONTAINMENT_TYPE, episode.id, sessionId, now);
-
-    let previousTurnId: string | undefined;
-    for (const turn of prepared.turns) {
-      const node = await writeStampedNodeInTransaction(tx, {
-        label: 'Turn',
-        now,
-        occurredAt: turn.occurredAt,
-        properties: turnProperties(turn, episode.id, sessionId),
-      });
-      pending.push({ id: node.id, text: turn.text });
-
-      await linkStructural(tx, CONTAINMENT_TYPE, node.id, episode.id, now);
-      if (previousTurnId !== undefined) {
-        await linkStructural(tx, 'FOLLOWS', node.id, previousTurnId, now);
-      }
-      previousTurnId = node.id;
-    }
-
-    return { episodeId: episode.id, created: true, pending };
-  });
-}
-
-/**
- * The episode this payload belongs to: the one already stored, or a newly written one. The
- * cheap read comes first so a re-pushed payload never opens a write transaction or takes
- * the session's lock. The authoritative dedupe is the one `storeEpisode` runs under it.
- */
-async function resolveEpisode(
-  deps: ReflectionIntakeDeps,
-  prepared: PreparedEpisode,
-  sessionId: string,
-  now: Date,
-  origin: ReflectionOrigin | undefined,
-): Promise<StoredEpisode> {
-  const known = await findEpisodeByContentHash(deps.driver, {
-    sessionId,
-    contentHash: prepared.contentHash,
-  });
-  if (known !== undefined) {
-    return { episodeId: known, created: false, pending: [] };
-  }
-  return storeEpisode(deps.driver, prepared, sessionId, now, origin);
-}
-
-type DurableWrite = {
-  readonly sessionId: string;
-  readonly stored: StoredEpisode;
-};
-
-/**
- * Everything between a validated payload and a committed episode, wrapped as one region
- * because every failure inside it leaves the same state: nothing written, nothing queued.
- * That fact is what the caller has to act on, and a raw `Neo4jError` does not carry it. A
- * statement the graph itself rejected is a defect here, not an outage, and passes through
- * unchanged.
- *
- * Only the graph can put intake in that state now. Inference happens after this region
- * commits, so an Ollama outage never reaches it.
- */
-async function storeDurably(
-  deps: ReflectionIntakeDeps,
-  prepared: PreparedEpisode,
-  identity: string,
-  now: Date,
-  origin: ReflectionOrigin | undefined,
-): Promise<DurableWrite> {
-  try {
-    const { sessionId } = await deps.sessions.ensureSession({ identity, now });
-    const stored = await resolveEpisode(deps, prepared, sessionId, now, origin);
-    return { sessionId, stored };
-  } catch (err) {
-    if (isGraphUnavailable(err)) {
-      throw new ReflectionNotStoredError('graph', err);
-    }
-    throw err;
-  }
-}
 
 /**
  * The queue row is derived from the graph, so it is repaired rather than assumed: a crash
@@ -334,9 +138,55 @@ function ensureIntegrateJob(
     deps.db,
     INTEGRATE_JOB_TYPE,
     { [EPISODE_ID_FIELD]: episodeId },
-    { lane: decision.lane, sessionId },
+    { lane: decision.lane, sessionId, now },
   );
   return { jobId, enqueued: true, lane: decision.lane, decision };
+}
+
+type IntakeArchive = {
+  readonly identity: string;
+  readonly sessionId: string;
+  readonly episodeId: string;
+  readonly prepared: PreparedEpisode;
+  /** The redacted content, which is what the substrate holds and what a re-derivation must match. */
+  readonly payload: ReflectionContent;
+  readonly lane: ReflectionLane | undefined;
+  readonly origin: ReflectionOrigin | undefined;
+  readonly now: Date;
+};
+
+type ArchivedIntake = {
+  /** False when the archive already held this experience under this identity. */
+  readonly archived: boolean;
+  readonly job: IntegrateJob;
+};
+
+/**
+ * The archive row and the queue row as one commit. Both are synchronous better-sqlite3 calls
+ * with nothing awaited between them, so the transaction costs nothing and buys the invariant
+ * the two rows are worth having together: no job for an experience the archive does not hold.
+ *
+ * `occurred_at` is the payload's own clock and `archived_at` is the caller's, which is the
+ * only wall-clock value on the row. A re-pushed payload conflicts on the idempotency key and
+ * inserts nothing, so the row the first push wrote stays exactly as it was written.
+ */
+function archiveAndQueue(deps: ReflectionIntakeDeps, input: IntakeArchive): ArchivedIntake {
+  return deps.db.transaction((): ArchivedIntake => ({
+    archived: insertExperience(deps.db, {
+      schemaVersion: ARCHIVE_SCHEMA_VERSION,
+      pipelineVersion: PIPELINE_VERSION,
+      identity: input.identity,
+      sessionId: input.sessionId,
+      episodeId: input.episodeId,
+      contentHash: input.prepared.contentHash,
+      occurredAt: input.prepared.occurredAt.toISOString(),
+      archivedAt: input.now.toISOString(),
+      lane: input.lane,
+      origin: input.origin,
+      payload: input.payload,
+    }),
+    job: ensureIntegrateJob(deps, input.episodeId, input.sessionId, input.lane, input.now),
+  }))();
 }
 
 /**
@@ -363,12 +213,14 @@ async function attachVectors(
 
 /**
  * The write path. Validate, redact, store the episode and its turns with a full bitemporal
- * stamp, link the backbone, enqueue the integrate job, wake the worker, then embed.
+ * stamp, link the backbone, archive the payload beside the integrate job in one commit, wake
+ * the worker, then embed.
  *
  * Redaction runs on the parsed payload before anything reads a content field, so no raw
- * credential reaches the hash, the embedder, or the graph. The graph then takes every write
- * as one transaction, and the queue row is repaired rather than assumed, so the two stores
- * converge on a retry instead of leaving an episode nothing will ever process.
+ * credential reaches the hash, the embedder, the graph, or the archive: what the archive
+ * holds is what the substrate holds. The graph then takes every write as one transaction, and
+ * the queue row is repaired rather than assumed, so the two stores converge on a retry
+ * instead of leaving an episode nothing will ever process.
  *
  * Embedding comes last on purpose: the episode and its queue row are already durable before
  * anything embeds, so reflection jobs still queue while the embedding service is down. The
@@ -400,18 +252,22 @@ export async function handleReflection(
     );
   }
 
+  const identity = suppliedIdentity ?? options.identity;
   const prepared = prepareEpisode(redacted.value, now);
-  const { sessionId, stored } = await storeDurably(
-    deps,
-    prepared,
-    suppliedIdentity ?? options.identity,
-    now,
-    origin,
-  );
+  const { sessionId, stored } = await storeExperience(deps, prepared, identity, now, origin);
   // Measured before this call's own row lands, so a fresh enqueue is not counted against
   // itself; a duplicate payload reads the same figure the already-queued job would.
   const ahead = pendingAhead(deps.db, deps.workerMaxAttempts);
-  const job = ensureIntegrateJob(deps, stored.episodeId, sessionId, requestedLane, now);
+  const { archived, job } = archiveAndQueue(deps, {
+    identity,
+    sessionId,
+    episodeId: stored.episodeId,
+    prepared,
+    payload: redacted.value,
+    lane: requestedLane,
+    origin,
+    now,
+  });
   if (job.enqueued) {
     notifyEnqueued(deps, job.jobId);
   }
@@ -439,7 +295,7 @@ export async function handleReflection(
     // an operator reads to tell a retry storm from real traffic, and it is invisible at the
     // level production runs. One line per duplicate push bounds the volume by the client.
     deps.logger.info(
-      { episodeId: stored.episodeId, sessionId, requeued: job.enqueued, lane: job.lane },
+      { episodeId: stored.episodeId, sessionId, requeued: job.enqueued, lane: job.lane, archived },
       'reflection payload already stored',
     );
     return { episode_id: stored.episodeId, queued: true, lane: job.lane, pending_ahead: ahead };

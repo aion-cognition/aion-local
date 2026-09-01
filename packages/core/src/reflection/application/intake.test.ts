@@ -1,8 +1,11 @@
+import type { Driver } from 'neo4j-driver';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ReflectionNotStoredError } from './errors.js';
 import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
 import { LaneAssigner } from './lanes.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
@@ -10,10 +13,16 @@ import { openLogger } from '../../infrastructure/logging/logger.js';
 import type { Vector } from '../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
+  ARCHIVE_SCHEMA_VERSION,
+  getExperienceByEpisode,
+  listExperiencesAfter,
+} from '../../infrastructure/sqlite/experience-archive.js';
+import {
   enqueueReflectionJob,
   listReflectionJobs,
 } from '../../infrastructure/sqlite/reflection-queue.js';
 import { SessionManager } from '../../session/session-manager.js';
+import { PIPELINE_VERSION } from '../domain/version.js';
 import { FakeGraph } from '../test-support/fake-graph.fixture.js';
 
 const MEMBER_ID = 'member-1';
@@ -48,6 +57,30 @@ const PAYLOAD = {
   observations: ['We keyed the sync on id_slug because the external ids churn'],
   summary: 'failed deploy of the ingestion service',
 };
+
+/** Carries its own timestamps, so the payload's clock and the intake clock are tellable apart. */
+const DATED_PAYLOAD = {
+  turns: [
+    {
+      role: 'user',
+      text: 'why did the ingestion service pick webhooks',
+      occurred_at: '2026-03-01T10:00:00Z',
+    },
+    {
+      role: 'assistant',
+      text: 'the vendor has no bulk export',
+      occurred_at: '2026-03-01T10:00:05Z',
+    },
+  ],
+  observations: ['webhooks were the only option the vendor offered'],
+};
+
+const PAYLOAD_CLOCK = '2026-03-01T10:00:00.000Z';
+const INTAKE_CLOCK = new Date('2026-08-14T09:30:00Z');
+const LATER_INTAKE_CLOCK = new Date('2026-08-15T11:45:00Z');
+
+/** The repo's `max-lines` ceiling, asserted here so a module outgrows it in a test, not a lint run. */
+const MAX_MODULE_LINES = 500;
 
 let graph: FakeGraph;
 let db: SqliteHandle;
@@ -428,5 +461,102 @@ describe('reflection intake pending_ahead', () => {
 
     expect(result.lane).toBe('bulk');
     expect(result.pending_ahead).toBe(2);
+  });
+});
+
+/** A driver whose every call fails the way an unreachable server does, code and all. */
+function unavailableDriver(): Driver {
+  const fail = (): never => {
+    const err = new Error('connection refused') as Error & { code: string };
+    err.code = 'ServiceUnavailable';
+    throw err;
+  };
+  return { executeQuery: fail, session: fail } as unknown as Driver;
+}
+
+describe('reflection intake archive', () => {
+  it('archives one row at the payload clock, stamped with the archive moment', async () => {
+    const result = await handleReflection(deps, DATED_PAYLOAD, {
+      identity: 'session-a',
+      now: INTAKE_CLOCK,
+    });
+
+    const rows = listExperiencesAfter(db, undefined, 10);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      schemaVersion: ARCHIVE_SCHEMA_VERSION,
+      pipelineVersion: PIPELINE_VERSION,
+      identity: 'session-a',
+      sessionId: 'session-a',
+      episodeId: result.episode_id,
+      occurredAt: PAYLOAD_CLOCK,
+      archivedAt: INTAKE_CLOCK.toISOString(),
+      lane: undefined,
+      origin: undefined,
+    });
+    expect(rows[0]?.contentHash).toBe(graph.nodes.get(result.episode_id)?.properties.content_hash);
+  });
+
+  it('archives one row for a payload pushed twice, leaving the first row as written', async () => {
+    const first = await handleReflection(deps, DATED_PAYLOAD, {
+      identity: 'session-a',
+      now: INTAKE_CLOCK,
+    });
+    const archived = getExperienceByEpisode(db, first.episode_id);
+
+    const second = await handleReflection(deps, DATED_PAYLOAD, {
+      identity: 'session-a',
+      now: LATER_INTAKE_CLOCK,
+    });
+
+    expect(second.episode_id).toBe(first.episode_id);
+    expect(graph.nodesWithLabel('Episode')).toHaveLength(1);
+    expect(listExperiencesAfter(db, undefined, 10)).toHaveLength(1);
+    expect(getExperienceByEpisode(db, first.episode_id)).toEqual(archived);
+  });
+
+  // The graph dedupes per session, so one identity's archive row must not answer for another's.
+  it('archives the same content once per identity', async () => {
+    const first = await handleReflection(deps, DATED_PAYLOAD, { identity: 'session-a' });
+    const second = await handleReflection(deps, DATED_PAYLOAD, { identity: 'session-b' });
+
+    expect(second.episode_id).not.toBe(first.episode_id);
+
+    const rows = listExperiencesAfter(db, undefined, 10);
+    expect(rows).toHaveLength(2);
+    expect([...rows].map((row) => row.identity).sort()).toEqual(['session-a', 'session-b']);
+    expect(new Set(rows.map((row) => row.contentHash)).size).toBe(1);
+  });
+
+  it('archives the redacted payload, never the text the caller sent', async () => {
+    const result = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+
+    const archived = JSON.stringify(getExperienceByEpisode(db, result.episode_id)?.payload);
+    expect(archived).not.toContain(AWS_KEY);
+    expect(archived).not.toContain(GITHUB_TOKEN);
+    expect(archived).toContain('⟨secret:aws-access-key:');
+    expect(archived).toContain('⟨secret:github-token:');
+  });
+
+  it('writes no archive row and no queue row when the graph is unavailable', async () => {
+    const severed = unavailableDriver();
+    const offline: ReflectionIntakeDeps = {
+      ...deps,
+      driver: severed,
+      sessions: new SessionManager(severed, { memberId: MEMBER_ID, workspaceId: WORKSPACE_ID }),
+    };
+
+    await expect(handleReflection(offline, PAYLOAD, { identity: 'session-a' })).rejects.toThrow(
+      ReflectionNotStoredError,
+    );
+
+    expect(listExperiencesAfter(db, undefined, 10)).toHaveLength(0);
+    expect(listReflectionJobs(db)).toHaveLength(0);
+  });
+
+  it('keeps the intake module inside the file-length ceiling', () => {
+    const source = readFileSync(fileURLToPath(new URL('./intake.ts', import.meta.url)), 'utf8');
+
+    expect(source.trimEnd().split('\n').length).toBeLessThan(MAX_MODULE_LINES);
   });
 });
