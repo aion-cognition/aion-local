@@ -35,6 +35,7 @@ import { applyEntityMergeProposal } from '../../../reflection/application/entity
 import type { OperationContext } from '../../domain/operation.js';
 import { hygieneLedgerKey } from '../../domain/proposal-hygiene.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
+import { staleMergeLedgerKey } from '../stale-merge-sweep.js';
 
 const EMBED_DIMENSION = 8;
 const NOW = new Date('2026-08-29T14:00:00.000Z');
@@ -215,10 +216,14 @@ describe('proposal_hygiene against a live graph', () => {
       getLedgerEntry(db, hygieneLedgerKey('supersession', forgottenId))?.summary,
     ).toMatchObject({ class: 'ordinary_residue' });
 
+    // The sweep took this one, not the horizon pass: an absorbed side means there is nothing
+    // left to merge, whatever the row's age.
     expect(getEntityMergeProposal(db, staleSideId)?.resolvedAt).toBe(NOW.toISOString());
-    expect(
-      getLedgerEntry(db, hygieneLedgerKey('entity_merge', staleSideId))?.summary,
-    ).toMatchObject({ reason: 'a side of this pair no longer holds currency' });
+    expect(getLedgerEntry(db, staleMergeLedgerKey(staleSideId))?.summary).toMatchObject({
+      reason: 'a side of this pair lost currency, so there is nothing left to merge',
+      goneSides: [firstMerge.absorbed.id],
+    });
+    expect(getLedgerEntry(db, hygieneLedgerKey('entity_merge', staleSideId))).toBeUndefined();
 
     expect(getSupersessionProposal(db, freshId)?.resolvedAt).toBeNull();
 
@@ -306,6 +311,38 @@ describe('proposal_hygiene against a live graph', () => {
     expect(getSupersessionProposal(db, id)?.resolvedAt).toBe(NOW.toISOString());
     expect(getLedgerEntry(db, hygieneLedgerKey('supersession', id))?.summary).toMatchObject({
       class: 'ordinary_residue',
+    });
+  }, 300_000);
+
+  it('resolves a merge proposal the moment a side is absorbed, without waiting a horizon', async () => {
+    await seedEpisode('ep-sweep-fresh', NOW, 2, 1);
+    const absorbedId = await seedEntity('Sweep Legacy', 'topic');
+    const canonicalId = await seedEntity('Sweep Legacy', 'topic');
+    const setupId = recordEntityMergeProposal(db, {
+      subject: { id: absorbedId, name: 'Sweep Legacy', type: 'topic' },
+      candidate: { id: canonicalId, name: 'Sweep Legacy', type: 'topic' },
+      similarity: 1,
+      episodeId: 'ep-sweep-fresh',
+    });
+    const applied = await applyEntityMergeProposal(harness.driver, db, { id: setupId });
+    if (applied.outcome !== 'applied') {
+      throw new Error('setup expected the exact-name pair to merge');
+    }
+    const partnerId = await seedEntity('Sweep Partner', 'topic');
+    // Created now, so no horizon has passed and no judge call is owed.
+    const freshStaleId = recordEntityMergeProposal(db, {
+      subject: { id: applied.absorbed.id, name: applied.absorbed.name, type: 'topic' },
+      candidate: { id: partnerId, name: 'Sweep Partner', type: 'topic' },
+      similarity: 0.6,
+      episodeId: 'ep-sweep-fresh',
+      createdAt: NOW.toISOString(),
+    });
+
+    await proposalHygieneOperation().run(ctxFor());
+
+    expect(getEntityMergeProposal(db, freshStaleId)?.resolvedAt).toBe(NOW.toISOString());
+    expect(getLedgerEntry(db, staleMergeLedgerKey(freshStaleId))?.summary).toMatchObject({
+      goneSides: [applied.absorbed.id],
     });
   }, 300_000);
 });

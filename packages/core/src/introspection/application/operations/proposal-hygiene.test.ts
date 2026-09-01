@@ -23,6 +23,7 @@ import {
 import type { OperationContext } from '../../domain/operation.js';
 import { hygieneLedgerKey } from '../../domain/proposal-hygiene.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
+import { staleMergeLedgerKey } from '../stale-merge-sweep.js';
 
 /**
  * A fake recognising the exact two read shapes this operation issues (the episode provenance
@@ -45,6 +46,14 @@ function fakeDriver(
 ): Driver {
   const executeQuery = (cypher: string, parameters: Record<string, unknown>): Promise<unknown> => {
     const ids = (parameters.ids as string[] | undefined) ?? [];
+    if (cypher.includes('n IS NULL')) {
+      // The stale sweep's currency check. An id the map does not carry has no node behind it,
+      // which the real query also reports as gone.
+      const records = ids
+        .filter((id) => entities.get(id)?.current !== true)
+        .map((id) => ({ toObject: () => ({ id }) }));
+      return Promise.resolve({ records });
+    }
     if (cypher.includes('MATCH (e:Episode')) {
       onEpisodeQuery?.();
       const records = ids
@@ -226,10 +235,18 @@ describe('proposal_hygiene judge routing', () => {
     expect(getLedgerEntry(db, hygieneLedgerKey('entity_merge', id))).toBeUndefined();
   });
 
-  it('dismisses a stale-sided pair on age alone, without calling the judge', async () => {
-    const id = seedFuzzyPair({ left: 'left-4', right: 'right-4', episode: 'ep-4' });
+  it('resolves a stale-sided pair through the sweep, with no horizon and no judge call', async () => {
+    // Created now, not twenty days ago: the sweep owns a pair with a closed side, and a pair
+    // with nothing left to merge is finished rather than undecided, so it does not wait.
+    const id = recordEntityMergeProposal(db, {
+      subject: { id: 'left-4', name: 'Ledger Cache', type: 'tool' },
+      candidate: { id: 'right-4', name: 'Ledger Store', type: 'topic' },
+      similarity: 0.6,
+      episodeId: 'ep-4',
+      createdAt: FRESH_CREATED.toISOString(),
+    });
     const driver = fakeDriver(
-      new Map([['ep-4', { occurredAt: OLD_CREATED, turnCount: 2, toolExecutionCount: 1 }]]),
+      new Map([['ep-4', { occurredAt: FRESH_CREATED, turnCount: 2, toolExecutionCount: 1 }]]),
       new Map([
         ['left-4', { current: true }],
         ['right-4', { current: false }],
@@ -241,11 +258,13 @@ describe('proposal_hygiene judge routing', () => {
     );
 
     expect(result.itemsAffected).toBe(1);
-    const entry = getLedgerEntry(db, hygieneLedgerKey('entity_merge', id));
-    expect(entry?.summary).toMatchObject({
-      reason: 'a side of this pair no longer holds currency',
+    expect(getEntityMergeProposal(db, id)?.resolvedAt).toBe(NOW.toISOString());
+    expect(getLedgerEntry(db, staleMergeLedgerKey(id))?.summary).toMatchObject({
+      reason: 'a side of this pair lost currency, so there is nothing left to merge',
+      goneSides: ['right-4'],
     });
-    expect(entry?.summary).not.toHaveProperty('verdict');
+    // The horizon pass never saw it, so it wrote nothing about it either.
+    expect(getLedgerEntry(db, hygieneLedgerKey('entity_merge', id))).toBeUndefined();
   });
 });
 
@@ -342,7 +361,9 @@ describe('proposal_hygiene abort', () => {
       status: 'noop',
       itemsProcessed: 0,
       itemsAffected: 0,
-      detail: '0 of 0 open proposal(s) dismissed past their hygiene horizon',
+      detail:
+        '0 of 0 open proposal(s) dismissed past their hygiene horizon; ' +
+        '0 of 0 merge proposal(s) resolved with a side that lost currency',
     });
   });
 });
