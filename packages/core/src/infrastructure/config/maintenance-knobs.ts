@@ -31,11 +31,10 @@ export const MAINTENANCE_KNOBS = {
   // invalid selection. The second pass vetoed 20 of 23 recommendations, including ones the
   // corpus calls correct, so the advisor recommends and the loop runs nothing.
   tier3Mode: ['AION_MAINTENANCE_TIER3_MODE', z.enum(['propose', 'act']), 'propose'],
-  // `merge_auto`'s kill switch. On by default: the policy only acts on an exact-name
-  // proposal, and every exact-name pair measured against two live review batches was a
-  // merge a person went on to approve, with no disagreement the shadow judge recorded. Off
-  // stops the operation from touching a proposal at all; open proposals keep queuing and
-  // `aion proposals` stays the only way to resolve them until it is back on.
+  // `merge_auto`'s kill switch. On by default: the sweep is deterministic and model-free, a
+  // graph-wide pass over tier-0 squash- and alias-equality groups with no proposal queue and
+  // no shadow-judge review at any point. Off no-ops the sweep entirely; the groups it would
+  // have merged stay unmerged until it is back on.
   autoMerge: ['AION_AUTO_MERGE', z.boolean(), true],
   // How often the introspection loop observes, decides, and runs at most one operation.
   // Fifteen minutes is one bucket of the finest granularity an operation can declare, so every
@@ -137,8 +136,8 @@ export const MAINTENANCE_KNOBS = {
   identifierMentionFloor: ['AION_MAINTENANCE_IDENTIFIER_MENTION_FLOOR', positiveInt, 5],
   // `claim_dedup`'s kill switch. On by default: the merge only ever runs on a pair a two-pass
   // judge unanimously called one assertion restated, the same discipline `merge_auto` follows
-  // for exact-name entity pairs. Off stops the scan and every model call it would have made;
-  // the near-duplicate claims stay in the graph exactly as extraction left them.
+  // for squash- and alias-equality entity pairs. Off stops the scan and every model call it
+  // would have made; the near-duplicate claims stay in the graph exactly as extraction left them.
   claimDedup: ['AION_MAINTENANCE_CLAIM_DEDUP', z.boolean(), true],
   // Pairs judged per run. Every pair costs up to two model calls (the detection pass, then the
   // second pass arguing the other side), the same ceiling `retroSupersessionBatch` sets for
