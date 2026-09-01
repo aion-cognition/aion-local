@@ -42,6 +42,16 @@ export { findPendingVectorNodes } from './application/vectors.js';
 export { EntityExtractionStage } from './application/stages/entities.js';
 
 export { EntityDedupStage } from './application/stages/entity-dedup.js';
+export type { EntityDedupStageOptions } from './application/stages/entity-dedup.js';
+
+export {
+  describeEntityMergePair,
+  judgeEntityMerge,
+  reviewEntityMerge,
+} from './application/entity-merge-judge.js';
+export type { EntityMergePair, EntityMergeSide } from './application/entity-merge-judge.js';
+
+export { applyEntityMerge, collectMergeSignals } from './application/entity-merge-writer.js';
 
 export { AssociationInferenceStage } from './application/stages/associations.js';
 

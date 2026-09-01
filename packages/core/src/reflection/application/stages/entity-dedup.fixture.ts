@@ -5,11 +5,16 @@ import {
   MERGE_PROVENANCE_PROPERTY,
 } from '../../../infrastructure/graph/entity-dedup-queries.js';
 import {
+  ENTITY_ALIASES_NORM_PROPERTY,
   ENTITY_MENTION_TYPE,
+  ENTITY_NAME_SQUASH_PROPERTY,
   ENTITY_NAME_VECTOR_HASH_PROPERTY,
+  ENTITY_PARTICIPATION_TYPE,
+  ENTITY_TYPE_COUNTS_PROPERTY,
   ENTITY_TYPE_PROPERTY,
 } from '../../../infrastructure/graph/entity-queries.js';
 import { MEMORY_PROPERTIES } from '../../../infrastructure/graph/episodes.js';
+import { PROTECTED_RELATIONSHIP_TYPES } from '../../../infrastructure/graph/protected-relationships.js';
 import {
   ENTITY_NAME_NORM_PROPERTY,
   ENTITY_NAME_PROPERTY,
@@ -43,14 +48,40 @@ function cosine(a: readonly number[], b: readonly number[]): number {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
+/** The backbone plus both mention directions, which the neighbourhood signal excludes. */
+const NON_NEIGHBOUR_TYPES = new Set<string>([
+  ...PROTECTED_RELATIONSHIP_TYPES,
+  ENTITY_MENTION_TYPE,
+  ENTITY_PARTICIPATION_TYPE,
+]);
+
 export class DedupFakeGraph extends FakeGraph {
   override async executeQuery(
     cypher: string,
     parameters: Record<string, unknown> = {},
   ): Promise<unknown> {
-    if (cypher.includes(`OPTIONAL MATCH (:Episode)-[m:${ENTITY_MENTION_TYPE}]->(n)`)) {
+    if (cypher.includes(`OPTIONAL MATCH (ep:Episode)-[:${ENTITY_MENTION_TYPE}]->(n)`)) {
       this.statements.push({ cypher, parameters });
       return toResult(this.#dedupDetails(parameters));
+    }
+    if (cypher.includes('SHOW PROCEDURES')) {
+      this.statements.push({ cypher, parameters });
+      // No graph data science plugin behind the fake, so the bulk nominator declares itself
+      // unavailable and the unit suite exercises the vector nominator. The GDS arm is proven
+      // against a real server in `entity-nomination-queries.int.test.ts`.
+      return toResult([{ count: 0 }]);
+    }
+    if (cypher.includes(`WITH n.${ENTITY_NAME_SQUASH_PROPERTY} AS squash`)) {
+      this.statements.push({ cypher, parameters });
+      return toResult(this.#squashGroups(parameters));
+    }
+    if (cypher.includes(`UNWIND holder.${ENTITY_ALIASES_NORM_PROPERTY} AS aliasKey`)) {
+      this.statements.push({ cypher, parameters });
+      return toResult(this.#aliasPairs(parameters));
+    }
+    if (cypher.includes('UNWIND range(0, size($pairs) - 1) AS ordinal')) {
+      this.statements.push({ cypher, parameters });
+      return toResult(this.#pairSignals(parameters));
     }
     if (cypher.includes('vector.similarity.cosine')) {
       this.statements.push({ cypher, parameters });
@@ -83,15 +114,142 @@ export class DedupFakeGraph extends FakeGraph {
     return this.nodesWithLabel('Entity');
   }
 
+  /** Current nodes only, matching the currency predicate every cascade read carries. */
+  #currentEntities(): FakeNode[] {
+    return this.entities().filter(
+      (node) =>
+        node.properties[BITEMPORAL_PROPERTIES.validUntil] === undefined &&
+        node.properties[BITEMPORAL_PROPERTIES.forgottenAt] === undefined,
+    );
+  }
+
+  /** Distinct current episodes mentioning the entity, which is what the real query counts. */
+  #mentioningEpisodes(entityId: string): string[] {
+    const episodes = this.edgesOfType(ENTITY_MENTION_TYPE)
+      .filter((edge) => edge.targetId === entityId)
+      .map((edge) => edge.sourceId)
+      .filter((episodeId) => {
+        const episode = this.nodes.get(episodeId);
+        return (
+          episode !== undefined &&
+          episode.properties[BITEMPORAL_PROPERTIES.validUntil] === undefined &&
+          episode.properties[BITEMPORAL_PROPERTIES.forgottenAt] === undefined
+        );
+      });
+    return [...new Set(episodes)].sort();
+  }
+
+  #squashGroups(parameters: Record<string, unknown>): Row[] {
+    const subjectIds = parameters.subjectIds as string[] | null;
+    const grouped = new Map<string, string[]>();
+    for (const node of this.#currentEntities()) {
+      const squash = node.properties[ENTITY_NAME_SQUASH_PROPERTY];
+      if (typeof squash !== 'string' || squash.length === 0) {
+        continue;
+      }
+      grouped.set(squash, [...(grouped.get(squash) ?? []), node.id]);
+    }
+    return [...grouped.entries()]
+      .filter(([, ids]) => ids.length > 1)
+      .filter(([, ids]) => subjectIds === null || ids.some((id) => subjectIds.includes(id)))
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([squash, ids]) => ({ squash, ids: [...ids].sort() }));
+  }
+
+  #aliasPairs(parameters: Record<string, unknown>): Row[] {
+    const subjectIds = parameters.subjectIds as string[] | null;
+    const current = this.#currentEntities();
+    const holders = new Map<string, string[]>();
+    for (const node of current) {
+      for (const key of (node.properties[ENTITY_ALIASES_NORM_PROPERTY] ?? []) as string[]) {
+        holders.set(key, [...(holders.get(key) ?? []), node.id]);
+      }
+    }
+
+    const rows: Row[] = [];
+    for (const [aliasKey, holderIds] of holders) {
+      const holderId = holderIds[0];
+      if (holderIds.length !== 1 || holderId === undefined) {
+        continue;
+      }
+      const owner = current.find(
+        (node) => node.properties[ENTITY_NAME_NORM_PROPERTY] === aliasKey && node.id !== holderId,
+      );
+      if (owner === undefined) {
+        continue;
+      }
+      if (subjectIds !== null && !subjectIds.includes(holderId) && !subjectIds.includes(owner.id)) {
+        continue;
+      }
+      rows.push({ holder_id: holderId, owner_id: owner.id, alias_key: aliasKey });
+    }
+    return rows.sort((left, right) =>
+      `${String(left.alias_key)}${String(left.holder_id)}`.localeCompare(
+        `${String(right.alias_key)}${String(right.holder_id)}`,
+      ),
+    );
+  }
+
+  /**
+   * The provenance and neighbourhood overlaps, over the same disjoint edge sets the real read
+   * uses. The temporal gap is never modeled: unit seeds carry no `occurred_at`, and reporting a
+   * zero for a distance nobody measured is the one thing the signal shape forbids.
+   */
+  #pairSignals(parameters: Record<string, unknown>): Row[] {
+    const pairs = (parameters.pairs ?? []) as { left: string; right: string }[];
+    const current = new Set(this.#currentEntities().map((node) => node.id));
+    return pairs
+      .filter((pair) => current.has(pair.left) && current.has(pair.right))
+      .map((pair) => {
+        const leftEpisodes = this.#mentioningEpisodes(pair.left);
+        const rightEpisodes = this.#mentioningEpisodes(pair.right);
+        const sharedEpisodes = leftEpisodes.filter((id) => rightEpisodes.includes(id));
+        const leftNeighbours = this.#neighbours(pair.left);
+        const rightNeighbours = this.#neighbours(pair.right);
+        const sharedNeighbours = leftNeighbours.filter((id) => rightNeighbours.includes(id));
+        const episodeUnion = leftEpisodes.length + rightEpisodes.length - sharedEpisodes.length;
+        const neighbourUnion =
+          leftNeighbours.length + rightNeighbours.length - sharedNeighbours.length;
+        return {
+          left_id: pair.left,
+          right_id: pair.right,
+          shared_episode_ids: sharedEpisodes,
+          shared_episode_count: sharedEpisodes.length,
+          shared_episode_jaccard: episodeUnion === 0 ? 0 : sharedEpisodes.length / episodeUnion,
+          neighbour_overlap_count: sharedNeighbours.length,
+          neighbour_overlap_jaccard:
+            neighbourUnion === 0 ? 0 : sharedNeighbours.length / neighbourUnion,
+          gap_seconds: null,
+          left_episode_count: leftEpisodes.length,
+          right_episode_count: rightEpisodes.length,
+        };
+      });
+  }
+
+  /** One hop, excluding the backbone and both mention directions, as the real predicate does. */
+  #neighbours(entityId: string): string[] {
+    const found = new Set<string>();
+    for (const edge of this.edges.values()) {
+      if (NON_NEIGHBOUR_TYPES.has(edge.type)) {
+        continue;
+      }
+      if (edge.sourceId === entityId && edge.targetId !== entityId) {
+        found.add(edge.targetId);
+      }
+      if (edge.targetId === entityId && edge.sourceId !== entityId) {
+        found.add(edge.sourceId);
+      }
+    }
+    return [...found].sort();
+  }
+
   #dedupDetails(parameters: Record<string, unknown>): Row[] {
     const ids = (parameters.ids ?? []) as readonly string[];
     return ids
       .map((id) => this.nodes.get(id))
       .filter((node): node is FakeNode => node !== undefined)
       .map((node) => {
-        const mentionCount = this.edgesOfType(ENTITY_MENTION_TYPE)
-          .filter((edge) => edge.targetId === node.id)
-          .reduce((total, edge) => total + edge.count, 0);
+        const mentionCount = this.#mentioningEpisodes(node.id).length;
         return {
           id: node.id,
           name: node.properties[ENTITY_NAME_PROPERTY],
@@ -104,6 +262,8 @@ export class DedupFakeGraph extends FakeGraph {
           aliases: node.properties[ENTITY_ALIASES_PROPERTY] ?? [],
           access_count: node.properties[ACCESS_COUNT_PROPERTY] ?? 0,
           last_accessed: node.properties[LAST_ACCESSED_PROPERTY] ?? null,
+          type_counts: node.properties[ENTITY_TYPE_COUNTS_PROPERTY] ?? '{}',
+          description: node.properties[MEMORY_PROPERTIES.text] ?? '',
           mentionCount,
         };
       });
