@@ -4,11 +4,9 @@ import { ACCESS_COUNT_PROPERTY } from './access-tracking.js';
 import { supersedeInTransaction, writeStampedNodeInTransaction } from './bitemporal.js';
 import { inWriteTransaction, runRead, type GraphTransaction } from './connection.js';
 import { upsertEdgeInTransaction } from './edges.js';
+import { MERGE_PROVENANCE_PROPERTY } from './entity-dedup-queries.js';
 import {
   clearNameVectorHashInTransaction,
-  MERGE_PROVENANCE_PROPERTY,
-} from './entity-dedup-queries.js';
-import {
   ENTITY_ALIASES_NORM_PROPERTY,
   ENTITY_ALIASES_PROPERTY,
   ENTITY_NAME_SQUASH_PROPERTY,

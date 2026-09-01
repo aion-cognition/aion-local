@@ -6,7 +6,12 @@ import {
   currentOnly,
   stampNew,
 } from './bitemporal.js';
-import { inWriteTransaction, runWrite, type GraphStatement } from './connection.js';
+import {
+  inWriteTransaction,
+  runWrite,
+  type GraphStatement,
+  type GraphTransaction,
+} from './connection.js';
 import {
   aliasKeys,
   aliasRecord,
@@ -351,6 +356,26 @@ const WRITE_ENTITY_VECTORS = [
     ` ELSE n.${MEMORY_PROPERTIES.contentVectorHash} END`,
   'RETURN n.id AS id',
 ].join('\n');
+
+const CLEAR_ENTITY_NAME_VECTOR_HASH = [
+  `MATCH (n:${ENTITY_LABEL} { id: $id })`,
+  `SET n.${ENTITY_NAME_VECTOR_HASH_PROPERTY} = null`,
+  'RETURN n.id AS id',
+].join('\n');
+
+/**
+ * The names a merge moves onto the canonical, and an unmerge moves back off it, are part of
+ * the text `name_vec` was taken over (`vector-input.ts`), so the stored vector stops answering
+ * for the name its hash claims. Only the hash goes: an identity nominating on a slightly stale
+ * vector beats one nominating on nothing, and the next resolution reads the missing hash as a
+ * mismatch and embeds the alias set the node actually holds.
+ */
+export async function clearNameVectorHashInTransaction(
+  tx: GraphTransaction,
+  id: string,
+): Promise<void> {
+  await tx.run(CLEAR_ENTITY_NAME_VECTOR_HASH, { id }, (row) => row.id as string);
+}
 
 export async function writeEntityVectors(
   driver: Driver,
