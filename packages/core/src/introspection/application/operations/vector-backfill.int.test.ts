@@ -18,6 +18,7 @@ import {
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import { refusingProvider } from '../../../infrastructure/providers/test-support/refusing-provider.fixture.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import { vectorInputHash } from '../../../reflection/domain/vector-input.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
 
@@ -123,13 +124,19 @@ describe('vector_backfill: context vector pass', () => {
     await writeStampedNode(harness.driver, {
       label: 'Episode',
       id: 'context-a',
-      properties: { text: 'a', content_vec: NEIGHBOR_VECTOR },
+      // Hashed as well as vectored: an unhashed vector is a pending one, and the content pass
+      // would re-embed these two out from under the neighborhood this test is measuring.
+      properties: {
+        text: 'a',
+        content_vec: NEIGHBOR_VECTOR,
+        content_vec_hash: vectorInputHash('a'),
+      },
       now: NOW,
     });
     await writeStampedNode(harness.driver, {
       label: 'Episode',
       id: 'context-b',
-      properties: { text: 'b', content_vec: OTHER_VECTOR },
+      properties: { text: 'b', content_vec: OTHER_VECTOR, content_vec_hash: vectorInputHash('b') },
       now: NOW,
     });
     await upsertEdge(harness.driver, {

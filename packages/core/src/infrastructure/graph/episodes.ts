@@ -17,6 +17,8 @@ export const MEMORY_PROPERTIES = {
   sequence: 'sequence',
   contentHash: 'content_hash',
   contentVector: 'content_vec',
+  /** sha256 of the exact text `content_vec` was taken over. Absent means the vector is pending. */
+  contentVectorHash: 'content_vec_hash',
   sessionId: 'session_id',
   sourceEpisodeId: 'source_episode_id',
   extractionMethod: 'extraction_method',

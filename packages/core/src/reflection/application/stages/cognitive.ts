@@ -273,7 +273,9 @@ export class CognitiveExtractionStage implements ReflectionStage {
     // failing the stage: `reflection/application/vectors.ts`'s backfill already drains them.
     let vectors: readonly Vector[] = [];
     try {
-      vectors = await ctx.provider.embed(nodes.map((node) => node.text));
+      // Trimmed, because the trimmed form is what the node stores and what its vector hash is
+      // taken over; embedding the raw wording would stamp a hash for text nothing holds.
+      vectors = await ctx.provider.embed(nodes.map((node) => node.text.trim()));
     } catch (error) {
       ctx.logger.warn(
         { err: error, episodeId: ctx.episodeId },

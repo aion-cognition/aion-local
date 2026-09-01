@@ -6,6 +6,7 @@ import {
   type PendingVectorNode,
 } from '../../infrastructure/graph/pending-vectors.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
+import { vectorInputHash } from '../domain/vector-input.js';
 
 export {
   findPendingVectorNodes,
@@ -32,7 +33,7 @@ function pair(
     // A provider that returns a short list leaves the tail pending rather than mis-pairing
     // it: the node keeps its marker and the next drain picks it up.
     if (vector !== undefined) {
-      entries.push({ id: node.id, vector });
+      entries.push({ id: node.id, vector, inputHash: vectorInputHash(node.text) });
     }
   }
   return entries;
