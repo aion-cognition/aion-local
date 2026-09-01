@@ -11,6 +11,12 @@ import { proposalTable } from './proposal-table.js';
  * rows. Nothing in the pipeline reads them back on its own.
  */
 
+/**
+ * Which nominator's number `similarity` holds. A cosine and a set-overlap ratio are not on one
+ * scale, so a reader that prints the number prints this beside it.
+ */
+export type EntityMergeSimilaritySource = 'name_cosine' | 'shared_episode_jaccard';
+
 export type EntityMergeProposal = {
   id: string;
   leftId: string;
@@ -19,8 +25,9 @@ export type EntityMergeProposal = {
   rightId: string;
   rightName: string;
   rightType: string;
-  /** Cosine between the two name vectors at detection time. */
+  /** Whatever `similaritySource` names, measured at detection time. */
   similarity: number;
+  similaritySource: EntityMergeSimilaritySource;
   episodeId: string;
   createdAt: string;
   /** Null while the proposal is still open; a timestamp once a person has dealt with it. */
@@ -36,6 +43,7 @@ type EntityMergeProposalRow = {
   right_name: string;
   right_type: string;
   similarity: number;
+  similarity_source: string;
   episode_id: string;
   created_at: string;
   resolved_at: string | null;
@@ -51,6 +59,7 @@ export type EntityMergeProposalInput = {
   readonly subject: EntityMergeProposalSide;
   readonly candidate: EntityMergeProposalSide;
   readonly similarity: number;
+  readonly similaritySource: EntityMergeSimilaritySource;
   readonly episodeId: string;
   readonly createdAt?: string;
 };
@@ -65,6 +74,7 @@ function toEntityMergeProposal(row: EntityMergeProposalRow): EntityMergeProposal
     rightName: row.right_name,
     rightType: row.right_type,
     similarity: row.similarity,
+    similaritySource: row.similarity_source as EntityMergeSimilaritySource,
     episodeId: row.episode_id,
     createdAt: row.created_at,
     resolvedAt: row.resolved_at,
@@ -101,14 +111,15 @@ export function recordEntityMergeProposal(
     .prepare(
       `INSERT INTO entity_merge_proposals
          (id, left_id, left_name, left_type, right_id, right_name, right_type,
-          similarity, episode_id, created_at, resolved_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+          similarity, similarity_source, episode_id, created_at, resolved_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
        ON CONFLICT(left_id, right_id) DO UPDATE SET
          left_name = excluded.left_name,
          left_type = excluded.left_type,
          right_name = excluded.right_name,
          right_type = excluded.right_type,
          similarity = excluded.similarity,
+         similarity_source = excluded.similarity_source,
          episode_id = excluded.episode_id
        RETURNING id`,
     )
@@ -121,6 +132,7 @@ export function recordEntityMergeProposal(
       right.name,
       right.type,
       input.similarity,
+      input.similaritySource,
       input.episodeId,
       input.createdAt ?? new Date().toISOString(),
     ) as { id: string };

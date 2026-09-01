@@ -34,6 +34,7 @@ describe('entity merge proposal accessors', () => {
       subject: { id: 'entity-b', name: 'Postgres', type: 'concept' },
       candidate: { id: 'entity-a', name: 'Postgres', type: 'tool' },
       similarity: 0.97,
+      similaritySource: 'name_cosine',
       episodeId: 'episode-2',
       createdAt: '2026-08-28T09:00:00.000Z',
       ...overrides,
@@ -52,6 +53,7 @@ describe('entity merge proposal accessors', () => {
       rightName: 'Postgres',
       rightType: 'concept',
       similarity: 0.97,
+      similaritySource: 'name_cosine',
       episodeId: 'episode-2',
       createdAt: '2026-08-28T09:00:00.000Z',
       resolvedAt: null,
@@ -64,6 +66,7 @@ describe('entity merge proposal accessors', () => {
       subject: { id: 'entity-a', name: 'Postgres', type: 'tool' },
       candidate: { id: 'entity-b', name: 'PostgreSQL', type: 'concept' },
       similarity: 0.99,
+      similaritySource: 'name_cosine',
       episodeId: 'episode-7',
       createdAt: '2026-09-01T00:00:00.000Z',
     });
@@ -73,6 +76,7 @@ describe('entity merge proposal accessors', () => {
     expect(getEntityMergeProposal(store.db, first)).toMatchObject({
       rightName: 'PostgreSQL',
       similarity: 0.99,
+      similaritySource: 'name_cosine',
       episodeId: 'episode-7',
       // The refresh reports what is newly known, not a new discovery date.
       createdAt: '2026-08-28T09:00:00.000Z',
@@ -100,6 +104,7 @@ describe('entity merge proposal accessors', () => {
     record({ similarity: 0.5 });
     expect(getEntityMergeProposal(store.db, id)).toMatchObject({
       similarity: 0.5,
+      similaritySource: 'name_cosine',
       resolvedAt: '2026-08-29T00:00:00.000Z',
     });
   });

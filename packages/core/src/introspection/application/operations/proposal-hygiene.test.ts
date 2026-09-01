@@ -179,6 +179,7 @@ describe('proposal_hygiene judge routing', () => {
       subject: { id: id.left, name: 'Ledger Cache', type: 'tool' },
       candidate: { id: id.right, name: 'Ledger Store', type: 'concept' },
       similarity: 0.6,
+      similaritySource: 'name_cosine',
       episodeId: id.episode,
       createdAt: OLD_CREATED.toISOString(),
     });
@@ -242,6 +243,7 @@ describe('proposal_hygiene judge routing', () => {
       subject: { id: 'left-4', name: 'Ledger Cache', type: 'tool' },
       candidate: { id: 'right-4', name: 'Ledger Store', type: 'topic' },
       similarity: 0.6,
+      similaritySource: 'name_cosine',
       episodeId: 'ep-4',
       createdAt: FRESH_CREATED.toISOString(),
     });
@@ -274,6 +276,7 @@ describe('proposal_hygiene judge batch cap', () => {
       subject: { id: 'left-a', name: 'A', type: 'tool' },
       candidate: { id: 'right-a', name: 'A Prime', type: 'concept' },
       similarity: 0.6,
+      similaritySource: 'name_cosine',
       episodeId: 'ep-a',
       createdAt: OLD_CREATED.toISOString(),
     });
@@ -281,6 +284,7 @@ describe('proposal_hygiene judge batch cap', () => {
       subject: { id: 'left-b', name: 'B', type: 'tool' },
       candidate: { id: 'right-b', name: 'B Prime', type: 'concept' },
       similarity: 0.6,
+      similaritySource: 'name_cosine',
       episodeId: 'ep-b',
       createdAt: new Date(OLD_CREATED.getTime() + 1_000).toISOString(),
     });
