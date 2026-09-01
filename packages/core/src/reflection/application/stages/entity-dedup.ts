@@ -126,6 +126,16 @@ export class EntityDedupStage implements ReflectionStage {
     };
   }
 
+  /**
+   * The options this instance actually runs on. `mode` is the kill switch and reaches the stage
+   * only through construction, so without a reader for it a build that dropped the wiring goes
+   * on auto-merging under a deployment that set `propose`, with the constructor default
+   * answering for the config.
+   */
+  describe(): EntityDedupStageOptions {
+    return this.#options;
+  }
+
   async run(ctx: StageContext): Promise<StageOutcome> {
     const mentioned = await findEpisodeEntities(ctx.driver, ctx.episodeId);
     if (mentioned.length === 0) {
