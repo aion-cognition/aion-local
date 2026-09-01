@@ -1,6 +1,7 @@
 import {
   asOf,
   bitemporalAt,
+  embedQueryPrefix,
   knewAt,
   OllamaProvider,
   selectSeeds,
@@ -144,7 +145,12 @@ export function runSearch(
         baseUrl: config.ollama.url,
         embedModel: config.models.embed,
       });
-      const [vector] = await provider.embed([flags.query]);
+      // The stored side is raw and the query side carries the model's prefix, which is the
+      // asymmetry recall embeds with. A query spelled differently here would score against the
+      // same vectors under floors nobody measured for it.
+      const [vector] = await provider.embed([
+        `${embedQueryPrefix(config.models.embed)}${flags.query}`,
+      ]);
       if (vector === undefined) {
         stderrWriter(`${config.models.embed} returned no embedding for the query`);
         return 1;

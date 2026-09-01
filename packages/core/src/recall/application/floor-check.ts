@@ -25,20 +25,30 @@ import {
  * report `ok` in a state where the committed test fails, which is the one thing a field check
  * must never do.
  *
+ * The cue side carries the model's query prefix and the content side does not, because that is
+ * the asymmetry recall itself embeds with. A doctor measuring both sides raw would describe a
+ * distribution the runtime never produces, which is the same failure one notch down.
+ *
  * `floor-calibration.int.test.ts` is where a floor is re-committed. This is the check that says
  * go and look.
  */
 export async function measureAdmissionFloor(
   provider: Provider,
   policy: AdmissionPolicy,
+  queryPrefix: string,
 ): Promise<Separation> {
   const pairs: readonly ScoredPair[] = [...UNRELATED_PAIRS, ...RELATED_PAIRS];
   const vectors = await provider.embed([
-    ...pairs.flatMap((pair) => [pair.cue, pair.content]),
+    ...pairs.flatMap((pair) => [`${queryPrefix}${pair.cue}`, pair.content]),
+    ...UNRELATED_SENTENCES.map((sentence) => `${queryPrefix}${sentence}`),
     ...UNRELATED_SENTENCES,
   ]);
   const paired = pairedCosines(vectors.slice(0, pairs.length * 2));
-  const mutual = pairwiseCosines(vectors.slice(pairs.length * 2));
+  const sentencesAt = pairs.length * 2;
+  const mutual = pairwiseCosines(
+    vectors.slice(sentencesAt, sentencesAt + UNRELATED_SENTENCES.length),
+    vectors.slice(sentencesAt + UNRELATED_SENTENCES.length),
+  );
 
   return checkSeparation({
     unrelatedScores: [...paired.slice(0, UNRELATED_PAIRS.length), ...mutual],

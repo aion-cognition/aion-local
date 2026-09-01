@@ -27,14 +27,17 @@ function deps(embedModel: string, embed: Provider['embed']): StageReadDeps {
 }
 
 describe('embedCues', () => {
-  it('marks every cue as a query for a model trained on asymmetric retrieval', async () => {
+  /**
+   * The spelling comes from `embed-models.ts` and from nowhere else, so that one row decides it
+   * for recall, `aion search`, `aion forget`, the doctor's field check and the committed
+   * calibrations at once. Every row in the table is raw today: arctic2 ships a "query: " prefix
+   * and this install measured it compressing the band the admission floor reads.
+   */
+  it('sends every cue in the spelling the table names for the configured model', async () => {
     const embed = vi.fn(async () => [[1], [2]]);
     const result = await embedCues(deps('snowflake-arctic-embed2', embed), CUES);
 
-    expect(embed).toHaveBeenCalledWith([
-      'query: what did we decide about the embed model',
-      'query: arctic2',
-    ]);
+    expect(embed).toHaveBeenCalledWith(CUES.map((cue) => cue.text));
     expect(result.cues.map((cue) => cue.text)).toEqual(CUES.map((cue) => cue.text));
     expect(result.cues[0]?.vector).toEqual([1]);
   });

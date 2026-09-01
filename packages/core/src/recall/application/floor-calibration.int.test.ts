@@ -8,6 +8,7 @@ import {
   type ScoredPair,
 } from './floors.fixtures.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import { embedQueryPrefix } from '../../infrastructure/providers/embed-models.js';
 import { OllamaProvider } from '../../infrastructure/providers/ollama-provider.js';
 import type { AdmissionPolicy } from '../domain/admission.js';
 import {
@@ -50,8 +51,17 @@ const POLICY: AdmissionPolicy = {
   bm25Mode: DEFAULTS.recall.bm25AdmissionMode,
 };
 
+const EMBED_MODEL = process.env.AION_EMBED_MODEL ?? DEFAULTS.models.embed;
+
+/**
+ * The cue carries the model's query prefix and the content does not, because that is the
+ * asymmetry `embedCues` sends at runtime. Measuring both sides raw would calibrate a floor
+ * against a distribution recall never produces.
+ */
+const QUERY_PREFIX = embedQueryPrefix(EMBED_MODEL);
+
 async function pairScores(pairs: readonly ScoredPair[]): Promise<number[]> {
-  const flattened = pairs.flatMap((pair) => [pair.cue, pair.content]);
+  const flattened = pairs.flatMap((pair) => [`${QUERY_PREFIX}${pair.cue}`, pair.content]);
   return pairedCosines(await provider.embed(flattened));
 }
 
@@ -70,7 +80,12 @@ let unrelated: Distribution;
 
 describe('the admission floor against this embedding model', () => {
   it('measures both distributions and reports them', async () => {
-    const setScores = pairwiseCosines(await provider.embed([...UNRELATED_SENTENCES]));
+    // Each sentence stands in for a query on one side of the pair and for stored content on
+    // the other, so both spellings are embedded and the cosine crosses them.
+    const setScores = pairwiseCosines(
+      await provider.embed(UNRELATED_SENTENCES.map((sentence) => `${QUERY_PREFIX}${sentence}`)),
+      await provider.embed([...UNRELATED_SENTENCES]),
+    );
     const offTopicScores = await pairScores(UNRELATED_PAIRS);
     const weakScores = await pairScores(WEAK_RELATED_PAIRS);
 

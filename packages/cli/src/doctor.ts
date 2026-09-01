@@ -2,6 +2,7 @@ import {
   assertVectorIndexDimensions,
   checkOllamaReachable,
   EmbedDimensionMismatchError,
+  embedQueryPrefix,
   latestAppliedGraphMigration,
   localChatModels,
   measureAdmissionFloor,
@@ -306,11 +307,15 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
           baseUrl: config.ollama.url,
           embedModel: config.models.embed,
         });
-        const separation = await measureAdmissionFloor(provider, {
-          vectorFloor: config.recall.vectorAdmissionFloor,
-          corroborationFloor: config.recall.corroborationFloor,
-          bm25Mode: config.recall.bm25AdmissionMode,
-        });
+        const separation = await measureAdmissionFloor(
+          provider,
+          {
+            vectorFloor: config.recall.vectorAdmissionFloor,
+            corroborationFloor: config.recall.corroborationFloor,
+            bm25Mode: config.recall.bm25AdmissionMode,
+          },
+          embedQueryPrefix(config.models.embed),
+        );
         if (!separation.separated) {
           return { ok: true, warn: true, detail: separation.detail };
         }

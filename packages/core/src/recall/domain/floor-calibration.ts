@@ -53,12 +53,21 @@ export function describeDistribution(scores: readonly number[]): Distribution {
   };
 }
 
-/** Cosine between every unordered pair of the set, which is what "mutually unrelated" measures. */
-export function pairwiseCosines(vectors: readonly Vector[]): number[] {
+/**
+ * Cosine between every unordered pair of the set, which is what "mutually unrelated" measures.
+ * Each sentence stands in for a query on one side and for stored content on the other, so the
+ * two arrays are the same sentences embedded in the two spellings the runtime uses: an
+ * asymmetric model reads its query prefix on the left and nothing on the right. Pass the same
+ * array twice for a model with no prefix, which is what symmetric measurement means here.
+ */
+export function pairwiseCosines(
+  queries: readonly Vector[],
+  contents: readonly Vector[] = queries,
+): number[] {
   const scores: number[] = [];
-  for (let left = 0; left < vectors.length; left += 1) {
-    for (let right = left + 1; right < vectors.length; right += 1) {
-      scores.push(cosineSimilarity(vectors[left] ?? [], vectors[right] ?? []));
+  for (let left = 0; left < queries.length; left += 1) {
+    for (let right = left + 1; right < contents.length; right += 1) {
+      scores.push(cosineSimilarity(queries[left] ?? [], contents[right] ?? []));
     }
   }
   return scores;

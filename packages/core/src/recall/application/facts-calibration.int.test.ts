@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { ANSWERING_GOALS, RESTATING_GOALS, type FactsPair } from './facts.fixtures.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import { embedQueryPrefix } from '../../infrastructure/providers/embed-models.js';
 import { OllamaProvider } from '../../infrastructure/providers/ollama-provider.js';
 import {
   CALIBRATION_TOLERANCE,
@@ -36,8 +37,15 @@ const provider = new OllamaProvider({
   embedModel: process.env.AION_EMBED_MODEL ?? DEFAULTS.models.embed,
 });
 
+/**
+ * The floor is applied to the cosine the vector leg already measured, and that leg embeds the
+ * query with the model's prefix. The harness spells it the same way or it calibrates a number
+ * the runtime never produces.
+ */
+const QUERY_PREFIX = embedQueryPrefix(process.env.AION_EMBED_MODEL ?? DEFAULTS.models.embed);
+
 async function pairScores(pairs: readonly FactsPair[]): Promise<number[]> {
-  const flattened = pairs.flatMap((pair) => [pair.query, pair.content]);
+  const flattened = pairs.flatMap((pair) => [`${QUERY_PREFIX}${pair.query}`, pair.content]);
   return pairedCosines(await provider.embed(flattened));
 }
 

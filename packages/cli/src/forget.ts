@@ -1,4 +1,5 @@
 import {
+  embedQueryPrefix,
   fetchNodeProvenance,
   forgetNode,
   OllamaProvider,
@@ -141,7 +142,9 @@ async function forgetByQuery(
     baseUrl: deps.config.ollama.url,
     embedModel: deps.config.models.embed,
   });
-  const [vector] = await provider.embed([query]);
+  // Same query spelling as recall and `aion search`: the prefix marks the text sent to the
+  // model, never the cue text that travels with the seed.
+  const [vector] = await provider.embed([`${embedQueryPrefix(deps.config.models.embed)}${query}`]);
   if (vector === undefined) {
     stderrWriter(`${deps.config.models.embed} returned no embedding for the query`);
     return 1;
