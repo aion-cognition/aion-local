@@ -1,24 +1,28 @@
-import { normalizeEntityName } from '../../reflection/domain/entity-extraction.js';
+import {
+  isDeterministicRelation,
+  nameFormRelation,
+} from '../../reflection/domain/entity-cascade.js';
 
 /**
- * The verdict an auto-merge policy would reach on a cross-type entity-merge proposal, judged
+ * The verdict the deterministic sweep would reach on an open entity-merge proposal, judged
  * without ever writing to the graph or resolving the proposal it looks at. A shadow earns
  * trust by being compared against what a person actually decided; only after that comparison
  * holds up does anyone arm the real thing.
  *
- * Measured against the proposals a person has already reviewed: every pair whose names came
- * out equal after normalization was a merge the person went on to approve, and every pair the
- * person turned down had different names and a similarity below 0.91. Type never distinguishes
- * the two groups, because a cross-type proposal only exists once its two sides already matched
- * on name; name is the whole criterion.
+ * It asks the rule tier 0 runs: the name-form relation, deterministic on `fold` or `squash`.
+ * Exact fold equality on its own stopped being a question the graph can answer yes to, because
+ * since migration 003 two current entities cannot hold one folded name; a shadow still asking
+ * it reported `would_queue` on every row forever while calling that a policy verdict.
  *
- * The comparison is exact equality on the same fold the graph's `name_norm` uniqueness key is
- * built from, not the character-overlap rule in `entity-identity.ts` that finds merge
+ * It is the name arm only. Tier 0's other reading is alias equality, which needs the graph and
+ * not a pair of names, so a pair this returns false for can still be swept.
+ *
+ * The relation is not the character-overlap rule in `entity-identity.ts` that finds merge
  * *candidates*. That rule scores "UserPromptSubmit" against "UserPromptSubmit hook" above its
- * own threshold; a shadow that reused it would auto-apply a pair no reviewer approved.
+ * own threshold and lands as `bigram`, which decides nothing here.
  */
 export function wouldAutoApply(leftName: string, rightName: string): boolean {
-  return normalizeEntityName(leftName) === normalizeEntityName(rightName);
+  return isDeterministicRelation(nameFormRelation(leftName, rightName));
 }
 
 /**
