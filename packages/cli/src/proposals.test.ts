@@ -19,7 +19,12 @@ function collector(): { lines: string[]; write: (line: string) => void } {
 
 describe('parseProposalFlags', () => {
   it('defaults to listing the open rows', () => {
-    expect(parseProposalFlags([])).toEqual({ subcommand: 'ls', all: false, scope: 'family' });
+    expect(parseProposalFlags([])).toEqual({
+      subcommand: 'ls',
+      all: false,
+      scope: 'family',
+      yes: false,
+    });
   });
 
   /**
@@ -34,19 +39,27 @@ describe('parseProposalFlags', () => {
       id: 'p-1',
       all: false,
       scope: 'family',
+      yes: false,
     });
     expect(parseProposalFlags(['apply', 'p-1', '--claim-only'])).toEqual({
       subcommand: 'apply',
       id: 'p-1',
       all: false,
       scope: 'claim',
+      yes: false,
     });
     expect(parseProposalFlags(['apply', 'p-1', '--episode'])).toEqual({
       subcommand: 'apply',
       id: 'p-1',
       all: false,
       scope: 'episode',
+      yes: false,
     });
+  });
+
+  it('reads --yes alongside the other apply flags', () => {
+    expect(parseProposalFlags(['apply', 'p-1', '--yes']).yes).toBe(true);
+    expect(parseProposalFlags(['apply', '--yes', 'p-1', '--claim-only']).yes).toBe(true);
   });
 
   it('refuses an unknown subcommand, an unknown option, or an apply with no id', () => {
@@ -54,7 +67,8 @@ describe('parseProposalFlags', () => {
       "unknown proposals subcommand 'approve' (supported: ls, apply, dismiss, reopen)",
     );
     expect(() => parseProposalFlags(['ls', '--everything'])).toThrow(
-      "unknown option '--everything' for proposals (supported: --all, --claim-only, --episode)",
+      "unknown option '--everything' for proposals " +
+        '(supported: --all, --claim-only, --episode, --yes)',
     );
     expect(() => parseProposalFlags(['apply'])).toThrow('proposals apply needs a proposal id');
     expect(() => parseProposalFlags(['dismiss'])).toThrow('proposals dismiss needs a proposal id');
@@ -205,6 +219,26 @@ describe('aion proposals against a seeded review queue', () => {
 
     expect(await runProposals(['apply', id, '--claim-only'], () => undefined)).toBe(1);
     expect(await runProposals(['apply', id, '--episode'], () => undefined)).toBe(1);
+  });
+
+  it('refuses to apply a supersession proposal without --yes on a non-tty stdin', async () => {
+    const id = seedSupersession();
+    const { lines, write } = collector();
+
+    expect(await runProposals(['apply', id], write)).toBe(1);
+
+    expect(lines.join('\n')).toContain('cancelled');
+    expect(getSupersessionProposal(store.db, id)?.resolvedAt).toBeNull();
+  });
+
+  it('refuses to apply an entity-merge proposal without --yes on a non-tty stdin', async () => {
+    const id = seedMerge();
+    const { lines, write } = collector();
+
+    expect(await runProposals(['apply', id], write)).toBe(1);
+
+    expect(lines.join('\n')).toContain('cancelled');
+    expect(getEntityMergeProposal(store.db, id)?.resolvedAt).toBeNull();
   });
 
   it('reopens a dismissed supersession proposal back into the open queue', async () => {

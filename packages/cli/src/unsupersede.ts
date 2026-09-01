@@ -5,11 +5,10 @@ import {
   type Logger,
   type SupersessionPreview,
 } from '@aion/core';
-import { createInterface } from 'node:readline/promises';
 
 import { CliUsageError, parseArgs, type ArgSpec } from './args.js';
 import { preview } from './format.js';
-import { stderrWriter, stdoutWriter, type Writer } from './output.js';
+import { confirmOrExit, stderrWriter, stdoutWriter, type Writer } from './output.js';
 import { withSubstrate } from './substrate.js';
 
 /**
@@ -49,28 +48,6 @@ export function parseUnsupersedeFlags(argv: readonly string[]): UnsupersedeFlags
   return { nodeId, yes: flags.has('--yes') };
 }
 
-async function askOnTerminal(question: string): Promise<string> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    return await rl.question(question);
-  } finally {
-    rl.close();
-  }
-}
-
-/** `--yes` skips the ask; with no terminal to ask on, `--yes` is the only way through. */
-async function confirm(assumeYes: boolean, write: Writer): Promise<boolean> {
-  if (assumeYes) {
-    return true;
-  }
-  if (!process.stdin.isTTY) {
-    write('re-run with --yes to reopen it (no terminal to confirm on)');
-    return false;
-  }
-  const answer = (await askOnTerminal('reopen it? [y/N] ')).trim().toLowerCase();
-  return answer === 'y' || answer === 'yes';
-}
-
 export function renderPreview(node: SupersessionPreview, write: Writer): void {
   write(`about to reopen ${node.id} (${node.labels.join(', ')}): ${preview(node.content)}`);
   for (const lineage of node.lineage) {
@@ -108,7 +85,7 @@ export function runUnsupersede(
       }
 
       renderPreview(node, write);
-      if (!(await confirm(flags.yes, write))) {
+      if (!(await confirmOrExit('reopen it? [y/N] ', flags.yes, write))) {
         write('cancelled');
         return 1;
       }

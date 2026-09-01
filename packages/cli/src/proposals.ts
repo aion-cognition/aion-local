@@ -23,7 +23,7 @@ import {
 
 import { CliUsageError, parseArgs, type ArgSpec } from './args.js';
 import { short } from './format.js';
-import { stdoutWriter, type Writer } from './output.js';
+import { confirmOrExit, stdoutWriter, type Writer } from './output.js';
 import { withSubstrate, type Substrate } from './substrate.js';
 
 /**
@@ -44,9 +44,10 @@ type Subcommand = (typeof SUBCOMMANDS)[number];
 const SPEC: ArgSpec<Subcommand> = {
   command: 'proposals',
   usage:
-    'aion proposals [ls | apply <id> | dismiss <id> | reopen <id>] [--all] [--claim-only] [--episode]',
+    'aion proposals [ls | apply <id> | dismiss <id> | reopen <id>] ' +
+    '[--all] [--claim-only] [--episode] [--yes]',
   subcommands: SUBCOMMANDS,
-  options: [{ flag: '--all' }, { flag: '--claim-only' }, { flag: '--episode' }],
+  options: [{ flag: '--all' }, { flag: '--claim-only' }, { flag: '--episode' }, { flag: '--yes' }],
   maxPositionals: 1,
 };
 
@@ -57,6 +58,7 @@ export type ProposalFlags = {
   readonly all: boolean;
   /** How wide the close cuts; `family` unless a flag narrows or widens it. */
   readonly scope: ApplyScope;
+  readonly yes: boolean;
 };
 
 export function parseProposalFlags(argv: readonly string[]): ProposalFlags {
@@ -84,6 +86,7 @@ export function parseProposalFlags(argv: readonly string[]): ProposalFlags {
     ...(id === undefined ? {} : { id }),
     all: flags.has('--all'),
     scope: applyScope(claimOnly, episode),
+    yes: flags.has('--yes'),
   };
 }
 
@@ -190,16 +193,19 @@ const SCOPE_NOTES: Readonly<Record<ApplyScope, string>> = {
 async function runApply(substrate: Substrate, flags: ProposalFlags): Promise<number> {
   const id = flags.id ?? '';
   const kind = locateProposal(substrate.db(), id);
-  if (kind === 'merge') {
-    if (flags.scope !== DEFAULT_APPLY_SCOPE) {
-      const flag = flags.scope === 'episode' ? '--episode' : '--claim-only';
-      throw new CliUsageError(
-        `proposals apply ${id}: ${flag} is a supersession scope and does not apply to an entity merge`,
-      );
-    }
-    return await runApplyMerge(substrate, id);
+  if (kind === 'merge' && flags.scope !== DEFAULT_APPLY_SCOPE) {
+    const flag = flags.scope === 'episode' ? '--episode' : '--claim-only';
+    throw new CliUsageError(
+      `proposals apply ${id}: ${flag} is a supersession scope and does not apply to an entity merge`,
+    );
   }
-  return await runApplySupersession(substrate, flags);
+  if (!(await confirmOrExit('apply it? [y/N] ', flags.yes, substrate.write))) {
+    substrate.write('cancelled');
+    return 1;
+  }
+  return kind === 'merge'
+    ? await runApplyMerge(substrate, id)
+    : await runApplySupersession(substrate, flags);
 }
 
 async function runApplySupersession(substrate: Substrate, flags: ProposalFlags): Promise<number> {
