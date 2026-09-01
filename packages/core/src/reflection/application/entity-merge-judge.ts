@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { errorMessage } from '../../infrastructure/errors.js';
+import { deadlineFor } from '../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../infrastructure/providers/types.js';
 import type { EntityMergeJudgePass } from '../../infrastructure/sqlite/entity-merge-decisions.js';
 import { ENTITY_TYPES } from '../domain/entity-extraction.js';
@@ -172,44 +173,13 @@ export type EntityMergeReviewOutcome =
   | { readonly status: 'reviewed'; readonly review: EntityMergeJudgePass }
   | { readonly status: 'failed'; readonly detail: string };
 
-type Deadline = { readonly signal: AbortSignal; readonly clear: () => void };
-
-/**
- * The call's own timeout, aborted early when the run is shutting down. Both are one signal, so
- * a stopped stage never waits out a model call with time left on it.
- */
-function deadlineFor(options: EntityMergeCallOptions): Deadline {
-  const controller = new AbortController();
-  const timer = setTimeout(() => {
-    controller.abort();
-  }, options.timeoutMs);
-  const caller = options.signal;
-  const onAbort = (): void => {
-    controller.abort();
-  };
-  if (caller !== undefined) {
-    if (caller.aborted) {
-      controller.abort();
-    } else {
-      caller.addEventListener('abort', onAbort, { once: true });
-    }
-  }
-  return {
-    signal: controller.signal,
-    clear: (): void => {
-      clearTimeout(timer);
-      caller?.removeEventListener('abort', onAbort);
-    },
-  };
-}
-
 async function ask(
   provider: Pick<Provider, 'generate'>,
   messages: ChatMessage[],
   schema: JsonSchema,
   options: EntityMergeCallOptions,
 ): Promise<{ readonly raw: unknown } | { readonly detail: string }> {
-  const deadline = deadlineFor(options);
+  const deadline = deadlineFor(options.timeoutMs, options.signal);
   if (deadline.signal.aborted) {
     deadline.clear();
     return { detail: 'the run stopped before the call started' };
