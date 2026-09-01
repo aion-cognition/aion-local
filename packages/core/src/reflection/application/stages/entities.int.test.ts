@@ -75,15 +75,22 @@ const STUB_EXTRACTION = {
     { name: 'Aion', type: 'project', context: 'the memory substrate', aliases: ['aion-local'] },
     { name: 'Aion', type: 'tool', context: 'the same name under a second reading' },
     { name: 'Aion', type: 'project', context: 'a duplicate the model returned twice' },
-    { name: 'proposal-hygiene', type: 'tool', context: 'the maintenance operation' },
+    {
+      name: 'proposal-hygiene',
+      type: 'tool',
+      context: 'the maintenance operation',
+      aliases: ['proposal_hygiene'],
+    },
   ],
 };
 
-/** A later record spelling the same two identities differently: a nickname and a separator variant. */
+/** A later record spelling the same identities differently, each by a name they already answer to. */
 const RESPELLED_EXTRACTION = {
   entities: [
     { name: 'Ry', type: 'person', context: 'the speaker under a short name', is_speaker: true },
     { name: 'aion-local', type: 'topic', context: 'the substrate under one of its aliases' },
+    // Squash equality routes nothing at write, so this spelling reaches its identity only
+    // because the record that named it first gave it as an alias.
     { name: 'proposal_hygiene', type: 'topic', context: 'the same operation, other separator' },
   ],
 };
@@ -251,7 +258,7 @@ describe('canonicalization against the live constraint', () => {
     expect(member?.aliasesNorm).toContain('ry');
     expect(member?.type).toBe('member');
 
-    // The alias tier and the squash tier, one each.
+    // The alias tier, on a nickname and on a separator variant the first record declared.
     const aion = after.find((entity) => entity.nameNorm === 'aion');
     expect(aion?.aliasesNorm).toContain('aion-local');
     const hygiene = after.find((entity) => entity.nameNorm === 'proposal-hygiene');
