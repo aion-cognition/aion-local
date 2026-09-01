@@ -10,6 +10,7 @@ import {
   BITEMPORAL_PROPERTIES,
   CLOSURE_PROVENANCE_PROPERTY,
 } from '../../../infrastructure/graph/bitemporal.js';
+import { MAX_STORED_ENTITY_ALIASES } from '../../../infrastructure/graph/entity-identity-queries.js';
 import {
   ENTITY_MENTION_TYPE,
   ENTITY_PARTICIPATION_TYPE,
@@ -19,6 +20,7 @@ import type { EpisodeContext } from '../../../infrastructure/graph/episode-conte
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../../../infrastructure/graph/episodes.js';
 import {
   ENTITY_ALIASES_NORM_PROPERTY,
+  ENTITY_ALIASES_PROPERTY,
   ENTITY_NAME_NORM_PROPERTY,
   ENTITY_NAME_PROPERTY,
   ENTITY_NAME_VECTOR_PROPERTY,
@@ -85,12 +87,18 @@ function seedEpisode(): void {
 }
 
 /** The backbone as `bootstrapBackbone` writes it: `Member` plus `Entity`, structural, no vectors. */
-function seedMember(name: string): void {
+function seedMember(name: string, aliases: readonly string[] = []): void {
   graph.seedNode(MEMBER_ID, ['Member', 'Entity', 'AionNode'], {
     type: 'member',
     [STRUCTURAL_PROPERTY]: true,
     [ENTITY_NAME_PROPERTY]: name,
     [ENTITY_NAME_NORM_PROPERTY]: name.toLowerCase(),
+    ...(aliases.length === 0
+      ? {}
+      : {
+          [ENTITY_ALIASES_PROPERTY]: [...aliases],
+          [ENTITY_ALIASES_NORM_PROPERTY]: aliases.map((alias) => alias.toLowerCase()),
+        }),
   });
 }
 
@@ -309,6 +317,23 @@ describe('structural upgrade', () => {
     const member = graph.nodes.get(MEMBER_ID);
     expect(member?.properties.aliases).toEqual(['Ry', 'ry']);
     expect(member?.properties.aliases_norm).toEqual(['ry']);
+  });
+
+  it('stops accumulating spellings at the cap, since each one is a lookup key', async () => {
+    const held = Array.from({ length: MAX_STORED_ENTITY_ALIASES }, (_, index) => `held ${index}`);
+    seedMember('Ryan Huber', held);
+
+    await new EntityExtractionStage().run(
+      context(
+        fakeProvider({
+          generate: [{ entities: [{ name: 'Ry', type: 'person', context: '', is_speaker: true }] }],
+        }),
+      ),
+    );
+
+    const member = graph.nodes.get(MEMBER_ID);
+    expect(member?.properties.aliases).toEqual(held);
+    expect(member?.properties.aliases_norm).toHaveLength(MAX_STORED_ENTITY_ALIASES);
   });
 });
 

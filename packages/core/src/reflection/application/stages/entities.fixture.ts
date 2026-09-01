@@ -1,5 +1,6 @@
 import { ACCESS_COUNT_PROPERTY } from '../../../infrastructure/graph/access-tracking.js';
 import { BITEMPORAL_PROPERTIES } from '../../../infrastructure/graph/bitemporal.js';
+import { MAX_STORED_ENTITY_ALIASES } from '../../../infrastructure/graph/entity-identity-queries.js';
 import {
   ENTITY_MENTION_TYPE,
   ENTITY_NAME_SQUASH_PROPERTY,
@@ -104,7 +105,7 @@ export class EntityFakeGraph extends FakeGraph {
       this.statements.push({ cypher, parameters });
       return toResult(this.#speaker());
     }
-    if (cypher.includes(`SET n.${ENTITY_ALIASES_PROPERTY} = coalesce(`)) {
+    if (cypher.includes('[alias IN entry.aliases WHERE NOT alias IN held]')) {
       this.statements.push({ cypher, parameters });
       return toResult(this.#addAliases(parameters));
     }
@@ -225,7 +226,7 @@ export class EntityFakeGraph extends FakeGraph {
     return member === undefined ? [] : [this.#identityRow(member)];
   }
 
-  /** Append-if-absent, the same union the statement runs in Cypher. */
+  /** Append-if-absent under the stored cap, the same union and slice the statement runs. */
   #addAliases(parameters: Record<string, unknown>): Row[] {
     const entries = (parameters.entries ?? []) as readonly AliasEntry[];
     const written: Row[] = [];
@@ -239,11 +240,11 @@ export class EntityFakeGraph extends FakeGraph {
       node.properties[ENTITY_ALIASES_PROPERTY] = [
         ...aliases,
         ...entry.aliases.filter((alias) => !aliases.includes(alias)),
-      ];
+      ].slice(0, MAX_STORED_ENTITY_ALIASES);
       node.properties[ENTITY_ALIASES_NORM_PROPERTY] = [
         ...aliasKeys,
         ...entry.aliases_norm.filter((alias) => !aliasKeys.includes(alias)),
-      ];
+      ].slice(0, MAX_STORED_ENTITY_ALIASES);
       written.push({ id: entry.id });
     }
     return written;

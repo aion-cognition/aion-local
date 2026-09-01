@@ -198,7 +198,11 @@ async function resolveStructural(
   }
   await addEntityAliases(
     ctx.driver,
-    [...added].map(([id, aliases]) => ({ id, aliases })),
+    [...added].map(([id, aliases]) => ({
+      id,
+      nameNorm: targets.get(id)?.match.nameNorm ?? '',
+      aliases,
+    })),
   );
 
   const resolved: ResolvedEntity[] = [];

@@ -9,6 +9,7 @@ import {
 } from './bitemporal.js';
 import { type GraphTransaction, inWriteTransaction, runRead, runWrite } from './connection.js';
 import { upsertEdgeInTransaction } from './edges.js';
+import { aliasKeys, aliasRecord } from './entity-identity-queries.js';
 import {
   clearNameVectorHashInTransaction,
   ENTITY_ALIASES_NORM_PROPERTY,
@@ -31,7 +32,6 @@ import {
 import { fromGraphVector, toGraphInteger, toGraphVector, type Row } from './values.js';
 import { asCosine } from './vector-indexes.js';
 import type { Vector } from '../providers/types.js';
-import { foldName } from '../providers/unicode-fold.js';
 
 /**
  * The graph side of entity deduplication. Everything that decides who is canonical lives in
@@ -328,22 +328,6 @@ async function readMergeProvenanceInTransaction(
 }
 
 /**
- * The lookup half of the alias record, derived rather than accumulated separately: a name this
- * merge absorbs has to answer the cue that used to reach it, and `entityNameSeeds` reads the
- * folded list. The canonical's own name is an identity, not an alias of itself.
- */
-function aliasLookupKeys(aliases: readonly string[], canonicalNameNorm: string): string[] {
-  const keys = new Set<string>();
-  for (const alias of aliases) {
-    const folded = foldName(alias);
-    if (folded.length > 0 && folded !== canonicalNameNorm) {
-      keys.add(folded);
-    }
-  }
-  return [...keys].sort();
-}
-
-/**
  * One JSON string per absorbed identity. Neo4j properties hold no nested maps, so the record
  * is serialized; it is a list rather than one blob so appending a later merge never rewrites
  * an earlier one.
@@ -439,13 +423,16 @@ export async function redirectAndAbsorb(
       ...buildMergeProvenance(input, mergedIds, trail),
     ];
 
+    // The absorbed names go through the same record the write path uses, so the merge cannot
+    // push an identity past the stored alias cap that resolution honours.
+    const aliases = aliasRecord(input.aliases, input.canonicalNameNorm);
     await writeStampedNodeInTransaction(tx, {
       label: 'Entity',
       id: input.canonicalId,
       now: input.now,
       mergeProperties: {
-        [ENTITY_ALIASES_PROPERTY]: input.aliases,
-        [ENTITY_ALIASES_NORM_PROPERTY]: aliasLookupKeys(input.aliases, input.canonicalNameNorm),
+        [ENTITY_ALIASES_PROPERTY]: aliases,
+        [ENTITY_ALIASES_NORM_PROPERTY]: aliasKeys(aliases, input.canonicalNameNorm),
         [ACCESS_COUNT_PROPERTY]: input.accessCount,
         [MERGE_PROVENANCE_PROPERTY]: provenance,
         ...(input.lastAccessed === undefined

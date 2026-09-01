@@ -115,7 +115,9 @@ describe('entityNameSeeds', () => {
   });
 
   it('picks up an alias added after the node was written', async () => {
-    await addEntityAliases(harness.driver, [{ id: redisId, aliases: ['the cache'] }]);
+    await addEntityAliases(harness.driver, [
+      { id: redisId, nameNorm: 'redis', aliases: ['the cache'] },
+    ]);
     const rows = await entityNameSeeds(harness.driver, {
       names: ['the cache'],
       mode: withCurrency(),
