@@ -165,7 +165,8 @@ describe('recall against an empty substrate', () => {
     expect(embed).toHaveBeenCalledWith(['why webhooks', 'webhook ingestion']);
   });
 
-  it('records a timing for every stage', async () => {
+  it('records a timing for every stage, and they account for the call rather than exceed it', async () => {
+    const started = performance.now();
     const pack = await handleRecall(
       deps(),
       { query: 'why webhooks' },
@@ -174,10 +175,17 @@ describe('recall against an empty substrate', () => {
         now: NOW,
       },
     );
+    const elapsed = performance.now() - started;
 
+    const timings = pack.metadata.stage_timings_ms;
     for (const stage of ['cues', 'embed', 'seeds', 'activation', 'fusion'] as const) {
-      expect(pack.metadata.stage_timings_ms[stage]).toBeGreaterThanOrEqual(0);
+      expect(timings[stage]).toBeGreaterThanOrEqual(0);
     }
+    // The stages run one after another inside the call, so their sum is bounded by the call. A
+    // stamp reported in place of a span, or one stage's clock counted into another's, breaks
+    // that; `>= 0` holds for either.
+    const spent = Object.values(timings).reduce((total, ms) => total + ms, 0);
+    expect(spent).toBeLessThanOrEqual(elapsed);
   });
 });
 

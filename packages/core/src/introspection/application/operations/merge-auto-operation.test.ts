@@ -11,7 +11,7 @@ import { refusingProvider } from '../../../infrastructure/providers/test-support
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { listEntityMergeDecisions } from '../../../infrastructure/sqlite/entity-merge-decisions.js';
 import { DedupFakeGraph } from '../../../reflection/application/stages/entity-dedup.fixture.js';
-import type { OperationContext } from '../../domain/operation.js';
+import { operationImprovement, type OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
 
 /**
@@ -99,7 +99,10 @@ describe('what the engine scores merge_auto on', () => {
     const operation = mergeAutoOperation();
 
     expect(operation.measure?.(healthWithEligible(7))).toBe(7);
-    expect(operation.improves ?? 'lower').toBe('lower');
+    // It declares no direction and takes the default, which is the reading the engine scores the
+    // run on: asserting the fallback here would pass whichever direction the operation declared.
+    expect(operation.improves).toBeUndefined();
+    expect(operationImprovement(operation)).toBe('lower');
   });
 });
 

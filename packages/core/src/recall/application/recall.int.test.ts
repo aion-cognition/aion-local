@@ -234,6 +234,7 @@ describe('recall over a substrate written by the real intake path', () => {
   });
 
   it('renders what it served and persists it under the reading session', async () => {
+    const started = performance.now();
     const pack = await handleRecall(
       deps,
       { query: QUERY },
@@ -242,6 +243,7 @@ describe('recall over a substrate written by the real intake path', () => {
         now: RECALLED_AT,
       },
     );
+    const elapsed = performance.now() - started;
 
     expect(pack.rendered_text).toContain('## Episodes');
     expect(pack.rendered_text).toContain(WEBHOOKS_OBSERVATION);
@@ -251,9 +253,14 @@ describe('recall over a substrate written by the real intake path', () => {
       { text: CUE, source: 'query', weight: 3 },
     ]);
     expect(pack.metadata.token_estimate).toBeGreaterThan(0);
+    const timings = pack.metadata.stage_timings_ms;
     for (const stage of ['cues', 'embed', 'seeds', 'activation', 'fusion'] as const) {
-      expect(pack.metadata.stage_timings_ms[stage]).toBeGreaterThanOrEqual(0);
+      expect(timings[stage]).toBeGreaterThanOrEqual(0);
     }
+    // Sequential stages inside one call, so the sum is bounded by the call: against a real
+    // server and a real model this is the reading that says the spans are spans.
+    const spent = Object.values(timings).reduce((total, ms) => total + ms, 0);
+    expect(spent).toBeLessThanOrEqual(elapsed);
 
     expect(getLastPack(db, READ_SESSION)?.pack).toEqual(pack);
   });

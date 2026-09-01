@@ -32,6 +32,14 @@ export type EmbedModelProfile = {
 /** The encoder's start and end tokens, which no input text gets to use. */
 const SPECIAL_TOKENS = 2;
 
+/**
+ * The name of the row that carries a prefix, and a name no model answers to. Every measured row
+ * is empty, so without this one `${queryPrefix}${text}` at the five call sites composes to the
+ * text itself and a build with the composition deleted passes every test that exists. Tests name
+ * this model to embed a query through the same table a run does; nothing configures it.
+ */
+export const QUERY_PREFIX_SEAM_MODEL = 'aion-query-prefix-seam';
+
 const PROFILES: Readonly<Record<string, EmbedModelProfile>> = {
   'nomic-embed-text': { contextTokens: 2048, queryPrefix: '' },
   // arctic2 ships a "query: " retrieval prefix and this install does not use it. Measured
@@ -42,6 +50,9 @@ const PROFILES: Readonly<Record<string, EmbedModelProfile>> = {
   // asymmetric shape it is meant for. Phase 4.4 re-derives the floors and owns this row;
   // whichever way it goes, one row decides it for every query-shaped embed in the product.
   'snowflake-arctic-embed2': { contextTokens: 8192, queryPrefix: '' },
+  // The prefix arctic2 ships, on the seam name, so the composition every call site performs is
+  // exercised while every configurable row is still raw. Phase 4.4 decides on this string.
+  [QUERY_PREFIX_SEAM_MODEL]: { contextTokens: 2048, queryPrefix: 'query: ' },
 };
 
 /** A model nobody measured gets the narrowest window in the table and no prefix. */

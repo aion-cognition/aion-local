@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { embedQueryPrefix, maxEmbedInputChars } from './embed-models.js';
+import { embedQueryPrefix, maxEmbedInputChars, QUERY_PREFIX_SEAM_MODEL } from './embed-models.js';
 import { DEFAULTS } from '../config/defaults.js';
 
 describe('embed input cap', () => {
@@ -19,7 +19,10 @@ describe('embed input cap', () => {
   });
 
   it('caps the configured default, so no model runs uncapped', () => {
-    expect(maxEmbedInputChars(DEFAULTS.models.embed)).toBeGreaterThan(0);
+    // The number, not a floor: the shipped default and the row it reads have to stay the same
+    // decision, and an unlisted default silently caps at 2046 instead.
+    expect(DEFAULTS.models.embed).toBe('snowflake-arctic-embed2');
+    expect(maxEmbedInputChars(DEFAULTS.models.embed)).toBe(8190);
   });
 });
 
@@ -41,5 +44,19 @@ describe('query prefix', () => {
 
   it('leaves an unlisted model unprefixed', () => {
     expect(embedQueryPrefix('some-model-nobody-measured')).toBe('');
+  });
+
+  /**
+   * Every measured row is empty, so `${prefix}${text}` at the five call sites sends exactly what
+   * a build with the composition deleted would send. The seam row is the one prefix any test can
+   * see, and it carries the string arctic2 ships because that is the string Phase 4.4 decides on.
+   */
+  it('hands back a real prefix for the seam row the call-site tests compose with', () => {
+    expect(embedQueryPrefix(QUERY_PREFIX_SEAM_MODEL)).toBe('query: ');
+  });
+
+  it('keeps the seam out of the models this install can be configured onto', () => {
+    expect(QUERY_PREFIX_SEAM_MODEL).not.toBe(DEFAULTS.models.embed);
+    expect(embedQueryPrefix(DEFAULTS.models.embed)).toBe('');
   });
 });
