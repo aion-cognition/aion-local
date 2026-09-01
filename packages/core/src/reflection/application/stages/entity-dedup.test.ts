@@ -406,6 +406,28 @@ describe('tier 3, the two-pass judge', () => {
     expect(judge.calls).toHaveLength(2);
   });
 
+  /**
+   * A capped run drops the overflow with no proposal and no other trace, so the count of what
+   * was put forward is the only thing that separates a quiet graph from a budget that ran out.
+   */
+  it('reports what tier 1 nominated beside what it could afford to judge', async () => {
+    seedEntity({ id: 'subject', name: 'Aion', type: 'project', vector: [1, 0] });
+    for (const index of [0, 1, 2]) {
+      seedEntity({
+        id: `near-${String(index)}`,
+        name: `Aion ${String(index)}`,
+        type: 'project',
+        vector: [1, 0],
+        txFrom: NEWER,
+      });
+    }
+    mention(EPISODE_ID, 'subject', 1);
+
+    const outcome = await new EntityDedupStage({ maxJudgments: 1 }).run(context(refusingJudge()));
+
+    expect(outcome.counts).toMatchObject({ merge_judgments: 1, merge_nominations: 3 });
+  });
+
   it('never absorbs the structural node, whatever the organic entity has going for it', async () => {
     seedEntity({
       id: 'member',
