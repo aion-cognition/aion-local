@@ -46,7 +46,11 @@ async function runOllamaCheck(config: Config): Promise<{ result: CheckResult; pa
     }
     if (path === '/api/embed') {
       return Promise.resolve(
-        new Response(JSON.stringify({ embeddings: [new Array<number>(768).fill(0.1)] })),
+        new Response(
+          JSON.stringify({
+            embeddings: [new Array<number>(DEFAULTS.models.embedDimension).fill(0.1)],
+          }),
+        ),
       );
     }
     return Promise.resolve(
@@ -75,7 +79,7 @@ describe('the Ollama round-trip check under routing', () => {
     const { result, paths } = await runOllamaCheck(DEFAULTS);
 
     expect(result.ok).toBe(true);
-    expect(result.detail).toContain('768 dimensions');
+    expect(result.detail).toContain(`${String(DEFAULTS.models.embedDimension)} dimensions`);
     expect(result.detail).toContain(`chat ${DEFAULTS.models.cue}, ${DEFAULTS.models.reflect} ok`);
     expect(paths.filter((path) => path === '/api/chat')).toHaveLength(2);
   });

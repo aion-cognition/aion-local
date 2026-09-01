@@ -1,3 +1,4 @@
+import { maxEmbedInputChars } from './embed-models.js';
 import { OllamaRequestError } from './errors.js';
 import type { Provider, StructuredRequest, Vector } from './types.js';
 import { foldForIdentity } from './unicode-fold.js';
@@ -23,18 +24,12 @@ function foldForEmbedding(text: string): string {
 }
 
 /**
- * A subword token spans at least one character, so an input of at most 2048 characters can
- * never exceed nomic-bert's 2048-token context, whatever its density or language. Ollama
- * rejects an over-length embed with a 400 and does not truncate it (the `truncate` option
- * does not save this model), and one rejected input fails the whole batch, so the cap has to
- * hold for every input rather than on average. A char budget below the token ceiling is the
- * only guarantee that holds for a dense node, not just a prose one. Long text embeds from its
- * prefix; windowing the remainder into a pooled vector is a later enhancement.
+ * The budget belongs to the model, so it is read from the model's row rather than pinned here.
+ * `embed-models.ts` carries the window and the derivation. Long text embeds from its prefix;
+ * windowing the remainder into a pooled vector is a later enhancement.
  */
-const MAX_EMBED_INPUT_CHARS = 2000;
-
-function capForEmbedding(text: string): string {
-  return text.length > MAX_EMBED_INPUT_CHARS ? text.slice(0, MAX_EMBED_INPUT_CHARS) : text;
+function capForEmbedding(text: string, cap: number): string {
+  return text.length > cap ? text.slice(0, cap) : text;
 }
 
 /**
@@ -45,11 +40,13 @@ function capForEmbedding(text: string): string {
 export class OllamaProvider implements Provider {
   private readonly baseUrl: string;
   private readonly embedModel: string;
+  private readonly embedInputCap: number;
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: OllamaProviderOptions) {
     this.baseUrl = normalizeBaseUrl(options.baseUrl);
     this.embedModel = options.embedModel;
+    this.embedInputCap = maxEmbedInputChars(options.embedModel);
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
@@ -63,7 +60,7 @@ export class OllamaProvider implements Provider {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         model: this.embedModel,
-        input: texts.map((text) => capForEmbedding(foldForEmbedding(text))),
+        input: texts.map((text) => capForEmbedding(foldForEmbedding(text), this.embedInputCap)),
       }),
     });
     if (!response.ok) {

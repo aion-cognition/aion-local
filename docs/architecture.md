@@ -455,7 +455,8 @@ constraint and the entity-resolution seed strategy both apply to them.
   `remark` squash together and are two words, so squash equality is evidence the dedup
   cascade weighs into a merge that carries a provenance record and an undo.
 - Two vector indexes, `content_vec_idx` and `context_vec_idx`, both `FOR (n:Memory)`, both
-  cosine similarity at the configured embed dimension (768 by default, `nomic-embed-text`).
+  cosine similarity at the configured embed dimension (1024 by default,
+  `snowflake-arctic-embed2`).
 - Two range indexes, `memory_valid_until_idx` and `memory_tx_until_idx`, both
   `FOR (n:Memory)`. They serve the bounded half of a time-travel filter
   (`valid_until > t`); the open-interval half (`IS NULL`) has no index to seek and is a

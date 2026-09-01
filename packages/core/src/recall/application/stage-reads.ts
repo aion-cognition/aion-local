@@ -14,6 +14,7 @@ import {
   type SeedCandidate,
 } from '../../infrastructure/graph/seed-queries.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
+import { embedQueryPrefix } from '../../infrastructure/providers/embed-models.js';
 import type { Provider, Vector } from '../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { isLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
@@ -47,14 +48,20 @@ export type EmbeddedCues = {
  * resolution, recency, and traversal all run on cue text or on graph structure, which is the
  * ladder's deeper rung. The rung is reported, because a pack answered without its semantic
  * leg is a thinner answer than the caller has any other way to see.
+ *
+ * Recall embeds a query here and nowhere else, so this is where the model's query prefix goes.
+ * Stored vectors and every symmetric comparison stay raw. The prefix marks the text sent to the
+ * model and never the cue: what is stored, logged, and matched on downstream is the cue the
+ * caller asked with.
  */
 export async function embedCues(deps: StageReadDeps, cues: readonly Cue[]): Promise<EmbeddedCues> {
   if (cues.length === 0) {
     return { cues: [] };
   }
+  const queryPrefix = embedQueryPrefix(deps.config.models.embed);
   let vectors: readonly Vector[] = [];
   try {
-    vectors = await deps.provider.embed(cues.map((cue) => cue.text));
+    vectors = await deps.provider.embed(cues.map((cue) => `${queryPrefix}${cue.text}`));
   } catch (err) {
     deps.logger.warn({ err, model: deps.config.models.embed }, 'cue embedding failed');
     return { cues, degradation: { stage: 'embed', reason: 'model_error' } };

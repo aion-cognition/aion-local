@@ -8,8 +8,8 @@
       "url": "http://host.docker.internal:11434"
     },
     "models": {
-      "embed": "nomic-embed-text",
-      "embedDimension": 768,
+      "embed": "snowflake-arctic-embed2",
+      "embedDimension": 1024,
       "cue": "qwen3:1.7b",
       "reflect": "qwen3:8b"
     },
