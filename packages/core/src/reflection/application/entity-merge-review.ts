@@ -1,10 +1,11 @@
-import type { Driver } from 'neo4j-driver';
-
+import {
+  applyEntityMerge,
+  collectMergeSignals,
+  type EntityMergeWriterDeps,
+} from './entity-merge-writer.js';
 import { ProposalNotFoundError } from './proposals.js';
 import {
-  clearEntityVectors,
   loadEntityDedupDetails,
-  redirectAndAbsorb,
   type DedupEntityDetail,
 } from '../../infrastructure/graph/entity-dedup-queries.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
@@ -13,14 +14,7 @@ import {
   resolveEntityMergeProposal,
   type EntityMergeProposalSide,
 } from '../../infrastructure/sqlite/entity-merge-proposals.js';
-import { isLedgerApplied, markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
-import {
-  entityMergeLedgerKey,
-  mergeAccessCount,
-  mergeAliases,
-  mergeLastAccessed,
-  selectCanonical,
-} from '../domain/entity-merge.js';
+import { selectCanonical } from '../domain/entity-merge.js';
 
 /**
  * The review half of entity-merge detection. Identity on the graph is keyed on `name_norm`
@@ -34,6 +28,9 @@ import {
 
 /** Provenance on the merge lineage edge: a person applied this, not the dedup stage. */
 export const ENTITY_MERGE_APPLY_METHOD = 'merge_proposal_apply';
+
+/** The graph, the ledger and the log the writer needs; the same three every tier hands it. */
+export type EntityMergeReviewDeps = EntityMergeWriterDeps;
 
 export type ApplyEntityMergeProposalInput = {
   readonly id: string;
@@ -74,6 +71,8 @@ export type EntityMergeApplied = {
   readonly edgesRedirected: number;
   /** True when the post-commit vector cleanup was swallowed rather than run. */
   readonly vectorCleanupDeferred: boolean;
+  /** The evidence record this apply wrote, which is what a later unmerge cites. */
+  readonly decisionId: string;
 };
 
 export type ApplyEntityMergeProposalResult =
@@ -111,16 +110,24 @@ function currentDetail(detail: DedupEntityDetail | undefined): DedupEntityDetail
   return detail?.current === true ? detail : undefined;
 }
 
+/** What a decision record says the reasons were when the reason is that a person said so. */
+const HUMAN_APPLY_REASON = 'applied from the review queue by a person';
+
 /**
- * Applies one merge proposal a person has reviewed. The write mirrors what the dedup stage
- * runs for an automatic merge (`EntityDedupStage.#mergeGroup`), because a merge is a merge
- * regardless of who decided it; only the provenance on the lineage edge tells the two apart.
+ * Applies one merge proposal a person has reviewed. It takes the same writer every tier of the
+ * cascade takes (`entity-merge-writer.ts`), because a merge is a merge regardless of who decided
+ * it: the graph write, the decision record and the ledger mark are the same three steps in the
+ * same order, and only the tier and the lineage provenance tell the two apart.
+ *
+ * The record matters most on this path. It is the one merge a person made, so it is the one a
+ * reversal most wants to cite, and an apply that wrote no record left `aion unmerge` with a
+ * restored node and nothing to say about why it was ever absorbed.
  */
 export async function applyEntityMergeProposal(
-  driver: Driver,
-  db: SqliteHandle,
+  deps: EntityMergeReviewDeps,
   input: ApplyEntityMergeProposalInput,
 ): Promise<ApplyEntityMergeProposalResult> {
+  const { driver, db } = deps;
   const proposal = getEntityMergeProposal(db, input.id);
   if (proposal === undefined) {
     throw new ProposalNotFoundError(input.id);
@@ -142,11 +149,20 @@ export async function applyEntityMergeProposal(
   const pair: readonly [DedupEntityDetail, DedupEntityDetail] = [left, right];
   const canonical = selectCanonical(pair);
   const absorbed = pair[0].id === canonical.id ? pair[1] : pair[0];
-  const mergedIds = [absorbed.id];
-  const key = entityMergeLedgerKey(canonical.id, mergedIds);
 
-  if (isLedgerApplied(db, key)) {
-    resolveEntityMergeProposal(db, input.id, now.toISOString());
+  const signals = await collectMergeSignals(driver, canonical, pair);
+  const result = await applyEntityMerge(deps, {
+    canonical,
+    members: pair,
+    tier: 'human',
+    reasons: [HUMAN_APPLY_REASON],
+    signals,
+    method: input.method ?? ENTITY_MERGE_APPLY_METHOD,
+    now,
+  });
+
+  resolveEntityMergeProposal(db, input.id, now.toISOString());
+  if (result.status !== 'merged') {
     return {
       outcome: 'already_applied',
       id: input.id,
@@ -155,46 +171,14 @@ export async function applyEntityMergeProposal(
     };
   }
 
-  const merged = await redirectAndAbsorb(driver, {
-    canonicalId: canonical.id,
-    canonicalNameNorm: canonical.nameNorm,
-    mergedIds,
-    aliases: mergeAliases(canonical.name, pair),
-    accessCount: mergeAccessCount(pair),
-    lastAccessed: mergeLastAccessed(pair),
-    supersedeSignals: ['entity_merge'],
-    supersedeProvenance: [input.method ?? ENTITY_MERGE_APPLY_METHOD],
-    mergedRecords: pair
-      .filter((member) => member.id !== canonical.id)
-      .map((member) => ({
-        id: member.id,
-        name: member.name,
-        nameNorm: member.nameNorm,
-        type: member.type,
-        aliases: member.aliases,
-      })),
-    ledgerKey: key,
-    now,
-  });
-
-  // Best-effort, like the dedup stage's own cleanup: index maintenance never fails the apply.
-  let vectorCleanupDeferred = false;
-  try {
-    await clearEntityVectors(driver, mergedIds);
-  } catch {
-    vectorCleanupDeferred = true;
-  }
-
-  markLedgerApplied(db, key, { canonicalId: canonical.id, mergedIds });
-  resolveEntityMergeProposal(db, input.id, now.toISOString());
-
   return {
     outcome: 'applied',
     id: input.id,
     canonical: toParty(canonical),
     absorbed: toParty(absorbed),
-    edgesRedirected: merged.edgesRedirected,
-    vectorCleanupDeferred,
+    edgesRedirected: result.edgesRedirected,
+    vectorCleanupDeferred: result.vectorCleanupDeferred,
+    decisionId: result.decisionId,
   };
 }
 

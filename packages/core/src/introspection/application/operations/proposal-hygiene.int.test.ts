@@ -167,9 +167,13 @@ describe('proposal_hygiene against a live graph', () => {
       subject: { id: legacyId, name: 'Legacy Name', type: 'concept' },
       candidate: { id: supersedingId, name: 'Legacy Name', type: 'concept' },
       similarity: 1,
+      similaritySource: 'name_cosine',
       episodeId: 'ep-stale-side',
     });
-    const firstMerge = await applyEntityMergeProposal(harness.driver, db, { id: firstMergeId });
+    const firstMerge = await applyEntityMergeProposal(
+      { driver: harness.driver, db, logger },
+      { id: firstMergeId },
+    );
     if (firstMerge.outcome !== 'applied') {
       throw new Error('setup expected the exact-name pair to merge');
     }
@@ -178,6 +182,7 @@ describe('proposal_hygiene against a live graph', () => {
       subject: { id: firstMerge.absorbed.id, name: firstMerge.absorbed.name, type: 'concept' },
       candidate: { id: stillCurrentId, name: 'Third Name', type: 'concept' },
       similarity: 0.6,
+      similaritySource: 'name_cosine',
       episodeId: 'ep-stale-side',
       createdAt: OLD.toISOString(),
     });
@@ -239,6 +244,7 @@ describe('proposal_hygiene against a live graph', () => {
       subject: { id: leftId, name: 'Ledger Cache', type: 'tool' },
       candidate: { id: rightId, name: 'Ledger Store', type: 'concept' },
       similarity: 0.6,
+      similaritySource: 'name_cosine',
       episodeId: 'ep-fuzzy',
       createdAt: OLD.toISOString(),
     });
@@ -322,9 +328,13 @@ describe('proposal_hygiene against a live graph', () => {
       subject: { id: absorbedId, name: 'Sweep Legacy', type: 'topic' },
       candidate: { id: canonicalId, name: 'Sweep Legacy', type: 'topic' },
       similarity: 1,
+      similaritySource: 'name_cosine',
       episodeId: 'ep-sweep-fresh',
     });
-    const applied = await applyEntityMergeProposal(harness.driver, db, { id: setupId });
+    const applied = await applyEntityMergeProposal(
+      { driver: harness.driver, db, logger },
+      { id: setupId },
+    );
     if (applied.outcome !== 'applied') {
       throw new Error('setup expected the exact-name pair to merge');
     }
@@ -334,6 +344,7 @@ describe('proposal_hygiene against a live graph', () => {
       subject: { id: applied.absorbed.id, name: applied.absorbed.name, type: 'topic' },
       candidate: { id: partnerId, name: 'Sweep Partner', type: 'topic' },
       similarity: 0.6,
+      similaritySource: 'name_cosine',
       episodeId: 'ep-sweep-fresh',
       createdAt: NOW.toISOString(),
     });
