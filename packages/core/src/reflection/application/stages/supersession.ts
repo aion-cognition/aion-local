@@ -237,6 +237,15 @@ export class SupersessionStage implements ReflectionStage {
     };
   }
 
+  /**
+   * The options this instance actually runs on. `mode` is the kill switch and reaches the stage
+   * only through construction, so without a reader for it a build that dropped the wiring goes
+   * on closing claims under a deployment that set `propose`.
+   */
+  describe(): SupersessionStageOptions {
+    return this.#options;
+  }
+
   async run(ctx: StageContext): Promise<StageOutcome> {
     const facts = await findEpisodeFactNodes(ctx.driver, ctx.episodeId);
     if (facts.length === 0) {
