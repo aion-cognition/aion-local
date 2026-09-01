@@ -17,6 +17,7 @@ import {
   openLogger,
   openSqliteHandle,
   orchestratorLedgerKey,
+  PIPELINE_VERSION,
   ReflectionOrchestrator,
   ReflectionWorker,
   runGraphMigrations,
@@ -209,7 +210,7 @@ beforeAll(async () => {
   workEpisodeId = stored.episode_id;
 
   await waitFor('the signalled reflection run to reach the ledger', LEDGER_DEADLINE_MS, () =>
-    Promise.resolve(isLedgerApplied(db, orchestratorLedgerKey(workEpisodeId))),
+    Promise.resolve(isLedgerApplied(db, orchestratorLedgerKey(PIPELINE_VERSION, workEpisodeId))),
   );
   entitiesAfterRun = await findEpisodeEntities(harness.driver, workEpisodeId);
 }, 600_000);
@@ -375,6 +376,8 @@ describe('gate item 5: an inference outage defers, it never loses', () => {
 
     const stillPending = await findPendingVectorNodes(harness.driver, 100);
     expect(stillPending.map((node) => node.id)).not.toContain(outageEpisodeId);
-    expect(isLedgerApplied(db, orchestratorLedgerKey(outageEpisodeId))).toBe(true);
+    expect(isLedgerApplied(db, orchestratorLedgerKey(PIPELINE_VERSION, outageEpisodeId))).toBe(
+      true,
+    );
   }, 600_000);
 });

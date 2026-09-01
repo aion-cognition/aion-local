@@ -23,6 +23,8 @@ export type { ApplyEntityMergeProposalResult } from './application/entity-merge-
 
 export type { ReflectionStage } from './domain/stage.js';
 
+export { PIPELINE_VERSION } from './domain/version.js';
+
 export { ReflectionOrchestrator, orchestratorLedgerKey } from './application/orchestrator.js';
 
 export { ReflectionWorker } from './application/worker.js';

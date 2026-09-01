@@ -19,6 +19,7 @@ import type {
 } from '../../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import type { StageContext } from '../../domain/stage.js';
+import { PIPELINE_VERSION } from '../../domain/version.js';
 import { FakeGraph } from '../../test-support/fake-graph.fixture.js';
 
 const EPISODE_ID = 'episode-1';
@@ -70,6 +71,8 @@ function buildContext(
     },
     logger,
     now: NOW,
+    occurredAt: OCCURRED_AT,
+    pipelineVersion: PIPELINE_VERSION,
   };
 }
 

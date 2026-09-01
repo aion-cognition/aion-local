@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -13,6 +14,8 @@ import {
 import { listReflectionJobs } from './reflection-queue.js';
 
 const fixtureUrl = new URL('./concurrent-writer.fixture.ts', import.meta.url);
+/** Resolves the `.js` specifiers the sources under the fixture are written against. */
+const specifierHook = fileURLToPath(new URL('./ts-specifier-hook.fixture.ts', import.meta.url));
 
 type WriterInput = {
   filePath: string;
@@ -31,7 +34,7 @@ type WriterHandle = {
 function spawnWriter(input: WriterInput): WriterHandle {
   const worker = new Worker(fixtureUrl, {
     workerData: input,
-    execArgv: ['--experimental-strip-types'],
+    execArgv: ['--experimental-strip-types', '--import', specifierHook],
   });
 
   const ready = new Promise<void>((resolve, reject) => {

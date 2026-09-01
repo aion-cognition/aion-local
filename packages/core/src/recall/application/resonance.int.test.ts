@@ -28,6 +28,7 @@ import type { Provider, StructuredRequest, Vector } from '../../infrastructure/p
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { ContextVectorStage } from '../../reflection/application/stages/context-vectors.js';
 import type { StageContext } from '../../reflection/domain/stage.js';
+import { PIPELINE_VERSION } from '../../reflection/domain/version.js';
 import { SessionManager } from '../../session/session-manager.js';
 import type { ActivatedNode } from '../domain/activation.js';
 import { RESONANCE_PATH } from '../domain/resonance.js';
@@ -212,6 +213,8 @@ function stageContext(episodeId: string, text: string): StageContext {
     },
     logger,
     now: AT,
+    occurredAt: AT,
+    pipelineVersion: PIPELINE_VERSION,
   };
 }
 

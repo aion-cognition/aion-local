@@ -32,6 +32,7 @@ import {
 } from '../../infrastructure/sqlite/reflection-queue.js';
 import { SessionManager } from '../../session/session-manager.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../domain/stage.js';
+import { PIPELINE_VERSION } from '../domain/version.js';
 
 /**
  * The worker against the real substrate: a signal starts a job with nothing polling for it,
@@ -266,7 +267,7 @@ describe('a reflection signalled while the worker is listening', () => {
     expect(stage.episodes).toEqual([stored.episode_id]);
     expect(listReflectionJobs(db)).toEqual([]);
 
-    const recorded = getLedgerEntry(db, orchestratorLedgerKey(stored.episode_id));
+    const recorded = getLedgerEntry(db, orchestratorLedgerKey(PIPELINE_VERSION, stored.episode_id));
     expect(recorded?.summary).toMatchObject({ counts: { entities: 1 } });
   });
 });
@@ -333,7 +334,7 @@ describe('five consecutive failures', () => {
     expect(drain.ran).toBe(5);
     expect(started.paused).toBe(true);
     expect(getReflectionJob(db, later[4]!)?.claimedAt).toBeNull();
-    expect(getLedgerEntry(db, orchestratorLedgerKey(episodeId))).toBeUndefined();
+    expect(getLedgerEntry(db, orchestratorLedgerKey(PIPELINE_VERSION, episodeId))).toBeUndefined();
 
     stage.mode = 'ok';
     await stage.entered(6);
@@ -341,7 +342,9 @@ describe('five consecutive failures', () => {
 
     expect(started.paused).toBe(false);
     expect(stage.episodes).toHaveLength(6);
-    expect(getLedgerEntry(db, orchestratorLedgerKey(episodeId))?.summary).toMatchObject({
+    expect(
+      getLedgerEntry(db, orchestratorLedgerKey(PIPELINE_VERSION, episodeId))?.summary,
+    ).toMatchObject({
       counts: { entities: 1 },
     });
   });
@@ -369,10 +372,14 @@ describe('workerCount above 1', () => {
 
     expect(stage.entries).toHaveLength(2);
     expect(listReflectionJobs(db)).toEqual([]);
-    expect(getLedgerEntry(db, orchestratorLedgerKey(storedA.episode_id))?.summary).toMatchObject({
+    expect(
+      getLedgerEntry(db, orchestratorLedgerKey(PIPELINE_VERSION, storedA.episode_id))?.summary,
+    ).toMatchObject({
       counts: { entities: 1 },
     });
-    expect(getLedgerEntry(db, orchestratorLedgerKey(storedB.episode_id))?.summary).toMatchObject({
+    expect(
+      getLedgerEntry(db, orchestratorLedgerKey(PIPELINE_VERSION, storedB.episode_id))?.summary,
+    ).toMatchObject({
       counts: { entities: 1 },
     });
   });

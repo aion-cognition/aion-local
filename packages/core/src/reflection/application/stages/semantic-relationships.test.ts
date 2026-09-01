@@ -14,6 +14,7 @@ import type {
 } from '../../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import type { StageContext } from '../../domain/stage.js';
+import { PIPELINE_VERSION } from '../../domain/version.js';
 
 const EPISODE_ID = 'episode-1';
 const NOW = new Date('2026-08-28T09:05:00.000Z');
@@ -68,6 +69,8 @@ function buildContext(provider: Provider, text = DEFAULT_TEXT): StageContext {
     episode: { id: EPISODE_ID, sessionId: 'session-1', text, turns: [] },
     logger,
     now: NOW,
+    occurredAt: NOW,
+    pipelineVersion: PIPELINE_VERSION,
   };
 }
 

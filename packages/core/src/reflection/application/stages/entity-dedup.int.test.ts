@@ -33,8 +33,9 @@ import {
 import { openLogger } from '../../../infrastructure/logging/logger.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { getLedgerEntry } from '../../../infrastructure/sqlite/ops-ledger.js';
-import { entityMergeLedgerKey } from '../../domain/entity-merge.js';
+import { ENTITY_CASCADE_VERSION, entityMergeLedgerKey } from '../../domain/entity-merge.js';
 import type { StageContext } from '../../domain/stage.js';
+import { PIPELINE_VERSION } from '../../domain/version.js';
 import {
   judgedNames,
   refusingEntityJudge,
@@ -111,6 +112,8 @@ function context(judge: ScriptedEntityJudge = scriptedEntityJudge()): StageConte
     episode: { id: episodeId, sessionId: 'session-1', text: '', turns: [] },
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     now: NOW,
+    occurredAt: NOW,
+    pipelineVersion: PIPELINE_VERSION,
   };
 }
 
@@ -217,7 +220,7 @@ describe('entity dedup against a live graph', () => {
       ]),
     );
 
-    const ledgerKey = entityMergeLedgerKey(canonicalId, [duplicateId]);
+    const ledgerKey = entityMergeLedgerKey(ENTITY_CASCADE_VERSION, canonicalId, [duplicateId]);
     expect(getLedgerEntry(db, ledgerKey)).toBeDefined();
 
     const rerun = await new EntityDedupStage().run(context());

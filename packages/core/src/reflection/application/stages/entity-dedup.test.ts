@@ -36,9 +36,10 @@ import { SqliteStore } from '../../../infrastructure/sqlite/database.js';
 import { listEntityMergeDecisions } from '../../../infrastructure/sqlite/entity-merge-decisions.js';
 import { listEntityMergeProposals } from '../../../infrastructure/sqlite/entity-merge-proposals.js';
 import { getLedgerEntry } from '../../../infrastructure/sqlite/ops-ledger.js';
-import { entityMergeLedgerKey } from '../../domain/entity-merge.js';
+import { ENTITY_CASCADE_VERSION, entityMergeLedgerKey } from '../../domain/entity-merge.js';
 import { squashName } from '../../domain/entity-reconciliation.js';
 import type { StageContext } from '../../domain/stage.js';
+import { PIPELINE_VERSION } from '../../domain/version.js';
 import {
   refusingEntityJudge as refusingJudge,
   scriptedEntityJudge as scriptedJudge,
@@ -79,6 +80,8 @@ function context(judge: ScriptedEntityJudge = scriptedJudge()): StageContext {
     episode: episode(),
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     now: NOW,
+    occurredAt: NOW,
+    pipelineVersion: PIPELINE_VERSION,
   };
 }
 
@@ -678,7 +681,7 @@ describe('idempotency', () => {
     const first = await new EntityDedupStage().run(context());
     expect(first.counts).toMatchObject({ merges: 1 });
 
-    const key = entityMergeLedgerKey('strong', ['weak']);
+    const key = entityMergeLedgerKey(ENTITY_CASCADE_VERSION, 'strong', ['weak']);
     expect(getLedgerEntry(store.db, key)).toBeDefined();
 
     const supersedesAfterFirst = graph.edgesOfType(SUPERSEDES_TYPE).length;
@@ -725,7 +728,7 @@ describe('idempotency', () => {
       merged_type: 'project',
       merged_aliases: ['aion-project'],
       merged_at: NOW.toISOString(),
-      ledger_key: entityMergeLedgerKey('strong', ['weak']),
+      ledger_key: entityMergeLedgerKey(ENTITY_CASCADE_VERSION, 'strong', ['weak']),
       decision_key: listEntityMergeDecisions(store.db)[0]?.idempotencyKey,
     });
     // Every edge the absorbed node carried, with the count that has since been summed into the

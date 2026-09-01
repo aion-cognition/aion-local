@@ -24,6 +24,7 @@ import {
 } from '../../../infrastructure/sqlite/reflection-queue.js';
 import { INTEGRATE_JOB_TYPE } from '../../../reflection/application/intake.js';
 import { orchestratorLedgerKey } from '../../../reflection/application/orchestrator.js';
+import { PIPELINE_VERSION } from '../../../reflection/domain/version.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
 
@@ -104,7 +105,9 @@ describe('reconcile_reenqueue', () => {
       properties: { text: 'already enriched' },
       now: NOW,
     });
-    markLedgerApplied(db, orchestratorLedgerKey('reconcile-enriched'), { done: true });
+    markLedgerApplied(db, orchestratorLedgerKey(PIPELINE_VERSION, 'reconcile-enriched'), {
+      done: true,
+    });
 
     await writeStampedNode(harness.driver, {
       label: 'Episode',

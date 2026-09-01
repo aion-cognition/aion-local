@@ -7,7 +7,7 @@ import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 
 /**
  * The contract every reflection stage implements, and the pure aggregation the orchestrator
- * records against `reflection:orchestrator:{episodeId}`. This file governs how a stage
+ * records against `reflection:orchestrator:{version}:{episodeId}`. This file governs how a stage
  * reports, not what any stage does.
  *
  * A stage takes its inputs from the graph, keyed on the episode, not from the stage before
@@ -44,8 +44,19 @@ export type StageContext = {
   readonly episodeId: string;
   readonly episode: EpisodeContext;
   readonly logger: Logger;
-  /** The run's clock. Every write a stage stamps uses it, so one run has one timestamp. */
+  /**
+   * The run's clock: transaction stamps, lock expiries, and any decision about elapsed time.
+   * One run has one value, so a replay of an old episode still ages its locks against the
+   * moment the replay happens.
+   */
   readonly now: Date;
+  /**
+   * When the episode happened, which is what a derived node's world time is stamped from. It
+   * falls back to `now` for an episode carrying no timestamp of its own.
+   */
+  readonly occurredAt: Date;
+  /** The pipeline version this run's ledger keys are forked under. */
+  readonly pipelineVersion: string;
 };
 
 /**
@@ -79,13 +90,20 @@ export type ReflectionSummary = {
  * with no ledger of its own (`cognitive`, historically) re-runs its full extraction on every
  * retry of the run it belongs to, and each pass MERGEs a fresh set of near-duplicate nodes
  * because its only idempotency is a content hash over LLM output that never collides twice.
- * `reflection:stage:{stageName}:{episodeId}` closes that gap one level down: the orchestrator
- * marks it the moment a stage finishes without failing and skips the stage entirely, without
- * calling `run`, when the key is already there. A retry therefore re-enters only the stages
- * that have not yet applied.
+ * `reflection:stage:{version}:{stageName}:{episodeId}` closes that gap one level down: the
+ * orchestrator marks it the moment a stage finishes without failing and skips the stage
+ * entirely, without calling `run`, when the key is already there. A retry therefore re-enters
+ * only the stages that have not yet applied.
+ *
+ * The version sits ahead of the stage name so a pipeline bump re-enters every stage: the key a
+ * stage earned under the old prompts gates only the old version's run.
  */
-export function stageLedgerKey(stageName: string, episodeId: string): string {
-  return `reflection:stage:${stageName}:${episodeId}`;
+export function stageLedgerKey(
+  pipelineVersion: string,
+  stageName: string,
+  episodeId: string,
+): string {
+  return `reflection:stage:${pipelineVersion}:${stageName}:${episodeId}`;
 }
 
 /** The `summary` a skipped-by-ledger stage records, distinct from a stage's own business-logic skip. */

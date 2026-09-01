@@ -24,6 +24,7 @@ import type { Provider, Vector } from '../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { coverageKey, narrativeNodeId } from '../domain/narrative.js';
 import type { StageContext } from '../domain/stage.js';
+import { PIPELINE_VERSION } from '../domain/version.js';
 import { NarrativeFakeGraph } from '../test-support/narrative-graph.fixture.js';
 
 const SESSION_ID = 'mcp-transport-session-1';
@@ -92,6 +93,8 @@ function stageContext(now: Date): StageContext {
     episode,
     logger,
     now,
+    occurredAt: episode.occurredAt ?? now,
+    pipelineVersion: PIPELINE_VERSION,
   };
 }
 

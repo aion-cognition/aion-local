@@ -27,6 +27,7 @@ import type { Provider } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { SessionManager } from '../../../session/session-manager.js';
 import type { StageContext } from '../../domain/stage.js';
+import { PIPELINE_VERSION } from '../../domain/version.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../intake.js';
 import { LaneAssigner } from '../lanes.js';
 
@@ -116,6 +117,8 @@ describe('CognitiveExtractionStage against a live graph and a live model', () =>
       episode: episode!,
       logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
       now: new Date(),
+      occurredAt: new Date(),
+      pipelineVersion: PIPELINE_VERSION,
     };
 
     const stage = new CognitiveExtractionStage({ model: DEFAULTS.models.reflect });
@@ -198,6 +201,8 @@ describe('CognitiveExtractionStage against a live graph and a live model', () =>
       episode,
       logger: intake.logger,
       now: new Date(),
+      occurredAt: new Date(),
+      pipelineVersion: PIPELINE_VERSION,
     };
 
     const outcome = await new CognitiveExtractionStage({ model: DEFAULTS.models.reflect }).run(ctx);

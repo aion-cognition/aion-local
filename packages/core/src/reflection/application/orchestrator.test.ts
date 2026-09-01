@@ -21,6 +21,7 @@ import type {
   StageOutcome,
 } from '../domain/stage.js';
 import { stageLedgerKey } from '../domain/stage.js';
+import { PIPELINE_VERSION } from '../domain/version.js';
 import { FakeGraph } from '../test-support/fake-graph.fixture.js';
 
 const EPISODE_ID = 'episode-1';
@@ -90,7 +91,7 @@ function poisoned(name: string, message: string): ReflectionStage {
 }
 
 function ledgerSummary(): ReflectionSummary | undefined {
-  return getLedgerEntry(store.db, orchestratorLedgerKey(EPISODE_ID))?.summary as
+  return getLedgerEntry(store.db, orchestratorLedgerKey(PIPELINE_VERSION, EPISODE_ID))?.summary as
     ReflectionSummary | undefined;
 }
 
@@ -155,7 +156,9 @@ describe('ReflectionOrchestrator', () => {
 
     const run = await orchestrator.run(EPISODE_ID, { now: NOW });
 
-    expect(orchestratorLedgerKey(EPISODE_ID)).toBe(`reflection:orchestrator:${EPISODE_ID}`);
+    expect(orchestratorLedgerKey(PIPELINE_VERSION, EPISODE_ID)).toBe(
+      `reflection:orchestrator:${PIPELINE_VERSION}:${EPISODE_ID}`,
+    );
     expect(ledgerSummary()).toEqual(run.summary);
   });
 
@@ -204,6 +207,79 @@ describe('ReflectionOrchestrator', () => {
     expect(ledgerSummary()).toEqual(first.summary);
   });
 
+  it('re-enters an episode a later pipeline version has not enriched, stage by stage', async () => {
+    const stages = [
+      stage('entities', { status: 'ok', summary: 'extracted 2 entities', counts: { entities: 2 } }),
+      stage('cognitive', { status: 'ok', summary: 'extracted 1 decision' }),
+    ];
+
+    const first = await new ReflectionOrchestrator(deps, stages).run(EPISODE_ID, { now: NOW });
+    const bumped = await new ReflectionOrchestrator(deps, stages).run(EPISODE_ID, {
+      now: NOW,
+      pipelineVersion: 'v2',
+    });
+
+    expect(first.applied).toBe(true);
+    expect(bumped.status).toBe('completed');
+    expect(bumped.applied).toBe(true);
+    expect(bumped.summary.skippedStages).toEqual([]);
+    expect(entered).toEqual(['entities', 'cognitive', 'entities', 'cognitive']);
+
+    // Both forks stand: what the old version enriched is still recorded as enriched under it.
+    for (const version of [PIPELINE_VERSION, 'v2']) {
+      expect(isLedgerApplied(store.db, orchestratorLedgerKey(version, EPISODE_ID))).toBe(true);
+      expect(isLedgerApplied(store.db, stageLedgerKey(version, 'entities', EPISODE_ID))).toBe(true);
+      expect(isLedgerApplied(store.db, stageLedgerKey(version, 'cognitive', EPISODE_ID))).toBe(
+        true,
+      );
+    }
+  });
+
+  it('stamps the context with the version the run was asked for', async () => {
+    const orchestrator = new ReflectionOrchestrator(deps, [
+      stage('entities', { status: 'ok', summary: 'ok' }),
+    ]);
+
+    await orchestrator.run(EPISODE_ID, { now: NOW, pipelineVersion: 'v7' });
+
+    expect(contexts[0]?.pipelineVersion).toBe('v7');
+  });
+
+  it('defaults the context to the shipped pipeline version', async () => {
+    const orchestrator = new ReflectionOrchestrator(deps, [
+      stage('entities', { status: 'ok', summary: 'ok' }),
+    ]);
+
+    await orchestrator.run(EPISODE_ID, { now: NOW });
+
+    expect(contexts[0]?.pipelineVersion).toBe(PIPELINE_VERSION);
+  });
+
+  it("stamps the context's world time from the episode, not from the run's clock", async () => {
+    const orchestrator = new ReflectionOrchestrator(deps, [
+      stage('entities', { status: 'ok', summary: 'ok' }),
+    ]);
+
+    await orchestrator.run(EPISODE_ID, { now: NOW });
+
+    expect(contexts[0]?.occurredAt).toEqual(OCCURRED_AT);
+    expect(contexts[0]?.now).toBe(NOW);
+  });
+
+  it("falls back to the run's clock for an episode carrying no world time", async () => {
+    graph.seedNode(EPISODE_ID, ['Episode', 'Memory', 'AionNode'], {
+      [MEMORY_PROPERTIES.text]: 'user: ship the worker',
+      [MEMORY_PROPERTIES.sessionId]: SESSION_ID,
+    });
+    const orchestrator = new ReflectionOrchestrator(deps, [
+      stage('entities', { status: 'ok', summary: 'ok' }),
+    ]);
+
+    await orchestrator.run(EPISODE_ID, { now: NOW });
+
+    expect(contexts[0]?.occurredAt).toBe(NOW);
+  });
+
   it('isolates a stage that throws: the rest of the pipeline still runs', async () => {
     const orchestrator = new ReflectionOrchestrator(deps, [
       stage('entities', { status: 'ok', summary: 'extracted 2 entities', counts: { entities: 2 } }),
@@ -229,7 +305,9 @@ describe('ReflectionOrchestrator', () => {
     // Isolation is about the run, not the gate: the stages after the throw did their work,
     // and the episode stays retryable so the one that threw gets another attempt.
     expect(run.applied).toBe(false);
-    expect(isLedgerApplied(store.db, orchestratorLedgerKey(EPISODE_ID))).toBe(false);
+    expect(isLedgerApplied(store.db, orchestratorLedgerKey(PIPELINE_VERSION, EPISODE_ID))).toBe(
+      false,
+    );
   });
 
   it('records a stage that reports failure without throwing, and keeps its explanation', async () => {
@@ -256,10 +334,16 @@ describe('ReflectionOrchestrator', () => {
     expect(run.status).toBe('completed');
     expect(run.applied).toBe(false);
     expect(run.summary.stages.map((entry) => entry.status)).toEqual(['failed', 'failed']);
-    expect(isLedgerApplied(store.db, orchestratorLedgerKey(EPISODE_ID))).toBe(false);
+    expect(isLedgerApplied(store.db, orchestratorLedgerKey(PIPELINE_VERSION, EPISODE_ID))).toBe(
+      false,
+    );
     // The all-failed rule holds at both levels: neither stage's own key is set either.
-    expect(isLedgerApplied(store.db, stageLedgerKey('entities', EPISODE_ID))).toBe(false);
-    expect(isLedgerApplied(store.db, stageLedgerKey('cognitive', EPISODE_ID))).toBe(false);
+    expect(
+      isLedgerApplied(store.db, stageLedgerKey(PIPELINE_VERSION, 'entities', EPISODE_ID)),
+    ).toBe(false);
+    expect(
+      isLedgerApplied(store.db, stageLedgerKey(PIPELINE_VERSION, 'cognitive', EPISODE_ID)),
+    ).toBe(false);
   });
 
   it('re-enters only the stages that have not yet applied across three retries, and never twice a stage that has', async () => {
@@ -312,12 +396,21 @@ describe('ReflectionOrchestrator', () => {
     expect(third.summary.skippedStages).toEqual(['entities', 'narrative']);
     expect(third.summary.counts).toEqual({ cognitive: 4 });
 
-    expect(isLedgerApplied(store.db, stageLedgerKey('entities', EPISODE_ID))).toBe(true);
-    expect(isLedgerApplied(store.db, stageLedgerKey('narrative', EPISODE_ID))).toBe(true);
-    expect(isLedgerApplied(store.db, stageLedgerKey('semantic-relationships', EPISODE_ID))).toBe(
+    expect(
+      isLedgerApplied(store.db, stageLedgerKey(PIPELINE_VERSION, 'entities', EPISODE_ID)),
+    ).toBe(true);
+    expect(
+      isLedgerApplied(store.db, stageLedgerKey(PIPELINE_VERSION, 'narrative', EPISODE_ID)),
+    ).toBe(true);
+    expect(
+      isLedgerApplied(
+        store.db,
+        stageLedgerKey(PIPELINE_VERSION, 'semantic-relationships', EPISODE_ID),
+      ),
+    ).toBe(true);
+    expect(isLedgerApplied(store.db, orchestratorLedgerKey(PIPELINE_VERSION, EPISODE_ID))).toBe(
       true,
     );
-    expect(isLedgerApplied(store.db, orchestratorLedgerKey(EPISODE_ID))).toBe(true);
   });
 
   it('gives a transiently failed stage another attempt: the second run skips the stage that already applied', async () => {
@@ -346,8 +439,12 @@ describe('ReflectionOrchestrator', () => {
     expect(second.summary.counts).toEqual({ entities: 2 });
     expect(second.summary.skippedStages).toEqual(['cognitive']);
     expect(entered).toEqual(['entities', 'cognitive', 'entities']);
-    expect(isLedgerApplied(store.db, orchestratorLedgerKey(EPISODE_ID))).toBe(true);
-    expect(isLedgerApplied(store.db, stageLedgerKey('cognitive', EPISODE_ID))).toBe(true);
+    expect(isLedgerApplied(store.db, orchestratorLedgerKey(PIPELINE_VERSION, EPISODE_ID))).toBe(
+      true,
+    );
+    expect(
+      isLedgerApplied(store.db, stageLedgerKey(PIPELINE_VERSION, 'cognitive', EPISODE_ID)),
+    ).toBe(true);
   });
 
   it('leaves the ledger unmarked when no stages are registered', async () => {
@@ -355,7 +452,9 @@ describe('ReflectionOrchestrator', () => {
 
     expect(run.status).toBe('completed');
     expect(run.applied).toBe(false);
-    expect(isLedgerApplied(store.db, orchestratorLedgerKey(EPISODE_ID))).toBe(false);
+    expect(isLedgerApplied(store.db, orchestratorLedgerKey(PIPELINE_VERSION, EPISODE_ID))).toBe(
+      false,
+    );
   });
 
   it('runs no stage and marks nothing when the episode is not readable', async () => {
@@ -368,9 +467,12 @@ describe('ReflectionOrchestrator', () => {
     expect(run.status).toBe('episode_unavailable');
     expect(run.applied).toBe(false);
     expect(entered).toEqual([]);
-    expect(isLedgerApplied(store.db, orchestratorLedgerKey('episode-that-never-existed'))).toBe(
-      false,
-    );
+    expect(
+      isLedgerApplied(
+        store.db,
+        orchestratorLedgerKey(PIPELINE_VERSION, 'episode-that-never-existed'),
+      ),
+    ).toBe(false);
   });
 
   it('treats a forgotten episode as unreadable', async () => {
@@ -402,7 +504,9 @@ describe('ReflectionOrchestrator', () => {
 
     await expect(orchestrator.run(EPISODE_ID, { now: NOW })).rejects.toThrow('ServiceUnavailable');
     expect(entered).toEqual([]);
-    expect(isLedgerApplied(store.db, orchestratorLedgerKey(EPISODE_ID))).toBe(false);
+    expect(isLedgerApplied(store.db, orchestratorLedgerKey(PIPELINE_VERSION, EPISODE_ID))).toBe(
+      false,
+    );
   });
 
   it('does not see a later change to the stage list it was constructed with', async () => {

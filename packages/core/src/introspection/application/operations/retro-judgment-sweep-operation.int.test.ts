@@ -31,6 +31,7 @@ import {
 import { LaneAssigner } from '../../../reflection/application/lanes.js';
 import { SUPERSESSION_STAGE_NAME } from '../../../reflection/application/stages/supersession.js';
 import { stageLedgerKey } from '../../../reflection/domain/stage.js';
+import { PIPELINE_VERSION } from '../../../reflection/domain/version.js';
 import { SessionManager } from '../../../session/session-manager.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
@@ -174,10 +175,15 @@ function contextFor(provider: Provider = refusingProvider): OperationContext {
 
 describe('retroJudgmentSweepOperation against a live graph', () => {
   it('never faced the supersession stage before the sweep runs', () => {
-    expect(isLedgerApplied(db, stageLedgerKey(SUPERSESSION_STAGE_NAME, priorEpisodeId))).toBe(
-      false,
-    );
-    expect(isLedgerApplied(db, stageLedgerKey(SUPERSESSION_STAGE_NAME, nextEpisodeId))).toBe(false);
+    expect(
+      isLedgerApplied(
+        db,
+        stageLedgerKey(PIPELINE_VERSION, SUPERSESSION_STAGE_NAME, priorEpisodeId),
+      ),
+    ).toBe(false);
+    expect(
+      isLedgerApplied(db, stageLedgerKey(PIPELINE_VERSION, SUPERSESSION_STAGE_NAME, nextEpisodeId)),
+    ).toBe(false);
   });
 
   it('proposes rather than closing, and marks both episodes swept', async () => {
@@ -199,8 +205,15 @@ describe('retroJudgmentSweepOperation against a live graph', () => {
     const priorFactProps = await nodeProperties(harness.driver, priorFactId);
     expect(priorFactProps[BITEMPORAL_PROPERTIES.validUntil]).toBeUndefined();
 
-    expect(isLedgerApplied(db, stageLedgerKey(SUPERSESSION_STAGE_NAME, priorEpisodeId))).toBe(true);
-    expect(isLedgerApplied(db, stageLedgerKey(SUPERSESSION_STAGE_NAME, nextEpisodeId))).toBe(true);
+    expect(
+      isLedgerApplied(
+        db,
+        stageLedgerKey(PIPELINE_VERSION, SUPERSESSION_STAGE_NAME, priorEpisodeId),
+      ),
+    ).toBe(true);
+    expect(
+      isLedgerApplied(db, stageLedgerKey(PIPELINE_VERSION, SUPERSESSION_STAGE_NAME, nextEpisodeId)),
+    ).toBe(true);
   }, 180_000);
 
   it('converges: a second run finds nothing left in the backlog', async () => {

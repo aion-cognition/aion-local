@@ -21,6 +21,7 @@ import { openLogger, type Logger } from '../../../infrastructure/logging/logger.
 import type { Provider } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import type { StageContext } from '../../domain/stage.js';
+import { PIPELINE_VERSION } from '../../domain/version.js';
 
 /**
  * A small hand-built neighborhood rather than a full LLM enrichment: this stage is pure
@@ -174,6 +175,8 @@ function buildContext(): StageContext {
     },
     logger,
     now: NOW,
+    occurredAt: NOW,
+    pipelineVersion: PIPELINE_VERSION,
   };
 }
 

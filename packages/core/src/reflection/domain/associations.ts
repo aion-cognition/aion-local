@@ -39,7 +39,10 @@ export function coOccurringPairs(entityIds: readonly string[]): readonly EntityP
  * up is the interrupted run: a crash partway through the pair loop replays the pairs already
  * written and counts them a second time, which is the same re-observation semantics
  * `MENTIONS` already carries by design and is bounded by the worker's attempt limit.
+ *
+ * The pipeline version forks the key, so a run under new extraction rules pairs the episode's
+ * entities again rather than reading the old version's mark as its own.
  */
-export function coOccursLedgerKey(episodeId: string): string {
-  return `association.co_occurs:${episodeId}`;
+export function coOccursLedgerKey(pipelineVersion: string, episodeId: string): string {
+  return `association.co_occurs:${pipelineVersion}:${episodeId}`;
 }

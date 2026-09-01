@@ -122,7 +122,15 @@ describe('summarizeRun', () => {
 
 describe('stageLedgerKey', () => {
   it('follows the pinned per-stage format', () => {
-    expect(stageLedgerKey('cognitive', 'episode-1')).toBe('reflection:stage:cognitive:episode-1');
+    expect(stageLedgerKey('v1', 'cognitive', 'episode-1')).toBe(
+      'reflection:stage:v1:cognitive:episode-1',
+    );
+  });
+
+  it('gives one stage of one episode a key per pipeline version', () => {
+    expect(stageLedgerKey('v2', 'cognitive', 'episode-1')).not.toBe(
+      stageLedgerKey('v1', 'cognitive', 'episode-1'),
+    );
   });
 });
 

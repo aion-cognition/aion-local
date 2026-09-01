@@ -19,6 +19,7 @@ import type { Provider, Vector } from '../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { isLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import { orchestratorLedgerKey } from '../../reflection/application/orchestrator.js';
+import { PIPELINE_VERSION } from '../../reflection/domain/version.js';
 import type { Measurement } from '../domain/admission.js';
 import { scoreArrivals } from '../domain/arrival-scoring.js';
 import type { FusedItem, RankedList } from '../domain/fusion.js';
@@ -210,7 +211,7 @@ export async function pendingEnrichment(
     const episodeIds = await listSessionEpisodeIds(deps.driver, sessionId, mode);
     let count = 0;
     for (const episodeId of episodeIds) {
-      if (!isLedgerApplied(deps.db, orchestratorLedgerKey(episodeId))) {
+      if (!isLedgerApplied(deps.db, orchestratorLedgerKey(PIPELINE_VERSION, episodeId))) {
         count += 1;
       }
     }
