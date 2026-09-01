@@ -17,7 +17,7 @@
     "typecheck:all": "tsc -p tsconfig.tests.json",
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
-    "test:integration": "vitest run --project integration",
+    "test:integration": "vitest run --project integration --project integration-ollama",
     "test:watch": "vitest --project unit",
     "quality:extraction": "tsc -b packages/core && node packages/core/dist/reflection/test-support/quality-harness/run.js",
     "cleanup:narratives": "tsc -b packages/core && node packages/core/dist/reflection/application/narrative-cleanup-run.js",

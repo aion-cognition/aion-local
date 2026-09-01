@@ -133,8 +133,8 @@ npm run build            # tsc -b
 npm run typecheck:all    # tsc -p tsconfig.tests.json: tests and fixtures included
 npm run lint             # eslint . (departures documented in eslint/README.md)
 npm run format:check     # prettier --check .
-npm test                 # both vitest projects (or unit + chunked integration; the full
-                         #   run exceeds a 10-minute window on this machine)
+npm test                 # all vitest projects; the full integration run takes about eight
+                         #   minutes on this machine now that files run three abreast
 ```
 
 Plus the re-exercise batteries below, and `./bin/aion doctor` green against the live stack.
@@ -159,7 +159,7 @@ reminder.
 
 `packages/mcp/src/gate/` holds the seven scripted batteries the fix round is gated on, each
 one a finding from the first full-system exercise round re-run against the shipped pipeline
-(`bootstrap.ts`'s own stage list, live Ollama, the run's throwaway Neo4j cleared for each
+(`bootstrap.ts`'s own stage list, live Ollama, a pooled throwaway Neo4j cleared for each
 file).
 
 ```
@@ -182,20 +182,30 @@ are shared with the workstream that owns each area (`floors.fixtures.ts`,
 ## Live-stack cautions
 
 - Never point tests at the live `aion` compose project (the `neo4j` / `aion-mcp` /
-  `aion-cli` services `./bin/aion` drives). The integration project starts one throwaway
-  Neo4j with a bare `docker run` and removes it when the run ends
-  (`infrastructure/graph/test-support/neo4j-global-setup.fixture.ts`); that container is
+  `aion-cli` services `./bin/aion` drives). The integration project starts a pool of
+  throwaway Neo4j containers with bare `docker run`s and removes them when the run ends
+  (`infrastructure/graph/test-support/neo4j-global-setup.fixture.ts`); those containers are
   the only Neo4j integration tests may touch. Every container it starts is named
-  `aion-test-neo4j-<uuid>`, so a run killed outright leaves one that is easy to find.
-- `startNeo4jHarness()` leases that container: it connects, clears the database, and hands
-  back the same shape a file used to get from a container of its own. Clearing drops the
-  schema as well as the data, because files declare their own vector dimension and do not
-  agree on one. Run a file outside the integration project and no address is published, so
-  the harness starts a container of its own instead. `startDedicatedNeo4jHarness()` asks for
-  that container outright; the harness lifecycle test is the one caller that needs it, since
-  it asserts on the removal the lease never performs.
-- The integration project runs with `fileParallelism: false` on purpose: files lease one
-  container one at a time, and two files at once would clear each other's graph mid-test.
+  `aion-test-neo4j-<uuid>`, so a run killed outright leaves some that are easy to find.
+- Files run in parallel, as many abreast as the pool holds (default 3, sized to the Docker
+  VM's memory beside the live stack; override with `TEST_NEO4J_POOL_SIZE`).
+  `startNeo4jHarness()` claims a free pool container through an exclusive lease
+  (`neo4j-lease.fixture.ts`), clears it, and releases it when the file ends, so concurrent
+  files each hold a database of their own. Clearing drops the schema as well as the data,
+  because files declare their own vector dimension and do not agree on one. Run a file
+  outside the integration project and no pool is published, so the harness starts a
+  container of its own instead. `startDedicatedNeo4jHarness()` asks for that container
+  outright; the harness lifecycle test is the one caller that needs it, since it asserts on
+  the removal the lease never performs.
+- For fast single-file iteration, keep a warm container across runs:
+  `eval "$(node scripts/test-neo4j.mjs start)"`. With `TEST_SHARED_NEO4J_URI` exported the
+  runner boots no pool, drops to serial, and every file leases the warm container directly,
+  so a run starts in seconds. `node scripts/test-neo4j.mjs stop` removes it.
+- `model-reconciliation` and `routing-key-flip` live in the `integration-ollama` project,
+  which runs serially after the integration group finishes. They assert on the Ollama
+  daemon's resident-model list, which the whole machine shares: a concurrent file generating
+  against the same model would reload it mid-eviction and fail the poll. `npm run
+  test:integration` runs both projects; a bare `--project integration` filter skips them.
 
 ## Test generation routing
 

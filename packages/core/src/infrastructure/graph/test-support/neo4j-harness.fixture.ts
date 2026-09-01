@@ -6,11 +6,18 @@ import {
   startNeo4jContainer,
   type Neo4jTestContainer,
 } from './neo4j-container.fixture.js';
+import {
+  claimPooledNeo4j,
+  publishedPool,
+  releaseNeo4jLease,
+  type Neo4jLease,
+} from './neo4j-lease.fixture.js';
 
 /**
- * Published by the integration project's global setup, which starts one container for the
- * whole run. All three are absent when a file runs outside that runner, and the harness
- * falls back to a container of its own so single-file debugging keeps working.
+ * A warm container a developer keeps running across iterations (scripts/test-neo4j.mjs
+ * maintains one). When these are set the global setup boots no pool, vitest.config.ts drops
+ * to serial so two files cannot wipe the one database out from under each other, and every
+ * file leases this container directly. All three are absent in a normal run.
  */
 export const SHARED_NEO4J_URI_ENV = 'TEST_SHARED_NEO4J_URI';
 export const SHARED_NEO4J_PASSWORD_ENV = 'TEST_SHARED_NEO4J_PASSWORD';
@@ -30,6 +37,8 @@ export type Neo4jHarness = {
   password: string;
   /** True when the container outlives this file and teardown only closes the driver. */
   shared: boolean;
+  /** Held while this file owns a pool container; teardown releases it for the next file. */
+  lease?: Neo4jLease;
 };
 
 function sharedContainer(): Neo4jTestContainer | undefined {
@@ -84,38 +93,63 @@ async function resetDatabase(driver: Driver): Promise<void> {
 }
 
 /**
- * The lease a test file takes on the run's Neo4j: connect, clear whatever the previous file
- * left, and hand back the same shape a file used to get from a container of its own. Only one
- * file may hold the lease at a time, which is what `fileParallelism: false` guarantees.
+ * The database a test file runs against: claim a container the run's pool has free, clear
+ * whatever the previous holder left, and hand back the same shape a file used to get from a
+ * container of its own. The claim is exclusive, so files running in parallel each hold a
+ * database of their own and never see each other's writes.
  *
- * With no shared container published, this falls back to starting one. Detection, not a
- * requirement: `npx vitest run <one file>` outside the integration project still works.
+ * With no pool published this leases the developer's warm container instead (the config runs
+ * serial in that mode, so exclusivity holds there too), and with neither it falls back to
+ * starting a container outright. Detection, not a requirement: `npx vitest run <one file>`
+ * outside the integration project still works.
  */
 export async function startNeo4jHarness(): Promise<Neo4jHarness> {
+  const published = publishedPool();
+  if (published !== undefined) {
+    const lease = await claimPooledNeo4j(published.pool, published.leaseDir);
+    try {
+      return {
+        ...(await leaseContainer(lease.container, 'this file holds the only lease on it')),
+        lease,
+      };
+    } catch (err) {
+      await releaseNeo4jLease(lease);
+      throw err;
+    }
+  }
+
   const shared = sharedContainer();
   if (shared === undefined) {
     return startDedicatedNeo4jHarness();
   }
+  return leaseContainer(shared, 'it outlives every run until scripts/test-neo4j.mjs stops it');
+}
 
-  const driver = neo4j.driver(shared.uri, neo4j.auth.basic(NEO4J_DEFAULT_USER, shared.password), {
-    connectionTimeout: SHARED_CONNECT_TIMEOUT_MS,
-  });
+async function leaseContainer(
+  container: Neo4jTestContainer,
+  lifetime: string,
+): Promise<Neo4jHarness> {
+  const driver = neo4j.driver(
+    container.uri,
+    neo4j.auth.basic(NEO4J_DEFAULT_USER, container.password),
+    { connectionTimeout: SHARED_CONNECT_TIMEOUT_MS },
+  );
   try {
     await driver.verifyConnectivity();
     await resetDatabase(driver);
   } catch (err) {
     await driver.close();
     throw new Error(
-      `the run's shared Neo4j (${shared.containerName}, ${shared.uri}) did not answer. It starts once per run, so every remaining file fails the same way until the run starts over.`,
+      `the leased Neo4j (${container.containerName}, ${container.uri}) did not answer, and ${lifetime}.`,
       { cause: err },
     );
   }
 
   return {
     driver,
-    uri: shared.uri,
-    containerName: shared.containerName,
-    password: shared.password,
+    uri: container.uri,
+    containerName: container.containerName,
+    password: container.password,
     shared: true,
   };
 }
@@ -141,8 +175,9 @@ export async function startDedicatedNeo4jHarness(): Promise<Neo4jHarness> {
 }
 
 /**
- * Closes the driver, then force-removes the container and its anonymous volumes if this file
- * started it. The shared container is left running for the file that comes next.
+ * Closes the driver, releases the pool lease if this file held one, and force-removes the
+ * container and its anonymous volumes if this file started it. A pooled or warm container is
+ * left running for the file that comes next.
  *
  * Undefined is a normal argument: `afterAll` still runs when `beforeAll` threw, and a teardown
  * that throws on the missing harness reports a second failure that buries the first one.
@@ -152,6 +187,9 @@ export async function stopNeo4jHarness(harness: Neo4jHarness | undefined): Promi
     return;
   }
   await harness.driver.close();
+  if (harness.lease !== undefined) {
+    await releaseNeo4jLease(harness.lease);
+  }
   if (harness.shared) {
     return;
   }
