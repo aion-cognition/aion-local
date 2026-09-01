@@ -66,6 +66,8 @@ export type EntityMergeWriteResult =
       readonly mergedIds: readonly string[];
       readonly decisionId: string;
       readonly edgesRedirected: number;
+      /** True when the post-commit vector cleanup was swallowed rather than run. */
+      readonly vectorCleanupDeferred: boolean;
     }
   | { readonly status: 'skipped'; readonly reason: 'already_applied' | 'nothing_to_merge' };
 
@@ -97,10 +99,14 @@ export async function collectMergeSignals(
     return {
       memberId: member.id,
       ...(cosine === undefined ? {} : { nominatingCosine: cosine }),
-      sharedEpisodeCount: pair?.sharedEpisodeCount ?? 0,
-      sharedEpisodeJaccard: pair?.sharedEpisodeJaccard ?? 0,
-      neighborOverlapCount: pair?.neighborOverlapCount ?? 0,
-      neighborOverlapJaccard: pair?.neighborOverlapJaccard ?? 0,
+      ...(pair === undefined
+        ? {}
+        : {
+            sharedEpisodeCount: pair.sharedEpisodeCount,
+            sharedEpisodeJaccard: pair.sharedEpisodeJaccard,
+            neighborOverlapCount: pair.neighborOverlapCount,
+            neighborOverlapJaccard: pair.neighborOverlapJaccard,
+          }),
       ...(pair?.temporalGapDays === undefined ? {} : { temporalGapDays: pair.temporalGapDays }),
       nameFormRelation: nameFormRelation(canonical.name, member.name),
       canonicalMentionCount: canonical.mentionCount,
@@ -158,9 +164,11 @@ export async function applyEntityMerge(
   });
 
   // Index cleanup runs post-commit with best-effort semantics and never fails the merge.
+  let vectorCleanupDeferred = false;
   try {
     await clearEntityVectors(deps.driver, mergedIds);
   } catch (err) {
+    vectorCleanupDeferred = true;
     deps.logger.warn(
       { err, canonicalId: input.canonical.id, mergedIds },
       'entity merge vector cleanup deferred',
@@ -179,5 +187,6 @@ export async function applyEntityMerge(
     mergedIds,
     decisionId,
     edgesRedirected: merged.edgesRedirected,
+    vectorCleanupDeferred,
   };
 }
