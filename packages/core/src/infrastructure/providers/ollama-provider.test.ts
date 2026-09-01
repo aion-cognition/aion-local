@@ -60,7 +60,7 @@ describe('OllamaProvider.embed', () => {
     const longText = 'a'.repeat(9000);
     const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => {
       const sent = JSON.parse(init?.body as string).input as string[];
-      expect((sent[0] ?? '').length).toBeLessThanOrEqual(2000);
+      expect((sent[0] ?? '').length).toBe(2046);
       expect(sent[1]).toBe('short');
       return jsonResponse({ embeddings: [[1], [2]] });
     });
@@ -71,6 +71,40 @@ describe('OllamaProvider.embed', () => {
     });
 
     await provider.embed([longText, 'short']);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it('caps against the configured model, so a wider window is not spent at the narrow budget', async () => {
+    const longText = 'a'.repeat(9000);
+    const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      const sent = JSON.parse(init?.body as string).input as string[];
+      expect((sent[0] ?? '').length).toBe(8190);
+      return jsonResponse({ embeddings: [[1]] });
+    });
+    const provider = new OllamaProvider({
+      baseUrl: 'http://localhost:11434',
+      embedModel: 'snowflake-arctic-embed2',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    await provider.embed([longText]);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it('holds a model outside the table to the narrow budget', async () => {
+    const longText = 'a'.repeat(9000);
+    const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      const sent = JSON.parse(init?.body as string).input as string[];
+      expect((sent[0] ?? '').length).toBe(2046);
+      return jsonResponse({ embeddings: [[1]] });
+    });
+    const provider = new OllamaProvider({
+      baseUrl: 'http://localhost:11434',
+      embedModel: 'some-model-nobody-measured',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    await provider.embed([longText]);
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 

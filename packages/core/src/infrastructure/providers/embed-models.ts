@@ -1,0 +1,55 @@
+/**
+ * What each embed model can take, and how it wants a query spelled. One row per model, so a
+ * model swap is a knob plus a row rather than a hunt through call sites.
+ *
+ * Ollama rejects an over-length embed input with a 400 and does not truncate it; `truncate:
+ * true` does not save it, and one rejected input fails its whole batch. The cap therefore has
+ * to hold for every input rather than on average, which is why it is derived from the window
+ * instead of guessed from average token density.
+ *
+ * The derivation: a subword token spans at least one character, and the encoder spends two
+ * positions of the window on its own start and end tokens. Measured against Ollama 0.24.0,
+ * nomic-embed-text takes 2046 single-token characters and rejects 2047.
+ *
+ * The cap is a guarantee for text that costs at most one token per character, which covers the
+ * Latin text this pipeline embeds. A multilingual tokenizer can spend more than one token on
+ * one character: snowflake-arctic-embed2 filled its 8192-token window with 4566 Devanagari
+ * characters. Dense non-Latin content can still draw the 400, and sizing content where it is
+ * generated is what closes that, not a smaller cap here.
+ */
+export type EmbedModelProfile = {
+  /** The model's context window, in tokens. */
+  readonly contextTokens: number;
+  /**
+   * Prepended to a recall query and to nothing else. A model trained on asymmetric retrieval
+   * saw queries marked and documents bare, so a stored vector, a name vector, and every
+   * symmetric comparison stay raw: prefixing both sides compresses the gap the comparison
+   * reads. An empty prefix is the ordinary case.
+   */
+  readonly queryPrefix: string;
+};
+
+/** The encoder's start and end tokens, which no input text gets to use. */
+const SPECIAL_TOKENS = 2;
+
+const PROFILES: Readonly<Record<string, EmbedModelProfile>> = {
+  'nomic-embed-text': { contextTokens: 2048, queryPrefix: '' },
+  'snowflake-arctic-embed2': { contextTokens: 8192, queryPrefix: 'query: ' },
+};
+
+/** A model nobody measured gets the narrowest window in the table and no prefix. */
+const UNLISTED: EmbedModelProfile = { contextTokens: 2048, queryPrefix: '' };
+
+/** The name without the tag, since `model` and `model:latest` are one model to Ollama. */
+function profileFor(model: string): EmbedModelProfile {
+  const name = model.toLowerCase().split(':')[0] ?? '';
+  return PROFILES[name] ?? UNLISTED;
+}
+
+export function maxEmbedInputChars(model: string): number {
+  return profileFor(model).contextTokens - SPECIAL_TOKENS;
+}
+
+export function embedQueryPrefix(model: string): string {
+  return profileFor(model).queryPrefix;
+}

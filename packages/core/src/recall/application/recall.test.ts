@@ -160,7 +160,9 @@ describe('recall against an empty substrate', () => {
 
     expect(generate).toHaveBeenCalledTimes(1);
     expect(embed).toHaveBeenCalledTimes(1);
-    expect(embed).toHaveBeenCalledWith(['why webhooks', 'webhook ingestion']);
+    // Every cue reaches the embedder marked as a query, which is what the default model was
+    // trained to read; the cues recall carries and reports stay unmarked.
+    expect(embed).toHaveBeenCalledWith(['query: why webhooks', 'query: webhook ingestion']);
   });
 
   it('records a timing for every stage', async () => {
@@ -224,7 +226,7 @@ describe('degradation', () => {
     expect(pack.metadata.cues).toEqual([
       { text: 'why did we pick webhooks', source: 'raw_query', weight: 3 },
     ]);
-    expect(embed).toHaveBeenCalledWith(['why did we pick webhooks']);
+    expect(embed).toHaveBeenCalledWith(['query: why did we pick webhooks']);
   });
 
   it('still serves a pack when embedding is unavailable, and says the vector leg is gone', async () => {

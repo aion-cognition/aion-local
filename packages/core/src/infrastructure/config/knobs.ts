@@ -72,8 +72,15 @@ export const KNOBS = {
     url: ['AION_OLLAMA_URL', text, 'http://host.docker.internal:11434'],
   },
   models: {
-    embed: ['AION_EMBED_MODEL', text, 'nomic-embed-text'],
-    embedDimension: ['AION_EMBED_DIMENSION', positiveInt, 768],
+    // The embed model owns the vector space for the life of a substrate: stored vectors and the
+    // graph's vector indexes are both sized by it, so changing it is a reset rather than a
+    // restart, and an install holding vectors from another model pins both vars in .env until
+    // it resets. `snowflake-arctic-embed2` returns 1024 floats and takes 8192 tokens. It was
+    // picked against six other local models on name pairs drawn from a live proposal queue: it
+    // held the widest gap between duplicate and distinct names and carries the widest window,
+    // which is what raises the embed input cap.
+    embed: ['AION_EMBED_MODEL', text, 'snowflake-arctic-embed2'],
+    embedDimension: ['AION_EMBED_DIMENSION', positiveInt, 1024],
     cue: ['AION_CUE_MODEL', text, 'qwen3:1.7b'],
     reflect: ['AION_REFLECT_MODEL', text, 'qwen3:8b'],
   },
