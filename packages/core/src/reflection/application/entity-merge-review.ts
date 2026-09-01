@@ -23,11 +23,10 @@ import {
 } from '../domain/entity-merge.js';
 
 /**
- * The review half of entity-merge detection. Uniqueness on the graph is keyed on
- * `(name_norm, type)`, so a cross-type pair the dedup stage found is two permanently separate
- * identities: joining them means deciding which type the extraction got wrong, a judgment
- * about the world rather than about strings. That decision is a person's, which is why this
- * operator path is the only place these rows are applied.
+ * The review half of entity-merge detection. Identity on the graph is keyed on `name_norm`
+ * alone, so a pair the dedup stage declined is two different names: joining them means deciding
+ * they are one referent, a judgment about the world rather than about strings. That decision is
+ * a person's, which is why this operator path is the only place these rows are applied.
  *
  * Nothing in the pipeline calls any of this. It is reached from `aion proposals` and nowhere
  * else, matching the supersession review path next to it.
@@ -158,6 +157,7 @@ export async function applyEntityMergeProposal(
 
   const merged = await redirectAndAbsorb(driver, {
     canonicalId: canonical.id,
+    canonicalNameNorm: canonical.nameNorm,
     mergedIds,
     aliases: mergeAliases(canonical.name, pair),
     accessCount: mergeAccessCount(pair),

@@ -170,6 +170,7 @@ describe('applying an entity-merge proposal', () => {
     const otherCanonicalId = await seedEntity('Unrelated Canonical', 'tool');
     await redirectAndAbsorb(harness.driver, {
       canonicalId: otherCanonicalId,
+      canonicalNameNorm: 'unrelated canonical',
       mergedIds: [storeId],
       aliases: ['Harrow Store'],
       accessCount: 0,

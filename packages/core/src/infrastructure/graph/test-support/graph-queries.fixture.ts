@@ -5,8 +5,14 @@ import { ACCESS_COUNT_PROPERTY } from '../access-tracking.js';
 import { CO_OCCURS_TYPE, SIMILAR_TYPE } from '../association-queries.js';
 import { readFirst, runRead, runWrite } from '../connection.js';
 import { CONTEXT_VECTOR_PROPERTY } from '../context-vector-queries.js';
-import { ENTITY_ALIASES_PROPERTY } from '../entity-dedup-queries.js';
-import { ENTITY_MENTION_TYPE, ENTITY_PARTICIPATION_TYPE } from '../entity-queries.js';
+import {
+  ENTITY_ALIASES_NORM_PROPERTY,
+  ENTITY_ALIASES_PROPERTY,
+  ENTITY_MENTION_TYPE,
+  ENTITY_NAME_SQUASH_PROPERTY,
+  ENTITY_PARTICIPATION_TYPE,
+  ENTITY_TYPE_COUNTS_PROPERTY,
+} from '../entity-queries.js';
 import { BASE_NODE_LABEL } from '../labels.js';
 import { SUPERSEDES_TYPE } from '../relationships.js';
 import { LAST_ACCESSED_PROPERTY } from '../seed-queries.js';
@@ -194,6 +200,9 @@ export type StoredEntity = {
   readonly structural: boolean;
   readonly validUntil: Date | null;
   readonly aliases: readonly string[];
+  readonly aliasesNorm: readonly string[];
+  readonly nameSquash: string | null;
+  readonly typeCounts: string | null;
 };
 
 const STORED_ENTITY_PROJECTION = [
@@ -204,7 +213,10 @@ const STORED_ENTITY_PROJECTION = [
   '       coalesce(n.access_count, 0) AS access_count,',
   '       coalesce(n.is_structural, false) AS is_structural,',
   '       n.valid_until AS valid_until,',
-  `       coalesce(n.${ENTITY_ALIASES_PROPERTY}, []) AS aliases`,
+  `       coalesce(n.${ENTITY_ALIASES_PROPERTY}, []) AS aliases,`,
+  `       coalesce(n.${ENTITY_ALIASES_NORM_PROPERTY}, []) AS aliases_norm,`,
+  `       n.${ENTITY_NAME_SQUASH_PROPERTY} AS name_squash,`,
+  `       n.${ENTITY_TYPE_COUNTS_PROPERTY} AS type_counts`,
 ].join('\n');
 
 function mapStoredEntity(row: Row): StoredEntity {
@@ -221,6 +233,9 @@ function mapStoredEntity(row: Row): StoredEntity {
     structural: row.is_structural === true,
     validUntil: (row.valid_until ?? null) as Date | null,
     aliases: row.aliases as string[],
+    aliasesNorm: row.aliases_norm as string[],
+    nameSquash: (row.name_squash ?? null) as string | null,
+    typeCounts: (row.type_counts ?? null) as string | null,
   };
 }
 

@@ -129,17 +129,70 @@ describe('canonicalization', () => {
     expect(aion?.properties[MEMORY_PROPERTIES.contentVector]).toBeDefined();
   });
 
-  it('embeds the name alone and the stored text, which is what the two indexes are searched by', async () => {
+  it('embeds the folded name and the stored text, which is what the two indexes are searched by', async () => {
     const provider = fakeProvider({ generate: [EXTRACTION] });
     await new EntityExtractionStage().run(context(provider));
 
     expect(provider.embedCalls).toHaveLength(1);
     expect(provider.embedCalls[0]).toEqual([
-      'Ryan Huber',
+      'ryan huber',
       'Ryan Huber (person): paired on the work',
-      'Aion',
+      'aion',
       'Aion (project): the memory substrate',
     ]);
+  });
+
+  it('embeds every alias with the name, so a nickname is inside the vector that nominates', async () => {
+    const provider = fakeProvider({
+      generate: [
+        {
+          entities: [
+            { name: 'Aion', type: 'project', context: '', aliases: ['the substrate', 'AION'] },
+          ],
+        },
+      ],
+    });
+    await new EntityExtractionStage().run(context(provider));
+
+    expect(provider.embedCalls[0]?.[0]).toBe('aion\nthe substrate');
+  });
+
+  it('re-embeds the name when an alias changes its input, and leaves it alone when nothing did', async () => {
+    await new EntityExtractionStage().run(context(fakeProvider({ generate: [EXTRACTION] })));
+
+    const widened = fakeProvider({
+      generate: [
+        { entities: [{ name: 'Aion', type: 'project', context: '', aliases: ['aion2'] }] },
+      ],
+    });
+    await new EntityExtractionStage().run(context(widened));
+    expect(widened.embedCalls[0]).toEqual(['aion\naion2']);
+
+    const unchanged = fakeProvider({
+      generate: [
+        { entities: [{ name: 'Aion', type: 'project', context: '', aliases: ['aion2'] }] },
+      ],
+    });
+    await new EntityExtractionStage().run(context(unchanged));
+    expect(unchanged.embedCalls).toEqual([]);
+  });
+
+  it('counts every reading and keeps the most observed label, without forking the identity', async () => {
+    const readings = [
+      { entities: [{ name: 'Aion', type: 'project', context: 'the substrate' }] },
+      { entities: [{ name: 'Aion', type: 'tool', context: 'the substrate' }] },
+      { entities: [{ name: 'Aion', type: 'tool', context: 'the substrate' }] },
+    ];
+    for (const reading of readings) {
+      await new EntityExtractionStage().run(context(fakeProvider({ generate: [reading] })));
+    }
+
+    const aion = graph
+      .entities()
+      .filter((node) => node.properties[ENTITY_NAME_NORM_PROPERTY] === 'aion');
+    expect(aion).toHaveLength(1);
+    expect(aion[0]?.properties.type).toBe('tool');
+    expect(aion[0]?.properties.type_counts).toBe('{"project":1,"tool":2}');
   });
 
   it('points MENTIONS at the entity and PARTICIPATES_IN at the episode', async () => {
@@ -235,6 +288,93 @@ describe('structural upgrade', () => {
 
     expect(entityNames()).toEqual(['Ryan Huber']);
     expect(graph.entities()).toHaveLength(1);
+  });
+
+  it('routes the speaker to the backbone under whatever name the record called them', async () => {
+    seedMember('Ryan Huber');
+    const outcome = await new EntityExtractionStage().run(
+      context(
+        fakeProvider({
+          generate: [{ entities: [{ name: 'Ry', type: 'person', context: '', is_speaker: true }] }],
+        }),
+      ),
+    );
+
+    expect(graph.entities()).toHaveLength(1);
+    expect(outcome.counts).toEqual({ entities: 0, mentions: 1 });
+    const member = graph.nodes.get(MEMBER_ID);
+    expect(member?.properties.aliases).toEqual(['Ry', 'ry']);
+    expect(member?.properties.aliases_norm).toEqual(['ry']);
+  });
+});
+
+describe('name-form routing', () => {
+  it('routes a separator variant onto the identity that already answers to the squashed name', async () => {
+    await new EntityExtractionStage().run(
+      context(
+        fakeProvider({
+          generate: [{ entities: [{ name: 'proposal-hygiene', type: 'tool', context: '' }] }],
+        }),
+      ),
+    );
+    await new EntityExtractionStage().run(
+      context(
+        fakeProvider({
+          generate: [{ entities: [{ name: 'proposal_hygiene', type: 'topic', context: '' }] }],
+        }),
+      ),
+    );
+
+    expect(entityNames()).toEqual(['proposal-hygiene']);
+    const node = graph.entities()[0];
+    expect(node?.properties.aliases_norm).toEqual(['proposal_hygiene']);
+  });
+
+  it('routes a later record onto the identity holding that spelling as an alias', async () => {
+    await new EntityExtractionStage().run(
+      context(
+        fakeProvider({
+          generate: [
+            { entities: [{ name: 'Aion', type: 'project', context: '', aliases: ['the graph'] }] },
+          ],
+        }),
+      ),
+    );
+    await new EntityExtractionStage().run(
+      context(
+        fakeProvider({
+          generate: [{ entities: [{ name: 'the graph', type: 'topic', context: '' }] }],
+        }),
+      ),
+    );
+
+    expect(entityNames()).toEqual(['Aion']);
+  });
+
+  it('mints its own identity when several holders answer to the name', async () => {
+    await new EntityExtractionStage().run(
+      context(
+        fakeProvider({
+          generate: [
+            {
+              entities: [
+                { name: 'Postgres', type: 'tool', context: '', aliases: ['the store'] },
+                { name: 'Valkey', type: 'tool', context: '', aliases: ['the store'] },
+              ],
+            },
+          ],
+        }),
+      ),
+    );
+    await new EntityExtractionStage().run(
+      context(
+        fakeProvider({
+          generate: [{ entities: [{ name: 'the store', type: 'tool', context: '' }] }],
+        }),
+      ),
+    );
+
+    expect(entityNames()).toEqual(['Postgres', 'Valkey', 'the store']);
   });
 });
 

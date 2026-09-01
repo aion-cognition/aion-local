@@ -66,10 +66,25 @@ const STUB_PAYLOAD = {
 
 const STUB_EXTRACTION = {
   entities: [
-    { name: 'ryan   HUBER', type: 'person', context: 'the member the backbone already answers to' },
-    { name: 'Aion', type: 'project', context: 'the memory substrate' },
-    { name: 'Aion', type: 'concept', context: 'the same name under a second type' },
+    {
+      name: 'ryan   HUBER',
+      type: 'person',
+      context: 'the member the backbone already answers to',
+      is_speaker: true,
+    },
+    { name: 'Aion', type: 'project', context: 'the memory substrate', aliases: ['aion-local'] },
+    { name: 'Aion', type: 'tool', context: 'the same name under a second reading' },
     { name: 'Aion', type: 'project', context: 'a duplicate the model returned twice' },
+    { name: 'proposal-hygiene', type: 'tool', context: 'the maintenance operation' },
+  ],
+};
+
+/** A later record spelling the same two identities differently: a nickname and a separator variant. */
+const RESPELLED_EXTRACTION = {
+  entities: [
+    { name: 'Ry', type: 'person', context: 'the speaker under a short name', is_speaker: true },
+    { name: 'aion-local', type: 'topic', context: 'the substrate under one of its aliases' },
+    { name: 'proposal_hygiene', type: 'topic', context: 'the same operation, other separator' },
   ],
 };
 
@@ -150,7 +165,7 @@ describe('canonicalization against the live constraint', () => {
     const outcome = await runStage(stubEpisodeId, stubProvider());
 
     expect(outcome.status).toBe('ok');
-    // Four rows in, three identities out: the duplicate collapses, the second type does not.
+    // Five rows in, three identities out: the repeat collapses, and so does the second reading.
     expect(outcome.counts).toEqual({ entities: 2, mentions: 3 });
 
     const entities = await storedEntities(harness.driver);
@@ -164,12 +179,14 @@ describe('canonicalization against the live constraint', () => {
     expect(member?.labels).not.toContain('Memory');
 
     expect(entities.filter((entity) => entity.nameNorm === 'ryan huber')).toHaveLength(1);
-    expect(
-      entities
-        .filter((entity) => entity.nameNorm === 'aion')
-        .map((entity) => entity.type)
-        .sort(),
-    ).toEqual(['concept', 'project']);
+
+    const aion = entities.filter((entity) => entity.nameNorm === 'aion');
+    expect(aion).toHaveLength(1);
+    // Two readings, one identity: both are counted and the first one stands as the label.
+    expect(aion[0]?.type).toBe('project');
+    expect(aion[0]?.typeCounts).toBe('{"project":1,"tool":1}');
+    expect(aion[0]?.aliasesNorm).toEqual(['aion-local']);
+    expect(aion[0]?.nameSquash).toBe('aion');
   });
 
   it('gives every extracted entity the Memory label, its text, and both vectors', async () => {
@@ -189,7 +206,11 @@ describe('canonicalization against the live constraint', () => {
     const entities = await findEpisodeEntities(harness.driver, stubEpisodeId);
 
     expect(mentions).toHaveLength(3);
-    expect(entities.map((entity) => entity.nameNorm)).toEqual(['aion', 'aion', 'ryan huber']);
+    expect(entities.map((entity) => entity.nameNorm)).toEqual([
+      'aion',
+      'proposal-hygiene',
+      'ryan huber',
+    ]);
     expect(await participationCount(harness.driver, stubEpisodeId)).toBe(3);
   });
 
@@ -210,6 +231,32 @@ describe('canonicalization against the live constraint', () => {
     // Salience is a counter by design, so a second mention counts twice.
     expect(after.filter((entity) => entity.accessCount === 2)).toHaveLength(3);
   });
+
+  it('routes a respelling onto the identity that already answers to it, minting nothing', async () => {
+    const before = await storedEntities(harness.driver);
+    const outcome = await runStage(stubEpisodeId, {
+      embed: async (texts: readonly string[]): Promise<Vector[]> => provider.embed(texts),
+      generate: async (): Promise<unknown> => RESPELLED_EXTRACTION,
+    });
+
+    expect(outcome.counts).toEqual({ entities: 0, mentions: 3 });
+
+    const after = await storedEntities(harness.driver);
+    expect(after.map((entity) => entity.id).sort()).toEqual(
+      before.map((entity) => entity.id).sort(),
+    );
+
+    // The speaker is the backbone under whatever the record called them.
+    const member = after.find((entity) => entity.id === memberId);
+    expect(member?.aliasesNorm).toContain('ry');
+    expect(member?.type).toBe('member');
+
+    // The alias tier and the squash tier, one each.
+    const aion = after.find((entity) => entity.nameNorm === 'aion');
+    expect(aion?.aliasesNorm).toContain('aion-local');
+    const hygiene = after.find((entity) => entity.nameNorm === 'proposal-hygiene');
+    expect(hygiene?.aliasesNorm).toContain('proposal_hygiene');
+  });
 });
 
 describe('entity extraction against a live model', () => {
@@ -221,7 +268,9 @@ describe('entity extraction against a live model', () => {
 
     const entities = await findEpisodeEntities(harness.driver, liveEpisodeId);
     expect(entities.length).toBeGreaterThan(1);
-    for (const entity of entities) {
+    // The backbone is exempt: the speaker routes onto the Member, which keeps `member` as its
+    // type because a mention never relabels the node every session hangs off.
+    for (const entity of entities.filter((row) => row.id !== memberId)) {
       expect(ENTITY_TYPES as readonly string[]).toContain(entity.type);
     }
 
@@ -257,7 +306,7 @@ describe('entity extraction against a live model', () => {
     // Whatever the model names the second time, every node it lands on is one the graph
     // already had or one this run reports creating.
     expect(after).toHaveLength(before.length + (outcome.counts?.entities ?? 0));
-    const identities = after.map((entity) => `${entity.nameNorm} ${entity.type}`);
+    const identities = after.map((entity) => entity.nameNorm);
     expect(new Set(identities).size).toBe(identities.length);
 
     const mentions = await mentionCounts(harness.driver, liveEpisodeId);
