@@ -2,6 +2,8 @@ import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
+import { migrateUnversionedLedgerKeys } from './ledger-version-migration.js';
+
 /** Name for the config registry, which is the only place the variable is read. */
 export const SQLITE_PATH_ENV_VAR = 'AION_SQLITE_PATH';
 
@@ -158,6 +160,44 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   // no index covers; at one row per merge that scan is cheaper than a second table to join.
   `CREATE INDEX IF NOT EXISTS entity_merge_decisions_canonical_idx
      ON entity_merge_decisions (canonical_id)`,
+  /**
+   * One row per reflection payload intake ever stored, independent of what the graph does
+   * with it afterward. A replay reads this table to re-run the pipeline against the same
+   * content without a caller pushing it again, and a debug view reads it to show when a
+   * payload arrived against when the graph enriched it.
+   *
+   * `idempotency_key` folds `identity` back in rather than keying on `content_hash` alone:
+   * episode dedup is scoped to one session, so two sessions pushing identical content are two
+   * episodes, and a content-only key would collapse their archive rows into one.
+   *
+   * `occurred_at` is the episode's own clock, the earliest timestamp found in its content.
+   * `archived_at` is the wall clock at write time and the only wall-clock value on the row.
+   * There is no `UPDATE` and no `DELETE` anywhere this table is written: insert conflicts on
+   * `idempotency_key` are a no-op, so a re-pushed payload never rewrites the row that first
+   * recorded it.
+   */
+  `CREATE TABLE IF NOT EXISTS experience_archive (
+    id TEXT PRIMARY KEY,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    schema_version INTEGER NOT NULL,
+    pipeline_version TEXT NOT NULL,
+    identity TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    episode_id TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    archived_at TEXT NOT NULL,
+    lane TEXT,
+    origin_json TEXT,
+    payload_json TEXT NOT NULL
+  )`,
+  // A replay walks rows oldest first by keyset, never OFFSET, so its cursor survives an abort.
+  `CREATE INDEX IF NOT EXISTS experience_archive_replay_idx
+     ON experience_archive (occurred_at, id)`,
+  `CREATE INDEX IF NOT EXISTS experience_archive_episode_idx
+     ON experience_archive (episode_id)`,
+  `CREATE INDEX IF NOT EXISTS experience_archive_version_idx
+     ON experience_archive (pipeline_version)`,
 ];
 
 type ColumnAddition = {
@@ -231,6 +271,9 @@ export function openSqliteHandle(target: SqliteTarget): SqliteHandle {
         db.exec(statement);
       }
       applyColumnAdditions(db);
+      // Runs on every open so every entrypoint gets it, and does nothing once a substrate has
+      // been through it.
+      migrateUnversionedLedgerKeys(db);
       return db;
     } catch (err) {
       db.close();
