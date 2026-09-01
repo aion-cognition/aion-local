@@ -1,12 +1,14 @@
 import { introspectionOperations, type HealthSnapshot, type OperationCandidate } from '@aion/core';
 import {
   NEUTRAL_ENRICHMENT_HEALTH,
+  NEUTRAL_ENTITY_HEALTH,
   NEUTRAL_GRAPH_HEALTH,
   NEUTRAL_PLASTICITY_HEALTH,
   NEUTRAL_PROPOSAL_HEALTH,
   NEUTRAL_QUEUE_HEALTH,
   NEUTRAL_REDACTION_HEALTH,
   type EnrichmentHealth,
+  type EntityHealth,
   type GraphStructureHealth,
   type OperationEffectiveness,
   type PlasticityHealth,
@@ -149,6 +151,7 @@ type Reading = {
   readonly enrichment?: EnrichmentHealth;
   readonly redaction?: RedactionHealth;
   readonly proposals?: ProposalHealth;
+  readonly entities?: EntityHealth;
   readonly plasticity?: PlasticityHealth;
   readonly effectiveness: readonly OperationEffectiveness[];
 };
@@ -162,6 +165,7 @@ function snapshot(reading: Reading): HealthSnapshot {
     enrichment: reading.enrichment ?? enrichment(),
     redaction: reading.redaction ?? redaction(),
     proposals: reading.proposals ?? proposals(),
+    entities: reading.entities ?? NEUTRAL_ENTITY_HEALTH,
     plasticity: reading.plasticity ?? plasticity(),
     effectiveness: reading.effectiveness,
     degraded: [],

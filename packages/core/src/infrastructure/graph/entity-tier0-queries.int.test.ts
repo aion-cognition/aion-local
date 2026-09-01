@@ -4,7 +4,11 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { forgetNode, supersede, writeStampedNode } from './bitemporal.js';
-import { findAliasEqualityPairs, findSquashEqualityGroups } from './entity-tier0-queries.js';
+import {
+  countTier0EligibleEntities,
+  findAliasEqualityPairs,
+  findSquashEqualityGroups,
+} from './entity-tier0-queries.js';
 import { runGraphMigrations } from './migrations.js';
 import {
   startNeo4jHarness,
@@ -168,5 +172,31 @@ describe('findAliasEqualityPairs', () => {
 
     expect(byOwner.map((pair) => pair.holderId)).toEqual(['al-scope-holder']);
     expect(unrelated.map((pair) => pair.holderId)).not.toContain('al-scope-holder');
+  }, 60_000);
+});
+
+describe('countTier0EligibleEntities', () => {
+  /**
+   * The relevance reading behind the graph-wide sweep. It counts identities rather than groups
+   * and it counts them distinctly, so a name reachable through both readings is one merge
+   * waiting to happen rather than two.
+   */
+  it('rises by the identities a new duplicate spelling adds', async () => {
+    const before = await countTier0EligibleEntities(harness.driver, { limit: 500 });
+
+    await entity({ id: 'cnt-a', name: 'flag-day' });
+    await entity({ id: 'cnt-b', name: 'flag_day' });
+
+    const after = await countTier0EligibleEntities(harness.driver, { limit: 500 });
+
+    expect(after).toBe(before + 2);
+  }, 60_000);
+
+  it('counts nothing for a name no other identity shares', async () => {
+    const before = await countTier0EligibleEntities(harness.driver, { limit: 500 });
+
+    await entity({ id: 'cnt-lonely', name: 'Zephyr Ingest' });
+
+    expect(await countTier0EligibleEntities(harness.driver, { limit: 500 })).toBe(before);
   }, 60_000);
 });

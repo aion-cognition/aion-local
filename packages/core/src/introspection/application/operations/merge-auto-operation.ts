@@ -33,14 +33,20 @@ import type { IntrospectionOperation, OperationOutcome } from '../../domain/oper
 
 export const MERGE_AUTO_OPERATION = 'merge_auto';
 
-/** Matches `merge_shadow`'s own divisor: ten open proposals reads as a full queue. */
+/** Ten identities the sweep could absorb reads as a full tick's worth of work. */
 const MERGE_AUTO_RELEVANCE_DIVISOR = 10;
 
 /** A tick's ceiling on groups swept at once, independent of the knob. */
 const MERGE_AUTO_GROUP_CEILING = 200;
 
+/**
+ * Scored on the graph, not on the proposal queue. The queue is residue a judge split on and
+ * this sweep never touches it, so scoring on it held the operation at zero relevance in every
+ * healthy steady state, and starvation protection multiplies relevance rather than adding to
+ * it: an operation at zero stays at zero however long it waits.
+ */
 export function mergeAutoRelevance(health: HealthSnapshot): number {
-  return Math.min(1, health.proposals.entityMergeOpen / MERGE_AUTO_RELEVANCE_DIVISOR);
+  return Math.min(1, health.entities.tier0Eligible / MERGE_AUTO_RELEVANCE_DIVISOR);
 }
 
 export function mergeAutoOperation(): IntrospectionOperation {
@@ -48,11 +54,10 @@ export function mergeAutoOperation(): IntrospectionOperation {
     name: MERGE_AUTO_OPERATION,
     bucket: 'hour',
     relevance: mergeAutoRelevance,
-    // The residue lane is what this is scored on: every identity the deterministic sweep
-    // absorbs is a side some open proposal was asking about, and the stale sweep resolves the
-    // row once the side is gone. An operation with no metric in the snapshot is scored on
-    // whether it applied anything, which is a measure that cannot fail.
-    measure: (health) => health.proposals.entityMergeOpen,
+    // Measured on what the sweep itself drains. An operation with no metric in the snapshot is
+    // scored on whether it applied anything, which is a measure that cannot fail; this one is
+    // scored on the count falling, which is the only thing a run of it can claim.
+    measure: (health) => health.entities.tier0Eligible,
     run: async (ctx): Promise<OperationOutcome> => {
       if (!ctx.config.maintenance.autoMerge) {
         return {

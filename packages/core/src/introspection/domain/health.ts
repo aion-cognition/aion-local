@@ -69,6 +69,20 @@ export type ProposalHealth = {
   readonly medianOpenAgeMs: number | undefined;
 };
 
+/**
+ * What the deterministic sweep has left to do. Counted from the graph rather than from the
+ * proposal queue, because the two are different populations: the queue holds the residue a
+ * judge split on, and the sweep only ever absorbs spellings no judge was asked about.
+ */
+export type EntityHealth = {
+  /**
+   * Current identities holding a tier-0 relation to another current identity: one squashed
+   * name key shared, or an unambiguous alias equal to another identity's folded name. A floor
+   * rather than a total when the scan limit cuts the read.
+   */
+  readonly tier0Eligible: number;
+};
+
 export type PlasticityHealth = {
   readonly reinforcementQueueDepth: number;
   readonly reinforcementLastRunAt: string | undefined;
@@ -96,6 +110,7 @@ export type HealthSnapshot = {
   readonly enrichment: EnrichmentHealth;
   readonly redaction: RedactionHealth;
   readonly proposals: ProposalHealth;
+  readonly entities: EntityHealth;
   readonly plasticity: PlasticityHealth;
   readonly effectiveness: readonly OperationEffectiveness[];
   /** Collectors that failed and fell back to a neutral reading, named so a rule can discount them. */
@@ -112,6 +127,7 @@ export const HEALTH_COLLECTORS = {
   enrichment: 'enrichment',
   redaction: 'redaction',
   proposals: 'proposals',
+  entities: 'entities',
   plasticity: 'plasticity',
 } as const;
 
@@ -157,6 +173,8 @@ export const NEUTRAL_PROPOSAL_HEALTH: ProposalHealth = {
   medianOpenAgeMs: undefined,
 };
 
+export const NEUTRAL_ENTITY_HEALTH: EntityHealth = { tier0Eligible: 0 };
+
 export const NEUTRAL_PLASTICITY_HEALTH: PlasticityHealth = {
   reinforcementQueueDepth: 0,
   reinforcementLastRunAt: undefined,
@@ -177,6 +195,7 @@ export function neutralSnapshot(cycle: number, observedAt: string): HealthSnapsh
     enrichment: NEUTRAL_ENRICHMENT_HEALTH,
     redaction: NEUTRAL_REDACTION_HEALTH,
     proposals: NEUTRAL_PROPOSAL_HEALTH,
+    entities: NEUTRAL_ENTITY_HEALTH,
     plasticity: NEUTRAL_PLASTICITY_HEALTH,
     effectiveness: [],
     degraded: Object.values(HEALTH_COLLECTORS),

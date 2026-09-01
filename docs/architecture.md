@@ -276,9 +276,9 @@ does, and one tick runs four phases: observe, decide, act, learn.
    doctor` and `/health` already read: graph structure (node population, vector parity,
    orphan share, episodes with no session link), queue (depth per lane, oldest unclaimed,
    exhausted attempts, enrichment lag), enrichment (episodes with no orchestrator ledger
-   key), plasticity, proposals, redaction residue. Every collector is caught
-   independently; one that throws names itself in `degraded` and costs its own metrics
-   rather than the reading.
+   key), plasticity, proposals, entities (identities the deterministic tier-0 sweep could
+   still absorb), redaction residue. Every collector is caught independently; one that
+   throws names itself in `degraded` and costs its own metrics rather than the reading.
 2. **Decide.** `decide` (`introspection/domain/decide.ts`) is pure: the same snapshot always
    produces the same answer, so a decision is arguable from the numbers. Tier is a property of
    the cycle rather than of the operation: an operation names the critical condition it repairs

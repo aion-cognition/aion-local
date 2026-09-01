@@ -57,6 +57,10 @@ function ctxFor(config: Config): OperationContext {
   };
 }
 
+function healthWithEligible(tier0Eligible: number): ReturnType<typeof healthFixture> {
+  return healthFixture({ entities: { tier0Eligible } });
+}
+
 function healthWithOpen(entityMergeOpen: number): ReturnType<typeof healthFixture> {
   return healthFixture({
     proposals: {
@@ -69,20 +73,32 @@ function healthWithOpen(entityMergeOpen: number): ReturnType<typeof healthFixtur
 }
 
 describe('mergeAutoRelevance', () => {
-  it('scales linearly with open entity-merge proposals', () => {
-    expect(mergeAutoRelevance(healthWithOpen(5))).toBeCloseTo(0.5, 6);
+  it('scales linearly with the identities the deterministic sweep could absorb', () => {
+    expect(mergeAutoRelevance(healthWithEligible(5))).toBeCloseTo(0.5, 6);
   });
 
-  it('caps at one past ten open proposals', () => {
-    expect(mergeAutoRelevance(healthWithOpen(40))).toBe(1);
+  it('caps at one past ten eligible identities', () => {
+    expect(mergeAutoRelevance(healthWithEligible(40))).toBe(1);
+  });
+
+  /**
+   * The sweep is graph-wide and the proposal queue is residue the judge split on, which the
+   * sweep never touches. Scoring it on that queue left the operation at zero relevance in
+   * every healthy steady state, which is an operation the engine can never select.
+   */
+  it('stays selectable on a graph with duplicate spellings and an empty proposal queue', () => {
+    expect(mergeAutoRelevance(healthWithOpen(0))).toBe(0);
+    expect(mergeAutoRelevance(healthFixture({ entities: { tier0Eligible: 2 } }))).toBeGreaterThan(
+      0,
+    );
   });
 });
 
 describe('what the engine scores merge_auto on', () => {
-  it('declares the open entity-merge queue as the number it exists to move down', () => {
+  it('declares the tier-0-eligible count as the number it exists to move down', () => {
     const operation = mergeAutoOperation();
 
-    expect(operation.measure?.(healthWithOpen(7))).toBe(7);
+    expect(operation.measure?.(healthWithEligible(7))).toBe(7);
     expect(operation.improves ?? 'lower').toBe('lower');
   });
 });

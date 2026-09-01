@@ -149,8 +149,8 @@ At dozens of nodes these are visible by inspection. At thousands they are invisi
 recall degrades, and human curation stops being a strategy.
 
 One tick runs four phases. **Observe** assembles one health snapshot of graph structure, queue
-lag, enrichment coverage, plasticity, proposals and redaction residue, every collector caught
-on its own. **Act** then runs at most one operation, under bounded scope, a protected
+lag, enrichment coverage, plasticity, proposals, duplicate spellings still on the graph and
+redaction residue, every collector caught on its own. **Act** then runs at most one operation, under bounded scope, a protected
 relationship set, and a ledger claim on its time window so nothing runs twice.
 
 **Decide**, in between, is pure: the same snapshot always produces the same answer, so a

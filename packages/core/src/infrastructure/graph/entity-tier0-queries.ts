@@ -135,3 +135,54 @@ export async function findAliasEqualityPairs(
     mapAliasPair,
   );
 }
+
+/**
+ * The same two readings as one number, for the health snapshot that decides whether the
+ * graph-wide sweep is worth a tick. Both arms return identities rather than groups and the
+ * count is distinct across them, because one identity reachable both ways is still one merge
+ * waiting to happen.
+ */
+const COUNT_TIER0_ELIGIBLE = [
+  'CALL () {',
+  `  MATCH (n:${ENTITY_LABEL})`,
+  `  WHERE ${currentOnly('n')}`,
+  `    AND n.${ENTITY_NAME_SQUASH_PROPERTY} IS NOT NULL AND n.${ENTITY_NAME_SQUASH_PROPERTY} <> ''`,
+  `  WITH n.${ENTITY_NAME_SQUASH_PROPERTY} AS squash, collect(DISTINCT n.id) AS ids`,
+  '  WHERE size(ids) > 1',
+  '  UNWIND ids AS id',
+  '  RETURN id',
+  'UNION',
+  `  MATCH (holder:${ENTITY_LABEL})`,
+  `  WHERE ${currentOnly('holder')} AND size(coalesce(holder.${ENTITY_ALIASES_NORM_PROPERTY}, [])) > 0`,
+  `  UNWIND holder.${ENTITY_ALIASES_NORM_PROPERTY} AS aliasKey`,
+  '  WITH aliasKey, collect(DISTINCT holder.id) AS holderIds',
+  '  WHERE size(holderIds) = 1',
+  `  MATCH (owner:${ENTITY_LABEL} { ${ENTITY_NAME_NORM_PROPERTY}: aliasKey })`,
+  `  WHERE ${currentOnly('owner')} AND owner.id <> holderIds[0]`,
+  '  UNWIND [holderIds[0], owner.id] AS id',
+  '  RETURN id',
+  '}',
+  'WITH id LIMIT $limit',
+  'RETURN count(DISTINCT id) AS eligible',
+].join('\n');
+
+/**
+ * Identities the deterministic sweep could absorb, capped by the scan limit. A cut read is a
+ * floor rather than a total, which is the reading the relevance rule wants either way: past
+ * the cap the answer is "there is work here", not a number.
+ */
+export async function countTier0EligibleEntities(
+  driver: Driver,
+  options: { readonly limit: number },
+): Promise<number> {
+  if (options.limit <= 0) {
+    return 0;
+  }
+  const rows = await runRead(
+    driver,
+    COUNT_TIER0_ELIGIBLE,
+    { limit: toGraphInteger(options.limit) },
+    (row: Row) => Number(row.eligible),
+  );
+  return rows[0] ?? 0;
+}

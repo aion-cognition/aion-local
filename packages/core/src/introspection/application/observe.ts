@@ -2,6 +2,7 @@ import type { Driver } from 'neo4j-driver';
 
 import type { Config } from '../../infrastructure/config/schema.js';
 import { countDecayableEdges } from '../../infrastructure/graph/edge-weights.js';
+import { countTier0EligibleEntities } from '../../infrastructure/graph/entity-tier0-queries.js';
 import {
   countEpisodesWithoutSession,
   countOrphanNodes,
@@ -23,6 +24,7 @@ import { NARRATIVE_GROUNDING } from '../../reflection/domain/narrative.js';
 import {
   HEALTH_COLLECTORS,
   NEUTRAL_ENRICHMENT_HEALTH,
+  NEUTRAL_ENTITY_HEALTH,
   NEUTRAL_GRAPH_HEALTH,
   NEUTRAL_PLASTICITY_HEALTH,
   NEUTRAL_PROPOSAL_HEALTH,
@@ -31,6 +33,7 @@ import {
   parityRatio,
   share,
   type EnrichmentHealth,
+  type EntityHealth,
   type GraphStructureHealth,
   type HealthSnapshot,
   type OperationEffectiveness,
@@ -191,6 +194,15 @@ function readProposals(db: SqliteHandle, now: Date): ProposalHealth {
   };
 }
 
+/**
+ * What the deterministic sweep has left to do, read from the graph. The proposal queue cannot
+ * answer this: since the cascade shipped, that queue holds only pairs a judge split on, and the
+ * sweep merges spellings no judge was ever asked about.
+ */
+async function readEntities(driver: Driver, scanLimit: number): Promise<EntityHealth> {
+  return { tier0Eligible: await countTier0EligibleEntities(driver, { limit: scanLimit }) };
+}
+
 function readPlasticity(db: SqliteHandle): PlasticityHealth {
   const counters = plasticityCounters(db);
   return {
@@ -233,7 +245,7 @@ export async function observeHealth(
   const names = options.operationNames ?? [];
   const degraded: string[] = [];
 
-  const [graph, queue, enrichment, redaction, proposals, plasticity, effectiveness] =
+  const [graph, queue, enrichment, redaction, proposals, entities, plasticity, effectiveness] =
     await Promise.all([
       collect(HEALTH_COLLECTORS.graph, deps.logger, degraded, NEUTRAL_GRAPH_HEALTH, () =>
         readGraph(deps.driver, scanLimit),
@@ -249,6 +261,9 @@ export async function observeHealth(
       ),
       collect(HEALTH_COLLECTORS.proposals, deps.logger, degraded, NEUTRAL_PROPOSAL_HEALTH, () =>
         Promise.resolve(readProposals(deps.db, now)),
+      ),
+      collect(HEALTH_COLLECTORS.entities, deps.logger, degraded, NEUTRAL_ENTITY_HEALTH, () =>
+        readEntities(deps.driver, scanLimit),
       ),
       collect(HEALTH_COLLECTORS.plasticity, deps.logger, degraded, NEUTRAL_PLASTICITY_HEALTH, () =>
         Promise.resolve(readPlasticity(deps.db)),
@@ -266,6 +281,7 @@ export async function observeHealth(
     enrichment,
     redaction,
     proposals,
+    entities,
     plasticity,
     effectiveness,
     degraded,
