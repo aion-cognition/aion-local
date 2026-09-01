@@ -41,7 +41,10 @@ pairs whose names differ, until `proposal_hygiene` ages one out: past
 tool exhaust, no conversation to judge) it dismisses the row and ledgers the class, the
 reason, and the pair, so a wrong dismissal is judged from a real record. `aion proposals
 reopen <id>` undoes any dismissal, hygiene's or a person's, and puts the row back in this
-queue. `AION_AUTO_MERGE=false` turns merge_auto off and leaves every proposal queued for a
+queue. A merge proposal one of whose entities a later merge has since absorbed waits for no
+horizon at all: hygiene sweeps those at the top of every run and resolves each one with the
+side that went, because a pair with a closed side has nothing left for a person to decide.
+`AION_AUTO_MERGE=false` turns merge_auto off and leaves every proposal queued for a
 person instead; `aion unmerge` reverses a merge `merge_auto` made, one at a time, the same
 as any other entity merge.
 
