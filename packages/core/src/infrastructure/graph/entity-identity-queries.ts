@@ -11,7 +11,7 @@ import {
   ENTITY_NAME_VECTOR_PROPERTY,
   STRUCTURAL_PROPERTY,
 } from './seed-queries.js';
-import type { Row } from './values.js';
+import { toGraphInteger, type Row } from './values.js';
 import { isEntityType, type EntityType } from '../../reflection/domain/entity-extraction.js';
 import {
   parseTypeCounts,
@@ -49,7 +49,20 @@ export const ENTITY_NAME_SQUASH_PROPERTY = 'name_squash';
 /** sha256 of the exact text `name_vec` was taken over, so a changed input is detectable. */
 export const ENTITY_NAME_VECTOR_HASH_PROPERTY = 'name_vec_hash';
 
-/** Distinct and sorted, and never the identity's own name: a name is not an alias of itself. */
+/**
+ * How many spellings one identity keeps. `MAX_ENTITY_ALIASES` bounds a single extraction's
+ * payload; this bounds what accumulates across every routing and every merge, and the two are
+ * different risks. Each stored entry is a lookup key that routes some other identity's
+ * mentions onto this node, and each one is a line of the text the name vector is taken over,
+ * which has to stay inside the embed budget by construction rather than by luck.
+ */
+export const MAX_STORED_ENTITY_ALIASES = 24;
+
+/**
+ * Distinct and sorted, and never the identity's own name: a name is not an alias of itself.
+ * Sorted before the cap so one set of spellings always yields one list, whatever order the
+ * callers assembled it in.
+ */
 export function aliasRecord(aliases: readonly string[], nameNorm: string): string[] {
   const kept = new Set<string>();
   for (const alias of aliases) {
@@ -58,10 +71,10 @@ export function aliasRecord(aliases: readonly string[], nameNorm: string): strin
       kept.add(trimmed);
     }
   }
-  return [...kept].sort();
+  return [...kept].sort().slice(0, MAX_STORED_ENTITY_ALIASES);
 }
 
-/** The lookup keys behind an alias record. Sorted, so an unchanged set writes the same list twice. */
+/** The lookup keys behind an alias record, under the same cap: one key per spelling kept. */
 export function aliasKeys(aliases: readonly string[], nameNorm: string): string[] {
   const keys = new Set<string>();
   for (const alias of aliases) {
@@ -70,7 +83,7 @@ export function aliasKeys(aliases: readonly string[], nameNorm: string): string[
       keys.add(folded);
     }
   }
-  return [...keys].sort();
+  return [...keys].sort().slice(0, MAX_STORED_ENTITY_ALIASES);
 }
 
 function taxonomyTypes(observed: readonly string[]): EntityType[] {
@@ -225,6 +238,8 @@ export async function findSpeakerEntity(driver: Driver): Promise<EntityIdentityM
 
 export type EntityAliasEntry = {
   readonly id: string;
+  /** The holder's own folded name, which is never an alias of itself. */
+  readonly nameNorm: string;
   /** Surface forms to record. Already-held aliases are dropped by the statement, not by the caller. */
   readonly aliases: readonly string[];
 };
@@ -235,16 +250,19 @@ export type EntityAliasEntry = {
  *
  * The union runs in Cypher rather than read-modify-write in application code, so two runs
  * naming the same identity cannot each drop the other's addition. Order is arrival order for
- * the same reason: sorting would need the read this statement exists to avoid.
+ * the same reason: sorting would need the read this statement exists to avoid. The cap
+ * therefore keeps the spellings an identity answered to first, and a full list stops growing
+ * rather than displacing them.
  */
 const ADD_ENTITY_ALIASES = [
   'UNWIND $entries AS entry',
   `MATCH (n:${ENTITY_LABEL} { id: entry.id })`,
-  `SET n.${ENTITY_ALIASES_PROPERTY} = coalesce(n.${ENTITY_ALIASES_PROPERTY}, []) +`,
-  `      [alias IN entry.aliases WHERE NOT alias IN coalesce(n.${ENTITY_ALIASES_PROPERTY}, [])],`,
-  `    n.${ENTITY_ALIASES_NORM_PROPERTY} = coalesce(n.${ENTITY_ALIASES_NORM_PROPERTY}, []) +`,
-  `      [alias IN entry.aliases_norm` +
-    ` WHERE NOT alias IN coalesce(n.${ENTITY_ALIASES_NORM_PROPERTY}, [])]`,
+  `WITH n, entry, coalesce(n.${ENTITY_ALIASES_PROPERTY}, []) AS held,`,
+  `     coalesce(n.${ENTITY_ALIASES_NORM_PROPERTY}, []) AS held_keys`,
+  `SET n.${ENTITY_ALIASES_PROPERTY} =`,
+  '      (held + [alias IN entry.aliases WHERE NOT alias IN held])[..$max],',
+  `    n.${ENTITY_ALIASES_NORM_PROPERTY} =`,
+  '      (held_keys + [alias IN entry.aliases_norm WHERE NOT alias IN held_keys])[..$max]',
   'RETURN n.id AS id',
 ].join('\n');
 
@@ -253,16 +271,20 @@ export async function addEntityAliases(
   entries: readonly EntityAliasEntry[],
 ): Promise<string[]> {
   const payload = entries
-    .map((entry) => ({
-      id: entry.id,
-      aliases: aliasRecord(entry.aliases, ''),
-      aliases_norm: aliasKeys(entry.aliases, ''),
-    }))
+    .map((entry) => {
+      const aliases = aliasRecord(entry.aliases, entry.nameNorm);
+      return { id: entry.id, aliases, aliases_norm: aliasKeys(aliases, entry.nameNorm) };
+    })
     .filter((entry) => entry.aliases.length > 0 || entry.aliases_norm.length > 0);
   if (payload.length === 0) {
     return [];
   }
-  return runWrite(driver, ADD_ENTITY_ALIASES, { entries: payload }, (row) => row.id as string);
+  return runWrite(
+    driver,
+    ADD_ENTITY_ALIASES,
+    { entries: payload, max: toGraphInteger(MAX_STORED_ENTITY_ALIASES) },
+    (row) => row.id as string,
+  );
 }
 
 /** What a reconciliation needs from the run that produced a row: its readings and its spellings. */

@@ -120,6 +120,7 @@ export async function runEntityUnmerge(
 
   const result = await applyUnmerge(deps.driver, {
     canonicalId: canonical.canonicalId,
+    canonicalNameNorm: canonical.canonicalNameNorm,
     record,
     canonicalAliases: canonical.aliases,
     records: canonical.records,

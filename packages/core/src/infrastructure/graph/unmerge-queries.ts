@@ -5,6 +5,7 @@ import { supersedeInTransaction, writeStampedNodeInTransaction } from './bitempo
 import { inWriteTransaction, runRead, type GraphTransaction } from './connection.js';
 import { upsertEdgeInTransaction } from './edges.js';
 import { MERGE_PROVENANCE_PROPERTY } from './entity-dedup-queries.js';
+import { aliasKeys, aliasRecord } from './entity-identity-queries.js';
 import {
   clearNameVectorHashInTransaction,
   ENTITY_ALIASES_NORM_PROPERTY,
@@ -17,7 +18,6 @@ import { lockNodeInTransaction } from './locks.js';
 import { isRelationshipType } from './relationships.js';
 import { ENTITY_NAME_NORM_PROPERTY, ENTITY_NAME_PROPERTY } from './seed-queries.js';
 import { squashName } from '../../reflection/domain/entity-reconciliation.js';
-import { foldName } from '../providers/unicode-fold.js';
 
 /**
  * Splitting a merged entity back out, from the record the merge wrote at merge time. The
@@ -30,23 +30,6 @@ import { foldName } from '../providers/unicode-fold.js';
  * canonical keeps every edge it holds, and the split identity comes back as a new node. That
  * is why the protected relationship set is not consulted: an unmerge only adds.
  */
-
-/**
- * The folded lookup half of an alias record. An unmerge has to rewrite it on both sides or the
- * released name keeps answering cues on behalf of the canonical it just left. No name is
- * excluded here: an alias that folds onto the holder's own name is already reachable by the
- * exact-name branch, so a duplicate key changes no answer.
- */
-function aliasLookupKeys(aliases: readonly string[]): string[] {
-  const keys = new Set<string>();
-  for (const alias of aliases) {
-    const folded = foldName(alias);
-    if (folded.length > 0) {
-      keys.add(folded);
-    }
-  }
-  return [...keys].sort();
-}
 
 export type MergeProvenanceEdge = {
   readonly type: string;
@@ -75,6 +58,7 @@ export type MergeProvenanceRecord = {
 
 export type CanonicalMerge = {
   readonly canonicalId: string;
+  readonly canonicalNameNorm: string;
   readonly aliases: readonly string[];
   readonly records: readonly MergeProvenanceRecord[];
 };
@@ -156,6 +140,7 @@ const FIND_CANONICAL_FOR_MERGED = [
   `MATCH (canonical:Entity)-[:SUPERSEDES]->(merged:Entity { id: $mergedId })`,
   `WHERE canonical.${MERGE_PROVENANCE_PROPERTY} IS NOT NULL`,
   'RETURN canonical.id AS canonical_id,',
+  `       canonical.${ENTITY_NAME_NORM_PROPERTY} AS canonical_name_norm,`,
   `       coalesce(canonical.${ENTITY_ALIASES_PROPERTY}, []) AS aliases,`,
   `       coalesce(canonical.${MERGE_PROVENANCE_PROPERTY}, []) AS records`,
   'LIMIT 1',
@@ -167,6 +152,7 @@ export async function readCanonicalMerge(
 ): Promise<CanonicalMerge | undefined> {
   const rows = await runRead(driver, FIND_CANONICAL_FOR_MERGED, { mergedId }, (row) => ({
     canonicalId: row.canonical_id as string,
+    canonicalNameNorm: (row.canonical_name_norm as string | null) ?? '',
     aliases: readStringArray(row.aliases),
     records: readStringArray(row.records)
       .map(readRecord)
@@ -178,6 +164,7 @@ export async function readCanonicalMerge(
 const READ_CANONICAL_MERGE_RECORDS = [
   'MATCH (canonical:Entity { id: $canonicalId })',
   'RETURN canonical.id AS canonical_id,',
+  `       canonical.${ENTITY_NAME_NORM_PROPERTY} AS canonical_name_norm,`,
   `       coalesce(canonical.${ENTITY_ALIASES_PROPERTY}, []) AS aliases,`,
   `       coalesce(canonical.${MERGE_PROVENANCE_PROPERTY}, []) AS records`,
 ].join('\n');
@@ -189,6 +176,7 @@ export async function readCanonicalMergeRecords(
 ): Promise<CanonicalMerge | undefined> {
   const rows = await runRead(driver, READ_CANONICAL_MERGE_RECORDS, { canonicalId }, (row) => ({
     canonicalId: row.canonical_id as string,
+    canonicalNameNorm: (row.canonical_name_norm as string | null) ?? '',
     aliases: readStringArray(row.aliases),
     records: readStringArray(row.records)
       .map(readRecord)
@@ -224,6 +212,7 @@ const FIND_EXISTING_NODES = [
 
 export type UnmergeInput = {
   readonly canonicalId: string;
+  readonly canonicalNameNorm: string;
   /** The record being split back out; it must carry the absorbed node's identity. */
   readonly record: MergeProvenanceRecord;
   readonly canonicalAliases: readonly string[];
@@ -306,8 +295,8 @@ export async function applyUnmerge(driver: Driver, input: UnmergeInput): Promise
         [ENTITY_NAME_NORM_PROPERTY]: nameNorm,
         [ENTITY_NAME_SQUASH_PROPERTY]: squashName(nameNorm),
         [ENTITY_TYPE_PROPERTY]: type,
-        [ENTITY_ALIASES_PROPERTY]: [...record.mergedAliases],
-        [ENTITY_ALIASES_NORM_PROPERTY]: aliasLookupKeys(record.mergedAliases),
+        [ENTITY_ALIASES_PROPERTY]: aliasRecord(record.mergedAliases, nameNorm),
+        [ENTITY_ALIASES_NORM_PROPERTY]: aliasKeys(record.mergedAliases, nameNorm),
         [ACCESS_COUNT_PROPERTY]: 0,
       },
     });
@@ -361,8 +350,8 @@ export async function applyUnmerge(driver: Driver, input: UnmergeInput): Promise
       id: input.canonicalId,
       now: input.now,
       mergeProperties: {
-        [ENTITY_ALIASES_PROPERTY]: aliases,
-        [ENTITY_ALIASES_NORM_PROPERTY]: aliasLookupKeys(aliases),
+        [ENTITY_ALIASES_PROPERTY]: aliasRecord(aliases, input.canonicalNameNorm),
+        [ENTITY_ALIASES_NORM_PROPERTY]: aliasKeys(aliases, input.canonicalNameNorm),
         [MERGE_PROVENANCE_PROPERTY]: rewriteRecords(
           input.records,
           record.mergedId,
