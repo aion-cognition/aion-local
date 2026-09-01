@@ -51,6 +51,10 @@ side that went, because a pair with a closed side has nothing left for a person 
 the graph for the next reflection to catch. `aion unmerge` reverses any entity merge one at a
 time and names the tier that made it, with the reasons that tier recorded.
 
+What reaches the entity half of this queue also depends on `AION_ENTITY_MERGE_MODE`. Under the
+shipped `unanimous` only the split pairs land here; under `propose` the pairs both passes agreed
+on land here too and nothing merges at tier 3.
+
 What reaches this queue depends on `AION_SUPERSEDE_MODE`. Under the shipped `unanimous`, the
 pipeline closes what two independent judgments agree on and queues the rest, so a row here is
 one the second pass vetoed and the veto is its rationale. Under `propose` every judgment lands
@@ -82,6 +86,35 @@ precision 1.000 and recall 1.000, against 0.857 and 1.000 for the single pass.
 It gates on the judge's stated confidence, which came back 0.95 on every affirmative in the same
 run, so the threshold is a pass-through rather than a filter.
 
+## Entity merge mode
+
+```
+AION_ENTITY_MERGE_MODE=unanimous  # the default: merge on two agreeing judgments, queue the rest
+AION_ENTITY_MERGE_MODE=propose    # the kill switch: queue every judged pair, merge none of them
+```
+
+The same shape one tier down, over identities rather than claims. The dedup cascade nominates a
+pair from the name vectors and from shared episodes, measures what the two share, and puts the
+facts to two calls: one asks whether one referent explains both records, the second argues that
+something separates them. Under `unanimous` a pair both passes agree on merges, with its
+provenance and a decision record `aion unmerge` reads back. Under `propose` both passes still
+run and the pair goes to `aion proposals` instead, so the reasoning survives a deployment that
+wants a person in the loop.
+
+Tier 0 ignores this knob. Two names that reach one key once separators are stripped, or an
+identity already answering to the other's name as an alias, merge with no model call, so there
+is no judgment for a mode over judgments to gate. `AION_AUTO_MERGE=false` is the switch for that
+tier's hourly sweep.
+
+The default is a measurement. `entity-cascade-precision.int.test.ts` builds 24 designed pairs
+into a real graph, runs the shipped cascade over each, and asserts the shipped default matches
+what it measures: at or above 0.9 auto-merge precision the default is `unanimous`, under it
+`propose`, and the test fails loudly either way round. Measured 2026-09-01 on claude-haiku-4-5
+with `snowflake-arctic-embed2` embeddings: TP 8, FP 0, FN 4, TN 12, precision 1.000, recall
+0.667. Every miss was a pair the second pass split and the cascade queued, never a wrong merge.
+Precision held at 1.000 across three runs; recall moved between 0.583 and 0.667 and gates
+nothing.
+
 ## Reopening a correction
 
 ```
@@ -110,7 +143,8 @@ nodes out of two thousand is a small share to a scoring function and an incident
 and before this there was no way to say so.
 
 `aion status` prints a `lanes` section: one line per operation that acts on its own between
-ticks (`merge_auto`, `supersession`, `proposal_hygiene`, `tier3`), each read as `acting` or
+ticks (`merge_auto`, `entity_dedup`, `supersession`, `proposal_hygiene`, `claim_dedup`,
+`tier3`), each read as `acting` or
 `off` from its own live knobs. Two states only, so the line answers "would this touch
 anything right now" without a third reading to interpret.
 

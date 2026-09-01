@@ -284,6 +284,23 @@ export const KNOBS = {
       proportion,
       0.1,
     ],
+    // What the cascade's judge tier does with a pair both passes call one thing. `unanimous`
+    // merges it; `propose` queues it and merges nothing, which makes it the kill switch. Tier 0
+    // reads neither value: a squash-equality merge asks no model, so there is no judgment for a
+    // mode over judgments to gate.
+    // Set by measurement rather than by hand, on the pre-registered rule the battery prints:
+    // auto-merge precision at or above 0.9 over the 24-pair cascade battery ships `unanimous`,
+    // anything less ships `propose`, and `entity-cascade-precision.int.test.ts` asserts the
+    // shipped value still matches what it measures, in both directions.
+    // Measured 2026-09-01 against claude-haiku-4-5 with snowflake-arctic-embed2 embeddings,
+    // 24 pairs built into a real graph: TP 8, FP 0, FN 4, TN 12, precision 1.000, recall 0.667.
+    // Three merges came from tier 0, five from the judge, and four pairs went to the residue
+    // lane. Every miss was a pair the second pass split rather than a wrong merge, which is the
+    // shape the bar was written for. Precision held at 1.000 across three runs; recall moved
+    // between 0.583 and 0.667 and gates nothing. The cross-type same-referent class is where
+    // it is spent: a company and the product named after it reach the second pass, and the
+    // second pass separates them.
+    entityMergeMode: ['AION_ENTITY_MERGE_MODE', z.enum(['propose', 'unanimous']), 'unanimous'],
     associationSemanticThreshold: ['AION_ASSOC_SEMANTIC_THRESHOLD', proportion, 0.75],
     associationSimilarLimit: ['AION_REFLECTION_ASSOCIATION_SIMILAR_LIMIT', positiveInt, 5],
     maxCognitiveNodes: ['AION_REFLECTION_MAX_COGNITIVE_NODES', positiveInt, 20],

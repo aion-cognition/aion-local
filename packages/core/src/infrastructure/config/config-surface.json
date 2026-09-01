@@ -90,6 +90,7 @@
       "maxEntities": 32,
       "entityDedupThreshold": 0.85,
       "entityNominationJaccardFloor": 0.1,
+      "entityMergeMode": "unanimous",
       "associationSemanticThreshold": 0.75,
       "associationSimilarLimit": 5,
       "maxCognitiveNodes": 20,
@@ -202,6 +203,7 @@
     "AION_DECISION_INTENT_BOOST -> recall.decisionBoost : number",
     "AION_EMBED_DIMENSION -> models.embedDimension : number",
     "AION_EMBED_MODEL -> models.embed : string",
+    "AION_ENTITY_MERGE_MODE -> reflection.entityMergeMode : string",
     "AION_FACTS_RESTATEMENT_FLOOR -> recall.restatementFloor : number",
     "AION_HEBBIAN_BATCH_SIZE -> hebbian.batchSize : number",
     "AION_HEBBIAN_DECAY_PEAK_DAYS -> hebbian.decayPeakDays : number",
@@ -445,6 +447,9 @@
     "AION_EMBED_MODEL=": "ConfigError Invalid configuration:\nAION_EMBED_MODEL: Too small: expected string to have >=1 characters",
     "AION_EMBED_MODEL=zzz": "ok \"zzz\"",
     "AION_EMBED_MODEL=x": "ok \"x\"",
+    "AION_ENTITY_MERGE_MODE=": "ConfigError Invalid configuration:\nAION_ENTITY_MERGE_MODE: Invalid option: expected one of \"propose\"|\"unanimous\"",
+    "AION_ENTITY_MERGE_MODE=zzz": "ConfigError Invalid configuration:\nAION_ENTITY_MERGE_MODE: Invalid option: expected one of \"propose\"|\"unanimous\"",
+    "AION_ENTITY_MERGE_MODE=x": "ConfigError Invalid configuration:\nAION_ENTITY_MERGE_MODE: Invalid option: expected one of \"propose\"|\"unanimous\"",
     "AION_FACTS_RESTATEMENT_FLOOR=not-a-number": "ConfigError Invalid configuration:\nAION_FACTS_RESTATEMENT_FLOOR: Invalid input: expected number, received NaN",
     "AION_FACTS_RESTATEMENT_FLOOR=": "ConfigError Invalid configuration:\nAION_FACTS_RESTATEMENT_FLOOR: Invalid input: expected number, received NaN",
     "AION_FACTS_RESTATEMENT_FLOOR=-1": "ConfigError Invalid configuration:\nAION_FACTS_RESTATEMENT_FLOOR: Too small: expected number to be >=0",
@@ -1318,6 +1323,9 @@
     "models.embed=\"\"": "models.embed: Too small: expected string to have >=1 characters",
     "models.embed=42": "models.embed: Invalid input: expected string, received number",
     "models.embed=null": "models.embed: Invalid input: expected string, received null",
+    "reflection.entityMergeMode=\"\"": "reflection.entityMergeMode: Invalid option: expected one of \"propose\"|\"unanimous\"",
+    "reflection.entityMergeMode=42": "reflection.entityMergeMode: Invalid option: expected one of \"propose\"|\"unanimous\"",
+    "reflection.entityMergeMode=null": "reflection.entityMergeMode: Invalid option: expected one of \"propose\"|\"unanimous\"",
     "recall.restatementFloor=-1": "recall.restatementFloor: Too small: expected number to be >=0",
     "recall.restatementFloor=0": "ok",
     "recall.restatementFloor=0.5": "ok",
@@ -2062,6 +2070,6 @@
     "reserved var list": "AION_BUILD_SHA, AION_GIT_USER_NAME, AION_REPO_HEAD_SHA, AION_REPO_PATH",
     "schema accepts DEFAULTS": "ok",
     "schema rejects an empty object": "rejected",
-    "default key order": "neo4j: uri,password | ollama: url | models: embed,embedDimension,cue,reflect | anthropic: apiKey,model | routing: cue,reflect | recall: maxHops,vectorLimit,maxFacts,maxEpisodes,maxNarratives,maxPreferences,maxResonant,useContextResonance,sessionDedup,ownSessionFilter,associationStrength,adjacencyTopK,compressionThreshold,cueBudgetMs,tokenBudget,vectorAdmissionFloor,corroborationFloor,bm25AdmissionMode,entityMatchThreshold,clusterCap,entityGlossCap,restatementFloor,decisionBoost,relatedClaimFloor,typedAdmission,typedAdmissionActivationFloor | search: methods,reranker,rrfConstant,mmrLambda,weights | activation: maxIterations,decayFactor,minActivation,maxNodesVisited,hubThreshold | hebbian: weightFloor,learningRate,decayRate,decayPeakDays,decaySigma,batchSize,flushCeiling,decayScanFraction | contextResonance: seedLimit,seedBudgetBase,seedBudgetGrowth,activationLimit,resonantLimit,contextSearchThreshold | reflection: stageTimeoutMs,maxEntities,entityDedupThreshold,entityNominationJaccardFloor,associationSemanticThreshold,associationSimilarLimit,maxCognitiveNodes,maxRelationships,supersedeMode,supersedeAutoConfidence,supersedeNeighborThreshold,supersedeFamilyRelatednessFloor,maxSupersessionSubjects,maxContradictionNeighbors,maxContradictionJudgments,narrativeIdleMinutes,maxNarrativeEpisodes,maxNarrativeEpisodeChars,narrativeSweepLimit | lanes: arrivalWindowMs,sessionArrivalMax,globalArrivalMax,hotSessionArrivalMax | redaction: entropyThreshold | maintenance: tier3,tier3Mode,autoMerge,tickMinutes,starvationCycles,urgencyThreshold,effectivenessFloor,vectorBackfillBatchSize,contextRefreshBatchSize,reconcileBatchSize,deadLetterBatchSize,redactionPurgeBatchSize,narrativeCleanupBatch,retroSupersessionBatch,descriptionRefreshBatch,descriptionRefreshMentionGrowth,backboneRepairBatch,orphanCleanupBatch,orphanForgetAfterDays,communityNodeLimit,communityMinNodes,bridgeMinCommunitySize,bridgeOverlapCeiling,proposalHygiene,hygienePollutedAgeHours,hygieneResidueAgeDays,hygieneJudgeBatch,edgePrune,edgePruneUnreinforcedDays,edgePruneBatch,identifierDecay,identifierDecayBatch,identifierHalfLifeDays,identifierMentionFloor,claimDedup,claimDedupBatch,claimDedupCosineFloor | sqlite: path,reinforcementQueueCap | operational: dataDir,mcpPort,workerCount,workerStaleClaimTimeoutMs,workerRetryBaseMs,workerRetryCapMs,workerMaxAttempts,workerBreakerThreshold,workerBreakerCooldownMs,workerVectorBatchSize,reconcileWarnThreshold,lagOldestUnclaimedWarnMs,lagQueueDepthWarnThreshold,sessionIdleExpiryMinutes | logging: filePath,level"
+    "default key order": "neo4j: uri,password | ollama: url | models: embed,embedDimension,cue,reflect | anthropic: apiKey,model | routing: cue,reflect | recall: maxHops,vectorLimit,maxFacts,maxEpisodes,maxNarratives,maxPreferences,maxResonant,useContextResonance,sessionDedup,ownSessionFilter,associationStrength,adjacencyTopK,compressionThreshold,cueBudgetMs,tokenBudget,vectorAdmissionFloor,corroborationFloor,bm25AdmissionMode,entityMatchThreshold,clusterCap,entityGlossCap,restatementFloor,decisionBoost,relatedClaimFloor,typedAdmission,typedAdmissionActivationFloor | search: methods,reranker,rrfConstant,mmrLambda,weights | activation: maxIterations,decayFactor,minActivation,maxNodesVisited,hubThreshold | hebbian: weightFloor,learningRate,decayRate,decayPeakDays,decaySigma,batchSize,flushCeiling,decayScanFraction | contextResonance: seedLimit,seedBudgetBase,seedBudgetGrowth,activationLimit,resonantLimit,contextSearchThreshold | reflection: stageTimeoutMs,maxEntities,entityDedupThreshold,entityNominationJaccardFloor,entityMergeMode,associationSemanticThreshold,associationSimilarLimit,maxCognitiveNodes,maxRelationships,supersedeMode,supersedeAutoConfidence,supersedeNeighborThreshold,supersedeFamilyRelatednessFloor,maxSupersessionSubjects,maxContradictionNeighbors,maxContradictionJudgments,narrativeIdleMinutes,maxNarrativeEpisodes,maxNarrativeEpisodeChars,narrativeSweepLimit | lanes: arrivalWindowMs,sessionArrivalMax,globalArrivalMax,hotSessionArrivalMax | redaction: entropyThreshold | maintenance: tier3,tier3Mode,autoMerge,tickMinutes,starvationCycles,urgencyThreshold,effectivenessFloor,vectorBackfillBatchSize,contextRefreshBatchSize,reconcileBatchSize,deadLetterBatchSize,redactionPurgeBatchSize,narrativeCleanupBatch,retroSupersessionBatch,descriptionRefreshBatch,descriptionRefreshMentionGrowth,backboneRepairBatch,orphanCleanupBatch,orphanForgetAfterDays,communityNodeLimit,communityMinNodes,bridgeMinCommunitySize,bridgeOverlapCeiling,proposalHygiene,hygienePollutedAgeHours,hygieneResidueAgeDays,hygieneJudgeBatch,edgePrune,edgePruneUnreinforcedDays,edgePruneBatch,identifierDecay,identifierDecayBatch,identifierHalfLifeDays,identifierMentionFloor,claimDedup,claimDedupBatch,claimDedupCosineFloor | sqlite: path,reinforcementQueueCap | operational: dataDir,mcpPort,workerCount,workerStaleClaimTimeoutMs,workerRetryBaseMs,workerRetryCapMs,workerMaxAttempts,workerBreakerThreshold,workerBreakerCooldownMs,workerVectorBatchSize,reconcileWarnThreshold,lagOldestUnclaimedWarnMs,lagQueueDepthWarnThreshold,sessionIdleExpiryMinutes | logging: filePath,level"
   }
 }

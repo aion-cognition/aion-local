@@ -270,7 +270,10 @@ const LANE_NAME_WIDTH = 18;
  * dedicated boolean. Supersession has no boolean of its own: `propose` queues everything and
  * closes nothing, so `unanimous` and the legacy `auto` are what "acting" means for it, and the
  * mode name is shown alongside for the same reason `queue` shows a lane's own depth rather
- * than just a total. Tier 3 only acts when its kill switch is on and its own mode knob says
+ * than just a total. The cascade's judge tier reads the same way under
+ * `AION_ENTITY_MERGE_MODE`, and it is a separate line from `merge_auto` because the two are
+ * separate switches: `merge_auto` governs the deterministic tier, which merges whatever the
+ * judge tier is doing. Tier 3 only acts when its kill switch is on and its own mode knob says
  * `act`; `propose` records a recommendation and runs nothing, which reads as `off` here for
  * the same reason it reads as `off` in `docs/operations.md`.
  */
@@ -283,6 +286,13 @@ function renderLanes(config: Config, write: Writer): void {
   write('lanes');
   write(
     `  ${'merge_auto'.padEnd(LANE_NAME_WIDTH)} MODE: ${laneMode(config.maintenance.autoMerge)}`,
+  );
+
+  const { entityMergeMode } = config.reflection;
+  const entityMergeActing = entityMergeMode !== 'propose';
+  const entityMergeDetail = entityMergeActing ? ` (${entityMergeMode})` : '';
+  write(
+    `  ${'entity_dedup'.padEnd(LANE_NAME_WIDTH)} MODE: ${laneMode(entityMergeActing)}${entityMergeDetail}`,
   );
 
   const supersessionMode = config.reflection.supersedeMode;
