@@ -272,6 +272,18 @@ export const KNOBS = {
     stageTimeoutMs: ['AION_REFLECTION_STAGE_TIMEOUT_MS', positiveInt, 60_000],
     maxEntities: ['AION_REFLECTION_MAX_ENTITIES', positiveInt, 32],
     entityDedupThreshold: ['AION_REFLECTION_ENTITY_DEDUP_THRESHOLD', proportion, 0.85],
+    // The floor the bulk nominator's shared-episode Jaccard has to clear. A nomination floor,
+    // not a decision line: everything above it is handed to the evidence tiers, and nothing
+    // above it merges on this number alone. A tenth means the two were seen together in about
+    // one episode in ten of the history they have between them, which is enough co-occurrence
+    // to be worth reading and low enough that a rare name paired with a common one still gets
+    // looked at. Sized against the community-size distribution of a live graph in 4.4; this
+    // default is the starting point, not a measurement.
+    entityNominationJaccardFloor: [
+      'AION_REFLECTION_ENTITY_NOMINATION_JACCARD_FLOOR',
+      proportion,
+      0.1,
+    ],
     associationSemanticThreshold: ['AION_ASSOC_SEMANTIC_THRESHOLD', proportion, 0.75],
     associationSimilarLimit: ['AION_REFLECTION_ASSOCIATION_SIMILAR_LIMIT', positiveInt, 5],
     maxCognitiveNodes: ['AION_REFLECTION_MAX_COGNITIVE_NODES', positiveInt, 20],
