@@ -21,6 +21,7 @@ import {
 } from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { squashName } from '../../reflection/domain/entity-reconciliation.js';
 
 const EMBED_DIMENSION = 8;
 const NOW = new Date('2026-08-29T14:00:00.000Z');
@@ -164,6 +165,27 @@ describe('graph health counts', () => {
 
 describe('observeHealth', () => {
   it('assembles one snapshot from every collector', async () => {
+    // The entities collector needs its own squash-equal pair: nothing else seeded above holds
+    // a name_squash collision. Both land in scope for the orphan count too (no text, so vector
+    // parity is untouched, and no edges, so each is its own orphan).
+    for (const [id, name] of [
+      ['entity-squash-a', 're-mark'],
+      ['entity-squash-b', 'remark'],
+    ] as const) {
+      const nameNorm = name.toLowerCase();
+      await writeStampedNode(harness.driver, {
+        label: 'Entity',
+        id,
+        properties: {
+          name,
+          name_norm: nameNorm,
+          name_squash: squashName(nameNorm),
+          type: 'concept',
+        },
+        now: NOW,
+      });
+    }
+
     const snapshot = await observeHealth(
       { driver: harness.driver, db, config, logger },
       { operationNames: ['fake_operation'], cycle: 7, now: NOW },
@@ -174,7 +196,9 @@ describe('observeHealth', () => {
     expect(snapshot.observedAt).toBe(NOW.toISOString());
     expect(snapshot.graph.vectorParity).toBeCloseTo(5 / 6, 6);
     expect(snapshot.graph.episodesWithoutSession).toBe(1);
-    expect(snapshot.graph.orphanShare).toBeCloseTo(2 / 4, 6);
+    // The two squash-equal entities join the orphan population too: neither carries an edge.
+    expect(snapshot.graph.orphanShare).toBeCloseTo(4 / 6, 6);
+    expect(snapshot.entities.tier0Eligible).toBe(2);
     // The one CO_OCCURS edge; the two PARTICIPATES_IN and the one EXTRACTED_FROM are protected.
     expect(snapshot.graph.decayableEdges).toBe(1);
     expect(snapshot.enrichment.unenriched).toBe(3);
@@ -208,5 +232,7 @@ describe('observeHealth', () => {
     expect(snapshot.graph.decayableEdges).toBe(0);
     expect(snapshot.queue.depth).toBe(0);
     expect(snapshot.plasticity.reinforcementQueueDepth).toBe(0);
+    expect(snapshot.degraded).toContain('entities');
+    expect(snapshot.entities.tier0Eligible).toBe(0);
   });
 });
