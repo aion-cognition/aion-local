@@ -6,6 +6,7 @@ import {
   writeEntityVectors,
   type EntityIdentityMatch,
   type EntityMergeInput,
+  type EntityNameForms,
   type EntityVectorEntry,
   type MergedEntity,
 } from '../../../infrastructure/graph/entity-queries.js';
@@ -15,19 +16,20 @@ import {
   normalizeEntityName,
   type ExtractedEntity,
 } from '../../domain/entity-extraction.js';
-import { squashName } from '../../domain/entity-reconciliation.js';
 import type { StageContext } from '../../domain/stage.js';
 import { entityNameVectorText, vectorInputHash } from '../../domain/vector-input.js';
 
 /**
  * Which node an extracted name lands on, and which of that node's two vectors this run has to
  * compute. Four tiers, tried in order and each one deterministic: the speaker is the backbone,
- * a name the backbone answers to is the backbone, a separator variant or an absorbed alias is
- * the identity already holding it, and anything left mints its own.
+ * a name the backbone answers to is the backbone, an absorbed alias is the identity already
+ * holding it, and anything left mints its own.
  *
- * Nothing here decides a duplicate. Every tier is exact string evidence over folded forms; a
- * name two identities answer to falls through to the cascade rather than being resolved on a
- * tie-break.
+ * Nothing here decides a duplicate. Every tier is exact string evidence over folded forms, and
+ * only over names a record actually used for the identity; a name two identities answer to
+ * falls through to the cascade rather than being resolved on a tie-break. Evidence about the
+ * shape of a name (squash equality, bigram overlap) belongs to the cascade too, whose merge is
+ * reversible where a write-time route is not.
  */
 
 /** Provenance: which pipeline path put the node in the graph. */
@@ -81,11 +83,21 @@ function mergeInput(
   };
 }
 
+/** One graph read's answer about every extracted name, plus who the record's "I" is. */
+type IdentityLookup = EntityNameForms & {
+  readonly speaker?: EntityIdentityMatch;
+};
+
 /**
- * The identities that already answer to a name this extraction did not spell exactly, in the
- * order the evidence is deterministic: separator-squashed equality first (`proposal_hygiene`
- * against `proposal-hygiene`), then alias membership. A name the graph already keys returns
- * nothing, because the MERGE seeks it on its own and resolves any merge chain forward.
+ * The identities that already answer to a name this extraction did not spell exactly: the
+ * ones holding it as an absorbed alias. A name the graph already keys returns nothing, because
+ * the MERGE seeks it on its own, resolves any merge chain forward, and reopens the node if a
+ * maintenance close was betting against exactly this mention.
+ *
+ * An alias is a name a record itself gave the identity, which is why routing on one at write
+ * is safe. Separator-squashed equality is not: `re-mark` and `remark` reach one lookup key and
+ * are two words, so that evidence goes to the dedup cascade, whose merge carries a provenance
+ * record and an undo. A write-time route has neither.
  *
  * Every holder comes back, never a pick. Two identities answering to one form is a duplicate
  * question, and answering it here would route a record's mentions onto whichever row sorted
@@ -93,19 +105,13 @@ function mergeInput(
  */
 function holdersOf(
   entity: ExtractedEntity,
-  forms: readonly EntityIdentityMatch[],
+  lookup: IdentityLookup,
 ): { readonly tier: string; readonly holders: readonly EntityIdentityMatch[] } | undefined {
-  if (forms.some((form) => form.nameNorm === entity.nameNorm)) {
+  if (lookup.ownedNames.has(entity.nameNorm)) {
     return undefined;
   }
 
-  const squash = squashName(entity.nameNorm);
-  const bySquash = forms.filter((form) => form.nameSquash === squash);
-  if (bySquash.length > 0) {
-    return { tier: 'squash', holders: bySquash };
-  }
-
-  const byAlias = forms.filter((form) => form.aliasesNorm.includes(entity.nameNorm));
+  const byAlias = lookup.forms.filter((form) => form.aliasesNorm.includes(entity.nameNorm));
   if (byAlias.length > 0) {
     return { tier: 'alias', holders: byAlias };
   }
@@ -120,19 +126,20 @@ function holdersOf(
 function resolveTarget(
   ctx: StageContext,
   entity: ExtractedEntity,
-  forms: readonly EntityIdentityMatch[],
-  speaker: EntityIdentityMatch | undefined,
+  lookup: IdentityLookup,
 ): EntityIdentityMatch | undefined {
-  if (entity.isSpeaker && speaker !== undefined) {
-    return speaker;
+  if (entity.isSpeaker && lookup.speaker !== undefined) {
+    return lookup.speaker;
   }
 
-  const structural = forms.find((form) => form.isStructural && form.nameNorm === entity.nameNorm);
+  const structural = lookup.forms.find(
+    (form) => form.isStructural && form.nameNorm === entity.nameNorm,
+  );
   if (structural !== undefined) {
     return structural;
   }
 
-  const held = holdersOf(entity, forms);
+  const held = holdersOf(entity, lookup);
   if (held === undefined) {
     return undefined;
   }
@@ -254,18 +261,19 @@ export async function resolveEntities(
   ctx: StageContext,
   entities: readonly ExtractedEntity[],
 ): Promise<readonly ResolvedEntity[]> {
-  const forms = await findEntityNameForms(ctx.driver, {
-    names: entities.map((entity) => entity.nameNorm),
-    squashes: entities.map((entity) => squashName(entity.nameNorm)),
-  });
+  const forms = await findEntityNameForms(
+    ctx.driver,
+    entities.map((entity) => entity.nameNorm),
+  );
   const speaker = entities.some((entity) => entity.isSpeaker)
     ? await findSpeakerEntity(ctx.driver)
     : undefined;
+  const lookup: IdentityLookup = { ...forms, ...(speaker === undefined ? {} : { speaker }) };
 
   const structural = new Map<string, { match: EntityIdentityMatch; entities: ExtractedEntity[] }>();
   const organic: { extracted: ExtractedEntity; input: EntityMergeInput }[] = [];
   for (const entity of entities) {
-    const target = resolveTarget(ctx, entity, forms, speaker);
+    const target = resolveTarget(ctx, entity, lookup);
     if (target?.isStructural === true) {
       const held = structural.get(target.id) ?? { match: target, entities: [] };
       held.entities.push(entity);

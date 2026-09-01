@@ -6,7 +6,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EntityFakeGraph, fakeProvider, type FakeProvider } from './entities.fixture.js';
 import { ENTITY_EXTRACTION_METHOD, EntityExtractionStage } from './entities.js';
 import { ACCESS_COUNT_PROPERTY } from '../../../infrastructure/graph/access-tracking.js';
-import { BITEMPORAL_PROPERTIES } from '../../../infrastructure/graph/bitemporal.js';
+import {
+  BITEMPORAL_PROPERTIES,
+  CLOSURE_PROVENANCE_PROPERTY,
+} from '../../../infrastructure/graph/bitemporal.js';
 import {
   ENTITY_MENTION_TYPE,
   ENTITY_PARTICIPATION_TYPE,
@@ -15,6 +18,7 @@ import {
 import type { EpisodeContext } from '../../../infrastructure/graph/episode-context.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../../../infrastructure/graph/episodes.js';
 import {
+  ENTITY_ALIASES_NORM_PROPERTY,
   ENTITY_NAME_NORM_PROPERTY,
   ENTITY_NAME_PROPERTY,
   ENTITY_NAME_VECTOR_PROPERTY,
@@ -309,7 +313,7 @@ describe('structural upgrade', () => {
 });
 
 describe('name-form routing', () => {
-  it('routes a separator variant onto the identity that already answers to the squashed name', async () => {
+  it('leaves a separator variant to the cascade instead of routing it at write', async () => {
     await new EntityExtractionStage().run(
       context(
         fakeProvider({
@@ -325,9 +329,10 @@ describe('name-form routing', () => {
       ),
     );
 
-    expect(entityNames()).toEqual(['proposal-hygiene']);
-    const node = graph.entities()[0];
-    expect(node?.properties.aliases_norm).toEqual(['proposal_hygiene']);
+    // Squash equality is duplicate evidence, and `re-mark` against `remark` is why it is only
+    // evidence. Deciding it here would move a record's mentions with nothing to undo it; the
+    // cascade's merge writes a provenance record and unmerge reverses it.
+    expect(entityNames()).toEqual(['proposal-hygiene', 'proposal_hygiene']);
   });
 
   it('routes a later record onto the identity holding that spelling as an alias', async () => {
@@ -349,6 +354,37 @@ describe('name-form routing', () => {
     );
 
     expect(entityNames()).toEqual(['Aion']);
+  });
+
+  it('leaves a name a closed identity still keys to the merge that can reopen it', async () => {
+    graph.seedNode('holder-1', ['Entity', 'Memory', 'AionNode'], {
+      [ENTITY_NAME_PROPERTY]: 'edge prune',
+      [ENTITY_NAME_NORM_PROPERTY]: 'edge prune',
+      [ENTITY_ALIASES_NORM_PROPERTY]: ['edge-prune'],
+      type: 'tool',
+    });
+    graph.seedNode('closed-1', ['Entity', 'Memory', 'AionNode'], {
+      [ENTITY_NAME_PROPERTY]: 'edge-prune',
+      [ENTITY_NAME_NORM_PROPERTY]: 'edge-prune',
+      type: 'tool',
+      [BITEMPORAL_PROPERTIES.validUntil]: OCCURRED_AT,
+      [CLOSURE_PROVENANCE_PROPERTY]: 'identifier_decay',
+    });
+
+    await new EntityExtractionStage().run(
+      context(
+        fakeProvider({
+          generate: [{ entities: [{ name: 'edge-prune', type: 'tool', context: '' }] }],
+        }),
+      ),
+    );
+
+    // The alias holder is current and the owner is not, so a tier reading only current rows
+    // would route here and the close would never see the mention it was betting on.
+    expect(graph.entities()).toHaveLength(2);
+    expect(graph.edgesOfType(ENTITY_MENTION_TYPE).map((edge) => edge.targetId)).toEqual([
+      'closed-1',
+    ]);
   });
 
   it('mints its own identity when several holders answer to the name', async () => {

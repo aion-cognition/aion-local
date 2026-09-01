@@ -38,7 +38,12 @@ export const ENTITY_TYPE_PROPERTY = 'type';
  */
 export const ENTITY_TYPE_COUNTS_PROPERTY = 'type_counts';
 
-/** The separator-stripped second lookup key, indexed by migration 003. Never a uniqueness rule. */
+/**
+ * The separator-stripped second lookup key, indexed by migration 003 and never a uniqueness
+ * rule. Stored for the dedup cascade to weigh rather than read by the write path: `re-mark`
+ * and `remark` squash together and are two words, so squash equality is evidence for a merge
+ * that carries a provenance record and an undo, never a routing decision taken at write.
+ */
 export const ENTITY_NAME_SQUASH_PROPERTY = 'name_squash';
 
 /** sha256 of the exact text `name_vec` was taken over, so a changed input is detectable. */
@@ -98,7 +103,6 @@ export type EntityIdentityMatch = {
   readonly id: string;
   readonly name: string;
   readonly nameNorm: string;
-  readonly nameSquash: string;
   readonly type: string;
   readonly aliasesNorm: readonly string[];
   readonly isStructural: boolean;
@@ -113,7 +117,6 @@ function mapIdentityMatch(row: Row): EntityIdentityMatch {
     id: row.id as string,
     name: (row.name as string | null) ?? '',
     nameNorm: (row.name_norm as string | null) ?? '',
-    nameSquash: (row.name_squash as string | null) ?? '',
     type: (row.type as string | null) ?? '',
     aliasesNorm: (row.aliases_norm as string[] | null) ?? [],
     isStructural: row.is_structural === true,
@@ -126,7 +129,6 @@ function identityProjection(): string {
   return [
     `n.id AS id, n.${ENTITY_NAME_PROPERTY} AS name`,
     `n.${ENTITY_NAME_NORM_PROPERTY} AS name_norm`,
-    `n.${ENTITY_NAME_SQUASH_PROPERTY} AS name_squash`,
     `n.${ENTITY_TYPE_PROPERTY} AS type`,
     `coalesce(n.${ENTITY_ALIASES_NORM_PROPERTY}, []) AS aliases_norm`,
     `coalesce(n.${STRUCTURAL_PROPERTY}, false) AS is_structural`,
@@ -135,19 +137,26 @@ function identityProjection(): string {
   ].join(',\n       ');
 }
 
-export type EntityNameFormInput = {
-  /** Folded names, matched against `name_norm` and against every alias key. */
-  readonly names: readonly string[];
-  /** Separator-stripped forms, matched against `name_squash`. */
-  readonly squashes: readonly string[];
+/** What one resolution read answers: who responds to these names, and which of them are spoken for. */
+export type EntityNameForms = {
+  /** Current identities answering by their own name or by an alias they have absorbed. */
+  readonly forms: readonly EntityIdentityMatch[];
+  /** The handed-in names an Entity already keys, whatever that node's currency. */
+  readonly ownedNames: ReadonlySet<string>;
 };
 
 /**
- * Every current identity that answers to one of these name forms, by its own name, by its
- * squashed name, or by an alias it has absorbed. Currency-filtered rather than
- * currency-aware: a closed node's key is still owned (the constraint spans every Entity
- * whatever its currency) and the MERGE resolves it forward on its own, so returning one here
- * would route an extraction onto an identity dedup already collapsed.
+ * The two halves answer different questions about one read.
+ *
+ * Routing may only ever land on a current identity, so the alias branch is currency-filtered:
+ * a closed node's key is still owned (the constraint spans every Entity whatever its currency)
+ * and the MERGE resolves it forward on its own, so returning one there would route an
+ * extraction onto an identity dedup already collapsed.
+ *
+ * Ownership is the opposite reading of the same fact. A name a closed node keys must not be
+ * routed anywhere at all: the MERGE is what reopens a node a maintenance close bet against,
+ * and a tier answering first would leave that identity split for good, its key held by a node
+ * no extraction can reach again.
  *
  * Structural entities are in scope on purpose. Merge-on-collision, read side: a name the
  * backbone already answers to resolves to the Member or the global Workspace instead of
@@ -157,33 +166,42 @@ export type EntityNameFormInput = {
  * It returns every holder and decides nothing. A name several identities answer to is exactly
  * the case a caller must not resolve on a coin flip.
  */
-function entityNameFormsStatement(input: EntityNameFormInput): GraphStatement {
+function entityNameFormsStatement(names: readonly string[]): GraphStatement {
   return {
     cypher: [
       `MATCH (n:${ENTITY_LABEL})`,
-      `WHERE ${currentOnly('n')}`,
-      `  AND (n.${ENTITY_NAME_NORM_PROPERTY} IN $names`,
-      `       OR n.${ENTITY_NAME_SQUASH_PROPERTY} IN $squashes`,
-      `       OR any(alias IN coalesce(n.${ENTITY_ALIASES_NORM_PROPERTY}, [])` +
-        ' WHERE alias IN $names))',
-      `RETURN ${identityProjection()}`,
+      `WHERE n.${ENTITY_NAME_NORM_PROPERTY} IN $names`,
+      `   OR any(alias IN coalesce(n.${ENTITY_ALIASES_NORM_PROPERTY}, [])` +
+        ' WHERE alias IN $names)',
+      `WITH n, (${currentOnly('n')}) AS is_current`,
+      `WHERE is_current OR n.${ENTITY_NAME_NORM_PROPERTY} IN $names`,
+      `RETURN ${identityProjection()},`,
+      '       is_current',
       'ORDER BY n.id',
     ].join('\n'),
-    parameters: {
-      names: [...new Set(input.names)],
-      squashes: [...new Set(input.squashes)],
-    },
+    parameters: { names: [...new Set(names)] },
   };
 }
 
 export async function findEntityNameForms(
   driver: Driver,
-  input: EntityNameFormInput,
-): Promise<EntityIdentityMatch[]> {
-  if (input.names.length === 0 && input.squashes.length === 0) {
-    return [];
+  names: readonly string[],
+): Promise<EntityNameForms> {
+  if (names.length === 0) {
+    return { forms: [], ownedNames: new Set() };
   }
-  return runRead(driver, entityNameFormsStatement(input), mapIdentityMatch);
+
+  const wanted = new Set(names);
+  const rows = await runRead(driver, entityNameFormsStatement(names), (row) => ({
+    match: mapIdentityMatch(row),
+    isCurrent: row.is_current === true,
+  }));
+  return {
+    forms: rows.filter((row) => row.isCurrent).map((row) => row.match),
+    ownedNames: new Set(
+      rows.map((row) => row.match.nameNorm).filter((nameNorm) => wanted.has(nameNorm)),
+    ),
+  };
 }
 
 /**
