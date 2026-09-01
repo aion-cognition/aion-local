@@ -11,8 +11,8 @@ import type { NameFormRelation } from '../../infrastructure/sqlite/entity-merge-
  * The relations are ordered by how much they claim. `fold` is the same name spelled two ways.
  * `squash` is the same name spelled with different separators, which is evidence and not proof:
  * `re-mark` and `remark` reach one squashed key and are two words. `bigram` is character
- * overlap past the identity threshold, which is where `gitlab-token` scored 0.9109 against
- * `github-token`, so it never decides anything on its own.
+ * overlap past the identity threshold, which is where `Postgres` scores 1.0 against
+ * `PostgreSQL`, so it never decides anything on its own.
  */
 
 /**
