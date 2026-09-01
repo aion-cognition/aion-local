@@ -132,6 +132,19 @@ describe('the alias tier', () => {
     // The routed reading still counts toward the label; only the identity was decided by name.
     expect(stored[0]?.typeCounts).toBe('{"tool":1,"topic":1}');
   });
+
+  it('mints its own identity when several current identities answer to the same alias', async () => {
+    const first = await resolveOne(extracted('postgres', 'tool', { aliases: ['the store'] }));
+    const second = await resolveOne(extracted('valkey', 'tool', { aliases: ['the store'] }));
+
+    // Both nodes now answer to 'the store'; the alias tier finds two holders and refuses to
+    // route onto either, so the extraction mints a third identity instead of picking one.
+    const minted = await resolveOne(extracted('the store', 'tool'));
+
+    expect(minted.created).toBe(true);
+    expect(minted.id).not.toBe(first.id);
+    expect(minted.id).not.toBe(second.id);
+  });
 });
 
 describe('a name a maintenance close still keys', () => {
