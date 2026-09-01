@@ -1,5 +1,6 @@
 import {
   listUnmergeableRecords,
+  previewSupersession,
   runEntityUnmerge,
   type GraphConnection,
   type UnmergedDecision,
@@ -7,8 +8,8 @@ import {
 
 import { CliUsageError, parseArgs, type ArgSpec } from './args.js';
 import { short } from './format.js';
-import { stdoutWriter, type Writer } from './output.js';
-import { withSubstrate } from './substrate.js';
+import { confirmOrExit, stdoutWriter, type Writer } from './output.js';
+import { withSubstrate, type Substrate } from './substrate.js';
 
 /**
  * `aion unmerge`: the human end of entity deduplication.
@@ -37,24 +38,44 @@ type Subcommand = (typeof SUBCOMMANDS)[number];
 
 const SPEC: ArgSpec<Subcommand> = {
   command: 'unmerge',
-  usage: 'aion unmerge [ls|apply] <id>',
+  usage: 'aion unmerge [ls|apply] <id> [--yes]',
   subcommands: SUBCOMMANDS,
+  options: [{ flag: '--yes' }],
   maxPositionals: 1,
 };
 
 export type UnmergeFlags = {
   readonly subcommand: Subcommand;
   readonly id: string;
+  readonly yes: boolean;
 };
 
 export function parseUnmergeFlags(argv: readonly string[]): UnmergeFlags {
-  const { subcommand, positionals } = parseArgs(SPEC, argv);
+  const { subcommand, flags, positionals } = parseArgs(SPEC, argv);
   const [id] = positionals;
   if (id === undefined) {
     const needs = subcommand === 'ls' ? 'a canonical entity id' : 'the absorbed entity id';
     throw new CliUsageError(`unmerge ${subcommand} needs ${needs}`);
   }
-  return { subcommand, id };
+  return { subcommand, id, yes: flags.has('--yes') };
+}
+
+type MergeRecord = Awaited<ReturnType<typeof listUnmergeableRecords>>[number];
+
+/** What one canonical has absorbed: the same listing `ls` shows, and what `apply` confirms against. */
+export function renderAbsorbed(
+  canonicalId: string,
+  records: readonly MergeRecord[],
+  write: Writer,
+): void {
+  write(`${canonicalId} has absorbed ${String(records.length)} identity(ies)`);
+  for (const record of records) {
+    write(
+      `  ${record.mergedId}  ${record.mergedName ?? 'name not recorded'}` +
+        ` (${record.mergedType ?? 'type not recorded'}), ` +
+        `${String(record.edges.length)} edge(s) recorded`,
+    );
+  }
 }
 
 async function runLs(connection: GraphConnection, id: string, write: Writer): Promise<number> {
@@ -66,16 +87,57 @@ async function runLs(connection: GraphConnection, id: string, write: Writer): Pr
     write(`${id} has no merge record with an identity left to split out`);
     return 0;
   }
-  write(`${id} has absorbed ${String(records.length)} identity(ies)`);
-  for (const record of records) {
-    write(
-      `  ${record.mergedId}  ${record.mergedName ?? 'name not recorded'}` +
-        ` (${record.mergedType ?? 'type not recorded'}), ` +
-        `${String(record.edges.length)} edge(s) recorded`,
-    );
-  }
+  renderAbsorbed(id, records, write);
   write('');
   write('`aion unmerge apply <id>` splits one of them back out');
+  return 0;
+}
+
+/**
+ * `apply` takes the absorbed node's own id, never the canonical's, so the preview it shows
+ * before asking has to find the canonical first. It reads the same `SUPERSEDES` edge `aion
+ * unsupersede` reads for every other close, since the merge that absorbed this node closed it
+ * exactly that way.
+ */
+async function findCanonicalId(
+  connection: GraphConnection,
+  mergedId: string,
+): Promise<string | undefined> {
+  const supersession = await previewSupersession(connection.driver, mergedId);
+  return supersession?.lineage[0]?.supersededBy;
+}
+
+async function runApply(substrate: Substrate, id: string, yes: boolean): Promise<number> {
+  const { write } = substrate;
+  const connection = substrate.connection();
+
+  const canonicalId = await findCanonicalId(connection, id);
+  if (canonicalId !== undefined) {
+    const records = await listUnmergeableRecords(connection.driver, canonicalId);
+    if (records.length > 0) {
+      renderAbsorbed(canonicalId, records, write);
+      write('');
+    }
+  }
+
+  if (!(await confirmOrExit('split it back out? [y/N] ', yes, write))) {
+    write('cancelled');
+    return 1;
+  }
+
+  const report = await runEntityUnmerge(
+    { driver: connection.driver, db: substrate.db(), logger: substrate.logger() },
+    { mergedId: id },
+  );
+  write(`${id}: ${report.status}, ${report.detail}`);
+  if (report.restoredId !== undefined) {
+    write(`  restored as ${report.restoredId} out of ${short(report.canonicalId ?? '')}`);
+    write(`  ${String(report.aliasesReleased)} alias(es) released`);
+  }
+  if (report.decision !== undefined) {
+    write(`  ${describeUnmergedDecision(report.decision)}`);
+    write(`  decision record ${short(report.decision.id)}`);
+  }
   return 0;
 }
 
@@ -90,25 +152,10 @@ export function runUnmerge(
     parse: parseUnmergeFlags,
     needsGraph: 'unmerge',
     run: async (substrate, flags) => {
-      const connection = substrate.connection();
       if (flags.subcommand === 'ls') {
-        return await runLs(connection, flags.id, write);
+        return await runLs(substrate.connection(), flags.id, write);
       }
-
-      const report = await runEntityUnmerge(
-        { driver: connection.driver, db: substrate.db(), logger: substrate.logger() },
-        { mergedId: flags.id },
-      );
-      write(`${flags.id}: ${report.status}, ${report.detail}`);
-      if (report.restoredId !== undefined) {
-        write(`  restored as ${report.restoredId} out of ${short(report.canonicalId ?? '')}`);
-        write(`  ${String(report.aliasesReleased)} alias(es) released`);
-      }
-      if (report.decision !== undefined) {
-        write(`  ${describeUnmergedDecision(report.decision)}`);
-        write(`  decision record ${short(report.decision.id)}`);
-      }
-      return 0;
+      return await runApply(substrate, flags.id, flags.yes);
     },
   });
 }

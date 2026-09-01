@@ -14,7 +14,7 @@ import {
 
 import { CliUsageError, parseArgs, type ArgSpec } from './args.js';
 import { ageOf } from './format.js';
-import { stdoutWriter, type Writer } from './output.js';
+import { confirmOrExit, stdoutWriter, type Writer } from './output.js';
 import { withSubstrate, type Substrate } from './substrate.js';
 
 /**
@@ -160,7 +160,7 @@ function runLs(substrate: Substrate, flags: QueueFlags): number {
   return 0;
 }
 
-function runDrop(substrate: Substrate, flags: QueueFlags): number {
+async function runDrop(substrate: Substrate, flags: QueueFlags): Promise<number> {
   const db = substrate.db();
   const { write } = substrate;
   const counts = countQueueJobs(db, filterOf(flags));
@@ -168,13 +168,11 @@ function runDrop(substrate: Substrate, flags: QueueFlags): number {
     write(`nothing to drop: no unclaimed jobs match ${describeFilter(flags)}`);
     return 0;
   }
-  if (!flags.yes) {
-    write(
-      `would drop ${String(counts.unclaimed)} unclaimed jobs matching ${describeFilter(flags)}`,
-    );
-    if (counts.claimed > 0) {
-      write(`${String(counts.claimed)} claimed jobs are running and are left alone`);
-    }
+  write(`would drop ${String(counts.unclaimed)} unclaimed jobs matching ${describeFilter(flags)}`);
+  if (counts.claimed > 0) {
+    write(`${String(counts.claimed)} claimed jobs are running and are left alone`);
+  }
+  if (!(await confirmOrExit('drop them? [y/N] ', flags.yes, write))) {
     write('their episodes stay in the graph; re-run with --yes to drop the queue rows');
     return 0;
   }
@@ -242,7 +240,7 @@ export function runQueue(
         return await runReconcile(substrate, flags);
       }
       if (flags.subcommand === 'drop') {
-        return runDrop(substrate, flags);
+        return await runDrop(substrate, flags);
       }
       if (flags.subcommand === 'promote') {
         return runPromote(substrate, flags);
