@@ -68,7 +68,7 @@ function digitRuns(folded: string): string[] {
   return (folded.match(/\d+/g) ?? []).sort();
 }
 
-function sameDigits(foldedA: string, foldedB: string): boolean {
+export function nameDigitsMatch(foldedA: string, foldedB: string): boolean {
   const runsA = digitRuns(foldedA);
   const runsB = digitRuns(foldedB);
   return runsA.length === runsB.length && runsA.every((run, index) => run === runsB[index]);
@@ -90,7 +90,7 @@ export function nameFormMatches(a: string, b: string): boolean {
   if (foldedA === foldedB) {
     return true;
   }
-  if (!sameDigits(foldedA, foldedB)) {
+  if (!nameDigitsMatch(foldedA, foldedB)) {
     return false;
   }
   if (Math.min(Array.from(foldedA).length, Array.from(foldedB).length) < MIN_OVERLAP_NAME_LENGTH) {
