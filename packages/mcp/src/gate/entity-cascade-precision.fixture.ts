@@ -12,7 +12,7 @@
  * for as long as two extractions disagreed about what kind of thing something was, its duplicate
  * was invisible. Namesakes, cross-type distinct referents and identifier-shaped pairs are the
  * cost of removing that filter, and `gitlab-token` against `github-token` is the standing case:
- * 0.9109 on name form, two credentials, never one thing.
+ * 0.9109 on vector cosine, two credentials, never one thing.
  *
  * Co-mention counts run against the truth on purpose. Two names for one thing exist because two
  * records did not name them together; two namesakes turn up in one conversation constantly. A
