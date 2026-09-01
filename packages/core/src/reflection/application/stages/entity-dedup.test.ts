@@ -14,6 +14,7 @@ import {
 } from '../../../infrastructure/graph/entity-dedup-queries.js';
 import {
   ENTITY_MENTION_TYPE,
+  ENTITY_NAME_VECTOR_HASH_PROPERTY,
   ENTITY_PARTICIPATION_TYPE,
 } from '../../../infrastructure/graph/entity-queries.js';
 import type { EpisodeContext } from '../../../infrastructure/graph/episode-context.js';
@@ -74,6 +75,7 @@ type EntitySeed = {
   readonly accessCount?: number;
   readonly aliases?: readonly string[];
   readonly superseded?: boolean;
+  readonly nameVectorHash?: string;
 };
 
 function seedEntity(seed: EntitySeed): void {
@@ -87,6 +89,9 @@ function seedEntity(seed: EntitySeed): void {
     ...(seed.accessCount === undefined ? {} : { [ACCESS_COUNT_PROPERTY]: seed.accessCount }),
     ...(seed.aliases === undefined ? {} : { [ENTITY_ALIASES_PROPERTY]: [...seed.aliases] }),
     ...(seed.superseded === true ? { [BITEMPORAL_PROPERTIES.validUntil]: OLDER } : {}),
+    ...(seed.nameVectorHash === undefined
+      ? {}
+      : { [ENTITY_NAME_VECTOR_HASH_PROPERTY]: seed.nameVectorHash }),
   });
 }
 
@@ -158,6 +163,38 @@ describe('grouping and canonical selection', () => {
     const supersedes = graph.edgesOfType(SUPERSEDES_TYPE);
     expect(supersedes).toHaveLength(1);
     expect(supersedes[0]).toMatchObject({ sourceId: 'strong', targetId: 'weak' });
+  });
+
+  it('drops the canonical name-vector hash, because the absorbed name changes what it stands for', async () => {
+    seedEntity({
+      id: 'strong',
+      name: 'Aion',
+      type: 'project',
+      vector: [1, 0],
+      txFrom: NEWER,
+      accessCount: 3,
+      nameVectorHash: 'taken-over-the-name-alone',
+    });
+    seedEntity({
+      id: 'weak',
+      name: 'Aion Project',
+      type: 'project',
+      vector: [9, 4],
+      txFrom: OLDER,
+      accessCount: 1,
+    });
+    mention(EPISODE_ID, 'strong', 3);
+    seedEpisode(OTHER_EPISODE_ID);
+    mention(OTHER_EPISODE_ID, 'weak', 1);
+
+    await new EntityDedupStage().run(context());
+
+    const strong = graph.nodes.get('strong');
+    expect(strong?.properties[ENTITY_ALIASES_PROPERTY]).toEqual(['Aion Project']);
+    // The vector stays where it is: nominating on a slightly stale name beats nominating on
+    // nothing until the next resolution reads the missing hash and embeds the alias set.
+    expect(strong?.properties[ENTITY_NAME_VECTOR_PROPERTY]).toEqual([1, 0]);
+    expect(strong?.properties[ENTITY_NAME_VECTOR_HASH_PROPERTY]).toBeUndefined();
   });
 
   it('redirects the absorbed entity edges onto the canonical, summing on collision', async () => {
