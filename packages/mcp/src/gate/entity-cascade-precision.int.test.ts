@@ -67,6 +67,14 @@ const BATTERY_DEADLINE_MS = 900_000;
 /** The pre-registered bar. */
 const PRECISION_BAR = 0.9;
 
+/**
+ * The smallest judge-tier sample allowed to pick the shipped mode. Tier 0 merges the separator
+ * class deterministically and those merges count toward the headline, so a run that judged one
+ * pair would ship `unanimous` on a measurement of the deterministic tier. Four is the floor the
+ * fixture population supports; a run under it has not measured the thing the rule is about.
+ */
+const JUDGED_SAMPLE_FLOOR = 4;
+
 const SESSION_ID = 'entity-cascade-battery';
 
 type SeededCase = {
@@ -274,6 +282,24 @@ function precision(): number {
   return ratio(truePositives(), truePositives() + falsePositives());
 }
 
+/** Every merge tier 3 made, which is the only population the shipped mode governs. */
+function judgedMerges(): Scored[] {
+  return scored.filter((row) => row.tier === 'tier3');
+}
+
+/**
+ * Precision over tier 3 alone. The headline number includes tier 0, which is right for the
+ * question "what does the cascade merge wrongly"; it is the wrong number for the question the
+ * pre-registered rule answers, since the mode governs tier 3 and nothing else.
+ */
+function judgedPrecision(): number {
+  const hits = judgedMerges().filter((row) => row.entry.duplicate).length;
+  const misses =
+    judgedMerges().filter((row) => !row.entry.duplicate).length +
+    crossCaseDecisions().filter((decision) => decision.tier === 'tier3').length;
+  return ratio(hits, hits + misses);
+}
+
 /** The three outcomes a pair can reach, named for the line the battery prints on a miss. */
 function didWhat(row: Scored): string {
   if (row.merged) {
@@ -447,22 +473,26 @@ describe('the 24-pair entity cascade battery', () => {
    * does one that clears it while the default stays `propose`.
    */
   it('ships the default the measurement calls for', () => {
-    const judged = scored.filter((row) => row.tier === 'tier3');
+    const judged = judgedMerges();
     const measured = precision();
-    const expected = measured >= PRECISION_BAR ? 'unanimous' : 'propose';
+    const judgedOnly = judgedPrecision();
+    const expected =
+      measured >= PRECISION_BAR && judgedOnly >= PRECISION_BAR ? 'unanimous' : 'propose';
 
     console.log(
       `pre-registered rule: auto-merge precision ${measured.toFixed(3)} against ` +
         `${String(PRECISION_BAR)}, over ${String(judged.length)} judged merge(s) of which ` +
         `${String(judged.filter((row) => row.entry.duplicate).length)} were duplicates; ` +
+        `judge tier alone ${judgedOnly.toFixed(3)}; ` +
         `the measurement calls for '${expected}' and the shipped default is ` +
         `'${DEFAULT_ENTITY_MERGE_MODE}'`,
     );
 
-    // The mode governs tier 3 and nothing else. A run where the judge merged nothing would
-    // decide it on tier 0's deterministic merges, which write whatever the mode says, so that
-    // run has not measured the thing the rule is about and must not answer it.
-    expect(judged.length).toBeGreaterThan(0);
+    // The mode governs tier 3 and nothing else, and tier 0 contributes fixed true positives to
+    // the headline: one judged merge beside three deterministic ones reaches 1.000 without
+    // measuring the judge at all. The floor is what stops a sample that small from answering.
+    expect(judged.length).toBeGreaterThanOrEqual(JUDGED_SAMPLE_FLOOR);
+    // Both numbers gate `unanimous`, so the headline cannot carry a judge tier failing alone.
     expect(DEFAULT_ENTITY_MERGE_MODE).toBe(expected);
   });
 });
