@@ -2,13 +2,24 @@ import type { Driver } from 'neo4j-driver';
 import { createHash } from 'node:crypto';
 
 import { writeStampedDerivedNodeInTransaction, type StampedNodeResult } from './bitemporal.js';
+import {
+  claimKeyProperties,
+  closeKeyedClaimsInTransaction,
+  type KeyedCloseOptions,
+  type KeyedCloseResult,
+} from './claim-key-queries.js';
+import { normalizeCognitiveText, TEXT_NORM_PROPERTY } from './cognitive-text.js';
 import { inWriteTransaction } from './connection.js';
 import { upsertEdgeInTransaction, type UpsertedEdge } from './edges.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
 import type { NodeLabel } from './labels.js';
 import { toGraphVector, type GraphProperties } from './values.js';
+import type { TemporalClass } from '../../reflection/domain/claim-key.js';
 import { vectorInputHash } from '../../reflection/domain/vector-input.js';
 import type { Vector } from '../providers/types.js';
+
+/** The stored fold declares itself below this module, and every reader of it still asks here. */
+export { normalizeCognitiveText, TEXT_NORM_PROPERTY };
 
 /**
  * The nine cognitive node types the reflection pipeline extracts. This module is their
@@ -27,14 +38,6 @@ export const COGNITIVE_NODE_LABELS = [
 ] as const satisfies readonly NodeLabel[];
 
 export type CognitiveNodeLabel = (typeof COGNITIVE_NODE_LABELS)[number];
-
-/** Stored alongside `text` so a future reader can match on it without recomputing the fold. */
-export const TEXT_NORM_PROPERTY = 'text_norm';
-
-/** Collapses whitespace and lowercases, matching `backbone.ts`'s entity-name normalization. */
-export function normalizeCognitiveText(text: string): string {
-  return text.trim().replace(/\s+/g, ' ').toLowerCase();
-}
 
 /**
  * Node identity: (source episode, cognitive type, normalized text). A deterministic id
@@ -82,6 +85,19 @@ export type CognitiveNodeWrite = {
    */
   readonly occurredAt: Date;
   readonly now: Date;
+  /**
+   * The claim key: the entity this claim asserts about, and the folded attribute it asserts.
+   * Both are needed for a key, and a claim that declined one carries neither. Everything below
+   * is optional, so a write that supplies none of it stores exactly what it stored before a key
+   * existed.
+   */
+  readonly subjectEntityId?: string;
+  readonly aspectNorm?: string;
+  readonly temporalClass?: TemporalClass;
+  /** How long a reading answers for; the horizon is computed from `occurredAt`, never from `now`. */
+  readonly readingHorizonDays?: number;
+  /** Absent leaves the key inert: it is stored and nothing is closed on it. */
+  readonly keyedClose?: KeyedCloseOptions;
 };
 
 export type CognitiveNodeWriteResult = {
@@ -89,6 +105,8 @@ export type CognitiveNodeWriteResult = {
   readonly edge: UpsertedEdge;
   /** False when the id already existed: a prior run (or an earlier node in this one) wrote it first. */
   readonly created: boolean;
+  /** Absent when no keyed lookup ran, which is different from a lookup that matched nothing. */
+  readonly keyedClose?: KeyedCloseResult;
 };
 
 /**
@@ -96,6 +114,12 @@ export type CognitiveNodeWriteResult = {
  * between the two never leaves a cognitive node with no source. `count: 0` on the edge makes
  * the link itself a total no-op on re-run, matching `supersede()`'s `SUPERSEDES` edge: this
  * is structural provenance, not an observation to tally.
+ *
+ * A keyed close is the third step of the same transaction. It shares the commit so the claim
+ * and the close of what it corrects land together, and so the currency the close reads is the
+ * currency the close writes against. A failed close therefore rolls the claim back with it,
+ * which is the safe direction: a claim on the graph whose key-mate quietly stayed open answers
+ * two ways at once, and a retried episode does not.
  */
 export async function writeCognitiveNode(
   driver: Driver,
@@ -110,6 +134,15 @@ export async function writeCognitiveNode(
     status: input.metadata?.status,
     priority: input.metadata?.priority,
     rationale: input.metadata?.rationale,
+    ...claimKeyProperties({
+      occurredAt: input.occurredAt,
+      ...(input.subjectEntityId === undefined ? {} : { subjectEntityId: input.subjectEntityId }),
+      ...(input.aspectNorm === undefined ? {} : { aspectNorm: input.aspectNorm }),
+      ...(input.temporalClass === undefined ? {} : { temporalClass: input.temporalClass }),
+      ...(input.readingHorizonDays === undefined
+        ? {}
+        : { readingHorizonDays: input.readingHorizonDays }),
+    }),
     ...(input.contentVector === undefined
       ? {}
       : {
@@ -139,6 +172,26 @@ export async function writeCognitiveNode(
       now: input.now,
     });
 
-    return { node, edge, created: node.created };
+    if (
+      input.keyedClose?.mode !== 'close' ||
+      input.subjectEntityId === undefined ||
+      input.aspectNorm === undefined
+    ) {
+      return { node, edge, created: node.created };
+    }
+
+    const keyedClose = await closeKeyedClaimsInTransaction(tx, {
+      newId: id,
+      episodeId: input.episodeId,
+      subjectEntityId: input.subjectEntityId,
+      aspectNorm: input.aspectNorm,
+      relatednessFloor: input.keyedClose.relatednessFloor,
+      now: input.now,
+      // The key-mate stopped being true when the correcting experience happened, which is the
+      // episode's own clock and not the moment this write reached the graph.
+      validUntil: input.occurredAt,
+    });
+
+    return { node, edge, created: node.created, keyedClose };
   });
 }

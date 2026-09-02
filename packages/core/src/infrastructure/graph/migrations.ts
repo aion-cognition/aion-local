@@ -121,6 +121,25 @@ const MIGRATION_003_IDENTITY_REKEY: GraphMigration = {
 };
 
 /**
+ * The seek behind the subject-keyed claim lookup: a claim about to be written asks which open
+ * claim already asserts the same attribute of the same subject, and a scan for that answer runs
+ * on every fact-bearing write.
+ *
+ * Scoped to `Memory` for the reason the vector and currency indexes are: it is the one label
+ * every cognitive type carries, and the four fact-bearing labels are a post-filter over the
+ * handful of rows the composite seek returns. The currency half of the lookup is a scan by
+ * construction, since an open interval is an absent property, so the composite pair has to
+ * anchor the read before that filter applies.
+ */
+const MIGRATION_004_CLAIM_KEY_LOOKUP: GraphMigration = {
+  version: 4,
+  name: 'subject-keyed claim lookup index',
+  statements: (_ctx) => [
+    'CREATE RANGE INDEX claim_subject_aspect_idx IF NOT EXISTS FOR (n:Memory) ON (n.subject_entity_id, n.aspect_norm)',
+  ],
+};
+
+/**
  * Ordered oldest-first, and the runner replays every version's statements on every call. The
  * meta table records first application rather than gating the run, which is what lets 003 drop
  * a constraint 001 no longer creates.
@@ -129,6 +148,7 @@ export const GRAPH_MIGRATIONS: readonly GraphMigration[] = [
   MIGRATION_001_BACKBONE_SCHEMA,
   MIGRATION_002_COGNITIVE_SCHEMA,
   MIGRATION_003_IDENTITY_REKEY,
+  MIGRATION_004_CLAIM_KEY_LOOKUP,
 ];
 
 const META_KEY_PREFIX = 'graph:migration:';

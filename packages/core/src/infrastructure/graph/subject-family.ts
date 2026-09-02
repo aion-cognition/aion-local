@@ -6,7 +6,7 @@ import {
   supersedeInTransaction,
   type SupersedeResult,
 } from './bitemporal.js';
-import { normalizeCognitiveText, TEXT_NORM_PROPERTY } from './cognitive-queries.js';
+import { normalizeCognitiveText, TEXT_NORM_PROPERTY } from './cognitive-text.js';
 import { inWriteTransaction, runRead, type GraphTransaction } from './connection.js';
 import {
   DESCRIPTION_MENTION_COUNT_PROPERTY,
@@ -304,61 +304,70 @@ export async function supersedeSubjectFamily(
   driver: Driver,
   input: SupersedeSubjectFamilyInput,
 ): Promise<SubjectFamilyResult> {
+  return inWriteTransaction(driver, async (tx: GraphTransaction) =>
+    supersedeSubjectFamilyInTransaction(tx, input),
+  );
+}
+
+/**
+ * The same family close joined to a transaction the caller already holds, for a path that has
+ * to close in the commit that wrote what corrects it. Subjects are read here rather than
+ * earlier for the reason the whole close is one transaction: a concurrent entity write must not
+ * land between the read that chose the family and the writes that closed it.
+ */
+export async function supersedeSubjectFamilyInTransaction(
+  tx: GraphTransaction,
+  input: SupersedeSubjectFamilyInput,
+): Promise<SubjectFamilyResult> {
   const now = input.now ?? new Date();
   const validUntil = input.validUntil ?? now;
 
-  // Subjects are read inside the write transaction with everything they decide, so a
-  // concurrent entity write cannot land between the read that chose the family and the writes
-  // that closed it.
-  const closed = await inWriteTransaction(driver, async (tx: GraphTransaction) => {
-    const subjects = await tx.run(
-      SUBJECTS_OF_CLAIM,
-      { claimId: input.claimId, minNameLength: toGraphInteger(MIN_SUBJECT_NAME_LENGTH) },
-      mapSubject,
-    );
-    const retired = subjects.filter((subject) => glossRestatesClaim(subject, subjects));
+  const subjects = await tx.run(
+    SUBJECTS_OF_CLAIM,
+    { claimId: input.claimId, minNameLength: toGraphInteger(MIN_SUBJECT_NAME_LENGTH) },
+    mapSubject,
+  );
+  const retired = subjects.filter((subject) => glossRestatesClaim(subject, subjects));
 
-    const supersession = await supersedeInTransaction(tx, {
-      oldId: input.claimId,
+  const supersession = await supersedeInTransaction(tx, {
+    oldId: input.claimId,
+    newId: input.newId,
+    now,
+    validUntil,
+    ...(input.signals === undefined ? {} : { signals: input.signals }),
+    ...(input.provenance === undefined ? {} : { provenance: input.provenance }),
+  });
+
+  const candidates = await tx.run(SUBJECT_SIBLINGS, siblingParameters(input.claimId), mapSibling);
+  const siblings = candidates.filter((sibling) => siblingCloses(sibling, input.relatednessFloor));
+  const held = candidates.filter((sibling) => !siblingCloses(sibling, input.relatednessFloor));
+  for (const sibling of siblings) {
+    await supersedeInTransaction(tx, {
+      oldId: sibling.id,
       newId: input.newId,
       now,
       validUntil,
-      ...(input.signals === undefined ? {} : { signals: input.signals }),
-      ...(input.provenance === undefined ? {} : { provenance: input.provenance }),
+      signals: SUBJECT_PROPAGATION_SIGNALS,
+      provenance: [SUBJECT_PROPAGATION_METHOD],
     });
+  }
+  for (const subject of retired) {
+    await tx.run(
+      RETIRE_GLOSS,
+      { id: subject.entityId, now: toGraphDateTime(now) },
+      (row) => row.id,
+    );
+  }
 
-    const candidates = await tx.run(SUBJECT_SIBLINGS, siblingParameters(input.claimId), mapSibling);
-    const siblings = candidates.filter((sibling) => siblingCloses(sibling, input.relatednessFloor));
-    const held = candidates.filter((sibling) => !siblingCloses(sibling, input.relatednessFloor));
-    for (const sibling of siblings) {
-      await supersedeInTransaction(tx, {
-        oldId: sibling.id,
-        newId: input.newId,
-        now,
-        validUntil,
-        signals: SUBJECT_PROPAGATION_SIGNALS,
-        provenance: [SUBJECT_PROPAGATION_METHOD],
-      });
-    }
-    for (const subject of retired) {
-      await tx.run(
-        RETIRE_GLOSS,
-        { id: subject.entityId, now: toGraphDateTime(now) },
-        (row) => row.id,
-      );
-    }
-    return { supersession, siblings, held, subjects, retired };
-  });
-
-  const retiredIds = new Set(closed.retired.map((subject) => subject.entityId));
+  const retiredIds = new Set(retired.map((subject) => subject.entityId));
   return {
-    supersession: closed.supersession,
-    closedIds: [input.claimId, ...closed.siblings.map((sibling) => sibling.id)],
-    siblings: closed.siblings,
-    heldSiblings: closed.held,
-    subjects: closed.subjects.map((subject) => subject.name),
-    retiredGlosses: closed.retired,
-    openGlosses: closed.subjects.filter(
+    supersession,
+    closedIds: [input.claimId, ...siblings.map((sibling) => sibling.id)],
+    siblings,
+    heldSiblings: held,
+    subjects: subjects.map((subject) => subject.name),
+    retiredGlosses: retired,
+    openGlosses: subjects.filter(
       (subject) => subject.gloss !== undefined && !retiredIds.has(subject.entityId),
     ),
   };
