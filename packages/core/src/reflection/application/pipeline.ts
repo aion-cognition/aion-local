@@ -70,11 +70,18 @@ export function associationOptions(config: Config): AssociationStageOptions {
   };
 }
 
-export function cognitiveOptions(config: Config): Required<CognitiveExtractionStageOptions> {
+/**
+ * The keyed close rides on this stage's write, so its mode and the family floor it closes
+ * siblings under are threaded here rather than with the judge's options.
+ */
+export function cognitiveOptions(config: Config): CognitiveExtractionStageOptions {
   return {
     model: config.models.reflect,
     timeoutMs: config.reflection.stageTimeoutMs,
     maxNodes: config.reflection.maxCognitiveNodes,
+    keyedCloseMode: config.reflection.keyedCloseMode,
+    familyRelatednessFloor: config.reflection.supersedeFamilyRelatednessFloor,
+    readingHorizonDays: config.temporal.readingHorizonDays,
   };
 }
 
