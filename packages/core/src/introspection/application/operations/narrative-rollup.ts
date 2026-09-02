@@ -1,4 +1,3 @@
-import type { Config } from '../../../infrastructure/config/schema.js';
 import { rollUpNarratives } from '../../../reflection/application/narrative-rollup.js';
 import type { RollupScope } from '../../../reflection/domain/rollup.js';
 import { HEALTH_COLLECTORS, type HealthSnapshot } from '../../domain/health.js';
@@ -14,39 +13,20 @@ import type { IntrospectionOperation, OperationOutcome } from '../../domain/oper
  * substrate: a day rollup needs a day that has ended with narratives in it. That is the designed
  * answer rather than a reason to hold the operation back, and it starts working the moment the
  * history exists.
+ *
+ * Acting from day one, gated by the `narrativeRollup` kill switch both scopes read. The risk is
+ * reversible either way: every rollup is a supersession, and `aion unsupersede` reopens any
+ * member it closed.
  */
 
 export const DAY_ROLLUP_OPERATION = 'narrative_rollup_day';
 export const WEEK_ROLLUP_OPERATION = 'narrative_rollup_week';
 
 /**
- * The kill switch both scopes read, by name because the config schema does not carry it yet:
- * `maintenance.narrativeRollup` (`AION_MAINTENANCE_NARRATIVE_ROLLUP`). On by default, which is
- * what acting from day one means for an operation whose whole risk is reversible: every rollup
- * is a supersession, and `aion unsupersede` reopens any member it closed.
- */
-export const NARRATIVE_ROLLUP_KNOB = 'narrativeRollup';
-export const NARRATIVE_ROLLUP_ENV = 'AION_MAINTENANCE_NARRATIVE_ROLLUP';
-const NARRATIVE_ROLLUP_DEFAULT = true;
-
-/**
- * Windows one run compresses, standing in for `AION_MAINTENANCE_NARRATIVE_ROLLUP_WINDOWS`. Two
- * is a backlog that drains at a steady pace: each window is a model call and its review, and a
- * substrate with a month of unrolled days works through them a tick at a time.
- */
-const ROLLUP_WINDOW_LIMIT = 2;
-
-/**
  * No gauge in the snapshot counts windows waiting to be rolled up, so both scopes reach the
  * urgency threshold on waiting time, the standing cadence `narrative_cleanup` documents.
  */
 export const NARRATIVE_ROLLUP_STANDING_RELEVANCE = 0.12;
-
-function armed(config: Config): boolean {
-  const maintenance = config.maintenance as unknown as Record<string, unknown>;
-  const value = maintenance[NARRATIVE_ROLLUP_KNOB];
-  return typeof value === 'boolean' ? value : NARRATIVE_ROLLUP_DEFAULT;
-}
 
 function rollupRelevance(health: HealthSnapshot): number {
   if (health.degraded.includes(HEALTH_COLLECTORS.graph)) {
@@ -65,12 +45,13 @@ function narrativeRollupOperation(
     bucket,
     relevance: rollupRelevance,
     run: async (ctx): Promise<OperationOutcome> => {
-      if (!armed(ctx.config)) {
+      if (!ctx.config.maintenance.narrativeRollup) {
         return {
           status: 'noop',
           itemsProcessed: 0,
           itemsAffected: 0,
-          detail: `narrative rollups disabled by ${NARRATIVE_ROLLUP_ENV}; no window examined`,
+          detail:
+            'narrative rollups disabled by AION_MAINTENANCE_NARRATIVE_ROLLUP; no window examined',
         };
       }
 
@@ -81,7 +62,7 @@ function narrativeRollupOperation(
           model: ctx.config.models.reflect,
           timeoutMs: ctx.config.reflection.stageTimeoutMs,
           maxMemberChars: ctx.config.reflection.maxNarrativeEpisodeChars,
-          windowLimit: ROLLUP_WINDOW_LIMIT,
+          windowLimit: ctx.config.maintenance.narrativeRollupWindows,
           now: ctx.now,
           signal: ctx.signal,
         },

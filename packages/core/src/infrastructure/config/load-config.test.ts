@@ -44,6 +44,30 @@ describe('loadConfig defaults', () => {
     expect(DEFAULTS.temporal.expiryAnnotation).toBe(true);
   });
 
+  // All three act from day one, so a default that flipped to false would be an operation the
+  // catalog offers and the loop never runs.
+  it('defaults narrative rollup to armed', () => {
+    expect(DEFAULTS.maintenance.narrativeRollup).toBe(true);
+  });
+
+  it('defaults claim consolidation to armed', () => {
+    expect(DEFAULTS.maintenance.claimConsolidation).toBe(true);
+  });
+
+  it('defaults structural discovery to armed', () => {
+    expect(DEFAULTS.maintenance.structuralDiscovery).toBe(true);
+  });
+
+  // The cost term is a tie-breaker and never a veto, which is what the ceiling holds: at the
+  // widest cost the catalog can reach, urgency is halved rather than erased.
+  it('serves a cost scale that bounds the divisor rather than the candidate', () => {
+    const config = loadConfig({});
+
+    expect(config.maintenance.costReferenceMs).toBe(1000);
+    expect(config.maintenance.costDecades).toBe(3);
+    expect(config.maintenance.maxCostDivisor).toBe(2);
+  });
+
   it('never mutates the shared DEFAULTS object across calls', () => {
     const before = DEFAULTS.recall.maxHops;
 
@@ -74,6 +98,53 @@ describe('loadConfig override precedence', () => {
   it('overrides the auto-merge knob off', () => {
     const config = loadConfig({ AION_AUTO_MERGE: 'false' });
     expect(config.maintenance.autoMerge).toBe(false);
+  });
+
+  it('overrides the narrative rollup switch off', () => {
+    const config = loadConfig({ AION_MAINTENANCE_NARRATIVE_ROLLUP: 'false' });
+    expect(config.maintenance.narrativeRollup).toBe(false);
+  });
+
+  it('overrides the claim consolidation switch off', () => {
+    const config = loadConfig({ AION_MAINTENANCE_CLAIM_CONSOLIDATION: 'false' });
+    expect(config.maintenance.claimConsolidation).toBe(false);
+  });
+
+  it('overrides the structural discovery switch off', () => {
+    const config = loadConfig({ AION_MAINTENANCE_STRUCTURAL_DISCOVERY: 'false' });
+    expect(config.maintenance.structuralDiscovery).toBe(false);
+  });
+
+  it('overrides the rollup window limit', () => {
+    const config = loadConfig({ AION_MAINTENANCE_NARRATIVE_ROLLUP_WINDOWS: '5' });
+    expect(config.maintenance.narrativeRollupWindows).toBe(5);
+  });
+
+  // The one maintenance count a deployment may legitimately set to zero: a ceiling of nothing
+  // asks for identities carrying no association at all.
+  it('takes a zero degree ceiling for structural discovery', () => {
+    const config = loadConfig({ AION_MAINTENANCE_STRUCTURAL_DISCOVERY_DEGREE_CEILING: '0' });
+    expect(config.maintenance.structuralDiscoveryDegreeCeiling).toBe(0);
+  });
+
+  it('overrides the structural discovery batches', () => {
+    const config = loadConfig({
+      AION_MAINTENANCE_STRUCTURAL_DISCOVERY_SEED_BATCH: '40',
+      AION_MAINTENANCE_STRUCTURAL_DISCOVERY_BATCH: '5',
+    });
+    expect(config.maintenance.structuralDiscoverySeedBatch).toBe(40);
+    expect(config.maintenance.structuralDiscoveryBatch).toBe(5);
+  });
+
+  it('overrides the cost scale the routine tier scores with', () => {
+    const config = loadConfig({
+      AION_MAINTENANCE_COST_REFERENCE_MS: '250',
+      AION_MAINTENANCE_COST_DECADES: '2',
+      AION_MAINTENANCE_MAX_COST_DIVISOR: '1.5',
+    });
+    expect(config.maintenance.costReferenceMs).toBe(250);
+    expect(config.maintenance.costDecades).toBe(2);
+    expect(config.maintenance.maxCostDivisor).toBe(1.5);
   });
 
   it('overrides an enum-backed string leaf', () => {
@@ -147,6 +218,32 @@ describe('loadConfig bad values', () => {
 
   it('rejects a non-boolean string for a boolean leaf, naming the var', () => {
     expect(() => loadConfig({ AION_MAINTENANCE_TIER3: 'yes' })).toThrow(/AION_MAINTENANCE_TIER3/);
+  });
+
+  it('rejects a non-boolean string for a maintenance kill switch, naming the var', () => {
+    expect(() => loadConfig({ AION_MAINTENANCE_STRUCTURAL_DISCOVERY: 'off' })).toThrow(
+      /AION_MAINTENANCE_STRUCTURAL_DISCOVERY/,
+    );
+  });
+
+  it('rejects a rollup window limit of zero, naming the var', () => {
+    expect(() => loadConfig({ AION_MAINTENANCE_NARRATIVE_ROLLUP_WINDOWS: '0' })).toThrow(
+      /AION_MAINTENANCE_NARRATIVE_ROLLUP_WINDOWS/,
+    );
+  });
+
+  // Under one it would multiply urgency instead of dividing it, which is the opposite of what
+  // a cost term is for.
+  it('rejects a cost divisor ceiling under one, naming the var', () => {
+    expect(() => loadConfig({ AION_MAINTENANCE_MAX_COST_DIVISOR: '0.5' })).toThrow(
+      /AION_MAINTENANCE_MAX_COST_DIVISOR/,
+    );
+  });
+
+  it('rejects a cost decade span of zero, naming the var', () => {
+    expect(() => loadConfig({ AION_MAINTENANCE_COST_DECADES: '0' })).toThrow(
+      /AION_MAINTENANCE_COST_DECADES/,
+    );
   });
 
   it('rejects a keyed close mode outside its enum, naming the var', () => {

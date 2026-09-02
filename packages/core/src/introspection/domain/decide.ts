@@ -28,27 +28,6 @@ import type { OperationTier } from './operation.js';
 export const DEPRIORITIZED_WEIGHT = 0.5;
 
 /**
- * Runs at or under this cost pay nothing; the divisor rises from here. Intended knob:
- * `maintenance.costReferenceMs`.
- */
-const COST_REFERENCE_MS = 1_000;
-
-/**
- * Decades of cost above the reference the divisor spreads over. The catalog's own runs span
- * about three, from a SQLite tally to a batch of model calls. Intended knob:
- * `maintenance.costDecades`.
- */
-const COST_DECADES = 3;
-
-/**
- * The most an operation's cost may divide its urgency, so cost is a tie-breaker between
- * comparable candidates and never a veto: the dearest operation in the catalog still crosses the
- * threshold on a reading that calls for it, and starvation still reaches it. Intended knob:
- * `maintenance.maxCostDivisor`.
- */
-const MAX_COST_DIVISOR = 2;
-
-/**
  * Resolved runs a critical operation gets before its own record can cost it the preemption.
  * A real emergency is repaired in a few bounded batches and keeps preempting throughout;
  * an operation still selected on the same condition after this many runs that never moved
@@ -67,6 +46,19 @@ export type OperationCandidate = {
   readonly relevance: number;
 };
 
+/**
+ * The three numbers the cost term is shaped by, taken as one value so this stays pure: the
+ * scorer is handed the scale the deployment set rather than reading a config tree of its own.
+ */
+export type CostScale = {
+  /** Runs at or under this cost pay nothing; the divisor rises from here. */
+  readonly referenceMs: number;
+  /** Decades of cost above the reference the divisor spreads over. */
+  readonly decades: number;
+  /** The most an operation's cost may divide its urgency. */
+  readonly maxDivisor: number;
+};
+
 export type DecisionInput = {
   readonly health: HealthSnapshot;
   readonly candidates: readonly OperationCandidate[];
@@ -76,6 +68,7 @@ export type DecisionInput = {
   readonly urgencyThreshold: number;
   /** Effectiveness below which an operation is weighted down but never excluded. */
   readonly effectivenessFloor: number;
+  readonly cost: CostScale;
   readonly tier3Enabled: boolean;
 };
 
@@ -144,12 +137,12 @@ export function starvationBoost(cyclesSinceSelected: number, starvationCycles: n
  * and everything past the catalog's cost span pays the same ceiling, which keeps one very slow
  * operation from being scheduled out of existence.
  */
-export function costDivisor(meanDurationMs: number | undefined): number {
-  if (meanDurationMs === undefined || meanDurationMs <= COST_REFERENCE_MS) {
+export function costDivisor(meanDurationMs: number | undefined, cost: CostScale): number {
+  if (meanDurationMs === undefined || meanDurationMs <= cost.referenceMs) {
     return 1;
   }
-  const decades = Math.min(COST_DECADES, Math.log10(meanDurationMs / COST_REFERENCE_MS));
-  return 1 + (decades / COST_DECADES) * (MAX_COST_DIVISOR - 1);
+  const decades = Math.min(cost.decades, Math.log10(meanDurationMs / cost.referenceMs));
+  return 1 + (decades / cost.decades) * (cost.maxDivisor - 1);
 }
 
 /**
@@ -171,7 +164,7 @@ export function scoreCandidate(
       : 1;
   const urgency =
     (candidate.relevance * weight * starvationBoost(cyclesSinceSelected, input.starvationCycles)) /
-    costDivisor(meanDurationMs);
+    costDivisor(meanDurationMs, input.cost);
   return { ...candidate, urgency, cyclesSinceSelected, effectiveness, runs, meanDurationMs };
 }
 

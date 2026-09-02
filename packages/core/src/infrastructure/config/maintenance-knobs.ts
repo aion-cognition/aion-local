@@ -9,6 +9,7 @@ import { z } from 'zod';
  */
 const proportion = z.number().min(0).max(1);
 const positiveInt = z.number().int().positive();
+const nonNegativeInt = z.number().int().nonnegative();
 
 export const MAINTENANCE_KNOBS = {
   // The strategic layer's kill switch. On by default: a cycle the deterministic tiers left
@@ -49,6 +50,16 @@ export const MAINTENANCE_KNOBS = {
   // The deprioritization line: at or above it an operation scores at full weight, under it at
   // half, and starvation still eventually runs it either way. Never an exclusion.
   effectivenessFloor: ['AION_MAINTENANCE_EFFECTIVENESS_FLOOR', proportion, 0.5],
+  // The cost term the routine tier divides urgency by, in three parts. A run at or under
+  // `costReferenceMs` pays nothing and the divisor rises from there. `costDecades` is how many
+  // decades of cost above the reference that rise spreads over; the catalog's own runs span
+  // about three, from a SQLite tally to a batch of model calls. `maxCostDivisor` is where the
+  // rise stops, so cost breaks a tie between comparable candidates and never vetoes one: the
+  // dearest operation in the catalog still crosses the threshold on a reading that calls for it,
+  // and starvation still reaches it.
+  costReferenceMs: ['AION_MAINTENANCE_COST_REFERENCE_MS', positiveInt, 1_000],
+  costDecades: ['AION_MAINTENANCE_COST_DECADES', positiveInt, 3],
+  maxCostDivisor: ['AION_MAINTENANCE_MAX_COST_DIVISOR', z.number().min(1), 2],
   // `vector_backfill`'s content-vector pass: pending `:Memory` nodes embedded in one run, at
   // hebbian.batchSize's own default, since this is the same shape of work as a reinforcement flush.
   vectorBackfillBatchSize: ['AION_MAINTENANCE_VECTOR_BACKFILL_BATCH_SIZE', positiveInt, 100],
@@ -170,4 +181,41 @@ export const MAINTENANCE_KNOBS = {
     positiveInt,
     200,
   ],
+  // The kill switch both narrative rollup scopes read. On by default, which is what acting from
+  // day one means for an operation whose whole risk is reversible: every rollup is a
+  // supersession, and `aion unsupersede` reopens any member it closed. Off leaves a day and a
+  // week of sessions reaching recall as the separate stories the close wrote.
+  narrativeRollup: ['AION_MAINTENANCE_NARRATIVE_ROLLUP', z.boolean(), true],
+  // Closed windows one run compresses, per scope. Two is a backlog that drains at a steady pace:
+  // each window is a model call and its review, and a substrate with a month of unrolled days
+  // works through them a tick at a time.
+  narrativeRollupWindows: ['AION_MAINTENANCE_NARRATIVE_ROLLUP_WINDOWS', positiveInt, 2],
+  // `claim_consolidation`'s kill switch. On by default: the write is a supersession like any
+  // other, and `aion unsupersede` reopens every claim it absorbed. Off leaves many standing
+  // claims about one subject in the graph as extraction wrote them.
+  claimConsolidation: ['AION_MAINTENANCE_CLAIM_CONSOLIDATION', z.boolean(), true],
+  // `structural_discovery`'s kill switch. On by default: a nearest-neighbour cosine brings a
+  // pair forward and only the store may write the edge, so a pair carrying a cosine and no
+  // graph evidence is dropped and counted rather than written weakly. Off leaves every
+  // under-connected identity exactly as it is.
+  structuralDiscovery: ['AION_MAINTENANCE_STRUCTURAL_DISCOVERY', z.boolean(), true],
+  // Association edges an identity may already hold and still count as under-connected. Two is
+  // conservative on purpose: the substrate this ships onto has no history to measure against,
+  // and a ceiling raised later reaches strictly more pairs, while edges written under one too
+  // high are already in the graph. Re-derive it against the degree distribution a graph grows.
+  structuralDiscoveryDegreeCeiling: [
+    'AION_MAINTENANCE_STRUCTURAL_DISCOVERY_DEGREE_CEILING',
+    nonNegativeInt,
+    2,
+  ],
+  /** Under-connected identities one run seeds the nomination read with. */
+  structuralDiscoverySeedBatch: [
+    'AION_MAINTENANCE_STRUCTURAL_DISCOVERY_SEED_BATCH',
+    positiveInt,
+    200,
+  ],
+  // Nominated pairs one run gathers evidence for and may write. A day bucket and twenty-five
+  // pairs is a slow build by design: the pairs are ranked by cosine, so a capped run takes the
+  // strongest of them and the next run takes what the substrate has grown into since.
+  structuralDiscoveryBatch: ['AION_MAINTENANCE_STRUCTURAL_DISCOVERY_BATCH', positiveInt, 25],
 } as const;

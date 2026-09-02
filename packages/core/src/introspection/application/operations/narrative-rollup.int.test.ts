@@ -3,12 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import {
-  dayNarrativeRollupOperation,
-  NARRATIVE_ROLLUP_ENV,
-  NARRATIVE_ROLLUP_KNOB,
-  weekNarrativeRollupOperation,
-} from './narrative-rollup.js';
+import { dayNarrativeRollupOperation, weekNarrativeRollupOperation } from './narrative-rollup.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import {
@@ -115,18 +110,12 @@ function stubProvider(verdict: 'unanimous' | 'vetoed'): Provider {
 
 const armed: Config = {
   ...DEFAULTS,
-  maintenance: {
-    ...DEFAULTS.maintenance,
-    [NARRATIVE_ROLLUP_KNOB]: true,
-  } as Config['maintenance'],
+  maintenance: { ...DEFAULTS.maintenance, narrativeRollup: true },
 };
 
 const disarmed: Config = {
   ...DEFAULTS,
-  maintenance: {
-    ...DEFAULTS.maintenance,
-    [NARRATIVE_ROLLUP_KNOB]: false,
-  } as Config['maintenance'],
+  maintenance: { ...DEFAULTS.maintenance, narrativeRollup: false },
 };
 
 function context(
@@ -200,7 +189,7 @@ describe('narrative rollups against a live substrate', () => {
 
     expect(outcome.status).toBe('noop');
     expect(outcome.itemsProcessed).toBe(0);
-    expect(outcome.detail).toContain(NARRATIVE_ROLLUP_ENV);
+    expect(outcome.detail).toContain('AION_MAINTENANCE_NARRATIVE_ROLLUP');
   });
 
   it('writes nothing when the review vetoes the draft', async () => {

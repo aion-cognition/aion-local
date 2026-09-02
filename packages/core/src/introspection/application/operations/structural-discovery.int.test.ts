@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { STRUCTURAL_DISCOVERY_KNOB, structuralDiscoveryOperation } from './structural-discovery.js';
+import { structuralDiscoveryOperation } from './structural-discovery.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
@@ -42,13 +42,15 @@ let db: SqliteHandle;
 let logger: Logger;
 let dataDir: string;
 
-/** The knob the operation gates on does not exist in the schema yet, so the test supplies it. */
+/** Both switch positions written out, so the file states which one every case runs under. */
 const armed: Config = {
   ...DEFAULTS,
-  maintenance: {
-    ...DEFAULTS.maintenance,
-    [STRUCTURAL_DISCOVERY_KNOB]: true,
-  } as Config['maintenance'],
+  maintenance: { ...DEFAULTS.maintenance, structuralDiscovery: true },
+};
+
+const disarmed: Config = {
+  ...DEFAULTS,
+  maintenance: { ...DEFAULTS.maintenance, structuralDiscovery: false },
 };
 
 function context(config: Config = armed): OperationContext {
@@ -167,7 +169,7 @@ afterAll(async () => {
 describe('structural_discovery', () => {
   it('examines nothing while the kill switch is off', async () => {
     const before = await countRelationships(harness.driver);
-    const outcome = await structuralDiscoveryOperation().run(context(DEFAULTS));
+    const outcome = await structuralDiscoveryOperation().run(context(disarmed));
 
     expect(outcome.status).toBe('noop');
     expect(outcome.itemsProcessed).toBe(0);

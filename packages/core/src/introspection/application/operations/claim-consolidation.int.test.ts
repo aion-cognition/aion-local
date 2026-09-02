@@ -3,11 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import {
-  claimConsolidationOperation,
-  CLAIM_CONSOLIDATION_ENV,
-  CLAIM_CONSOLIDATION_KNOB,
-} from './claim-consolidation.js';
+import { claimConsolidationOperation } from './claim-consolidation.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import {
@@ -36,7 +32,6 @@ import {
   type Neo4jHarness,
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { unsupersedeNode } from '../../../infrastructure/graph/unsupersede.js';
-import { toGraphInteger } from '../../../infrastructure/graph/values.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import type { Provider } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
@@ -161,10 +156,7 @@ function stubProvider(verdict: 'unanimous' | 'vetoed'): Provider {
 function configWith(armed: boolean): Config {
   return {
     ...DEFAULTS,
-    maintenance: {
-      ...DEFAULTS.maintenance,
-      [CLAIM_CONSOLIDATION_KNOB]: armed,
-    } as Config['maintenance'],
+    maintenance: { ...DEFAULTS.maintenance, claimConsolidation: armed },
   };
 }
 
@@ -213,7 +205,7 @@ async function assignCommunities(): Promise<void> {
       label: claim.label,
       id: claim.id,
       now: new Date(claim.at),
-      mergeProperties: { [COMMUNITY_PROPERTY]: toGraphInteger(claim.community) },
+      mergeProperties: { [COMMUNITY_PROPERTY]: claim.community },
     });
   }
 }
@@ -264,7 +256,7 @@ describe('claim consolidation against a live substrate', () => {
     const outcome = await claimConsolidationOperation().run(context(configWith(false)));
 
     expect(outcome.status).toBe('noop');
-    expect(outcome.detail).toContain(CLAIM_CONSOLIDATION_ENV);
+    expect(outcome.detail).toContain('AION_MAINTENANCE_CLAIM_CONSOLIDATION');
   });
 
   it('derives no floor at all while no claim carries a community', async () => {

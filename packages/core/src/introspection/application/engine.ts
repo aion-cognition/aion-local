@@ -242,6 +242,11 @@ export class Introspector {
         starvationCycles: this.#deps.config.maintenance.starvationCycles,
         urgencyThreshold: this.#deps.config.maintenance.urgencyThreshold,
         effectivenessFloor: this.#deps.config.maintenance.effectivenessFloor,
+        cost: {
+          referenceMs: this.#deps.config.maintenance.costReferenceMs,
+          decades: this.#deps.config.maintenance.costDecades,
+          maxDivisor: this.#deps.config.maintenance.maxCostDivisor,
+        },
         tier3Enabled: this.#deps.config.maintenance.tier3,
       });
 
