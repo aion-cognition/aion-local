@@ -5,7 +5,6 @@ import { runRead, runWrite, type GraphStatement } from './connection.js';
 import { ENTITY_LABEL } from './labels.js';
 import {
   ENTITY_ALIASES_NORM_PROPERTY,
-  ENTITY_ALIASES_PROPERTY,
   ENTITY_NAME_NORM_PROPERTY,
   ENTITY_NAME_PROPERTY,
   ENTITY_NAME_VECTOR_PROPERTY,
@@ -33,6 +32,13 @@ import { foldName } from '../../reflection/domain/name-fold.js';
 export const ENTITY_TYPE_PROPERTY = 'type';
 
 /**
+ * Every surface form an identity answers to: the extractor's aliases plus whatever a merge
+ * absorbed. Declared here rather than beside the read that scans it, because what an identity
+ * answers to is decided by the pairing below and by nothing else.
+ */
+export const ENTITY_ALIASES_PROPERTY = 'aliases';
+
+/**
  * Counted type observations, JSON encoded because Neo4j has no map property.
  * `entity-reconciliation.ts` owns the encoding and the rule that reads it.
  */
@@ -58,32 +64,45 @@ export const ENTITY_NAME_VECTOR_HASH_PROPERTY = 'name_vec_hash';
  */
 export const MAX_STORED_ENTITY_ALIASES = 24;
 
+/** One spelling an identity answers to, beside the folded key that routes a mention to it. */
+export type AliasPair = {
+  readonly alias: string;
+  readonly key: string;
+};
+
 /**
- * Distinct and sorted, and never the identity's own name: a name is not an alias of itself.
- * Sorted before the cap so one set of spellings always yields one list, whatever order the
- * callers assembled it in.
+ * The stored alias list and its lookup keys, decided together and cut once. Two spellings that
+ * fold to one key are one entry, so the two halves are the same length and pair by position:
+ * capping them apart lets one cut keep a spelling whose key the other cut dropped, which
+ * displays a name nothing can route by, or route by a key no name explains.
+ *
+ * Never the identity's own name, since a name is not an alias of itself. Sorted by key before
+ * the cap, so one set of spellings always yields one list whatever order the callers assembled
+ * it in, and the spelling kept for a key is the first its own sort offers.
  */
-export function aliasRecord(aliases: readonly string[], nameNorm: string): string[] {
-  const kept = new Set<string>();
-  for (const alias of aliases) {
+export function aliasPairs(aliases: readonly string[], nameNorm: string): AliasPair[] {
+  const byKey = new Map<string, string>();
+  for (const alias of [...aliases].sort()) {
     const trimmed = alias.trim();
-    if (trimmed.length > 0 && foldName(trimmed) !== nameNorm) {
-      kept.add(trimmed);
+    const key = foldName(trimmed);
+    if (key.length > 0 && key !== nameNorm && !byKey.has(key)) {
+      byKey.set(key, trimmed);
     }
   }
-  return [...kept].sort().slice(0, MAX_STORED_ENTITY_ALIASES);
+  return [...byKey.keys()]
+    .sort()
+    .slice(0, MAX_STORED_ENTITY_ALIASES)
+    .map((key) => ({ alias: byKey.get(key) ?? key, key }));
 }
 
-/** The lookup keys behind an alias record, under the same cap: one key per spelling kept. */
+/** The spellings half of `aliasPairs`, for a caller that stores only the record. */
+export function aliasRecord(aliases: readonly string[], nameNorm: string): string[] {
+  return aliasPairs(aliases, nameNorm).map((pair) => pair.alias);
+}
+
+/** The lookup half of `aliasPairs`, in the record's own order. */
 export function aliasKeys(aliases: readonly string[], nameNorm: string): string[] {
-  const keys = new Set<string>();
-  for (const alias of aliases) {
-    const folded = foldName(alias);
-    if (folded.length > 0 && folded !== nameNorm) {
-      keys.add(folded);
-    }
-  }
-  return [...keys].sort().slice(0, MAX_STORED_ENTITY_ALIASES);
+  return aliasPairs(aliases, nameNorm).map((pair) => pair.key);
 }
 
 function taxonomyTypes(observed: readonly string[]): EntityType[] {
@@ -272,8 +291,12 @@ export async function addEntityAliases(
 ): Promise<string[]> {
   const payload = entries
     .map((entry) => {
-      const aliases = aliasRecord(entry.aliases, entry.nameNorm);
-      return { id: entry.id, aliases, aliases_norm: aliasKeys(aliases, entry.nameNorm) };
+      const pairs = aliasPairs(entry.aliases, entry.nameNorm);
+      return {
+        id: entry.id,
+        aliases: pairs.map((pair) => pair.alias),
+        aliases_norm: pairs.map((pair) => pair.key),
+      };
     })
     .filter((entry) => entry.aliases.length > 0 || entry.aliases_norm.length > 0);
   if (payload.length === 0) {
@@ -397,8 +420,9 @@ export function reconcileMergedEntities(
   const settled = new Map<string, { type: string; aliasesNorm: string[] }>();
   for (const [id, group] of groups) {
     const { row } = group;
-    const aliases = aliasRecord([...row.aliases, ...group.aliases], row.canonicalNameNorm);
-    const aliasesNorm = aliasKeys(aliases, row.canonicalNameNorm);
+    const pairs = aliasPairs([...row.aliases, ...group.aliases], row.canonicalNameNorm);
+    const aliases = pairs.map((pair) => pair.alias);
+    const aliasesNorm = pairs.map((pair) => pair.key);
 
     // The backbone keeps its own type and its own identity properties. A mention never
     // relabels it, and `addEntityAliases` is the only thing that writes to it at all.

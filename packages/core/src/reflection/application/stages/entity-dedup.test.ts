@@ -8,10 +8,8 @@ import { EntityDedupStage } from './entity-dedup.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { ACCESS_COUNT_PROPERTY } from '../../../infrastructure/graph/access-tracking.js';
 import { BITEMPORAL_PROPERTIES } from '../../../infrastructure/graph/bitemporal.js';
-import {
-  ENTITY_ALIASES_PROPERTY,
-  MERGE_PROVENANCE_PROPERTY,
-} from '../../../infrastructure/graph/entity-dedup-queries.js';
+import { ENTITY_ALIASES_PROPERTY } from '../../../infrastructure/graph/entity-identity-queries.js';
+import { MERGE_PROVENANCE_PROPERTY } from '../../../infrastructure/graph/entity-merge-queries.js';
 import {
   ENTITY_ALIASES_NORM_PROPERTY,
   ENTITY_MENTION_TYPE,

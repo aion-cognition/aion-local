@@ -12,7 +12,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { EntityDedupStage } from './entity-dedup.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
-import { redirectAndAbsorb } from '../../../infrastructure/graph/entity-dedup-queries.js';
+import { redirectAndAbsorb } from '../../../infrastructure/graph/entity-merge-queries.js';
 import {
   linkEntityMentions,
   mergeEntities,

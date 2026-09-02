@@ -7,6 +7,7 @@ import { descriptionFreshnessOperation } from './operations/description-freshnes
 import { edgePruneOperation } from './operations/edge-prune.js';
 import { identifierDecayOperation } from './operations/identifier-decay.js';
 import { mergeAutoOperation } from './operations/merge-auto-operation.js';
+import { mergeDecisionReconcileOperation } from './operations/merge-decision-reconcile-operation.js';
 import { narrativeCleanupOperation } from './operations/narrative-cleanup-operation.js';
 import { narrativeRegroundingOperation } from './operations/narrative-regrounding.js';
 import { orphanCleanupOperation } from './operations/orphan-cleanup.js';
@@ -70,6 +71,9 @@ export function introspectionOperations(): readonly IntrospectionOperation[] {
     // it: a nearest-neighbor pair a two-pass judge unanimously calls one assertion restated.
     mergeAutoOperation(),
     claimDedupOperation(),
+    // The merge's own two-store seam: the graph commits a merge before the decision record
+    // reaches SQLite, and no candidate read can find that pair again to re-decide it.
+    mergeDecisionReconcileOperation(),
 
     // The queue's own hygiene: ages a proposal out once nobody has acted on it inside its
     // horizon, ledgered and reversible with `aion proposals reopen`.

@@ -1,6 +1,9 @@
 import { ACCESS_COUNT_PROPERTY } from '../../../infrastructure/graph/access-tracking.js';
 import { BITEMPORAL_PROPERTIES } from '../../../infrastructure/graph/bitemporal.js';
-import { MAX_STORED_ENTITY_ALIASES } from '../../../infrastructure/graph/entity-identity-queries.js';
+import {
+  ENTITY_ALIASES_PROPERTY,
+  MAX_STORED_ENTITY_ALIASES,
+} from '../../../infrastructure/graph/entity-identity-queries.js';
 import {
   ENTITY_MENTION_TYPE,
   ENTITY_NAME_SQUASH_PROPERTY,
@@ -11,7 +14,6 @@ import {
 import { MEMORY_PROPERTIES } from '../../../infrastructure/graph/episodes.js';
 import {
   ENTITY_ALIASES_NORM_PROPERTY,
-  ENTITY_ALIASES_PROPERTY,
   ENTITY_NAME_NORM_PROPERTY,
   ENTITY_NAME_PROPERTY,
   ENTITY_NAME_VECTOR_PROPERTY,

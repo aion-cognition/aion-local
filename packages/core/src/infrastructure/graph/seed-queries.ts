@@ -35,9 +35,6 @@ export const ENTITY_NAME_NORM_PROPERTY = 'name_norm';
 /** Written by entity extraction. Absent when extraction has not produced it yet, which the similarity leg handles as a normal state. */
 export const ENTITY_NAME_VECTOR_PROPERTY = 'name_vec';
 
-/** Every surface form an identity answers to: the extractor's aliases plus whatever a merge absorbed. */
-export const ENTITY_ALIASES_PROPERTY = 'aliases';
-
 /**
  * `aliases` folded through the same `foldName` a cue is, the identity's own name excluded.
  * Derived rather than accumulated on its own, which is what makes a name a merge absorbed

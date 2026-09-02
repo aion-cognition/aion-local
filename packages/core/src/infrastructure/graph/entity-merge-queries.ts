@@ -7,13 +7,13 @@ import {
   supersedeInTransaction,
   writeStampedNodeInTransaction,
 } from './bitemporal.js';
+import { forwardClaimSubjectsInTransaction } from './claim-key-queries.js';
 import { type GraphTransaction, inWriteTransaction, runWrite } from './connection.js';
 import { upsertEdgeInTransaction } from './edges.js';
-import { aliasKeys, aliasRecord } from './entity-identity-queries.js';
+import { aliasPairs, ENTITY_ALIASES_PROPERTY } from './entity-identity-queries.js';
 import {
   clearNameVectorHashInTransaction,
   ENTITY_ALIASES_NORM_PROPERTY,
-  ENTITY_ALIASES_PROPERTY,
   ENTITY_NAME_VECTOR_HASH_PROPERTY,
 } from './entity-queries.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
@@ -26,8 +26,8 @@ import type { Row } from './values.js';
 /**
  * The write half of an entity merge: redirect an absorbed node's edges onto the canonical,
  * absorb its names and salience, close it with its lineage edge, and record everything an
- * unmerge will need. The reads that find the pair live beside this in
- * `entity-dedup-queries.ts`; who is canonical is decided in `reflection/domain/entity-merge.ts`.
+ * unmerge will need. The reads that find the pair live in `entity-dedup-queries.ts`; who is
+ * canonical is decided in `reflection/domain/entity-merge.ts`.
  */
 
 export type RedirectableEdge = {
@@ -277,6 +277,7 @@ function buildMergeProvenance(
   input: MergeEntityGroupInput,
   mergedIds: readonly string[],
   trail: ReadonlyMap<string, readonly ProvenanceEdge[]>,
+  claims: ReadonlyMap<string, readonly string[]>,
 ): string[] {
   const byId = new Map((input.mergedRecords ?? []).map((record) => [record.id, record]));
   return mergedIds.map((mergedId) => {
@@ -295,6 +296,7 @@ function buildMergeProvenance(
             merged_aliases: [...record.aliases],
           }),
       edges: trail.get(mergedId) ?? [],
+      claims: claims.get(mergedId) ?? [],
     });
   });
 }
@@ -316,10 +318,12 @@ function buildMergeProvenance(
  * 4. Read the merged nodes' closed relationships and record them without writing them. A
  *    relationship `edge_prune` closed comes back open at floor strength if it is fed to the
  *    upsert, so a closed edge moves as a record and never as a write.
- * 5. Read the canonical's own aliases, salience and merge records, fold the group's
+ * 5. Move the subject key of every claim asserting about an absorbed identity onto the
+ *    canonical, and record which claims moved so a split can hand them back.
+ * 6. Read the canonical's own aliases, salience and merge records, fold the group's
  *    contribution into what the read returned, and write the union: aliases and keys unioned,
  *    `access_count` a delta on the stored total, `last_accessed` the later of the two.
- * 6. Close each merged node with its lineage edge.
+ * 7. Close each merged node with its lineage edge.
  *
  * Redirect and close belong to the same commit because either alone is an invalid state. A
  * crash between them used to leave the duplicate stripped of every relationship and still
@@ -405,23 +409,41 @@ export async function redirectAndAbsorb(
       trail.set(edge.mergedId, record);
     }
 
-    const stored = await readCanonicalAbsorbState(tx, input.canonicalId);
-    const provenance = [...stored.records, ...buildMergeProvenance(input, mergedIds, trail)];
+    // A claim keys its subject on an entity id, so the merge moves those keys with the
+    // identity and records which ones it moved. Nothing else states it: after the commit the
+    // claim reads the canonical, and no arithmetic on the graph says where it came from.
+    const forwarded = await forwardClaimSubjectsInTransaction(tx, {
+      mergedIds,
+      canonicalId: input.canonicalId,
+    });
+    const claims = new Map<string, string[]>();
+    for (const claim of forwarded) {
+      claims.set(claim.mergedId, [...(claims.get(claim.mergedId) ?? []), claim.claimId]);
+    }
 
-    // The absorbed names join what the node already answers to and go through the same record
+    const stored = await readCanonicalAbsorbState(tx, input.canonicalId);
+    const provenance = [
+      ...stored.records,
+      ...buildMergeProvenance(input, mergedIds, trail, claims),
+    ];
+
+    // The absorbed names join what the node already answers to and go through the same pairing
     // the write path uses, so the merge cannot push an identity past the stored alias cap that
     // resolution honours. The stored keys join the union in their own right: a key is what
-    // routes another identity's mentions here, and dropping one unroutes them silently.
-    const aliases = aliasRecord([...stored.aliases, ...input.aliases], input.canonicalNameNorm);
-    const aliasesNorm = aliasKeys([...stored.aliasesNorm, ...aliases], input.canonicalNameNorm);
+    // routes another identity's mentions here, and dropping one unroutes them silently. A key
+    // whose spelling the cap dropped stands in as its own spelling rather than losing the route.
+    const aliases = aliasPairs(
+      [...stored.aliases, ...stored.aliasesNorm, ...input.aliases],
+      input.canonicalNameNorm,
+    );
     const lastAccessed = latestAccess(stored.lastAccessed, input.lastAccessed);
     await writeStampedNodeInTransaction(tx, {
       label: 'Entity',
       id: input.canonicalId,
       now: input.now,
       mergeProperties: {
-        [ENTITY_ALIASES_PROPERTY]: aliases,
-        [ENTITY_ALIASES_NORM_PROPERTY]: aliasesNorm,
+        [ENTITY_ALIASES_PROPERTY]: aliases.map((pair) => pair.alias),
+        [ENTITY_ALIASES_NORM_PROPERTY]: aliases.map((pair) => pair.key),
         [ACCESS_COUNT_PROPERTY]: stored.accessCount + input.accessCount,
         [MERGE_PROVENANCE_PROPERTY]: provenance,
         ...(lastAccessed === undefined ? {} : { [LAST_ACCESSED_PROPERTY]: lastAccessed }),

@@ -1,5 +1,6 @@
 import { currentOnly } from './bitemporal.js';
 import type { GraphTransaction } from './connection.js';
+import { VALID_HORIZON_PROPERTY } from './read-modes.js';
 import { supersedeSubjectFamilyInTransaction, type SubjectFamilyResult } from './subject-family.js';
 import { FACT_NODE_LABELS } from './supersession-queries.js';
 import type { GraphProperties } from './values.js';
@@ -32,9 +33,10 @@ export const TEMPORAL_CLASS_PROPERTY = 'temporal_class';
  * When a reading stops answering. Never `valid_until`: a future close is invisible to every
  * currency predicate in the tree, is made permanent by the `coalesce` on the close, and would
  * record the wrong world time under a lineage edge a later real correction writes. The read
- * side compares this to its own reference clock and annotates the row.
+ * side compares this to its own reference clock and annotates the row, which is why it declares
+ * the property and every reader of it, this write included, still asks there.
  */
-export const VALID_HORIZON_PROPERTY = 'valid_horizon';
+export { VALID_HORIZON_PROPERTY };
 
 /**
  * What a keyed match does. `off` skips the lookup outright. `judge` records the key on the node
@@ -174,4 +176,81 @@ export async function closeKeyedClaimsInTransaction(
   }
 
   return { closedIds: families.flatMap((family) => family.closedIds), families };
+}
+
+/**
+ * Moves every claim keyed on an absorbed identity onto the canonical, and names what it moved.
+ *
+ * A merge that left the key behind would leave it pointing at a node the graph no longer
+ * answers for, so the claim stops matching its own successors and falls to the judge. That is
+ * the safe direction rather than a wrong close, which is why this is a quality repair and not
+ * a correctness gate, but a key nothing can match is still a key that does no work.
+ */
+const FORWARD_CLAIM_SUBJECTS = [
+  'UNWIND $mergedIds AS mergedId',
+  'MATCH (c:Memory)',
+  `WHERE c.${CLAIM_SUBJECT_PROPERTY} = mergedId`,
+  `SET c.${CLAIM_SUBJECT_PROPERTY} = $canonicalId`,
+  'RETURN mergedId AS merged_id, c.id AS id',
+  'ORDER BY merged_id, id',
+].join('\n');
+
+export type ForwardedClaimSubject = {
+  readonly mergedId: string;
+  readonly claimId: string;
+};
+
+export async function forwardClaimSubjectsInTransaction(
+  tx: GraphTransaction,
+  input: { readonly mergedIds: readonly string[]; readonly canonicalId: string },
+): Promise<ForwardedClaimSubject[]> {
+  if (input.mergedIds.length === 0) {
+    return [];
+  }
+  return tx.run(
+    FORWARD_CLAIM_SUBJECTS,
+    { mergedIds: [...input.mergedIds], canonicalId: input.canonicalId },
+    (row) => ({ mergedId: row.merged_id as string, claimId: row.id as string }),
+  );
+}
+
+/**
+ * Puts the recorded claims back on the identity a split restores. The subject is the new node
+ * rather than the absorbed one, matching the edges: an unmerge only ever adds, and the closed
+ * duplicate stays closed.
+ *
+ * A claim whose key has since moved on to some other canonical belongs to that merge's trail,
+ * so the write is guarded on the key still reading the canonical it is being taken off.
+ */
+const RESTORE_CLAIM_SUBJECTS = [
+  'UNWIND $claimIds AS claimId',
+  'MATCH (c:Memory { id: claimId })',
+  `WHERE c.${CLAIM_SUBJECT_PROPERTY} = $canonicalId`,
+  `SET c.${CLAIM_SUBJECT_PROPERTY} = $subjectEntityId`,
+  'RETURN c.id AS id',
+].join('\n');
+
+export type RestoreClaimSubjectsInput = {
+  readonly claimIds: readonly string[];
+  /** The identity the merge forwarded onto, which is the only key this may take a claim off. */
+  readonly canonicalId: string;
+  readonly subjectEntityId: string;
+};
+
+export async function restoreClaimSubjectsInTransaction(
+  tx: GraphTransaction,
+  input: RestoreClaimSubjectsInput,
+): Promise<string[]> {
+  if (input.claimIds.length === 0) {
+    return [];
+  }
+  return tx.run(
+    RESTORE_CLAIM_SUBJECTS,
+    {
+      claimIds: [...input.claimIds],
+      canonicalId: input.canonicalId,
+      subjectEntityId: input.subjectEntityId,
+    },
+    (row) => row.id as string,
+  );
 }

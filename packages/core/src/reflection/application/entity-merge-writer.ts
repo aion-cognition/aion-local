@@ -1,10 +1,10 @@
 import type { Driver } from 'neo4j-driver';
 
+import type { DedupEntityDetail } from '../../infrastructure/graph/entity-dedup-queries.js';
 import {
   clearEntityVectors,
   redirectAndAbsorb,
-  type DedupEntityDetail,
-} from '../../infrastructure/graph/entity-dedup-queries.js';
+} from '../../infrastructure/graph/entity-merge-queries.js';
 import { readEntityPairSignals } from '../../infrastructure/graph/entity-signal-queries.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
@@ -36,8 +36,12 @@ import {
  * the evidence without recomputing anything.
  *
  * Order matters at the two failure points. The record lands after the graph commit, so nothing
- * ever claims a merge that did not happen; the ledger mark lands after the record, so a crash
- * between them replays into an idempotent re-record rather than losing the evidence.
+ * ever claims a merge that did not happen, and the record and the ledger mark are one SQLite
+ * transaction, so neither can outlive the other. What no ordering closes is the window between
+ * the two stores: the graph carries the record's key from the moment it commits, and a process
+ * that dies before the SQLite write leaves that key pointing at nothing. Nothing replays it,
+ * because the candidate reads are currency-filtered and the absorbed side is already closed, so
+ * `merge_decision_reconcile` walks the trail afterwards and writes the missing row back.
  */
 
 export type EntityMergeWriterDeps = {
@@ -178,18 +182,31 @@ export async function applyEntityMerge(
     return { status: 'skipped', reason: 'stale', staleIds: merged.staleIds };
   }
 
-  const decisionId = recordEntityMergeDecision(deps.db, {
-    canonicalId: input.canonical.id,
-    memberIds: mergedIds,
-    tier: input.tier,
-    reasons: input.reasons,
-    signals: input.signals,
-    ...(input.judge === undefined ? {} : { judge: input.judge }),
-    cascadeVersion,
-    createdAt: input.now.toISOString(),
-  });
+  // One SQLite transaction over both, and nothing awaited between them. A mark with no record
+  // is a merge nobody can argue with later; a record with no mark invites a replay of a merge
+  // that already happened, which the currency re-read then refuses without ever marking it.
+  const decisionId = deps.db.transaction((): string => {
+    const id = recordEntityMergeDecision(deps.db, {
+      canonicalId: input.canonical.id,
+      memberIds: mergedIds,
+      tier: input.tier,
+      reasons: input.reasons,
+      signals: input.signals,
+      ...(input.judge === undefined ? {} : { judge: input.judge }),
+      cascadeVersion,
+      createdAt: input.now.toISOString(),
+    });
+    markLedgerApplied(deps.db, ledgerKey, {
+      canonicalId: input.canonical.id,
+      mergedIds,
+      tier: input.tier,
+      decisionId: id,
+    });
+    return id;
+  })();
 
-  // Index cleanup runs post-commit with best-effort semantics and never fails the merge.
+  // Index cleanup runs after both, best-effort, and never fails the merge. It sits outside the
+  // transaction because it is asynchronous and a SQLite transaction cannot span an await.
   let vectorCleanupDeferred = false;
   try {
     await clearEntityVectors(deps.driver, mergedIds);
@@ -200,13 +217,6 @@ export async function applyEntityMerge(
       'entity merge vector cleanup deferred',
     );
   }
-
-  markLedgerApplied(deps.db, ledgerKey, {
-    canonicalId: input.canonical.id,
-    mergedIds,
-    tier: input.tier,
-    decisionId,
-  });
 
   return {
     status: 'merged',

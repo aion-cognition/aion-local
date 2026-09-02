@@ -155,7 +155,8 @@
       "identifierMentionFloor": 5,
       "claimDedup": true,
       "claimDedupBatch": 5,
-      "claimDedupCosineFloor": 0.95
+      "claimDedupCosineFloor": 0.95,
+      "mergeDecisionReconcileBatch": 200
     },
     "temporal": {
       "readingHorizonDays": 30,
@@ -251,6 +252,7 @@
     "AION_MAINTENANCE_IDENTIFIER_DECAY_BATCH -> maintenance.identifierDecayBatch : number",
     "AION_MAINTENANCE_IDENTIFIER_HALF_LIFE_DAYS -> maintenance.identifierHalfLifeDays : number",
     "AION_MAINTENANCE_IDENTIFIER_MENTION_FLOOR -> maintenance.identifierMentionFloor : number",
+    "AION_MAINTENANCE_MERGE_DECISION_RECONCILE_BATCH -> maintenance.mergeDecisionReconcileBatch : number",
     "AION_MAINTENANCE_NARRATIVE_CLEANUP_BATCH -> maintenance.narrativeCleanupBatch : number",
     "AION_MAINTENANCE_ORPHAN_CLEANUP_BATCH -> maintenance.orphanCleanupBatch : number",
     "AION_MAINTENANCE_ORPHAN_FORGET_AFTER_DAYS -> maintenance.orphanForgetAfterDays : number",
@@ -726,6 +728,13 @@
     "AION_MAINTENANCE_IDENTIFIER_MENTION_FLOOR=0.5": "ConfigError Invalid configuration:\nAION_MAINTENANCE_IDENTIFIER_MENTION_FLOOR: Invalid input: expected int, received number",
     "AION_MAINTENANCE_IDENTIFIER_MENTION_FLOOR=1.5": "ConfigError Invalid configuration:\nAION_MAINTENANCE_IDENTIFIER_MENTION_FLOOR: Invalid input: expected int, received number",
     "AION_MAINTENANCE_IDENTIFIER_MENTION_FLOOR=2": "ok 2",
+    "AION_MAINTENANCE_MERGE_DECISION_RECONCILE_BATCH=not-a-number": "ConfigError Invalid configuration:\nAION_MAINTENANCE_MERGE_DECISION_RECONCILE_BATCH: Invalid input: expected number, received NaN",
+    "AION_MAINTENANCE_MERGE_DECISION_RECONCILE_BATCH=": "ConfigError Invalid configuration:\nAION_MAINTENANCE_MERGE_DECISION_RECONCILE_BATCH: Invalid input: expected number, received NaN",
+    "AION_MAINTENANCE_MERGE_DECISION_RECONCILE_BATCH=-1": "ConfigError Invalid configuration:\nAION_MAINTENANCE_MERGE_DECISION_RECONCILE_BATCH: Too small: expected number to be >0",
+    "AION_MAINTENANCE_MERGE_DECISION_RECONCILE_BATCH=0": "ConfigError Invalid configuration:\nAION_MAINTENANCE_MERGE_DECISION_RECONCILE_BATCH: Too small: expected number to be >0",
+    "AION_MAINTENANCE_MERGE_DECISION_RECONCILE_BATCH=0.5": "ConfigError Invalid configuration:\nAION_MAINTENANCE_MERGE_DECISION_RECONCILE_BATCH: Invalid input: expected int, received number",
+    "AION_MAINTENANCE_MERGE_DECISION_RECONCILE_BATCH=1.5": "ConfigError Invalid configuration:\nAION_MAINTENANCE_MERGE_DECISION_RECONCILE_BATCH: Invalid input: expected int, received number",
+    "AION_MAINTENANCE_MERGE_DECISION_RECONCILE_BATCH=2": "ok 2",
     "AION_MAINTENANCE_NARRATIVE_CLEANUP_BATCH=not-a-number": "ConfigError Invalid configuration:\nAION_MAINTENANCE_NARRATIVE_CLEANUP_BATCH: Invalid input: expected number, received NaN",
     "AION_MAINTENANCE_NARRATIVE_CLEANUP_BATCH=": "ConfigError Invalid configuration:\nAION_MAINTENANCE_NARRATIVE_CLEANUP_BATCH: Invalid input: expected number, received NaN",
     "AION_MAINTENANCE_NARRATIVE_CLEANUP_BATCH=-1": "ConfigError Invalid configuration:\nAION_MAINTENANCE_NARRATIVE_CLEANUP_BATCH: Too small: expected number to be >0",
@@ -1617,6 +1626,13 @@
     "maintenance.identifierMentionFloor=2": "ok",
     "maintenance.identifierMentionFloor=NaN": "maintenance.identifierMentionFloor: Invalid input: expected number, received NaN",
     "maintenance.identifierMentionFloor=\"text\"": "maintenance.identifierMentionFloor: Invalid input: expected number, received string",
+    "maintenance.mergeDecisionReconcileBatch=-1": "maintenance.mergeDecisionReconcileBatch: Too small: expected number to be >0",
+    "maintenance.mergeDecisionReconcileBatch=0": "maintenance.mergeDecisionReconcileBatch: Too small: expected number to be >0",
+    "maintenance.mergeDecisionReconcileBatch=0.5": "maintenance.mergeDecisionReconcileBatch: Invalid input: expected int, received number",
+    "maintenance.mergeDecisionReconcileBatch=1.5": "maintenance.mergeDecisionReconcileBatch: Invalid input: expected int, received number",
+    "maintenance.mergeDecisionReconcileBatch=2": "ok",
+    "maintenance.mergeDecisionReconcileBatch=NaN": "maintenance.mergeDecisionReconcileBatch: Invalid input: expected number, received NaN",
+    "maintenance.mergeDecisionReconcileBatch=\"text\"": "maintenance.mergeDecisionReconcileBatch: Invalid input: expected number, received string",
     "maintenance.narrativeCleanupBatch=-1": "maintenance.narrativeCleanupBatch: Too small: expected number to be >0",
     "maintenance.narrativeCleanupBatch=0": "maintenance.narrativeCleanupBatch: Too small: expected number to be >0",
     "maintenance.narrativeCleanupBatch=0.5": "maintenance.narrativeCleanupBatch: Invalid input: expected int, received number",
@@ -2120,6 +2136,6 @@
     "reserved var list": "AION_BUILD_SHA, AION_GIT_USER_NAME, AION_REPO_HEAD_SHA, AION_REPO_PATH",
     "schema accepts DEFAULTS": "ok",
     "schema rejects an empty object": "rejected",
-    "default key order": "neo4j: uri,password | ollama: url | models: embed,embedDimension,cue,reflect | anthropic: apiKey,model | routing: cue,reflect | recall: maxHops,vectorLimit,maxFacts,maxEpisodes,maxNarratives,maxPreferences,maxResonant,useContextResonance,sessionDedup,ownSessionFilter,associationStrength,adjacencyTopK,compressionThreshold,cueBudgetMs,tokenBudget,vectorAdmissionFloor,corroborationFloor,bm25AdmissionMode,entityMatchThreshold,clusterCap,entityGlossCap,restatementFloor,decisionBoost,relatedClaimFloor,typedAdmission,typedAdmissionActivationFloor | search: methods,reranker,rrfConstant,mmrLambda,weights | activation: maxIterations,decayFactor,minActivation,maxNodesVisited,hubThreshold | hebbian: weightFloor,learningRate,decayRate,decayPeakDays,decaySigma,batchSize,flushCeiling,decayScanFraction | contextResonance: seedLimit,seedBudgetBase,seedBudgetGrowth,activationLimit,resonantLimit,contextSearchThreshold | reflection: stageTimeoutMs,maxEntities,entityDedupThreshold,entityNominationJaccardFloor,entityMergeMode,associationSemanticThreshold,associationSimilarLimit,maxCognitiveNodes,maxRelationships,supersedeMode,keyedCloseMode,supersedeAutoConfidence,supersedeNeighborThreshold,supersedeFamilyRelatednessFloor,maxSupersessionSubjects,maxContradictionNeighbors,maxContradictionJudgments,narrativeIdleMinutes,maxNarrativeEpisodes,maxNarrativeEpisodeChars,narrativeSweepLimit | lanes: arrivalWindowMs,sessionArrivalMax,globalArrivalMax,hotSessionArrivalMax | redaction: entropyThreshold | maintenance: tier3,tier3Mode,autoMerge,tickMinutes,starvationCycles,urgencyThreshold,effectivenessFloor,vectorBackfillBatchSize,contextRefreshBatchSize,reconcileBatchSize,replayBatchSize,deadLetterBatchSize,redactionPurgeBatchSize,narrativeCleanupBatch,retroSupersessionBatch,descriptionRefreshBatch,descriptionRefreshMentionGrowth,backboneRepairBatch,orphanCleanupBatch,orphanForgetAfterDays,communityNodeLimit,communityMinNodes,bridgeMinCommunitySize,bridgeOverlapCeiling,proposalHygiene,hygienePollutedAgeHours,hygieneResidueAgeDays,hygieneJudgeBatch,edgePrune,edgePruneUnreinforcedDays,edgePruneBatch,identifierDecay,identifierDecayBatch,identifierHalfLifeDays,identifierMentionFloor,claimDedup,claimDedupBatch,claimDedupCosineFloor | temporal: readingHorizonDays,expiryAnnotation | sqlite: path,reinforcementQueueCap | operational: dataDir,mcpPort,workerCount,workerStaleClaimTimeoutMs,workerRetryBaseMs,workerRetryCapMs,workerMaxAttempts,workerBreakerThreshold,workerBreakerCooldownMs,workerVectorBatchSize,reconcileWarnThreshold,lagOldestUnclaimedWarnMs,lagQueueDepthWarnThreshold,sessionIdleExpiryMinutes | logging: filePath,level"
+    "default key order": "neo4j: uri,password | ollama: url | models: embed,embedDimension,cue,reflect | anthropic: apiKey,model | routing: cue,reflect | recall: maxHops,vectorLimit,maxFacts,maxEpisodes,maxNarratives,maxPreferences,maxResonant,useContextResonance,sessionDedup,ownSessionFilter,associationStrength,adjacencyTopK,compressionThreshold,cueBudgetMs,tokenBudget,vectorAdmissionFloor,corroborationFloor,bm25AdmissionMode,entityMatchThreshold,clusterCap,entityGlossCap,restatementFloor,decisionBoost,relatedClaimFloor,typedAdmission,typedAdmissionActivationFloor | search: methods,reranker,rrfConstant,mmrLambda,weights | activation: maxIterations,decayFactor,minActivation,maxNodesVisited,hubThreshold | hebbian: weightFloor,learningRate,decayRate,decayPeakDays,decaySigma,batchSize,flushCeiling,decayScanFraction | contextResonance: seedLimit,seedBudgetBase,seedBudgetGrowth,activationLimit,resonantLimit,contextSearchThreshold | reflection: stageTimeoutMs,maxEntities,entityDedupThreshold,entityNominationJaccardFloor,entityMergeMode,associationSemanticThreshold,associationSimilarLimit,maxCognitiveNodes,maxRelationships,supersedeMode,keyedCloseMode,supersedeAutoConfidence,supersedeNeighborThreshold,supersedeFamilyRelatednessFloor,maxSupersessionSubjects,maxContradictionNeighbors,maxContradictionJudgments,narrativeIdleMinutes,maxNarrativeEpisodes,maxNarrativeEpisodeChars,narrativeSweepLimit | lanes: arrivalWindowMs,sessionArrivalMax,globalArrivalMax,hotSessionArrivalMax | redaction: entropyThreshold | maintenance: tier3,tier3Mode,autoMerge,tickMinutes,starvationCycles,urgencyThreshold,effectivenessFloor,vectorBackfillBatchSize,contextRefreshBatchSize,reconcileBatchSize,replayBatchSize,deadLetterBatchSize,redactionPurgeBatchSize,narrativeCleanupBatch,retroSupersessionBatch,descriptionRefreshBatch,descriptionRefreshMentionGrowth,backboneRepairBatch,orphanCleanupBatch,orphanForgetAfterDays,communityNodeLimit,communityMinNodes,bridgeMinCommunitySize,bridgeOverlapCeiling,proposalHygiene,hygienePollutedAgeHours,hygieneResidueAgeDays,hygieneJudgeBatch,edgePrune,edgePruneUnreinforcedDays,edgePruneBatch,identifierDecay,identifierDecayBatch,identifierHalfLifeDays,identifierMentionFloor,claimDedup,claimDedupBatch,claimDedupCosineFloor,mergeDecisionReconcileBatch | temporal: readingHorizonDays,expiryAnnotation | sqlite: path,reinforcementQueueCap | operational: dataDir,mcpPort,workerCount,workerStaleClaimTimeoutMs,workerRetryBaseMs,workerRetryCapMs,workerMaxAttempts,workerBreakerThreshold,workerBreakerCooldownMs,workerVectorBatchSize,reconcileWarnThreshold,lagOldestUnclaimedWarnMs,lagQueueDepthWarnThreshold,sessionIdleExpiryMinutes | logging: filePath,level"
   }
 }

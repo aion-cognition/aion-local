@@ -7,10 +7,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { entityUnmergeLedgerKey, listUnmergeableRecords, runEntityUnmerge } from './unmerge.js';
 import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
 import { upsertEdge } from '../../../infrastructure/graph/edges.js';
-import {
-  loadEntityDedupDetails,
-  redirectAndAbsorb,
-} from '../../../infrastructure/graph/entity-dedup-queries.js';
+import { loadEntityDedupDetails } from '../../../infrastructure/graph/entity-dedup-queries.js';
+import { redirectAndAbsorb } from '../../../infrastructure/graph/entity-merge-queries.js';
 import {
   mergeEntities,
   type EntityMergeInput,

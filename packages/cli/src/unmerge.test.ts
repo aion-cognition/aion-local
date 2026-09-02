@@ -50,6 +50,7 @@ describe('renderAbsorbed', () => {
           mergedName: 'PostgreSQL',
           mergedType: 'tool',
           mergedAliases: [],
+          claimIds: [],
           edges: [
             {
               type: 'RELATED_TO',
@@ -79,7 +80,7 @@ describe('renderAbsorbed', () => {
 
     renderAbsorbed(
       'canonical-1',
-      [{ mergedId: 'merged-1', mergedAliases: [], edges: [], raw: {} }],
+      [{ mergedId: 'merged-1', mergedAliases: [], claimIds: [], edges: [], raw: {} }],
       (line) => lines.push(line),
     );
 
