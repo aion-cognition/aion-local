@@ -50,6 +50,15 @@ export class AssociationInferenceStage implements ReflectionStage {
     };
   }
 
+  /**
+   * The options this instance actually runs on. Both thresholds and the floor reach the stage
+   * only through construction, so without a reader a build that dropped the wiring writes edges
+   * under the constructor defaults while the deployment's own numbers sit unread.
+   */
+  describe(): AssociationStageOptions {
+    return this.#options;
+  }
+
   async run(ctx: StageContext): Promise<StageOutcome> {
     const entities = await this.#loadEntities(ctx);
     if (!entities.ok) {
