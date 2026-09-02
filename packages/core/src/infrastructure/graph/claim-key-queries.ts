@@ -5,6 +5,8 @@ import { supersedeSubjectFamilyInTransaction, type SubjectFamilyResult } from '.
 import { FACT_NODE_LABELS } from './supersession-queries.js';
 import type { GraphProperties } from './values.js';
 import {
+  CLAIM_ASPECT_PROPERTY,
+  CLAIM_SUBJECT_PROPERTY,
   KEYED_CLOSE_METHOD,
   KEYED_CLOSE_SIGNALS,
   readingHorizon,
@@ -21,11 +23,8 @@ import {
  * those reached would be silently broken with nothing to notice it.
  */
 
-/** The resolved entity the claim asserts about. */
-export const CLAIM_SUBJECT_PROPERTY = 'subject_entity_id';
-
-/** The folded attribute name, which is what makes two claims about one subject comparable. */
-export const CLAIM_ASPECT_PROPERTY = 'aspect_norm';
+/** The two halves of the key declare themselves with the key itself; every reader still asks here. */
+export { CLAIM_ASPECT_PROPERTY, CLAIM_SUBJECT_PROPERTY };
 
 export const TEMPORAL_CLASS_PROPERTY = 'temporal_class';
 

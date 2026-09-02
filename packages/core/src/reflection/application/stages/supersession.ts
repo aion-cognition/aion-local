@@ -4,9 +4,11 @@ import { applyJudgment, type SupersessionMode } from './supersession-apply.js';
 import { RunTally } from './supersession-tally.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { describeError, isAbortError } from '../../../infrastructure/errors.js';
+import type { KeyedCloseMode } from '../../../infrastructure/graph/claim-key-queries.js';
 import {
   findContradictionCandidates,
   findEpisodeFactNodes,
+  findKeyedCandidates,
   findSubjectIdentityCandidates,
   type ContradictionCandidate,
   type EpisodeFactNode,
@@ -33,6 +35,10 @@ import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/s
  * what both passes agree on. `propose` writes every affirmative to `supersession_proposals`
  * and touches nothing, which makes it the kill switch. `auto` is the confidence-gated
  * predecessor, kept valid for a deployment that pinned it.
+ *
+ * A claim that carries a subject key reaches the same judge through a leg of its own. Under
+ * `AION_KEYED_CLOSE_MODE=judge` the key generates the candidate and the two passes still decide
+ * it, so the key buys precision on what gets asked about and changes nothing about who answers.
  *
  * Entities are deliberately out of scope: extraction merges them on `name_norm`, so a
  * second episode naming the same entity reuses the same node and there is no new node to
@@ -63,6 +69,8 @@ export type SupersessionStageOptions = {
   readonly maxJudgments: number;
   /** How wide a unanimous close cuts: the same family floor `aion proposals apply` runs on. */
   readonly familyRelatednessFloor: number;
+  /** Where a keyed pair goes: `judge` puts it in front of this stage, and no other value does. */
+  readonly keyedCloseMode: KeyedCloseMode;
 };
 
 const JUDGMENT_JSON_SCHEMA: JsonSchema = {
@@ -233,6 +241,7 @@ export class SupersessionStage implements ReflectionStage {
       maxNeighbors: DEFAULTS.reflection.maxContradictionNeighbors,
       maxJudgments: DEFAULTS.reflection.maxContradictionJudgments,
       familyRelatednessFloor: DEFAULTS.reflection.supersedeFamilyRelatednessFloor,
+      keyedCloseMode: DEFAULTS.reflection.keyedCloseMode,
       ...options,
     };
   }
@@ -281,34 +290,67 @@ export class SupersessionStage implements ReflectionStage {
   }
 
   /**
-   * Subject identity first, embedding proximity only to fill the remaining slots. Both sides
-   * of a real reversal name the same subject, and the KNN leg alone both missed those pairs
-   * and supplied every measured false positive.
+   * The key first, then subject identity, then embedding proximity for what is left. Both sides
+   * of a real reversal name the same subject, and the KNN leg alone both missed those pairs and
+   * supplied every measured false positive; a key states that without a substring test.
    */
   async #findCandidates(
     ctx: StageContext,
     subject: FactSubject,
     siblingIds: readonly string[],
   ): Promise<ContradictionCandidate[]> {
+    const { maxNeighbors } = this.#options;
+    const byKey = await this.#keyedCandidates(ctx, subject, siblingIds);
+    if (byKey.length >= maxNeighbors) {
+      return byKey;
+    }
+
+    const seen = new Set(byKey.map((candidate) => candidate.id));
     const bySubject = await findSubjectIdentityCandidates(ctx.driver, {
       episodeId: ctx.episodeId,
       subjectTextNorm: subject.textNorm,
       vector: subject.contentVector,
+      excludeIds: [...siblingIds, ...seen],
+      limit: maxNeighbors - byKey.length,
+    });
+    const found = [...byKey, ...bySubject];
+    if (found.length >= maxNeighbors) {
+      return found;
+    }
+    const byVector = await findContradictionCandidates(ctx.driver, {
+      vector: subject.contentVector,
+      excludeIds: [...siblingIds, ...found.map((candidate) => candidate.id)],
+      threshold: this.#options.neighborThreshold,
+      limit: maxNeighbors - found.length,
+    });
+    return [...found, ...byVector];
+  }
+
+  /**
+   * The keyed leg runs in `judge` mode alone: in `close` mode the write already took the
+   * key-mate in its own transaction, and in `off` mode the claim stored no key. A key that
+   * matched nothing filters out nothing, and the claim falls through to the two legs below.
+   */
+  async #keyedCandidates(
+    ctx: StageContext,
+    subject: FactSubject,
+    siblingIds: readonly string[],
+  ): Promise<ContradictionCandidate[]> {
+    const { subjectEntityId, aspectNorm } = subject;
+    if (
+      this.#options.keyedCloseMode !== 'judge' ||
+      subjectEntityId === undefined ||
+      aspectNorm === undefined
+    ) {
+      return [];
+    }
+    return findKeyedCandidates(ctx.driver, {
+      subjectEntityId,
+      aspectNorm,
+      vector: subject.contentVector,
       excludeIds: siblingIds,
       limit: this.#options.maxNeighbors,
     });
-    if (bySubject.length >= this.#options.maxNeighbors) {
-      return bySubject;
-    }
-
-    const seen = new Set(bySubject.map((candidate) => candidate.id));
-    const byVector = await findContradictionCandidates(ctx.driver, {
-      vector: subject.contentVector,
-      excludeIds: [...siblingIds, ...seen],
-      threshold: this.#options.neighborThreshold,
-      limit: this.#options.maxNeighbors - bySubject.length,
-    });
-    return [...bySubject, ...byVector];
   }
 
   /** Returns the write error that stopped the run, or undefined when the subject was fully checked. */

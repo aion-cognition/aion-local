@@ -11,6 +11,16 @@ import { foldName } from './name-fold.js';
  */
 
 /**
+ * The resolved entity a claim asserts about, as the node stores it. It sits here rather than
+ * beside the keyed close because two graph modules read it and one of them imports the other:
+ * the family close compares the key, the keyed close writes it.
+ */
+export const CLAIM_SUBJECT_PROPERTY = 'subject_entity_id';
+
+/** The folded attribute name, which is what makes two claims about one subject comparable. */
+export const CLAIM_ASPECT_PROPERTY = 'aspect_norm';
+
+/**
  * How long a claim answers for. `reading` is a measurement of something that moves and goes
  * stale on a clock; `standing` holds until something corrects it; `trend` names a direction,
  * and a direction has no expiry date. Only `reading` takes a horizon.

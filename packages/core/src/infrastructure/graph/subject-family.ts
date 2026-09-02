@@ -19,6 +19,10 @@ import { ENTITY_NAME_NORM_PROPERTY, ENTITY_NAME_PROPERTY } from './seed-queries.
 import { FACT_NODE_LABELS } from './supersession-queries.js';
 import { toGraphDateTime, toGraphInteger, type Row } from './values.js';
 import { asCosine } from './vector-indexes.js';
+import {
+  CLAIM_ASPECT_PROPERTY,
+  CLAIM_SUBJECT_PROPERTY,
+} from '../../reflection/domain/claim-key.js';
 
 /**
  * The middle blade between closing one claim and closing a whole observation.
@@ -104,6 +108,18 @@ export async function findClaimSubjects(
   );
 }
 
+const NAMES_A_SUBJECT = `head([name IN names WHERE sibling.${TEXT_NORM_PROPERTY} CONTAINS name]) IS NOT NULL`;
+
+/**
+ * Whether the key decides this pair. Both sides have to carry a whole key for it to: a
+ * comparison needs two of them, and a claim that declined its key has nothing a keyed sibling
+ * could be equal to. Where it does decide, the name test plays no part.
+ */
+const BOTH_KEYED = [
+  `claim.${CLAIM_SUBJECT_PROPERTY} IS NOT NULL AND claim.${CLAIM_ASPECT_PROPERTY} IS NOT NULL`,
+  `AND sibling.${CLAIM_SUBJECT_PROPERTY} IS NOT NULL AND sibling.${CLAIM_ASPECT_PROPERTY} IS NOT NULL`,
+].join('\n            ');
+
 /**
  * The siblings a close is decided over. Same source episode, still open, naming one of the
  * claim's subjects, and observed nowhere else: a fact a second open episode also produced is
@@ -117,11 +133,21 @@ export async function findClaimSubjects(
  * cosine between the two claims' own content vectors: the substrate's sanctioned statement
  * that two sentences are about the same thing, already computed, and re-derivable months later
  * by anyone who asks why a claim closed.
+ *
+ * Where both claims carry a key, the key answers instead of the name. Naming the subject was
+ * always a stand-in for asserting about it, and a stand-in is what closed a service's retry
+ * count on a correction about its cadence: two attributes of one thing, both true, and the
+ * sibling's text carried the service's name. A keyed sibling therefore has to state the same
+ * attribute of the same entity, and a sibling with no key is matched exactly as before. The
+ * relatedness floor still decides the close either way.
  */
 const SUBJECT_SIBLINGS = [
   `MATCH (claim { id: $claimId })-[:EXTRACTED_FROM]->(source:Episode)`,
   `WHERE ${currentOnly('source')}`,
-  `MATCH (source)-[:${ENTITY_MENTION_TYPE}]->(e:Entity)`,
+  // Optional, because a claim that carries a key names its subject through the key rather than
+  // by spelling it. Without an entity to match, `names` is empty and the name test answers
+  // false for every sibling, which is what it answered before a key existed.
+  `OPTIONAL MATCH (source)-[:${ENTITY_MENTION_TYPE}]->(e:Entity)`,
   `WHERE ${currentOnly('e')}`,
   `  AND size(e.${ENTITY_NAME_NORM_PROPERTY}) >= $minNameLength`,
   `  AND claim.${TEXT_NORM_PROPERTY} CONTAINS e.${ENTITY_NAME_NORM_PROPERTY}`,
@@ -131,7 +157,10 @@ const SUBJECT_SIBLINGS = [
   'WHERE sibling.id <> $claimId',
   '  AND any(label IN labels(sibling) WHERE label IN $labels)',
   `  AND ${currentOnly('sibling')}`,
-  `  AND head([name IN names WHERE sibling.${TEXT_NORM_PROPERTY} CONTAINS name]) IS NOT NULL`,
+  `  AND CASE WHEN ${BOTH_KEYED}`,
+  `           THEN sibling.${CLAIM_SUBJECT_PROPERTY} = claim.${CLAIM_SUBJECT_PROPERTY}`,
+  `                AND sibling.${CLAIM_ASPECT_PROPERTY} = claim.${CLAIM_ASPECT_PROPERTY}`,
+  `           ELSE ${NAMES_A_SUBJECT} END`,
   '  AND NOT EXISTS {',
   '    MATCH (sibling)-[:EXTRACTED_FROM]->(other:Episode)',
   `    WHERE other.id <> source.id AND other.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
@@ -139,6 +168,7 @@ const SUBJECT_SIBLINGS = [
   `RETURN sibling.id AS id, sibling.${MEMORY_PROPERTIES.text} AS text,`,
   '       [label IN labels(sibling) WHERE label IN $labels][0] AS label,',
   `       head([name IN names WHERE sibling.${TEXT_NORM_PROPERTY} CONTAINS name]) AS subject,`,
+  `       (${BOTH_KEYED}) AS keyed,`,
   `       CASE WHEN claim.${MEMORY_PROPERTIES.contentVector} IS NULL`,
   `             OR sibling.${MEMORY_PROPERTIES.contentVector} IS NULL THEN null`,
   `            ELSE ${asCosine(
@@ -151,8 +181,10 @@ export type SubjectSibling = {
   readonly id: string;
   readonly label: string;
   readonly text: string;
-  /** Which of the claim's subjects this sibling names. */
+  /** Which of the claim's subjects this sibling names, empty when the key matched it instead. */
   readonly subject: string;
+  /** True when both claims carried a key and the two keys agreed, so no name was compared. */
+  readonly keyed: boolean;
   /**
    * Cosine against the judged claim, or absent when either side has no content vector yet.
    * Absent is not zero and not one: it is "no answer", and a close is not made on no answer.
@@ -167,6 +199,7 @@ function mapSibling(row: Row): SubjectSibling {
     label: (row.label as string | null) ?? '',
     text: (row.text as string | null) ?? '',
     subject: (row.subject as string | null) ?? '',
+    keyed: row.keyed === true,
     ...(typeof relatedness === 'number' ? { relatedness } : {}),
   };
 }
