@@ -14,7 +14,17 @@ function statementsOf(version: number): readonly string[] {
 
 describe('the pinned migration list', () => {
   it('is ordered oldest-first with no gaps', () => {
-    expect(GRAPH_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3]);
+    expect(GRAPH_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4]);
+  });
+});
+
+describe('migration 004 claim key lookup', () => {
+  it('declares the subject and aspect as one composite seek over every memory label', () => {
+    const statements = statementsOf(4);
+
+    expect(statements).toEqual([
+      'CREATE RANGE INDEX claim_subject_aspect_idx IF NOT EXISTS FOR (n:Memory) ON (n.subject_entity_id, n.aspect_norm)',
+    ]);
   });
 });
 

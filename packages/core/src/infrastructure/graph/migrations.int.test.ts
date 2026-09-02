@@ -80,6 +80,12 @@ const EXPECTED_NON_LOOKUP_INDEXES = [
     properties: ['tx_until'],
   },
   {
+    name: 'claim_subject_aspect_idx',
+    type: 'RANGE',
+    labelsOrTypes: ['Memory'],
+    properties: ['subject_entity_id', 'aspect_norm'],
+  },
+  {
     name: CONTENT_FULLTEXT_INDEX,
     type: 'FULLTEXT',
     labelsOrTypes: [
@@ -140,7 +146,7 @@ async function fetchNonLookupIndexes(harness: Neo4jHarness): Promise<IndexRow[]>
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-describe('graph schema migrations 001 + 002 + 003', () => {
+describe('graph schema migrations 001 + 002 + 003 + 004', () => {
   let harness: Neo4jHarness;
   let db: SqliteHandle;
   let dir: string;
@@ -164,20 +170,22 @@ describe('graph schema migrations 001 + 002 + 003', () => {
       embedDimension: EMBED_DIMENSION,
     });
 
-    expect(applied).toEqual([1, 2, 3]);
+    expect(applied).toEqual([1, 2, 3, 4]);
     expect(created).toContain('content_vec_idx');
     expect(created).toContain('aion_node_id_unique');
     expect(created).toContain('goal_id_unique');
     expect(created).toContain(CONTENT_FULLTEXT_INDEX);
     expect(created).toContain('entity_name_unique');
     expect(created).toContain('entity_name_squash_idx');
+    expect(created).toContain('claim_subject_aspect_idx');
     // The composite key 003 retires is never created in the first place, so a fresh graph
     // never carries it and the drop has nothing to do.
     expect(created).not.toContain('entity_name_type_unique');
     expect(getMeta(db, graphMigrationMetaKey(1))).toBeDefined();
     expect(getMeta(db, graphMigrationMetaKey(2))).toBeDefined();
     expect(getMeta(db, graphMigrationMetaKey(3))).toBeDefined();
-    expect(latestAppliedGraphMigration(db)).toBe(3);
+    expect(getMeta(db, graphMigrationMetaKey(4))).toBeDefined();
+    expect(latestAppliedGraphMigration(db)).toBe(4);
   });
 
   it('creates exactly the pinned constraints, including one id constraint per new cognitive label', async () => {
@@ -258,8 +266,8 @@ describe('graph schema migrations 001 + 002 + 003', () => {
     ).toEqual(EXPECTED_NON_LOOKUP_INDEXES);
   });
 
-  it('the pinned migration list is exactly migrations 1, 2 and 3', () => {
-    expect(GRAPH_MIGRATIONS.map((m) => m.version)).toEqual([1, 2, 3]);
+  it('the pinned migration list is exactly migrations 1, 2, 3 and 4', () => {
+    expect(GRAPH_MIGRATIONS.map((m) => m.version)).toEqual([1, 2, 3, 4]);
   });
 });
 

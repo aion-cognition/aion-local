@@ -1,7 +1,8 @@
 import type { Driver } from 'neo4j-driver';
 
 import { currentOnly } from './bitemporal.js';
-import { TEXT_NORM_PROPERTY, type CognitiveNodeLabel } from './cognitive-queries.js';
+import type { CognitiveNodeLabel } from './cognitive-queries.js';
+import { TEXT_NORM_PROPERTY } from './cognitive-text.js';
 import { runRead, type GraphStatement } from './connection.js';
 import { ENTITY_MENTION_TYPE } from './entity-queries.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
