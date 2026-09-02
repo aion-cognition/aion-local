@@ -28,13 +28,15 @@ and `stage.ts` declare for what a stage or operation receives). Two cross into v
 of its fields as fallback horizons, and `introspection/domain/tier3.ts`'s `proposeOnlyAdvisor`
 takes a `Logger` and calls `logger.info`, I/O executed from inside domain code rather than
 merely typed against it. What still holds: `domain/` never imports `application/`;
-`application/` imports `domain/` and `infrastructure/`; `infrastructure/` imports nothing from
-the six contexts above it, and has no notion of episodes, cues, or memory packs, only nodes,
-edges, and rows.
+`application/` imports `domain/` and `infrastructure/`. `infrastructure/` reaches into one
+context, `reflection/domain/`, across fifteen files, for pure identity and content
+primitives only (name folding, claim keys, vector-input hashing, entity-extraction and
+entity-reconciliation helpers, two value types); it holds no application code and no notion
+of episodes, cues, or memory packs beyond those primitives.
 
 - **`infrastructure/`**: `graph/` (every Cypher statement in the workspace), `sqlite/`
-  (the reflection queue, last-pack cache, the served-item record, ops ledger, claim locking,
-  and the two proposal
+  (the reflection queue, the experience archive `aion replay` and `aion timeline` read,
+  last-pack cache, the served-item record, ops ledger, claim locking, and the two proposal
   queues, whose reads share one `proposal-table.ts` because both are an id, the pair the
   proposal is about, and a `resolved_at` that is null while a person still owes the row a
   decision), `providers/` (the Ollama and Anthropic clients, the circuit breaker, the
@@ -62,8 +64,8 @@ edges, and rows.
   conditions read off it), `decide.ts` (the pure three-tier decision, starvation protection,
   effectiveness weighting, the preemption grace), `operation.ts` (the contract a maintenance
   operation implements), `bridge-pairs.ts` (which two communities a bridge should join),
-  `buckets.ts` (calendar-aligned idempotency keys), `tier3.ts` (the model-guided seam, opt-in
-  and propose-only).
+  `buckets.ts` (calendar-aligned idempotency keys), `tier3.ts` (the model-guided seam, on by
+  default and propose-only).
 - **`introspection/application/`**: `observe.ts` (one health reading, assembled from the
   surfaces `doctor` and `/health` already use, every collector caught), `engine.ts` (the
   tick loop: bucket claim, run, learn, backoff), `catalog.ts` (the registration seam),
@@ -88,18 +90,22 @@ edges, and rows.
 - **`session/`**: `session-manager.ts`, identity-to-session-id resolution, cached per
   process, backed by `infrastructure/graph/sessions.ts`.
 
-Cross-context imports are not one edge; eight directed pairs exist, about thirty imports
-total. `introspection/` is the heaviest importer: twelve from `reflection/` (queue lag,
-reconciliation, vector backfill, narrative cleanup, and the entity-merge and dedup machinery
-`merge_auto` and `retro_judgment_sweep` read directly, reached from both `domain/` and
-`application/`), four from `redaction/`, three from `plasticity/`. `recall/domain/` still
-imports from `reflection/domain/`, in five files now rather than four: `fusion.ts`, `pack.ts`,
-`ranking.ts` and `session-dedup.ts` take `hashContent` from `content.ts`, and `resonance.ts`
-takes `weightedMeanVector` from `context-vector.ts`; `recall/application/stage-reads.ts` adds
-a sixth import, of `orchestratorLedgerKey` from `reflection/application/orchestrator.ts`.
-`recall/` also imports once from `session/`, and `reflection/` imports once from
-`plasticity/`, twice from `redaction/`, and once from `session/`. Nothing crosses back into
-`recall/domain/`, and `infrastructure/` still imports from none of the six.
+Cross-context imports run in one direction, context by context, and nothing crosses back into
+`recall/domain/`. `introspection/` is the heaviest importer: from `reflection/` it reaches
+queue lag, reconciliation, vector backfill, narrative cleanup and rollup, claim consolidation,
+and the entity-merge and dedup machinery `merge_auto`, `merge_decision_reconcile`,
+`retro_judgment_sweep` and `structural_discovery` read directly, across both `domain/` and
+`application/`; it also reaches `redaction/` (residue scanning, fingerprinting, the redact
+call) and `plasticity/` (the flush and decay operations and their metrics). `recall/domain/`
+takes `hashContent` from `reflection/domain/content.ts` in `fusion.ts`, `pack.ts`, `ranking.ts`
+and `session-dedup.ts`, and `weightedMeanVector` from `context-vector.ts` in `resonance.ts`;
+`recall/application/stage-reads.ts` adds two more, `orchestratorLedgerKey` and
+`PIPELINE_VERSION`, both from `reflection/`. `recall/application/recall.ts` also imports
+`redactPayload` from `redaction/deep-walk.ts` and `SessionManager`'s type from `session/`.
+`reflection/application/` imports from `plasticity/domain/reinforcement.ts` (the
+co-extraction trigger and the clique discount), from `redaction/` (fingerprinting and the
+same `redactPayload`), and from `session/`. `infrastructure/` reaches only
+`reflection/domain/`, for the same primitives noted above.
 
 ## Write path: reflection intake
 
@@ -123,10 +129,14 @@ a sixth import, of `orchestratorLedgerKey` from `reflection/application/orchestr
    under the lock, write the stamped `Episode` node and each stamped `Turn` node with no
    vector properties, and link `Turn -[:PARTICIPATES_IN]-> Episode`,
    `Episode -[:PARTICIPATES_IN]-> Session`, and `Turn -[:FOLLOWS]-> <previous Turn>`.
-8. Find or create a pending `integrate` job in the SQLite reflection queue, keyed by
-   episode id and carrying its lane. The check is against the queue, not assumed from step
-   7's outcome, so a crash between the episode commit and the enqueue self-heals on the
-   next identical push.
+8. Archive the redacted payload and find or create a pending `integrate` job in the SQLite
+   reflection queue, in one transaction: two synchronous writes, so the commit costs nothing
+   extra, and it buys the invariant that no job exists for an experience the archive does not
+   hold. The job is keyed by episode id and carries its lane; the check is against the queue,
+   not assumed from step 7's outcome, so a crash between the episode commit and the enqueue
+   self-heals on the next identical push. `aion replay` reads the archive back through the
+   pipeline, and `aion timeline` reads one episode across the archive, the graph, the queue,
+   and the ledger.
 9. If a new job was enqueued, call the `onJobEnqueued` callback so the worker can start
    immediately. The service wires that callback to `worker.wake()`; the SQLite row is what a
    restart replays from regardless. A callback that throws is logged and swallowed, since by
@@ -175,7 +185,7 @@ independently for the pack's `stage_timings_ms`:
    times out, errors, or returns something unparseable, recall falls
    back to a raw-query/raw-summary cue instead of failing, and the pack records that
    degradation. `AION_CUE_BUDGET_MS` guards the call at 8000ms, a deliberate deviation from
-   PRD §14's 2000: the pinned cue model answers in 558-811ms warm and a measured 2030ms on
+   PRD §14's 2000: the pinned cue model answers in 527-937ms warm and a measured 2030ms on
    the run after an eviction, so the pinned value fires on ordinary recalls.
 2. **Embed.** Every cue is embedded in one batched call. A failure here costs recall its
    vector leg only; BM25 and exact entity resolution still run on cue text. The pack records
@@ -229,8 +239,8 @@ independently for the pack's `stage_timings_ms`:
    fused list, so on a populated substrate a five-item cut is filled by near-tie vector hits
    before any traversal-reached item can land. The token budget is what actually bounds a
    pack's size. `preferences` has no producer yet, so it is structurally absent rather than
-   empty. `narratives` gained one in P3: a session's close, or the idle sweep, compresses its
-   episodes into a `Narrative` node. `resonant` gained one in P4: the second pass above.
+   empty. `narratives` gained one when a session's close, or the idle sweep, compresses its
+   episodes into a `Narrative` node. `resonant` gained one from the second pass above.
 
 8. **Session dedup.** One subtraction between the assembled candidate set and the wire. A
    per-prompt recall hook asks many times inside one conversation and the top of the ranked list
@@ -305,7 +315,9 @@ does, and one tick runs four phases: observe, decide, act, learn.
    2 scores the rest by each operation's own `relevance`, halved for an operation whose runs
    have stopped improving anything and multiplied by how many cycles it has been passed over,
    and selects the highest above `AION_MAINTENANCE_URGENCY_THRESHOLD`. Tier 3 is the
-   model-guided seam: opt-in (`AION_MAINTENANCE_TIER3`), propose-only, and inert by default.
+   model-guided seam: on by default (`AION_MAINTENANCE_TIER3`), and propose-only because
+   `AION_MAINTENANCE_TIER3_MODE` ships `propose`. `AION_MAINTENANCE_TIER3=false` is the kill
+   switch; on any tick that reaches tier 3, the standing cost is one advisor call.
 3. **Act.** At most one operation per tick. It claims a calendar-aligned time bucket in the
    ops ledger first (`intro:<name>:<bucket>:<stamp>`), so two service instances cannot run
    the same window twice, and writes the outcome back to that key when it finishes. The
@@ -323,13 +335,17 @@ does, and one tick runs four phases: observe, decide, act, learn.
    too, whatever it did, which is what makes the cheapest way to answer a reading a fact.
 
 The catalog is one ordered list (`introspection/application/catalog.ts`), which is the only
-place an operation joins maintenance. Fourteen are registered, in four groups: substrate
+place an operation joins maintenance. Twenty-four are registered, in seven groups: substrate
 hygiene (`vector_backfill`, `reconcile_reenqueue`, `dead_letter`,
-`redaction_residue_purge`), plasticity (`reinforcement_flush`, `memory_decay`), content
-(`narrative_cleanup`, `narrative_regrounding`, `retro_judgment_sweep`,
-`description_freshness`), and topology (`emergency_relationship_repair`, `orphan_cleanup`,
-`community_refresh`, `symbiosis_bridge`). List order is documentation: selection is by tier
-and urgency, and ties break on waiting time and then on name.
+`redaction_residue_purge`), plasticity (`reinforcement_flush`, `memory_decay`, `edge_prune`,
+`identifier_decay`), content maintenance (`narrative_cleanup`, `narrative_regrounding`,
+`retro_judgment_sweep`, `description_freshness`), compression (`narrative_rollup_day`,
+`narrative_rollup_week`, `claim_consolidation`), topology
+(`emergency_relationship_repair`, `orphan_cleanup`, `community_refresh`, `symbiosis_bridge`,
+`structural_discovery`), entity and claim-merge policy (`merge_auto`, `claim_dedup`,
+`merge_decision_reconcile`), and queue hygiene (`proposal_hygiene`). List order is
+documentation: selection is by tier and urgency, and ties break on waiting time and then on
+name.
 
 One repair sits beside the catalog and is deliberately not in it. `entity_unmerge` splits an
 absorbed identity back out of the entity it was merged into. A bad merge is not measurable
@@ -344,13 +360,13 @@ bypassing the relevance score and the bucket claim and nothing else. The escape 
 because one operation's subject is not proportional: thirteen leaking nodes out of two
 thousand is a small share to a scoring function and an incident to a person.
 
-**Four operations the design names and this does not register.** `entity_consolidation` is a
+**Two operations the design names and this does not register.** `entity_consolidation` is a
 placeholder in the design itself and waits on a measure of entity fragmentation the snapshot
-does not take. `connectivity_enhance` and `association_pruning` overlap what `symbiosis_bridge`
-and `memory_decay` already do to edge weight, and building a third writer of the same property
-before the first two have a measured effect would make all three unattributable.
-`temporal_hygiene` has no trigger: nothing in the snapshot counts a validity-period violation,
-and an operation with no gauge cannot be scored or starved.
+does not take. `temporal_hygiene` has no trigger: nothing in the snapshot counts a
+validity-period violation, and an operation with no gauge cannot be scored or starved. The
+other two the design named are covered under different names: `edge_prune` ages edge weight
+down against staleness, and `structural_discovery` writes association edges to
+under-connected identities directly.
 
 **One narrowing inside the bridge.** The design describes an LLM proposing a set of specific
 node connections. This proposes the summary, rationale and compatibility, and anchors the
@@ -384,8 +400,6 @@ is not a state the substrate can reach.
 transaction closes every node whose only open `EXTRACTED_FROM` source was that episode and
 links each to the new episode with provenance `supersession_episode_propagation`. Closing an
 episode alone leaves its facts open, and recall then serves the corrected value as `current`.
-`propagateEpisodeSupersession` runs the second half over an episode something else already
-closed.
 
 `supersedeSubjectFamily(driver, { claimId, newId })` is the middle blade
 (`infrastructure/graph/subject-family.ts`), and the default an applied proposal takes. It
@@ -425,10 +439,12 @@ Four read modes, all built from one composable fragment
 definition of currency:
 
 - **`withCurrency()`**: the default. No time is pinned; a row is included whenever
-  `forgotten_at IS NULL`. Every returned item still carries a `currency` label (`current`
-  or `superseded`, judged against now) and, when superseded, a `superseded_by { id, at }`
-  pointer. This is currency-aware, not currency-filtered: superseded knowledge is still
-  eligible, just annotated.
+  `forgotten_at IS NULL`. Every returned item still carries a `currency` label (`current`,
+  `superseded`, or `expired`, judged against now) and, when superseded, a
+  `superseded_by { id, at }` pointer. `expired` marks a reading aged past the
+  `valid_horizon` it was written with; down-ranked, never dropped, and on by default
+  (`AION_TEMPORAL_EXPIRY_ANNOTATION`). This is currency-aware, not currency-filtered:
+  superseded and expired knowledge are still eligible, just annotated.
 - **`asOf(validAt)`**: a world-time slice, rows whose valid interval covers `validAt`.
 - **`knewAt(knownAt)`**: a system-time slice, rows whose transaction interval covers
   `knownAt`. Lineage itself is filtered to supersessions recorded by `knownAt` and still held
@@ -458,7 +474,7 @@ node type. The backbone nodes (`Member`, `Workspace`) stay out of `Memory` (they
 connectivity, not content) and carry `Entity` instead, so the `name_norm` uniqueness
 constraint and the entity-resolution seed strategy both apply to them.
 
-**Indexes and constraints** (migrations 001, 002 and 003,
+**Indexes and constraints** (migrations 001 through 004,
 `infrastructure/graph/migrations.ts`):
 
 - Uniqueness constraints on `AionNode.id`, and on `.id` for every primary label except
@@ -478,6 +494,9 @@ constraint and the entity-resolution seed strategy both apply to them.
   `FOR (n:Memory)`. They serve the bounded half of a time-travel filter
   (`valid_until > t`); the open-interval half (`IS NULL`) has no index to seek and is a
   scan by construction.
+- One range index, `claim_subject_aspect_idx` on `Memory(subject_entity_id, aspect_norm)`
+  (migration 004): the seek behind the subject-keyed claim lookup, which asks on every
+  fact-bearing write which open claim already asserts the same attribute of the same subject.
 - One fulltext index, `memory_content_fts`, over `Episode|Turn|Entity|Narrative` plus the
   nine cognitive labels, `ON EACH [summary, text, name]`, the target of the `bm25` seed
   strategy. `Bridge` is the one `Memory` label it leaves out. It replaced migration 001's
