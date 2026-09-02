@@ -9,7 +9,13 @@ import { MEMORY_PROPERTIES } from './episodes.js';
 import { BASE_NODE_LABEL, MEMORY_LABEL } from './labels.js';
 import { readModeFragment, withCurrency } from './read-modes.js';
 import { ENTITY_NAME_NORM_PROPERTY, ENTITY_NAME_PROPERTY } from './seed-queries.js';
-import { fromGraphVector, toGraphInteger, toGraphVector, type Row } from './values.js';
+import {
+  fromGraphVector,
+  toGraphDateTime,
+  toGraphInteger,
+  toGraphVector,
+  type Row,
+} from './values.js';
 import { asCosine } from './vector-indexes.js';
 import {
   CLAIM_ASPECT_PROPERTY,
@@ -73,20 +79,32 @@ export type EpisodeFactNode = {
 
 function episodeFactNodesStatement(episodeId: string, reference?: Date): GraphStatement {
   const fragment = readModeFragment(withCurrency(reference), 'n');
+  const predicates = ['any(label IN labels(n) WHERE label IN $labels)', fragment.where];
+  if (reference !== undefined) {
+    // The close predicate the default read mode does not carry, on the same cut as the
+    // currency annotation: a node that no longer stood at the read's vantage point must not
+    // become the subject that closes a live claim.
+    predicates.unshift(
+      `(n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL` +
+        ` OR n.${BITEMPORAL_PROPERTIES.validUntil} > $openAt)`,
+    );
+  }
   return {
     cypher: [
       'MATCH (:Episode { id: $episodeId })<-[:EXTRACTED_FROM]-(n)',
-      // The close predicate the default read mode does not carry: a node that has already been
-      // superseded must not become the subject that closes a live claim.
-      `WHERE n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
-      `  AND any(label IN labels(n) WHERE label IN $labels) AND ${fragment.where}`,
+      `WHERE ${predicates.join(' AND ')}`,
       'RETURN n.id AS id, [label IN labels(n) WHERE label IN $labels][0] AS label,',
       `       n.${MEMORY_PROPERTIES.text} AS text, n.${TEXT_NORM_PROPERTY} AS text_norm,`,
       `       n.${MEMORY_PROPERTIES.contentVector} AS content_vec,`,
       `       n.${CLAIM_SUBJECT_PROPERTY} AS subject_entity_id, n.${CLAIM_ASPECT_PROPERTY} AS aspect_norm`,
       `ORDER BY n.${TEXT_NORM_PROPERTY}, n.id`,
     ].join('\n'),
-    parameters: { episodeId, labels: [...FACT_NODE_LABELS], ...fragment.parameters },
+    parameters: {
+      episodeId,
+      labels: [...FACT_NODE_LABELS],
+      ...(reference === undefined ? {} : { openAt: toGraphDateTime(reference) }),
+      ...fragment.parameters,
+    },
   };
 }
 
@@ -98,7 +116,12 @@ function episodeFactNodesStatement(episodeId: string, reference?: Date): GraphSt
 export async function findEpisodeFactNodes(
   driver: Driver,
   episodeId: string,
-  /** The clock currency is judged from; the wall clock when a caller holds none. */
+  /**
+   * The clock currency is judged from. Naming one asks what this episode extracted that still
+   * stood then, which is the candidate set a stage about to write needs. Omitting it asks the
+   * other question, what this episode extracted at all, and a node closed since comes back
+   * with the rest.
+   */
   reference?: Date,
 ): Promise<EpisodeFactNode[]> {
   const rows = await runRead(

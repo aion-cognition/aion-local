@@ -9,6 +9,11 @@ import { hashContent } from '../../reflection/domain/content.js';
  * question about what the reader sees first, never about what the reader may see at all.
  */
 
+/**
+ * Bounded to [-1,1] on the way out, because a floating-point dot product over two identical
+ * vectors lands a few ulps above 1 and arrival scoring reports this number as a measurement the
+ * pack prints as a confidence, which the protocol bounds at 1.
+ */
 export function cosineSimilarity(left: Vector, right: Vector): number {
   if (left.length !== right.length || left.length === 0) {
     return 0;
@@ -26,7 +31,7 @@ export function cosineSimilarity(left: Vector, right: Vector): number {
   if (leftNorm === 0 || rightNorm === 0) {
     return 0;
   }
-  return dot / (Math.sqrt(leftNorm) * Math.sqrt(rightNorm));
+  return Math.min(1, Math.max(-1, dot / (Math.sqrt(leftNorm) * Math.sqrt(rightNorm))));
 }
 
 /** The minimum an item must carry to be ordered, capped, or diversified. */

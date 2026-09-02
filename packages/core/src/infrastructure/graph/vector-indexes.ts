@@ -23,3 +23,20 @@ export const CONTEXT_VECTOR_INDEX = 'context_vec_idx';
 export function asCosine(scoreExpression: string): string {
   return `(2.0 * ${scoreExpression} - 1.0)`;
 }
+
+/**
+ * The read-side half of `asCosine`, applied by every reader whose score reaches the domain as a
+ * measurement rather than only as a comparison against a threshold.
+ *
+ * Neo4j scores in float32, so a node whose vector is the query vector comes back at
+ * 1.0000001192092896 instead of 1, and the rescale above doubles the overshoot to
+ * 1.0000002384185791. A cosine is at most 1 by definition, and a pack prints an admitted item's
+ * measurement as a confidence the protocol bounds at 1, so the bound holds here rather than on
+ * the accident that no cue ever embeds to exactly what a stored vector holds.
+ *
+ * One-sided: a genuinely negative cosine is a real reading and ranks below zero. Only the
+ * ceiling is the arithmetic's to break.
+ */
+export function capScore(score: number): number {
+  return Math.min(1, score);
+}

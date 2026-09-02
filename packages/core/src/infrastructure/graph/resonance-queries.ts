@@ -5,7 +5,7 @@ import { CONTEXT_VECTOR_PROPERTY } from './context-vector-queries.js';
 import { BASE_NODE_LABEL } from './labels.js';
 import { readModeFragment, type ReadMode } from './read-modes.js';
 import { fromGraphVector, toGraphInteger, toGraphVector } from './values.js';
-import { asCosine, CONTEXT_VECTOR_INDEX } from './vector-indexes.js';
+import { asCosine, capScore, CONTEXT_VECTOR_INDEX } from './vector-indexes.js';
 import type { Vector } from '../providers/types.js';
 
 /**
@@ -124,6 +124,6 @@ export async function resonantNodes(
       threshold: input.threshold,
       exclude: [...input.exclude],
     },
-    (row) => ({ id: row.id as string, similarity: row.similarity as number }),
+    (row) => ({ id: row.id as string, similarity: capScore(row.similarity as number) }),
   );
 }
