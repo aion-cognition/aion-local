@@ -10,6 +10,7 @@ import {
   KEYED_CLOSE_METHOD,
   KEYED_CLOSE_SIGNALS,
   readingHorizon,
+  type KeyedCloseMode,
   type TemporalClass,
 } from '../../reflection/domain/claim-key.js';
 
@@ -37,12 +38,8 @@ export const TEMPORAL_CLASS_PROPERTY = 'temporal_class';
  */
 export { VALID_HORIZON_PROPERTY };
 
-/**
- * What a keyed match does. `off` skips the lookup outright. `judge` records the key on the node
- * and leaves the pair to the two-pass judge, which is the unmeasured default. `close` is the
- * mechanical close this module performs.
- */
-export type KeyedCloseMode = 'off' | 'judge' | 'close';
+/** The mode is declared with the key itself, because the family close reads it too. */
+export type { KeyedCloseMode };
 
 export type KeyedCloseOptions = {
   readonly mode: KeyedCloseMode;
@@ -121,6 +118,12 @@ export type KeyedCloseInput = {
   readonly episodeId: string;
   readonly subjectEntityId: string;
   readonly aspectNorm: string;
+  /**
+   * The mode this close is running under, carried through to the family cut rather than
+   * restated there: the family close reads it to decide whether a sibling whose key disagrees
+   * is excluded or left to the containment test.
+   */
+  readonly mode: KeyedCloseMode;
   readonly relatednessFloor: number;
   readonly now: Date;
   /** When the correcting experience happened, which is when the closed claims stopped being true. */
@@ -165,6 +168,7 @@ export async function closeKeyedClaimsInTransaction(
       await supersedeSubjectFamilyInTransaction(tx, {
         claimId: mate,
         newId: input.newId,
+        keyedCloseMode: input.mode,
         relatednessFloor: input.relatednessFloor,
         now: input.now,
         validUntil: input.validUntil,

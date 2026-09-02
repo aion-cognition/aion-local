@@ -185,6 +185,7 @@ export async function writeCognitiveNode(
       episodeId: input.episodeId,
       subjectEntityId: input.subjectEntityId,
       aspectNorm: input.aspectNorm,
+      mode: input.keyedClose.mode,
       relatednessFloor: input.keyedClose.relatednessFloor,
       now: input.now,
       // The key-mate stopped being true when the correcting experience happened, which is the

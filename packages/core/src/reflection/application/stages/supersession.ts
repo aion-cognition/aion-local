@@ -428,7 +428,6 @@ export class SupersessionStage implements ReflectionStage {
     judgment: ContradictionJudgment,
     tally: RunTally,
   ): Promise<void> {
-    const { mode, autoConfidence, familyRelatednessFloor, model, timeoutMs } = this.#options;
     const outcome = await applyJudgment(
       ctx,
       {
@@ -437,7 +436,8 @@ export class SupersessionStage implements ReflectionStage {
         confidence: judgment.confidence,
         ...(judgment.rationale === undefined ? {} : { rationale: judgment.rationale }),
       },
-      { mode, autoConfidence, familyRelatednessFloor, model, timeoutMs },
+      // The stage options carry the write policy whole; the judge's search knobs ride along.
+      this.#options,
       tally,
     );
     ctx.logger.debug(

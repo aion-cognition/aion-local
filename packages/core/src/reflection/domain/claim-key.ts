@@ -79,3 +79,29 @@ export const KEYED_CLOSE_METHOD = 'keyed_close';
 
 /** The evidence the close was made on, which is the key and nothing else. */
 export const KEYED_CLOSE_SIGNALS: readonly string[] = ['subject_key'];
+
+/**
+ * What a keyed match does. `off` skips the lookup outright. `judge` records the key on the node
+ * and leaves the pair to the two-pass judge, which is the shipped default. `close` is the
+ * mechanical close the keyed path performs.
+ *
+ * It sits here for the reason the two property names do: the keyed close reads the mode to
+ * decide whether it runs at all, the family close reads it to decide what a key is worth, and
+ * one of those two modules imports the other.
+ */
+export type KeyedCloseMode = 'off' | 'judge' | 'close';
+
+/**
+ * Whether two different aspect slugs are evidence that two claims assert different attributes.
+ * Only under `close`, the mode a deployment arms once its slugs measure reliable.
+ *
+ * Extraction keys both halves of a correction rarely, and the slug drifts between observations:
+ * "checkpoint state storage location" against "checkpoint state storage backend" is one
+ * attribute named twice. A mismatch that excluded a sibling on that evidence holds a stale
+ * claim open as current, so under every other mode a mismatch falls back to the containment
+ * test and the relatedness floor. An exact match still confirms membership under every mode,
+ * because a match is not a guess.
+ */
+export function keyedMismatchExcludes(mode: KeyedCloseMode | undefined): boolean {
+  return mode === 'close';
+}

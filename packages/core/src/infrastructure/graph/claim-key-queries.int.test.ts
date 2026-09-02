@@ -17,6 +17,7 @@ import { ENTITY_MENTION_TYPE } from './entity-queries.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
 import { runGraphMigrations } from './migrations.js';
 import { ENTITY_NAME_NORM_PROPERTY, ENTITY_NAME_PROPERTY } from './seed-queries.js';
+import { supersedeSubjectFamily } from './subject-family.js';
 import {
   nodeProperties,
   supersedingNodeIds,
@@ -97,15 +98,76 @@ type ClaimInput = Omit<CognitiveNodeWrite, 'label' | 'occurredAt' | 'now'> & {
   readonly label?: CognitiveNodeWrite['label'];
 };
 
-async function writeClaim(
-  input: ClaimInput,
-): Promise<Awaited<ReturnType<typeof writeCognitiveNode>>> {
+type WrittenClaim = Awaited<ReturnType<typeof writeCognitiveNode>>;
+
+async function writeClaim(input: ClaimInput): Promise<WrittenClaim> {
   return writeCognitiveNode(harness.driver, {
     label: 'Concept',
     occurredAt: OCCURRED_AT,
     now: NOW,
     ...input,
   });
+}
+
+type FamilyFixture = {
+  /** The judged claim, keyed on the repository's default branch. */
+  readonly prior: WrittenClaim;
+  /** The same repository, a second attribute, and a slug that matches nothing on the judged claim. */
+  readonly otherAspect: WrittenClaim;
+  /** No key at all, so only the name test can reach it. */
+  readonly unkeyed: WrittenClaim;
+  readonly correction: WrittenClaim;
+};
+
+/**
+ * Three siblings containment and the floor admit on their own: each names the repository in its
+ * own text and carries the judged claim's vector. The key is the only thing that can separate
+ * them, which is what makes the mode visible.
+ *
+ * Each seeding takes its own repository, because `name_norm` is unique across entities and one
+ * close per family keeps the second seeding reading nodes the first one did not touch.
+ */
+async function seedFamily(
+  suffix: string,
+  repositoryName: string,
+  keyedClose?: CognitiveNodeWrite['keyedClose'],
+): Promise<FamilyFixture> {
+  const observed = `ep-family-old-${suffix}`;
+  const correcting = `ep-family-new-${suffix}`;
+  await seedEpisode(observed);
+  await seedEpisode(correcting);
+  const repository = await seedEntity(`entity-repo-${suffix}`, repositoryName);
+  await mention(observed, repository);
+  const vector = [1, 0, 0, 0, 0, 0, 0, 0];
+  const key = { subjectEntityId: repository, aspectNorm: aspect('default branch') };
+
+  return {
+    prior: await writeClaim({
+      episodeId: observed,
+      text: `The ${repositoryName} default branch is main.`,
+      contentVector: vector,
+      ...key,
+    }),
+    otherAspect: await writeClaim({
+      episodeId: observed,
+      text: `The ${repositoryName} default reviewer is the release captain.`,
+      contentVector: vector,
+      subjectEntityId: repository,
+      aspectNorm: aspect('default reviewer'),
+    }),
+    unkeyed: await writeClaim({
+      episodeId: observed,
+      text: `The ${repositoryName} is mirrored to the archive host nightly.`,
+      contentVector: vector,
+    }),
+    correction: await writeClaim({
+      episodeId: correcting,
+      text: `The ${repositoryName} default branch is trunk.`,
+      contentVector: vector,
+      ...key,
+      ...(keyedClose === undefined ? {} : { keyedClose }),
+    }),
+  };
 }
 
 async function isClosed(id: string): Promise<boolean> {
@@ -352,55 +414,76 @@ describe('the keyed close', () => {
   });
 
   /**
-   * The family cut around a keyed close. All three siblings name the subject in their own text
-   * and carry the same vector, so containment plus relatedness would have taken every one of
-   * them. What separates them is the key: the sibling asserting a second attribute of the same
-   * repository is not a candidate at all, and the sibling with no key of its own is matched the
-   * way it always was.
+   * The family cut around a keyed close, which runs under the `close` mode by construction. All
+   * three siblings name the subject in their own text and carry the same vector, so containment
+   * plus relatedness would have taken every one of them. Under this mode the key separates them:
+   * the sibling asserting a second attribute of the same repository is not a candidate at all,
+   * and the sibling with no key of its own is matched the way it always was.
    */
-  it('holds a sibling asserting a different attribute and still takes an unkeyed one', async () => {
-    await seedEpisode('ep-family-old');
-    await seedEpisode('ep-family-new');
-    const repository = await seedEntity('entity-ravel-repo', 'Ravel repository');
-    await mention('ep-family-old', repository);
-    const vector = [1, 0, 0, 0, 0, 0, 0, 0];
-    const key = { subjectEntityId: repository, aspectNorm: aspect('default branch') };
-    const prior = await writeClaim({
-      episodeId: 'ep-family-old',
-      text: 'The Ravel repository default branch is main.',
-      contentVector: vector,
-      ...key,
-    });
-    const otherAspect = await writeClaim({
-      episodeId: 'ep-family-old',
-      text: 'The Ravel repository default reviewer is the release captain.',
-      contentVector: vector,
-      subjectEntityId: repository,
-      aspectNorm: aspect('default reviewer'),
-    });
-    const unkeyed = await writeClaim({
-      episodeId: 'ep-family-old',
-      text: 'The Ravel repository is mirrored to the archive host nightly.',
-      contentVector: vector,
+  it('under the close mode, holds a differently keyed sibling and takes an unkeyed one', async () => {
+    const seeded = await seedFamily('write-close', 'Ravel repository', {
+      mode: 'close',
+      relatednessFloor: FAMILY_FLOOR,
     });
 
-    const correction = await writeClaim({
-      episodeId: 'ep-family-new',
-      text: 'The Ravel repository default branch is trunk.',
-      contentVector: vector,
-      ...key,
-      keyedClose: { mode: 'close', relatednessFloor: FAMILY_FLOOR },
-    });
-
-    const family = correction.keyedClose?.families[0];
-    expect(family?.siblings.map((sibling) => sibling.id)).toEqual([unkeyed.node.id]);
+    const family = seeded.correction.keyedClose?.families[0];
+    expect(family?.siblings.map((sibling) => sibling.id)).toEqual([seeded.unkeyed.node.id]);
     expect(family?.siblings.map((sibling) => sibling.keyed)).toEqual([false]);
     expect(family?.heldSiblings).toEqual([]);
-    expect([...(correction.keyedClose?.closedIds ?? [])].sort()).toEqual(
-      [prior.node.id, unkeyed.node.id].sort(),
+    expect([...(seeded.correction.keyedClose?.closedIds ?? [])].sort()).toEqual(
+      [seeded.prior.node.id, seeded.unkeyed.node.id].sort(),
     );
-    expect(await isClosed(otherAspect.node.id)).toBe(false);
-    expect(await supersedingNodeIds(harness.driver, otherAspect.node.id)).toEqual([]);
+    expect(await isClosed(seeded.otherAspect.node.id)).toBe(false);
+    expect(await supersedingNodeIds(harness.driver, seeded.otherAspect.node.id)).toEqual([]);
+  });
+
+  /**
+   * The same three siblings closed through the family path an applied proposal runs, where the
+   * mode is a value rather than a branch that has already been taken.
+   *
+   * Under `judge` an aspect slug is not yet reliable enough to exclude anything: extraction keys
+   * both halves of a correction rarely, and the slug drifts between observations, so a sibling
+   * the name test and the floor admit closes and no stale sentence stays current. Under `close`
+   * that same sibling is held, which is the cut a deployment arms once its slugs measure
+   * reliable. Nothing but the mode differs between the two halves.
+   */
+  it('takes a differently keyed sibling under the judge mode and holds it under close', async () => {
+    const judged = await seedFamily('apply-judge', 'Sandpiper repository');
+
+    const closedUnderJudge = await supersedeSubjectFamily(harness.driver, {
+      claimId: judged.prior.node.id,
+      newId: judged.correction.node.id,
+      keyedCloseMode: 'judge',
+      relatednessFloor: FAMILY_FLOOR,
+      now: NOW,
+      validUntil: OCCURRED_AT,
+    });
+
+    expect([...closedUnderJudge.siblings.map((sibling) => sibling.id)].sort()).toEqual(
+      [judged.otherAspect.node.id, judged.unkeyed.node.id].sort(),
+    );
+    // Neither sibling was admitted on a key: one has none, and the other's disagrees.
+    expect(closedUnderJudge.siblings.map((sibling) => sibling.keyed)).toEqual([false, false]);
+    expect(closedUnderJudge.heldSiblings).toEqual([]);
+    expect(await isClosed(judged.otherAspect.node.id)).toBe(true);
+    expect(await isClosed(judged.unkeyed.node.id)).toBe(true);
+
+    const held = await seedFamily('apply-close', 'Thistledown repository');
+
+    const closedUnderClose = await supersedeSubjectFamily(harness.driver, {
+      claimId: held.prior.node.id,
+      newId: held.correction.node.id,
+      keyedCloseMode: 'close',
+      relatednessFloor: FAMILY_FLOOR,
+      now: NOW,
+      validUntil: OCCURRED_AT,
+    });
+
+    expect(closedUnderClose.siblings.map((sibling) => sibling.id)).toEqual([held.unkeyed.node.id]);
+    expect(closedUnderClose.heldSiblings).toEqual([]);
+    expect(await isClosed(held.unkeyed.node.id)).toBe(true);
+    expect(await isClosed(held.otherAspect.node.id)).toBe(false);
+    expect(await supersedingNodeIds(harness.driver, held.otherAspect.node.id)).toEqual([]);
   });
 
   it('retires an entity gloss that restates the claim the key closed', async () => {

@@ -219,6 +219,7 @@ async function runApplySupersession(substrate: Substrate, flags: ProposalFlags):
     id,
     scope: flags.scope,
     relatednessFloor: config.reflection.supersedeFamilyRelatednessFloor,
+    keyedCloseMode: config.reflection.keyedCloseMode,
   });
   substrate.logger().warn(
     {
