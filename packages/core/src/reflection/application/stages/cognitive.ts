@@ -1,13 +1,22 @@
 import { z } from 'zod';
 
+import {
+  narrowClaimKey,
+  resolveClaimSubjects,
+  storedClaimKey,
+  type ClaimSubjects,
+  type ExtractedClaimKey,
+} from './subject-resolution.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { describeError, formatZodError, isAbortError } from '../../../infrastructure/errors.js';
+import type { KeyedCloseMode } from '../../../infrastructure/graph/claim-key-queries.js';
 import {
   COGNITIVE_NODE_LABELS,
   writeCognitiveNode,
   type CognitiveNodeMetadata,
 } from '../../../infrastructure/graph/cognitive-queries.js';
 import type { ChatMessage, JsonSchema, Vector } from '../../../infrastructure/providers/types.js';
+import { TEMPORAL_CLASSES } from '../../domain/claim-key.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
 
 /**
@@ -16,12 +25,24 @@ import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/s
  * episode. `infrastructure/graph/cognitive-queries.ts` owns the write and the node-identity
  * rule this stage relies on for idempotency; this file owns the model call and the mapping
  * from its output to that write.
+ *
+ * A fact-bearing claim also carries the key it asserts under: which entity, which attribute, and
+ * how long the claim answers for. `subject-resolution.ts` owns what the model said about that
+ * key and which entity its subject is.
  */
 
+/** The pinned `AION_KEYED_CLOSE_MODE`, which decides whether a claim is keyed at all. */
+export const DEFAULT_KEYED_CLOSE_MODE: KeyedCloseMode = DEFAULTS.reflection.keyedCloseMode;
+
 export type CognitiveExtractionStageOptions = {
-  readonly model?: string;
-  readonly timeoutMs?: number;
-  readonly maxNodes?: number;
+  readonly model: string;
+  readonly timeoutMs: number;
+  readonly maxNodes: number;
+  /** `off` resolves no subject and stores no key, which is what makes it the kill switch. */
+  readonly keyedCloseMode: KeyedCloseMode;
+  /** How close a sibling has to be before a keyed close takes it with the claim it closes. */
+  readonly familyRelatednessFloor: number;
+  readonly readingHorizonDays: number;
 };
 
 const NODE_TYPES = COGNITIVE_NODE_LABELS;
@@ -39,7 +60,12 @@ const COGNITIVE_JSON_SCHEMA: JsonSchema = {
           status: { type: 'string' },
           priority: { type: 'string' },
           rationale: { type: 'string' },
+          subject_entity: { type: 'string' },
+          aspect: { type: 'string' },
+          temporal_class: { type: 'string', enum: [...TEMPORAL_CLASSES] },
         },
+        // The key fields stay out of `required`: most claims name no subject the graph holds,
+        // and forcing three fields onto every node buys a key the episode did not state.
         required: ['type', 'text'],
       },
     },
@@ -53,6 +79,12 @@ const ExtractedNodeSchema = z.object({
   status: z.string().optional(),
   priority: z.string().optional(),
   rationale: z.string().optional(),
+  // Unknown rather than typed, the way entity extraction reads `aliases` and `is_speaker`: a
+  // model that invents a fourth temporal class is wrong about one field, and rejecting the node
+  // over it would throw away a claim the episode really made. The narrowing is what decides.
+  subject_entity: z.unknown().optional(),
+  aspect: z.unknown().optional(),
+  temporal_class: z.unknown().optional(),
 });
 
 type ExtractedNode = z.infer<typeof ExtractedNodeSchema>;
@@ -103,6 +135,14 @@ const SYSTEM_PROMPT = [
   'For a decision, add a one-sentence rationale when the episode gives one.',
   "A goal or plan must state something beyond the episode's own summary line; if it would",
   'only restate that summary in different words, leave it out.',
+  'For a decision, insight, concept, or event only, add three more fields when the episode',
+  'makes them plain: subject_entity, the one thing the claim asserts about, spelled the way the',
+  'episode spells it; aspect, the attribute of that thing being asserted, never its value, so',
+  '"supersede mode" and not "unanimous", and "retry limit" and not "five"; and temporal_class,',
+  'which is reading for a measurement that goes stale on its own, standing for something that',
+  'holds until it is corrected, and trend for a direction rather than a value.',
+  'Leaving all three out is normal and expected: give them for a claim that states one attribute',
+  'of one named thing, and omit them for everything else.',
 ].join(' ');
 
 function buildMessages(text: string, summary: string | undefined): ChatMessage[] {
@@ -189,14 +229,28 @@ const RestatementOutputSchema = z.object({ restated: z.array(z.string()) });
 
 export class CognitiveExtractionStage implements ReflectionStage {
   readonly name = 'cognitive';
-  readonly #model: string;
-  readonly #timeoutMs: number;
-  readonly #maxNodes: number;
+  readonly #options: CognitiveExtractionStageOptions;
 
-  constructor(options: CognitiveExtractionStageOptions = {}) {
-    this.#model = options.model ?? DEFAULTS.models.reflect;
-    this.#timeoutMs = options.timeoutMs ?? DEFAULTS.reflection.stageTimeoutMs;
-    this.#maxNodes = options.maxNodes ?? DEFAULTS.reflection.maxCognitiveNodes;
+  constructor(options: Partial<CognitiveExtractionStageOptions> = {}) {
+    this.#options = {
+      model: DEFAULTS.models.reflect,
+      timeoutMs: DEFAULTS.reflection.stageTimeoutMs,
+      maxNodes: DEFAULTS.reflection.maxCognitiveNodes,
+      keyedCloseMode: DEFAULT_KEYED_CLOSE_MODE,
+      familyRelatednessFloor: DEFAULTS.reflection.supersedeFamilyRelatednessFloor,
+      readingHorizonDays: DEFAULTS.temporal.readingHorizonDays,
+      ...options,
+    };
+  }
+
+  /**
+   * The options this instance actually runs on. `keyedCloseMode` is the kill switch and reaches
+   * the stage only through construction, so without a reader a build that dropped the wiring goes
+   * on keying and closing under a deployment that set `off`, with the constructor default
+   * answering for the config.
+   */
+  describe(): CognitiveExtractionStageOptions {
+    return this.#options;
   }
 
   async run(ctx: StageContext): Promise<StageOutcome> {
@@ -208,11 +262,11 @@ export class CognitiveExtractionStage implements ReflectionStage {
     const controller = new AbortController();
     const timer = setTimeout(() => {
       controller.abort();
-    }, this.#timeoutMs);
+    }, this.#options.timeoutMs);
     let raw: unknown;
     try {
       raw = await ctx.provider.generate({
-        model: this.#model,
+        model: this.#options.model,
         messages: buildMessages(text, ctx.episode.summary),
         schema: COGNITIVE_JSON_SCHEMA,
         // Reasoning buys nothing for extraction and costs the budget (mirrors cues.ts / the quality harness).
@@ -244,7 +298,7 @@ export class CognitiveExtractionStage implements ReflectionStage {
       );
     }
     const extracted = usable.nodes
-      .slice(0, this.#maxNodes)
+      .slice(0, this.#options.maxNodes)
       .filter((node) => node.text.trim().length > 0);
     if (extracted.length === 0) {
       if (usable.dropped > 0) {
@@ -283,8 +337,18 @@ export class CognitiveExtractionStage implements ReflectionStage {
       );
     }
 
+    const keys = nodes.map((node) =>
+      narrowClaimKey(node.type, {
+        subjectEntity: node.subject_entity,
+        aspect: node.aspect,
+        temporalClass: node.temporal_class,
+      }),
+    );
+    const subjects = await this.#resolveSubjects(ctx, keys);
+
     let written = 0;
     let created = 0;
+    let closed = 0;
     let writeError: unknown;
     for (const [index, node] of nodes.entries()) {
       try {
@@ -296,8 +360,15 @@ export class CognitiveExtractionStage implements ReflectionStage {
           contentVector: vectors[index],
           occurredAt: ctx.occurredAt,
           now: ctx.now,
+          ...storedClaimKey(keys[index] ?? {}, subjects),
+          readingHorizonDays: this.#options.readingHorizonDays,
+          keyedClose: {
+            mode: this.#options.keyedCloseMode,
+            relatednessFloor: this.#options.familyRelatednessFloor,
+          },
         });
         written += 1;
+        closed += result.keyedClose?.closedIds.length ?? 0;
         if (result.created) {
           created += 1;
         }
@@ -315,11 +386,35 @@ export class CognitiveExtractionStage implements ReflectionStage {
       };
     }
 
+    const closing = closed === 0 ? '' : `, ${closed} closed by key`;
     return {
       status: 'ok',
-      summary: `extracted ${nodes.length} cognitive node(s), ${created} new`,
+      summary: `extracted ${nodes.length} cognitive node(s), ${created} new${closing}`,
       counts: { cognitive: nodes.length },
     };
+  }
+
+  /**
+   * The subjects this run's keys resolve to, or none of them. A failed identity read costs the
+   * episode its keys and nothing else: the claims are what the episode paid for, and an unkeyed
+   * claim still reaches the judge that has always handled it.
+   */
+  async #resolveSubjects(
+    ctx: StageContext,
+    keys: readonly ExtractedClaimKey[],
+  ): Promise<ClaimSubjects> {
+    if (this.#options.keyedCloseMode === 'off') {
+      return new Map();
+    }
+    try {
+      return await resolveClaimSubjects(ctx, keys);
+    } catch (error) {
+      ctx.logger.warn(
+        { err: error, episodeId: ctx.episodeId },
+        'cognitive extraction: subject resolution failed, writing the claims without keys',
+      );
+      return new Map();
+    }
   }
 
   /** Keeps every non-Goal/Plan node untouched; Goal/Plan candidates pass through validation. */
@@ -380,10 +475,10 @@ export class CognitiveExtractionStage implements ReflectionStage {
     const controller = new AbortController();
     const timer = setTimeout(() => {
       controller.abort();
-    }, this.#timeoutMs);
+    }, this.#options.timeoutMs);
     try {
       const raw = await ctx.provider.generate({
-        model: this.#model,
+        model: this.#options.model,
         messages: buildRestatementMessages(summary, candidates),
         schema: buildRestatementSchema(candidates),
         think: false,

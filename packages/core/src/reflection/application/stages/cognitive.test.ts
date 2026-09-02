@@ -4,11 +4,19 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { CognitiveExtractionStage } from './cognitive.js';
+import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { BITEMPORAL_PROPERTIES } from '../../../infrastructure/graph/bitemporal.js';
+import {
+  CLAIM_ASPECT_PROPERTY,
+  CLAIM_SUBJECT_PROPERTY,
+  TEMPORAL_CLASS_PROPERTY,
+  VALID_HORIZON_PROPERTY,
+} from '../../../infrastructure/graph/claim-key-queries.js';
 import {
   deriveCognitiveNodeId,
   TEXT_NORM_PROPERTY,
 } from '../../../infrastructure/graph/cognitive-queries.js';
+import { ENTITY_MENTION_TYPE } from '../../../infrastructure/graph/entity-queries.js';
 import { MEMORY_PROPERTIES } from '../../../infrastructure/graph/episodes.js';
 import { fromGraphDateTime } from '../../../infrastructure/graph/values.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
@@ -18,6 +26,8 @@ import type {
   Vector,
 } from '../../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import { readingHorizon } from '../../domain/claim-key.js';
+import { foldName } from '../../domain/name-fold.js';
 import type { StageContext } from '../../domain/stage.js';
 import { PIPELINE_VERSION } from '../../domain/version.js';
 import { FakeGraph } from '../../test-support/fake-graph.fixture.js';
@@ -25,6 +35,8 @@ import { FakeGraph } from '../../test-support/fake-graph.fixture.js';
 const EPISODE_ID = 'episode-1';
 const NOW = new Date('2026-08-28T09:05:00.000Z');
 const OCCURRED_AT = new Date('2026-08-28T09:00:00.000Z');
+
+const SUBJECT_ID = 'entity-postgres';
 
 type GenerateFn = (req: StructuredRequest) => Promise<unknown>;
 type EmbedFn = (texts: readonly string[]) => Promise<Vector[]>;
@@ -50,6 +62,12 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(dataDir, { recursive: true, force: true });
 });
+
+/** One entity this episode mentions, which is the whole scope a claim subject resolves against. */
+function seedMentionedEntity(name: string, id: string): void {
+  graph.seedNode(id, ['Entity', 'AionNode'], { name, name_norm: foldName(name), type: 'tool' });
+  graph.seedEdge(ENTITY_MENTION_TYPE, EPISODE_ID, id);
+}
 
 function buildContext(
   provider: Provider,
@@ -391,6 +409,194 @@ describe('CognitiveExtractionStage', () => {
       );
       expect(outcome.counts).toEqual({ cognitive: 0 });
       expect(graph.nodesWithLabel('Plan')).toHaveLength(0);
+    });
+  });
+
+  describe('claim keys', () => {
+    it('keys a fact-bearing claim to the entity the episode mentions and the attribute it asserts', async () => {
+      seedMentionedEntity('Postgres', SUBJECT_ID);
+      const generate = async (): Promise<unknown> => ({
+        nodes: [
+          {
+            type: 'Decision',
+            text: 'the queue moves off Postgres onto its own SQLite file',
+            subject_entity: 'Postgres',
+            aspect: 'Queue Store',
+            temporal_class: 'standing',
+          },
+        ],
+      });
+      const stage = new CognitiveExtractionStage();
+
+      const outcome = await stage.run(buildContext(stubProvider(generate)));
+
+      expect(outcome.status).toBe('ok');
+      const [decision] = graph.nodesWithLabel('Decision');
+      expect(decision?.properties[CLAIM_SUBJECT_PROPERTY]).toBe(SUBJECT_ID);
+      expect(decision?.properties[CLAIM_ASPECT_PROPERTY]).toBe('queue store');
+      expect(decision?.properties[TEMPORAL_CLASS_PROPERTY]).toBe('standing');
+      expect(decision?.properties[VALID_HORIZON_PROPERTY]).toBeUndefined();
+    });
+
+    it('dates a reading horizon from the episode clock and the horizon days it was built with', async () => {
+      seedMentionedEntity('Postgres', SUBJECT_ID);
+      const generate = async (): Promise<unknown> => ({
+        nodes: [
+          {
+            type: 'Event',
+            text: 'the queue table held 4.2 million rows this morning',
+            subject_entity: 'Postgres',
+            aspect: 'queue table row count',
+            temporal_class: 'reading',
+          },
+        ],
+      });
+      const stage = new CognitiveExtractionStage({ readingHorizonDays: 7 });
+
+      await stage.run(buildContext(stubProvider(generate)));
+
+      const [event] = graph.nodesWithLabel('Event');
+      expect(fromGraphDateTime(event?.properties[VALID_HORIZON_PROPERTY])).toEqual(
+        readingHorizon(OCCURRED_AT, 7),
+      );
+    });
+
+    it('keeps the claim and drops only the temporal class when the model invents a fourth one', async () => {
+      seedMentionedEntity('Postgres', SUBJECT_ID);
+      const generate = async (): Promise<unknown> => ({
+        nodes: [
+          {
+            type: 'Insight',
+            text: 'the queue write is the contended one',
+            subject_entity: 'Postgres',
+            aspect: 'contended write',
+            temporal_class: 'projection',
+          },
+        ],
+      });
+      const stage = new CognitiveExtractionStage();
+
+      const outcome = await stage.run(buildContext(stubProvider(generate)));
+
+      expect(outcome.status).toBe('ok');
+      expect(outcome.counts).toEqual({ cognitive: 1 });
+      const [insight] = graph.nodesWithLabel('Insight');
+      expect(insight?.properties[MEMORY_PROPERTIES.text]).toBe(
+        'the queue write is the contended one',
+      );
+      expect(insight?.properties[TEMPORAL_CLASS_PROPERTY]).toBeUndefined();
+      expect(insight?.properties[CLAIM_SUBJECT_PROPERTY]).toBe(SUBJECT_ID);
+      expect(insight?.properties[CLAIM_ASPECT_PROPERTY]).toBe('contended write');
+    });
+
+    it('declines subject and aspect together when the aspect is a sentence rather than an attribute', async () => {
+      seedMentionedEntity('Postgres', SUBJECT_ID);
+      const generate = async (): Promise<unknown> => ({
+        nodes: [
+          {
+            type: 'Concept',
+            text: 'the queue store is its own SQLite file',
+            subject_entity: 'Postgres',
+            aspect:
+              'the store the reflection queue writes to now that it no longer shares the main transaction',
+            temporal_class: 'standing',
+          },
+        ],
+      });
+      const stage = new CognitiveExtractionStage();
+
+      const outcome = await stage.run(buildContext(stubProvider(generate)));
+
+      expect(outcome.counts).toEqual({ cognitive: 1 });
+      const [concept] = graph.nodesWithLabel('Concept');
+      expect(concept?.properties[CLAIM_SUBJECT_PROPERTY]).toBeUndefined();
+      expect(concept?.properties[CLAIM_ASPECT_PROPERTY]).toBeUndefined();
+      expect(concept?.properties[TEMPORAL_CLASS_PROPERTY]).toBe('standing');
+    });
+
+    it('declines the key when the episode mentions nothing the subject names', async () => {
+      const generate = async (): Promise<unknown> => ({
+        nodes: [
+          {
+            type: 'Decision',
+            text: 'the queue moves off Postgres onto its own SQLite file',
+            subject_entity: 'Postgres',
+            aspect: 'queue store',
+            temporal_class: 'standing',
+          },
+        ],
+      });
+      const stage = new CognitiveExtractionStage();
+
+      const outcome = await stage.run(buildContext(stubProvider(generate)));
+
+      expect(outcome.counts).toEqual({ cognitive: 1 });
+      const [decision] = graph.nodesWithLabel('Decision');
+      expect(decision?.properties[CLAIM_SUBJECT_PROPERTY]).toBeUndefined();
+      expect(decision?.properties[CLAIM_ASPECT_PROPERTY]).toBeUndefined();
+    });
+
+    it('keys nothing on a Goal, whatever the model returned for it', async () => {
+      seedMentionedEntity('Postgres', SUBJECT_ID);
+      const generate = async (): Promise<unknown> => ({
+        nodes: [
+          {
+            type: 'Goal',
+            text: 'move every queue write off Postgres',
+            subject_entity: 'Postgres',
+            aspect: 'queue store',
+            temporal_class: 'standing',
+          },
+        ],
+      });
+      const stage = new CognitiveExtractionStage();
+
+      await stage.run(buildContext(stubProvider(generate)));
+
+      const [goal] = graph.nodesWithLabel('Goal');
+      expect(goal?.properties[CLAIM_SUBJECT_PROPERTY]).toBeUndefined();
+      expect(goal?.properties[CLAIM_ASPECT_PROPERTY]).toBeUndefined();
+      expect(goal?.properties[TEMPORAL_CLASS_PROPERTY]).toBeUndefined();
+    });
+
+    it('resolves no subject and stores no key when the keyed close is off', async () => {
+      seedMentionedEntity('Postgres', SUBJECT_ID);
+      const generate = async (): Promise<unknown> => ({
+        nodes: [
+          {
+            type: 'Decision',
+            text: 'the queue moves off Postgres onto its own SQLite file',
+            subject_entity: 'Postgres',
+            aspect: 'queue store',
+            temporal_class: 'reading',
+          },
+        ],
+      });
+      const stage = new CognitiveExtractionStage({ keyedCloseMode: 'off' });
+
+      await stage.run(buildContext(stubProvider(generate)));
+
+      const [decision] = graph.nodesWithLabel('Decision');
+      expect(decision?.properties[CLAIM_SUBJECT_PROPERTY]).toBeUndefined();
+      expect(decision?.properties[CLAIM_ASPECT_PROPERTY]).toBeUndefined();
+      // The class and its horizon answer to the temporal knobs, not to the keyed close.
+      expect(decision?.properties[TEMPORAL_CLASS_PROPERTY]).toBe('reading');
+      expect(graph.statements.some((statement) => statement.cypher.includes('MENTIONS'))).toBe(
+        false,
+      );
+    });
+
+    it('reports the options it runs on, keyed close and horizon included', () => {
+      const stage = new CognitiveExtractionStage();
+
+      expect(stage.describe()).toEqual({
+        model: DEFAULTS.models.reflect,
+        timeoutMs: DEFAULTS.reflection.stageTimeoutMs,
+        maxNodes: DEFAULTS.reflection.maxCognitiveNodes,
+        keyedCloseMode: DEFAULTS.reflection.keyedCloseMode,
+        familyRelatednessFloor: DEFAULTS.reflection.supersedeFamilyRelatednessFloor,
+        readingHorizonDays: DEFAULTS.temporal.readingHorizonDays,
+      });
     });
   });
 });

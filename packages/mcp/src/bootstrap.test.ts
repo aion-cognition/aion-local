@@ -46,6 +46,7 @@ const configured: Config = {
   models: { ...DEFAULTS.models, reflect: 'wiring-probe-model' },
   hebbian: { ...DEFAULTS.hebbian, weightFloor: 0.13 },
   sqlite: { ...DEFAULTS.sqlite, reinforcementQueueCap: 4_242 },
+  temporal: { ...DEFAULTS.temporal, readingHorizonDays: 31 },
   operational: {
     ...DEFAULTS.operational,
     workerCount: 3,
@@ -201,6 +202,9 @@ describe('reflectionStages', () => {
       model: configured.models.reflect,
       timeoutMs: configured.reflection.stageTimeoutMs,
       maxNodes: configured.reflection.maxCognitiveNodes,
+      keyedCloseMode: configured.reflection.keyedCloseMode,
+      familyRelatednessFloor: configured.reflection.supersedeFamilyRelatednessFloor,
+      readingHorizonDays: configured.temporal.readingHorizonDays,
     });
     expect(semanticRelationshipOptions(configured)).toEqual({
       model: configured.models.reflect,
