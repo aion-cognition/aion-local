@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { foldForIdentity, foldName } from './unicode-fold.js';
+import { foldForIdentity, foldName } from './name-fold.js';
 
 describe('foldForIdentity', () => {
   it('folds case the way the ASCII lowercase it replaced did', () => {

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 
 import { BITEMPORAL_PROPERTIES, writeStampedNode, type StampedNodeResult } from './bitemporal.js';
 import { runRead } from './connection.js';
-import { foldName } from '../providers/unicode-fold.js';
+import { foldName } from '../../reflection/domain/name-fold.js';
 
 /** The workspace is a fixed singleton, not a user-supplied name. */
 export const GLOBAL_WORKSPACE_NAME = 'global';

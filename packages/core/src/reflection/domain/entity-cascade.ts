@@ -1,6 +1,6 @@
 import { nameDigitsMatch, nameFormMatches } from './entity-identity.js';
 import { squashName } from './entity-reconciliation.js';
-import { foldName } from '../../infrastructure/providers/unicode-fold.js';
+import { foldName } from './name-fold.js';
 import type { NameFormRelation } from '../../infrastructure/sqlite/entity-merge-decisions.js';
 
 /**

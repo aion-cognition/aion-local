@@ -27,9 +27,9 @@ import {
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger } from '../../../infrastructure/logging/logger.js';
 import { refusingProvider } from '../../../infrastructure/providers/test-support/refusing-provider.fixture.js';
-import { foldName } from '../../../infrastructure/providers/unicode-fold.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { findEntityMergeDecisionsForEntity } from '../../../infrastructure/sqlite/entity-merge-decisions.js';
+import { foldName } from '../../../reflection/domain/name-fold.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
 

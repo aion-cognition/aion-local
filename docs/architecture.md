@@ -72,10 +72,11 @@ edges, and rows.
   never selects on its own.
 - **`reflection/domain/`**: `content.ts` (episode/turn shaping and content hashing),
   `stage.ts` (the contract every stage implements and how the orchestrator records it),
-  `entity-extraction.ts`, `entity-identity.ts` and `entity-merge.ts` (name folding, the
-  name-form half of identity, and the grouping a dedup run reduces to),
-  `associations.ts` (pair combinatorics), `context-vector.ts` (the strength-weighted mean),
-  `narrative.ts` (the session boundary and versioning rules).
+  `name-fold.ts` (the identity fold behind `name_norm` and every embedding call),
+  `entity-extraction.ts`, `entity-identity.ts` and `entity-merge.ts` (the name-form half of
+  identity and the grouping a dedup run reduces to), `associations.ts` (pair combinatorics),
+  `context-vector.ts` (the strength-weighted mean), `narrative.ts` (the session boundary and
+  versioning rules).
 - **`reflection/application/`**: `intake.ts` (the write path), `worker.ts` (claims queue
   rows and runs the orchestrator), `orchestrator.ts` and `stages/` (the enrichment
   pipeline), `narratives.ts`, `lanes.ts`, `vectors.ts` (pending-vector backfill),

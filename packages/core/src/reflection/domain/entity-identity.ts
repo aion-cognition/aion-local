@@ -1,4 +1,4 @@
-import { foldName } from '../../infrastructure/providers/unicode-fold.js';
+import { foldName } from './name-fold.js';
 
 /**
  * The name-form half of entity identity. Vector proximity alone is wrong in both directions:

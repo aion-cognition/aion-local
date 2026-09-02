@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
+import { foldName } from './name-fold.js';
 import type { JsonSchema } from '../../infrastructure/providers/types.js';
-import { foldName } from '../../infrastructure/providers/unicode-fold.js';
 
 /**
  * The model names entities and their types, and this module is everything that happens to

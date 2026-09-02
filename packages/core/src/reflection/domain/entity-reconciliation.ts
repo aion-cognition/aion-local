@@ -1,5 +1,5 @@
 import { ENTITY_TYPES, isEntityType, type EntityType } from './entity-extraction.js';
-import { foldName } from '../../infrastructure/providers/unicode-fold.js';
+import { foldName } from './name-fold.js';
 
 /**
  * What is left of `type` once identity stops depending on it, plus the second name key the

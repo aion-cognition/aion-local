@@ -31,13 +31,13 @@ import {
 } from '../../../infrastructure/graph/seed-queries.js';
 import { toGraphDateTime } from '../../../infrastructure/graph/values.js';
 import { openLogger } from '../../../infrastructure/logging/logger.js';
-import { foldName } from '../../../infrastructure/providers/unicode-fold.js';
 import { SqliteStore } from '../../../infrastructure/sqlite/database.js';
 import { listEntityMergeDecisions } from '../../../infrastructure/sqlite/entity-merge-decisions.js';
 import { listEntityMergeProposals } from '../../../infrastructure/sqlite/entity-merge-proposals.js';
 import { getLedgerEntry } from '../../../infrastructure/sqlite/ops-ledger.js';
 import { ENTITY_CASCADE_VERSION, entityMergeLedgerKey } from '../../domain/entity-merge.js';
 import { squashName } from '../../domain/entity-reconciliation.js';
+import { foldName } from '../../domain/name-fold.js';
 import type { StageContext } from '../../domain/stage.js';
 import { PIPELINE_VERSION } from '../../domain/version.js';
 import {
