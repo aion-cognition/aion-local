@@ -60,6 +60,7 @@ function baseCandidate(candidate: SeedCandidate): Omit<FusionCandidate, 'rationa
       ? {}
       : { sourceEpisodeId: candidate.sourceEpisodeId }),
     ...(candidate.why === undefined ? {} : { why: candidate.why }),
+    ...(candidate.mentionCount === undefined ? {} : { mentionCount: candidate.mentionCount }),
     ...annotationOf(candidate),
   };
 }

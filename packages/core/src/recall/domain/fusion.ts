@@ -59,6 +59,12 @@ export type FusionCandidate = {
   readonly isStructural?: boolean;
   /** A Turn's parent episode, so the episodes bucket can hold one item per episode. */
   readonly sourceEpisodeId?: string;
+  /**
+   * Distinct current episodes mentioning the entity, `entity-dedup-queries.ts`'s own
+   * canonical-selection signal carried into ranking. Absent for a node type `MENTIONS`
+   * never targets, which `mentionSalience` reads the same as a one-off sighting.
+   */
+  readonly mentionCount?: number;
   /** Why the item surfaced, as the pack reports it. Its score is the method's own. */
   readonly rationale: Rationale;
   /** The node's own stated reason (a Decision's `rationale` property), distinct from `rationale` above. */
@@ -199,6 +205,26 @@ function boostFor(
   return factor;
 }
 
+/**
+ * Mention-count ranking prior's weight: how much each distinct episode past the first lifts
+ * an entity's score, log-scaled so the fortieth adds far less than the second. Fixed here
+ * rather than as a knob (the intended home is `AION_MENTION_SALIENCE_WEIGHT`) until this prior
+ * earns one.
+ */
+const MENTION_SALIENCE_WEIGHT = 0.1;
+
+/**
+ * 1 for a one-off sighting or a node type `MENTIONS` never targets, since a single mention is
+ * the baseline nothing should rank below. Combines with `boostFor` by multiplication, the same
+ * way the two priors would combine if `labelBoosts` ever named an Entity label.
+ */
+function mentionSalience(mentionCount: number | undefined): number {
+  if (mentionCount === undefined || mentionCount <= 1) {
+    return 1;
+  }
+  return 1 + MENTION_SALIENCE_WEIGHT * Math.log1p(mentionCount - 1);
+}
+
 /** Current before superseded on an exact tie; id last, so one graph produces one order. */
 function compareFused(left: FusedItem, right: FusedItem): number {
   if (left.score !== right.score) {
@@ -333,7 +359,10 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
       typedAdmitted += 1;
     }
     const superseded = entry.best.currency === 'superseded';
-    const ranked = entry.score * boostFor(entry.best.labels, options.labelBoosts);
+    const ranked =
+      entry.score *
+      boostFor(entry.best.labels, options.labelBoosts) *
+      mentionSalience(entry.best.mentionCount);
     items.push({
       ...entry.best,
       relevance: entry.relevance,

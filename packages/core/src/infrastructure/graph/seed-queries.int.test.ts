@@ -3,8 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { writeStampedNode } from './bitemporal.js';
 import { runWrite } from './connection.js';
-import { addEntityAliases, mergeEntities } from './entity-queries.js';
+import { addEntityAliases, linkEntityMentions, mergeEntities } from './entity-queries.js';
 import { runGraphMigrations } from './migrations.js';
 import { withCurrency } from './read-modes.js';
 import { entityNameSeeds, EXACT_NAME_MATCH_SCORE } from './seed-queries.js';
@@ -142,5 +143,50 @@ describe('entityNameSeeds', () => {
     });
 
     expect(rows).toEqual([]);
+  });
+});
+
+describe('mention counting', () => {
+  it('counts distinct current episodes, dropping one the moment it is forgotten', async () => {
+    await writeStampedNode(harness.driver, {
+      label: 'Episode',
+      id: 'mention-episode-1',
+      now: NOW,
+      properties: { text: 'text', session_id: 'session-1' },
+    });
+    await writeStampedNode(harness.driver, {
+      label: 'Episode',
+      id: 'mention-episode-2',
+      now: NOW,
+      properties: { text: 'text', session_id: 'session-1' },
+    });
+    for (const episodeId of ['mention-episode-1', 'mention-episode-2']) {
+      await linkEntityMentions(harness.driver, {
+        episodeId,
+        entityIds: [postgresId],
+        now: NOW,
+        confidence: 1,
+        provenance: ['test'],
+      });
+    }
+
+    const [seeded] = await entityNameSeeds(harness.driver, {
+      names: ['postgres'],
+      mode: withCurrency(),
+    });
+    expect(seeded?.mentionCount).toBe(2);
+
+    await runWrite(
+      harness.driver,
+      'MATCH (e:Episode { id: $id }) SET e.forgotten_at = datetime() RETURN e.id AS id',
+      { id: 'mention-episode-2' },
+      (row) => row.id as string,
+    );
+
+    const [afterForget] = await entityNameSeeds(harness.driver, {
+      names: ['postgres'],
+      mode: withCurrency(),
+    });
+    expect(afterForget?.mentionCount).toBe(1);
   });
 });
