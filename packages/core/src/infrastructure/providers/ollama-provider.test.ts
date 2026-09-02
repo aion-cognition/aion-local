@@ -37,6 +37,22 @@ describe('OllamaProvider.embed', () => {
     ]);
   });
 
+  it('sends the configured keep_alive so the server holds the model loaded between calls', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      expect(JSON.parse(init?.body as string).keep_alive).toBe(-1);
+      return jsonResponse({ embeddings: [[1]] });
+    });
+    const provider = new OllamaProvider({
+      baseUrl: 'http://localhost:11434',
+      embedModel: 'nomic-embed-text',
+      embedKeepAlive: -1,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    await provider.embed(['a']);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
   it('folds case before the request, so a proper noun is not sent as an out-of-vocabulary token', async () => {
     const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => {
       expect(JSON.parse(init?.body as string).input).toEqual([

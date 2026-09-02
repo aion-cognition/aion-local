@@ -108,6 +108,7 @@ export class ProviderRouter {
     this.#ollama = new OllamaProvider({
       baseUrl: config.ollama.url,
       embedModel: config.models.embed,
+      embedKeepAlive: config.ollama.embedKeepAlive,
       ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
     });
     this.#anthropic = this.routing.keyPresent

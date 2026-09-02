@@ -33,6 +33,7 @@ import {
   workerOptions,
   type Config,
   type Logger,
+  type Provider,
   type RecallDeps,
   type ReflectionIntakeDeps,
 } from '@aion/core';
@@ -104,6 +105,22 @@ async function reconcileModels(
     }
   } catch (err) {
     logger.warn({ err }, 'model reconciliation failed');
+  }
+}
+
+/**
+ * One probe embed at boot, so a cold Ollama pays its model load here rather than inside the
+ * first recall, whose callers sit in synchronous harness hooks with a 10s budget. The logged
+ * duration is the cold/warm tell: seconds is a load, milliseconds is a model already resident.
+ * Fail-open like reconciliation: the service never depends on the warm having happened.
+ */
+export async function warmEmbedModel(embedder: Provider, logger: Logger): Promise<void> {
+  const started = Date.now();
+  try {
+    await embedder.embed(['embed warm-up probe']);
+    logger.info({ ms: Date.now() - started }, 'embed model warmed');
+  } catch (err) {
+    logger.warn({ err, ms: Date.now() - started }, 'embed warm-up failed');
   }
 }
 
@@ -211,6 +228,9 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       );
     }
     await reconcileModels(config, router, logger);
+    // Deliberately not awaited: binding the port never waits on Ollama, and an early recall
+    // queues behind the same model load either way.
+    void warmEmbedModel(router.embedder, logger);
 
     sideEffects = new RecallSideEffects(
       driver,

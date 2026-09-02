@@ -66,6 +66,10 @@ export const KNOBS = {
   },
   ollama: {
     url: ['AION_OLLAMA_URL', text, 'http://host.docker.internal:11434'],
+    // Seconds Ollama holds the embed model in memory after each embed call; -1 pins it
+    // resident. The embed model serves every route and its reload lands inside the synchronous
+    // recall hooks: measured against warm calls under a second, a reload added 1 to 16 seconds.
+    embedKeepAlive: ['AION_EMBED_KEEP_ALIVE', z.number().int().min(-1), -1],
   },
   models: {
     // The embed model owns the vector space for the life of a substrate: stored vectors and the
