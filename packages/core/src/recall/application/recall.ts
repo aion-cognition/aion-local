@@ -36,6 +36,7 @@ import { recordPackMethodMetrics } from '../../infrastructure/sqlite/method-coun
 import { recordRecallOutcome } from '../../infrastructure/sqlite/recall-cadence.js';
 import { recordCueOutcome } from '../../infrastructure/sqlite/recall-samples.js';
 import { readServedItems, recordServedItems } from '../../infrastructure/sqlite/served-items.js';
+import { redactPayload } from '../../redaction/deep-walk.js';
 import type { SessionManager } from '../../session/session-manager.js';
 import {
   spreadActivation,
@@ -239,6 +240,20 @@ export async function handleRecall(
   // latency once the pack is ready to assemble (see the `await` beside `assemblePack`).
   const pendingEnrichmentPromise = pendingEnrichment(deps, sessionId, mode);
 
+  // Redacted before the cue model or the embedder sees any of it: both are inference calls
+  // over caller-supplied text, and a secret-shaped token in the query is the same leak surface
+  // intake already closes for a stored payload.
+  const { value: cueInput } = redactPayload(
+    {
+      query: payload.query,
+      ...(payload.context?.summary === undefined ? {} : { summary: payload.context.summary }),
+      ...(payload.context?.recent_turns === undefined
+        ? {}
+        : { recentTurns: payload.context.recent_turns }),
+    },
+    deps.config.redaction.entropyThreshold,
+  );
+
   const cues = await timed<CueExtractionResult>(() =>
     extractCues(
       {
@@ -248,13 +263,7 @@ export async function handleRecall(
         cache: deps.cueCache,
         logger: deps.logger,
       },
-      {
-        query: payload.query,
-        ...(payload.context?.summary === undefined ? {} : { summary: payload.context.summary }),
-        ...(payload.context?.recent_turns === undefined
-          ? {}
-          : { recentTurns: payload.context.recent_turns }),
-      },
+      cueInput,
     ),
   );
 

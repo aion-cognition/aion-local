@@ -208,6 +208,39 @@ describe('recall against an empty substrate', () => {
   });
 });
 
+describe('recall-side redaction gate', () => {
+  const QUERY_SECRET = 'AKIAIOSFODNN7EXAMPLE';
+  const SUMMARY_SECRET = 'ghp_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8';
+  const TURN_SECRET = 'sk-ant-abcdefghijklmnopqrstuvwxyz0123456789';
+
+  it('redacts the query, summary, and recent turns before the cue extractor and the embedder see them', async () => {
+    await handleRecall(
+      deps(),
+      {
+        query: `why did we rotate ${QUERY_SECRET}`,
+        context: {
+          summary: `the leak came from ${SUMMARY_SECRET}`,
+          recent_turns: [{ role: 'user', text: `paste this key: ${TURN_SECRET}` }],
+        },
+      },
+      { identity: IDENTITY, now: NOW },
+    );
+
+    const call = generate.mock.calls[0]?.[0] as { messages: { role: string; content: string }[] };
+    const seenByCueModel = call.messages.map((message) => message.content).join('\n');
+    expect(seenByCueModel).not.toContain(QUERY_SECRET);
+    expect(seenByCueModel).not.toContain(SUMMARY_SECRET);
+    expect(seenByCueModel).not.toContain(TURN_SECRET);
+    expect(seenByCueModel).toContain('⟨secret:aws-access-key:');
+    expect(seenByCueModel).toContain('⟨secret:github-token:');
+    expect(seenByCueModel).toContain('⟨secret:anthropic-api-key:');
+
+    const seenByEmbedder = (embed.mock.calls[0]?.[0] as string[]).join('\n');
+    expect(seenByEmbedder).not.toContain(QUERY_SECRET);
+    expect(seenByEmbedder).toContain('⟨secret:aws-access-key:');
+  });
+});
+
 describe('session identity and persistence', () => {
   it('persists the pack it served under the transport session', async () => {
     const pack = await handleRecall(

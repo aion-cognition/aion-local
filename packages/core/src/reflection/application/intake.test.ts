@@ -189,6 +189,33 @@ describe('reflection intake redaction', () => {
 
     expect(graph.nodesWithLabel('Session').map((node) => node.id)).toEqual(['mcp-transport-42']);
   });
+
+  it('stamps the rules fired and span count on the nodes redaction actually touched', async () => {
+    const result = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+
+    const episode = graph.nodes.get(result.episode_id);
+    expect(episode?.properties.redaction_rules).toEqual(['aws-access-key', 'github-token']);
+    expect(episode?.properties.redaction_span_count).toBe(2);
+
+    const turns = graph.nodesWithLabel('Turn');
+    const withSecret = turns.find((turn) => turn.properties.sequence === 0);
+    const withoutSecret = turns.find((turn) => turn.properties.sequence === 1);
+    expect(withSecret?.properties.redaction_rules).toEqual(['aws-access-key']);
+    expect(withSecret?.properties.redaction_span_count).toBe(1);
+    expect(withoutSecret?.properties.redaction_rules).toBeUndefined();
+    expect(withoutSecret?.properties.redaction_span_count).toBeUndefined();
+  });
+
+  it('stamps neither property when the payload holds nothing to redact', async () => {
+    const result = await handleReflection(deps, DATED_PAYLOAD, { identity: 'session-a' });
+
+    const episode = graph.nodes.get(result.episode_id);
+    expect(episode?.properties.redaction_rules).toBeUndefined();
+    expect(episode?.properties.redaction_span_count).toBeUndefined();
+
+    const turns = graph.nodesWithLabel('Turn');
+    expect(turns.every((turn) => turn.properties.redaction_rules === undefined)).toBe(true);
+  });
 });
 
 describe('reflection intake storage', () => {
