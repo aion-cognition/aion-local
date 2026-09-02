@@ -1,6 +1,11 @@
-import { z } from 'zod';
-
 import { applyJudgment, type SupersessionMode } from './supersession-apply.js';
+import {
+  judgeContradiction,
+  type ContradictionJudgment,
+  type ContradictionPair,
+  type JudgeContradictionOptions,
+  type JudgeOutcome,
+} from './supersession-judge.js';
 import { RunTally } from './supersession-tally.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { describeError, isAbortError } from '../../../infrastructure/errors.js';
@@ -13,12 +18,7 @@ import {
   type ContradictionCandidate,
   type EpisodeFactNode,
 } from '../../../infrastructure/graph/supersession-queries.js';
-import type {
-  ChatMessage,
-  JsonSchema,
-  Provider,
-  Vector,
-} from '../../../infrastructure/providers/types.js';
+import type { Vector } from '../../../infrastructure/providers/types.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
 
 /**
@@ -49,14 +49,21 @@ export const SUPERSESSION_STAGE_NAME = 'supersession';
 
 export type { SupersessionMode };
 
+// The judge is re-exported here because this is the door the barrel and the batteries already
+// use; it lives beside the stage rather than inside it.
+export {
+  judgeContradiction,
+  type ContradictionJudgment,
+  type ContradictionPair,
+  type JudgeContradictionOptions,
+  type JudgeOutcome,
+};
+
 /** The pinned `AION_SUPERSEDE_MODE`, set by the battery's measurement rather than by hand. */
 export const DEFAULT_SUPERSEDE_MODE: SupersessionMode = DEFAULTS.reflection.supersedeMode;
 
 /** The pinned `AION_SUPERSEDE_AUTO_CONFIDENCE`: the `auto` mode's threshold, read nowhere else. */
 export const DEFAULT_SUPERSEDE_AUTO_CONFIDENCE = DEFAULTS.reflection.supersedeAutoConfidence;
-
-/** Applied only when the model omits the optional field: an unstated confidence never auto-applies. */
-const UNSTATED_CONFIDENCE = 0.5;
 
 export type SupersessionStageOptions = {
   readonly model: string;
@@ -72,156 +79,6 @@ export type SupersessionStageOptions = {
   /** Where a keyed pair goes: `judge` puts it in front of this stage, and no other value does. */
   readonly keyedCloseMode: KeyedCloseMode;
 };
-
-const JUDGMENT_JSON_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    contradicts: { type: 'boolean' },
-    confidence: { type: 'number' },
-    rationale: { type: 'string' },
-  },
-  required: ['contradicts', 'confidence'],
-};
-
-/** Looser than the JSON schema on purpose: a judgment missing its rationale is still usable. */
-const JudgmentSchema = z.object({
-  contradicts: z.boolean(),
-  confidence: z.number().optional(),
-  rationale: z.string().optional(),
-});
-
-/**
- * The four discriminations the measured false positives turned on. Each rule names a shape
- * the judge answered "contradicts" to at confidence 1.0 while both statements stayed true.
- */
-const SYSTEM_PROMPT = [
-  'You judge whether a new statement contradicts an earlier one from the same memory substrate.',
-  'They contradict only when both cannot hold at once: the new statement reverses, replaces, or',
-  'corrects the earlier one about the same subject.',
-  'Answer false when the two statements are about different subjects, even when they share',
-  'wording or shape: two services, components, environments, or people with similar policies',
-  'are separate facts, and both stay true.',
-  'Answer false when the new statement restates, summarises, or rephrases the earlier one,',
-  'including when one is vaguer or more precise than the other. A restatement replaces nothing.',
-  'Answer false when the two describe different times and neither claims to be the current',
-  'state: a record of what happened once does not contradict a later state or a standing rule,',
-  'and a past observation stays true after the thing it observed changes.',
-  'Answer false when the statements record two people disagreeing. A stated position is not',
-  'made untrue by a colleague holding another one.',
-  'Answer with contradicts, a confidence between 0 and 1 for how sure the pair makes you, and a',
-  'one-clause rationale naming the subject both statements are about. Say false rather than guess.',
-].join(' ');
-
-function buildMessages(
-  priorKind: string,
-  currentKind: string,
-  prior: string,
-  current: string,
-  sharedSubject: string | undefined,
-): ChatMessage[] {
-  const subjectLine =
-    sharedSubject === undefined ? '' : `\n\nBoth statements name: ${sharedSubject}`;
-  return [
-    { role: 'system', content: SYSTEM_PROMPT },
-    {
-      role: 'user',
-      content:
-        `Earlier statement (kind ${priorKind}):\n${prior}\n\n` +
-        `New statement (kind ${currentKind}):\n${current}${subjectLine}`,
-    },
-  ];
-}
-
-function clampConfidence(value: number | undefined): number {
-  const raw = value ?? UNSTATED_CONFIDENCE;
-  if (!Number.isFinite(raw)) {
-    return UNSTATED_CONFIDENCE;
-  }
-  return Math.min(1, Math.max(0, raw));
-}
-
-export type ContradictionJudgment = {
-  readonly contradicts: boolean;
-  readonly confidence: number;
-  readonly rationale?: string;
-};
-
-/** Two statements and, when the shared-subject leg found one, the subject they both name. */
-export type ContradictionPair = {
-  readonly priorLabel: string;
-  readonly currentLabel: string;
-  readonly prior: string;
-  readonly current: string;
-  readonly sharedSubject?: string;
-};
-
-export type JudgeContradictionOptions = {
-  readonly model: string;
-  readonly timeoutMs: number;
-};
-
-/**
- * `failed` is a call that threw or timed out; `unusable` is an answer that came back in a
- * shape the schema refuses. The stage logs the two differently and a precision battery
- * scores neither, so the caller needs them apart rather than folded into one `undefined`.
- */
-export type JudgeOutcome =
-  | { readonly status: 'judged'; readonly judgment: ContradictionJudgment }
-  | { readonly status: 'failed'; readonly error: unknown }
-  | { readonly status: 'unusable' };
-
-/**
- * One judgment, prompt and schema included. Exported because precision is measured on this
- * call rather than on the stage around it: a battery that rebuilt the prompt would report a
- * number for a judge the service does not run.
- */
-export async function judgeContradiction(
-  provider: Pick<Provider, 'generate'>,
-  pair: ContradictionPair,
-  options: JudgeContradictionOptions,
-): Promise<JudgeOutcome> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => {
-    controller.abort();
-  }, options.timeoutMs);
-  let raw: unknown;
-  try {
-    raw = await provider.generate({
-      model: options.model,
-      messages: buildMessages(
-        pair.priorLabel,
-        pair.currentLabel,
-        pair.prior,
-        pair.current,
-        pair.sharedSubject,
-      ),
-      schema: JUDGMENT_JSON_SCHEMA,
-      // Reasoning buys nothing on a two-statement judgment and costs the budget (mirrors
-      // the extraction stages).
-      think: false,
-      signal: controller.signal,
-    });
-  } catch (error) {
-    return { status: 'failed', error };
-  } finally {
-    clearTimeout(timer);
-  }
-
-  const parsed = JudgmentSchema.safeParse(raw);
-  if (!parsed.success) {
-    return { status: 'unusable' };
-  }
-
-  const rationale = parsed.data.rationale?.trim();
-  return {
-    status: 'judged',
-    judgment: {
-      contradicts: parsed.data.contradicts,
-      confidence: clampConfidence(parsed.data.confidence),
-      ...(rationale === undefined || rationale.length === 0 ? {} : { rationale }),
-    },
-  };
-}
 
 /** A fact node that can actually search: text to judge and a vector to search with. */
 type FactSubject = EpisodeFactNode & { readonly contentVector: Vector };
@@ -258,7 +115,11 @@ export class SupersessionStage implements ReflectionStage {
   async run(ctx: StageContext): Promise<StageOutcome> {
     const facts = await findEpisodeFactNodes(ctx.driver, ctx.episodeId, ctx.now);
     if (facts.length === 0) {
-      return { status: 'skipped', summary: 'episode has no fact-bearing nodes to check' };
+      return {
+        status: 'skipped',
+        summary: 'episode has no fact-bearing nodes to check',
+        retryable: true,
+      };
     }
 
     const siblingIds = facts.map((fact) => fact.id);
@@ -269,7 +130,11 @@ export class SupersessionStage implements ReflectionStage {
       )
       .slice(0, this.#options.maxSubjects);
     if (subjects.length === 0) {
-      return { status: 'skipped', summary: 'fact nodes carry no content vectors yet' };
+      return {
+        status: 'skipped',
+        summary: 'fact nodes carry no content vectors yet',
+        retryable: true,
+      };
     }
 
     const tally = new RunTally();
@@ -400,7 +265,11 @@ export class SupersessionStage implements ReflectionStage {
           ? {}
           : { sharedSubject: candidate.sharedSubject }),
       },
-      { model: this.#options.model, timeoutMs: this.#options.timeoutMs },
+      {
+        model: this.#options.model,
+        timeoutMs: this.#options.timeoutMs,
+        ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
+      },
     );
 
     if (outcome.status === 'judged') {

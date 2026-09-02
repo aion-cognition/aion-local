@@ -1,5 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 
+import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { runRead, type GraphStatement } from './connection.js';
 import { BASE_NODE_LABEL } from './labels.js';
 import { readModeFragment, withCurrency } from './read-modes.js';
@@ -42,6 +43,9 @@ export function buildEdgeWeightDistribution(): GraphStatement {
   const cypher = [
     `MATCH (a:${BASE_NODE_LABEL})-[r]->(b:${BASE_NODE_LABEL})`,
     `WHERE type(r) IN $types AND ${source.where} AND ${target.where}`,
+    // A closed edge sits at the floor the prune left it on, so counting one would report the
+    // weight of an edge nothing traverses.
+    `  AND r.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
     'WITH type(r) AS relType, coalesce(r.strength, 0.0) AS strength',
     'RETURN relType,',
     '       count(strength) AS n,',

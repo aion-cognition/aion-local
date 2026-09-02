@@ -126,6 +126,42 @@ describe('a merge whose canonical was written to after the decision snapshot', (
   });
 });
 
+describe('a group that names one absorbed identity twice', () => {
+  it('counts and records it once', async () => {
+    await seedEntity('repeat-canon');
+    await seedEntity('repeat-dup');
+    await recordAccess(harness.driver, { ids: ['repeat-dup'], now: SNAPSHOT_AT });
+
+    const snapshot = await loadEntityDedupDetails(harness.driver, ['repeat-canon', 'repeat-dup']);
+    const canonical = snapshot.find((detail) => detail.id === 'repeat-canon');
+    const duplicate = snapshot.find((detail) => detail.id === 'repeat-dup');
+    if (canonical === undefined || duplicate === undefined) {
+      throw new Error('the pair did not load');
+    }
+
+    const result = await applyEntityMerge(
+      { driver: harness.driver, db, logger },
+      {
+        canonical,
+        // The same member twice, which is what a caller that concatenated two nominations hands in.
+        members: [canonical, duplicate, duplicate],
+        tier: 'tier0',
+        reasons: ['test'],
+        signals: [],
+        method: 'test',
+        now: MERGE_AT,
+      },
+    );
+
+    expect(result).toMatchObject({ status: 'merged', mergedIds: ['repeat-dup'] });
+    // One absorbed identity, so one salience roll-up and one merged record, not two of each.
+    const stored = await storedEntity(harness.driver, 'repeat-canon');
+    expect(stored?.accessCount).toBe(1);
+    const properties = await nodeProperties(harness.driver, 'repeat-canon');
+    expect(properties[MERGE_PROVENANCE_PROPERTY]).toHaveLength(1);
+  });
+});
+
 describe('two workers that decided the same pair and write it at once', () => {
   it('lands one merge and reports the other skipped rather than absorbing twice', async () => {
     await seedEntity('race-canon');

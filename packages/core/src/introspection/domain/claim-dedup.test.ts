@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { claimDedupLedgered, claimDedupPairKey, selectClaimDedupSurvivor } from './claim-dedup.js';
+import { claimDedupPairKey, selectClaimDedupSurvivor } from './claim-dedup.js';
 
 describe('claimDedupPairKey', () => {
   it('is the same key whichever side is named first', () => {
@@ -28,18 +28,5 @@ describe('selectClaimDedupSurvivor', () => {
 
     expect(selectClaimDedupSurvivor(a, b)).toEqual({ survivor: a, loser: b });
     expect(selectClaimDedupSurvivor(b, a)).toEqual({ survivor: a, loser: b });
-  });
-});
-
-describe('claimDedupLedgered', () => {
-  it('records every real verdict', () => {
-    expect(claimDedupLedgered({ kind: 'merge' })).toBe(true);
-    expect(claimDedupLedgered({ kind: 'related', reason: 'different subject' })).toBe(true);
-    expect(claimDedupLedgered({ kind: 'vetoed', reason: 'adds a qualifier' })).toBe(true);
-    expect(claimDedupLedgered({ kind: 'stale' })).toBe(true);
-  });
-
-  it('does not record a technical failure, so a later run retries it', () => {
-    expect(claimDedupLedgered({ kind: 'failed', detail: 'timed out' })).toBe(false);
   });
 });

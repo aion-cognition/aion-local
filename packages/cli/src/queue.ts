@@ -142,7 +142,7 @@ function renderCounts(substrate: Substrate, flags: QueueFlags): void {
   const db = substrate.db();
   const { workerMaxAttempts } = substrate.config.operational;
   const counts = countQueueJobs(db, filterOf(flags), workerMaxAttempts);
-  const byLane = countQueueJobsByLane(db, workerMaxAttempts);
+  const byLane = countQueueJobsByLane(db, filterOf(flags), workerMaxAttempts);
   const lanes = REFLECTION_LANES.map((lane) => `${lane}=${String(byLane.get(lane) ?? 0)}`).join(
     ' ',
   );

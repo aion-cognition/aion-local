@@ -32,11 +32,11 @@ describe('openLogger', () => {
     expect(JSON.parse(lines[1] ?? '')).toMatchObject({ msg: 'quiet' });
   });
 
-  it('opens both stdout (fd 1) and the file, each at the configured level', () => {
+  it('opens both stdout (fd 1) and the file when asked, each at the configured level', () => {
     const destinationSpy = vi.spyOn(pino, 'destination');
     const filePath = join(dir, 'aion.jsonl');
 
-    const logger = openLogger({ filePath, level: 'debug' });
+    const logger = openLogger({ filePath, level: 'debug', stdout: true });
     logger.debug('both sinks');
 
     const destCalls = destinationSpy.mock.calls.map(([opts]) => opts);
@@ -45,6 +45,24 @@ describe('openLogger', () => {
 
     const lines = readFileSync(filePath, 'utf8').trimEnd().split('\n');
     expect(JSON.parse(lines[0] ?? '')).toMatchObject({ msg: 'both sinks' });
+    destinationSpy.mockRestore();
+  });
+
+  // A CLI command writes its answer on fd 1, so a log record teed there lands in the middle of
+  // the JSON a caller of `aion last --json` parses.
+  it('leaves fd 1 alone unless the caller asks for the tee', () => {
+    const destinationSpy = vi.spyOn(pino, 'destination');
+    const filePath = join(dir, 'aion.jsonl');
+
+    const logger = openLogger({ filePath, level: 'debug' });
+    logger.debug('file only');
+
+    const destCalls = destinationSpy.mock.calls.map(([opts]) => opts);
+    expect(destCalls).not.toContainEqual(expect.objectContaining({ dest: 1 }));
+    expect(destCalls).toContainEqual(expect.objectContaining({ dest: filePath, sync: true }));
+
+    const lines = readFileSync(filePath, 'utf8').trimEnd().split('\n');
+    expect(JSON.parse(lines[0] ?? '')).toMatchObject({ msg: 'file only' });
     destinationSpy.mockRestore();
   });
 

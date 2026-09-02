@@ -1,18 +1,14 @@
 import type { Driver } from 'neo4j-driver';
 
-import { ACCESS_COUNT_PROPERTY } from './access-tracking.js';
+import { RECORD_SALIENCE_BUMP } from './access-tracking.js';
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { inWriteTransaction, runRead, type GraphStatement } from './connection.js';
 import { upsertEdgeInTransaction } from './edges.js';
 import { ENTITY_TYPE_PROPERTY } from './entity-identity-queries.js';
 import { CONTAINMENT_TYPE } from './episodes.js';
-import { BASE_NODE_LABEL, ENTITY_LABEL } from './labels.js';
+import { ENTITY_LABEL } from './labels.js';
 import { readModeFragment, withCurrency } from './read-modes.js';
-import {
-  ENTITY_NAME_NORM_PROPERTY,
-  ENTITY_NAME_PROPERTY,
-  LAST_ACCESSED_PROPERTY,
-} from './seed-queries.js';
+import { ENTITY_NAME_NORM_PROPERTY, ENTITY_NAME_PROPERTY } from './seed-queries.js';
 import { toGraphDateTime } from './values.js';
 
 /**
@@ -40,18 +36,13 @@ const STRUCTURAL_SIGNALS = ['structural'];
 const MENTION_SIGNALS = ['episodic'];
 
 /**
- * Salience signals for mentions. Deliberately not idempotent, exactly like recall's
+ * Salience for mentions is the same stamp recall writes, so it is `access-tracking.ts`'s
+ * statement rather than a copy of it. Deliberately not idempotent, exactly like recall's
  * access tracking and the edge merge policy's `count`: each call stands for one episode
  * that mentioned the entity, so a replay of the same run counts twice rather than
  * pretending the mention did not happen. The pipeline's ledger gate is what keeps a
  * re-enqueued job from replaying it.
  */
-const RECORD_MENTION_SALIENCE = [
-  'UNWIND $ids AS entityId',
-  `MATCH (n:${BASE_NODE_LABEL} { id: entityId })`,
-  `SET n.${LAST_ACCESSED_PROPERTY} = $now,`,
-  `    n.${ACCESS_COUNT_PROPERTY} = coalesce(n.${ACCESS_COUNT_PROPERTY}, 0) + 1`,
-].join('\n');
 
 export type EntityMentionInput = {
   readonly episodeId: string;
@@ -106,7 +97,7 @@ export async function linkEntityMentions(
     }
 
     await tx.run(
-      RECORD_MENTION_SALIENCE,
+      RECORD_SALIENCE_BUMP,
       { ids: entityIds, now: toGraphDateTime(input.now) },
       () => undefined,
     );

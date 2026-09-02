@@ -14,6 +14,7 @@ import {
   type EpisodeCognitiveNode,
   type SemanticRelationshipType,
 } from '../../../infrastructure/graph/semantic-relationship-queries.js';
+import { deadlineFor } from '../../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema } from '../../../infrastructure/providers/types.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
 
@@ -261,13 +262,14 @@ export class SemanticRelationshipStage implements ReflectionStage {
     ]);
     const candidates = buildCandidates(entities, cognitive);
     if (candidates.length < 2) {
-      return { status: 'skipped', summary: 'fewer than two entities or cognitive nodes to relate' };
+      return {
+        status: 'skipped',
+        summary: 'fewer than two entities or cognitive nodes to relate',
+        retryable: true,
+      };
     }
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => {
-      controller.abort();
-    }, this.#timeoutMs);
+    const deadline = deadlineFor(this.#timeoutMs, ctx.signal);
     let raw: unknown;
     try {
       raw = await ctx.provider.generate({
@@ -280,7 +282,7 @@ export class SemanticRelationshipStage implements ReflectionStage {
         // Reasoning buys nothing worth that price, so it stays off (mirrors the entity and
         // cognitive stages).
         think: false,
-        signal: controller.signal,
+        signal: deadline.signal,
       });
     } catch (error) {
       return {
@@ -288,7 +290,7 @@ export class SemanticRelationshipStage implements ReflectionStage {
         summary: `semantic relationship call ${isAbortError(error) ? 'timed out' : 'failed'}: ${describeError(error)}`,
       };
     } finally {
-      clearTimeout(timer);
+      deadline.clear();
     }
 
     const parsed = SemanticRelationshipOutputSchema.safeParse(raw);

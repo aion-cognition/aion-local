@@ -5,16 +5,18 @@ import type { ItemOrigin } from '../../infrastructure/graph/origin-queries.js';
 
 /**
  * The other serving-layer subtraction, and the one `session-dedup.ts` cannot make. A turn is
- * reflected into the graph when the session stops, and the next prompt's recall finds that turn
- * and the claims extracted from it as memories the session has never been served. They are new
- * to the record and old to the reader: the conversation that produced them is still holding
- * them, so rendering them spends the pack's budget restating the agent to itself.
+ * reflected into the graph on the stop hook that ends it, and the next prompt's recall finds
+ * that turn and the claims extracted from it as memories the session has never been served.
+ * They are new to the record and old to the reader: the conversation that produced them is
+ * still holding them, so rendering them spends the pack's budget restating the agent to itself.
  *
  * Dedup cannot catch this, because each of these is served exactly once. What separates them is
  * where they came from, not how often they have been sent.
  *
  * Cognition is untouched, exactly as with dedup: the full admitted set still reaches
- * reinforcement, access tracking and the pack-method counters, and only the wire gets smaller.
+ * reinforcement and access tracking, and only the wire gets smaller. The pack-method counters
+ * are the one exception, and by design: they are read off the assembled pack, so a withheld
+ * item's method is uncredited there.
  */
 
 export type OwnSessionInput = {
@@ -34,8 +36,10 @@ export type OwnSessionInput = {
  *
  * Two of the four fields the served fingerprint hashes can move without the node changing
  * identity, and both of them are the substrate correcting the session: a closed lineage, and
- * the currency marker that goes with it. Content and the stored why cannot move here, because a
- * cognitive node's id is folded from its own text, so a reworded claim is a different node.
+ * the currency marker that goes with it. A cognitive node's content and stored why cannot move
+ * under one id, because its id is folded from its own text, so a reworded claim is a different
+ * node. An entity is the exception: its description is rewritten in place, so a regrown gloss
+ * on an entity only this session ever mentioned is withheld, which this knowingly accepts.
  *
  * The related-claim annotation is the third signal and the one a raw turn carries: nothing ever
  * supersedes a turn, so a turn the substrate has since contradicted surfaces as current, and the

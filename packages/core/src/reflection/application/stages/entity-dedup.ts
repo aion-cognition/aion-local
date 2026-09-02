@@ -139,7 +139,11 @@ export class EntityDedupStage implements ReflectionStage {
   async run(ctx: StageContext): Promise<StageOutcome> {
     const mentioned = await findEpisodeEntities(ctx.driver, ctx.episodeId, ctx.now);
     if (mentioned.length === 0) {
-      return { status: 'skipped', summary: 'episode mentions no entities to deduplicate' };
+      return {
+        status: 'skipped',
+        summary: 'episode mentions no entities to deduplicate',
+        retryable: true,
+      };
     }
 
     const subjectIds = [...new Set(mentioned.map((entity) => entity.id))];
@@ -261,7 +265,11 @@ export class EntityDedupStage implements ReflectionStage {
       return { tally: NOTHING_DONE };
     }
 
-    const options = { model: this.#options.model, timeoutMs: this.#options.timeoutMs };
+    const options = {
+      model: this.#options.model,
+      timeoutMs: this.#options.timeoutMs,
+      ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
+    };
     const prompt = buildJudgePair(left, right, pair);
     const asked: CascadeTally = { ...NOTHING_DONE, judged: 1 };
 

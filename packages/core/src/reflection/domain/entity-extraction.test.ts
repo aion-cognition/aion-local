@@ -105,6 +105,23 @@ describe('parseExtractedEntities', () => {
     const entities = Array.from({ length: 50 }, (_unused, index) => entity(`Person ${index}`));
     expect(parseExtractedEntities({ entities }, 5)).toHaveLength(5);
   });
+
+  it('still absorbs a repeat of an accepted name that follows an over-cap one', () => {
+    const parsed = parseExtractedEntities(
+      {
+        entities: [
+          entity('Aion', 'project'),
+          entity('Valkey', 'tool'),
+          entity('Someone Else', 'person'),
+          entity('Aion', 'project', '', { aliases: ['Aion DB'] }),
+        ],
+      },
+      2,
+    );
+
+    expect(parsed?.map((row) => row.name)).toEqual(['Aion', 'Valkey']);
+    expect(parsed?.[0]?.aliases).toEqual(['aion db']);
+  });
 });
 
 describe('aliases', () => {

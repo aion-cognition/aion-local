@@ -68,6 +68,14 @@ export type IntrospectionOperation = {
   readonly answers?: CriticalCondition;
   readonly bucket: OperationBucket;
   /**
+   * The operation's own kill switch, read by the engine before the operation is a candidate at
+   * all. An operation that only checked its switch inside `run` still took the selection stamp
+   * and the bucket claim, so switching it off cost the catalog a window and reset the
+   * operation's own starvation counter. `run` checks the same switch again for a caller that
+   * bypasses the engine.
+   */
+  enabled?(config: Config): boolean;
+  /**
    * How much this snapshot calls for the operation, on 0 to 1. Zero means there is nothing to
    * do and the engine will not select it however long it has waited: starvation protection
    * raises the priority of work that exists, it does not invent work.

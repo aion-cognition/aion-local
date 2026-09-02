@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { positiveInt } from './knob-types.js';
+
 /**
  * The `temporal` group's own table, split out of `knobs.ts` the same way `maintenance` is: a
  * decay design over a fact node's temporal class is the group's likely next addition, and any
@@ -7,7 +9,6 @@ import { z } from 'zod';
  * `knobs.ts` folds this back in as its `temporal` leaf, so the split is invisible to every
  * reader of `KNOBS` or `KNOB_TABLE`.
  */
-const positiveInt = z.number().int().positive();
 
 export const TEMPORAL_KNOBS = {
   // How far past a reading's own occurrence its horizon falls: `occurredAt + readingHorizonDays`,

@@ -229,7 +229,6 @@ describe('reflection intake storage', () => {
       session_id: 'session-a',
       turn_count: 2,
       tool_execution_count: 1,
-      observation_count: 1,
       extraction_method: 'reflection_intake',
     });
     expect(episode?.properties.content_hash).toEqual(expect.any(String));
@@ -466,6 +465,19 @@ describe('reflection intake pending_ahead', () => {
     expect(result.pending_ahead).toBe(3);
     // The count excludes this call's own row: four jobs now queued, three were ahead of it.
     expect(listReflectionJobs(db)).toHaveLength(4);
+  });
+
+  it('leaves the caller out of its own figure on a duplicate push', async () => {
+    enqueueReflectionJob(db, INTEGRATE_JOB_TYPE, { episode_id: 'seed-0' }, { lane: 'interactive' });
+    const first = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+    expect(first.pending_ahead).toBe(1);
+
+    // The same payload again matches the row the first push queued. That row is this caller's,
+    // so what sits ahead of it is still the one seeded job.
+    const second = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+
+    expect(second.pending_ahead).toBe(1);
+    expect(listReflectionJobs(db)).toHaveLength(2);
   });
 
   it('ignores unclaimed bulk rows: only the interactive lane can be ahead of a caller', async () => {

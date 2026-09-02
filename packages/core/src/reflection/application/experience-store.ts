@@ -61,8 +61,9 @@ function episodeProperties(
     [MEMORY_PROPERTIES.sessionId]: sessionId,
     [MEMORY_PROPERTIES.extractionMethod]: INTAKE_EXTRACTION_METHOD,
     [MEMORY_PROPERTIES.turnCount]: prepared.turnCount,
+    // Only the two counts hygiene classifies on are stored. The observation count stays in the
+    // prepared payload and in the archive row, which is what a later reader would derive it from.
     [MEMORY_PROPERTIES.toolExecutionCount]: prepared.toolExecutionCount,
-    [MEMORY_PROPERTIES.observationCount]: prepared.observationCount,
     // Undefined when the caller named none: absent origin is an absent property, no sentinel.
     [MEMORY_PROPERTIES.originChannel]: origin?.channel,
     [MEMORY_PROPERTIES.originEvent]: origin?.event,

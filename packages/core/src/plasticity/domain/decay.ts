@@ -2,19 +2,22 @@
  * The pure Hebbian decay: the bell curve against staleness, and the floor clamp. No SQLite,
  * no Cypher.
  *
- * **The bell curve.** `decay = exp(-((t - peak)^2) / (2 * sigma^2))`, where `t` is days
- * since an edge was last touched. The curve peaks at `t = peak` and falls off symmetrically
+ * The curve is `decay = exp(-((t - peak)^2) / (2 * sigma^2))`, where `t` is days
+ * since an edge was last touched. It peaks at `t = peak` and falls off symmetrically
  * on both sides: an edge touched yesterday and an edge idle for a year both sit in a tail and
  * decay slowly, one because it may still be relevant, the other because it has already
  * settled near the floor and further decay buys little. An edge idle for exactly the peak
  * window decays fastest, which is the point in an edge's disuse where trimming it does the
  * most for signal-to-noise.
  *
- * **The floor clamp.** `w' = max(floor, w - eta_decay * decay)`. Decay only ever subtracts,
+ * The clamp is `w' = min(w, max(floor, w - eta_decay * decay))`. Decay only ever subtracts,
  * so `w'` never exceeds `w`, and the floor stops it reaching zero: an edge faded to the floor
- * stays traversable if spreading activation ever reaches it again.
+ * stays traversable if spreading activation ever reaches it again. The outer `min` is what
+ * keeps the floor from working as a lift. An edge can be stored under it, since a semantic
+ * relationship writes its confidence as its strength with no clamp, and raising such an edge
+ * to the floor would make the sweep the reason recall can traverse it.
  *
- * **Staleness source.** Edges carry no access-time property of their own. Recall stamps
+ * Edges carry no access-time property of their own. Recall stamps
  * `last_accessed` on the nodes a pack surfaces, never on the edges between them, so an edge's
  * `updated_at` (set by the merge policy on every write and by reinforcement's own bounded
  * step) is what stands in for "last touched" here. Decay must not write it: an input the
@@ -24,9 +27,11 @@
  */
 
 /**
- * `exp(-((daysSinceAccess - peakDays)^2) / (2 * sigma^2))`, in `(0, 1]` and maximal at
+ * `exp(-((daysSinceAccess - peakDays)^2) / (2 * sigma^2))`, in `[0, 1]` and maximal at
  * `daysSinceAccess === peakDays`. Symmetric around the peak: `decayFactor(peak - x, ...)`
- * equals `decayFactor(peak + x, ...)` for any `x`.
+ * equals `decayFactor(peak + x, ...)` for any `x`. Far enough out in a tail the exponent
+ * underflows to exactly zero, which is a decay run's honest answer for an edge nowhere near
+ * the peak.
  */
 export function decayFactor(daysSinceAccess: number, peakDays: number, sigma: number): number {
   const offset = daysSinceAccess - peakDays;
@@ -36,8 +41,7 @@ export function decayFactor(daysSinceAccess: number, peakDays: number, sigma: nu
 /**
  * The rule itself, and the same arithmetic the Cypher applies, so a test can state the
  * expected weight without a server. A weight only ever moves toward the floor, never past it
- * and never up: a factor of zero, the curve's deep tails, is a decay run's honest answer for
- * an edge nowhere near the peak.
+ * and never up. An edge already under the floor stays where it is.
  */
 export function boundedDecay(
   weight: number,
@@ -47,7 +51,7 @@ export function boundedDecay(
 ): number {
   const raw = weight - decayRate * factor;
   if (raw < weightFloor) {
-    return weightFloor;
+    return Math.min(weight, weightFloor);
   }
   return raw;
 }

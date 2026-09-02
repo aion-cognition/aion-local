@@ -15,7 +15,7 @@ import type { Substrate, SubstrateCommand } from './substrate.js';
  * of the text itself. Every row a model can be configured onto carries an empty prefix, so a run
  * on the shipped model cannot tell the composition from a build with it deleted; these drive the
  * real call sites on the seam row `embed-models.ts` keeps for exactly that, and pin which text
- * carries the prefix. Phase 4.4 turns a measured row on, and this is what it will be reviewed by.
+ * carries the prefix ahead of turning the measured row on.
  */
 
 const QUERY = 'webhooks ingestion';

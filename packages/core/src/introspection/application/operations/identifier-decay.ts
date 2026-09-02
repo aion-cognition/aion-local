@@ -3,6 +3,7 @@ import {
   findIdentifierDecayCandidates,
   type IdentifierDecayCandidate,
 } from '../../../infrastructure/graph/identifier-decay-queries.js';
+import { getMeta, setMeta } from '../../../infrastructure/sqlite/meta.js';
 import type { HealthSnapshot } from '../../domain/health.js';
 import { identifierShape, type IdentifierShape } from '../../domain/identifier-shape.js';
 import type {
@@ -28,6 +29,9 @@ import type {
  */
 
 export const IDENTIFIER_DECAY_OPERATION = 'identifier_decay';
+
+/** Where the sweep resumes from, so successive runs walk the whole id order rather than one page. */
+const SCAN_CURSOR_KEY = 'identifier_decay:scan_cursor';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -97,12 +101,19 @@ async function runIdentifierDecay(ctx: OperationContext): Promise<OperationOutco
 
   const { identifierDecayBatch, identifierHalfLifeDays, identifierMentionFloor } =
     ctx.config.maintenance;
-  const candidates = await findIdentifierDecayCandidates(ctx.driver, identifierDecayBatch);
+  const stored = getMeta(ctx.db, SCAN_CURSOR_KEY);
+  const cursor = stored === undefined || stored.length === 0 ? undefined : stored;
+  const candidates = await findIdentifierDecayCandidates(ctx.driver, identifierDecayBatch, cursor);
+  // A short batch is the end of the id order, so the next run starts over. Anything else
+  // resumes after the last entity read: the scan window is otherwise pinned to the lowest ids
+  // and an entity past it is never examined.
+  const last = candidates.length < identifierDecayBatch ? '' : (candidates.at(-1)?.id ?? '');
+  setMeta(ctx.db, SCAN_CURSOR_KEY, last);
 
   const counts = new Map<IdentifierShape, number>();
   const eligibleIds: string[] = [];
   for (const candidate of candidates) {
-    const shape = identifierShape(candidate.name, candidate.type);
+    const shape = identifierShape(candidate.name);
     if (!isEligible(candidate, shape, ctx.now, identifierHalfLifeDays, identifierMentionFloor)) {
       continue;
     }
@@ -119,12 +130,17 @@ async function runIdentifierDecay(ctx: OperationContext): Promise<OperationOutco
     };
   }
 
-  const closed = await closeIdentifierEntities(ctx.driver, eligibleIds, ctx.now);
+  // The scan's own eligibility, handed to the write so it is re-derived at write time. A mention
+  // landing between the two would otherwise close the entity that was just named.
+  const closed = await closeIdentifierEntities(ctx.driver, eligibleIds, ctx.now, {
+    mentionFloor: identifierMentionFloor,
+    mentionedBefore: new Date(ctx.now.getTime() - identifierHalfLifeDays * DAY_MS),
+  });
   const mentionsClosed = closed.reduce((sum, entry) => sum + entry.mentionsClosed, 0);
   const coOccursClosed = closed.reduce((sum, entry) => sum + entry.coOccursClosed, 0);
 
   return {
-    status: 'applied',
+    status: closed.length === 0 ? 'noop' : 'applied',
     itemsProcessed: candidates.length,
     itemsAffected: closed.length,
     detail:
@@ -142,6 +158,7 @@ export function identifierDecayOperation(): IntrospectionOperation {
   return {
     name: IDENTIFIER_DECAY_OPERATION,
     bucket: 'day',
+    enabled: (config) => config.maintenance.identifierDecay,
     relevance: identifierDecayRelevance,
     // The count a close removes from. Every session mints more identifiers, so a run is scored
     // on the count falling against that inflow rather than on how many rows it touched.

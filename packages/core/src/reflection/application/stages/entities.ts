@@ -7,6 +7,7 @@ import {
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { isAbortError } from '../../../infrastructure/errors.js';
 import { linkEntityMentions } from '../../../infrastructure/graph/entity-queries.js';
+import { deadlineFor } from '../../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage } from '../../../infrastructure/providers/types.js';
 import {
   ENTITY_EXTRACTION_JSON_SCHEMA,
@@ -208,10 +209,7 @@ export class EntityExtractionStage implements ReflectionStage {
     ctx: StageContext,
     messages: readonly ChatMessage[],
   ): Promise<{ ok: true; data: unknown } | { ok: false; reason: string }> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => {
-      controller.abort();
-    }, this.#options.timeoutMs);
+    const deadline = deadlineFor(this.#options.timeoutMs, ctx.signal);
     try {
       const data = await ctx.provider.generate({
         model: this.#options.model,
@@ -221,13 +219,13 @@ export class EntityExtractionStage implements ReflectionStage {
         // Reasoning buys nothing on a naming task and costs the guard: the pinned model
         // runs tens of seconds with it on, and sometimes does not return.
         think: false,
-        signal: controller.signal,
+        signal: deadline.signal,
       });
       return { ok: true, data };
     } catch (err) {
       return { ok: false, reason: describe(err) };
     } finally {
-      clearTimeout(timer);
+      deadline.clear();
     }
   }
 }

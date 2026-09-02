@@ -6,7 +6,7 @@ import type { AdmissionRule, RecallMethod } from '@aion/protocol';
  * fusion's business.
  *
  * The floors are calibrated against the embedding model's own measured noise, both
- * distributions of it: unrelated text and genuine matches (`floors.fixtures.ts`,
+ * distributions of it: unrelated text and genuine matches (`floors.data.ts`,
  * `floor-calibration.int.test.ts`). A floor fitted to noise alone cannot tell "rejects
  * unrelated text" from "rejects everything".
  */
@@ -128,11 +128,15 @@ export type AdmissionReport = {
  * activation score measures how strongly the graph connects the node to a seed. A node the
  * spread reached is scored against the query separately (`arrival-scoring.ts`), and that
  * cosine reaches the gate as the vector measurement it is.
+ *
+ * Resonance is absent for the same reason on a different axis: a resonance score is a cosine
+ * in context space against a centroid, not against the query, and `vectorFloor` was calibrated
+ * on cue-against-content readings. The resonance path keeps its own rule (`context_threshold`,
+ * `resonance.ts`) and never asks this gate.
  */
 const COSINE_METHODS: ReadonlySet<RecallMethod> = new Set<RecallMethod>([
   'vector',
   'entity_resolution',
-  'resonance',
 ]);
 
 /** Same method, same cue is the same evidence seen twice, whichever leg carried it here. */

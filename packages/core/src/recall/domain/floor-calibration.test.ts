@@ -52,6 +52,12 @@ describe('pairwiseCosines over two spellings', () => {
     expect(rounded(pairwiseCosines(twoQueries, twoContents))).toEqual([0, HALF]);
   });
 
+  it('refuses two arrays of different lengths, where index no longer names the diagonal', () => {
+    expect(() => pairwiseCosines(QUERIES, CONTENTS.slice(0, 2))).toThrow(
+      /same sentences in both spellings/,
+    );
+  });
+
   it('skips the diagonal, since a sentence against its own content is a related reading', () => {
     const scores = pairwiseCosines(QUERIES, [...QUERIES]);
 

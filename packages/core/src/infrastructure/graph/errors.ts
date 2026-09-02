@@ -34,6 +34,20 @@ export class GraphWriteError extends Error {
   }
 }
 
+/** A weight, a confidence or a rate. Outside 0..1 it is a caller defect, not a value to clamp. */
+export function assertProportion(name: string, value: number): void {
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    throw new GraphWriteError(`${name} must be between 0 and 1, received ${value}`);
+  }
+}
+
+/** A batch size or a day count, where zero and a fraction are both defects the caller has to fix. */
+export function assertPositiveInt(name: string, value: number): void {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new GraphWriteError(`${name} must be a positive integer, received ${value}`);
+  }
+}
+
 /**
  * The embedding model's dimension no longer matches the dimension the vector index was
  * built at. Neo4j rejects writes of the wrong width rather than silently truncating, so

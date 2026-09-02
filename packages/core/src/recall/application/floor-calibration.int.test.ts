@@ -6,7 +6,7 @@ import {
   UNRELATED_SENTENCES,
   WEAK_RELATED_PAIRS,
   type ScoredPair,
-} from './floors.fixtures.js';
+} from './floors.data.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { embedQueryPrefix } from '../../infrastructure/providers/embed-models.js';
 import { OllamaProvider } from '../../infrastructure/providers/ollama-provider.js';
@@ -36,10 +36,9 @@ import {
  * pairs (p95 0.296) and pull the combined p95 down with them.
  *
  * The tails do not overlap on this model, which is what nomic-embed-text never gave: 0.083
- * separates the highest unrelated reading from the weakest genuine match. Phase 4.4 split that
- * gap into three and put both floors in it, 0.35 and 0.33, so every genuine match clears the
- * admission floor on the vector leg alone and every unrelated reading stays 0.031 under the
- * corroboration floor.
+ * separates the highest unrelated reading from the weakest genuine match. Both floors, 0.35
+ * and 0.33, sit in that gap, so every genuine match clears the admission floor on the vector
+ * leg alone and every unrelated reading stays 0.031 under the corroboration floor.
  */
 
 const OLLAMA_URL = process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434';

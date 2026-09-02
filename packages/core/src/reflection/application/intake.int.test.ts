@@ -142,7 +142,7 @@ describe('reflection intake against a live graph and live Ollama', () => {
     expect(props.extraction_method).toBe('reflection_intake');
     expect(props.turn_count).toBe(2);
     expect(props.tool_execution_count).toBe(1);
-    expect(props.observation_count).toBe(1);
+    expect(props.observation_count).toBeUndefined();
     expect(props.content_hash).toEqual(expect.any(String));
 
     expect(props.occurred_at).toBeInstanceOf(Date);
@@ -257,13 +257,13 @@ describe('reflection intake against a live graph and live Ollama', () => {
 
     const repeat = await handleReflection(deps, MIXED_PAYLOAD, { identity: SESSION_IDENTITY });
 
-    // pending_ahead counts the one already-queued interactive job from the beforeAll push,
-    // which nothing in this file ever claims.
+    // The only queued interactive job is the row this push matched, which is this caller's own,
+    // so nothing sits ahead of it.
     expect(repeat).toEqual({
       episode_id: episodeId,
       queued: true,
       lane: 'interactive',
-      pending_ahead: 1,
+      pending_ahead: 0,
     });
     expect(await countNodes(harness.driver)).toBe(nodesBefore);
     expect(await countRelationships(harness.driver)).toBe(edgesBefore);

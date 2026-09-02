@@ -96,6 +96,20 @@ describe('SessionManager.ensureSession', () => {
     }
   });
 
+  it('forgets an identity, so the cache does not hold a closed session for the process life', async () => {
+    const manager = new SessionManager(harness.driver, { memberId, workspaceId });
+    const identity = 'session-forgotten';
+    await manager.ensureSession({ identity, now: new Date('2026-02-02T00:00:00.000Z') });
+
+    manager.forget(identity);
+
+    // The next call goes back to the graph, which answers with the node already there: the
+    // cache saves a round trip and records nothing, so dropping an entry loses no state.
+    const again = await manager.ensureSession({ identity });
+    expect(again).toEqual({ sessionId: identity, created: false });
+    expect(await countNodesWithId(harness.driver, 'Session', identity)).toBe(1);
+  });
+
   it('collapses concurrent first calls for a brand-new identity into a single session', async () => {
     const manager = new SessionManager(harness.driver, { memberId, workspaceId });
 

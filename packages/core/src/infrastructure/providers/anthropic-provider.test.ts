@@ -58,13 +58,24 @@ describe('the request the provider sends', () => {
 
     const body = sentBody(fetchImpl);
     expect(body.model).toBe('claude-haiku-4-5');
-    expect(body.temperature).toBe(0);
     expect(body.think).toBeUndefined();
     expect(body.output_config).toBeUndefined();
     expect(String(body.system)).toContain('you extract entities');
     expect(String(body.system)).toContain(JSON.stringify(SCHEMA));
     // The system message is lifted out; only the conversation turns stay in `messages`.
     expect(body.messages).toEqual([{ role: 'user', content: 'the episode text' }]);
+  });
+
+  // The newer model families reject `temperature` with a 400, and the model is an operator
+  // knob, so an unasked-for default would fail every generation on those.
+  it('sends temperature only when the caller asked for one', async () => {
+    const fetchImpl = vi.fn(() => Promise.resolve(textResponse('{"ok": true}')));
+
+    await provider(fetchImpl).generate(REQUEST);
+    expect(sentBody(fetchImpl)).not.toHaveProperty('temperature');
+
+    await provider(fetchImpl).generate({ ...REQUEST, temperature: 0.4 });
+    expect(sentBody(fetchImpl, 1).temperature).toBe(0.4);
   });
 
   it('sends the key and the API version as headers', async () => {
@@ -224,6 +235,26 @@ describe('failures the provider has to survive', () => {
     expect((err as AnthropicRequestError).status).toBe(529);
     expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
+
+  // `deadline-signal.ts` promises a shutdown never waits out a model call, and the backoff
+  // sleep is the one place that promise had no effect.
+  it('unwinds a throttle backoff as soon as the caller aborts', async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(() => {
+      controller.abort();
+      return Promise.resolve(
+        new Response('slow down', { status: 429, headers: { 'retry-after': '30' } }),
+      );
+    });
+
+    await expect(
+      provider(fetchImpl as unknown as typeof fetch).generate({
+        ...REQUEST,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow(/abort/i);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  }, 2_000);
 
   it('opens the breaker rather than paying the API for a failure that is not going away', async () => {
     const fetchImpl = vi.fn(() => Promise.resolve(new Response('bad key', { status: 401 })));

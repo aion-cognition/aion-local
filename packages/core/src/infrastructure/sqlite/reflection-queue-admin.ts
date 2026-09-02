@@ -1,7 +1,7 @@
 import type { SqliteHandle } from './database.js';
 import {
-  DEFAULT_REFLECTION_LANE,
   toReflectionJob,
+  toReflectionLane,
   type ReflectionJob,
   type ReflectionJobRow,
   type ReflectionLane,
@@ -113,17 +113,16 @@ export function countQueueJobs(
  */
 export function countQueueJobsByLane(
   db: SqliteHandle,
+  filter: ReflectionQueueFilter = {},
   maxAttempts: number = Number.MAX_SAFE_INTEGER,
 ): Map<ReflectionLane, number> {
+  const where = conditions(filter, ['claimed_at IS NULL', 'attempts < ?']);
   const rows = db
-    .prepare(
-      `SELECT lane, COUNT(*) AS pending FROM reflection_queue
-       WHERE claimed_at IS NULL AND attempts < ? GROUP BY lane`,
-    )
-    .all(maxAttempts) as { lane: string | null; pending: number }[];
+    .prepare(`SELECT lane, COUNT(*) AS pending FROM reflection_queue${where.sql} GROUP BY lane`)
+    .all(maxAttempts, ...where.parameters) as { lane: string | null; pending: number }[];
   const counts = new Map<ReflectionLane, number>();
   for (const row of rows) {
-    const lane: ReflectionLane = row.lane === 'bulk' ? 'bulk' : DEFAULT_REFLECTION_LANE;
+    const lane = toReflectionLane(row.lane);
     counts.set(lane, (counts.get(lane) ?? 0) + row.pending);
   }
   return counts;
@@ -144,10 +143,33 @@ export function dropUnclaimedJobs(db: SqliteHandle, filter: ReflectionQueueFilte
  * Moves matching unclaimed rows into the interactive lane, where the next claim takes them
  * ahead of everything bulk. Already-interactive rows are excluded so the count reported is
  * the number of jobs that actually changed lane.
+ *
+ * A row takes a fresh `lane_seq` from the interactive group it lands in, because the column
+ * numbers a row within its own (lane, session) group. Carrying a bulk turn across would sort
+ * the row against interactive rows that never shared its counter, and the next enqueue for
+ * that session would take its high-water mark from a number the bulk backlog set. One
+ * statement per row so each reads the mark the row before it left.
  */
 export function promoteJobs(db: SqliteHandle, filter: ReflectionQueueFilter = {}): number {
   const where = conditions(filter, ['claimed_at IS NULL', "lane <> 'interactive'"]);
-  return db
-    .prepare(`UPDATE reflection_queue SET lane = 'interactive'${where.sql}`)
-    .run(...where.parameters).changes;
+  const rows = db
+    .prepare(`SELECT id FROM reflection_queue${where.sql} ORDER BY lane_seq ASC, rowid ASC`)
+    .all(...where.parameters) as { id: string }[];
+  const promote = db.prepare(
+    `UPDATE reflection_queue
+       SET lane = 'interactive',
+           lane_seq = (
+             SELECT COALESCE(MAX(q.lane_seq), 0) + 1 FROM reflection_queue q
+             WHERE q.lane = 'interactive' AND q.session_id IS reflection_queue.session_id
+           )
+     WHERE id = ? AND claimed_at IS NULL AND lane <> 'interactive'`,
+  );
+  const promoteAll = db.transaction((ids: readonly string[]) => {
+    let moved = 0;
+    for (const id of ids) {
+      moved += promote.run(id).changes;
+    }
+    return moved;
+  });
+  return promoteAll(rows.map((row) => row.id));
 }

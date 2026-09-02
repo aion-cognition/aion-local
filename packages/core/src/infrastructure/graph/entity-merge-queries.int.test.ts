@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { BITEMPORAL_PROPERTIES, writeStampedNode } from './bitemporal.js';
 import { CLAIM_ASPECT_PROPERTY, CLAIM_SUBJECT_PROPERTY } from './claim-key-queries.js';
-import { readFirst } from './connection.js';
+import { readFirst, runWrite } from './connection.js';
 import { closeEligibleAssociationEdges } from './edge-prune-queries.js';
 import { upsertEdge } from './edges.js';
 import { MAX_STORED_ENTITY_ALIASES } from './entity-identity-queries.js';
@@ -289,6 +289,61 @@ describe('a merge pushing an identity past the stored alias cap', () => {
   });
 });
 
+describe('an unmerge over an alias the merge stored under a different spelling', () => {
+  /**
+   * `aliasPairs` trims what it stores, so the canonical rarely holds the exact spelling the
+   * merge record carries. Released on the raw spelling, the split identity's own key stays on
+   * the canonical and one cue resolves to both nodes.
+   */
+  it('releases the alias on its fold rather than on its spelling', async () => {
+    for (const id of ['spelling-canon', 'spelling-dup']) {
+      await seedEntity(id);
+    }
+    const raw = '  Ledger Cache  ';
+
+    await redirectAndAbsorb(harness.driver, {
+      canonicalId: 'spelling-canon',
+      canonicalNameNorm: 'spelling-canon',
+      mergedIds: ['spelling-dup'],
+      aliases: [raw],
+      accessCount: 0,
+      mergedRecords: [
+        {
+          id: 'spelling-dup',
+          name: 'spelling-dup',
+          nameNorm: 'spelling-dup',
+          type: 'concept',
+          aliases: [raw],
+        },
+      ],
+      now: NOW,
+    });
+
+    // Stored trimmed, which is what the release has to match against.
+    expect(storedAliases(await nodeProperties(harness.driver, 'spelling-canon'))).toContain(
+      'Ledger Cache',
+    );
+
+    const split = await applyUnmerge(harness.driver, {
+      canonicalId: 'spelling-canon',
+      record: await absorbedRecord('spelling-dup'),
+      now: LATER,
+    });
+
+    // The recovered identity keeps the world time it was first observed at, not the repair's.
+    const restoredNode = await nodeProperties(harness.driver, split.restoredId);
+    expect(restoredNode[BITEMPORAL_PROPERTIES.occurredAt]).toEqual(NOW);
+
+    const canonical = await nodeProperties(harness.driver, 'spelling-canon');
+    expect(storedAliasKeys(canonical)).not.toContain(foldName(raw));
+    expect(storedAliases(canonical)).not.toContain('Ledger Cache');
+    // The key goes with the identity it belongs to.
+    expect(storedAliasKeys(await nodeProperties(harness.driver, split.restoredId))).toContain(
+      foldName(raw),
+    );
+  });
+});
+
 describe('a merge over the entity a claim names as its subject', () => {
   it('forwards the claim key onto the canonical and hands it back on an unmerge', async () => {
     for (const id of ['subject-canon', 'subject-dup']) {
@@ -340,5 +395,37 @@ describe('a merge over the entity a claim names as its subject', () => {
     // The split identity is the node the restored edges land on, so the key lands there too.
     const unmerged = await nodeProperties(harness.driver, 'subject-claim');
     expect(unmerged[CLAIM_SUBJECT_PROPERTY]).toBe(split.restoredId);
+  });
+});
+
+describe('a merged node carrying an edge type the catalog does not name', () => {
+  it('counts the edge it cannot redirect rather than reporting a clean merge', async () => {
+    for (const id of ['legacy-canon', 'legacy-dup', 'legacy-neighbor']) {
+      await seedEntity(id);
+    }
+    // An edge no writer in this tree produces: a substrate written by an older version, or by
+    // hand. The upsert refuses the type, so the redirect can only leave it where it is.
+    await runWrite(
+      harness.driver,
+      [
+        'MATCH (a:AionNode { id: $sourceId }), (b:AionNode { id: $targetId })',
+        'CREATE (a)-[r:LEGACY_LINK { id: $edgeId, strength: 0.5 }]->(b)',
+        'RETURN r.id AS id',
+      ].join('\n'),
+      { sourceId: 'legacy-dup', targetId: 'legacy-neighbor', edgeId: 'legacy-edge' },
+      (row) => row.id as string,
+    );
+
+    const result = await redirectAndAbsorb(harness.driver, {
+      canonicalId: 'legacy-canon',
+      canonicalNameNorm: 'legacy-canon',
+      mergedIds: ['legacy-dup'],
+      aliases: ['legacy-dup'],
+      accessCount: 0,
+      now: NOW,
+    });
+
+    expect(result.status === 'applied' ? result.edgesUnknownType : -1).toBe(1);
+    expect(result.status === 'applied' ? result.edgesRedirected : -1).toBe(0);
   });
 });

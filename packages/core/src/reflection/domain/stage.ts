@@ -31,11 +31,17 @@ export type StageOutcome = {
   /** One line, recorded verbatim in the ledger. A skip says why it skipped. */
   readonly summary: string;
   readonly counts?: StageCounts;
+  /**
+   * A skip for want of input another stage owed this one. The orchestrator leaves the stage's
+   * ledger key open, so the retry that re-enters the failed predecessor re-enters this stage
+   * too. Absent means the stage decided for itself and a retry would decide the same.
+   */
+  readonly retryable?: boolean;
 };
 
 /**
- * Everything a stage is given. The episode is loaded once per run and shared, so eight
- * stages do not read the same turns eight times.
+ * Everything a stage is given. The episode is loaded once per run and shared, so every stage
+ * reads the same turns once.
  */
 export type StageContext = {
   readonly driver: Driver;
@@ -57,6 +63,12 @@ export type StageContext = {
   readonly occurredAt: Date;
   /** The pipeline version this run's ledger keys are forked under. */
   readonly pipelineVersion: string;
+  /**
+   * The caller's shutdown signal, composed under every model call's own deadline through
+   * `deadlineFor`. Without it a stop waits out the full stage timeout on a call it already
+   * gave up on, once per remaining stage.
+   */
+  readonly signal?: AbortSignal;
 };
 
 /**
@@ -86,14 +98,12 @@ export type ReflectionSummary = {
 };
 
 /**
- * The per-episode ledger key only ever gated the whole pipeline. A stage
- * with no ledger of its own (`cognitive`, historically) re-runs its full extraction on every
- * retry of the run it belongs to, and each pass MERGEs a fresh set of near-duplicate nodes
- * because its only idempotency is a content hash over LLM output that never collides twice.
- * `reflection:stage:{version}:{stageName}:{episodeId}` closes that gap one level down: the
- * orchestrator marks it the moment a stage finishes without failing and skips the stage
- * entirely, without calling `run`, when the key is already there. A retry therefore re-enters
- * only the stages that have not yet applied.
+ * `reflection:stage:{version}:{stageName}:{episodeId}` gates one stage of one episode, where
+ * the per-episode key gates the whole pipeline. A stage whose only idempotency is a content
+ * hash over model output MERGEs a fresh set of near-duplicate nodes on every retry, because
+ * that hash never collides twice; this key is what keeps a retry out of it. The orchestrator
+ * marks it when a stage applies and skips the stage entirely, without calling `run`, when the
+ * key is already there, so a retry re-enters only the stages that have not applied.
  *
  * The version sits ahead of the stage name so a pipeline bump re-enters every stage: the key a
  * stage earned under the old prompts gates only the old version's run.

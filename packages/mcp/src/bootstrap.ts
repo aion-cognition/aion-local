@@ -125,9 +125,54 @@ function fallbackMemberName(env: NodeJS.ProcessEnv): string {
 
 export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionService> {
   const config = loadConfig(env);
-  const logger = openLogger({ ...config.logging, name: 'aion-mcp' });
+  // The service takes the fd 1 tee, which is what `docker logs` reads. The CLI does not: its
+  // answers go to fd 1.
+  const logger = openLogger({ ...config.logging, name: 'aion-mcp', stdout: true });
   const store = new SqliteStore({ filePath: config.sqlite.path });
   const connection = new GraphConnection(config.neo4j);
+
+  // Every component that starts on its own clock or its own event loop, in construction
+  // order. A failure partway through construction has to stop whichever of these already
+  // started before the driver and the store close, or it keeps running against a connection
+  // nothing else is using any more.
+  let sideEffects: RecallSideEffects | undefined;
+  let worker: ReflectionWorker | undefined;
+  let idleNarratives: IdleNarrativeSweeper | undefined;
+  let introspector: Introspector | undefined;
+  let service: AionMcpService | undefined;
+  let idleSessions: SessionIdleSweeper | undefined;
+  let narratives: SessionNarrativeCloser | undefined;
+
+  /**
+   * The same order `close` below uses, so a failure partway through startup tears down
+   * whichever of these already started, and a normal shutdown tears down all of them.
+   */
+  const teardown = async (): Promise<void> => {
+    idleSessions?.stop();
+    if (introspector !== undefined) {
+      await introspector.stop();
+    }
+    if (service !== undefined) {
+      await service.close();
+    }
+    if (narratives !== undefined) {
+      await narratives.whenIdle();
+    }
+    if (sideEffects !== undefined) {
+      // The access-tracking write recall schedules is deferred and fire-and-forget by
+      // contract, so a recall that landed just before shutdown can still have one in
+      // flight; the driver closing under it would drop the write and swallow it into a warn.
+      await sideEffects.whenIdle();
+    }
+    if (idleNarratives !== undefined) {
+      await idleNarratives.stop();
+    }
+    if (worker !== undefined) {
+      await worker.stop();
+    }
+    await connection.close();
+    store.close();
+  };
 
   try {
     const health = await connection.health();
@@ -167,7 +212,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
     }
     await reconcileModels(config, router, logger);
 
-    const sideEffects = new RecallSideEffects(
+    sideEffects = new RecallSideEffects(
       driver,
       store.db,
       logger,
@@ -185,7 +230,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       onRecalled: sideEffects.onRecalled,
     };
     const stages = reflectionStages(config);
-    const worker = new ReflectionWorker(
+    worker = new ReflectionWorker(
       {
         driver,
         db: store.db,
@@ -198,6 +243,9 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       },
       workerOptions(config),
     );
+    // Narrowed once so the closures below don't each have to prove `worker` is still the same
+    // instance the outer, reassignable binding held when they were built.
+    const reflectionWorker = worker;
 
     // Built after the worker because it wakes it: reflection is event-driven, and the queue
     // row is what survives a restart rather than what a loop watches.
@@ -208,7 +256,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       // Intake only embeds, so the role it borrows changes nothing about where its calls go.
       provider: reflectProvider,
       onJobEnqueued: () => {
-        worker.wake();
+        reflectionWorker.wake();
       },
       logger,
       entropyThreshold: config.redaction.entropyThreshold,
@@ -220,7 +268,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
     if (stages.length > 0) {
       // The drain runs alongside the first tool calls rather than in front of them: a long
       // backlog would otherwise hold the service off the port it is supposed to be answering.
-      void worker.start().catch((err: unknown) => {
+      void reflectionWorker.start().catch((err: unknown) => {
         logger.error({ err }, 'reflection worker drain failed');
       });
     } else {
@@ -231,16 +279,17 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
     // can observe; the sweep is what a client that disconnects without a DELETE (an editor
     // that exits) leaves behind.
     const narrativeDeps = { driver, provider: reflectProvider, logger };
-    const narratives = new SessionNarrativeCloser(narrativeDeps, narrativeOptions(config));
-    const idleNarratives = new IdleNarrativeSweeper(narrativeDeps, narrativeSweepOptions(config));
+    narratives = new SessionNarrativeCloser(narrativeDeps, narrativeOptions(config));
+    idleNarratives = new IdleNarrativeSweeper(narrativeDeps, narrativeSweepOptions(config));
     idleNarratives.start();
+    const sessionNarratives = narratives;
 
     // The introspection loop. The catalog is a plain ordered list rather than a lookup the
     // engine owns, so an operation joins maintenance by being registered in that one function
     // and nowhere else. The loop starts here and stops in `close` below, ahead of the driver,
     // because a tick that has begun can still hold a graph write.
     const maintenanceOperations = introspectionOperations();
-    const introspector = new Introspector(
+    introspector = new Introspector(
       {
         driver,
         db: store.db,
@@ -264,13 +313,14 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       reflection: (args, identity) => handleReflection(intake, args, { identity }),
     };
 
-    const service = new AionMcpService({
+    service = new AionMcpService({
       backend,
       logger,
       host: bindHost(runningInContainer()),
       port: config.operational.mcpPort,
       onSessionClosed: (sessionId) => {
-        narratives.onSessionClosed(sessionId);
+        sessionNarratives.onSessionClosed(sessionId);
+        sessions.forget(sessionId);
         // The served-item record describes one agent's live context, so it dies with the
         // session it describes. Both close paths land here, the client's DELETE and the idle
         // sweep, so the rows outlive a session by at most the idle window.
@@ -283,7 +333,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
     // The primary trigger, not the fallback: a client's close() tears down its own
     // transport and never sends the DELETE `onSessionClosed` above
     // depends on, so a session with no request in this long closes on its own instead.
-    const idleSessions = new SessionIdleSweeper(service, {
+    idleSessions = new SessionIdleSweeper(service, {
       idleMs: config.operational.sessionIdleExpiryMinutes * MINUTE_MS,
       purgeIdleBefore: (cutoff) => {
         purgeServedItemsIdleSince(store.db, cutoff.toISOString());
@@ -312,26 +362,17 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       service,
       config,
       logger,
-      close: async () => {
-        // Stop the idle sweep before the service closes its own transports, so shutdown
-        // cannot race a sweep tick into closing a session the drain is already tearing down.
-        idleSessions.stop();
-        // Maintenance stops before the driver does: a tick that started can still be holding
-        // a graph write, and its own abort signal is what lets an operation cut that short.
-        await introspector.stop();
-        // The service first, so every transport closes and its narrative is scheduled before
-        // the closer is awaited; the driver goes last, since both are still writing to it.
-        await service.close();
-        await narratives.whenIdle();
-        await idleNarratives.stop();
-        await worker.stop();
-        await connection.close();
-        store.close();
-      },
+      // Stop the idle sweep before the service closes its own transports, so shutdown cannot
+      // race a sweep tick into closing a session the drain is already tearing down; maintenance
+      // stops next, since a tick that started can still be holding a graph write and its own
+      // abort signal is what lets an operation cut that short; the service closes third, so
+      // every transport closes and its narrative and access-tracking writes are scheduled
+      // before either is awaited; the driver and the store go last, since all of the above are
+      // still writing to them.
+      close: teardown,
     };
   } catch (err) {
-    await connection.close();
-    store.close();
+    await teardown();
     logger.fatal({ err }, 'mcp service failed to start');
     throw err;
   }

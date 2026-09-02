@@ -75,7 +75,13 @@ describe('mid-session boundary', () => {
 
 describe('the boundary a running session is judged against', () => {
   const IDLE_MS = 30 * 60 * 1000;
-  const settings = { now: new Date('2026-04-02T09:30:00Z'), idleMs: IDLE_MS, midSession: true };
+  const settings = {
+    now: new Date('2026-04-02T09:30:00Z'),
+    idleMs: IDLE_MS,
+    midSession: true,
+    midSessionEpisodes: 12,
+    midSessionGapMs: 10 * 60 * 1000,
+  };
 
   const paused = [
     episode('e1', { writtenAt: new Date('2026-04-02T09:00:00Z') }),
@@ -101,6 +107,32 @@ describe('the boundary a running session is judged against', () => {
 
     expect(decision.narrate).toBe(true);
     expect(decision.reason).toBe('the session paused for 25 minutes');
+  });
+
+  it('reads the episode boundary off the settings, so a deployment can retune it', () => {
+    const busy = [
+      episode('e1', { writtenAt: new Date('2026-04-02T09:26:00Z') }),
+      episode('e2', { writtenAt: new Date('2026-04-02T09:27:00Z') }),
+      episode('e3', { writtenAt: new Date('2026-04-02T09:28:00Z') }),
+    ];
+
+    expect(decideSessionBoundary(busy, [], settings).narrate).toBe(false);
+    expect(decideSessionBoundary(busy, [], { ...settings, midSessionEpisodes: 3 })).toEqual({
+      narrate: true,
+      reason: '3 episodes since the standing narrative',
+    });
+  });
+
+  it('reads the pause the boundary turns on off the settings too', () => {
+    const shortPause = [
+      episode('e1', { writtenAt: new Date('2026-04-02T09:20:00Z') }),
+      episode('e2', { writtenAt: new Date('2026-04-02T09:25:00Z') }),
+    ];
+
+    expect(decideSessionBoundary(shortPause, [], settings).narrate).toBe(false);
+    expect(
+      decideSessionBoundary(shortPause, [], { ...settings, midSessionGapMs: 4 * 60 * 1000 }),
+    ).toEqual({ narrate: true, reason: 'the session paused for 5 minutes' });
   });
 
   it('waits for the close on the same session once the switch is off', () => {

@@ -4,7 +4,7 @@
  * than that a new fixture happens to behave.
  *
  * The off-topic, on-topic and leaked-shape sets reuse fixtures that already live elsewhere
- * (`recall/application/floors.fixtures.ts` and
+ * (`recall/application/floors.data.ts` and
  * `redaction/test-support/leaked-shapes.fixture.ts`) and are imported at their gate file
  * rather than copied here.
  */

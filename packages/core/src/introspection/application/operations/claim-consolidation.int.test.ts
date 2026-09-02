@@ -8,6 +8,7 @@ import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import {
   BITEMPORAL_PROPERTIES,
+  supersede,
   writeStampedNode,
 } from '../../../infrastructure/graph/bitemporal.js';
 import { CONSOLIDATION_EXTRACTION_METHOD } from '../../../infrastructure/graph/claim-consolidation-queries.js';
@@ -35,6 +36,7 @@ import { unsupersedeNode } from '../../../infrastructure/graph/unsupersede.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import type { Provider } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import { consolidationVetoKey } from '../../../reflection/application/claim-consolidation.js';
 import { consolidationNodeId } from '../../../reflection/domain/consolidation.js';
 import { coverageKey } from '../../../reflection/domain/narrative.js';
 import type { OperationContext } from '../../domain/operation.js';
@@ -269,7 +271,7 @@ describe('claim consolidation against a live substrate', () => {
     );
   });
 
-  it('writes nothing when the review vetoes the synthesis', async () => {
+  it('writes nothing when the review vetoes the synthesis, and does not ask again', async () => {
     await assignCommunities();
 
     const outcome = await claimConsolidationOperation().run(context(configWith(true), 'vetoed'));
@@ -280,6 +282,17 @@ describe('claim consolidation against a live substrate', () => {
       const properties = await nodeProperties(harness.driver, memberId);
       expect(properties[BITEMPORAL_PROPERTIES.validUntil]).toBeUndefined();
     }
+
+    // The refusal is recorded against this exact member set, so the next tick spends its two
+    // model calls somewhere it can still compress rather than on the same answer.
+    const second = await claimConsolidationOperation().run(context(configWith(true), 'vetoed'));
+    expect(second.detail).toContain('0 vetoed by review');
+    expect(second.detail).toContain('1 already covered');
+
+    // Cleared here so the tests below measure the ordinary path rather than this refusal.
+    db.prepare('DELETE FROM ops_ledger WHERE key = ?').run(
+      consolidationVetoKey(coverageKey(MEMBER_IDS)),
+    );
   });
 
   it('reads its density floor off the neighbourhoods the substrate actually holds', async () => {
@@ -338,6 +351,83 @@ describe('claim consolidation against a live substrate', () => {
       expect(
         (await nodeProperties(harness.driver, memberId))[BITEMPORAL_PROPERTIES.validUntil],
       ).toBeInstanceOf(Date);
+    }
+  });
+  it('writes nothing when a correction closes a member while the synthesis runs', async () => {
+    const community = 12;
+    const seeds: readonly ClaimSeed[] = [
+      {
+        id: 'claim-lag-1',
+        label: 'Decision',
+        episodeId: 'consolidation-ep-a',
+        community,
+        at: '2026-04-06T11:00:00.000Z',
+        text: 'Queue lag is sampled once a minute and kept for a day.',
+      },
+      {
+        id: 'claim-lag-2',
+        label: 'Insight',
+        episodeId: 'consolidation-ep-a',
+        community,
+        at: '2026-04-06T11:10:00.000Z',
+        text: 'The oldest unclaimed job is what the lag gauge reports.',
+      },
+      {
+        id: 'claim-lag-3',
+        label: 'Decision',
+        episodeId: 'consolidation-ep-b',
+        community,
+        at: '2026-04-07T11:00:00.000Z',
+        text: 'A lag sample older than a day is dropped rather than aggregated.',
+      },
+      {
+        id: 'claim-lag-4',
+        label: 'Insight',
+        episodeId: 'consolidation-ep-b',
+        community,
+        at: '2026-04-07T11:20:00.000Z',
+        text: 'Lag is reported per lane, because the interactive lane is served first.',
+      },
+    ];
+    for (const seed of seeds) {
+      await seedClaim(seed);
+      await writeStampedNode(harness.driver, {
+        label: seed.label,
+        id: seed.id,
+        now: new Date(seed.at),
+        mergeProperties: { [COMMUNITY_PROPERTY]: seed.community },
+      });
+    }
+
+    // A correction lands between the member read and the write, which is the window two model
+    // calls hold open.
+    const corrected = seeds[0]!.id;
+    const correcting: Provider = {
+      embed: (texts) =>
+        Promise.resolve(texts.map(() => Array.from({ length: EMBED_DIMENSION }, () => 0.5))),
+      generate: async (request) => {
+        await supersede(harness.driver, {
+          oldId: corrected,
+          newId: MEMBER_IDS[0]!,
+          now: NOW,
+          validUntil: NOW,
+          signals: ['contradiction'],
+          provenance: ['test'],
+        });
+        return stubProvider('unanimous').generate(request);
+      },
+    };
+
+    const outcome = await claimConsolidationOperation().run({
+      ...context(),
+      provider: correcting,
+    });
+
+    expect(outcome.status).toBe('noop');
+    expect(outcome.detail).toContain('1 corrected under the synthesis');
+    // Nothing absorbed the neighbourhood, so the three claims that still stand keep standing.
+    for (const seed of seeds.slice(1)) {
+      expect(await supersedingNodeIds(harness.driver, seed.id)).toEqual([]);
     }
   });
 });

@@ -1,13 +1,11 @@
 import type { z } from 'zod';
 
 /**
- * The error-shaping helpers every layer had written out for itself. They were byte-identical
- * everywhere but one site, and that site had silently dropped the error name, which is where
- * a named failure carries its diagnosis.
+ * The one place an error is turned into text, so no layer writes its own and drops the name.
  *
- * Two renderings, deliberately both: `describeError` keeps the name, because `OllamaUnreachableError`
- * is most of what a reader needs; `errorMessage` drops it where the message alone is the whole
- * field, as in the reflection queue's `last_error`.
+ * Two renderings, deliberately both: `describeError` keeps the name, because
+ * `OllamaUnreachableError` is most of what a reader needs; `errorMessage` drops it where the
+ * message alone is the whole field, as in the reflection queue's `last_error`.
  */
 
 /** A guard aborted the call. The distinction a caller draws is timed out against failed. */

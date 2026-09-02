@@ -76,6 +76,27 @@ async function unloadModel(baseUrl: string, model: string, fetchImpl: typeof fet
 }
 
 /**
+ * What the run did, in the order a reader needs it. An unload that threw leaves `evicted` empty
+ * without meaning nothing was resident, so failures are named before residency is described, and
+ * the on-disk parenthetical only appears when something was actually found absent.
+ */
+function describeOutcome(
+  evicted: readonly string[],
+  absent: readonly string[],
+  failures: readonly string[],
+): string {
+  if (evicted.length > 0) {
+    return `unloaded ${evicted.join(', ')} from memory; models stay on disk`;
+  }
+  if (failures.length > 0) {
+    return 'nothing was unloaded';
+  }
+  return absent.length === 0
+    ? 'no key-covered model was resident'
+    : `no key-covered model was resident (${absent.join(', ')} on disk, not in memory)`;
+}
+
+/**
  * Reconciles what Ollama is holding in memory against the resolved routing, at service boot
  * and at the end of `aion init`.
  *
@@ -109,11 +130,13 @@ export async function reconcileResidentModels(
     resident = await listResidentModels(options.baseUrl, { fetchImpl });
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
+    // `absent` means known not to be in memory, and residency is exactly what could not be
+    // read, so it stays empty and `error` carries the unknown.
     return {
       checked: true,
       resident: [],
       evicted: [],
-      absent: candidates,
+      absent: [],
       error,
       detail: `could not read resident models: ${error}`,
     };
@@ -138,10 +161,7 @@ export async function reconcileResidentModels(
     }
   }
 
-  const detail =
-    evicted.length === 0
-      ? `no key-covered model was resident (${absent.join(', ')} on disk, not in memory)`
-      : `unloaded ${evicted.join(', ')} from memory; models stay on disk`;
+  const detail = describeOutcome(evicted, absent, failures);
 
   return {
     checked: true,

@@ -195,6 +195,7 @@ describe('narrative regrounding', () => {
       newId: corrected.node.id,
       confidence: 1,
       episodeId: 'regrounding-episode-2',
+      createdAt: NOW.toISOString(),
     });
 
     // Before the apply the narrative reads as current, which is exactly the problem.

@@ -1,12 +1,14 @@
 /**
- * The plasticity layer's public surface: the Hebbian update math and the flush operation the
- * introspector schedules.
+ * The plasticity layer's public surface: the counters the CLI and the MCP snapshot read.
+ *
+ * The flush, the decay sweep and the Hebbian math stay off this barrel. Only introspection
+ * calls them, and it imports them by relative path.
  */
 
 /**
- * The two trigger strings stay off this barrel. Each producer's own layer already exports the
- * string it writes, and re-exporting the same name from two layers makes it ambiguous at the
- * package entrypoint.
+ * The trigger strings stay off it for the same reason. `domain/reinforcement.ts` declares each
+ * one, the two producers that write it import it from there, and nothing outside core reads a
+ * trigger.
  */
 
 export { plasticityCounters } from './application/metrics.js';

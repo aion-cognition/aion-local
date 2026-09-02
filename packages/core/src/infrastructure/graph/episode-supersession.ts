@@ -7,7 +7,6 @@ import {
   type SupersedeResult,
 } from './bitemporal.js';
 import { inWriteTransaction, runRead, type GraphTransaction } from './connection.js';
-import { SUPERSEDES_TYPE } from './relationships.js';
 
 /**
  * Closing an Episode leaves the facts extracted from it open, so recall keeps serving the
@@ -19,7 +18,7 @@ import { SUPERSEDES_TYPE } from './relationships.js';
  * and one entity outlives any episode that named it.
  */
 
-/** Appendix B provenance, distinct from a judged contradiction so lineage stays readable. */
+/** The provenance a propagated close carries, distinct from a judged contradiction so lineage stays readable. */
 export const EPISODE_PROPAGATION_METHOD = 'supersession_episode_propagation';
 
 const EPISODE_PROPAGATION_SIGNALS = ['episode_supersession'];
@@ -38,15 +37,6 @@ const DERIVED_NODES_OF_CLOSED_EPISODE = [
   '  }',
   'RETURN n.id AS id',
   'ORDER BY n.id',
-].join('\n');
-
-/** The replacement recorded against a closed Episode, so a repair pass can find it. */
-const SUCCESSOR_OF_EPISODE = [
-  `MATCH (next)-[:${SUPERSEDES_TYPE}]->(old:Episode { id: $episodeId })`,
-  `WHERE old.${BITEMPORAL_PROPERTIES.validUntil} IS NOT NULL`,
-  'RETURN next.id AS id',
-  'ORDER BY next.id',
-  'LIMIT 1',
 ].join('\n');
 
 /** The open Episode a derived node was extracted from; the review path needs it to widen a
@@ -143,31 +133,5 @@ export async function supersedeEpisode(
     });
     const propagation = await closeDerivedFamily(tx, input.oldId, input.newId, now, validUntil);
     return { supersession, propagation };
-  });
-}
-
-/**
- * The same propagation over an episode something else already closed: the repair path for a
- * substrate whose episodes were superseded before this existed. A no-op when the episode is
- * open, carries no lineage, or has nothing left to close.
- */
-export async function propagateEpisodeSupersession(
-  driver: Driver,
-  input: { readonly episodeId: string; readonly now?: Date },
-): Promise<EpisodePropagationResult | undefined> {
-  const now = input.now ?? new Date();
-  return inWriteTransaction(driver, async (tx) => {
-    const successors = await tx.run(
-      SUCCESSOR_OF_EPISODE,
-      { episodeId: input.episodeId },
-      (row) => row.id as string,
-    );
-    const supersededBy = successors[0];
-    if (supersededBy === undefined) {
-      return undefined;
-    }
-    // A repair carries no world time of its own: the episode closed before this existed, so
-    // both timelines on the family it should have taken with it end at the repair.
-    return closeDerivedFamily(tx, input.episodeId, supersededBy, now, now);
   });
 }

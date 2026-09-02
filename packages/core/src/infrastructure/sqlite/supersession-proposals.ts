@@ -1,13 +1,26 @@
 import { randomUUID } from 'node:crypto';
 
 import type { SqliteHandle } from './database.js';
-import { proposalTable } from './proposal-table.js';
+import {
+  countOpenProposals,
+  findProposalsForNode,
+  getProposal,
+  listOldestOpenProposals,
+  listOpenProposalCreatedAt,
+  listProposals,
+  reopenProposal,
+  resolveProposal,
+  type ProposalTableSpec,
+} from './proposal-table.js';
 
 /**
- * The supersession policy's low-confidence half. A contradiction judgment the reflection
- * model is not sure enough about never touches the graph; it lands here for a person to
- * act on via `aion why`. Nothing in the pipeline reads these rows back to apply them:
- * that is the whole point of the split.
+ * The record of every affirmative supersession judgment, whichever mode ruled on it. A close
+ * resolves its row on the way out. A veto leaves the row open carrying the veto, so
+ * `aion proposals ls` shows both what the judge wanted and what stopped it.
+ *
+ * An open row is a queue a person acts on with `aion proposals apply`. The supersession stage
+ * reaches that same apply path itself under `AION_SUPERSEDE_MODE=unanimous` and stamps
+ * `supersession_unanimous_auto`, so lineage separates an autonomous close from a reviewed one.
  */
 
 export type SupersessionProposal = {
@@ -41,7 +54,8 @@ export type SupersessionProposalInput = {
   readonly confidence: number;
   readonly rationale?: string;
   readonly episodeId: string;
-  readonly createdAt?: string;
+  /** Required: the caller owns the clock, so no row can carry a stamp nobody chose. */
+  readonly createdAt: string;
 };
 
 function toSupersessionProposal(row: SupersessionProposalRow): SupersessionProposal {
@@ -57,11 +71,11 @@ function toSupersessionProposal(row: SupersessionProposalRow): SupersessionPropo
   };
 }
 
-const proposals = proposalTable<SupersessionProposalRow, SupersessionProposal>({
+const PROPOSALS: ProposalTableSpec<SupersessionProposalRow, SupersessionProposal> = {
   table: 'supersession_proposals',
   pairColumns: ['old_id', 'new_id'],
   mapRow: toSupersessionProposal,
-});
+};
 
 /**
  * Idempotent on the pair: a second judgment of the same (old, new) refreshes the confidence,
@@ -91,7 +105,7 @@ export function recordSupersessionProposal(
       input.confidence,
       input.rationale ?? null,
       input.episodeId,
-      input.createdAt ?? new Date().toISOString(),
+      input.createdAt,
     ) as { id: string };
   return row.id;
 }
@@ -100,12 +114,25 @@ export function getSupersessionProposal(
   db: SqliteHandle,
   id: string,
 ): SupersessionProposal | undefined {
-  return proposals.get(db, id);
+  return getProposal(db, PROPOSALS, id);
 }
 
 /** Ordered by insertion (rowid), not created_at: same-millisecond bursts would tie on the latter. */
 export function listSupersessionProposals(db: SqliteHandle): SupersessionProposal[] {
-  return proposals.list(db);
+  return listProposals(db, PROPOSALS);
+}
+
+/** Every open row's creation stamp, oldest first, for a caller that reads ages and not rows. */
+export function listOpenSupersessionProposalCreatedAt(db: SqliteHandle): string[] {
+  return listOpenProposalCreatedAt(db, PROPOSALS);
+}
+
+/** The oldest unresolved rows, bounded in SQL for a caller that weighs age. */
+export function listOldestOpenSupersessionProposals(
+  db: SqliteHandle,
+  limit: number,
+): SupersessionProposal[] {
+  return listOldestOpenProposals(db, PROPOSALS, limit);
 }
 
 /** Both directions: `aion why <id>` shows what a node would replace and what would replace it. */
@@ -113,24 +140,24 @@ export function findSupersessionProposalsForNode(
   db: SqliteHandle,
   nodeId: string,
 ): SupersessionProposal[] {
-  return proposals.findForNode(db, nodeId);
+  return findProposalsForNode(db, PROPOSALS, nodeId);
 }
 
 /** Returns false when the id is unknown or the proposal was already resolved. */
 export function resolveSupersessionProposal(
   db: SqliteHandle,
   id: string,
-  resolvedAt: string = new Date().toISOString(),
+  resolvedAt: string,
 ): boolean {
-  return proposals.resolve(db, id, resolvedAt);
+  return resolveProposal(db, PROPOSALS, id, resolvedAt);
 }
 
 /** Open proposals only: a resolved row is a decision already made, not a queue for anyone. */
 export function countOpenSupersessionProposals(db: SqliteHandle): number {
-  return proposals.countOpen(db);
+  return countOpenProposals(db, PROPOSALS);
 }
 
 /** Returns false when the id is unknown or the proposal is already open. */
 export function reopenSupersessionProposal(db: SqliteHandle, id: string): boolean {
-  return proposals.reopen(db, id);
+  return reopenProposal(db, PROPOSALS, id);
 }

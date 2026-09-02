@@ -5,7 +5,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { applySupersessionProposal, UNANIMOUS_APPLY_METHOD } from './proposals.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
-import { BITEMPORAL_PROPERTIES, writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
+import {
+  BITEMPORAL_PROPERTIES,
+  supersede,
+  writeStampedNode,
+} from '../../infrastructure/graph/bitemporal.js';
 import { writeCognitiveNode } from '../../infrastructure/graph/cognitive-queries.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
 import { fetchNodeEdges, fetchNodeProvenance } from '../../infrastructure/graph/node-provenance.js';
@@ -77,6 +81,7 @@ async function closeThroughApply(
     newId: corrected,
     confidence: 1,
     episodeId,
+    createdAt: '2026-08-29T12:00:00.000Z',
   });
   await applySupersessionProposal(harness.driver, db, {
     id: proposalId,
@@ -259,6 +264,29 @@ describe('reopening a superseded claim', () => {
     // The first reopen's stamp stands, the same discipline the close itself follows.
     const edges = await fetchNodeEdges(harness.driver, stale);
     expect(edges.find((edge) => edge.type === 'SUPERSEDES')?.reopenedAt).toEqual(REOPENED_AT);
+  }, 120_000);
+
+  /**
+   * The orchestrator's retry case: the same pair closes again after a reopen. A closed node
+   * whose lineage the default read drops is the state the substrate forbids, so the second
+   * close has to bring the edge back open.
+   */
+  it('reopens the lineage edge when the same pair is superseded again', async () => {
+    await seedEpisode('ep-reclose-1', 'The Marlow cache holds ten thousand keys.');
+    await seedEpisode('ep-reclose-2', 'The Marlow cache holds a million keys.');
+    const stale = await seedClaim('ep-reclose-1', 'the Marlow cache holds ten thousand keys');
+    const corrected = await seedClaim('ep-reclose-2', 'the Marlow cache holds a million keys');
+    await closeThroughApply(stale, corrected, 'ep-reclose-2');
+    await unsupersedeNode(harness.driver, { id: stale, now: REOPENED_AT });
+    expect(await isCurrent(stale)).toBe(true);
+
+    const reclosedAt = new Date('2026-08-30T12:00:00.000Z');
+    await supersede(harness.driver, { oldId: stale, newId: corrected, now: reclosedAt });
+
+    expect(await isCurrent(stale)).toBe(false);
+    const after = await fetchNodeProvenance(harness.driver, stale);
+    expect(after?.currency).toBe('superseded');
+    expect(after?.supersededBy?.id).toBe(corrected);
   }, 120_000);
 
   it('answers nothing for an id the graph does not know', async () => {

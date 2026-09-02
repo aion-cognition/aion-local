@@ -136,6 +136,42 @@ describe('a merge whose decision record never reached SQLite', () => {
     expect(listEntityMergeDecisions(db).map((decision) => decision.tier)).toEqual(['tier0']);
   });
 
+  it('resumes after the last canonical it read, so a trail past the first page is reached', async () => {
+    // The trail is append-only and nothing narrows it as rows are reconciled. A run that always
+    // started at the lexicographically first canonical would read one fixed page forever.
+    const seen: (string | null)[] = [];
+    const pagingDriver = {
+      executeQuery: (_cypher: string, parameters: Record<string, unknown>) => {
+        seen.push(parameters.after as string | null);
+        const after = parameters.after as string | null;
+        const rows =
+          after === null
+            ? [{ canonical_id: 'canon-a' }, { canonical_id: 'canon-b' }]
+            : [{ canonical_id: 'canon-c' }];
+        return Promise.resolve({
+          records: rows.map((row) => ({
+            toObject: () => ({
+              ...row,
+              canonical_name_norm: row.canonical_id,
+              aliases: [],
+              records: [],
+            }),
+          })),
+        });
+      },
+    } as unknown as OperationContext['driver'];
+
+    const paged: Config = {
+      ...DEFAULTS,
+      maintenance: { ...DEFAULTS.maintenance, mergeDecisionReconcileBatch: 2 },
+    };
+    const operation = mergeDecisionReconcileOperation();
+    await operation.run({ ...context(paged), driver: pagingDriver });
+    await operation.run({ ...context(paged), driver: pagingDriver });
+
+    expect(seen).toEqual([null, 'canon-b']);
+  });
+
   it('is a maintenance operation the loop can select', () => {
     expect(introspectionOperations().map((operation) => operation.name)).toContain(
       mergeDecisionReconcileOperation().name,

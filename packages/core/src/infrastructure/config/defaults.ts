@@ -2,17 +2,19 @@ import { KNOB_TABLE } from './knobs.js';
 import type { Config } from './schema.js';
 
 /**
- * The shipped value of every knob, folded out of the one table that declares them. This is the
- * one home for every number a reflection stage or the worker runs on: a stage takes its value as
- * a constructor option and falls back to the leaf here, so a knob and the pipeline that reads it
- * cannot disagree. Before, each stage restated its own copy and a test asserted the two matched.
+ * Folds the knob table's third tuple slot into the shipped tree. `KNOBS` states why a stage reads
+ * its value from here rather than restating it.
+ *
+ * Every value is cloned. `Config` strips the table's readonly modifiers, so a caller writing to
+ * `DEFAULTS.search.weights` would otherwise be writing into the declaration itself, for the life
+ * of the process.
  */
 function buildDefaults(): Config {
   const config: Record<string, Record<string, unknown>> = {};
   for (const [group, leaves] of Object.entries(KNOB_TABLE)) {
     const section: Record<string, unknown> = {};
     for (const [leaf, [, , value]] of Object.entries(leaves)) {
-      section[leaf] = value;
+      section[leaf] = structuredClone(value);
     }
     config[group] = section;
   }

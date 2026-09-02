@@ -79,7 +79,7 @@ describe('reflection queue administration', () => {
 
     expect(counts).toMatchObject({ total: 1, unclaimed: 1, exhausted: 1, pending: 0 });
     expect(counts.oldestPendingAt).toBeUndefined();
-    expect(countQueueJobsByLane(store.db, 5)).toEqual(new Map());
+    expect(countQueueJobsByLane(store.db, {}, 5)).toEqual(new Map());
   });
 
   it('counts pending depth per lane', () => {
@@ -119,6 +119,26 @@ describe('reflection queue administration', () => {
     expect(promoteJobs(store.db, { sessionId: 'flood' })).toBe(2);
     expect(promoteJobs(store.db, { sessionId: 'flood' })).toBe(0);
     expect(listQueueJobs(store.db, { lane: 'interactive' })).toHaveLength(3);
+  });
+
+  it('claims a promoted row behind the interactive work its session already had queued', () => {
+    enqueue('agent', 'bulk', 'backlog-0');
+    enqueue('agent', 'bulk', 'backlog-1');
+    const live = enqueue('agent', 'interactive', 'live');
+
+    expect(promoteJobs(store.db, { sessionId: 'agent' })).toBe(2);
+
+    const claimant = new ReflectionQueueClaimant();
+    expect(claimant.claimNext(store.db)?.id).toBe(live);
+  });
+
+  it('counts lane depth over the filtered rows only', () => {
+    seed();
+
+    expect(countQueueJobsByLane(store.db, { sessionId: 'flood' })).toEqual(new Map([['bulk', 2]]));
+    expect(countQueueJobsByLane(store.db, { lane: 'interactive' })).toEqual(
+      new Map([['interactive', 1]]),
+    );
   });
 
   it('leaves a claimed bulk row in its lane', () => {

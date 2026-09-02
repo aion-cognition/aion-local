@@ -67,13 +67,20 @@ describe('bounded decay', () => {
     }
   });
 
-  it('never crosses the floor for any weight, rate, or factor in range', () => {
-    for (let weight = 0; weight <= 1.0001; weight += 0.1) {
+  it('never crosses the floor for any weight at or above it', () => {
+    for (let weight = FLOOR; weight <= 1.0001; weight += 0.1) {
       for (let factor = 0; factor <= 1.0001; factor += 0.1) {
         const next = boundedDecay(Math.min(weight, 1), RATE, Math.min(factor, 1), FLOOR);
         expect(next).toBeGreaterThanOrEqual(FLOOR);
       }
     }
+  });
+
+  it('leaves an edge stored under the floor where it is rather than raising it', () => {
+    // A semantic relationship writes its confidence as its strength unclamped, so a weak
+    // proposal sits under the floor. The sweep must not be what makes it traversable.
+    expect(boundedDecay(0.05, RATE, 1, FLOOR)).toBe(0.05);
+    expect(boundedDecay(0, RATE, 1, FLOOR)).toBe(0);
   });
 
   it('leaves a weight already at the floor exactly there at the peak decay rate', () => {

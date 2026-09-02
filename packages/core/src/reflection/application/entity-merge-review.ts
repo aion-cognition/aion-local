@@ -35,12 +35,6 @@ export type EntityMergeReviewDeps = EntityMergeWriterDeps;
 export type ApplyEntityMergeProposalInput = {
   readonly id: string;
   readonly now?: Date;
-  /**
-   * What lineage should say decided this merge. Defaults to `ENTITY_MERGE_APPLY_METHOD`,
-   * a person applying it through `aion proposals`; an automated caller passes its own method
-   * so the `SUPERSEDES` edge never claims a person decided a merge nobody reviewed.
-   */
-  readonly method?: string;
 };
 
 export type EntityMergeAlreadyResolved = {
@@ -63,6 +57,13 @@ export type EntityMergeAlreadyApplied = {
   readonly absorbed: EntityMergeProposalSide;
 };
 
+/** The two sides resolved to one node, so there was never a second identity to absorb. */
+export type EntityMergeNothingToMerge = {
+  readonly outcome: 'nothing_to_merge';
+  readonly id: string;
+  readonly canonical: EntityMergeProposalSide;
+};
+
 export type EntityMergeApplied = {
   readonly outcome: 'applied';
   readonly id: string;
@@ -76,7 +77,11 @@ export type EntityMergeApplied = {
 };
 
 export type ApplyEntityMergeProposalResult =
-  EntityMergeAlreadyResolved | EntityMergeStale | EntityMergeAlreadyApplied | EntityMergeApplied;
+  | EntityMergeAlreadyResolved
+  | EntityMergeStale
+  | EntityMergeAlreadyApplied
+  | EntityMergeNothingToMerge
+  | EntityMergeApplied;
 
 export type DismissEntityMergeProposalResult =
   | { readonly dismissed: false; readonly id: string; readonly resolvedAt: string }
@@ -157,7 +162,7 @@ export async function applyEntityMergeProposal(
     tier: 'human',
     reasons: [HUMAN_APPLY_REASON],
     signals,
-    method: input.method ?? ENTITY_MERGE_APPLY_METHOD,
+    method: ENTITY_MERGE_APPLY_METHOD,
     now,
   });
 
@@ -174,6 +179,11 @@ export async function applyEntityMergeProposal(
       missingSide = 'left';
     }
     return { outcome: 'stale', id: input.id, missingSide };
+  }
+  if (result.status === 'skipped' && result.reason === 'nothing_to_merge') {
+    // Both sides of the row name one node, so nothing was absorbed and no merge happened.
+    // Reporting it as already applied would claim one did.
+    return { outcome: 'nothing_to_merge', id: input.id, canonical: toParty(canonical) };
   }
   if (result.status !== 'merged') {
     return {

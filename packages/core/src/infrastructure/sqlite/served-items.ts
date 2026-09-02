@@ -5,8 +5,9 @@ import type { SqliteHandle } from './database.js';
  * that session's conversation, so serving it a second time spends tokens on text the agent is
  * still reading. This table is what lets the next recall subtract it.
  *
- * Only items a pack actually rendered are recorded. An item the caps or the token budget cut
- * was never served, so it has no row and the next recall offers it in full.
+ * Every item a pack rendered gets a row, and so does every repeat it withheld, since the agent
+ * still holds a withheld repeat from the recall that first served it. An item a bucket cap or
+ * the token budget cut has no row, so the next recall offers it in full.
  */
 
 export type ServedItem = {
@@ -31,7 +32,8 @@ export function readServedItems(db: SqliteHandle, sessionId: string): ReadonlyMa
 /**
  * One row per item, written after assembly so the record names what the agent received. A
  * re-serve refreshes the fingerprint and the last-served stamp and leaves `first_served_at`
- * alone, since that stamp is when the session learned the memory.
+ * alone. Nothing selects `first_served_at` today; it is kept so a later forensic read can say
+ * when a session first learned a memory.
  */
 export function recordServedItems(
   db: SqliteHandle,

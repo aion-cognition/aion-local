@@ -227,9 +227,9 @@ export class ReflectionWorker {
 
   /**
    * Gives back what this instance holds so the next process does not wait out the stale
-   * timeout for it: the subscription, both kinds of timer, and every claim parked on a
-   * backoff. Runs already in flight are awaited rather than abandoned, since they are the
-   * ones still writing to the graph.
+   * timeout for it: both kinds of timer, and every claim parked on a backoff. Runs already in
+   * flight are awaited rather than abandoned, since they are the ones still writing to the
+   * graph.
    */
   async stop(): Promise<void> {
     this.#stopped = true;
@@ -272,6 +272,8 @@ export class ReflectionWorker {
     }
     let reclaimed: number;
     try {
+      // A claim expiry is a lock stamp, so it is measured against the wall clock rather than
+      // the run clock: a replay pinned to an old date must not read live claims as abandoned.
       reclaimed = reclaimStaleReflectionJobs(
         this.#deps.db,
         this.#staleTimeoutMs,

@@ -56,7 +56,9 @@ async function runEdgePrune(ctx: OperationContext): Promise<OperationOutcome> {
 
   return {
     status: closed.length === 0 ? 'noop' : 'applied',
-    itemsProcessed: closed.length,
+    // What the run could have closed, which is the at-floor population the scan found, against
+    // what the batch bound and the unreinforced horizon left it actually closing.
+    itemsProcessed: before.atFloor,
     itemsAffected: closed.length,
     detail:
       `closed ${String(closed.length)} at-floor CO_OCCURS/SIMILAR edge(s); ` +
@@ -74,6 +76,7 @@ export function edgePruneOperation(): IntrospectionOperation {
   return {
     name: EDGE_PRUNE_OPERATION,
     bucket: 'day',
+    enabled: (config) => config.maintenance.edgePrune,
     relevance: edgePruneRelevance,
     // The count a run closes from, so a run that closed nothing cannot read as a success. New
     // decay can drive fresh edges to the floor between two ticks, which is why the score is

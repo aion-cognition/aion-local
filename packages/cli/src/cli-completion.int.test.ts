@@ -150,6 +150,7 @@ describe('aion why against a seeded substrate', () => {
       confidence: 0.97,
       rationale: 'restated with the corrected vendor',
       episodeId,
+      createdAt: '2026-08-29T12:00:00.000Z',
     });
   });
 

@@ -9,6 +9,7 @@ import {
 
 import { CliUsageError, parseArgs, type ArgSpec } from './args.js';
 import { stdoutWriter, type Writer } from './output.js';
+import { abortOnInterrupt } from './replay.js';
 import { withSubstrate, type Substrate } from './substrate.js';
 
 /**
@@ -93,7 +94,9 @@ async function runOne(substrate: Substrate, name: string): Promise<number> {
     write(`health collectors that fell back: ${health.degraded.join(', ')}`);
   }
 
-  const controller = new AbortController();
+  // A forced run can be a big backlog (redaction_residue_purge, say), and an operator who
+  // Ctrl-Cs it should stop the batch loop cleanly rather than kill the substrate mid-write.
+  const controller = abortOnInterrupt();
   const outcome = await operation.run({
     driver,
     db,

@@ -2,15 +2,15 @@
  * The pure Hebbian update: the bounded rule, the per-trigger rates, and the fold from a
  * window of queued signals down to one step per pair. No SQLite, no Cypher.
  *
- * **The bounded rule.** `w' = w + eta * (1 - w)`. The `(1 - w)` term is what makes
+ * The rule is bounded: `w' = w + eta * (1 - w)`. The `(1 - w)` term is what makes
  * reinforcement diminish: an edge at 0.5 gains 0.05 per full-rate step, an edge at 0.9 gains
  * 0.01, and no sequence of steps reaches 1.0. Early co-activations move a weight the most,
  * which is the property worth having, since the first few carry the most information.
  *
- * **Window semantics.** A window is one flush's claimed batch, not a wall-clock interval. All
- * of a pair's signals inside that batch fold into a single bounded application: N signals for
- * one pair raise the pair's effective learning rate toward the base rate and stop there, they
- * never apply N compounding steps. Two consequences worth naming. A pair that fires ten times
+ * A window is one flush's claimed batch, not a wall-clock interval. All of a pair's signals
+ * inside that batch fold into a single bounded application: N signals for one pair raise the
+ * pair's effective learning rate toward the base rate and stop there, they never apply N
+ * compounding steps. Two consequences worth naming. A pair that fires ten times
  * between two flushes moves as far as a pair that fired once, so a tight loop cannot pump an
  * edge to 1.0 in one pass. And the same ten signals split across two flushes apply two steps
  * rather than one, so flush cadence changes how fast weights move; that is the cost of a
@@ -18,13 +18,12 @@
  */
 
 /**
- * Recall's trigger string, from the side effect that enqueues it. Declared here rather than
- * imported so the domain stays free of the layers that feed it; the parity is asserted in
- * this module's test.
+ * Recall's trigger string. It is declared here, beside the policy table keyed on it, and the
+ * side effect that enqueues it imports it, so the producer and the flush cannot drift.
  */
 export const RECALL_CO_ACTIVATION_TRIGGER = 'recall_co_activation';
 
-/** Reflection's trigger string, from the stage that enqueues it. Same parity assertion. */
+/** Reflection's trigger string, imported by the stage that enqueues it. */
 export const REFLECTION_CO_EXTRACTION_TRIGGER = 'reflection:co-extraction';
 
 export type TriggerPolicy = {
@@ -50,14 +49,21 @@ export const TRIGGER_POLICIES: Readonly<Record<string, TriggerPolicy>> = {
 };
 
 /**
- * An unrecognised trigger reinforces at the base rate with no discount. That is the explicit
- * reinforcement case, a direct request to strengthen one pair, and it is one pair by
- * construction. Dropping the signal instead would make an unknown trigger silently inert.
+ * An unrecognised trigger reinforces at the base rate with no discount. A row written by an
+ * older build, or by a producer whose policy has not landed yet, still applies one bounded
+ * step; dropping the signal instead would make an unknown trigger silently inert.
  */
 export const DEFAULT_TRIGGER_POLICY: TriggerPolicy = { etaFactor: 1, cliqueDiscounted: false };
 
+/**
+ * The queue's `trigger` column is free-form text, so the lookup asks the table for its own keys
+ * rather than reading through the prototype: a row spelling `constructor` would otherwise
+ * return `Object` and carry an undefined rate into the fold.
+ */
 export function triggerPolicy(trigger: string): TriggerPolicy {
-  return TRIGGER_POLICIES[trigger] ?? DEFAULT_TRIGGER_POLICY;
+  return Object.hasOwn(TRIGGER_POLICIES, trigger)
+    ? (TRIGGER_POLICIES[trigger] ?? DEFAULT_TRIGGER_POLICY)
+    : DEFAULT_TRIGGER_POLICY;
 }
 
 export type QueuedSignal = {
@@ -76,7 +82,7 @@ export type QueuedSignal = {
  * the bound.
  *
  * The two halves join on a NUL, which neither a trigger name nor a timestamp can contain, so
- * two different pairs cannot fold to one key. Written as the `\u0000` escape rather than as
+ * two different bursts cannot fold to one key. Written as the `\u0000` escape rather than as
  * the byte itself: a literal NUL in the source makes git read the whole file as binary and
  * drop diff, blame, and text search for it.
  */
@@ -84,21 +90,35 @@ export function signalGroupKey(signal: Pick<QueuedSignal, 'trigger' | 'ts'>): st
   return `${signal.trigger}\u0000${signal.ts}`;
 }
 
+/** The window split into the bursts its producers stamped, keyed by `signalGroupKey`. */
+function bursts(signals: readonly QueuedSignal[]): ReadonlyMap<string, readonly QueuedSignal[]> {
+  const groups = new Map<string, QueuedSignal[]>();
+  for (const signal of signals) {
+    const key = signalGroupKey(signal);
+    const held = groups.get(key) ?? [];
+    held.push(signal);
+    groups.set(key, held);
+  }
+  return groups;
+}
+
 /**
- * How many distinct nodes each burst touched, counted from the endpoints rather than from the
+ * How many distinct nodes one burst touched, counted from the endpoints rather than from the
  * pair count. Counting endpoints is exact whether or not the burst arrived whole; inverting
  * `pairs = n(n-1)/2` is not.
  */
-export function cliqueSizes(signals: readonly QueuedSignal[]): ReadonlyMap<string, number> {
-  const members = new Map<string, Set<string>>();
-  for (const signal of signals) {
-    const key = signalGroupKey(signal);
-    const group = members.get(key) ?? new Set<string>();
-    group.add(signal.sourceId);
-    group.add(signal.targetId);
-    members.set(key, group);
+function burstSize(group: readonly QueuedSignal[]): number {
+  const members = new Set<string>();
+  for (const signal of group) {
+    members.add(signal.sourceId);
+    members.add(signal.targetId);
   }
-  return new Map([...members].map(([key, group]) => [key, group.size]));
+  return members.size;
+}
+
+/** The same count for every burst in a window. */
+export function cliqueSizes(signals: readonly QueuedSignal[]): ReadonlyMap<string, number> {
+  return new Map([...bursts(signals)].map(([key, group]) => [key, burstSize(group)]));
 }
 
 /**
@@ -137,7 +157,7 @@ export type AggregatedPair = {
   readonly targetId: string;
   /** Queue rows that folded into this pair's step. */
   readonly signalCount: number;
-  /** Summed signal weights before the clamp, so an over-signalled pair is visible. */
+  /** Summed signal weights before the clamp. At or above 1 the pair spent a whole step. */
   readonly effectiveSignal: number;
   /** The eta this pair's single bounded step applies. */
   readonly learningRate: number;
@@ -156,27 +176,28 @@ export function aggregateWindow(
   signals: readonly QueuedSignal[],
   baseLearningRate: number,
 ): readonly AggregatedPair[] {
-  const sizes = cliqueSizes(signals);
   const totals = new Map<
     string,
     { sourceId: string; targetId: string; count: number; signal: number }
   >();
 
-  for (const signal of signals) {
-    if (signal.sourceId === signal.targetId) {
-      continue;
+  for (const group of bursts(signals).values()) {
+    const size = burstSize(group);
+    for (const signal of group) {
+      if (signal.sourceId === signal.targetId) {
+        continue;
+      }
+      const key = pairKey(signal.sourceId, signal.targetId);
+      const entry = totals.get(key) ?? {
+        sourceId: signal.sourceId <= signal.targetId ? signal.sourceId : signal.targetId,
+        targetId: signal.sourceId <= signal.targetId ? signal.targetId : signal.sourceId,
+        count: 0,
+        signal: 0,
+      };
+      entry.count += 1;
+      entry.signal += signalWeight(signal, size);
+      totals.set(key, entry);
     }
-    const key = pairKey(signal.sourceId, signal.targetId);
-    const size = sizes.get(signalGroupKey(signal)) ?? 2;
-    const entry = totals.get(key) ?? {
-      sourceId: signal.sourceId <= signal.targetId ? signal.sourceId : signal.targetId,
-      targetId: signal.sourceId <= signal.targetId ? signal.targetId : signal.sourceId,
-      count: 0,
-      signal: 0,
-    };
-    entry.count += 1;
-    entry.signal += signalWeight(signal, size);
-    totals.set(key, entry);
   }
 
   return [...totals.entries()]

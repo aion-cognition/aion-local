@@ -149,10 +149,11 @@ afterAll(async () => {
 });
 
 describe('SemanticRelationshipStage against a live graph and a live model', () => {
-  // Whether the live 8B judges a sentence as CAUSES rather than RELATED_TO, and which way it
-  // points the edge, is model judgment. The suite pins structure, never model output quality:
-  // these two measurements live in the quality harness, and the mocked unit tests hold the
-  // validation contract (quoted justification, endpoint existence, clamping).
+  // Neither test below runs. Both assert model output quality rather than structure: whether
+  // the live 8B calls a sentence CAUSES rather than RELATED_TO, which way it points the edge,
+  // and whether it withholds CONTRADICTS from agreement restated in other words. The quality
+  // harness is where those are scored, and the mocked unit tests hold the validation contract
+  // (quoted justification, endpoint existence, clamping).
   it.skip('proposes a causal edge that activation traverses with type-aware weight', async () => {
     const episode = await loadEpisodeContext(harness.driver, episodeId);
     expect(episode).toBeDefined();

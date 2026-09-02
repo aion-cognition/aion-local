@@ -72,7 +72,6 @@ describe('storing one experience', () => {
       session_id: 'session-a',
       turn_count: 2,
       tool_execution_count: 0,
-      observation_count: 1,
       extraction_method: 'reflection_intake',
     });
 

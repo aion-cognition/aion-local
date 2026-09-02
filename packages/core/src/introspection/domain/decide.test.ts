@@ -80,7 +80,7 @@ describe('criticalConditions', () => {
 
   it('reports an orphan explosion above the share', () => {
     const health = healthFixture({
-      graph: { ...NEUTRAL_GRAPH_HEALTH, nodes: POPULATION, orphanNodes: 60, orphanShare: 0.6 },
+      graph: { ...NEUTRAL_GRAPH_HEALTH, nodes: POPULATION, orphanShare: 0.6 },
     });
     expect(criticalConditions(health)).toEqual(['orphan_share']);
   });
@@ -240,7 +240,6 @@ describe('decide', () => {
       graph: {
         ...NEUTRAL_GRAPH_HEALTH,
         nodes: POPULATION,
-        orphanNodes: 60,
         orphanShare: 0.6,
         vectorExpected: POPULATION,
         vectorPresent: 10,
@@ -262,7 +261,6 @@ describe('decide', () => {
     const graph = {
       ...NEUTRAL_GRAPH_HEALTH,
       nodes: POPULATION,
-      orphanNodes: 60,
       orphanShare: 0.6,
     };
     const candidates = [
@@ -314,7 +312,6 @@ describe('decide', () => {
           graph: {
             ...NEUTRAL_GRAPH_HEALTH,
             nodes: POPULATION,
-            orphanNodes: 60,
             orphanShare: 0.6,
           },
           effectiveness: [
@@ -337,7 +334,6 @@ describe('decide', () => {
           graph: {
             ...NEUTRAL_GRAPH_HEALTH,
             nodes: POPULATION,
-            orphanNodes: 60,
             orphanShare: 0.6,
           },
           effectiveness: [

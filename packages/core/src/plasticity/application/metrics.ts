@@ -1,9 +1,3 @@
-import type { Driver } from 'neo4j-driver';
-
-import {
-  edgeWeightDistribution,
-  type EdgeWeightDistribution,
-} from '../../infrastructure/graph/edge-weight-distribution.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   decaySweepCounters,
@@ -18,11 +12,10 @@ import {
 
 /**
  * What plasticity has done to the graph, read back for an operator rather than argued from
- * design intent. Split the way `queueLagSnapshot` (`reflection/application/lag.ts`) is split:
- * `plasticityCounters` is SQLite-only, so `/health` can call it on every liveness probe, and
- * the edge-weight distribution stays out of it because it is a graph read. `plasticitySnapshot`
- * adds that one bounded read on top, for `aion status` and `doctor`, which call it on demand
- * rather than on a clock.
+ * design intent. Every field here is a SQLite read, the boundary `queueLagSnapshot`
+ * (`reflection/application/lag.ts`) draws for the same reason: `/health` calls this on every
+ * liveness probe. The edge-weight distribution is a graph read, so it stays out; `aion status`
+ * and `doctor` ask `edgeWeightDistribution` for it themselves, on demand rather than on a clock.
  */
 
 export type PlasticityCounters = {
@@ -40,16 +33,4 @@ export function plasticityCounters(db: SqliteHandle): PlasticityCounters {
     reinforcementQueueDepth: countReinforcementSignals(db),
     decay: decaySweepCounters(db),
   };
-}
-
-export type PlasticitySnapshot = PlasticityCounters & {
-  readonly edgeWeights: EdgeWeightDistribution;
-};
-
-export async function plasticitySnapshot(
-  driver: Driver,
-  db: SqliteHandle,
-): Promise<PlasticitySnapshot> {
-  const edgeWeights = await edgeWeightDistribution(driver);
-  return { ...plasticityCounters(db), edgeWeights };
 }

@@ -1,6 +1,8 @@
 import {
   countGraphElements,
   countNodesByLabel,
+  describeError,
+  edgeWeightDistribution,
   introspectionCycle,
   introspectionOperations,
   latestLedgerEntry,
@@ -20,7 +22,6 @@ import {
   resolveProviderRouting,
   routingSummary,
   unbackedPins,
-  edgeWeightDistribution,
   type Config,
   type EdgeWeightDistribution,
   type GraphConnection,
@@ -40,7 +41,7 @@ import {
   renderMergeShadow,
   type MergeShadowSnapshot,
 } from './merge-shadow-section.js';
-import { describeError, type Writer } from './output.js';
+import type { Writer } from './output.js';
 
 /**
  * `status` and `stats` read one substrate through one collector and render it through one
@@ -279,7 +280,9 @@ const LANE_NAME_WIDTH = 18;
  * separate switches: `merge_auto` governs the deterministic tier, which merges whatever the
  * judge tier is doing. Tier 3 only acts when its kill switch is on and its own mode knob says
  * `act`; `propose` records a recommendation and runs nothing, which reads as `off` here for
- * the same reason it reads as `off` in `docs/operations.md`.
+ * the same reason it reads as `off` in `docs/operations.md`. `keyed_close` is a seventh
+ * switch, independent of `supersedeMode`: it runs inside a different stage's write and reads
+ * the same way supersession does, `off` or the mode it routes into.
  */
 function laneMode(acting: boolean): 'acting' | 'off' {
   return acting ? 'acting' : 'off';
@@ -304,6 +307,13 @@ function renderLanes(config: Config, write: Writer): void {
   const supersessionDetail = supersessionActing ? ` (${supersessionMode})` : '';
   write(
     `  ${'supersession'.padEnd(LANE_NAME_WIDTH)} MODE: ${laneMode(supersessionActing)}${supersessionDetail}`,
+  );
+
+  const { keyedCloseMode } = config.reflection;
+  const keyedCloseActing = keyedCloseMode !== 'off';
+  const keyedCloseDetail = keyedCloseActing ? ` (${keyedCloseMode})` : '';
+  write(
+    `  ${'keyed_close'.padEnd(LANE_NAME_WIDTH)} MODE: ${laneMode(keyedCloseActing)}${keyedCloseDetail}`,
   );
 
   write(

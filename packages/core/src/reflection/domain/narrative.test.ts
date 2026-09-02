@@ -103,6 +103,19 @@ describe('narrative versioning', () => {
     expect(decision.episodeIds).toEqual(['e1', 'e2']);
   });
 
+  it('judges the close against the highest open version, whatever order the read returned', () => {
+    const decision = decideSessionNarrative(
+      [episode('e1'), episode('e2')],
+      [
+        existing({ id: 'narrative-1', version: 1, coverageKey: 'key-1', coverageCount: 1 }),
+        existing({ id: 'narrative-2', version: 2, coverageKey: 'key-2', coverageCount: 3 }),
+      ],
+    );
+
+    expect(decision.action).toBe('skip');
+    expect(decision.reason).toBe('version 2 covers 3 episodes, this close 2');
+  });
+
   it('skips a session with no episodes', () => {
     const decision = decideSessionNarrative([], []);
 

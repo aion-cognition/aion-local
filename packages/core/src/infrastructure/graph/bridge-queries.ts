@@ -28,6 +28,10 @@ export const BRIDGE_SIGNAL = 'symbiosis_bridge';
 /** The two communities the bridge was built between, kept on the node so a later run can see it. */
 export const BRIDGE_SOURCE_COMMUNITY_PROPERTY = 'source_community';
 export const BRIDGE_TARGET_COMMUNITY_PROPERTY = 'target_community';
+/**
+ * The cosine that picked the endpoints, stored for provenance and read by no query: the same
+ * number reaches recall as the strength and confidence on the bridge's two `RELATED_TO` edges.
+ */
 export const BRIDGE_SIMILARITY_PROPERTY = 'similarity';
 
 /** Enough of an endpoint to name it in the bridge's own text, short enough to stay a label. */

@@ -85,9 +85,11 @@ describe('supersession proposal accessors', () => {
 
   it('resolves once', () => {
     const id = record();
-    expect(resolveSupersessionProposal(store.db, id)).toBe(true);
-    expect(resolveSupersessionProposal(store.db, id)).toBe(false);
-    expect(resolveSupersessionProposal(store.db, 'missing')).toBe(false);
+    expect(resolveSupersessionProposal(store.db, id, '2026-08-29T00:00:00.000Z')).toBe(true);
+    expect(resolveSupersessionProposal(store.db, id, '2026-08-29T00:00:00.000Z')).toBe(false);
+    expect(resolveSupersessionProposal(store.db, 'missing', '2026-08-29T00:00:00.000Z')).toBe(
+      false,
+    );
   });
 
   it('reopens a resolved row and refuses an already-open one', () => {

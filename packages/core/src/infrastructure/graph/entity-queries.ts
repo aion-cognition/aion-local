@@ -67,9 +67,11 @@ import type { Vector } from '../providers/types.js';
  */
 
 /**
- * The names other modules import from here; they are declared with their queries now. Only the
- * ones a caller outside this module still reaches for: a re-export nobody imports is a second
- * name for one thing, and the point of the barrel is that there is one door per symbol.
+ * The names other modules import from here; they are declared with their queries now, and this
+ * list is kept to the ones a caller outside this module still reaches for. A few symbols are
+ * reached through both doors today (`ENTITY_TYPE_PROPERTY` and `ENTITY_MENTION_TYPE` are each
+ * imported from here and from their own module), so the re-export is a convenience rather than
+ * the single entrance.
  */
 export {
   addEntityAliases,
@@ -209,6 +211,11 @@ export function prepareEntityMerge(
     `OPTIONAL MATCH (head:${ENTITY_LABEL})-[:${SUPERSEDES_TYPE}*1..${String(MERGE_CHAIN_DEPTH)}]->(n)`,
     `WHERE n.${BITEMPORAL_PROPERTIES.validUntil} IS NOT NULL`,
     `  AND ${currentOnly('head')}`,
+    // Ordered before the collect: two current supersessors of one closed node would otherwise
+    // leave the canonical to whichever the planner reached first, and every identity property
+    // below is read off it. Oldest wins, which is the merge that closed the node.
+    'WITH name_norm, proposed_id, n, head',
+    `ORDER BY head.${BITEMPORAL_PROPERTIES.txFrom}, head.id`,
     'WITH name_norm, proposed_id, n, collect(head)[0] AS head',
     'WITH name_norm, proposed_id, coalesce(head, n) AS resolved',
     `SET resolved.${LOCK_PROPERTY} = $now`,
@@ -272,9 +279,14 @@ function mapEntityMergeRow(row: Row): EntityMergeRow {
   };
 }
 
+/**
+ * The id seek goes through `AionNode`, which carries the id constraint migration 001 declares;
+ * `Entity` has a uniqueness constraint on `name_norm` and none on `id`, so seeking it by id
+ * plans as a label scan, once per row of the batch.
+ */
 const WRITE_ENTITY_IDENTITY = [
   'UNWIND $updates AS update',
-  `MATCH (n:${ENTITY_LABEL} { id: update.id })`,
+  `MATCH (n:${BASE_NODE_LABEL}:${ENTITY_LABEL} { id: update.id })`,
   `SET n.${ENTITY_TYPE_PROPERTY} = update.type,`,
   `    n.${ENTITY_TYPE_COUNTS_PROPERTY} = update.type_counts,`,
   `    n.${ENTITY_NAME_SQUASH_PROPERTY} = update.name_squash,`,
@@ -366,7 +378,7 @@ const WRITE_ENTITY_VECTORS = [
 ].join('\n');
 
 const CLEAR_ENTITY_NAME_VECTOR_HASH = [
-  `MATCH (n:${ENTITY_LABEL} { id: $id })`,
+  `MATCH (n:${BASE_NODE_LABEL}:${ENTITY_LABEL} { id: $id })`,
   `SET n.${ENTITY_NAME_VECTOR_HASH_PROPERTY} = null`,
   'RETURN n.id AS id',
 ].join('\n');

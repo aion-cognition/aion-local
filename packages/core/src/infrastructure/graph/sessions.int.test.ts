@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { bootstrapBackbone } from './backbone.js';
-import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
+import { BITEMPORAL_PROPERTIES, writeStampedNode } from './bitemporal.js';
 import { runRead } from './connection.js';
 import { runGraphMigrations } from './migrations.js';
 import { ensureGraphSession } from './sessions.js';
@@ -145,6 +145,33 @@ describe('ensureGraphSession', () => {
       (row) => row.txFrom as Date,
     );
     expect(after[0]).toEqual(original[0]);
+  });
+
+  /**
+   * A session id resolved against a member it does not hang off yet has to gain that edge.
+   * Reporting success while the backbone edge is missing leaves the session unreachable from
+   * the member every traversal starts at.
+   */
+  it('attaches a backbone edge a resolve call finds missing', async () => {
+    const other = await writeStampedNode(harness.driver, {
+      label: 'Member',
+      id: 'other-member',
+      now: new Date('2026-09-10T00:00:00.000Z'),
+      properties: { name: 'Other Member', name_norm: 'other member', type: 'person' },
+    });
+
+    const repeat = await ensureGraphSession(harness.driver, {
+      sessionId: 'second-session',
+      memberId: other.id,
+      workspaceId,
+      now: new Date('2026-09-10T00:00:00.000Z'),
+    });
+
+    expect(repeat.created).toBe(false);
+    expect(await countEdges('INITIATED_BY', 'second-session', other.id)).toBe(1);
+    // The edge it already had stands: an upsert with count 0 adds nothing to either.
+    expect(await countEdges('INITIATED_BY', 'second-session', memberId)).toBe(1);
+    expect(await countEdges('WITHIN_WORKSPACE', 'second-session', workspaceId)).toBe(1);
   });
 
   // One service handles many agent sessions, each creating its Session node on its first

@@ -40,9 +40,11 @@ import { contextCentroid, resonantItem } from '../domain/resonance.js';
  * something. If nothing cleared admission on its own evidence there is nothing to take a mean
  * of, and resonating from the rest would hand back memories related to the shape of nothing at
  * all. That is the failure the floors exist to prevent, so the stage declines the query
- * instead. For the same reason the bucket is capped at how many items the first pass admitted:
- * resonance elaborates an answer and may not become one, and a pack that admitted a single
- * marginal fact has no business carrying five associations behind it.
+ * instead. For the same reason the bucket is capped at how many admitted items the spread also
+ * activated: resonance elaborates an answer and may not become one, and a pack that admitted a
+ * single marginal fact has no business carrying five associations behind it. A seed that fell
+ * under `min_activation` is admitted without ever entering the activated set, so the cap can
+ * sit under the pack's own item count.
  */
 
 export type ResonanceDeps = {
@@ -70,9 +72,10 @@ export type ResonanceInput = {
 
 /**
  * Why a run produced nothing, distinguished because they are different states with different
- * responses. `disabled` is a setting, `no_anchor` is a query the substrate could not answer,
- * `no_context_vectors` is a substrate whose enrichment has not caught up, and `unavailable` is
- * an outage in a stage the caller is not entitled to lose a pack over.
+ * responses. `disabled` is a setting, `no_activation` is a spread that reached nothing,
+ * `no_anchor` is a query the substrate could not answer, `no_context_vectors` is a substrate
+ * whose enrichment has not caught up, and `unavailable` is an outage in a stage the caller is
+ * not entitled to lose a pack over.
  */
 export type ResonanceSkip =
   'disabled' | 'no_activation' | 'no_anchor' | 'no_context_vectors' | 'unavailable';

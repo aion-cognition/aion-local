@@ -97,18 +97,34 @@ export async function mmrVectors(
       ids.add(candidate.id);
     }
   }
-  const rows = await contentVectors(deps.driver, { ids: [...ids], mode });
-  return new Map(rows.map((row) => [row.id, row.vector]));
+  try {
+    const rows = await contentVectors(deps.driver, { ids: [...ids], mode });
+    return new Map(rows.map((row) => [row.id, row.vector]));
+  } catch (err) {
+    // No vectors is the RRF ordering, which is a coarser pack rather than no pack.
+    deps.logger.warn({ err }, 'mmr vector read failed; the pack is ordered by fused rank');
+    return undefined;
+  }
 }
 
-/** Hydrates the activated ids no seed strategy already carried content for. */
+/**
+ * Hydrates the activated ids no seed strategy already carried content for.
+ *
+ * Best-effort, like the reads below it: an empty map costs the pack the arrivals, since fusion
+ * drops a candidate with no content, and leaves it the seeds that already carry theirs.
+ */
 export async function hydrate(
   deps: StageReadDeps,
   ids: readonly string[],
   mode: ReadMode,
 ): Promise<ReadonlyMap<string, SeedCandidate>> {
-  const rows = await nodeCandidates(deps.driver, { ids, mode });
-  return new Map(rows.map((row) => [row.id, row]));
+  try {
+    const rows = await nodeCandidates(deps.driver, { ids, mode });
+    return new Map(rows.map((row) => [row.id, row]));
+  } catch (err) {
+    deps.logger.warn({ err }, 'arrival hydration failed; the pack keeps the seeds it has');
+    return new Map();
+  }
 }
 
 /**
@@ -116,6 +132,9 @@ export async function hydrate(
  * arrivals already carry. It runs beside hydration rather than after it: the two ask the same
  * driver about the same ids and neither needs the other's answer, so the measurement costs the
  * fusion stage a round trip it overlaps rather than one it waits for.
+ *
+ * Best-effort: unmeasured arrivals are refused by the gate, so a failure here costs the pack
+ * what activation reached and never the seeds' own answer.
  */
 export async function measureArrivals(
   deps: StageReadDeps,
@@ -123,7 +142,12 @@ export async function measureArrivals(
   cues: readonly SeedCue[],
   mode: ReadMode,
 ): Promise<ReadonlyMap<string, Measurement[]>> {
-  const rows = await contentVectors(deps.driver, { ids, mode });
+  let rows: Awaited<ReturnType<typeof contentVectors>> = [];
+  try {
+    rows = await contentVectors(deps.driver, { ids, mode });
+  } catch (err) {
+    deps.logger.warn({ err }, 'arrival measurement failed; the arrivals go unmeasured');
+  }
   return scoreArrivals({
     arrivals: ids,
     vectors: new Map(rows.map((row) => [row.id, row.vector])),

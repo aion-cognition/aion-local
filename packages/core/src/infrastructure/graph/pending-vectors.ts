@@ -77,10 +77,16 @@ export async function findPendingVectorNodes(
  * write-if-absent: the vector is a deterministic function of the node's own text and the
  * embed model, so a second pass over the same node writes the same floats, and two workers
  * racing the same backlog converge instead of conflicting.
+ *
+ * The currency filter is the read's, applied again here. An embed is a network call, so a node
+ * the drain read as pending can be merged away and have its vectors cleared before this write
+ * lands, and matching on id alone would put that duplicate straight back into
+ * `content_vec_idx`.
  */
 const WRITE_CONTENT_VECTORS = [
   'UNWIND $entries AS entry',
   `MATCH (n:${MEMORY_LABEL} { id: entry.id })`,
+  `WHERE ${currentOnly('n')}`,
   `SET n.${MEMORY_PROPERTIES.contentVector} = entry.vector,`,
   `    n.${MEMORY_PROPERTIES.contentVectorHash} = entry.input_hash`,
   'RETURN n.id AS id',

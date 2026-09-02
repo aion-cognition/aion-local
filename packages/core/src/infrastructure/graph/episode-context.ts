@@ -11,6 +11,10 @@ import type { Row } from './values.js';
  * stage. Reflection reads the present: a forgotten episode is not enriched, so the default
  * read mode applies, which suppresses `forgotten_at` rows and leaves superseded ones
  * eligible.
+ *
+ * There is no clock parameter. A default mode's reference time moves only the currency
+ * annotation (`read-modes.ts`), and this read projects none, so a clock a caller handed in
+ * would have crossed to the server and changed nothing.
  */
 
 export type EpisodeTurnContext = {
@@ -37,9 +41,9 @@ export type EpisodeContext = {
  * keeps an episode with no turns loadable, which is what a payload of tool executions and
  * observations alone stores.
  */
-function loadStatement(episodeId: string, reference?: Date): GraphStatement {
-  const episode = readModeFragment(withCurrency(reference), 'e', 'rme');
-  const turn = readModeFragment(withCurrency(reference), 't', 'rmt');
+function loadStatement(episodeId: string): GraphStatement {
+  const episode = readModeFragment(withCurrency(), 'e', 'rme');
+  const turn = readModeFragment(withCurrency(), 't', 'rmt');
   const cypher = [
     'MATCH (e:Episode { id: $episodeId })',
     `WHERE ${episode.where}`,
@@ -118,9 +122,7 @@ function readEpisodeContext(row: Row): EpisodeContext {
 export async function loadEpisodeContext(
   driver: Driver,
   episodeId: string,
-  /** The clock currency is judged from; the wall clock when a caller holds none. */
-  reference?: Date,
 ): Promise<EpisodeContext | undefined> {
-  const rows = await runRead(driver, loadStatement(episodeId, reference), readEpisodeContext);
+  const rows = await runRead(driver, loadStatement(episodeId), readEpisodeContext);
   return rows[0];
 }

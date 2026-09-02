@@ -48,7 +48,7 @@ export function queueLagSnapshot(
   now: Date = new Date(),
 ): QueueLagSnapshot {
   const counts = countQueueJobs(db, {}, workerMaxAttempts);
-  const byLane = countQueueJobsByLane(db, workerMaxAttempts);
+  const byLane = countQueueJobsByLane(db, {}, workerMaxAttempts);
   const depthByLane = Object.fromEntries(
     REFLECTION_LANES.map((lane) => [lane, byLane.get(lane) ?? 0]),
   ) as Record<ReflectionLane, number>;

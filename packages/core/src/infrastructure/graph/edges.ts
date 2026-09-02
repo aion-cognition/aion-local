@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { type GraphStatement, type GraphTransaction, runWrite } from './connection.js';
-import { GraphNodeNotFoundError, GraphWriteError } from './errors.js';
+import { assertProportion, GraphNodeNotFoundError, GraphWriteError } from './errors.js';
 import { BASE_NODE_LABEL } from './labels.js';
 import { isRelationshipType, normalizeEndpoints, type RelationshipType } from './relationships.js';
 import { toGraphDateTime, type Row } from './values.js';
@@ -64,12 +64,6 @@ export type UpsertedEdge = {
   readonly createdAt: Date;
   readonly updatedAt: Date;
 };
-
-function assertProportion(name: string, value: number): void {
-  if (!Number.isFinite(value) || value < 0 || value > 1) {
-    throw new GraphWriteError(`${name} must be between 0 and 1, received ${value}`);
-  }
-}
 
 function uniqueStrings(values: readonly string[]): string[] {
   return [...new Set(values)];

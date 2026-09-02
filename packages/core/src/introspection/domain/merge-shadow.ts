@@ -4,15 +4,16 @@ import {
 } from '../../reflection/domain/entity-cascade.js';
 
 /**
- * The verdict the deterministic sweep would reach on an open entity-merge proposal, judged
- * without ever writing to the graph or resolving the proposal it looks at. A shadow earns
- * trust by being compared against what a person actually decided; only after that comparison
- * holds up does anyone arm the real thing.
+ * The tier-0 name rule, and the provenance the operation that acts on it stamps.
+ *
+ * `wouldAutoApply` answers the rule without touching the graph or the proposal it looks at, so
+ * `aion stats` can count how many open proposals the policy would take. `merge_auto` runs the
+ * same rule for real, armed by its own kill switch (`AION_AUTO_MERGE`); there is no review step
+ * between the two.
  *
  * It asks the rule tier 0 runs: the name-form relation, deterministic on `fold` or `squash`.
  * Exact fold equality on its own stopped being a question the graph can answer yes to, because
- * since migration 003 two current entities cannot hold one folded name; a shadow still asking
- * it reported `would_queue` on every row forever while calling that a policy verdict.
+ * since migration 003 two current entities cannot hold one folded name.
  *
  * It is the name arm only. Tier 0's other reading is alias equality, which needs the graph and
  * not a pair of names, so a pair this returns false for can still be swept.
@@ -27,92 +28,7 @@ export function wouldAutoApply(leftName: string, rightName: string): boolean {
 
 /**
  * Provenance stamped on the `SUPERSEDES` edge `merge_auto` writes. It is declared beside the
- * verdict rule rather than in the operation that acts on it, because the two are the same
- * policy: this constant is what makes the acting half's lineage say a rule decided, never a
- * person.
+ * rule rather than in the operation that acts on it, because the two are the same policy: this
+ * constant is what makes the acting half's lineage say a rule decided, never a person.
  */
 export const AUTO_MERGE_METHOD = 'auto_merge';
-
-export type MergeShadowVerdict = 'would_apply' | 'would_queue';
-
-export function verdictOf(wouldApply: boolean): MergeShadowVerdict {
-  return wouldApply ? 'would_apply' : 'would_queue';
-}
-
-function isMergeShadowVerdict(value: unknown): value is MergeShadowVerdict {
-  return value === 'would_apply' || value === 'would_queue';
-}
-
-/** Reads a verdict back from a ledger entry's stored payload; `undefined` for anything else. */
-export function readMergeShadowVerdict(summary: unknown): MergeShadowVerdict | undefined {
-  if (typeof summary !== 'object' || summary === null) {
-    return undefined;
-  }
-  const { verdict } = summary as { verdict?: unknown };
-  return isMergeShadowVerdict(verdict) ? verdict : undefined;
-}
-
-/**
- * Permanent, not time-bucketed: a proposal is judged once and never revisited once it has a
- * key here. Rows resolved before the shadow existed get judged after the fact, which the
- * deterministic rule makes equivalent; the entry's payload says which order it was. `aion
- * stats` reads the same prefix back to compare every verdict against what actually happened.
- */
-export const MERGE_SHADOW_LEDGER_PREFIX = 'merge_shadow:';
-
-export function mergeShadowLedgerKey(proposalId: string): string {
-  return `${MERGE_SHADOW_LEDGER_PREFIX}${proposalId}`;
-}
-
-/**
- * Whether the verdict matches what a resolved proposal actually became. A person who approved
- * a merge the shadow would also have applied agrees; a person who dismissed a pair the shadow
- * would have left queued for review also agrees. Anything else is a disagreement to look at
- * before arming the policy.
- */
-export function verdictAgrees(verdict: MergeShadowVerdict, actuallyMerged: boolean): boolean {
-  return (verdict === 'would_apply') === actuallyMerged;
-}
-
-export type MergeShadowResolvedJudgment = {
-  readonly proposalId: string;
-  readonly leftName: string;
-  readonly leftType: string;
-  readonly rightName: string;
-  readonly rightType: string;
-  readonly verdict: MergeShadowVerdict;
-  /** From the graph: a `SUPERSEDES` edge with signal `entity_merge` between the two ids. */
-  readonly actuallyMerged: boolean;
-  /** From the graph: both sides still hold currency. Always false after a merge of the pair. */
-  readonly bothCurrent: boolean;
-};
-
-export type MergeShadowAgreement = {
-  readonly total: number;
-  readonly agreeing: number;
-  readonly disagreements: readonly MergeShadowResolvedJudgment[];
-  /** Resolved without a merge because a side was already gone; nobody decided against the pair. */
-  readonly staleCleared: number;
-};
-
-/**
- * The pure half of the stats agreement surface: counts and names, no ledger or graph read.
- * A resolved pair that never merged and has a side without currency was cleared as stale, so
- * it says nothing about whether the verdict matched a person's judgment; those are counted
- * apart rather than scored, or every stale clear would read as a policy failure.
- */
-export function summarizeMergeShadowAgreement(
-  judgments: readonly MergeShadowResolvedJudgment[],
-): MergeShadowAgreement {
-  const stale = judgments.filter((judgment) => !judgment.actuallyMerged && !judgment.bothCurrent);
-  const scored = judgments.filter((judgment) => !stale.includes(judgment));
-  const disagreements = scored.filter(
-    (judgment) => !verdictAgrees(judgment.verdict, judgment.actuallyMerged),
-  );
-  return {
-    total: scored.length,
-    agreeing: scored.length - disagreements.length,
-    disagreements,
-    staleCleared: stale.length,
-  };
-}

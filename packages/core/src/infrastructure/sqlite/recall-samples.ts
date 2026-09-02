@@ -17,22 +17,31 @@ import { getMeta, setMeta } from './meta.js';
 /** Recalls the rate is computed over. Wide enough to be stable, short enough to move in an hour. */
 export const DEFAULT_RECALL_SAMPLE_WINDOW = 500;
 
-const CUE_DEGRADED_META_KEY = 'recall:cues:degraded_window';
+/** Exported so a test can read the raw window, which the rate alone cannot describe. */
+export const CUE_DEGRADED_META_KEY = 'recall:cues:degraded_window';
 
 /** One character per recall, newest last: `1` degraded, `0` not. */
 function readWindow(db: SqliteHandle): string {
   return getMeta(db, CUE_DEGRADED_META_KEY) ?? '';
 }
 
-/** FIFO over `windowSize`: the oldest outcome is dropped first once the window is full. */
+/**
+ * FIFO over `windowSize`: the oldest outcome is dropped first once the window is full.
+ *
+ * The read and the write are one unit. The whole window lives in one row, so a writer working
+ * from a snapshot another connection has already moved past discards every sample that
+ * connection added, not one. Immediate takes the write lock at BEGIN.
+ */
 export function recordCueOutcome(
   db: SqliteHandle,
   degraded: boolean,
   windowSize: number = DEFAULT_RECALL_SAMPLE_WINDOW,
 ): void {
-  const held = `${readWindow(db)}${degraded ? '1' : '0'}`;
-  const trimmed = held.length > windowSize ? held.slice(held.length - windowSize) : held;
-  setMeta(db, CUE_DEGRADED_META_KEY, trimmed);
+  db.transaction(() => {
+    const held = `${readWindow(db)}${degraded ? '1' : '0'}`;
+    const trimmed = held.length > windowSize ? held.slice(held.length - windowSize) : held;
+    setMeta(db, CUE_DEGRADED_META_KEY, trimmed);
+  }).immediate();
 }
 
 /** `undefined` until the first recall lands, rather than a zero that reads as "measured, fine". */

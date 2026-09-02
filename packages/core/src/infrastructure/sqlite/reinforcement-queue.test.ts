@@ -1,13 +1,15 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SqliteStore } from './database.js';
 import {
   DEFAULT_REINFORCEMENT_QUEUE_CAP,
   enqueueReinforcementSignal,
   listReinforcementSignals,
+  recordReinforcementFlush,
+  reinforcementFlushCounters,
   reinforcementQueueDroppedCount,
 } from './reinforcement-queue.js';
 
@@ -119,5 +121,55 @@ describe('reinforcement queue cap', () => {
     const id = enqueueReinforcementSignal(store.db, 'a', 'b', 'co_activation');
     expect(listReinforcementSignals(store.db).map((s) => s.id)).toContain(id);
     expect(reinforcementQueueDroppedCount(store.db)).toBe(0);
+  });
+});
+
+describe('flush counter accumulation', () => {
+  let dir: string;
+  let store: SqliteStore;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'aion-reinforcement-counters-'));
+    store = new SqliteStore({ filePath: join(dir, 'aion.sqlite') });
+  });
+
+  afterEach(() => {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  /**
+   * The read and the writes are one unit, the way the decay sweep's counters are. Totals added
+   * to a base another flush has already moved past are that flush's totals thrown away, and
+   * only a transaction that takes the write lock at BEGIN keeps a second flush out of the gap.
+   */
+  it('accumulates inside one immediate transaction', () => {
+    const open = store.db.transaction.bind(store.db);
+    let immediate = 0;
+    const spy = vi.spyOn(store.db, 'transaction').mockImplementation(((fn: any) => {
+      const tx = open(fn);
+      const proxy: any = (...args: any[]) => tx(...args);
+      proxy.immediate = (...args: any[]) => {
+        immediate += 1;
+        return tx.immediate(...args);
+      };
+      return proxy;
+    }) as any);
+
+    recordReinforcementFlush(store.db, {
+      signalsApplied: 3,
+      pairsApplied: 2,
+      edgesUpdated: 1,
+      at: '2026-01-01T00:00:00.000Z',
+    });
+    spy.mockRestore();
+
+    expect(immediate).toBe(1);
+    expect(reinforcementFlushCounters(store.db)).toEqual({
+      signalsApplied: 3,
+      pairsApplied: 2,
+      edgesUpdated: 1,
+      lastRunAt: '2026-01-01T00:00:00.000Z',
+    });
   });
 });

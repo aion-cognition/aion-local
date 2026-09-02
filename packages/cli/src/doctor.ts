@@ -1,6 +1,7 @@
 import {
   assertVectorIndexDimensions,
   checkOllamaReachable,
+  describeError,
   EmbedDimensionMismatchError,
   embedQueryPrefix,
   latestAppliedGraphMigration,
@@ -26,7 +27,7 @@ import { dirname, join } from 'node:path';
 import { parseArgs, type ArgSpec } from './args.js';
 import { mcpBaseUrl } from './compose.js';
 import { queueLagCheck, readingHorizonCheck } from './doctor-checks.js';
-import { describeError, stdoutWriter, type Writer } from './output.js';
+import { stdoutWriter, type Writer } from './output.js';
 import { withSubstrate } from './substrate.js';
 
 const SPEC: ArgSpec = {

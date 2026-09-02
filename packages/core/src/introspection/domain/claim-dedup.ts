@@ -49,22 +49,3 @@ export function selectClaimDedupSurvivor(
     a.occurredAt.getTime() === b.occurredAt.getTime() ? a.id <= b.id : a.occurredAt < b.occurredAt;
   return aOlder ? { survivor: a, loser: b } : { survivor: b, loser: a };
 }
-
-/**
- * What a judged pair decided, told apart by what a caller does with it rather than by the raw
- * model answers: `merge` is the only outcome that touches the graph, and the three that do not
- * still divide into two kinds the ledger treats differently (see `claim-dedup-judge.ts`'s own
- * doc): a real verdict (`related`, `vetoed`) is ledgered so the pair is never judged again, and
- * `failed` (a call that errored, timed out, or answered in an unusable shape) is not, so a
- * transient failure gets another chance on a later run.
- */
-export type ClaimDedupOutcome =
-  | { readonly kind: 'merge' }
-  | { readonly kind: 'related'; readonly reason: string }
-  | { readonly kind: 'vetoed'; readonly reason: string }
-  | { readonly kind: 'stale' }
-  | { readonly kind: 'failed'; readonly detail: string };
-
-export function claimDedupLedgered(outcome: ClaimDedupOutcome): boolean {
-  return outcome.kind !== 'failed';
-}

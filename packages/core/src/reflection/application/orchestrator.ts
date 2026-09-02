@@ -54,6 +54,11 @@ export type ReflectionRunOptions = {
   readonly now?: Date;
   /** Which fork of the ledger key space this run gates on. Defaults to the shipped version. */
   readonly pipelineVersion?: string;
+  /**
+   * The caller's shutdown signal, handed to every stage. A stage composes it under its own
+   * timeout, so a stop cuts the model call it is waiting on instead of waiting the timeout out.
+   */
+  readonly signal?: AbortSignal;
 };
 
 function elapsed(started: number): number {
@@ -97,7 +102,7 @@ export class ReflectionOrchestrator {
     }
 
     const now = options.now ?? new Date();
-    const episode = await loadEpisodeContext(this.#deps.driver, episodeId, now);
+    const episode = await loadEpisodeContext(this.#deps.driver, episodeId);
     if (episode === undefined) {
       this.#deps.logger.warn({ episodeId }, 'reflection skipped: no readable episode');
       return this.#empty(episodeId, 'episode_unavailable', elapsed(started));
@@ -115,6 +120,7 @@ export class ReflectionOrchestrator {
       // time of what it was derived from rather than the moment the run happened.
       occurredAt: episode.occurredAt ?? now,
       pipelineVersion,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
     };
 
     const stages: StageRecord[] = [];
@@ -153,8 +159,9 @@ export class ReflectionOrchestrator {
   /**
    * The per-stage ledger gate. A stage whose key is already applied is not entered and its
    * `run` is never called, so a retry cannot re-mint what an earlier attempt already wrote.
-   * The key is set the moment the stage finishes without failing, `ok` or `skipped` alike,
-   * mirroring `shouldMarkApplied`'s view that only `failed` leaves something to retry.
+   * The key is set when the stage applies or decides for itself that it has nothing to do.
+   * A stage that skipped for want of input a failed predecessor owed it keeps its key open,
+   * because the retry that re-enters that predecessor owes this stage its run too.
    */
   async #runOrSkip(stage: ReflectionStage, context: StageContext): Promise<StageRecord> {
     const key = stageLedgerKey(context.pipelineVersion, stage.name, context.episodeId);
@@ -162,7 +169,7 @@ export class ReflectionOrchestrator {
       return stageAlreadyAppliedRecord(stage.name);
     }
     const record = await this.#runStage(stage, context);
-    if (record.status !== 'failed') {
+    if (record.status !== 'failed' && record.retryable !== true) {
       markLedgerApplied(this.#deps.db, key, { status: record.status, summary: record.summary });
     }
     return record;

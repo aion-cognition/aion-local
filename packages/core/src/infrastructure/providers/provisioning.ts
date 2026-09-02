@@ -84,8 +84,10 @@ export async function listOllamaModels(
 
 /**
  * Ollama's pull/chat streams are newline-delimited JSON over a single HTTP
- * response body; this has no framing beyond "split on \n", so a stalled or
- * truncated chunk boundary is handled by carrying the remainder to the next read.
+ * response body; this has no framing beyond "split on \n", so a chunk boundary that lands
+ * mid-line is handled by carrying the remainder to the next read. The decoder is flushed at
+ * EOF too, since a boundary can also land inside a multi-byte character and the held bytes
+ * would otherwise be dropped from the last line.
  */
 async function readNdjson(
   response: Response,
@@ -116,7 +118,7 @@ async function readNdjson(
       newlineIndex = buffer.indexOf('\n');
     }
   }
-  const rest = buffer.trim();
+  const rest = (buffer + decoder.decode()).trim();
   if (rest.length > 0) {
     onLine(JSON.parse(rest) as Record<string, unknown>);
   }

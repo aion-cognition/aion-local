@@ -23,6 +23,8 @@ export {
  * and answers the caller anyway; the worker treats it as a job to retry. Swallowing it in
  * the middle would take that choice away from both.
  */
+
+/** One node to one vector, by position in the call's own list. */
 function pair(
   nodes: readonly PendingVectorNode[],
   vectors: readonly (readonly number[])[],

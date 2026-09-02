@@ -1,11 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 
-import {
-  BITEMPORAL_PROPERTIES,
-  currentOnly,
-  supersedeInTransaction,
-  type SupersedeResult,
-} from './bitemporal.js';
+import { currentOnly, supersedeInTransaction, type SupersedeResult } from './bitemporal.js';
 import { normalizeCognitiveText, TEXT_NORM_PROPERTY } from './cognitive-text.js';
 import { inWriteTransaction, runRead, type GraphTransaction } from './connection.js';
 import {
@@ -15,8 +10,9 @@ import {
 } from './entity-description-queries.js';
 import { ENTITY_MENTION_TYPE } from './entity-queries.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
+import { BASE_NODE_LABEL, EXTRACTION_TYPE } from './labels.js';
 import { ENTITY_NAME_NORM_PROPERTY, ENTITY_NAME_PROPERTY } from './seed-queries.js';
-import { FACT_NODE_LABELS } from './supersession-queries.js';
+import { FACT_NODE_LABELS, MIN_SUBJECT_NAME_LENGTH } from './supersession-queries.js';
 import { toGraphDateTime, toGraphInteger, type Row } from './values.js';
 import { asCosine } from './vector-indexes.js';
 import {
@@ -56,16 +52,13 @@ export const SUBJECT_PROPAGATION_METHOD = 'supersession_subject_propagation';
 
 const SUBJECT_PROPAGATION_SIGNALS = ['subject_family'];
 
-/** Matches the subject-identity candidate leg: a name this short is inside nearly every claim. */
-const MIN_SUBJECT_NAME_LENGTH = 3;
-
 /**
  * The subjects a claim names: entities its own source episode mentioned whose stored fold
  * appears inside the claim's stored fold. The same test the detection leg uses to decide two
  * statements are about one thing, applied to one statement.
  */
 const SUBJECTS_OF_CLAIM = [
-  `MATCH (claim { id: $claimId })-[:EXTRACTED_FROM]->(source:Episode)`,
+  `MATCH (claim:${BASE_NODE_LABEL} { id: $claimId })-[:${EXTRACTION_TYPE}]->(source:Episode)`,
   `WHERE ${currentOnly('source')}`,
   `MATCH (source)-[:${ENTITY_MENTION_TYPE}]->(e:Entity)`,
   `WHERE ${currentOnly('e')}`,
@@ -155,7 +148,7 @@ const KEYS_AGREE = [
  * every case.
  */
 const SUBJECT_SIBLINGS = [
-  `MATCH (claim { id: $claimId })-[:EXTRACTED_FROM]->(source:Episode)`,
+  `MATCH (claim:${BASE_NODE_LABEL} { id: $claimId })-[:${EXTRACTION_TYPE}]->(source:Episode)`,
   `WHERE ${currentOnly('source')}`,
   // Optional, because a claim that carries a key names its subject through the key rather than
   // by spelling it. Without an entity to match, `names` is empty and the name test answers
@@ -166,7 +159,7 @@ const SUBJECT_SIBLINGS = [
   `  AND claim.${TEXT_NORM_PROPERTY} CONTAINS e.${ENTITY_NAME_NORM_PROPERTY}`,
   // `claim` is carried through: the relatedness reading below is against its own vector.
   `WITH claim, source, collect(DISTINCT e.${ENTITY_NAME_NORM_PROPERTY}) AS names`,
-  'MATCH (sibling)-[:EXTRACTED_FROM]->(source)',
+  `MATCH (sibling)-[:${EXTRACTION_TYPE}]->(source)`,
   'WHERE sibling.id <> $claimId',
   '  AND any(label IN labels(sibling) WHERE label IN $labels)',
   `  AND ${currentOnly('sibling')}`,
@@ -174,8 +167,8 @@ const SUBJECT_SIBLINGS = [
   `           WHEN $keyedMismatchExcludes AND ${BOTH_KEYED} THEN false`,
   `           ELSE ${NAMES_A_SUBJECT} END`,
   '  AND NOT EXISTS {',
-  '    MATCH (sibling)-[:EXTRACTED_FROM]->(other:Episode)',
-  `    WHERE other.id <> source.id AND other.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
+  `    MATCH (sibling)-[:${EXTRACTION_TYPE}]->(other:Episode)`,
+  `    WHERE other.id <> source.id AND ${currentOnly('other')}`,
   '  }',
   `RETURN sibling.id AS id, sibling.${MEMORY_PROPERTIES.text} AS text,`,
   '       [label IN labels(sibling) WHERE label IN $labels][0] AS label,',
@@ -238,19 +231,6 @@ function siblingParameters(
     minNameLength: toGraphInteger(MIN_SUBJECT_NAME_LENGTH),
     keyedMismatchExcludes: keyedMismatchExcludes(keyedCloseMode),
   };
-}
-
-/**
- * A read-only preview of what a family close would take, for a caller that wants to look first.
- * The mode belongs in the preview as much as in the close: the same value has to decide both, or
- * the preview shows a cut the apply does not make.
- */
-export async function findSubjectSiblings(
-  driver: Driver,
-  claimId: string,
-  keyedCloseMode?: KeyedCloseMode,
-): Promise<readonly SubjectSibling[]> {
-  return runRead(driver, SUBJECT_SIBLINGS, siblingParameters(claimId, keyedCloseMode), mapSibling);
 }
 
 /**
@@ -371,9 +351,15 @@ export async function supersedeSubjectFamily(
 
 /**
  * The same family close joined to a transaction the caller already holds, for a path that has
- * to close in the commit that wrote what corrects it. Subjects are read here rather than
- * earlier for the reason the whole close is one transaction: a concurrent entity write must not
- * land between the read that chose the family and the writes that closed it.
+ * to close in the commit that wrote what corrects it. Subjects are read inside that transaction
+ * so the whole close lands as one unit: no reader sees the judged claim closed while its
+ * siblings still stand.
+ *
+ * The transaction does not serialize this against a concurrent entity write. Neo4j reads take
+ * no lock and its isolation is read-committed (`locks.ts`), and this path takes no lock, so the
+ * family a close takes is the one the graph held when the read ran. Under-taking is the
+ * tolerable direction: a sibling a later mention adds stays open and answers, which is visible
+ * and reversible with `--episode`.
  */
 export async function supersedeSubjectFamilyInTransaction(
   tx: GraphTransaction,

@@ -101,6 +101,7 @@ describe('SemanticRelationshipStage', () => {
     expect(outcome).toEqual({
       status: 'skipped',
       summary: 'fewer than two entities or cognitive nodes to relate',
+      retryable: true,
     });
   });
 
@@ -118,6 +119,7 @@ describe('SemanticRelationshipStage', () => {
     expect(outcome).toEqual({
       status: 'skipped',
       summary: 'fewer than two entities or cognitive nodes to relate',
+      retryable: true,
     });
   });
 

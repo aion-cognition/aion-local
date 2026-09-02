@@ -106,23 +106,6 @@ const SNAPSHOT: StatsSnapshot = {
       openWouldQueue: 2,
       autoMergeEnabled: true,
       autoMergedCount: 5,
-      agreement: {
-        total: 3,
-        agreeing: 2,
-        disagreements: [
-          {
-            proposalId: 'disagree-1',
-            leftName: 'Zephyr Ingest',
-            leftType: 'service',
-            rightName: 'Zephyr Ingest',
-            rightType: 'concept',
-            verdict: 'would_apply',
-            actuallyMerged: false,
-            bothCurrent: true,
-          },
-        ],
-        staleCleared: 0,
-      },
     },
   },
 };
@@ -237,17 +220,13 @@ describe('renderStats', () => {
     expect(text).toMatch(/dead_letter\s+never selected/);
   });
 
-  it('renders the open merge-shadow counts and the agreement against resolved proposals', () => {
+  it('renders the open merge-shadow counts', () => {
     const { lines, write } = collector();
 
     renderStats(SNAPSHOT, DEFAULTS, write, NOW);
 
     const text = lines.join('\n');
     expect(text).toContain('open        1 would auto-apply, 2 would queue');
-    expect(text).toContain('agreement   2 of 3');
-    expect(text).toContain(
-      'Zephyr Ingest (service) / Zephyr Ingest (concept): shadow said would_apply, actual was not merged',
-    );
   });
 
   it('renders the auto-merge knob state and the applied count', () => {
@@ -270,7 +249,6 @@ describe('renderStats', () => {
           openWouldQueue: 2,
           autoMergeEnabled: false,
           autoMergedCount: undefined,
-          agreement: undefined,
         },
       },
     };
@@ -279,51 +257,6 @@ describe('renderStats', () => {
 
     const text = lines.join('\n');
     expect(text).toContain('auto-merge  off, count unavailable while Neo4j is down');
-  });
-
-  it('says there are no shadow verdicts yet rather than printing 0 of 0', () => {
-    const { lines, write } = collector();
-    const noVerdicts: StatsSnapshot = {
-      ...SNAPSHOT,
-      extras: {
-        ...SNAPSHOT.extras,
-        mergeShadow: {
-          openWouldApply: 0,
-          openWouldQueue: 0,
-          autoMergeEnabled: true,
-          autoMergedCount: 0,
-          agreement: { total: 0, agreeing: 0, disagreements: [], staleCleared: 0 },
-        },
-      },
-    };
-
-    renderStats(noVerdicts, DEFAULTS, write);
-
-    const text = lines.join('\n');
-    expect(text).toContain('agreement   no shadow verdicts yet');
-    expect(text).toContain('open        0 would auto-apply, 0 would queue');
-  });
-
-  it('says the agreement is unavailable while Neo4j is down', () => {
-    const { lines, write } = collector();
-    const down: StatsSnapshot = {
-      ...SNAPSHOT,
-      extras: {
-        ...SNAPSHOT.extras,
-        mergeShadow: {
-          openWouldApply: 1,
-          openWouldQueue: 2,
-          autoMergeEnabled: false,
-          autoMergedCount: undefined,
-          agreement: undefined,
-        },
-      },
-    };
-
-    renderStats(down, DEFAULTS, write);
-
-    const text = lines.join('\n');
-    expect(text).toContain('agreement   unavailable while Neo4j is down');
   });
 
   it('says counts are unavailable when Neo4j is down, without dividing by zero on cadence', () => {

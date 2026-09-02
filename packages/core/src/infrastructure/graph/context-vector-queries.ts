@@ -1,9 +1,10 @@
 import type { Driver } from 'neo4j-driver';
 
+import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { runRead, runWrite, type GraphStatement } from './connection.js';
 import { ENTITY_MENTION_TYPE } from './entity-queries.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from './episodes.js';
-import { BASE_NODE_LABEL, MEMORY_LABEL } from './labels.js';
+import { BASE_NODE_LABEL, EXTRACTION_TYPE, MEMORY_LABEL } from './labels.js';
 import { SUMMARIZED_BY_TYPE } from './narrative-queries.js';
 import { readModeFragment, withCurrency } from './read-modes.js';
 import { fromGraphVector, toGraphDateTime, toGraphVector, type Row } from './values.js';
@@ -18,9 +19,6 @@ import type {
  * over the run's own edge writes, and read its neighborhood, plus the batched write that stores
  * the result; `reflection/domain/context-vector.ts` owns the weighted-mean itself.
  */
-
-/** The cognitive types have no shared writer-side constant for the edge back to their episode (`cognitive-queries.ts` inlines it); this module needs the literal too. */
-const EXTRACTED_FROM_TYPE = 'EXTRACTED_FROM';
 
 /** Declared by migration 001 `FOR (n:Memory)`, alongside `content_vec`; no writer has needed a shared name for it before this stage. */
 export const CONTEXT_VECTOR_PROPERTY = 'context_vec';
@@ -45,7 +43,7 @@ function affectedNodesStatement(episodeId: string, reference?: Date): GraphState
     'UNION',
     branch(`MATCH (:Episode { id: $episodeId })-[:${ENTITY_MENTION_TYPE}]->(n:Entity)`),
     'UNION',
-    branch(`MATCH (n)-[:${EXTRACTED_FROM_TYPE}]->(:Episode { id: $episodeId })`),
+    branch(`MATCH (n)-[:${EXTRACTION_TYPE}]->(:Episode { id: $episodeId })`),
     'UNION',
     branch(`MATCH (:Episode { id: $episodeId })-[:${SUMMARIZED_BY_TYPE}]->(n:Narrative)`),
   ].join('\n');
@@ -77,9 +75,9 @@ export async function findAffectedNodeIds(
  * The closure is bounded by `since` rather than taken over the whole one-hop neighborhood,
  * which is precision and not economy: a neighbor whose incident edges did not move still has a
  * correct context vector, and one unbounded hop off a hub entity would recompute hundreds of
- * nodes nothing changed. `r.updated_at` is the stamp every edge write moves and the same signal
- * `context-vector-sync.ts` reads to find drift, so the two invalidation paths agree on what
- * counts as changed.
+ * nodes nothing changed. `r.updated_at` is the stamp a run's own edge writes move, which is all
+ * this closure has to catch; the maintenance scan in `context-vector-sync.ts` reads the decay
+ * and prune stamps too, because those move between runs and no reflection pass sees them.
  *
  * `:Memory` is required of the far endpoint because that is what the write below matches on: a
  * backbone node with no vector index behind it is not a node this stage can store a context for.
@@ -139,6 +137,10 @@ export async function findEdgeTouchedNeighborIds(
  * spreading activation. A neighbor with no `content_vec` (a pending-vector marker, a
  * structural backbone node) contributes nothing and is filtered out here, before the vector
  * ever reaches the domain math.
+ *
+ * `r.valid_until IS NULL` drops an edge `edge_prune` closed, the same predicate `adjacency.ts`
+ * carries: a closed edge would otherwise weight the stored context at the floor strength the
+ * close was meant to retire.
  */
 function neighborContentVectorsStatement(
   nodeIds: readonly string[],
@@ -148,7 +150,8 @@ function neighborContentVectorsStatement(
   const cypher = [
     'UNWIND $nodeIds AS nodeId',
     `MATCH (n:${BASE_NODE_LABEL} { id: nodeId })-[r]-(m:${BASE_NODE_LABEL})`,
-    `WHERE m.id <> nodeId AND m.${MEMORY_PROPERTIES.contentVector} IS NOT NULL AND ${fragment.where}`,
+    `WHERE m.id <> nodeId AND m.${MEMORY_PROPERTIES.contentVector} IS NOT NULL`,
+    `  AND r.${BITEMPORAL_PROPERTIES.validUntil} IS NULL AND ${fragment.where}`,
     'RETURN nodeId, m.id AS neighborId,',
     '       coalesce(r.strength, 1.0) AS strength,',
     `       m.${MEMORY_PROPERTIES.contentVector} AS vector`,

@@ -5,8 +5,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { sweepEdgeDecay } from './decay.js';
 import { flushReinforcementQueue } from './flush.js';
-import { plasticityCounters, plasticitySnapshot } from './metrics.js';
+import { plasticityCounters } from './metrics.js';
 import { writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
+import { edgeWeightDistribution } from '../../infrastructure/graph/edge-weight-distribution.js';
 import { upsertEdge } from '../../infrastructure/graph/edges.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
 import type { RelationshipType } from '../../infrastructure/graph/relationships.js';
@@ -134,9 +135,9 @@ describe('plasticity metrics against the graph', () => {
     await seedEdge('SIMILAR', 'dist-c', 'dist-d', 0.5);
     await seedEdge('SIMILAR', 'dist-e', 'dist-f', 0.8);
 
-    const snapshot = await plasticitySnapshot(harness.driver, db);
+    const edgeWeights = await edgeWeightDistribution(harness.driver);
 
-    const similar = snapshot.edgeWeights.SIMILAR;
+    const similar = edgeWeights.SIMILAR;
     if (similar === undefined) {
       throw new Error('expected at least one live SIMILAR edge');
     }
@@ -148,8 +149,8 @@ describe('plasticity metrics against the graph', () => {
   });
 
   it('leaves a type with no live edge as undefined rather than a zeroed row', async () => {
-    const snapshot = await plasticitySnapshot(harness.driver, db);
+    const edgeWeights = await edgeWeightDistribution(harness.driver);
 
-    expect(snapshot.edgeWeights.RELATED_TO).toBeUndefined();
+    expect(edgeWeights.RELATED_TO).toBeUndefined();
   });
 });

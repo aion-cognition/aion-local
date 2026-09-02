@@ -8,6 +8,7 @@ import {
   getEntityMergeDecisionByKey,
   recordEntityMergeDecision,
 } from '../../../infrastructure/sqlite/entity-merge-decisions.js';
+import { getLedgerEntry, markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
 import { entityMergeLedgerKey } from '../../../reflection/domain/entity-merge.js';
 import type { IntrospectionOperation, OperationOutcome } from '../../domain/operation.js';
 
@@ -128,16 +129,35 @@ function reconcile(db: SqliteHandle, orphan: OrphanedDecision, now: Date): boole
   return true;
 }
 
+/**
+ * Where the last run stopped. The merge trail is append-only and nothing narrows it as rows are
+ * reconciled, so a run that always started at the lexicographically first canonical would read
+ * one fixed page forever and never reach an orphan behind it. A short page means the walk
+ * reached the end, and the cursor goes back to the start.
+ */
+export const MERGE_DECISION_RECONCILE_CURSOR_KEY = 'merge_decision_reconcile:cursor';
+
+function readCursor(db: SqliteHandle): string | undefined {
+  const summary = getLedgerEntry(db, MERGE_DECISION_RECONCILE_CURSOR_KEY)?.summary;
+  if (typeof summary !== 'object' || summary === null) {
+    return undefined;
+  }
+  const { after } = summary as { after?: unknown };
+  return typeof after === 'string' && after.length > 0 ? after : undefined;
+}
+
 export function mergeDecisionReconcileOperation(): IntrospectionOperation {
   return {
     name: MERGE_DECISION_RECONCILE_OPERATION,
     bucket: 'day',
     relevance: () => MERGE_DECISION_RECONCILE_STANDING_RELEVANCE,
     run: async (ctx): Promise<OperationOutcome> => {
-      const canonicals = await listMergeProvenance(
-        ctx.driver,
-        ctx.config.maintenance.mergeDecisionReconcileBatch,
-      );
+      const batch = ctx.config.maintenance.mergeDecisionReconcileBatch;
+      const canonicals = await listMergeProvenance(ctx.driver, batch, readCursor(ctx.db));
+      const last = canonicals.at(-1);
+      markLedgerApplied(ctx.db, MERGE_DECISION_RECONCILE_CURSOR_KEY, {
+        after: canonicals.length < batch || last === undefined ? '' : last.canonicalId,
+      });
 
       let orphans = 0;
       let written = 0;

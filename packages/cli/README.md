@@ -7,8 +7,8 @@ what Claude Code runs on a hook fire.
 ## Boundaries
 
 Imports `@aion/core` for every substrate read and write, `@aion/protocol` for the pack shape
-`aion last` renders, and three symbols from `@aion/mcp` (`HEALTH_PATH`, `runningInContainer`,
-`USAGE_PROTOCOL`). Nothing imports this package.
+`aion last` renders, and four symbols from `@aion/mcp` (`HEALTH_PATH`, `runningInContainer`,
+`USAGE_PROTOCOL`, `reflectionStages`). Nothing imports this package.
 
 `hook/` is the exception, with a stricter rule: node builtins and its own siblings, nothing
 else. It runs on the host's bare node with no install step, so one third-party import breaks
@@ -25,13 +25,16 @@ status      services, models, routing, and graph counts
 doctor      check every substrate invariant and name what is broken
 last        the last MemoryPack served per session, with rationale
 queue       inspect the reflection queue: ls | drop | promote | reconcile
+replay      put archived experiences back through the pipeline: ls | run
 proposals   review judged contradictions and duplicate entities: ls | apply | dismiss
 maintain    the maintenance catalog, and forcing one operation to run now: ls | run
 unmerge     split an identity back out of the entity dedup absorbed it into: ls | apply
 stats       substrate counts, queue and plasticity health, cadence, per-method pack shares
 why         provenance, lineage, and open proposals for one node
+timeline    one episode across the archive, the graph, the queue, and the ledger
 search      direct hybrid search through the seed layer, bypassing pack assembly
 forget      bitemporal close of a node by id or query: nothing is deleted
+unsupersede reopen a claim a supersession closed, whatever made the close
 ```
 
 Dispatch is all `run.ts` does. Each command opens its own logger from validated config, which

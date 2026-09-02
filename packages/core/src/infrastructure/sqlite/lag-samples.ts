@@ -5,8 +5,8 @@ import { getMeta, setMeta } from './meta.js';
  * Enrichment lag: wall time from a job's `enqueued_at` to the moment the orchestrator marks
  * its ledger key applied. A rolling window of raw samples, not a running average: the p95 of
  * this figure measured 95% queueing, and a mean would hide exactly the tail a freshness signal
- * exists to catch. `reflection-queue.ts` deletes a job's row on completion
- * (`claim.ts`), so nothing durable survives the run itself; this is the only record of it.
+ * exists to catch. `claim.ts` deletes a job's row on completion, so nothing durable survives
+ * the run itself; this is the only record of it.
  */
 
 /** Newest `windowSize` samples only, so the figure tracks current conditions, not history. */

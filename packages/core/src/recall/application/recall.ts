@@ -55,7 +55,7 @@ import { suppressedOwnSession } from '../domain/session-origin.js';
 
 /**
  * The recall pipeline, in the order its stages run. Cue extraction spends the one generation
- * call recall is allowed, every cue is embedded in a single batch, the four seed strategies
+ * call recall is allowed, every cue is embedded in a single batch, the five seed strategies
  * run, activation spreads from what they found, fusion ranks the union, context resonance
  * makes its second pass over what activation reached, and the pack is assembled and persisted.
  *
@@ -322,6 +322,7 @@ export async function handleRecall(
       reranker: deps.config.search.reranker,
       mmrLambda: deps.config.search.mmrLambda,
       clusterCap: deps.config.recall.clusterCap,
+      clusterCosineThreshold: deps.config.recall.clusterCosineThreshold,
       labelBoosts: labelBoosts(cues.value.cues, deps.config.recall.decisionBoost),
       ...(vectors === undefined ? {} : { vectors }),
     });

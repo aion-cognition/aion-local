@@ -111,6 +111,7 @@ describe('aion proposals against a seeded review queue', () => {
       confidence: 1,
       rationale: 'fanout transport',
       episodeId: 'episode-2',
+      createdAt: '2026-08-29T12:00:00.000Z',
     });
   }
 

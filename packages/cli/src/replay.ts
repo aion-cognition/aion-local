@@ -63,6 +63,8 @@ export type ReplayFlags = {
   readonly subcommand: Subcommand;
   /** False selects only rows archived under some other pipeline version. */
   readonly all: boolean;
+  /** The default selection, named: `--stale` is `!all` spelled out, never its own field elsewhere. */
+  readonly stale: boolean;
   readonly episode?: string;
   readonly session?: string;
   readonly limit?: number;
@@ -94,9 +96,11 @@ export function parseReplayFlags(argv: readonly string[]): ReplayFlags {
   const limit = countOf('--limit', values.get('--limit'));
   const batch = countOf('--batch', values.get('--batch'));
 
+  const all = flags.has('--all');
   return {
     subcommand,
-    all: flags.has('--all'),
+    all,
+    stale: !all,
     live: flags.has('--live'),
     yes: flags.has('--yes'),
     json: flags.has('--json'),
@@ -109,7 +113,7 @@ export function parseReplayFlags(argv: readonly string[]): ReplayFlags {
 
 function selectionOf(flags: ReplayFlags): ReplaySelection {
   return {
-    stale: !flags.all,
+    stale: flags.stale,
     ...(flags.episode === undefined ? {} : { episodeId: flags.episode }),
     ...(flags.session === undefined ? {} : { sessionId: flags.session }),
   };
@@ -223,7 +227,7 @@ function toJson(report: ReplayReport): unknown {
  * stops the loop between batches so the cursor is reported, and an operator who asks twice is
  * telling us the graceful stop is taking too long.
  */
-function abortOnInterrupt(): AbortController {
+export function abortOnInterrupt(): AbortController {
   const controller = new AbortController();
   process.once('SIGINT', () => {
     controller.abort();

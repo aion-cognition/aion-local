@@ -45,9 +45,7 @@ const ADVICE_SYSTEM_PROMPT = [
   'by its own deterministic rules, that nothing is urgent enough to run.',
   'You are given one health reading, the operations that could run this cycle, and what each',
   'one has done for the substrate before.',
-  'Answer none unless the reading shows work waiting that one named operation would do. An',
-  'operation whose relevance stands at a fixed value has a cadence rather than a backlog, and a',
-  'fixed value is not evidence of work.',
+  'Answer none unless the reading shows work waiting that one named operation would do.',
   'Prefer the cheapest operation that addresses what the reading shows, reading cost off each',
   "operation's own per-run time. Prefer an operation with a record of improving the number it",
   'moves over one that has never moved it. An effectiveness of unmeasured means the operation',
@@ -142,12 +140,13 @@ function describeSnapshot(health: HealthSnapshot): string {
   ].join('\n');
 }
 
+/** The shared wording for a timing the record does not carry. */
+const UNKNOWN_COST = 'cost unknown';
+
 /**
  * What one run of this operation has cost, which is what makes "prefer the cheapest" a question
  * the reading answers rather than a guess from the operation's name.
  */
-const UNKNOWN_COST = 'cost unknown';
-
 function describeCost(meanDurationMs: number | undefined): string {
   if (meanDurationMs === undefined) {
     return UNKNOWN_COST;
@@ -245,7 +244,9 @@ export async function adviseTier3(
     return { status: 'unusable', reason: 'the advisor answered in a shape the schema refuses' };
   }
 
-  const operation = parsed.data.operation.trim();
+  // Lowercased before both comparisons: every registered name is snake_case, so a model
+  // answering "None" is the decline it means rather than an unusable answer.
+  const operation = parsed.data.operation.trim().toLowerCase();
   const stated = parsed.data.rationale?.trim();
   const rationale = stated === undefined || stated.length === 0 ? NO_RATIONALE_GIVEN : stated;
   if (operation === TIER3_NO_OPERATION || operation.length === 0) {

@@ -32,7 +32,13 @@ export type EnsureSessionResult = {
 export class SessionManager {
   readonly #driver: Driver;
   readonly #backbone: SessionManagerBackbone;
-  readonly #resolved = new Map<string, string>();
+  /**
+   * The identities whose Session node this process has already ensured. A set rather than a
+   * map: `ensureGraphSession` keys the node on the identity verbatim, so a session id is its
+   * identity and there is nothing to remember but membership. `forget` is what keeps it from
+   * growing for the life of a process that serves many identities.
+   */
+  readonly #ensured = new Set<string>();
   readonly #inFlight = new Map<string, Promise<EnsureSessionResult>>();
 
   constructor(driver: Driver, backbone: SessionManagerBackbone) {
@@ -41,16 +47,26 @@ export class SessionManager {
   }
 
   /**
-   * The session id for an identity, with no graph write. A Session node is minted by the
-   * first call that produces content, never by connecting or by reading. Empty sessions still
-   * add edges to both structural hubs and a link to the FOLLOWS chain. `ensureGraphSession`
-   * keys the node on the identity verbatim, so the id is known before the node exists.
+   * The session id for an identity, with no graph write. A Session node is minted by the first
+   * call that produces content, never by connecting or by reading: minting it eagerly would
+   * attach INITIATED_BY, WITHIN_WORKSPACE and a FOLLOWS link to a session that never held
+   * anything. `ensureGraphSession` keys the node on the identity verbatim, so the id is known
+   * before the node exists.
    */
   sessionIdFor(identity: string): string {
     if (identity.length === 0) {
       throw new Error('session identity must be a non-empty string');
     }
-    return this.#resolved.get(identity) ?? identity;
+    return identity;
+  }
+
+  /**
+   * Drops one identity's cached resolution when its transport closes. The next call for it
+   * pays one MERGE, which returns the same node: the cache is a round-trip saving, never a
+   * record of anything.
+   */
+  forget(identity: string): void {
+    this.#ensured.delete(identity);
   }
 
   async ensureSession(input: EnsureSessionInput): Promise<EnsureSessionResult> {
@@ -59,9 +75,8 @@ export class SessionManager {
       throw new Error('session identity must be a non-empty string');
     }
 
-    const resolved = this.#resolved.get(identity);
-    if (resolved !== undefined) {
-      return { sessionId: resolved, created: false };
+    if (this.#ensured.has(identity)) {
+      return { sessionId: identity, created: false };
     }
 
     const inFlight = this.#inFlight.get(identity);
@@ -86,7 +101,7 @@ export class SessionManager {
       ...(input.now === undefined ? {} : { now: input.now }),
       ...(input.occurredAt === undefined ? {} : { occurredAt: input.occurredAt }),
     });
-    this.#resolved.set(identity, result.sessionId);
+    this.#ensured.add(identity);
     return { sessionId: result.sessionId, created: result.created };
   }
 }

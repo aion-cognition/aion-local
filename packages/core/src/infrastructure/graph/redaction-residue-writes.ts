@@ -1,6 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 
 import { runRead, runWrite } from './connection.js';
+import { MEMORY_PROPERTIES } from './episodes.js';
 import { BASE_NODE_LABEL } from './labels.js';
 import { toGraphDateTime, type Row } from './values.js';
 
@@ -58,10 +59,18 @@ export type RedactedPropertyUpdate = {
   readonly properties: Readonly<Record<string, string>>;
 };
 
+/**
+ * Clearing the vector and its hash is part of the rewrite, not a separate concern. The stored
+ * floats were taken over the plaintext this write is replacing, so leaving them would let
+ * vector search keep ranking the node by the secret; clearing the hash is what puts the node
+ * back in `findPendingVectorNodes` so `vector_backfill` re-embeds the redacted text.
+ */
 const WRITE_REDACTED_PROPERTIES = [
   'UNWIND $updates AS update',
   `MATCH (n:${BASE_NODE_LABEL} { id: update.id })`,
-  'SET n += update.properties, n.redacted_at = $now',
+  'SET n += update.properties, n.redacted_at = $now,',
+  `    n.${MEMORY_PROPERTIES.contentVector} = null,`,
+  `    n.${MEMORY_PROPERTIES.contentVectorHash} = null`,
   'RETURN n.id AS id',
 ].join('\n');
 

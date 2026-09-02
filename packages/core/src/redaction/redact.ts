@@ -8,9 +8,10 @@ import {
 } from './rules.js';
 
 /**
- * Mirrors `DEFAULTS.redaction.entropyThreshold` in `config/defaults.ts`. Duplicated
- * rather than imported: this module stays a standalone, config-free pure function,
- * and callers that hold a loaded `Config` pass its value in explicitly instead.
+ * Mirrors the `entropyThreshold` knob declared in `infrastructure/config/knobs.ts`.
+ * Duplicated rather than imported: this module stays a standalone, config-free pure
+ * function, and callers that hold a loaded `Config` pass its value in explicitly instead.
+ * `redact.test.ts` asserts the two literals still agree.
  */
 export const DEFAULT_ENTROPY_THRESHOLD = 4.5;
 
@@ -135,10 +136,13 @@ export function redact(
  * name beside it) has nothing to fire on. Scanning `key=value` gives those rules the pair
  * they need and gives the entropy backstop the same view it has of embedded env dumps.
  *
- * Only the value's own range is ever fingerprinted. A span that starts inside the key is
- * clamped rather than dropped, so material that straddles the delimiter cannot survive by
- * hiding behind the name; the key itself is redacted separately by the caller, on its own
- * merits.
+ * Only the value's own range is ever redacted out of the output text. A span that starts
+ * inside the key is clamped rather than dropped, so material that straddles the delimiter
+ * cannot survive by hiding behind the name; the key itself is redacted separately by the
+ * caller, on its own merits. The fingerprint itself still hashes the detector's full matched
+ * span, key characters included when the span reached that far, so a `key=value` pair
+ * fingerprints the same way whether it arrives as one string or as this pair: two views of
+ * the same secret that must resolve to the same six hex chars.
  *
  * The fallback is the point of the pair rule: a credential key whose value has no
  * recognisable shape of its own (an internal service key, a rotated password) is
@@ -163,7 +167,7 @@ export function redactKeyedValue(
     }
     const start = Math.max(occurrence.start, offset) - offset;
     const end = occurrence.end - offset;
-    found.push({ start, end, material: value.slice(start, end), ruleId: occurrence.ruleId });
+    found.push({ start, end, material: occurrence.material, ruleId: occurrence.ruleId });
   }
 
   if (found.length === 0 && isCredentialValue(value)) {

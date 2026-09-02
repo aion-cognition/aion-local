@@ -16,9 +16,12 @@ export function vectorInputHash(text: string): string {
  * The text an entity's `name_vec` is taken over: the identity's folded name and every lookup
  * key it answers to, one per line. The aliases belong in it because this vector is what
  * nominates duplicates, and an identity that has absorbed "PostgreSQL" should be found by
- * someone searching for it. Sorted and deduplicated, so one alias set always produces one
- * string and therefore one hash.
+ * someone searching for it. Sorted and deduplicated against each other and against the name,
+ * so one alias set always produces one string and therefore one hash: an alias list that
+ * repeats the identity's own name would otherwise embed a different string and re-embed on
+ * every mention.
  */
 export function entityNameVectorText(nameNorm: string, aliasesNorm: readonly string[]): string {
-  return [nameNorm, ...[...new Set(aliasesNorm)].sort()].join('\n');
+  const aliases = [...new Set(aliasesNorm)].filter((alias) => alias !== nameNorm).sort();
+  return [nameNorm, ...aliases].join('\n');
 }

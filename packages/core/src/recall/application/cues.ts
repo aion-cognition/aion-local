@@ -181,7 +181,12 @@ function cacheKey(input: CueExtractionInput, model: string): string {
 
 type CueModelCallResult =
   | { readonly ok: true; readonly data: unknown }
-  | { readonly ok: false; readonly reason: Degradation['reason'] };
+  | {
+      readonly ok: false;
+      readonly reason: Degradation['reason'];
+      /** Carried so the log can tell an outage from an auth rejection from a bad request. */
+      readonly error: unknown;
+    };
 
 /** The one `generate` call, under the budget as a hang guard via `AbortController`. */
 async function callCueModel(
@@ -205,7 +210,7 @@ async function callCueModel(
     });
     return { ok: true, data };
   } catch (error) {
-    return { ok: false, reason: isAbortError(error) ? 'timeout' : 'model_error' };
+    return { ok: false, reason: isAbortError(error) ? 'timeout' : 'model_error', error };
   } finally {
     clearTimeout(timer);
   }
@@ -314,7 +319,10 @@ export async function extractCues(
 
   const call = await callCueModel(deps, input);
   if (!call.ok) {
-    deps.logger.warn({ model: deps.model, reason: call.reason }, 'cue extraction degraded');
+    deps.logger.warn(
+      { err: call.error, model: deps.model, reason: call.reason },
+      'cue extraction degraded',
+    );
     return degradedResult(input, call.reason);
   }
 

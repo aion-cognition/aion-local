@@ -20,7 +20,10 @@ import {
   stopNeo4jHarness,
   type Neo4jHarness,
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
-import { findOrphanNodes } from '../../../infrastructure/graph/topology-queries.js';
+import {
+  findOrphanNodes,
+  forgetOrphanNode,
+} from '../../../infrastructure/graph/topology-queries.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import { refusingProvider } from '../../../infrastructure/providers/test-support/refusing-provider.fixture.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
@@ -209,12 +212,12 @@ afterAll(async () => {
 describe('orphan cleanup', () => {
   it('stays at zero relevance until the snapshot actually meets the orphan condition', () => {
     const quiet = healthFixture({
-      graph: { ...healthFixture().graph, nodes: 100, orphanNodes: 5, orphanShare: 0.05 },
+      graph: { ...healthFixture().graph, nodes: 100, orphanShare: 0.05 },
     });
     expect(orphanCleanupRelevance(quiet)).toBe(0);
 
     const fragmented = healthFixture({
-      graph: { ...healthFixture().graph, nodes: 100, orphanNodes: 40, orphanShare: 0.4 },
+      graph: { ...healthFixture().graph, nodes: 100, orphanShare: 0.4 },
     });
     expect(orphanCleanupRelevance(fragmented)).toBeCloseTo(0.4);
   });
@@ -246,6 +249,34 @@ describe('orphan cleanup', () => {
 
     const after = await countOrphanNodes(harness.driver);
     expect(after.orphans).toBeLessThan(5);
+  });
+
+  it('does not forget a node that stopped being an orphan since the scan read it', async () => {
+    // The write re-derives the orphan test, so an association landing between the scan and the
+    // forget saves the node. Nothing reopens a forget, so the decision has to be made at the
+    // write and not at the read.
+    await seedLooseInsight('insight-ancient-rescued', LONG_AGO);
+    expect(await orphanIds()).toContain('insight-ancient-rescued');
+
+    await upsertEdge(harness.driver, {
+      type: 'RELATED_TO',
+      sourceId: 'insight-ancient-rescued',
+      targetId: 'entity-postgres',
+      strength: 0.5,
+      confidence: 0.5,
+      signals: ['episodic'],
+      provenance: ['test'],
+      count: 1,
+      now: NOW,
+    });
+    const rescued = await forgetOrphanNode(harness.driver, {
+      id: 'insight-ancient-rescued',
+      forgetBefore: NOW,
+      now: NOW,
+    });
+
+    expect(rescued).toBe(false);
+    expect(await forgottenAt('insight-ancient-rescued')).toBeUndefined();
   });
 
   it('finds nothing left to repair on a second run over the same substrate', async () => {

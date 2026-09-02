@@ -1,9 +1,12 @@
 import type { Driver } from 'neo4j-driver';
 
-import { supersede } from '../../../infrastructure/graph/bitemporal.js';
+import { supersedeInTransaction } from '../../../infrastructure/graph/bitemporal.js';
+import { inWriteTransaction } from '../../../infrastructure/graph/connection.js';
+import { lockNodeInTransaction } from '../../../infrastructure/graph/locks.js';
 import {
   findDuplicateNarrativeSessions,
   findOrphanedNarratives,
+  readOpenNarrativeVersionsInTransaction,
   type DuplicateNarrativeGroup,
   type DuplicateNarrativeVersion,
 } from '../../../infrastructure/graph/narrative-cleanup-queries.js';
@@ -17,9 +20,9 @@ import type { IntrospectionOperation, OperationOutcome } from '../../domain/oper
  * Neither is rare enough on a long-running substrate to leave for the next session close: a
  * session that stopped being written to stops triggering the ordinary repair path too.
  *
- * The grounding-stale regeneration path (`reflection/application/narrative-cleanup.ts`) is
- * deliberately untouched here: it calls a model to rewrite the narrative body, which this
- * operation's two actions do not need, and stays the hand-run tool it already is.
+ * The grounding-stale regeneration path (`reflection/application/narrative-cleanup.ts`) is out
+ * of scope here because it calls a model to rewrite the narrative body, which neither of these
+ * two repairs needs. `narrative_regrounding` is the operation that drives that path.
  */
 
 export const NARRATIVE_CLEANUP_OPERATION = 'narrative_cleanup';
@@ -64,20 +67,32 @@ async function closeDuplicates(
   );
   let closed = 0;
   for (const group of groups) {
-    const keep = keepNewest(group.versions);
-    for (const version of group.versions) {
-      if (version.id === keep.id) {
-        continue;
+    // One transaction per session, session locked first, group re-read under the lock. The
+    // keeper is chosen from what is open at write time, so a concurrent close of the version
+    // this scan liked cannot leave the session with every version closed.
+    closed += await inWriteTransaction(driver, async (tx) => {
+      await lockNodeInTransaction(tx, group.sessionId, now);
+      const versions = await readOpenNarrativeVersionsInTransaction(tx, group.sessionId);
+      if (versions.length < 2) {
+        return 0;
       }
-      await supersede(driver, {
-        oldId: version.id,
-        newId: keep.id,
-        now,
-        signals: NARRATIVE_DUPLICATE_SIGNALS,
-        provenance: [NARRATIVE_DUPLICATE_METHOD],
-      });
-      closed += 1;
-    }
+      const keep = keepNewest(versions);
+      let closedHere = 0;
+      for (const version of versions) {
+        if (version.id === keep.id) {
+          continue;
+        }
+        await supersedeInTransaction(tx, {
+          oldId: version.id,
+          newId: keep.id,
+          now,
+          signals: NARRATIVE_DUPLICATE_SIGNALS,
+          provenance: [NARRATIVE_DUPLICATE_METHOD],
+        });
+        closedHere += 1;
+      }
+      return closedHere;
+    });
   }
   return { sessions: groups.length, closed };
 }

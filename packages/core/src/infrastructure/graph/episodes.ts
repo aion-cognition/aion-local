@@ -1,14 +1,16 @@
-import neo4j, { type Driver } from 'neo4j-driver';
+import type { Driver } from 'neo4j-driver';
 
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { runRead, type GraphTransaction } from './connection.js';
 import { readModeFragment, withCurrency, type ReadMode } from './read-modes.js';
+import { toGraphInteger } from './values.js';
 
 /**
  * Property names shared between the writer in `core/reflection/` and the Cypher here, so
  * a rename cannot drift the two apart. `content_vec` is the property migration 001's
- * vector index is declared on, and `text`/`summary` are two of the three the `content_fts`
- * fulltext index covers: a memory node written under other names is invisible to both.
+ * vector index is declared on, and `text`/`summary` are two of the three the
+ * `memory_content_fts` fulltext index covers (`seed-queries.ts` names it): a memory node
+ * written under other names is invisible to both.
  */
 export const MEMORY_PROPERTIES = {
   text: 'text',
@@ -24,13 +26,13 @@ export const MEMORY_PROPERTIES = {
   extractionMethod: 'extraction_method',
   turnCount: 'turn_count',
   toolExecutionCount: 'tool_execution_count',
-  observationCount: 'observation_count',
   /** Record-only: how the reflection call that wrote this episode reached intake. */
   originChannel: 'origin_channel',
   originEvent: 'origin_event',
   /**
-   * Provenance stamped at intake from the node's own fingerprints, absent when the node's
-   * text held no secret. What separates a residue scan's "cleaned" from "never dirty".
+   * A record of what redaction removed at intake, absent when the node's text held no secret.
+   * Written and not read back: the residue scan re-runs the detector over the stored text
+   * rather than trusting these.
    */
   redactionRules: 'redaction_rules',
   redactionSpanCount: 'redaction_span_count',
@@ -50,10 +52,15 @@ export type FindEpisodeByContentHashInput = {
  * than scanning every Episode in the graph for a hash no index covers. Earliest write
  * wins, which is what makes a re-pushed payload resolve to the original episode instead
  * of whichever duplicate the planner happened to reach first.
+ *
+ * A forgotten episode does not answer. A forget suppresses the row everywhere else the
+ * substrate reads, and an episode that still claimed its hash here would silently drop the
+ * re-pushed experience rather than store it.
  */
 const FIND_EPISODE_BY_CONTENT_HASH = [
   `MATCH (:Session { id: $sessionId })<-[:${CONTAINMENT_TYPE}]-(e:Episode)`,
   `WHERE e.${MEMORY_PROPERTIES.contentHash} = $contentHash`,
+  `  AND e.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
   `RETURN e.id AS id ORDER BY e.${BITEMPORAL_PROPERTIES.txFrom}, e.id LIMIT 1`,
 ].join('\n');
 
@@ -117,7 +124,7 @@ export async function listStoredEpisodes(
   driver: Driver,
   limit: number,
 ): Promise<readonly StoredEpisodeRef[]> {
-  return runRead(driver, LIST_STORED_EPISODES, { limit: neo4j.int(Math.trunc(limit)) }, (row) => ({
+  return runRead(driver, LIST_STORED_EPISODES, { limit: toGraphInteger(limit) }, (row) => ({
     id: row.id as string,
     sessionId: typeof row.session_id === 'string' ? row.session_id : undefined,
   }));

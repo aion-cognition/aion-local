@@ -214,7 +214,6 @@ describe('Introspector', () => {
       graph: {
         ...NEUTRAL_GRAPH_HEALTH,
         nodes: CRITICAL_MIN_POPULATION * 5,
-        orphanNodes: CRITICAL_MIN_POPULATION * 3,
         orphanShare: 0.6,
       },
     });
@@ -249,6 +248,21 @@ describe('Introspector', () => {
     expect(report.decision.kind).toBe('idle');
     expect(operation.calls()).toBe(0);
     expect(report.outcome).toBeUndefined();
+  });
+
+  it('never selects a switched-off operation, so its window and its waiting time are untouched', async () => {
+    // A kill switch read inside `run` fired after the selection stamp and the bucket claim, so
+    // switching an operation off cost the catalog a window and reset the operation's own
+    // starvation counter. The engine now drops it before it is a candidate at all.
+    const off = fakeOperation('switched_off_maintenance', { enabled: () => false });
+    const report = await engineFor(bed, [off], [healthFixture()]).tickOnce();
+
+    expect(report.decision.kind).toBe('idle');
+    expect(off.calls()).toBe(0);
+    expect(operationStats(bed.db, 'switched_off_maintenance').selectedCycle).toBeUndefined();
+    expect(
+      getLedgerEntry(bed.db, operationBucketKey('switched_off_maintenance', 'quarter-hour', NOW)),
+    ).toBeUndefined();
   });
 
   it('idles and backs off when observation itself fails', async () => {

@@ -27,7 +27,12 @@ export type NodeProvenance = CurrencyAnnotation & {
   readonly id: string;
   readonly labels: readonly string[];
   readonly content: string;
-  /** `extraction_method` on a Turn or Episode; absent on the nine cognitive types, whose provenance is their `EXTRACTED_FROM` edge. */
+  /**
+   * `extraction_method` on every node a named pipeline stage wrote: intake's Turn and Episode,
+   * entity resolution's Entity, and the Narrative a session compression, a rollup or a claim
+   * consolidation produced. Absent on the nine cognitive types, whose provenance is their
+   * `EXTRACTED_FROM` edge.
+   */
   readonly extractionMethod?: string;
   readonly sourceEpisodeId?: string;
   /** The node's own stated reason (a Decision's `rationale` property today). */

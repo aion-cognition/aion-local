@@ -1,7 +1,19 @@
 import type { Driver } from 'neo4j-driver';
 
-import { BASE_NODE_LABEL } from './labels.js';
-import { CONTENT_FULLTEXT_INDEX } from './seed-queries.js';
+import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
+import { CONTEXT_VECTOR_PROPERTY } from './context-vector-queries.js';
+import { ENTITY_NAME_SQUASH_PROPERTY } from './entity-identity-queries.js';
+import { MEMORY_PROPERTIES } from './episodes.js';
+import { BASE_NODE_LABEL, MEMORY_LABEL } from './labels.js';
+import {
+  CONTENT_FULLTEXT_INDEX,
+  ENTITY_NAME_NORM_PROPERTY,
+  ENTITY_NAME_PROPERTY,
+} from './seed-queries.js';
+import {
+  CLAIM_ASPECT_PROPERTY,
+  CLAIM_SUBJECT_PROPERTY,
+} from '../../reflection/domain/claim-key.js';
 import type { SqliteHandle } from '../sqlite/database.js';
 import { getMeta, setMeta } from '../sqlite/meta.js';
 
@@ -40,15 +52,15 @@ const MIGRATION_001_BACKBONE_SCHEMA: GraphMigration = {
     // nothing.
     'CREATE CONSTRAINT member_id_unique IF NOT EXISTS FOR (n:Member) REQUIRE n.id IS UNIQUE',
     'CREATE CONSTRAINT workspace_id_unique IF NOT EXISTS FOR (n:Workspace) REQUIRE n.id IS UNIQUE',
-    `CREATE VECTOR INDEX content_vec_idx IF NOT EXISTS FOR (n:Memory) ON (n.content_vec)
+    `CREATE VECTOR INDEX content_vec_idx IF NOT EXISTS FOR (n:${MEMORY_LABEL}) ON (n.${MEMORY_PROPERTIES.contentVector})
      OPTIONS { indexConfig: { \`vector.dimensions\`: ${ctx.embedDimension}, \`vector.similarity_function\`: 'cosine' } }`,
-    `CREATE VECTOR INDEX context_vec_idx IF NOT EXISTS FOR (n:Memory) ON (n.context_vec)
+    `CREATE VECTOR INDEX context_vec_idx IF NOT EXISTS FOR (n:${MEMORY_LABEL}) ON (n.${CONTEXT_VECTOR_PROPERTY})
      OPTIONS { indexConfig: { \`vector.dimensions\`: ${ctx.embedDimension}, \`vector.similarity_function\`: 'cosine' } }`,
     // These serve the bounded half of a time-travel filter (`valid_until > t`). An open
     // interval is an absent property, which no Neo4j index covers, so the `IS NULL` half
     // is a scan by construction and every read anchors on a seek before it applies.
-    'CREATE RANGE INDEX memory_valid_until_idx IF NOT EXISTS FOR (n:Memory) ON (n.valid_until)',
-    'CREATE RANGE INDEX memory_tx_until_idx IF NOT EXISTS FOR (n:Memory) ON (n.tx_until)',
+    `CREATE RANGE INDEX memory_valid_until_idx IF NOT EXISTS FOR (n:${MEMORY_LABEL}) ON (n.${BITEMPORAL_PROPERTIES.validUntil})`,
+    `CREATE RANGE INDEX memory_tx_until_idx IF NOT EXISTS FOR (n:${MEMORY_LABEL}) ON (n.${BITEMPORAL_PROPERTIES.txUntil})`,
     // Migration 002 owns the fulltext index. It was declared here first, over the three
     // labels that existed then; widening it needed a drop, and a drop that runs on every
     // `aion init` destroys a healthy index and its contents. The name moved instead, so the
@@ -73,10 +85,16 @@ const MIGRATION_001_BACKBONE_SCHEMA: GraphMigration = {
  * leaving a healthy index untouched. The property list is unchanged: `summary` already
  * covers `Narrative.summary` and `text` already covers the cognitive types' text property
  * (canonical name `text` across all nine).
+ *
+ * `Bridge` carries `Memory` and holds text, and is still left out of the fulltext label list.
+ * A bridge's text is a sentence the introspection loop generated about two communities
+ * (`symbiosis-bridge.ts`), so a keyword hit on it answers with the substrate's own connector
+ * rather than with anything a person said. Its content vector puts it in `content_vec_idx`,
+ * and spreading activation reaches it from either endpoint it joins.
  */
 const MIGRATION_002_COGNITIVE_SCHEMA: GraphMigration = {
   version: 2,
-  name: 'cognitive node labels, id constraints, fulltext index over every memory label',
+  name: 'cognitive node labels, id constraints, fulltext index over the content-bearing labels',
   statements: (_ctx) => [
     'CREATE CONSTRAINT narrative_id_unique IF NOT EXISTS FOR (n:Narrative) REQUIRE n.id IS UNIQUE',
     'CREATE CONSTRAINT goal_id_unique IF NOT EXISTS FOR (n:Goal) REQUIRE n.id IS UNIQUE',
@@ -89,7 +107,7 @@ const MIGRATION_002_COGNITIVE_SCHEMA: GraphMigration = {
     'CREATE CONSTRAINT pattern_id_unique IF NOT EXISTS FOR (n:Pattern) REQUIRE n.id IS UNIQUE',
     'CREATE CONSTRAINT trend_id_unique IF NOT EXISTS FOR (n:Trend) REQUIRE n.id IS UNIQUE',
     'CREATE CONSTRAINT bridge_id_unique IF NOT EXISTS FOR (n:Bridge) REQUIRE n.id IS UNIQUE',
-    `CREATE FULLTEXT INDEX ${CONTENT_FULLTEXT_INDEX} IF NOT EXISTS FOR (n:Episode|Turn|Entity|Narrative|Goal|Plan|Decision|Insight|Concept|Context|Event|Pattern|Trend) ON EACH [n.summary, n.text, n.name]`,
+    `CREATE FULLTEXT INDEX ${CONTENT_FULLTEXT_INDEX} IF NOT EXISTS FOR (n:Episode|Turn|Entity|Narrative|Goal|Plan|Decision|Insight|Concept|Context|Event|Pattern|Trend) ON EACH [n.${MEMORY_PROPERTIES.summary}, n.${MEMORY_PROPERTIES.text}, n.${ENTITY_NAME_PROPERTY}]`,
   ],
 };
 
@@ -115,8 +133,8 @@ const MIGRATION_003_IDENTITY_REKEY: GraphMigration = {
   name: 'entity identity keyed on name alone, squashed-name lookup index',
   statements: (_ctx) => [
     'DROP CONSTRAINT entity_name_type_unique IF EXISTS',
-    'CREATE CONSTRAINT entity_name_unique IF NOT EXISTS FOR (n:Entity) REQUIRE n.name_norm IS UNIQUE',
-    'CREATE INDEX entity_name_squash_idx IF NOT EXISTS FOR (n:Entity) ON (n.name_squash)',
+    `CREATE CONSTRAINT entity_name_unique IF NOT EXISTS FOR (n:Entity) REQUIRE n.${ENTITY_NAME_NORM_PROPERTY} IS UNIQUE`,
+    `CREATE INDEX entity_name_squash_idx IF NOT EXISTS FOR (n:Entity) ON (n.${ENTITY_NAME_SQUASH_PROPERTY})`,
   ],
 };
 
@@ -135,7 +153,7 @@ const MIGRATION_004_CLAIM_KEY_LOOKUP: GraphMigration = {
   version: 4,
   name: 'subject-keyed claim lookup index',
   statements: (_ctx) => [
-    'CREATE RANGE INDEX claim_subject_aspect_idx IF NOT EXISTS FOR (n:Memory) ON (n.subject_entity_id, n.aspect_norm)',
+    `CREATE RANGE INDEX claim_subject_aspect_idx IF NOT EXISTS FOR (n:${MEMORY_LABEL}) ON (n.${CLAIM_SUBJECT_PROPERTY}, n.${CLAIM_ASPECT_PROPERTY})`,
   ],
 };
 

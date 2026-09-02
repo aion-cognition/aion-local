@@ -57,6 +57,14 @@ const SCAN_CEILING = 500;
  * read past subjects earlier runs already settled. */
 const SCAN_FETCH_CEILING = 5000;
 
+/**
+ * How many neighbours a subject is offered. More than one because a subject whose nearest
+ * neighbour a past run already judged would otherwise be stamped settled on the strength of a
+ * pair nobody is going to revisit, and never reach its second-nearest. Small, because the pair
+ * a run acts on is still the closest unjudged one.
+ */
+const NEIGHBOR_LIMIT = 5;
+
 export function claimDedupRelevance(): number {
   return CLAIM_DEDUP_STANDING_RELEVANCE;
 }
@@ -101,6 +109,7 @@ export function claimDedupOperation(): IntrospectionOperation {
   return {
     name: CLAIM_DEDUP_OPERATION,
     bucket: 'hour',
+    enabled: (config) => config.maintenance.claimDedup,
     relevance: claimDedupRelevance,
     run: async (ctx): Promise<OperationOutcome> => {
       if (!ctx.config.maintenance.claimDedup) {
@@ -156,19 +165,25 @@ export function claimDedupOperation(): IntrospectionOperation {
           vector: subject.contentVector,
           excludeIds: [subject.id, ...takenLosers],
           threshold: floor,
-          limit: 1,
+          limit: NEIGHBOR_LIMIT,
         });
-        const neighbor = neighbors[0];
-        if (neighbor === undefined) {
+        if (neighbors.length === 0) {
           stampScanned('clean');
           continue;
         }
 
-        const pairKey = claimDedupPairKey(subject.id, neighbor.id);
-        if (attempted.has(pairKey) || isLedgerApplied(ctx.db, pairKey)) {
+        // The closest neighbour this pair has not already been judged against. Stamping the
+        // subject on the first already-judged pair would retire it while its next-nearest
+        // neighbour had never been looked at.
+        const unjudged = neighbors
+          .map((entry) => ({ entry, pairKey: claimDedupPairKey(subject.id, entry.id) }))
+          .find(({ pairKey }) => !attempted.has(pairKey) && !isLedgerApplied(ctx.db, pairKey));
+        if (unjudged === undefined) {
           stampScanned('already-paired');
           continue;
         }
+        const neighbor = unjudged.entry;
+        const { pairKey } = unjudged;
         attempted.add(pairKey);
         judged += 1;
 
@@ -225,11 +240,19 @@ export function claimDedupOperation(): IntrospectionOperation {
           { id: subject.id, occurredAt: subjectDetail.occurredAt },
           { id: neighbor.id, occurredAt: candidateDetail.occurredAt },
         );
-        await mergeClaimPair(ctx.driver, {
+        const merge = await mergeClaimPair(ctx.driver, {
           survivorId: survivor.id,
           loserId: loser.id,
           now: ctx.now,
         });
+        // The write re-reads currency under its own transaction, which is the reading that
+        // decides: a side taken between the read above and the commit is stale, not merged.
+        if (!merge.merged) {
+          stale += 1;
+          markLedgerApplied(ctx.db, pairKey, { verdict: 'stale' });
+          stampScanned('stale');
+          continue;
+        }
         takenLosers.add(loser.id);
         merged += 1;
         stampScanned('merged');

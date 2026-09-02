@@ -224,7 +224,7 @@ export function parseExtractedEntities(
     // The cap counts identities, not rows: a repeat of a name already accepted costs no node,
     // and dropping it would lose the aliases and typings that reading contributed.
     if (existing === undefined && byIdentity.size >= maxEntities) {
-      break;
+      continue;
     }
 
     const declared = candidate.type ?? '';

@@ -15,6 +15,7 @@ import {
   backupPath,
   installHooks,
   parseHooksFlags,
+  SettingsUnreadableError,
   statusHooks,
   uninstallHooks,
   type HooksCommandOptions,
@@ -229,5 +230,38 @@ describe('hooks install and uninstall', () => {
     statusHooks(options({ repo: { path: '/host/aion-local', verified: false } }), write);
 
     expect(written.join('\n')).toContain('not checkable from here');
+  });
+
+  it('names invalid JSON distinctly from a read failure, with the parse error as the cause', () => {
+    mkdirSync(join(dir, 'home', '.claude'), { recursive: true });
+    writeFileSync(settingsPath, '{not json');
+
+    let caught: unknown;
+    try {
+      statusHooks(options(), write);
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(SettingsUnreadableError);
+    expect((caught as Error).message).toContain('is not valid JSON');
+    expect((caught as Error).cause).toBeInstanceOf(Error);
+  });
+
+  it('names a read failure distinctly from invalid JSON, with the read error as the cause', () => {
+    // A directory at the settings path is unreadable as a file (EISDIR), the portable way to
+    // force `readFileSync` itself to throw, ahead of anything that parses what it returned.
+    mkdirSync(settingsPath, { recursive: true });
+
+    let caught: unknown;
+    try {
+      statusHooks(options(), write);
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(SettingsUnreadableError);
+    expect((caught as Error).message).toContain('could not be read');
+    expect((caught as Error).cause).toBeInstanceOf(Error);
   });
 });

@@ -194,6 +194,19 @@ describe('degradation ladder', () => {
     expect(CueSchema.parse(result.cues[0])).toEqual(result.cues[0]);
   });
 
+  it('logs the provider error, so an outage reads differently from a rejection', async () => {
+    const failure = new Error('401 unauthorized');
+    generate.mockRejectedValue(failure);
+    const warn = vi.spyOn(deps.logger, 'warn');
+
+    await extractCues(deps, { query: 'why did the migration deadlock' });
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ err: failure, model: MODEL, reason: 'model_error' }),
+      'cue extraction degraded',
+    );
+  });
+
   it('carries the caller-supplied summary through the ladder at its damped 1x weight', async () => {
     generate.mockRejectedValue(new Error('ollama unreachable'));
 

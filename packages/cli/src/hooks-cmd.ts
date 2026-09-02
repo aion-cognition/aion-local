@@ -1,3 +1,4 @@
+import { describeError } from '@aion/core';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname } from 'node:path';
@@ -12,7 +13,7 @@ import {
   type HookProfile,
   type SettingsHooks,
 } from './hooks-settings.js';
-import { describeError, stderrWriter, stdoutWriter, type Writer } from './output.js';
+import { stderrWriter, stdoutWriter, type Writer } from './output.js';
 import { claudeSettingsPath, hookScriptPath, resolveHostRepo, type HostRepo } from './paths.js';
 
 /**
@@ -22,14 +23,14 @@ import { claudeSettingsPath, hookScriptPath, resolveHostRepo, type HostRepo } fr
 
 function unknownHooksOption(option: string): CliUsageError {
   return new CliUsageError(
-    `unknown option '${option}' for hooks ` +
-      '(supported: --profile full|lite, --no-research-capture, --stop-mode push|instruct)',
+    `unknown option '${option}' for hooks (supported: --profile full|lite, ` +
+      '--with-research-capture, --no-research-capture, --stop-mode push|instruct)',
   );
 }
 
 export class SettingsUnreadableError extends Error {
-  constructor(path: string) {
-    super(`${path} is not valid JSON; fix or move it before installing hooks`);
+  constructor(path: string, reason: string, options?: { cause?: unknown }) {
+    super(`${path} ${reason}; fix or move it before installing hooks`, options);
     this.name = 'SettingsUnreadableError';
   }
 }
@@ -104,10 +105,16 @@ function readSettings(path: string): unknown {
   if (!existsSync(path)) {
     return {};
   }
+  let raw: string;
   try {
-    return JSON.parse(readFileSync(path, 'utf8'));
-  } catch {
-    throw new SettingsUnreadableError(path);
+    raw = readFileSync(path, 'utf8');
+  } catch (err) {
+    throw new SettingsUnreadableError(path, 'could not be read', { cause: err });
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    throw new SettingsUnreadableError(path, 'is not valid JSON', { cause: err });
   }
 }
 
@@ -230,7 +237,8 @@ function usage(): string {
     '                               start and session end only',
     '  --stop-mode push|instruct    push stores the turn directly; instruct asks the model to',
     '                               store it and blocks the stop until it does',
-    '  --no-research-capture        skip the Slack, Linear, and Notion tool-result capture',
+    '  --with-research-capture      capture Slack, Linear, and Notion tool results (default)',
+    '  --no-research-capture        skip that capture',
     '',
   ].join('\n');
 }

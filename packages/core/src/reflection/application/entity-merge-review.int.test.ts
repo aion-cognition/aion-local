@@ -234,6 +234,30 @@ describe('applying an entity-merge proposal', () => {
     expect(getEntityMergeProposal(db, proposalId)?.resolvedAt).toEqual(expect.any(String));
   }, 120_000);
 
+  it('reports a row whose two sides are one node as nothing to merge', async () => {
+    const nodeId = await seedEntity('Solitary Ledger', 'tool');
+    const proposalId = recordEntityMergeProposal(db, {
+      subject: { id: nodeId, name: 'Solitary Ledger', type: 'tool' },
+      candidate: { id: nodeId, name: 'Solitary Ledger', type: 'tool' },
+      similarity: 0.99,
+      similaritySource: 'name_cosine',
+      episodeId: 'ep-solitary',
+    });
+
+    const result = await applyEntityMergeProposal(
+      { driver: harness.driver, db, logger },
+      { id: proposalId, now: NOW },
+    );
+
+    // No merge happened, so the operator must not be told one already had.
+    expect(result).toEqual({
+      outcome: 'nothing_to_merge',
+      id: proposalId,
+      canonical: { id: nodeId, name: 'Solitary Ledger', type: 'tool' },
+    });
+    expect(getEntityMergeProposal(db, proposalId)?.resolvedAt).toEqual(expect.any(String));
+  }, 120_000);
+
   it('throws for an id in neither queue', async () => {
     await expect(
       applyEntityMergeProposal(

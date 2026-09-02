@@ -33,13 +33,22 @@ function methodCountKey(method: string): string {
   return `${METHOD_COUNT_KEY_PREFIX}${method}`;
 }
 
-/** One increment per item a pack served, keyed by its own `rationale.method`. Call once, at pack persistence. */
+/**
+ * One increment per item a pack served, keyed by its own `rationale.method`. Call once, at pack
+ * persistence.
+ *
+ * The reads and the writes are one unit: the service and the CLI open the same store, so a total
+ * added to a base the other connection has already moved past is that pack's items thrown away.
+ * Immediate takes the write lock at BEGIN, so the second writer waits out busy_timeout.
+ */
 export function recordPackMethodCounts(db: SqliteHandle, methods: readonly string[]): void {
-  for (const method of methods) {
-    const key = methodCountKey(method);
-    const current = Number(getMeta(db, key) ?? '0');
-    setMeta(db, key, String(current + 1));
-  }
+  db.transaction(() => {
+    for (const method of methods) {
+      const key = methodCountKey(method);
+      const current = Number(getMeta(db, key) ?? '0');
+      setMeta(db, key, String(current + 1));
+    }
+  }).immediate();
 }
 
 /** Cumulative pack items per method, zero for a method that has never produced one. */
@@ -85,23 +94,27 @@ export function recordPackMethodLegStats(
   db: SqliteHandle,
   stats: Readonly<Partial<Record<PackMethod, PackMethodLegStat>>>,
 ): void {
-  for (const method of PACK_METHODS) {
-    const stat = stats[method];
-    if (stat === undefined) {
-      continue;
+  // One unit for the same reason the counter above is: three totals read off one base and
+  // written back, against a store two processes write.
+  db.transaction(() => {
+    for (const method of PACK_METHODS) {
+      const stat = stats[method];
+      if (stat === undefined) {
+        continue;
+      }
+      setMeta(db, soleKey(method), String(Number(getMeta(db, soleKey(method)) ?? '0') + stat.sole));
+      setMeta(
+        db,
+        sharedKey(method),
+        String(Number(getMeta(db, sharedKey(method)) ?? '0') + stat.shared),
+      );
+      setMeta(
+        db,
+        rrfKey(method),
+        String(Number(getMeta(db, rrfKey(method)) ?? '0') + stat.rrfContribution),
+      );
     }
-    setMeta(db, soleKey(method), String(Number(getMeta(db, soleKey(method)) ?? '0') + stat.sole));
-    setMeta(
-      db,
-      sharedKey(method),
-      String(Number(getMeta(db, sharedKey(method)) ?? '0') + stat.shared),
-    );
-    setMeta(
-      db,
-      rrfKey(method),
-      String(Number(getMeta(db, rrfKey(method)) ?? '0') + stat.rrfContribution),
-    );
-  }
+  }).immediate();
 }
 
 /** Cumulative sole finds, shared finds, and RRF contribution per method, zero where never recorded. */

@@ -7,7 +7,7 @@ import {
   closeFragment,
   stampNew,
 } from './bitemporal.js';
-import { BASE_NODE_LABEL, isContentBearing, NODE_LABELS, resolveLabels } from './labels.js';
+import { BASE_NODE_LABEL, NODE_LABELS, resolveLabels } from './labels.js';
 import { fromGraphDateTime } from './values.js';
 
 const NOW = new Date('2026-02-03T04:05:06.000Z');
@@ -58,8 +58,7 @@ describe('labels', () => {
   it('gives content-bearing nodes the shared Memory label', () => {
     expect(resolveLabels('Episode')).toEqual(['Episode', 'Memory', BASE_NODE_LABEL]);
     expect(resolveLabels('Turn')).toEqual(['Turn', 'Memory', BASE_NODE_LABEL]);
-    expect(isContentBearing('Episode')).toBe(true);
-    expect(isContentBearing('Session')).toBe(false);
+    expect(resolveLabels('Session')).not.toContain('Memory');
   });
 
   it('gives backbone nodes the Entity label the composite constraint needs', () => {

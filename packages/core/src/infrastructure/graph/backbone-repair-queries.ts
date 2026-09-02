@@ -28,14 +28,18 @@ export type BackboneRepairTarget = {
  *
  * An episode whose `session_id` names no current session is not returned: there is nothing to
  * attach it to, and inventing a session would be a worse answer than leaving the count high.
+ * The session join runs before the batch limit for that reason. Limiting first spends the
+ * batch on the oldest breaks whether or not they are repairable, and unrepairable ones at the
+ * head of the ordering hold the same places on every later run, so the repairable episodes
+ * behind them are never selected.
  */
 const FIND_EPISODES_MISSING_SESSION_LINK = [
   'MATCH (e:Episode)',
   `WHERE ${currentOnly('e')} AND e.${MEMORY_PROPERTIES.sessionId} IS NOT NULL`,
   `  AND NOT (e)-[:${CONTAINMENT_TYPE}]->(:Session)`,
-  `WITH e ORDER BY e.${BITEMPORAL_PROPERTIES.txFrom}, e.id LIMIT $limit`,
   `MATCH (s:Session { id: e.${MEMORY_PROPERTIES.sessionId} })`,
-  `WHERE s.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  `WHERE ${currentOnly('s')}`,
+  `WITH e, s ORDER BY e.${BITEMPORAL_PROPERTIES.txFrom}, e.id LIMIT $limit`,
   'RETURN e.id AS episode_id, s.id AS session_id',
 ].join('\n');
 

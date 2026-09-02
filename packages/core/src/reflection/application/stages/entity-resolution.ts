@@ -384,9 +384,12 @@ export async function attachVectors(
     await writeEntityVectors(ctx.driver, pairVectors(plan, vectors));
     return false;
   } catch (err) {
+    // The two vectors recover by different paths. The worker's pending-vector drain writes
+    // `content_vec` only, so a missing `name_vec` waits for the next episode that mentions the
+    // entity: the stored hash is absent, so that run plans the name embedding again.
     ctx.logger.warn(
       { err, episodeId: ctx.episodeId, entities: resolved.length },
-      'entity vectors deferred; the entities are stored and the drain will embed them',
+      'entity vectors deferred; the drain embeds the content vector and the next mention the name',
     );
     return true;
   }

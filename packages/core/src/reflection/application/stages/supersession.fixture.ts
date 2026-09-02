@@ -73,10 +73,7 @@ export class SupersessionFakeGraph extends FakeGraph {
     // claim: what widens a family is proven against a real server in `proposals.int.test.ts`.
     // Ahead of the cosine branch below, because the sibling read carries a cosine of its own
     // and matching on that first would hand it the candidate search's parameters.
-    if (
-      cypher.includes('MATCH (claim { id: $claimId })') ||
-      cypher.includes('UNWIND $ids AS closedId')
-    ) {
+    if (cypher.includes('{ id: $claimId }') || cypher.includes('UNWIND $ids AS closedId')) {
       this.statements.push({ cypher, parameters });
       return toResult([]);
     }

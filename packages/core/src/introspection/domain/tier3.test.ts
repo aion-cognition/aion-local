@@ -40,6 +40,7 @@ describe('acceptTier3Proposal', () => {
   it('accepts an allowlisted candidate with work to do and a record of running', () => {
     expect(acceptTier3Proposal(proposal('dead_letter'), CANDIDATES, snapshot())).toEqual({
       verdict: 'accepted',
+      candidate: CANDIDATES.find((entry) => entry.name === 'dead_letter'),
     });
   });
 
@@ -79,7 +80,7 @@ describe('acceptTier3Proposal', () => {
 
     expect(acceptTier3Proposal(proposal('dead_letter'), CANDIDATES, untried)).toMatchObject({
       verdict: 'downgraded',
-      reason: 'the operation has never been seen to succeed',
+      reason: 'the operation has no run record yet',
     });
   });
 
@@ -88,7 +89,7 @@ describe('acceptTier3Proposal', () => {
 
     expect(acceptTier3Proposal(proposal('dead_letter'), CANDIDATES, missing)).toMatchObject({
       verdict: 'downgraded',
-      reason: 'the operation has never been seen to succeed',
+      reason: 'the operation has no run record yet',
     });
   });
 

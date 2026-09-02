@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   evictableModels,
   localChatModels,
-  modelsToPull,
   remoteBannerLines,
   resolveProviderRouting,
   routingSummary,
@@ -109,17 +108,15 @@ describe('the routing matrix', () => {
 });
 
 describe('what routing asks init and reconciliation to do', () => {
-  it('pulls the embed model alone once every generation role is remote', () => {
+  it('evicts every generation model once every generation role is remote', () => {
     const routing = resolveProviderRouting(config({ key: 'sk-ant-test' }));
 
-    expect(modelsToPull(routing)).toEqual([EMBED_MODEL]);
     expect(evictableModels(routing)).toEqual([CUE_MODEL, REFLECT_MODEL]);
   });
 
-  it('pulls the embed model and whatever chat model is still local', () => {
+  it('evicts only the roles that went remote', () => {
     const routing = resolveProviderRouting(config({ key: 'sk-ant-test', cue: 'ollama' }));
 
-    expect(modelsToPull(routing)).toEqual([EMBED_MODEL, CUE_MODEL]);
     expect(evictableModels(routing)).toEqual([REFLECT_MODEL]);
   });
 

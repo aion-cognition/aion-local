@@ -1,5 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import {
   reinforceEdgeWeights,
   type WeightReinforcement,
@@ -24,18 +25,6 @@ import { aggregateWindow, type AggregatedPair } from '../domain/reinforcement.js
  * One call drains at most one batch. A caller that wants the queue empty calls again while
  * `signalsClaimed` is positive.
  */
-
-/** Matches `hebbian.batchSize` in `config/defaults.ts`; parity is asserted in this module's test. */
-export const DEFAULT_HEBBIAN_BATCH_SIZE = 100;
-
-/** Matches `hebbian.learningRate`: eta in `w' = w + eta * (1 - w)`. */
-export const DEFAULT_HEBBIAN_LEARNING_RATE = 0.1;
-
-/**
- * Matches `hebbian.weightFloor`: no edge is ever written below it, and `recall.associationStrength`
- * sits at the same number, so nothing plasticity writes becomes untraversable.
- */
-export const DEFAULT_HEBBIAN_WEIGHT_FLOOR = 0.1;
 
 export type HebbianFlushDeps = {
   readonly driver: Driver;
@@ -86,14 +75,18 @@ function toWeightReinforcements(pairs: readonly AggregatedPair[]): readonly Weig
  *
  * A graph failure leaves the rows in place and throws, so the next flush retries the same
  * window rather than dropping it.
+ *
+ * A caller that names no batch size, rate or floor gets the shipped knob. `hebbian.weightFloor`
+ * and `recall.associationStrength` sit at the same number, so nothing this writes becomes
+ * untraversable.
  */
 export async function flushReinforcementQueue(
   deps: HebbianFlushDeps,
   options: HebbianFlushOptions = {},
 ): Promise<HebbianFlushReport> {
-  const batchSize = options.batchSize ?? DEFAULT_HEBBIAN_BATCH_SIZE;
-  const learningRate = options.learningRate ?? DEFAULT_HEBBIAN_LEARNING_RATE;
-  const weightFloor = options.weightFloor ?? DEFAULT_HEBBIAN_WEIGHT_FLOOR;
+  const batchSize = options.batchSize ?? DEFAULTS.hebbian.batchSize;
+  const learningRate = options.learningRate ?? DEFAULTS.hebbian.learningRate;
+  const weightFloor = options.weightFloor ?? DEFAULTS.hebbian.weightFloor;
   const now = options.now ?? new Date();
 
   const signals = claimReinforcementSignals(deps.db, batchSize);
@@ -132,6 +125,15 @@ export async function flushReinforcementQueue(
     edgesUpdated: edges.length,
     signalsDeleted,
   };
-  deps.logger.debug({ ...report }, 'hebbian flush applied');
+  // The two fold aggregates ride the log rather than the report: how much evidence a window
+  // spent is an operator's question, and every caller of this function wants the counts above.
+  deps.logger.debug(
+    {
+      ...report,
+      signalsFolded: pairs.reduce((sum, pair) => sum + pair.signalCount, 0),
+      pairsSaturated: pairs.filter((pair) => pair.effectiveSignal >= 1).length,
+    },
+    'hebbian flush applied',
+  );
   return report;
 }

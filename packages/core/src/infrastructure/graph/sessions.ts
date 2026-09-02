@@ -79,11 +79,16 @@ async function readFollowsTarget(
 
 /**
  * Lazy Session creation plus the three backbone edges (INITIATED_BY, WITHIN_WORKSPACE,
- * FOLLOWS). The backbone edges and the FOLLOWS chain are established exactly once, on the
- * write that actually creates the node (`node.created`): a repeat call for the same
- * `sessionId` resolves and reports the existing chain instead of re-deriving it, which is
- * both truer to "resolve without writing" and what keeps a repeat call for an older
- * session from ever cross-linking to a session created after it.
+ * FOLLOWS). The two backbone edges are upserted on every call, `count: 0`, so a repeat call is
+ * a no-op when the member and the workspace are the ones the session already hangs off and
+ * attaches the missing edge when they are not. Skipping them on the resolve path left a
+ * session resolved against a different member with no edge to it and a result that said the
+ * call succeeded.
+ *
+ * The FOLLOWS chain is derived exactly once, on the write that actually creates the node
+ * (`node.created`): a repeat call for the same `sessionId` reports the existing chain instead
+ * of re-deriving it, which is what keeps a repeat call for an older session from ever
+ * cross-linking to a session created after it.
  *
  * One transaction, and the Member locked inside it before the chain is derived. The tail
  * of the chain is a read ("the member's most recent other session") that decides a write,
@@ -105,19 +110,6 @@ export async function ensureGraphSession(
       id: input.sessionId,
       now,
       occurredAt,
-    });
-
-    if (!node.created) {
-      const follows = await readFollowsTarget(tx, node.id);
-      return { sessionId: node.id, created: false, follows };
-    }
-
-    await lockNodeInTransaction(tx, input.memberId, now);
-
-    const priorSessionId = await findPriorSessionId(tx, {
-      sessionId: node.id,
-      memberId: input.memberId,
-      workspaceId: input.workspaceId,
     });
 
     await upsertEdgeInTransaction(tx, {
@@ -142,6 +134,19 @@ export async function ensureGraphSession(
       provenance: STRUCTURAL_PROVENANCE,
       count: 0,
       now,
+    });
+
+    if (!node.created) {
+      const follows = await readFollowsTarget(tx, node.id);
+      return { sessionId: node.id, created: false, follows };
+    }
+
+    await lockNodeInTransaction(tx, input.memberId, now);
+
+    const priorSessionId = await findPriorSessionId(tx, {
+      sessionId: node.id,
+      memberId: input.memberId,
+      workspaceId: input.workspaceId,
     });
 
     if (priorSessionId !== undefined) {

@@ -14,8 +14,8 @@ import { toGraphDateTime, type Row } from './values.js';
  * nobody can undo any other way: a wrong contradiction judgment, a family cut too wide, an
  * autonomous close a person disagrees with.
  *
- * Nothing is deleted, here least of all. The `SUPERSEDES` edge stays and is closed in system
- * time instead, so the substrate still knows it once believed the replacement and when it
+ * Nothing is deleted, here least of all. The `SUPERSEDES` edge stays and is closed on both
+ * timelines instead, so the substrate still knows it once believed the replacement and when it
  * stopped: `aion why` reads that back as closed-then-reopened, and a `knew_at` read before the
  * reopen still returns the supersession the substrate held at that moment. What the node gets
  * back is its currency, by dropping the two stamps the close wrote.
@@ -59,8 +59,12 @@ const SUPERSESSION_PREVIEW = [
   `                n.${ENTITY_NAME_PROPERTY}, '') AS content,`,
   `       n.${BITEMPORAL_PROPERTIES.validUntil} AS valid_until,`,
   `       n.${BITEMPORAL_PROPERTIES.forgottenAt} AS forgotten_at,`,
-  '       collect(next.id) AS superseded_by,',
-  '       collect(coalesce(r.provenance, [])) AS provenance',
+  // The successor and its provenance are collected as one map. Collected apart, an unmatched
+  // OPTIONAL MATCH drops the null id and keeps the coalesced empty provenance list, so the two
+  // sides come back at different lengths.
+  '       collect(CASE WHEN next IS NULL THEN null',
+  '                    ELSE { id: next.id, provenance: coalesce(r.provenance, []) } END)',
+  '         AS lineage',
 ].join('\n');
 
 export type SupersessionPreview = {
@@ -72,18 +76,19 @@ export type SupersessionPreview = {
   readonly lineage: readonly ReopenedLineage[];
 };
 
+type LineageRow = { id: string; provenance: string[] | null };
+
 function mapPreview(row: Row): SupersessionPreview {
-  const ids = (row.superseded_by as string[] | null) ?? [];
-  const provenance = (row.provenance as string[][] | null) ?? [];
+  const lineage = (row.lineage as LineageRow[] | null) ?? [];
   return {
     id: row.id as string,
     labels: (row.labels as string[] | null) ?? [],
     content: typeof row.content === 'string' ? row.content : '',
     closed: row.valid_until instanceof Date,
     forgotten: row.forgotten_at instanceof Date,
-    lineage: ids.map((supersededBy, index) => ({
-      supersededBy,
-      provenance: provenance[index] ?? [],
+    lineage: lineage.map((entry) => ({
+      supersededBy: entry.id,
+      provenance: entry.provenance ?? [],
     })),
   };
 }
@@ -102,14 +107,21 @@ export async function previewSupersession(
 }
 
 /**
- * `coalesce` on both stamps, so a second reopen keeps the first one's timestamps and writes
- * nothing new, the same discipline the close itself follows.
+ * A second reopen matches no row: the `tx_until IS NULL` predicate is what an already-closed
+ * edge fails, so the first call's stamps stand without a `coalesce` guarding them.
+ *
+ * Both timelines close, not system time alone. `edges.ts` reopens a matched edge on
+ * `valid_until IS NOT NULL` and clears `tx_until` under that same condition, so an edge closed
+ * in system time alone can never come back: a later supersession of the same pair would re-close
+ * the node while its lineage edge stayed stamped, leaving a closed node whose lineage the
+ * default read drops.
  */
 const CLOSE_LINEAGE_EDGES = [
   `MATCH (next)-[r:${SUPERSEDES_TYPE}]->(n:${BASE_NODE_LABEL} { id: $id })`,
   `WHERE r.${BITEMPORAL_PROPERTIES.txUntil} IS NULL`,
-  `SET r.${BITEMPORAL_PROPERTIES.txUntil} = coalesce(r.${BITEMPORAL_PROPERTIES.txUntil}, $now),`,
-  `    r.${EDGE_REOPENED_AT_PROPERTY} = coalesce(r.${EDGE_REOPENED_AT_PROPERTY}, $now)`,
+  `SET r.${BITEMPORAL_PROPERTIES.txUntil} = $now,`,
+  `    r.${BITEMPORAL_PROPERTIES.validUntil} = $now,`,
+  `    r.${EDGE_REOPENED_AT_PROPERTY} = $now`,
   'RETURN next.id AS superseded_by, coalesce(r.provenance, []) AS provenance',
   'ORDER BY superseded_by',
 ].join('\n');

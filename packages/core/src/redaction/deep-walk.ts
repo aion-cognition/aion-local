@@ -7,14 +7,14 @@ export type DeepRedactionResult<T> = {
 };
 
 /**
- * Recurses through a JSON-shaped payload (the reflection tool input: objects, arrays,
- * strings, and primitives) and redacts every string, in value position and in key
- * position alike. Keys carry secrets as often as values do: a credential is a map key
- * whenever tool output is `{ "<token>": [scopes] }`, and an unredacted key reaches
- * storage through the same episode text as any leaf. Returns a new tree; the input is
- * never mutated, so a caller holding the original still has the raw content until it
- * assigns the result. Non-plain values (Date, Map, class instances) are not a payload
- * shape this handles; the reflection input is zod-validated JSON already.
+ * Recurses through a JSON-shaped payload (objects, arrays, strings, and primitives) and
+ * redacts every string, in value position and in key position alike. Keys carry secrets as
+ * often as values do: a credential is a map key whenever tool output is `{ "<token>":
+ * [scopes] }`, and an unredacted key reaches storage through the same episode text as any
+ * leaf. Returns a new tree; the input is never mutated, so a caller holding the original
+ * still has the raw content until it assigns the result. Non-plain values (Date, Map, class
+ * instances) are not a payload shape this handles; both callers (the reflection tool input,
+ * the recall request's query and context) pass zod-validated JSON already.
  *
  * A key from the credential vocabulary is also context for its own value: the walk carries
  * it down so `{"aws_secret_access_key": "<40 chars>"}` is judged the way the same pair

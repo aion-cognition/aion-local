@@ -27,11 +27,10 @@ import { confirmOrExit, stdoutWriter, type Writer } from './output.js';
 import { withSubstrate, type Substrate } from './substrate.js';
 
 /**
- * Where a judged contradiction gets decided. Supersession is propose-only, because the judge
- * answers with one confidence for every firing whichever model it runs on, so nothing in the
- * pipeline closes a claim on its own. Without a command the proposal tables are write-only, and
- * a stored correction can never change what recall answers, which was the user-visible failure
- * the posture change was meant to fix.
+ * Where a judged contradiction gets decided, when it is not decided on its own. Under the
+ * shipped `unanimous` mode, a row here is a pair the second judge pass vetoed; the pipeline
+ * already closed what both passes agreed on. `propose` is the kill switch: it stops the
+ * pipeline from closing anything and queues every pair for this command instead.
  *
  * `apply` is the only writing subcommand and takes one id at a time on purpose: applying these
  * in bulk would reinstate auto-apply with an extra keystroke.
@@ -282,6 +281,13 @@ function renderMergeApply(result: ApplyEntityMergeProposalResult, write: Writer)
     write(
       `applied ${result.id}: already merged, "${result.absorbed.name}" is inside ` +
         `"${result.canonical.name}"; the row is now resolved`,
+    );
+    return;
+  }
+  if (result.outcome === 'nothing_to_merge') {
+    write(
+      `applied ${result.id}: both sides are "${result.canonical.name}" ` +
+        `(${short(result.canonical.id)}), so there was nothing to merge; the row is now resolved`,
     );
     return;
   }

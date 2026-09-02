@@ -126,11 +126,6 @@ export function localChatModels(routing: ProviderRouting): readonly string[] {
   ];
 }
 
-/** Embed always, plus whatever chat models are still local. The full init pull list. */
-export function modelsToPull(routing: ProviderRouting): readonly string[] {
-  return [...new Set([routing.embedModel, ...localChatModels(routing)])];
-}
-
 /**
  * Models a remote-routed role would have used and nothing local still needs. Reconciliation
  * unloads these from memory when they are resident. The embed model is excluded by

@@ -196,8 +196,7 @@ export async function consultTier3(
   }
 
   const operation = deps.operations.find((entry) => entry.name === proposal.operation);
-  const candidate = input.candidates.find((entry) => entry.name === proposal.operation);
-  if (operation === undefined || candidate === undefined) {
+  if (operation === undefined) {
     record(deps, input, {
       ...proposed,
       gate,
@@ -214,7 +213,7 @@ export async function consultTier3(
     kind: 'selected',
     name: operation.name,
     tier: 3,
-    urgency: candidate.relevance,
+    urgency: acceptance.candidate.relevance,
     reason: `tier3: ${proposal.rationale}`,
   };
 

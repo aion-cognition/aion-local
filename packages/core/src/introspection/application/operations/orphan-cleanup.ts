@@ -1,8 +1,8 @@
-import { forgetNode } from '../../../infrastructure/graph/bitemporal.js';
 import { upsertEdge } from '../../../infrastructure/graph/edges.js';
 import {
   findOrphanNodes,
   findOrphanRelinkTargets,
+  forgetOrphanNode,
   type OrphanRelinkTarget,
 } from '../../../infrastructure/graph/topology-queries.js';
 import { criticalConditions, type HealthSnapshot } from '../../domain/health.js';
@@ -79,7 +79,9 @@ async function runOrphanCleanup(ctx: OperationContext): Promise<OperationOutcome
       )
     ).map((target) => [target.orphanId, target]),
   );
-  const forgetBefore = ctx.now.getTime() - ctx.config.maintenance.orphanForgetAfterDays * DAY_MS;
+  const forgetBefore = new Date(
+    ctx.now.getTime() - ctx.config.maintenance.orphanForgetAfterDays * DAY_MS,
+  );
 
   let processed = 0;
   let relinked = 0;
@@ -97,9 +99,12 @@ async function runOrphanCleanup(ctx: OperationContext): Promise<OperationOutcome
     }
     // No candidate and no age: an orphan the substrate may still connect on its own. A node
     // with no stamp at all is never forgotten, since its age is unknown rather than large.
-    if (orphan.txFrom !== undefined && orphan.txFrom.getTime() <= forgetBefore) {
-      await forgetNode(ctx.driver, { id: orphan.id, now: ctx.now });
-      forgotten += 1;
+    // The age test is here to skip the write; the write repeats it, and the orphan test with
+    // it, against the graph as it stands now.
+    if (orphan.txFrom !== undefined && orphan.txFrom.getTime() <= forgetBefore.getTime()) {
+      if (await forgetOrphanNode(ctx.driver, { id: orphan.id, forgetBefore, now: ctx.now })) {
+        forgotten += 1;
+      }
     }
   }
 

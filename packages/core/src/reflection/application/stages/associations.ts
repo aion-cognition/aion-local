@@ -65,7 +65,11 @@ export class AssociationInferenceStage implements ReflectionStage {
       return { status: 'failed', summary: entities.summary };
     }
     if (entities.rows.length === 0) {
-      return { status: 'skipped', summary: 'no entities mentioned in the episode' };
+      return {
+        status: 'skipped',
+        summary: 'no entities mentioned in the episode',
+        retryable: true,
+      };
     }
     const entityIds = entities.rows.map((entity) => entity.id);
 

@@ -33,10 +33,10 @@ export const ENTITY_MENTION_PROJECTION_NAME = 'aion-entity-mentions';
  * more than ten genuine co-mention partners above the floor is a hub, and a hub's eleventh
  * partner is not the duplicate anyone is looking for.
  */
-export const NOMINATION_TOP_K = 10;
+const NOMINATION_TOP_K = 10;
 
 /** A tick's ceiling on nominated pairs, so one dense graph cannot hand the cascade a day's work. */
-export const NOMINATION_LIMIT = 500;
+const NOMINATION_LIMIT = 500;
 
 /**
  * Whether the plugin is loaded at all. The image ships it, but a server someone started by hand
@@ -177,9 +177,9 @@ async function dropQuietly(driver: Driver, logger: Logger | undefined): Promise<
 
 /**
  * Guard, reclaim, project, stream, drop. The caller gets the pairs and never the projection, so
- * there is no path on which forgetting to drop is possible. Population bounds stay with the
- * operation that calls this: relevance and node caps are read from config, and this module has
- * none.
+ * there is no path on which forgetting to drop is possible. The two bounds on how much one run
+ * hands back, `NOMINATION_TOP_K` and `NOMINATION_LIMIT`, are this module's own: the cascade
+ * passes neither, and the caps it does read from config bound what it then does with the pairs.
  */
 export async function nominateSharedEpisodePairs(
   driver: Driver,

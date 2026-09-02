@@ -12,9 +12,9 @@
  */
 
 /** Twice per window, so what went quiet is noticed within one and a half windows. */
-export const SWEEP_DIVISOR = 2;
+const SWEEP_DIVISOR = 2;
 
-/** The floor every sweep of a minutes-scale window uses. */
+/** The default floor, taken by the two idle sweeps. The reaper passes its own, one second. */
 export const MIN_SWEEP_INTERVAL_MS = 60_000;
 
 export function halfWindowIntervalMs(

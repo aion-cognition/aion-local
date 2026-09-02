@@ -11,8 +11,8 @@ import { NARRATIVE_GROUNDING } from '../domain/narrative.js';
  * the substrate never held, and they are recall-eligible forever. Where the session still
  * holds episodes the narrative is rewritten under the grounding rule and supersedes its
  * predecessor; where it holds none, nothing can ground a rewrite and the old node is
- * forgotten: suppressed, still readable through `as_of`. There is no automatic maintenance
- * pass yet, so this runs by hand.
+ * forgotten: suppressed, still readable through `as_of`. The `narrative_regrounding` operation
+ * drains this on the hour bucket, bounded by `maintenance.narrativeCleanupBatch`.
  */
 
 export type NarrativeCleanupOptions = Omit<NarrativeOptions, 'now' | 'regenerate'> & {

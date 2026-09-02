@@ -100,13 +100,8 @@ export function resolveLabels(primary: NodeLabel): readonly string[] {
   return [primary, ...COMPANION_LABELS[primary], BASE_NODE_LABEL];
 }
 
-/** True when the label's nodes carry `Memory` and therefore land in the vector and currency indexes. */
-export function isContentBearing(primary: NodeLabel): boolean {
-  return COMPANION_LABELS[primary].includes('Memory');
-}
-
 /** Reflection's provenance edge, which is what makes an episode enriched rather than pending. */
 export const EXTRACTION_TYPE: RelationshipType = 'EXTRACTED_FROM';
 
-/** The protected set as a Cypher label-list literal: `NOT type(r) IN [${BACKBONE_TYPES}]`. */
+/** The protected set as a Cypher relationship-type list literal: `NOT type(r) IN [${BACKBONE_TYPES}]`. */
 export const BACKBONE_TYPES = PROTECTED_RELATIONSHIP_TYPES.map((type) => `'${type}'`).join(', ');

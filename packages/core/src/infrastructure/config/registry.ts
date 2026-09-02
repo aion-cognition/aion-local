@@ -1,4 +1,10 @@
-import { KNOB_TABLE, type ConfigPath, type KnobDeclaration, type KnobKind } from './knobs.js';
+import {
+  KNOB_TABLE,
+  type ConfigPath,
+  type KnobDeclaration,
+  type KnobKind,
+  type KnobTable,
+} from './knobs.js';
 
 export type Knob = {
   envVar: string;
@@ -58,11 +64,22 @@ function knobKind(knob: KnobDeclaration): KnobKind {
  * AION_SEED_BUDGET_GROWTH are named for the budget they shape rather than for the group that
  * holds them alongside the cap.
  */
-function buildRegistry(): readonly Knob[] {
+export function buildRegistry(table: KnobTable = KNOB_TABLE): readonly Knob[] {
   const registry: Knob[] = [];
-  for (const [group, leaves] of Object.entries(KNOB_TABLE)) {
+  // Two leaves declaring one variable would both be written from it, and the loader would give
+  // no sign: the unknown-variable check dedupes and the schema accepts both writes. The table is
+  // 150-odd leaves across three files, which is where such a collision hides.
+  const claimed = new Map<string, string>();
+  for (const [group, leaves] of Object.entries(table)) {
     for (const [leaf, knob] of Object.entries(leaves)) {
-      registry.push({ envVar: knob[0], path: [group, leaf], kind: knobKind(knob) });
+      const envVar = knob[0];
+      const path = `${group}.${leaf}`;
+      const owner = claimed.get(envVar);
+      if (owner !== undefined) {
+        throw new Error(`${envVar} is declared by both ${owner} and ${path}`);
+      }
+      claimed.set(envVar, path);
+      registry.push({ envVar, path: [group, leaf], kind: knobKind(knob) });
     }
   }
   return registry;
@@ -101,14 +118,21 @@ export const RETIRED_ENV_VARS: ReadonlySet<string> = new Set([
   'AION_REFLECTION_NARRATIVE_TIMEOUT_MS',
 ]);
 
-const registryByEnvVar = new Map(KNOB_REGISTRY.map((knob) => [knob.envVar, knob]));
+const KNOWN_ENV_VARS: ReadonlySet<string> = new Set(KNOB_REGISTRY.map((knob) => knob.envVar));
+
+const REGISTRY_BY_PATH: ReadonlyMap<string, Knob> = new Map(
+  KNOB_REGISTRY.map((knob) => [knob.path.join('.'), knob]),
+);
 
 export function knownEnvVars(): ReadonlySet<string> {
-  return new Set(registryByEnvVar.keys());
+  return KNOWN_ENV_VARS;
 }
 
+/**
+ * The variable an operator would set to reach this config path. A schema issue can land inside a
+ * leaf rather than on it (`search.weights.vector`, `search.methods.1`), so the lookup takes the
+ * group and leaf that name the knob and leaves the rest of the path to the caller.
+ */
 export function envVarForPath(path: readonly string[]): string | undefined {
-  const joined = path.join('.');
-  const match = KNOB_REGISTRY.find((knob) => knob.path.join('.') === joined);
-  return match?.envVar;
+  return REGISTRY_BY_PATH.get(path.slice(0, 2).join('.'))?.envVar;
 }

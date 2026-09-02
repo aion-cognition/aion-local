@@ -2,8 +2,12 @@ import { z } from 'zod';
 
 import { hashContent } from './content.js';
 import {
-  citedSourceIds,
+  clip,
+  groundSentences,
   narrativeSentenceBudget,
+  renderItem,
+  synthesisSystemPrompt,
+  type GroundedSentence,
   type NarrativeOutput,
   type NarrativeSource,
   type NarrativeSourceItem,
@@ -31,16 +35,6 @@ export type ConsolidationMember = {
   readonly occurredAt?: Date;
 };
 
-function clip(text: string, maxChars: number): string {
-  return text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;
-}
-
-/** Header and content on separate lines, so a thin member's header is not read as a sentence. */
-function renderItem(item: NarrativeSourceItem): string {
-  const when = item.occurredAt === undefined ? '' : ` ${item.occurredAt.toISOString()}`;
-  return `[${item.handle}] ${item.kind}${when}\n${item.text}`;
-}
-
 /**
  * The compression input, in the shape the narrative assembler already reads. Every member is
  * rendered, because a rollup that saw half its members would claim to cover a window it never
@@ -67,11 +61,8 @@ export function renderConsolidationSource(
   };
 }
 
-export type GroundedSentence = {
-  readonly text: string;
-  /** Graph ids of the members this one sentence cites. Never empty: a sentence with none is dropped. */
-  readonly citations: readonly string[];
-};
+/** Declared beside the grounding filter both axes run; re-exported here for its callers. */
+export type { GroundedSentence };
 
 export type GroundedConsolidation = {
   readonly sentences: readonly GroundedSentence[];
@@ -85,54 +76,33 @@ export type GroundedConsolidation = {
 };
 
 /**
- * The grounding filter, keeping the citations per sentence rather than folding them into one
- * list: the review pass judges a sentence against the members that sentence cited, and a node
- * level list cannot say which item was supposed to support which claim.
+ * The same grounding filter the session axis runs, kept per sentence rather than folded into one
+ * list: the review pass judges a sentence against the members that sentence cited, and a
+ * node-level list cannot say which member was supposed to support which claim.
  */
 export function assembleConsolidation(
   output: NarrativeOutput,
   source: NarrativeSource,
 ): GroundedConsolidation {
-  const sentences: GroundedSentence[] = [];
-  const citations: string[] = [];
-  let dropped = 0;
-
-  for (const sentence of output.sentences) {
-    const text = sentence.text.trim();
-    const cited = citedSourceIds(sentence.source_ids, source);
-    if (text.length === 0 || cited.length === 0 || sentences.length >= source.sentenceBudget) {
-      dropped += 1;
-      continue;
-    }
-    sentences.push({ text, citations: cited });
-    for (const id of cited) {
-      if (!citations.includes(id)) {
-        citations.push(id);
-      }
-    }
-  }
+  const grounded = groundSentences(output, source);
 
   return {
-    sentences,
-    summary: sentences[0]?.text ?? '',
-    narrative: sentences.map((sentence) => sentence.text).join(' '),
-    citations,
-    kept: sentences.length,
-    dropped,
+    sentences: grounded.sentences,
+    summary: grounded.sentences[0]?.text ?? '',
+    narrative: grounded.sentences.map((sentence) => sentence.text).join(' '),
+    citations: grounded.citations,
+    kept: grounded.sentences.length,
+    dropped: grounded.dropped,
   };
 }
 
 function synthesisPrompt(subject: string, sentenceBudget: number): string {
-  return [
-    `You compress ${subject} from a memory substrate into one durable memory.`,
-    'The input is the members in the order they happened; each starts with a header line tagged like [S1] and its content follows.',
-    'Answer with sentences. Every sentence lists in "source_ids" the tags of the members it draws on.',
-    'State only what the cited members state: never add a cause, motive, outcome, participant, quantity or judgement they do not contain.',
-    'Name the concrete work, decisions and results the members record, in their own wording where it is specific.',
-    'Write your own sentences; never copy a tag or a header line into one.',
-    `Write at most ${String(sentenceBudget)} sentences, and fewer when the members say little.`,
-    'A sentence you cannot cite is a sentence you must not write.',
-  ].join(' ');
+  return synthesisSystemPrompt({
+    opening: `You compress ${subject} from a memory substrate into one durable memory.`,
+    source: 'the members',
+    noun: 'members',
+    sentenceBudget,
+  });
 }
 
 function scopeSubject(scope: RollupScope): string {

@@ -38,6 +38,11 @@ export function recordTypedAdmissions(
     markLedgerApplied(db, `typed_admission:${packStamp}:${item.id}`, {
       itemId: item.id,
       edgeType: item.typedEvidence.edgeType,
+      // What the tier actually gated on: one edge's isolated contribution against its own
+      // floor. `activationScore` is the node's whole spread total beside it, which is a
+      // larger number and never the one the rule read.
+      typedContribution: item.typedEvidence.contribution,
+      activationFloor: policy.typedAdmissionActivationFloor,
       activationScore: item.activation ?? item.rationale.score,
       cosine: item.admittedBy.score,
       clearedFloor: policy.corroborationFloor,

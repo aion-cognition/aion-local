@@ -47,9 +47,6 @@ export type RankableItem = {
  */
 const CLUSTER_PREFIX_CHARS = 16;
 
-/** Cosine above which two items are the same content by vector rather than by text. */
-const CLUSTER_COSINE_THRESHOLD = 0.95;
-
 function clusterPrefixKey(content: string): string {
   return hashContent(content.trim().toLowerCase().slice(0, CLUSTER_PREFIX_CHARS));
 }
@@ -60,13 +57,15 @@ function clusterPrefixKey(content: string): string {
  * were never competing for the same slot to begin with (`pack.ts`'s bucket caps are per
  * bucket already). Within a bucket, two items join a cluster when their content shares the
  * prefix key above, or (only when the caller already fetched embeddings for MMR) when
- * their vectors clear `CLUSTER_COSINE_THRESHOLD`. A run with no vectors in hand (the
+ * their vectors clear `cosineThreshold` (`AION_PACK_CLUSTER_COSINE_THRESHOLD`). A run with no
+ * vectors in hand (the
  * default RRF reranker) relies on the prefix leg alone, which is what the burst repro needs:
  * the records it measured are one-line and share their opening verbatim.
  */
 function clusterRoots(
   items: readonly RankableItem[],
   vectors: ReadonlyMap<string, Vector> | undefined,
+  cosineThreshold: number,
 ): ReadonlyMap<string, string> {
   const parent = new Map<string, string>();
   for (const item of items) {
@@ -127,7 +126,7 @@ function clusterRoots(
         if (right === undefined || rightVector === undefined) {
           continue;
         }
-        if (cosineSimilarity(leftVector, rightVector) > CLUSTER_COSINE_THRESHOLD) {
+        if (cosineSimilarity(leftVector, rightVector) > cosineThreshold) {
           union(left.id, right.id);
         }
       }
@@ -152,12 +151,13 @@ export function applyClusterCap<T extends RankableItem>(
   items: readonly T[],
   cap: number,
   vectors: ReadonlyMap<string, Vector> | undefined,
+  cosineThreshold: number,
 ): T[] {
   if (items.length <= 1) {
     return [...items];
   }
 
-  const roots = clusterRoots(items, vectors);
+  const roots = clusterRoots(items, vectors, cosineThreshold);
   const keptByRoot = new Map<string, number>();
   const survivors: T[] = [];
 
@@ -196,10 +196,10 @@ function redundancy<T extends RankableItem>(
 
 /**
  * The diversity-aware alternative: `lambda * relevance - (1 - lambda) *
- * redundancy`, selected greedily. Redundancy is cosine distance between content vectors
- * rather than Jaccard word overlap, because word overlap needs a tokenizer and text
- * machinery stays out of the cognitive path entirely. The embedding is the redundancy
- * signal the substrate already holds.
+ * redundancy`, selected greedily. Redundancy is the highest cosine similarity between a
+ * candidate's content vector and the vectors already chosen, rather than Jaccard word overlap,
+ * because word overlap needs a tokenizer and text machinery stays out of the cognitive path
+ * entirely. The embedding is the redundancy signal the substrate already holds.
  *
  * Relevance is normalized against the top fused score first. Raw RRF sums cluster near
  * `1/k` while cosine similarity spans [0,1], so mixing them unnormalized would make lambda

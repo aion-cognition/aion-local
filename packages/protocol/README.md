@@ -57,6 +57,7 @@ npx tsc -b packages/protocol
 npx eslint packages/protocol
 ```
 
-Four unit files, one per schema module. They are the contract's own tests: what a schema
-accepts, what it rejects, and what the rejection says. The JSON Schema conversion is covered
+Four unit files: `common.ts`'s schemas have no file of their own and are exercised through
+the modules that import them. Each file is the contract's own test: what a schema accepts,
+what it rejects, and what the rejection says. The JSON Schema conversion is covered
 by `packages/mcp/src/tools.test.ts`, because that is where the conversion happens.

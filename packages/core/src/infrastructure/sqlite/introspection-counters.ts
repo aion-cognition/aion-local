@@ -66,9 +66,15 @@ function readNumber(db: SqliteHandle, metaKey: string): number | undefined {
  * passed over.
  */
 export function nextIntrospectionCycle(db: SqliteHandle): number {
-  const next = (readNumber(db, CYCLE_KEY) ?? 0) + 1;
-  setMeta(db, CYCLE_KEY, String(next));
-  return next;
+  // The read and the write are one unit, as in the two tallies below: two engines advancing the
+  // counter off one base hand out the same cycle number twice.
+  return db
+    .transaction(() => {
+      const next = (readNumber(db, CYCLE_KEY) ?? 0) + 1;
+      setMeta(db, CYCLE_KEY, String(next));
+      return next;
+    })
+    .immediate();
 }
 
 export function introspectionCycle(db: SqliteHandle): number {

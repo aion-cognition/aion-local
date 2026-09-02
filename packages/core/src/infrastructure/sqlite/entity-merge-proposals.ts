@@ -1,7 +1,19 @@
 import { randomUUID } from 'node:crypto';
 
 import type { SqliteHandle } from './database.js';
-import { proposalTable } from './proposal-table.js';
+import {
+  countOpenProposals,
+  findProposalsForNode,
+  getProposal,
+  listOldestOpenProposals,
+  listOpenProposalCreatedAt,
+  listOpenProposalsAfter,
+  listProposals,
+  reopenProposal,
+  resolveProposal,
+  type OpenProposalPage,
+  type ProposalTableSpec,
+} from './proposal-table.js';
 
 /**
  * Near-duplicates the dedup stage found but would not merge. Since migration 003 identity keys
@@ -81,11 +93,11 @@ function toEntityMergeProposal(row: EntityMergeProposalRow): EntityMergeProposal
   };
 }
 
-const proposals = proposalTable<EntityMergeProposalRow, EntityMergeProposal>({
+const PROPOSALS: ProposalTableSpec<EntityMergeProposalRow, EntityMergeProposal> = {
   table: 'entity_merge_proposals',
   pairColumns: ['left_id', 'right_id'],
   mapRow: toEntityMergeProposal,
-});
+};
 
 /**
  * Idempotent on the id-sorted pair: the same two entities detected again from either side
@@ -143,19 +155,40 @@ export function getEntityMergeProposal(
   db: SqliteHandle,
   id: string,
 ): EntityMergeProposal | undefined {
-  return proposals.get(db, id);
+  return getProposal(db, PROPOSALS, id);
 }
 
 /** Ordered by insertion (rowid), not created_at: same-millisecond bursts would tie on the latter. */
 export function listEntityMergeProposals(db: SqliteHandle): EntityMergeProposal[] {
-  return proposals.list(db);
+  return listProposals(db, PROPOSALS);
+}
+
+/** One rowid-ordered page of unresolved rows, for a sweep that walks the queue across runs. */
+export function listOpenEntityMergeProposalsAfter(
+  db: SqliteHandle,
+  options: { readonly limit: number; readonly afterRowid?: number },
+): OpenProposalPage<EntityMergeProposal> {
+  return listOpenProposalsAfter(db, PROPOSALS, options);
+}
+
+/** Every open row's creation stamp, oldest first, for a caller that reads ages and not rows. */
+export function listOpenEntityMergeProposalCreatedAt(db: SqliteHandle): string[] {
+  return listOpenProposalCreatedAt(db, PROPOSALS);
+}
+
+/** The oldest unresolved rows, bounded in SQL for a caller that weighs age. */
+export function listOldestOpenEntityMergeProposals(
+  db: SqliteHandle,
+  limit: number,
+): EntityMergeProposal[] {
+  return listOldestOpenProposals(db, PROPOSALS, limit);
 }
 
 export function findEntityMergeProposalsForNode(
   db: SqliteHandle,
   nodeId: string,
 ): EntityMergeProposal[] {
-  return proposals.findForNode(db, nodeId);
+  return findProposalsForNode(db, PROPOSALS, nodeId);
 }
 
 /** Returns false when the id is unknown or the proposal was already resolved. */
@@ -164,15 +197,15 @@ export function resolveEntityMergeProposal(
   id: string,
   resolvedAt: string = new Date().toISOString(),
 ): boolean {
-  return proposals.resolve(db, id, resolvedAt);
+  return resolveProposal(db, PROPOSALS, id, resolvedAt);
 }
 
 /** Open proposals only: a resolved row is a decision already made, not a queue for anyone. */
 export function countOpenEntityMergeProposals(db: SqliteHandle): number {
-  return proposals.countOpen(db);
+  return countOpenProposals(db, PROPOSALS);
 }
 
 /** Returns false when the id is unknown or the proposal is already open. */
 export function reopenEntityMergeProposal(db: SqliteHandle, id: string): boolean {
-  return proposals.reopen(db, id);
+  return reopenProposal(db, PROPOSALS, id);
 }

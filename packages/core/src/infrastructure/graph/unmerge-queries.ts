@@ -1,7 +1,11 @@
 import type { Driver } from 'neo4j-driver';
 
 import { ACCESS_COUNT_PROPERTY } from './access-tracking.js';
-import { supersedeInTransaction, writeStampedNodeInTransaction } from './bitemporal.js';
+import {
+  BITEMPORAL_PROPERTIES,
+  supersedeInTransaction,
+  writeStampedNodeInTransaction,
+} from './bitemporal.js';
 import { restoreClaimSubjectsInTransaction } from './claim-key-queries.js';
 import { inWriteTransaction, runRead, type GraphTransaction } from './connection.js';
 import { upsertEdgeInTransaction } from './edges.js';
@@ -19,6 +23,7 @@ import { isRelationshipType } from './relationships.js';
 import { ENTITY_NAME_NORM_PROPERTY, ENTITY_NAME_PROPERTY } from './seed-queries.js';
 import { toGraphInteger } from './values.js';
 import { squashName } from '../../reflection/domain/entity-reconciliation.js';
+import { foldName } from '../../reflection/domain/name-fold.js';
 
 /**
  * Splitting a merged entity back out, from the record the merge wrote at merge time. The
@@ -200,6 +205,7 @@ export async function readCanonicalMergeRecords(
 const READ_MERGE_PROVENANCE = [
   'MATCH (canonical:Entity)',
   `WHERE canonical.${MERGE_PROVENANCE_PROPERTY} IS NOT NULL`,
+  '  AND ($after IS NULL OR canonical.id > $after)',
   'RETURN canonical.id AS canonical_id,',
   `       canonical.${ENTITY_NAME_NORM_PROPERTY} AS canonical_name_norm,`,
   `       coalesce(canonical.${ENTITY_ALIASES_PROPERTY}, []) AS aliases,`,
@@ -209,16 +215,22 @@ const READ_MERGE_PROVENANCE = [
 ].join('\n');
 
 /**
- * Every canonical carrying a merge trail, bounded. The scan exists because the trail is the
- * only durable statement of a merge that a crash between the graph commit and the SQLite write
- * leaves behind, and nothing else walks the whole property: the two readers above both start
- * from an id a caller already holds.
+ * Every canonical carrying a merge trail, bounded and paged. The scan exists because the trail
+ * is the only durable statement of a merge that a crash between the graph commit and the SQLite
+ * write leaves behind, and nothing else walks the whole property: the two readers above both
+ * start from an id a caller already holds.
+ *
+ * `after` is a keyset cursor over `canonical.id`. Without it a bounded caller reads the same
+ * lexicographically first page every run and can never reach a trail past it, and the trail is
+ * append-only, so paging is the only way the whole of it is ever seen.
  */
 export async function listMergeProvenance(
   driver: Driver,
   limit: number,
+  after?: string,
 ): Promise<CanonicalMerge[]> {
-  return runRead(driver, READ_MERGE_PROVENANCE, { limit: toGraphInteger(limit) }, (row) => ({
+  const parameters = { limit: toGraphInteger(limit), after: after ?? null };
+  return runRead(driver, READ_MERGE_PROVENANCE, parameters, (row) => ({
     canonicalId: row.canonical_id as string,
     canonicalNameNorm: (row.canonical_name_norm as string | null) ?? '',
     aliases: readStringArray(row.aliases),
@@ -280,6 +292,17 @@ async function existingNodeIds(
   }
   const rows = await tx.run(FIND_EXISTING_NODES, { ids: unique }, (row) => row.id as string);
   return new Set(rows);
+}
+
+/**
+ * When the absorbed identity was first observed, read from the node the merge closed and never
+ * deleted. The restored node inherits it, so a split dates the identity to the experience
+ * rather than to the repair.
+ */
+async function mergedOccurredAt(tx: GraphTransaction, id: string): Promise<Date | undefined> {
+  const cypher = `MATCH (m:${BASE_NODE_LABEL} { id: $id }) RETURN m.${BITEMPORAL_PROPERTIES.occurredAt} AS at`;
+  const at = (await tx.run(cypher, { id }, (row) => row.at))[0];
+  return at instanceof Date ? at : undefined;
 }
 
 type CanonicalState = {
@@ -364,6 +387,7 @@ export async function applyUnmerge(driver: Driver, input: UnmergeInput): Promise
     await lockNodeInTransaction(tx, input.canonicalId, input.now);
     await lockNodeInTransaction(tx, record.mergedId, input.now);
     const canonical = await readCanonicalStateInTransaction(tx, input.canonicalId);
+    const occurredAt = await mergedOccurredAt(tx, record.mergedId);
 
     await tx.run(
       RELEASE_IDENTITY_KEY,
@@ -375,6 +399,7 @@ export async function applyUnmerge(driver: Driver, input: UnmergeInput): Promise
     const restored = await writeStampedNodeInTransaction(tx, {
       label: 'Entity',
       now: input.now,
+      ...(occurredAt === undefined ? {} : { occurredAt }),
       properties: {
         [ENTITY_NAME_PROPERTY]: record.mergedName ?? nameNorm,
         [ENTITY_NAME_NORM_PROPERTY]: nameNorm,
@@ -432,11 +457,15 @@ export async function applyUnmerge(driver: Driver, input: UnmergeInput): Promise
       provenance: ['introspection'],
     });
 
+    // Released on the fold, not the spelling: `aliasPairs` trims what it stores and stands a
+    // folded key in for a spelling the cap dropped, so a raw-spelling comparison leaves the
+    // split identity's own key on the canonical and one cue resolves to both nodes.
     const released = new Set([
-      ...(record.mergedName === undefined ? [] : [record.mergedName]),
-      ...record.mergedAliases,
+      nameNorm,
+      ...(record.mergedName === undefined ? [] : [foldName(record.mergedName)]),
+      ...record.mergedAliases.map((alias) => foldName(alias)),
     ]);
-    const kept = canonical.aliases.filter((alias) => !released.has(alias));
+    const kept = canonical.aliases.filter((alias) => !released.has(foldName(alias)));
     const aliases = aliasPairs(kept, canonical.nameNorm);
 
     await writeStampedNodeInTransaction(tx, {

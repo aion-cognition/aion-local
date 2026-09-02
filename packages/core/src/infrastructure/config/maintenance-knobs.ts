@@ -1,15 +1,15 @@
 import { z } from 'zod';
 
+import { nonNegativeInt, positiveInt, proportion } from './knob-types.js';
+
 /**
  * The `maintenance` group's own table, split out of `knobs.ts` because that file sits at the
- * 500-line lint cap: `maintenance` is the fastest-growing group (nearly every introspection
- * operation ships its own kill switch and batch here), and a table that already fills its file
- * grows in the file least likely to have room. `knobs.ts` folds this back in as its
- * `maintenance` leaf, so the split is invisible to every reader of `KNOBS` or `KNOB_TABLE`.
+ * 500-line lint cap: `maintenance` is the fastest-growing group (most introspection operations
+ * declare a batch bound here, and the ones that write model output in place also declare a kill
+ * switch), and a table that already fills its file grows in the file least likely to have room.
+ * `knobs.ts` folds this back in as its `maintenance` leaf, so the split is invisible to every
+ * reader of `KNOBS` or `KNOB_TABLE`.
  */
-const proportion = z.number().min(0).max(1);
-const positiveInt = z.number().int().positive();
-const nonNegativeInt = z.number().int().nonnegative();
 
 export const MAINTENANCE_KNOBS = {
   // The strategic layer's kill switch. On by default: a cycle the deterministic tiers left
@@ -85,6 +85,10 @@ export const MAINTENANCE_KNOBS = {
   // up to eight judgment calls (supersession's own ceiling), so five keeps one tick's model
   // spend in line with an ordinary reflection run.
   retroSupersessionBatch: ['AION_MAINTENANCE_RETRO_SUPERSESSION_BATCH', positiveInt, 5],
+  // `description_freshness`'s kill switch. It is the one operation that replaces stored text
+  // with model output in place rather than closing a node and writing a new one, so an
+  // operator who distrusts the rewrite needs a way to stop it that is not a code change.
+  descriptionFreshness: ['AION_MAINTENANCE_DESCRIPTION_FRESHNESS', z.boolean(), true],
   // `description_freshness`'s bound: entities re-synthesized per run. Each entity costs one
   // generation call and one embed. Small on purpose: a refresh a tick behind is a staleness
   // window, not an outage.
@@ -141,6 +145,11 @@ export const MAINTENANCE_KNOBS = {
   // ceiling. Matches `retroSupersessionBatch`'s own reasoning: bound the cost of a run
   // that finds a full page of ordinary-residue pairs needing a verdict.
   hygieneJudgeBatch: ['AION_MAINTENANCE_HYGIENE_JUDGE_BATCH', positiveInt, 5],
+  // `reinforcement_flush` and `memory_decay`'s kill switches, the pair every other weight
+  // operation already had. Off, the operation is a noop: signals wait in the queue, and stale
+  // edges hold the strength they have. The rates and batch sizes stay in the `hebbian` group.
+  reinforcementFlush: ['AION_MAINTENANCE_REINFORCEMENT_FLUSH', z.boolean(), true],
+  memoryDecay: ['AION_MAINTENANCE_MEMORY_DECAY', z.boolean(), true],
   // `edge_prune`'s kill switch, aging threshold, and batch; edge-prune.ts states the arithmetic.
   edgePrune: ['AION_MAINTENANCE_EDGE_PRUNE', z.boolean(), true],
   edgePruneUnreinforcedDays: ['AION_MAINTENANCE_EDGE_PRUNE_UNREINFORCED_DAYS', positiveInt, 14],

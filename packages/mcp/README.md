@@ -10,9 +10,9 @@ streamable HTTP. This package is transport and wiring; the memory operations the
 Imports `@aion/core`, `@aion/protocol`, `@modelcontextprotocol/sdk` and `zod`. It imports
 nothing from `cli`.
 
-Imported by `cli`, which takes three symbols (`HEALTH_PATH`, `runningInContainer`,
-`USAGE_PROTOCOL`); `packages/cli/src/last.int.test.ts` also boots a real service through
-`bootstrapService`. The dependency runs one way.
+Imported by `cli`, which takes four symbols (`HEALTH_PATH`, `runningInContainer`,
+`USAGE_PROTOCOL`, `reflectionStages`); `packages/cli/src/last.int.test.ts` also boots a real
+service through `bootstrapService`. The dependency runs one way.
 
 ## The surface
 
@@ -57,8 +57,11 @@ a probe on every interval stays cheap.
 
 ## The gate
 
-`gate/` holds the seven scripted batteries a change round is gated on, each run against
-`bootstrap.ts`'s own stage list, live Ollama, and the run's throwaway Neo4j.
+`gate/` holds eleven int test files. Seven scripted batteries, each run against
+`bootstrap.ts`'s own stage list, live Ollama, and the run's throwaway Neo4j, are split across
+three of them. The other eight gate one behavior each, four of them the batteries that pin a
+mode knob (`AION_SUPERSEDE_MODE`, `AION_ENTITY_MERGE_MODE`, `AION_KEYED_CLOSE_MODE`,
+`AION_MAINTENANCE_TIER3_MODE`).
 
 ```
 npx vitest run --project integration --reporter=verbose re-exercise-gate

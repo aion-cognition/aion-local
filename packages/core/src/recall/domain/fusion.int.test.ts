@@ -125,6 +125,7 @@ describe('the near-duplicate cluster cap against real embeddings', () => {
       reranker: 'rrf',
       mmrLambda: 0.5,
       clusterCap: DEFAULTS.recall.clusterCap,
+      clusterCosineThreshold: DEFAULTS.recall.clusterCosineThreshold,
       vectors,
     });
 

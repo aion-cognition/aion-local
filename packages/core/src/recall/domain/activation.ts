@@ -8,8 +8,6 @@ import type { AdjacencyNeighbor } from '../../infrastructure/graph/adjacency.js'
 import type { CurrencyAnnotation } from '../../infrastructure/graph/read-modes.js';
 import { isRelationshipType } from '../../infrastructure/graph/relationships.js';
 
-export { MODEL_INFERRED_PENALTY, MODEL_INFERRED_TYPES } from './activation-weights.js';
-
 /**
  * Spreading activation over batched adjacency reads. The graph is asked one question per
  * frontier iteration; everything else (weighting, accumulation, inhibition, termination)

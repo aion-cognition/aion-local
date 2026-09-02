@@ -30,6 +30,7 @@ describe('parseReplayFlags', () => {
     expect(parseReplayFlags([])).toEqual({
       subcommand: 'ls',
       all: false,
+      stale: true,
       live: false,
       yes: false,
       json: false,
@@ -56,6 +57,7 @@ describe('parseReplayFlags', () => {
     ).toEqual({
       subcommand: 'run',
       all: true,
+      stale: false,
       episode: 'e-1',
       session: 's-1',
       limit: 9,
@@ -64,6 +66,12 @@ describe('parseReplayFlags', () => {
       yes: true,
       json: true,
     });
+  });
+
+  it('reads --stale as the explicit spelling of the default, not a distinct selection', () => {
+    expect(parseReplayFlags(['run', '--stale']).stale).toBe(true);
+    expect(parseReplayFlags(['run']).stale).toBe(true);
+    expect(parseReplayFlags(['run', '--all']).stale).toBe(false);
   });
 
   it('rejects an unknown subcommand, option, missing value, or bad count', () => {
@@ -89,7 +97,15 @@ describe('parseReplayFlags', () => {
 
 describe('the scratch-substrate gate', () => {
   function flagsOf(overrides: Partial<ReplayFlags> = {}): ReplayFlags {
-    return { subcommand: 'run', all: false, live: false, yes: false, json: false, ...overrides };
+    return {
+      subcommand: 'run',
+      all: false,
+      stale: true,
+      live: false,
+      yes: false,
+      json: false,
+      ...overrides,
+    };
   }
 
   it('refuses the shipped substrate and names what it would have written to', () => {
