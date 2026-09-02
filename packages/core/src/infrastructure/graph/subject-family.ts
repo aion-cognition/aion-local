@@ -22,6 +22,8 @@ import { asCosine } from './vector-indexes.js';
 import {
   CLAIM_ASPECT_PROPERTY,
   CLAIM_SUBJECT_PROPERTY,
+  keyedMismatchExcludes,
+  type KeyedCloseMode,
 } from '../../reflection/domain/claim-key.js';
 
 /**
@@ -111,13 +113,20 @@ export async function findClaimSubjects(
 const NAMES_A_SUBJECT = `head([name IN names WHERE sibling.${TEXT_NORM_PROPERTY} CONTAINS name]) IS NOT NULL`;
 
 /**
- * Whether the key decides this pair. Both sides have to carry a whole key for it to: a
- * comparison needs two of them, and a claim that declined its key has nothing a keyed sibling
- * could be equal to. Where it does decide, the name test plays no part.
+ * Whether the key is available to decide this pair. Both sides have to carry a whole key for it
+ * to be: a comparison needs two of them, and a claim that declined its key has nothing a keyed
+ * sibling could be equal to.
  */
 const BOTH_KEYED = [
   `claim.${CLAIM_SUBJECT_PROPERTY} IS NOT NULL AND claim.${CLAIM_ASPECT_PROPERTY} IS NOT NULL`,
   `AND sibling.${CLAIM_SUBJECT_PROPERTY} IS NOT NULL AND sibling.${CLAIM_ASPECT_PROPERTY} IS NOT NULL`,
+].join('\n            ');
+
+/** Two whole keys that agree: the same attribute of the same entity, stated twice. */
+const KEYS_AGREE = [
+  BOTH_KEYED,
+  `AND sibling.${CLAIM_SUBJECT_PROPERTY} = claim.${CLAIM_SUBJECT_PROPERTY}`,
+  `AND sibling.${CLAIM_ASPECT_PROPERTY} = claim.${CLAIM_ASPECT_PROPERTY}`,
 ].join('\n            ');
 
 /**
@@ -134,12 +143,16 @@ const BOTH_KEYED = [
  * that two sentences are about the same thing, already computed, and re-derivable months later
  * by anyone who asks why a claim closed.
  *
- * Where both claims carry a key, the key answers instead of the name. Naming the subject was
- * always a stand-in for asserting about it, and a stand-in is what closed a service's retry
- * count on a correction about its cadence: two attributes of one thing, both true, and the
- * sibling's text carried the service's name. A keyed sibling therefore has to state the same
- * attribute of the same entity, and a sibling with no key is matched exactly as before. The
- * relatedness floor still decides the close either way.
+ * Two keys that agree admit the sibling on their own, under every mode. Naming the subject was
+ * always a stand-in for asserting about it, and an exact key match says the sibling states the
+ * same attribute of the same entity, which is what the name was standing in for.
+ *
+ * Two keys that disagree are read as evidence of different attributes only under the `close`
+ * mode. Extraction keys both halves of a correction rarely and the aspect slug drifts between
+ * observations, so a mismatch is not yet a reliable answer, and excluding a sibling on it holds
+ * a stale claim open as current. Under every other mode a mismatch falls through to the name
+ * test, exactly as a pair with no key does. The relatedness floor still decides the close in
+ * every case.
  */
 const SUBJECT_SIBLINGS = [
   `MATCH (claim { id: $claimId })-[:EXTRACTED_FROM]->(source:Episode)`,
@@ -157,9 +170,8 @@ const SUBJECT_SIBLINGS = [
   'WHERE sibling.id <> $claimId',
   '  AND any(label IN labels(sibling) WHERE label IN $labels)',
   `  AND ${currentOnly('sibling')}`,
-  `  AND CASE WHEN ${BOTH_KEYED}`,
-  `           THEN sibling.${CLAIM_SUBJECT_PROPERTY} = claim.${CLAIM_SUBJECT_PROPERTY}`,
-  `                AND sibling.${CLAIM_ASPECT_PROPERTY} = claim.${CLAIM_ASPECT_PROPERTY}`,
+  `  AND CASE WHEN ${KEYS_AGREE} THEN true`,
+  `           WHEN $keyedMismatchExcludes AND ${BOTH_KEYED} THEN false`,
   `           ELSE ${NAMES_A_SUBJECT} END`,
   '  AND NOT EXISTS {',
   '    MATCH (sibling)-[:EXTRACTED_FROM]->(other:Episode)',
@@ -168,7 +180,7 @@ const SUBJECT_SIBLINGS = [
   `RETURN sibling.id AS id, sibling.${MEMORY_PROPERTIES.text} AS text,`,
   '       [label IN labels(sibling) WHERE label IN $labels][0] AS label,',
   `       head([name IN names WHERE sibling.${TEXT_NORM_PROPERTY} CONTAINS name]) AS subject,`,
-  `       (${BOTH_KEYED}) AS keyed,`,
+  `       (${KEYS_AGREE}) AS keyed,`,
   `       CASE WHEN claim.${MEMORY_PROPERTIES.contentVector} IS NULL`,
   `             OR sibling.${MEMORY_PROPERTIES.contentVector} IS NULL THEN null`,
   `            ELSE ${asCosine(
@@ -216,20 +228,29 @@ export function siblingCloses(sibling: SubjectSibling, floor: number): boolean {
   return sibling.relatedness !== undefined && sibling.relatedness >= floor;
 }
 
-function siblingParameters(claimId: string): Record<string, unknown> {
+function siblingParameters(
+  claimId: string,
+  keyedCloseMode: KeyedCloseMode | undefined,
+): Record<string, unknown> {
   return {
     claimId,
     labels: [...FACT_NODE_LABELS],
     minNameLength: toGraphInteger(MIN_SUBJECT_NAME_LENGTH),
+    keyedMismatchExcludes: keyedMismatchExcludes(keyedCloseMode),
   };
 }
 
-/** A read-only preview of what a family close would take, for a caller that wants to look first. */
+/**
+ * A read-only preview of what a family close would take, for a caller that wants to look first.
+ * The mode belongs in the preview as much as in the close: the same value has to decide both, or
+ * the preview shows a cut the apply does not make.
+ */
 export async function findSubjectSiblings(
   driver: Driver,
   claimId: string,
+  keyedCloseMode?: KeyedCloseMode,
 ): Promise<readonly SubjectSibling[]> {
-  return runRead(driver, SUBJECT_SIBLINGS, siblingParameters(claimId), mapSibling);
+  return runRead(driver, SUBJECT_SIBLINGS, siblingParameters(claimId, keyedCloseMode), mapSibling);
 }
 
 /**
@@ -295,6 +316,12 @@ export type SupersedeSubjectFamilyInput = {
   /** The judged claim: it closes, and it defines the subject the siblings are matched on. */
   readonly claimId: string;
   readonly newId: string;
+  /**
+   * The keyed-close mode this close runs under. Absent is the same answer as `judge` and `off`:
+   * a sibling whose key disagrees is decided by the name test and the floor, because only the
+   * `close` mode has measured its slugs reliable enough to exclude on one.
+   */
+  readonly keyedCloseMode?: KeyedCloseMode;
   /** Cosine against the judged claim a sibling must reach before the correction closes it too. */
   readonly relatednessFloor: number;
   readonly now?: Date;
@@ -371,7 +398,11 @@ export async function supersedeSubjectFamilyInTransaction(
     ...(input.provenance === undefined ? {} : { provenance: input.provenance }),
   });
 
-  const candidates = await tx.run(SUBJECT_SIBLINGS, siblingParameters(input.claimId), mapSibling);
+  const candidates = await tx.run(
+    SUBJECT_SIBLINGS,
+    siblingParameters(input.claimId, input.keyedCloseMode),
+    mapSibling,
+  );
   const siblings = candidates.filter((sibling) => siblingCloses(sibling, input.relatednessFloor));
   const held = candidates.filter((sibling) => !siblingCloses(sibling, input.relatednessFloor));
   for (const sibling of siblings) {

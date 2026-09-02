@@ -1,6 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 
 import { supersede } from '../../infrastructure/graph/bitemporal.js';
+import type { KeyedCloseMode } from '../../infrastructure/graph/claim-key-queries.js';
 import {
   findSourceEpisodeId,
   supersedeEpisode,
@@ -79,6 +80,12 @@ export type ApplyProposalInput = {
    * and a caller that has not said where the line sits has not thought about it.
    */
   readonly relatednessFloor: number;
+  /**
+   * The deployment's keyed-close mode, which decides whether a family apply may exclude a
+   * sibling whose key disagrees with the judged claim's. Absent is the same answer as `judge`
+   * and `off`: a disagreeing key excludes nothing and the relatedness floor decides alone.
+   */
+  readonly keyedCloseMode?: KeyedCloseMode;
   readonly now?: Date;
   /**
    * When the correcting experience happened, which is when the closed claims stopped being
@@ -193,6 +200,7 @@ export async function applySupersessionProposal(
     relatednessFloor: input.relatednessFloor,
     validUntil: input.validUntil ?? now,
     attribution: input.attribution ?? HUMAN_REVIEW,
+    ...(input.keyedCloseMode === undefined ? {} : { keyedCloseMode: input.keyedCloseMode }),
   });
   // After the close, not inside it: the marker is a repair instruction rather than part of the
   // correction, and a narrative left unmarked costs a stale sentence, not a wrong close.
@@ -203,6 +211,7 @@ export async function applySupersessionProposal(
 
 type ScopeInput = {
   readonly relatednessFloor: number;
+  readonly keyedCloseMode?: KeyedCloseMode;
   readonly validUntil: Date;
   readonly attribution: ApplyAttribution;
 };
@@ -243,6 +252,7 @@ async function applyScope(
     claimId: proposal.oldId,
     newId: proposal.newId,
     relatednessFloor: input.relatednessFloor,
+    ...(input.keyedCloseMode === undefined ? {} : { keyedCloseMode: input.keyedCloseMode }),
     now,
     validUntil,
     signals: attribution.signals,

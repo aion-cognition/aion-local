@@ -186,6 +186,8 @@ describe('a correction applied at the default granularity', () => {
     const applied = await applySupersessionProposal(substrate.driver, substrate.db, {
       id: proposal?.id ?? '',
       relatednessFloor: DEFAULTS.reflection.supersedeFamilyRelatednessFloor,
+      // The shipped mode, so the gate measures the cut a deployment actually gets.
+      keyedCloseMode: DEFAULTS.reflection.keyedCloseMode,
       now: APPLIED_AT,
     });
 
@@ -222,9 +224,12 @@ describe('a correction applied at the default granularity', () => {
       identity: READ_SESSION,
       now: APPLIED_AT,
     });
+    // A correcting claim names the old owner to deny it, so a claim from the correction
+    // episode itself is not a stale assertion of the old owner even when it names them.
     const stale = (item: MemoryPackItem): boolean =>
       names(item, OWNERSHIP_CORRECTION.staleOwner) &&
-      !names(item, OWNERSHIP_CORRECTION.currentOwner);
+      !names(item, OWNERSHIP_CORRECTION.currentOwner) &&
+      !correctionNodeIds.includes(item.id);
 
     const current = after.items.find((item) => names(item, OWNERSHIP_CORRECTION.currentOwner));
     const staleFacts = (after.pack.facts ?? []).filter(stale);

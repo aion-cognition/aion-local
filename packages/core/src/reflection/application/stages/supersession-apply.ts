@@ -7,6 +7,7 @@ import {
 import type { RunTally } from './supersession-tally.js';
 import { isAbortError } from '../../../infrastructure/errors.js';
 import { supersede } from '../../../infrastructure/graph/bitemporal.js';
+import type { KeyedCloseMode } from '../../../infrastructure/graph/claim-key-queries.js';
 import {
   findNodesWithoutCurrency,
   SUPERSESSION_METHOD,
@@ -48,6 +49,8 @@ export type SupersessionWritePolicy = {
   readonly mode: SupersessionMode;
   readonly autoConfidence: number;
   readonly familyRelatednessFloor: number;
+  /** Carried for the family cut alone: it decides what a sibling's disagreeing key is worth. */
+  readonly keyedCloseMode: KeyedCloseMode;
   readonly model: string;
   readonly timeoutMs: number;
 };
@@ -189,6 +192,7 @@ async function applyUnanimous(
   await applySupersessionProposal(ctx.driver, ctx.db, {
     id: record(ctx, pair, second),
     relatednessFloor: policy.familyRelatednessFloor,
+    keyedCloseMode: policy.keyedCloseMode,
     now: ctx.now,
     // The correcting episode is what ended the old claim's truth, so world time closes at
     // the episode's clock while the row's system time closes at the write.
