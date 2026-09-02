@@ -112,6 +112,9 @@ function config(overrides: Partial<Config['recall']> = {}): Config {
       vectorLimit: 1,
       sessionDedup: false,
       ownSessionFilter: false,
+      // The fixture's cosines are placed against these pinned floors so the mechanism test survives recalibration of the shipped defaults.
+      vectorAdmissionFloor: 0.6,
+      corroborationFloor: 0.55,
       ...overrides,
     },
     contextResonance: { ...DEFAULTS.contextResonance, seedLimit: 1 },
@@ -255,8 +258,8 @@ describe('a CONTRADICTS partner under the vector floor', () => {
       edgeType: 'CONTRADICTS',
       activationScore: expect.any(Number),
       cosine: expect.closeTo(PARTNER_COSINE, 2),
-      clearedFloor: DEFAULTS.recall.corroborationFloor,
-      failedFloor: DEFAULTS.recall.vectorAdmissionFloor,
+      clearedFloor: 0.55,
+      failedFloor: 0.6,
     });
   });
 
