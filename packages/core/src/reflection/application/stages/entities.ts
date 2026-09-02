@@ -122,6 +122,15 @@ export class EntityExtractionStage implements ReflectionStage {
     };
   }
 
+  /**
+   * The options this instance actually runs on. Every one reaches the stage only through
+   * construction, so without a reader a build that dropped the wiring extracts under the
+   * constructor defaults while the deployment's own model and cap sit unread.
+   */
+  describe(): EntityStageOptions {
+    return this.#options;
+  }
+
   async run(ctx: StageContext): Promise<StageOutcome> {
     const body = ctx.episode.text.trim();
     if (body.length === 0) {

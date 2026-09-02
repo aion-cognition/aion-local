@@ -28,6 +28,20 @@ export { PIPELINE_VERSION } from './domain/version.js';
 
 export { ReflectionOrchestrator, orchestratorLedgerKey } from './application/orchestrator.js';
 
+export {
+  associationOptions,
+  cognitiveOptions,
+  entityDedupOptions,
+  entityOptions,
+  narrativeOptions,
+  narrativeSweepOptions,
+  reflectionStages,
+  reinforcementOptions,
+  semanticRelationshipOptions,
+  supersessionOptions,
+  workerOptions,
+} from './application/pipeline.js';
+
 export { replayExperiences } from './application/replay.js';
 export type {
   ReplayDeps,
@@ -40,7 +54,6 @@ export { buildEpisodeTimeline } from './application/episode-timeline.js';
 export type { TimelineEvent } from './application/episode-timeline.js';
 
 export { ReflectionWorker } from './application/worker.js';
-export type { ReflectionWorkerOptions } from './application/worker.js';
 
 export { findPendingVectorNodes } from './application/vectors.js';
 
@@ -50,27 +63,20 @@ export { DEFAULT_ENTITY_MERGE_MODE, EntityDedupStage } from './application/stage
 
 export { AssociationInferenceStage } from './application/stages/associations.js';
 
-export { CognitiveExtractionStage } from './application/stages/cognitive.js';
-
-export { SemanticRelationshipStage } from './application/stages/semantic-relationships.js';
-
 export { judgeContradiction, SupersessionStage } from './application/stages/supersession.js';
 export type { ContradictionJudgment } from './application/stages/supersession.js';
 
 export { reviewContradiction } from './application/stages/supersession-review.js';
 export type { ReviewVerdict, VetoCheck } from './application/stages/supersession-review.js';
 
-export { ReinforcementEnqueueStage } from './application/stages/reinforcement.js';
-
 export { ContextVectorStage } from './application/stages/context-vectors.js';
 
 export {
   NARRATIVE_STAGE_NAME,
   SessionNarrativeCloser,
-  SessionNarrativeStage,
   closeSessionNarrative,
 } from './application/narratives.js';
-export type { NarrativeDeps, SessionNarrativeOptions } from './application/narratives.js';
+export type { NarrativeDeps } from './application/narratives.js';
 
 export { IdleNarrativeSweeper } from './application/narrative-sweeper.js';
 

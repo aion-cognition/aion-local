@@ -1,12 +1,7 @@
 import {
-  AssociationInferenceStage,
   bootstrapBackbone,
-  CognitiveExtractionStage,
-  ContextVectorStage,
   CueCache,
   deleteServedItems,
-  EntityDedupStage,
-  EntityExtractionStage,
   GraphConnection,
   handleRecall,
   handleReflection,
@@ -17,6 +12,8 @@ import {
   latestAppliedGraphMigration,
   loadConfig,
   modelAdvisor,
+  narrativeOptions,
+  narrativeSweepOptions,
   openLogger,
   plasticityCounters,
   ProviderRouter,
@@ -26,23 +23,18 @@ import {
   RecallSideEffects,
   reconcileResidentModels,
   ReflectionOrchestrator,
+  reflectionStages,
   ReflectionWorker,
-  ReinforcementEnqueueStage,
   routingSummary,
-  SemanticRelationshipStage,
   SessionManager,
   SessionNarrativeCloser,
-  SessionNarrativeStage,
   SqliteStore,
-  SupersessionStage,
   unbackedPins,
+  workerOptions,
   type Config,
   type Logger,
   type RecallDeps,
   type ReflectionIntakeDeps,
-  type ReflectionStage,
-  type ReflectionWorkerOptions,
-  type SessionNarrativeOptions,
 } from '@aion/core';
 import { userInfo } from 'node:os';
 
@@ -63,92 +55,12 @@ export const GIT_USER_NAME_ENV_VAR = 'AION_GIT_USER_NAME';
 const MINUTE_MS = 60 * 1000;
 
 /**
- * The pipeline, in the one place its order lives. Identity is resolved before anything reads
- * it: extraction, then deduplication, because a later stage that pairs, links, or judges
- * duplicate entities writes the duplication into the graph as structure. Supersession
- * follows cognitive extraction, since the facts it judges are the Decision and Insight nodes
- * that stage writes. Context vectors run last: they aggregate over whatever the rest of the
- * run just changed.
- *
- * Narrative evaluation is last. It carries the idle rule rather than the close: a session
- * whose episodes are reflecting seconds after they arrived is still open, and the stage
- * skips it, leaving the narrative to `SessionNarrativeCloser`. What it catches is the other
- * case: a backlog drained hours late, or a retry that landed after the client was gone,
- * where no close hook will ever fire again.
- *
- * An empty list would leave the worker down: an orchestrator with nothing to run enriches
- * nothing, which reads to the worker as a failed job and spends the episode's retries on it.
+ * The pipeline and its option builders live in `@aion/core`, beside the stage contract, so the
+ * introspection loop can build the same stages this service does without depending on the MCP
+ * package. They are re-exported here because the CLI's replay and timeline verbs and the gate
+ * fixtures reach the pipeline through the service that runs it.
  */
-export function reflectionStages(config: Config): readonly ReflectionStage[] {
-  const model = config.models.reflect;
-  const { reflection } = config;
-  return [
-    new EntityExtractionStage({
-      model,
-      timeoutMs: reflection.stageTimeoutMs,
-      maxEntities: reflection.maxEntities,
-    }),
-    new EntityDedupStage({
-      model,
-      timeoutMs: reflection.stageTimeoutMs,
-      similarityThreshold: reflection.entityDedupThreshold,
-      sharedEpisodeJaccardFloor: reflection.entityNominationJaccardFloor,
-      mode: reflection.entityMergeMode,
-    }),
-    new AssociationInferenceStage({
-      semanticThreshold: reflection.associationSemanticThreshold,
-      similarLimit: reflection.associationSimilarLimit,
-      weightFloor: config.hebbian.weightFloor,
-    }),
-    new CognitiveExtractionStage({
-      model,
-      timeoutMs: reflection.stageTimeoutMs,
-      maxNodes: reflection.maxCognitiveNodes,
-    }),
-    new SemanticRelationshipStage({
-      model,
-      timeoutMs: reflection.stageTimeoutMs,
-      maxRelationships: reflection.maxRelationships,
-    }),
-    new SupersessionStage({
-      model,
-      timeoutMs: reflection.stageTimeoutMs,
-      mode: reflection.supersedeMode,
-      autoConfidence: reflection.supersedeAutoConfidence,
-      neighborThreshold: reflection.supersedeNeighborThreshold,
-      maxSubjects: reflection.maxSupersessionSubjects,
-      maxNeighbors: reflection.maxContradictionNeighbors,
-      maxJudgments: reflection.maxContradictionJudgments,
-      familyRelatednessFloor: reflection.supersedeFamilyRelatednessFloor,
-    }),
-    new ReinforcementEnqueueStage({ reinforcementQueueCap: config.sqlite.reinforcementQueueCap }),
-    new ContextVectorStage(),
-    new SessionNarrativeStage(narrativeOptions(config)),
-  ];
-}
-
-export function narrativeOptions(config: Config): SessionNarrativeOptions {
-  return {
-    model: config.models.reflect,
-    idleMs: config.reflection.narrativeIdleMinutes * MINUTE_MS,
-    timeoutMs: config.reflection.stageTimeoutMs,
-    maxSourceEpisodes: config.reflection.maxNarrativeEpisodes,
-    maxEpisodeChars: config.reflection.maxNarrativeEpisodeChars,
-  };
-}
-
-export function workerOptions(config: Config): ReflectionWorkerOptions {
-  return {
-    workerCount: config.operational.workerCount,
-    staleTimeoutMs: config.operational.workerStaleClaimTimeoutMs,
-    retryBaseMs: config.operational.workerRetryBaseMs,
-    retryCapMs: config.operational.workerRetryCapMs,
-    maxAttempts: config.operational.workerMaxAttempts,
-    breakerThreshold: config.operational.workerBreakerThreshold,
-    breakerCooldownMs: config.operational.workerBreakerCooldownMs,
-    vectorBatchSize: config.operational.workerVectorBatchSize,
-  };
-}
+export { narrativeOptions, narrativeSweepOptions, reflectionStages, workerOptions };
 
 export class GraphUnreachableError extends Error {
   constructor(uri: string, detail: string) {
@@ -320,10 +232,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
     // that exits) leaves behind.
     const narrativeDeps = { driver, provider: reflectProvider, logger };
     const narratives = new SessionNarrativeCloser(narrativeDeps, narrativeOptions(config));
-    const idleNarratives = new IdleNarrativeSweeper(narrativeDeps, {
-      ...narrativeOptions(config),
-      limit: config.reflection.narrativeSweepLimit,
-    });
+    const idleNarratives = new IdleNarrativeSweeper(narrativeDeps, narrativeSweepOptions(config));
     idleNarratives.start();
 
     // The introspection loop. The catalog is a plain ordered list rather than a lookup the

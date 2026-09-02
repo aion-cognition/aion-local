@@ -1,6 +1,7 @@
 import { loadEpisodeContext } from '../../../infrastructure/graph/episode-context.js';
 import { findFactBearingEpisodesOldestFirst } from '../../../infrastructure/graph/retro-supersession-queries.js';
 import { isLedgerApplied, markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
+import { supersessionOptions } from '../../../reflection/application/pipeline.js';
 import {
   SupersessionStage,
   SUPERSESSION_STAGE_NAME,
@@ -49,16 +50,10 @@ export function retroJudgmentSweepOperation(): IntrospectionOperation {
       );
       const toJudge = unswept.slice(0, batch);
 
-      const stage = new SupersessionStage({
-        model: ctx.config.models.reflect,
-        timeoutMs: ctx.config.reflection.stageTimeoutMs,
-        mode: 'propose',
-        autoConfidence: ctx.config.reflection.supersedeAutoConfidence,
-        neighborThreshold: ctx.config.reflection.supersedeNeighborThreshold,
-        maxSubjects: ctx.config.reflection.maxSupersessionSubjects,
-        maxNeighbors: ctx.config.reflection.maxContradictionNeighbors,
-        maxJudgments: ctx.config.reflection.maxContradictionJudgments,
-      });
+      // The one option the sweep sets for itself: it judges a backlog no session is waiting on,
+      // so its verdicts go to review rather than straight to the graph. The rest comes from the
+      // pipeline's builder, since a second copy of the list drifts the moment a knob joins it.
+      const stage = new SupersessionStage({ ...supersessionOptions(ctx.config), mode: 'propose' });
 
       let judged = 0;
       let proposals = 0;
