@@ -242,6 +242,34 @@ describe('a memory the query shares no words with reaches the pack by the shape 
     expect(lexical.map((row) => row.id)).not.toContain(targetId);
   }, 120_000);
 
+  /**
+   * The band `contextResonance.contextSearchThreshold` sits in, measured rather than assumed.
+   * The search runs from a centroid over what the first pass admitted, which is this query's
+   * anchor world, so the two readings against that world's own neighborhood shape are the two
+   * distributions the threshold has to separate: the memory whose crew has the same shape, and
+   * the memory whose crew has a different one.
+   */
+  it('measures the shape distance to the target against the shape distance to the distractor', async () => {
+    const anchor = await contextVector(substrate.driver, episodeIds.get(ANCHOR_WORLD.key) ?? '');
+    const target = await contextVector(substrate.driver, episodeIds.get(TARGET_WORLD.key) ?? '');
+    const distractor = await contextVector(
+      substrate.driver,
+      episodeIds.get(DISTRACTOR_WORLD.key) ?? '',
+    );
+    if (anchor === undefined || target === undefined || distractor === undefined) {
+      throw new Error('a world reached the read path with no context vector');
+    }
+
+    const matched = cosineSimilarity(anchor, target);
+    const mismatched = cosineSimilarity(anchor, distractor);
+    const threshold = substrate.config.contextResonance.contextSearchThreshold.toFixed(2);
+    console.log(
+      `neighborhood shape against the anchor: target ${matched.toFixed(3)}, distractor ${mismatched.toFixed(3)}, threshold ${threshold}`,
+    );
+
+    expect(matched).toBeGreaterThan(mismatched);
+  }, 120_000);
+
   it('surfaces the target in the resonant bucket and in no other', async () => {
     const result = await substrate.recall(RESONANCE_QUERY, {
       identity: READ_SESSION,

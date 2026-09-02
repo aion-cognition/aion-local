@@ -207,7 +207,7 @@ newer one's source episode folds onto it, and the newer closes with the same `SU
 lineage a contradiction close writes, so `aion unsupersede` reverses it like any other close.
 `AION_MAINTENANCE_CLAIM_DEDUP` (default `true`) is its kill switch. `AION_MAINTENANCE_CLAIM_DEDUP_BATCH`
 (default `5`) bounds pairs judged per run, since every pair costs up to two model calls.
-`AION_MAINTENANCE_CLAIM_DEDUP_COSINE_FLOOR` (default `0.95`) is the nearest-neighbor floor a
+`AION_MAINTENANCE_CLAIM_DEDUP_COSINE_FLOOR` (default `0.73`) is the nearest-neighbor floor a
 pair must clear before the judge is asked at all. A pair is judged once, ever: the verdict is
 ledgered under a permanent key on the unordered pair, so a re-run never pays for it twice.
 
