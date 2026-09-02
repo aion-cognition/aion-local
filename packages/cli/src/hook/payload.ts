@@ -28,6 +28,49 @@ export function additionalContext(hookEventName: string, text: string): string {
   return JSON.stringify({ hookSpecificOutput: { hookEventName, additionalContext: text } });
 }
 
+/** The names the harness gives the two aion tools a model can call for itself. */
+export const REFLECTION_TOOL_NAME = 'mcp__aion__reflection';
+export const RECALL_TOOL_NAME = 'mcp__aion__recall';
+
+/**
+ * The rewritten arguments a PreToolUse hook hands back. `permissionDecision` stays out of the
+ * frame: the field is optional and omitting it leaves the call to the normal permission flow,
+ * which is the point. This hook corrects an argument, it does not approve a tool.
+ */
+export function updatedToolInput(
+  hookEventName: string,
+  toolInput: Record<string, unknown>,
+): string {
+  return JSON.stringify({ hookSpecificOutput: { hookEventName, updatedInput: toolInput } });
+}
+
+/**
+ * The session id a direct tool call must carry, or undefined when the call already carries the
+ * right one and nothing needs rewriting. A tool call that omits `session_id` falls back to the
+ * MCP transport's own uuid, which splits one Claude session into two Session nodes in the graph.
+ *
+ * Reflection writes, so the Claude session id always wins: an id the model supplied itself is
+ * wrong for a write. Recall only reads, so an id it passed on purpose stays and only an absent
+ * one is filled in.
+ */
+export function stampedToolInput(
+  input: Record<string, unknown>,
+  tool: string,
+  sessionId: string,
+): Record<string, unknown> | undefined {
+  const current = isRecord(input.tool_input) ? input.tool_input : {};
+  if (tool === REFLECTION_TOOL_NAME) {
+    if (current.session_id === sessionId) {
+      return undefined;
+    }
+    return { ...current, session_id: sessionId };
+  }
+  if (tool === RECALL_TOOL_NAME && stringField(current, 'session_id') === undefined) {
+    return { ...current, session_id: sessionId };
+  }
+  return undefined;
+}
+
 export function packHasContent(structured: Record<string, unknown> | undefined): boolean {
   if (structured === undefined) {
     return false;

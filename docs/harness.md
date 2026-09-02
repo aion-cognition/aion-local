@@ -37,6 +37,7 @@ is the substrate.
 | SubagentStop | `subagent-stop` | Stores a subagent's turn the same way. |
 | SessionEnd | `session-end` | Flushes the last window and drops the cursor. |
 | PostToolUse | `post-tool-use` | Buffers a research tool result for the next flush. |
+| PreToolUse | `pre-tool-use` | Stamps the Claude session id onto a direct recall or reflection call. |
 
 Every hook fails open. A service that is down, a transcript it cannot read, a malformed
 payload, a fetch that never answers: all of them exit 0 with nothing on stdout. Ten seconds is
@@ -70,6 +71,34 @@ read as transcript rather than as conclusions.
 
 Instruct mode honors `stop_hook_active` strictly. A block while a block is already being
 processed would never settle.
+
+## One session, one Session node
+
+The hooks pass the Claude session id as the `session_id` tool argument. A tool call the model
+makes for itself can leave that argument out, and the server then falls back to the MCP
+transport's own uuid, so one Claude session writes to two Session nodes.
+
+The PreToolUse hook closes that gap before the call leaves the client. It matches
+`mcp__aion__reflection` and `mcp__aion__recall` and returns the arguments with `session_id` set
+to the id the harness gave it:
+
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "updatedInput": { "summary": "...", "session_id": "the-claude-session-id" }
+  }
+}
+```
+
+Reflection writes, so the Claude session id always wins there, including over an id the model
+supplied itself. Recall only reads, so an id it passed on purpose stays and only an absent one
+is filled in. A call that already carries the right id gets no rewrite, which keeps the normal
+permission flow for the common case. The hook reads stdin and writes stdout with no round trip,
+because it sits in front of every recall and reflection the model makes.
+
+Both profiles install it. A session running aion hooks holds the invariant either way. The
+frame omits `permissionDecision`, so approval stays with the normal permission flow.
 
 ## Research capture
 
@@ -159,6 +188,17 @@ block looks like this, with the absolute path to your own checkout:
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "mcp__aion__reflection|mcp__aion__recall",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /path/to/aion-local/packages/cli/dist/hook-main.js pre-tool-use"
+          }
+        ]
+      }
     ]
   }
 }
@@ -166,7 +206,8 @@ block looks like this, with the absolute path to your own checkout:
 
 `async: true` keeps a capture-only hook off the turn's critical path. SessionStart and
 UserPromptSubmit cannot use it, because their output is the context they inject. Stop cannot
-either, because it may block.
+either, because it may block. PreToolUse cannot either, because the tool call waits on the
+arguments it returns.
 
 `aion hooks status` prints which entries are installed, their flags, and whether the build
 exists. `aion hooks uninstall` removes exactly those entries.
@@ -180,8 +221,12 @@ the subtree and fails the build on any other import.
 
 Per fire it opens a streamable-HTTP MCP session against `http://127.0.0.1:8765/mcp`
 (`AION_MCP_PORT` moves the port), makes one tool call, and deletes the session. The Claude
-session id travels as the `session_id` tool argument, which overrides the transport identity,
-so hook traffic and the model's own tool calls land in one memory stream rather than two.
+session id travels as the `session_id` tool argument, which overrides the transport identity.
+`pre-tool-use` puts the same argument on the model's own calls, so both land in one memory
+stream rather than two.
+
+`pre-tool-use` and `post-tool-use` are the two exceptions to the round trip: neither opens an
+MCP session at all.
 
 The transcript is JSONL written by the harness for its own use, and its line shape drifts.
 Every read is defensive: an unparseable line is skipped, and a message is recognized by walking

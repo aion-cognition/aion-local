@@ -18,6 +18,12 @@ export const RESEARCH_MATCHER = 'mcp__slack__.*|mcp__linear-mcp-server__.*|mcp__
 
 export const SESSION_START_MATCHER = 'startup|resume|clear|compact';
 
+/**
+ * The two aion tools a model calls for itself. Both are stamped with the Claude session id
+ * before the call leaves the client, so one session owns one Session node in the graph.
+ */
+export const AION_TOOL_MATCHER = 'mcp__aion__reflection|mcp__aion__recall';
+
 export type HookCommand = {
   readonly type: 'command';
   readonly command: string;
@@ -65,9 +71,11 @@ function withMatcher(entry: HookMatcher, matcher: string): HookMatcher {
 }
 
 export function buildAionHooks(spec: HookInstallSpec): SettingsHooks {
+  // Both profiles carry the session stamp. Any session running aion hooks holds the invariant.
   const hooks: Record<string, readonly HookMatcher[]> = {
     SessionStart: [withMatcher(inline(spec, 'session-start'), SESSION_START_MATCHER)],
     SessionEnd: [inline(spec, 'session-end')],
+    PreToolUse: [withMatcher(inline(spec, 'pre-tool-use'), AION_TOOL_MATCHER)],
   };
 
   if (spec.profile === 'full') {

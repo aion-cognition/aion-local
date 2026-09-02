@@ -8,6 +8,7 @@ export const HOOK_EVENTS = [
   'subagent-stop',
   'session-end',
   'post-tool-use',
+  'pre-tool-use',
 ] as const;
 
 export type HookEvent = (typeof HOOK_EVENTS)[number];

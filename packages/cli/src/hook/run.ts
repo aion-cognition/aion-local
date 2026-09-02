@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   postToolUse,
   preCompact,
+  preToolUse,
   promptSubmit,
   sessionEnd,
   sessionStart,
@@ -42,6 +43,7 @@ const HANDLERS: Record<HookEvent, (context: HookContext) => Promise<number>> = {
   'subagent-stop': subagentStop,
   'session-end': sessionEnd,
   'post-tool-use': postToolUse,
+  'pre-tool-use': preToolUse,
 };
 
 export type HookFlags = {

@@ -332,6 +332,132 @@ describe('hook events', () => {
     ]);
   });
 
+  it('stamps the claude session id over the one a reflection call carried', async () => {
+    const { fetchImpl, calls } = transport({ structuredContent: {} });
+
+    await expect(
+      runHook(
+        {
+          session_id: SESSION_ID,
+          tool_name: 'mcp__aion__reflection',
+          tool_input: { summary: 'the fix is a per-table split', session_id: 'transport-1' },
+        },
+        options('pre-tool-use', { fetchImpl }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(calls).toEqual([]);
+    expect(JSON.parse(stdout[0] ?? '{}')).toEqual({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        updatedInput: { summary: 'the fix is a per-table split', session_id: SESSION_ID },
+      },
+    });
+  });
+
+  it('stamps a reflection call that carries no session id at all', async () => {
+    const { fetchImpl } = transport({ structuredContent: {} });
+
+    await runHook(
+      {
+        session_id: SESSION_ID,
+        tool_name: 'mcp__aion__reflection',
+        tool_input: { summary: 'the fix is a per-table split' },
+      },
+      options('pre-tool-use', { fetchImpl }),
+    );
+
+    expect(JSON.parse(stdout[0] ?? '{}').hookSpecificOutput.updatedInput).toEqual({
+      summary: 'the fix is a per-table split',
+      session_id: SESSION_ID,
+    });
+  });
+
+  it('rewrites nothing when a reflection call already carries the right session id', async () => {
+    const { fetchImpl } = transport({ structuredContent: {} });
+
+    await expect(
+      runHook(
+        {
+          session_id: SESSION_ID,
+          tool_name: 'mcp__aion__reflection',
+          tool_input: { summary: 'already right', session_id: SESSION_ID },
+        },
+        options('pre-tool-use', { fetchImpl }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(stdout).toEqual([]);
+  });
+
+  it('fills in the session id a recall call left out', async () => {
+    const { fetchImpl } = transport({ structuredContent: {} });
+
+    await runHook(
+      {
+        session_id: SESSION_ID,
+        tool_name: 'mcp__aion__recall',
+        tool_input: { query: 'why did the migration deadlock', session_id: '' },
+      },
+      options('pre-tool-use', { fetchImpl }),
+    );
+
+    expect(JSON.parse(stdout[0] ?? '{}')).toEqual({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        updatedInput: { query: 'why did the migration deadlock', session_id: SESSION_ID },
+      },
+    });
+  });
+
+  it('leaves the session id a recall call chose for itself alone', async () => {
+    const { fetchImpl } = transport({ structuredContent: {} });
+
+    await expect(
+      runHook(
+        {
+          session_id: SESSION_ID,
+          tool_name: 'mcp__aion__recall',
+          tool_input: { query: 'what did the other session decide', session_id: 'other-session' },
+        },
+        options('pre-tool-use', { fetchImpl }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(stdout).toEqual([]);
+  });
+
+  it('says nothing about a tool that is not aion', async () => {
+    const { fetchImpl, calls } = transport({ structuredContent: {} });
+
+    await expect(
+      runHook(
+        {
+          session_id: SESSION_ID,
+          tool_name: 'mcp__slack__conversations_history',
+          tool_input: { channel: 'C123' },
+        },
+        options('pre-tool-use', { fetchImpl }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(stdout).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
+  it('says nothing when the payload carries no session id to stamp', async () => {
+    const { fetchImpl } = transport({ structuredContent: {} });
+
+    await expect(
+      runHook(
+        { tool_name: 'mcp__aion__reflection', tool_input: { summary: 'orphaned' } },
+        options('pre-tool-use', { fetchImpl }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(stdout).toEqual([]);
+  });
+
   it('drops the cursor file when the session ends', async () => {
     writeFileSync(transcriptPath, `${ASSISTANT_LINE}\n`);
     const { fetchImpl } = transport({ structuredContent: { episode_id: 'e3' } });
