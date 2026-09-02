@@ -15,9 +15,14 @@ export { halfWindowIntervalMs, MIN_SWEEP_INTERVAL_MS, SweepTimer } from './sweep
 export { DEFAULT_SQLITE_PATH, SqliteStore, openSqliteHandle } from './sqlite/database.js';
 export type { SqliteHandle } from './sqlite/database.js';
 
-export { countExperiencesByVersion, experienceArchiveSpan } from './sqlite/experience-archive.js';
+export {
+  countExperiencesByVersion,
+  experienceArchiveSpan,
+  getExperienceByEpisode,
+} from './sqlite/experience-archive.js';
 
 export {
+  getLedgerEntry,
   isLedgerApplied,
   latestLedgerEntry,
   listLedgerEntries,
@@ -30,6 +35,7 @@ export type { OperationStats } from './sqlite/introspection-counters.js';
 export {
   REFLECTION_LANES,
   enqueueReflectionJob,
+  findPendingReflectionJob,
   isReflectionLane,
   listReflectionJobs,
 } from './sqlite/reflection-queue.js';
@@ -110,6 +116,8 @@ export { asOf, bitemporalAt, knewAt, withCurrency } from './graph/read-modes.js'
 export type { ReadMode } from './graph/read-modes.js';
 
 export { loadEpisodeContext } from './graph/episode-context.js';
+
+export { listSessionEpisodeIds } from './graph/episodes.js';
 
 export { NARRATIVE_PROPERTIES, findSessionNarratives } from './graph/narrative-queries.js';
 
