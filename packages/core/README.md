@@ -33,9 +33,14 @@ infrastructure/  graph/, sqlite/, providers/, config/, logging/
 ```
 
 The layering rule: `domain/` never imports `application/`; `application/` imports `domain/`
-and `infrastructure/`; `infrastructure/` imports nothing from a context. It knows nodes,
-edges and rows, never episodes, cues or packs. One edge crosses contexts and runs one way:
-`recall/domain/` takes `hashContent` and `weightedMeanVector` out of `reflection/domain/`.
+and `infrastructure/`. `reflection/domain/` is the one context the other two draw pure value
+primitives from, and nothing draws back. `recall/domain/` takes `hashContent` from
+`content.js` and `weightedMeanVector` from `context-vector.js`; `introspection/domain/` takes
+`entity-cascade.js`'s relation checks. `infrastructure/` takes fifteen files' worth of the
+same kind of primitive (name folding, claim keys, vector-input hashing, entity-extraction and
+entity-reconciliation helpers, the `ReflectionContent` and `ComputedContextVector` types) and
+nothing else: no application code, no I/O, no Cypher that reflection/ itself doesn't already
+own.
 
 ## The public surface
 

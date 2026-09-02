@@ -51,7 +51,8 @@ packages/core/src/
   infrastructure/graph/                 every Cypher statement in the workspace
   infrastructure/logging/               pino wrapper
   infrastructure/providers/             Ollama client, circuit breaker, provisioning
-  infrastructure/sqlite/                reflection queue, last-pack cache, ops ledger, locks
+  infrastructure/sqlite/                reflection queue, experience archive, last-pack cache,
+                                        ops ledger, locks
   recall/domain/                        pure: activation, fusion (RRF/MMR), pack assembly
   recall/application/                   cue extraction, seed strategies, the recall pipeline
   plasticity/                           reinforcement folding and the decay curve, plus the
@@ -157,11 +158,11 @@ reminder.
 
 ## The re-exercise gate
 
-`packages/mcp/src/gate/` holds ten int test files. Seven scripted batteries, each one a
+`packages/mcp/src/gate/` holds eleven int test files. Seven scripted batteries, each one a
 finding from the first full-system exercise round re-run against the shipped pipeline
 (`bootstrap.ts`'s own stage list, live Ollama, a pooled throwaway Neo4j cleared for each
-file), are split across three of them, listed below. The other seven gate one behavior each,
-three of them the mode-setting batteries further down.
+file), are split across three of them, listed below. The other eight gate one behavior each,
+four of them the mode-setting batteries further down.
 
 ```
 npx vitest run --project integration --reporter=verbose re-exercise-gate         # all seven

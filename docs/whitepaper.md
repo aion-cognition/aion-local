@@ -67,10 +67,12 @@ what this system thought last month. One interval cannot answer both, and the ga
 two answers is where a correction lives.
 
 Default recall does not filter superseded knowledge out. It labels it. Every returned item
-carries `current` or `superseded`, and a superseded item carries a pointer to what replaced it
-and when. Filtering it would make the substrate look like it had always been right. `aion
-forget` is the one suppression and still not a deletion: it sets `forgotten_at`, default recall
-stops serving the node, and a time-travel read still returns it.
+carries `current`, `superseded`, or `expired`; a superseded item carries a pointer to what
+replaced it and when, and an expired one has aged past the `valid_horizon` it was written
+with, down-ranked rather than dropped. Filtering it would make the substrate look like it had
+always been right. `aion forget` is the one suppression and still not a deletion: it sets
+`forgotten_at`, default recall stops serving the node, and a time-travel read still returns
+it.
 
 An empty pack is an honest answer. Nothing relevant is stored, and that is not a failure. The
 admission floors exist so a pack can come back empty rather than padded with weak matches the
@@ -159,7 +161,7 @@ snapshot meets preempts the whole catalog, and that preemption expires once it s
 metric it declared, because a condition can stand for weeks and nothing else may wait that
 long. Otherwise operations score on their own relevance, weighted down when their runs stop
 improving anything and up the longer they wait, so nothing starves. The model-guided tier is
-the last fallback, opt-in and propose-only here.
+the last fallback, on by default and propose-only here.
 
 **Learn** is what makes the loop a loop. An operation declares the one metric it exists to
 move. The engine reads it before the run and again on a later tick, when the system has
@@ -221,8 +223,9 @@ maintenance loop, idempotent consolidation through an operations ledger, and the
 contract all carry over.
 
 The surface is two MCP tools, `recall` and `reflection`. Neo4j holds the graph and its vector
-indexes. SQLite holds the reflection queue, the operations ledger, the proposal queues, and the
-last-pack cache. Generation runs on Ollama on the host. Set an Anthropic key and the two
+indexes. SQLite holds the reflection queue, the append-only experience archive `aion replay`
+and `aion timeline` read back, the operations ledger, the proposal queues, and the last-pack
+cache. Generation runs on Ollama on the host. Set an Anthropic key and the two
 generation roles, cue extraction and reflection, route to Haiku instead of the local instruct
 model. Embeddings stay local either way, because the vector space is the substrate.
 
@@ -243,8 +246,8 @@ Where this build differs from the paper:
   They are the section above.
 - **Some tuned values disagree with the paper's appendix** (the episode cap, the summary cue
   weight, the cue-call budget), each on a measurement `architecture.md` records.
-- **Fourteen maintenance operations are registered**, and four the paper names are not, each
-  for a reason `architecture.md` gives. Entity unmerge sits outside the catalog on
+- **Twenty-four maintenance operations are registered**, and two the paper names are not,
+  each for a reason `architecture.md` gives. Entity unmerge sits outside the catalog on
   purpose, since a bad merge and a correct one have the same shape in the graph.
 - **A third implementation.** The paper describes two, TypeScript and Go, both multi-tenant
   services. This repo is neither: it is a separate TypeScript implementation, built from the

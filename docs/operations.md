@@ -86,6 +86,25 @@ precision 1.000 and recall 1.000, against 0.857 and 1.000 for the single pass.
 It gates on the judge's stated confidence, which came back 0.95 on every affirmative in the same
 run, so the threshold is a pass-through rather than a filter.
 
+## Subject-keyed closure
+
+```
+AION_KEYED_CLOSE_MODE=off     # the kill switch: skip the keyed lookup entirely
+AION_KEYED_CLOSE_MODE=judge   # the default: route a keyed candidate into the same two-pass
+                               # unanimous judge AION_SUPERSEDE_MODE uses
+AION_KEYED_CLOSE_MODE=close   # the mechanical close, made in the writing transaction
+```
+
+Independent of `AION_SUPERSEDE_MODE`: the keyed lookup runs inside a different stage's write,
+so it needs a kill switch of its own. `close` ships only once its own battery clears a bar set
+ahead of the measurement: precision at or above 0.95 over the 24-case corpus, on at least four
+mechanical closes; short of either it ships `judge`. `keyed-close-precision.int.test.ts`
+asserts the shipped value against what it measures, in both directions.
+
+Measured 2026-09-01 on claude-haiku-4-5 with `snowflake-arctic-embed2` embeddings, 24 pairs
+of sessions through the shipped extraction stages: 2 mechanical closes, precision 1.000,
+recall 0.250. Recall falls short of the bar `close` needs, so this ships `judge`.
+
 ## Entity merge mode
 
 ```
@@ -143,8 +162,8 @@ nodes out of two thousand is a small share to a scoring function and an incident
 and before this there was no way to say so.
 
 `aion status` prints a `lanes` section: one line per operation that acts on its own between
-ticks (`merge_auto`, `entity_dedup`, `supersession`, `proposal_hygiene`, `claim_dedup`,
-`tier3`), each read as `acting` or
+ticks (`merge_auto`, `entity_dedup`, `supersession`, `keyed_close`, `proposal_hygiene`,
+`claim_dedup`, `tier3`), each read as `acting` or
 `off` from its own live knobs. Two states only, so the line answers "would this touch
 anything right now" without a third reading to interpret.
 
@@ -172,13 +191,15 @@ aion forget <id | query> [--yes]
 
 ## Logs
 
-Everything writes structured JSONL to two places at once: stdout, which `docker logs
-aion-aion-mcp-1` reads, and one file on the data volume, `/data/logs/aion.jsonl` by default.
-The service logs under the name `aion-mcp`, and every CLI run under its command's name.
-`AION_LOG_LEVEL` moves the level (`debug` through `fatal`); writes are synchronous, so a
-crash keeps the tail that explains it. The container's stdout copy is capped by the compose
-`logging` block (10 MB × 3); the file on the volume is the uncapped durable record. The
-harness hooks are the one component outside the containers; each fire appends one line to
+Everything writes structured JSONL to one file on the data volume, `/data/logs/aion.jsonl` by
+default. The service tees the same records to stdout, which `docker logs aion-aion-mcp-1`
+reads. A CLI run does not tee: stdout is where a command writes its answer, so a log record
+there would break the single JSON object `--json` promises. The service logs under the name
+`aion-mcp`, and every CLI run under its command's name. `AION_LOG_LEVEL` moves the level
+(`debug` through `fatal`); writes are synchronous, so a crash keeps the tail that explains it.
+The container's stdout copy is capped by the compose `logging` block (10 MB × 3); the file on
+the volume is the uncapped durable record. The harness hooks are the one component outside
+the containers; each fire appends one line to
 `~/.aion/hook-state/hooks.log` on the host.
 
 ## Configuration

@@ -78,17 +78,18 @@ in the same request. `aion last` prints two `degraded` lines.
 ### Full Ollama outage: reflection
 
 **Trigger.** Same outage, on the write path. Intake makes one embedding call, and it makes
-it after the write transaction has already committed
-(`packages/core/src/reflection/application/intake.ts:414`).
+it after the write transaction has already committed (`intake.ts:291`, the `attachVectors`
+call).
 
-**What happens.** Nothing, to the experience. The write transaction commits the `Episode`,
-its `Turn` nodes, and every backbone edge with no `content_vec` property at all
-(`intake.ts:143-189`); the integrate job is inserted and the worker woken through
-`onJobEnqueued` (`intake.ts:397-400`); only then does `attachVectors` embed. The call
-throws, it is logged as `content vectors deferred; the episode is stored and queued`, and
-intake returns normally (`intake.ts:335-348`). A `:Memory` node without `content_vec` is itself the
-pending marker; there is no flag property to keep in sync with it
-(`packages/core/src/infrastructure/graph/pending-vectors.ts`).
+**What happens.** Nothing, to the experience. `storeEpisode` commits the `Episode`, its
+`Turn` nodes, and every backbone edge with no `content_vec` property at all, inside one
+write transaction (`reflection/application/experience-store.ts:125-172`); `archiveAndQueue`
+inserts the integrate job and `notifyEnqueued` wakes the worker (`intake.ts:261-275`); only
+then does `attachVectors` embed (`intake.ts:291`). The call throws, is caught inside
+`attachVectors` itself, logged as `content vectors deferred; the episode is stored and
+queued`, and intake returns normally (`intake.ts:199-211`). A `:Memory` node without
+`content_vec` is itself the pending marker; there is no flag property to keep in sync with
+it (`packages/core/src/infrastructure/graph/pending-vectors.ts`).
 
 **What the caller sees.** The ordinary ack, `{episode_id, queued: true}`. No MCP error.
 `ReflectionNotStoredError` no longer has an `embed` stage at all: the only way intake can
@@ -113,9 +114,10 @@ Verified against a throwaway Neo4j plus an Ollama pointed at the discard port
 `PARTICIPATES_IN`, and the turn `FOLLOWS` chain all present, the queue row present, the
 enqueue callback fired, and `content_vec` absent on all three nodes.
 `findPendingVectorNodes` then returned exactly those three ids, `attachContentVectors`
-against live Ollama filled all three at 768 dimensions, a second pass wrote the same
-vectors and left the pending set empty. The failing embed call itself costs 12ms
-(`TypeError: fetch failed`), measured against `http://127.0.0.1:9`.
+against live Ollama filled all three at the configured dimension (1024,
+`snowflake-arctic-embed2`), a second pass wrote the same vectors and left the pending set
+empty. The failing embed call itself costs 12ms (`TypeError: fetch failed`), measured
+against `http://127.0.0.1:9`.
 
 ### Neo4j down: recall
 
@@ -164,7 +166,7 @@ recall against a warm session): resolved in 16.6-17.6s across two runs (down fro
 `[{"stage":"graph","reason":"unavailable"}]` and `rendered_text` then still the bare
 empty-pack constant.
 
-**Diagnose.** `aion doctor`'s `neo4j-bolt` check (`packages/cli/src/doctor.ts:188`), which
+**Diagnose.** `aion doctor`'s `neo4j-bolt` check (`packages/cli/src/doctor.ts:155`), which
 every graph-reading check declares as its `dependsOn` so a dead server is reported once
 rather than as a timeout per check. Live, `selectSeeds`' error log line above names it
 directly. `aion last` prints `degraded  graph: unavailable`.
@@ -183,7 +185,7 @@ pack.
 wraps both reads in one try/catch. A graph error there is caught, logged as `context resonance
 failed; the pack keeps its first-pass answer` (`resonance.ts:185`), and returns `{items: [],
 skipped: 'unavailable'}` instead of propagating. `handleRecall` logs the skip reason on its own
-`recall served` line (`recall.ts:398-418`, field `resonanceSkipped` at `:411`) but does not add
+`recall served` line (`recall.ts:449-475`, field `resonanceSkipped` at `:468`) but does not add
 it to `degradations` (`recall.ts:279-291`), the list `metadata.degraded` is built from.
 
 **What the caller sees.** The pack the first pass already assembled, with an empty `resonant`
@@ -211,13 +213,14 @@ for that identity). `SessionManager.ensureSession` caches resolved identities in
 (`packages/core/src/session/session-manager.ts:60-63`); a cache hit needs no graph call and
 is unaffected by the outage.
 
-**What happens.** `storeDurably` calls `sessions.ensureSession`, which reaches
-`ensureGraphSession` and issues a write (`intake.ts:227-243`). It fails; `isGraphUnavailable` recognizes the driver's
+**What happens.** `storeExperience` calls `sessions.ensureSession`, which reaches
+`ensureGraphSession` (`infrastructure/graph/sessions.ts:95`) and issues a write. It fails;
+`isGraphUnavailable` (`infrastructure/graph/errors.ts:15`) recognizes the driver's
 `ServiceUnavailable`/`SessionExpired` codes (or an unlabeled connection-acquisition
-timeout) and `storeDurably` wraps it in `ReflectionNotStoredError('graph', err)`
-(`intake.ts:239`) rather than letting the raw `Neo4jError` escape. This is the one refusal
-the write path still makes: an unreachable graph has nowhere to put the experience, so
-answering `queued: true` would lose it for good.
+timeout) and `storeExperience` wraps it in `ReflectionNotStoredError('graph', err)`
+(`reflection/application/experience-store.ts:226-227`) rather than letting the raw
+`Neo4jError` escape. This is the one refusal the write path still makes: an unreachable
+graph has nowhere to put the experience, so answering `queued: true` would lose it for good.
 
 **What the caller sees.** An MCP `InternalError` (-32603):
 `reflection not stored: the graph is unavailable (Neo4jError). Nothing was written and
@@ -259,7 +262,7 @@ numbers above land inside them.
 regular file, or its parent does not exist and cannot be made.
 
 **What happens.** `bootstrapService` constructs `SqliteStore` before anything else,
-including the Neo4j health check (`packages/mcp/src/bootstrap.ts:207`).
+including the Neo4j health check (`packages/mcp/src/bootstrap.ts:129`).
 `openSqliteHandle` calls `ensureDirectoryExists`, which is `mkdirSync(dirname(filePath),
 { recursive: true })` (`packages/core/src/infrastructure/sqlite/database.ts:145-150`) with
 no guard; the raw `EEXIST` or `ENOENT` propagates out of `bootstrapService`, and
@@ -269,7 +272,7 @@ called (`packages/mcp/src/run.ts:37-40`). No listener binds; no partial service 
 **What the caller sees.** Nothing over MCP; there is no server to connect to. An operator
 reading `docker logs` sees a raw errno, not a domain error: `bootstrap.ts` defines
 `GraphUnreachableError` and `SchemaNotInitializedError` for the neighboring startup checks
-(`bootstrap.ts:143-155`) but nothing names the SQLite path, so the message reads
+(`bootstrap.ts:65-77`) but nothing names the SQLite path, so the message reads
 `aion-mcp: Error: EEXIST: file already exists, mkdir '...'` rather than "aion could not
 open its SQLite store at `<path>`."
 
@@ -319,11 +322,11 @@ Every knob below is `AION_*`-overridable; the catalog is
 
 | Knob | Default | Buys (raising it) | Costs (raising it) | Vs. spec |
 |---|---|---|---|---|
-| `AION_CUE_BUDGET_MS` (`recall.cueBudgetMs`) | 8000 | Headroom past a cold cue-model start (measured 2288ms cold vs. 558-811ms warm), so the hang guard stays a hang guard instead of firing on ordinary recalls. | A call that has actually hung blocks recall that much longer before the ladder degrades it. | PRD §14 pins 2000. Raised to 5000 in the original build, then to 8000 after a live gate rerun busted 2000 at a measured 2030ms. |
+| `AION_CUE_BUDGET_MS` (`recall.cueBudgetMs`) | 8000 | Headroom past a cold cue-model start (measured 2288ms cold vs. 527-937ms warm), so the hang guard stays a hang guard instead of firing on ordinary recalls. | A call that has actually hung blocks recall that much longer before the ladder degrades it. | PRD §14 pins 2000. Raised to 5000 in the original build, then to 8000 after a live gate rerun busted 2000 at a measured 2030ms. |
 | `AION_RECALL_MAX_EPISODES` (`recall.maxEpisodes`) | 20 | Room for a graph-traversal item to survive fusion against near-tie vector hits. The checkpoint's one traversal-reached item ranked 13th: absent from the pack at 5, 8, and 12, present at 20. | A bigger `episodes` bucket before the token budget trims it; `episodes` is the pack's largest bucket. | Whitepaper Appendix E pins 5. Checked live at 5/8/12/20; only 20 passed. |
 | `AION_RECALL_TOKEN_BUDGET` (`recall.tokenBudget`) | 1200 | Nothing directly; this is the actual size ceiling on a pack, downstream of every bucket cap. | A pack trimmed harder, regardless of how many items the caps above admitted. | Not flagged as a deviation. |
 | `AION_VECTOR_ADMISSION_FLOOR` (`recall.vectorAdmissionFloor`) | 0.35 | Keeps weak, near-random matches out of a pack on their own. Calibrated against snowflake-arctic-embed2 on 43 unrelated pairs and 10 genuine matches: unrelated p50 0.086, p95 0.267, max 0.299; related min 0.382, p05 0.438, p50 0.769. This model leaves a 0.083 valley where nomic-embed-text left an overlap, so both floors sit inside it: 0.35 is 0.032 under the weakest genuine match and admits every one of them on the vector leg alone. | A single-leg match under 0.35 needs a second corroborating leg to be admitted at all. `floor-calibration.int.test.ts` fails if the committed value stops separating the two distributions. | Replaces PRD §14's `AION_MIN_RELEVANCE`, which named one floor for every method. Was 0.60 against nomic-embed-text, whose noise sample reached 0.547. |
-| `AION_CORROBORATION_FLOOR` (`recall.corroborationFloor`) | 0.33 | The lower bar a cosine has to clear to count as one of the two independent measurements that admit an item neither could carry alone. Set 0.031 above the noise sample's max (0.299), not merely its median, so two corroborating legs are two readings of signal rather than two readings of the same noise. | Lowered toward the noise ceiling, two unrelated cues start corroborating each other on noise alone. | New in the fix round, re-derived against snowflake-arctic-embed2 in Phase 4.4. |
+| `AION_CORROBORATION_FLOOR` (`recall.corroborationFloor`) | 0.33 | The lower bar a cosine has to clear to count as one of the two independent measurements that admit an item neither could carry alone. Set 0.031 above the noise sample's max (0.299), not merely its median, so two corroborating legs are two readings of signal rather than two readings of the same noise. | Lowered toward the noise ceiling, two unrelated cues start corroborating each other on noise alone. | Re-derived against snowflake-arctic-embed2 on 2026-09-02. |
 | `AION_BM25_ADMISSION_MODE` (`recall.bm25AdmissionMode`) | `exact` | `exact` admits a Lucene match on the verbatim cue and nothing else from the lexical leg; `corroborated` makes even that need a second measurement; `any` restores the pre-floor behaviour, where one shared term admitted anything. | `any` is what EX-1 measured: normalize-to-best put the top hit of every query at 1.00, so five off-topic queries each filled the pack to budget. | New in the fix round. |
 | `AION_RECALL_MAX_HOPS` (`recall.maxHops`) | 3 | Lets activation cross one `FOLLOWS` link between two episodes via the Session hub (`Episode-[:PARTICIPATES_IN]->Session-[:FOLLOWS]->Session-[:PARTICIPATES_IN]->Episode` is 3 hops). At 2, that path reaches only a contentless Session node. | Wider fan-out per iteration, more nodes visited before `maxNodesVisited` caps it. | Whitepaper Appendix E pins 2. |
 | `AION_PACK_CLUSTER_CAP` (`recall.clusterCap`) | 2 | Stops one near-duplicate content cluster from filling a bucket. EX-22 measured a burst of near-identical episodes taking 29.5% of a pack's slots. | Raised, a repeated shape crowds out more of a bucket's real diversity before the cap stops it. | New in the fix round. |
