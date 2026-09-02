@@ -16,6 +16,7 @@ import {
   vectorSeeds,
   type ScoredSeedCandidate,
 } from '../../infrastructure/graph/seed-queries.js';
+import { capScore } from '../../infrastructure/graph/vector-indexes.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Vector } from '../../infrastructure/providers/types.js';
 import {
@@ -145,16 +146,21 @@ function contribute(
   cue: SeedCue | undefined,
   exact?: true,
 ): SeedContribution {
+  // Capped rather than trusted. Every leg hands its score over on [0,1] by its own contract, a
+  // cosine or a Lucene score already divided by the best hit of its cue, and this is the one
+  // funnel all four cue-driven legs pass through on the way to a measurement the gate reads
+  // and a pack prints as a confidence the protocol bounds at 1.
+  const score = capScore(candidate.score);
   const base = {
     candidate,
     strategy,
-    relevance: candidate.score,
+    relevance: score,
     ...(exact === undefined ? {} : { exact }),
   };
   if (cue === undefined) {
-    return { ...base, score: candidate.score };
+    return { ...base, score };
   }
-  return { ...base, score: scaleByCueWeight(candidate.score, cue.weight), cue: cue.text };
+  return { ...base, score: scaleByCueWeight(score, cue.weight), cue: cue.text };
 }
 
 function embeddedCues(cues: readonly SeedCue[]): readonly (SeedCue & { vector: Vector })[] {

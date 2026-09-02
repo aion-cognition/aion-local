@@ -18,7 +18,7 @@ import {
 } from './entity-queries.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
 import { BASE_NODE_LABEL, ENTITY_LABEL } from './labels.js';
-import { lockNodeInTransaction } from './locks.js';
+import { lockGroupInTransaction } from './locks.js';
 import { isRelationshipType } from './relationships.js';
 import { ENTITY_NAME_VECTOR_PROPERTY, LAST_ACCESSED_PROPERTY } from './seed-queries.js';
 import type { Row } from './values.js';
@@ -346,22 +346,21 @@ export async function redirectAndAbsorb(
   const absorbed = new Set(groupIds);
 
   return inWriteTransaction(driver, async (tx) => {
-    // Sorted over the whole group rather than canonical-first: two overlapping groups can
-    // pick different canonicals, and canonical-first would then have them request the same
-    // two nodes in opposite orders. Sorting by id is the one order every caller agrees on.
-    for (const id of groupIds) {
-      await lockNodeInTransaction(tx, id, input.now);
-    }
+    // An id naming no node joins the stale set below rather than ending the call: this group
+    // was decided off a snapshot, and a side the graph no longer answers for is the same
+    // answer as a side that has since lost currency.
+    const unknownIds = await lockGroupInTransaction(tx, groupIds, input.now);
 
     // The caller decided this group off a snapshot that may be minutes old; the sibling
     // paths (claim-dedup, supersession-apply) re-read currency just before writing and this
     // path must too. A side another writer absorbed or a person forgot in the meantime
     // makes the whole group's evidence stale, so nothing is written for any of it.
-    const staleIds = await tx.run(
+    const withoutCurrency = await tx.run(
       FIND_SIDES_WITHOUT_CURRENCY,
       { ids: groupIds },
       (row) => row.id as string,
     );
+    const staleIds = [...new Set([...unknownIds, ...withoutCurrency])].sort();
     if (staleIds.length > 0) {
       return { status: 'stale', staleIds };
     }

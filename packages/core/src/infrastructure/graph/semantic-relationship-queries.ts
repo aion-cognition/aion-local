@@ -7,6 +7,7 @@ import { upsertEdge, type UpsertedEdge } from './edges.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
 import { readModeFragment, withCurrency } from './read-modes.js';
 import type { RelationshipType } from './relationships.js';
+import { toGraphDateTime } from './values.js';
 
 /**
  * Typed edges between entities and cognitive structures, inferred once per episode from the
@@ -54,19 +55,30 @@ export type EpisodeCognitiveNode = {
 
 function episodeCognitiveNodesStatement(episodeId: string, reference?: Date): GraphStatement {
   const fragment = readModeFragment(withCurrency(reference), 'n');
+  const predicates = ['any(label IN labels(n) WHERE label IN $labels)', fragment.where];
+  if (reference !== undefined) {
+    // The close predicate the default read mode does not carry, on the same cut as the
+    // currency annotation: a typed edge onto a claim that no longer stood at the read's
+    // vantage point asserts a relation between a claim that holds and one that does not.
+    predicates.unshift(
+      `(n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL` +
+        ` OR n.${BITEMPORAL_PROPERTIES.validUntil} > $openAt)`,
+    );
+  }
   return {
     cypher: [
       'MATCH (:Episode { id: $episodeId })<-[:EXTRACTED_FROM]-(n)',
-      // The close predicate the default read mode does not carry: a superseded node is still
-      // currency-annotated rather than filtered, and a typed edge onto one asserts a relation
-      // between a claim that stands and one that does not.
-      `WHERE n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
-      `  AND any(label IN labels(n) WHERE label IN $labels) AND ${fragment.where}`,
+      `WHERE ${predicates.join(' AND ')}`,
       'RETURN n.id AS id, [label IN labels(n) WHERE label IN $labels][0] AS label,',
       `       n.${MEMORY_PROPERTIES.text} AS text`,
       `ORDER BY n.${TEXT_NORM_PROPERTY}, n.id`,
     ].join('\n'),
-    parameters: { episodeId, labels: [...COGNITIVE_NODE_LABELS], ...fragment.parameters },
+    parameters: {
+      episodeId,
+      labels: [...COGNITIVE_NODE_LABELS],
+      ...(reference === undefined ? {} : { openAt: toGraphDateTime(reference) }),
+      ...fragment.parameters,
+    },
   };
 }
 
@@ -79,7 +91,12 @@ function episodeCognitiveNodesStatement(episodeId: string, reference?: Date): Gr
 export async function findEpisodeCognitiveNodes(
   driver: Driver,
   episodeId: string,
-  /** The clock currency is judged from; the wall clock when a caller holds none. */
+  /**
+   * The clock currency is judged from. Naming one asks what this episode extracted that still
+   * stood then, which is the candidate set a stage about to write needs. Omitting it asks the
+   * other question, what this episode extracted at all, and a node closed since comes back
+   * with the rest.
+   */
   reference?: Date,
 ): Promise<EpisodeCognitiveNode[]> {
   return runRead(driver, episodeCognitiveNodesStatement(episodeId, reference), (row) => ({

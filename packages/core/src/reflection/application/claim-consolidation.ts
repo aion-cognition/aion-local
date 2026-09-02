@@ -312,14 +312,10 @@ async function consolidateSubject(
     return { outcome: 'failed', absorbed: 0 };
   }
 
-  // The members were read before two model calls. A correction that closed one of them in that
-  // window makes this synthesis a restatement of a fact that no longer stands, so the run drops
-  // it rather than absorbing a claim someone else already replaced. The next tick reads the
-  // neighbourhood as it now is.
-  // The members were read before two model calls. A correction that closed one of them in that
-  // window makes this synthesis a restatement of a fact that no longer stands, so the run drops
-  // it rather than absorbing a claim someone else already replaced. The next tick reads the
-  // neighbourhood as it now is.
+  // The members were read before two model calls, long enough for another writer to take a
+  // side's currency; a consolidation over a set that changed underneath it would supersede a
+  // claim the graph no longer stands behind. Read immediately before the write, like the
+  // sibling judged paths do.
   const gone = await findNodesWithoutCurrency(deps.driver, memberIds);
   if (gone.length > 0) {
     deps.logger.info(

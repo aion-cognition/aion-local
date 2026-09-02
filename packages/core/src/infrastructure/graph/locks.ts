@@ -42,3 +42,31 @@ export async function lockNodeInTransaction(
     throw new GraphNodeNotFoundError([id], 'lockNode');
   }
 }
+
+/**
+ * A whole group locked in one pass, sorted by id so two overlapping groups request the same two
+ * nodes in the same order and cannot deadlock on each other.
+ *
+ * The ids that name no node come back rather than raising. A caller locking one node it just
+ * read has nothing to say about a miss and wants the throw above; a caller locking a group it
+ * decided off an older snapshot does, since a side the graph no longer answers for is the same
+ * answer as a side that has since lost currency and belongs in the same refusal.
+ */
+export async function lockGroupInTransaction(
+  tx: GraphTransaction,
+  ids: readonly string[],
+  now: Date,
+): Promise<readonly string[]> {
+  const unknown: string[] = [];
+  for (const id of [...ids].sort()) {
+    try {
+      await lockNodeInTransaction(tx, id, now);
+    } catch (err) {
+      if (!(err instanceof GraphNodeNotFoundError)) {
+        throw err;
+      }
+      unknown.push(id);
+    }
+  }
+  return unknown;
+}
