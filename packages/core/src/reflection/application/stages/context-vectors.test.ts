@@ -15,7 +15,7 @@ import { PIPELINE_VERSION } from '../../domain/version.js';
 
 /**
  * Exercises the stage's control flow against a minimal stand-in for the driver, dispatched
- * by which of this module's three query shapes a statement matches. `FakeGraph` (reflection's
+ * by which of this module's four query shapes a statement matches. `FakeGraph` (reflection's
  * shared fixture) does not model these queries and belongs to other stages' tests, so this
  * stub is local and disposable. The real Cypher is proven against a live Neo4j in
  * `context-vectors.int.test.ts`.
@@ -39,8 +39,13 @@ function isAffectedIdsQuery(cypher: string): boolean {
   return cypher.includes('UNION') && cypher.includes('MATCH (n:Episode { id: $episodeId })');
 }
 
+/** Shares the `UNWIND $nodeIds` opener with the neighbor read, so it is matched on its return. */
+function isClosureQuery(cypher: string): boolean {
+  return cypher.includes('RETURN DISTINCT m.id AS id');
+}
+
 function isNeighborQuery(cypher: string): boolean {
-  return cypher.includes('UNWIND $nodeIds AS nodeId');
+  return cypher.includes('UNWIND $nodeIds AS nodeId') && !isClosureQuery(cypher);
 }
 
 function isWriteQuery(cypher: string): boolean {
@@ -133,6 +138,9 @@ describe('ContextVectorStage', () => {
       if (isAffectedIdsQuery(cypher)) {
         return [{ id: EPISODE_ID }, { id: 'entity-a' }];
       }
+      if (isClosureQuery(cypher)) {
+        return [];
+      }
       if (isNeighborQuery(cypher)) {
         return [
           { nodeId: EPISODE_ID, neighborId: 'entity-a', strength: 1, vector: [1, 0] },
@@ -159,6 +167,41 @@ describe('ContextVectorStage', () => {
     expect(written[0]?.vector[1]).toBeCloseTo(0.5, 5);
   });
 
+  it('folds the far endpoints of the edges this run wrote into the set it recomputes', async () => {
+    let closureAnchors: readonly string[] = [];
+    let recomputeRequest: readonly string[] = [];
+    const driver = stubDriver((cypher, parameters) => {
+      if (isAffectedIdsQuery(cypher)) {
+        return [{ id: EPISODE_ID }];
+      }
+      if (isClosureQuery(cypher)) {
+        closureAnchors = parameters.nodeIds as string[];
+        // The episode's own id comes back with it: most edges a run writes land inside the
+        // family, and the stage is what deduplicates the two sets.
+        return [{ id: EPISODE_ID }, { id: 'entity-far' }];
+      }
+      if (isNeighborQuery(cypher)) {
+        recomputeRequest = parameters.nodeIds as string[];
+        return [
+          { nodeId: EPISODE_ID, neighborId: 'entity-far', strength: 1, vector: [1, 0] },
+          { nodeId: 'entity-far', neighborId: EPISODE_ID, strength: 1, vector: [0, 1] },
+        ];
+      }
+      if (isWriteQuery(cypher)) {
+        const entries = parameters.entries as { id: string }[];
+        return entries.map((entry) => ({ id: entry.id }));
+      }
+      throw new Error(`unexpected statement:\n${cypher}`);
+    });
+
+    const outcome = await new ContextVectorStage().run(buildContext(driver));
+
+    expect(closureAnchors).toEqual([EPISODE_ID]);
+    expect(recomputeRequest).toEqual([EPISODE_ID, 'entity-far']);
+    expect(outcome.summary).toBe('recomputed context_vec for 2 of 2 affected node(s)');
+    expect(outcome.counts).toEqual({ contextVectors: 2 });
+  });
+
   it('returns a failed outcome without throwing when the graph read fails', async () => {
     const driver = stubDriver(() => {
       throw new Error('neo4j unreachable');
@@ -174,6 +217,9 @@ describe('ContextVectorStage', () => {
     const driver = stubDriver((cypher) => {
       if (isAffectedIdsQuery(cypher)) {
         return [{ id: EPISODE_ID }];
+      }
+      if (isClosureQuery(cypher)) {
+        return [];
       }
       if (isNeighborQuery(cypher)) {
         return [{ nodeId: EPISODE_ID, neighborId: 'entity-a', strength: 1, vector: [1, 0] }];

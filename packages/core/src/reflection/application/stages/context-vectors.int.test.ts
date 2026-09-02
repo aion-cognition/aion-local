@@ -8,6 +8,7 @@ import { ContextVectorStage } from './context-vectors.js';
 import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
 import { upsertEdge } from '../../../infrastructure/graph/edges.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
+import { resonantNodes } from '../../../infrastructure/graph/resonance-queries.js';
 import {
   contextVector,
   vectorIndexNeighbors,
@@ -32,6 +33,10 @@ import { PIPELINE_VERSION } from '../../domain/version.js';
 const EMBED_DIMENSION = 8;
 const EPISODE_ID = 'ctx-vec-episode';
 const NOW = new Date('2026-08-28T12:00:00.000Z');
+/** Old enough that the first run's clock does not count the edges stamped with it as its own. */
+const BEFORE_RUN = new Date('2026-08-28T09:00:00.000Z');
+/** A second run over the same episode, after a later stage wrote one more edge. */
+const SECOND_RUN = new Date('2026-08-28T15:00:00.000Z');
 
 /**
  * A one-hot-shaped vector, but never a bare `0`/`1`: the vector index property is `FLOAT`-
@@ -48,6 +53,7 @@ const EPISODE_VECTOR = unitVector(0);
 const ENTITY_A_VECTOR = unitVector(1);
 const ENTITY_B_VECTOR = unitVector(2);
 const ENTITY_C_VECTOR = unitVector(3);
+const ENTITY_D_VECTOR = unitVector(4);
 
 let harness: Neo4jHarness;
 let db: SqliteHandle;
@@ -92,8 +98,8 @@ async function seedNeighborhood(driver: Driver): Promise<void> {
       content_vec: ENTITY_B_VECTOR,
     },
   });
-  // Not mentioned by the episode: reachable only from entity-a, and only entity-a's own
-  // recompute (a future run) should ever pick it up.
+  // Not mentioned by the episode, and reachable only across an edge older than any run below:
+  // nothing a run recomputes moved its neighborhood.
   await writeStampedNode(driver, {
     label: 'Entity',
     id: 'entity-c',
@@ -105,6 +111,21 @@ async function seedNeighborhood(driver: Driver): Promise<void> {
       type: 'person',
       text: 'Carol',
       content_vec: ENTITY_C_VECTOR,
+    },
+  });
+  // Also outside the episode's family, and unreachable until the second run writes the edge
+  // that puts it one hop from entity-b.
+  await writeStampedNode(driver, {
+    label: 'Entity',
+    id: 'entity-d',
+    now: NOW,
+    occurredAt: NOW,
+    properties: {
+      name: 'Dave',
+      name_norm: 'dave',
+      type: 'person',
+      text: 'Dave',
+      content_vec: ENTITY_D_VECTOR,
     },
   });
 
@@ -141,7 +162,7 @@ async function seedNeighborhood(driver: Driver): Promise<void> {
     signals: ['semantic'],
     provenance: ['test-fixture'],
     count: 1,
-    now: NOW,
+    now: BEFORE_RUN,
   });
 }
 
@@ -160,7 +181,7 @@ afterAll(async () => {
   rmSync(dataDir, { recursive: true, force: true });
 });
 
-function buildContext(): StageContext {
+function buildContext(now: Date = NOW): StageContext {
   return {
     driver: harness.driver,
     db,
@@ -174,7 +195,7 @@ function buildContext(): StageContext {
       turns: [],
     },
     logger,
-    now: NOW,
+    now,
     occurredAt: NOW,
     pipelineVersion: PIPELINE_VERSION,
   };
@@ -200,7 +221,8 @@ describe('ContextVectorStage against a live graph', () => {
       expect(episode?.[i]).toBeCloseTo((ENTITY_A_VECTOR[i]! + ENTITY_B_VECTOR[i]!) / 2, 5);
     }
 
-    // entity-c was never touched by this episode, so this run must not recompute it.
+    // entity-c is outside the episode's family and its one edge predates this run, so nothing
+    // moved its neighborhood and this run must not recompute it.
     const entityC = await contextVector(harness.driver, 'entity-c');
     expect(entityC).toBeUndefined();
   });
@@ -213,5 +235,55 @@ describe('ContextVectorStage against a live graph', () => {
     expect(rows.some((row) => row.id === 'entity-b')).toBe(true);
     const top = rows.reduce((best, row) => (row.score > best.score ? row : best));
     expect(top.id).toBe('entity-b');
+  });
+
+  it('recomputes both endpoints of an edge the run wrote, the far one included', async () => {
+    await upsertEdge(harness.driver, {
+      type: 'SIMILAR',
+      sourceId: 'entity-b',
+      targetId: 'entity-d',
+      strength: 1,
+      confidence: 0.8,
+      signals: ['semantic'],
+      provenance: ['test-fixture'],
+      count: 1,
+      now: SECOND_RUN,
+    });
+
+    const outcome = await new ContextVectorStage().run(buildContext(SECOND_RUN));
+
+    expect(outcome.status).toBe('ok');
+    expect(outcome.counts).toEqual({ contextVectors: 4 });
+
+    // entity-d sits outside the episode's family and reaches it only across the edge this run
+    // wrote. Its one vectored neighbor is entity-b, so its context is that vector exactly.
+    const entityD = await contextVector(harness.driver, 'entity-d');
+    expect(entityD).toEqual(ENTITY_B_VECTOR);
+
+    // The near endpoint moves with it: two edges to the episode against one to entity-d.
+    const entityB = await contextVector(harness.driver, 'entity-b');
+    for (let i = 0; i < EMBED_DIMENSION; i += 1) {
+      expect(entityB?.[i]).toBeCloseTo((2 * EPISODE_VECTOR[i]! + ENTITY_D_VECTOR[i]!) / 3, 5);
+    }
+
+    // entity-c is one hop off entity-a across an edge this run did not touch, so the closure
+    // stops before it.
+    const entityC = await contextVector(harness.driver, 'entity-c');
+    expect(entityC).toBeUndefined();
+  });
+
+  it('hands the refreshed far endpoint to the context resonance search', async () => {
+    // 0.7 is the shipped `contextResonance.contextSearchThreshold`, spelled out because what
+    // this proves is that the node is in the index at all, not where the bar sits.
+    const hits = await resonantNodes(harness.driver, {
+      centroid: ENTITY_B_VECTOR,
+      threshold: 0.7,
+      limit: 3,
+      exclude: new Set<string>(),
+      mode: {},
+    });
+
+    expect(hits[0]?.id).toBe('entity-d');
+    expect(hits[0]?.similarity).toBeCloseTo(1, 4);
   });
 });
