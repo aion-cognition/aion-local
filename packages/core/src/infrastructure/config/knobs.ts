@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { MAINTENANCE_KNOBS } from './maintenance-knobs.js';
+import { TEMPORAL_KNOBS } from './temporal-knobs.js';
 import {
   DEFAULT_LOG_FILE,
   DEFAULT_LOG_LEVEL,
@@ -55,9 +56,11 @@ const providerPin = z.enum(['auto', 'ollama', 'anthropic']);
  * comma-separated var feeds all three sub-fields, which is what the trailing `'weights'`
  * declares.
  *
- * One knob is declared ahead of a reader. `recall.compressionThreshold` is overridable and
- * unread until narrative compression lands; it is here now because a knob added late is a knob
- * whose name and range were never reviewed, and setting one today changes nothing.
+ * Four knobs are declared ahead of a reader: `recall.compressionThreshold`, unread until
+ * narrative compression lands; `reflection.keyedCloseMode`, `temporal.readingHorizonDays`, and
+ * `temporal.expiryAnnotation`, unread until the subject-keyed close and its read-side horizon
+ * land. Each is here now because a knob added late is a knob whose name and range were never
+ * reviewed, and setting one today changes nothing.
  *
  * `redaction.entropyThreshold` and `operational.dataDir` have no pinned spec default; they
  * follow common secret-scanner practice (4.5 bits/char) and the compose data volume mount
@@ -322,6 +325,14 @@ export const KNOBS = {
     // measurement, which is a real risk of fitting the instrument: the number to watch is
     // whether it holds on pairs this set does not contain.
     supersedeMode: ['AION_SUPERSEDE_MODE', z.enum(['propose', 'auto', 'unanimous']), 'unanimous'],
+    // The subject-keyed closure path's own switch, independent of `supersedeMode`: it runs
+    // inside a different stage's write and needs to be killable on its own. `off` is the kill
+    // switch and skips the keyed lookup entirely. `judge` routes a keyed candidate into the
+    // same two-pass unanimous supersession judge `supersedeMode` uses, which closes it
+    // autonomously; this is the default. `close` is the mechanical keyed close, applied once
+    // its own battery clears the pre-registered bar the way `supersedeMode` and
+    // `entityMergeMode` were.
+    keyedCloseMode: ['AION_KEYED_CLOSE_MODE', z.enum(['off', 'judge', 'close']), 'judge'],
     /** The `auto` path's threshold only. No other mode reads it. */
     supersedeAutoConfidence: ['AION_SUPERSEDE_AUTO_CONFIDENCE', proportion, 0.85],
     supersedeNeighborThreshold: ['AION_REFLECTION_SUPERSEDE_NEIGHBOR_THRESHOLD', proportion, 0.75],
@@ -369,6 +380,8 @@ export const KNOBS = {
   // every introspection operation ships its own kill switch and batch here), and this file
   // sits at the 500-line lint cap with the least room to absorb that growth.
   maintenance: MAINTENANCE_KNOBS,
+  // Split into its own file the same way `maintenance` is; see `temporal-knobs.ts` for why.
+  temporal: TEMPORAL_KNOBS,
   sqlite: {
     path: [SQLITE_PATH_ENV_VAR, text, DEFAULT_SQLITE_PATH],
     /** Rows past this are dropped oldest-first at enqueue; the table has no consumer yet. */
