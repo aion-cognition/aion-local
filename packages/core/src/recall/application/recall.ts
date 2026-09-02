@@ -3,7 +3,6 @@ import {
   type Degradation,
   type MemoryPack,
   type PackTruncation,
-  type RecallInput,
   type RecallOutput,
   type StageTimingsMs,
 } from '@aion/protocol';
@@ -11,6 +10,7 @@ import type { Driver } from 'neo4j-driver';
 
 import { buildRankedLists, toActivationSeed } from './candidates.js';
 import { extractCues, type CueCache, type CueExtractionResult } from './cues.js';
+import { readModeFor } from './read-mode.js';
 import { resonate, type ResonanceResult } from './resonance.js';
 import { selectSeeds, type Seed } from './seeds.js';
 import {
@@ -27,14 +27,7 @@ import type { Config } from '../../infrastructure/config/schema.js';
 import { roundMs } from '../../infrastructure/errors.js';
 import { adjacencyFetchFor } from '../../infrastructure/graph/adjacency.js';
 import type { ItemOrigin } from '../../infrastructure/graph/origin-queries.js';
-import {
-  asOf,
-  bitemporalAt,
-  isTimeTravel,
-  knewAt,
-  withCurrency,
-  type ReadMode,
-} from '../../infrastructure/graph/read-modes.js';
+import { isTimeTravel, type ReadMode } from '../../infrastructure/graph/read-modes.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
@@ -129,21 +122,6 @@ async function timed<T>(run: () => Promise<T>): Promise<Timed<T>> {
   const started = performance.now();
   const value = await run();
   return { value, ms: roundMs(performance.now() - started) };
-}
-
-export function readModeFor(input: RecallInput): ReadMode {
-  const validAt = input.as_of === undefined ? undefined : new Date(input.as_of);
-  const knownAt = input.knew_at === undefined ? undefined : new Date(input.knew_at);
-  if (validAt !== undefined && knownAt !== undefined) {
-    return bitemporalAt(validAt, knownAt);
-  }
-  if (validAt !== undefined) {
-    return asOf(validAt);
-  }
-  if (knownAt !== undefined) {
-    return knewAt(knownAt);
-  }
-  return withCurrency();
 }
 
 function admissionFor(config: Config): AdmissionPolicy {
@@ -246,7 +224,10 @@ export async function handleRecall(
 ): Promise<RecallOutput> {
   const now = options.now ?? new Date();
   const payload = RecallInputSchema.parse(input);
-  const mode = readModeFor(payload);
+  const mode = readModeFor(payload, {
+    now,
+    expiryAnnotation: deps.config.temporal.expiryAnnotation,
+  });
 
   // Resolved, not created. Recall produces no content, so a read-only session mints no
   // Session node, no INITIATED_BY, no WITHIN_WORKSPACE and no link in the FOLLOWS chain;

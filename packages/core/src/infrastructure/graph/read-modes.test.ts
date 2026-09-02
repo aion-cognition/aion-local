@@ -27,7 +27,9 @@ describe('withCurrency', () => {
   it('annotates currency against the current clock and projects the SUPERSEDES lineage', () => {
     const fragment = readModeFragment(withCurrency(), 'n');
     expect(fragment.currency).toBe(
-      "CASE WHEN n.valid_until IS NULL OR n.valid_until > $rm_reference THEN 'current' ELSE 'superseded' END",
+      "CASE WHEN n.valid_until IS NOT NULL AND n.valid_until <= $rm_reference THEN 'superseded'" +
+        " WHEN n.valid_horizon IS NOT NULL AND n.valid_horizon <= $rm_reference THEN 'expired'" +
+        " ELSE 'current' END",
     );
     expect(fragment.lineage).toBe(
       'head([ (rm_sup)-[rm_sup_rel:SUPERSEDES]->(n) WHERE rm_sup_rel.tx_until IS NULL' +
@@ -36,6 +38,48 @@ describe('withCurrency', () => {
     expect(fragment.projection).toBe(
       `${fragment.currency} AS currency, ${fragment.lineage} AS superseded_by`,
     );
+  });
+});
+
+describe('a reading past its horizon', () => {
+  it('annotates the row expired and leaves it in the row set', () => {
+    const fragment = readModeFragment(withCurrency(REFERENCE), 'n');
+    expect(fragment.currency).toContain(
+      "WHEN n.valid_horizon IS NOT NULL AND n.valid_horizon <= $rm_reference THEN 'expired'",
+    );
+    expect(fragment.where).toBe('n.forgotten_at IS NULL');
+    expect(fragment.where).not.toContain('valid_horizon');
+  });
+
+  /**
+   * A closed claim and an aged-out reading are different answers, and the close is the one a
+   * successor can be named for, so it is asked first.
+   */
+  it('reports a superseded reading as superseded rather than as expired', () => {
+    const fragment = readModeFragment(withCurrency(REFERENCE), 'n');
+    const superseded = fragment.currency.indexOf("THEN 'superseded'");
+    const expired = fragment.currency.indexOf("THEN 'expired'");
+    expect(superseded).toBeGreaterThan(-1);
+    expect(expired).toBeGreaterThan(superseded);
+  });
+
+  it('judges the horizon against the vantage point the rest of the read judges from', () => {
+    const fragment = readModeFragment(asOf(VALID_AT), 'n');
+    expect(fragment.currency).toContain('n.valid_horizon <= $rm_reference');
+    expect(fromGraphDateTime(fragment.parameters.rm_reference)).toEqual(VALID_AT);
+  });
+
+  it('drops the expiry arm entirely when the annotation is switched off', () => {
+    const fragment = readModeFragment({ reference: REFERENCE, expiryAnnotation: false }, 'n');
+    expect(fragment.currency).toBe(
+      'CASE WHEN n.valid_until IS NOT NULL AND n.valid_until <= $rm_reference' +
+        " THEN 'superseded' ELSE 'current' END",
+    );
+    expect(fragment.currency).not.toContain('valid_horizon');
+  });
+
+  it('stays out of time travel with the annotation switched off', () => {
+    expect(isTimeTravel({ reference: REFERENCE, expiryAnnotation: false })).toBe(false);
   });
 });
 
@@ -152,10 +196,18 @@ describe('readCurrencyAnnotation', () => {
     ).toEqual({ currency: 'superseded', supersededBy: { id: 'new-1', at } });
   });
 
+  /** Nothing superseded an aged-out reading, so there is no successor for it to name. */
+  it('reads an expired row, which has no lineage to report', () => {
+    expect(readCurrencyAnnotation({ currency: 'expired', superseded_by: null })).toEqual({
+      currency: 'expired',
+    });
+  });
+
   it('falls back to current when the projection is absent or malformed', () => {
     expect(readCurrencyAnnotation({})).toEqual({ currency: 'current' });
     expect(readCurrencyAnnotation({ currency: 'current', superseded_by: { id: 7 } })).toEqual({
       currency: 'current',
     });
+    expect(readCurrencyAnnotation({ currency: 'stale' })).toEqual({ currency: 'current' });
   });
 });

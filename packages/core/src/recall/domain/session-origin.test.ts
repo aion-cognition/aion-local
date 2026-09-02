@@ -9,7 +9,18 @@ type ItemOverrides = {
   readonly labels?: readonly string[];
   readonly content?: string;
   readonly superseded?: boolean;
+  readonly expired?: boolean;
 };
+
+function currencyOf(id: string, overrides: ItemOverrides): Partial<FusedItem> {
+  if (overrides.superseded === true) {
+    return {
+      currency: 'superseded',
+      supersededBy: { id: `${id}-successor`, at: new Date('2026-08-10T00:00:00.000Z') },
+    };
+  }
+  return { currency: overrides.expired === true ? 'expired' : 'current' };
+}
 
 function item(id: string, overrides: ItemOverrides = {}): FusedItem {
   return {
@@ -20,12 +31,8 @@ function item(id: string, overrides: ItemOverrides = {}): FusedItem {
     relevance: 0.8,
     measured: 0.8,
     score: 0.02,
-    ...(overrides.superseded === true
-      ? {
-          currency: 'superseded' as const,
-          supersededBy: { id: `${id}-successor`, at: new Date('2026-08-10T00:00:00.000Z') },
-        }
-      : { currency: 'current' as const }),
+    currency: 'current',
+    ...currencyOf(id, overrides),
   };
 }
 
@@ -97,6 +104,14 @@ describe('memories a session made out of its own turns', () => {
 describe('a memory the substrate corrected after the session stored it', () => {
   it('serves a superseded claim the session itself produced', () => {
     expect(suppress([item('c1', { superseded: true })], origins({ c1: OWN }))).toEqual([]);
+  });
+
+  /**
+   * A horizon is a clock running out, not the graph answering back. The session still holds
+   * every word of the claim it made, and an older reading of its own is not news to it.
+   */
+  it('still withholds a claim of its own that has aged past its horizon', () => {
+    expect(suppress([item('c1', { expired: true })], origins({ c1: OWN }))).toEqual(['c1']);
   });
 
   it('serves a turn resonance found a current claim beside', () => {

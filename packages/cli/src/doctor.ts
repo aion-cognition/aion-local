@@ -25,6 +25,7 @@ import { dirname, join } from 'node:path';
 
 import { parseArgs, type ArgSpec } from './args.js';
 import { mcpBaseUrl } from './compose.js';
+import { queueLagCheck, readingHorizonCheck } from './doctor-checks.js';
 import { describeError, stdoutWriter, type Writer } from './output.js';
 import { withSubstrate } from './substrate.js';
 
@@ -134,41 +135,6 @@ export async function probeServiceFreshness(
     warn: true,
     detail: `service runs ${running} but the repo is at ${repoHeadSha}; rebuild and recreate aion-mcp`,
   };
-}
-
-/**
- * Pure SQLite, no Neo4j: `aion doctor` printed "8 checks passed" with 4,000+ jobs pending,
- * and again with one permanently wedged job. Warn, never fail: a backlog is a thing that is
- * behind, not a thing that is broken.
- */
-export function queueLagCheck(
-  db: SqliteHandle,
-  config: Config,
-  now: Date = new Date(),
-): CheckResult {
-  const snapshot = queueLagSnapshot(db, config.operational.workerMaxAttempts, now);
-  const { interactive, bulk } = snapshot.depthByLane;
-  const depth = interactive + bulk;
-  const oldest = snapshot.oldestUnclaimedMs;
-  const detail = [
-    `depth ${String(depth)} (interactive ${String(interactive)}, bulk ${String(bulk)})`,
-    `oldest unclaimed ${oldest === undefined ? 'none' : `${String(Math.round(oldest / 1000))}s`}`,
-    `${String(snapshot.exhausted)} exhausted`,
-    `${String(snapshot.reinforcementDropped)} reinforcement rows dropped`,
-    snapshot.p95EnrichmentLagMs === undefined
-      ? 'no enrichment lag samples yet'
-      : `p95 enrichment lag ${String(Math.round(snapshot.p95EnrichmentLagMs / 1000))}s`,
-    snapshot.cueDegradedRate === undefined
-      ? 'no recalls measured yet'
-      : `${(snapshot.cueDegradedRate * 100).toFixed(1)}% of recent recalls degraded on cues`,
-  ].join(', ');
-
-  const stale = oldest !== undefined && oldest > config.operational.lagOldestUnclaimedWarnMs;
-  const deep = depth > config.operational.lagQueueDepthWarnThreshold;
-  if (stale || deep) {
-    return { ok: true, warn: true, detail };
-  }
-  return { ok: true, detail };
 }
 
 function writableDirectories(config: Config): readonly string[] {
@@ -402,6 +368,11 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
         }
         return { ok: true, detail: scanned };
       },
+    },
+    {
+      name: 'reading-horizon',
+      dependsOn: NEO4J_BOLT,
+      run: () => readingHorizonCheck(connection.driver),
     },
     {
       name: 'queue-lag',

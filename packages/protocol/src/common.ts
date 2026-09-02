@@ -7,8 +7,13 @@ import { z } from 'zod';
  */
 export const IsoTimestampSchema = z.union([z.iso.datetime({ offset: true }), z.iso.date()]);
 
-/** A node is either the live fact or lineage kept for time-travel. */
-export const CurrencySchema = z.enum(['current', 'superseded']);
+/**
+ * A node is the live fact, lineage kept for time-travel, or a reading that aged past the
+ * horizon it was written with. `expired` is its own value rather than a second use of
+ * `superseded` because an aged-out reading has no successor: nothing corrected it, so there is
+ * no lineage to print, and folding the two together renders it as an ordinary current memory.
+ */
+export const CurrencySchema = z.enum(['current', 'superseded', 'expired']);
 
 export type Currency = z.infer<typeof CurrencySchema>;
 

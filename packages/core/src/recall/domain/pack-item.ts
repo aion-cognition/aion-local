@@ -122,6 +122,10 @@ function renderDay(timestamp: string): string {
  * marker belongs wherever superseded knowledge surfaces, so it is part of the rendered block
  * and not only of the structured item.
  *
+ * An aged-out reading is marked too, and it needs its own word: nothing superseded it, so it
+ * has no lineage line, and the reading beside its occurrence date is otherwise indistinguishable
+ * from a measurement the substrate still stands behind.
+ *
  * A raw turn in the resonant bucket closes with the current claim from its subject family,
  * when it has one. A turn is captured text and is never distilled into a claim, so nothing
  * ever supersedes it and it surfaces as current however often it was later corrected. The
@@ -152,6 +156,9 @@ export function renderItem(entry: PackEntry): string {
   }
   if (item.superseded_by !== undefined) {
     facts.push(`superseded by ${item.superseded_by.id} at ${item.superseded_by.at}`);
+  }
+  if (item.currency === 'expired') {
+    facts.push('expired');
   }
   const why = item.why === undefined ? '' : `\n   why: ${item.why}`;
   const related =

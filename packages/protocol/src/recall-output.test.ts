@@ -148,6 +148,28 @@ describe('MemoryPackSchema valid fixtures', () => {
     expect(MemoryPackSchema.parse(pack)).toEqual(pack);
   });
 
+  /**
+   * An aged-out reading has no successor, so it carries the third currency and no lineage. A
+   * schema closed at two values would let it render as an ordinary current memory.
+   */
+  it('parses an expired item, which names no successor', () => {
+    const pack = {
+      facts: [
+        {
+          id: 'fact-8',
+          content: 'the ingest queue holds 4.2 million rows',
+          rank: 3,
+          confidence: 0.61,
+          rationale: { method: 'vector', score: 0.61 },
+          currency: 'expired',
+        },
+      ],
+      rendered_text: 'fact-8 (expired): the ingest queue holds 4.2 million rows',
+      metadata: baseMetadata,
+    };
+    expect(MemoryPackSchema.parse(pack)).toEqual(pack);
+  });
+
   it('parses an item carrying the rule that admitted it and the evidence that qualified', () => {
     const pack = {
       facts: [
@@ -251,16 +273,18 @@ describe('MemoryPackSchema invalid shapes', () => {
     expect(result.success).toBe(false);
   });
 
-  it('rejects an unknown currency value', () => {
-    const result = MemoryPackItemSchema.safeParse({
-      id: 'x',
-      content: 'x',
-      rank: 1,
-      confidence: 1,
-      rationale: { method: 'vector', score: 1 },
-      currency: 'stale',
-    });
-    expect(result.success).toBe(false);
+  it('rejects an unknown currency value, so the set stays the three the substrate can produce', () => {
+    for (const currency of ['stale', 'expiring', 'unknown']) {
+      const result = MemoryPackItemSchema.safeParse({
+        id: 'x',
+        content: 'x',
+        rank: 1,
+        confidence: 1,
+        rationale: { method: 'vector', score: 1 },
+        currency,
+      });
+      expect(result.success).toBe(false);
+    }
   });
 
   it('rejects a rationale missing method', () => {

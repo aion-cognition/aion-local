@@ -91,6 +91,10 @@ export type { GraphCounts } from './graph/introspection.js';
 
 export { fetchNodeEdges, fetchNodeProvenance } from './graph/node-provenance.js';
 
+export { scanHorizonIntegrity } from './graph/horizon-integrity.js';
+
+export type { HorizonIntegrity } from './graph/horizon-integrity.js';
+
 export { countAutoMergedEntities, entityMergePairState } from './graph/merge-shadow-queries.js';
 
 export type { NodeEdge, NodeProvenance } from './graph/node-provenance.js';

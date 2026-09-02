@@ -90,6 +90,12 @@ export function renderProvenance(
       `          superseded by ${provenance.supersededBy.id} at ${provenance.supersededBy.at.toISOString()}`,
     );
   }
+  // An aged-out reading has no successor and no close, so every stamp below reads like a
+  // current node's. Without this line the word above looks like the substrate contradicting
+  // itself rather than a measurement whose clock ran out.
+  if (provenance.currency === 'expired') {
+    write('          past its reading horizon; nothing superseded it');
+  }
   write('bitemporal stamps');
   write(`  occurred_at   ${iso(provenance.occurredAt) ?? '-'}`);
   write(`  valid_from    ${iso(provenance.validFrom) ?? '-'}`);
