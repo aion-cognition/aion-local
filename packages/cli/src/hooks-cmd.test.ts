@@ -104,7 +104,7 @@ describe('hooks install and uninstall', () => {
   it('creates the settings file when there is none', () => {
     expect(installHooks(options(), write)).toBe(0);
 
-    expect(describeAionHooks(settings())).toHaveLength(6);
+    expect(describeAionHooks(settings())).toHaveLength(7);
     expect(written[0]).toContain('aion hooks installed (full)');
   });
 
@@ -132,7 +132,7 @@ describe('hooks install and uninstall', () => {
     installHooks(options(), write);
     installHooks(options(), write);
 
-    expect(describeAionHooks(settings())).toHaveLength(6);
+    expect(describeAionHooks(settings())).toHaveLength(7);
     const backups = readdirSync(join(dir, 'home', '.claude')).filter((name) =>
       name.includes('.aion-'),
     );
@@ -179,6 +179,7 @@ describe('hooks install and uninstall', () => {
     const block = JSON.parse(written[written.length - 1] ?? '{}');
     expect(Object.keys(block.hooks).sort()).toEqual([
       'PreCompact',
+      'PreToolUse',
       'SessionEnd',
       'SessionStart',
       'Stop',

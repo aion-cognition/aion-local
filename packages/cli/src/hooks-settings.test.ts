@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  AION_TOOL_MATCHER,
   buildAionHooks,
   describeAionHooks,
   mergeAionHooks,
@@ -34,6 +35,7 @@ describe('buildAionHooks', () => {
   it('covers every event on the full profile', () => {
     expect(Object.keys(buildAionHooks(spec())).sort()).toEqual([
       'PreCompact',
+      'PreToolUse',
       'SessionEnd',
       'SessionStart',
       'Stop',
@@ -42,11 +44,26 @@ describe('buildAionHooks', () => {
     ]);
   });
 
-  it('covers only the two session boundaries on the lite profile', () => {
+  it('covers the two session boundaries and the session stamp on the lite profile', () => {
     expect(Object.keys(buildAionHooks(spec({ profile: 'lite' }))).sort()).toEqual([
+      'PreToolUse',
       'SessionEnd',
       'SessionStart',
     ]);
+  });
+
+  it('stamps both aion tools on either profile', () => {
+    for (const profile of ['full', 'lite'] as const) {
+      const entry = buildAionHooks(spec({ profile })).PreToolUse?.[0];
+      expect(entry?.matcher).toBe(AION_TOOL_MATCHER);
+      expect(entry?.hooks[0]?.command).toBe(`node ${SCRIPT} pre-tool-use`);
+    }
+
+    const pattern = new RegExp(`^(${AION_TOOL_MATCHER})$`);
+    for (const tool of ['mcp__aion__reflection', 'mcp__aion__recall']) {
+      expect(tool).toMatch(pattern);
+    }
+    expect('mcp__aion__forget').not.toMatch(pattern);
   });
 
   it('matches all four session-start sources', () => {
@@ -77,6 +94,7 @@ describe('buildAionHooks', () => {
     expect(hooks.PostToolUse?.[0]?.hooks[0]?.async).toBe(true);
     expect(hooks.SessionStart?.[0]?.hooks[0]?.async).toBeUndefined();
     expect(hooks.Stop?.[0]?.hooks[0]?.async).toBeUndefined();
+    expect(hooks.PreToolUse?.[0]?.hooks[0]?.async).toBeUndefined();
   });
 
   it('quotes a path that carries a space', () => {
@@ -91,7 +109,7 @@ describe('mergeAionHooks', () => {
   it('writes a complete hooks block into a settings file that has none', () => {
     const merged = mergeAionHooks({}, buildAionHooks(spec()));
 
-    expect(describeAionHooks(merged)).toHaveLength(6);
+    expect(describeAionHooks(merged)).toHaveLength(7);
   });
 
   it('keeps every foreign hook and every unrelated key', () => {
@@ -120,7 +138,7 @@ describe('mergeAionHooks', () => {
       describeAionHooks(lite)
         .map((row) => row.event)
         .sort(),
-    ).toEqual(['SessionEnd', 'SessionStart']);
+    ).toEqual(['PreToolUse', 'SessionEnd', 'SessionStart']);
     expect((lite.hooks as Record<string, unknown>).Stop).toBeUndefined();
   });
 

@@ -9,14 +9,16 @@ import {
   recallArgs,
   reflectionArgs,
   reflectionTurns,
+  stampedToolInput,
   stringField,
   toolExecutions,
+  updatedToolInput,
 } from './payload.js';
 import { dropHookState, readHookState, writeHookState } from './state.js';
 import { hasAssistantText, mentionsReflectionCall, readTranscriptTail } from './transcript.js';
 
 /**
- * The seven events, one MCP round trip at most each. Every handler returns an exit code, and
+ * The eight events, one MCP round trip at most each. Every handler returns an exit code, and
  * only Stop's instruct mode ever returns anything but 0.
  */
 
@@ -201,6 +203,26 @@ export async function sessionEnd(context: HookContext): Promise<number> {
   await push(context, taken);
   dropHookState(context.options.stateDir, taken.sessionId ?? '');
   return 0;
+}
+
+/**
+ * The one hook that runs before its tool rather than after it, and the only one that rewrites a
+ * call. It fires on the model's own aion tool calls and stamps the Claude session id into the
+ * arguments, so a session writes to one Session node however the tool was reached. Stdin to
+ * stdout, no round trip: this sits on the critical path of every recall and reflection the model
+ * makes.
+ */
+export function preToolUse(context: HookContext): Promise<number> {
+  const sessionId = stringField(context.input, 'session_id');
+  const tool = stringField(context.input, 'tool_name');
+  if (sessionId === undefined || tool === undefined) {
+    return Promise.resolve(0);
+  }
+  const stamped = stampedToolInput(context.input, tool, sessionId);
+  if (stamped !== undefined) {
+    context.options.stdout(updatedToolInput('PreToolUse', stamped));
+  }
+  return Promise.resolve(0);
 }
 
 /**
