@@ -236,6 +236,29 @@ async function contextVectorContributions(
 }
 
 /**
+ * One entry per distinct word, first occurrence's casing kept, order preserved. Lucene's
+ * default parser ORs space-separated terms and sums each clause's own score, so a cue that
+ * names a word twice would otherwise count that word's match twice over; the phrase query
+ * below skips this, since a repeated word is part of what makes the phrase the phrase.
+ */
+function dedupeQueryTerms(text: string): string {
+  const seen = new Set<string>();
+  const terms: string[] = [];
+  for (const term of text.split(/\s+/)) {
+    if (term.length === 0) {
+      continue;
+    }
+    const key = term.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    terms.push(term);
+  }
+  return terms.join(' ');
+}
+
+/**
  * Two queries per cue, because the leg answers two different questions. The loose query is
  * the ranked list RRF fuses; the phrase query is the only admission evidence BM25 can offer,
  * since normalizing a corpus-relative Lucene score to the best hit of the same cue puts the
@@ -244,7 +267,8 @@ async function contextVectorContributions(
  * seen.
  *
  * Per-cue rather than one combined query, so one cue that trips the Lucene parser costs only
- * its own contribution. The cue text reaches the index escaped but otherwise verbatim.
+ * its own contribution. The cue text reaches the index escaped and deduped for the loose
+ * query, escaped and otherwise verbatim for the phrase query.
  */
 async function bm25Contributions(
   deps: SelectSeedsDeps,
@@ -254,7 +278,7 @@ async function bm25Contributions(
 ): Promise<SettledLeg> {
   const tasks: Promise<readonly SeedContribution[]>[] = [];
   for (const cue of cues) {
-    const query = escapeLuceneQuery(cue.text);
+    const query = escapeLuceneQuery(dedupeQueryTerms(cue.text));
     if (query.length === 0) {
       continue;
     }

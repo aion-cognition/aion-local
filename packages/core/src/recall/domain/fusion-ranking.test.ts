@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { AdmissionPolicy, Measurement } from './admission.js';
 import {
   fuse,
+  reciprocalRank,
   SUPERSEDED_RANK_WEIGHT,
   type FusedItem,
   type FusionCandidate,
@@ -45,6 +46,7 @@ type CandidateOverrides = {
   readonly structural?: boolean;
   readonly labels?: readonly string[];
   readonly evidence?: readonly Measurement[];
+  readonly mentionCount?: number;
 };
 
 function candidate(id: string, overrides: CandidateOverrides = {}): FusionCandidate {
@@ -59,6 +61,7 @@ function candidate(id: string, overrides: CandidateOverrides = {}): FusionCandid
     ...(overrides.evidence === undefined ? {} : { evidence: overrides.evidence }),
     ...(overrides.activation === undefined ? {} : { activation: overrides.activation }),
     ...(overrides.structural === undefined ? {} : { isStructural: overrides.structural }),
+    ...(overrides.mentionCount === undefined ? {} : { mentionCount: overrides.mentionCount }),
   };
   if (overrides.superseded !== true) {
     return { ...base, currency: 'current' as const };
@@ -350,5 +353,26 @@ describe('the decision-intent label boost', () => {
     const fused = items([list('vector', [decision])], { ...BOOSTED, admission: CALIBRATED });
 
     expect(fused).toEqual([]);
+  });
+});
+
+describe('the mention-count salience prior', () => {
+  it('ranks the entity seen forty times above a one-off at equal cosine', () => {
+    // Ids chosen so an id tie-break alone would rank the one-off first; only the mention
+    // prior can put the forty-times entity ahead of it.
+    const fused = items([
+      list('vector', [candidate('aaa-once', { labels: ['Entity', 'Memory'], mentionCount: 1 })]),
+      list('bm25', [candidate('zzz-forty', { labels: ['Entity', 'Memory'], mentionCount: 40 })]),
+    ]);
+
+    expect(ids(fused)).toEqual(['zzz-forty', 'aaa-once']);
+  });
+
+  it('leaves a node type MENTIONS never targets at its unweighted score', () => {
+    const fused = items([
+      list('vector', [candidate('episode', { labels: ['Episode', 'Memory'] })]),
+    ]);
+
+    expect(fused[0]?.score).toBeCloseTo(reciprocalRank(0, RRF_CONSTANT), 10);
   });
 });

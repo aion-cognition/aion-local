@@ -297,6 +297,52 @@ describe('what the legs mark as a literal match', () => {
   });
 });
 
+describe('the fulltext cue text', () => {
+  it('queries a repeated term once, not once per repetition', async () => {
+    const looseQueries: string[] = [];
+    const driver = answeringWith((cypher, parameters) => {
+      if (cypher.includes('db.index.fulltext.queryNodes')) {
+        const { query } = parameters;
+        if (typeof query === 'string' && !query.startsWith('"')) {
+          looseQueries.push(query);
+        }
+      }
+      return [];
+    });
+
+    await selectSeeds(
+      { driver, config: DEFAULTS, logger: silentLogger() },
+      {
+        cues: [{ text: 'the migration failed the migration retried', source: 'query', weight: 3 }],
+      },
+    );
+
+    expect(looseQueries).toEqual(['the migration failed retried']);
+  });
+
+  it('keeps every repetition in the phrase query, since order and count are what phrase matching means', async () => {
+    const phraseQueries: string[] = [];
+    const driver = answeringWith((cypher, parameters) => {
+      if (cypher.includes('db.index.fulltext.queryNodes')) {
+        const { query } = parameters;
+        if (typeof query === 'string' && query.startsWith('"')) {
+          phraseQueries.push(query);
+        }
+      }
+      return [];
+    });
+
+    await selectSeeds(
+      { driver, config: DEFAULTS, logger: silentLogger() },
+      {
+        cues: [{ text: 'the migration failed the migration retried', source: 'query', weight: 3 }],
+      },
+    );
+
+    expect(phraseQueries).toEqual(['"the migration failed the migration retried"']);
+  });
+});
+
 function fulltextRows(cypher: string, parameters: FakeRow): readonly FakeRow[] {
   if (!cypher.includes('db.index.fulltext.queryNodes')) {
     return [];

@@ -1,6 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 
-import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
+import { BITEMPORAL_PROPERTIES, currentOnly } from './bitemporal.js';
 import { runRead } from './connection.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
 import { BASE_NODE_LABEL, MEMORY_LABEL } from './labels.js';
@@ -75,6 +75,8 @@ export type SeedCandidate = CurrencyAnnotation & {
    * collide under one name from here on.
    */
   readonly why?: string;
+  /** Distinct current episodes mentioning the node; absent for a node type `MENTIONS` never targets. */
+  readonly mentionCount?: number;
 };
 
 export type ScoredSeedCandidate = SeedCandidate & {
@@ -142,6 +144,8 @@ function candidateProjection(nodeVar: string, fragment: ReadFragment): string {
     // every node type that never carries it; the property name stays `rationale` in the
     // graph, `why` is the wire name that keeps it distinct from a retrieval rationale.
     `${nodeVar}.rationale AS why`,
+    // 'MENTIONS' mirrors `entity-mention-queries.ts`'s `ENTITY_MENTION_TYPE`, inlined here to avoid an import cycle back into that module.
+    `COUNT { MATCH (ep:Episode)-[:MENTIONS]->(${nodeVar}) WHERE ${currentOnly('ep')} } AS mention_count`,
     fragment.projection,
   ].join(', ');
 }
@@ -150,6 +154,7 @@ function mapCandidate(row: Row): SeedCandidate {
   const occurredAt = row.occurred_at;
   const sourceEpisodeId = row.source_episode_id;
   const { why } = row;
+  const mentionCount = (row.mention_count as number | null) ?? 0;
   return {
     id: row.id as string,
     labels: (row.labels as string[] | null) ?? [],
@@ -158,6 +163,7 @@ function mapCandidate(row: Row): SeedCandidate {
     ...(row.is_structural === true ? { isStructural: true } : {}),
     ...(typeof sourceEpisodeId === 'string' ? { sourceEpisodeId } : {}),
     ...(typeof why === 'string' && why.trim().length > 0 ? { why } : {}),
+    ...(mentionCount > 0 ? { mentionCount } : {}),
     ...readCurrencyAnnotation(row),
   };
 }
