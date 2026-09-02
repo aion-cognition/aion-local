@@ -58,7 +58,7 @@ function ctxFor(config: Config): OperationContext {
 }
 
 function healthWithEligible(tier0Eligible: number): ReturnType<typeof healthFixture> {
-  return healthFixture({ entities: { tier0Eligible } });
+  return healthFixture({ entities: { tier0Eligible, identifierShaped: 0 } });
 }
 
 function healthWithOpen(entityMergeOpen: number): ReturnType<typeof healthFixture> {
@@ -88,9 +88,7 @@ describe('mergeAutoRelevance', () => {
    */
   it('stays selectable on a graph with duplicate spellings and an empty proposal queue', () => {
     expect(mergeAutoRelevance(healthWithOpen(0))).toBe(0);
-    expect(mergeAutoRelevance(healthFixture({ entities: { tier0Eligible: 2 } }))).toBeGreaterThan(
-      0,
-    );
+    expect(mergeAutoRelevance(healthWithEligible(2))).toBeGreaterThan(0);
   });
 });
 

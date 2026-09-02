@@ -85,6 +85,25 @@ export type IntrospectionOperation = {
   run(ctx: OperationContext): Promise<OperationOutcome>;
 };
 
+/**
+ * What the effectiveness reader needs of the catalog: a name, and whether there is a metric
+ * behind the record at all. An operation with no metric still keeps a record of runs and
+ * failures; what it does not get is a verdict on whether those runs helped.
+ */
+export type OperationMeasurement = {
+  readonly name: string;
+  readonly measured: boolean;
+};
+
+export function operationMeasurements(
+  operations: readonly IntrospectionOperation[],
+): readonly OperationMeasurement[] {
+  return operations.map((operation) => ({
+    name: operation.name,
+    measured: operation.measure !== undefined,
+  }));
+}
+
 export function operationImprovement(operation: IntrospectionOperation): 'lower' | 'higher' {
   return operation.improves ?? 'lower';
 }

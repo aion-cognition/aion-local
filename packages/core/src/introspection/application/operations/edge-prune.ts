@@ -22,25 +22,16 @@ import type {
 
 export const EDGE_PRUNE_OPERATION = 'edge_prune';
 
-/**
- * `GraphStructureHealth.decayableEdges` is one total across every unprotected relationship
- * type, association and typed-knowledge alike, so relevance cannot scale on the at-floor
- * `CO_OCCURS`/`SIMILAR` share the way `memoryDecayRelevance` scales on staleness: the snapshot
- * does not carry that narrower count. A standing value is the honest answer until it does.
- */
-export const EDGE_PRUNE_STANDING_RELEVANCE = 0.15;
+/** How much at-floor association mass reads as a full call for a run. */
+export const EDGE_PRUNE_RELEVANCE_DIVISOR = 1_000;
 
 /**
- * Zero exactly when the coarser total already reads zero: association edges are a subset of
- * `decayableEdges`, so nothing unprotected at all means nothing prunable either. A positive
- * total does not guarantee a prunable edge exists, so the standing value beyond that gate is a
- * floor on urgency, not a measurement of how much at-floor mass is actually waiting.
+ * Scaled on the at-floor count the snapshot now carries, which is exactly the population a run
+ * closes: zero at-floor edges is zero relevance, and everything above that scales the way
+ * `memoryDecayRelevance` scales on staleness rather than standing at a fixed value.
  */
 export function edgePruneRelevance(health: HealthSnapshot): number {
-  if (health.graph.decayableEdges <= 0) {
-    return 0;
-  }
-  return EDGE_PRUNE_STANDING_RELEVANCE;
+  return Math.min(1, health.graph.atFloorAssociationEdges / EDGE_PRUNE_RELEVANCE_DIVISOR);
 }
 
 async function runEdgePrune(ctx: OperationContext): Promise<OperationOutcome> {
@@ -84,6 +75,11 @@ export function edgePruneOperation(): IntrospectionOperation {
     name: EDGE_PRUNE_OPERATION,
     bucket: 'day',
     relevance: edgePruneRelevance,
+    // The count a run closes from, so a run that closed nothing cannot read as a success. New
+    // decay can drive fresh edges to the floor between two ticks, which is why the score is
+    // whether the count fell rather than whether the run closed anything.
+    measure: (health) => health.graph.atFloorAssociationEdges,
+    improves: 'lower',
     run: runEdgePrune,
   };
 }

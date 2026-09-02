@@ -172,6 +172,11 @@ export function proposalHygieneOperation(): IntrospectionOperation {
     name: PROPOSAL_HYGIENE_OPERATION,
     bucket: 'day',
     relevance: proposalHygieneRelevance,
+    // The median rather than the oldest row's age, because a run that ages one forgotten
+    // proposal out moves the oldest and leaves a stalled queue exactly as stalled. An empty
+    // queue reads as zero, which is the reading a run that cleared it earned.
+    measure: (health) => health.proposals.medianOpenAgeMs ?? 0,
+    improves: 'lower',
     run: async (ctx): Promise<OperationOutcome> => {
       if (!ctx.config.maintenance.proposalHygiene) {
         return {

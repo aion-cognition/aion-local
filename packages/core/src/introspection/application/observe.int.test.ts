@@ -9,6 +9,7 @@ import type { Config } from '../../infrastructure/config/schema.js';
 import { writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
 import { upsertEdge } from '../../infrastructure/graph/edges.js';
 import {
+  countContextVectorCoverage,
   countEpisodesWithoutSession,
   countOrphanNodes,
   countVectorParity,
@@ -161,6 +162,17 @@ describe('graph health counts', () => {
   it('counts an episode with no session as a missing backbone link', async () => {
     expect(await countEpisodesWithoutSession(harness.driver)).toBe(1);
   });
+
+  it('counts only the nodes a context vector could be computed for right now', async () => {
+    const coverage = await countContextVectorCoverage(harness.driver);
+    // Three of the six memory nodes have a current edge to a neighbor that carries a content
+    // vector: the enriched episode reaches its insight, the insight reaches that episode, and
+    // the unvectorized entity reaches the associated one. The associated entity's only
+    // neighbor has no content vector, the second episode reaches nothing but its session, and
+    // the loose episode reaches nothing at all, so none of the three is a gap a run could
+    // close. Nothing here writes a context vector, so every one of the three is missing one.
+    expect(coverage).toEqual({ expected: 3, present: 0 });
+  });
 });
 
 describe('observeHealth', () => {
@@ -186,9 +198,23 @@ describe('observeHealth', () => {
       });
     }
 
+    // The identifier collector needs a machine-minted name; nothing else seeded here has one.
+    // No text, so vector parity is untouched, and no edges, so it is its own orphan.
+    await writeStampedNode(harness.driver, {
+      label: 'Entity',
+      id: 'entity-sha',
+      properties: {
+        name: '0f7c1b2d3e4f50617283940a1b2c3d4e5f607182',
+        name_norm: '0f7c1b2d3e4f50617283940a1b2c3d4e5f607182',
+        name_squash: squashName('0f7c1b2d3e4f50617283940a1b2c3d4e5f607182'),
+        type: 'artifact',
+      },
+      now: NOW,
+    });
+
     const snapshot = await observeHealth(
       { driver: harness.driver, db, config, logger },
-      { operationNames: ['fake_operation'], cycle: 7, now: NOW },
+      { operations: [{ name: 'fake_operation', measured: true }], cycle: 7, now: NOW },
     );
 
     expect(snapshot.degraded).toEqual([]);
@@ -196,11 +222,21 @@ describe('observeHealth', () => {
     expect(snapshot.observedAt).toBe(NOW.toISOString());
     expect(snapshot.graph.vectorParity).toBeCloseTo(5 / 6, 6);
     expect(snapshot.graph.episodesWithoutSession).toBe(1);
-    // The two squash-equal entities join the orphan population too: neither carries an edge.
-    expect(snapshot.graph.orphanShare).toBeCloseTo(4 / 6, 6);
+    // The two squash-equal entities and the digest-named one join the orphan population too:
+    // none of the three carries an edge.
+    expect(snapshot.graph.orphanShare).toBeCloseTo(5 / 7, 6);
     expect(snapshot.entities.tier0Eligible).toBe(2);
+    // The digest name is the only one of the nine entities and episodes shaped like an
+    // identifier; every other name here is a word.
+    expect(snapshot.entities.identifierShaped).toBe(1);
     // The one CO_OCCURS edge; the two PARTICIPATES_IN and the one EXTRACTED_FROM are protected.
     expect(snapshot.graph.decayableEdges).toBe(1);
+    // That same CO_OCCURS edge sits at 0.5, well above the 0.1 weight floor, so nothing here
+    // is prunable and the narrower count reads zero while the coarser one reads one.
+    expect(snapshot.graph.atFloorAssociationEdges).toBe(0);
+    expect(snapshot.graph.contextVectorExpected).toBe(3);
+    expect(snapshot.graph.contextVectorPresent).toBe(0);
+    expect(snapshot.graph.contextVectorCoverage).toBe(0);
     expect(snapshot.enrichment.unenriched).toBe(3);
     expect(snapshot.queue.depth).toBe(0);
     expect(snapshot.proposals.oldestOpenAgeMs).toBeUndefined();
@@ -210,9 +246,11 @@ describe('observeHealth', () => {
         runs: 0,
         improved: 0,
         failed: 0,
-        effectiveness: 1,
+        // Declaring a metric is not the same as having been scored on one.
+        effectiveness: undefined,
         cyclesSinceSelected: 7,
         lastRunAt: undefined,
+        meanDurationMs: undefined,
       },
     ]);
   });
@@ -234,5 +272,8 @@ describe('observeHealth', () => {
     expect(snapshot.plasticity.reinforcementQueueDepth).toBe(0);
     expect(snapshot.degraded).toContain('entities');
     expect(snapshot.entities.tier0Eligible).toBe(0);
+    expect(snapshot.entities.identifierShaped).toBe(0);
+    expect(snapshot.graph.atFloorAssociationEdges).toBe(0);
+    expect(snapshot.graph.contextVectorCoverage).toBe(1);
   });
 });

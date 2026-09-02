@@ -215,6 +215,7 @@ describe('decide, on fresh-graph fixtures (no live tick, no waiting)', () => {
             effectiveness: 0.25,
             cyclesSinceSelected: cyclesWaited,
             lastRunAt: '2026-08-29T00:00:00.000Z',
+            meanDurationMs: undefined,
           },
         ],
       });
@@ -266,6 +267,7 @@ describe('decide, on fresh-graph fixtures (no live tick, no waiting)', () => {
           effectiveness: 1,
           cyclesSinceSelected: 10_000,
           lastRunAt: undefined,
+          meanDurationMs: undefined,
         },
       ],
     });

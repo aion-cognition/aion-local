@@ -1,9 +1,10 @@
 import type { Driver } from 'neo4j-driver';
 
-import { currentOnly } from './bitemporal.js';
+import { BITEMPORAL_PROPERTIES, currentOnly } from './bitemporal.js';
 import { readFirst } from './connection.js';
+import { CONTEXT_VECTOR_PROPERTY } from './context-vector-queries.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from './episodes.js';
-import { BACKBONE_TYPES, EXTRACTION_TYPE } from './labels.js';
+import { BACKBONE_TYPES, BASE_NODE_LABEL, EXTRACTION_TYPE, MEMORY_LABEL } from './labels.js';
 import { toGraphInteger } from './values.js';
 
 /**
@@ -123,4 +124,42 @@ export async function countEpisodesWithoutSession(
     (row) => row.missing as number,
   );
   return missing ?? 0;
+}
+
+export type ContextVectorCoverage = {
+  /** Current nodes a context vector could be computed for right now. */
+  readonly expected: number;
+  /** Of those, the ones carrying one. */
+  readonly present: number;
+};
+
+/**
+ * How much of the population that can hold a context vector actually holds one. `expected`
+ * mirrors the neighborhood read the stage itself does (`context-vector-queries.ts`) rather than
+ * "has any edge at all": a node whose only neighbors carry no content vector is outside the
+ * count, because no run could give it a context vector either. The edge has to be open, since a
+ * closed one is history and belongs to no neighborhood.
+ */
+const COUNT_CONTEXT_VECTOR_COVERAGE = [
+  `MATCH (n:${MEMORY_LABEL})`,
+  `WHERE ${currentOnly('n')}`,
+  'WITH n LIMIT $limit',
+  `WHERE EXISTS { MATCH (n)-[r]-(m:${BASE_NODE_LABEL})`,
+  `  WHERE m.id <> n.id AND m.${MEMORY_PROPERTIES.contentVector} IS NOT NULL`,
+  `    AND r.${BITEMPORAL_PROPERTIES.validUntil} IS NULL AND ${currentOnly('m')} }`,
+  'RETURN count(n) AS expected,',
+  `  count(n.${CONTEXT_VECTOR_PROPERTY}) AS present`,
+].join('\n');
+
+export async function countContextVectorCoverage(
+  driver: Driver,
+  limit: number = DEFAULT_HEALTH_SCAN_LIMIT,
+): Promise<ContextVectorCoverage> {
+  const counts = await readFirst(
+    driver,
+    COUNT_CONTEXT_VECTOR_COVERAGE,
+    { limit: toGraphInteger(limit) },
+    (row) => ({ expected: row.expected as number, present: row.present as number }),
+  );
+  return counts ?? { expected: 0, present: 0 };
 }

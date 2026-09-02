@@ -21,6 +21,7 @@ function effectiveness(name: string, runs: number): OperationEffectiveness {
     effectiveness: 1,
     cyclesSinceSelected: 4,
     lastRunAt: undefined,
+    meanDurationMs: undefined,
   };
 }
 

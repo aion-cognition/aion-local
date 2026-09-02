@@ -116,6 +116,41 @@ export async function findIdentifierDecayCandidates(
   return runRead(driver, statement.cypher, statement.parameters, mapCandidate);
 }
 
+export type EntityNaming = {
+  readonly name: string;
+  readonly type: string;
+};
+
+/**
+ * Every current entity's name and type, for the health snapshot's identifier-shaped count.
+ * Shape classification is pure TypeScript (`introspection/domain/identifier-shape.ts`) and the
+ * patterns live there alone, so the count reads names out and classifies them above rather than
+ * growing a second copy of the patterns in Cypher. Bounded by `limit`, which makes the count a
+ * floor on a substrate larger than the scan.
+ */
+export function buildEntityNamingStatement(limit: number): GraphStatement {
+  assertPositiveInt('limit', limit);
+  const cypher = [
+    `MATCH (n:${ENTITY_LABEL})`,
+    `WHERE n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL AND n.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+    `RETURN n.name AS name, n.${ENTITY_TYPE_PROPERTY} AS type`,
+    'ORDER BY n.id',
+    'LIMIT $limit',
+  ].join('\n');
+  return { cypher, parameters: { limit: neo4j.int(limit) } };
+}
+
+export async function readCurrentEntityNamings(
+  driver: Driver,
+  limit: number,
+): Promise<EntityNaming[]> {
+  const statement = buildEntityNamingStatement(limit);
+  return runRead(driver, statement.cypher, statement.parameters, (row: Row) => ({
+    name: (row.name as string | null) ?? '',
+    type: (row.type as string | null) ?? '',
+  }));
+}
+
 export type ClosedIdentifierEntity = {
   readonly id: string;
   readonly mentionsClosed: number;

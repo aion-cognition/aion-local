@@ -2,7 +2,7 @@ import type { Driver } from 'neo4j-driver';
 import { describe, expect, it } from 'vitest';
 
 import {
-  EDGE_PRUNE_STANDING_RELEVANCE,
+  EDGE_PRUNE_RELEVANCE_DIVISOR,
   edgePruneOperation,
   edgePruneRelevance,
 } from './edge-prune.js';
@@ -22,17 +22,29 @@ function silentLogger(): Logger {
 }
 
 describe('edgePruneRelevance', () => {
-  it('is zero on a graph with no unprotected edge at all, however long the wait', () => {
-    const health = healthFixture({ graph: { ...NEUTRAL_GRAPH_HEALTH, decayableEdges: 0 } });
+  it('is zero on a graph with no at-floor association edge, however many others it carries', () => {
+    const health = healthFixture({
+      graph: { ...NEUTRAL_GRAPH_HEALTH, decayableEdges: 9_000, atFloorAssociationEdges: 0 },
+    });
     expect(edgePruneRelevance(health)).toBe(0);
   });
 
-  it('holds the standing value once the graph has any unprotected edge to speak of', () => {
-    const health = healthFixture({ graph: { ...NEUTRAL_GRAPH_HEALTH, decayableEdges: 1 } });
-    expect(edgePruneRelevance(health)).toBe(EDGE_PRUNE_STANDING_RELEVANCE);
+  it('scales on the at-floor count and holds at one past the divisor', () => {
+    const some = healthFixture({
+      graph: {
+        ...NEUTRAL_GRAPH_HEALTH,
+        atFloorAssociationEdges: EDGE_PRUNE_RELEVANCE_DIVISOR / 4,
+      },
+    });
+    expect(edgePruneRelevance(some)).toBeCloseTo(0.25, 6);
 
-    const busy = healthFixture({ graph: { ...NEUTRAL_GRAPH_HEALTH, decayableEdges: 9_000 } });
-    expect(edgePruneRelevance(busy)).toBe(EDGE_PRUNE_STANDING_RELEVANCE);
+    const flooded = healthFixture({
+      graph: {
+        ...NEUTRAL_GRAPH_HEALTH,
+        atFloorAssociationEdges: EDGE_PRUNE_RELEVANCE_DIVISOR * 9,
+      },
+    });
+    expect(edgePruneRelevance(flooded)).toBe(1);
   });
 });
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  costDivisor,
   CRITICAL_PREEMPTION_GRACE_RUNS,
   decide,
   DEPRIORITIZED_WEIGHT,
@@ -41,6 +42,7 @@ function stats(overrides: Partial<OperationEffectiveness>): OperationEffectivene
     effectiveness: 1,
     cyclesSinceSelected: 0,
     lastRunAt: undefined,
+    meanDurationMs: undefined,
     ...overrides,
   };
 }
@@ -125,10 +127,64 @@ describe('scoreCandidate', () => {
     expect(scoreCandidate(candidate({}), input).urgency).toBeCloseTo(0.5 * DEPRIORITIZED_WEIGHT, 6);
   });
 
-  it('treats an operation with no history as fully effective', () => {
+  it('leaves an operation with no history unweighted rather than scoring it', () => {
     const scored = scoreCandidate(candidate({ name: 'never-run' }), baseInput());
-    expect(scored.effectiveness).toBe(1);
+    expect(scored.effectiveness).toBeUndefined();
     expect(scored.urgency).toBeCloseTo(0.5, 6);
+  });
+
+  it('leaves an operation whose record no metric scored unweighted', () => {
+    const input = baseInput({
+      health: healthFixture({
+        effectiveness: [stats({ runs: 10, improved: 0, effectiveness: undefined })],
+      }),
+    });
+    const scored = scoreCandidate(candidate({}), input);
+    expect(scored.effectiveness).toBeUndefined();
+    expect(scored.urgency).toBeCloseTo(0.5, 6);
+  });
+
+  it('divides urgency by a bounded cost term, never to zero', () => {
+    const dear = baseInput({
+      health: healthFixture({
+        effectiveness: [stats({ runs: 4, improved: 4, effectiveness: 1, meanDurationMs: 600_000 })],
+      }),
+    });
+    const cheap = baseInput({
+      health: healthFixture({
+        effectiveness: [stats({ runs: 4, improved: 4, effectiveness: 1, meanDurationMs: 200 })],
+      }),
+    });
+
+    const dearUrgency = scoreCandidate(candidate({}), dear).urgency;
+    const cheapUrgency = scoreCandidate(candidate({}), cheap).urgency;
+    expect(dearUrgency).toBeLessThan(cheapUrgency);
+    expect(dearUrgency).toBeGreaterThan(cheapUrgency / 2);
+  });
+
+  it('charges nothing for cost until a run has been timed', () => {
+    const scored = scoreCandidate(
+      candidate({}),
+      baseInput({
+        health: healthFixture({ effectiveness: [stats({ runs: 4, improved: 4 })] }),
+      }),
+    );
+    expect(scored.urgency).toBeCloseTo(0.5, 6);
+  });
+});
+
+describe('costDivisor', () => {
+  it('charges nothing at or under the reference cost', () => {
+    expect(costDivisor(undefined)).toBe(1);
+    expect(costDivisor(0)).toBe(1);
+    expect(costDivisor(1_000)).toBe(1);
+  });
+
+  it('rises with cost and stops at the ceiling', () => {
+    expect(costDivisor(10_000)).toBeGreaterThan(1);
+    expect(costDivisor(100_000)).toBeGreaterThan(costDivisor(10_000));
+    expect(costDivisor(1_000_000)).toBeCloseTo(2, 6);
+    expect(costDivisor(600_000_000)).toBeCloseTo(2, 6);
   });
 });
 
@@ -250,6 +306,34 @@ describe('decide', () => {
           },
           effectiveness: [
             stats({ name: 'orphan_cleanup', runs: 40, improved: 40, effectiveness: 1 }),
+          ],
+        }),
+        candidates: [
+          candidate({ name: 'orphan_cleanup', answers: 'orphan_share', relevance: 0.6 }),
+          candidate({ name: 'routine', relevance: 1 }),
+        ],
+      }),
+    );
+    expect(decision).toMatchObject({ kind: 'selected', name: 'orphan_cleanup', tier: 1 });
+  });
+
+  it('keeps preempting past the grace when no metric ever scored the emergency', () => {
+    const decision = decide(
+      baseInput({
+        health: healthFixture({
+          graph: {
+            ...NEUTRAL_GRAPH_HEALTH,
+            nodes: POPULATION,
+            orphanNodes: 60,
+            orphanShare: 0.6,
+          },
+          effectiveness: [
+            stats({
+              name: 'orphan_cleanup',
+              runs: CRITICAL_PREEMPTION_GRACE_RUNS * 4,
+              improved: 0,
+              effectiveness: undefined,
+            }),
           ],
         }),
         candidates: [

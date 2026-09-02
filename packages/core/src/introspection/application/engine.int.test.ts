@@ -135,6 +135,20 @@ describe('Introspector', () => {
     expect(scored.pendingMeasure).toBeUndefined();
   });
 
+  it('records a run with no declared metric as unmeasured rather than as an improvement', async () => {
+    // Nothing in the snapshot moves when this operation applies, so scoring the run on its own
+    // status would record an improvement no reading could contradict.
+    const operation = fakeOperation('unmeasured_maintenance', { measure: undefined });
+    const report = await engineFor(bed, [operation], [healthFixture()]).tickOnce();
+
+    expect(report.outcome).toMatchObject({ status: 'applied' });
+    expect(operationStats(bed.db, 'unmeasured_maintenance')).toMatchObject({
+      runs: 1,
+      improved: 0,
+      unmeasured: 1,
+    });
+  });
+
   it('records a throwing operation as failed and keeps ticking', async () => {
     const operation: IntrospectionOperation = {
       name: 'broken_maintenance',
