@@ -329,9 +329,23 @@ export const KNOBS = {
     // inside a different stage's write and needs to be killable on its own. `off` is the kill
     // switch and skips the keyed lookup entirely. `judge` routes a keyed candidate into the
     // same two-pass unanimous supersession judge `supersedeMode` uses, which closes it
-    // autonomously; this is the default. `close` is the mechanical keyed close, applied once
-    // its own battery clears the pre-registered bar the way `supersedeMode` and
-    // `entityMergeMode` were.
+    // autonomously. `close` is the mechanical keyed close, made in the writing transaction.
+    // The default is set by measurement rather than by hand, on a rule pre-registered before
+    // the numbers: precision at or above 0.95 over the 24-case keyed-close battery, made on at
+    // least four mechanical closes, ships `close`; short of either it ships `judge`, and
+    // `keyed-close-precision.int.test.ts` asserts the shipped value against what it measures,
+    // in both directions. The bar is above the 0.9 the two judge batteries carry because this
+    // is the one closure path with no second opinion behind it.
+    // Measured 2026-09-01 against claude-haiku-4-5 with snowflake-arctic-embed2 embeddings, 24
+    // pairs of sessions run through the shipped extraction stages: 2 closes, TP 2, FP 0, FN 6,
+    // precision 1.000, recall 0.250. Both trap classes held, 6 of 6 and 6 of 6, and all four
+    // sessions stating no single attribute kept every key off. What ships `judge` is the sample
+    // and not the precision: 16 claims carried a key at all, 3 of the 24 cases carried one on
+    // both halves, and the mechanism was therefore asked twice. The aspect slug is where the
+    // recall goes. One case keyed the same entity from both sides and still missed, on
+    // "checkpoint state storage location" against "checkpoint state storage backend"; every
+    // other miss never keyed the earlier half at all. That is the number to move before this
+    // is measured again.
     keyedCloseMode: ['AION_KEYED_CLOSE_MODE', z.enum(['off', 'judge', 'close']), 'judge'],
     /** The `auto` path's threshold only. No other mode reads it. */
     supersedeAutoConfidence: ['AION_SUPERSEDE_AUTO_CONFIDENCE', proportion, 0.85],
