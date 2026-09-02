@@ -1,7 +1,7 @@
 import { maxEmbedInputChars } from './embed-models.js';
 import { OllamaRequestError } from './errors.js';
 import type { Provider, StructuredRequest, Vector } from './types.js';
-import { foldForIdentity } from './unicode-fold.js';
+import { foldForIdentity } from '../../reflection/domain/name-fold.js';
 
 export type OllamaProviderOptions = {
   baseUrl: string;
@@ -17,7 +17,7 @@ function normalizeBaseUrl(url: string): string {
  * `foldForIdentity` is the same fold `name_norm` is derived through, which is what keeps a
  * stored vector and a query vector on the same footing. Folding here rather than at a call
  * site is deliberate: an asymmetric fold would score a document against a differently
- * tokenized query. See `unicode-fold.ts` for what the fold does and why.
+ * tokenized query. See `name-fold.ts` for what the fold does and why.
  */
 function foldForEmbedding(text: string): string {
   return foldForIdentity(text);

@@ -6,7 +6,7 @@ import {
   nameFormMatches,
   nameFormOverlap,
 } from './entity-identity.js';
-import { foldName } from '../../infrastructure/providers/unicode-fold.js';
+import { foldName } from './name-fold.js';
 
 /**
  * The pairs carry their measured cosines: no single vector threshold separates them, which is

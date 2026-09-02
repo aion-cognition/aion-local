@@ -21,7 +21,7 @@ import {
   squashName,
   type TypeCounts,
 } from '../../reflection/domain/entity-reconciliation.js';
-import { foldName } from '../providers/unicode-fold.js';
+import { foldName } from '../../reflection/domain/name-fold.js';
 
 /**
  * How an entity is found by the names it answers to, and what its properties become when a

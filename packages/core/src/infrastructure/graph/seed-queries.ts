@@ -13,8 +13,8 @@ import {
 } from './read-modes.js';
 import { fromGraphVector, toGraphInteger, toGraphVector, type Row } from './values.js';
 import { asCosine, CONTENT_VECTOR_INDEX, CONTEXT_VECTOR_INDEX } from './vector-indexes.js';
+import { foldName } from '../../reflection/domain/name-fold.js';
 import type { Vector } from '../providers/types.js';
-import { foldName } from '../providers/unicode-fold.js';
 
 /**
  * Four seed strategies, one query each, plus the two reads recall makes against ids it

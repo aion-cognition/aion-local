@@ -20,8 +20,8 @@ import {
   ENTITY_NAME_NORM_PROPERTY,
   ENTITY_NAME_PROPERTY,
 } from '../../../infrastructure/graph/seed-queries.js';
-import { foldName } from '../../../infrastructure/providers/unicode-fold.js';
 import { squashName } from '../../domain/entity-reconciliation.js';
+import { foldName } from '../../domain/name-fold.js';
 
 /**
  * How a run spends a judge budget it cannot cover. Ranking one nominator above the other hands
