@@ -254,3 +254,14 @@ and at or above 0.9 on the judge tier alone ships `unanimous`, under either bar 
 0's deterministic merges alone can carry the headline to 1.000 without judging anything. A
 failure there means the cascade moved, and the fix is to change the knob rather than the
 assertion.
+
+`gate/keyed-close-precision.int.test.ts` is the same shape for `AION_KEYED_CLOSE_MODE`. It tells
+24 designed pairs of sessions to the shipped entity and cognitive stages, pinned to `close`, and
+scores every close the subject key made on its own against truth committed in the fixture.
+The bar written before the numbers is 0.95 rather than 0.9, because a keyed close is the only
+closure path with no second opinion behind it: at or above it ships `close`, under it ships
+`judge`, where the key becomes a candidate generator for the same two-pass unanimous judge.
+`KEYED_CLOSE_SAMPLE_FLOOR` (4) is the smallest number of closes the rule will ship `close` on,
+half the eight cases that can produce one. Recall is printed and gates nothing, since a key that
+matched nothing leaves the pair to the judge. A failure there means the mechanism or the
+extractor moved, and the fix is to change the knob rather than the assertion.
