@@ -9,13 +9,17 @@ import { introspectionOperations } from './catalog.js';
  * docstring and the code cannot drift apart quietly.
  */
 const UNMEASURED_OPERATIONS = [
+  'claim_consolidation',
   'claim_dedup',
   'community_refresh',
   'description_freshness',
   'memory_decay',
   'merge_decision_reconcile',
   'narrative_cleanup',
+  'narrative_rollup_day',
+  'narrative_rollup_week',
   'retro_judgment_sweep',
+  'structural_discovery',
   'symbiosis_bridge',
 ];
 

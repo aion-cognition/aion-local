@@ -170,3 +170,36 @@ export async function currentEpisodeIds(driver: Driver): Promise<string[]> {
     (row) => row.id as string,
   );
 }
+
+/** What a discovery write stamps on an association edge, read from whichever end it points. */
+export type AssociationEdgeState = {
+  readonly strength: number | undefined;
+  readonly signals: readonly string[];
+  readonly provenance: readonly string[];
+  readonly rationale: string | undefined;
+};
+
+/** `undefined` when no edge of that type stands between the two nodes, either direction. */
+export async function associationEdgeState(
+  driver: Driver,
+  leftId: string,
+  rightId: string,
+  type: RelationshipType,
+): Promise<AssociationEdgeState | undefined> {
+  return readFirst(
+    driver,
+    [
+      `MATCH (a:${BASE_NODE_LABEL} { id: $leftId })-[r:${type}]-(b:${BASE_NODE_LABEL} { id: $rightId })`,
+      `WHERE r.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
+      'RETURN r.strength AS strength, r.signals AS signals, r.provenance AS provenance,',
+      '       r.rationale AS rationale',
+    ].join('\n'),
+    { leftId, rightId },
+    (row) => ({
+      strength: typeof row.strength === 'number' ? row.strength : undefined,
+      signals: (row.signals as string[] | null) ?? [],
+      provenance: (row.provenance as string[] | null) ?? [],
+      rationale: typeof row.rationale === 'string' ? row.rationale : undefined,
+    }),
+  );
+}

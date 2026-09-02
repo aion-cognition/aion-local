@@ -59,6 +59,9 @@ export type Tier3Case = {
   readonly truthNote: string;
 };
 
+/** One second a run, so the cost line the advisor now reads carries the same value for every row. */
+const FIXTURE_RUN_COST_MS = 1_000;
+
 function row(
   name: string,
   runs: number,
@@ -70,9 +73,10 @@ function row(
     runs,
     improved,
     failed: 0,
-    effectiveness: runs === 0 ? 1 : improved / runs,
+    effectiveness: runs === 0 ? undefined : improved / runs,
     cyclesSinceSelected,
     lastRunAt: undefined,
+    meanDurationMs: FIXTURE_RUN_COST_MS,
   };
 }
 
@@ -121,6 +125,10 @@ function populatedGraph(overrides: Partial<GraphStructureHealth> = {}): GraphStr
     orphanNodes: 3,
     orphanShare: 0.02,
     decayableEdges: 210,
+    // Part of the decayable mass has reached the floor, which is the narrower population
+    // `edge_prune` acts on. Without it that operation reads as having nothing to do and leaves
+    // the candidate table a competitor short of the substrate these cases describe.
+    atFloorAssociationEdges: 150,
     ...overrides,
   });
 }

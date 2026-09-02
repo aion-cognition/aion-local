@@ -161,10 +161,12 @@ long. Otherwise operations score on their own relevance, weighted down when thei
 improving anything and up the longer they wait, so nothing starves. The model-guided tier is
 the last fallback, opt-in and propose-only here.
 
-**Learn** is what makes the loop a loop. Every operation declares the one metric it exists to
+**Learn** is what makes the loop a loop. An operation declares the one metric it exists to
 move. The engine reads it before the run and again on a later tick, when the system has
 settled, and records improved, unchanged, or failed. Those counts are the weight the next
-decision reads.
+decision reads. An operation the snapshot carries no metric for records the run as unmeasured
+and is weighted on nothing, because the only verdict available without a metric is the
+operation's own report of what it did.
 
 ## The MemoryPack is the contract
 

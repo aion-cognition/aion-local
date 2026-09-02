@@ -22,12 +22,11 @@ import {
 import type { GraphProperties } from '../../infrastructure/graph/values.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
+import { decideSessionBoundary, MID_SESSION_ROLLUP_DEFAULT } from '../domain/mid-session.js';
 import {
   assembleNarrative,
   buildNarrativeMessages,
   decideSessionNarrative,
-  isSessionIdle,
-  lastActivityAt,
   narrativeMaxTokens,
   narrativeNodeId,
   narrativeSpan,
@@ -82,6 +81,8 @@ export type NarrativeOptions = {
   readonly occurredAt?: Date;
   /** Cleanup only: rewrite the standing narrative over the same episodes, superseding it. */
   readonly regenerate?: boolean;
+  /** The mid-session boundary's kill switch. Off, a running session waits for its close. */
+  readonly midSession?: boolean;
 };
 
 export type IdleSweepOptions = NarrativeOptions & {
@@ -109,6 +110,7 @@ type NarrativeSettings = {
   readonly now: Date;
   readonly occurredAt: Date;
   readonly regenerate: boolean;
+  readonly midSession: boolean;
 };
 
 function settingsOf(options: NarrativeOptions): NarrativeSettings {
@@ -122,6 +124,7 @@ function settingsOf(options: NarrativeOptions): NarrativeSettings {
     now,
     occurredAt: options.occurredAt ?? now,
     regenerate: options.regenerate ?? false,
+    midSession: options.midSession ?? MID_SESSION_ROLLUP_DEFAULT,
   };
 }
 
@@ -283,7 +286,9 @@ function skipped(sessionId: string, episodes: number, summary: string): Narrativ
 /**
  * One boundary, evaluated and acted on. `requireIdle` is the difference between the two
  * triggers: a transport close is an explicit end, while the sweep and the reflection stage
- * have only silence to go on and must wait out the idle window first.
+ * have only silence to go on. Silence is no longer the only thing they have: a session still
+ * running crosses a mid-session boundary on its own length or on a pause inside it, and the
+ * narrative that boundary writes is an ordinary version the close later supersedes.
  */
 async function narrateSession(
   deps: NarrativeDeps,
@@ -296,13 +301,12 @@ async function narrateSession(
     return skipped(sessionId, 0, 'the session holds no episodes');
   }
 
+  const existing = await findSessionNarratives(deps.driver, sessionId);
+
   if (requireIdle) {
-    const activity = lastActivityAt(episodes);
-    if (activity === undefined) {
-      return skipped(sessionId, episodes.length, 'the session carries no activity timestamp');
-    }
-    if (!isSessionIdle(activity, settings.now, settings.idleMs)) {
-      return skipped(sessionId, episodes.length, 'the session is still active');
+    const boundary = decideSessionBoundary(episodes, existing, settings);
+    if (!boundary.narrate) {
+      return skipped(sessionId, episodes.length, boundary.reason);
     }
   }
 
@@ -310,7 +314,6 @@ async function narrateSession(
   // The narrative's world time is the end of what it compresses; a session whose episodes
   // carry no timestamps falls back to the run's.
   const occurredAt = span.end ?? settings.occurredAt;
-  const existing = await findSessionNarratives(deps.driver, sessionId);
   const decision = decideSessionNarrative(episodes, existing, { regenerate: settings.regenerate });
   const generation = settings.regenerate ? NARRATIVE_GROUNDING : '';
   const narrativeId = narrativeNodeId(sessionId, decision.coverageKey, generation);

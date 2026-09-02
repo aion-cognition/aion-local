@@ -317,8 +317,10 @@ does, and one tick runs four phases: observe, decide, act, learn.
    counts as better. The engine takes that reading before the run and again on a later tick,
    which is the first snapshot that can see the system settled around the change, and records
    `improved` / `unchanged` / `failed`. Those counts are the effectiveness weight step 2
-   reads. An operation with no metric in the snapshot is scored on whether it applied
-   anything.
+   reads. An operation with no metric in the snapshot records `unmeasured` instead: the run
+   is on its record, and its effectiveness reads as unmeasured rather than as a number, which
+   the weight and the preemption grace both leave alone. Every run's wall time is recorded
+   too, whatever it did, which is what makes the cheapest way to answer a reading a fact.
 
 The catalog is one ordered list (`introspection/application/catalog.ts`), which is the only
 place an operation joins maintenance. Fourteen are registered, in four groups: substrate
@@ -334,8 +336,9 @@ absorbed identity back out of the entity it was merged into. A bad merge is not 
 from inside the graph (a correct merge and a wrong one have the same shape), so a person
 names the merge to reverse; `aion unmerge ls|apply` is where they name it.
 
-`aion stats` renders the loop's own record: the cycle count, and per operation the runs,
-the improved/unchanged/failed split, and the last window's outcome from the ledger.
+`aion stats` renders the loop's own record: the cycle count, and per operation the runs, the
+improved/unchanged/failed/unmeasured split, the typical cost of a run, and the last window's
+outcome from the ledger.
 `aion maintain ls` lists the catalog; `aion maintain run <name>` forces one operation now,
 bypassing the relevance score and the bucket claim and nothing else. The escape hatch exists
 because one operation's subject is not proportional: thirteen leaking nodes out of two

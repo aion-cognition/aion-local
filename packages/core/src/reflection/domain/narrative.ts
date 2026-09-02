@@ -378,6 +378,16 @@ function resolveCitations(raw: readonly string[], byHandle: ReadonlyMap<string, 
 }
 
 /**
+ * The graph ids one sentence's tags resolve to, in the order the model wrote them, with
+ * anything the prompt never offered dropped. The consolidation engine keeps citations per
+ * sentence rather than per node, because its reviewer checks a sentence against the items that
+ * sentence cited.
+ */
+export function citedSourceIds(raw: readonly string[], source: NarrativeSource): readonly string[] {
+  return resolveCitations(raw, new Map(source.items.map((item) => [item.handle, item.id])));
+}
+
+/**
  * The grounding rule, enforced rather than requested: a sentence citing no source item the
  * prompt actually supplied never reaches the node, and the budget caps what a model that
  * ignored it can still store.
