@@ -11,11 +11,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { horizonIntegrityCheck, queueLagCheck } from './doctor-checks.js';
 import {
   buildDoctorChecks,
   probeMcpHttp,
   probeServiceFreshness,
-  queueLagCheck,
   runChecks,
   summarize,
   type Check,
@@ -343,6 +343,52 @@ describe('queueLagCheck', () => {
     const result = queueLagCheck(store.db, config);
 
     expect(result.warn).toBeUndefined();
+  });
+});
+
+describe('horizonIntegrityCheck', () => {
+  it('passes a substrate that has written no horizon at all', () => {
+    const result = horizonIntegrityCheck({
+      withHorizon: 0,
+      closed: 0,
+      closedAtHorizon: 0,
+      sampleIds: [],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.warn).toBeUndefined();
+    expect(result.detail).toContain('0 readings carry a horizon');
+  });
+
+  /**
+   * A reading a later observation corrected carries the close and the horizon at once, and
+   * that is the ordinary shape. A check that read the pair as the fault would fire on every
+   * corrected reading in the substrate.
+   */
+  it('passes a corrected reading, which carries a close and a horizon together', () => {
+    const result = horizonIntegrityCheck({
+      withHorizon: 4,
+      closed: 2,
+      closedAtHorizon: 0,
+      sampleIds: [],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.detail).toContain('4 readings carry a horizon, 2 of them superseded');
+  });
+
+  it('fails a node whose close is stamped at its own horizon, and names it', () => {
+    const result = horizonIntegrityCheck({
+      withHorizon: 4,
+      closed: 2,
+      closedAtHorizon: 1,
+      sampleIds: ['reading-queue-depth'],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain('1 of 4');
+    expect(result.detail).toContain('reading-queue-depth');
+    expect(result.detail).toContain('aion unsupersede');
   });
 });
 

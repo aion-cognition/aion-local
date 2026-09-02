@@ -48,6 +48,13 @@ const SUPERSEDED: NodeProvenance = {
   supersededBy: { id: 'decision-1', at: new Date('2026-06-05T00:00:00.000Z') },
 };
 
+const EXPIRED: NodeProvenance = {
+  ...CURRENT,
+  id: 'concept-queue-depth',
+  content: 'the Quillon ingest queue holds 4.2 million rows',
+  currency: 'expired',
+};
+
 const EDGES: readonly NodeEdge[] = [
   {
     type: 'EXTRACTED_FROM',
@@ -159,6 +166,21 @@ describe('renderProvenance', () => {
     expect(text).toContain('currency  superseded');
     expect(text).toContain('superseded by decision-1 at 2026-06-05T00:00:00.000Z');
     expect(text).toContain('valid_until   2026-06-05T00:00:00.000Z');
+  });
+
+  /**
+   * Nothing closed an aged-out reading, so the stamps above read exactly like a current
+   * node's and the word alone would look like a typo. The line says what aged and what did not.
+   */
+  it('says an expired reading aged out rather than that something corrected it', () => {
+    const { lines, write } = collector();
+
+    renderProvenance(EXPIRED, [], [], [], write);
+
+    const text = lines.join('\n');
+    expect(text).toContain('currency  expired');
+    expect(text).toContain('past its reading horizon; nothing superseded it');
+    expect(text).toContain('valid_until   open');
   });
 
   it('renders the extraction provenance chain from the EXTRACTED_FROM edge', () => {

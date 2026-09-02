@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CueCache } from './cues.js';
-import { handleRecall, readModeFor, type RecallCompletion, type RecallDeps } from './recall.js';
+import { readModeFor } from './read-mode.js';
+import { handleRecall, type RecallCompletion, type RecallDeps } from './recall.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { buildAdjacencyStatement } from '../../infrastructure/graph/adjacency.js';
 import { withCurrency } from '../../infrastructure/graph/read-modes.js';
@@ -100,20 +101,38 @@ afterEach(() => {
 });
 
 describe('read mode', () => {
-  it('defaults to currency-aware rather than to a temporal slice', () => {
-    expect(readModeFor({ query: 'why webhooks' })).toEqual({});
+  const ANNOTATING = { now: NOW, expiryAnnotation: true };
+
+  /**
+   * One recall issues ten or more fragments. Without the run's own clock on the mode, each
+   * one reads the wall clock for itself, and a reading sitting on its horizon comes back
+   * current on one leg and expired on the next.
+   */
+  it('defaults to currency-aware, judged from the run own clock', () => {
+    expect(readModeFor({ query: 'why webhooks' }, ANNOTATING)).toEqual({ reference: NOW });
   });
 
   it('threads as_of and knew_at through as world time and system time', () => {
-    expect(readModeFor({ query: 'q', as_of: '2026-03-01' })).toEqual({
+    expect(readModeFor({ query: 'q', as_of: '2026-03-01' }, ANNOTATING)).toEqual({
       validAt: new Date('2026-03-01'),
     });
-    expect(readModeFor({ query: 'q', knew_at: '2026-03-01' })).toEqual({
+    expect(readModeFor({ query: 'q', knew_at: '2026-03-01' }, ANNOTATING)).toEqual({
       knownAt: new Date('2026-03-01'),
     });
-    expect(readModeFor({ query: 'q', as_of: '2026-03-01', knew_at: '2026-04-01' })).toEqual({
+    expect(
+      readModeFor({ query: 'q', as_of: '2026-03-01', knew_at: '2026-04-01' }, ANNOTATING),
+    ).toEqual({
       validAt: new Date('2026-03-01'),
       knownAt: new Date('2026-04-01'),
+    });
+  });
+
+  it('carries the expiry kill switch onto the mode every fragment is built from', () => {
+    const off = { now: NOW, expiryAnnotation: false };
+    expect(readModeFor({ query: 'q' }, off)).toEqual({ reference: NOW, expiryAnnotation: false });
+    expect(readModeFor({ query: 'q', as_of: '2026-03-01' }, off)).toEqual({
+      validAt: new Date('2026-03-01'),
+      expiryAnnotation: false,
     });
   });
 });

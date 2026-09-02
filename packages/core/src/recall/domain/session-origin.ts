@@ -40,9 +40,13 @@ export type OwnSessionInput = {
  * The related-claim annotation is the third signal and the one a raw turn carries: nothing ever
  * supersedes a turn, so a turn the substrate has since contradicted surfaces as current, and the
  * annotation beside it is the whole of the news.
+ *
+ * An expired reading is not one of the three. A horizon is a clock running out on a measurement
+ * the session itself made, and the session holds every word of it; the substrate has said
+ * nothing new, so serving it back is the echo this subtraction exists to stop.
  */
 function correctedSince(item: FusedItem, claims: ReadonlyMap<string, RelatedClaim>): boolean {
-  return item.currency !== 'current' || item.supersededBy !== undefined || claims.has(item.id);
+  return item.currency === 'superseded' || item.supersededBy !== undefined || claims.has(item.id);
 }
 
 /**

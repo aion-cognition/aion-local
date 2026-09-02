@@ -20,9 +20,22 @@ export type ReadMode = {
    * supplies it is still a default read.
    */
   readonly reference?: Date;
+  /**
+   * Whether a reading past its horizon comes back marked `expired`. Absent annotates, so every
+   * read path reports an aged-out reading unless the caller holding the kill switch says
+   * otherwise. Off restores the two-value answer the substrate gave before a horizon existed,
+   * and touches no stored property either way.
+   */
+  readonly expiryAnnotation?: boolean;
 };
 
-export type Currency = 'current' | 'superseded';
+/**
+ * `superseded` means something corrected the node and the lineage edge names what.
+ * `expired` means a reading aged past the horizon it was written with: nothing corrected it,
+ * so it has no successor, and the substrate is saying the measurement is old rather than
+ * wrong. Both are down-ranked and labeled; neither is dropped.
+ */
+export type Currency = 'current' | 'superseded' | 'expired';
 
 export type SupersededBy = {
   readonly id: string;
@@ -34,10 +47,17 @@ export type CurrencyAnnotation = {
   readonly supersededBy?: SupersededBy;
 };
 
+/**
+ * When a reading stops answering. Declared here, with the comparator that reads it, rather
+ * than with the write that stores it: a horizon is never a close, nothing in the bitemporal
+ * predicates may touch it, and its whole meaning is the comparison below.
+ */
+export const VALID_HORIZON_PROPERTY = 'valid_horizon';
+
 export type ReadFragment = {
   /** Boolean expression over the node variable; safe to AND into any WHERE. */
   readonly where: string;
-  /** Expression yielding `'current' | 'superseded'` relative to this mode's reference time. */
+  /** Expression yielding one `Currency` value relative to this mode's reference time. */
   readonly currency: string;
   /** Expression yielding `{ id, at }` for the node that superseded this one, or null. */
   readonly lineage: string;
@@ -125,10 +145,25 @@ export function readModeFragment(mode: ReadMode, nodeVar: string, prefix = 'rm')
     predicates.push(`${nodeVar}.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`);
   }
 
-  const currency =
-    `CASE WHEN ${nodeVar}.${BITEMPORAL_PROPERTIES.validUntil} IS NULL` +
-    ` OR ${nodeVar}.${BITEMPORAL_PROPERTIES.validUntil} > $${referenceParam}` +
-    " THEN 'current' ELSE 'superseded' END";
+  /**
+   * The close is asked first: a reading that was corrected before it aged out is superseded,
+   * and that is the arm with a successor to name. A horizon suppresses nothing here, it only
+   * decides which word the row comes back with, so an aged-out reading still surfaces and
+   * still says what it measured.
+   */
+  const arms = [
+    `WHEN ${nodeVar}.${BITEMPORAL_PROPERTIES.validUntil} IS NOT NULL` +
+      ` AND ${nodeVar}.${BITEMPORAL_PROPERTIES.validUntil} <= $${referenceParam}` +
+      " THEN 'superseded'",
+  ];
+  if (mode.expiryAnnotation !== false) {
+    arms.push(
+      `WHEN ${nodeVar}.${VALID_HORIZON_PROPERTY} IS NOT NULL` +
+        ` AND ${nodeVar}.${VALID_HORIZON_PROPERTY} <= $${referenceParam}` +
+        " THEN 'expired'",
+    );
+  }
+  const currency = `CASE ${arms.join(' ')} ELSE 'current' END`;
 
   const successor = `${prefix}_sup`;
   const successorEdge = `${prefix}_sup_rel`;
@@ -158,9 +193,21 @@ export function readModeFragment(mode: ReadMode, nodeVar: string, prefix = 'rm')
   };
 }
 
+/**
+ * The word the projection returned, narrowed. Anything else reads as `current`, including an
+ * absent projection: a row nothing annotated must not be reported as one the reader has to
+ * discount.
+ */
+function readCurrency(value: unknown): Currency {
+  if (value === 'superseded' || value === 'expired') {
+    return value;
+  }
+  return 'current';
+}
+
 /** Reads back what `ReadFragment.projection` returns; every recall path marks its items through this. */
 export function readCurrencyAnnotation(row: Row): CurrencyAnnotation {
-  const currency: Currency = row.currency === 'superseded' ? 'superseded' : 'current';
+  const currency = readCurrency(row.currency);
   const lineage = row.superseded_by;
   if (lineage === null || typeof lineage !== 'object') {
     return { currency };

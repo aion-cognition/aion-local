@@ -7,9 +7,20 @@ type ItemOverrides = {
   readonly content?: string;
   readonly why?: string;
   readonly superseded?: boolean;
+  readonly expired?: boolean;
   readonly rank?: number;
   readonly measured?: number;
 };
+
+function currencyOf(id: string, overrides: ItemOverrides): Partial<FusedItem> {
+  if (overrides.superseded === true) {
+    return {
+      currency: 'superseded',
+      supersededBy: { id: `${id}-successor`, at: new Date('2026-08-10T00:00:00.000Z') },
+    };
+  }
+  return { currency: overrides.expired === true ? 'expired' : 'current' };
+}
 
 function item(id: string, overrides: ItemOverrides = {}): FusedItem {
   return {
@@ -21,12 +32,8 @@ function item(id: string, overrides: ItemOverrides = {}): FusedItem {
     measured: overrides.measured ?? 0.8,
     score: 0.02,
     ...(overrides.why === undefined ? {} : { why: overrides.why }),
-    ...(overrides.superseded === true
-      ? {
-          currency: 'superseded' as const,
-          supersededBy: { id: `${id}-successor`, at: new Date('2026-08-10T00:00:00.000Z') },
-        }
-      : { currency: 'current' as const }),
+    currency: 'current',
+    ...currencyOf(id, overrides),
   };
 }
 
@@ -46,6 +53,18 @@ describe('the served fingerprint', () => {
     expect(servedFingerprint(item('e1'))).not.toBe(
       servedFingerprint(item('e1', { superseded: true })),
     );
+  });
+
+  /**
+   * The reading the session already read now says it has aged out, and the rendered line says
+   * so. That marker is new to the reader, so the item is told again in full rather than
+   * subtracted as a repeat of what it said before.
+   */
+  it('moves when a reading crosses its horizon, which the rendered line also says', () => {
+    const current = item('c1');
+
+    expect(servedFingerprint(item('c1', { expired: true }))).not.toBe(servedFingerprint(current));
+    expect([...suppressedRepeats([item('c1', { expired: true })], served(current))]).toEqual([]);
   });
 
   it("moves when the node's own stated reason changes", () => {
