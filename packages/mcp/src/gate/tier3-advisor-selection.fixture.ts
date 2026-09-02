@@ -128,7 +128,6 @@ function populatedGraph(overrides: Partial<GraphStructureHealth> = {}): GraphStr
     relationships: 402,
     vectorExpected: 96,
     vectorPresent: 96,
-    orphanNodes: 3,
     orphanShare: 0.02,
     decayableEdges: 210,
     // Part of the decayable mass has reached the floor, which is the narrower population
@@ -468,7 +467,7 @@ export const TIER3_SELECTION_BATTERY: readonly Tier3Case[] = [
   {
     key: 'orphans-well-under-the-fragmentation-line',
     health: snapshot({
-      graph: populatedGraph({ orphanNodes: 9, orphanShare: 0.06 }),
+      graph: populatedGraph({ orphanShare: 0.06 }),
       enrichment: enrichment({ episodes: 96 }),
       effectiveness: POPULATED_RECORD,
     }),

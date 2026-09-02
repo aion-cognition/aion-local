@@ -36,6 +36,7 @@ export function claimConsolidationOperation(): IntrospectionOperation {
   return {
     name: CLAIM_CONSOLIDATION_OPERATION,
     bucket: 'hour',
+    enabled: (config) => config.maintenance.claimConsolidation,
     relevance: claimConsolidationRelevance,
     run: async (ctx): Promise<OperationOutcome> => {
       if (!ctx.config.maintenance.claimConsolidation) {
@@ -49,7 +50,7 @@ export function claimConsolidationOperation(): IntrospectionOperation {
       }
 
       const report = await consolidateClaims(
-        { driver: ctx.driver, provider: ctx.provider, logger: ctx.logger },
+        { driver: ctx.driver, provider: ctx.provider, db: ctx.db, logger: ctx.logger },
         {
           model: ctx.config.models.reflect,
           timeoutMs: ctx.config.reflection.stageTimeoutMs,
@@ -61,7 +62,7 @@ export function claimConsolidationOperation(): IntrospectionOperation {
 
       return {
         status: report.created === 0 ? 'noop' : 'applied',
-        itemsProcessed: report.candidates,
+        itemsProcessed: report.examined,
         itemsAffected: report.created,
         detail: report.detail,
       };

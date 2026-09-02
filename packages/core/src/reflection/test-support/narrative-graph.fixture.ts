@@ -107,7 +107,12 @@ export class NarrativeFakeGraph extends FakeGraph {
         const labelled = node.labels.some((label) =>
           (NARRATIVE_SOURCE_LABELS as readonly string[]).includes(label),
         );
-        if (!labelled || !this.edges.has(`EXTRACTED_FROM:${node.id}:${String(episode.id)}`)) {
+        const forgotten = node.properties[BITEMPORAL_PROPERTIES.forgottenAt] !== undefined;
+        if (
+          !labelled ||
+          forgotten ||
+          !this.edges.has(`EXTRACTED_FROM:${node.id}:${String(episode.id)}`)
+        ) {
           continue;
         }
         rows.push({

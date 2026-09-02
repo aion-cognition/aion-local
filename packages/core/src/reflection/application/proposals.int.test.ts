@@ -11,15 +11,16 @@ import {
   PROPOSAL_APPLY_METHOD,
 } from './proposals.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
-import { BITEMPORAL_PROPERTIES, writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
+import {
+  BITEMPORAL_PROPERTIES,
+  forgetNode,
+  writeStampedNode,
+} from '../../infrastructure/graph/bitemporal.js';
 import { writeCognitiveNode } from '../../infrastructure/graph/cognitive-queries.js';
 import { upsertEdge } from '../../infrastructure/graph/edges.js';
 import { findSourceEpisodeId } from '../../infrastructure/graph/episode-supersession.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
-import {
-  findClaimSubjects,
-  findSubjectSiblings,
-} from '../../infrastructure/graph/subject-family.js';
+import { findClaimSubjects } from '../../infrastructure/graph/subject-family.js';
 import {
   nodeProperties,
   relationshipsByProvenance,
@@ -157,6 +158,7 @@ describe('applying a supersession proposal', () => {
       confidence: 1,
       rationale: 'poll interval',
       episodeId: 'ep-poll-2',
+      createdAt: NOW.toISOString(),
     });
 
     expect(await isClosed(stale)).toBe(false);
@@ -227,17 +229,9 @@ describe('applying a supersession proposal', () => {
       newId: corrected,
       confidence: 1,
       episodeId: 'ep-fanout-2',
+      createdAt: NOW.toISOString(),
     });
 
-    // The same read the apply runs, exposed so a caller can show what a close would take
-    // before taking it. Both same-subject siblings are candidates; the reading decides.
-    const preview = await findSubjectSiblings(harness.driver, stale);
-    expect(preview.map((sibling) => sibling.id).sort()).toEqual([otherRelation, restating].sort());
-    expect(preview.find((sibling) => sibling.id === restating)?.relatedness).toBeCloseTo(0.9, 2);
-    expect(preview.find((sibling) => sibling.id === otherRelation)?.relatedness).toBeCloseTo(
-      0.2,
-      2,
-    );
     // The episode mentions both services; only the one the claim itself names is a subject.
     const subjects = await findClaimSubjects(harness.driver, stale);
     expect(subjects.map((subject) => subject.name)).toEqual(['Kestrel exporter']);
@@ -257,6 +251,18 @@ describe('applying a supersession proposal', () => {
     expect(await isClosed(otherSubject)).toBe(false);
     expect(await isClosed('ep-fanout-1')).toBe(false);
     expect(applied.siblings.map((sibling) => sibling.id)).toEqual([restating]);
+    // Both same-subject siblings were candidates; the cosine against the judged claim is what
+    // separated the one that closed from the one that stands.
+    expect(
+      [...applied.siblings, ...applied.heldSiblings].map((sibling) => sibling.id).sort(),
+    ).toEqual([otherRelation, restating].sort());
+    expect(applied.siblings.find((sibling) => sibling.id === restating)?.relatedness).toBeCloseTo(
+      0.9,
+      2,
+    );
+    expect(
+      applied.heldSiblings.find((sibling) => sibling.id === otherRelation)?.relatedness,
+    ).toBeCloseTo(0.2, 2);
     // Named but untouched, and reported so a person who meant to take the whole observation
     // can see what the narrower cut left.
     expect(applied.heldSiblings.map((sibling) => sibling.id)).toEqual([otherRelation]);
@@ -296,6 +302,7 @@ describe('applying a supersession proposal', () => {
       newId: corrected,
       confidence: 1,
       episodeId: 'ep-owner-2',
+      createdAt: NOW.toISOString(),
     });
 
     const applied = await applySupersessionProposal(harness.driver, db, {
@@ -323,6 +330,62 @@ describe('applying a supersession proposal', () => {
   }, 120_000);
 
   /**
+   * A second source only holds a sibling open while it is current. An episode a person forgot
+   * is suppressed everywhere else, so counting it as corroboration keeps a stale claim
+   * answering off evidence the substrate no longer serves.
+   */
+  it('closes a sibling whose only second source was forgotten', async () => {
+    await seedEpisode('ep-forgot-1', 'The Wren indexer writes shards to the primary volume.');
+    await seedEpisode('ep-forgot-2', 'The Wren indexer writes shards to object storage now.');
+    await seedEpisode('ep-forgot-3', 'A second observation of the same Wren indexer shard write.');
+    await mention('ep-forgot-1', 'Wren indexer', 'service');
+    const stale = await seedClaim(
+      'ep-forgot-1',
+      'the Wren indexer writes shards to the primary volume',
+      RELATION_AXIS,
+    );
+    const restating = await seedClaim(
+      'ep-forgot-1',
+      'the Wren indexer shard writes land on the primary volume',
+      offAxis(0.9),
+    );
+    const corrected = await seedClaim(
+      'ep-forgot-2',
+      'the Wren indexer writes shards to object storage',
+      offAxis(0.8),
+    );
+    // The sibling was observed twice, which is what holds it open against one correction.
+    await upsertEdge(harness.driver, {
+      type: 'EXTRACTED_FROM',
+      sourceId: restating,
+      targetId: 'ep-forgot-3',
+      strength: 1,
+      confidence: 1,
+      signals: ['test'],
+      provenance: ['test'],
+      now: NOW,
+    });
+    const proposalId = recordSupersessionProposal(db, {
+      oldId: stale,
+      newId: corrected,
+      confidence: 1,
+      episodeId: 'ep-forgot-2',
+      createdAt: NOW.toISOString(),
+    });
+
+    await forgetNode(harness.driver, { id: 'ep-forgot-3', now: NOW });
+
+    const applied = await applySupersessionProposal(harness.driver, db, {
+      id: proposalId,
+      relatednessFloor: FLOOR,
+      now: NOW,
+    });
+
+    expect(applied.closedIds).toEqual([stale, restating]);
+    expect(await isClosed(restating)).toBe(true);
+  }, 120_000);
+
+  /**
    * The narrow escape has to stay narrow: with the subject family as the default, an operator
    * correcting one wrong sentence inside a good observation needs a way to leave the rest.
    */
@@ -338,6 +401,7 @@ describe('applying a supersession proposal', () => {
       newId: corrected,
       confidence: 1,
       episodeId: 'ep-narrow-2',
+      createdAt: NOW.toISOString(),
     });
 
     const applied = await applySupersessionProposal(harness.driver, db, {
@@ -363,6 +427,7 @@ describe('applying a supersession proposal', () => {
       newId: corrected,
       confidence: 1,
       episodeId: 'ep-bare-2',
+      createdAt: NOW.toISOString(),
     });
 
     const applied = await applySupersessionProposal(harness.driver, db, {
@@ -391,6 +456,7 @@ describe('applying a supersession proposal', () => {
       newId: corrected,
       confidence: 1,
       episodeId: 'ep-region-2',
+      createdAt: NOW.toISOString(),
     });
 
     expect(await findSourceEpisodeId(harness.driver, stale)).toBe('ep-region-1');
@@ -419,6 +485,7 @@ describe('applying a supersession proposal', () => {
       newId: corrected,
       confidence: 1,
       episodeId: 'ep-once-2',
+      createdAt: NOW.toISOString(),
     });
     dismissSupersessionProposal(db, proposalId, NOW);
 

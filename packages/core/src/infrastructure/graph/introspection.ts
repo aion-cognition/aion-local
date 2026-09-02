@@ -1,7 +1,8 @@
-import neo4j, { type Driver } from 'neo4j-driver';
+import type { Driver } from 'neo4j-driver';
 
 import { readFirst, runRead } from './connection.js';
 import { VectorIndexDimensionMismatchError, VectorIndexMissingError } from './errors.js';
+import { toGraphInteger } from './values.js';
 import { CONTENT_VECTOR_INDEX, CONTEXT_VECTOR_INDEX } from './vector-indexes.js';
 
 /** The two vector indexes migration 001 declares; both are built at the embedding model's dimension. */
@@ -108,10 +109,12 @@ export async function countNodesByLabel(driver: Driver): Promise<ReadonlyMap<str
 }
 
 /**
- * Every string property of every node, in pages. The redaction residue check is the only
- * caller: secret detection is deterministic, so re-running the current rules over what is
- * already stored is the one way to find material an older, leakier ruleset wrote. Paged and
- * bounded because this reads the whole substrate and runs from `aion doctor`.
+ * Every string property of every node, as one id-ordered prefix. The redaction residue check
+ * is the only caller: secret detection is deterministic, so re-running the current rules over
+ * what is already stored is the one way to find material an older, leakier ruleset wrote.
+ * `limit` bounds it because this reads the whole substrate and runs from `aion doctor`. There
+ * is no cursor, so a substrate larger than the limit is covered only as far as the prefix
+ * reaches.
  */
 export async function readStoredText(
   driver: Driver,
@@ -124,10 +127,14 @@ export async function readStoredText(
       'WITH n, [k IN keys(n) WHERE n[k] IS :: STRING | n[k]] AS strings',
       'WHERE size(strings) > 0',
       "RETURN n.id AS id, reduce(joined = '', s IN strings | joined + ' ' + s) AS text",
+      // A scan with no order is free to return a different node set on every call, so a
+      // smaller-limit caller (the health tick) and a larger-limit caller (the purge) can end
+      // up looking at disjoint nodes. Ordering by id makes a smaller scan a stable prefix of
+      // a larger one over unchanged data, so the callers agree on what they are counting.
+      'ORDER BY id',
       'LIMIT $limit',
     ].join('\n'),
-    // Neo4j rejects a JS number here: it arrives as a float and LIMIT wants an integer.
-    { limit: neo4j.int(Math.trunc(limit)) },
+    { limit: toGraphInteger(limit) },
     (row) => ({
       id: (row.id as string | null) ?? '',
       text: (row.text as string | null) ?? '',

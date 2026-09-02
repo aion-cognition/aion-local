@@ -3,6 +3,7 @@ import type { Driver } from 'neo4j-driver';
 import { withoutFingerprints } from './fingerprint.js';
 import { redact } from './redact.js';
 import { readStoredText } from '../infrastructure/graph/introspection.js';
+import { readNodeStringProperties } from '../infrastructure/graph/redaction-residue-writes.js';
 
 /**
  * What an older, leakier ruleset already wrote. Closing a leak path stops the next write; it
@@ -31,29 +32,56 @@ export type RedactionResidue = {
 
 const SAMPLE_SIZE = 5;
 
+/** True when at least one of a node's own string properties, scanned on its own, still trips a rule. */
+function propertyLeaks(
+  properties: Readonly<Record<string, string>>,
+  entropyThreshold: number,
+  ruleIds: Set<string>,
+): boolean {
+  let leaks = false;
+  for (const value of Object.values(properties)) {
+    const { matches } = redact(withoutFingerprints(value), entropyThreshold);
+    if (matches.length === 0) {
+      continue;
+    }
+    leaks = true;
+    for (const match of matches) {
+      ruleIds.add(match.rule);
+    }
+  }
+  return leaks;
+}
+
 export async function scanRedactionResidue(
   driver: Driver,
   entropyThreshold: number,
   limit: number = DEFAULT_RESIDUE_SCAN_LIMIT,
 ): Promise<RedactionResidue> {
   const rows = await readStoredText(driver, limit);
+
+  // The concatenated scan is a cheap first pass, not the verdict: a rule can fire on text
+  // that only exists because two clean properties sit next to each other in the join, and
+  // the purge (which rewrites one property at a time) can never close a leak counted that
+  // way. Candidates from the concatenated pass are re-checked property by property, the same
+  // unit of text the purge judges, before either is counted as leaking.
+  const candidateIds = rows
+    .filter((row) => redact(withoutFingerprints(row.text), entropyThreshold).matches.length > 0)
+    .map((row) => row.id);
+
   const ruleIds = new Set<string>();
   const sampleIds: string[] = [];
   let leaking = 0;
 
-  for (const row of rows) {
-    // Fingerprints out first: a node this check already had rewritten still carries a
-    // `key: value`-shaped token, and counting that as a leak makes the count unclosable.
-    const { matches } = redact(withoutFingerprints(row.text), entropyThreshold);
-    if (matches.length === 0) {
-      continue;
-    }
-    leaking += 1;
-    for (const match of matches) {
-      ruleIds.add(match.rule);
-    }
-    if (sampleIds.length < SAMPLE_SIZE) {
-      sampleIds.push(row.id);
+  if (candidateIds.length > 0) {
+    const nodes = await readNodeStringProperties(driver, candidateIds);
+    for (const node of nodes) {
+      if (!propertyLeaks(node.properties, entropyThreshold, ruleIds)) {
+        continue;
+      }
+      leaking += 1;
+      if (sampleIds.length < SAMPLE_SIZE && node.id !== '') {
+        sampleIds.push(node.id);
+      }
     }
   }
 

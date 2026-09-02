@@ -1,9 +1,9 @@
 import type { Driver } from 'neo4j-driver';
 
-import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
+import { currentOnly } from './bitemporal.js';
 import { runRead, type GraphStatement } from './connection.js';
 import { ENTITY_MENTION_TYPE } from './entity-queries.js';
-import { BASE_NODE_LABEL } from './labels.js';
+import { BASE_NODE_LABEL, EXTRACTION_TYPE } from './labels.js';
 import { readModeFragment, withCurrency } from './read-modes.js';
 
 /**
@@ -19,7 +19,7 @@ import { readModeFragment, withCurrency } from './read-modes.js';
  * Turn↔Entity pairs are not reinforcement triggers. Nothing is lost by dropping it: the
  * entity stage writes both edges in one transaction, so `MENTIONS` covers the same entities.
  */
-const CO_EXTRACTED_EDGE_TYPES = `${ENTITY_MENTION_TYPE}|EXTRACTED_FROM`;
+const CO_EXTRACTED_EDGE_TYPES = `${ENTITY_MENTION_TYPE}|${EXTRACTION_TYPE}`;
 
 /**
  * Anchored on the episode and expanded, like every sibling read in the pipeline. Matching
@@ -33,7 +33,7 @@ function coExtractedNodesStatement(episodeId: string, reference?: Date): GraphSt
     cypher: [
       'MATCH (e:Episode { id: $episodeId })',
       `MATCH (e)-[:${CO_EXTRACTED_EDGE_TYPES}]-(n:${BASE_NODE_LABEL})`,
-      `WHERE n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL AND ${fragment.where}`,
+      `WHERE ${currentOnly('n')}`,
       'RETURN DISTINCT n.id AS id',
     ].join('\n'),
     parameters: { episodeId, ...fragment.parameters },

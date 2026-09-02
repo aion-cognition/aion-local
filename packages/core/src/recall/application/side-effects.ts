@@ -1,4 +1,5 @@
 import type { Driver } from 'neo4j-driver';
+import { randomUUID } from 'node:crypto';
 
 import type { RecallCompletion, RecallListener } from './recall.js';
 import { recordAccess } from '../../infrastructure/graph/access-tracking.js';
@@ -9,6 +10,7 @@ import {
   DEFAULT_REINFORCEMENT_QUEUE_CAP,
   enqueueReinforcementSignal,
 } from '../../infrastructure/sqlite/reinforcement-queue.js';
+import { RECALL_CO_ACTIVATION_TRIGGER } from '../../plasticity/domain/reinforcement.js';
 import type { ActivatedNode } from '../domain/activation.js';
 
 /**
@@ -28,8 +30,11 @@ import type { ActivatedNode } from '../domain/activation.js';
  */
 export const REINFORCEMENT_TOP_N = 10;
 
-/** The name for this trigger source, distinct from reflection's co-occurrence signal. */
-export const REINFORCEMENT_TRIGGER = 'recall_co_activation';
+/**
+ * The name for this trigger source, distinct from reflection's co-occurrence signal. The string
+ * lives with the policy table that reads it, so the producer and the flush cannot drift.
+ */
+export { RECALL_CO_ACTIVATION_TRIGGER as REINFORCEMENT_TRIGGER };
 
 /**
  * Every pair among the top-N activated nodes, ordered by rank so the same activation result
@@ -97,10 +102,12 @@ export class RecallSideEffects {
   };
 
   /**
-   * Resolves once every access-tracking write scheduled so far has settled. Production
-   * wiring never calls this: `onRecalled` is fire-and-forget by `recall.ts`'s own contract.
-   * Tests call it after `handleRecall` returns to observe the deferred write without a
-   * sleep: `await handleRecall(...); await sideEffects.whenIdle();`.
+   * Resolves once every access-tracking write scheduled so far has settled. `onRecalled` is
+   * fire-and-forget by `recall.ts`'s own contract, so nothing on the recall path itself calls
+   * this; the MCP service's shutdown does, between closing its transports and closing the
+   * driver, so a write scheduled just before the process stops still lands. Tests call it the
+   * same way, after `handleRecall` returns, to observe the deferred write without a sleep:
+   * `await handleRecall(...); await sideEffects.whenIdle();`.
    */
   async whenIdle(): Promise<void> {
     await this.#pending;
@@ -109,14 +116,18 @@ export class RecallSideEffects {
   #enqueueReinforcement(completion: RecallCompletion): void {
     try {
       const ts = completion.now.toISOString();
+      // One id per recall, so two recalls landing in the same millisecond stay two bursts and
+      // the flush discounts each as the clique it actually was.
+      const burstId = randomUUID();
       for (const [sourceId, targetId] of reinforcementPairs(completion.activated)) {
         enqueueReinforcementSignal(
           this.#db,
           sourceId,
           targetId,
-          REINFORCEMENT_TRIGGER,
+          RECALL_CO_ACTIVATION_TRIGGER,
           ts,
           this.#reinforcementQueueCap,
+          burstId,
         );
       }
     } catch (err) {

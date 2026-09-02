@@ -203,7 +203,7 @@ export function describeEffectiveness(effectiveness: number | undefined): string
 /** An operation whose declared condition the snapshot meets, so the reason can name it outright. */
 type CriticalCandidate = ScoredCandidate & { readonly answers: CriticalCondition };
 
-/** Highest urgency, then the one that has waited longest, then the name, so ties never depend on registration order. */
+/** Highest score, then the one that has waited longest, then the name, so ties never depend on registration order. */
 function bestBy<T extends ScoredCandidate>(
   candidates: readonly T[],
   score: (candidate: T) => number,

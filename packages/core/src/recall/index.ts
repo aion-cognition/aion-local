@@ -1,6 +1,8 @@
 /**
- * The recall layer's public surface: the pipeline, its stages, and the pure domain modules
- * behind admission, fusion, ranking and pack assembly.
+ * The recall layer's public surface: the pipeline with its cue cache, seed selection and side
+ * effects; the pack taxonomy, its assembly and the resonant path marker; the admission and
+ * fusion result types with the cosine behind them; and the floor re-measurement the doctor
+ * runs, with the batteries the gate reads.
  */
 
 export { CueCache } from './application/cues.js';
@@ -10,7 +12,7 @@ export {
   BATTERY_SUBSTRATE,
   OFF_TOPIC_BATTERY,
   ON_TOPIC_BATTERY,
-} from './application/floors.fixtures.js';
+} from './application/floors.data.js';
 
 export { selectSeeds } from './application/seeds.js';
 export type { Seed, SeedCue } from './application/seeds.js';

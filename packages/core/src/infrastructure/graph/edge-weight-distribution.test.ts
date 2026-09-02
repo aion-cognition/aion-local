@@ -28,6 +28,11 @@ describe('bounded edge weight distribution', () => {
     expect(cypher).toContain('b.forgotten_at IS NULL');
   });
 
+  it('skips an edge the prune closed, whose floor weight would pull every percentile down', () => {
+    const { cypher } = buildEdgeWeightDistribution();
+    expect(cypher).toContain('r.valid_until IS NULL');
+  });
+
   it('aggregates min, the three quartile-adjacent percentiles, and max in one pass', () => {
     const { cypher } = buildEdgeWeightDistribution();
     expect(cypher).toContain('min(strength) AS min');

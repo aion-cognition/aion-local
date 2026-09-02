@@ -134,8 +134,18 @@ export async function applyEntityMerge(
   deps: EntityMergeWriterDeps,
   input: EntityMergeWriteInput,
 ): Promise<EntityMergeWriteResult> {
-  const absorbed = input.members.filter((member) => member.id !== input.canonical.id);
-  const mergedIds = [...new Set(absorbed.map((member) => member.id))].sort();
+  // One entry per absorbed identity, because the salience roll-up and the merged records are
+  // taken from this list: a member repeated in the group would otherwise be counted twice and
+  // written twice, while the ledger key and the graph write saw it once.
+  const seen = new Set<string>();
+  const absorbed = input.members.filter((member) => {
+    if (member.id === input.canonical.id || seen.has(member.id)) {
+      return false;
+    }
+    seen.add(member.id);
+    return true;
+  });
+  const mergedIds = [...seen].sort();
   if (mergedIds.length === 0) {
     return { status: 'skipped', reason: 'nothing_to_merge' };
   }

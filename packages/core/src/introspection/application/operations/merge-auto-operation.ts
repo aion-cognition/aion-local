@@ -53,6 +53,7 @@ export function mergeAutoOperation(): IntrospectionOperation {
   return {
     name: MERGE_AUTO_OPERATION,
     bucket: 'hour',
+    enabled: (config) => config.maintenance.autoMerge,
     relevance: mergeAutoRelevance,
     // Measured on what the sweep itself drains. An operation with no metric in the snapshot is
     // scored on whether it applied anything, which is a measure that cannot fail; this one is

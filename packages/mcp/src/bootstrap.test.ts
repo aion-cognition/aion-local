@@ -81,6 +81,9 @@ const configured: Config = {
     maxNarrativeEpisodes: 41,
     maxNarrativeEpisodeChars: 2_100,
     narrativeSweepLimit: 21,
+    midSessionRollup: false,
+    midSessionEpisodes: 13,
+    midSessionGapMinutes: 11,
   },
 };
 
@@ -219,13 +222,16 @@ describe('reflectionStages', () => {
 });
 
 describe('narrativeOptions', () => {
-  it('threads the configured idle window and both source caps', () => {
+  it('threads the configured idle window, both source caps and the mid-session boundary', () => {
     expect(narrativeOptions(configured)).toEqual({
       model: configured.models.reflect,
       idleMs: configured.reflection.narrativeIdleMinutes * MINUTE_MS,
       timeoutMs: configured.reflection.stageTimeoutMs,
       maxSourceEpisodes: configured.reflection.maxNarrativeEpisodes,
       maxEpisodeChars: configured.reflection.maxNarrativeEpisodeChars,
+      midSession: configured.reflection.midSessionRollup,
+      midSessionEpisodes: configured.reflection.midSessionEpisodes,
+      midSessionGapMs: configured.reflection.midSessionGapMinutes * MINUTE_MS,
     });
   });
 

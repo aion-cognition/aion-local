@@ -1,5 +1,6 @@
 import {
   ConfigError,
+  describeError,
   GraphConnection,
   loadConfig,
   openLogger,
@@ -10,13 +11,15 @@ import {
 } from '@aion/core';
 
 import { CliUsageError, wantsHelp, type ArgSpec } from './args.js';
-import { describeError, stderrWriter, type Writer } from './output.js';
+import { stderrWriter, type Writer } from './output.js';
 
 /**
- * The lifecycle every command shares: validated config, a logger, a database, a graph driver,
- * and the guarantee that each is closed however the command ends. Each opens on first use, so
- * a command that answers out of its own catalog opens no log file and no database, and one
- * refused for a bad flag opens neither before it refuses.
+ * The lifecycle every command shares: validated config, a logger, a database, and a graph
+ * driver, with the guarantee that the database and the driver are each closed however the
+ * command ends, and a failure closing one never stops the other from closing too. Each opens
+ * on first use, so a command that answers out of its own catalog opens no log file and no
+ * database, and one refused for a bad flag opens neither before it refuses. The logger writes
+ * through synchronous pino destinations, so nothing is left buffered for it to flush on close.
  */
 export class Substrate {
   readonly config: Config;
@@ -78,13 +81,26 @@ export class Substrate {
     return undefined;
   }
 
-  /** The driver goes first, since work still draining on it can read and write the database. */
+  /**
+   * The driver goes first, since work still draining on it can read and write the database.
+   * Each close is isolated: a driver close that rejects must not skip the SQLite close behind
+   * it, and this runs from a caller's own `finally`, so it cannot itself throw and replace
+   * whatever that caller was already returning or throwing.
+   */
   async close(): Promise<void> {
     if (this.#connection !== undefined) {
-      await this.#connection.close();
+      try {
+        await this.#connection.close();
+      } catch (err) {
+        this.logger().warn({ err: describeError(err) }, 'failed to close the graph driver');
+      }
     }
     if (this.#store !== undefined) {
-      this.#store.close();
+      try {
+        this.#store.close();
+      } catch (err) {
+        this.logger().warn({ err: describeError(err) }, 'failed to close the database');
+      }
     }
   }
 }

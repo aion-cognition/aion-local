@@ -5,8 +5,8 @@ import type { Vector } from '../../infrastructure/providers/types.js';
 /**
  * The measurement behind `recall.vectorAdmissionFloor`, kept as a function of two measured
  * distributions rather than of one. A floor calibrated on noise alone has no way to tell
- * "rejects unrelated text" from "rejects everything": a genuine match measured 0.631, close
- * enough to a naive 0.60 floor that the floor would have starved it.
+ * "rejects unrelated text" from "rejects everything", so the genuine matches are measured too
+ * and the floor goes in the gap between the two tails.
  *
  * Committed constants stay the only runtime source of truth. This module measures; nothing
  * here adjusts a floor, and the doctor check that calls it reports drift and stops there.
@@ -87,6 +87,14 @@ function symmetricCosines(vectors: readonly Vector[]): number[] {
 }
 
 function crossCosines(queries: readonly Vector[], contents: readonly Vector[]): number[] {
+  // Index is what identifies the diagonal, so the two arrays have to be the same sentences in
+  // the same order. A short embed response would otherwise drop a genuine unrelated pair and
+  // keep a self-pair, moving the noise distribution the floor is set above.
+  if (queries.length !== contents.length) {
+    throw new Error(
+      `crossCosines needs the same sentences in both spellings: ${String(queries.length)} queries against ${String(contents.length)} contents`,
+    );
+  }
   const scores: number[] = [];
   for (let left = 0; left < queries.length; left += 1) {
     for (let right = 0; right < contents.length; right += 1) {

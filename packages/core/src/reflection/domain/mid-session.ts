@@ -19,28 +19,6 @@ import {
  */
 
 /**
- * Uncovered episodes that make a running session worth compressing, standing in for
- * `reflection.midSessionEpisodes` (`AION_REFLECTION_MID_SESSION_EPISODES`). Twelve is under a
- * third of the source ceiling a narrative renders, so a session crossing it has enough behind it
- * to compress and enough ahead of it that the close still has something to add.
- */
-export const MID_SESSION_EPISODES_DEFAULT = 12;
-
-/**
- * Silence that reads as one stretch of work finishing, standing in for
- * `reflection.midSessionGapMinutes` (`AION_REFLECTION_MID_SESSION_GAP_MINUTES`). A third of the
- * idle window: shorter than the silence that ends a session, longer than a pause for a build.
- */
-export const MID_SESSION_GAP_MS_DEFAULT = 10 * 60 * 1000;
-
-/**
- * The mid-session rollup's kill switch, on from the first run. Off, the only boundaries are the
- * close and the idle rule, exactly as before. Reads `reflection.midSessionRollup`
- * (`AION_REFLECTION_MID_SESSION_ROLLUP`) once the config schema carries it.
- */
-export const MID_SESSION_ROLLUP_DEFAULT = true;
-
-/**
  * Silence between the two newest episodes: a session that stopped and started again. System time
  * leads for the reason `lastActivityAt` uses it, and a session of one episode has no gap at all.
  */
@@ -99,7 +77,12 @@ export function decideMidSessionBoundary(input: MidSessionBoundaryInput): MidSes
 export type SessionBoundarySettings = {
   readonly now: Date;
   readonly idleMs: number;
+  /** The mid-session boundary's kill switch, `reflection.midSessionRollup`. */
   readonly midSession: boolean;
+  /** `reflection.midSessionEpisodes`: uncovered episodes that make a session worth compressing. */
+  readonly midSessionEpisodes: number;
+  /** `reflection.midSessionGapMinutes`, in the unit the closer works in. */
+  readonly midSessionGapMs: number;
 };
 
 export type SessionBoundary = {
@@ -131,8 +114,8 @@ export function decideSessionBoundary(
     episodeCount: episodes.length,
     coveredCount: standingCoverage(existing),
     trailingGapMs: trailingGapMs(episodes),
-    episodeBoundary: MID_SESSION_EPISODES_DEFAULT,
-    gapMs: MID_SESSION_GAP_MS_DEFAULT,
+    episodeBoundary: settings.midSessionEpisodes,
+    gapMs: settings.midSessionGapMs,
   });
   return boundary.cross
     ? { narrate: true, reason: boundary.reason }

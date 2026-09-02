@@ -246,13 +246,16 @@ export class FakeGraph {
   }
 
   /** Records that the lock was taken and on which node; the fake serializes nothing. */
+  // A lock on an id the graph does not hold binds nothing and takes no lock, which the real
+  // helper answers with an empty row set and a thrown miss.
   #lockNode(parameters: Record<string, unknown>): unknown {
     const id = parameters.id as string;
     const node = this.nodes.get(id);
-    if (node !== undefined) {
-      this.locked.push(id);
+    if (node === undefined) {
+      return toResult([]);
     }
-    return toResult([]);
+    this.locked.push(id);
+    return toResult([{ id }]);
   }
 
   #writeContentVectors(parameters: Record<string, unknown>): Row[] {

@@ -4,6 +4,7 @@ import {
   writeRedactedProperties,
   type RedactedPropertyUpdate,
 } from '../../../infrastructure/graph/redaction-residue-writes.js';
+import { isLedgerApplied, markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
 import { FINGERPRINT_PATTERN, withoutFingerprints } from '../../../redaction/fingerprint.js';
 import { redact } from '../../../redaction/redact.js';
 import { DEFAULT_RESIDUE_SCAN_LIMIT } from '../../../redaction/residue.js';
@@ -45,6 +46,19 @@ function stillLeaking(text: string, entropyThreshold: number): boolean {
  * floor is what stops a small one from waiting days on starvation protection to be noticed.
  */
 export const REDACTION_RESIDUE_MIN_RELEVANCE = 0.5;
+
+/**
+ * A node the node-level scan flags and the property-level rewriter cannot fix. Detection reads
+ * every string property joined together, so a match that lives only across the join of two
+ * properties, or only across a fingerprint boundary, has no single property to rewrite. Without
+ * a mark such a node sits at the head of the flagged list forever and takes a slot in every
+ * batch, which is a leak nobody is told about starving the ones that can still be fixed.
+ */
+export const REDACTION_UNRESOLVED_PREFIX = 'redaction_unresolved:';
+
+export function redactionUnresolvedKey(nodeId: string): string {
+  return `${REDACTION_UNRESOLVED_PREFIX}${nodeId}`;
+}
 
 export function redactionResiduePurgeRelevance(health: HealthSnapshot): number {
   if (health.redaction.scanned === 0 || health.redaction.leaking === 0) {
@@ -117,7 +131,10 @@ export function redactionResiduePurgeOperation(): IntrospectionOperation {
       const leakingIds = scanned
         .filter((row) => stillLeaking(row.text, threshold))
         .map((row) => row.id);
-      const batchIds = leakingIds.slice(0, ctx.config.maintenance.redactionPurgeBatchSize);
+      const fixable = leakingIds.filter(
+        (id) => !isLedgerApplied(ctx.db, redactionUnresolvedKey(id)),
+      );
+      const batchIds = fixable.slice(0, ctx.config.maintenance.redactionPurgeBatchSize);
 
       if (batchIds.length === 0 || ctx.signal.aborted) {
         return {
@@ -130,11 +147,21 @@ export function redactionResiduePurgeOperation(): IntrospectionOperation {
 
       const nodes = await readNodeStringProperties(ctx.driver, batchIds);
       const updates: RedactedPropertyUpdate[] = [];
+      let unresolved = 0;
       for (const node of nodes) {
         const properties = redactedProperties(node.properties, threshold);
         if (Object.keys(properties).length > 0) {
           updates.push({ id: node.id, properties });
+          continue;
         }
+        markLedgerApplied(ctx.db, redactionUnresolvedKey(node.id), {
+          reason: 'flagged by the node scan, with no single property this rewriter can redact',
+        });
+        unresolved += 1;
+        ctx.logger.warn(
+          { nodeId: node.id },
+          'redaction residue purge cannot fix a flagged node; it needs a person',
+        );
       }
 
       const written = await writeRedactedProperties(ctx.driver, updates, ctx.now);
@@ -142,7 +169,9 @@ export function redactionResiduePurgeOperation(): IntrospectionOperation {
         status: written.length === 0 ? 'noop' : 'applied',
         itemsProcessed: batchIds.length,
         itemsAffected: written.length,
-        detail: `${String(written.length)} of ${String(batchIds.length)} inspected nodes rewritten, ${String(leakingIds.length)} flagged this scan`,
+        detail:
+          `${String(written.length)} of ${String(batchIds.length)} inspected nodes rewritten, ` +
+          `${String(leakingIds.length)} flagged this scan, ${String(unresolved)} left for a person`,
       };
     },
   };

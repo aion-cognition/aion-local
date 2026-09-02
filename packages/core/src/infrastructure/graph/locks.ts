@@ -1,6 +1,7 @@
 import type { GraphTransaction } from './connection.js';
+import { GraphNodeNotFoundError } from './errors.js';
 import { BASE_NODE_LABEL } from './labels.js';
-import { identityRow, toGraphDateTime } from './values.js';
+import { toGraphDateTime } from './values.js';
 
 /**
  * Written only to take the lock, never read as a fact about the node. It is a substrate
@@ -22,15 +23,22 @@ export const LOCK_PROPERTY = 'locked_at';
  * the lock second sees everything the first committed, so the two serialize instead of
  * racing. Callers must already be inside `inWriteTransaction`; a lock taken by a statement
  * that commits on its own is released immediately and protects nothing.
+ *
+ * An id that names no node throws. A MATCH that bound nothing takes no lock, and a caller
+ * that read the silence as a lock would run its read-then-write unserialized while believing
+ * the opposite.
  */
 export async function lockNodeInTransaction(
   tx: GraphTransaction,
   id: string,
   now: Date,
 ): Promise<void> {
-  await tx.run(
-    `MATCH (n:${BASE_NODE_LABEL} { id: $id }) SET n.${LOCK_PROPERTY} = $now`,
+  const locked = await tx.run(
+    `MATCH (n:${BASE_NODE_LABEL} { id: $id }) SET n.${LOCK_PROPERTY} = $now RETURN n.id AS id`,
     { id, now: toGraphDateTime(now) },
-    identityRow,
+    (row) => row.id as string,
   );
+  if (locked.length === 0) {
+    throw new GraphNodeNotFoundError([id], 'lockNode');
+  }
 }

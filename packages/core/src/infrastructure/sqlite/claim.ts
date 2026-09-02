@@ -45,7 +45,7 @@ function toReflectionJob(row: ReflectionJobRow): ReflectionJob {
 /**
  * Which claimable row goes next, as one ordered subquery.
  *
- * `lane_rank` is 0 for interactive and 1 for everything else, and it sorts first, so no bulk
+ * The lane CASE sorts first, 0 for interactive and 1 for everything else, so no bulk
  * row is ever claimed while an interactive one is claimable. That is the starvation the live
  * incident produced (4,016 bulk jobs ahead of every real episode); it cannot recur in that
  * direction. An unrecognised lane sorts with bulk: a lane nobody named yet is not a

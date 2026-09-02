@@ -155,6 +155,8 @@ export type MergeEntityGroupResult =
   | {
       readonly status: 'applied';
       readonly edgesRedirected: number;
+      /** Edges left behind because their stored type is not in the catalog; see the contract below. */
+      readonly edgesUnknownType: number;
       readonly superseded: readonly string[];
     }
   | {
@@ -223,7 +225,7 @@ type CanonicalAbsorbState = {
 };
 
 const READ_CANONICAL_ABSORB_STATE = [
-  `MATCH (n:${ENTITY_LABEL} { id: $id })`,
+  `MATCH (n:${BASE_NODE_LABEL}:${ENTITY_LABEL} { id: $id })`,
   `RETURN coalesce(n.${MERGE_PROVENANCE_PROPERTY}, []) AS records,`,
   `       coalesce(n.${ENTITY_ALIASES_PROPERTY}, []) AS aliases,`,
   `       coalesce(n.${ENTITY_ALIASES_NORM_PROPERTY}, []) AS aliasesNorm,`,
@@ -314,7 +316,9 @@ function buildMergeProvenance(
  *    edge-upsert, which is what makes a collision with an edge the canonical already holds sum
  *    and max rather than overwrite. An edge whose other endpoint is also in this group,
  *    including a direct canonical/merged edge, is dropped: after the merge both ends are the
- *    same node, and a self-loop records nothing.
+ *    same node, and a self-loop records nothing. An edge whose stored type is outside the
+ *    relationship catalog is dropped too and counted in `edgesUnknownType`, since the upsert
+ *    would refuse it.
  * 4. Read the merged nodes' closed relationships and record them without writing them. A
  *    relationship `edge_prune` closed comes back open at floor strength if it is fed to the
  *    upsert, so a closed edge moves as a record and never as a write.
@@ -336,7 +340,7 @@ export async function redirectAndAbsorb(
 ): Promise<MergeEntityGroupResult> {
   const mergedIds = [...new Set(input.mergedIds)].sort();
   if (mergedIds.length === 0) {
-    return { status: 'applied', edgesRedirected: 0, superseded: [] };
+    return { status: 'applied', edgesRedirected: 0, edgesUnknownType: 0, superseded: [] };
   }
   const groupIds = [...new Set([input.canonicalId, ...mergedIds])].sort();
   const absorbed = new Set(groupIds);
@@ -369,9 +373,12 @@ export async function redirectAndAbsorb(
     );
     const trail = new Map<string, ProvenanceEdge[]>();
     let redirected = 0;
+    let edgesUnknownType = 0;
     for (const edge of edges) {
       const other = absorbed.has(edge.otherId) ? input.canonicalId : edge.otherId;
-      const kept = other !== input.canonicalId && isRelationshipType(edge.type);
+      const known = isRelationshipType(edge.type);
+      const kept = other !== input.canonicalId && known;
+      edgesUnknownType += other !== input.canonicalId && !known ? 1 : 0;
       const record = trail.get(edge.mergedId) ?? [];
       record.push(toProvenanceEdge(edge, kept));
       trail.set(edge.mergedId, record);
@@ -438,7 +445,7 @@ export async function redirectAndAbsorb(
     );
     const lastAccessed = latestAccess(stored.lastAccessed, input.lastAccessed);
     await writeStampedNodeInTransaction(tx, {
-      label: 'Entity',
+      label: ENTITY_LABEL,
       id: input.canonicalId,
       now: input.now,
       mergeProperties: {
@@ -463,7 +470,7 @@ export async function redirectAndAbsorb(
       superseded.push(result.oldId);
     }
 
-    return { status: 'applied', edgesRedirected: redirected, superseded };
+    return { status: 'applied', edgesRedirected: redirected, edgesUnknownType, superseded };
   });
 }
 

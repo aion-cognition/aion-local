@@ -17,8 +17,10 @@ import { toGraphInteger, type Row } from './values.js';
  * filtered here rather than by the caller, because a closed node's key is still owned and a
  * pair with a closed side has nothing left to merge.
  *
- * Scoping is optional. The reflection stage passes the episode's own entities, so one run costs
- * two indexed lookups; the maintenance sweep passes nothing and reads the whole current graph.
+ * Scoping is optional and it narrows the answer, not the scan: both arms group over the whole
+ * current entity population first and `subjectIds` filters what comes back. The reflection stage
+ * passes the episode's own entities, the maintenance sweep passes nothing, and the two cost the
+ * same walk.
  */
 
 export type SquashEqualityGroup = {

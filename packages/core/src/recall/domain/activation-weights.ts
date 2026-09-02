@@ -78,7 +78,7 @@ export const ACTIVATION_WEIGHTS: Record<RelationshipType, number> = {
   FEATURED_IN: 0.5,
 
   // Semantic association, the inferred tier. SIMILAR and RELATED_TO are additionally
-  // scaled by strength x confidence (see EVIDENCE_SCALED_TYPES), so these are ceilings
+  // scaled by strength x confidence (see CONFIDENCE_SCALED_TYPES), so these are ceilings
   // rather than fixed weights; CO_OCCURS and ANALOGOUS_TO are weaker claims still. SIMILAR
   // is also model-inferred (tuned value; MODEL_INFERRED_PENALTY discounts it below);
   // RELATED_TO carries the same provenance but has not been re-audited.

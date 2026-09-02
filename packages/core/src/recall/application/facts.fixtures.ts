@@ -1,6 +1,6 @@
 /**
  * The evidence behind `recall.restatementFloor` and the measured facts-bucket scenario, as
- * fixtures rather than as lore, in the shape `floors.fixtures.ts` established.
+ * fixtures rather than as lore, in the shape `floors.data.ts` established.
  *
  * Two distributions decide the floor, and both are Goal and Plan text scored against the query
  * that would retrieve it. The one that has to be caught is a node whose text is the question

@@ -346,6 +346,50 @@ describe('ReflectionOrchestrator', () => {
     ).toBe(false);
   });
 
+  it('re-enters a stage that skipped for want of what the failed stage before it owed', async () => {
+    let extractionAttempts = 0;
+    let enrichCalls = 0;
+    const extraction: ReflectionStage = {
+      name: 'entities',
+      run: async () => {
+        extractionAttempts += 1;
+        if (extractionAttempts === 1) {
+          throw new Error('the reflect model timed out');
+        }
+        return { status: 'ok' as const, summary: 'extracted 2 entities', counts: { entities: 2 } };
+      },
+    };
+    // Reads what extraction writes, so its skip is the failure above it and not a decision of
+    // its own: the retry that re-extracts owes this stage its run too.
+    const enrich: ReflectionStage = {
+      name: 'associations',
+      run: async () => {
+        enrichCalls += 1;
+        return extractionAttempts > 1
+          ? { status: 'ok' as const, summary: 'inferred 1 association' }
+          : {
+              status: 'skipped' as const,
+              summary: 'no entities mentioned in the episode',
+              retryable: true,
+            };
+      },
+    };
+    const stages = [extraction, enrich];
+
+    const first = await new ReflectionOrchestrator(deps, stages).run(EPISODE_ID, { now: NOW });
+    expect(first.applied).toBe(false);
+    expect(
+      isLedgerApplied(store.db, stageLedgerKey(PIPELINE_VERSION, 'associations', EPISODE_ID)),
+    ).toBe(false);
+
+    const second = await new ReflectionOrchestrator(deps, stages).run(EPISODE_ID, { now: NOW });
+
+    expect(enrichCalls).toBe(2);
+    expect(second.summary.skippedStages).toEqual([]);
+    expect(second.summary.stages.map((entry) => entry.status)).toEqual(['ok', 'ok']);
+    expect(second.applied).toBe(true);
+  });
+
   it('re-enters only the stages that have not yet applied across three retries, and never twice a stage that has', async () => {
     let entityCalls = 0;
     let narrativeCalls = 0;

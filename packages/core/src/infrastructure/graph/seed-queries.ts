@@ -26,7 +26,7 @@ import type { Vector } from '../providers/types.js';
 export { CONTENT_VECTOR_INDEX } from './vector-indexes.js';
 export { countMemoryNodes, memoryPopulation } from './memory-population.js';
 
-/** Migration 001's fulltext index over `Episode.summary`, `Turn.text`, `Entity.name`. */
+/** Migration 002's fulltext index over `summary`, `text` and `name` on every memory label. */
 export const CONTENT_FULLTEXT_INDEX = 'memory_content_fts';
 
 export const ENTITY_NAME_PROPERTY = 'name';
@@ -318,11 +318,12 @@ export async function entityNameSeeds(
 ): Promise<EntityNameMatch[]> {
   const fragment = readModeFragment(input.mode, 'n');
   const aliases = `coalesce(n.${ENTITY_ALIASES_NORM_PROPERTY}, [])`;
+  // `name_norm` is constraint-indexed and `aliases_norm` is not, so an `OR` scans every Entity.
+  const arm = (where: string): string =>
+    `  MATCH (n:Entity) WHERE ${where} AND ${fragment.where}\n  RETURN n`;
   const cypher = [
-    'MATCH (n:Entity)',
-    `WHERE (n.${ENTITY_NAME_NORM_PROPERTY} IN $names`,
-    `       OR any(alias IN ${aliases} WHERE alias IN $names))`,
-    `  AND ${fragment.where}`,
+    `CALL {\n${arm(`n.${ENTITY_NAME_NORM_PROPERTY} IN $names`)}\n  UNION\n` +
+      `${arm(`any(alias IN ${aliases} WHERE alias IN $names)`)}\n}`,
     // The identity's own name first, so a node matched both ways attributes to the exact cue.
     `WITH n, [name IN $names WHERE name = n.${ENTITY_NAME_NORM_PROPERTY}] +`,
     `        [name IN $names WHERE name <> n.${ENTITY_NAME_NORM_PROPERTY}` +
@@ -350,8 +351,8 @@ export type EntitySimilaritySeedInput = {
  * predicate matches nothing and the leg returns empty. That is the same state a cold-start
  * substrate is in, which is why it is shipped behaviour rather than a stub.
  *
- * No index covers `name_vec` (`Entity` is not `:Memory`, and the vector indexes are declared
- * on that label), so this scans entities carrying one. The dimension guard is required:
+ * No index covers `name_vec`: the vector indexes are declared on `content_vec` and
+ * `context_vec`, so this scans entities carrying one. The dimension guard is required:
  * `vector.similarity.cosine` errors on mismatched lengths rather than returning null.
  */
 export async function entitySimilaritySeeds(
@@ -425,8 +426,8 @@ export type NodeContentVector = {
 };
 
 /**
- * Content embeddings for a set of ids, batched: 768 floats per row is the reason recall does
- * not carry vectors through the ordinary path and asks for them where it needs them. Two
+ * Content embeddings for a set of ids, batched: a full embedding per row is the reason recall
+ * asks for vectors where it needs them instead of carrying them through the ordinary path. Two
  * callers need them, the MMR reranker over the ranked set and arrival scoring over what the
  * spread reached. A row comes back only for a node that carries a vector, so an id missing
  * from the answer is a pending embedding rather than a zero.

@@ -153,8 +153,10 @@ describe('loadConfig override precedence', () => {
   });
 
   it('overrides the keyed close mode', () => {
-    const config = loadConfig({ AION_KEYED_CLOSE_MODE: 'judge' });
-    expect(config.reflection.keyedCloseMode).toBe('judge');
+    // Off rather than judge: judge is the shipped default, so asserting it cannot tell an
+    // override that works from one that never runs.
+    const config = loadConfig({ AION_KEYED_CLOSE_MODE: 'off' });
+    expect(config.reflection.keyedCloseMode).toBe('off');
   });
 
   it('overrides the reading horizon in days', () => {
@@ -262,6 +264,15 @@ describe('loadConfig bad values', () => {
 
   it('rejects search weights with a non-numeric part', () => {
     expect(() => loadConfig({ AION_SEARCH_WEIGHTS: '0.5,x,0.2' })).toThrow(/AION_SEARCH_WEIGHTS/);
+  });
+
+  it('names the env var when the failing leaf is inside a subtree', () => {
+    expect(() => loadConfig({ AION_SEARCH_WEIGHTS: '2,0,0' })).toThrow(
+      /AION_SEARCH_WEIGHTS\.vector/,
+    );
+    expect(() => loadConfig({ AION_SEARCH_METHODS: 'vector,nope' })).toThrow(
+      /AION_SEARCH_METHODS\.1/,
+    );
   });
 
   it('reports every bad var in one error when several are invalid', () => {

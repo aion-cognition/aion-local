@@ -1,6 +1,6 @@
 import {
   listUnmergeableRecords,
-  previewSupersession,
+  readCanonicalMerge,
   runEntityUnmerge,
   type GraphConnection,
   type UnmergedDecision,
@@ -95,16 +95,16 @@ async function runLs(connection: GraphConnection, id: string, write: Writer): Pr
 
 /**
  * `apply` takes the absorbed node's own id, never the canonical's, so the preview it shows
- * before asking has to find the canonical first. It reads the same `SUPERSEDES` edge `aion
- * unsupersede` reads for every other close, since the merge that absorbed this node closed it
- * exactly that way.
+ * before asking has to find the canonical first. This is the same lookup `runEntityUnmerge`
+ * itself resolves against, narrowed to the `SUPERSEDES` source that carries a merge record, so a
+ * merged node with a second, unrelated open supersession into it never names the wrong canonical.
  */
 async function findCanonicalId(
   connection: GraphConnection,
   mergedId: string,
 ): Promise<string | undefined> {
-  const supersession = await previewSupersession(connection.driver, mergedId);
-  return supersession?.lineage[0]?.supersededBy;
+  const canonical = await readCanonicalMerge(connection.driver, mergedId);
+  return canonical?.canonicalId;
 }
 
 async function runApply(substrate: Substrate, id: string, yes: boolean): Promise<number> {

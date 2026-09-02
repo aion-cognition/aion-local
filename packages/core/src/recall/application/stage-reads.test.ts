@@ -1,8 +1,15 @@
 import type { Cue } from '@aion/protocol';
 import { describe, expect, it, vi } from 'vitest';
 
-import { embedCues, type StageReadDeps } from './stage-reads.js';
+import {
+  embedCues,
+  hydrate,
+  measureArrivals,
+  mmrVectors,
+  type StageReadDeps,
+} from './stage-reads.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import { withCurrency } from '../../infrastructure/graph/read-modes.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import {
   embedQueryPrefix,
@@ -75,5 +82,47 @@ describe('embedCues', () => {
 
     expect(result.degradation).toEqual({ stage: 'embed', reason: 'model_error' });
     expect(result.cues).toEqual(CUES);
+  });
+});
+
+/** A driver whose every read rejects, which is the outage that starts after seed selection. */
+function failingDriverDeps(): StageReadDeps {
+  return {
+    driver: {
+      executeQuery: () => Promise.reject(new Error('ServiceUnavailable: connect ECONNREFUSED')),
+    },
+    config: { ...DEFAULTS, search: { ...DEFAULTS.search, reranker: 'mmr' } },
+    logger: silentLogger(),
+  } as unknown as StageReadDeps;
+}
+
+describe('the fusion-stage reads, against a graph that goes down mid-call', () => {
+  it('hydrates nothing rather than failing the recall', async () => {
+    await expect(hydrate(failingDriverDeps(), ['a', 'b'], withCurrency())).resolves.toEqual(
+      new Map(),
+    );
+  });
+
+  it('leaves the arrivals unmeasured rather than failing the recall', async () => {
+    const measurements = await measureArrivals(
+      failingDriverDeps(),
+      ['a'],
+      [{ ...CUES[0]!, vector: [1, 0] }],
+      withCurrency(),
+    );
+
+    expect(measurements.get('a') ?? []).toEqual([]);
+  });
+
+  it('orders by fused rank rather than failing the recall when the vector read is down', async () => {
+    const lists = [
+      {
+        leg: 'vector' as const,
+        weight: 1,
+        candidates: [{ id: 'a' }],
+      },
+    ] as unknown as Parameters<typeof mmrVectors>[1];
+
+    await expect(mmrVectors(failingDriverDeps(), lists, withCurrency())).resolves.toBeUndefined();
   });
 });

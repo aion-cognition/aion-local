@@ -6,11 +6,15 @@
  * node. Every writer of `name_norm` calls `foldName`; the embedding path calls
  * `foldForIdentity` on whole text.
  *
- * Measured against Ollama 0.24.0 + `nomic-embed-text`: every word carrying an uppercase
- * letter tokenizes to one out-of-vocabulary token, so `Redis`, `Dog` and `Thandiwe Baptiste`
- * returned the same 768 floats byte for byte while their lowercase forms embedded distinctly.
- * A plain `toLowerCase` closed that class and left the rest: `Ａ` (fullwidth), `ﬁ` (ligature)
- * and `ß` still fold to something a lowercase mapping alone does not reach.
+ * The fold is required by the identity key alone, whatever model embeds the text: `name_norm`
+ * is what `entity_name_unique` is declared on, so two spellings of one name must fold to one
+ * string. What first forced it was an embedding reading on a model the substrate no longer
+ * runs, Ollama 0.24.0 + `nomic-embed-text`: every word carrying an uppercase letter tokenized
+ * to one out-of-vocabulary token, so `Redis`, `Dog` and `Thandiwe Baptiste` returned the same
+ * 768 floats byte for byte while their lowercase forms embedded distinctly. That reading has
+ * not been retaken against the shipped `snowflake-arctic-embed2`, and nothing here turns on it.
+ * A plain `toLowerCase` closes the case class and leaves the rest: `Ａ` (fullwidth), `ﬁ`
+ * (ligature) and `ß` still fold to something a lowercase mapping alone does not reach.
  *
  * NFKC first, so a compatibility form reduces to its canonical spelling. Then case folding:
  * Unicode's case-insensitive matching operation, which `toLowerCase` implements except for the

@@ -231,6 +231,9 @@ describe('renderStatus', () => {
     expect(text).toContain(
       `supersession       MODE: acting (${DEFAULTS.reflection.supersedeMode})`,
     );
+    expect(text).toContain(
+      `keyed_close        MODE: acting (${DEFAULTS.reflection.keyedCloseMode})`,
+    );
     expect(text).toContain('proposal_hygiene   MODE: acting');
     expect(text).toContain('claim_dedup        MODE: acting');
     // tier3Mode ships `propose`: the advisor runs, but an accepted recommendation runs nothing.
@@ -247,6 +250,23 @@ describe('renderStatus', () => {
     renderStatus(healthy, proposeOnly, write);
 
     expect(lines.join('\n')).toContain('supersession       MODE: off');
+  });
+
+  it('reads off, not the mode name, for keyed_close under its own kill switch', () => {
+    const { lines, write } = collector();
+    const killed: Config = {
+      ...DEFAULTS,
+      reflection: { ...DEFAULTS.reflection, keyedCloseMode: 'off' },
+    };
+
+    renderStatus(healthy, killed, write);
+
+    const text = lines.join('\n');
+    expect(text).toContain('keyed_close        MODE: off');
+    // Independent switch: killing it does not touch the other autonomous lanes.
+    expect(text).toContain(
+      `supersession       MODE: acting (${DEFAULTS.reflection.supersedeMode})`,
+    );
   });
 
   it('reads off for the cascade judge tier under propose, with merge_auto still acting', () => {

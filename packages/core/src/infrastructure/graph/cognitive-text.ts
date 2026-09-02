@@ -9,7 +9,12 @@
 /** Stored alongside `text` so a future reader can match on it without recomputing the fold. */
 export const TEXT_NORM_PROPERTY = 'text_norm';
 
-/** Collapses whitespace and lowercases, matching `backbone.ts`'s entity-name normalization. */
+/**
+ * Collapses whitespace and lowercases. Not the identity fold: it skips the NFKC and case
+ * folding `name-fold.ts` applies, so two spellings that differ by a compatibility form mint
+ * two cognitive node ids. A key that has to match an entity's identity uses `foldForIdentity`
+ * instead, which is what `claim-key.ts` says about its own fold.
+ */
 export function normalizeCognitiveText(text: string): string {
   return text.trim().replace(/\s+/g, ' ').toLowerCase();
 }

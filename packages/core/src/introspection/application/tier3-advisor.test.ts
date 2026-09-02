@@ -82,6 +82,26 @@ describe('adviseTier3', () => {
     expect(outcome).toEqual({ status: 'declined', rationale: 'every backlog is small' });
   });
 
+  it('is case-insensitive on the operation word, so None is a decline and not a broken advisor', async () => {
+    const outcome = await adviseTier3(
+      answering({ operation: 'None', rationale: 'every backlog is small' }),
+      REQUEST,
+      OPTIONS,
+    );
+
+    expect(outcome).toEqual({ status: 'declined', rationale: 'every backlog is small' });
+  });
+
+  it('is case-insensitive on a named operation too', async () => {
+    const outcome = await adviseTier3(
+      answering({ operation: 'Dead_Letter', confidence: 1, rationale: 'the queue is stuck' }),
+      REQUEST,
+      OPTIONS,
+    );
+
+    expect(outcome).toMatchObject({ status: 'advised', proposal: { operation: 'dead_letter' } });
+  });
+
   it('refuses an answer the schema cannot read', async () => {
     const outcome = await adviseTier3(answering({ pick: 'dead_letter' }), REQUEST, OPTIONS);
 

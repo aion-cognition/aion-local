@@ -131,6 +131,8 @@ export type FusionOptions = {
   readonly mmrLambda: number;
   /** How many members of one near-duplicate cluster a bucket may hold (`AION_PACK_CLUSTER_CAP`). */
   readonly clusterCap: number;
+  /** The cosine at which two items are one cluster by vector (`AION_PACK_CLUSTER_COSINE_THRESHOLD`). */
+  readonly clusterCosineThreshold: number;
   /**
    * Per-label multipliers on the fused score, empty on a query with no judged intent. Ranking
    * only: a boost cannot admit an item the floors rejected, since admission has already run
@@ -154,7 +156,7 @@ export type FusionOptions = {
  */
 export const SUPERSEDED_RANK_WEIGHT = 0.5;
 
-/** `1 / (k + rank)`, ranks counted from 1. */
+/** `1 / (k + rank + 1)`; `rank` is the zero-based position in the leg's list. */
 export function reciprocalRank(rank: number, k: number): number {
   return 1 / (k + rank + 1);
 }
@@ -207,9 +209,9 @@ function boostFor(
 
 /**
  * Mention-count ranking prior's weight: how much each distinct episode past the first lifts
- * an entity's score, log-scaled so the fortieth adds far less than the second. Fixed here
- * rather than as a knob (the intended home is `AION_MENTION_SALIENCE_WEIGHT`) until this prior
- * earns one.
+ * an entity's score, log-scaled so the fortieth adds far less than the second. A constant
+ * rather than a knob, like `SUPERSEDED_RANK_WEIGHT` above it: no deployment has asked to tune
+ * this prior, and a knob nobody sets is a name to keep working.
  */
 const MENTION_SALIENCE_WEIGHT = 0.1;
 
@@ -397,7 +399,12 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
 
   items.sort(compareFused);
   const deduped = dedupeByContent(items);
-  const capped = applyClusterCap(deduped, options.clusterCap, options.vectors);
+  const capped = applyClusterCap(
+    deduped,
+    options.clusterCap,
+    options.vectors,
+    options.clusterCosineThreshold,
+  );
   const ordered =
     options.reranker === 'mmr' ? mmrOrder(capped, options.mmrLambda, options.vectors) : capped;
 

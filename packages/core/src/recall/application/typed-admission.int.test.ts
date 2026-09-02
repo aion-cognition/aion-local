@@ -256,6 +256,8 @@ describe('a CONTRADICTS partner under the vector floor', () => {
     expect(entry?.summary).toEqual({
       itemId: partnerEpisodeId,
       edgeType: 'CONTRADICTS',
+      typedContribution: expect.any(Number),
+      activationFloor: DEFAULTS.recall.typedAdmissionActivationFloor,
       activationScore: expect.any(Number),
       cosine: expect.closeTo(PARTNER_COSINE, 2),
       clearedFloor: 0.55,

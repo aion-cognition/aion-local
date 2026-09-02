@@ -4,6 +4,7 @@ import { BITEMPORAL_PROPERTIES, currentOnly } from './bitemporal.js';
 import { runRead, runWrite } from './connection.js';
 import { ENTITY_MENTION_TYPE, ENTITY_TYPE_PROPERTY } from './entity-queries.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
+import { BASE_NODE_LABEL, ENTITY_LABEL } from './labels.js';
 import { ENTITY_NAME_PROPERTY, STRUCTURAL_PROPERTY } from './seed-queries.js';
 import { toGraphDateTime, toGraphInteger, toGraphVector, type Row } from './values.js';
 import { vectorInputHash } from '../../reflection/domain/vector-input.js';
@@ -102,7 +103,7 @@ export type EntityMentionContext = {
  * fold in, so this reads recency rather than the whole mention history.
  */
 const FIND_ENTITY_MENTION_CONTEXTS = [
-  `MATCH (ep:Episode)-[:${ENTITY_MENTION_TYPE}]->(:Entity { id: $entityId })`,
+  `MATCH (ep:Episode)-[:${ENTITY_MENTION_TYPE}]->(:${BASE_NODE_LABEL}:${ENTITY_LABEL} { id: $entityId })`,
   `WHERE ep.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
   `RETURN ep.id AS episode_id, coalesce(ep.${MEMORY_PROPERTIES.summary}, ep.${MEMORY_PROPERTIES.text}) AS text,`,
   `       ep.${BITEMPORAL_PROPERTIES.occurredAt} AS occurred_at`,
@@ -141,16 +142,29 @@ export async function findEntityMentionContexts(
  * (who wrote it, when) is not attached per string, and lives instead on the node as the single
  * most recent refresh's method and timestamp, which is what every entry after the first one
  * was written under.
+ *
+ * The currency test is here rather than only on the candidate read. Two model calls run between
+ * the two, long enough for a merge, an identifier decay, or `aion forget` to close the entity,
+ * and this write is an in-place replacement with no bitemporal close to undo it.
+ *
+ * The append is conditional because an entity whose gloss a correction retired carries no
+ * `text` at all (`subject-family.ts`), and Neo4j refuses a list holding a null. This write is
+ * what re-derives such a gloss, which is why it also clears the retirement stamp: the node
+ * answers again, from the mentions it has now.
  */
 const REFRESH_ENTITY_DESCRIPTION = [
-  'MATCH (e:Entity { id: $id })',
-  `SET e.${PRIOR_DESCRIPTIONS_PROPERTY} = coalesce(e.${PRIOR_DESCRIPTIONS_PROPERTY}, []) + [e.${MEMORY_PROPERTIES.text}],`,
+  `MATCH (e:${BASE_NODE_LABEL}:${ENTITY_LABEL} { id: $id })`,
+  `WHERE ${currentOnly('e')}`,
+  `SET e.${PRIOR_DESCRIPTIONS_PROPERTY} = CASE WHEN e.${MEMORY_PROPERTIES.text} IS NULL`,
+  `      THEN coalesce(e.${PRIOR_DESCRIPTIONS_PROPERTY}, [])`,
+  `      ELSE coalesce(e.${PRIOR_DESCRIPTIONS_PROPERTY}, []) + [e.${MEMORY_PROPERTIES.text}] END,`,
   `    e.${MEMORY_PROPERTIES.text} = $text,`,
   `    e.${MEMORY_PROPERTIES.contentVector} = $contentVector,`,
   `    e.${MEMORY_PROPERTIES.contentVectorHash} = $contentVectorHash,`,
   `    e.${DESCRIPTION_MENTION_COUNT_PROPERTY} = $mentionCount,`,
   `    e.${DESCRIPTION_REFRESHED_AT_PROPERTY} = $now,`,
-  `    e.${DESCRIPTION_REFRESH_METHOD_PROPERTY} = $method`,
+  `    e.${DESCRIPTION_REFRESH_METHOD_PROPERTY} = $method,`,
+  `    e.${DESCRIPTION_RETIRED_AT_PROPERTY} = null`,
   'RETURN e.id AS id',
 ].join('\n');
 

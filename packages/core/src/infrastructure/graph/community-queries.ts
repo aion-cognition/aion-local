@@ -180,6 +180,11 @@ const READ_COMMUNITY_PROFILES = [
   'OPTIONAL MATCH (m)-[r]-(o:Memory)',
   `  WHERE NOT type(r) IN [${BACKBONE_TYPES}]`,
   `    AND o.${COMMUNITY_PROPERTY} IS NOT NULL`,
+  // The far endpoint carries the same two filters the members do, and the same two
+  // `READ_COMMUNITY_PAIR_EDGES` applies: coherence and isolation are compared against the
+  // overlap that read reports, so both have to score the same population.
+  `    AND ${currentOnly('o')}`,
+  `    AND coalesce(o.${STRUCTURAL_PROPERTY}, false) = false`,
   'WITH community, size,',
   `  sum(CASE WHEN o.${COMMUNITY_PROPERTY} <> community THEN 1 ELSE 0 END) AS external_edges,`,
   `  sum(CASE WHEN o.${COMMUNITY_PROPERTY} = community THEN 1 ELSE 0 END) AS internal_ends`,

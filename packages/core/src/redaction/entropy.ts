@@ -100,7 +100,10 @@ export function findHighEntropyTokens(
 
     const start = tokenStart + valueOffset;
     const end = tokenStart + match[0].length;
-    if (overlapsAny(start, end, claimed) || overlapsAny(start, end, found)) {
+    // `found` never needs its own overlap check: matchAll yields non-overlapping tokens, and
+    // `valueOffset` only ever moves a span's start forward, so this span cannot reach back
+    // into one already collected.
+    if (overlapsAny(start, end, claimed)) {
       continue;
     }
 

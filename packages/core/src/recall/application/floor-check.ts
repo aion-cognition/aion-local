@@ -3,7 +3,7 @@ import {
   UNRELATED_PAIRS,
   UNRELATED_SENTENCES,
   type ScoredPair,
-} from './floors.fixtures.js';
+} from './floors.data.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import type { AdmissionPolicy } from '../domain/admission.js';
 import {

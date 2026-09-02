@@ -104,6 +104,7 @@ describe('ContextVectorStage', () => {
     expect(outcome).toEqual({
       status: 'skipped',
       summary: 'no affected memory nodes to recompute',
+      retryable: true,
     });
     expect(neighborQueryIssued).toBe(false);
   });
@@ -128,6 +129,7 @@ describe('ContextVectorStage', () => {
     expect(outcome).toEqual({
       status: 'skipped',
       summary: 'no affected node has a vectored neighbor',
+      retryable: true,
     });
     expect(writeQueryIssued).toBe(false);
   });

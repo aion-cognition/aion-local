@@ -12,8 +12,8 @@ import { toGraphDateTime, toGraphInteger, type Row } from './values.js';
  * The reads narrative compression needs: the episodes a session accumulated, the
  * claim-bearing nodes extracted from them, the narrative versions the session already
  * carries, and the sessions that have gone quiet. The node and its edges are written through
- * the ordinary stamped-node and edge-upsert adapters; the one write here is the forget stamp,
- * which no other module owns.
+ * the ordinary stamped-node and edge-upsert adapters; the two writes here are the forget stamp
+ * and the regrounding marker, which no other module owns.
  */
 
 /**

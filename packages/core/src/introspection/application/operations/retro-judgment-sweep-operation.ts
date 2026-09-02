@@ -27,7 +27,11 @@ import type { IntrospectionOperation, OperationOutcome } from '../../domain/oper
 
 export const RETRO_JUDGMENT_SWEEP_OPERATION = 'retro_judgment_sweep';
 
-/** Standing relevance, like `memory_decay`: a backlog has no gauge of its own, only waiting time. */
+/**
+ * A floor, not a reading. The backlog has no gauge in the snapshot, so this constant never
+ * moves and never reaches the urgency threshold on its own; the engine's starvation boost is
+ * what carries it over.
+ */
 export const RETRO_SWEEP_STANDING_RELEVANCE = 0.1;
 
 /** How far past one batch the candidate window reaches, so a batch's worth of already-swept episodes does not stall a tick. */
@@ -75,6 +79,9 @@ export function retroJudgmentSweepOperation(): IntrospectionOperation {
           now: ctx.now,
           occurredAt: episode.occurredAt ?? ctx.now,
           pipelineVersion: PIPELINE_VERSION,
+          // The tick's own signal: a stop reaches the judge calls this stage is waiting on
+          // rather than only the gap between episodes.
+          signal: ctx.signal,
         };
         const outcome = await stage.run(stageCtx);
         judged += 1;
@@ -82,7 +89,7 @@ export function retroJudgmentSweepOperation(): IntrospectionOperation {
         // Mirrors the orchestrator's own per-stage gate: only a run with nothing left to
         // retry earns the key, so a transient model or write failure leaves the episode in
         // the backlog for the next tick instead of skipping it forever.
-        if (outcome.status !== 'failed') {
+        if (outcome.status !== 'failed' && outcome.retryable !== true) {
           markLedgerApplied(
             ctx.db,
             stageLedgerKey(PIPELINE_VERSION, SUPERSESSION_STAGE_NAME, episodeId),

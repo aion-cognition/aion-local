@@ -7,14 +7,7 @@ export { operationBucketKey, OPERATION_LEDGER_PREFIX } from './domain/buckets.js
 
 export type { IntrospectionOperation } from './domain/operation.js';
 
-export {
-  MERGE_SHADOW_LEDGER_PREFIX,
-  mergeShadowLedgerKey,
-  readMergeShadowVerdict,
-  summarizeMergeShadowAgreement,
-  wouldAutoApply,
-} from './domain/merge-shadow.js';
-export type { MergeShadowAgreement, MergeShadowResolvedJudgment } from './domain/merge-shadow.js';
+export { wouldAutoApply } from './domain/merge-shadow.js';
 
 export { observeHealth } from './application/observe.js';
 
@@ -37,9 +30,8 @@ export { Introspector } from './application/engine.js';
 export { introspectionOperations } from './application/catalog.js';
 
 /**
- * The repair the loop never selects on its own. It is exported beside the catalog because it
- * has the same shape as an operation and belongs to the same layer; what it does not have is a
- * measurable trigger, so a person names the merge to reverse.
+ * The repair the loop never selects. A person names the merge to reverse; `unmerge.ts` says why
+ * it has no measurable trigger.
  */
 export { listUnmergeableRecords, runEntityUnmerge } from './application/operations/unmerge.js';
 export type { UnmergedDecision } from './application/operations/unmerge.js';

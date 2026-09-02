@@ -60,22 +60,17 @@ export type ReflectionIntakeOptions = {
   readonly now?: Date;
 };
 
-/**
- * The queue row is derived from the graph, so it is repaired rather than assumed: a crash
- * between the episode's commit and this insert would otherwise strand the episode forever,
- * since every retry then matches it by content hash, answers `queued: true`, and never
- * reaches the enqueue. Checking for the pending row instead converges: the retry finds the
- * episode and the missing job, and queues it.
- *
- * better-sqlite3 is synchronous and this function awaits nothing, so the check and the
- * insert cannot interleave with another intake in this process. The long-lived service is
- * the single writer of this table; the CLI container claims, it does not enqueue.
- */
 type IntegrateJob = {
   readonly jobId: string;
   readonly enqueued: boolean;
   readonly lane: ReflectionLane;
   readonly decision: LaneDecision | undefined;
+  /**
+   * The row this call answers for was already claimable when the depth was measured, which is
+   * only ever true of a duplicate push. It comes back out of `pending_ahead`, which counts what
+   * sits ahead of this caller rather than the caller itself.
+   */
+  readonly countedInDepth: boolean;
 };
 
 /**
@@ -114,6 +109,17 @@ function pendingAhead(db: SqliteHandle, maxAttempts: number): number {
   return countQueueJobs(db, { lane: DEFAULT_REFLECTION_LANE }, maxAttempts).pending;
 }
 
+/**
+ * The queue row is derived from the graph, so it is repaired rather than assumed: a crash
+ * between the episode's commit and this insert would otherwise strand the episode forever,
+ * since every retry then matches it by content hash, answers `queued: true`, and never
+ * reaches the enqueue. Checking for the pending row instead converges: the retry finds the
+ * episode and the missing job, and queues it.
+ *
+ * better-sqlite3 is synchronous and this function awaits nothing, so the check and the
+ * insert cannot interleave with another intake in this process. The long-lived service is
+ * the single writer of this table; the CLI container claims, it does not enqueue.
+ */
 function ensureIntegrateJob(
   deps: ReflectionIntakeDeps,
   episodeId: string,
@@ -130,7 +136,16 @@ function ensureIntegrateJob(
     episodeId,
   );
   if (pending !== undefined) {
-    return { jobId: pending.id, enqueued: false, lane: pending.lane, decision: undefined };
+    return {
+      jobId: pending.id,
+      enqueued: false,
+      lane: pending.lane,
+      decision: undefined,
+      countedInDepth:
+        pending.lane === DEFAULT_REFLECTION_LANE &&
+        pending.claimedAt === null &&
+        pending.attempts < deps.workerMaxAttempts,
+    };
   }
 
   const decision = deps.lanes.assign({ sessionId, requested, now });
@@ -140,7 +155,7 @@ function ensureIntegrateJob(
     { [EPISODE_ID_FIELD]: episodeId },
     { lane: decision.lane, sessionId, now },
   );
-  return { jobId, enqueued: true, lane: decision.lane, decision };
+  return { jobId, enqueued: true, lane: decision.lane, decision, countedInDepth: false };
 }
 
 type IntakeArchive = {
@@ -256,8 +271,9 @@ export async function handleReflection(
   const prepared = prepareEpisode(redacted.value, now);
   const { sessionId, stored } = await storeExperience(deps, prepared, identity, now, origin);
   // Measured before this call's own row lands, so a fresh enqueue is not counted against
-  // itself; a duplicate payload reads the same figure the already-queued job would.
-  const ahead = pendingAhead(deps.db, deps.workerMaxAttempts);
+  // itself. A duplicate push matched a row that is already inside this figure, and that row is
+  // the caller's own, so it comes back out below.
+  const depth = pendingAhead(deps.db, deps.workerMaxAttempts);
   const { archived, job } = archiveAndQueue(deps, {
     identity,
     sessionId,
@@ -268,6 +284,7 @@ export async function handleReflection(
     origin,
     now,
   });
+  const ahead = job.countedInDepth ? depth - 1 : depth;
   if (job.enqueued) {
     notifyEnqueued(deps, job.jobId);
   }

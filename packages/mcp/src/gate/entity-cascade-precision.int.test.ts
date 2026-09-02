@@ -29,9 +29,22 @@ import {
   CASCADE_CASE_CLASSES,
   casesOfClass,
   type CascadeCase,
-  type CascadeCaseClass,
   type CascadeSide,
 } from './entity-cascade-precision.fixture.js';
+import {
+  crossCaseDecisions,
+  decisionFor,
+  didWhat,
+  falsePositives,
+  judgedMerges,
+  judgedPrecision,
+  precision,
+  ratio,
+  tierOf,
+  truePositives,
+  type Scored,
+  type SeededCase,
+} from './entity-cascade-precision.scoring.js';
 import { GateSubstrate } from './gate-substrate.fixture.js';
 
 /**
@@ -77,25 +90,6 @@ const PRECISION_BAR = 0.9;
 const JUDGED_SAMPLE_FLOOR = 4;
 
 const SESSION_ID = 'entity-cascade-battery';
-
-type SeededCase = {
-  readonly entry: CascadeCase;
-  readonly leftId: string;
-  readonly rightId: string;
-  /** Cosine between the two stored name vectors, which is what tier 1's search scores. */
-  readonly cosine: number;
-  /** What the stage reported for the run over this case's shared episode. */
-  readonly judged: number;
-};
-
-type Scored = SeededCase & {
-  readonly merged: boolean;
-  /** Absent when nothing merged the pair. */
-  readonly tier?: EntityMergeDecision['tier'];
-  /** True when the two passes split and the pair went to the residue lane instead. */
-  readonly proposed: boolean;
-  readonly correct: boolean;
-};
 
 let substrate: GateSubstrate;
 let scored: Scored[] = [];
@@ -251,76 +245,6 @@ async function runCase(row: Omit<SeededCase, 'cosine' | 'judged'>): Promise<numb
   return typeof outcome.counts?.merge_judgments === 'number' ? outcome.counts.merge_judgments : 0;
 }
 
-/** The decision that merged exactly this pair, whichever side ended up canonical. */
-function decisionFor(
-  row: SeededCase,
-  all: readonly EntityMergeDecision[],
-): EntityMergeDecision | undefined {
-  const wanted = [row.leftId, row.rightId].sort().join(',');
-  return all.find(
-    (decision) =>
-      [...new Set([decision.canonicalId, ...decision.memberIds])].sort().join(',') === wanted,
-  );
-}
-
-function ratio(numerator: number, denominator: number): number {
-  return denominator === 0 ? 0 : numerator / denominator;
-}
-
-function truePositives(): number {
-  return scored.filter((row) => row.merged && row.entry.duplicate).length;
-}
-
-/** Every merge that is not one of the twelve duplicates, cross-case merges included. */
-function falsePositives(): number {
-  const withinCase = scored.filter((row) => row.merged && !row.entry.duplicate).length;
-  return withinCase + crossCaseDecisions().length;
-}
-
-function crossCaseDecisions(): EntityMergeDecision[] {
-  const owned = new Set(scored.map((row) => decisionFor(row, decisions)?.id));
-  return decisions.filter((decision) => !owned.has(decision.id));
-}
-
-function precision(): number {
-  return ratio(truePositives(), truePositives() + falsePositives());
-}
-
-/** Every merge tier 3 made, which is the only population the shipped mode governs. */
-function judgedMerges(): Scored[] {
-  return scored.filter((row) => row.tier === 'tier3');
-}
-
-/**
- * Precision over tier 3 alone. The headline number includes tier 0, which is right for the
- * question "what does the cascade merge wrongly"; it is the wrong number for the question the
- * pre-registered rule answers, since the mode governs tier 3 and nothing else.
- */
-function judgedPrecision(): number {
-  const hits = judgedMerges().filter((row) => row.entry.duplicate).length;
-  const misses =
-    judgedMerges().filter((row) => !row.entry.duplicate).length +
-    crossCaseDecisions().filter((decision) => decision.tier === 'tier3').length;
-  return ratio(hits, hits + misses);
-}
-
-/** The three outcomes a pair can reach, named for the line the battery prints on a miss. */
-function didWhat(row: Scored): string {
-  if (row.merged) {
-    return `merged at ${String(row.tier)}`;
-  }
-  if (row.proposed) {
-    return 'split the two passes and queued the pair';
-  }
-  return 'left them apart with no proposal';
-}
-
-function tierOf(caseClass: CascadeCaseClass): string {
-  const rows = scored.filter((row) => row.entry.caseClass === caseClass);
-  const correct = rows.filter((row) => row.correct).length;
-  return `${String(correct)}/${String(rows.length)}`;
-}
-
 beforeAll(async () => {
   // The key so the reported route is the route the provider took. `testGenerationProvider`
   // decides from the environment and the substrate's config does not carry the key, so without
@@ -386,14 +310,14 @@ describe('the 24-pair entity cascade battery', () => {
   });
 
   it('scores every merge the cascade made against the pre-committed truth', () => {
-    const tp = truePositives();
-    const fp = falsePositives();
+    const tp = truePositives(scored);
+    const fp = falsePositives(scored, decisions);
     const fn = scored.filter((row) => !row.merged && row.entry.duplicate).length;
     const tn = scored.filter((row) => !row.merged && !row.entry.duplicate).length;
 
     console.log(
       `auto-merges: TP ${String(tp)}, FP ${String(fp)}, FN ${String(fn)}, TN ${String(tn)} | ` +
-        `precision ${precision().toFixed(3)}, recall ${ratio(tp, 12).toFixed(3)}`,
+        `precision ${precision(scored, decisions).toFixed(3)}, recall ${ratio(tp, 12).toFixed(3)}`,
     );
     console.log(
       `by tier: ${String(decisions.filter((row) => row.tier === 'tier0').length)} tier-0 merge(s), ` +
@@ -401,7 +325,7 @@ describe('the 24-pair entity cascade battery', () => {
         `${String(proposals.length)} pair(s) left as proposals`,
     );
     for (const caseClass of CASCADE_CASE_CLASSES) {
-      console.log(`  class ${caseClass}: ${tierOf(caseClass)} correct`);
+      console.log(`  class ${caseClass}: ${tierOf(scored, caseClass)} correct`);
     }
     for (const row of scored.filter((entry) => !entry.correct)) {
       console.log(
@@ -409,7 +333,7 @@ describe('the 24-pair entity cascade battery', () => {
           `truth ${String(row.entry.duplicate)} because ${row.entry.truthNote}`,
       );
     }
-    for (const decision of crossCaseDecisions()) {
+    for (const decision of crossCaseDecisions(scored, decisions)) {
       console.log(
         `  merged across two cases at ${decision.tier}: ${[
           decision.canonicalId,
@@ -477,7 +401,9 @@ describe('the 24-pair entity cascade battery', () => {
     }
 
     expect(wrong).toHaveLength(0);
-    expect(crossCaseDecisions().filter((decision) => decision.tier === 'tier0')).toHaveLength(0);
+    expect(
+      crossCaseDecisions(scored, decisions).filter((decision) => decision.tier === 'tier0'),
+    ).toHaveLength(0);
   });
 
   /**
@@ -486,9 +412,9 @@ describe('the 24-pair entity cascade battery', () => {
    * does one that clears it while the default stays `propose`.
    */
   it('ships the default the measurement calls for', () => {
-    const judged = judgedMerges();
-    const measured = precision();
-    const judgedOnly = judgedPrecision();
+    const judged = judgedMerges(scored);
+    const measured = precision(scored, decisions);
+    const judgedOnly = judgedPrecision(scored, decisions);
     const expected =
       measured >= PRECISION_BAR && judgedOnly >= PRECISION_BAR ? 'unanimous' : 'propose';
 

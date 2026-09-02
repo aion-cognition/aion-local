@@ -41,20 +41,22 @@ export type ClaimCommunityProfile = {
 };
 
 /**
- * Per-community claim counts and the session spread behind them, in stock Cypher: the session
- * ids are collected per claim, flattened, and counted distinct in one pass, so the read needs no
- * plugin the substrate may not have.
+ * Per-community claim counts and the session spread behind them, in stock Cypher: both counts
+ * are taken in one aggregation, so the read needs no plugin the substrate may not have.
+ *
+ * The session count is a `count(DISTINCT)` over the optional path rather than a flatten of
+ * per-claim lists. A claim with no session path yields a null `s`, which the count ignores and
+ * the row survives: a community whose claims all reach no session reports zero sessions instead
+ * of disappearing from the distribution the density floor is derived from. Consolidated claims
+ * are exactly that case, since a consolidation is written with no `EXTRACTED_FROM` edge.
  */
 const READ_PROFILES = [
   `MATCH (n:${FACT_LABEL_EXPRESSION})`,
   `WHERE ${currentOnly('n')} AND n.${COMMUNITY_PROPERTY} IS NOT NULL`,
   `OPTIONAL MATCH ${SESSION_PATH}`,
-  `WITH n.${COMMUNITY_PROPERTY} AS community, n.id AS claim, collect(DISTINCT s.id) AS sessions`,
-  'WITH community, count(DISTINCT claim) AS size, collect(sessions) AS session_lists',
-  'UNWIND session_lists AS list',
-  'UNWIND list AS session_id',
-  'WITH community, size, collect(DISTINCT session_id) AS sessions',
-  'RETURN community, size, size(sessions) AS session_count',
+  `WITH n.${COMMUNITY_PROPERTY} AS community, count(DISTINCT n) AS size,`,
+  '     count(DISTINCT s.id) AS session_count',
+  'RETURN community, size, session_count',
   'ORDER BY size DESC, community ASC',
 ].join('\n');
 

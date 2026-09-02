@@ -26,7 +26,14 @@ export type ExhaustedJob = {
   readonly enqueuedAt: string;
 };
 
-/** Oldest first: a row that has waited longest for attention waits longest for the retry too. */
+/**
+ * Oldest first: a row that has waited longest for attention waits longest for the retry too.
+ *
+ * Rows already carrying the seen marker are excluded in SQL rather than skipped by the caller.
+ * A row that spent its one retry keeps its original `enqueued_at`, so it sorts ahead of every
+ * newly exhausted row forever; filtering after the fact would let a batch's worth of permanently
+ * stuck rows fill the batch and starve the rows that still have a retry coming.
+ */
 export function listExhaustedJobs(
   db: SqliteHandle,
   maxAttempts: number,
@@ -36,10 +43,15 @@ export function listExhaustedJobs(
     .prepare(
       `SELECT id, job_type, enqueued_at FROM reflection_queue
        WHERE claimed_at IS NULL AND attempts >= ?
+         AND NOT EXISTS (SELECT 1 FROM ops_ledger WHERE key = ? || reflection_queue.id)
        ORDER BY enqueued_at ASC, rowid ASC
        LIMIT ?`,
     )
-    .all(maxAttempts, limit) as { id: string; job_type: string; enqueued_at: string }[];
+    .all(maxAttempts, DEAD_LETTER_SEEN_LEDGER_PREFIX, limit) as {
+    id: string;
+    job_type: string;
+    enqueued_at: string;
+  }[];
   return rows.map((row) => ({ id: row.id, jobType: row.job_type, enqueuedAt: row.enqueued_at }));
 }
 
@@ -47,11 +59,21 @@ export function listExhaustedJobs(
  * Moves the job to the bulk lane and resets its attempt count, so the claim path can take
  * it again. Scoped to still-unclaimed rows: a row a worker picked up between the list and
  * this call is no longer this operation's to touch. Returns whether the row actually moved.
+ *
+ * `lane_seq` is restamped from the bulk group the row lands in, because the column numbers a
+ * row within its own (lane, session) group. A retry that kept its old turn would sort ahead of
+ * bulk work that has been waiting longer than it has.
  */
 export function relaneDeadLetterJob(db: SqliteHandle, jobId: string): boolean {
   const result = db
     .prepare(
-      `UPDATE reflection_queue SET lane = 'bulk', attempts = 0
+      `UPDATE reflection_queue
+         SET lane = 'bulk',
+             attempts = 0,
+             lane_seq = (
+               SELECT COALESCE(MAX(q.lane_seq), 0) + 1 FROM reflection_queue q
+               WHERE q.lane = 'bulk' AND q.session_id IS reflection_queue.session_id
+             )
        WHERE id = ? AND claimed_at IS NULL`,
     )
     .run(jobId);

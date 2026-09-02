@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { deadlineFor } from '../../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../../infrastructure/providers/types.js';
 
 /**
@@ -44,6 +45,8 @@ export type ReviewPair = {
 export type ReviewContradictionOptions = {
   readonly model: string;
   readonly timeoutMs: number;
+  /** The caller's shutdown signal, composed under the call's own deadline. */
+  readonly signal?: AbortSignal;
 };
 
 /**
@@ -155,10 +158,7 @@ export async function reviewContradiction(
   pair: ReviewPair,
   options: ReviewContradictionOptions,
 ): Promise<ReviewOutcome> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => {
-    controller.abort();
-  }, options.timeoutMs);
+  const deadline = deadlineFor(options.timeoutMs, options.signal);
   let raw: unknown;
   try {
     raw = await provider.generate({
@@ -168,12 +168,12 @@ export async function reviewContradiction(
       // Matches the first pass: reasoning buys nothing on a two-statement judgment and doubles
       // an already doubled budget.
       think: false,
-      signal: controller.signal,
+      signal: deadline.signal,
     });
   } catch (error) {
     return { status: 'failed', error };
   } finally {
-    clearTimeout(timer);
+    deadline.clear();
   }
 
   const parsed = ReviewSchema.safeParse(raw);

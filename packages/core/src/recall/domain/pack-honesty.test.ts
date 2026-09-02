@@ -1,98 +1,15 @@
-import type { Cue, StageTimingsMs } from '@aion/protocol';
 import { describe, expect, it } from 'vitest';
 
-import type { AdmissionEvidence, AdmissionReport } from './admission.js';
+import type { AdmissionEvidence } from './admission.js';
 import type { FusedItem } from './fusion.js';
-import type { BucketCaps } from './pack-buckets.js';
-import { assemblePack, estimateTokens, type AssemblePackInput } from './pack.js';
+import { estimateTokens } from './pack.js';
+import { assemble, CAPS, item, report } from './test-support/pack.fixture.js';
 
 /**
  * What a pack says about itself: which facts it declines to carry, what number it prints
  * beside an item, and the one line that tells a text-only reader the answer is thin.
  * Routing, caps and the budget are `pack.test.ts`.
  */
-
-const TIMINGS: StageTimingsMs = { embed: 12, cues: 340, seeds: 55, activation: 80, fusion: 4 };
-
-const CUES: readonly Cue[] = [{ text: 'webhooks', source: 'query', weight: 3 }];
-
-const CAPS: BucketCaps = {
-  facts: 15,
-  episodes: 5,
-  narratives: 5,
-  preferences: 3,
-  resonant: 5,
-};
-
-type ItemOverrides = {
-  readonly labels?: readonly string[];
-  readonly content?: string;
-  readonly score?: number;
-  readonly occurredAt?: Date;
-  readonly path?: string;
-  readonly superseded?: boolean;
-  readonly sourceEpisodeId?: string;
-  /** The absolute cosine behind admission; zero for an item a literal match let in. */
-  readonly measured?: number;
-  /** The rule that let the item in, as the gate reports it. */
-  readonly admittedBy?: AdmissionEvidence;
-};
-
-function item(id: string, overrides: ItemOverrides = {}): FusedItem {
-  const { path } = overrides;
-  return {
-    id,
-    labels: overrides.labels ?? ['Episode', 'Memory', 'AionNode'],
-    content: overrides.content ?? `content of ${id}`,
-    ...(overrides.occurredAt === undefined ? {} : { occurredAt: overrides.occurredAt }),
-    rationale: {
-      method: path === undefined ? 'vector' : 'activation',
-      score: 0.8,
-      ...(path === undefined ? {} : { path }),
-    },
-    relevance: 0.8,
-    measured: overrides.measured ?? 0.8,
-    ...(overrides.admittedBy === undefined ? {} : { admittedBy: overrides.admittedBy }),
-    score: overrides.score ?? 0.02,
-    ...(overrides.sourceEpisodeId === undefined
-      ? {}
-      : { sourceEpisodeId: overrides.sourceEpisodeId }),
-    ...(overrides.superseded === true
-      ? {
-          currency: 'superseded' as const,
-          supersededBy: { id: `${id}-successor`, at: new Date('2026-08-10T00:00:00.000Z') },
-        }
-      : { currency: 'current' as const }),
-  };
-}
-
-/** A gate that judged exactly the items handed over and dropped nothing, unless a test says otherwise. */
-function report(items: readonly FusedItem[]): AdmissionReport {
-  return {
-    policy: { vectorFloor: 0.6, corroborationFloor: 0.45, bm25Mode: 'exact' },
-    considered: items.length,
-    admitted: items.length,
-    droppedBelowFloor: 0,
-    droppedUnmeasured: 0,
-    droppedUnmeasuredArrival: 0,
-    droppedDuplicateContent: 0,
-    droppedNearDuplicate: 0,
-    anchored: items.length > 0,
-    typedAdmitted: 0,
-  };
-}
-
-function assemble(items: readonly FusedItem[], overrides: Partial<AssemblePackInput> = {}) {
-  return assemblePack({
-    items,
-    admission: report(items),
-    caps: CAPS,
-    tokenBudget: 1200,
-    cues: CUES,
-    timings: TIMINGS,
-    ...overrides,
-  });
-}
 
 describe('the facts bucket', () => {
   function gloss(id: string): FusedItem {

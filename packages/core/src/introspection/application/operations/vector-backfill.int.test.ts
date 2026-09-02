@@ -16,7 +16,7 @@ import {
   type Neo4jHarness,
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
-import { refusingProvider } from '../../../infrastructure/providers/test-support/refusing-provider.fixture.js';
+import type { Provider, Vector } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { vectorInputHash } from '../../../reflection/domain/vector-input.js';
 import type { OperationContext } from '../../domain/operation.js';
@@ -51,13 +51,34 @@ afterAll(async () => {
   rmSync(dataDir, { recursive: true, force: true });
 });
 
+/**
+ * Counts what the operation asked it to embed. The drain must go through the provider the
+ * service built and handed the run, so a stub here is also the assertion that it does: a run
+ * that built its own client would leave this at zero and still write vectors.
+ */
+type CountingProvider = Provider & { calls: number; texts: string[] };
+
+function countingProvider(): CountingProvider {
+  const provider: CountingProvider = {
+    calls: 0,
+    texts: [],
+    embed: (texts: readonly string[]): Promise<Vector[]> => {
+      provider.calls += 1;
+      provider.texts.push(...texts);
+      return Promise.resolve(texts.map(() => new Array<number>(EMBED_DIMENSION).fill(0.25)));
+    },
+    generate: (): Promise<unknown> => Promise.reject(new Error('this caller must not generate')),
+  };
+  return provider;
+}
+
 function ctxFor(overrides: Partial<OperationContext> = {}): OperationContext {
   return {
     driver: harness.driver,
     db,
     config,
     logger,
-    provider: refusingProvider,
+    provider: countingProvider(),
     health: healthFixture(),
     now: NOW,
     signal: new AbortController().signal,
@@ -77,11 +98,15 @@ describe('vector_backfill: content vector pass', () => {
     }
 
     const operation = vectorBackfillOperation();
-    const first = await operation.run(ctxFor());
+    const provider = countingProvider();
+    const first = await operation.run(ctxFor({ provider }));
 
     // Batch size is 2: exactly two of the three pending nodes are embedded this run, no more.
     expect(first.status).toBe('applied');
     expect(first.itemsAffected).toBe(2);
+    // Through the injected provider, not one the run built for itself.
+    expect(provider.calls).toBe(1);
+    expect(provider.texts).toHaveLength(2);
 
     const second = await operation.run(ctxFor({ now: LATER }));
     // The remaining node (and nothing else) is picked up on the next run.

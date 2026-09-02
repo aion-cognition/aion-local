@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { redact, redactKeyedValue } from './redact.js';
+import { DEFAULT_ENTROPY_THRESHOLD, redact, redactKeyedValue } from './redact.js';
+import { DEFAULTS } from '../infrastructure/config/defaults.js';
+
+describe('DEFAULT_ENTROPY_THRESHOLD', () => {
+  it('matches the entropyThreshold knob, so the two literals cannot drift apart', () => {
+    expect(DEFAULT_ENTROPY_THRESHOLD).toBe(DEFAULTS.redaction.entropyThreshold);
+  });
+});
 
 describe('redact: true positives, one per rule', () => {
   const cases: { rule: string; secret: string; text: string }[] = [
@@ -222,6 +229,20 @@ describe('redactKeyedValue: the same rules over a structured pair', () => {
     const structured = redactKeyedValue('aws_secret_access_key', secret);
 
     expect(structured.matches).toEqual(embedded.matches);
+  });
+
+  it('gives the entropy backstop the same fingerprint whether the pair is embedded or structured', () => {
+    // A key outside the credential vocabulary and a value whose own entropy sits just under
+    // the threshold: only the whole `key=value` token clears it, so the name's characters are
+    // part of what the detector actually matched.
+    const key = 'traceId';
+    const value = '/DDE6Sz-+HvSRkldFB+WFz+ei';
+    const embedded = redact(`${key}=${value}`);
+    const structured = redactKeyedValue(key, value);
+
+    expect(embedded.matches.map((match) => match.rule)).toEqual(['high-entropy']);
+    expect(structured.matches).toEqual(embedded.matches);
+    expect(structured.text).not.toContain(key);
   });
 
   it('never claims the key it was given as context', () => {

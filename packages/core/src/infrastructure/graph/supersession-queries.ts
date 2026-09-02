@@ -1,6 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 
-import { currentOnly } from './bitemporal.js';
+import { BITEMPORAL_PROPERTIES, currentOnly } from './bitemporal.js';
 import type { CognitiveNodeLabel } from './cognitive-queries.js';
 import { TEXT_NORM_PROPERTY } from './cognitive-text.js';
 import { runRead, type GraphStatement } from './connection.js';
@@ -76,7 +76,10 @@ function episodeFactNodesStatement(episodeId: string, reference?: Date): GraphSt
   return {
     cypher: [
       'MATCH (:Episode { id: $episodeId })<-[:EXTRACTED_FROM]-(n)',
-      `WHERE any(label IN labels(n) WHERE label IN $labels) AND ${fragment.where}`,
+      // The close predicate the default read mode does not carry: a node that has already been
+      // superseded must not become the subject that closes a live claim.
+      `WHERE n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
+      `  AND any(label IN labels(n) WHERE label IN $labels) AND ${fragment.where}`,
       'RETURN n.id AS id, [label IN labels(n) WHERE label IN $labels][0] AS label,',
       `       n.${MEMORY_PROPERTIES.text} AS text, n.${TEXT_NORM_PROPERTY} AS text_norm,`,
       `       n.${MEMORY_PROPERTIES.contentVector} AS content_vec,`,

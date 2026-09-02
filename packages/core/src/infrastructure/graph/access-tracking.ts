@@ -9,8 +9,9 @@ import { toGraphDateTime } from './values.js';
  * Recall's access-tracking side effect: every node a recall surfaced gets its last-access
  * timestamp bumped and its access count incremented, in one statement for the whole batch.
  * This is what lets `graph/seed-queries.ts`'s recency strategy leave its cold-start
- * `tx_from DESC` ordering once a substrate has served real recalls: before any recall runs,
- * no node carries either property.
+ * `tx_from DESC` ordering: recall stamps the two properties here, and reflection stamps them
+ * on every entity an episode mentions (`entity-mention-queries.ts`), so the tier is empty
+ * only until one of the two has run.
  *
  * Unlike the rest of this directory's writes, this one is not idempotent by design: running
  * it twice for the same node doubles `access_count`, the same way the edge upsert's `count`
@@ -20,7 +21,12 @@ import { toGraphDateTime } from './values.js';
 
 export const ACCESS_COUNT_PROPERTY = 'access_count';
 
-const RECORD_ACCESS = [
+/**
+ * The salience stamp itself, shared with the mention path so the two writers cannot drift on
+ * what a bump is. Both take `$ids` and `$now`; each keeps its own transaction and its own
+ * meaning for the batch.
+ */
+export const RECORD_SALIENCE_BUMP = [
   'UNWIND $ids AS nodeId',
   `MATCH (n:${BASE_NODE_LABEL} { id: nodeId })`,
   `SET n.${LAST_ACCESSED_PROPERTY} = $now,`,
@@ -35,7 +41,7 @@ export type RecordAccessInput = {
 /** Pure statement builder, so the batch's shape is testable without a server. */
 export function buildRecordAccessStatement(input: RecordAccessInput): GraphStatement {
   return {
-    cypher: RECORD_ACCESS,
+    cypher: RECORD_SALIENCE_BUMP,
     parameters: { ids: [...new Set(input.ids)], now: toGraphDateTime(input.now) },
   };
 }

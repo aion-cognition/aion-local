@@ -6,7 +6,6 @@ import { countDecayableEdges } from '../../infrastructure/graph/edge-weights.js'
 import { countTier0EligibleEntities } from '../../infrastructure/graph/entity-tier0-queries.js';
 import { readCurrentEntityNamings } from '../../infrastructure/graph/identifier-decay-queries.js';
 import {
-  countContextVectorCoverage,
   countEpisodesWithoutSession,
   countOrphanNodes,
   countVectorParity,
@@ -16,12 +15,12 @@ import { findStaleNarratives } from '../../infrastructure/graph/narrative-querie
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { countDeadLetterAttention } from '../../infrastructure/sqlite/dead-letter-queue.js';
-import { listEntityMergeProposals } from '../../infrastructure/sqlite/entity-merge-proposals.js';
+import { listOpenEntityMergeProposalCreatedAt } from '../../infrastructure/sqlite/entity-merge-proposals.js';
 import {
   listOperationStats,
   meanOperationDurationMs,
 } from '../../infrastructure/sqlite/introspection-counters.js';
-import { listSupersessionProposals } from '../../infrastructure/sqlite/supersession-proposals.js';
+import { listOpenSupersessionProposalCreatedAt } from '../../infrastructure/sqlite/supersession-proposals.js';
 import { plasticityCounters } from '../../plasticity/application/metrics.js';
 import { scanRedactionResidue } from '../../redaction/residue.js';
 import { queueLagSnapshot } from '../../reflection/application/lag.js';
@@ -115,32 +114,26 @@ async function readGraph(
   scanLimit: number,
   weightFloor: number,
 ): Promise<GraphStructureHealth> {
-  const [counts, parity, orphans, missing, stale, decayableEdges, floorBands, contextVectors] =
-    await Promise.all([
-      countGraphElements(driver),
-      countVectorParity(driver, scanLimit),
-      countOrphanNodes(driver, scanLimit),
-      countEpisodesWithoutSession(driver, scanLimit),
-      findStaleNarratives(driver, NARRATIVE_GROUNDING, scanLimit),
-      countDecayableEdges(driver),
-      countEdgesByFloorBand(driver, weightFloor),
-      countContextVectorCoverage(driver, scanLimit),
-    ]);
+  const [counts, parity, orphans, missing, stale, decayableEdges, floorBands] = await Promise.all([
+    countGraphElements(driver),
+    countVectorParity(driver, scanLimit),
+    countOrphanNodes(driver, scanLimit),
+    countEpisodesWithoutSession(driver, scanLimit),
+    findStaleNarratives(driver, NARRATIVE_GROUNDING, scanLimit),
+    countDecayableEdges(driver),
+    countEdgesByFloorBand(driver, weightFloor),
+  ]);
   return {
     nodes: counts.nodes,
     relationships: counts.relationships,
     vectorExpected: parity.expected,
     vectorPresent: parity.vectored,
     vectorParity: parityRatio(parity.vectored, parity.expected),
-    orphanNodes: orphans.orphans,
     orphanShare: share(orphans.orphans, orphans.nodes),
     episodesWithoutSession: missing,
     staleNarratives: stale.length,
     decayableEdges,
     atFloorAssociationEdges: floorBands.atFloor,
-    contextVectorExpected: contextVectors.expected,
-    contextVectorPresent: contextVectors.present,
-    contextVectorCoverage: parityRatio(contextVectors.present, contextVectors.expected),
   };
 }
 
@@ -202,17 +195,18 @@ function median(values: readonly number[]): number | undefined {
  * doing its job.
  */
 function readProposals(db: SqliteHandle, now: Date): ProposalHealth {
-  const supersession = listSupersessionProposals(db).filter(
-    (proposal) => proposal.resolvedAt === null,
-  );
-  const merges = listEntityMergeProposals(db).filter((proposal) => proposal.resolvedAt === null);
-  const ages = [...supersession, ...merges].map((proposal) =>
-    Math.max(0, now.getTime() - new Date(proposal.createdAt).getTime()),
+  const supersession = listOpenSupersessionProposalCreatedAt(db);
+  const merges = listOpenEntityMergeProposalCreatedAt(db);
+  const ages = [...supersession, ...merges].map((createdAt) =>
+    Math.max(0, now.getTime() - new Date(createdAt).getTime()),
   );
   return {
     supersessionOpen: supersession.length,
     entityMergeOpen: merges.length,
-    oldestOpenAgeMs: ages.length === 0 ? undefined : Math.max(...ages),
+    // A reduce rather than `Math.max(...ages)`: the spread passes one argument per open row,
+    // which a large queue turns into a call the engine refuses.
+    oldestOpenAgeMs:
+      ages.length === 0 ? undefined : ages.reduce((oldest, age) => Math.max(oldest, age), 0),
     medianOpenAgeMs: median(ages),
   };
 }
@@ -228,7 +222,7 @@ async function readEntities(driver: Driver, scanLimit: number): Promise<EntityHe
     readCurrentEntityNamings(driver, scanLimit),
   ]);
   const identifierShaped = namings.filter(
-    (naming) => identifierShape(naming.name, naming.type) !== 'none',
+    (naming) => identifierShape(naming.name) !== 'none',
   ).length;
   return { tier0Eligible, identifierShaped };
 }
@@ -313,8 +307,12 @@ export async function observeHealth(
       collect(HEALTH_COLLECTORS.plasticity, deps.logger, degraded, NEUTRAL_PLASTICITY_HEALTH, () =>
         Promise.resolve(readPlasticity(deps.db)),
       ),
-      collect('effectiveness', deps.logger, degraded, [] as readonly OperationEffectiveness[], () =>
-        Promise.resolve(readOperationEffectiveness(deps.db, operations, cycle)),
+      collect(
+        HEALTH_COLLECTORS.effectiveness,
+        deps.logger,
+        degraded,
+        [] as readonly OperationEffectiveness[],
+        () => Promise.resolve(readOperationEffectiveness(deps.db, operations, cycle)),
       ),
     ]);
 

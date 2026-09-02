@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  DEFAULT_TRIGGER_POLICY,
   RECALL_CO_ACTIVATION_TRIGGER,
   REFLECTION_CO_EXTRACTION_TRIGGER,
+  TRIGGER_POLICIES,
   aggregateWindow,
   boundedReinforcement,
   cliqueDiscount,
@@ -12,8 +14,6 @@ import {
   signalWeight,
   triggerPolicy,
 } from './reinforcement.js';
-import { REINFORCEMENT_TRIGGER } from '../../recall/application/side-effects.js';
-import { REFLECTION_CO_EXTRACTION_TRIGGER as STAGE_TRIGGER } from '../../reflection/application/stages/reinforcement.js';
 
 const FLOOR = 0.1;
 const BASE_RATE = 0.1;
@@ -38,13 +38,11 @@ function clique(ids: readonly string[], ts = TS) {
   return signals;
 }
 
-describe('trigger strings match the producers that write them', () => {
-  it('names the string recall enqueues', () => {
-    expect(RECALL_CO_ACTIVATION_TRIGGER).toBe(REINFORCEMENT_TRIGGER);
-  });
-
-  it('names the string the reflection stage enqueues', () => {
-    expect(REFLECTION_CO_EXTRACTION_TRIGGER).toBe(STAGE_TRIGGER);
+describe('trigger strings carry a policy', () => {
+  it('gives the string each producer writes a row in the table', () => {
+    expect(Object.keys(TRIGGER_POLICIES).sort()).toEqual(
+      [RECALL_CO_ACTIVATION_TRIGGER, REFLECTION_CO_EXTRACTION_TRIGGER].sort(),
+    );
   });
 });
 
@@ -125,6 +123,19 @@ describe('per-trigger learning rates', () => {
 
   it('falls back to the full rate for a trigger nobody registered', () => {
     expect(triggerPolicy('manual:correction')).toEqual({ etaFactor: 1, cliqueDiscounted: false });
+  });
+
+  it('falls back for a trigger that spells an inherited Object member', () => {
+    expect(triggerPolicy('constructor')).toEqual(DEFAULT_TRIGGER_POLICY);
+    expect(triggerPolicy('toString')).toEqual(DEFAULT_TRIGGER_POLICY);
+  });
+
+  it('keeps a step for a queue row whose trigger spells an inherited member', () => {
+    const [pair] = aggregateWindow(
+      [{ sourceId: 'a', targetId: 'b', trigger: 'constructor', ts: TS }],
+      BASE_RATE,
+    );
+    expect(pair?.learningRate).toBeCloseTo(BASE_RATE, 10);
   });
 });
 

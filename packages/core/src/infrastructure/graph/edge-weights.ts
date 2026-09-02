@@ -2,7 +2,7 @@ import neo4j, { type Driver } from 'neo4j-driver';
 
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { readFirst, runWrite, type GraphStatement } from './connection.js';
-import { GraphWriteError } from './errors.js';
+import { assertPositiveInt, assertProportion, GraphWriteError } from './errors.js';
 import { BASE_NODE_LABEL } from './labels.js';
 import { PROTECTED_RELATIONSHIP_TYPES } from './protected-relationships.js';
 import { readModeFragment, withCurrency } from './read-modes.js';
@@ -40,12 +40,6 @@ export type ReinforceEdgeWeightsInput = {
   readonly weightFloor: number;
   readonly now?: Date;
 };
-
-function assertProportion(name: string, value: number): void {
-  if (!Number.isFinite(value) || value < 0 || value > 1) {
-    throw new GraphWriteError(`${name} must be between 0 and 1, received ${value}`);
-  }
-}
 
 function assertPair(pair: WeightReinforcement): void {
   if (pair.sourceId.length === 0 || pair.targetId.length === 0) {
@@ -181,12 +175,6 @@ export type DecayedEdge = {
   readonly previousStrength: number;
 };
 
-function assertPositiveInt(name: string, value: number): void {
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new GraphWriteError(`${name} must be a positive integer, received ${value}`);
-  }
-}
-
 function assertPositive(name: string, value: number): void {
   if (!Number.isFinite(value) || value <= 0) {
     throw new GraphWriteError(`${name} must be a positive number, received ${value}`);
@@ -248,7 +236,10 @@ export function buildEdgeWeightDecay(input: WeightDecayInput): GraphStatement {
     'WITH r, exp(-1.0 * ((daysSinceAccess - $peakDays) ^ 2.0) / (2.0 * ($sigma ^ 2.0))) AS decay',
     'WITH r, coalesce(r.strength, $weightFloor) AS before, decay',
     'WITH r, before,',
-    '     CASE WHEN before - $decayRate * decay < $weightFloor THEN $weightFloor',
+    // The floor bounds the subtraction, it does not lift: an edge stored under the floor,
+    // which a semantic relationship writes when its confidence is low, stays where it is.
+    '     CASE WHEN before < $weightFloor THEN before',
+    '          WHEN before - $decayRate * decay < $weightFloor THEN $weightFloor',
     '          ELSE before - $decayRate * decay END AS after',
     'SET r.strength = after,',
     `    r.${DECAYED_AT_PROPERTY} = $now`,

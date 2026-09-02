@@ -121,7 +121,12 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   if (!result.success) {
     const lines = result.error.issues.map((issue) => {
       const path = issue.path.map(String);
-      const label = envVarForPath(path) ?? path.join('.');
+      const envVar = envVarForPath(path);
+      // The tail names the field inside a subtree variable, so AION_SEARCH_WEIGHTS says which
+      // of its three parts failed.
+      const field = path.slice(2).join('.');
+      const label =
+        envVar === undefined ? path.join('.') : `${envVar}${field === '' ? '' : `.${field}`}`;
       return `${label}: ${issue.message}`;
     });
     throw new ConfigError(`Invalid configuration:\n${lines.join('\n')}`);

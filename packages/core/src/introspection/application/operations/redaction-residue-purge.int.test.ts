@@ -7,11 +7,13 @@ import {
   REDACTION_RESIDUE_MIN_RELEVANCE,
   redactionResiduePurgeOperation,
   redactionResiduePurgeRelevance,
+  redactionUnresolvedKey,
 } from './redaction-residue-purge.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
+import { findPendingVectorNodes } from '../../../infrastructure/graph/pending-vectors.js';
 import {
   everyStoredProperty,
   nodeProperties,
@@ -24,6 +26,7 @@ import {
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import { refusingProvider } from '../../../infrastructure/providers/test-support/refusing-provider.fixture.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import { markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
 
@@ -96,6 +99,8 @@ describe('redaction_residue_purge', () => {
       properties: {
         text: `the key we used was ${LEAKED_KEY}`,
         summary: 'a clean summary with nothing secret in it',
+        content_vec: new Array<number>(EMBED_DIMENSION).fill(0.5),
+        content_vec_hash: 'f'.repeat(64),
       },
       now: NOW,
     });
@@ -115,6 +120,17 @@ describe('redaction_residue_purge', () => {
 
     // The real check: the raw secret is nowhere in the substrate, not just out of `text`.
     expect(await everyStoredProperty(harness.driver)).not.toContain(LEAKED_KEY);
+  }, 60_000);
+
+  it('clears the vector and its hash, so the drain re-embeds the redacted text', async () => {
+    // The stored floats were taken over the plaintext the rewrite just replaced. Leaving them
+    // would let vector search go on ranking the node by the secret.
+    const props = await nodeProperties(harness.driver, 'leak-node-1');
+    expect(props.content_vec).toBeUndefined();
+    expect(props.content_vec_hash).toBeUndefined();
+    expect(await findPendingVectorNodes(harness.driver, 10)).toContainEqual(
+      expect.objectContaining({ id: 'leak-node-1' }),
+    );
   }, 60_000);
 
   it('is idempotent: a second run finds nothing left to rewrite', async () => {
@@ -150,6 +166,30 @@ describe('redaction_residue_purge', () => {
     expect(text).toMatch(/⟨secret:anthropic-api-key:[0-9a-f]{6}⟩/);
     // No fingerprint holds another one: the rule id of the earlier fix is still readable.
     expect(text).not.toMatch(/⟨secret:[a-z0-9-]*⟨/);
+  }, 60_000);
+
+  it('skips a flagged node the property rewriter could not fix, so it stops taking a batch slot', async () => {
+    await writeStampedNode(harness.driver, {
+      label: 'Episode',
+      id: 'leak-node-unfixable',
+      properties: { text: `an unfixable leak ${LEAKED_KEY}` },
+      now: NOW,
+    });
+    // The node-level scan reads every string property joined together, so it can flag a node no
+    // single property rewrite fixes. Such a node is recorded once and then left out of the
+    // batch, instead of sitting at the head of it on every run forever.
+    markLedgerApplied(db, redactionUnresolvedKey('leak-node-unfixable'), {
+      reason: 'flagged by the node scan, with no single property this rewriter can redact',
+    });
+
+    const result = await redactionResiduePurgeOperation().run(ctxFor());
+
+    // Still counted as leaking, and still not inspected: the flag is the report, the stamp is
+    // what keeps it from starving the nodes the rewriter can still fix.
+    expect(result.status).toBe('noop');
+    expect(result.detail).toContain('1 flagged');
+    const props = await nodeProperties(harness.driver, 'leak-node-unfixable');
+    expect(String(props.text)).toContain(LEAKED_KEY);
   }, 60_000);
 
   it('bounds one run to redactionPurgeBatchSize nodes', async () => {

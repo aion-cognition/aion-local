@@ -71,7 +71,11 @@ describe('AssociationInferenceStage', () => {
   it('skips an episode that mentions no entities', async () => {
     const outcome = await new AssociationInferenceStage().run(buildContext());
 
-    expect(outcome).toEqual({ status: 'skipped', summary: 'no entities mentioned in the episode' });
+    expect(outcome).toEqual({
+      status: 'skipped',
+      summary: 'no entities mentioned in the episode',
+      retryable: true,
+    });
     expect(graph.edgesOfType('CO_OCCURS')).toHaveLength(0);
   });
 

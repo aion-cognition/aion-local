@@ -1,8 +1,8 @@
 /**
  * The infrastructure layer's public surface: config, providers, SQLite, logging, and the graph.
- * Split out of the package entrypoint so `@aion/core` is unchanged by the split; the graph
- * section used to live in its own `graph-index.ts` until pruning this barrel down to what the
- * consuming packages actually import brought the combined file back under the line cap.
+ * It names only what a package outside core imports, which is the line
+ * `packages/core/src/barrel-consumers.test.ts` enforces and what keeps the file under the
+ * line cap. Everything inside core reaches these modules by their own paths.
  */
 
 export { openLogger } from './logging/logger.js';
@@ -107,9 +107,13 @@ export { upsertEdge } from './graph/edges.js';
 
 export { forgetNode, supersede, writeStampedNode } from './graph/bitemporal.js';
 
+export { findPendingVectorNodes } from './graph/pending-vectors.js';
+
 export { supersedeEpisode } from './graph/episode-supersession.js';
 
 export { previewSupersession, unsupersedeNode } from './graph/unsupersede.js';
+
+export { readCanonicalMerge } from './graph/unmerge-queries.js';
 
 export type { SupersessionPreview } from './graph/unsupersede.js';
 

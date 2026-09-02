@@ -1,3 +1,4 @@
+import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import {
   DEFAULT_RECONCILE_LIMIT,
   reconcileEnrichment,
@@ -7,17 +8,18 @@ import type { IntrospectionOperation, OperationOutcome } from '../../domain/oper
 
 export const RECONCILE_REENQUEUE_OPERATION = 'reconcile_reenqueue';
 
-/** Mirrors `maintenance.reconcileBatchSize`'s own default; see `defaults.ts` for why. */
-const DEFAULT_RECONCILE_BATCH_SIZE = 200;
-
 /**
  * Wraps `reconcileEnrichment`, the same call `aion doctor`'s `review-queue` check and the
  * operator's `aion queue reconcile` make, with `reEnqueue: true`. An episode with no
  * orchestrator ledger key and no queue row will never enrich on its own: nothing joins the
  * graph against the queue, so this is the one path that finds it.
+ *
+ * Relevance reads the shipped default rather than the live config: the contract hands it only
+ * the health snapshot, so a knob an operator retuned changes what a run drains and not how
+ * urgently the loop wants one.
  */
 export function reconcileReenqueueRelevance(health: HealthSnapshot): number {
-  return Math.min(1, health.enrichment.unenriched / DEFAULT_RECONCILE_BATCH_SIZE);
+  return Math.min(1, health.enrichment.unenriched / DEFAULTS.maintenance.reconcileBatchSize);
 }
 
 export function reconcileReenqueueOperation(): IntrospectionOperation {

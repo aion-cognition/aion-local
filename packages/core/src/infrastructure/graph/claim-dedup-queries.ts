@@ -4,7 +4,7 @@ import { BITEMPORAL_PROPERTIES, currentOnly, supersedeInTransaction } from './bi
 import { inWriteTransaction, runRead } from './connection.js';
 import { upsertEdgeInTransaction } from './edges.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
-import { BASE_NODE_LABEL } from './labels.js';
+import { BASE_NODE_LABEL, EXTRACTION_TYPE } from './labels.js';
 import { FACT_NODE_LABELS, isFactNodeLabel, type FactNodeLabel } from './supersession-queries.js';
 import { fromGraphVector, toGraphInteger, type Row } from './values.js';
 import type { Vector } from '../providers/types.js';
@@ -88,9 +88,8 @@ export async function findRecentCurrentClaims(
 export type ClaimDedupDetail = {
   readonly id: string;
   readonly occurredAt: Date;
-  /** Read again immediately before a merge writes, so a pair judged against a currency reading
-   * that has since changed (a concurrent close, or the other half of this same run) is caught
-   * as stale rather than merged on stale evidence. */
+  /** The reading the caller drops a stale pair on before it spends a write; `mergeClaimPair`
+   * re-reads currency inside its own transaction, which is the reading that decides. */
   readonly current: boolean;
 };
 
@@ -126,7 +125,7 @@ export async function loadClaimDedupDetails(
 }
 
 const CLAIM_EPISODES = [
-  `MATCH (n:${BASE_NODE_LABEL} { id: $id })-[:EXTRACTED_FROM]->(e:Episode)`,
+  `MATCH (n:${BASE_NODE_LABEL} { id: $id })-[:${EXTRACTION_TYPE}]->(e:Episode)`,
   'RETURN DISTINCT e.id AS id',
 ].join('\n');
 
@@ -137,13 +136,28 @@ export type MergeClaimPairInput = {
 };
 
 export type MergeClaimPairResult = {
+  /** False when a side lost its currency between the judgment and this write; nothing was written. */
+  readonly merged: boolean;
   readonly episodesFolded: number;
 };
+
+const CURRENT_CLAIM_IDS = [
+  'UNWIND $ids AS wantedId',
+  `MATCH (n:${BASE_NODE_LABEL} { id: wantedId })`,
+  `WHERE ${currentOnly('n')}`,
+  'RETURN n.id AS id',
+].join('\n');
 
 /**
  * The merge write: fold the loser's `EXTRACTED_FROM` provenance onto the survivor, then close
  * the loser bitemporally with lineage to the survivor, in one transaction so a crash between
  * the two cannot leave provenance folded onto a survivor that never actually absorbed anything.
+ *
+ * Currency is re-read here, inside that transaction, the way `claim-key-queries.ts` and the
+ * entity absorb both do it. The caller's own reading is minutes old by the time a judgment
+ * comes back, and the close `supersedeInTransaction` writes uses `coalesce`, so a pair another
+ * writer already closed would take a second `SUPERSEDES` edge and leave one claim with two
+ * successors.
  *
  * Unlike an entity absorb, nothing is redirected off the loser: its own edges stay exactly
  * where they are, so `aion unsupersede` (which reopens a `SUPERSEDES` close mode-blind, by
@@ -158,10 +172,19 @@ export async function mergeClaimPair(
   input: MergeClaimPairInput,
 ): Promise<MergeClaimPairResult> {
   return inWriteTransaction(driver, async (tx) => {
+    const current = await tx.run(
+      CURRENT_CLAIM_IDS,
+      { ids: [input.survivorId, input.loserId] },
+      (row) => row.id as string,
+    );
+    if (current.length < 2) {
+      return { merged: false, episodesFolded: 0 };
+    }
+
     const episodes = await tx.run(CLAIM_EPISODES, { id: input.loserId }, (row) => row.id as string);
     for (const episodeId of episodes) {
       await upsertEdgeInTransaction(tx, {
-        type: 'EXTRACTED_FROM',
+        type: EXTRACTION_TYPE,
         sourceId: input.survivorId,
         targetId: episodeId,
         strength: 1,
@@ -181,6 +204,6 @@ export async function mergeClaimPair(
       provenance: [CLAIM_DEDUP_METHOD],
     });
 
-    return { episodesFolded: episodes.length };
+    return { merged: true, episodesFolded: episodes.length };
   });
 }

@@ -3,11 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import {
-  DEFAULT_HEBBIAN_BATCH_SIZE,
-  DEFAULT_HEBBIAN_LEARNING_RATE,
-  DEFAULT_HEBBIAN_WEIGHT_FLOOR,
-} from './flush.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import {
@@ -22,15 +17,10 @@ import {
 const TRIGGER = 'reflection:co-extraction';
 
 describe('flush knobs match the shipped configuration', () => {
-  it('carries the pinned batch size, learning rate and weight floor', () => {
-    expect(DEFAULT_HEBBIAN_BATCH_SIZE).toBe(DEFAULTS.hebbian.batchSize);
-    expect(DEFAULT_HEBBIAN_LEARNING_RATE).toBe(DEFAULTS.hebbian.learningRate);
-    expect(DEFAULT_HEBBIAN_WEIGHT_FLOOR).toBe(DEFAULTS.hebbian.weightFloor);
-  });
-
-  it('pins the learning rate and the weight floor to their calibrated values', () => {
-    expect(DEFAULT_HEBBIAN_LEARNING_RATE).toBe(0.1);
-    expect(DEFAULT_HEBBIAN_WEIGHT_FLOOR).toBe(0.1);
+  it('pins the batch size, learning rate and weight floor to their calibrated values', () => {
+    expect(DEFAULTS.hebbian.batchSize).toBe(100);
+    expect(DEFAULTS.hebbian.learningRate).toBe(0.1);
+    expect(DEFAULTS.hebbian.weightFloor).toBe(0.1);
   });
 });
 

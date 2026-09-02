@@ -17,10 +17,14 @@ export const FINGERPRINT_PATTERN = /⟨secret:[a-z0-9-]+:[0-9a-f]{6}⟩/g;
  * What a fingerprint stands in as while the detector looks, and not the empty string.
  * Removing the token outright closes the gap between `api_key:` and whatever the next line
  * names, and the generic assignment rule then reads the next line's field name as this line's
- * value: a fresh match over text that holds no secret at all. `redacted` is the one
- * placeholder that rule's own lookahead exempts, so a fingerprint reads as what it is.
+ * value: a fresh match over text that holds no secret at all. The rule's own lookahead
+ * exempts `redacted`, so a fingerprint reads as what it is.
+ *
+ * Padded with a space on each side so two fingerprints sitting back to back cannot fuse into
+ * `redactedredacted`, a word the lookahead's `\b` boundary does not exempt and which the
+ * generic assignment rule then reads as a fresh secret.
  */
-export const FINGERPRINT_PLACEHOLDER = 'redacted';
+export const FINGERPRINT_PLACEHOLDER = ' redacted ';
 
 /**
  * Stored text with every fingerprint replaced by the inert placeholder, which is what any

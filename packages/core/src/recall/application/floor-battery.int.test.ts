@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { CueCache } from './cues.js';
-import { BATTERY_SUBSTRATE, OFF_TOPIC_BATTERY, ON_TOPIC_BATTERY } from './floors.fixtures.js';
+import { BATTERY_SUBSTRATE, OFF_TOPIC_BATTERY, ON_TOPIC_BATTERY } from './floors.data.js';
 import { handleRecall, type RecallDeps } from './recall.js';
 import { waitFor } from './test-support/wait-for.fixture.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';

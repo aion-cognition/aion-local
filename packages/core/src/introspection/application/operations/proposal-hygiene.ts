@@ -2,13 +2,13 @@ import { loadEntityDedupDetails } from '../../../infrastructure/graph/entity-ded
 import { fetchHygieneEpisodeProvenance } from '../../../infrastructure/graph/hygiene-provenance-queries.js';
 import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import {
-  listEntityMergeProposals,
+  listOldestOpenEntityMergeProposals,
   resolveEntityMergeProposal,
   type EntityMergeProposal,
 } from '../../../infrastructure/sqlite/entity-merge-proposals.js';
 import { isLedgerApplied, markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
 import {
-  listSupersessionProposals,
+  listOldestOpenSupersessionProposals,
   resolveSupersessionProposal,
   type SupersessionProposal,
 } from '../../../infrastructure/sqlite/supersession-proposals.js';
@@ -32,28 +32,40 @@ import { sweepStaleMergeProposals } from '../stale-merge-sweep.js';
 
 /**
  * Ages a proposal out of the review queue once nobody has acted on it inside its horizon.
- * Every dismissal is a `resolve()` plus a permanent ledger stamp naming the class, the reason,
- * and the pair, so precision is judged from the real record later rather than from a shadow
- * count kept in advance. `aion proposals reopen` is the undo; this operation never deletes a
- * row and never touches the graph, only the two sqlite proposal tables and the ledger.
+ * Every dismissal is a `resolve()` plus a ledger stamp naming the class, the reason, and the
+ * pair, so precision is judged from the real record later rather than from a shadow count kept
+ * in advance. The stamp is keyed by table and id and holds the latest dismissal of that row: a
+ * row a person reopens and this operation dismisses again overwrites it, and the log line says
+ * the row was a repeat. `aion proposals reopen` is the undo; this operation never deletes a row
+ * and never touches the graph, only the two sqlite proposal tables and the ledger.
  */
 
 export const PROPOSAL_HYGIENE_OPERATION = 'proposal_hygiene';
 
-/** Independent of the judge budget below: the ceiling on how many open rows one tick reads at all. */
+/**
+ * Independent of the judge budget below: the ceiling on how many open rows one tick classifies.
+ * Each table is read to this depth, oldest first, and the merged list is cut to it again.
+ */
 const SCAN_CEILING = 200;
 
 type HygieneCandidate =
   | { readonly table: 'supersession'; readonly proposal: SupersessionProposal }
   | { readonly table: 'entity_merge'; readonly proposal: EntityMergeProposal };
 
+/**
+ * The oldest open rows from both tables, each bounded in SQL before the merge. Resolved rows
+ * are never deleted, so a load that read whole tables and filtered in memory would grow with
+ * the archive; taking the oldest `SCAN_CEILING` of each table cannot miss a row that belongs in
+ * the oldest `SCAN_CEILING` overall.
+ */
 function loadCandidates(db: SqliteHandle): readonly HygieneCandidate[] {
-  const supersessions: HygieneCandidate[] = listSupersessionProposals(db)
-    .filter((proposal) => proposal.resolvedAt === null)
-    .map((proposal) => ({ table: 'supersession', proposal }));
-  const merges: HygieneCandidate[] = listEntityMergeProposals(db)
-    .filter((proposal) => proposal.resolvedAt === null)
-    .map((proposal) => ({ table: 'entity_merge', proposal }));
+  const supersessions: HygieneCandidate[] = listOldestOpenSupersessionProposals(
+    db,
+    SCAN_CEILING,
+  ).map((proposal) => ({ table: 'supersession', proposal }));
+  const merges: HygieneCandidate[] = listOldestOpenEntityMergeProposals(db, SCAN_CEILING).map(
+    (proposal) => ({ table: 'entity_merge', proposal }),
+  );
   return [...supersessions, ...merges]
     .sort((a, b) => Date.parse(a.proposal.createdAt) - Date.parse(b.proposal.createdAt))
     .slice(0, SCAN_CEILING);
@@ -171,6 +183,7 @@ export function proposalHygieneOperation(): IntrospectionOperation {
   return {
     name: PROPOSAL_HYGIENE_OPERATION,
     bucket: 'day',
+    enabled: (config) => config.maintenance.proposalHygiene,
     relevance: proposalHygieneRelevance,
     // The median rather than the oldest row's age, because a run that ages one forgotten
     // proposal out moves the oldest and leaves a stalled queue exactly as stalled. An empty
@@ -196,14 +209,13 @@ export function proposalHygieneOperation(): IntrospectionOperation {
       // undecided, and resolving it first keeps the judge budget for rows a person could still
       // act on. It rides under the same kill switch as everything else here, so off still means
       // this operation touches no proposal.
-      const swept = ctx.signal.aborted
-        ? { examined: 0, resolved: 0 }
-        : await sweepStaleMergeProposals({
-            db: ctx.db,
-            driver: ctx.driver,
-            logger: ctx.logger,
-            now: ctx.now,
-          });
+      const swept = await sweepStaleMergeProposals({
+        db: ctx.db,
+        driver: ctx.driver,
+        logger: ctx.logger,
+        now: ctx.now,
+        signal: ctx.signal,
+      });
       const candidates = loadCandidates(ctx.db);
       const episodeIds = [...new Set(candidates.map((candidate) => candidate.proposal.episodeId))];
       const episodes = await fetchHygieneEpisodeProvenance(ctx.driver, episodeIds);

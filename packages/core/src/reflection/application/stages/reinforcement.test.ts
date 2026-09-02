@@ -2,11 +2,16 @@ import type { Driver } from 'neo4j-driver';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-import { ReinforcementEnqueueStage, REFLECTION_CO_EXTRACTION_TRIGGER } from './reinforcement.js';
+import {
+  coExtractionLedgerKey,
+  ReinforcementEnqueueStage,
+  REFLECTION_CO_EXTRACTION_TRIGGER,
+} from './reinforcement.js';
 import { openLogger } from '../../../infrastructure/logging/logger.js';
 import { SqliteStore } from '../../../infrastructure/sqlite/database.js';
+import { isLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
 import { listReinforcementSignals } from '../../../infrastructure/sqlite/reinforcement-queue.js';
 import type { StageContext } from '../../domain/stage.js';
 import { PIPELINE_VERSION } from '../../domain/version.js';
@@ -163,6 +168,52 @@ describe('ReinforcementEnqueueStage', () => {
     const second = await stage.run(ctx);
     expect(second.status).toBe('skipped');
     expect(listReinforcementSignals(store.db)).toHaveLength(1);
+  });
+
+  it('leaves no partial burst behind when an enqueue fails mid-loop', async () => {
+    const episodeId = 'episode-1';
+    const nodeIds = ['node-1', 'node-2', 'node-3'];
+
+    graph.seedNode(episodeId, ['Episode', 'AionNode']);
+    for (const nodeId of nodeIds) {
+      graph.seedNode(nodeId, ['Entity', 'AionNode'], { type: 'person' });
+      graph.seedEdge('MENTIONS', episodeId, nodeId);
+    }
+
+    let inserts = 0;
+    const prepare = store.db.prepare.bind(store.db);
+    vi.spyOn(store.db, 'prepare').mockImplementation((sql: string) => {
+      if (sql.includes('INSERT INTO reinforcement_queue')) {
+        inserts += 1;
+        if (inserts === 3) {
+          throw new Error('disk I/O error');
+        }
+      }
+      return prepare(sql);
+    });
+
+    const stage = new ReinforcementEnqueueStage();
+    const ctx: StageContext = {
+      driver,
+      db: store.db,
+      provider: {} as any,
+      episodeId,
+      episode: { id: episodeId, sessionId: 'session-1', text: '', turns: [] },
+      logger: openLogger({ filePath: join(dataDir, 'test.jsonl'), level: 'fatal' }),
+      now: new Date('2025-01-15T10:00:00Z'),
+      occurredAt: new Date('2025-01-15T10:00:00Z'),
+      pipelineVersion: PIPELINE_VERSION,
+    };
+
+    await expect(stage.run(ctx)).rejects.toThrow('disk I/O error');
+
+    vi.restoreAllMocks();
+    // The retry owes this episode one burst. A prefix left behind would land a second burst
+    // under a later timestamp, which the flush applies as its own bounded step.
+    expect(listReinforcementSignals(store.db)).toHaveLength(0);
+    expect(isLedgerApplied(store.db, coExtractionLedgerKey(PIPELINE_VERSION, episodeId))).toBe(
+      false,
+    );
   });
 
   it('handles mixed entity and cognitive nodes', async () => {

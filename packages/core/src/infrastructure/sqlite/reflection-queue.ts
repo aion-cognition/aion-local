@@ -76,8 +76,9 @@ export type EnqueueReflectionJobOptions = {
   readonly sessionId?: string;
   /**
    * The moment stamped on the row. A queue row is a system-time record, so this is the wall
-   * clock; the caller passes it rather than the writer reading one, so an intake's archive
-   * stamp and its queue stamp agree exactly.
+   * clock. Intake passes its own archive stamp, so an episode's archive row and its queue row
+   * agree exactly. A caller with no clock in scope, such as `reconcile`'s backfill, omits it
+   * and the row stamps at enqueue.
    */
   readonly now?: Date;
 };

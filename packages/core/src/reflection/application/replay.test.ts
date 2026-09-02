@@ -355,6 +355,30 @@ describe('aborting a replay', () => {
     expect(calls).toHaveLength(2);
   });
 
+  it('stops inside the batch, without running the rows behind the one that aborted it', async () => {
+    archiveAll();
+    const controller = new AbortController();
+    const aborting: ReplayDeps = {
+      ...deps,
+      runner: {
+        run: async (episodeId, options) => {
+          controller.abort();
+          return deps.runner.run(episodeId, options);
+        },
+      },
+    };
+
+    const report = await replayExperiences(aborting, {
+      batchSize: 4,
+      signal: controller.signal,
+    });
+
+    expect(report.aborted).toBe(true);
+    expect(report.scanned).toBe(1);
+    expect(report.cursor?.occurredAt).toBe(OCCURRED[0]);
+    expect(calls).toHaveLength(1);
+  });
+
   it('replays nothing when the signal is already aborted', async () => {
     archiveAll();
 

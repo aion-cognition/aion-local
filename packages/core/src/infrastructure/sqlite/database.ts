@@ -52,17 +52,25 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     session_id TEXT,
     lane_seq INTEGER NOT NULL DEFAULT 0
   )`,
+  /**
+   * `burst_id` names the set of rows one producer wrote in one go. Two producers stamping the
+   * same trigger in the same millisecond are otherwise indistinguishable, and the flush would
+   * read them as one larger clique and over-discount both. Null on a row written before the
+   * column existed, where the trigger and the timestamp are all there is to group by.
+   */
   `CREATE TABLE IF NOT EXISTS reinforcement_queue (
     id TEXT PRIMARY KEY,
     source_id TEXT NOT NULL,
     target_id TEXT NOT NULL,
     trigger TEXT NOT NULL,
-    ts TEXT NOT NULL
+    ts TEXT NOT NULL,
+    burst_id TEXT
   )`,
   /**
-   * Sub-threshold contradiction judgments from reflection's supersession stage. They are
-   * never applied: `aion why` surfaces them and a person decides. `UNIQUE (old_id, new_id)`
-   * is what makes a re-judged pair one row rather than a growing pile.
+   * Every affirmative contradiction judgment from reflection's supersession stage. `aion why`
+   * surfaces the open rows and a person applies them, and the stage applies them itself under
+   * `AION_SUPERSEDE_MODE=unanimous`. `UNIQUE (old_id, new_id)` is what makes a re-judged pair
+   * one row rather than a growing pile.
    */
   `CREATE TABLE IF NOT EXISTS supersession_proposals (
     id TEXT PRIMARY KEY,
@@ -92,8 +100,9 @@ const SCHEMA_STATEMENTS: readonly string[] = [
    * session was ever served.
    *
    * `fingerprint` is what the item said when it was served, so a memory that changed since is
-   * told again rather than treated as known. `first_served_at` is never rewritten; a re-serve
-   * moves `last_served_at` only, which is what the session's rows are aged against.
+   * told again rather than treated as known. `last_served_at` is what every read and the idle
+   * purge use. `first_served_at` is written once and never rewritten or selected: it is kept so
+   * a later forensic read can say when a session first learned a memory.
    */
   `CREATE TABLE IF NOT EXISTS served_items (
     session_id TEXT NOT NULL,
@@ -156,10 +165,6 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     idempotency_key TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL
   )`,
-  // The canonical arm of the decision lookup. The member arm walks the stored JSON list, which
-  // no index covers; at one row per merge that scan is cheaper than a second table to join.
-  `CREATE INDEX IF NOT EXISTS entity_merge_decisions_canonical_idx
-     ON entity_merge_decisions (canonical_id)`,
   /**
    * One row per reflection payload intake ever stored, independent of what the graph does
    * with it afterward. A replay reads this table to re-run the pipeline against the same
@@ -191,6 +196,31 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     origin_json TEXT,
     payload_json TEXT NOT NULL
   )`,
+];
+
+/**
+ * Indexes, declared after the tables and applied after `COLUMN_ADDITIONS`. A retrofitted
+ * substrate does not have the added columns until that pass runs, and an index over one of them
+ * fails outright on a table that predates it.
+ */
+const INDEX_STATEMENTS: readonly string[] = [
+  // The claim's whole ORDER BY, so a claim seeks the first unclaimed row instead of sorting
+  // every pending one. The lane CASE is indexed as the expression the statement writes, since
+  // an index on `lane` alone sorts bulk ahead of interactive.
+  `CREATE INDEX IF NOT EXISTS reflection_queue_claim_idx
+     ON reflection_queue (CASE lane WHEN 'interactive' THEN 0 ELSE 1 END, lane_seq, attempts, id)
+     WHERE claimed_at IS NULL`,
+  // The high-water read every enqueue makes to stamp `lane_seq` for its (lane, session) group.
+  `CREATE INDEX IF NOT EXISTS reflection_queue_lane_seq_idx
+     ON reflection_queue (lane, session_id, lane_seq)`,
+  // The right arm of the node lookup. `UNIQUE (old_id, new_id)` already covers the left one as
+  // a prefix, and SQLite applies its OR optimization only when both arms can seek.
+  `CREATE INDEX IF NOT EXISTS supersession_proposals_new_idx
+     ON supersession_proposals (new_id)`,
+  // The right arm of the node lookup. `UNIQUE (left_id, right_id)` already covers the left one
+  // as a prefix, and SQLite applies its OR optimization only when both arms can seek.
+  `CREATE INDEX IF NOT EXISTS entity_merge_proposals_right_idx
+     ON entity_merge_proposals (right_id)`,
   // A replay walks rows oldest first by keyset, never OFFSET, so its cursor survives an abort.
   `CREATE INDEX IF NOT EXISTS experience_archive_replay_idx
      ON experience_archive (occurred_at, id)`,
@@ -216,6 +246,7 @@ const COLUMN_ADDITIONS: readonly ColumnAddition[] = [
   { table: 'reflection_queue', column: 'lane', definition: "TEXT NOT NULL DEFAULT 'interactive'" },
   { table: 'reflection_queue', column: 'session_id', definition: 'TEXT' },
   { table: 'reflection_queue', column: 'lane_seq', definition: 'INTEGER NOT NULL DEFAULT 0' },
+  { table: 'reinforcement_queue', column: 'burst_id', definition: 'TEXT' },
   { table: 'last_pack', column: 'as_of', definition: 'TEXT' },
   { table: 'last_pack', column: 'knew_at', definition: 'TEXT' },
   {
@@ -271,6 +302,9 @@ export function openSqliteHandle(target: SqliteTarget): SqliteHandle {
         db.exec(statement);
       }
       applyColumnAdditions(db);
+      for (const statement of INDEX_STATEMENTS) {
+        db.exec(statement);
+      }
       // Runs on every open so every entrypoint gets it, and does nothing once a substrate has
       // been through it.
       migrateUnversionedLedgerKeys(db);

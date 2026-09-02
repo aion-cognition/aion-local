@@ -1,93 +1,28 @@
-import type { RecallMethod } from '@aion/protocol';
 import { describe, expect, it } from 'vitest';
 
-import type { AdmissionPolicy, Measurement } from './admission.js';
 import {
   fuse,
   reciprocalRank,
   SUPERSEDED_RANK_WEIGHT,
-  type FusedItem,
   type FusionCandidate,
   type FusionOptions,
-  type RankedList,
 } from './fusion.js';
+import {
+  CALIBRATED,
+  candidate,
+  ids,
+  items,
+  list,
+  RRF,
+  RRF_CONSTANT,
+} from './test-support/fusion.fixture.js';
 import type { Vector } from '../../infrastructure/providers/types.js';
-
-const RRF_CONSTANT = 60;
 
 /**
  * Fusion's other half: what an admitted item is explained by, and the order the pack sees.
  * Admission itself is `fusion.test.ts`; these run under a policy that admits everything except
  * where a case is about the floor's interaction with ordering.
  */
-const ADMIT_ALL: AdmissionPolicy = { vectorFloor: 0, corroborationFloor: 0, bm25Mode: 'any' };
-
-/** The shipped shape: a calibrated cosine floor, a lower corroboration floor, exact-only BM25. */
-const CALIBRATED: AdmissionPolicy = {
-  vectorFloor: 0.6,
-  corroborationFloor: 0.55,
-  bm25Mode: 'exact',
-};
-
-const RRF: FusionOptions = {
-  rrfConstant: RRF_CONSTANT,
-  admission: ADMIT_ALL,
-  reranker: 'rrf',
-  mmrLambda: 0.5,
-  clusterCap: 2,
-};
-
-type CandidateOverrides = {
-  readonly content?: string;
-  readonly method?: RecallMethod;
-  readonly relevance?: number;
-  readonly superseded?: boolean;
-  readonly activation?: number;
-  readonly structural?: boolean;
-  readonly labels?: readonly string[];
-  readonly evidence?: readonly Measurement[];
-  readonly mentionCount?: number;
-};
-
-function candidate(id: string, overrides: CandidateOverrides = {}): FusionCandidate {
-  const method = overrides.method ?? 'vector';
-  const relevance = overrides.relevance ?? 0.8;
-  const base = {
-    id,
-    labels: overrides.labels ?? ['Episode', 'Memory'],
-    content: overrides.content ?? `content of ${id}`,
-    rationale: { method, score: overrides.activation ?? relevance },
-    relevance,
-    ...(overrides.evidence === undefined ? {} : { evidence: overrides.evidence }),
-    ...(overrides.activation === undefined ? {} : { activation: overrides.activation }),
-    ...(overrides.structural === undefined ? {} : { isStructural: overrides.structural }),
-    ...(overrides.mentionCount === undefined ? {} : { mentionCount: overrides.mentionCount }),
-  };
-  if (overrides.superseded !== true) {
-    return { ...base, currency: 'current' as const };
-  }
-  return {
-    ...base,
-    currency: 'superseded' as const,
-    supersededBy: { id: `${id}-successor`, at: new Date('2026-08-01T00:00:00.000Z') },
-  };
-}
-
-function list(
-  leg: RankedList['leg'],
-  candidates: readonly FusionCandidate[],
-  weight = 1,
-): RankedList {
-  return { leg, weight, candidates };
-}
-
-function items(lists: readonly RankedList[], options: FusionOptions = RRF): readonly FusedItem[] {
-  return fuse(lists, options).items;
-}
-
-function ids(fused: readonly { readonly id: string }[]): string[] {
-  return fused.map((item) => item.id);
-}
 
 describe('structural nodes', () => {
   it('never packs the backbone, however strongly the spread activated it', () => {

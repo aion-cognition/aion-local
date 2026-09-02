@@ -4,9 +4,10 @@ import { hashContent } from './content.js';
 import type { ChatMessage, JsonSchema } from '../../infrastructure/providers/types.js';
 
 /**
- * A session's close (the MCP transport ending, or 30 minutes of silence) is the boundary
- * that warrants a narrative. Everything here is pure, so the boundary rule, the versioning
- * rule, and the identity of an episode set are all assertable without a graph.
+ * Three boundaries warrant a session narrative: the close (the MCP transport ending), silence
+ * past the idle window, and a mid-session boundary, whose rule lives in `mid-session.ts` and
+ * calls `isSessionIdle` here as one of its arms. Everything here is pure, so the boundary rule,
+ * the versioning rule, and the identity of an episode set are all assertable without a graph.
  */
 
 /** The only scope produced here. Day and week scopes belong to maintenance operations. */
@@ -170,7 +171,12 @@ export function decideSessionNarrative(
     return skip(reason, key, matching.version, episodeIds, matching.open ? stragglers : []);
   }
 
-  const standing = open[0];
+  // The highest open version, picked here rather than taken from the read's order: a caller
+  // whose Cypher loses its ORDER BY would otherwise judge this close against an older version.
+  const standing = open.reduce<ExistingNarrative | undefined>(
+    (top, narrative) => (top === undefined || narrative.version > top.version ? narrative : top),
+    undefined,
+  );
   if (standing !== undefined && episodes.length <= standing.coverageCount) {
     return skip(
       `version ${String(standing.version)} covers ${String(standing.coverageCount)} episodes, this close ${String(episodes.length)}`,
@@ -245,7 +251,8 @@ function round(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
-function clip(text: string, maxChars: number): string {
+/** Shared with the consolidation engine, which renders its members the same way. */
+export function clip(text: string, maxChars: number): string {
   return text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;
 }
 
@@ -253,7 +260,7 @@ function clip(text: string, maxChars: number): string {
  * Header and content on separate lines. Run together, a thin item's whole line reads as a
  * sentence and the model copies the header with it into the stored narrative.
  */
-function renderItem(item: NarrativeSourceItem): string {
+export function renderItem(item: NarrativeSourceItem): string {
   const when = item.occurredAt === undefined ? '' : ` ${item.occurredAt.toISOString()}`;
   return `[${item.handle}] ${item.kind}${when}\n${item.text}`;
 }
@@ -387,28 +394,43 @@ export function citedSourceIds(raw: readonly string[], source: NarrativeSource):
   return resolveCitations(raw, new Map(source.items.map((item) => [item.handle, item.id])));
 }
 
+/** One kept sentence and the graph ids it cited, which is what a per-sentence review reads. */
+export type GroundedSentence = {
+  readonly text: string;
+  /** Never empty: a sentence citing nothing the prompt offered is dropped. */
+  readonly citations: readonly string[];
+};
+
+export type GroundedSentences = {
+  readonly sentences: readonly GroundedSentence[];
+  /** Every cited id, in the order it was first cited. */
+  readonly citations: readonly string[];
+  readonly dropped: number;
+};
+
 /**
  * The grounding rule, enforced rather than requested: a sentence citing no source item the
  * prompt actually supplied never reaches the node, and the budget caps what a model that
- * ignored it can still store.
+ * ignored it can still store. Both axes filter here; what differs is the shape each one stores,
+ * which is the caller's to fold.
  */
-export function assembleNarrative(
+export function groundSentences(
   output: NarrativeOutput,
   source: NarrativeSource,
-): GroundedNarrative {
+): GroundedSentences {
   const byHandle = new Map(source.items.map((item) => [item.handle, item.id]));
-  const kept: string[] = [];
+  const sentences: GroundedSentence[] = [];
   const citations: string[] = [];
   let dropped = 0;
 
   for (const sentence of output.sentences) {
     const text = sentence.text.trim();
     const cited = resolveCitations(sentence.source_ids, byHandle);
-    if (text.length === 0 || cited.length === 0 || kept.length >= source.sentenceBudget) {
+    if (text.length === 0 || cited.length === 0 || sentences.length >= source.sentenceBudget) {
       dropped += 1;
       continue;
     }
-    kept.push(text);
+    sentences.push({ text, citations: cited });
     for (const id of cited) {
       if (!citations.includes(id)) {
         citations.push(id);
@@ -416,31 +438,60 @@ export function assembleNarrative(
     }
   }
 
+  return { sentences, citations, dropped };
+}
+
+/** The session axis's flat shape: one body, one citation list. */
+export function assembleNarrative(
+  output: NarrativeOutput,
+  source: NarrativeSource,
+): GroundedNarrative {
+  const grounded = groundSentences(output, source);
+  const kept = grounded.sentences.map((sentence) => sentence.text);
+
   return {
     summary: kept[0] ?? '',
     narrative: kept.join(' '),
-    citations,
+    citations: grounded.citations,
     kept: kept.length,
-    dropped,
+    dropped: grounded.dropped,
   };
 }
 
-function narrativeSystemPrompt(sentenceBudget: number): string {
+/**
+ * The one synthesis prompt both axes run on. The rules are identical; what a caller supplies is
+ * what it is compressing and the noun its members answer to, so a change to the grounding rule
+ * reaches the day rollup and the session narrative together.
+ */
+export function synthesisSystemPrompt(input: {
+  readonly opening: string;
+  readonly source: string;
+  readonly noun: string;
+  readonly sentenceBudget: number;
+}): string {
   return [
-    "You compress an AI coding agent's work session into one durable memory.",
-    "The input is the session's source items in the order they happened; each starts with a header line tagged like [S1] and its content follows.",
-    'Answer with sentences. Every sentence lists in "source_ids" the tags of the items it draws on.',
-    'State only what the cited items state: never add a cause, motive, outcome, participant, quantity or judgement they do not contain.',
-    'Name the concrete work, decisions and results the items record, in their own wording where it is specific.',
+    input.opening,
+    `The input is ${input.source} in the order they happened; each starts with a header line tagged like [S1] and its content follows.`,
+    `Answer with sentences. Every sentence lists in "source_ids" the tags of the ${input.noun} it draws on.`,
+    `State only what the cited ${input.noun} state: never add a cause, motive, outcome, participant, quantity or judgement they do not contain.`,
+    `Name the concrete work, decisions and results the ${input.noun} record, in their own wording where it is specific.`,
     'Write your own sentences; never copy a tag or a header line into one.',
-    `Write at most ${String(sentenceBudget)} sentences, and fewer when the items say little.`,
+    `Write at most ${String(input.sentenceBudget)} sentences, and fewer when the ${input.noun} say little.`,
     'A sentence you cannot cite is a sentence you must not write.',
   ].join(' ');
 }
 
 export function buildNarrativeMessages(source: NarrativeSource): ChatMessage[] {
   return [
-    { role: 'system', content: narrativeSystemPrompt(source.sentenceBudget) },
+    {
+      role: 'system',
+      content: synthesisSystemPrompt({
+        opening: "You compress an AI coding agent's work session into one durable memory.",
+        source: "the session's source items",
+        noun: 'items',
+        sentenceBudget: source.sentenceBudget,
+      }),
+    },
     { role: 'user', content: `Session:\n${source.text}` },
   ];
 }

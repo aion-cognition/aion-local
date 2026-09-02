@@ -1,6 +1,8 @@
 /**
- * The reflection layer's public surface: intake, the orchestrator and its stages, the worker,
- * narratives, lag, and the proposal review path.
+ * The reflection layer's public surface. Every name here is one something outside core imports:
+ * intake and lane assignment, the orchestrator and the stages consumers construct directly, the
+ * worker, replay, narratives and the episode timeline, lag, enrichment reconcile, and the
+ * proposal review path. The stages the pipeline wires for itself stay unexported.
  */
 
 export { handleReflection, INTEGRATE_JOB_TYPE } from './application/intake.js';
@@ -55,11 +57,9 @@ export type { TimelineEvent } from './application/episode-timeline.js';
 
 export { ReflectionWorker } from './application/worker.js';
 
-export { findPendingVectorNodes } from './application/vectors.js';
-
 export { EntityExtractionStage } from './application/stages/entities.js';
 
-export { DEFAULT_ENTITY_MERGE_MODE, EntityDedupStage } from './application/stages/entity-dedup.js';
+export { EntityDedupStage } from './application/stages/entity-dedup.js';
 
 export { AssociationInferenceStage } from './application/stages/associations.js';
 

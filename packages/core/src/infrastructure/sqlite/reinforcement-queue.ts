@@ -20,11 +20,17 @@ type ReinforcementSignalRow = {
 };
 
 type SignalBurstRow = {
-  trigger: string;
-  ts: string;
+  burst: string;
   lo: number;
   n: number;
 };
+
+/**
+ * How a burst is identified in SQL. `burst_id` is the producer's own name for the set of rows
+ * it wrote in one go; a row written before that column existed falls back to the trigger and
+ * the timestamp, which is all such a row carries.
+ */
+const BURST_KEY = "COALESCE(burst_id, trigger || ':' || ts)";
 
 function toReinforcementSignal(row: ReinforcementSignalRow): ReinforcementSignal {
   return {
@@ -37,10 +43,10 @@ function toReinforcementSignal(row: ReinforcementSignalRow): ReinforcementSignal
 }
 
 /**
- * Matches `sqlite.reinforcementQueueCap`'s default (`config/defaults.ts`, parity asserted in
- * `stage-defaults.test.ts`). A rolling window is closer to Hebbian semantics than an
- * unbounded log: signals older than the window stand for co-activations the graph has
- * already moved on from.
+ * `knobs.ts` imports this constant as `sqlite.reinforcementQueueCap`'s default, so there is one
+ * value rather than two to keep in step. A rolling window is closer to Hebbian semantics than an
+ * unbounded log: signals older than the window stand for co-activations the graph has already
+ * moved on from.
  */
 export const DEFAULT_REINFORCEMENT_QUEUE_CAP = 50_000;
 
@@ -74,10 +80,15 @@ function trimToCapacity(db: SqliteHandle, cap: number): void {
   if (overflow <= 0) {
     return;
   }
-  const dropped = db
-    .prepare('DELETE FROM reinforcement_queue WHERE rowid < ?')
-    .run(bounds.lo + overflow).changes;
-  setMeta(db, DROPPED_COUNT_META_KEY, String(reinforcementQueueDroppedCount(db) + dropped));
+  const firstKept = bounds.lo + overflow;
+  // The delete and the counter are one unit: a total added to a base another connection has
+  // already moved past is that trim's drops thrown away.
+  db.transaction(() => {
+    const dropped = db
+      .prepare('DELETE FROM reinforcement_queue WHERE rowid < ?')
+      .run(firstKept).changes;
+    setMeta(db, DROPPED_COUNT_META_KEY, String(reinforcementQueueDroppedCount(db) + dropped));
+  }).immediate();
 }
 
 /**
@@ -92,11 +103,13 @@ export function enqueueReinforcementSignal(
   trigger: string,
   ts: string = new Date().toISOString(),
   cap: number = DEFAULT_REINFORCEMENT_QUEUE_CAP,
+  burstId?: string,
 ): string {
   const id = randomUUID();
   db.prepare(
-    'INSERT INTO reinforcement_queue (id, source_id, target_id, trigger, ts) VALUES (?, ?, ?, ?, ?)',
-  ).run(id, sourceId, targetId, trigger, ts);
+    `INSERT INTO reinforcement_queue (id, source_id, target_id, trigger, ts, burst_id)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(id, sourceId, targetId, trigger, ts, burstId ?? null);
   trimToCapacity(db, cap);
   return id;
 }
@@ -115,9 +128,8 @@ export function countReinforcementSignals(db: SqliteHandle): number {
 }
 
 /**
- * The oldest bursts, whole. A burst is the set of rows one producer wrote in one go, which it
- * stamps with a single trigger and timestamp: an episode's co-extraction pairs, or one
- * recall's co-activated pairs.
+ * The oldest bursts, whole. A burst is the set of rows one producer wrote in one go under one
+ * `burst_id`: an episode's co-extraction pairs, or one recall's co-activated pairs.
  *
  * Batching by burst rather than by row is what makes the clique discount computable. The
  * discount needs to know how many nodes the burst touched, and that is only readable from a
@@ -140,9 +152,9 @@ export function claimReinforcementSignals(
 
   const bursts = db
     .prepare(
-      `SELECT trigger, ts, MIN(rowid) AS lo, count(*) AS n
+      `SELECT ${BURST_KEY} AS burst, MIN(rowid) AS lo, count(*) AS n
        FROM reinforcement_queue
-       GROUP BY trigger, ts
+       GROUP BY burst
        ORDER BY lo ASC
        LIMIT ?`,
     )
@@ -161,11 +173,14 @@ export function claimReinforcementSignals(
     return [];
   }
 
-  const predicate = claimed.map(() => '(trigger = ? AND ts = ?)').join(' OR ');
-  const parameters = claimed.flatMap((burst) => [burst.trigger, burst.ts]);
+  const placeholders = claimed.map(() => '?').join(', ');
   const selected = db
-    .prepare(`SELECT * FROM reinforcement_queue WHERE ${predicate} ORDER BY rowid ASC`)
-    .all(...parameters) as ReinforcementSignalRow[];
+    .prepare(
+      `SELECT * FROM reinforcement_queue
+       WHERE ${BURST_KEY} IN (${placeholders})
+       ORDER BY rowid ASC`,
+    )
+    .all(...claimed.map((burst) => burst.burst)) as ReinforcementSignalRow[];
   return selected.map(toReinforcementSignal);
 }
 
@@ -226,9 +241,15 @@ export type ReinforcementFlushCounts = {
  * what separates a quiet queue from a stalled operation.
  */
 export function recordReinforcementFlush(db: SqliteHandle, counts: ReinforcementFlushCounts): void {
-  const current = reinforcementFlushCounters(db);
-  setMeta(db, FLUSH_META_KEYS.signals, String(current.signalsApplied + counts.signalsApplied));
-  setMeta(db, FLUSH_META_KEYS.pairs, String(current.pairsApplied + counts.pairsApplied));
-  setMeta(db, FLUSH_META_KEYS.edges, String(current.edgesUpdated + counts.edgesUpdated));
-  setMeta(db, FLUSH_META_KEYS.lastRunAt, counts.at);
+  // The read and the four writes are one unit, as in the decay sweep's counters: totals added
+  // to a base another flush has already moved past are that flush's totals thrown away.
+  // Immediate takes the write lock at BEGIN, so a second flush waits out busy_timeout instead
+  // of working from a stale snapshot.
+  db.transaction(() => {
+    const current = reinforcementFlushCounters(db);
+    setMeta(db, FLUSH_META_KEYS.signals, String(current.signalsApplied + counts.signalsApplied));
+    setMeta(db, FLUSH_META_KEYS.pairs, String(current.pairsApplied + counts.pairsApplied));
+    setMeta(db, FLUSH_META_KEYS.edges, String(current.edgesUpdated + counts.edgesUpdated));
+    setMeta(db, FLUSH_META_KEYS.lastRunAt, counts.at);
+  }).immediate();
 }

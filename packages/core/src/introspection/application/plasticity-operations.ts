@@ -10,6 +10,10 @@ import type { IntrospectionOperation, OperationOutcome } from '../domain/operati
  * Adapts the existing reinforcement flush and decay sweep to the operation contract. The flush
  * side adds one behaviour beyond relevance and outcome shape: a bounded per-run drain loop,
  * since arrival on a heavy day outruns what a single claimed batch can clear.
+ *
+ * Each carries the kill switch every other weight operation carries. Off, the run is a noop:
+ * reinforcement rows wait in the queue for a deployment that turns it back on, and stale edges
+ * hold the strength they have.
  */
 
 export const REINFORCEMENT_FLUSH_OPERATION = 'reinforcement_flush';
@@ -156,6 +160,15 @@ export function reinforcementFlushOperation(): IntrospectionOperation {
     measure: (health) => health.plasticity.reinforcementQueueDepth,
     improves: 'lower',
     run: async (ctx): Promise<OperationOutcome> => {
+      if (!ctx.config.maintenance.reinforcementFlush) {
+        return {
+          status: 'noop',
+          itemsProcessed: 0,
+          itemsAffected: 0,
+          detail:
+            'reinforcement disabled by AION_MAINTENANCE_REINFORCEMENT_FLUSH; the queue is left as is',
+        };
+      }
       const report = await drainReinforcementQueue(
         () =>
           flushReinforcementQueue(
@@ -189,6 +202,14 @@ export function memoryDecayOperation(): IntrospectionOperation {
     bucket: 'day',
     relevance: memoryDecayRelevance,
     run: async (ctx): Promise<OperationOutcome> => {
+      if (!ctx.config.maintenance.memoryDecay) {
+        return {
+          status: 'noop',
+          itemsProcessed: 0,
+          itemsAffected: 0,
+          detail: 'decay disabled by AION_MAINTENANCE_MEMORY_DECAY; no edges scanned',
+        };
+      }
       const scanQuota = decayScanQuota(
         ctx.health.graph.decayableEdges,
         ctx.config.hebbian.decayScanFraction,

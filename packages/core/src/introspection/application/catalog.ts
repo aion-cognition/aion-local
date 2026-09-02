@@ -32,9 +32,7 @@ import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-
  *
  * Order is documentation, not priority. Selection is by tier and urgency, and ties break on
  * waiting time and then on name, so moving a line here changes nothing about what runs. The
- * first four groups read outward from the substrate: what makes a node findable at all, then
- * what makes the edges between nodes carry weight, then what the nodes say, then the shape the
- * whole graph has taken. The last group stands apart: it repairs nothing, it only watches.
+ * comment above each group says what that group is for.
  *
  * Twelve of the twenty-four declare a `measure`, a number in the health snapshot their run is
  * scored on moving. The other twelve are recorded as unmeasured rather than scored, and each is

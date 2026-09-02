@@ -13,6 +13,7 @@ import {
   DESCRIPTION_REFRESH_METHOD,
   DESCRIPTION_REFRESH_METHOD_PROPERTY,
   PRIOR_DESCRIPTIONS_PROPERTY,
+  refreshEntityDescription,
 } from '../../../infrastructure/graph/entity-description-queries.js';
 import { linkEntityMentions, mergeEntities } from '../../../infrastructure/graph/entity-queries.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
@@ -158,5 +159,48 @@ describe('descriptionFreshnessOperation against a live graph', () => {
     expect(outcome.status).toBe('noop');
     expect(outcome.itemsAffected).toBe(0);
     expect(calls).toHaveLength(0);
+  }, 60_000);
+
+  it('will not rewrite an entity that lost currency while the model was answering', async () => {
+    // The two model calls are long enough for a merge, a decay, or a forget to close the
+    // entity. The write is an in-place replacement with no close to undo, so it carries the
+    // currency test itself.
+    await harness.driver.executeQuery(
+      'MATCH (e:Entity { id: $id }) SET e.valid_until = datetime($now)',
+      { id: entityId, now: NOW.toISOString() },
+    );
+    try {
+      const applied = await refreshEntityDescription(harness.driver, {
+        id: entityId,
+        text: 'a rewrite nobody should be able to write',
+        contentVector: new Array<number>(EMBED_DIMENSION).fill(0.02),
+        mentionCount: MENTION_COUNT,
+        now: NOW,
+      });
+
+      expect(applied).toBe(false);
+      const props = await nodeProperties(harness.driver, entityId);
+      expect(props.text).toBe(REFRESHED_DESCRIPTION);
+    } finally {
+      await harness.driver.executeQuery('MATCH (e:Entity { id: $id }) REMOVE e.valid_until', {
+        id: entityId,
+      });
+    }
+  }, 60_000);
+
+  it('does nothing at all with AION_MAINTENANCE_DESCRIPTION_FRESHNESS off', async () => {
+    const off: Config = {
+      ...config,
+      maintenance: { ...config.maintenance, descriptionFreshness: false },
+    };
+    const outcome = await descriptionFreshnessOperation().run({ ...contextFor(), config: off });
+
+    expect(outcome).toEqual({
+      status: 'noop',
+      itemsProcessed: 0,
+      itemsAffected: 0,
+      detail:
+        'description freshness disabled by AION_MAINTENANCE_DESCRIPTION_FRESHNESS; no entity examined',
+    });
   }, 60_000);
 });

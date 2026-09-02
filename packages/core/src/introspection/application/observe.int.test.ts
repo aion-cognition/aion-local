@@ -9,12 +9,12 @@ import type { Config } from '../../infrastructure/config/schema.js';
 import { writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
 import { upsertEdge } from '../../infrastructure/graph/edges.js';
 import {
-  countContextVectorCoverage,
   countEpisodesWithoutSession,
   countOrphanNodes,
   countVectorParity,
 } from '../../infrastructure/graph/introspection-health.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
+import { findPendingVectorNodes } from '../../infrastructure/graph/pending-vectors.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
@@ -27,6 +27,8 @@ import { squashName } from '../../reflection/domain/entity-reconciliation.js';
 const EMBED_DIMENSION = 8;
 const NOW = new Date('2026-08-29T14:00:00.000Z');
 const VECTOR = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
+// Vector parity counts a node as vectored only with the hash the floats were taken over.
+const VECTOR_HASH = 'a'.repeat(64);
 
 let harness: Neo4jHarness;
 let db: SqliteHandle;
@@ -63,7 +65,7 @@ beforeAll(async () => {
     await writeStampedNode(harness.driver, {
       label: 'Episode',
       id,
-      properties: { text: `body of ${id}`, content_vec: VECTOR },
+      properties: { text: `body of ${id}`, content_vec: VECTOR, content_vec_hash: VECTOR_HASH },
       now: NOW,
     });
     await upsertEdge(harness.driver, {
@@ -81,7 +83,11 @@ beforeAll(async () => {
   await writeStampedNode(harness.driver, {
     label: 'Insight',
     id: 'insight-from-episode',
-    properties: { text: 'what the first episode came to', content_vec: VECTOR },
+    properties: {
+      text: 'what the first episode came to',
+      content_vec: VECTOR,
+      content_vec_hash: VECTOR_HASH,
+    },
     now: NOW,
   });
   await upsertEdge(harness.driver, {
@@ -98,7 +104,11 @@ beforeAll(async () => {
   await writeStampedNode(harness.driver, {
     label: 'Episode',
     id: 'episode-loose',
-    properties: { text: 'body of the loose episode', content_vec: VECTOR },
+    properties: {
+      text: 'body of the loose episode',
+      content_vec: VECTOR,
+      content_vec_hash: VECTOR_HASH,
+    },
     now: NOW,
   });
   await writeStampedNode(harness.driver, {
@@ -121,6 +131,7 @@ beforeAll(async () => {
       type: 'concept',
       text: 'linked',
       content_vec: VECTOR,
+      content_vec_hash: VECTOR_HASH,
     },
     now: NOW,
   });
@@ -149,6 +160,26 @@ describe('graph health counts', () => {
     expect(parity).toEqual({ expected: 6, vectored: 5 });
   });
 
+  it('counts a vector with no hash as missing, the same population the drain reads', async () => {
+    // A re-enqueue clears the hash and leaves the floats: the node is behind, because nothing
+    // can show the stored vector was taken over the text the node holds now.
+    await harness.driver.executeQuery(
+      'MATCH (n:Episode { id: $id }) SET n.content_vec_hash = null',
+      { id: 'episode-loose' },
+    );
+    try {
+      expect(await countVectorParity(harness.driver)).toEqual({ expected: 6, vectored: 4 });
+      expect(await findPendingVectorNodes(harness.driver, 10)).toContainEqual(
+        expect.objectContaining({ id: 'episode-loose' }),
+      );
+    } finally {
+      await harness.driver.executeQuery(
+        'MATCH (n:Episode { id: $id }) SET n.content_vec_hash = $hash',
+        { id: 'episode-loose', hash: VECTOR_HASH },
+      );
+    }
+  });
+
   it('counts a node whose every edge is backbone or provenance as an orphan', async () => {
     const orphans = await countOrphanNodes(harness.driver);
     // Four of the six memory nodes are in scope: the two episodes nothing was extracted from
@@ -161,17 +192,6 @@ describe('graph health counts', () => {
 
   it('counts an episode with no session as a missing backbone link', async () => {
     expect(await countEpisodesWithoutSession(harness.driver)).toBe(1);
-  });
-
-  it('counts only the nodes a context vector could be computed for right now', async () => {
-    const coverage = await countContextVectorCoverage(harness.driver);
-    // Three of the six memory nodes have a current edge to a neighbor that carries a content
-    // vector: the enriched episode reaches its insight, the insight reaches that episode, and
-    // the unvectorized entity reaches the associated one. The associated entity's only
-    // neighbor has no content vector, the second episode reaches nothing but its session, and
-    // the loose episode reaches nothing at all, so none of the three is a gap a run could
-    // close. Nothing here writes a context vector, so every one of the three is missing one.
-    expect(coverage).toEqual({ expected: 3, present: 0 });
   });
 });
 
@@ -234,9 +254,6 @@ describe('observeHealth', () => {
     // That same CO_OCCURS edge sits at 0.5, well above the 0.1 weight floor, so nothing here
     // is prunable and the narrower count reads zero while the coarser one reads one.
     expect(snapshot.graph.atFloorAssociationEdges).toBe(0);
-    expect(snapshot.graph.contextVectorExpected).toBe(3);
-    expect(snapshot.graph.contextVectorPresent).toBe(0);
-    expect(snapshot.graph.contextVectorCoverage).toBe(0);
     expect(snapshot.enrichment.unenriched).toBe(3);
     expect(snapshot.queue.depth).toBe(0);
     expect(snapshot.proposals.oldestOpenAgeMs).toBeUndefined();
@@ -274,6 +291,5 @@ describe('observeHealth', () => {
     expect(snapshot.entities.tier0Eligible).toBe(0);
     expect(snapshot.entities.identifierShaped).toBe(0);
     expect(snapshot.graph.atFloorAssociationEdges).toBe(0);
-    expect(snapshot.graph.contextVectorCoverage).toBe(1);
   });
 });

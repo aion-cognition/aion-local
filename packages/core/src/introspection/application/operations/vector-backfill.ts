@@ -1,9 +1,10 @@
+import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { findNeighborContentVectors } from '../../../infrastructure/graph/context-vector-queries.js';
 import {
   findStaleContextVectorNodes,
+  markContextVectorSynced,
   writeContextVectorSync,
 } from '../../../infrastructure/graph/context-vector-sync.js';
-import { OllamaProvider } from '../../../infrastructure/providers/ollama-provider.js';
 import {
   attachContentVectors,
   findPendingVectorNodes,
@@ -18,16 +19,16 @@ import type {
 
 export const VECTOR_BACKFILL_OPERATION = 'vector_backfill';
 
-/** Mirrors `maintenance.vectorBackfillBatchSize`'s own default; see `defaults.ts` for why. */
-const DEFAULT_VECTOR_BACKFILL_BATCH_SIZE = 100;
-
 /**
  * Two passes over the same population, one primary and one a tightly bounded addendum.
  *
  * The primary pass is the pending-vector drain: `:Memory` nodes committed without a
- * `content_vec` because intake writes before it embeds. Its relevance tracks the backlog
- * directly (`vectorExpected` minus `vectorPresent` is already in the snapshot), which is
- * what makes this operation preempt-worthy the moment vector search starts missing nodes.
+ * `content_vec`, or carrying one with no `content_vec_hash` to show it was taken over the
+ * node's current text. Its relevance tracks the backlog directly (`vectorExpected` minus
+ * `vectorPresent` is already in the snapshot, counted over the same predicate the drain
+ * reads), which is what makes this operation preempt-worthy the moment vector search starts
+ * missing nodes. Relevance divides by the shipped default rather than the live batch knob,
+ * since the contract hands it only the health snapshot.
  *
  * The second pass has no backlog gauge of its own: a node's `context_vec` goes stale when a
  * neighbor's edge weight moves after reflection last computed it, and nothing in the health
@@ -41,7 +42,7 @@ export function vectorBackfillRelevance(health: HealthSnapshot): number {
   if (pending <= 0) {
     return 0;
   }
-  return Math.min(1, pending / DEFAULT_VECTOR_BACKFILL_BATCH_SIZE);
+  return Math.min(1, pending / DEFAULTS.maintenance.vectorBackfillBatchSize);
 }
 
 async function backfillContentVectors(
@@ -54,11 +55,7 @@ async function backfillContentVectors(
   if (pending.length === 0) {
     return { processed: 0, affected: 0 };
   }
-  const provider = new OllamaProvider({
-    baseUrl: ctx.config.ollama.url,
-    embedModel: ctx.config.models.embed,
-  });
-  const written = await attachContentVectors(ctx.driver, provider, pending);
+  const written = await attachContentVectors(ctx.driver, ctx.provider, pending);
   return { processed: pending.length, affected: written.length };
 }
 
@@ -75,6 +72,14 @@ async function refreshContextVectors(
   const neighbors = await findNeighborContentVectors(ctx.driver, staleIds);
   const computed = computeContextVectors(neighbors);
   const written = await writeContextVectorSync(ctx.driver, computed, ctx.now);
+  // A stale node the computation yields nothing for still counts as examined. The scan orders on
+  // this stamp, so leaving it unwritten hands the same node back at the head of every later tick.
+  const seen = new Set(written);
+  await markContextVectorSynced(
+    ctx.driver,
+    staleIds.filter((id) => !seen.has(id)),
+    ctx.now,
+  );
   return { processed: staleIds.length, affected: written.length };
 }
 

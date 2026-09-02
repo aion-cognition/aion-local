@@ -70,11 +70,12 @@ export type IdentifierDecayCandidate = {
  * edges do not: whether the graph was ever asked about this entity, not whether the reflection
  * pipeline last wrote it.
  */
-export function buildCandidatesStatement(batchSize: number): GraphStatement {
+export function buildCandidatesStatement(batchSize: number, after?: string): GraphStatement {
   assertPositiveInt('batchSize', batchSize);
   const cypher = [
     `MATCH (n:${ENTITY_LABEL})`,
     `WHERE n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL AND n.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+    '  AND ($after IS NULL OR n.id > $after)',
     `OPTIONAL MATCH (e:Episode)-[m:${ENTITY_MENTION_TYPE}]->(n)`,
     `WHERE m.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
     'WITH n, count(DISTINCT e) AS episode_mentions, max(m.updated_at) AS last_mention_at',
@@ -90,6 +91,7 @@ export function buildCandidatesStatement(batchSize: number): GraphStatement {
     parameters: {
       typedKnowledgeTypes: TYPED_KNOWLEDGE_TYPES,
       batchSize: neo4j.int(batchSize),
+      after: after ?? null,
     },
   };
 }
@@ -107,12 +109,18 @@ function mapCandidate(row: Row): IdentifierDecayCandidate {
   };
 }
 
-/** Current entities up to `batchSize`, oldest id first, with what the eligibility check needs. */
+/**
+ * Current entities up to `batchSize`, in id order from `after`, with what the eligibility check
+ * needs. Ids are `randomUUID()`, so the order carries no age; it is a keyset the caller can
+ * resume from. Without the cursor a batch of entities the shape rules never accept sits at the
+ * head of the order forever and the sweep never examines anything past it.
+ */
 export async function findIdentifierDecayCandidates(
   driver: Driver,
   batchSize: number,
+  after?: string,
 ): Promise<IdentifierDecayCandidate[]> {
-  const statement = buildCandidatesStatement(batchSize);
+  const statement = buildCandidatesStatement(batchSize, after);
   return runRead(driver, statement.cypher, statement.parameters, mapCandidate);
 }
 
@@ -170,14 +178,43 @@ export type ClosedIdentifierEntity = {
  * has already closed (a retried batch, an id repeated by a caller error) is a no-op rather than
  * a timestamp bump.
  */
-export function buildCloseStatement(ids: readonly string[], now: Date): GraphStatement {
+export type IdentifierDecayEligibility = {
+  /** Distinct episodes that may still mention the entity for it to count as unmentioned. */
+  readonly mentionFloor: number;
+  /** The entity's newest current mention must be no later than this. */
+  readonly mentionedBefore: Date;
+};
+
+/**
+ * `eligibility` carries the half-life and the mention floor into the write. The scan that chose
+ * the ids ran before the batch, and a mention landing in between closes the entity that was just
+ * named and takes its fresh `MENTIONS` edge with it, so the close re-derives the decision from
+ * the graph. A caller closing a named entity outright rather than by decay omits it.
+ */
+export function buildCloseStatement(
+  ids: readonly string[],
+  now: Date,
+  eligibility?: IdentifierDecayEligibility,
+): GraphStatement {
   if (ids.length === 0) {
     throw new GraphWriteError('identifier decay close needs at least one entity id');
   }
+  const eligibilityLines =
+    eligibility === undefined
+      ? []
+      : [
+          `OPTIONAL MATCH (e:Episode)-[mention:${ENTITY_MENTION_TYPE}]->(n)`,
+          `WHERE mention.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
+          'WITH n, count(DISTINCT e) AS episode_mentions, max(mention.updated_at) AS last_mention_at',
+          'WHERE episode_mentions <= $mentionFloor',
+          '  AND last_mention_at IS NOT NULL',
+          '  AND last_mention_at <= $mentionedBefore',
+        ];
   const cypher = [
     'UNWIND $ids AS id',
     `MATCH (n:${ENTITY_LABEL} { id: id })`,
     `WHERE n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL AND n.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+    ...eligibilityLines,
     `SET n.${BITEMPORAL_PROPERTIES.forgottenAt} = coalesce(n.${BITEMPORAL_PROPERTIES.forgottenAt}, $now),`,
     `    n.${CLOSURE_PROVENANCE_PROPERTY} = coalesce(n.${CLOSURE_PROVENANCE_PROPERTY}, $closedBy),`,
     `    ${closeFragment('n')}`,
@@ -200,6 +237,12 @@ export function buildCloseStatement(ids: readonly string[], now: Date): GraphSta
       validUntil: toGraphDateTime(now),
       txUntil: toGraphDateTime(now),
       closedBy: CLOSED_BY_IDENTIFIER_DECAY,
+      ...(eligibility === undefined
+        ? {}
+        : {
+            mentionFloor: neo4j.int(eligibility.mentionFloor),
+            mentionedBefore: toGraphDateTime(eligibility.mentionedBefore),
+          }),
     },
   };
 }
@@ -216,7 +259,8 @@ export async function closeIdentifierEntities(
   driver: Driver,
   ids: readonly string[],
   now: Date,
+  eligibility?: IdentifierDecayEligibility,
 ): Promise<ClosedIdentifierEntity[]> {
-  const statement = buildCloseStatement(ids, now);
+  const statement = buildCloseStatement(ids, now, eligibility);
   return runWrite(driver, statement.cypher, statement.parameters, mapClosedEntity);
 }

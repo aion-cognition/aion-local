@@ -1,6 +1,7 @@
 import {
   openSqliteHandle,
   runGraphMigrations,
+  supersede,
   writeStampedNode,
   type SqliteHandle,
 } from '@aion/core';
@@ -169,5 +170,58 @@ describe('aion unmerge apply against a real merge', () => {
     expect(listing.lines.join('\n')).toContain(
       'has no merge record with an identity left to split out',
     );
+  });
+});
+
+describe('aion unmerge apply against a merged node with a second open SUPERSEDES edge', () => {
+  it('names the canonical that carries the merge record, not whichever source sorts first', async () => {
+    const [canonical] = await mergeEntities(
+      harness.driver,
+      [entityInput('Redis', 'redis', CANONICAL_EPISODE)],
+      NOW,
+    );
+    const [duplicate] = await mergeEntities(
+      harness.driver,
+      [entityInput('RedisDB', 'redisdb', DUPLICATE_EPISODE)],
+      NOW,
+    );
+    if (canonical === undefined || duplicate === undefined) {
+      throw new Error('failed to seed the second pair to merge');
+    }
+
+    await redirectAndAbsorb(harness.driver, {
+      canonicalId: canonical.id,
+      canonicalNameNorm: 'redis',
+      mergedIds: [duplicate.id],
+      aliases: ['RedisDB'],
+      accessCount: 0,
+      supersedeSignals: ['entity_merge'],
+      supersedeProvenance: ['test'],
+      mergedRecords: [
+        { id: duplicate.id, name: 'RedisDB', nameNorm: 'redisdb', type: 'tool', aliases: [] },
+      ],
+      now: NOW,
+    });
+
+    // A second, unrelated open SUPERSEDES edge into the same merged node, from a source with
+    // no merge record and an id that sorts before any node id `mergeEntities` generates.
+    await writeStampedNode(harness.driver, {
+      label: 'Entity',
+      id: '!decoy-supersession',
+      now: NOW,
+      properties: { name: 'decoy', name_norm: 'decoy', type: 'tool' },
+    });
+    await supersede(harness.driver, {
+      oldId: duplicate.id,
+      newId: '!decoy-supersession',
+      now: NOW,
+    });
+
+    const { lines, write } = collector();
+    expect(await runUnmerge(['apply', duplicate.id], write)).toBe(1);
+
+    const text = lines.join('\n');
+    expect(text).toContain(`${canonical.id} has absorbed 1 identity(ies)`);
+    expect(text).not.toContain('!decoy-supersession has absorbed');
   });
 });

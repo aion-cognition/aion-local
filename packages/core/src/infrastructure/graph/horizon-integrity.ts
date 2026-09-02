@@ -1,9 +1,10 @@
-import neo4j, { type Driver } from 'neo4j-driver';
+import type { Driver } from 'neo4j-driver';
 
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { readFirst } from './connection.js';
 import { BASE_NODE_LABEL } from './labels.js';
 import { VALID_HORIZON_PROPERTY } from './read-modes.js';
+import { toGraphInteger } from './values.js';
 
 /**
  * A reading's horizon is annotated at read and is never a close. The two properties can both
@@ -59,8 +60,7 @@ export async function scanHorizonIntegrity(
   const report = await readFirst(
     driver,
     HORIZON_INTEGRITY,
-    // Neo4j rejects a JS number for LIMIT and for a slice bound: both arrive as floats.
-    { limit: neo4j.int(Math.trunc(limit)), sample: neo4j.int(SAMPLE_SIZE) },
+    { limit: toGraphInteger(limit), sample: toGraphInteger(SAMPLE_SIZE) },
     (row) => ({
       withHorizon: row.with_horizon as number,
       closed: row.closed as number,

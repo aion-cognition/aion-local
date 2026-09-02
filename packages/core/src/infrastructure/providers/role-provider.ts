@@ -112,8 +112,11 @@ export class ProviderRouter {
     });
     this.#anthropic = this.routing.keyPresent
       ? new AnthropicProvider({
-          apiKey: config.anthropic.apiKey,
+          // Trimmed, because routing decided the key was present after trimming it. A key read
+          // from a file keeps its trailing newline, and fetch rejects that header value outright.
+          apiKey: config.anthropic.apiKey.trim(),
           model: config.anthropic.model,
+          now: this.#now,
           ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
         })
       : undefined;

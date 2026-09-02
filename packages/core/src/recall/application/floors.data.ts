@@ -3,13 +3,13 @@
  *
  * Two distributions decide a floor and both have to be measured: what unrelated text scores
  * against this embedding model, and what a genuine match scores. Measuring the first and
- * skipping the second nearly starved a real match at 0.631, which sits close enough to a naive
- * 0.60 floor to be cut by it.
+ * skipping the second sets a floor that cannot tell "rejects unrelated text" from "rejects
+ * everything".
  *
- * The two distributions overlap, and that is a property of the model rather than a defect in
- * the corpus: unrelated technical prose reaches 0.55 while a vaguely-worded genuine match can
- * sit at 0.45. A floor cannot resolve an overlap, so the floor is set above the noise and the
- * genuine matches inside the band are carried by corroboration and exact hits instead.
+ * On snowflake-arctic-embed2 the two tails separate: the highest unrelated reading is 0.083
+ * under the weakest genuine match, and both floors, 0.35 and 0.33, sit in that gap. Weak
+ * genuine matches still land under the floors, and corroboration and exact hits are what carry
+ * those.
  *
  * `floor-calibration.int.test.ts` embeds every pair here against live Ollama and asserts the
  * committed floors still separate the two distributions. `floor-battery.int.test.ts` runs the
@@ -18,8 +18,8 @@
  */
 
 /**
- * Mutually unrelated, one subject each: 15 pairwise cosines over six sentences that share
- * nothing.
+ * Mutually unrelated, one subject each: six sentences that share nothing, crossed as 30
+ * ordered pairs.
  */
 export const UNRELATED_SENTENCES: readonly string[] = [
   'The monsoon rainfall variability across Tamil Nadu districts peaked in October.',

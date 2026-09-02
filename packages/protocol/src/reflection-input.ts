@@ -58,7 +58,7 @@ export const ReflectionLaneSchema = z
  * does not know one omits it.
  */
 export const ReflectionOriginSchema = z.strictObject({
-  channel: z.enum(['hook', 'mcp', 'cli', 'verification']),
+  channel: z.enum(['hook', 'mcp', 'cli']),
   event: z.string().optional(),
 });
 

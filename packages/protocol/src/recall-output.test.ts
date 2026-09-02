@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  AdmissionReportSchema,
   CueSchema,
   MEMORY_PACK_BUCKETS,
   MemoryPackItemSchema,
@@ -352,6 +353,27 @@ describe('MemoryPackSchema invalid shapes', () => {
       currency: 'current',
     });
     expect(result.success).toBe(false);
+  });
+
+  it('rejects a confidence outside [0,1], the cosine range the field is documented against', () => {
+    for (const confidence of [-0.01, 1.01]) {
+      const result = MemoryPackItemSchema.safeParse({
+        id: 'x',
+        content: 'x',
+        rank: 1,
+        confidence,
+        rationale: { method: 'vector', score: 1 },
+        currency: 'current',
+      });
+      expect(result.success).toBe(false);
+    }
+  });
+
+  it('rejects a vector_floor or a corroboration_floor outside [0,1]', () => {
+    for (const leaf of ['vector_floor', 'corroboration_floor'] as const) {
+      const result = AdmissionReportSchema.safeParse({ ...baseMetadata.admission, [leaf]: 1.5 });
+      expect(result.success).toBe(false);
+    }
   });
 });
 

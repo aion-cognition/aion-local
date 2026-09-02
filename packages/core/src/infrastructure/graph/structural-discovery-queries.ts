@@ -38,7 +38,10 @@ export const ENTITY_VECTOR_PROJECTION_NAME = 'aion-entity-vectors';
  */
 export const DISCOVERY_TOP_K = 5;
 
-/** A tick's ceiling on nominated pairs, so one dense substrate cannot hand a run a day's work. */
+/**
+ * The fallback ceiling on nominated pairs, for a caller that names none. The operation passes
+ * `structuralDiscoveryBatch`, which is where the knob table declares the real ceiling.
+ */
 export const DISCOVERY_NOMINATION_LIMIT = 100;
 
 /**

@@ -101,11 +101,15 @@ export class McpSessionRegistry {
       return;
     }
     this.#logger.info({ sessionId, sessions: this.#sessions.size }, 'mcp session closed');
+    this.#runSessionClosedHook(sessionId);
+  }
+
+  // Teardown is not the hook's to fail: a close that threw would leave the transport half
+  // dismantled over work that is recoverable by the idle sweep anyway.
+  #runSessionClosedHook(sessionId: string): void {
     if (this.#onSessionClosed === undefined) {
       return;
     }
-    // Teardown is not the hook's to fail: a close that threw would leave the transport half
-    // dismantled over work that is recoverable by the idle sweep anyway.
     try {
       this.#onSessionClosed(sessionId);
     } catch (err) {
@@ -113,6 +117,13 @@ export class McpSessionRegistry {
     }
   }
 
+  /**
+   * The map has to shrink here, synchronously, for the while loop to terminate on the next
+   * oldest entry rather than the one just evicted; `server.close()`'s own `onclose` still runs
+   * and calls `forget`, which is now a no-op since the id is already gone. The served-items and
+   * narrative cleanup that `forget` would otherwise have run is fired here instead, so an
+   * evicted session gets the same teardown a DELETE or an idle close gets.
+   */
   #evictOverflow(): void {
     while (this.#sessions.size > MAX_SESSIONS) {
       const oldest = this.#sessions.entries().next().value;
@@ -122,6 +133,7 @@ export class McpSessionRegistry {
       const [sessionId, session] = oldest;
       this.#sessions.delete(sessionId);
       this.#logger.warn({ sessionId, sessions: this.#sessions.size }, 'mcp session evicted');
+      this.#runSessionClosedHook(sessionId);
       void session.server.close().catch((err: unknown) => {
         this.#logger.warn({ err, sessionId }, 'mcp session close failed');
       });

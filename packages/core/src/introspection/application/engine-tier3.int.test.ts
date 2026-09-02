@@ -193,7 +193,7 @@ describe('Introspector tier 3', () => {
 
     expect(report.decision.kind).toBe('tier3');
     expect(operation.calls()).toBe(0);
-    expect(tier3Summary(bed.db).gate).toContain('never been seen to succeed');
+    expect(tier3Summary(bed.db).gate).toContain('no run record yet');
   });
 
   it('ends the cycle skipped when the accepted operation lost its bucket, without a second attempt', async () => {

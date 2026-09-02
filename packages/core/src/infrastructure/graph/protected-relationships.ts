@@ -28,8 +28,3 @@ export const PROTECTED_RELATIONSHIP_TYPES: readonly RelationshipType[] = [
   'HAS_MEMBER',
   'HAS_WORKSPACE',
 ];
-
-/** Takes a plain string so a type read back from Cypher can be checked without a cast. */
-export function isProtectedRelationshipType(type: string): boolean {
-  return (PROTECTED_RELATIONSHIP_TYPES as readonly string[]).includes(type);
-}

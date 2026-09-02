@@ -29,6 +29,10 @@ export type BucketCaps = Readonly<Record<PackBucket, number>>;
  * vectors and sit in `content_fts`, so retrieval finds them and assembly would then drop
  * every one.
  *
+ * A Bridge answers in facts for the same reason. It names two neighbourhoods nothing else
+ * connects, which is a fact about the substrate, and it carries a summary and a content vector
+ * of its own, so the vector leg returns it.
+ *
  * Preferences still have no producer, since preference extraction is unbuilt, so that bucket is
  * structurally absent from a pack rather than empty. A label with no bucket cannot be packed and
  * its item is dropped.
@@ -42,6 +46,7 @@ const BUCKET_BY_LABEL: Readonly<Record<string, PackBucket>> = {
   Episode: 'episodes',
   Turn: 'episodes',
   Entity: 'facts',
+  Bridge: 'facts',
   Narrative: 'narratives',
   Goal: 'facts',
   Plan: 'facts',

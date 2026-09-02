@@ -34,8 +34,8 @@ import {
 } from '../domain/seed-selection.js';
 
 /**
- * Four strategies run together, their candidates merge, and each surviving seed keeps every
- * strategy that found it. The strategies themselves are Cypher and live in
+ * The five strategies run together, their candidates merge, and each surviving seed keeps
+ * every strategy that found it. The strategies themselves are Cypher and live in
  * `graph/seed-queries.ts`, the merge and the budget arithmetic in `domain/seed-selection.ts`;
  * this file is the order they run in and the sizes they run at.
  */
@@ -381,7 +381,7 @@ function emptyByStrategy(): Record<SeedStrategy, readonly Seed[]> {
 }
 
 /**
- * All four strategies run together; each one's failure is isolated to itself. The seed budget
+ * All five strategies run together; each one's failure is isolated to itself. The seed budget
  * is the only place the candidate set is narrowed, and it is sized from the substrate before
  * the legs run, because a leg that fetches fewer rows than its reservation cannot fill it.
  *

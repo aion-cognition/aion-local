@@ -1,5 +1,6 @@
 import { currentOnly } from './bitemporal.js';
 import type { GraphTransaction } from './connection.js';
+import { BASE_NODE_LABEL, EXTRACTION_TYPE, MEMORY_LABEL } from './labels.js';
 import { VALID_HORIZON_PROPERTY } from './read-modes.js';
 import { supersedeSubjectFamilyInTransaction, type SubjectFamilyResult } from './subject-family.js';
 import { FACT_NODE_LABELS } from './supersession-queries.js';
@@ -106,7 +107,7 @@ const KEYED_CLAIM_MATES = [
   '  AND c.id <> $newId',
   '  AND any(label IN labels(c) WHERE label IN $labels)',
   `  AND ${currentOnly('c')}`,
-  '  AND NOT EXISTS { MATCH (c)-[:EXTRACTED_FROM]->(:Episode { id: $episodeId }) }',
+  `  AND NOT EXISTS { MATCH (c)-[:${EXTRACTION_TYPE}]->(:Episode { id: $episodeId }) }`,
   'RETURN c.id AS id',
   'ORDER BY c.id',
 ].join('\n');
@@ -224,10 +225,14 @@ export async function forwardClaimSubjectsInTransaction(
  *
  * A claim whose key has since moved on to some other canonical belongs to that merge's trail,
  * so the write is guarded on the key still reading the canonical it is being taken off.
+ *
+ * The id seek goes through `AionNode`, which carries the id constraint migration 001 declares.
+ * `Memory` has only its vector and range indexes, so seeking it by id plans as a label scan
+ * over every content node.
  */
 const RESTORE_CLAIM_SUBJECTS = [
   'UNWIND $claimIds AS claimId',
-  'MATCH (c:Memory { id: claimId })',
+  `MATCH (c:${BASE_NODE_LABEL}:${MEMORY_LABEL} { id: claimId })`,
   `WHERE c.${CLAIM_SUBJECT_PROPERTY} = $canonicalId`,
   `SET c.${CLAIM_SUBJECT_PROPERTY} = $subjectEntityId`,
   'RETURN c.id AS id',

@@ -3,11 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import {
-  DEFAULT_HEBBIAN_DECAY_PEAK_DAYS,
-  DEFAULT_HEBBIAN_DECAY_RATE,
-  DEFAULT_HEBBIAN_DECAY_SIGMA,
-} from './decay.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import {
@@ -16,16 +11,10 @@ import {
 } from '../../infrastructure/sqlite/decay-counters.js';
 
 describe('decay knobs match the shipped configuration', () => {
-  it('carries the pinned decay rate, peak, and sigma', () => {
-    expect(DEFAULT_HEBBIAN_DECAY_RATE).toBe(DEFAULTS.hebbian.decayRate);
-    expect(DEFAULT_HEBBIAN_DECAY_PEAK_DAYS).toBe(DEFAULTS.hebbian.decayPeakDays);
-    expect(DEFAULT_HEBBIAN_DECAY_SIGMA).toBe(DEFAULTS.hebbian.decaySigma);
-  });
-
   it('pins the decay rate, peak, and sigma to their calibrated values', () => {
-    expect(DEFAULT_HEBBIAN_DECAY_RATE).toBe(0.05);
-    expect(DEFAULT_HEBBIAN_DECAY_PEAK_DAYS).toBe(30);
-    expect(DEFAULT_HEBBIAN_DECAY_SIGMA).toBe(15);
+    expect(DEFAULTS.hebbian.decayRate).toBe(0.05);
+    expect(DEFAULTS.hebbian.decayPeakDays).toBe(30);
+    expect(DEFAULTS.hebbian.decaySigma).toBe(15);
   });
 });
 

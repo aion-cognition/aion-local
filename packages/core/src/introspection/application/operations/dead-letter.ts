@@ -1,9 +1,10 @@
 import {
+  countDeadLetterAttention,
   deadLetterSeenKey,
   listExhaustedJobs,
   relaneDeadLetterJob,
 } from '../../../infrastructure/sqlite/dead-letter-queue.js';
-import { isLedgerApplied, markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
+import { markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
 import type { HealthSnapshot } from '../../domain/health.js';
 import type { IntrospectionOperation, OperationOutcome } from '../../domain/operation.js';
 
@@ -41,21 +42,19 @@ export function deadLetterOperation(): IntrospectionOperation {
     run: (ctx): Promise<OperationOutcome> => {
       const maxAttempts = ctx.config.operational.workerMaxAttempts;
       const batchSize = ctx.config.maintenance.deadLetterBatchSize;
+      // The listing already excludes rows that spent their one retry, so every row in the batch
+      // is one this pass can act on. The count of the rest comes from the whole table, not from
+      // a batch they no longer occupy.
       const exhausted = listExhaustedJobs(ctx.db, maxAttempts, batchSize);
+      const stillNeedsAttention = countDeadLetterAttention(ctx.db, maxAttempts);
 
       let relaned = 0;
-      let stillNeedsAttention = 0;
       for (const job of exhausted) {
         if (ctx.signal.aborted) {
           break;
         }
-        const seenKey = deadLetterSeenKey(job.id);
-        if (isLedgerApplied(ctx.db, seenKey)) {
-          stillNeedsAttention += 1;
-          continue;
-        }
         if (relaneDeadLetterJob(ctx.db, job.id)) {
-          markLedgerApplied(ctx.db, seenKey, { jobType: job.jobType });
+          markLedgerApplied(ctx.db, deadLetterSeenKey(job.id), { jobType: job.jobType });
           relaned += 1;
         }
       }

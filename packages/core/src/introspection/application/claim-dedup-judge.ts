@@ -30,8 +30,6 @@ export type ClaimDedupCallOptions = {
   readonly signal?: AbortSignal;
 };
 
-const UNSTATED_CONFIDENCE = 0.5;
-
 const NO_REASON_GIVEN = 'the judge gave no reason';
 
 const DETECT_SYSTEM_PROMPT = [
@@ -42,8 +40,7 @@ const DETECT_SYSTEM_PROMPT = [
   'Answer related when the two share a subject or wording but at least one carries a fact, a',
   'qualifier, a scope, or a time the other lacks, or when they describe different attributes,',
   'different occasions, or different subjects. Say related rather than guess.',
-  'Answer with same, a confidence between 0 and 1, and a one-clause rationale naming what is',
-  'identical or what differs.',
+  'Answer with same and a one-clause rationale naming what is identical or what differs.',
 ].join(' ');
 
 const REVIEW_SYSTEM_PROMPT = [
@@ -86,7 +83,6 @@ const DETECT_JSON_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
     same: { type: 'boolean' },
-    confidence: { type: 'number' },
     rationale: { type: 'string' },
   },
   required: ['same'],
@@ -101,10 +97,9 @@ const REVIEW_JSON_SCHEMA: JsonSchema = {
   required: ['reason', 'either_adds_information'],
 };
 
-/** Looser than the JSON schema on purpose: an answer missing its confidence is still usable. */
+/** Looser than the JSON schema on purpose: an answer missing its rationale is still usable. */
 const DetectSchema = z.object({
   same: z.boolean(),
-  confidence: z.number().optional(),
   rationale: z.string().optional(),
 });
 
@@ -113,17 +108,8 @@ const ReviewSchema = z.object({
   reason: z.string().optional(),
 });
 
-function clampConfidence(value: number | undefined): number {
-  const raw = value ?? UNSTATED_CONFIDENCE;
-  if (!Number.isFinite(raw)) {
-    return UNSTATED_CONFIDENCE;
-  }
-  return Math.min(1, Math.max(0, raw));
-}
-
 export type ClaimDedupJudgment = {
   readonly same: boolean;
-  readonly confidence: number;
   readonly rationale?: string;
 };
 
@@ -179,7 +165,6 @@ export async function judgeClaimDedup(
     status: 'judged',
     judgment: {
       same: parsed.data.same,
-      confidence: clampConfidence(parsed.data.confidence),
       ...(rationale === undefined || rationale.length === 0 ? {} : { rationale }),
     },
   };

@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mergeAutoOperation } from './merge-auto-operation.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
+import { forgetNode } from '../../../infrastructure/graph/bitemporal.js';
 import { addEntityAliases } from '../../../infrastructure/graph/entity-identity-queries.js';
 import {
   mergeEntities,
@@ -13,7 +14,7 @@ import {
 } from '../../../infrastructure/graph/entity-queries.js';
 import {
   countAutoMergedEntities,
-  wasEntityMergeApplied,
+  entityMergePairState,
 } from '../../../infrastructure/graph/merge-shadow-queries.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import {
@@ -107,7 +108,7 @@ describe('mergeAutoOperation against a live graph', () => {
     expect(outcome.itemsAffected).toBe(1);
     expect(outcome.detail).toBe('1 identity(ies) merged across 1 deterministic group(s)');
 
-    expect(await wasEntityMergeApplied(harness.driver, dashedId, spacedId)).toBe(true);
+    expect((await entityMergePairState(harness.driver, dashedId, spacedId)).merged).toBe(true);
     const edge =
       (await supersessionEdge(harness.driver, dashedId)) ??
       (await supersessionEdge(harness.driver, spacedId));
@@ -153,7 +154,7 @@ describe('mergeAutoOperation against a live graph', () => {
     const outcome = await mergeAutoOperation().run(contextFor());
 
     expect(outcome.itemsAffected).toBe(1);
-    expect(await wasEntityMergeApplied(harness.driver, holderId, ownerId)).toBe(true);
+    expect((await entityMergePairState(harness.driver, holderId, ownerId)).merged).toBe(true);
     expect(findEntityMergeDecisionsForEntity(db, ownerId)[0]?.reasons).toEqual([
       "one already answers to the other's name, as the alias hbr",
     ]);
@@ -175,7 +176,22 @@ describe('mergeAutoOperation against a live graph', () => {
       itemsAffected: 0,
       detail: 'auto-merge disabled by AION_AUTO_MERGE; nothing swept',
     });
-    expect(await wasEntityMergeApplied(harness.driver, dottedId, spaceyId)).toBe(false);
+    expect((await entityMergePairState(harness.driver, dottedId, spaceyId)).merged).toBe(false);
     expect((await storedEntity(harness.driver, spaceyId))?.validUntil).toBeNull();
+  }, 120_000);
+
+  /**
+   * The agreement read has to tell a stale clear from a policy failure, and a forget is the
+   * other way a side stops standing. A pair with a forgotten side is not two live identities
+   * anyone still disagrees about.
+   */
+  it('reports a pair with a forgotten side as no longer both current', async () => {
+    const keptId = await seedEntity('Alder ledger', 'tool');
+    const goneId = await seedEntity('Bracken ledger', 'topic');
+    expect((await entityMergePairState(harness.driver, keptId, goneId)).bothCurrent).toBe(true);
+
+    await forgetNode(harness.driver, { id: goneId, now: NOW });
+
+    expect((await entityMergePairState(harness.driver, keptId, goneId)).bothCurrent).toBe(false);
   }, 120_000);
 });

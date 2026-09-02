@@ -124,7 +124,9 @@ describe('edge_prune', () => {
     const outcome = await edgePruneOperation().run(context());
 
     expect(outcome.status).toBe('applied');
-    expect(outcome.itemsProcessed).toBe(2);
+    // Examined is the at-floor population the run read, which is three: the two it closes and
+    // the protected typed-knowledge edge it looked at and left.
+    expect(outcome.itemsProcessed).toBe(3);
     expect(outcome.itemsAffected).toBe(2);
     expect(outcome.detail).toContain('closed 2');
     expect(outcome.detail).toContain('at-floor 3->1');
@@ -196,7 +198,8 @@ describe('edge_prune', () => {
     const outcome = await edgePruneOperation().run(context());
 
     expect(outcome.status).toBe('noop');
-    expect(outcome.itemsProcessed).toBe(0);
+    // The protected edge is still at the floor, so the run still examined it and closed nothing.
+    expect(outcome.itemsProcessed).toBe(1);
     expect(outcome.itemsAffected).toBe(0);
   });
 

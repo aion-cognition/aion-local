@@ -18,6 +18,7 @@ import {
   mergeEntities,
   type EntityMergeInput,
 } from '../../../infrastructure/graph/entity-queries.js';
+import { closeIdentifierEntities } from '../../../infrastructure/graph/identifier-decay-queries.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import {
   edgePruneState,
@@ -301,6 +302,30 @@ describe('identifier_decay', () => {
 
   it('protects an entity mentioned by more episodes than the mention floor', async () => {
     const state = await identifierEntityState(harness.driver, highMentionsId);
+    expect(state.validUntil).toBeUndefined();
+  });
+
+  it('refuses to close an entity a mention reached after the scan chose it', async () => {
+    // The scan and the close are two statements. A mention landing between them makes the
+    // entity fresh again, and closing it there would take the new MENTIONS edge with it.
+    const rescuedId = await seedEntityWithMention(
+      'b1c2d3e4f5061728394a5b6c7d8e9f00112233ff',
+      'b1c2d3e4f5061728394a5b6c7d8e9f00112233ff',
+      'ep-rescued-original',
+      OLD,
+    );
+    await addMention(rescuedId, 'ep-rescued-fresh', NOW);
+
+    const closed = await closeIdentifierEntities(harness.driver, [rescuedId], NOW, {
+      mentionFloor: DEFAULTS.maintenance.identifierMentionFloor,
+      mentionedBefore: new Date(
+        NOW.getTime() - DEFAULTS.maintenance.identifierHalfLifeDays * 24 * 60 * 60 * 1000,
+      ),
+    });
+
+    expect(closed).toEqual([]);
+    const state = await identifierEntityState(harness.driver, rescuedId);
+    expect(state.forgottenAt).toBeUndefined();
     expect(state.validUntil).toBeUndefined();
   });
 

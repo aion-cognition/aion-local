@@ -1,5 +1,5 @@
 import type { CueExtractionInput } from './cues.js';
-import { OFF_TOPIC_BATTERY } from './floors.fixtures.js';
+import { OFF_TOPIC_BATTERY } from './floors.data.js';
 
 /**
  * Realistic recall calls an agent might issue, spanning query-only, query+summary, and

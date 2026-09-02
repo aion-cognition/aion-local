@@ -245,7 +245,9 @@ export function seedBudget(memoryCount: number, curve: SeedBudgetCurve): number 
 
 /**
  * The share of the budget each leg is guaranteed before the merged ranking spends the rest.
- * They sum to 0.8, so a fifth of the budget stays open to whatever scored best overall.
+ * They sum to 0.8, so about a fifth of the budget stays open to whatever scored best overall
+ * once the budget is ten or more and every share earns a slot on its own. Under that the
+ * one-slot floor lifts the small shares, and at a budget of five the five legs take all of it.
  *
  * Unreserved, the merged ranking is not a fair fight: an exact entity-name match scores 1.0 by
  * construction, a BM25 leg normalized to its own best hit puts its top row at 1.0 whatever it

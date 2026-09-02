@@ -4,6 +4,9 @@
  * here, and the Airbnb rules that aged out are documented in the README rather
  * than silently dropped.
  */
+
+import { SHARED_RESTRICTED_SYNTAX } from './restricted-syntax.js';
+
 export default {
   name: 'aion/base',
   rules: {
@@ -80,14 +83,6 @@ export default {
     // Restricted constructs. for-in invites prototype surprises; labels and
     // with are complexity escape hatches nothing here needs. The Airbnb for-of
     // ban is deliberately absent: iterators are the modern default.
-    'no-restricted-syntax': [
-      'error',
-      {
-        selector: 'ForInStatement',
-        message: 'Iterate Object.keys/values/entries instead of for-in.',
-      },
-      { selector: 'LabeledStatement', message: 'Restructure instead of labeling loops.' },
-      { selector: 'WithStatement', message: 'with is banned.' },
-    ],
+    'no-restricted-syntax': ['error', ...SHARED_RESTRICTED_SYNTAX],
   },
 };

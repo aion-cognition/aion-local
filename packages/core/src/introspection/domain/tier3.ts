@@ -9,7 +9,7 @@ import type { Logger } from '../../infrastructure/logging/logger.js';
  * The constraint the whole tier is built on: a proposal is a recommendation, never an
  * execution. Whatever the model returns still passes the same bucket claim, the same protected
  * relationship set, and the same bounded scope every deterministic operation passes, and an
- * operation the model has never seen succeed is downgraded rather than accepted.
+ * operation with no run record at all is downgraded rather than accepted.
  */
 
 export type Tier3Request = {
@@ -46,17 +46,18 @@ export type Tier3Outcome =
 export type Tier3Advisor = (request: Tier3Request) => Promise<Tier3Outcome>;
 
 /**
- * What an accepted proposal is allowed to RUN. Everything else in the catalog stays a
- * recommendation the loop logs.
+ * What an accepted proposal is allowed to RUN. It is an allowlist, so an operation outside it
+ * stays a recommendation the loop logs, and a new operation joins the catalog without gaining a
+ * model-chosen run until someone adds it here.
  *
- * Five operations are left out, each for its own reason. `redaction_residue_purge` rewrites
- * stored text and a wrong redaction destroys content permanently, which is why its own knob
- * caps a run at twenty nodes. `merge_auto` has its own arming lane and kill switch, and a
- * second way to arm it would defeat both. `symbiosis_bridge` writes model-authored edges into
- * the graph, so a model choosing to run it is a model authorizing its own writes.
- * `orphan_cleanup`, `emergency_relationship_repair`, and `vector_backfill` are tier-1
- * responders: when their condition is real, tier 1 fires on it, and tier 3 second-guessing a
- * critical responder is never the right call.
+ * Two classes are kept out on purpose. A tier-1 responder (`vector_backfill`, `orphan_cleanup`,
+ * `backbone_repair`) is fired by the condition it declares, and tier 3 second-guessing a
+ * critical responder is never the right call. An operation whose write a model must not
+ * authorize is out for that reason: `redaction_residue_purge` rewrites stored text and a wrong
+ * redaction destroys content, `symbiosis_bridge` writes model-authored edges, and `merge_auto`
+ * has its own arming lane and kill switch that a second way to arm it would defeat.
+ *
+ * Everything else is out because nothing has argued it in. The list is the deliberate half.
  */
 export const TIER3_ACTABLE_OPERATIONS: readonly string[] = [
   'dead_letter',
@@ -76,7 +77,8 @@ export const TIER3_ACTABLE_OPERATIONS: readonly string[] = [
  * operation is outside what tier 3 may run, or it has no track record to run on.
  */
 export type Tier3Acceptance =
-  | { readonly verdict: 'accepted' }
+  /** Carries the candidate the gate already looked up, so no caller repeats the search. */
+  | { readonly verdict: 'accepted'; readonly candidate: OperationCandidate }
   | { readonly verdict: 'downgraded'; readonly reason: string }
   | { readonly verdict: 'rejected'; readonly reason: string };
 
@@ -116,13 +118,15 @@ export function acceptTier3Proposal(
 
   // Never the first-run path. The tier-2 starvation boost is linear and uncapped off cycles
   // waited, so every operation with relevance above zero earns its first run there eventually;
-  // this rule delays a model-chosen run until the record exists, it cannot strand one.
+  // this rule delays a model-chosen run until the record exists, it cannot strand one. The gate
+  // is the record, not the verdict: `runs` counts failures too, and an operation whose runs all
+  // failed is weighted down by tier 2 rather than blocked here.
   const stats = health.effectiveness.find((entry) => entry.name === proposal.operation);
   if (stats === undefined || stats.runs === 0) {
-    return { verdict: 'downgraded', reason: 'the operation has never been seen to succeed' };
+    return { verdict: 'downgraded', reason: 'the operation has no run record yet' };
   }
 
-  return { verdict: 'accepted' };
+  return { verdict: 'accepted', candidate };
 }
 
 /**

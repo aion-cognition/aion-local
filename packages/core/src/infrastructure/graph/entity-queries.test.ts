@@ -75,6 +75,16 @@ describe('buildEntityMerge identity key', () => {
     const { cypher } = buildEntityMerge([ENTITY], NOW);
     expect(cypher).toContain('SET resolved.locked_at = $now');
   });
+
+  it('orders the chain heads before taking one, so the canonical does not move between runs', () => {
+    const { cypher } = buildEntityMerge([ENTITY], NOW);
+    const lines = cypher.split('\n');
+    const ordered = lines.findIndex((line) => line.startsWith('ORDER BY head.'));
+    const collected = lines.findIndex((line) => line.includes('collect(head)[0]'));
+
+    expect(ordered).toBeGreaterThan(-1);
+    expect(ordered).toBeLessThan(collected);
+  });
 });
 
 describe('buildEntityMerge reopening a maintenance-closed node', () => {

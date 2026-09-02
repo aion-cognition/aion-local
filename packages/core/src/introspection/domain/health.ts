@@ -23,7 +23,6 @@ export type GraphStructureHealth = {
   readonly vectorPresent: number;
   /** Present over expected. 1 when nothing is expected, since an empty substrate is not behind. */
   readonly vectorParity: number;
-  readonly orphanNodes: number;
   /** Orphans over content-bearing nodes. 0 on an empty substrate. */
   readonly orphanShare: number;
   /** Episodes with no `PARTICIPATES_IN` edge to a session: the missing-backbone condition. */
@@ -37,11 +36,6 @@ export type GraphStructureHealth = {
    * `decayableEdges` that `edge_prune` is the operation for, and the only one a run of it moves.
    */
   readonly atFloorAssociationEdges: number;
-  /** Current nodes carrying an edge, which is the population a context vector can be computed for. */
-  readonly contextVectorExpected: number;
-  readonly contextVectorPresent: number;
-  /** Present over expected. 1 when nothing is expected, since an empty substrate is not behind. */
-  readonly contextVectorCoverage: number;
 };
 
 export type QueueHealth = {
@@ -112,7 +106,9 @@ export type OperationEffectiveness = {
   readonly improved: number;
   readonly failed: number;
   /**
-   * Improved runs over the runs a declared metric scored. Undefined where there is nothing to
+   * Improved runs over the runs a declared metric scored, failures included: a run that threw
+   * scored no metric and still counts against the ratio, which is what makes an operation that
+   * keeps failing weigh less than one that keeps running. Undefined where there is nothing to
    * divide: an operation that declares no metric, or one whose runs have none scored yet. Every
    * consumer reads the absence as "no verdict" rather than substituting a number, so an
    * operation is never weighted on a reading nothing could have contradicted.
@@ -152,6 +148,7 @@ export const HEALTH_COLLECTORS = {
   proposals: 'proposals',
   entities: 'entities',
   plasticity: 'plasticity',
+  effectiveness: 'effectiveness',
 } as const;
 
 /** Neutral readings: what a collector's fields hold when it failed and its name went to `degraded`. */
@@ -161,15 +158,11 @@ export const NEUTRAL_GRAPH_HEALTH: GraphStructureHealth = {
   vectorExpected: 0,
   vectorPresent: 0,
   vectorParity: 1,
-  orphanNodes: 0,
   orphanShare: 0,
   episodesWithoutSession: 0,
   staleNarratives: 0,
   decayableEdges: 0,
   atFloorAssociationEdges: 0,
-  contextVectorExpected: 0,
-  contextVectorPresent: 0,
-  contextVectorCoverage: 1,
 };
 
 export const NEUTRAL_QUEUE_HEALTH: QueueHealth = {
@@ -244,10 +237,10 @@ export const CRITICAL_MIN_POPULATION = 20;
 export type CriticalCondition = 'vector_parity' | 'orphan_share' | 'missing_backbone_links';
 
 /**
- * The tier-1 conditions this snapshot meets, in the order they degrade recall. An operation
- * names the one condition it repairs and reads it from here rather than re-deriving the
- * thresholds, so the condition that selects an operation and the condition the operation
- * repairs cannot drift apart.
+ * The tier-1 conditions this snapshot meets. An operation names the one condition it repairs
+ * and reads it from here rather than re-deriving the thresholds, so the condition that selects
+ * an operation and the condition the operation repairs cannot drift apart. Every consumer tests
+ * membership; which critical operation preempts is decided on relevance in `decide.ts`.
  */
 export function criticalConditions(health: HealthSnapshot): readonly CriticalCondition[] {
   if (health.degraded.includes(HEALTH_COLLECTORS.graph)) {

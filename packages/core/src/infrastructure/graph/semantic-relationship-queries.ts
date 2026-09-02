@@ -1,5 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 
+import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { COGNITIVE_NODE_LABELS, TEXT_NORM_PROPERTY } from './cognitive-queries.js';
 import { runRead, type GraphStatement } from './connection.js';
 import { upsertEdge, type UpsertedEdge } from './edges.js';
@@ -18,10 +19,10 @@ import type { RelationshipType } from './relationships.js';
  * Five semantic relationship types, plus two the catalog already had names for. `SIMILAR_TO`
  * is written under the catalog's existing `SIMILAR`, which is the same relation under the
  * other name: forking a second type would split one claim across two edges and two
- * activation weights. `CONTRADICTS` is its own type: the supersession judgment only compares
- * fact nodes against same-label neighbours and only acts above the auto-apply threshold, so
- * without it nothing in the graph can say that this Decision is in tension with that
- * Insight. `RELATED_TO` and `ANALOGOUS_TO` stay for the connections none of the five name.
+ * activation weights. `CONTRADICTS` is its own type because supersession is a close: it ends
+ * the older claim and stamps lineage on it. Two claims that stand in tension while both stay
+ * current have no other edge to sit on. `RELATED_TO` and `ANALOGOUS_TO` stay for the
+ * connections none of the five name.
  *
  * `satisfies` fails to compile if a name here drifts from the catalog `edges.ts` validates
  * against.
@@ -56,7 +57,11 @@ function episodeCognitiveNodesStatement(episodeId: string, reference?: Date): Gr
   return {
     cypher: [
       'MATCH (:Episode { id: $episodeId })<-[:EXTRACTED_FROM]-(n)',
-      `WHERE any(label IN labels(n) WHERE label IN $labels) AND ${fragment.where}`,
+      // The close predicate the default read mode does not carry: a superseded node is still
+      // currency-annotated rather than filtered, and a typed edge onto one asserts a relation
+      // between a claim that stands and one that does not.
+      `WHERE n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
+      `  AND any(label IN labels(n) WHERE label IN $labels) AND ${fragment.where}`,
       'RETURN n.id AS id, [label IN labels(n) WHERE label IN $labels][0] AS label,',
       `       n.${MEMORY_PROPERTIES.text} AS text`,
       `ORDER BY n.${TEXT_NORM_PROPERTY}, n.id`,

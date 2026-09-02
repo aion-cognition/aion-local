@@ -1,5 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 
+import { currentOnly } from './bitemporal.js';
 import { readFirst } from './connection.js';
 import { BASE_NODE_LABEL } from './labels.js';
 import { SUPERSEDES_TYPE } from './relationships.js';
@@ -20,7 +21,7 @@ const ENTITY_MERGE_PAIR_STATE = [
   `OPTIONAL MATCH (a)-[r:${SUPERSEDES_TYPE}]-(b)`,
   'WHERE $signal IN r.signals',
   'RETURN count(r) > 0 AS merged,',
-  '       a.valid_until IS NULL AND b.valid_until IS NULL AS both_current',
+  `       ${currentOnly('a')} AND ${currentOnly('b')} AS both_current`,
 ].join('\n');
 
 export type EntityMergePairState = {
@@ -46,15 +47,6 @@ export async function entityMergePairState(
     (row) => ({ merged: row.merged === true, bothCurrent: row.both_current === true }),
   );
   return state ?? { merged: false, bothCurrent: false };
-}
-
-export async function wasEntityMergeApplied(
-  driver: Driver,
-  idA: string,
-  idB: string,
-): Promise<boolean> {
-  const state = await entityMergePairState(driver, idA, idB);
-  return state.merged;
 }
 
 /**

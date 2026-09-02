@@ -3,7 +3,7 @@ import neo4j, { type Driver } from 'neo4j-driver';
 import { CO_OCCURS_TYPE, SIMILAR_TYPE } from './association-queries.js';
 import { BITEMPORAL_PROPERTIES, closeFragment } from './bitemporal.js';
 import { readFirst, runWrite, type GraphStatement } from './connection.js';
-import { GraphWriteError } from './errors.js';
+import { assertPositiveInt, assertProportion } from './errors.js';
 import { BASE_NODE_LABEL } from './labels.js';
 import { PROTECTED_RELATIONSHIP_TYPES } from './protected-relationships.js';
 import { readModeFragment, withCurrency } from './read-modes.js';
@@ -63,18 +63,6 @@ export type PrunedEdge = {
   readonly sourceId: string;
   readonly targetId: string;
 };
-
-function assertPositiveInt(name: string, value: number): void {
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new GraphWriteError(`${name} must be a positive integer, received ${value}`);
-  }
-}
-
-function assertProportion(name: string, value: number): void {
-  if (!Number.isFinite(value) || value < 0 || value > 1) {
-    throw new GraphWriteError(`${name} must be between 0 and 1, received ${value}`);
-  }
-}
 
 /**
  * Floor and age are both inclusive at the boundary, matching the floor's own inclusive read in

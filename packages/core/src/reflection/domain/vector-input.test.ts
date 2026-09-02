@@ -22,6 +22,12 @@ describe('entityNameVectorText', () => {
     expect(entityNameVectorText('postgres', ['postgresql', 'pg'])).toBe('postgres\npg\npostgresql');
   });
 
+  it('drops an alias that repeats the identity own name, which is already the first line', () => {
+    expect(entityNameVectorText('postgres', ['postgres'])).toBe(
+      entityNameVectorText('postgres', []),
+    );
+  });
+
   it('sorts and deduplicates, so one alias set is always one hash whatever order it arrived in', () => {
     expect(entityNameVectorText('postgres', ['pg', 'postgresql', 'pg'])).toBe(
       entityNameVectorText('postgres', ['postgresql', 'pg']),

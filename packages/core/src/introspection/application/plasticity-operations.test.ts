@@ -12,6 +12,7 @@ import {
   drainReinforcementQueue,
   memoryDecayOperation,
   memoryDecayRelevance,
+  reinforcementFlushOperation,
   reinforcementFlushRelevance,
 } from './plasticity-operations.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
@@ -20,7 +21,11 @@ import { refusingProvider } from '../../infrastructure/providers/test-support/re
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import type { HebbianFlushReport } from '../../plasticity/application/flush.js';
 import { decide, DEPRIORITIZED_WEIGHT, type DecisionInput } from '../domain/decide.js';
-import { NEUTRAL_GRAPH_HEALTH, type HealthSnapshot } from '../domain/health.js';
+import {
+  NEUTRAL_GRAPH_HEALTH,
+  NEUTRAL_PLASTICITY_HEALTH,
+  type HealthSnapshot,
+} from '../domain/health.js';
 import type { OperationContext } from '../domain/operation.js';
 import { healthFixture } from '../domain/test-support/health.fixture.js';
 
@@ -331,6 +336,56 @@ describe('memoryDecayOperation, run directly rather than through the engine', ()
       itemsProcessed: 0,
       itemsAffected: 0,
       detail: 'no decayable edges reported by the snapshot',
+    });
+  });
+});
+
+describe('the kill switches', () => {
+  /** No driver and no db: a disabled operation must return before it reaches either. */
+  function disabledContext(overrides: Partial<OperationContext>): OperationContext {
+    return {
+      driver: undefined as unknown as Driver,
+      db: undefined as unknown as SqliteHandle,
+      config: DEFAULTS,
+      logger: silentLogger(),
+      provider: refusingProvider,
+      health: healthFixture({ graph: { ...NEUTRAL_GRAPH_HEALTH, decayableEdges: 5_000 } }),
+      now: new Date('2026-08-31T00:00:00.000Z'),
+      signal: new AbortController().signal,
+      ...overrides,
+    };
+  }
+
+  it('leaves the queue alone when reinforcement is off', async () => {
+    const ctx = disabledContext({
+      config: {
+        ...DEFAULTS,
+        maintenance: { ...DEFAULTS.maintenance, reinforcementFlush: false },
+      },
+      health: healthFixture({
+        plasticity: { ...NEUTRAL_PLASTICITY_HEALTH, reinforcementQueueDepth: 5_000 },
+      }),
+    });
+
+    expect(await reinforcementFlushOperation().run(ctx)).toEqual({
+      status: 'noop',
+      itemsProcessed: 0,
+      itemsAffected: 0,
+      detail:
+        'reinforcement disabled by AION_MAINTENANCE_REINFORCEMENT_FLUSH; the queue is left as is',
+    });
+  });
+
+  it('leaves stale edges at the strength they have when decay is off', async () => {
+    const ctx = disabledContext({
+      config: { ...DEFAULTS, maintenance: { ...DEFAULTS.maintenance, memoryDecay: false } },
+    });
+
+    expect(await memoryDecayOperation().run(ctx)).toEqual({
+      status: 'noop',
+      itemsProcessed: 0,
+      itemsAffected: 0,
+      detail: 'decay disabled by AION_MAINTENANCE_MEMORY_DECAY; no edges scanned',
     });
   });
 });

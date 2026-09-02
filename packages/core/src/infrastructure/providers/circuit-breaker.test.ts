@@ -44,4 +44,41 @@ describe('CircuitBreaker', () => {
 
     await expect(breaker.run(fn)).rejects.toThrow('boom');
   });
+
+  // A provider that is still down (an expired key, a regional outage) must cost one call per
+  // cooldown, not a fresh budget of them.
+  it('re-opens on a failed trial call rather than spending the budget again', async () => {
+    let now = 0;
+    const breaker = new CircuitBreaker({ failureThreshold: 5, cooldownMs: 1000, now: () => now });
+    const fn = vi.fn(() => Promise.reject(new Error('boom')));
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await expect(breaker.run(fn)).rejects.toThrow('boom');
+    }
+    expect(fn).toHaveBeenCalledTimes(5);
+
+    now = 1000;
+    await expect(breaker.run(fn)).rejects.toThrow('boom');
+    expect(fn).toHaveBeenCalledTimes(6);
+
+    await expect(breaker.run(fn)).rejects.toThrow(CircuitOpenError);
+    expect(fn).toHaveBeenCalledTimes(6);
+  });
+
+  // A deadline the caller set and a shutdown are the caller's own doing, so they say nothing
+  // about the provider and must not open it against the next healthy call.
+  it('does not count an abort toward the failure budget', async () => {
+    const breaker = new CircuitBreaker({ failureThreshold: 2 });
+    const aborted = () => {
+      const err = new Error('aborted');
+      err.name = 'AbortError';
+      return Promise.reject(err);
+    };
+
+    await expect(breaker.run(aborted)).rejects.toThrow('aborted');
+    await expect(breaker.run(aborted)).rejects.toThrow('aborted');
+    await expect(breaker.run(aborted)).rejects.toThrow('aborted');
+
+    await expect(breaker.run(() => Promise.resolve('ok'))).resolves.toBe('ok');
+  });
 });

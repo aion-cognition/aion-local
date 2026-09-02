@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { introspectionOperations } from './catalog.js';
+import { TIER3_ACTABLE_OPERATIONS } from '../domain/tier3.js';
 
 /**
  * The operations whose runs no snapshot number can contradict yet, each named in the catalog's
@@ -35,5 +36,13 @@ describe('introspectionOperations', () => {
       .map((operation) => operation.name)
       .sort();
     expect(withoutMeasure).toEqual(UNMEASURED_OPERATIONS);
+  });
+
+  it('registers every operation tier 3 is allowed to run', () => {
+    // The allowlist holds bare strings. A rename that missed one would drop that operation out
+    // of tier 3 silently, as a permanent `downgraded` verdict nobody asked for.
+    const names = new Set(introspectionOperations().map((operation) => operation.name));
+    const unregistered = TIER3_ACTABLE_OPERATIONS.filter((name) => !names.has(name));
+    expect(unregistered).toEqual([]);
   });
 });

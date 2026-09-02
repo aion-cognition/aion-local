@@ -1,3 +1,4 @@
+import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { cleanupNarratives } from '../../../reflection/application/narrative-cleanup.js';
 import { HEALTH_COLLECTORS, type HealthSnapshot } from '../../domain/health.js';
 import type { IntrospectionOperation, OperationOutcome } from '../../domain/operation.js';
@@ -19,14 +20,16 @@ import type { IntrospectionOperation, OperationOutcome } from '../../domain/oper
 
 export const NARRATIVE_REGROUNDING_OPERATION = 'narrative_regrounding';
 
-/** Mirrors `maintenance.narrativeCleanupBatch`'s own default; see `defaults.ts` for why. */
-const DEFAULT_NARRATIVE_BATCH = 10;
-
+/**
+ * Relevance reads the shipped default rather than the live config: the contract hands it only
+ * the health snapshot, so a knob an operator retuned changes what a run rewrites and not how
+ * urgently the loop wants one.
+ */
 export function narrativeRegroundingRelevance(health: HealthSnapshot): number {
   if (health.degraded.includes(HEALTH_COLLECTORS.graph)) {
     return 0;
   }
-  return Math.min(1, health.graph.staleNarratives / DEFAULT_NARRATIVE_BATCH);
+  return Math.min(1, health.graph.staleNarratives / DEFAULTS.maintenance.narrativeCleanupBatch);
 }
 
 export function narrativeRegroundingOperation(): IntrospectionOperation {

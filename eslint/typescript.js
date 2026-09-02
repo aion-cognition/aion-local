@@ -5,6 +5,9 @@
  * only what is ours: tunings that override preset defaults, and house
  * additions the presets do not activate.
  */
+
+import { SHARED_RESTRICTED_SYNTAX } from './restricted-syntax.js';
+
 export default {
   name: 'aion/typescript',
   rules: {
@@ -71,12 +74,7 @@ export default {
         selector: 'TSImportType',
         message: 'Use a top-level import for types, never inline import() expressions.',
       },
-      {
-        selector: 'ForInStatement',
-        message: 'Iterate Object.keys/values/entries instead of for-in.',
-      },
-      { selector: 'LabeledStatement', message: 'Restructure instead of labeling loops.' },
-      { selector: 'WithStatement', message: 'with is banned.' },
+      ...SHARED_RESTRICTED_SYNTAX,
     ],
   },
 };

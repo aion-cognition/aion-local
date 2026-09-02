@@ -35,9 +35,11 @@ import {
  * wide as a reviewed one and carries its own provenance. `auto` is the confidence gate that
  * came before either, kept working for a deployment that pinned it.
  *
- * Every path records the proposal row. A closed claim's row is resolved on the way out, and a
- * vetoed one stays open carrying the veto, so `aion proposals ls` is the record of what the
- * judge wanted and what stopped it either way.
+ * Both reviewed paths record the proposal row. A closed claim's row is resolved on the way out,
+ * and a vetoed one stays open carrying the veto, so `aion proposals ls` is the record of what
+ * the judge wanted and what stopped it either way. `auto` is the exception: the branch that
+ * closes on the confidence gate writes no row, so what it did is readable from the lineage
+ * alone.
  *
  * What a judgment did is reported three ways rather than two, and read off the graph rather
  * than off which branch ran: see `JudgmentOutcome`.
@@ -118,7 +120,11 @@ async function secondPass(
         ? {}
         : { sharedSubject: pair.candidate.sharedSubject }),
     },
-    { model: policy.model, timeoutMs: policy.timeoutMs },
+    {
+      model: policy.model,
+      timeoutMs: policy.timeoutMs,
+      ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
+    },
   );
 
   if (outcome.status === 'reviewed') {
@@ -163,12 +169,6 @@ async function applyUnanimous(
   policy: SupersessionWritePolicy,
   tally: RunTally,
 ): Promise<JudgmentOutcome> {
-  if (decidedAlready(ctx, pair)) {
-    // Someone already ruled on this pair. Re-judging it does not reopen their decision, and a
-    // second call spent arguing with it would change nothing.
-    return 'already_decided';
-  }
-
   const verdict = await secondPass(ctx, pair, policy);
   const second = describeVeto(verdict);
   if (verdict.outcome !== 'unanimous') {
@@ -215,6 +215,12 @@ export async function applyJudgment(
   policy: SupersessionWritePolicy,
   tally: RunTally,
 ): Promise<JudgmentOutcome> {
+  // Someone already ruled on this pair. Re-judging it does not reopen their decision, and no
+  // mode may close what a person dismissed.
+  if (decidedAlready(ctx, pair)) {
+    return 'already_decided';
+  }
+
   if (policy.mode === 'unanimous') {
     return await applyUnanimous(ctx, pair, policy, tally);
   }

@@ -178,6 +178,9 @@ async function runStructuralDiscovery(ctx: OperationContext): Promise<OperationO
   const nomination = await nominateVectorNeighbors(ctx.driver, {
     seedIds: seeds.map((seed) => seed.id),
     cosineFloor: ctx.config.reflection.associationSemanticThreshold,
+    // The knob is the pair ceiling, so the query carries it: read after the fact it would be
+    // clamped by the query's own default and a raised setting would report nothing.
+    limit: ctx.config.maintenance.structuralDiscoveryBatch,
     logger: ctx.logger,
   });
   if (nomination.status === 'unavailable') {
@@ -185,10 +188,7 @@ async function runStructuralDiscovery(ctx: OperationContext): Promise<OperationO
   }
 
   const stamp = bucketStamp(STRUCTURAL_DISCOVERY_BUCKET, ctx.now);
-  const nominations = nomination.nominations.slice(
-    0,
-    ctx.config.maintenance.structuralDiscoveryBatch,
-  );
+  const { nominations } = nomination;
   if (nominations.length === 0) {
     return noop(`no unconnected neighbour above the nomination floor in bucket ${stamp}`, 0);
   }

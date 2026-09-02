@@ -1,6 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 
-import { DEFAULT_HEBBIAN_BATCH_SIZE, DEFAULT_HEBBIAN_WEIGHT_FLOOR } from './flush.js';
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { decayEdgeWeights } from '../../infrastructure/graph/edge-weights.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
@@ -20,15 +20,6 @@ import { recordDecaySweep } from '../../infrastructure/sqlite/decay-counters.js'
  * how long the edge has gone unused, which the sweep leaves alone.
  */
 
-/** Matches `hebbian.decayRate`: eta_decay in `w' = max(floor, w - eta_decay * decay)`. */
-export const DEFAULT_HEBBIAN_DECAY_RATE = 0.05;
-
-/** Matches `hebbian.decayPeakDays`: the staleness, in days, where the bell curve peaks. */
-export const DEFAULT_HEBBIAN_DECAY_PEAK_DAYS = 30;
-
-/** Matches `hebbian.decaySigma`: the curve's spread around the peak. */
-export const DEFAULT_HEBBIAN_DECAY_SIGMA = 15;
-
 export type HebbianDecayDeps = {
   readonly driver: Driver;
   readonly db: SqliteHandle;
@@ -47,7 +38,11 @@ export type HebbianDecayOptions = {
 export type HebbianDecayReport = {
   /** Unprotected edges the scan examined this run, bounded by batchSize. */
   readonly edgesScanned: number;
-  /** Of those, the ones whose weight actually moved; the rest were already at the floor. */
+  /**
+   * Of those, the ones whose weight changed. An edge already at the floor accounts for most of
+   * the rest, and so does one far out in a tail, where the curve's step is too small to move a
+   * float.
+   */
   readonly edgesDecayed: number;
 };
 
@@ -55,16 +50,20 @@ export type HebbianDecayReport = {
  * Scan, decay, record. Unlike the flush, there is no cheap "is there anything to do" check
  * to skip ahead of the graph call: the scan itself is that check, and an empty result is a
  * normal outcome rather than a special case.
+ *
+ * A caller that names no rate, peak or sigma gets the shipped knob: `eta_decay` in
+ * `w' = min(w, max(floor, w - eta_decay * decay))`, the staleness in days where the bell curve
+ * peaks, and the curve's spread around that peak.
  */
 export async function sweepEdgeDecay(
   deps: HebbianDecayDeps,
   options: HebbianDecayOptions = {},
 ): Promise<HebbianDecayReport> {
-  const batchSize = options.batchSize ?? DEFAULT_HEBBIAN_BATCH_SIZE;
-  const decayRate = options.decayRate ?? DEFAULT_HEBBIAN_DECAY_RATE;
-  const peakDays = options.peakDays ?? DEFAULT_HEBBIAN_DECAY_PEAK_DAYS;
-  const sigma = options.sigma ?? DEFAULT_HEBBIAN_DECAY_SIGMA;
-  const weightFloor = options.weightFloor ?? DEFAULT_HEBBIAN_WEIGHT_FLOOR;
+  const batchSize = options.batchSize ?? DEFAULTS.hebbian.batchSize;
+  const decayRate = options.decayRate ?? DEFAULTS.hebbian.decayRate;
+  const peakDays = options.peakDays ?? DEFAULTS.hebbian.decayPeakDays;
+  const sigma = options.sigma ?? DEFAULTS.hebbian.decaySigma;
+  const weightFloor = options.weightFloor ?? DEFAULTS.hebbian.weightFloor;
   const now = options.now ?? new Date();
 
   const edges = await decayEdgeWeights(deps.driver, {

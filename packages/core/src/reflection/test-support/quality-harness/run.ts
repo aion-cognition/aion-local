@@ -12,12 +12,11 @@ import { OllamaProvider } from '../../../infrastructure/providers/ollama-provide
 import { AnthropicHaikuClient } from '../../../infrastructure/providers/test-support/anthropic-client.js';
 
 /**
- * The one knob the config schema does not carry yet: the Anthropic provider work owns
- * registering its model there. Everything else this harness needs comes from the loader:
- * the Ollama URL, the reflect model, the embed model, the API key. The harness measures
- * the models the service would actually route to, not a second copy that drifts.
+ * Everything this harness runs on comes from the loader: the Ollama URL, the reflect model,
+ * the embed model, the Anthropic model and its API key. The harness measures the models the
+ * service would actually route to, so it reads no env var of its own and holds no default
+ * that could drift from the knob table.
  */
-const DEFAULT_ANTHROPIC_MODEL = 'claude-haiku-4-5';
 
 // This module runs compiled from `dist/`. Reports belong next to the source for easy review,
 // not inside a directory `npm run clean` deletes.
@@ -42,8 +41,8 @@ function buildLocalRoute(config: Config): RouteConfig {
   };
 }
 
-function buildAnthropicRoute(apiKey: string): RouteConfig {
-  const model = process.env.AION_ANTHROPIC_MODEL ?? DEFAULT_ANTHROPIC_MODEL;
+function buildAnthropicRoute(config: Config): RouteConfig {
+  const { apiKey, model } = config.anthropic;
   const client = new AnthropicHaikuClient({ apiKey });
 
   return {
@@ -63,10 +62,12 @@ async function main(): Promise<void> {
 
   const { apiKey } = config.anthropic;
   if (apiKey.trim().length > 0) {
-    routes.push(buildAnthropicRoute(apiKey));
+    routes.push(buildAnthropicRoute(config));
   } else {
     skippedRoutes.push({ route: 'anthropic', reason: 'AION_ANTHROPIC_API_KEY not set' });
-    process.stdout.write('AION_ANTHROPIC_API_KEY not set; skipping the claude-haiku-4-5 route.\n');
+    process.stdout.write(
+      `AION_ANTHROPIC_API_KEY not set; skipping the ${config.anthropic.model} route.\n`,
+    );
   }
 
   process.stdout.write(`Running extraction quality harness against ${routes.length} route(s)...\n`);

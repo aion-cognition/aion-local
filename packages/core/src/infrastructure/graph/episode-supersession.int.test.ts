@@ -3,14 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { BITEMPORAL_PROPERTIES, supersede, writeStampedNode } from './bitemporal.js';
+import { BITEMPORAL_PROPERTIES, writeStampedNode } from './bitemporal.js';
 import { writeCognitiveNode } from './cognitive-queries.js';
 import { upsertEdge } from './edges.js';
-import {
-  EPISODE_PROPAGATION_METHOD,
-  propagateEpisodeSupersession,
-  supersedeEpisode,
-} from './episode-supersession.js';
+import { EPISODE_PROPAGATION_METHOD, supersedeEpisode } from './episode-supersession.js';
 import { runGraphMigrations } from './migrations.js';
 import { SUPERSEDES_TYPE } from './relationships.js';
 import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
@@ -172,37 +168,5 @@ describe('supersedeEpisode', () => {
         targetId: derived,
       }),
     );
-  }, 120_000);
-});
-
-describe('propagateEpisodeSupersession', () => {
-  it('repairs an episode something else already closed', async () => {
-    await seedEpisode('ep-repair-old');
-    await seedEpisode('ep-repair-new');
-    const derived = await seedDerived('ep-repair-old', 'The queue drains every 30 seconds.');
-
-    await supersede(harness.driver, { oldId: 'ep-repair-old', newId: 'ep-repair-new', now: NOW });
-    expect(await isClosed(derived)).toBe(false);
-
-    const result = await propagateEpisodeSupersession(harness.driver, {
-      episodeId: 'ep-repair-old',
-      now: NOW,
-    });
-
-    expect(result?.closedIds).toEqual([derived]);
-    expect(await isClosed(derived)).toBe(true);
-  }, 120_000);
-
-  it('does nothing for an open episode', async () => {
-    await seedEpisode('ep-open');
-    const derived = await seedDerived('ep-open', 'Nothing has corrected this yet.');
-
-    const result = await propagateEpisodeSupersession(harness.driver, {
-      episodeId: 'ep-open',
-      now: NOW,
-    });
-
-    expect(result).toBeUndefined();
-    expect(await isClosed(derived)).toBe(false);
   }, 120_000);
 });

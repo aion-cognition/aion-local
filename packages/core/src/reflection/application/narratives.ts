@@ -1,28 +1,24 @@
 import type { Driver } from 'neo4j-driver';
 
-import { attachContentVectors } from './vectors.js';
+import {
+  attachVector,
+  closeSuperseded,
+  NARRATIVE_EXTRACTION_METHOD,
+  writeNarrative,
+  type NarrativeWrite,
+} from './narrative-write.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { describeError } from '../../infrastructure/errors.js';
 import {
-  supersede,
-  writeStampedDerivedNodeInTransaction,
-} from '../../infrastructure/graph/bitemporal.js';
-import { inWriteTransaction } from '../../infrastructure/graph/connection.js';
-import { upsertEdgeInTransaction } from '../../infrastructure/graph/edges.js';
-import { MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
-import {
-  DERIVES_FROM_TYPE,
   findIdleSessions,
   findSessionNarratives,
   loadSessionEpisodes,
   loadSessionSourceNodes,
-  NARRATIVE_PROPERTIES,
-  SUMMARIZED_BY_TYPE,
 } from '../../infrastructure/graph/narrative-queries.js';
-import type { GraphProperties } from '../../infrastructure/graph/values.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
+import { deadlineFor } from '../../infrastructure/providers/deadline-signal.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
-import { decideSessionBoundary, MID_SESSION_ROLLUP_DEFAULT } from '../domain/mid-session.js';
+import { decideSessionBoundary } from '../domain/mid-session.js';
 import {
   assembleNarrative,
   buildNarrativeMessages,
@@ -34,11 +30,8 @@ import {
   NARRATIVE_JSON_SCHEMA,
   NarrativeOutputSchema,
   renderNarrativeSource,
-  SESSION_NARRATIVE_SCOPE,
   type GroundedNarrative,
-  type NarrativeDecision,
   type NarrativeSource,
-  type NarrativeSpan,
 } from '../domain/narrative.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../domain/stage.js';
 
@@ -52,14 +45,12 @@ import type { ReflectionStage, StageContext, StageOutcome } from '../domain/stag
 
 export const NARRATIVE_STAGE_NAME = 'narratives';
 
+const MINUTE_MS = 60 * 1000;
+
 /** The idle window in the unit the closer works in; config states it in minutes. */
-export const DEFAULT_SESSION_IDLE_MS = DEFAULTS.reflection.narrativeIdleMinutes * 60 * 1000;
+export const DEFAULT_SESSION_IDLE_MS = DEFAULTS.reflection.narrativeIdleMinutes * MINUTE_MS;
 
-/** Provenance: what produced the node, as distinct from what later reads it. */
-export const NARRATIVE_EXTRACTION_METHOD = 'reflection_narrative';
-
-const NARRATIVE_SIGNALS = ['compression'];
-const NARRATIVE_PROVENANCE = [NARRATIVE_EXTRACTION_METHOD];
+export { NARRATIVE_EXTRACTION_METHOD };
 
 export type NarrativeDeps = {
   readonly driver: Driver;
@@ -83,6 +74,12 @@ export type NarrativeOptions = {
   readonly regenerate?: boolean;
   /** The mid-session boundary's kill switch. Off, a running session waits for its close. */
   readonly midSession?: boolean;
+  /** Uncovered episodes that cross the mid-session boundary on their own. */
+  readonly midSessionEpisodes?: number;
+  /** A pause inside a running session that crosses the same boundary. */
+  readonly midSessionGapMs?: number;
+  /** The caller's shutdown signal, composed under the compression call's own deadline. */
+  readonly signal?: AbortSignal;
 };
 
 export type IdleSweepOptions = NarrativeOptions & {
@@ -111,6 +108,9 @@ type NarrativeSettings = {
   readonly occurredAt: Date;
   readonly regenerate: boolean;
   readonly midSession: boolean;
+  readonly midSessionEpisodes: number;
+  readonly midSessionGapMs: number;
+  readonly signal?: AbortSignal;
 };
 
 function settingsOf(options: NarrativeOptions): NarrativeSettings {
@@ -124,7 +124,11 @@ function settingsOf(options: NarrativeOptions): NarrativeSettings {
     now,
     occurredAt: options.occurredAt ?? now,
     regenerate: options.regenerate ?? false,
-    midSession: options.midSession ?? MID_SESSION_ROLLUP_DEFAULT,
+    midSession: options.midSession ?? DEFAULTS.reflection.midSessionRollup,
+    midSessionEpisodes: options.midSessionEpisodes ?? DEFAULTS.reflection.midSessionEpisodes,
+    midSessionGapMs:
+      options.midSessionGapMs ?? DEFAULTS.reflection.midSessionGapMinutes * MINUTE_MS,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
   };
 }
 
@@ -140,10 +144,7 @@ async function compress(
   settings: NarrativeSettings,
   source: NarrativeSource,
 ): Promise<GroundedNarrative> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => {
-    controller.abort();
-  }, settings.timeoutMs);
+  const deadline = deadlineFor(settings.timeoutMs, settings.signal);
   try {
     const raw = await deps.provider.generate({
       model: settings.model,
@@ -151,131 +152,11 @@ async function compress(
       schema: NARRATIVE_JSON_SCHEMA,
       maxTokens: narrativeMaxTokens(source.sentenceBudget),
       think: false,
-      signal: controller.signal,
+      signal: deadline.signal,
     });
     return assembleNarrative(NarrativeOutputSchema.parse(raw), source);
   } finally {
-    clearTimeout(timer);
-  }
-}
-
-type NarrativeWrite = {
-  readonly narrativeId: string;
-  readonly sessionId: string;
-  readonly decision: NarrativeDecision;
-  readonly output: GroundedNarrative;
-  readonly source: NarrativeSource;
-  readonly span: NarrativeSpan;
-  readonly now: Date;
-  /** The end of the span the narrative covers, else the run's world time. */
-  readonly occurredAt: Date;
-};
-
-/**
- * `summary` is the one-line gist every pack shows; `text` is the narrative body, which is
- * both what `content_fts` indexes and what the pending-vector drain would embed if the
- * embedder is down at close time. Writing the body under `text` is what keeps a narrative
- * that missed its vector recoverable by the ordinary backfill instead of permanently
- * invisible to vector search. `citations` carries the ids every stored sentence cited, which
- * is what makes the claim auditable after the fact.
- */
-function narrativeProperties(input: NarrativeWrite): GraphProperties {
-  return {
-    [MEMORY_PROPERTIES.summary]: input.output.summary,
-    [MEMORY_PROPERTIES.text]: input.output.narrative,
-    [NARRATIVE_PROPERTIES.citations]: [...input.output.citations],
-    [NARRATIVE_PROPERTIES.sentenceCount]: input.output.kept,
-    [NARRATIVE_PROPERTIES.grounding]: NARRATIVE_GROUNDING,
-    [MEMORY_PROPERTIES.sessionId]: input.sessionId,
-    [MEMORY_PROPERTIES.extractionMethod]: NARRATIVE_EXTRACTION_METHOD,
-    [NARRATIVE_PROPERTIES.scope]: SESSION_NARRATIVE_SCOPE,
-    [NARRATIVE_PROPERTIES.version]: input.decision.version,
-    [NARRATIVE_PROPERTIES.coverageKey]: input.decision.coverageKey,
-    [NARRATIVE_PROPERTIES.coverageCount]: input.decision.episodeIds.length,
-    [NARRATIVE_PROPERTIES.coverage]: input.source.coverage,
-    [NARRATIVE_PROPERTIES.spanStart]: input.span.start,
-    [NARRATIVE_PROPERTIES.spanEnd]: input.span.end,
-  };
-}
-
-/**
- * The node and its provenance edges in one transaction. `occurred_at` is the end of the span
- * it covers, so recency ranks a narrative with the freshest experience it compresses rather
- * than with the oldest. Edge counts are zero: these are structural facts, not observations,
- * so a repeat write moves nothing.
- */
-async function writeNarrative(deps: NarrativeDeps, input: NarrativeWrite): Promise<void> {
-  await inWriteTransaction(deps.driver, async (tx) => {
-    await writeStampedDerivedNodeInTransaction(tx, {
-      label: 'Narrative',
-      id: input.narrativeId,
-      now: input.now,
-      occurredAt: input.occurredAt,
-      properties: narrativeProperties(input),
-    });
-
-    await upsertEdgeInTransaction(tx, {
-      type: DERIVES_FROM_TYPE,
-      sourceId: input.narrativeId,
-      targetId: input.sessionId,
-      strength: 1,
-      confidence: 1,
-      signals: NARRATIVE_SIGNALS,
-      provenance: NARRATIVE_PROVENANCE,
-      count: 0,
-      now: input.now,
-    });
-
-    for (const episodeId of input.decision.episodeIds) {
-      await upsertEdgeInTransaction(tx, {
-        type: SUMMARIZED_BY_TYPE,
-        sourceId: episodeId,
-        targetId: input.narrativeId,
-        strength: 1,
-        confidence: 1,
-        signals: NARRATIVE_SIGNALS,
-        provenance: NARRATIVE_PROVENANCE,
-        count: 0,
-        now: input.now,
-      });
-    }
-  });
-}
-
-/** Lineage, not deletion: the old version stays readable and time travel still returns it. */
-async function closeSuperseded(
-  deps: NarrativeDeps,
-  decision: NarrativeDecision,
-  narrativeId: string,
-  settings: NarrativeSettings,
-  occurredAt: Date,
-): Promise<void> {
-  for (const oldId of decision.supersedes) {
-    if (oldId !== narrativeId) {
-      await supersede(deps.driver, {
-        oldId,
-        newId: narrativeId,
-        now: settings.now,
-        // An older version stopped covering the session at the replacement's own world time,
-        // which is not the moment the rewrite ran.
-        validUntil: occurredAt,
-        signals: NARRATIVE_SIGNALS,
-        provenance: NARRATIVE_PROVENANCE,
-      });
-    }
-  }
-}
-
-/**
- * The last step, and the only one allowed to fail without failing the narrative. A node that
- * ends here without its `content_vec` is the same pending-vector marker intake leaves, and
- * the worker's drain resolves it on the next pass.
- */
-async function attachVector(deps: NarrativeDeps, narrativeId: string, text: string): Promise<void> {
-  try {
-    await attachContentVectors(deps.driver, deps.provider, [{ id: narrativeId, text }]);
-  } catch (err) {
-    deps.logger.warn({ err, narrativeId }, 'narrative vector deferred; the narrative is stored');
+    deadline.clear();
   }
 }
 
@@ -319,7 +200,7 @@ async function narrateSession(
   const narrativeId = narrativeNodeId(sessionId, decision.coverageKey, generation);
 
   if (decision.action === 'skip') {
-    await closeSuperseded(deps, decision, narrativeId, settings, occurredAt);
+    await closeSuperseded(deps, decision, narrativeId, settings.now, occurredAt);
     return skipped(sessionId, episodes.length, decision.reason);
   }
 
@@ -367,7 +248,7 @@ async function narrateSession(
     occurredAt,
   };
   await writeNarrative(deps, write);
-  await closeSuperseded(deps, decision, narrativeId, settings, occurredAt);
+  await closeSuperseded(deps, decision, narrativeId, settings.now, occurredAt);
   await attachVector(deps, narrativeId, output.narrative);
 
   deps.logger.info(
@@ -452,7 +333,12 @@ export class SessionNarrativeStage implements ReflectionStage {
       provider: ctx.provider,
       logger: ctx.logger,
     };
-    const settings = settingsOf({ ...this.#options, now: ctx.now, occurredAt: ctx.occurredAt });
+    const settings = settingsOf({
+      ...this.#options,
+      now: ctx.now,
+      occurredAt: ctx.occurredAt,
+      ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
+    });
     const result = await narrateSession(deps, ctx.episode.sessionId, settings, true);
 
     if (result.status === 'created') {
@@ -491,7 +377,11 @@ export class SessionNarrativeCloser {
     });
   };
 
-  /** Resolves once every close scheduled so far has settled. Only tests should call it. */
+  /**
+   * Resolves once every close scheduled so far has settled. Shutdown awaits this chain, and
+   * each entry in it is a model call bounded only by `timeoutMs`, so a process closing many
+   * sessions at once can sit here for that timeout per session before it exits.
+   */
   async whenIdle(): Promise<void> {
     await this.#pending;
   }

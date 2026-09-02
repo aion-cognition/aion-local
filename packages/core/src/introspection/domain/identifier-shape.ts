@@ -7,8 +7,7 @@
  * check, never a ranking or activation decision.
  *
  * Every shape below is conservative on purpose: it must be unambiguous on the name alone, so a
- * plain word never matches. `type` is part of the signature the maintenance design settled on,
- * but nothing here reads it, since the name shapes are already unambiguous without it.
+ * plain word never matches. The entity's type is not read: the name shapes settle it.
  */
 
 export type IdentifierShape = 'sha' | 'uuid' | 'path' | 'agent_id' | 'none';
@@ -42,7 +41,7 @@ function looksLikePath(value: string): boolean {
   return countSeparators(value) >= MIN_PATH_SEPARATORS;
 }
 
-export function identifierShape(name: string, _type: string): IdentifierShape {
+export function identifierShape(name: string): IdentifierShape {
   const trimmed = name.trim();
   if (trimmed.length === 0) {
     return 'none';

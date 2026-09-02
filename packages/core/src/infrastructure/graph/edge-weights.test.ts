@@ -157,6 +157,11 @@ describe('bell curve edge weight decay', () => {
     expect(cypher).not.toContain('raw > 1.0');
   });
 
+  it('leaves an edge stored under the floor alone rather than lifting it to the floor', () => {
+    const { cypher } = buildEdgeWeightDecay(DECAY_INPUT);
+    expect(cypher).toContain('CASE WHEN before < $weightFloor THEN before');
+  });
+
   it('excludes the protected types by the same parameter reinforcement uses', () => {
     const { cypher, parameters } = buildEdgeWeightDecay(DECAY_INPUT);
     expect(cypher).toContain('WHERE NOT type(r) IN $protected');

@@ -570,6 +570,28 @@ describe('SupersessionStage', () => {
     expect(bed.supersedesEdges()).toEqual(before);
   });
 
+  it('closes nothing in auto mode on a pair a person already ruled on', async () => {
+    seedContradictingPair();
+    bed.responses = [{ contradicts: true, confidence: 0.6, rationale: 'possibly a reversal' }];
+    await new SupersessionStage({ mode: 'auto' }).run(bed.context(EPISODE_ID));
+    const proposed = bed.proposals()[0];
+    if (proposed === undefined) {
+      throw new Error('expected the below-threshold judgment to leave a proposal row');
+    }
+    bed.resolve(proposed.id);
+
+    bed.responses = [{ contradicts: true, confidence: 0.95, rationale: 'a reversal after all' }];
+    const outcome = await new SupersessionStage({ mode: 'auto' }).run(bed.context(EPISODE_ID));
+
+    expect(outcome.counts).toEqual({
+      supersessions: 0,
+      supersessionProposals: 0,
+      supersessionStaleTargets: 0,
+    });
+    expect(bed.validUntil('decision-old')).toBeUndefined();
+    expect(bed.supersedesEdges()).toEqual([]);
+  });
+
   it('re-running after a proposal leaves one proposal row', async () => {
     seedContradictingPair();
     bed.responses = [

@@ -1,7 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 
 import { BITEMPORAL_PROPERTIES, currentOnly } from './bitemporal.js';
-import { runRead } from './connection.js';
+import { runRead, type GraphTransaction } from './connection.js';
 import { CONTAINMENT_TYPE } from './episodes.js';
 import { DERIVES_FROM_TYPE, NARRATIVE_PROPERTIES } from './narrative-queries.js';
 import { toGraphInteger, type Row } from './values.js';
@@ -67,6 +67,31 @@ export async function findDuplicateNarrativeSessions(
       versions: Array.isArray(row.versions) ? row.versions.map(readVersion) : [],
     }),
   );
+}
+
+const READ_OPEN_NARRATIVE_VERSIONS = [
+  `MATCH (n:Narrative)-[:${DERIVES_FROM_TYPE}]->(:Session { id: $sessionId })`,
+  `WHERE ${currentOnly('n')}`,
+  `RETURN n.id AS id, n.${NARRATIVE_PROPERTIES.version} AS version,`,
+  `       n.${NARRATIVE_PROPERTIES.coverageCount} AS coverage_count`,
+  'ORDER BY n.id',
+].join('\n');
+
+/**
+ * The same group re-read inside the caller's transaction, after the session lock. The scan that
+ * found the duplicates ran outside any lock, so by the time the closes are written another
+ * writer may have closed the version this run picked to keep, and closing the rest against it
+ * would leave the session with no current narrative at all.
+ */
+export async function readOpenNarrativeVersionsInTransaction(
+  tx: GraphTransaction,
+  sessionId: string,
+): Promise<DuplicateNarrativeVersion[]> {
+  return tx.run(READ_OPEN_NARRATIVE_VERSIONS, { sessionId }, (row) => ({
+    id: row.id as string,
+    version: typeof row.version === 'number' ? row.version : 0,
+    coverageCount: typeof row.coverage_count === 'number' ? row.coverage_count : 0,
+  }));
 }
 
 export type OrphanedNarrative = {

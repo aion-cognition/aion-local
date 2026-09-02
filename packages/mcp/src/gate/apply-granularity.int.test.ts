@@ -88,6 +88,7 @@ async function reviewRow(): Promise<SupersessionProposal | undefined> {
     confidence: 1,
     episodeId: correctionEpisodeId,
     rationale: 'ownership of the subject',
+    createdAt: '2026-08-29T12:00:00.000Z',
   });
   return listSupersessionProposals(substrate.db).find((row) => row.id === id);
 }

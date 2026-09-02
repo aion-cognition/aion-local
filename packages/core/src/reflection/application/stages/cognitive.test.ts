@@ -221,6 +221,22 @@ describe('CognitiveExtractionStage', () => {
     expect(graph.nodesWithLabel('Concept')).toHaveLength(2);
   });
 
+  it('spends no cap slot on a node whose text is blank', async () => {
+    const generate = async (): Promise<unknown> => ({
+      nodes: [
+        { type: 'Concept', text: '   ' },
+        { type: 'Concept', text: 'one' },
+        { type: 'Concept', text: 'two' },
+      ],
+    });
+    const stage = new CognitiveExtractionStage({ maxNodes: 2 });
+
+    const outcome = await stage.run(buildContext(stubProvider(generate)));
+
+    expect(outcome.counts).toEqual({ cognitive: 2 });
+    expect(graph.nodesWithLabel('Concept')).toHaveLength(2);
+  });
+
   it('fails on a response that is not a list of nodes at all', async () => {
     const stage = new CognitiveExtractionStage();
     const outcome = await stage.run(
@@ -409,6 +425,28 @@ describe('CognitiveExtractionStage', () => {
       );
       expect(outcome.counts).toEqual({ cognitive: 0 });
       expect(graph.nodesWithLabel('Plan')).toHaveLength(0);
+    });
+
+    it('fails the stage when the validation call never lands, keeping the candidates', async () => {
+      let calls = 0;
+      const generate = async (): Promise<unknown> => {
+        calls += 1;
+        if (calls === 1) {
+          return {
+            nodes: [{ type: 'Plan', text: 'Close out the duplicate remittance investigation.' }],
+          };
+        }
+        throw new Error('ollama unreachable');
+      };
+      const stage = new CognitiveExtractionStage();
+
+      const outcome = await stage.run(buildContext(stubProvider(generate), undefined, SUMMARY));
+
+      // The retry owes the episode its Plan node: nothing else re-extracts one, so a transport
+      // failure must not read as the model judging the candidate a restatement.
+      expect(outcome.status).toBe('failed');
+      expect(outcome.summary).toContain('restatement validation failed');
+      expect(outcome.summary).toContain('ollama unreachable');
     });
   });
 

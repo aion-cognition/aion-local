@@ -60,7 +60,11 @@ const ROLLUP_PROVENANCE = [ROLLUP_EXTRACTION_METHOD];
 /** Members read per run. A day of sessions and a week of days both sit far inside this. */
 export const DEFAULT_ROLLUP_MEMBER_LIMIT = 200;
 
-/** Windows compressed per run, so one tick pays for a bounded number of model calls. */
+/**
+ * Windows compressed per run, so one tick pays for a bounded number of model calls. A window
+ * whose standing rollup already covers it costs no call and does not spend the budget, which is
+ * what keeps a run reaching newer windows once the oldest ones are done.
+ */
 export const DEFAULT_ROLLUP_WINDOW_LIMIT = 2;
 
 export type RollupDeps = {
@@ -82,7 +86,7 @@ export type RollupOptions = {
 
 export type RollupReport = {
   readonly scope: RollupScope;
-  /** Closed windows the run considered, which bounds what it could have written. */
+  /** Closed windows the run read, whether or not it spent a model call on one. */
   readonly windows: number;
   readonly created: number;
   readonly skipped: number;
@@ -155,7 +159,8 @@ function rollupProperties(input: RollupWrite): GraphProperties {
     [NARRATIVE_PROPERTIES.version]: input.version,
     [NARRATIVE_PROPERTIES.coverageKey]: input.coverageKey,
     [NARRATIVE_PROPERTIES.coverageCount]: input.memberIds.length,
-    // Every member is rendered, so a rollup always saw the whole of what it claims to cover.
+    // Every member of the window is rendered, and a window the member read may have cut short
+    // is not rolled up at all, so a stored rollup saw the whole of what it claims to cover.
     [NARRATIVE_PROPERTIES.coverage]: 1,
     [NARRATIVE_PROPERTIES.spanStart]: input.spanStart,
     [NARRATIVE_PROPERTIES.spanEnd]: input.spanEnd,
@@ -350,20 +355,29 @@ export async function rollUpNarratives(
     limit: settings.memberLimit,
   });
 
-  const windows = groupRollupWindows(members, settings.scope)
-    .filter((window) => isWindowClosed(window, settings.now))
-    .slice(0, settings.windowLimit);
+  const grouped = groupRollupWindows(members, settings.scope).filter((window) =>
+    isWindowClosed(window, settings.now),
+  );
+  // The member read is capped across every window at once, so a read that came back full may
+  // have cut its newest window short. A rollup asserts it saw the whole of what it covers, so
+  // that window waits for a run whose read reaches all of it.
+  const closed = members.length < settings.memberLimit ? grouped : grouped.slice(0, -1);
 
   let created = 0;
   let skipped = 0;
   let vetoed = 0;
   let failed = 0;
   let absorbed = 0;
+  let examined = 0;
 
-  for (const window of windows) {
+  // `windowLimit` bounds the rollups a tick writes, not the windows it looks at. A settled
+  // window answers `skip` and writes nothing, so spending the budget on it would leave the run
+  // re-examining the same oldest days forever and never reaching the ones that need a rollup.
+  for (const window of closed) {
     if (settings.signal?.aborted === true) {
       break;
     }
+    examined += 1;
     const existing = await findWindowRollups(deps.driver, settings.scope, window.key);
     const result = await rollUpWindow(deps, settings, window, existing);
     absorbed += result.absorbed;
@@ -376,11 +390,14 @@ export async function rollUpNarratives(
     } else {
       failed += 1;
     }
+    if (created + vetoed + failed >= settings.windowLimit) {
+      break;
+    }
   }
 
   return {
     scope: settings.scope,
-    windows: windows.length,
+    windows: examined,
     created,
     skipped,
     vetoed,

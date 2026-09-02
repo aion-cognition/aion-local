@@ -226,12 +226,17 @@ export class Introspector {
       effectiveness: readOperationEffectiveness(this.#deps.db, measurements, cycle),
     };
 
-    const candidates = this.#deps.operations.map((operation) => this.#candidate(operation, health));
+    // A switched-off operation is not a candidate at all. Filtering here rather than inside
+    // `run` is what stops it from taking the selection stamp and the bucket claim for a tick it
+    // was never going to do anything with.
+    const candidates = this.#deps.operations
+      .filter((operation) => operation.enabled?.(this.#deps.config) !== false)
+      .map((operation) => this.#candidate(operation, health));
 
     // Deciding again when a claim is lost, rather than ending the tick. One operation whose
     // relevance sits at the top of the catalog and whose bucket is an hour wide would otherwise
-    // be selected on every tick inside that hour and run on none of them, and the eleven other
-    // operations would wait out the hour behind it. The set only shrinks, so this terminates.
+    // be selected on every tick inside that hour and run on none of them, and every other
+    // operation would wait out the hour behind it. The set only shrinks, so this terminates.
     const claimedElsewhere = new Set<string>();
     let skippedReport: TickReport | undefined;
     for (let attempt = 0; attempt <= candidates.length; attempt += 1) {

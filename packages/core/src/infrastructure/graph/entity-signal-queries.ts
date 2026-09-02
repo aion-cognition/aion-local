@@ -1,6 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 
-import { currentOnly } from './bitemporal.js';
+import { BITEMPORAL_PROPERTIES, currentOnly } from './bitemporal.js';
 import { runRead } from './connection.js';
 import { ENTITY_MENTION_TYPE } from './entity-mention-queries.js';
 import { BACKBONE_TYPES, BASE_NODE_LABEL, ENTITY_LABEL } from './labels.js';
@@ -70,16 +70,16 @@ const SECONDS_PER_DAY = 86_400;
 const READ_ENTITY_PAIR_SIGNALS = [
   'UNWIND range(0, size($pairs) - 1) AS ordinal',
   'WITH ordinal, $pairs[ordinal] AS pair',
-  `MATCH (a:${ENTITY_LABEL} { id: pair.left })`,
+  `MATCH (a:${BASE_NODE_LABEL}:${ENTITY_LABEL} { id: pair.left })`,
   `WHERE ${currentOnly('a')}`,
-  `MATCH (b:${ENTITY_LABEL} { id: pair.right })`,
+  `MATCH (b:${BASE_NODE_LABEL}:${ENTITY_LABEL} { id: pair.right })`,
   `WHERE ${currentOnly('b')}`,
 
   `OPTIONAL MATCH (ea:Episode)-[:${ENTITY_MENTION_TYPE}]->(a)`,
-  `WHERE ${currentOnly('ea')} AND ea.occurred_at IS NOT NULL`,
+  `WHERE ${currentOnly('ea')} AND ea.${BITEMPORAL_PROPERTIES.occurredAt} IS NOT NULL`,
   'WITH ordinal, a, b, collect(DISTINCT ea) AS leftEpisodes',
   `OPTIONAL MATCH (eb:Episode)-[:${ENTITY_MENTION_TYPE}]->(b)`,
-  `WHERE ${currentOnly('eb')} AND eb.occurred_at IS NOT NULL`,
+  `WHERE ${currentOnly('eb')} AND eb.${BITEMPORAL_PROPERTIES.occurredAt} IS NOT NULL`,
   'WITH ordinal, a, b, leftEpisodes, collect(DISTINCT eb) AS rightEpisodes',
 
   `OPTIONAL MATCH (a)-[ra]-(na:${BASE_NODE_LABEL})`,
@@ -106,7 +106,8 @@ const READ_ENTITY_PAIR_SIGNALS = [
   '     size(leftEpisodeIds) + size(rightEpisodeIds) - size(sharedEpisodeIds) AS episodeUnion,',
   '     reduce(flat = [], row IN [ea IN leftEpisodes |',
   '       [eb IN rightEpisodes |',
-  '         abs(duration.inSeconds(ea.occurred_at, eb.occurred_at).seconds)]] | flat + row) AS gaps',
+  `         abs(duration.inSeconds(ea.${BITEMPORAL_PROPERTIES.occurredAt},`,
+  `                                 eb.${BITEMPORAL_PROPERTIES.occurredAt}).seconds)]] | flat + row) AS gaps`,
 
   'RETURN ordinal, a.id AS left_id, b.id AS right_id,',
   '       sharedEpisodeIds AS shared_episode_ids,',

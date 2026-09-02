@@ -6,6 +6,6 @@
     "tsBuildInfoFile": "./dist/.tsbuildinfo"
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/**/*.test.ts", "src/**/*.fixture.ts"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.fixture.ts", "src/**/*.scoring.ts"],
   "references": [{ "path": "../core" }, { "path": "../protocol" }]
 }

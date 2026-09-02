@@ -156,6 +156,55 @@ function poolDriver(input: {
   return { executeQuery } as unknown as Driver;
 }
 
+/** Like `fakeDriver`, but the vector search answers with a ranked list rather than one row. */
+function fakeDriverWithNeighbors(subject: FakeClaim, neighbors: readonly FakeClaim[]): Driver {
+  const byId = new Map([subject, ...neighbors].map((claim) => [claim.id, claim]));
+  const executeQuery = (cypher: string, parameters: Record<string, unknown>): Promise<unknown> => {
+    if (cypher.includes('ORDER BY n.occurred_at DESC')) {
+      return Promise.resolve({
+        records: [
+          {
+            toObject: () => ({
+              id: subject.id,
+              label: subject.label,
+              text: subject.text,
+              content_vec: [0.1, 0.2],
+              occurred_at: subject.occurredAt,
+            }),
+          },
+        ],
+      });
+    }
+    if (cypher.includes('AND NOT n.id IN $excludeIds')) {
+      const excludeIds = (parameters.excludeIds as string[] | undefined) ?? [];
+      const records = neighbors
+        .filter((neighbor) => !excludeIds.includes(neighbor.id))
+        .map((neighbor, rank) => ({
+          toObject: () => ({
+            id: neighbor.id,
+            label: neighbor.label,
+            text: neighbor.text,
+            score: 0.97 - rank / 100,
+            shared_subject: null,
+          }),
+        }));
+      return Promise.resolve({ records });
+    }
+    if (cypher.includes('UNWIND $ids AS wantedId')) {
+      const ids = (parameters.ids as string[] | undefined) ?? [];
+      const records = ids
+        .map((id) => byId.get(id))
+        .filter((claim): claim is FakeClaim => claim !== undefined)
+        .map((claim) => ({
+          toObject: () => ({ id: claim.id, occurred_at: claim.occurredAt, current: true }),
+        }));
+      return Promise.resolve({ records });
+    }
+    throw new Error(`claim-dedup fake driver does not model this query: ${cypher}`);
+  };
+  return { executeQuery } as unknown as Driver;
+}
+
 function answering(...answers: unknown[]): Provider {
   let call = 0;
   return {
@@ -351,6 +400,35 @@ describe('claim_dedup judge routing', () => {
     // settled too: a later run must not spend a vector search re-discovering the same answer.
     expect(getLedgerEntry(db, claimDedupScanKey(SUBJECT.id))?.summary).toMatchObject({
       verdict: 'already-paired',
+    });
+  });
+
+  it('falls through to the next-nearest neighbour when the closest pair is already judged', async () => {
+    // A subject whose one nearest neighbour a past run settled would otherwise be stamped for
+    // good on the strength of a pair nobody is going to revisit, and its second-nearest
+    // neighbour would never be looked at.
+    const second: FakeClaim = {
+      id: 'neighbor-2',
+      label: 'Decision',
+      text: 'Postgres is what the ledger runs on',
+      occurredAt: new Date(NOW.getTime() - 2000),
+    };
+    const driver = fakeDriverWithNeighbors(subjectAt(NOW), [
+      neighborAt(new Date(NOW.getTime() - 1000)),
+      second,
+    ]);
+    markLedgerApplied(db, claimDedupPairKey(SUBJECT.id, NEIGHBOR.id), { verdict: 'related' });
+
+    const result = await claimDedupOperation().run(
+      ctxFor({ driver, provider: answering({ same: false, rationale: 'different scope' }) }),
+    );
+
+    expect(result).toMatchObject({ itemsProcessed: 1 });
+    expect(getLedgerEntry(db, claimDedupPairKey(SUBJECT.id, second.id))?.summary).toMatchObject({
+      verdict: 'related',
+    });
+    expect(getLedgerEntry(db, claimDedupScanKey(SUBJECT.id))?.summary).toMatchObject({
+      verdict: 'related',
     });
   });
 });

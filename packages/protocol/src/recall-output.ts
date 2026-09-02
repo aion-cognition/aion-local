@@ -117,7 +117,7 @@ export const MemoryPackItemSchema = z.strictObject({
    * well it answers what was asked. `rationale.method` is what tells the two apart, which is
    * why the rendered line prints the method beside the number.
    */
-  confidence: z.number(),
+  confidence: z.number().min(0).max(1),
   rationale: RationaleSchema,
   /**
    * How the item cleared the gate. Optional because a pack is persisted to `last_pack` and
@@ -267,9 +267,9 @@ export const AdmissionReportSchema = z.strictObject({
    */
   typed_admitted: z.number().int().nonnegative().optional(),
   /** Cosine at or above which one measurement admits an item on its own. */
-  vector_floor: z.number(),
+  vector_floor: z.number().min(0).max(1),
   /** Cosine at or above which a measurement counts as one unit of corroboration. */
-  corroboration_floor: z.number(),
+  corroboration_floor: z.number().min(0).max(1),
   bm25_mode: z.enum(['exact', 'corroborated', 'any']),
 });
 

@@ -1,8 +1,12 @@
 import type { Driver } from 'neo4j-driver';
 import { randomUUID } from 'node:crypto';
 
-import { BITEMPORAL_PROPERTIES, writeStampedNode, type StampedNodeResult } from './bitemporal.js';
-import { runRead } from './connection.js';
+import {
+  BITEMPORAL_PROPERTIES,
+  writeStampedNodeInTransaction,
+  type StampedNodeResult,
+} from './bitemporal.js';
+import { inWriteTransaction, runRead, type GraphTransaction } from './connection.js';
 import { foldName } from '../../reflection/domain/name-fold.js';
 
 /** The workspace is a fixed singleton, not a user-supplied name. */
@@ -31,19 +35,23 @@ function normalizeEntityName(name: string): string {
 }
 
 /**
- * Member and Workspace are true singletons: at most one of each will ever exist.
- * `writeStampedNode` merges on (label, id), so a fresh `randomUUID()` every call would
- * create a second node instead of finding the first. The label alone identifies the
- * singleton: resolving by name would fork the backbone the first time a name changes
- * (a corrected git identity, a typo at the init prompt), leaving prior sessions hanging
- * off an orphaned Member. Earliest-stamped wins so the choice is stable across runs.
+ * The id one Member or one Workspace already answers to. `writeStampedNode` merges on
+ * (label, id), so a fresh `randomUUID()` every call would create a second node instead of
+ * finding the first. The label alone identifies the singleton: resolving by name would fork
+ * the backbone the first time a name changes (a corrected git identity, a typo at the init
+ * prompt), leaving prior sessions hanging off an orphaned Member. Earliest-stamped wins so
+ * the choice is stable across runs.
+ *
+ * The read runs in the caller's write transaction, next to the write it feeds. The two
+ * production callers are `aion init` and `aion replay`, single-process commands a person runs;
+ * a substrate bootstrapped by two processes at once would still mint two ids here, because a
+ * singleton keyed on a fresh UUID has no shared key for the two writes to serialize on.
  */
-async function resolveSingletonId(
-  driver: Driver,
+async function resolveSingletonIdInTransaction(
+  tx: GraphTransaction,
   label: 'Member' | 'Workspace',
 ): Promise<string | undefined> {
-  const rows = await runRead(
-    driver,
+  const rows = await tx.run(
     `MATCH (n:${label}) RETURN n.id AS id ORDER BY n.${BITEMPORAL_PROPERTIES.txFrom}, n.id LIMIT 1`,
     {},
     (row) => row.id as string,
@@ -84,31 +92,34 @@ export async function bootstrapBackbone(
   const now = input.now ?? new Date();
 
   const memberName = displayName(input.memberName);
-  const memberId = (await resolveSingletonId(driver, 'Member')) ?? randomUUID();
-  const member = await writeStampedNode(driver, {
-    label: 'Member',
-    id: memberId,
-    now,
-    properties: { type: MEMBER_ENTITY_TYPE },
-    mergeProperties: {
-      is_structural: true,
-      name: memberName,
-      name_norm: normalizeEntityName(memberName),
-    },
-  });
 
-  const workspaceId = (await resolveSingletonId(driver, 'Workspace')) ?? randomUUID();
-  const workspace = await writeStampedNode(driver, {
-    label: 'Workspace',
-    id: workspaceId,
-    now,
-    properties: { type: WORKSPACE_ENTITY_TYPE },
-    mergeProperties: {
-      is_structural: true,
-      name: GLOBAL_WORKSPACE_NAME,
-      name_norm: normalizeEntityName(GLOBAL_WORKSPACE_NAME),
-    },
-  });
+  return inWriteTransaction(driver, async (tx) => {
+    const memberId = (await resolveSingletonIdInTransaction(tx, 'Member')) ?? randomUUID();
+    const member = await writeStampedNodeInTransaction(tx, {
+      label: 'Member',
+      id: memberId,
+      now,
+      properties: { type: MEMBER_ENTITY_TYPE },
+      mergeProperties: {
+        is_structural: true,
+        name: memberName,
+        name_norm: normalizeEntityName(memberName),
+      },
+    });
 
-  return { member, workspace };
+    const workspaceId = (await resolveSingletonIdInTransaction(tx, 'Workspace')) ?? randomUUID();
+    const workspace = await writeStampedNodeInTransaction(tx, {
+      label: 'Workspace',
+      id: workspaceId,
+      now,
+      properties: { type: WORKSPACE_ENTITY_TYPE },
+      mergeProperties: {
+        is_structural: true,
+        name: GLOBAL_WORKSPACE_NAME,
+        name_norm: normalizeEntityName(GLOBAL_WORKSPACE_NAME),
+      },
+    });
+
+    return { member, workspace };
+  });
 }

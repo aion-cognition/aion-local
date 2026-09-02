@@ -96,6 +96,14 @@ describe('ReflectionInputSchema valid fixtures', () => {
     expect(result.success).toBe(false);
   });
 
+  it('rejects the verification channel, which no caller produces', () => {
+    const result = ReflectionInputSchema.safeParse({
+      observations: ['a decision'],
+      origin: { channel: 'verification' },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it('rejects an unknown key on origin', () => {
     const result = ReflectionInputSchema.safeParse({
       observations: ['a decision'],

@@ -40,33 +40,35 @@ const SPECIAL_TOKENS = 2;
  */
 export const QUERY_PREFIX_SEAM_MODEL = 'aion-query-prefix-seam';
 
-const PROFILES: Readonly<Record<string, EmbedModelProfile>> = {
-  'nomic-embed-text': { contextTokens: 2048, queryPrefix: '' },
-  // arctic2 ships a "query: " retrieval prefix and this install does not use it. Phase 4.4
-  // ruled on the row by re-measuring both spellings against the admission fixtures on
-  // 2026-09-02, cue side prefixed and content side raw against both sides raw. What decides it
-  // is the gap the admission floor has to sit in, not either band's own numbers: raw leaves
-  // unrelated at max 0.299 and the weakest genuine match at 0.382, a valley 0.083 wide, which
-  // is what the committed 0.35 floor is derived from. Prefixed leaves unrelated at max 0.224
-  // and the weakest genuine match at 0.233, a valley 0.009 wide, narrower than the 0.03 drift
-  // the calibration allows a floor. The prefix compresses the separation the floor reads, on
-  // the asymmetric shape it is meant for, so the row stays empty and every query-shaped embed
-  // in the product goes out raw.
-  'snowflake-arctic-embed2': { contextTokens: 8192, queryPrefix: '' },
+const PROFILES: ReadonlyMap<string, EmbedModelProfile> = new Map([
+  ['nomic-embed-text', { contextTokens: 2048, queryPrefix: '' }],
+  // arctic2 ships a "query: " retrieval prefix and this install does not use it. Both spellings
+  // were re-measured against the admission fixtures on 2026-09-02, cue side prefixed and content
+  // side raw against both sides raw. What decides it is the gap the admission floor has to sit
+  // in, not either band's own numbers: raw leaves unrelated at max 0.299 and the weakest genuine
+  // match at 0.382, a valley 0.083 wide, which is what the committed 0.35 floor is derived from.
+  // Prefixed leaves unrelated at max 0.224 and the weakest genuine match at 0.233, a valley
+  // 0.009 wide, narrower than the 0.03 drift the calibration allows a floor. The prefix
+  // compresses the separation the floor reads, on the asymmetric shape it is meant for, so the
+  // row stays empty and every query-shaped embed in the product goes out raw.
+  ['snowflake-arctic-embed2', { contextTokens: 8192, queryPrefix: '' }],
   // The prefix arctic2 ships, on the seam name, so the composition every call site performs is
-  // exercised while every configurable row is still raw. Phase 4.4 kept the string here and
-  // nowhere else, since the seam has to stay testable after the ruling that no shipped row
-  // carries a prefix.
-  [QUERY_PREFIX_SEAM_MODEL]: { contextTokens: 2048, queryPrefix: 'query: ' },
-};
+  // exercised while every configurable row is still raw. The string lives here and nowhere else,
+  // since the seam has to stay testable while no shipped row carries a prefix.
+  [QUERY_PREFIX_SEAM_MODEL, { contextTokens: 2048, queryPrefix: 'query: ' }],
+]);
 
 /** A model nobody measured gets the narrowest window in the table and no prefix. */
 const UNLISTED: EmbedModelProfile = { contextTokens: 2048, queryPrefix: '' };
 
-/** The name without the tag, since `model` and `model:latest` are one model to Ollama. */
+/**
+ * The name without the tag, since `model` and `model:latest` are one model to Ollama. A Map
+ * rather than an object literal, so a configured model named after an `Object.prototype` key
+ * reads as unlisted instead of returning the prototype member.
+ */
 function profileFor(model: string): EmbedModelProfile {
   const name = model.toLowerCase().split(':')[0] ?? '';
-  return PROFILES[name] ?? UNLISTED;
+  return PROFILES.get(name) ?? UNLISTED;
 }
 
 export function maxEmbedInputChars(model: string): number {

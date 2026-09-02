@@ -29,7 +29,11 @@ export class ContextVectorStage implements ReflectionStage {
     try {
       const affectedIds = await findAffectedNodeIds(ctx.driver, ctx.episodeId, ctx.now);
       if (affectedIds.length === 0) {
-        return { status: 'skipped', summary: 'no affected memory nodes to recompute' };
+        return {
+          status: 'skipped',
+          summary: 'no affected memory nodes to recompute',
+          retryable: true,
+        };
       }
 
       const touchedIds = await findEdgeTouchedNeighborIds(ctx.driver, affectedIds, ctx.now);
@@ -38,7 +42,11 @@ export class ContextVectorStage implements ReflectionStage {
       const neighbors = await findNeighborContentVectors(ctx.driver, recomputeIds, ctx.now);
       const computed = computeContextVectors(neighbors);
       if (computed.length === 0) {
-        return { status: 'skipped', summary: 'no affected node has a vectored neighbor' };
+        return {
+          status: 'skipped',
+          summary: 'no affected node has a vectored neighbor',
+          retryable: true,
+        };
       }
 
       const written = await writeContextVectors(ctx.driver, computed);

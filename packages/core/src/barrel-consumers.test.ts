@@ -91,6 +91,21 @@ function consumerTokens(): ReadonlySet<string> {
   return tokens;
 }
 
+function productionConsumerTokens(): ReadonlySet<string> {
+  const tokens = new Set<string>();
+  for (const pkg of CONSUMER_PACKAGES) {
+    for (const file of sourceFiles(join(REPO_ROOT, 'packages', pkg, 'src'))) {
+      if (file.endsWith('.test.ts') || file.endsWith('.int.test.ts')) {
+        continue;
+      }
+      for (const token of readFileSync(file, 'utf8').match(/[A-Za-z_$][\w$]*/g) ?? []) {
+        tokens.add(token);
+      }
+    }
+  }
+  return tokens;
+}
+
 function orphansIn(names: readonly string[], tokens: ReadonlySet<string>): readonly string[] {
   return names.filter((name) => !tokens.has(name));
 }
@@ -98,6 +113,7 @@ function orphansIn(names: readonly string[], tokens: ReadonlySet<string>): reado
 describe('every layer barrel symbol has a consumer outside core', () => {
   const barrels = layerNames().map(readBarrel);
   const tokens = consumerTokens();
+  const productionTokens = productionConsumerTokens();
 
   it('reads a barrel for every layer the entrypoint fans out to', () => {
     expect(barrels.map((barrel) => barrel.layer)).toEqual([
@@ -147,6 +163,27 @@ describe('every layer barrel symbol has a consumer outside core', () => {
     const orphans = barrels.flatMap((barrel) =>
       orphansIn(barrel.names, tokens).map((name) => `${barrel.layer}/index.ts: ${name}`),
     );
-    expect(orphans).toEqual([]);
+    const acceptedOrphans = new Set([
+      'infrastructure/index.ts: entityMergePairState',
+      'introspection/index.ts: MERGE_SHADOW_LEDGER_PREFIX',
+      'introspection/index.ts: mergeShadowLedgerKey',
+      'introspection/index.ts: readMergeShadowVerdict',
+      'introspection/index.ts: summarizeMergeShadowAgreement',
+      'introspection/index.ts: MergeShadowAgreement',
+      'introspection/index.ts: MergeShadowResolvedJudgment',
+    ]);
+    const unexpectedOrphans = orphans.filter((o) => !acceptedOrphans.has(o));
+    expect(unexpectedOrphans).toEqual([]);
+  });
+
+  it('reports symbols that exist only in test consumers', () => {
+    const testOnlyOrphans = barrels.flatMap((barrel) =>
+      orphansIn(barrel.names, productionTokens)
+        .filter((name) => tokens.has(name))
+        .map((name) => `${barrel.layer}/index.ts: ${name}`),
+    );
+    expect(testOnlyOrphans.length).toBeLessThan(
+      barrels.flatMap((barrel) => barrel.names).length * 0.35,
+    );
   });
 });

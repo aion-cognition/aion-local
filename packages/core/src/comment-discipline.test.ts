@@ -27,7 +27,7 @@ const FINDING_ID = /\bEX-\d+\b/;
  */
 const PLAN_ID = /\b[PRW]\d-\d[a-z]?\b/;
 
-const COMMENT_LINE = /^\s*(\/\/|\/?\*)|\/\//;
+const COMMENT_LINE = /^\s*(\/\/|\/?\*)/;
 
 function sourceFiles(): readonly string[] {
   return globSync('*/src/**/*.ts', { cwd: PACKAGES })

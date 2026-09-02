@@ -115,9 +115,10 @@ function normalizeMembers(memberIds: readonly string[]): string[] {
 }
 
 /**
- * sha256 over the canonical, the sorted members and the cascade version, with a separator no
- * id can contain, so `('ab', ['c'])` and `('a', ['bc'])` cannot collide. Bumping the cascade
- * version is therefore what makes a re-decided merge a new record rather than an overwrite of
+ * sha256 over the canonical, the sorted members and the cascade version, each separated by a
+ * newline, so `('ab', ['c'])` and `('a', ['bc'])` cannot collide. Members are joined with a
+ * comma inside their own field, which is unambiguous because an id is a uuid. Bumping the
+ * cascade version is what makes a re-decided merge a new record rather than an overwrite of
  * the one the old prompts produced.
  */
 export function entityMergeDecisionKey(

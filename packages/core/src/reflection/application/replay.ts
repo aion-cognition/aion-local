@@ -3,6 +3,7 @@ import { storeExperience, type ExperienceStoreDeps } from './experience-store.js
 import type { ReflectionRun, ReflectionRunOptions } from './orchestrator.js';
 import { errorMessage } from '../../infrastructure/errors.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
+import { abortRequested } from '../../infrastructure/providers/deadline-signal.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   listExperiencesAfter,
@@ -21,9 +22,9 @@ import { PIPELINE_VERSION } from '../domain/version.js';
  * Replay never touches the queue. It stores the experience and runs the orchestrator itself,
  * so a bulk pass cannot demote live sessions through the lane assigner's arrival counters.
  *
- * Two clocks run through a replay. World time is the archived experience's: `occurred_at`,
- * `valid_from` and `valid_until` come off the row, so a re-derived node is dated to when the
- * thing happened. Transaction time is the replay's own moment: `tx_from`, `tx_until` and every
+ * Two clocks run through a replay. World time is the archived experience's `occurred_at`, and
+ * `valid_from` is stamped from it, so a re-derived node is dated to when the thing happened.
+ * Transaction time is the replay's own moment: `tx_from`, `tx_until` and every
  * lock take the wall clock, because the substrate learned this today. Handing one clock to both
  * writes a transaction history into the past, which is a record of a write that never happened.
  *
@@ -186,7 +187,7 @@ export async function replayExperiences(
   let aborted = false;
 
   for (;;) {
-    if (options.signal?.aborted === true) {
+    if (abortRequested(options.signal)) {
       aborted = true;
       break;
     }
@@ -202,12 +203,22 @@ export async function replayExperiences(
       break;
     }
     for (const row of rows) {
+      // Checked per row, not per batch: a row is a full orchestrator run, so waiting out the
+      // batch would spend minutes on work the caller has already stopped asking for. The
+      // cursor stays at the last completed row, which is where the next pass resumes.
+      if (abortRequested(options.signal)) {
+        aborted = true;
+        break;
+      }
       tally[await rowOutcome(deps, row, pipelineVersion, clock())] += 1;
       tally.scanned += 1;
       cursor = { occurredAt: row.occurredAt, id: row.id };
     }
     if (cursor !== undefined) {
       options.onBatch?.({ ...countsOf(tally), scanned: tally.scanned, cursor });
+    }
+    if (aborted) {
+      break;
     }
   }
 

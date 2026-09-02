@@ -39,11 +39,3 @@ export async function confirmOrExit(
   const answer = (await askOnTerminal(prompt)).trim().toLowerCase();
   return answer === 'y' || answer === 'yes';
 }
-
-/** Named errors carry the diagnosis in `name`; losing it would turn a precise failure into a generic one. */
-export function describeError(err: unknown): string {
-  if (err instanceof Error) {
-    return `${err.name}: ${err.message}`;
-  }
-  return String(err);
-}

@@ -2,9 +2,8 @@ import type { Driver } from 'neo4j-driver';
 
 import { BITEMPORAL_PROPERTIES, currentOnly } from './bitemporal.js';
 import { readFirst } from './connection.js';
-import { CONTEXT_VECTOR_PROPERTY } from './context-vector-queries.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from './episodes.js';
-import { BACKBONE_TYPES, BASE_NODE_LABEL, EXTRACTION_TYPE, MEMORY_LABEL } from './labels.js';
+import { BACKBONE_TYPES, EXTRACTION_TYPE, MEMORY_LABEL } from './labels.js';
 import { toGraphInteger } from './values.js';
 
 /**
@@ -32,13 +31,18 @@ export type VectorParityCounts = {
  * The same population `findPendingVectorNodes` drains, counted rather than listed. A node with
  * no text is excluded from both halves: nothing can embed it, so counting it as a gap would
  * report a parity no backfill could ever close.
+ *
+ * A vector with no hash counts as missing, which is the drain's own predicate. The hash says
+ * the stored floats were taken over the text the node holds now, so a node whose text or embed
+ * model changed is behind even though it still carries floats.
  */
 const COUNT_VECTOR_PARITY = [
-  'MATCH (n:Memory)',
+  `MATCH (n:${MEMORY_LABEL})`,
   `WHERE ${currentOnly('n')} AND n.${MEMORY_PROPERTIES.text} IS NOT NULL`,
   'WITH n LIMIT $limit',
   'RETURN count(n) AS expected,',
-  `  count(n.${MEMORY_PROPERTIES.contentVector}) AS vectored`,
+  `  count(CASE WHEN n.${MEMORY_PROPERTIES.contentVector} IS NOT NULL`,
+  `    AND n.${MEMORY_PROPERTIES.contentVectorHash} IS NOT NULL THEN 1 END) AS vectored`,
 ].join('\n');
 
 export async function countVectorParity(
@@ -72,13 +76,19 @@ export type OrphanCounts = {
  */
 const AWAITING_ENRICHMENT = `n:Episode AND NOT EXISTS { MATCH ()-[:${EXTRACTION_TYPE}]->(n) }`;
 
+/**
+ * The edge has to be open in world time, the same predicate the traversal applies: an edge
+ * `edge_prune` closed is one spreading activation can no longer cross, so counting it as a live
+ * association reports a node the graph has already cut off as connected.
+ */
 const COUNT_ORPHANS = [
-  'MATCH (n:Memory)',
+  `MATCH (n:${MEMORY_LABEL})`,
   `WHERE ${currentOnly('n')}`,
   `  AND NOT (${AWAITING_ENRICHMENT})`,
   'WITH n LIMIT $limit',
   'OPTIONAL MATCH (n)-[r]-()',
   `  WHERE NOT type(r) IN [${BACKBONE_TYPES}]`,
+  `    AND r.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
   'WITH n, count(r) AS associations',
   'RETURN count(n) AS nodes, sum(CASE WHEN associations = 0 THEN 1 ELSE 0 END) AS orphans',
 ].join('\n');
@@ -124,42 +134,4 @@ export async function countEpisodesWithoutSession(
     (row) => row.missing as number,
   );
   return missing ?? 0;
-}
-
-export type ContextVectorCoverage = {
-  /** Current nodes a context vector could be computed for right now. */
-  readonly expected: number;
-  /** Of those, the ones carrying one. */
-  readonly present: number;
-};
-
-/**
- * How much of the population that can hold a context vector actually holds one. `expected`
- * mirrors the neighborhood read the stage itself does (`context-vector-queries.ts`) rather than
- * "has any edge at all": a node whose only neighbors carry no content vector is outside the
- * count, because no run could give it a context vector either. The edge has to be open, since a
- * closed one is history and belongs to no neighborhood.
- */
-const COUNT_CONTEXT_VECTOR_COVERAGE = [
-  `MATCH (n:${MEMORY_LABEL})`,
-  `WHERE ${currentOnly('n')}`,
-  'WITH n LIMIT $limit',
-  `WHERE EXISTS { MATCH (n)-[r]-(m:${BASE_NODE_LABEL})`,
-  `  WHERE m.id <> n.id AND m.${MEMORY_PROPERTIES.contentVector} IS NOT NULL`,
-  `    AND r.${BITEMPORAL_PROPERTIES.validUntil} IS NULL AND ${currentOnly('m')} }`,
-  'RETURN count(n) AS expected,',
-  `  count(n.${CONTEXT_VECTOR_PROPERTY}) AS present`,
-].join('\n');
-
-export async function countContextVectorCoverage(
-  driver: Driver,
-  limit: number = DEFAULT_HEALTH_SCAN_LIMIT,
-): Promise<ContextVectorCoverage> {
-  const counts = await readFirst(
-    driver,
-    COUNT_CONTEXT_VECTOR_COVERAGE,
-    { limit: toGraphInteger(limit) },
-    (row) => ({ expected: row.expected as number, present: row.present as number }),
-  );
-  return counts ?? { expected: 0, present: 0 };
 }

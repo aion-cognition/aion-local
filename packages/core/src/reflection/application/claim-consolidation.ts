@@ -22,9 +22,12 @@ import {
   DERIVES_FROM_TYPE,
   NARRATIVE_PROPERTIES,
 } from '../../infrastructure/graph/narrative-queries.js';
+import { findNodesWithoutCurrency } from '../../infrastructure/graph/supersession-queries.js';
 import type { GraphProperties } from '../../infrastructure/graph/values.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
+import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { isLedgerApplied, markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import {
   buildSubjectMessages,
   consolidationNodeId,
@@ -43,7 +46,9 @@ import { coverageKey, narrativeSpan, NARRATIVE_GROUNDING } from '../domain/narra
  * `DERIVES_FROM` edge spans each source, and the sources close into it.
  *
  * The output is a claim, not a story. It carries the ordinary fact labels, enters recall in the
- * facts bucket, and can be superseded, keyed and deduped like anything else extraction writes.
+ * facts bucket, and can be superseded and deduped like anything else extraction writes. It
+ * carries no claim key, so the keyed close never reaches it: what the members were keyed on
+ * stops applying the moment they are absorbed.
  *
  * Candidates come from the community projection, which is the only structure that says two
  * claims are about one subject without a vector deciding it. How dense a neighbourhood has to be
@@ -70,8 +75,19 @@ export const CONSOLIDATION_MIN_SESSIONS = 2;
 export type ConsolidationDeps = {
   readonly driver: Driver;
   readonly provider: Provider;
+  /** Where a veto is recorded, so the next tick spends its budget somewhere it can compress. */
+  readonly db: SqliteHandle;
   readonly logger: Logger;
 };
+
+/**
+ * A neighbourhood the review already refused, keyed on the same member set the idempotency read
+ * uses. The key changes the moment the neighbourhood gains or loses a claim, so a veto expires
+ * on its own rather than closing the subject off for good.
+ */
+export function consolidationVetoKey(memberSetKey: string): string {
+  return `consolidation:vetoed:${memberSetKey}`;
+}
 
 export type ConsolidationOptions = {
   readonly model?: string;
@@ -84,10 +100,14 @@ export type ConsolidationOptions = {
 };
 
 export type ConsolidationReport = {
-  /** Neighbourhoods at or above the derived floor, which bounds what the run could have written. */
+  /** Neighbourhoods at or above the derived floor and spanning enough sessions to compress. */
   readonly candidates: number;
+  /** Of those, the ones this run actually looked at, which its subject budget bounds. */
+  readonly examined: number;
   readonly created: number;
   readonly skipped: number;
+  /** Neighbourhoods a correction changed under the synthesis, written nowhere and closed nothing. */
+  readonly stale: number;
   readonly vetoed: number;
   readonly failed: number;
   readonly absorbed: number;
@@ -228,7 +248,7 @@ async function attachVector(deps: ConsolidationDeps, claimId: string, text: stri
 }
 
 type SubjectOutcome = {
-  readonly outcome: 'created' | 'skipped' | 'vetoed' | 'failed';
+  readonly outcome: 'created' | 'skipped' | 'stale' | 'vetoed' | 'failed';
   readonly absorbed: number;
 };
 
@@ -247,6 +267,12 @@ async function consolidateSubject(
   const claimId = consolidationNodeId(key);
   const span = narrativeSpan(claims);
   const occurredAt = span.end ?? settings.now;
+
+  if (isLedgerApplied(deps.db, consolidationVetoKey(key))) {
+    // The review already refused this exact member set. Asking again costs two model calls and
+    // gets the same answer, and it is what kept the budget on one neighbourhood every tick.
+    return { outcome: 'skipped', absorbed: 0 };
+  }
 
   const stored = await findConsolidationByCoverageKey(deps.driver, key);
   if (stored.length > 0) {
@@ -267,6 +293,11 @@ async function consolidateSubject(
   });
 
   if (synthesis.status === 'vetoed') {
+    markLedgerApplied(deps.db, consolidationVetoKey(key), {
+      community: profile.community,
+      members: memberIds.length,
+      reason: synthesis.reason,
+    });
     deps.logger.info(
       { community: profile.community, members: claims.length, reason: synthesis.reason },
       'consolidation vetoed by review; the source claims stand',
@@ -279,6 +310,23 @@ async function consolidateSubject(
       'consolidation synthesis failed',
     );
     return { outcome: 'failed', absorbed: 0 };
+  }
+
+  // The members were read before two model calls. A correction that closed one of them in that
+  // window makes this synthesis a restatement of a fact that no longer stands, so the run drops
+  // it rather than absorbing a claim someone else already replaced. The next tick reads the
+  // neighbourhood as it now is.
+  // The members were read before two model calls. A correction that closed one of them in that
+  // window makes this synthesis a restatement of a fact that no longer stands, so the run drops
+  // it rather than absorbing a claim someone else already replaced. The next tick reads the
+  // neighbourhood as it now is.
+  const gone = await findNodesWithoutCurrency(deps.driver, memberIds);
+  if (gone.length > 0) {
+    deps.logger.info(
+      { community: profile.community, members: memberIds.length, gone },
+      'consolidation dropped: a member lost currency while the synthesis ran',
+    );
+    return { outcome: 'stale', absorbed: 0 };
   }
 
   await writeConsolidation(deps, {
@@ -328,8 +376,10 @@ export async function consolidateClaims(
   if (floor === undefined) {
     return {
       candidates: 0,
+      examined: 0,
       created: 0,
       skipped: 0,
+      stale: 0,
       vetoed: 0,
       failed: 0,
       absorbed: 0,
@@ -337,45 +387,63 @@ export async function consolidateClaims(
     };
   }
 
-  const candidates = profiles
-    .filter((profile) => profile.size >= floor && profile.sessions >= CONSOLIDATION_MIN_SESSIONS)
-    .slice(0, settings.subjectLimit);
+  const candidates = profiles.filter(
+    (profile) => profile.size >= floor && profile.sessions >= CONSOLIDATION_MIN_SESSIONS,
+  );
 
   let created = 0;
   let skipped = 0;
+  let stale = 0;
   let vetoed = 0;
   let failed = 0;
   let absorbed = 0;
+  let examined = 0;
 
   for (const profile of candidates) {
     if (settings.signal?.aborted === true) {
+      break;
+    }
+    // The budget bounds the model calls, so a neighbourhood that costs none does not spend it:
+    // one already consolidated, or one the review refused, leaves the run free to walk further
+    // down the ordered list to a neighbourhood it can still compress.
+    if (examined >= settings.subjectLimit) {
       break;
     }
     const result = await consolidateSubject(deps, settings, profile);
     absorbed += result.absorbed;
     if (result.outcome === 'created') {
       created += 1;
+      examined += 1;
     } else if (result.outcome === 'skipped') {
       skipped += 1;
+    } else if (result.outcome === 'stale') {
+      stale += 1;
+      examined += 1;
     } else if (result.outcome === 'vetoed') {
       vetoed += 1;
+      examined += 1;
     } else {
       failed += 1;
+      examined += 1;
     }
   }
 
   return {
     candidates: candidates.length,
+    examined,
     created,
     skipped,
+    stale,
     vetoed,
     failed,
     absorbed,
     densityFloor: floor,
     detail:
       `density floor ${String(floor)} derived from ${String(profiles.length)} neighbourhood(s): ` +
-      `${String(candidates.length)} at or above it, ${String(created)} consolidated over ` +
-      `${String(absorbed)} claim(s), ${String(skipped)} already covered, ${String(vetoed)} vetoed by ` +
-      `review, ${String(failed)} generation failure(s)`,
+      `${String(candidates.length)} at or above it, ${String(examined)} examined, ` +
+      `${String(created)} consolidated over ` +
+      `${String(absorbed)} claim(s), ${String(skipped)} already covered, ${String(stale)} ` +
+      `corrected under the synthesis, ${String(vetoed)} vetoed by review, ${String(failed)} ` +
+      `generation failure(s)`,
   };
 }

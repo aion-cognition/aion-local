@@ -78,6 +78,15 @@ const SESSIONS = [
       'Friday finished the Ariadne backfill and flipped the flag on for the first cohort. ' +
       'The cohort was capped at five percent of traffic and watched for an hour afterwards.',
   },
+  // A third closed day, one past the two-window budget a tick spends. It is what makes the
+  // backlog visible: a run that spends the budget on settled days never reaches this one.
+  {
+    id: 'narrative-session-saturday',
+    occurredAt: '2026-04-04T10:00:00.000Z',
+    text:
+      'Saturday widened the Ariadne cohort to a quarter of traffic and left it there. ' +
+      'The error budget held flat for the whole window and nobody paged.',
+  },
 ];
 
 /**
@@ -282,5 +291,20 @@ describe('narrative rollups against a live substrate', () => {
 
     expect(outcome.status).toBe('noop');
     expect(outcome.detail).toContain('1 already covered');
+  });
+
+  /**
+   * The backlog has to drain. A settled day answers `skip` and writes nothing, so a later tick
+   * has to walk past it to the day nothing has rolled up yet rather than spending its window
+   * budget on the same oldest days every run.
+   */
+  it('reaches a day past the window budget on a later tick', async () => {
+    const outcome = await dayNarrativeRollupOperation().run(context());
+
+    expect(outcome.status).toBe('applied');
+    const rolled = await supersedingNodeIds(harness.driver, 'narrative-session-saturday');
+    expect(rolled).toHaveLength(1);
+    const properties = await nodeProperties(harness.driver, rolled[0]!);
+    expect(properties[ROLLUP_WINDOW_PROPERTY]).toBe('2026-04-04');
   });
 });

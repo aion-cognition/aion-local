@@ -10,6 +10,7 @@ import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite
 import {
   getEntityMergeProposal,
   recordEntityMergeProposal,
+  reopenEntityMergeProposal,
   resolveEntityMergeProposal,
 } from '../../infrastructure/sqlite/entity-merge-proposals.js';
 import { getLedgerEntry } from '../../infrastructure/sqlite/ops-ledger.js';
@@ -112,7 +113,71 @@ describe('stale merge proposal sweep', () => {
       rightId: 'right-4',
       rightName: 'right-4',
       episodeId: 'ep-4',
+      reopened: false,
     });
+  });
+
+  it('walks past a head of rows it cannot resolve, so a stale row behind them is reached', async () => {
+    // The two oldest pairs both hold currency, so no run ever resolves them. A sweep that
+    // always read the head of the open queue would spend every tick on those two and never
+    // see the third.
+    propose('head-a', 'head-b');
+    propose('head-c', 'head-d');
+    const stale = propose('tail-left', 'tail-right');
+    const current = new Set(['head-a', 'head-b', 'head-c', 'head-d', 'tail-right']);
+
+    const first = await sweepStaleMergeProposals({
+      db,
+      driver: fakeDriver(current),
+      logger,
+      now: NOW,
+      limit: 2,
+    });
+    expect(first).toEqual({ examined: 2, resolved: 0 });
+    expect(getEntityMergeProposal(db, stale)?.resolvedAt).toBeNull();
+
+    const second = await sweepStaleMergeProposals({
+      db,
+      driver: fakeDriver(current),
+      logger,
+      now: NOW,
+      limit: 2,
+    });
+    expect(second).toEqual({ examined: 1, resolved: 1 });
+    expect(getEntityMergeProposal(db, stale)?.resolvedAt).toBe(NOW.toISOString());
+  });
+
+  it('marks a re-closed row as reopened, so the second close leaves a trace of the first', async () => {
+    const id = propose('reopen-left', 'reopen-right');
+
+    await sweep(new Set(['reopen-right']));
+    expect(getLedgerEntry(db, staleMergeLedgerKey(id))?.summary).toMatchObject({ reopened: false });
+
+    reopenEntityMergeProposal(db, id);
+    db.exec("DELETE FROM ops_ledger WHERE key = 'entity_merge_stale_cursor'");
+    await sweep(new Set(['reopen-right']));
+
+    expect(getLedgerEntry(db, staleMergeLedgerKey(id))?.summary).toMatchObject({ reopened: true });
+  });
+
+  it('reads no graph once the caller has aborted', async () => {
+    propose('abort-left', 'abort-right');
+    const aborted = new AbortController();
+    aborted.abort();
+
+    const result = await sweepStaleMergeProposals({
+      db,
+      driver: {
+        executeQuery: () => {
+          throw new Error('an aborted sweep must not read the graph');
+        },
+      } as unknown as Driver,
+      logger,
+      now: NOW,
+      signal: aborted.signal,
+    });
+
+    expect(result).toEqual({ examined: 0, resolved: 0 });
   });
 
   it('reads no graph and resolves nothing when every row is already resolved', async () => {

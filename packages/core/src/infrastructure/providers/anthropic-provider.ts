@@ -1,4 +1,5 @@
 import { CircuitBreaker } from './circuit-breaker.js';
+import { abortRequested } from './deadline-signal.js';
 import { summarizeErrorBody } from './errors.js';
 import type { ChatMessage, GenerationBackend, JsonSchema, StructuredRequest } from './types.js';
 
@@ -214,7 +215,30 @@ export type AnthropicRequestOptions = {
 };
 
 function throttled(status: number): boolean {
-  return status === 429 || status === 529 || status >= 500;
+  return status === 429 || status >= 500;
+}
+
+/**
+ * The backoff wait, cut short by the caller's own signal. A stage deadline or a shutdown must
+ * not sit out a 30s retry-after with nothing in flight, which is what `deadline-signal.ts`
+ * promises. The timer is unreferenced so a pending wait never holds the process open.
+ */
+function backoff(waitMs: number, signal: AbortSignal | undefined): Promise<void> {
+  if (abortRequested(signal)) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, waitMs);
+    timer.unref();
+    function onAbort(): void {
+      clearTimeout(timer);
+      resolve();
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 /**
@@ -243,9 +267,10 @@ async function askAnthropic(
       },
       body: JSON.stringify({
         model: req.model,
-        // Callers that omit temperature get 0, not the API default: extraction has to be as
-        // repeatable as the local route or two runs of one episode disagree on sampling luck.
-        temperature: req.temperature ?? 0,
+        // Sent only when the caller named one. The newer model families removed the parameter
+        // and answer a 400 to it, the model is an operator knob, and their default sampling is
+        // already the repeatable behaviour the 0 was there to ask for.
+        ...(req.temperature === undefined ? {} : { temperature: req.temperature }),
         max_tokens: req.maxTokens ?? options.maxTokens ?? DEFAULT_MAX_TOKENS,
         ...(instructions === undefined ? {} : { system: instructions }),
         ...(viaPrompt
@@ -259,17 +284,20 @@ async function askAnthropic(
       }),
       ...(req.signal === undefined ? {} : { signal: req.signal }),
     });
-    if (!throttled(response.status) || attempt >= MAX_ATTEMPTS) {
+    if (!throttled(response.status) || attempt >= MAX_ATTEMPTS || abortRequested(req.signal)) {
       break;
     }
     const retryAfter = Number(response.headers.get('retry-after'));
     const waitMs =
       Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : attempt * 2000;
     await response.text().catch(() => undefined);
-    await new Promise((resolve) => {
-      setTimeout(resolve, Math.min(waitMs, MAX_BACKOFF_MS));
-    });
+    await backoff(Math.min(waitMs, MAX_BACKOFF_MS), req.signal);
+    if (abortRequested(req.signal)) {
+      break;
+    }
   }
+
+  req.signal?.throwIfAborted();
 
   if (!response.ok) {
     throw new AnthropicRequestError(response.status, await response.text());
@@ -323,6 +351,8 @@ export type AnthropicProviderOptions = {
   readonly schemaDelivery?: SchemaDelivery;
   readonly breakerFailureThreshold?: number;
   readonly breakerCooldownMs?: number;
+  /** The breaker's clock, passed in like every other clock rather than read from the module. */
+  readonly now?: () => number;
 };
 
 /**
@@ -330,10 +360,10 @@ export type AnthropicProviderOptions = {
  * model owns that space for the life of a substrate, and Anthropic has no embeddings API
  * either way.
  *
- * The breaker is the same policy the rest of the provider layer states (5 consecutive
- * failures, 60s cooldown). It matters more here than on the local route: an expired key or a
- * regional outage fails every call, and without it each queued episode pays three HTTP
- * attempts with backoff before the worker's own retry gets a turn.
+ * The breaker runs its own default policy: 5 consecutive failures, then a 60s cooldown. It
+ * matters more here than on the local route, since an expired key or a regional outage fails
+ * every call, and without it each queued episode pays three HTTP attempts with backoff before
+ * the worker's own retry gets a turn.
  */
 export class AnthropicProvider implements GenerationBackend {
   readonly #options: AnthropicRequestOptions;
@@ -353,6 +383,7 @@ export class AnthropicProvider implements GenerationBackend {
         ? {}
         : { failureThreshold: options.breakerFailureThreshold }),
       ...(options.breakerCooldownMs === undefined ? {} : { cooldownMs: options.breakerCooldownMs }),
+      ...(options.now === undefined ? {} : { now: options.now }),
     });
   }
 

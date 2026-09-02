@@ -15,6 +15,10 @@ import type { IntrospectionOperation, OperationOutcome } from '../../domain/oper
  * extraction never revises it. Once enough new mentions have accumulated, the description is
  * a year-old sentence read as current fact (`recall/domain/pack.ts` renders its age precisely
  * because it never changes on its own). This operation is the thing that changes it.
+ *
+ * It carries its own kill switch. Every other operation either closes a node and writes a new
+ * one or moves a number; this one replaces stored text with model output in place, so an
+ * operator who wants the rewrite stopped needs a knob rather than a deploy.
  */
 
 export const DESCRIPTION_FRESHNESS_OPERATION = 'description_freshness';
@@ -77,8 +81,19 @@ export function descriptionFreshnessOperation(): IntrospectionOperation {
   return {
     name: DESCRIPTION_FRESHNESS_OPERATION,
     bucket: 'hour',
+    enabled: (config) => config.maintenance.descriptionFreshness,
     relevance: () => DESCRIPTION_FRESHNESS_STANDING_RELEVANCE,
     run: async (ctx): Promise<OperationOutcome> => {
+      if (!ctx.config.maintenance.descriptionFreshness) {
+        return {
+          status: 'noop',
+          itemsProcessed: 0,
+          itemsAffected: 0,
+          detail:
+            'description freshness disabled by AION_MAINTENANCE_DESCRIPTION_FRESHNESS; no entity examined',
+        };
+      }
+
       const batch = ctx.config.maintenance.descriptionRefreshBatch;
       const candidates = await findStaleDescriptionEntities(ctx.driver, {
         growthThreshold: ctx.config.maintenance.descriptionRefreshMentionGrowth,
