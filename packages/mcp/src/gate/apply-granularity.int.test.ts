@@ -39,6 +39,8 @@ const substrate = new GateSubstrate('granularity');
 let baselineEpisodeId = '';
 let correctionEpisodeId = '';
 let baselineNodeIds: readonly string[] = [];
+/** What the baseline episode actually yielded, label and text, since the family cut starts here. */
+let baselineClaims: readonly string[] = [];
 let correctionNodeIds: readonly string[] = [];
 let proposal: SupersessionProposal | undefined;
 let proposalWasJudged = false;
@@ -141,9 +143,9 @@ beforeAll(async () => {
   correctionEpisodeId = correction.episode_id;
   await enrich(correctionEpisodeId, 'the ownership correction to enrich');
 
-  baselineNodeIds = (await findEpisodeCognitiveNodes(substrate.driver, baselineEpisodeId)).map(
-    (node) => node.id,
-  );
+  const baseline0 = await findEpisodeCognitiveNodes(substrate.driver, baselineEpisodeId);
+  baselineClaims = baseline0.map((node) => `${node.label} "${node.text.slice(0, 70)}"`);
+  baselineNodeIds = baseline0.map((node) => node.id);
   correctionNodeIds = (await findEpisodeCognitiveNodes(substrate.driver, correctionEpisodeId)).map(
     (node) => node.id,
   );
@@ -167,6 +169,7 @@ describe('a correction applied at the default granularity', () => {
         `${String(stale.length)} naming ${OWNERSHIP_CORRECTION.staleOwner}, ` +
         `${String(baselineNodeIds.length)} baseline claims; ${describeItems(before.items)}`,
     );
+    console.log(`baseline claims: ${baselineClaims.join(' | ')}`);
     console.log(
       `review row: ${proposal === undefined ? 'none' : proposal.id}, ${
         proposalWasJudged
@@ -195,6 +198,20 @@ describe('a correction applied at the default granularity', () => {
       `applied ${applied.scope}: closed ${String(applied.closedIds.length)} node(s) on subjects ` +
         `[${applied.subjects.join(', ')}], ${String(applied.openGlosses.length)} gloss(es) left open ` +
         `(${applied.openGlosses.map((gloss) => gloss.name).join(', ')})`,
+    );
+    // The band the relatedness floor sits in, from the run that reads it: every sibling the
+    // subject match found, closed or held, with the cosine it was judged on. This is the
+    // measurement the floor is derived from, so it belongs in the run's own output.
+    const band = [...applied.siblings, ...applied.heldSiblings]
+      .map(
+        (sibling) =>
+          `${(sibling.relatedness ?? Number.NaN).toFixed(3)} ${
+            applied.siblings.includes(sibling) ? 'closed' : 'held'
+          } "${sibling.text.slice(0, 60)}"`,
+      )
+      .join('\n  ');
+    console.log(
+      `family band at floor ${String(DEFAULTS.reflection.supersedeFamilyRelatednessFloor)}: ${band}`,
     );
 
     expect(applied.scope).toBe('family');

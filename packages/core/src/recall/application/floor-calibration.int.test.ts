@@ -26,7 +26,7 @@ import {
  * signal that the constant has gone stale. A floor tuned on noise alone cannot tell "rejects
  * unrelated text" from "rejects everything".
  *
- * Measured 2026-09-01, snowflake-arctic-embed2 on host Ollama, and printed on every run:
+ * Measured 2026-09-02, snowflake-arctic-embed2 on host Ollama, and printed on every run:
  *   unrelated  n=43  p50 0.086  p95 0.267  max 0.299
  *   related    n=10  min 0.382  p05 0.438  p50 0.769
  *   weak       n=4   0.154 0.222 0.244 0.393   (related, under the floor, corroboration's job)
@@ -35,11 +35,11 @@ import {
  * the six mutually unrelated sentences, which score far lower (p95 0.128) than the off-topic
  * pairs (p95 0.296) and pull the combined p95 down with them.
  *
- * The tails no longer overlap on this model, and the committed floors are still nomic's: 0.60
- * sits far above a noise sample that stops at 0.299, so 3 of 10 genuine matches fall under it
- * and are carried by corroboration and exact lexical hits. That is inside what this file
- * tolerates and it is not calibration. Phase 4.4 re-derives every distribution-coupled number
- * against this model; until it does, the numbers printed here are the evidence for it.
+ * The tails do not overlap on this model, which is what nomic-embed-text never gave: 0.083
+ * separates the highest unrelated reading from the weakest genuine match. Phase 4.4 split that
+ * gap into three and put both floors in it, 0.35 and 0.33, so every genuine match clears the
+ * admission floor on the vector leg alone and every unrelated reading stays 0.031 under the
+ * corroboration floor.
  */
 
 const OLLAMA_URL = process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434';

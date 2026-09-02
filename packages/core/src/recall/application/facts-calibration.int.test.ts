@@ -22,10 +22,12 @@ import {
  * every Goal a user legitimately asked about, the same one-sided mistake the admission floors
  * had to avoid.
  *
- * Measured 2026-08-29, nomic-embed-text on host Ollama, printed on every run:
- *   restating  n=8  min 0.841  p05 0.854  p50 0.909  p95 0.951  max 0.960
- *   answering  n=8  min 0.416  p05 0.428  p50 0.552  p95 0.714  max 0.729
- * Committed floor 0.80 sits in that gap: 8 of 8 restatements caught, 0 of 8 answers touched.
+ * Measured 2026-09-02, snowflake-arctic-embed2 on host Ollama, printed on every run:
+ *   restating  n=8  min 0.723  p05 0.741  p50 0.841  p95 0.897  max 0.907
+ *   answering  n=8  min 0.139  p05 0.197  p50 0.404  p95 0.653  max 0.656
+ * Committed floor 0.69 is the midpoint of that gap: 8 of 8 restatements caught, 0 of 8 answers
+ * touched, and 0.033 of margin either side. Against nomic-embed-text the same fixtures measured
+ * restating min 0.841 and answering max 0.729, which is where the retired 0.80 came from.
  */
 
 const OLLAMA_URL = process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434';

@@ -21,8 +21,8 @@ import { contextCentroid, resonantItem } from '../domain/resonance.js';
  * different spaces and neither says anything about the other: `recall.vectorAdmissionFloor` was
  * measured against the noise between a query and a memory's own text, while this one is measured
  * between two means of neighborhoods. A floor calibrated on one distribution is not a floor on
- * the other, so the honest bar is the one the algorithm specifies, and 0.7 sits above the
- * content floor rather than under it. The bucket is a second way in, not a lower one.
+ * the other, so the honest bar is the one the algorithm specifies, and the value it carries sits
+ * above the content floor rather than under it. The bucket is a second way in, not a lower one.
  *
  * WHAT THE CENTROID IS BUILT FROM. Only the activated nodes the first pass actually admitted,
  * weighted by activation. The rest of the activated set is whatever the seed legs reached,

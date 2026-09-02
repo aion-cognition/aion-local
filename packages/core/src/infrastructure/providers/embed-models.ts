@@ -42,16 +42,21 @@ export const QUERY_PREFIX_SEAM_MODEL = 'aion-query-prefix-seam';
 
 const PROFILES: Readonly<Record<string, EmbedModelProfile>> = {
   'nomic-embed-text': { contextTokens: 2048, queryPrefix: '' },
-  // arctic2 ships a "query: " retrieval prefix and this install does not use it. Measured
-  // against the admission fixtures on 2026-09-01, query side prefixed and content side raw:
-  // unrelated p95 0.210 max 0.224, related min 0.233 p50 0.634, half the genuine matches under
-  // the committed 0.60 floor. Raw on both sides: unrelated p95 0.285 max 0.299, related min
-  // 0.382 p50 0.769, 30% under it. The prefix compresses the band the floor reads, on the
-  // asymmetric shape it is meant for. Phase 4.4 re-derives the floors and owns this row;
-  // whichever way it goes, one row decides it for every query-shaped embed in the product.
+  // arctic2 ships a "query: " retrieval prefix and this install does not use it. Phase 4.4
+  // ruled on the row by re-measuring both spellings against the admission fixtures on
+  // 2026-09-02, cue side prefixed and content side raw against both sides raw. What decides it
+  // is the gap the admission floor has to sit in, not either band's own numbers: raw leaves
+  // unrelated at max 0.299 and the weakest genuine match at 0.382, a valley 0.083 wide, which
+  // is what the committed 0.35 floor is derived from. Prefixed leaves unrelated at max 0.224
+  // and the weakest genuine match at 0.233, a valley 0.009 wide, narrower than the 0.03 drift
+  // the calibration allows a floor. The prefix compresses the separation the floor reads, on
+  // the asymmetric shape it is meant for, so the row stays empty and every query-shaped embed
+  // in the product goes out raw.
   'snowflake-arctic-embed2': { contextTokens: 8192, queryPrefix: '' },
   // The prefix arctic2 ships, on the seam name, so the composition every call site performs is
-  // exercised while every configurable row is still raw. Phase 4.4 decides on this string.
+  // exercised while every configurable row is still raw. Phase 4.4 kept the string here and
+  // nowhere else, since the seam has to stay testable after the ruling that no shipped row
+  // carries a prefix.
   [QUERY_PREFIX_SEAM_MODEL]: { contextTokens: 2048, queryPrefix: 'query: ' },
 };
 

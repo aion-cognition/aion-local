@@ -149,11 +149,17 @@ export const MAINTENANCE_KNOBS = {
   // its own per-item cost, and the ledger key each pair earns on its way through is what keeps
   // a re-run from paying for it twice.
   claimDedupBatch: ['AION_MAINTENANCE_CLAIM_DEDUP_BATCH', positiveInt, 5],
-  // The nearest-neighbor cosine a pair must clear before the judge is asked at all. Measured
-  // against the live graph: of the 250 most recent claims, 28 (11%) had a neighbor at or
-  // above this floor, median nearest-neighbor 0.908, against calibration p50 0.408 unrelated
-  // and 0.773 related. The 0.90-0.95 band is partly single-project vocabulary and stays untouched.
-  claimDedupCosineFloor: ['AION_MAINTENANCE_CLAIM_DEDUP_COSINE_FLOOR', proportion, 0.95],
+  // The nearest-neighbor cosine a pair must clear before the judge is asked at all. A
+  // nomination floor: what merges is what the two-pass judge calls one assertion restated, and
+  // this only decides which pairs it is asked about. Re-derived 2026-09-02 against
+  // snowflake-arctic-embed2 on claim text: one assertion written twice min 0.787, p05 0.830,
+  // p50 0.929, max 0.981; two claims that share nothing min 0.101, p50 0.274, max 0.672. 0.73
+  // is the midpoint of that gap, 0.058 above the strongest unrelated pair and 0.057 under the
+  // weakest restatement, both margins about twice the 0.03 drift tolerance. Claims about one
+  // subject that are not one assertion (the 24 supersession battery pairs, min 0.408, p50
+  // 0.814, max 0.932) sit inside the restatement band and no floor separates them, which is
+  // what the judge is for. The nomic-era value was 0.95, which one pair in 186,355 reached.
+  claimDedupCosineFloor: ['AION_MAINTENANCE_CLAIM_DEDUP_COSINE_FLOOR', proportion, 0.73],
   // `merge_decision_reconcile`'s bound: canonicals whose merge trail is read per run. The
   // graph commits a merge before its SQLite record exists, so a process that dies in between
   // leaves a decision key nothing answers for, and no candidate read can find that pair again

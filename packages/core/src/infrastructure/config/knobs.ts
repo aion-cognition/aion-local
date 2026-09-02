@@ -151,18 +151,21 @@ export const KNOBS = {
     cueBudgetMs: ['AION_CUE_BUDGET_MS', positiveInt, 8000],
     tokenBudget: ['AION_RECALL_TOKEN_BUDGET', positiveInt, 1200],
     // Absolute cosine floors, measured against the embedding model's noise rather than pinned.
-    // Against nomic-embed-text on 28 unrelated pairs and 10 genuine matches (`floors.fixtures.ts`):
-    // unrelated p50 0.408, p95 0.530, max 0.547; related min 0.451, p50 0.773. The tails overlap,
-    // so no floor separates them, and the answer to an overlap is corroboration rather than a lower
-    // floor. `vectorAdmissionFloor` sits above the whole noise sample and admits one measurement
-    // alone; a floor at 0.50 sat inside the overlap band and admitted off-topic text on one leg.
-    // `corroborationFloor` is the lower bar a measurement clears to count as one of the two an item
-    // can be corroborated on, and it too sits above the noise range: two readings at 0.46 and 0.51
-    // are two readings of the same noise, which is what admitted every surviving item on the gate's
-    // off-topic probes. `floor-calibration.int.test.ts` re-measures both and fails when the
-    // committed values stop separating the distributions.
-    vectorAdmissionFloor: ['AION_VECTOR_ADMISSION_FLOOR', proportion, 0.6],
-    corroborationFloor: ['AION_CORROBORATION_FLOOR', proportion, 0.55],
+    // Re-derived 2026-09-02 against snowflake-arctic-embed2 on 43 unrelated pairs and 10 genuine
+    // matches (`floors.fixtures.ts`): unrelated p50 0.086, p95 0.267, max 0.299; related min
+    // 0.382, p05 0.438, p50 0.769. This model leaves a valley where nomic-embed-text left an
+    // overlap, so the two floors split the 0.083 between the highest unrelated reading and the
+    // weakest genuine match into three. `vectorAdmissionFloor` sits 0.032 under that weakest
+    // match and admits one measurement alone. `corroborationFloor` is the lower bar a measurement
+    // clears to count as one of the two an item can be corroborated on, and it sits 0.031 above
+    // the whole noise sample: two readings inside the noise band are two readings of the same
+    // noise, which is what admitted every surviving item on the gate's off-topic probes. Each
+    // margin clears the 0.03 drift tolerance the calibration allows. The nomic-era pair was 0.60
+    // and 0.55 against a noise sample that reached 0.547.
+    // `floor-calibration.int.test.ts` re-measures both and fails when the committed values stop
+    // separating the distributions.
+    vectorAdmissionFloor: ['AION_VECTOR_ADMISSION_FLOOR', proportion, 0.35],
+    corroborationFloor: ['AION_CORROBORATION_FLOOR', proportion, 0.33],
     /** A Lucene score is corpus-relative, so the lexical leg admits by rule, not by number. */
     bm25AdmissionMode: [
       'AION_BM25_ADMISSION_MODE',
@@ -186,12 +189,15 @@ export const KNOBS = {
     // still leaving eleven of fifteen fact slots to content that states something.
     entityGlossCap: ['AION_PACK_ENTITY_GLOSS_CAP', positiveInt, 4],
     // `restatementFloor` is the cosine at or above which a Goal or Plan is judged to be the query
-    // said back rather than answered. Measured against nomic-embed-text on two distributions
-    // of Goal/Plan text, both scored against the query that would retrieve them
-    // (`facts.fixtures.ts`): nodes that restate the query min 0.841 p50 0.909, nodes that answer
-    // it p50 0.552 max 0.729. 0.80 sits in the gap and caught 8 of 8 restatements with 0 of 8
-    // misfires. `facts-calibration.int.test.ts` re-measures both and fails if they stop separating.
-    restatementFloor: ['AION_FACTS_RESTATEMENT_FLOOR', proportion, 0.8],
+    // said back rather than answered. Re-derived 2026-09-02 against snowflake-arctic-embed2 on
+    // two distributions of Goal/Plan text, both scored against the query that would retrieve them
+    // (`facts.fixtures.ts`): nodes that restate the query min 0.723 p50 0.841 max 0.907, nodes
+    // that answer it p50 0.404 p95 0.653 max 0.656. 0.69 is the midpoint of that gap, 0.033 above
+    // the strongest answering node and 0.033 under the weakest restatement, both margins at the
+    // 0.03 drift tolerance, and it catches 8 of 8 restatements with 0 of 8 misfires. The nomic-era
+    // value was 0.80 against a restating band that started at 0.841.
+    // `facts-calibration.int.test.ts` re-measures both and fails if they stop separating.
+    restatementFloor: ['AION_FACTS_RESTATEMENT_FLOOR', proportion, 0.69],
     // `decisionBoost` multiplies the fused score of Decision and Insight when the cue model
     // judged the query decision-shaped. At rrfConstant 60 a factor of 1.25 is worth about
     // fifteen ranks, which is the facts cap: enough to bring a Decision any leg ranked into the
@@ -257,7 +263,17 @@ export const KNOBS = {
     seedBudgetGrowth: ['AION_SEED_BUDGET_GROWTH', positive, 2],
     activationLimit: ['AION_CONTEXT_RESONANCE_ACTIVATION_LIMIT', positiveInt, 50],
     resonantLimit: ['AION_CONTEXT_RESONANCE_RESONANT_LIMIT', positiveInt, 20],
-    contextSearchThreshold: ['AION_CONTEXT_RESONANCE_CONTEXT_SEARCH_THRESHOLD', proportion, 0.7],
+    // The cosine between two neighborhood shapes at which the second pass calls one a match. A
+    // different space from the content floors, and it is measured in its own space: re-derived
+    // 2026-09-02 against snowflake-arctic-embed2 on the resonance gate's three worlds
+    // (`context-resonance.int.test.ts` prints all of it). A neighborhood shaped like the one the
+    // query anchored reads 0.785 against it, and the three items the bucket admitted read 0.776,
+    // 0.705 and 0.703 against the centroid; the world whose crew has a different shape reads
+    // 0.308. 0.5 is the midpoint, 0.192 above the mismatch and 0.203 under the weakest match,
+    // and it still sits above `recall.vectorAdmissionFloor`, so the bucket stays a second way in
+    // rather than a lower one. The nomic-era value was 0.7, against shape matches that ran 0.95
+    // and up in that model's space.
+    contextSearchThreshold: ['AION_CONTEXT_RESONANCE_CONTEXT_SEARCH_THRESHOLD', proportion, 0.5],
   },
   /**
    * The reflection pipeline's per-stage knobs. Each stage owns its thresholds and caps as an
@@ -274,7 +290,22 @@ export const KNOBS = {
     // guard takes it as a constructor option instead of a knob nobody sets.
     stageTimeoutMs: ['AION_REFLECTION_STAGE_TIMEOUT_MS', positiveInt, 60_000],
     maxEntities: ['AION_REFLECTION_MAX_ENTITIES', positiveInt, 32],
-    entityDedupThreshold: ['AION_REFLECTION_ENTITY_DEDUP_THRESHOLD', proportion, 0.85],
+    // The cosine the name-vector nominator's hits have to clear. A nomination floor, not a
+    // decision line: the evidence tiers and the two-pass judge behind it decide, and nothing
+    // merges on this number alone. Re-derived 2026-09-02 against snowflake-arctic-embed2 over
+    // the 24 committed cascade pairs plus all 276 cross pairs of their names, folded the way
+    // `name_vec` folds them: two arbitrary names p50 0.181, p95 0.336, max 0.463; two names for
+    // one referent min 0.367, p05 0.488, p50 0.760, max 0.935. The two bands overlap, which is
+    // the property the cascade is built around, so the floor sits above the noise and the
+    // overlap goes to the evidence tiers. 0.53 clears the whole 276-pair background by 0.067 and
+    // the committed guard pair of unrelated personal names (0.474) by 0.056, and sits 0.057
+    // under the weakest duplicate the vector leg is asked to find (0.587, `arctic2` against
+    // `snowflake-arctic-embed2`), so it nominates 11 of the 12 duplicate pairs. The one it
+    // misses is `GDS` against `Graph Data Science` at 0.367, under the background ceiling: an
+    // acronym and its expansion share no characters, and the shared-episode nominator is what
+    // reaches that pair. The nomic-era value was 0.85 against a band whose duplicates started at
+    // 0.92. `ollama-provider.int.test.ts` holds the guard pairs either side of it.
+    entityDedupThreshold: ['AION_REFLECTION_ENTITY_DEDUP_THRESHOLD', proportion, 0.53],
     // The floor the bulk nominator's shared-episode Jaccard has to clear. A nomination floor,
     // not a decision line: everything above it is handed to the evidence tiers, and nothing
     // above it merges on this number alone. A tenth means the two were seen together in about
@@ -304,7 +335,18 @@ export const KNOBS = {
     // it is spent: a company and the product named after it reach the second pass, and the
     // second pass separates them.
     entityMergeMode: ['AION_ENTITY_MERGE_MODE', z.enum(['propose', 'unanimous']), 'unanimous'],
-    associationSemanticThreshold: ['AION_ASSOC_SEMANTIC_THRESHOLD', proportion, 0.75],
+    // The cosine two entity content vectors have to reach before a SIMILAR edge is written
+    // between them. Re-derived 2026-09-02 against snowflake-arctic-embed2 on entity text spelled
+    // the way `entityContentText` spells it: two descriptions of one referent (the 12 duplicate
+    // cascade pairs) min 0.543, p05 0.575, p50 0.715, max 0.852; entities that share nothing
+    // (all 276 cross pairs of the same descriptions) p50 0.204, p95 0.342, max 0.506; entities
+    // co-mentioned in one episode and distinct (10 pairs of the facts battery's glosses) p50
+    // 0.268, max 0.410. 0.53 sits above every one of the 286 noise readings and under every
+    // same-referent reading, so it writes 12 of 12 and 0 of 286. The valley is 0.037 wide, so
+    // the margins are 0.024 above the noise and 0.013 under the weakest genuine pair, and the
+    // noise side gets the wider one because an edge written here has no judge behind it. The
+    // nomic-era value was 0.75, measured admitting nearly every nearest neighbour.
+    associationSemanticThreshold: ['AION_ASSOC_SEMANTIC_THRESHOLD', proportion, 0.53],
     associationSimilarLimit: ['AION_REFLECTION_ASSOCIATION_SIMILAR_LIMIT', positiveInt, 5],
     maxCognitiveNodes: ['AION_REFLECTION_MAX_COGNITIVE_NODES', positiveInt, 20],
     maxRelationships: ['AION_REFLECTION_MAX_RELATIONSHIPS', positiveInt, 40],
@@ -355,6 +397,17 @@ export const KNOBS = {
     // this is where that line sits. Under the neighbour threshold, because these two already
     // share an observation and a named subject: the evidence a family close needs on top of that
     // is that they are about the same thing, not that they nearly restate each other.
+    // Re-measured 2026-09-02 against snowflake-arctic-embed2 and left where it was, which is the
+    // one number in this pass that the new space did not move. The granularity gate's own two
+    // claims are the band: the sibling that says what the corrected subject does reads 0.537
+    // against the judged claim and has to hold, and the sibling that asserts the same attribute
+    // reads 0.841 and has to close, so 0.6 sits 0.063 above the hold and 0.241 under the close.
+    // The same two pairs read 0.732 and 0.868 under nomic-embed-text, where this floor was set:
+    // that model put the sibling a correction does not touch above the floor, so it closed, and
+    // arctic2 is what separates the two questions rather than compressing them together.
+    // Wider fixture pairs, same shape: siblings asserting one attribute of one subject 0.826 to
+    // 0.850, siblings asserting another attribute of it 0.323 to 0.766, with two-environment
+    // counts (0.865) the standing overlap no floor resolves.
     supersedeFamilyRelatednessFloor: [
       'AION_REFLECTION_SUPERSEDE_FAMILY_RELATEDNESS_FLOOR',
       proportion,

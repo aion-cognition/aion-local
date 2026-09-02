@@ -375,8 +375,9 @@ describe('tier 3, the two-pass judge', () => {
   });
 
   it('spends no model call on a pair no nominator put forward', async () => {
+    // Orthogonal, so the pair is under any nomination floor rather than under one number.
     seedEntity({ id: 'a', name: 'Aion', type: 'project', vector: [1, 0] });
-    seedEntity({ id: 'b', name: 'Postgres', type: 'project', vector: [1, 1] });
+    seedEntity({ id: 'b', name: 'Postgres', type: 'project', vector: [0, 1] });
     mention(EPISODE_ID, 'a', 1);
 
     const judge = scriptedJudge();
@@ -481,23 +482,23 @@ describe('tier 3, the two-pass judge', () => {
 
   it('respects a configured nomination threshold looser than the default', async () => {
     // Names that reach the judge either way, so the configured number is the only thing
-    // deciding: cosine([1,0],[1,1]) is 0.707, under the default and over the configured one.
+    // deciding: cosine([1,0],[1,2]) is 0.447, under the default and over the configured one.
     seedEntity({ id: 'a', name: 'Aion', type: 'project', vector: [1, 0], accessCount: 1 });
     seedEntity({
       id: 'b',
       name: 'Aion Project',
       type: 'project',
-      vector: [1, 1],
+      vector: [1, 2],
       accessCount: 0,
       txFrom: NEWER,
     });
     mention(EPISODE_ID, 'a', 1);
 
-    expect(DEFAULTS.reflection.entityDedupThreshold).toBe(0.85);
+    expect(DEFAULTS.reflection.entityDedupThreshold).toBe(0.53);
     const strict = await new EntityDedupStage().run(context());
     expect(strict.counts).toMatchObject({ merges: 0, merge_judgments: 0 });
 
-    const outcome = await new EntityDedupStage({ similarityThreshold: 0.5 }).run(context());
+    const outcome = await new EntityDedupStage({ similarityThreshold: 0.4 }).run(context());
 
     expect(outcome.counts).toMatchObject({ merges: 1 });
   });
