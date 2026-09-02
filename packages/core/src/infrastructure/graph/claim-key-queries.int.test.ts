@@ -351,6 +351,58 @@ describe('the keyed close', () => {
     expect(await supersedingNodeIds(harness.driver, first.node.id)).toEqual([]);
   });
 
+  /**
+   * The family cut around a keyed close. All three siblings name the subject in their own text
+   * and carry the same vector, so containment plus relatedness would have taken every one of
+   * them. What separates them is the key: the sibling asserting a second attribute of the same
+   * repository is not a candidate at all, and the sibling with no key of its own is matched the
+   * way it always was.
+   */
+  it('holds a sibling asserting a different attribute and still takes an unkeyed one', async () => {
+    await seedEpisode('ep-family-old');
+    await seedEpisode('ep-family-new');
+    const repository = await seedEntity('entity-ravel-repo', 'Ravel repository');
+    await mention('ep-family-old', repository);
+    const vector = [1, 0, 0, 0, 0, 0, 0, 0];
+    const key = { subjectEntityId: repository, aspectNorm: aspect('default branch') };
+    const prior = await writeClaim({
+      episodeId: 'ep-family-old',
+      text: 'The Ravel repository default branch is main.',
+      contentVector: vector,
+      ...key,
+    });
+    const otherAspect = await writeClaim({
+      episodeId: 'ep-family-old',
+      text: 'The Ravel repository default reviewer is the release captain.',
+      contentVector: vector,
+      subjectEntityId: repository,
+      aspectNorm: aspect('default reviewer'),
+    });
+    const unkeyed = await writeClaim({
+      episodeId: 'ep-family-old',
+      text: 'The Ravel repository is mirrored to the archive host nightly.',
+      contentVector: vector,
+    });
+
+    const correction = await writeClaim({
+      episodeId: 'ep-family-new',
+      text: 'The Ravel repository default branch is trunk.',
+      contentVector: vector,
+      ...key,
+      keyedClose: { mode: 'close', relatednessFloor: FAMILY_FLOOR },
+    });
+
+    const family = correction.keyedClose?.families[0];
+    expect(family?.siblings.map((sibling) => sibling.id)).toEqual([unkeyed.node.id]);
+    expect(family?.siblings.map((sibling) => sibling.keyed)).toEqual([false]);
+    expect(family?.heldSiblings).toEqual([]);
+    expect([...(correction.keyedClose?.closedIds ?? [])].sort()).toEqual(
+      [prior.node.id, unkeyed.node.id].sort(),
+    );
+    expect(await isClosed(otherAspect.node.id)).toBe(false);
+    expect(await supersedingNodeIds(harness.driver, otherAspect.node.id)).toEqual([]);
+  });
+
   it('retires an entity gloss that restates the claim the key closed', async () => {
     await seedEpisode('ep-gloss-old');
     await seedEpisode('ep-gloss-new');

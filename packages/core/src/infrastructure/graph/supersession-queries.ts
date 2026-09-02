@@ -6,11 +6,15 @@ import { TEXT_NORM_PROPERTY } from './cognitive-text.js';
 import { runRead, type GraphStatement } from './connection.js';
 import { ENTITY_MENTION_TYPE } from './entity-queries.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
-import { BASE_NODE_LABEL } from './labels.js';
+import { BASE_NODE_LABEL, MEMORY_LABEL } from './labels.js';
 import { readModeFragment, withCurrency } from './read-modes.js';
-import { ENTITY_NAME_NORM_PROPERTY } from './seed-queries.js';
+import { ENTITY_NAME_NORM_PROPERTY, ENTITY_NAME_PROPERTY } from './seed-queries.js';
 import { fromGraphVector, toGraphInteger, toGraphVector, type Row } from './values.js';
 import { asCosine } from './vector-indexes.js';
+import {
+  CLAIM_ASPECT_PROPERTY,
+  CLAIM_SUBJECT_PROPERTY,
+} from '../../reflection/domain/claim-key.js';
 import type { Vector } from '../providers/types.js';
 
 /**
@@ -59,6 +63,12 @@ export type EpisodeFactNode = {
   readonly textNorm: string;
   /** Absent while the node is still a pending-vector marker; such a node cannot search for neighbours. */
   readonly contentVector?: Vector;
+  /**
+   * The claim's key, when extraction named a subject the graph holds and an attribute it could
+   * fold. Both halves land together or neither does, so a node carrying one is a node with none.
+   */
+  readonly subjectEntityId?: string;
+  readonly aspectNorm?: string;
 };
 
 function episodeFactNodesStatement(episodeId: string, reference?: Date): GraphStatement {
@@ -69,7 +79,8 @@ function episodeFactNodesStatement(episodeId: string, reference?: Date): GraphSt
       `WHERE any(label IN labels(n) WHERE label IN $labels) AND ${fragment.where}`,
       'RETURN n.id AS id, [label IN labels(n) WHERE label IN $labels][0] AS label,',
       `       n.${MEMORY_PROPERTIES.text} AS text, n.${TEXT_NORM_PROPERTY} AS text_norm,`,
-      `       n.${MEMORY_PROPERTIES.contentVector} AS content_vec`,
+      `       n.${MEMORY_PROPERTIES.contentVector} AS content_vec,`,
+      `       n.${CLAIM_SUBJECT_PROPERTY} AS subject_entity_id, n.${CLAIM_ASPECT_PROPERTY} AS aspect_norm`,
       `ORDER BY n.${TEXT_NORM_PROPERTY}, n.id`,
     ].join('\n'),
     parameters: { episodeId, labels: [...FACT_NODE_LABELS], ...fragment.parameters },
@@ -101,12 +112,16 @@ function mapEpisodeFactNode(row: Row): EpisodeFactNode | undefined {
     return undefined;
   }
   const contentVector = fromGraphVector(row.content_vec);
+  const subjectEntityId = row.subject_entity_id as string | null;
+  const aspectNorm = row.aspect_norm as string | null;
   return {
     id: row.id as string,
     label,
     text: (row.text as string | null) ?? '',
     textNorm: (row.text_norm as string | null) ?? '',
     ...(contentVector === undefined ? {} : { contentVector }),
+    ...(subjectEntityId === null ? {} : { subjectEntityId }),
+    ...(aspectNorm === null ? {} : { aspectNorm }),
   };
 }
 
@@ -152,7 +167,7 @@ export type ContradictionCandidate = {
   readonly sharedSubject?: string;
 };
 
-export type CandidateMatch = 'subject' | 'knn';
+export type CandidateMatch = 'subject' | 'knn' | 'key';
 
 function toCandidate(row: Row, matchedBy: CandidateMatch): ContradictionCandidate | undefined {
   const label = (row.label as string | null) ?? '';
@@ -174,8 +189,72 @@ function mapSubjectCandidate(row: Row): ContradictionCandidate | undefined {
   return toCandidate(row, 'subject');
 }
 
+function mapKeyedCandidate(row: Row): ContradictionCandidate | undefined {
+  return toCandidate(row, 'key');
+}
+
 function mapVectorCandidate(row: Row): ContradictionCandidate | undefined {
   return toCandidate(row, 'knn');
+}
+
+/**
+ * The claims that already state this claim's key: one subject entity, one folded aspect, still
+ * open, and extracted somewhere other than this episode. Nothing is compared as text, because
+ * the key states what the containment test was standing in for.
+ *
+ * `Memory` anchors the seek, since that is the label the composite key index is declared on, and
+ * the fact labels are a post-filter over the handful of rows it returns. The subject's own name
+ * rides along so the judge is told what both statements are about, the same line the subject leg
+ * supplies from a name match.
+ */
+const KEYED_CANDIDATES = [
+  `MATCH (n:${MEMORY_LABEL})`,
+  `WHERE n.${CLAIM_SUBJECT_PROPERTY} = $subjectEntityId`,
+  `  AND n.${CLAIM_ASPECT_PROPERTY} = $aspectNorm`,
+  '  AND any(label IN labels(n) WHERE label IN $labels)',
+  `  AND ${currentOnly('n')}`,
+  '  AND NOT n.id IN $excludeIds',
+  'OPTIONAL MATCH (subject:Entity { id: $subjectEntityId })',
+  'WITH n, subject, [label IN labels(n) WHERE label IN $labels][0] AS label,',
+  `     CASE WHEN n.${MEMORY_PROPERTIES.contentVector} IS NOT NULL`,
+  `          AND size(n.${MEMORY_PROPERTIES.contentVector}) = $dimension`,
+  `          THEN ${asCosine(`vector.similarity.cosine(n.${MEMORY_PROPERTIES.contentVector}, $vector)`)}`,
+  '          ELSE 0.0 END AS score',
+  `RETURN n.id AS id, label, n.${MEMORY_PROPERTIES.text} AS text, score,`,
+  `       subject.${ENTITY_NAME_PROPERTY} AS shared_subject`,
+  'ORDER BY score DESC, n.id',
+  'LIMIT $limit',
+].join('\n');
+
+export type KeyedCandidateInput = {
+  readonly subjectEntityId: string;
+  readonly aspectNorm: string;
+  /** The subject claim's own vector, scored for ordering only: the key already made the match. */
+  readonly vector: Vector;
+  /** The subject and its episode siblings, which is what keeps one observation off itself. */
+  readonly excludeIds: readonly string[];
+  readonly limit: number;
+};
+
+export async function findKeyedCandidates(
+  driver: Driver,
+  input: KeyedCandidateInput,
+): Promise<ContradictionCandidate[]> {
+  const rows = await runRead(
+    driver,
+    KEYED_CANDIDATES,
+    {
+      subjectEntityId: input.subjectEntityId,
+      aspectNorm: input.aspectNorm,
+      labels: [...FACT_NODE_LABELS],
+      excludeIds: [...input.excludeIds],
+      vector: toGraphVector(input.vector),
+      dimension: toGraphInteger(input.vector.length),
+      limit: toGraphInteger(input.limit),
+    },
+    mapKeyedCandidate,
+  );
+  return rows.filter((row): row is ContradictionCandidate => row !== undefined);
 }
 
 /**

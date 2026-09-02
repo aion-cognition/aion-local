@@ -106,6 +106,9 @@ export function supersessionOptions(config: Config): SupersessionStageOptions {
     maxNeighbors: config.reflection.maxContradictionNeighbors,
     maxJudgments: config.reflection.maxContradictionJudgments,
     familyRelatednessFloor: config.reflection.supersedeFamilyRelatednessFloor,
+    // The same knob the cognitive stage reads, threaded to both because one value decides two
+    // things: whether the write closes a keyed pair, and whether this stage judges one.
+    keyedCloseMode: config.reflection.keyedCloseMode,
   };
 }
 

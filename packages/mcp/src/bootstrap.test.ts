@@ -96,6 +96,7 @@ const wiredSupersessionOptions = {
   maxNeighbors: configured.reflection.maxContradictionNeighbors,
   maxJudgments: configured.reflection.maxContradictionJudgments,
   familyRelatednessFloor: configured.reflection.supersedeFamilyRelatednessFloor,
+  keyedCloseMode: configured.reflection.keyedCloseMode,
 };
 
 function stageOfType<T extends ReflectionStage>(
@@ -187,7 +188,7 @@ describe('reflectionStages', () => {
     expect(associationOptions(configured)).toEqual(associations.describe());
   });
 
-  it('gives the supersession stage and the retro sweep the same nine options', () => {
+  it('gives the supersession stage and the retro sweep the same ten options', () => {
     const supersession = stageOfType(
       stages,
       (stage): stage is SupersessionStage => stage instanceof SupersessionStage,
