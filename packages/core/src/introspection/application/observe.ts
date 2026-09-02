@@ -1,9 +1,12 @@
 import type { Driver } from 'neo4j-driver';
 
 import type { Config } from '../../infrastructure/config/schema.js';
+import { countEdgesByFloorBand } from '../../infrastructure/graph/edge-prune-queries.js';
 import { countDecayableEdges } from '../../infrastructure/graph/edge-weights.js';
 import { countTier0EligibleEntities } from '../../infrastructure/graph/entity-tier0-queries.js';
+import { readCurrentEntityNamings } from '../../infrastructure/graph/identifier-decay-queries.js';
 import {
+  countContextVectorCoverage,
   countEpisodesWithoutSession,
   countOrphanNodes,
   countVectorParity,
@@ -14,7 +17,10 @@ import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { countDeadLetterAttention } from '../../infrastructure/sqlite/dead-letter-queue.js';
 import { listEntityMergeProposals } from '../../infrastructure/sqlite/entity-merge-proposals.js';
-import { listOperationStats } from '../../infrastructure/sqlite/introspection-counters.js';
+import {
+  listOperationStats,
+  meanOperationDurationMs,
+} from '../../infrastructure/sqlite/introspection-counters.js';
 import { listSupersessionProposals } from '../../infrastructure/sqlite/supersession-proposals.js';
 import { plasticityCounters } from '../../plasticity/application/metrics.js';
 import { scanRedactionResidue } from '../../redaction/residue.js';
@@ -42,6 +48,8 @@ import {
   type QueueHealth,
   type RedactionHealth,
 } from '../domain/health.js';
+import { identifierShape } from '../domain/identifier-shape.js';
+import type { OperationMeasurement } from '../domain/operation.js';
 
 /**
  * One health reading, assembled from the surfaces that already answer these questions for
@@ -74,8 +82,12 @@ export type ObserveDeps = {
 };
 
 export type ObserveOptions = {
-  /** Registered operation names, so an operation with no history still appears with a zeroed record. */
-  readonly operationNames?: readonly string[];
+  /**
+   * The registered catalog, so an operation with no history still appears with a zeroed record.
+   * Each entry carries whether the operation declares a metric, because a record with no metric
+   * behind it is reported as unmeasured rather than scored.
+   */
+  readonly operations?: readonly OperationMeasurement[];
   readonly cycle?: number;
   readonly now?: Date;
   readonly scanLimit?: number;
@@ -98,15 +110,22 @@ async function collect<T>(
   }
 }
 
-async function readGraph(driver: Driver, scanLimit: number): Promise<GraphStructureHealth> {
-  const [counts, parity, orphans, missing, stale, decayableEdges] = await Promise.all([
-    countGraphElements(driver),
-    countVectorParity(driver, scanLimit),
-    countOrphanNodes(driver, scanLimit),
-    countEpisodesWithoutSession(driver, scanLimit),
-    findStaleNarratives(driver, NARRATIVE_GROUNDING, scanLimit),
-    countDecayableEdges(driver),
-  ]);
+async function readGraph(
+  driver: Driver,
+  scanLimit: number,
+  weightFloor: number,
+): Promise<GraphStructureHealth> {
+  const [counts, parity, orphans, missing, stale, decayableEdges, floorBands, contextVectors] =
+    await Promise.all([
+      countGraphElements(driver),
+      countVectorParity(driver, scanLimit),
+      countOrphanNodes(driver, scanLimit),
+      countEpisodesWithoutSession(driver, scanLimit),
+      findStaleNarratives(driver, NARRATIVE_GROUNDING, scanLimit),
+      countDecayableEdges(driver),
+      countEdgesByFloorBand(driver, weightFloor),
+      countContextVectorCoverage(driver, scanLimit),
+    ]);
   return {
     nodes: counts.nodes,
     relationships: counts.relationships,
@@ -118,6 +137,10 @@ async function readGraph(driver: Driver, scanLimit: number): Promise<GraphStruct
     episodesWithoutSession: missing,
     staleNarratives: stale.length,
     decayableEdges,
+    atFloorAssociationEdges: floorBands.atFloor,
+    contextVectorExpected: contextVectors.expected,
+    contextVectorPresent: contextVectors.present,
+    contextVectorCoverage: parityRatio(contextVectors.present, contextVectors.expected),
   };
 }
 
@@ -200,7 +223,14 @@ function readProposals(db: SqliteHandle, now: Date): ProposalHealth {
  * sweep merges spellings no judge was ever asked about.
  */
 async function readEntities(driver: Driver, scanLimit: number): Promise<EntityHealth> {
-  return { tier0Eligible: await countTier0EligibleEntities(driver, { limit: scanLimit }) };
+  const [tier0Eligible, namings] = await Promise.all([
+    countTier0EligibleEntities(driver, { limit: scanLimit }),
+    readCurrentEntityNamings(driver, scanLimit),
+  ]);
+  const identifierShaped = namings.filter(
+    (naming) => identifierShape(naming.name, naming.type) !== 'none',
+  ).length;
+  return { tier0Eligible, identifierShaped };
 }
 
 function readPlasticity(db: SqliteHandle): PlasticityHealth {
@@ -213,25 +243,40 @@ function readPlasticity(db: SqliteHandle): PlasticityHealth {
 }
 
 /**
- * Effectiveness is improved runs over resolved runs, and an operation that has never resolved
- * a run reads as 1. A new operation starts trusted and earns its way down: the alternative
- * starts it at zero, where the effectiveness floor holds it under the urgency threshold until
- * starvation protection eventually runs it, which is a slow start nothing asked for.
+ * Effectiveness is improved runs over the runs a declared metric scored, and it is undefined
+ * wherever that denominator is zero: an operation that declares no metric, and an operation that
+ * declares one but has not resolved a run against it yet. Undefined is the reading, not a
+ * missing one. An operation with no metric can only ever be scored on whether it did something,
+ * which is a verdict its own run decides, and a loop that weights operations on that is
+ * measuring the operation's willingness rather than its effect.
+ *
+ * `runs` still counts every resolution, unmeasured ones included, so waiting time and the
+ * has-it-ever-run gates read the same number they always did.
  */
 export function readOperationEffectiveness(
   db: SqliteHandle,
-  names: readonly string[],
+  operations: readonly OperationMeasurement[],
   cycle: number,
 ): readonly OperationEffectiveness[] {
-  return listOperationStats(db, names).map((stats) => ({
-    name: stats.name,
-    runs: stats.runs,
-    improved: stats.improved,
-    failed: stats.failed,
-    effectiveness: stats.runs === 0 ? 1 : stats.improved / stats.runs,
-    cyclesSinceSelected: Math.max(0, cycle - (stats.selectedCycle ?? 0)),
-    lastRunAt: stats.lastRunAt,
-  }));
+  const measured = new Set(
+    operations.filter((operation) => operation.measured).map((operation) => operation.name),
+  );
+  return listOperationStats(
+    db,
+    operations.map((operation) => operation.name),
+  ).map((stats) => {
+    const scored = stats.runs - stats.unmeasured;
+    return {
+      name: stats.name,
+      runs: stats.runs,
+      improved: stats.improved,
+      failed: stats.failed,
+      effectiveness: measured.has(stats.name) && scored > 0 ? stats.improved / scored : undefined,
+      cyclesSinceSelected: Math.max(0, cycle - (stats.selectedCycle ?? 0)),
+      lastRunAt: stats.lastRunAt,
+      meanDurationMs: meanOperationDurationMs(stats),
+    };
+  });
 }
 
 export async function observeHealth(
@@ -242,13 +287,13 @@ export async function observeHealth(
   const cycle = options.cycle ?? 0;
   const scanLimit = options.scanLimit ?? DEFAULT_OBSERVE_SCAN_LIMIT;
   const residueLimit = options.residueLimit ?? DEFAULT_OBSERVE_RESIDUE_LIMIT;
-  const names = options.operationNames ?? [];
+  const operations = options.operations ?? [];
   const degraded: string[] = [];
 
   const [graph, queue, enrichment, redaction, proposals, entities, plasticity, effectiveness] =
     await Promise.all([
       collect(HEALTH_COLLECTORS.graph, deps.logger, degraded, NEUTRAL_GRAPH_HEALTH, () =>
-        readGraph(deps.driver, scanLimit),
+        readGraph(deps.driver, scanLimit, deps.config.hebbian.weightFloor),
       ),
       collect(HEALTH_COLLECTORS.queue, deps.logger, degraded, NEUTRAL_QUEUE_HEALTH, () =>
         Promise.resolve(readQueue(deps.db, deps.config, now)),
@@ -269,7 +314,7 @@ export async function observeHealth(
         Promise.resolve(readPlasticity(deps.db)),
       ),
       collect('effectiveness', deps.logger, degraded, [] as readonly OperationEffectiveness[], () =>
-        Promise.resolve(readOperationEffectiveness(deps.db, names, cycle)),
+        Promise.resolve(readOperationEffectiveness(deps.db, operations, cycle)),
       ),
     ]);
 

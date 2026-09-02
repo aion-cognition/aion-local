@@ -2,7 +2,7 @@ import type { Driver } from 'neo4j-driver';
 import { describe, expect, it } from 'vitest';
 
 import {
-  IDENTIFIER_DECAY_STANDING_RELEVANCE,
+  IDENTIFIER_DECAY_RELEVANCE_DIVISOR,
   identifierDecayOperation,
   identifierDecayRelevance,
 } from './identifier-decay.js';
@@ -22,17 +22,24 @@ function silentLogger(): Logger {
 }
 
 describe('identifierDecayRelevance', () => {
-  it('is zero on an empty substrate, however long the wait', () => {
-    const health = healthFixture({ graph: { ...NEUTRAL_GRAPH_HEALTH, nodes: 0 } });
+  it('is zero on a graph holding no identifier-shaped entity, however many nodes it carries', () => {
+    const health = healthFixture({
+      graph: { ...NEUTRAL_GRAPH_HEALTH, nodes: 9_000 },
+      entities: { tier0Eligible: 0, identifierShaped: 0 },
+    });
     expect(identifierDecayRelevance(health)).toBe(0);
   });
 
-  it('holds the standing value once the graph carries any node at all', () => {
-    const health = healthFixture({ graph: { ...NEUTRAL_GRAPH_HEALTH, nodes: 1 } });
-    expect(identifierDecayRelevance(health)).toBe(IDENTIFIER_DECAY_STANDING_RELEVANCE);
+  it('scales on the identifier-shaped count and holds at one past the divisor', () => {
+    const some = healthFixture({
+      entities: { tier0Eligible: 0, identifierShaped: IDENTIFIER_DECAY_RELEVANCE_DIVISOR / 4 },
+    });
+    expect(identifierDecayRelevance(some)).toBeCloseTo(0.25, 6);
 
-    const busy = healthFixture({ graph: { ...NEUTRAL_GRAPH_HEALTH, nodes: 9_000 } });
-    expect(identifierDecayRelevance(busy)).toBe(IDENTIFIER_DECAY_STANDING_RELEVANCE);
+    const flooded = healthFixture({
+      entities: { tier0Eligible: 0, identifierShaped: IDENTIFIER_DECAY_RELEVANCE_DIVISOR * 9 },
+    });
+    expect(identifierDecayRelevance(flooded)).toBe(1);
   });
 });
 

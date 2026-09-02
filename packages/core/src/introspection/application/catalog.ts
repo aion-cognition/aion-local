@@ -29,6 +29,22 @@ import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-
  * first four groups read outward from the substrate: what makes a node findable at all, then
  * what makes the edges between nodes carry weight, then what the nodes say, then the shape the
  * whole graph has taken. The last group stands apart: it repairs nothing, it only watches.
+ *
+ * Twelve of the twenty declare a `measure`, a number in the health snapshot their run is scored
+ * on moving. The other eight are recorded as unmeasured rather than scored, and each is waiting
+ * on a gauge the snapshot does not carry yet:
+ *
+ * - `claim_dedup`: a near-duplicate claim-pair count.
+ * - `memory_decay`: edge weight above the floor, which is what a decay pass lowers.
+ * - `narrative_cleanup`: duplicate standing narratives per session.
+ * - `retro_judgment_sweep`: episodes whose contradictions no judge has read.
+ * - `description_freshness`: entities whose gloss predates their newest mentions.
+ * - `community_refresh`: nodes carrying a community assignment older than their edges.
+ * - `symbiosis_bridge`: the count of community pairs the graph connects least.
+ * - `merge_decision_reconcile`: merges committed to the graph with no decision record.
+ *
+ * Each is a graph read nothing computes on the tick today. Until one exists, its operation is
+ * scored on relevance, waiting time, and cost alone, which is everything known about it.
  */
 export function introspectionOperations(): readonly IntrospectionOperation[] {
   return [

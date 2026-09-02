@@ -16,8 +16,13 @@ import { getMeta, setMeta } from './meta.js';
 const CYCLE_KEY = 'introspection:cycle';
 const OPERATION_PREFIX = 'introspection:op:';
 
-/** Whether an operation moved the metric it declared, once the next snapshot could see it. */
-export type OperationResolution = 'improved' | 'unchanged' | 'failed';
+/**
+ * Whether an operation moved the metric it declared, once the next snapshot could see it.
+ * `unmeasured` is the resolution for a run there was no metric to score: the operation declares
+ * none, or the one it declares could not be read. It counts as a run and answers nothing about
+ * whether the run helped, which is the whole difference between it and the other three.
+ */
+export type OperationResolution = 'improved' | 'unchanged' | 'failed' | 'unmeasured';
 
 export type OperationStats = {
   readonly name: string;
@@ -26,14 +31,21 @@ export type OperationStats = {
   readonly improved: number;
   readonly unchanged: number;
   readonly failed: number;
+  /** Resolved runs no metric scored, so `runs` still sums to the four tallies. */
+  readonly unmeasured: number;
   readonly lastRunAt?: string;
+  /** Wall time the most recent run took, which is what "prefer the cheapest" is answered from. */
+  readonly lastDurationMs?: number;
+  /** Runs that have been timed, and their summed duration, so a mean survives a restart. */
+  readonly durationRuns: number;
+  readonly durationTotalMs: number;
   /** The cycle this operation was last selected on; absent until it has been. */
   readonly selectedCycle?: number;
   /** The metric reading taken before the last run, waiting on the next snapshot to score it. */
   readonly pendingMeasure?: number;
 };
 
-const EMPTY_STATS = { runs: 0, improved: 0, unchanged: 0, failed: 0 } as const;
+const EMPTY_STATS = { runs: 0, improved: 0, unchanged: 0, failed: 0, unmeasured: 0 } as const;
 
 function key(name: string, leaf: string): string {
   return `${OPERATION_PREFIX}${name}:${leaf}`;
@@ -67,16 +79,33 @@ export function operationStats(db: SqliteHandle, name: string): OperationStats {
   const lastRunAt = getMeta(db, key(name, 'last_run_at'));
   const selectedCycle = readNumber(db, key(name, 'selected_cycle'));
   const pendingMeasure = readNumber(db, key(name, 'pending_measure'));
+  const lastDurationMs = readNumber(db, key(name, 'last_duration_ms'));
   return {
     name,
     runs: readNumber(db, key(name, 'runs')) ?? EMPTY_STATS.runs,
     improved: readNumber(db, key(name, 'improved')) ?? EMPTY_STATS.improved,
     unchanged: readNumber(db, key(name, 'unchanged')) ?? EMPTY_STATS.unchanged,
     failed: readNumber(db, key(name, 'failed')) ?? EMPTY_STATS.failed,
+    unmeasured: readNumber(db, key(name, 'unmeasured')) ?? EMPTY_STATS.unmeasured,
+    durationRuns: readNumber(db, key(name, 'duration_runs')) ?? 0,
+    durationTotalMs: readNumber(db, key(name, 'duration_total_ms')) ?? 0,
     ...(lastRunAt === undefined ? {} : { lastRunAt }),
+    ...(lastDurationMs === undefined ? {} : { lastDurationMs }),
     ...(selectedCycle === undefined ? {} : { selectedCycle }),
     ...(pendingMeasure === undefined ? {} : { pendingMeasure }),
   };
+}
+
+/**
+ * What a run of this operation typically costs, or undefined until one has been timed. The mean
+ * rather than the last reading: one operation's cost varies with how much work its batch found,
+ * and a scheduler comparing catalog costs needs the shape of the whole record.
+ */
+export function meanOperationDurationMs(stats: OperationStats): number | undefined {
+  if (stats.durationRuns <= 0) {
+    return undefined;
+  }
+  return stats.durationTotalMs / stats.durationRuns;
 }
 
 export function listOperationStats(
@@ -93,6 +122,21 @@ export function recordOperationSelected(db: SqliteHandle, name: string, cycle: n
 
 export function recordOperationRun(db: SqliteHandle, name: string, at: string): void {
   setMeta(db, key(name, 'last_run_at'), at);
+}
+
+/**
+ * How long one run took, recorded whatever it did: a failure that took a minute is exactly the
+ * cost a scheduler needs to know about. Read and both writes are one unit for the same reason
+ * the resolution tallies are, so the count and the total cannot increment off different bases.
+ */
+export function recordOperationDuration(db: SqliteHandle, name: string, durationMs: number): void {
+  const bounded = Math.max(0, durationMs);
+  db.transaction(() => {
+    const current = operationStats(db, name);
+    setMeta(db, key(name, 'duration_runs'), String(current.durationRuns + 1));
+    setMeta(db, key(name, 'duration_total_ms'), String(current.durationTotalMs + bounded));
+    setMeta(db, key(name, 'last_duration_ms'), String(bounded));
+  }).immediate();
 }
 
 export function recordOperationResolution(

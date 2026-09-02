@@ -6,8 +6,8 @@ import { errorMessage } from '../../infrastructure/errors.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import { deadlineFor } from '../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../infrastructure/providers/types.js';
-import type { OperationCandidate } from '../domain/decide.js';
-import type { HealthSnapshot } from '../domain/health.js';
+import { describeEffectiveness, type OperationCandidate } from '../domain/decide.js';
+import type { HealthSnapshot, OperationEffectiveness } from '../domain/health.js';
 import type { Tier3Advisor, Tier3Outcome, Tier3Proposal, Tier3Request } from '../domain/tier3.js';
 
 /**
@@ -48,8 +48,10 @@ const ADVICE_SYSTEM_PROMPT = [
   'Answer none unless the reading shows work waiting that one named operation would do. An',
   'operation whose relevance stands at a fixed value has a cadence rather than a backlog, and a',
   'fixed value is not evidence of work.',
-  'Prefer the cheapest operation that addresses what the reading shows. Prefer an operation',
-  'with a record of improving the number it moves over one that has never moved it.',
+  'Prefer the cheapest operation that addresses what the reading shows, reading cost off each',
+  "operation's own per-run time. Prefer an operation with a record of improving the number it",
+  'moves over one that has never moved it. An effectiveness of unmeasured means the operation',
+  'moves no number this reading carries, so treat it as unknown rather than as good or bad.',
   'Choose an operation whose relevance is above zero: zero means that operation has nothing to',
   'do, however bad the rest of the reading looks.',
   'Answer with the operation name, a confidence between 0 and 1, and one sentence of rationale',
@@ -140,16 +142,39 @@ function describeSnapshot(health: HealthSnapshot): string {
   ].join('\n');
 }
 
+/**
+ * What one run of this operation has cost, which is what makes "prefer the cheapest" a question
+ * the reading answers rather than a guess from the operation's name.
+ */
+const UNKNOWN_COST = 'cost unknown';
+
+function describeCost(meanDurationMs: number | undefined): string {
+  if (meanDurationMs === undefined) {
+    return UNKNOWN_COST;
+  }
+  return `typically ${(meanDurationMs / 1000).toFixed(1)}s per run`;
+}
+
+function describeRecord(stats: OperationEffectiveness | undefined): string {
+  if (stats === undefined) {
+    return `untried, ${UNKNOWN_COST}`;
+  }
+  return [
+    `${String(stats.runs)} runs`,
+    `${String(stats.improved)} improved`,
+    `effectiveness ${describeEffectiveness(stats.effectiveness)}`,
+    `${String(stats.cyclesSinceSelected)} cycles since it was last selected`,
+    describeCost(stats.meanDurationMs),
+  ].join(', ');
+}
+
 function describeCandidate(candidate: OperationCandidate, health: HealthSnapshot): string {
   const stats = health.effectiveness.find((entry) => entry.name === candidate.name);
-  const record =
-    stats === undefined
-      ? 'untried'
-      : `${String(stats.runs)} runs, ${String(stats.improved)} improved, ` +
-        `effectiveness ${stats.effectiveness.toFixed(2)}, ` +
-        `${String(stats.cyclesSinceSelected)} cycles since it was last selected`;
   const answers = candidate.answers === undefined ? 'routine' : `answers ${candidate.answers}`;
-  return `${candidate.name}: relevance ${candidate.relevance.toFixed(3)}, ${answers}, ${record}`;
+  return (
+    `${candidate.name}: relevance ${candidate.relevance.toFixed(3)}, ` +
+    `${answers}, ${describeRecord(stats)}`
+  );
 }
 
 function buildAdviceMessages(request: Tier3Request): ChatMessage[] {

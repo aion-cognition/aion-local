@@ -1,6 +1,12 @@
 import type { Driver } from 'neo4j-driver';
 
 import { observeHealth, readOperationEffectiveness, type ObserveOptions } from './observe.js';
+import {
+  readMeasure,
+  recordRunOutcome,
+  resolvePendingMeasures,
+  type ResolvedRun,
+} from './operation-scoring.js';
 import { consultTier3 } from './tier3-consult.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { errorMessage } from '../../infrastructure/errors.js';
@@ -9,21 +15,16 @@ import type { Provider } from '../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   claimOperationBucket,
-  clearPendingMeasure,
   nextIntrospectionCycle,
-  operationStats,
-  recordOperationResolution,
   recordOperationRun,
   recordOperationSelected,
-  setPendingMeasure,
-  type OperationResolution,
 } from '../../infrastructure/sqlite/introspection-counters.js';
 import { markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import { operationBucketKey } from '../domain/buckets.js';
 import { decide, type Decision, type OperationCandidate } from '../domain/decide.js';
 import { neutralSnapshot, type HealthSnapshot } from '../domain/health.js';
 import {
-  measureImproved,
+  operationMeasurements,
   type IntrospectionOperation,
   type OperationOutcome,
 } from '../domain/operation.js';
@@ -82,7 +83,7 @@ export type TickReport = {
   /** True when every operation the cycle selected had its bucket claimed already. */
   readonly skipped: boolean;
   /** Operations whose earlier run was scored against this snapshot. */
-  readonly resolved: readonly { readonly name: string; readonly resolution: OperationResolution }[];
+  readonly resolved: readonly ResolvedRun[];
 };
 
 export class Introspector {
@@ -195,11 +196,11 @@ export class Introspector {
    */
   async tickOnce(): Promise<TickReport> {
     const cycle = nextIntrospectionCycle(this.#deps.db);
-    const names = this.#deps.operations.map((operation) => operation.name);
+    const measurements = operationMeasurements(this.#deps.operations);
     const at = this.#now();
     let observed: HealthSnapshot;
     try {
-      observed = await this.#observe({ operationNames: names, cycle, now: at });
+      observed = await this.#observe({ operations: measurements, cycle, now: at });
       this.#backoffFactor = 1;
     } catch (err) {
       this.#backoffFactor = Math.min(MAX_BACKOFF_FACTOR, this.#backoffFactor * 2);
@@ -219,10 +220,10 @@ export class Introspector {
 
     // Scoring the previous run before deciding, then re-reading the record it just changed:
     // an operation that failed last cycle should be weighted down on this one, not the next.
-    const resolved = this.#resolvePending(observed);
+    const resolved = resolvePendingMeasures(this.#deps, this.#deps.operations, observed);
     const health: HealthSnapshot = {
       ...observed,
-      effectiveness: readOperationEffectiveness(this.#deps.db, names, cycle),
+      effectiveness: readOperationEffectiveness(this.#deps.db, measurements, cycle),
     };
 
     const candidates = this.#deps.operations.map((operation) => this.#candidate(operation, health));
@@ -293,19 +294,6 @@ export class Introspector {
     );
   }
 
-  /** Same guard as `#candidate`: a metric that throws is an unscored run, not a dead loop. */
-  #measure(operation: IntrospectionOperation, health: HealthSnapshot): number | undefined {
-    if (operation.measure === undefined) {
-      return undefined;
-    }
-    try {
-      return operation.measure(health);
-    } catch (err) {
-      this.#deps.logger.warn({ err, operation: operation.name }, 'operation measure failed');
-      return undefined;
-    }
-  }
-
   /** A relevance that throws is a zero, not a crash: a broken scorer must not take the loop with it. */
   #candidate(operation: IntrospectionOperation, health: HealthSnapshot): OperationCandidate {
     const answers = operation.answers === undefined ? {} : { answers: operation.answers };
@@ -317,55 +305,13 @@ export class Introspector {
     }
   }
 
-  /**
-   * Scores every run that was waiting on a later reading. The reading was taken before the run
-   * and is compared against this cycle's snapshot, which is the first one that can see what the
-   * run did after the rest of the system settled around it.
-   *
-   * A partial snapshot scores nothing. A collector that fell back reports its metric at a
-   * neutral value, which an operation trying to drive that metric down would read as a
-   * spectacular success; the pending reading stays put instead and waits for a whole one.
-   */
-  #resolvePending(
-    health: HealthSnapshot,
-  ): readonly { readonly name: string; readonly resolution: OperationResolution }[] {
-    const resolved: { name: string; resolution: OperationResolution }[] = [];
-    if (health.degraded.length > 0) {
-      return resolved;
-    }
-    for (const operation of this.#deps.operations) {
-      if (operation.measure === undefined) {
-        continue;
-      }
-      const stats = operationStats(this.#deps.db, operation.name);
-      if (stats.pendingMeasure === undefined) {
-        continue;
-      }
-      const after = this.#measure(operation, health);
-      if (after === undefined) {
-        continue;
-      }
-      const resolution: OperationResolution = measureImproved(
-        operation,
-        stats.pendingMeasure,
-        after,
-      )
-        ? 'improved'
-        : 'unchanged';
-      recordOperationResolution(this.#deps.db, operation.name, resolution);
-      clearPendingMeasure(this.#deps.db, operation.name);
-      resolved.push({ name: operation.name, resolution });
-    }
-    return resolved;
-  }
-
   /** Answers a report only when the consultation ran an operation; otherwise the cycle is idle. */
   async #consultTier3(
     health: HealthSnapshot,
     candidates: readonly OperationCandidate[],
     reason: string,
     cycle: number,
-    resolved: readonly { readonly name: string; readonly resolution: OperationResolution }[],
+    resolved: readonly ResolvedRun[],
   ): Promise<TickReport | undefined> {
     try {
       return await consultTier3(
@@ -388,7 +334,7 @@ export class Introspector {
     decision: Extract<Decision, { kind: 'selected' }>,
     health: HealthSnapshot,
     cycle: number,
-    resolved: readonly { readonly name: string; readonly resolution: OperationResolution }[],
+    resolved: readonly ResolvedRun[],
   ): Promise<TickReport> {
     const now = this.#now();
     const key = operationBucketKey(operation.name, operation.bucket, now);
@@ -412,9 +358,12 @@ export class Introspector {
       return { cycle, health, decision, skipped: true, resolved };
     }
 
-    const before = this.#measure(operation, health);
+    const before = readMeasure(this.#deps, operation, health);
     recordOperationRun(this.#deps.db, operation.name, now.toISOString());
 
+    // Wall time, read from the monotonic clock rather than from `#now`: the injected clock is
+    // fixed in tests and world time is not what a run costs.
+    const startedAt = performance.now();
     let outcome: OperationOutcome;
     try {
       outcome = await operation.run({
@@ -452,7 +401,8 @@ export class Introspector {
       ...(outcome.detail === undefined ? {} : { detail: outcome.detail }),
     });
 
-    this.#learn(operation, outcome, before);
+    const durationMs = performance.now() - startedAt;
+    recordRunOutcome(this.#deps, operation, outcome, before, durationMs);
     this.#deps.logger.info(
       {
         cycle,
@@ -465,36 +415,10 @@ export class Introspector {
         status: outcome.status,
         itemsProcessed: outcome.itemsProcessed,
         itemsAffected: outcome.itemsAffected,
+        durationMs: Math.round(durationMs),
       },
       'maintenance operation ran',
     );
     return { cycle, health, decision, outcome, skipped: false, resolved };
-  }
-
-  /**
-   * An operation with a metric parks its pre-run reading and is scored on the next cycle; one
-   * without a metric is scored now, on whether it changed anything. A failure resolves
-   * immediately either way, since there is nothing to measure and waiting a cycle would only
-   * delay the deprioritization.
-   */
-  #learn(
-    operation: IntrospectionOperation,
-    outcome: OperationOutcome,
-    before: number | undefined,
-  ): void {
-    if (outcome.status === 'failed') {
-      clearPendingMeasure(this.#deps.db, operation.name);
-      recordOperationResolution(this.#deps.db, operation.name, 'failed');
-      return;
-    }
-    if (before !== undefined) {
-      setPendingMeasure(this.#deps.db, operation.name, before);
-      return;
-    }
-    recordOperationResolution(
-      this.#deps.db,
-      operation.name,
-      outcome.status === 'applied' ? 'improved' : 'unchanged',
-    );
   }
 }

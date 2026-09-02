@@ -32,6 +32,16 @@ export type GraphStructureHealth = {
   readonly staleNarratives: number;
   /** Unprotected edges the decay sweep could act on. Zero on a graph of only backbone links. */
   readonly decayableEdges: number;
+  /**
+   * Open association edges decay has driven to the weight floor: the narrower population inside
+   * `decayableEdges` that `edge_prune` is the operation for, and the only one a run of it moves.
+   */
+  readonly atFloorAssociationEdges: number;
+  /** Current nodes carrying an edge, which is the population a context vector can be computed for. */
+  readonly contextVectorExpected: number;
+  readonly contextVectorPresent: number;
+  /** Present over expected. 1 when nothing is expected, since an empty substrate is not behind. */
+  readonly contextVectorCoverage: number;
 };
 
 export type QueueHealth = {
@@ -81,6 +91,12 @@ export type EntityHealth = {
    * rather than a total when the scan limit cuts the read.
    */
   readonly tier0Eligible: number;
+  /**
+   * Current entities whose name is machine-minted rather than spoken: a digest, a UUID, a path,
+   * an agent id. The population `identifier_decay` closes, and a floor rather than a total when
+   * the scan limit cuts the read.
+   */
+  readonly identifierShaped: number;
 };
 
 export type PlasticityHealth = {
@@ -95,11 +111,18 @@ export type OperationEffectiveness = {
   readonly runs: number;
   readonly improved: number;
   readonly failed: number;
-  /** Improved runs over resolved runs; 1 for an operation that has never run, so a new one is not born deprioritized. */
-  readonly effectiveness: number;
+  /**
+   * Improved runs over the runs a declared metric scored. Undefined where there is nothing to
+   * divide: an operation that declares no metric, or one whose runs have none scored yet. Every
+   * consumer reads the absence as "no verdict" rather than substituting a number, so an
+   * operation is never weighted on a reading nothing could have contradicted.
+   */
+  readonly effectiveness: number | undefined;
   /** Cycles since this operation was last selected. Starvation protection reads it. */
   readonly cyclesSinceSelected: number;
   readonly lastRunAt: string | undefined;
+  /** What a run of it typically costs, so the cheapest way to answer a reading is a fact and not a guess. */
+  readonly meanDurationMs: number | undefined;
 };
 
 export type HealthSnapshot = {
@@ -143,6 +166,10 @@ export const NEUTRAL_GRAPH_HEALTH: GraphStructureHealth = {
   episodesWithoutSession: 0,
   staleNarratives: 0,
   decayableEdges: 0,
+  atFloorAssociationEdges: 0,
+  contextVectorExpected: 0,
+  contextVectorPresent: 0,
+  contextVectorCoverage: 1,
 };
 
 export const NEUTRAL_QUEUE_HEALTH: QueueHealth = {
@@ -173,7 +200,7 @@ export const NEUTRAL_PROPOSAL_HEALTH: ProposalHealth = {
   medianOpenAgeMs: undefined,
 };
 
-export const NEUTRAL_ENTITY_HEALTH: EntityHealth = { tier0Eligible: 0 };
+export const NEUTRAL_ENTITY_HEALTH: EntityHealth = { tier0Eligible: 0, identifierShaped: 0 };
 
 export const NEUTRAL_PLASTICITY_HEALTH: PlasticityHealth = {
   reinforcementQueueDepth: 0,

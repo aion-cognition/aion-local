@@ -31,21 +31,17 @@ export const IDENTIFIER_DECAY_OPERATION = 'identifier_decay';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/**
- * No health collector counts identifier-shaped entities specifically, so this reads the same
- * coarse way `edge_prune` does off a total that is zero only when the narrower population is:
- * `health.graph.nodes` is zero only on an empty substrate, and an empty substrate holds no
- * identifier-shaped entity either. Above that gate the value is a floor on urgency, not a
- * measurement of how much stale identifier mass is actually waiting; a dedicated collector
- * would replace it, and none exists today.
- */
-export const IDENTIFIER_DECAY_STANDING_RELEVANCE = 0.1;
+/** How many identifier-shaped entities read as a full call for a run. */
+export const IDENTIFIER_DECAY_RELEVANCE_DIVISOR = 500;
 
+/**
+ * Scaled on the identifier-shaped count the snapshot carries, the population this operation
+ * closes from. Most of that population is too recently mentioned to be eligible on any one tick,
+ * so the divisor is a cadence over the whole population rather than a count of what is eligible
+ * right now.
+ */
 export function identifierDecayRelevance(health: HealthSnapshot): number {
-  if (health.graph.nodes <= 0) {
-    return 0;
-  }
-  return IDENTIFIER_DECAY_STANDING_RELEVANCE;
+  return Math.min(1, health.entities.identifierShaped / IDENTIFIER_DECAY_RELEVANCE_DIVISOR);
 }
 
 function daysSince(at: Date, now: Date): number {
@@ -147,6 +143,10 @@ export function identifierDecayOperation(): IntrospectionOperation {
     name: IDENTIFIER_DECAY_OPERATION,
     bucket: 'day',
     relevance: identifierDecayRelevance,
+    // The count a close removes from. Every session mints more identifiers, so a run is scored
+    // on the count falling against that inflow rather than on how many rows it touched.
+    measure: (health) => health.entities.identifierShaped,
+    improves: 'lower',
     run: runIdentifierDecay,
   };
 }
