@@ -18,6 +18,7 @@ import { isGraphUnavailable } from '../../infrastructure/graph/errors.js';
 import { lockNodeInTransaction } from '../../infrastructure/graph/locks.js';
 import type { PendingVectorNode } from '../../infrastructure/graph/pending-vectors.js';
 import type { GraphProperties } from '../../infrastructure/graph/values.js';
+import { fingerprintProvenance } from '../../redaction/fingerprint.js';
 import type { SessionManager } from '../../session/session-manager.js';
 import type { PreparedEpisode, PreparedTurn } from '../domain/content.js';
 
@@ -49,6 +50,10 @@ function episodeProperties(
   sessionId: string,
   origin: ReflectionOrigin | undefined,
 ): GraphProperties {
+  // The episode's own text already carries every fingerprint redaction wrote anywhere in the
+  // payload (summary, turns, tool executions, observations all render into it), so reading
+  // provenance off it needs no separate walk over the source fields.
+  const provenance = fingerprintProvenance(prepared.text);
   return {
     [MEMORY_PROPERTIES.text]: prepared.text,
     [MEMORY_PROPERTIES.summary]: prepared.summary,
@@ -61,10 +66,14 @@ function episodeProperties(
     // Undefined when the caller named none: absent origin is an absent property, no sentinel.
     [MEMORY_PROPERTIES.originChannel]: origin?.channel,
     [MEMORY_PROPERTIES.originEvent]: origin?.event,
+    // Same absent-means-none rule: a payload redaction never touched stamps neither property.
+    [MEMORY_PROPERTIES.redactionRules]: provenance?.ruleIds,
+    [MEMORY_PROPERTIES.redactionSpanCount]: provenance?.spanCount,
   };
 }
 
 function turnProperties(turn: PreparedTurn, episodeId: string, sessionId: string): GraphProperties {
+  const provenance = fingerprintProvenance(turn.text);
   return {
     [MEMORY_PROPERTIES.text]: turn.text,
     [MEMORY_PROPERTIES.role]: turn.role,
@@ -73,6 +82,8 @@ function turnProperties(turn: PreparedTurn, episodeId: string, sessionId: string
     [MEMORY_PROPERTIES.sessionId]: sessionId,
     [MEMORY_PROPERTIES.sourceEpisodeId]: episodeId,
     [MEMORY_PROPERTIES.extractionMethod]: INTAKE_EXTRACTION_METHOD,
+    [MEMORY_PROPERTIES.redactionRules]: provenance?.ruleIds,
+    [MEMORY_PROPERTIES.redactionSpanCount]: provenance?.spanCount,
   };
 }
 

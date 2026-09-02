@@ -35,3 +35,33 @@ export const FINGERPRINT_PLACEHOLDER = 'redacted';
 export function withoutFingerprints(text: string): string {
   return text.replace(FINGERPRINT_PATTERN, FINGERPRINT_PLACEHOLDER);
 }
+
+/** The capturing counterpart of `FINGERPRINT_PATTERN`, for recovering which rule wrote a span. */
+const FINGERPRINT_RULE_PATTERN = /⟨secret:([a-z0-9-]+):[0-9a-f]{6}⟩/g;
+
+export type FingerprintProvenance = {
+  /** Every rule id a fingerprint in the text names, deduplicated and sorted. */
+  readonly ruleIds: readonly string[];
+  /** Every fingerprint token found, rule repeats included. */
+  readonly spanCount: number;
+};
+
+/**
+ * What a node's own already-redacted text says about its redaction history, read back off
+ * the fingerprints themselves rather than recomputed: which rules fired and how many spans
+ * they replaced. `undefined` when the text holds no fingerprint at all, which is the
+ * difference between a node redaction cleaned and one it never touched.
+ */
+export function fingerprintProvenance(text: string): FingerprintProvenance | undefined {
+  const ruleIds = new Set<string>();
+  let spanCount = 0;
+  for (const match of text.matchAll(FINGERPRINT_RULE_PATTERN)) {
+    const ruleId = match[1];
+    if (ruleId === undefined) {
+      continue;
+    }
+    spanCount += 1;
+    ruleIds.add(ruleId);
+  }
+  return spanCount === 0 ? undefined : { ruleIds: [...ruleIds].sort(), spanCount };
+}

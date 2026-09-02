@@ -28,6 +28,12 @@ export const MEMORY_PROPERTIES = {
   /** Record-only: how the reflection call that wrote this episode reached intake. */
   originChannel: 'origin_channel',
   originEvent: 'origin_event',
+  /**
+   * Provenance stamped at intake from the node's own fingerprints, absent when the node's
+   * text held no secret. What separates a residue scan's "cleaned" from "never dirty".
+   */
+  redactionRules: 'redaction_rules',
+  redactionSpanCount: 'redaction_span_count',
 } as const;
 
 /** `PARTICIPATES_IN` is member-to-container for Turn→Episode and Episode→Session alike. */
