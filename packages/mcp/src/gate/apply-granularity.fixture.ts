@@ -5,7 +5,13 @@
  * and the next recall still answered with the old owner at rank 1 marked current. The stale
  * ownership sat in three places at once and the apply reached one of them. The observation is
  * written to reproduce that spread: an entity description written the first time the pipeline
- * saw the name, a standing claim about who owns the thing, and a record of how they came to.
+ * saw the name, a record of how the owner came to own it, and what owning it lets him do.
+ *
+ * The approval claim is the sibling this gate exists for. The judge does not close it, because
+ * a new owner and a standing approver are not the same assertion and the second pass says so,
+ * which leaves it open and current after the correction is applied at claim level. Only the
+ * subject family reaches it. What the pipeline does is the control, since a change of owner
+ * says nothing about it.
  */
 
 export type GranularityFixture = {
@@ -30,6 +36,7 @@ export const OWNERSHIP_CORRECTION: GranularityFixture = {
   baseline: [
     'Dmitri Volkov owns the Quillon ingest pipeline.',
     'Dmitri Volkov took over the Quillon ingest pipeline from the platform team in March.',
+    'Only Dmitri Volkov may approve a schema change to the Quillon ingest pipeline.',
     'The Quillon ingest pipeline moves clinical claim files into the warehouse every night.',
   ],
   baselineSummary: 'who owns the Quillon ingest pipeline, as first recorded',

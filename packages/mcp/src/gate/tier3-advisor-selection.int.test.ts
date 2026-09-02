@@ -82,6 +82,10 @@ function batteryConfig(): Config {
     },
     anthropic: { ...DEFAULTS.anthropic, apiKey },
     routing: { ...DEFAULTS.routing, reflect: local ? 'ollama' : DEFAULTS.routing.reflect },
+    // structural_discovery's standing relevance rises with the orphan share, which takes the
+    // orphan readings here at tier 2, and what this battery pins is the advisor rather than the
+    // catalog's composition.
+    maintenance: { ...DEFAULTS.maintenance, structuralDiscovery: false },
   };
 }
 
@@ -144,7 +148,7 @@ beforeAll(async () => {
 
   const rows: Scored[] = [];
   for (const entry of TIER3_SELECTION_BATTERY) {
-    rows.push(await consult(provider, model, entry, candidatesFor(entry.health)));
+    rows.push(await consult(provider, model, entry, candidatesFor(entry.health, config)));
   }
   scored = rows;
 }, BATTERY_DEADLINE_MS);
@@ -182,7 +186,7 @@ describe('the tier-3 advisor selection battery', () => {
     expect(TIER3_SELECTION_BATTERY.length).toBeGreaterThanOrEqual(20);
 
     for (const entry of TIER3_SELECTION_BATTERY) {
-      const candidates = candidatesFor(entry.health);
+      const candidates = candidatesFor(entry.health, config);
       for (const candidate of candidates) {
         expect(catalog.has(candidate.name)).toBe(true);
       }
@@ -192,6 +196,11 @@ describe('the tier-3 advisor selection battery', () => {
         starvationCycles: DEFAULTS.maintenance.starvationCycles,
         urgencyThreshold: DEFAULTS.maintenance.urgencyThreshold,
         effectivenessFloor: DEFAULTS.maintenance.effectivenessFloor,
+        cost: {
+          referenceMs: DEFAULTS.maintenance.costReferenceMs,
+          decades: DEFAULTS.maintenance.costDecades,
+          maxDivisor: DEFAULTS.maintenance.maxCostDivisor,
+        },
         tier3Enabled: true,
       });
       expect({ key: entry.key, kind: decision.kind }).toEqual({ key: entry.key, kind: 'tier3' });

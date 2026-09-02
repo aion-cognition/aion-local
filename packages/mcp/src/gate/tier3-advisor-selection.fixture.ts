@@ -1,4 +1,10 @@
-import { introspectionOperations, type HealthSnapshot, type OperationCandidate } from '@aion/core';
+import {
+  introspectionOperations,
+  type Config,
+  type HealthSnapshot,
+  type OperationCandidate,
+} from '@aion/core';
+import { STRUCTURAL_DISCOVERY_OPERATION } from '@aion/core/introspection/application/operations/structural-discovery.js';
 import {
   NEUTRAL_ENRICHMENT_HEALTH,
   NEUTRAL_ENTITY_HEALTH,
@@ -184,12 +190,23 @@ function snapshot(reading: Reading): HealthSnapshot {
  * The candidate table the advisor sees, built from the shipped catalog and each operation's own
  * relevance. Nothing here restates a formula: a fixture that drifts away from the operation it
  * is about shows up as a decision that is no longer tier 3.
+ *
+ * An operation the battery's config disarms is left out, since a kill switch that is off means
+ * the cycle has nothing there to offer.
  */
-export function candidatesFor(health: HealthSnapshot): readonly OperationCandidate[] {
-  return introspectionOperations().map((operation) => {
-    const answers = operation.answers === undefined ? {} : { answers: operation.answers };
-    return { name: operation.name, ...answers, relevance: operation.relevance(health) };
-  });
+export function candidatesFor(
+  health: HealthSnapshot,
+  config: Config,
+): readonly OperationCandidate[] {
+  return introspectionOperations()
+    .filter(
+      (operation) =>
+        operation.name !== STRUCTURAL_DISCOVERY_OPERATION || config.maintenance.structuralDiscovery,
+    )
+    .map((operation) => {
+      const answers = operation.answers === undefined ? {} : { answers: operation.answers };
+      return { name: operation.name, ...answers, relevance: operation.relevance(health) };
+    });
 }
 
 export const TIER3_SELECTION_BATTERY: readonly Tier3Case[] = [

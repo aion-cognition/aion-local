@@ -1,4 +1,3 @@
-import type { Config } from '../../../infrastructure/config/schema.js';
 import { consolidateClaims } from '../../../reflection/application/claim-consolidation.js';
 import { HEALTH_COLLECTORS, type HealthSnapshot } from '../../domain/health.js';
 import type { IntrospectionOperation, OperationOutcome } from '../../domain/operation.js';
@@ -12,19 +11,12 @@ import type { IntrospectionOperation, OperationOutcome } from '../../domain/oper
  * worth anything. Neither number is shipped. On a substrate whose communities have not been
  * projected yet the run says exactly that and writes nothing, which is what the first weeks of
  * a fresh graph look like.
+ *
+ * Acting from day one, gated by the `claimConsolidation` kill switch: the write is a
+ * supersession like any other, and `aion unsupersede` reopens every claim it absorbed.
  */
 
 export const CLAIM_CONSOLIDATION_OPERATION = 'claim_consolidation';
-
-/**
- * The kill switch, by name because the config schema does not carry it yet:
- * `maintenance.claimConsolidation` (`AION_MAINTENANCE_CLAIM_CONSOLIDATION`). On by default: the
- * write is a supersession like any other, and `aion unsupersede` reopens every claim it
- * absorbed.
- */
-export const CLAIM_CONSOLIDATION_KNOB = 'claimConsolidation';
-export const CLAIM_CONSOLIDATION_ENV = 'AION_MAINTENANCE_CLAIM_CONSOLIDATION';
-const CLAIM_CONSOLIDATION_DEFAULT = true;
 
 /**
  * No gauge counts claims waiting to be consolidated, so this runs on the standing cadence
@@ -32,12 +24,6 @@ const CLAIM_CONSOLIDATION_DEFAULT = true;
  * the graph, and finding it costs a read the tick was going to pay for anyway.
  */
 export const CLAIM_CONSOLIDATION_STANDING_RELEVANCE = 0.1;
-
-function armed(config: Config): boolean {
-  const maintenance = config.maintenance as unknown as Record<string, unknown>;
-  const value = maintenance[CLAIM_CONSOLIDATION_KNOB];
-  return typeof value === 'boolean' ? value : CLAIM_CONSOLIDATION_DEFAULT;
-}
 
 export function claimConsolidationRelevance(health: HealthSnapshot): number {
   if (health.degraded.includes(HEALTH_COLLECTORS.graph)) {
@@ -52,12 +38,13 @@ export function claimConsolidationOperation(): IntrospectionOperation {
     bucket: 'hour',
     relevance: claimConsolidationRelevance,
     run: async (ctx): Promise<OperationOutcome> => {
-      if (!armed(ctx.config)) {
+      if (!ctx.config.maintenance.claimConsolidation) {
         return {
           status: 'noop',
           itemsProcessed: 0,
           itemsAffected: 0,
-          detail: `claim consolidation disabled by ${CLAIM_CONSOLIDATION_ENV}; no subject examined`,
+          detail:
+            'claim consolidation disabled by AION_MAINTENANCE_CLAIM_CONSOLIDATION; no subject examined',
         };
       }
 

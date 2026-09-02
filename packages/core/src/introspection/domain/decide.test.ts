@@ -7,6 +7,7 @@ import {
   DEPRIORITIZED_WEIGHT,
   scoreCandidate,
   starvationBoost,
+  type CostScale,
   type DecisionInput,
   type OperationCandidate,
 } from './decide.js';
@@ -21,6 +22,9 @@ import { healthFixture } from './test-support/health.fixture.js';
 
 const POPULATION = CRITICAL_MIN_POPULATION * 5;
 
+/** The shipped scale, written out here so a reading below is arguable from the numbers. */
+const COST: CostScale = { referenceMs: 1_000, decades: 3, maxDivisor: 2 };
+
 function baseInput(overrides: Partial<DecisionInput> = {}): DecisionInput {
   return {
     health: healthFixture(),
@@ -28,6 +32,7 @@ function baseInput(overrides: Partial<DecisionInput> = {}): DecisionInput {
     starvationCycles: 8,
     urgencyThreshold: 0.2,
     effectivenessFloor: 0.5,
+    cost: COST,
     tier3Enabled: false,
     ...overrides,
   };
@@ -175,16 +180,24 @@ describe('scoreCandidate', () => {
 
 describe('costDivisor', () => {
   it('charges nothing at or under the reference cost', () => {
-    expect(costDivisor(undefined)).toBe(1);
-    expect(costDivisor(0)).toBe(1);
-    expect(costDivisor(1_000)).toBe(1);
+    expect(costDivisor(undefined, COST)).toBe(1);
+    expect(costDivisor(0, COST)).toBe(1);
+    expect(costDivisor(1_000, COST)).toBe(1);
   });
 
   it('rises with cost and stops at the ceiling', () => {
-    expect(costDivisor(10_000)).toBeGreaterThan(1);
-    expect(costDivisor(100_000)).toBeGreaterThan(costDivisor(10_000));
-    expect(costDivisor(1_000_000)).toBeCloseTo(2, 6);
-    expect(costDivisor(600_000_000)).toBeCloseTo(2, 6);
+    expect(costDivisor(10_000, COST)).toBeGreaterThan(1);
+    expect(costDivisor(100_000, COST)).toBeGreaterThan(costDivisor(10_000, COST));
+    expect(costDivisor(1_000_000, COST)).toBeCloseTo(2, 6);
+    expect(costDivisor(600_000_000, COST)).toBeCloseTo(2, 6);
+  });
+
+  it('follows the configured scale rather than a built-in one', () => {
+    const wider: CostScale = { referenceMs: 10_000, decades: 2, maxDivisor: 4 };
+
+    expect(costDivisor(10_000, wider)).toBe(1);
+    expect(costDivisor(1_000_000, wider)).toBeCloseTo(4, 6);
+    expect(costDivisor(100_000, wider)).toBeCloseTo(2.5, 6);
   });
 });
 

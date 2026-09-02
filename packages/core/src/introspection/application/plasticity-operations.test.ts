@@ -53,6 +53,7 @@ function baseInput(overrides: Partial<DecisionInput> = {}): DecisionInput {
     starvationCycles: 8,
     urgencyThreshold: 0.2,
     effectivenessFloor: 0.5,
+    cost: { referenceMs: 1_000, decades: 3, maxDivisor: 2 },
     tier3Enabled: false,
     ...overrides,
   };
