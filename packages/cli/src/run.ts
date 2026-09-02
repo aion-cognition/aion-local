@@ -10,6 +10,7 @@ import { runReplayCommand } from './replay.js';
 import { runSearch } from './search.js';
 import { runStats } from './stats.js';
 import { runStatus } from './status.js';
+import { runTimelineCommand } from './timeline.js';
 import { runUnmerge } from './unmerge.js';
 import { runUnsupersede } from './unsupersede.js';
 import { runWhy } from './why.js';
@@ -69,6 +70,10 @@ const commands: Record<string, Command> = {
   why: {
     summary: 'provenance, lineage, and open proposals for one node',
     run: (argv) => runWhy(argv),
+  },
+  timeline: {
+    summary: 'one episode across the archive, the graph, the queue, and the ledger',
+    run: (argv) => runTimelineCommand(argv),
   },
   search: {
     summary: 'direct hybrid search through the seed layer, bypassing pack assembly',

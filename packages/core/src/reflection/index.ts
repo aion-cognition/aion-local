@@ -3,7 +3,7 @@
  * narratives, lag, and the proposal review path.
  */
 
-export { handleReflection } from './application/intake.js';
+export { handleReflection, INTEGRATE_JOB_TYPE } from './application/intake.js';
 export type { ReflectionIntakeDeps } from './application/intake.js';
 
 export { LaneAssigner } from './application/lanes.js';
@@ -21,6 +21,7 @@ export {
 } from './application/entity-merge-review.js';
 export type { ApplyEntityMergeProposalResult } from './application/entity-merge-review.js';
 
+export { stageLedgerKey } from './domain/stage.js';
 export type { ReflectionStage } from './domain/stage.js';
 
 export { PIPELINE_VERSION } from './domain/version.js';
@@ -34,6 +35,9 @@ export type {
   ReplayReport,
   ReplaySelection,
 } from './application/replay.js';
+
+export { buildEpisodeTimeline } from './application/episode-timeline.js';
+export type { TimelineEvent } from './application/episode-timeline.js';
 
 export { ReflectionWorker } from './application/worker.js';
 export type { ReflectionWorkerOptions } from './application/worker.js';
