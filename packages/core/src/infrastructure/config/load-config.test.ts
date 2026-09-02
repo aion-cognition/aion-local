@@ -36,6 +36,14 @@ describe('loadConfig defaults', () => {
     expect(DEFAULTS.maintenance.autoMerge).toBe(true);
   });
 
+  it('defaults the keyed close to judge', () => {
+    expect(DEFAULTS.reflection.keyedCloseMode).toBe('judge');
+  });
+
+  it('defaults expiry annotation to armed', () => {
+    expect(DEFAULTS.temporal.expiryAnnotation).toBe(true);
+  });
+
   it('never mutates the shared DEFAULTS object across calls', () => {
     const before = DEFAULTS.recall.maxHops;
 
@@ -71,6 +79,21 @@ describe('loadConfig override precedence', () => {
   it('overrides an enum-backed string leaf', () => {
     const config = loadConfig({ AION_SEARCH_RERANKER: 'mmr' });
     expect(config.search.reranker).toBe('mmr');
+  });
+
+  it('overrides the keyed close mode', () => {
+    const config = loadConfig({ AION_KEYED_CLOSE_MODE: 'judge' });
+    expect(config.reflection.keyedCloseMode).toBe('judge');
+  });
+
+  it('overrides the reading horizon in days', () => {
+    const config = loadConfig({ AION_READING_HORIZON_DAYS: '14' });
+    expect(config.temporal.readingHorizonDays).toBe(14);
+  });
+
+  it('overrides the expiry annotation switch off', () => {
+    const config = loadConfig({ AION_TEMPORAL_EXPIRY_ANNOTATION: 'false' });
+    expect(config.temporal.expiryAnnotation).toBe(false);
   });
 
   it('overrides the comma-separated search weights as vector,bm25,graph', () => {
@@ -124,6 +147,16 @@ describe('loadConfig bad values', () => {
 
   it('rejects a non-boolean string for a boolean leaf, naming the var', () => {
     expect(() => loadConfig({ AION_MAINTENANCE_TIER3: 'yes' })).toThrow(/AION_MAINTENANCE_TIER3/);
+  });
+
+  it('rejects a keyed close mode outside its enum, naming the var', () => {
+    expect(() => loadConfig({ AION_KEYED_CLOSE_MODE: 'always' })).toThrow(/AION_KEYED_CLOSE_MODE/);
+  });
+
+  it('rejects a non-positive reading horizon, naming the var', () => {
+    expect(() => loadConfig({ AION_READING_HORIZON_DAYS: '0' })).toThrow(
+      /AION_READING_HORIZON_DAYS/,
+    );
   });
 
   it('rejects search weights with the wrong number of parts', () => {
