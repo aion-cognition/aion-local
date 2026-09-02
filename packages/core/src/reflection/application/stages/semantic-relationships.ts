@@ -164,6 +164,13 @@ const SemanticRelationshipOutputSchema = z.object({
 /** Applied only when the model omits the (optional) field; a genuine answer never needs it. */
 const DEFAULT_PROPOSAL_CONFIDENCE = 0.5;
 
+/**
+ * Named rather than left to the route's default, which the provider no longer sends. The stage
+ * proposes edges the graph keeps, so one episode proposes one set of them (mirrors the entity and
+ * cognitive stages).
+ */
+const RELATIONSHIP_TEMPERATURE = 0;
+
 function clampConfidence(value: number | undefined): number {
   const raw = value ?? DEFAULT_PROPOSAL_CONFIDENCE;
   if (!Number.isFinite(raw)) {
@@ -276,6 +283,7 @@ export class SemanticRelationshipStage implements ReflectionStage {
         model: this.#model,
         messages: buildMessages(text, candidates),
         schema: buildJsonSchema(candidates),
+        temperature: RELATIONSHIP_TEMPERATURE,
         // Thinking measurably fixes neither the direction nor the CONTRADICTS false
         // positives this stage is disciplined against below, and costs enough latency to
         // blow the timeout guard outright (qwen3:8b's documented "occasional non-returns").

@@ -1,11 +1,17 @@
 import {
   applySupersessionProposal,
   DEFAULTS,
+  fetchNodeEdges,
   findEpisodeCognitiveNodes,
   listSupersessionProposals,
   recordSupersessionProposal,
   type SupersessionProposal,
 } from '@aion/core';
+import { SUPERSEDES_TYPE } from '@aion/core/infrastructure/graph/relationships.js';
+import {
+  findClaimSubjects,
+  SUBJECT_PROPAGATION_METHOD,
+} from '@aion/core/infrastructure/graph/subject-family.js';
 import { nodeProperties } from '@aion/core/infrastructure/graph/test-support/graph-queries.fixture.js';
 import type { MemoryPackItem } from '@aion/protocol';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -91,6 +97,110 @@ async function reviewRow(): Promise<SupersessionProposal | undefined> {
     createdAt: '2026-08-29T12:00:00.000Z',
   });
   return listSupersessionProposals(substrate.db).find((row) => row.id === id);
+}
+
+const UNREADABLE_BAND =
+  'unreadable, because the enrichment made this close: the cosine each sibling was judged on is ' +
+  'taken inside the apply and never stored';
+
+type AppliedResult = Awaited<ReturnType<typeof applySupersessionProposal>>;
+
+/**
+ * The close this file measures, whoever made it. Under the shipped `unanimous` supersede mode
+ * the two-pass judge applies its own proposal during enrichment, so on a run where the second
+ * pass agrees the close has already landed and the row is resolved; a veto leaves the row open
+ * and this file makes the close itself. Both answer the same questions.
+ */
+type AppliedClose = Pick<AppliedResult, 'closedIds' | 'subjects' | 'openGlosses'> & {
+  /** `family` when the lineage carries a propagated sibling, which no other scope writes. */
+  readonly scope: string;
+  /**
+   * The cosine each sibling was judged on, present only when this file made the close. The
+   * reading is taken inside the apply against the two claims' vectors and never stored, and the
+   * sibling read that would recompute it takes open nodes only, so a close read back after the
+   * fact has no answer for the half it closed.
+   */
+  readonly band?: string;
+};
+
+/**
+ * The band the relatedness floor sits in, from the run that reads it: every sibling the subject
+ * match found, closed or held, with the cosine it was judged on. This is the measurement the
+ * floor is derived from, so it belongs in the run's own output.
+ */
+function familyBand(applied: AppliedResult): string {
+  return [...applied.siblings, ...applied.heldSiblings]
+    .map(
+      (sibling) =>
+        `${(sibling.relatedness ?? Number.NaN).toFixed(3)} ${
+          applied.siblings.includes(sibling) ? 'closed' : 'held'
+        } "${sibling.text.slice(0, 60)}"`,
+    )
+    .join('\n  ');
+}
+
+function closedScope(closedTheClaim: boolean, propagated: number): string {
+  if (!closedTheClaim) {
+    return 'nothing closed';
+  }
+  if (propagated > 0) {
+    return 'family';
+  }
+  return 'claim';
+}
+
+/**
+ * The enrichment's own close, read back off the lineage it wrote. What the apply returned went
+ * with the tick that made it and the row records only that the pair was decided, so the family
+ * is recovered from `(new)-[:SUPERSEDES]->(old)`: the judged claim carries the apply's own
+ * provenance, and every sibling carries `SUBJECT_PROPAGATION_METHOD`, which only a family close
+ * writes. A claim close touches the judged claim alone and an episode close records the
+ * correcting episode as the successor, so the propagated edge is what separates the three.
+ *
+ * Re-applying instead would measure something else: the sibling read takes only open nodes, so a
+ * second apply over a family that is already closed comes back with the judged claim alone.
+ */
+async function readAppliedClose(row: SupersessionProposal): Promise<AppliedClose> {
+  const lineage = (await fetchNodeEdges(substrate.driver, row.newId)).filter(
+    (edge) => edge.type === SUPERSEDES_TYPE && edge.outgoing && edge.reopenedAt === undefined,
+  );
+  const closedTheClaim = lineage.some((edge) => edge.otherId === row.oldId);
+  const propagated = lineage.filter(
+    (edge) => edge.otherId !== row.oldId && edge.provenance.includes(SUBJECT_PROPAGATION_METHOD),
+  );
+  // The same read the apply matched its family on, over inputs the close does not move: it
+  // stamps `valid_until` on claims and clears the text of a gloss it retired, and neither the
+  // source episode nor the entities the subject test reads are closed by it. A retired gloss
+  // leaves no text behind, so the subjects that still carry one are the glosses left open.
+  const subjects = await findClaimSubjects(substrate.driver, row.oldId);
+  return {
+    scope: closedScope(closedTheClaim, propagated.length),
+    closedIds: closedTheClaim ? [row.oldId, ...propagated.map((edge) => edge.otherId)] : [],
+    subjects: subjects.map((subject) => subject.name),
+    openGlosses: subjects.filter((subject) => subject.gloss !== undefined),
+  };
+}
+
+/**
+ * The gate's one close, taken from whichever pass made it. A resolved row is one the enrichment
+ * already applied, and applying it again would throw; an open row is the veto path, where this
+ * file makes the close itself with the shipped knobs.
+ */
+async function closeUnderReview(row: SupersessionProposal | undefined): Promise<AppliedClose> {
+  if (row === undefined) {
+    throw new Error('no review row to close');
+  }
+  if (row.resolvedAt !== null) {
+    return readAppliedClose(row);
+  }
+  const applied = await applySupersessionProposal(substrate.driver, substrate.db, {
+    id: row.id,
+    relatednessFloor: DEFAULTS.reflection.supersedeFamilyRelatednessFloor,
+    // The shipped mode, so the gate measures the cut a deployment actually gets.
+    keyedCloseMode: DEFAULTS.reflection.keyedCloseMode,
+    now: APPLIED_AT,
+  });
+  return { ...applied, band: familyBand(applied) };
 }
 
 async function nodeText(id: string): Promise<string> {
@@ -187,30 +297,15 @@ describe('a correction applied at the default granularity', () => {
 
   it('closes the siblings naming the subject and reports the gloss it cannot close', async () => {
     expect(proposal).toBeDefined();
-    const applied = await applySupersessionProposal(substrate.driver, substrate.db, {
-      id: proposal?.id ?? '',
-      relatednessFloor: DEFAULTS.reflection.supersedeFamilyRelatednessFloor,
-      // The shipped mode, so the gate measures the cut a deployment actually gets.
-      keyedCloseMode: DEFAULTS.reflection.keyedCloseMode,
-      now: APPLIED_AT,
-    });
+    const applied = await closeUnderReview(proposal);
 
     console.log(
-      `applied ${applied.scope}: closed ${String(applied.closedIds.length)} node(s) on subjects ` +
+      `close made by ${applied.band === undefined ? 'the enrichment' : 'this file'}: ` +
+        `applied ${applied.scope}, closed ${String(applied.closedIds.length)} node(s) on subjects ` +
         `[${applied.subjects.join(', ')}], ${String(applied.openGlosses.length)} gloss(es) left open ` +
         `(${applied.openGlosses.map((gloss) => gloss.name).join(', ')})`,
     );
-    // The band the relatedness floor sits in, from the run that reads it: every sibling the
-    // subject match found, closed or held, with the cosine it was judged on. This is the
-    // measurement the floor is derived from, so it belongs in the run's own output.
-    const band = [...applied.siblings, ...applied.heldSiblings]
-      .map(
-        (sibling) =>
-          `${(sibling.relatedness ?? Number.NaN).toFixed(3)} ${
-            applied.siblings.includes(sibling) ? 'closed' : 'held'
-          } "${sibling.text.slice(0, 60)}"`,
-      )
-      .join('\n  ');
+    const band = applied.band ?? UNREADABLE_BAND;
     console.log(
       `family band at floor ${String(DEFAULTS.reflection.supersedeFamilyRelatednessFloor)}: ${band}`,
     );

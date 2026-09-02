@@ -52,6 +52,12 @@ export const BRIDGE_CANDIDATE_LIMIT = 25;
 /** How many scored pairs the run will try before giving up on this window. */
 export const BRIDGE_PAIR_ATTEMPTS = 3;
 
+/**
+ * Named rather than left to the route's default, which the provider no longer sends. The bridge
+ * text is written onto an edge the graph keeps, so one pair reads one way.
+ */
+const BRIDGE_TEMPERATURE = 0;
+
 const BRIDGE_MAX_TOKENS = 400;
 
 const BRIDGE_JSON_SCHEMA: JsonSchema = {
@@ -149,6 +155,7 @@ async function proposeBridgeText(
       messages: buildMessages(pair, closest),
       schema: BRIDGE_JSON_SCHEMA,
       maxTokens: BRIDGE_MAX_TOKENS,
+      temperature: BRIDGE_TEMPERATURE,
       think: false,
       signal: deadline.signal,
     });

@@ -112,4 +112,21 @@ describe('judgeHygienePair', () => {
 
     expect(verdict).toEqual({ status: 'failed', reason: 'model unavailable' });
   });
+
+  it('asks for an unsampled answer, so one pair records one reason', async () => {
+    const requests: StructuredRequest[] = [];
+
+    await judgeHygienePair(
+      {
+        generate: (request: StructuredRequest): Promise<unknown> => {
+          requests.push(request);
+          return Promise.resolve({ verdict: 'distinct' });
+        },
+      },
+      PAIR,
+      OPTIONS,
+    );
+
+    expect(requests[0]?.temperature).toBe(0);
+  });
 });

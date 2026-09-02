@@ -118,6 +118,20 @@ describe('CognitiveExtractionStage', () => {
     });
   });
 
+  it('asks the model for an unsampled answer, so two runs of one episode extract the same nodes', async () => {
+    const requests: StructuredRequest[] = [];
+    const generate: GenerateFn = async (req) => {
+      requests.push(req);
+      return { nodes: [{ type: 'Insight', text: 'idempotency needs two levels' }] };
+    };
+
+    await new CognitiveExtractionStage().run(buildContext(stubProvider(generate)));
+
+    expect(requests[0]?.temperature).toBe(0);
+    expect(requests[0]?.think).toBe(false);
+    expect(requests[0]?.signal).toBeInstanceOf(AbortSignal);
+  });
+
   it('extracts, embeds, and links each node type with its modest per-type fields', async () => {
     const generate = async (): Promise<unknown> => ({
       nodes: [
@@ -365,6 +379,24 @@ describe('CognitiveExtractionStage', () => {
       expect(outcome.counts).toEqual({ cognitive: 1 });
       expect(graph.nodesWithLabel('Goal')).toHaveLength(0);
       expect(graph.nodesWithLabel('Decision')).toHaveLength(1);
+    });
+
+    it('asks the validation call for an unsampled answer, so one candidate set is judged once', async () => {
+      const requests: StructuredRequest[] = [];
+      const generate = async (req: StructuredRequest): Promise<unknown> => {
+        requests.push(req);
+        return requests.length === 1
+          ? { nodes: [{ type: 'Goal', text: 'Close out the duplicate remittance investigation.' }] }
+          : { restated: [] };
+      };
+
+      await new CognitiveExtractionStage().run(
+        buildContext(stubProvider(generate), undefined, SUMMARY),
+      );
+
+      expect(requests).toHaveLength(2);
+      expect(requests[1]?.temperature).toBe(0);
+      expect(requests[1]?.think).toBe(false);
     });
 
     it('keeps a Goal the validation call confirms adds information beyond the summary', async () => {

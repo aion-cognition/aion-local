@@ -49,6 +49,15 @@ export type CognitiveExtractionStageOptions = {
 
 const NODE_TYPES = COGNITIVE_NODE_LABELS;
 
+/**
+ * Extraction is a reading of fixed text, and the stage names the value rather than leaving it to
+ * the route's default. Sampled, the remote model answers often enough with a type outside the
+ * nine to cost an episode every node it had: measured over the 48 episodes the keyed-close
+ * battery seeds, sampling fails 2 of them and this value fails none. `entities.ts` names it for
+ * the same reason.
+ */
+const EXTRACTION_TEMPERATURE = 0;
+
 const COGNITIVE_JSON_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
@@ -215,6 +224,7 @@ export class CognitiveExtractionStage implements ReflectionStage {
         model: this.#options.model,
         messages: buildMessages(text, ctx.episode.summary),
         schema: COGNITIVE_JSON_SCHEMA,
+        temperature: EXTRACTION_TEMPERATURE,
         // Reasoning buys nothing for extraction and costs the budget (mirrors cues.ts / the quality harness).
         think: false,
         signal: deadline.signal,

@@ -10,6 +10,12 @@ import type { ChatMessage, JsonSchema, Provider } from '../../../infrastructure/
  * `supersession-apply.ts`, and the second pass to `supersession-review.ts`.
  */
 
+/**
+ * Named rather than left to the route's default, which the provider no longer sends. Pass one of
+ * the gate that closes a fact, and `supersession-review.ts` names the same value for pass two.
+ */
+const JUDGE_TEMPERATURE = 0;
+
 const JUDGMENT_JSON_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
@@ -135,6 +141,7 @@ export async function judgeContradiction(
         pair.sharedSubject,
       ),
       schema: JUDGMENT_JSON_SCHEMA,
+      temperature: JUDGE_TEMPERATURE,
       // Reasoning buys nothing on a two-statement judgment and costs the budget (mirrors
       // the extraction stages).
       think: false,

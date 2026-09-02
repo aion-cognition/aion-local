@@ -76,7 +76,7 @@ describe('describeEntityMergePair', () => {
 });
 
 describe('judgeEntityMerge', () => {
-  it('asks without thinking and returns the boolean with its rationale', async () => {
+  it('asks unsampled and without thinking, and returns the boolean with its rationale', async () => {
     const { provider, requests } = recorder({
       same: true,
       rationale: 'one store under two spellings',
@@ -88,7 +88,7 @@ describe('judgeEntityMerge', () => {
       status: 'judged',
       judgment: { same: true, rationale: 'one store under two spellings' },
     });
-    expect(requests[0]).toMatchObject({ model: 'reflect-model', think: false });
+    expect(requests[0]).toMatchObject({ model: 'reflect-model', temperature: 0, think: false });
     expect(requests[0]?.schema).toBeDefined();
   });
 

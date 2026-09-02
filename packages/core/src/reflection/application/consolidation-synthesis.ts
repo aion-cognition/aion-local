@@ -26,6 +26,13 @@ import {
  * that answer is acted on as it stands rather than weighed against a bar.
  */
 
+/**
+ * Both passes route through `callModel`, so the value is named once here rather than left to the
+ * route's default, which the provider no longer sends. Unanimity is what absorbs a member set,
+ * and a sampled reviewer answers differently on sentences it already read.
+ */
+const SYNTHESIS_TEMPERATURE = 0;
+
 export type SynthesisOptions = {
   readonly model: string;
   readonly timeoutMs: number;
@@ -58,6 +65,7 @@ async function callModel(
       messages: [...request.messages],
       schema: request.schema,
       ...(request.maxTokens === undefined ? {} : { maxTokens: request.maxTokens }),
+      temperature: SYNTHESIS_TEMPERATURE,
       // Reasoning buys a citation check nothing, and this pays for it twice on every member set.
       think: false,
       signal: deadline.signal,

@@ -48,6 +48,13 @@ export type EntityMergeCallOptions = {
   readonly signal?: AbortSignal;
 };
 
+/**
+ * Both passes route through `callJudge`, so the value is named once here rather than left to the
+ * route's default, which the provider no longer sends. Unanimity is what merges two entities,
+ * and a sampled pass makes that gate answer differently on the same pair.
+ */
+const JUDGE_TEMPERATURE = 0;
+
 const NO_REASON_GIVEN = 'the reviewer gave no reason';
 
 const NOTHING_RECORDED = 'none recorded';
@@ -189,6 +196,7 @@ async function ask(
       model: options.model,
       messages,
       schema,
+      temperature: JUDGE_TEMPERATURE,
       // A pair comparison is not helped by reasoning, and the stage pays for it twice over:
       // this call and the second pass both fire on every pair that reaches tier 3.
       think: false,

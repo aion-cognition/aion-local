@@ -162,17 +162,19 @@ describe('session close', () => {
     expect(embed).toHaveBeenCalledWith([FIRST_SENTENCE]);
   });
 
-  it('sends the episodes to the model with reasoning off and a guard signal', async () => {
+  it('sends the episodes to the model unsampled, with reasoning off and a guard signal', async () => {
     await closeSessionNarrative(deps, SESSION_ID, { now: NOW });
 
     const request = generate.mock.calls[0]?.[0] as {
       model: string;
+      temperature: number;
       think: boolean;
       signal: AbortSignal;
       maxTokens: number;
       messages: readonly { content: string }[];
     };
     expect(request.model).toBe('qwen3:8b');
+    expect(request.temperature).toBe(0);
     expect(request.think).toBe(false);
     expect(request.signal.aborted).toBe(false);
     expect(request.maxTokens).toBeLessThan(400);
