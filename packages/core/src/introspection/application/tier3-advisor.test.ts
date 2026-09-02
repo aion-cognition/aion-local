@@ -209,3 +209,21 @@ describe('modelAdvisor', () => {
     expect(DEFAULT_TIER3_MODE).toBe(DEFAULTS.maintenance.tier3Mode);
   });
 });
+
+describe('the sampling both tier 3 calls ask for', () => {
+  it('asks for an unsampled answer on the recommendation and on the review of it', async () => {
+    const requests: StructuredRequest[] = [];
+    const recording: Pick<Provider, 'generate'> = {
+      generate: (request: StructuredRequest): Promise<unknown> => {
+        requests.push(request);
+        return Promise.resolve({ operation: TIER3_NO_OPERATION, upheld: true, reason: 'agreed' });
+      },
+    };
+
+    await adviseTier3(recording, REQUEST, OPTIONS);
+    await reviewTier3Proposal(recording, REQUEST, PROPOSAL, OPTIONS);
+
+    expect(requests).toHaveLength(2);
+    expect(requests.map((request) => request.temperature)).toEqual([0, 0]);
+  });
+});

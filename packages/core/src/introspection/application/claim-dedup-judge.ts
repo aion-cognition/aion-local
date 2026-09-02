@@ -30,6 +30,13 @@ export type ClaimDedupCallOptions = {
   readonly signal?: AbortSignal;
 };
 
+/**
+ * Both passes name the value, since the provider sends the parameter only when a caller does.
+ * Unanimity is the gate that merges two claims, and a sampled pass makes that gate answer
+ * differently on the same pair from one tick to the next.
+ */
+const JUDGE_TEMPERATURE = 0;
+
 const NO_REASON_GIVEN = 'the judge gave no reason';
 
 const DETECT_SYSTEM_PROMPT = [
@@ -145,6 +152,7 @@ export async function judgeClaimDedup(
       model: options.model,
       messages: buildDetectMessages(pair),
       schema: DETECT_JSON_SCHEMA,
+      temperature: JUDGE_TEMPERATURE,
       // A two-statement comparison is not helped by reasoning, and the tick pays for it twice
       // over: this call and the second pass both fire on every candidate pair.
       think: false,
@@ -191,6 +199,7 @@ export async function reviewClaimDedup(
       model: options.model,
       messages: buildReviewMessages(pair),
       schema: REVIEW_JSON_SCHEMA,
+      temperature: JUDGE_TEMPERATURE,
       think: false,
       signal: deadline.signal,
     });

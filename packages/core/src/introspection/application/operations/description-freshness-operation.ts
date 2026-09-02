@@ -28,6 +28,13 @@ const MENTION_CONTEXT_LIMIT = 5;
 const MENTION_EXCERPT_CHARS = 400;
 const DESCRIPTION_MAX_TOKENS = 300;
 
+/**
+ * Named rather than left to the route's default, which the provider no longer sends. The
+ * operation rewrites a description in place from mentions it just read, so a second pass over
+ * unchanged mentions leaves the entity alone.
+ */
+const DESCRIPTION_TEMPERATURE = 0;
+
 const DESCRIPTION_JSON_SCHEMA: JsonSchema = {
   type: 'object',
   properties: { description: { type: 'string' } },
@@ -122,6 +129,7 @@ export function descriptionFreshnessOperation(): IntrospectionOperation {
               messages: buildMessages(entity, contexts),
               schema: DESCRIPTION_JSON_SCHEMA,
               maxTokens: DESCRIPTION_MAX_TOKENS,
+              temperature: DESCRIPTION_TEMPERATURE,
               think: false,
               signal: deadline.signal,
             });

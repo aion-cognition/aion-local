@@ -55,6 +55,13 @@ export type ReviewContradictionOptions = {
  * different answer from one that answers first. With the booleans first, a first pass over the
  * 24-case battery affirmed all fourteen closures, including both known false positives.
  */
+/**
+ * Matches the first pass in `supersession-judge.ts`, and named rather than left to the route's
+ * default, which the provider no longer sends. Unanimity is what closes a fact, and a sampled
+ * reviewer turns that gate into a coin flip over evidence it already read.
+ */
+const REVIEW_TEMPERATURE = 0;
+
 const REVIEW_JSON_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
@@ -165,6 +172,7 @@ export async function reviewContradiction(
       model: options.model,
       messages: buildReviewMessages(pair),
       schema: REVIEW_JSON_SCHEMA,
+      temperature: REVIEW_TEMPERATURE,
       // Matches the first pass: reasoning buys nothing on a two-statement judgment and doubles
       // an already doubled budget.
       think: false,

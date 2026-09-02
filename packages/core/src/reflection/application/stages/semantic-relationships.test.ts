@@ -160,6 +160,21 @@ describe('SemanticRelationshipStage', () => {
     expect(edge?.count).toBe(0);
   });
 
+  it('asks the model for an unsampled answer, so one episode proposes one set of edges', async () => {
+    seedEntity('entity-1', 'Ryan', 'person');
+    seedCognitive('cog-1', 'Decision', 'use SQLite for the queue');
+    const requests: StructuredRequest[] = [];
+    const generate = async (req: StructuredRequest): Promise<unknown> => {
+      requests.push(req);
+      return { relationships: [] };
+    };
+
+    await new SemanticRelationshipStage().run(buildContext(stubProvider(generate)));
+
+    expect(requests[0]?.temperature).toBe(0);
+    expect(requests[0]?.think).toBe(false);
+  });
+
   it('drops a proposal whose quote does not appear in the episode text', async () => {
     seedEntity('entity-1', 'Ryan', 'person');
     seedEntity('entity-2', 'Aion', 'project');

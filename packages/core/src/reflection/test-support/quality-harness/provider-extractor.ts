@@ -22,6 +22,13 @@ import type { ChatMessage, JsonSchema, Provider } from '../../../infrastructure/
  */
 export const DEFAULT_GENERATE_TIMEOUT_MS = 60_000;
 
+/**
+ * Matches the stages this harness measures (`entities.ts` and `cognitive.ts` both name 0), and
+ * named rather than left to the route's default, which the provider no longer sends. A sampled
+ * harness scores a different extraction than the one the service runs.
+ */
+const EXTRACTION_TEMPERATURE = 0;
+
 export type ProviderGenerateDeps = {
   readonly generate: Provider['generate'];
   readonly model: string;
@@ -50,6 +57,7 @@ async function runStructuredExtraction<T>(
       model: deps.model,
       messages,
       schema,
+      temperature: EXTRACTION_TEMPERATURE,
       think: false,
       signal: controller.signal,
     });

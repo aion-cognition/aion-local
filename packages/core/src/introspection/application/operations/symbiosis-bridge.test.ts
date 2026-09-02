@@ -180,3 +180,17 @@ describe('symbiosisBridgeOperation under a shutdown', () => {
     expect(outcome.detail).toContain('deterministic bridge');
   });
 });
+
+describe('the sampling the bridge call asks for', () => {
+  it('asks for an unsampled answer, so one pair reads one way', async () => {
+    const { provider, started } = hangingProvider();
+    const controller = new AbortController();
+    const run = symbiosisBridgeOperation().run(contextFor(provider, controller.signal));
+    const request = await started;
+
+    controller.abort();
+    await run;
+
+    expect(request.temperature).toBe(0);
+  });
+});

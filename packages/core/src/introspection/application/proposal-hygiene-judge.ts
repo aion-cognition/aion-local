@@ -12,6 +12,13 @@ import type { ChatMessage, JsonSchema, Provider } from '../../infrastructure/pro
  * on the way to a resolve `aion proposals reopen` can always undo.
  */
 
+/**
+ * Named rather than left to the route's default, which the provider now sends nothing for. The
+ * verdict decides what the ledger records for a pair, and two runs over one pair record one
+ * reason.
+ */
+const JUDGE_TEMPERATURE = 0;
+
 const SYSTEM_PROMPT = [
   'You review one candidate entity-merge pair a memory substrate found and nobody resolved.',
   'You are given both names and types. Judge whether they name the same real-world thing or',
@@ -85,6 +92,7 @@ export async function judgeHygienePair(
       model: options.model,
       messages: buildMessages(pair),
       schema: JUDGE_JSON_SCHEMA,
+      temperature: JUDGE_TEMPERATURE,
       think: false,
       signal: deadline.signal,
     });

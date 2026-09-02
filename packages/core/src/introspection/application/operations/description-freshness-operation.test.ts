@@ -139,3 +139,17 @@ describe('descriptionFreshnessOperation under a shutdown', () => {
     expect(outcome.status).toBe('noop');
   });
 });
+
+describe('the sampling the description call asks for', () => {
+  it('asks for an unsampled answer, so unchanged mentions rewrite nothing', async () => {
+    const { provider, started } = hangingProvider();
+    const controller = new AbortController();
+    const run = descriptionFreshnessOperation().run(contextFor(provider, controller.signal));
+    const request = await started;
+
+    controller.abort();
+    await run;
+
+    expect(request.temperature).toBe(0);
+  });
+});

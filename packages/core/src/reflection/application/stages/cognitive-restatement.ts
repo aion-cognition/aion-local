@@ -78,6 +78,13 @@ function buildRestatementMessages(
 
 const RestatementOutputSchema = z.object({ restated: z.array(z.string()) });
 
+/**
+ * Matches `cognitive.ts`, whose extraction this call validates, and named rather than left to the
+ * route's default, which the provider no longer sends. A sampled check keeps a different subset
+ * of one episode's candidates each run.
+ */
+const RESTATEMENT_TEMPERATURE = 0;
+
 async function restatementCall(
   ctx: StageContext,
   request: RestatementRequest,
@@ -88,6 +95,7 @@ async function restatementCall(
       model: request.model,
       messages: buildRestatementMessages(request.summary, request.candidates),
       schema: buildRestatementSchema(request.candidates),
+      temperature: RESTATEMENT_TEMPERATURE,
       think: false,
       signal: deadline.signal,
     });

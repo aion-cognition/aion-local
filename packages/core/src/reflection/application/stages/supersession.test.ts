@@ -471,13 +471,14 @@ describe('SupersessionStage', () => {
     expect(bed.requests).toHaveLength(2);
   });
 
-  it('sends one judgment per pair, with both statements, the kinds, and thinking off', async () => {
+  it('sends one unsampled judgment per pair, with both statements, the kinds, and thinking off', async () => {
     seedContradictingPair();
     bed.responses = [{ contradicts: false, confidence: 0.1 }];
 
     await new SupersessionStage({ mode: 'propose' }).run(bed.context(EPISODE_ID));
 
     expect(bed.requests).toHaveLength(1);
+    expect(bed.requests[0]!.temperature).toBe(0);
     expect(bed.requests[0]!.think).toBe(false);
     expect(bed.requests[0]!.signal).toBeDefined();
     const prompt = bed.prompts()[0]!;

@@ -101,12 +101,13 @@ describe('the second pass over an affirmative judgment', () => {
     expect(unusable.status).toBe('unusable');
   });
 
-  it('sends both statements, the shared subject, and thinking off', async () => {
+  it('sends both statements, the shared subject, thinking off, and an unsampled answer', async () => {
     const provider = providerReturning({ earlier_survives: false, newer_is_well_formed: true });
 
     await reviewContradiction(provider, PAIR, OPTIONS);
 
     const [request] = provider.requests;
+    expect(request?.temperature).toBe(0);
     expect(request?.think).toBe(false);
     expect(request?.signal).toBeDefined();
     const prompt = (request?.messages ?? []).map((message) => message.content).join('\n');

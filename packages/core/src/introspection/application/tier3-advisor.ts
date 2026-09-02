@@ -36,6 +36,13 @@ export type Tier3CallOptions = {
 /** What the model answers when the substrate needs nothing. Not an operation name. */
 export const TIER3_NO_OPERATION = 'none';
 
+/**
+ * Both passes name the value rather than leaving it to the route's default: the provider sends
+ * the parameter only when a caller names one, and a sampled second pass turns the review into a
+ * coin flip over the same evidence the first pass already read.
+ */
+const TIER3_TEMPERATURE = 0;
+
 const UNSTATED_CONFIDENCE = 0.5;
 
 const NO_RATIONALE_GIVEN = 'the advisor gave no rationale';
@@ -228,6 +235,7 @@ export async function adviseTier3(
       model: options.model,
       messages: buildAdviceMessages(request),
       schema: adviceSchema(names),
+      temperature: TIER3_TEMPERATURE,
       // The answer is a choice over a table the caller already scored. Reasoning doubles the
       // cost of a call the loop makes on every idle tick and moves nothing.
       think: false,
@@ -296,6 +304,7 @@ export async function reviewTier3Proposal(
       model: options.model,
       messages: buildReviewMessages(request, proposal),
       schema: REVIEW_JSON_SCHEMA,
+      temperature: TIER3_TEMPERATURE,
       think: false,
       signal: deadline.signal,
     });

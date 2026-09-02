@@ -45,6 +45,13 @@ import type { ReflectionStage, StageContext, StageOutcome } from '../domain/stag
 
 export const NARRATIVE_STAGE_NAME = 'narratives';
 
+/**
+ * Named rather than left to the route's default, which the provider no longer sends. The
+ * compression is a reading of episodes that are already closed, and the grounding check that
+ * follows measures one narrative rather than a fresh sample of it.
+ */
+const NARRATIVE_TEMPERATURE = 0;
+
 const MINUTE_MS = 60 * 1000;
 
 /** The idle window in the unit the closer works in; config states it in minutes. */
@@ -151,6 +158,7 @@ async function compress(
       messages: buildNarrativeMessages(source),
       schema: NARRATIVE_JSON_SCHEMA,
       maxTokens: narrativeMaxTokens(source.sentenceBudget),
+      temperature: NARRATIVE_TEMPERATURE,
       think: false,
       signal: deadline.signal,
     });
