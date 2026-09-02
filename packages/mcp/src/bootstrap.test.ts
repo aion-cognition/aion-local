@@ -13,6 +13,8 @@ import {
   supersessionOptions,
   SupersessionStage,
   type Config,
+  type Logger,
+  type Provider,
   type ReflectionStage,
 } from '@aion/core';
 import { describe, expect, it } from 'vitest';
@@ -21,6 +23,7 @@ import {
   narrativeOptions,
   narrativeSweepOptions,
   reflectionStages,
+  warmEmbedModel,
   workerOptions,
 } from './bootstrap.js';
 
@@ -240,6 +243,57 @@ describe('narrativeOptions', () => {
       ...narrativeOptions(configured),
       limit: configured.reflection.narrativeSweepLimit,
     });
+  });
+});
+
+function collectingLogger(): { infos: unknown[]; warns: unknown[]; logger: Logger } {
+  const infos: unknown[] = [];
+  const warns: unknown[] = [];
+  const noop = (): void => {
+    // A test logger that prints nothing, on purpose.
+  };
+  const logger = {
+    debug: noop,
+    info: (fields: unknown): void => {
+      infos.push(fields);
+    },
+    warn: (fields: unknown): void => {
+      warns.push(fields);
+    },
+    error: noop,
+  } as unknown as Logger;
+  return { infos, warns, logger };
+}
+
+describe('warmEmbedModel', () => {
+  it('embeds one probe, so a cold model load lands at boot rather than on the first recall', async () => {
+    const batches: (readonly string[])[] = [];
+    const embedder: Provider = {
+      embed: (texts) => {
+        batches.push(texts);
+        return Promise.resolve(texts.map(() => [0]));
+      },
+      generate: () => Promise.reject(new Error('the warm never generates')),
+    };
+    const { infos, logger } = collectingLogger();
+
+    await warmEmbedModel(embedder, logger);
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0]).toHaveLength(1);
+    expect(infos).toHaveLength(1);
+    expect((infos[0] as { ms: number }).ms).toBeGreaterThanOrEqual(0);
+  });
+
+  it('resolves and warns when the embed fails, because boot does not depend on the warm', async () => {
+    const embedder: Provider = {
+      embed: () => Promise.reject(new Error('fetch failed')),
+      generate: () => Promise.reject(new Error('the warm never generates')),
+    };
+    const { warns, logger } = collectingLogger();
+
+    await expect(warmEmbedModel(embedder, logger)).resolves.toBeUndefined();
+    expect(warns).toHaveLength(1);
   });
 });
 

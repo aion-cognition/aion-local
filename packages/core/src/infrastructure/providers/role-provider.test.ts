@@ -107,6 +107,19 @@ describe('what each role generates against', () => {
     expect(calls[0]?.body.model).toBe(DEFAULTS.models.embed);
   });
 
+  it('threads the keep-alive knob into the embed request', async () => {
+    const { calls, impl } = recordingFetch();
+    const base = config();
+    const router = new ProviderRouter({
+      config: { ...base, ollama: { ...base.ollama, embedKeepAlive: 300 } },
+      fetchImpl: impl,
+    });
+
+    await router.forRole('cue').embed(['the episode text']);
+
+    expect(calls[0]?.body.keep_alive).toBe(300);
+  });
+
   it('hands one role the same provider every time it is asked', () => {
     const { impl } = recordingFetch();
     const router = new ProviderRouter({ config: config(), fetchImpl: impl });

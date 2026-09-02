@@ -6,6 +6,8 @@ import { foldForIdentity } from '../../reflection/domain/name-fold.js';
 export type OllamaProviderOptions = {
   baseUrl: string;
   embedModel: string;
+  /** Sent as `keep_alive` on embed calls; -1 keeps the model resident. Omitted, the server's own default applies. */
+  embedKeepAlive?: number;
   fetchImpl?: typeof fetch;
 };
 
@@ -41,12 +43,14 @@ export class OllamaProvider implements Provider {
   private readonly baseUrl: string;
   private readonly embedModel: string;
   private readonly embedInputCap: number;
+  private readonly embedKeepAlive: number | undefined;
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: OllamaProviderOptions) {
     this.baseUrl = normalizeBaseUrl(options.baseUrl);
     this.embedModel = options.embedModel;
     this.embedInputCap = maxEmbedInputChars(options.embedModel);
+    this.embedKeepAlive = options.embedKeepAlive;
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
@@ -61,6 +65,7 @@ export class OllamaProvider implements Provider {
       body: JSON.stringify({
         model: this.embedModel,
         input: texts.map((text) => capForEmbedding(foldForEmbedding(text), this.embedInputCap)),
+        ...(this.embedKeepAlive === undefined ? {} : { keep_alive: this.embedKeepAlive }),
       }),
     });
     if (!response.ok) {
