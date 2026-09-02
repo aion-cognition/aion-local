@@ -8,6 +8,7 @@ import {
   listOllamaModels,
   listOperationStats,
   listResidentModels,
+  meanOperationDurationMs,
   OPERATION_LEDGER_PREFIX,
   PACK_METHODS,
   packMethodCounters,
@@ -253,9 +254,12 @@ function renderMaintenance(snapshot: MaintenanceSnapshot, now: number, write: Wr
       reading.lastItemsAffected === undefined
         ? ''
         : ` (${String(reading.lastItemsAffected)} affected)`;
+    const mean = meanOperationDurationMs(stats);
+    const cost = mean === undefined ? '' : `  ~${(mean / 1000).toFixed(1)}s/run`;
     write(
       `  ${name} runs ${String(stats.runs)}  improved ${String(stats.improved)}  ` +
         `unchanged ${String(stats.unchanged)}  failed ${String(stats.failed)}  ` +
+        `unmeasured ${String(stats.unmeasured)}${cost}  ` +
         `last ${age} ago ${reading.lastStatus ?? 'unrecorded'}${affected}`,
     );
   }

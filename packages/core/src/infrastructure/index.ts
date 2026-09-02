@@ -29,7 +29,11 @@ export {
   markLedgerApplied,
 } from './sqlite/ops-ledger.js';
 
-export { introspectionCycle, listOperationStats } from './sqlite/introspection-counters.js';
+export {
+  introspectionCycle,
+  listOperationStats,
+  meanOperationDurationMs,
+} from './sqlite/introspection-counters.js';
 export type { OperationStats } from './sqlite/introspection-counters.js';
 
 export {

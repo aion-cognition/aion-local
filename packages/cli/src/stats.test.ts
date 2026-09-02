@@ -77,6 +77,10 @@ const SNAPSHOT: StatsSnapshot = {
             improved: 2,
             unchanged: 1,
             failed: 0,
+            unmeasured: 0,
+            durationRuns: 3,
+            durationTotalMs: 6_600,
+            lastDurationMs: 2_100,
             lastRunAt: '2026-08-29T12:00:00.000Z',
             selectedCycle: 39,
           },
@@ -84,7 +88,16 @@ const SNAPSHOT: StatsSnapshot = {
           lastItemsAffected: 18,
         },
         {
-          stats: { name: 'dead_letter', runs: 0, improved: 0, unchanged: 0, failed: 0 },
+          stats: {
+            name: 'dead_letter',
+            runs: 0,
+            improved: 0,
+            unchanged: 0,
+            failed: 0,
+            unmeasured: 0,
+            durationRuns: 0,
+            durationTotalMs: 0,
+          },
         },
       ],
     },
@@ -211,7 +224,7 @@ describe('renderStats', () => {
     const text = lines.join('\n');
     expect(text).toContain('cycle 41, 2 operations registered');
     expect(text).toMatch(
-      /vector_backfill\s+runs 3\s+improved 2\s+unchanged 1\s+failed 0\s+last 4m ago applied \(18 affected\)/,
+      /vector_backfill\s+runs 3\s+improved 2\s+unchanged 1\s+failed 0\s+unmeasured 0\s+~2\.2s\/run\s+last 4m ago applied \(18 affected\)/,
     );
   });
 

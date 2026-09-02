@@ -1,5 +1,6 @@
 import type { IntrospectionOperation } from '../domain/operation.js';
 import { backboneRepairOperation } from './operations/backbone-repair.js';
+import { claimConsolidationOperation } from './operations/claim-consolidation.js';
 import { claimDedupOperation } from './operations/claim-dedup.js';
 import { communityRefreshOperation } from './operations/community-refresh.js';
 import { deadLetterOperation } from './operations/dead-letter.js';
@@ -10,11 +11,16 @@ import { mergeAutoOperation } from './operations/merge-auto-operation.js';
 import { mergeDecisionReconcileOperation } from './operations/merge-decision-reconcile-operation.js';
 import { narrativeCleanupOperation } from './operations/narrative-cleanup-operation.js';
 import { narrativeRegroundingOperation } from './operations/narrative-regrounding.js';
+import {
+  dayNarrativeRollupOperation,
+  weekNarrativeRollupOperation,
+} from './operations/narrative-rollup.js';
 import { orphanCleanupOperation } from './operations/orphan-cleanup.js';
 import { proposalHygieneOperation } from './operations/proposal-hygiene.js';
 import { reconcileReenqueueOperation } from './operations/reconcile-reenqueue.js';
 import { redactionResiduePurgeOperation } from './operations/redaction-residue-purge.js';
 import { retroJudgmentSweepOperation } from './operations/retro-judgment-sweep-operation.js';
+import { structuralDiscoveryOperation } from './operations/structural-discovery.js';
 import { symbiosisBridgeOperation } from './operations/symbiosis-bridge.js';
 import { vectorBackfillOperation } from './operations/vector-backfill.js';
 import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-operations.js';
@@ -30,11 +36,14 @@ import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-
  * what makes the edges between nodes carry weight, then what the nodes say, then the shape the
  * whole graph has taken. The last group stands apart: it repairs nothing, it only watches.
  *
- * Twelve of the twenty declare a `measure`, a number in the health snapshot their run is scored
- * on moving. The other eight are recorded as unmeasured rather than scored, and each is waiting
- * on a gauge the snapshot does not carry yet:
+ * Twelve of the twenty-four declare a `measure`, a number in the health snapshot their run is
+ * scored on moving. The other twelve are recorded as unmeasured rather than scored, and each is
+ * waiting on a gauge the snapshot does not carry yet:
  *
  * - `claim_dedup`: a near-duplicate claim-pair count.
+ * - `claim_consolidation`: claim neighbourhoods above the derived density floor.
+ * - `narrative_rollup_day` and `narrative_rollup_week`: closed windows carrying uncompressed
+ *   narratives of the scope below.
  * - `memory_decay`: edge weight above the floor, which is what a decay pass lowers.
  * - `narrative_cleanup`: duplicate standing narratives per session.
  * - `retro_judgment_sweep`: episodes whose contradictions no judge has read.
@@ -42,6 +51,7 @@ import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-
  * - `community_refresh`: nodes carrying a community assignment older than their edges.
  * - `symbiosis_bridge`: the count of community pairs the graph connects least.
  * - `merge_decision_reconcile`: merges committed to the graph with no decision record.
+ * - `structural_discovery`: entities carrying fewer associations than a degree ceiling.
  *
  * Each is a graph read nothing computes on the tick today. Until one exists, its operation is
  * scored on relevance, waiting time, and cost alone, which is everything known about it.
@@ -73,6 +83,13 @@ export function introspectionOperations(): readonly IntrospectionOperation[] {
     retroJudgmentSweepOperation(),
     descriptionFreshnessOperation(),
 
+    // Compression, on both of its axes: the scopes above a session, and the claims that turn
+    // out to be one subject said many times. Each writes one grounded memory and closes what it
+    // absorbed, which is the ordinary supersession every one of those closes can be undone by.
+    dayNarrativeRollupOperation(),
+    weekNarrativeRollupOperation(),
+    claimConsolidationOperation(),
+
     // Topology: repair connectivity, then re-derive the neighbourhoods, then join the two the
     // graph connects least. Listed in that order because it is the order they depend on each
     // other, not because the engine reads it.
@@ -80,6 +97,9 @@ export function introspectionOperations(): readonly IntrospectionOperation[] {
     orphanCleanupOperation(),
     communityRefreshOperation(),
     symbiosisBridgeOperation(),
+    // Joins two identities the graph left apart: a nearest neighbour brings the pair forward
+    // and a reading of the store decides whether anything stands behind it.
+    structuralDiscoveryOperation(),
 
     // Entity-merge policy: tier 0 of the dedup cascade, swept over the whole graph rather than
     // over one episode. It absorbs the spellings the identity key cannot tell apart and asks no

@@ -35,10 +35,20 @@ import type { ReflectionStage } from '../domain/stage.js';
 const MINUTE_MS = 60 * 1000;
 
 /**
+ * The mid-session boundary's kill switch. It stays optional below because no knob carries it
+ * yet: the stage's own default is the value until one does, and threading `undefined` would
+ * override that default with nothing.
+ */
+type MidSessionKnob = 'midSession';
+
+/**
  * Every narrative option the running service supplies. `regenerate` stays out: it is a cleanup
  * flag one command sets on a single call, not a knob the pipeline threads.
  */
-export type WiredNarrativeOptions = Required<Omit<SessionNarrativeOptions, 'regenerate'>>;
+export type WiredNarrativeOptions = Required<
+  Omit<SessionNarrativeOptions, 'regenerate' | MidSessionKnob>
+> &
+  Partial<Pick<SessionNarrativeOptions, MidSessionKnob>>;
 
 /** The idle sweep runs the closer's options and one bound of its own. */
 export type NarrativeSweepOptions = WiredNarrativeOptions & { readonly limit: number };
@@ -116,6 +126,16 @@ export function reinforcementOptions(config: Config): Required<ReinforcementEnqu
   return { reinforcementQueueCap: config.sqlite.reinforcementQueueCap };
 }
 
+/**
+ * The mid-session kill switch read by name, because the config schema does not carry it yet.
+ * Absent, the stage's own default stands, which is what keeps the boundary acting from the first
+ * run rather than waiting on a knob to exist.
+ */
+function midSessionOptions(config: Config): Partial<WiredNarrativeOptions> {
+  const rollup = (config.reflection as unknown as Record<string, unknown>).midSessionRollup;
+  return typeof rollup === 'boolean' ? { midSession: rollup } : {};
+}
+
 export function narrativeOptions(config: Config): WiredNarrativeOptions {
   return {
     model: config.models.reflect,
@@ -123,6 +143,7 @@ export function narrativeOptions(config: Config): WiredNarrativeOptions {
     timeoutMs: config.reflection.stageTimeoutMs,
     maxSourceEpisodes: config.reflection.maxNarrativeEpisodes,
     maxEpisodeChars: config.reflection.maxNarrativeEpisodeChars,
+    ...midSessionOptions(config),
   };
 }
 

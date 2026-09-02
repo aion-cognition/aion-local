@@ -347,8 +347,32 @@ describe('the reflection stage', () => {
     );
 
     expect(outcome.status).toBe('skipped');
-    expect(outcome.summary).toBe('the session is still active');
+    expect(outcome.summary).toBe('the session is still active: 2 uncovered episodes and no pause');
     expect(generate).not.toHaveBeenCalled();
+  });
+
+  it('compresses a running session that paused long enough for the work to read as finished', async () => {
+    seedEpisode('episode-3', '2026-04-02T10:30:00Z');
+
+    const outcome = await new SessionNarrativeStage().run(
+      stageContext(new Date('2026-04-02T10:35:00Z')),
+    );
+
+    expect(outcome.status).toBe('ok');
+    expect(graph.nodesWithLabel('Narrative')).toHaveLength(1);
+    expect(narrativeNode().properties[NARRATIVE_PROPERTIES.coverageCount]).toBe(3);
+  });
+
+  it('waits for the close instead once the mid-session boundary is switched off', async () => {
+    seedEpisode('episode-3', '2026-04-02T10:30:00Z');
+
+    const outcome = await new SessionNarrativeStage({ midSession: false }).run(
+      stageContext(new Date('2026-04-02T10:35:00Z')),
+    );
+
+    expect(outcome.status).toBe('skipped');
+    expect(outcome.summary).toBe('the session is still active');
+    expect(graph.nodesWithLabel('Narrative')).toEqual([]);
   });
 
   it('compresses a session whose window has passed', async () => {
