@@ -6,7 +6,7 @@ import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from './episodes.js';
 import { BASE_NODE_LABEL, MEMORY_LABEL } from './labels.js';
 import { SUMMARIZED_BY_TYPE } from './narrative-queries.js';
 import { readModeFragment, withCurrency } from './read-modes.js';
-import { fromGraphVector, toGraphVector, type Row } from './values.js';
+import { fromGraphVector, toGraphDateTime, toGraphVector, type Row } from './values.js';
 import type {
   ComputedContextVector,
   NeighborContentVector,
@@ -14,9 +14,9 @@ import type {
 
 /**
  * Reflection's last stage recomputes `context_vec` for every `:Memory` node this run's
- * enrichment touched. This module owns the two batched reads that find that set and its
- * neighborhood, and the batched write that stores the result; `reflection/domain/context-vector.ts`
- * owns the weighted-mean itself.
+ * enrichment touched. This module owns the three batched reads that find that set, close it
+ * over the run's own edge writes, and read its neighborhood, plus the batched write that stores
+ * the result; `reflection/domain/context-vector.ts` owns the weighted-mean itself.
  */
 
 /** The cognitive types have no shared writer-side constant for the edge back to their episode (`cognitive-queries.ts` inlines it); this module needs the literal too. */
@@ -63,6 +63,69 @@ export async function findAffectedNodeIds(
   const rows = await runRead(
     driver,
     affectedNodesStatement(episodeId, reference),
+    (row) => row.id as string,
+  );
+  return [...new Set(rows)];
+}
+
+/**
+ * The other half of the affected set. An edge write moves the context of both its endpoints,
+ * and the family above names only the episode's own nodes, so the far endpoint of an edge this
+ * run wrote keeps a `context_vec` computed from a neighborhood it no longer has. This read
+ * names those far endpoints, and the stage recomputes them in the same batch.
+ *
+ * The closure is bounded by `since` rather than taken over the whole one-hop neighborhood,
+ * which is precision and not economy: a neighbor whose incident edges did not move still has a
+ * correct context vector, and one unbounded hop off a hub entity would recompute hundreds of
+ * nodes nothing changed. `r.updated_at` is the stamp every edge write moves and the same signal
+ * `context-vector-sync.ts` reads to find drift, so the two invalidation paths agree on what
+ * counts as changed.
+ *
+ * `:Memory` is required of the far endpoint because that is what the write below matches on: a
+ * backbone node with no vector index behind it is not a node this stage can store a context for.
+ */
+function edgeTouchedNeighborsStatement(
+  nodeIds: readonly string[],
+  since: Date,
+  reference: Date,
+): GraphStatement {
+  const fragment = readModeFragment(withCurrency(reference), 'm', 'tch');
+  const cypher = [
+    'UNWIND $nodeIds AS nodeId',
+    `MATCH (n:${BASE_NODE_LABEL} { id: nodeId })-[r]-(m:${BASE_NODE_LABEL}:${MEMORY_LABEL})`,
+    `WHERE m.id <> nodeId AND r.updated_at >= $since AND ${fragment.where}`,
+    'RETURN DISTINCT m.id AS id',
+  ].join('\n');
+
+  return {
+    cypher,
+    parameters: {
+      nodeIds: [...new Set(nodeIds)],
+      since: toGraphDateTime(since),
+      ...fragment.parameters,
+    },
+  };
+}
+
+/**
+ * Endpoints on the other side of an edge written at or after `since`. Ids already in `nodeIds`
+ * come back among them, since most edges a run writes have both ends inside the family; the
+ * caller folds the two sets together.
+ */
+export async function findEdgeTouchedNeighborIds(
+  driver: Driver,
+  nodeIds: readonly string[],
+  /** The run's own clock, which is what its edge writes stamped `updated_at` with. */
+  since: Date,
+  /** The clock currency is judged from; `since` when a caller holds no other vantage point. */
+  reference: Date = since,
+): Promise<string[]> {
+  if (nodeIds.length === 0) {
+    return [];
+  }
+  const rows = await runRead(
+    driver,
+    edgeTouchedNeighborsStatement(nodeIds, since, reference),
     (row) => row.id as string,
   );
   return [...new Set(rows)];

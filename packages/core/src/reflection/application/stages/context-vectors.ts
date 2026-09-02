@@ -1,6 +1,7 @@
 import { describeError } from '../../../infrastructure/errors.js';
 import {
   findAffectedNodeIds,
+  findEdgeTouchedNeighborIds,
   findNeighborContentVectors,
   writeContextVectors,
 } from '../../../infrastructure/graph/context-vector-queries.js';
@@ -13,6 +14,13 @@ import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/s
  * the only stage with a top-level `try`/`catch` around its whole body, because this operation
  * is eventually consistent: a failure here leaves affected nodes with stale context vectors
  * for the next successful run rather than costing the run its ledger mark.
+ *
+ * The set is closed over the run's own edge writes before anything is computed. An edge moves
+ * the context of both its endpoints, and an earlier stage writes plenty of edges whose far end
+ * belongs to some other episode: an entity this run linked to one it deduplicated against, a
+ * fact it superseded. Recomputing only the episode's family leaves that far end holding a
+ * vector for a neighborhood it no longer has, and nothing downstream can tell a stale context
+ * vector from a current one.
  */
 export class ContextVectorStage implements ReflectionStage {
   readonly name = 'context-vectors';
@@ -24,7 +32,10 @@ export class ContextVectorStage implements ReflectionStage {
         return { status: 'skipped', summary: 'no affected memory nodes to recompute' };
       }
 
-      const neighbors = await findNeighborContentVectors(ctx.driver, affectedIds, ctx.now);
+      const touchedIds = await findEdgeTouchedNeighborIds(ctx.driver, affectedIds, ctx.now);
+      const recomputeIds = [...new Set([...affectedIds, ...touchedIds])];
+
+      const neighbors = await findNeighborContentVectors(ctx.driver, recomputeIds, ctx.now);
       const computed = computeContextVectors(neighbors);
       if (computed.length === 0) {
         return { status: 'skipped', summary: 'no affected node has a vectored neighbor' };
@@ -33,7 +44,7 @@ export class ContextVectorStage implements ReflectionStage {
       const written = await writeContextVectors(ctx.driver, computed);
       return {
         status: 'ok',
-        summary: `recomputed context_vec for ${written.length} of ${affectedIds.length} affected node(s)`,
+        summary: `recomputed context_vec for ${written.length} of ${recomputeIds.length} affected node(s)`,
         counts: { contextVectors: written.length },
       };
     } catch (error) {
