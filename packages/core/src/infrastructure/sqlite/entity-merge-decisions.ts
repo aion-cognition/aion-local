@@ -21,8 +21,13 @@ import type { SqliteHandle } from './database.js';
  * neither decides anything: tier 1 nominates pairs and tier 2 assembles the facts tier 3 reads,
  * so a value for either would name a tier that never fires. A deterministic tier-2 rule would
  * add its own value when it exists.
+ *
+ * `reconciled` names the one case where the answer is that nobody knows: the graph states a
+ * merge whose record never reached this table, and `merge_decision_reconcile` writes back what
+ * the merge trail still holds. Naming the loss is the point, because the alternative is a row
+ * claiming a tier decided something no evidence survives for.
  */
-export type EntityMergeTier = 'tier0' | 'tier3' | 'human';
+export type EntityMergeTier = 'tier0' | 'tier3' | 'human' | 'reconciled';
 
 /** How the two names relate, as the name-form math reads them, never as prose about them. */
 export type NameFormRelation = 'fold' | 'squash' | 'bigram' | 'none';

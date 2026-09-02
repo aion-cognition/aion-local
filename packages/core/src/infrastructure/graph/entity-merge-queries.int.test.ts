@@ -4,9 +4,11 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { BITEMPORAL_PROPERTIES, writeStampedNode } from './bitemporal.js';
+import { CLAIM_ASPECT_PROPERTY, CLAIM_SUBJECT_PROPERTY } from './claim-key-queries.js';
 import { readFirst } from './connection.js';
 import { closeEligibleAssociationEdges } from './edge-prune-queries.js';
 import { upsertEdge } from './edges.js';
+import { MAX_STORED_ENTITY_ALIASES } from './entity-identity-queries.js';
 import { redirectAndAbsorb } from './entity-merge-queries.js';
 import { runGraphMigrations } from './migrations.js';
 import {
@@ -19,6 +21,8 @@ import {
   stopNeo4jHarness,
   type Neo4jHarness,
 } from './test-support/neo4j-harness.fixture.js';
+import { applyUnmerge, readCanonicalMerge, type MergeProvenanceRecord } from './unmerge-queries.js';
+import { foldName } from '../../reflection/domain/name-fold.js';
 import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
 
 /**
@@ -69,14 +73,44 @@ type ProvenanceEdgeRecord = {
   readonly redirected: boolean;
 };
 
+type ProvenanceRecord = {
+  readonly merged_id: string;
+  readonly edges?: ProvenanceEdgeRecord[];
+  readonly claims?: string[];
+};
+
+function provenanceRecords(records: unknown, mergedId: string): ProvenanceRecord[] {
+  return ((records ?? []) as string[])
+    .map((record) => JSON.parse(record) as ProvenanceRecord)
+    .filter((record) => record.merged_id === mergedId);
+}
+
 /** The edge trail one absorbed identity contributed, as the unmerge operation reads it back. */
 function provenanceEdges(records: unknown, mergedId: string): ProvenanceEdgeRecord[] {
-  const parsed = ((records ?? []) as string[]).map(
-    (record) => JSON.parse(record) as { merged_id: string; edges?: ProvenanceEdgeRecord[] },
-  );
-  return parsed
-    .filter((record) => record.merged_id === mergedId)
-    .flatMap((record) => record.edges ?? []);
+  return provenanceRecords(records, mergedId).flatMap((record) => record.edges ?? []);
+}
+
+/** The claims whose subject key the merge moved, which is what an unmerge hands back. */
+function provenanceClaims(records: unknown, mergedId: string): string[] {
+  return provenanceRecords(records, mergedId).flatMap((record) => record.claims ?? []);
+}
+
+function storedAliases(properties: Record<string, unknown>): string[] {
+  return (properties.aliases ?? []) as string[];
+}
+
+function storedAliasKeys(properties: Record<string, unknown>): string[] {
+  return (properties.aliases_norm ?? []) as string[];
+}
+
+/** The trail entry an unmerge is driven from, which the merge must have written for it to exist. */
+async function absorbedRecord(mergedId: string): Promise<MergeProvenanceRecord> {
+  const canonical = await readCanonicalMerge(harness.driver, mergedId);
+  const record = canonical?.records.find((entry) => entry.mergedId === mergedId);
+  if (record === undefined) {
+    throw new Error(`no merge record names ${mergedId}`);
+  }
+  return record;
 }
 
 beforeAll(async () => {
@@ -195,5 +229,116 @@ describe('a merge over an absorbed node whose association edge_prune closed', ()
         redirected: false,
       }),
     ]);
+  });
+});
+
+describe('a merge pushing an identity past the stored alias cap', () => {
+  it('leaves every stored spelling with the key that routes it, through the merge and back', async () => {
+    for (const id of ['alias-canon', 'alias-filler', 'alias-dup']) {
+      await seedEntity(id);
+    }
+
+    // A full alias list first, so the second merge has to cut. `Zulu spelling` sorts ahead of
+    // every `spelling NN` as a surface form and behind every one of them as a lookup key.
+    const stored = Array.from(
+      { length: MAX_STORED_ENTITY_ALIASES },
+      (_, index) => `spelling ${String(index).padStart(2, '0')}`,
+    );
+    await redirectAndAbsorb(harness.driver, {
+      canonicalId: 'alias-canon',
+      canonicalNameNorm: 'alias-canon',
+      mergedIds: ['alias-filler'],
+      aliases: stored,
+      accessCount: 0,
+      now: NOW,
+    });
+
+    await redirectAndAbsorb(harness.driver, {
+      canonicalId: 'alias-canon',
+      canonicalNameNorm: 'alias-canon',
+      mergedIds: ['alias-dup'],
+      aliases: ['Zulu spelling', 'zulu spelling'],
+      accessCount: 0,
+      mergedRecords: [
+        {
+          id: 'alias-dup',
+          name: 'alias-dup',
+          nameNorm: 'alias-dup',
+          type: 'concept',
+          aliases: ['Zulu spelling', 'zulu spelling'],
+        },
+      ],
+      now: NOW,
+    });
+
+    const canonical = await nodeProperties(harness.driver, 'alias-canon');
+    expect(storedAliases(canonical).map((alias) => foldName(alias))).toEqual(
+      storedAliasKeys(canonical),
+    );
+
+    const split = await applyUnmerge(harness.driver, {
+      canonicalId: 'alias-canon',
+      record: await absorbedRecord('alias-dup'),
+      now: LATER,
+    });
+
+    const restored = await nodeProperties(harness.driver, split.restoredId);
+    expect(storedAliases(restored).map((alias) => foldName(alias))).toEqual(
+      storedAliasKeys(restored),
+    );
+  });
+});
+
+describe('a merge over the entity a claim names as its subject', () => {
+  it('forwards the claim key onto the canonical and hands it back on an unmerge', async () => {
+    for (const id of ['subject-canon', 'subject-dup']) {
+      await seedEntity(id);
+    }
+    await writeStampedNode(harness.driver, {
+      label: 'Insight',
+      id: 'subject-claim',
+      properties: {
+        text: 'the retry ceiling is eight',
+        [CLAIM_SUBJECT_PROPERTY]: 'subject-dup',
+        [CLAIM_ASPECT_PROPERTY]: 'retry ceiling',
+      },
+      occurredAt: NOW,
+      now: NOW,
+    });
+
+    await redirectAndAbsorb(harness.driver, {
+      canonicalId: 'subject-canon',
+      canonicalNameNorm: 'subject-canon',
+      mergedIds: ['subject-dup'],
+      aliases: ['subject-dup'],
+      accessCount: 0,
+      mergedRecords: [
+        {
+          id: 'subject-dup',
+          name: 'subject-dup',
+          nameNorm: 'subject-dup',
+          type: 'concept',
+          aliases: [],
+        },
+      ],
+      now: NOW,
+    });
+
+    // The key follows the identity, so the claim still keys on an entity the graph answers for.
+    const merged = await nodeProperties(harness.driver, 'subject-claim');
+    expect(merged[CLAIM_SUBJECT_PROPERTY]).toBe('subject-canon');
+
+    const canonical = await nodeProperties(harness.driver, 'subject-canon');
+    expect(provenanceClaims(canonical.merge_provenance, 'subject-dup')).toEqual(['subject-claim']);
+
+    const split = await applyUnmerge(harness.driver, {
+      canonicalId: 'subject-canon',
+      record: await absorbedRecord('subject-dup'),
+      now: LATER,
+    });
+
+    // The split identity is the node the restored edges land on, so the key lands there too.
+    const unmerged = await nodeProperties(harness.driver, 'subject-claim');
+    expect(unmerged[CLAIM_SUBJECT_PROPERTY]).toBe(split.restoredId);
   });
 });

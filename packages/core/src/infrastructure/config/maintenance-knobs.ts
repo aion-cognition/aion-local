@@ -154,4 +154,14 @@ export const MAINTENANCE_KNOBS = {
   // above this floor, median nearest-neighbor 0.908, against calibration p50 0.408 unrelated
   // and 0.773 related. The 0.90-0.95 band is partly single-project vocabulary and stays untouched.
   claimDedupCosineFloor: ['AION_MAINTENANCE_CLAIM_DEDUP_COSINE_FLOOR', proportion, 0.95],
+  // `merge_decision_reconcile`'s bound: canonicals whose merge trail is read per run. The
+  // graph commits a merge before its SQLite record exists, so a process that dies in between
+  // leaves a decision key nothing answers for, and no candidate read can find that pair again
+  // to re-decide it. Two hundred matches the other trail-walking sweeps: one indexed read per
+  // canonical and, in the healthy case, no write at all.
+  mergeDecisionReconcileBatch: [
+    'AION_MAINTENANCE_MERGE_DECISION_RECONCILE_BATCH',
+    positiveInt,
+    200,
+  ],
 } as const;

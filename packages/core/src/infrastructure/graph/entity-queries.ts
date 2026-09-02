@@ -13,8 +13,8 @@ import {
   type GraphTransaction,
 } from './connection.js';
 import {
-  aliasKeys,
-  aliasRecord,
+  aliasPairs,
+  ENTITY_ALIASES_PROPERTY,
   ENTITY_NAME_SQUASH_PROPERTY,
   ENTITY_NAME_VECTOR_HASH_PROPERTY,
   ENTITY_TYPE_COUNTS_PROPERTY,
@@ -31,7 +31,6 @@ import { LOCK_PROPERTY } from './locks.js';
 import { SUPERSEDES_TYPE } from './relationships.js';
 import {
   ENTITY_ALIASES_NORM_PROPERTY,
-  ENTITY_ALIASES_PROPERTY,
   ENTITY_NAME_NORM_PROPERTY,
   ENTITY_NAME_PROPERTY,
   ENTITY_NAME_VECTOR_PROPERTY,
@@ -67,9 +66,14 @@ import type { Vector } from '../providers/types.js';
  * `entity-identity-queries.ts` decides which one the node wears.
  */
 
-/** The names other modules have always imported from here; they are declared with their queries now. */
+/**
+ * The names other modules import from here; they are declared with their queries now. Only the
+ * ones a caller outside this module still reaches for: a re-export nobody imports is a second
+ * name for one thing, and the point of the barrel is that there is one door per symbol.
+ */
 export {
   addEntityAliases,
+  ENTITY_ALIASES_PROPERTY,
   ENTITY_NAME_SQUASH_PROPERTY,
   ENTITY_NAME_VECTOR_HASH_PROPERTY,
   ENTITY_TYPE_COUNTS_PROPERTY,
@@ -77,9 +81,7 @@ export {
   findEntityNameForms,
   findSpeakerEntity,
   reconcileMergedEntities,
-  type EntityAliasEntry,
   type EntityIdentityMatch,
-  type EntityIdentityUpdate,
   type EntityMergeRow,
   type EntityNameForms,
   type MergedEntity,
@@ -89,10 +91,9 @@ export {
   ENTITY_PARTICIPATION_TYPE,
   findEpisodeEntities,
   linkEntityMentions,
-  type EntityMentionInput,
   type EpisodeEntity,
 } from './entity-mention-queries.js';
-export { ENTITY_ALIASES_NORM_PROPERTY, ENTITY_ALIASES_PROPERTY } from './seed-queries.js';
+export { ENTITY_ALIASES_NORM_PROPERTY } from './seed-queries.js';
 
 /** Companions are applied on both MERGE branches, so an entity written before a label rule picks it up. */
 function companionLabels(): string {
@@ -121,7 +122,7 @@ export type EntityMergeInput = EntityReading & {
 
 /** Property naming stays in this module, so a stage never spells a graph property itself. */
 function entityCreateProperties(entity: EntityMergeInput): GraphProperties {
-  const aliases = aliasRecord(entity.aliases ?? [], entity.nameNorm);
+  const aliases = aliasPairs(entity.aliases ?? [], entity.nameNorm);
   return {
     [ENTITY_NAME_PROPERTY]: entity.name,
     [ENTITY_NAME_NORM_PROPERTY]: entity.nameNorm,
@@ -130,8 +131,8 @@ function entityCreateProperties(entity: EntityMergeInput): GraphProperties {
     [ENTITY_TYPE_COUNTS_PROPERTY]: serializeTypeCounts(
       recordTypeObservations({}, observedTypes(entity)),
     ),
-    [ENTITY_ALIASES_PROPERTY]: aliases,
-    [ENTITY_ALIASES_NORM_PROPERTY]: aliasKeys(aliases, entity.nameNorm),
+    [ENTITY_ALIASES_PROPERTY]: aliases.map((pair) => pair.alias),
+    [ENTITY_ALIASES_NORM_PROPERTY]: aliases.map((pair) => pair.key),
     [MEMORY_PROPERTIES.text]: entity.text,
     [MEMORY_PROPERTIES.sourceEpisodeId]: entity.sourceEpisodeId,
     [MEMORY_PROPERTIES.extractionMethod]: entity.extractionMethod,

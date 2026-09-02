@@ -10,7 +10,7 @@ import {
 } from './entity-merge-review.js';
 import { ProposalNotFoundError } from './proposals.js';
 import { upsertEdge } from '../../infrastructure/graph/edges.js';
-import { redirectAndAbsorb } from '../../infrastructure/graph/entity-dedup-queries.js';
+import { redirectAndAbsorb } from '../../infrastructure/graph/entity-merge-queries.js';
 import { mergeEntities, type EntityMergeInput } from '../../infrastructure/graph/entity-queries.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
 import {

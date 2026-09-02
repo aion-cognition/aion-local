@@ -3,8 +3,8 @@ import type { Driver } from 'neo4j-driver';
 import { ACCESS_COUNT_PROPERTY } from './access-tracking.js';
 import { BITEMPORAL_PROPERTIES, currentOnly } from './bitemporal.js';
 import { runRead } from './connection.js';
+import { ENTITY_ALIASES_PROPERTY } from './entity-identity-queries.js';
 import {
-  ENTITY_ALIASES_PROPERTY,
   ENTITY_MENTION_TYPE,
   ENTITY_TYPE_COUNTS_PROPERTY,
   ENTITY_TYPE_PROPERTY,
@@ -24,12 +24,10 @@ import type { Vector } from '../providers/types.js';
 
 /**
  * The graph side of entity deduplication. Everything that decides who is canonical lives in
- * `reflection/domain/entity-merge.ts`; this module only reads the candidates a similarity
- * search needs and writes the merge once the stage has decided one.
+ * `reflection/domain/entity-merge.ts`; the merge write itself lives in
+ * `entity-merge-queries.ts`, and this module only reads the candidates a similarity search
+ * needs.
  */
-
-/** The property the merged names land in. Read back by `aion why` as the identity's history. */
-export { ENTITY_ALIASES_PROPERTY } from './entity-queries.js';
 
 export type DedupEntityDetail = {
   readonly id: string;
@@ -173,13 +171,3 @@ export async function findSimilarCurrentEntities(
     }),
   );
 }
-
-export {
-  clearEntityVectors,
-  MERGE_PROVENANCE_PROPERTY,
-  redirectAndAbsorb,
-  type MergedEntityRecord,
-  type MergeEntityGroupInput,
-  type MergeEntityGroupResult,
-  type RedirectableEdge,
-} from './entity-merge-queries.js';

@@ -1,9 +1,8 @@
 import { ACCESS_COUNT_PROPERTY } from '../../../infrastructure/graph/access-tracking.js';
 import { BITEMPORAL_PROPERTIES } from '../../../infrastructure/graph/bitemporal.js';
-import {
-  ENTITY_ALIASES_PROPERTY,
-  MERGE_PROVENANCE_PROPERTY,
-} from '../../../infrastructure/graph/entity-dedup-queries.js';
+import { CLAIM_SUBJECT_PROPERTY } from '../../../infrastructure/graph/claim-key-queries.js';
+import { ENTITY_ALIASES_PROPERTY } from '../../../infrastructure/graph/entity-identity-queries.js';
+import { MERGE_PROVENANCE_PROPERTY } from '../../../infrastructure/graph/entity-merge-queries.js';
 import {
   ENTITY_ALIASES_NORM_PROPERTY,
   ENTITY_MENTION_TYPE,
@@ -91,9 +90,17 @@ export class DedupFakeGraph extends FakeGraph {
       this.statements.push({ cypher, parameters });
       return toResult(this.#canonicalAbsorbState(parameters));
     }
+    if (cypher.includes(`WHERE canonical.${MERGE_PROVENANCE_PROPERTY} IS NOT NULL`)) {
+      this.statements.push({ cypher, parameters });
+      return toResult(this.#canonicalsWithMergeTrail());
+    }
     if (cypher.includes('UNWIND $ids AS wanted')) {
       this.statements.push({ cypher, parameters });
       return toResult(this.#sidesWithoutCurrency(parameters));
+    }
+    if (cypher.includes(`SET c.${CLAIM_SUBJECT_PROPERTY} = $canonicalId`)) {
+      this.statements.push({ cypher, parameters });
+      return toResult(this.#forwardClaimSubjects(parameters));
     }
     if (cypher.includes('UNWIND $mergedIds AS mergedId') && cypher.includes('startNode(r).id')) {
       this.statements.push({ cypher, parameters });
@@ -144,6 +151,39 @@ export class DedupFakeGraph extends FakeGraph {
         );
       });
     return [...new Set(episodes)].sort();
+  }
+
+  /** Every canonical carrying a merge trail, which is the population the reconcile sweep walks. */
+  #canonicalsWithMergeTrail(): Row[] {
+    return this.entities()
+      .filter((node) => Array.isArray(node.properties[MERGE_PROVENANCE_PROPERTY]))
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .map((node) => ({
+        canonical_id: node.id,
+        canonical_name_norm: node.properties[ENTITY_NAME_NORM_PROPERTY],
+        aliases: node.properties[ENTITY_ALIASES_PROPERTY] ?? [],
+        records: node.properties[MERGE_PROVENANCE_PROPERTY] ?? [],
+      }));
+  }
+
+  /** The merge's key forwarding: every claim asserting about an absorbed identity moves. */
+  #forwardClaimSubjects(parameters: Record<string, unknown>): Row[] {
+    const mergedIds = new Set((parameters.mergedIds as string[] | undefined) ?? []);
+    const canonicalId = parameters.canonicalId as string;
+    const rows: Row[] = [];
+    for (const node of this.nodes.values()) {
+      const subject = node.properties[CLAIM_SUBJECT_PROPERTY];
+      if (typeof subject !== 'string' || !mergedIds.has(subject)) {
+        continue;
+      }
+      node.properties[CLAIM_SUBJECT_PROPERTY] = canonicalId;
+      rows.push({ merged_id: subject, id: node.id });
+    }
+    return rows.sort((left, right) =>
+      `${String(left.merged_id)}${String(left.id)}`.localeCompare(
+        `${String(right.merged_id)}${String(right.id)}`,
+      ),
+    );
   }
 
   /** The merge transaction's post-lock currency read: ids that are missing or closed. */

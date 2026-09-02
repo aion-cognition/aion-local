@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { redirectAndAbsorb } from './entity-dedup-queries.js';
+import { redirectAndAbsorb } from './entity-merge-queries.js';
 import { mergeEntities, type EntityMergeInput } from './entity-queries.js';
 import { runGraphMigrations } from './migrations.js';
 import { withCurrency } from './read-modes.js';

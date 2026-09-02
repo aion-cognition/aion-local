@@ -2,14 +2,14 @@ import type { Driver } from 'neo4j-driver';
 
 import { ACCESS_COUNT_PROPERTY } from './access-tracking.js';
 import { supersedeInTransaction, writeStampedNodeInTransaction } from './bitemporal.js';
+import { restoreClaimSubjectsInTransaction } from './claim-key-queries.js';
 import { inWriteTransaction, runRead, type GraphTransaction } from './connection.js';
 import { upsertEdgeInTransaction } from './edges.js';
-import { MERGE_PROVENANCE_PROPERTY } from './entity-dedup-queries.js';
-import { aliasKeys, aliasRecord } from './entity-identity-queries.js';
+import { aliasPairs, ENTITY_ALIASES_PROPERTY } from './entity-identity-queries.js';
+import { MERGE_PROVENANCE_PROPERTY } from './entity-merge-queries.js';
 import {
   clearNameVectorHashInTransaction,
   ENTITY_ALIASES_NORM_PROPERTY,
-  ENTITY_ALIASES_PROPERTY,
   ENTITY_NAME_SQUASH_PROPERTY,
   ENTITY_TYPE_PROPERTY,
 } from './entity-queries.js';
@@ -17,6 +17,7 @@ import { BASE_NODE_LABEL } from './labels.js';
 import { lockNodeInTransaction } from './locks.js';
 import { isRelationshipType } from './relationships.js';
 import { ENTITY_NAME_NORM_PROPERTY, ENTITY_NAME_PROPERTY } from './seed-queries.js';
+import { toGraphInteger } from './values.js';
 import { squashName } from '../../reflection/domain/entity-reconciliation.js';
 
 /**
@@ -50,6 +51,12 @@ export type MergeProvenanceRecord = {
   readonly mergedType?: string;
   readonly mergedAliases: readonly string[];
   readonly edges: readonly MergeProvenanceEdge[];
+  /** Claims whose subject key the merge moved onto the canonical. Empty on a merge written before it did. */
+  readonly claimIds: readonly string[];
+  /** The `entity_merge_decisions` row this merge points at. Absent on one written before the cascade recorded decisions. */
+  readonly decisionKey?: string;
+  /** The `entity.merge:` ledger key the merge is idempotent on. Absent for the same reason. */
+  readonly ledgerKey?: string;
   /** Set once this record has been split back out; a second unmerge of the same id is a no-op. */
   readonly unmergedAt?: string;
   /** The stored record verbatim, so rewriting it preserves fields this reader does not name. */
@@ -119,6 +126,8 @@ function readRecord(serialized: string): MergeProvenanceRecord | undefined {
   const nameNorm = raw.merged_name_norm;
   const type = raw.merged_type;
   const unmergedAt = raw.unmerged_at;
+  const decisionKey = raw.decision_key;
+  const ledgerKey = raw.ledger_key;
   return {
     mergedId,
     ...(typeof name === 'string' ? { mergedName: name } : {}),
@@ -126,6 +135,9 @@ function readRecord(serialized: string): MergeProvenanceRecord | undefined {
     ...(typeof type === 'string' ? { mergedType: type } : {}),
     mergedAliases: readStringArray(raw.merged_aliases),
     edges,
+    claimIds: readStringArray(raw.claims),
+    ...(typeof decisionKey === 'string' ? { decisionKey } : {}),
+    ...(typeof ledgerKey === 'string' ? { ledgerKey } : {}),
     ...(typeof unmergedAt === 'string' ? { unmergedAt } : {}),
     raw,
   };
@@ -185,6 +197,37 @@ export async function readCanonicalMergeRecords(
   return rows[0];
 }
 
+const READ_MERGE_PROVENANCE = [
+  'MATCH (canonical:Entity)',
+  `WHERE canonical.${MERGE_PROVENANCE_PROPERTY} IS NOT NULL`,
+  'RETURN canonical.id AS canonical_id,',
+  `       canonical.${ENTITY_NAME_NORM_PROPERTY} AS canonical_name_norm,`,
+  `       coalesce(canonical.${ENTITY_ALIASES_PROPERTY}, []) AS aliases,`,
+  `       coalesce(canonical.${MERGE_PROVENANCE_PROPERTY}, []) AS records`,
+  'ORDER BY canonical.id',
+  'LIMIT $limit',
+].join('\n');
+
+/**
+ * Every canonical carrying a merge trail, bounded. The scan exists because the trail is the
+ * only durable statement of a merge that a crash between the graph commit and the SQLite write
+ * leaves behind, and nothing else walks the whole property: the two readers above both start
+ * from an id a caller already holds.
+ */
+export async function listMergeProvenance(
+  driver: Driver,
+  limit: number,
+): Promise<CanonicalMerge[]> {
+  return runRead(driver, READ_MERGE_PROVENANCE, { limit: toGraphInteger(limit) }, (row) => ({
+    canonicalId: row.canonical_id as string,
+    canonicalNameNorm: (row.canonical_name_norm as string | null) ?? '',
+    aliases: readStringArray(row.aliases),
+    records: readStringArray(row.records)
+      .map(readRecord)
+      .filter((record): record is MergeProvenanceRecord => record !== undefined),
+  }));
+}
+
 /**
  * The suffix that releases an identity key. `entity_name_unique` covers every Entity node
  * whatever its currency, and entity extraction leans on that: a closed duplicate still owns
@@ -220,6 +263,8 @@ export type UnmergeInput = {
 export type UnmergeResult = {
   readonly restoredId: string;
   readonly edgesRestored: number;
+  /** Claims whose subject key came back with the split identity. */
+  readonly claimsRestored: number;
   /** Recorded edges whose other endpoint is no longer in the graph. */
   readonly edgesSkipped: number;
   readonly aliasesReleased: number;
@@ -326,6 +371,7 @@ export async function applyUnmerge(driver: Driver, input: UnmergeInput): Promise
       (row) => row.id as string,
     );
 
+    const restoredAliases = aliasPairs(record.mergedAliases, nameNorm);
     const restored = await writeStampedNodeInTransaction(tx, {
       label: 'Entity',
       now: input.now,
@@ -334,8 +380,8 @@ export async function applyUnmerge(driver: Driver, input: UnmergeInput): Promise
         [ENTITY_NAME_NORM_PROPERTY]: nameNorm,
         [ENTITY_NAME_SQUASH_PROPERTY]: squashName(nameNorm),
         [ENTITY_TYPE_PROPERTY]: type,
-        [ENTITY_ALIASES_PROPERTY]: aliasRecord(record.mergedAliases, nameNorm),
-        [ENTITY_ALIASES_NORM_PROPERTY]: aliasKeys(record.mergedAliases, nameNorm),
+        [ENTITY_ALIASES_PROPERTY]: restoredAliases.map((pair) => pair.alias),
+        [ENTITY_ALIASES_NORM_PROPERTY]: restoredAliases.map((pair) => pair.key),
         [ACCESS_COUNT_PROPERTY]: 0,
       },
     });
@@ -368,6 +414,14 @@ export async function applyUnmerge(driver: Driver, input: UnmergeInput): Promise
       edgesRestored += 1;
     }
 
+    // The subject key lands on the restored node rather than the closed one, matching where
+    // the edges above went: an unmerge only ever adds, and the absorbed node stays closed.
+    const claimsRestored = await restoreClaimSubjectsInTransaction(tx, {
+      claimIds: record.claimIds,
+      canonicalId: input.canonicalId,
+      subjectEntityId: restored.id,
+    });
+
     // The restored identity is what the closed node became, so it carries the lineage. The
     // close itself is a no-op: the merge already stamped it and the write coalesces.
     await supersedeInTransaction(tx, {
@@ -382,15 +436,16 @@ export async function applyUnmerge(driver: Driver, input: UnmergeInput): Promise
       ...(record.mergedName === undefined ? [] : [record.mergedName]),
       ...record.mergedAliases,
     ]);
-    const aliases = canonical.aliases.filter((alias) => !released.has(alias));
+    const kept = canonical.aliases.filter((alias) => !released.has(alias));
+    const aliases = aliasPairs(kept, canonical.nameNorm);
 
     await writeStampedNodeInTransaction(tx, {
       label: 'Entity',
       id: input.canonicalId,
       now: input.now,
       mergeProperties: {
-        [ENTITY_ALIASES_PROPERTY]: aliasRecord(aliases, canonical.nameNorm),
-        [ENTITY_ALIASES_NORM_PROPERTY]: aliasKeys(aliases, canonical.nameNorm),
+        [ENTITY_ALIASES_PROPERTY]: aliases.map((pair) => pair.alias),
+        [ENTITY_ALIASES_NORM_PROPERTY]: aliases.map((pair) => pair.key),
         [MERGE_PROVENANCE_PROPERTY]: rewriteRecords(
           canonical.records,
           record.mergedId,
@@ -404,8 +459,9 @@ export async function applyUnmerge(driver: Driver, input: UnmergeInput): Promise
     return {
       restoredId: restored.id,
       edgesRestored,
+      claimsRestored: claimsRestored.length,
       edgesSkipped,
-      aliasesReleased: canonical.aliases.length - aliases.length,
+      aliasesReleased: canonical.aliases.length - kept.length,
     };
   });
 }

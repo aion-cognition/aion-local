@@ -10,7 +10,10 @@ import {
   BITEMPORAL_PROPERTIES,
   CLOSURE_PROVENANCE_PROPERTY,
 } from '../../../infrastructure/graph/bitemporal.js';
-import { MAX_STORED_ENTITY_ALIASES } from '../../../infrastructure/graph/entity-identity-queries.js';
+import {
+  ENTITY_ALIASES_PROPERTY,
+  MAX_STORED_ENTITY_ALIASES,
+} from '../../../infrastructure/graph/entity-identity-queries.js';
 import {
   ENTITY_MENTION_TYPE,
   ENTITY_PARTICIPATION_TYPE,
@@ -20,7 +23,6 @@ import type { EpisodeContext } from '../../../infrastructure/graph/episode-conte
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../../../infrastructure/graph/episodes.js';
 import {
   ENTITY_ALIASES_NORM_PROPERTY,
-  ENTITY_ALIASES_PROPERTY,
   ENTITY_NAME_NORM_PROPERTY,
   ENTITY_NAME_PROPERTY,
   ENTITY_NAME_VECTOR_PROPERTY,

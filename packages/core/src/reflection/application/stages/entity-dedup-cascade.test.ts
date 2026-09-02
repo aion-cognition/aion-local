@@ -8,7 +8,7 @@ import {
 } from './entity-dedup-cascade.js';
 import { DedupFakeGraph } from './entity-dedup.fixture.js';
 import { BITEMPORAL_PROPERTIES } from '../../../infrastructure/graph/bitemporal.js';
-import { ENTITY_ALIASES_PROPERTY } from '../../../infrastructure/graph/entity-dedup-queries.js';
+import { ENTITY_ALIASES_PROPERTY } from '../../../infrastructure/graph/entity-identity-queries.js';
 import {
   ENTITY_ALIASES_NORM_PROPERTY,
   ENTITY_MENTION_TYPE,
