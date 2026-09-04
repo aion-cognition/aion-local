@@ -25,7 +25,6 @@ export {
   getLedgerEntry,
   isLedgerApplied,
   latestLedgerEntry,
-  listLedgerEntries,
   markLedgerApplied,
 } from './sqlite/ops-ledger.js';
 

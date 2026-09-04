@@ -384,16 +384,6 @@ function resolveCitations(raw: readonly string[], byHandle: ReadonlyMap<string, 
   return ids;
 }
 
-/**
- * The graph ids one sentence's tags resolve to, in the order the model wrote them, with
- * anything the prompt never offered dropped. The consolidation engine keeps citations per
- * sentence rather than per node, because its reviewer checks a sentence against the items that
- * sentence cited.
- */
-export function citedSourceIds(raw: readonly string[], source: NarrativeSource): readonly string[] {
-  return resolveCitations(raw, new Map(source.items.map((item) => [item.handle, item.id])));
-}
-
 /** One kept sentence and the graph ids it cited, which is what a per-sentence review reads. */
 export type GroundedSentence = {
   readonly text: string;

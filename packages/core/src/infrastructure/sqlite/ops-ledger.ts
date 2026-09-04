@@ -45,21 +45,6 @@ export function listLedgerKeys(db: SqliteHandle, prefix: string): string[] {
 }
 
 /**
- * Every entry under one namespace, keyed and summarized. `listLedgerKeys` above answers which
- * of many things has run; this is for a caller that also needs what each one recorded, such as
- * comparing a batch of stored verdicts against a live reading one at a time.
- */
-export function listLedgerEntries(db: SqliteHandle, prefix: string): OpsLedgerEntry[] {
-  const escaped = prefix.replace(/[\\%_]/g, '\\$&');
-  const rows = db
-    .prepare(
-      "SELECT key, applied_at, summary_json FROM ops_ledger WHERE key LIKE ? ESCAPE '\\' ORDER BY key",
-    )
-    .all(`${escaped}%`) as OpsLedgerRow[];
-  return rows.map(toOpsLedgerEntry);
-}
-
-/**
  * The newest entry under a namespace. For a time-bucketed key that is the last window the
  * operation ran in, which is what an operator asking "did maintenance do anything" wants.
  * Ordered by write time first, so an operation whose bucket granularity changed still reports
