@@ -16,7 +16,7 @@ import type { ReflectionOutput } from '@aion/protocol';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { CROSS_STAGE_ENTITY_MISS } from './gate-batteries.fixture.js';
-import { GateSubstrate, waitFor } from './gate-substrate.fixture.js';
+import { GateSubstrate, waitFor, REMOTE_JUDGE_ABSENT  } from './gate-substrate.fixture.js';
 
 /**
  * What the write path stores, and who it serves first.
@@ -69,7 +69,7 @@ afterAll(async () => {
   await substrate.close();
 });
 
-describe('the leaked-shape corpus through a real intake', () => {
+describe.skipIf(REMOTE_JUDGE_ABSENT)('the leaked-shape corpus through a real intake', () => {
   for (const shape of LEAKED_SHAPES) {
     it(`stores no trace of ${shape.label}`, () => {
       expect(storedProperties).not.toContain(shape.material);
@@ -90,7 +90,7 @@ describe('the leaked-shape corpus through a real intake', () => {
   }
 });
 
-describe('a bulk load queued ahead of one live turn', () => {
+describe.skipIf(REMOTE_JUDGE_ABSENT)('a bulk load queued ahead of one live turn', () => {
   const acks: ReflectionOutput[] = [];
   let live: ReflectionOutput | undefined;
   let bulkUnclaimedWhenLiveEnriched = 0;
@@ -198,7 +198,7 @@ describe('a bulk load queued ahead of one live turn', () => {
  * arrival-rate backstop is what had to fire, and a battery that always sets `lane: 'bulk'`
  * stays green with that backstop switched off entirely.
  */
-describe('a flood that never says it is one', () => {
+describe.skipIf(REMOTE_JUDGE_ABSENT)('a flood that never says it is one', () => {
   const acks: ReflectionOutput[] = [];
   const UNDECLARED_SESSION = 'gate-undeclared-flood';
 
@@ -244,7 +244,7 @@ describe('a flood that never says it is one', () => {
  * extractions into a single pass, is deliberately out of scope while quality-neutral changes
  * come first. Kept runnable so the measurement is a `.skip` away rather than a rewrite away.
  */
-describe('cross-stage entity naming, measured but not gated', () => {
+describe.skipIf(REMOTE_JUDGE_ABSENT)('cross-stage entity naming, measured but not gated', () => {
   it.skip('names the central entities its own cognitive nodes name', async () => {
     const stored = await substrate.store(CROSS_STAGE_ENTITY_MISS.payload, {
       identity: CROSS_STAGE_ENTITY_MISS.identity,

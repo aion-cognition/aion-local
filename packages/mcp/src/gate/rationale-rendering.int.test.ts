@@ -2,7 +2,7 @@ import { countQueueJobs, findEpisodeCognitiveNodes } from '@aion/core';
 import { nodeProperties } from '@aion/core/infrastructure/graph/test-support/graph-queries.fixture.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { GateSubstrate, waitFor } from './gate-substrate.fixture.js';
+import { GateSubstrate, waitFor, REMOTE_JUDGE_ABSENT  } from './gate-substrate.fixture.js';
 import { heldOutCase } from './held-out-recall.fixture.js';
 
 /**
@@ -68,7 +68,7 @@ afterAll(async () => {
   await substrate.close();
 });
 
-describe('a decision node renders the reason behind it', () => {
+describe.skipIf(REMOTE_JUDGE_ABSENT)('a decision node renders the reason behind it', () => {
   it('answers why postgres beat redis with the why line present in rendered_text', async () => {
     const result = await substrate.recall(
       'why did we go with postgres instead of redis for refund locking',

@@ -15,6 +15,7 @@ import {
 } from '@aion/core';
 import { beforeAll, describe, expect, it } from 'vitest';
 
+import { REMOTE_JUDGE_ABSENT } from './gate-substrate.fixture.js';
 import {
   candidatesFor,
   NO_OPERATION,
@@ -153,7 +154,7 @@ beforeAll(async () => {
   scored = rows;
 }, BATTERY_DEADLINE_MS);
 
-describe('the tier-3 advisor selection battery', () => {
+describe.skipIf(REMOTE_JUDGE_ABSENT)('the tier-3 advisor selection battery', () => {
   it('names the route it measured, so the number belongs to a model', () => {
     const route = router.routing.roles.reflect;
     const resolved = resolveProviderRouting(config).roles.reflect;

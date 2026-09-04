@@ -19,7 +19,7 @@ import {
 } from '@aion/core/reflection/domain/claim-key.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { GateSubstrate } from './gate-substrate.fixture.js';
+import { GateSubstrate, REMOTE_JUDGE_ABSENT  } from './gate-substrate.fixture.js';
 import {
   casesOfClass,
   KEYED_BATTERY,
@@ -300,7 +300,7 @@ afterAll(async () => {
   await substrate.close();
 });
 
-describe('the 24-case keyed close battery', () => {
+describe.skipIf(REMOTE_JUDGE_ABSENT)('the 24-case keyed close battery', () => {
   it('names the route it measured, so the number belongs to a model', () => {
     const route = resolveProviderRouting(substrate.config).roles.reflect;
     console.log(

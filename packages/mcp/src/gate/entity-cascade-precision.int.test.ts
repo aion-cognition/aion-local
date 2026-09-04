@@ -45,7 +45,7 @@ import {
   type Scored,
   type SeededCase,
 } from './entity-cascade-precision.scoring.js';
-import { GateSubstrate } from './gate-substrate.fixture.js';
+import { GateSubstrate, REMOTE_JUDGE_ABSENT  } from './gate-substrate.fixture.js';
 
 /**
  * The cascade's shipped default, measured rather than argued.
@@ -292,7 +292,7 @@ afterAll(async () => {
   await substrate.close();
 });
 
-describe('the 24-pair entity cascade battery', () => {
+describe.skipIf(REMOTE_JUDGE_ABSENT)('the 24-pair entity cascade battery', () => {
   it('names the route it measured, so the number belongs to a model', () => {
     const route = resolveProviderRouting(substrate.config).roles.reflect;
     console.log(

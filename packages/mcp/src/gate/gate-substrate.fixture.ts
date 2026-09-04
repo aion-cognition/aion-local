@@ -72,6 +72,17 @@ export type GateSubstrateOptions = {
   readonly tune?: (config: Config) => Config;
 };
 
+/**
+ * The batteries measure the shipped configuration, whose generations run on the remote route.
+ * With no key `testGenerationProvider` falls back to the local model silently, and every floor
+ * and pinned default gets judged against a benchmark it was never measured on: the local judge
+ * reads as product regressions. The batteries skip, visibly, instead. `TEST_AION_GENERATION=local`
+ * counts as absent for the same reason.
+ */
+export const REMOTE_JUDGE_ABSENT =
+  (process.env.AION_ANTHROPIC_API_KEY ?? '').trim() === '' ||
+  process.env.TEST_AION_GENERATION === 'local';
+
 export class GateSubstrate {
   readonly label: string;
   readonly config: Config;

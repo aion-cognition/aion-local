@@ -26,7 +26,7 @@ import {
   type ChangeCase,
   type NarrativeFixture,
 } from './gate-batteries.fixture.js';
-import { GateSubstrate, waitFor } from './gate-substrate.fixture.js';
+import { GateSubstrate, waitFor, REMOTE_JUDGE_ABSENT  } from './gate-substrate.fixture.js';
 
 /**
  * What the substrate does when the world changes under it, and what it writes about a session
@@ -164,7 +164,7 @@ afterAll(async () => {
  * resolved row; under `propose` nothing closes at all. Both are asserted against the shipped
  * config rather than a pinned one, so this stays a gate on what ships.
  */
-describe('the six-case supersession set under the shipped mode', () => {
+describe.skipIf(REMOTE_JUDGE_ABSENT)('the six-case supersession set under the shipped mode', () => {
   it('closes nothing on one judgment alone', async () => {
     // The legacy `auto` provenance, which no shipped mode writes: a close stamped this way is
     // a confidence gate that came back.
@@ -223,7 +223,7 @@ describe('the six-case supersession set under the shipped mode', () => {
   });
 });
 
-describe('the four corrections, read back', () => {
+describe.skipIf(REMOTE_JUDGE_ABSENT)('the four corrections, read back', () => {
   const corrections = CHANGE_BATTERY.filter((entry) => entry.kind === 'correction');
 
   function held(entry: ChangeCase): StoredCase {
@@ -317,7 +317,7 @@ describe('the four corrections, read back', () => {
   );
 });
 
-describe('narrative grounding on the fabrication fixtures', () => {
+describe.skipIf(REMOTE_JUDGE_ABSENT)('narrative grounding on the fabrication fixtures', () => {
   type Narration = {
     readonly sentences: number;
     readonly chars: number;

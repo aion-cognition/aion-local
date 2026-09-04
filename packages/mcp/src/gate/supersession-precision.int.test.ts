@@ -16,6 +16,7 @@ import {
 } from '@aion/core/reflection/application/stages/supersession.js';
 import { beforeAll, describe, expect, it } from 'vitest';
 
+import { REMOTE_JUDGE_ABSENT } from './gate-substrate.fixture.js';
 import {
   casesOfClass,
   PRECISION_BATTERY,
@@ -260,7 +261,7 @@ beforeAll(async () => {
   retro = retroRows;
 }, BATTERY_DEADLINE_MS);
 
-describe('the 24-case supersession battery', () => {
+describe.skipIf(REMOTE_JUDGE_ABSENT)('the 24-case supersession battery', () => {
   it('names the route it measured, so the number belongs to a model', () => {
     const route = router.routing.roles.reflect;
     const resolved = resolveProviderRouting(config).roles.reflect;

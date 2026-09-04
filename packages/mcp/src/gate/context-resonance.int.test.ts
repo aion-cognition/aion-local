@@ -26,7 +26,7 @@ import {
   TARGET_WORLD,
   type ResonanceWorld,
 } from './context-resonance.fixture.js';
-import { GateSubstrate, waitFor } from './gate-substrate.fixture.js';
+import { GateSubstrate, waitFor, REMOTE_JUDGE_ABSENT  } from './gate-substrate.fixture.js';
 
 /**
  * The second pass, on the shipped read path and in the embedding space the service actually
@@ -208,7 +208,7 @@ afterAll(async () => {
   await substrate.close();
 });
 
-describe('a memory the query shares no words with reaches the pack by the shape of its neighborhood', () => {
+describe.skipIf(REMOTE_JUDGE_ABSENT)('a memory the query shares no words with reaches the pack by the shape of its neighborhood', () => {
   it('leaves the target out of reach of the content leg and the keyword leg', async () => {
     const [queryVector] = await substrate.provider.embed([RESONANCE_QUERY]);
     const [targetVector] = await substrate.provider.embed([TARGET_WORLD.observation]);
@@ -370,7 +370,7 @@ describe('a memory the query shares no words with reaches the pack by the shape 
  * shape of whatever the recency leg happened to return, and searching from it is how an
  * off-topic pack fills itself with memories nothing measured.
  */
-describe('an off-topic query gets no resonant bucket at all', () => {
+describe.skipIf(REMOTE_JUDGE_ABSENT)('an off-topic query gets no resonant bucket at all', () => {
   it.each(OFF_TOPIC_BATTERY)(
     'stays quiet for: %s',
     async (query) => {
