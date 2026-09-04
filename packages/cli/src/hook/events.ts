@@ -8,6 +8,7 @@ import {
   packText,
   recallArgs,
   reflectionArgs,
+  reflectionObservationArgs,
   reflectionTurns,
   stampedToolInput,
   stringField,
@@ -194,8 +195,28 @@ export function stop(context: HookContext): Promise<number> {
   return Promise.resolve(instruct(context));
 }
 
-export function subagentStop(context: HookContext): Promise<number> {
-  return pushTurn(context);
+/**
+ * A subagent writes its own transcript file, which the session cursor cannot tail: the stored
+ * offset tracks the parent transcript, so the tail read comes back empty and the turn path
+ * no-ops. The payload's `last_assistant_message` carries the synthesis directly, and it goes
+ * up as one observation, tagged with the agent type, with the parent cursor left alone. A
+ * payload without the field (a harness older than 2.1.196) falls back to the turn path.
+ */
+export async function subagentStop(context: HookContext): Promise<number> {
+  const synthesis = stringField(context.input, 'last_assistant_message');
+  if (synthesis === undefined) {
+    return pushTurn(context);
+  }
+  const agentType = stringField(context.input, 'agent_type');
+  const noted = agentType === undefined ? synthesis : `[${agentType}] ${synthesis}`;
+  const origin = { channel: 'hook' as const, event: context.options.event };
+  await withMcp(context, (client) =>
+    client.call(
+      REFLECTION_TOOL,
+      reflectionObservationArgs(noted, stringField(context.input, 'session_id'), origin),
+    ),
+  );
+  return 0;
 }
 
 export async function sessionEnd(context: HookContext): Promise<number> {
