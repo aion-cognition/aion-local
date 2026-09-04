@@ -22,7 +22,7 @@ import {
   countReinforcementSignals,
   enqueueReinforcementSignal,
 } from '../../infrastructure/sqlite/reinforcement-queue.js';
-import { expectedBoundedReinforcement } from '../../plasticity/domain/reinforcement.oracle.js';
+import { boundedReinforcement } from '../../plasticity/domain/reinforcement.js';
 import type { OperationContext } from '../domain/operation.js';
 import { healthFixture } from '../domain/test-support/health.fixture.js';
 
@@ -133,7 +133,7 @@ describe('reinforcement_flush: multi-batch drain against the graph', () => {
     expect(countReinforcementSignals(db)).toBe(0);
     for (let i = 0; i < 5; i += 1) {
       expect(await edgeStrength(`drain-${String(i)}-a`, `drain-${String(i)}-b`)).toBeCloseTo(
-        expectedBoundedReinforcement(0.5, LEARNING_RATE, WEIGHT_FLOOR),
+        boundedReinforcement(0.5, LEARNING_RATE, WEIGHT_FLOOR),
         10,
       );
     }
@@ -200,7 +200,7 @@ describe('reinforcement_flush: multi-batch drain against the graph', () => {
     // own drain loop instead, land on the identical value.
     let expected = 0.9;
     for (let round = 0; round < 25; round += 1) {
-      expected = expectedBoundedReinforcement(expected, LEARNING_RATE, WEIGHT_FLOOR);
+      expected = boundedReinforcement(expected, LEARNING_RATE, WEIGHT_FLOOR);
     }
     const strength = await edgeStrength('loop-saturate-a', 'loop-saturate-b');
     expect(strength).toBeCloseTo(expected, 10);

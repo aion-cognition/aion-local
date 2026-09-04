@@ -15,8 +15,12 @@ export const IsoTimestampSchema = z.union([z.iso.datetime({ offset: true }), z.i
  */
 export const CurrencySchema = z.enum(['current', 'superseded', 'expired']);
 
+export type Currency = z.infer<typeof CurrencySchema>;
+
 /** The node that closed this one's validity, and when. This supersedes lineage. */
 export const SupersededBySchema = z.strictObject({
   id: z.string().min(1),
   at: IsoTimestampSchema,
 });
+
+export type SupersededBy = z.infer<typeof SupersededBySchema>;

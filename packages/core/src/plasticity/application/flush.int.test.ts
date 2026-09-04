@@ -21,7 +21,7 @@ import {
   enqueueReinforcementSignal,
   reinforcementFlushCounters,
 } from '../../infrastructure/sqlite/reinforcement-queue.js';
-import { expectedBoundedReinforcement } from '../domain/reinforcement.oracle.js';
+import { boundedReinforcement } from '../domain/reinforcement.js';
 
 const EMBED_DIMENSION = 8;
 const NOW = new Date('2026-03-01T00:00:00.000Z');
@@ -118,7 +118,7 @@ describe('hebbian flush against the graph', () => {
       signalsDeleted: 1,
     });
     expect(await edgeStrength('SIMILAR', 'recall-a', 'recall-b')).toBeCloseTo(
-      expectedBoundedReinforcement(0.5, LEARNING_RATE, WEIGHT_FLOOR),
+      boundedReinforcement(0.5, LEARNING_RATE, WEIGHT_FLOOR),
       10,
     );
   });
@@ -132,7 +132,7 @@ describe('hebbian flush against the graph', () => {
     await flush();
 
     expect(await edgeStrength('CO_OCCURS', 'reflect-a', 'reflect-b')).toBeCloseTo(
-      expectedBoundedReinforcement(0.5, LEARNING_RATE * 0.3, WEIGHT_FLOOR),
+      boundedReinforcement(0.5, LEARNING_RATE * 0.3, WEIGHT_FLOOR),
       10,
     );
   });
@@ -155,7 +155,7 @@ describe('hebbian flush against the graph', () => {
     expect(report.pairsApplied).toBe(15);
     expect(report.edgesUpdated).toBe(1);
     expect(await edgeStrength('CO_OCCURS', 'clique-a', 'clique-b')).toBeCloseTo(
-      expectedBoundedReinforcement(0.5, (LEARNING_RATE * 0.3) / 5, WEIGHT_FLOOR),
+      boundedReinforcement(0.5, (LEARNING_RATE * 0.3) / 5, WEIGHT_FLOOR),
       10,
     );
   });
@@ -179,7 +179,7 @@ describe('hebbian flush against the graph', () => {
     expect(report.signalsClaimed).toBe(8);
     expect(report.pairsApplied).toBe(1);
     expect(await edgeStrength('SIMILAR', 'repeat-a', 'repeat-b')).toBeCloseTo(
-      expectedBoundedReinforcement(0.5, LEARNING_RATE, WEIGHT_FLOOR),
+      boundedReinforcement(0.5, LEARNING_RATE, WEIGHT_FLOOR),
       10,
     );
   });
@@ -210,7 +210,7 @@ describe('hebbian flush against the graph', () => {
     expect(report.edgesUpdated).toBe(1);
     expect(await edgeStrength('PARTICIPATES_IN', 'mixed-a', 'mixed-b')).toBe(0.4);
     expect(await edgeStrength('CO_OCCURS', 'mixed-a', 'mixed-b')).toBeCloseTo(
-      expectedBoundedReinforcement(0.4, LEARNING_RATE, WEIGHT_FLOOR),
+      boundedReinforcement(0.4, LEARNING_RATE, WEIGHT_FLOOR),
       10,
     );
   });
@@ -279,7 +279,7 @@ describe('hebbian flush against the graph', () => {
     expect(second.signalsClaimed).toBe(1);
     expect(countReinforcementSignals(db)).toBe(0);
     expect(await edgeStrength('SIMILAR', 'batch-c', 'batch-d')).toBeCloseTo(
-      expectedBoundedReinforcement(0.5, LEARNING_RATE, WEIGHT_FLOOR),
+      boundedReinforcement(0.5, LEARNING_RATE, WEIGHT_FLOOR),
       10,
     );
   });
