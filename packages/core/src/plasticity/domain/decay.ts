@@ -1,7 +1,6 @@
 /**
- * The decay sweep's test oracle: the bell curve against staleness and the floor clamp, in
- * pure TS. The sweep applies this arithmetic in Cypher (`edge-weights.ts`); tests import this
- * mirror to state an expected weight without a server. Nothing in production imports it.
+ * The pure Hebbian decay: the bell curve against staleness, and the floor clamp. No SQLite,
+ * no Cypher.
  *
  * The curve is `decay = exp(-((t - peak)^2) / (2 * sigma^2))`, where `t` is days
  * since an edge was last touched. It peaks at `t = peak` and falls off symmetrically
@@ -29,21 +28,22 @@
 
 /**
  * `exp(-((daysSinceAccess - peakDays)^2) / (2 * sigma^2))`, in `[0, 1]` and maximal at
- * `daysSinceAccess === peakDays`. Symmetric around the peak: `expectedDecayFactor(peak - x, ...)`
- * equals `expectedDecayFactor(peak + x, ...)` for any `x`. Far enough out in a tail the exponent
+ * `daysSinceAccess === peakDays`. Symmetric around the peak: `decayFactor(peak - x, ...)`
+ * equals `decayFactor(peak + x, ...)` for any `x`. Far enough out in a tail the exponent
  * underflows to exactly zero, which is a decay run's honest answer for an edge nowhere near
  * the peak.
  */
-export function expectedDecayFactor(daysSinceAccess: number, peakDays: number, sigma: number): number {
+export function decayFactor(daysSinceAccess: number, peakDays: number, sigma: number): number {
   const offset = daysSinceAccess - peakDays;
   return Math.exp(-(offset * offset) / (2 * sigma * sigma));
 }
 
 /**
- * The rule itself. A weight only ever moves toward the floor, never past it and never up. An
- * edge already under the floor stays where it is.
+ * The rule itself, and the same arithmetic the Cypher applies, so a test can state the
+ * expected weight without a server. A weight only ever moves toward the floor, never past it
+ * and never up. An edge already under the floor stays where it is.
  */
-export function expectedBoundedDecay(
+export function boundedDecay(
   weight: number,
   decayRate: number,
   factor: number,
