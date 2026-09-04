@@ -1,6 +1,7 @@
 /**
- * The pure Hebbian update: the bounded rule, the per-trigger rates, and the fold from a
- * window of queued signals down to one step per pair. No SQLite, no Cypher.
+ * The pure Hebbian update: the per-trigger rates, and the fold from a window of queued
+ * signals down to one step per pair. No SQLite, no Cypher. The bounded rule itself is applied
+ * in Cypher (`edge-weights.ts`) and mirrored for tests in `reinforcement.oracle.ts`.
  *
  * The rule is bounded: `w' = w + eta * (1 - w)`. The `(1 - w)` term is what makes
  * reinforcement diminish: an edge at 0.5 gains 0.05 per full-rate step, an edge at 0.9 gains
@@ -116,11 +117,6 @@ function burstSize(group: readonly QueuedSignal[]): number {
   return members.size;
 }
 
-/** The same count for every burst in a window. */
-export function cliqueSizes(signals: readonly QueuedSignal[]): ReadonlyMap<string, number> {
-  return new Map([...bursts(signals)].map(([key, group]) => [key, burstSize(group)]));
-}
-
 /**
  * The share of one burst's evidence that a single pair in it carries: `1 / max(1, n - 1)`.
  *
@@ -210,25 +206,4 @@ export function aggregateWindow(
       learningRate: baseLearningRate * Math.min(1, entry.signal),
     }))
     .filter((pair) => pair.learningRate > 0);
-}
-
-/**
- * The rule itself, and the same arithmetic the Cypher applies, so a test can state the
- * expected weight without a server. The floor is a lower bound on the result, which
- * reinforcement can only reach by starting under it: a step raises the weight whenever eta is
- * positive and the weight is under 1.
- */
-export function boundedReinforcement(
-  weight: number,
-  learningRate: number,
-  weightFloor: number,
-): number {
-  const raw = weight + learningRate * (1 - weight);
-  if (raw < weightFloor) {
-    return weightFloor;
-  }
-  if (raw > 1) {
-    return 1;
-  }
-  return raw;
 }

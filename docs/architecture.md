@@ -56,10 +56,12 @@ of episodes, cues, or memory packs beyond those primitives.
   ranked lists), `stage-reads.ts` (the pipeline's batched graph reads), `resonance.ts` (the
   second pass), `recall.ts` (the pipeline), `side-effects.ts` (post-recall listeners).
 - **`plasticity/`**: `domain/` folds a window of co-activation signals into per-pair
-  learning rates and computes the staleness curve; `application/` runs the two operations
-  that apply them, `flush.ts` (bounded reinforcement of the nominated pairs) and `decay.ts`
-  (weight decay against staleness, the protected relationship types exempt), plus
-  `metrics.ts`. Both operations are called, never scheduled: cadence belongs to the caller.
+  learning rates; the bounded step and the staleness curve are applied in Cypher, with pure
+  `*.oracle.ts` mirrors beside the domain code that tests state expected weights against.
+  `application/` runs the two operations, `flush.ts` (bounded reinforcement of the nominated
+  pairs) and `decay.ts` (weight decay against staleness, the protected relationship types
+  exempt), plus `metrics.ts`. Both operations are called, never scheduled: cadence belongs to
+  the caller.
 - **`introspection/domain/`**: `health.ts` (the snapshot every phase reads, plus the critical
   conditions read off it), `decide.ts` (the pure three-tier decision, starvation protection,
   effectiveness weighting, the preemption grace), `operation.ts` (the contract a maintenance

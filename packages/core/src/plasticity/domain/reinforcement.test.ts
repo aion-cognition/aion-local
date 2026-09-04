@@ -6,14 +6,12 @@ import {
   REFLECTION_CO_EXTRACTION_TRIGGER,
   TRIGGER_POLICIES,
   aggregateWindow,
-  boundedReinforcement,
   cliqueDiscount,
-  cliqueSizes,
   pairKey,
-  signalGroupKey,
   signalWeight,
   triggerPolicy,
 } from './reinforcement.js';
+import { expectedBoundedReinforcement } from './reinforcement.oracle.js';
 
 const FLOOR = 0.1;
 const BASE_RATE = 0.1;
@@ -43,64 +41,6 @@ describe('trigger strings carry a policy', () => {
     expect(Object.keys(TRIGGER_POLICIES).sort()).toEqual(
       [RECALL_CO_ACTIVATION_TRIGGER, REFLECTION_CO_EXTRACTION_TRIGGER].sort(),
     );
-  });
-});
-
-describe('bounded reinforcement', () => {
-  it('climbs toward one and never past it', () => {
-    let weight = FLOOR;
-    let previous = weight;
-    for (let step = 0; step < 500; step += 1) {
-      weight = boundedReinforcement(weight, BASE_RATE, FLOOR);
-      expect(weight).toBeLessThanOrEqual(1);
-      expect(weight).toBeGreaterThanOrEqual(previous);
-      previous = weight;
-    }
-    expect(weight).toBeGreaterThan(0.999);
-  });
-
-  it('is still strictly rising while the edge is short of saturation', () => {
-    let weight = FLOOR;
-    for (let step = 0; step < 50; step += 1) {
-      const next = boundedReinforcement(weight, BASE_RATE, FLOOR);
-      expect(next).toBeGreaterThan(weight);
-      weight = next;
-    }
-  });
-
-  it('gains less the stronger the edge already is', () => {
-    const weak = boundedReinforcement(0.5, BASE_RATE, FLOOR) - 0.5;
-    const strong = boundedReinforcement(0.9, BASE_RATE, FLOOR) - 0.9;
-    expect(weak).toBeCloseTo(0.05, 10);
-    expect(strong).toBeCloseTo(0.01, 10);
-    expect(strong).toBeLessThan(weak);
-  });
-
-  it('stays inside the floor and one for every weight and rate in range', () => {
-    for (let weight = 0; weight <= 1.0001; weight += 0.05) {
-      for (let eta = 0; eta <= 1.0001; eta += 0.05) {
-        const next = boundedReinforcement(Math.min(weight, 1), Math.min(eta, 1), FLOOR);
-        expect(next).toBeGreaterThanOrEqual(FLOOR);
-        expect(next).toBeLessThanOrEqual(1);
-      }
-    }
-  });
-
-  it('never moves a weight downward', () => {
-    for (let weight = FLOOR; weight <= 1.0001; weight += 0.05) {
-      const start = Math.min(weight, 1);
-      expect(boundedReinforcement(start, BASE_RATE, FLOOR)).toBeGreaterThanOrEqual(start);
-    }
-  });
-
-  it('raises a weight found below the floor up to it', () => {
-    expect(boundedReinforcement(0.01, 0, FLOOR)).toBe(FLOOR);
-    expect(boundedReinforcement(0, 0.05, FLOOR)).toBe(FLOOR);
-  });
-
-  it('leaves a saturated edge alone', () => {
-    expect(boundedReinforcement(1, BASE_RATE, FLOOR)).toBe(1);
-    expect(boundedReinforcement(1, 1, FLOOR)).toBe(1);
   });
 });
 
@@ -164,20 +104,6 @@ describe('clique discount', () => {
     expect(total(large) / total(small)).toBeCloseTo(2, 10);
   });
 
-  it('counts the burst from its distinct endpoints', () => {
-    const sizes = cliqueSizes(clique(['a', 'b', 'c', 'd']));
-    expect([...sizes.values()]).toEqual([4]);
-  });
-
-  it('separates bursts by trigger and timestamp', () => {
-    const sizes = cliqueSizes([
-      ...clique(['a', 'b', 'c']),
-      ...clique(['d', 'e'], '2026-01-02T00:00:00.000Z'),
-      recallSignal('f', 'g'),
-    ]);
-    expect(sizes.size).toBe(3);
-    expect(sizes.get(signalGroupKey({ trigger: RECALL_CO_ACTIVATION_TRIGGER, ts: TS }))).toBe(2);
-  });
 
   it('discounts a co-extraction signal but not a recall one', () => {
     expect(signalWeight(coExtractionSignal('a', 'b'), 11)).toBeCloseTo(0.03, 10);
@@ -207,8 +133,8 @@ describe('window aggregation', () => {
       Array.from({ length: 500 }, () => recallSignal('a', 'b')),
       BASE_RATE,
     );
-    const applied = boundedReinforcement(0.5, flood[0]?.learningRate ?? 0, FLOOR);
-    expect(applied).toBeCloseTo(boundedReinforcement(0.5, BASE_RATE, FLOOR), 10);
+    const applied = expectedBoundedReinforcement(0.5, flood[0]?.learningRate ?? 0, FLOOR);
+    expect(applied).toBeCloseTo(expectedBoundedReinforcement(0.5, BASE_RATE, FLOOR), 10);
   });
 
   it('accumulates weak co-extraction signals toward the full rate without passing it', () => {

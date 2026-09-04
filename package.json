@@ -20,7 +20,6 @@
     "test:integration": "vitest run --project integration --project integration-ollama",
     "test:watch": "vitest --project unit",
     "quality:extraction": "tsc -b packages/core && node packages/core/dist/reflection/test-support/quality-harness/run.js",
-    "cleanup:narratives": "tsc -b packages/core && node packages/core/dist/reflection/application/narrative-cleanup-run.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "lint:conflicts": "eslint-config-prettier packages/core/src/index.ts",

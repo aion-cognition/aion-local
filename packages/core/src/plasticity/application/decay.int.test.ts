@@ -19,7 +19,7 @@ import {
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { decaySweepCounters } from '../../infrastructure/sqlite/decay-counters.js';
-import { boundedDecay, decayFactor } from '../domain/decay.js';
+import { expectedBoundedDecay, expectedDecayFactor } from '../domain/decay.oracle.js';
 
 const EMBED_DIMENSION = 8;
 const NOW = new Date('2026-03-01T00:00:00.000Z');
@@ -128,9 +128,9 @@ describe('hebbian decay against the graph', () => {
     const report = await sweep();
 
     expect(report).toEqual({ edgesScanned: 1, edgesDecayed: 1 });
-    const factor = decayFactor(PEAK_DAYS, PEAK_DAYS, SIGMA);
+    const factor = expectedDecayFactor(PEAK_DAYS, PEAK_DAYS, SIGMA);
     expect(await edgeStrength('SIMILAR', 'decay-a', 'decay-b')).toBeCloseTo(
-      boundedDecay(0.5, DECAY_RATE, factor, WEIGHT_FLOOR),
+      expectedBoundedDecay(0.5, DECAY_RATE, factor, WEIGHT_FLOOR),
       6,
     );
   });
@@ -259,7 +259,7 @@ describe('hebbian decay against the graph', () => {
     // read staleness off a property it writes would flatten the second step to the curve's
     // left tail and report an edge nobody touched as freshly used.
     expect(0.9 - afterFirst).toBeCloseTo(afterFirst - afterSecond, 6);
-    expect(0.9 - afterFirst).toBeCloseTo(DECAY_RATE * decayFactor(PEAK_DAYS, PEAK_DAYS, SIGMA), 6);
+    expect(0.9 - afterFirst).toBeCloseTo(DECAY_RATE * expectedDecayFactor(PEAK_DAYS, PEAK_DAYS, SIGMA), 6);
   });
 
   it('covers every edge in turn when they are all the same whole number of days stale', async () => {

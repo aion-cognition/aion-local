@@ -66,8 +66,6 @@ export const AdmittedBySchema = z.strictObject({
   evidence: z.array(z.string().min(1)).min(1),
 });
 
-export type AdmittedBy = z.infer<typeof AdmittedBySchema>;
-
 /**
  * The current claim that answers what a raw turn is about. A turn is captured text, never a
  * distilled claim, so supersession never judges one and a belief stated in a turn stays
