@@ -3,6 +3,7 @@ import {
   openSqliteHandle,
   runGraphMigrations,
   type SqliteHandle,
+  DEFAULTS,
 } from '@aion/core';
 import {
   startNeo4jHarness,
@@ -29,7 +30,7 @@ import { runLast } from './last.js';
  * wrote to, so both readers agree with what is really on disk.
  */
 
-const EMBED_DIMENSION = 768;
+const EMBED_DIMENSION = DEFAULTS.models.embedDimension;
 const OBSERVATION = 'we picked webhooks for the ingestion service because polling was too slow';
 const QUERY = 'why did we pick webhooks for ingestion';
 
