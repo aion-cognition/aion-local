@@ -38,7 +38,8 @@ import { HEALTH_PATH, MCP_PATH } from './http.js';
  */
 
 const MEMBER_NAME = 'Ryan Huber';
-const EMBED_DIMENSION = 768;
+/** The file embeds through the host's live Ollama, so the index must carry the shipped model's width. */
+const EMBED_DIMENSION = DEFAULTS.models.embedDimension;
 
 const OBSERVATION_A = 'we picked webhooks for the ingestion service because polling was too slow';
 const OBSERVATION_B = 'the standup moved to nine thirty on tuesdays';
