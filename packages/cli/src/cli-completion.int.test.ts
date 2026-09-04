@@ -9,6 +9,7 @@ import {
   upsertEdge,
   writeStampedNode,
   type SqliteHandle,
+  DEFAULTS,
 } from '@aion/core';
 import {
   startNeo4jHarness,
@@ -33,7 +34,7 @@ import { runWhy } from './why.js';
  * than depending on what a model extracts.
  */
 
-const EMBED_DIMENSION = 768;
+const EMBED_DIMENSION = DEFAULTS.models.embedDimension;
 const AION_OLLAMA_URL = process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434';
 const ENV_KEYS = [
   'AION_NEO4J_URI',
