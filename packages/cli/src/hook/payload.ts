@@ -13,6 +13,9 @@ export const TOOL_OUTPUT_LIMIT = 2000;
 /** The arguments summary is a locator, not the call. */
 export const TOOL_INPUT_LIMIT = 1000;
 
+/** A synthesis is prose worth keeping whole, so it gets twice a tool result's room. */
+export const OBSERVATION_LIMIT = 4000;
+
 export function stringField(input: Record<string, unknown>, key: string): string | undefined {
   const value = input[key];
   return typeof value === 'string' && value !== '' ? value : undefined;
@@ -167,6 +170,22 @@ export function reflectionArgs(
   if (executions.length > 0) {
     args.tool_executions = executions;
   }
+  if (sessionId !== undefined) {
+    args.session_id = sessionId;
+  }
+  return args;
+}
+
+/** One distilled note in place of turns: the value is the conclusion, not the exchange. */
+export function reflectionObservationArgs(
+  observation: string,
+  sessionId: string | undefined,
+  origin: ReflectionOriginPayload,
+): Record<string, unknown> {
+  const args: Record<string, unknown> = {
+    origin,
+    observations: [excerpt(observation, OBSERVATION_LIMIT)],
+  };
   if (sessionId !== undefined) {
     args.session_id = sessionId;
   }

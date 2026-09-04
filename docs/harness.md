@@ -34,7 +34,7 @@ is the substrate.
 | UserPromptSubmit | `prompt-submit` | Recalls against the prompt, when the prompt is long enough to be a question. |
 | PreCompact | `pre-compact` | Pushes the window compaction is about to discard. |
 | Stop | `stop` | Stores the turn, or asks the model to store it. |
-| SubagentStop | `subagent-stop` | Stores a subagent's turn the same way. |
+| SubagentStop | `subagent-stop` | Stores the subagent's synthesis (`last_assistant_message`) as one observation. |
 | SessionEnd | `session-end` | Flushes the last window and drops the cursor. |
 | PostToolUse | `post-tool-use` | Buffers a research tool result for the next flush. |
 | PreToolUse | `pre-tool-use` | Stamps the Claude session id onto a direct recall or reflection call. |

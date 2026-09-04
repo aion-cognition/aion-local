@@ -1,10 +1,11 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { mcpEndpoint, parseRpcBody, type FetchImpl } from './mcp.js';
 import { HOOK_TIMEOUT_MS, STOP_INSTRUCTION, type HookOptions, type StopMode } from './options.js';
+import { OBSERVATION_LIMIT } from './payload.js';
 import { parseHookFlags, parseHookInput, runHook } from './run.js';
 import { readHookState, stateFilePath } from './state.js';
 
@@ -236,6 +237,54 @@ describe('hook events', () => {
       expect(toolArgsIn(calls).origin).toEqual({ channel: 'hook', event });
     },
   );
+
+  it('pushes the subagent synthesis as an observation and leaves the cursor alone', async () => {
+    writeFileSync(transcriptPath, `${USER_LINE}\n${ASSISTANT_LINE}\n`);
+    const { fetchImpl, calls } = transport({ structuredContent: { episode_id: 'e1' } });
+
+    await expect(
+      runHook(
+        {
+          session_id: SESSION_ID,
+          transcript_path: transcriptPath,
+          last_assistant_message: 'the sweep found two oracle sites',
+          agent_type: 'Explore',
+        },
+        options('subagent-stop', { fetchImpl }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(toolNamesIn(calls)).toEqual(['reflection']);
+    const args = toolArgsIn(calls);
+    expect(args.observations).toEqual(['[Explore] the sweep found two oracle sites']);
+    expect(args.turns).toBeUndefined();
+    expect(args.session_id).toBe(SESSION_ID);
+    expect(args.origin).toEqual({ channel: 'hook', event: 'subagent-stop' });
+    expect(existsSync(stateFilePath(join(dir, 'state'), SESSION_ID))).toBe(false);
+  });
+
+  it('drops the provenance prefix when the payload names no agent type', async () => {
+    const { fetchImpl, calls } = transport({ structuredContent: { episode_id: 'e1' } });
+
+    await runHook(
+      { session_id: SESSION_ID, last_assistant_message: 'no agent type came along' },
+      options('subagent-stop', { fetchImpl }),
+    );
+
+    expect(toolArgsIn(calls).observations).toEqual(['no agent type came along']);
+  });
+
+  it('caps a runaway synthesis at the observation limit', async () => {
+    const { fetchImpl, calls } = transport({ structuredContent: { episode_id: 'e1' } });
+
+    await runHook(
+      { session_id: SESSION_ID, last_assistant_message: 'y'.repeat(OBSERVATION_LIMIT + 500) },
+      options('subagent-stop', { fetchImpl }),
+    );
+
+    const [observation] = toolArgsIn(calls).observations as readonly string[];
+    expect(observation).toHaveLength(OBSERVATION_LIMIT);
+  });
 
   it('pushes nothing when only the user spoke', async () => {
     writeFileSync(transcriptPath, `${USER_LINE}\n`);
