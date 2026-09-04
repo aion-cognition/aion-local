@@ -17,7 +17,7 @@ import type { MemoryPackItem } from '@aion/protocol';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { OWNERSHIP_CORRECTION } from './apply-granularity.fixture.js';
-import { GateSubstrate, waitFor } from './gate-substrate.fixture.js';
+import { GateSubstrate, waitFor, REMOTE_JUDGE_ABSENT  } from './gate-substrate.fixture.js';
 
 /**
  * What an applied correction does to what recall answers.
@@ -267,7 +267,7 @@ afterAll(async () => {
   await substrate.close();
 });
 
-describe('a correction applied at the default granularity', () => {
+describe.skipIf(REMOTE_JUDGE_ABSENT)('a correction applied at the default granularity', () => {
   it('records how the stale ownership is spread before anything is applied', async () => {
     const before = await substrate.recall(OWNERSHIP_CORRECTION.query, {
       identity: READ_SESSION,

@@ -11,7 +11,7 @@ import {
 import type { MemoryPackItem } from '@aion/protocol';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { GateSubstrate, waitFor } from './gate-substrate.fixture.js';
+import { GateSubstrate, waitFor, REMOTE_JUDGE_ABSENT  } from './gate-substrate.fixture.js';
 
 /**
  * The off-topic and on-topic batteries, paired on purpose. The measured miss queries have to
@@ -144,7 +144,7 @@ afterAll(async () => {
   await substrate.close();
 });
 
-describe('an unrelated query returns a thin or empty pack', () => {
+describe.skipIf(REMOTE_JUDGE_ABSENT)('an unrelated query returns a thin or empty pack', () => {
   it.each(OFF_TOPIC_BATTERY)(
     'comes back thin or empty for: %s',
     async (query) => {
@@ -221,7 +221,7 @@ describe('an unrelated query returns a thin or empty pack', () => {
   }, 120_000);
 });
 
-describe('a question the substrate can answer is still answered', () => {
+describe.skipIf(REMOTE_JUDGE_ABSENT)('a question the substrate can answer is still answered', () => {
   it.each(ON_TOPIC_BATTERY)(
     'still answers: $query',
     async (probe) => {

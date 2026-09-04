@@ -45,7 +45,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { narrativeOptions, reflectionStages, workerOptions } from './bootstrap.js';
-import { waitFor } from './gate/gate-substrate.fixture.js';
+import { waitFor, REMOTE_JUDGE_ABSENT  } from './gate/gate-substrate.fixture.js';
 
 /**
  * The reflection pipeline's exit gate, assembled the way the service assembles itself: the
@@ -222,7 +222,7 @@ afterAll(async () => {
   rmSync(dataDir, { recursive: true, force: true });
 });
 
-describe('gate item 1: one reflection call, no manual run', () => {
+describe.skipIf(REMOTE_JUDGE_ABSENT)('gate item 1: one reflection call, no manual run', () => {
   it('leaves the episode carrying entities the model named', () => {
     expect(entitiesAfterRun.length).toBeGreaterThanOrEqual(2);
     for (const entity of entitiesAfterRun) {
@@ -253,7 +253,7 @@ describe('gate item 1: one reflection call, no manual run', () => {
   });
 });
 
-describe('gate item 2: the ledger blocks the re-run', () => {
+describe.skipIf(REMOTE_JUDGE_ABSENT)('gate item 2: the ledger blocks the re-run', () => {
   it('returns already_applied and writes nothing a second time', async () => {
     const entitiesBefore = entitiesAfterRun.length;
     const cognitiveBefore = (await cognitiveNodeIds(workEpisodeId)).length;
@@ -268,7 +268,7 @@ describe('gate item 2: the ledger blocks the re-run', () => {
   });
 });
 
-describe('gate item 3: a closed session leaves a narrative', () => {
+describe.skipIf(REMOTE_JUDGE_ABSENT)('gate item 3: a closed session leaves a narrative', () => {
   it('writes one on the transport close hook the service registers', async () => {
     const closer = new SessionNarrativeCloser(
       { driver: harness.driver, provider, logger },
@@ -286,7 +286,7 @@ describe('gate item 3: a closed session leaves a narrative', () => {
   }, 180_000);
 });
 
-describe('gate item 4: recall serves what reflection built', () => {
+describe.skipIf(REMOTE_JUDGE_ABSENT)('gate item 4: recall serves what reflection built', () => {
   let pack: MemoryPack;
 
   // One recall, read by both assertions: the pack is what the agent gets, and asking twice
@@ -332,7 +332,7 @@ describe('gate item 4: recall serves what reflection built', () => {
   });
 });
 
-describe('gate item 5: an inference outage defers, it never loses', () => {
+describe.skipIf(REMOTE_JUDGE_ABSENT)('gate item 5: an inference outage defers, it never loses', () => {
   let outageEpisodeId: string;
 
   it('stores and queues the episode with its vectors pending', async () => {

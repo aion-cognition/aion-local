@@ -11,6 +11,7 @@ import type { MemoryPackItem } from '@aion/protocol';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { GateSubstrate, waitFor, type GateRecallResult } from './gate-substrate.fixture.js';
+import { REMOTE_JUDGE_ABSENT } from './gate-substrate.fixture.js';
 import { DISTRACTORS, HELD_OUT_CASES, HELD_OUT_PROBES } from './held-out-recall.fixture.js';
 
 /**
@@ -237,7 +238,7 @@ afterAll(async () => {
   await substrate.close();
 });
 
-describe('a claim stored in one session answers the natural question asked in another', () => {
+describe.skipIf(REMOTE_JUDGE_ABSENT)('a claim stored in one session answers the natural question asked in another', () => {
   it.each(HELD_OUT_PROBES)(
     'answers: $question',
     async (probe) => {
