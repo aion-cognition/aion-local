@@ -26,7 +26,11 @@ import * as tier3Advisor from './tier3-advisor.js';
  * naming it here would ship a second text nothing compares against, which is how a keyed prompt
  * drifts away from the local one unseen.
  */
-const FORKED: readonly string[] = ['description-freshness'];
+const FORKED: readonly string[] = [
+  'description-freshness',
+  'supersession-judge',
+  'supersession-review',
+];
 
 type SurfacePrompt = {
   readonly surface: string;

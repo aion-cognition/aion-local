@@ -2,7 +2,11 @@ import { z } from 'zod';
 
 import { deadlineFor } from '../../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../../infrastructure/providers/types.js';
-import { LOCAL as REVIEW_SYSTEM_PROMPT } from '../../../prompts/supersession-review.js';
+import { promptMode } from '../../../prompts/index.js';
+import {
+  KEYED as REVIEW_KEYED,
+  LOCAL as REVIEW_LOCAL,
+} from '../../../prompts/supersession-review.js';
 
 /**
  * The second pass over an affirmative contradiction judgment, arguing the other side.
@@ -80,11 +84,11 @@ const ReviewSchema = z.object({
   reason: z.string().optional(),
 });
 
-function buildReviewMessages(pair: ReviewPair): ChatMessage[] {
+function buildReviewMessages(pair: ReviewPair, systemPrompt: string): ChatMessage[] {
   const subjectLine =
     pair.sharedSubject === undefined ? '' : `\n\nBoth statements name: ${pair.sharedSubject}`;
   return [
-    { role: 'system', content: REVIEW_SYSTEM_PROMPT },
+    { role: 'system', content: systemPrompt },
     {
       role: 'user',
       content:
@@ -117,16 +121,17 @@ function toVerdict(parsed: z.infer<typeof ReviewSchema>): ReviewVerdict {
  * battery that rebuilt the prompt would report a number for a reviewer the service does not run.
  */
 export async function reviewContradiction(
-  provider: Pick<Provider, 'generate'>,
+  provider: Pick<Provider, 'generate' | 'route'>,
   pair: ReviewPair,
   options: ReviewContradictionOptions,
 ): Promise<ReviewOutcome> {
+  const systemPrompt = promptMode(provider) === 'keyed' ? REVIEW_KEYED : REVIEW_LOCAL;
   const deadline = deadlineFor(options.timeoutMs, options.signal);
   let raw: unknown;
   try {
     raw = await provider.generate({
       model: options.model,
-      messages: buildReviewMessages(pair),
+      messages: buildReviewMessages(pair, systemPrompt),
       schema: REVIEW_JSON_SCHEMA,
       temperature: REVIEW_TEMPERATURE,
       // Matches the first pass: reasoning buys nothing on a two-statement judgment and doubles

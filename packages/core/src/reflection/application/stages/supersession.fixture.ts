@@ -325,6 +325,11 @@ export class SupersessionTestBed {
   closeDuringReview: string | undefined;
   /** The same window for a mode with no second call: the target goes while the judge answers. */
   closeDuringJudgment: string | undefined;
+  /**
+   * Which text the two passes read. Absent is the local route, which is what a fake provider
+   * gets everywhere else; a test that wants the keyed words sets it.
+   */
+  route: { readonly provider: 'ollama' | 'anthropic' } | undefined;
   #store: SqliteStore | undefined;
   #dataDir = '';
 
@@ -336,6 +341,7 @@ export class SupersessionTestBed {
     this.reviews = [];
     this.closeDuringReview = undefined;
     this.closeDuringJudgment = undefined;
+    this.route = undefined;
     this.#dataDir = mkdtempSync(join(tmpdir(), 'aion-supersession-stage-'));
     this.#store = new SqliteStore({ filePath: join(this.#dataDir, 'aion.sqlite') });
   }
@@ -375,6 +381,7 @@ export class SupersessionTestBed {
       db: this.db,
       provider: {
         embed: async () => [],
+        ...(this.route === undefined ? {} : { route: this.route }),
         generate: async (request: StructuredRequest) => {
           this.requests.push(request);
           if (isReviewRequest(request)) {

@@ -2,7 +2,8 @@ import { z } from 'zod';
 
 import { deadlineFor } from '../../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../../infrastructure/providers/types.js';
-import { LOCAL as SYSTEM_PROMPT } from '../../../prompts/supersession-judge.js';
+import { promptMode } from '../../../prompts/index.js';
+import { KEYED as JUDGE_KEYED, LOCAL as JUDGE_LOCAL } from '../../../prompts/supersession-judge.js';
 
 /**
  * The first pass over one pair of statements: the prompt, the schema its answer has to satisfy,
@@ -40,11 +41,12 @@ function buildMessages(
   prior: string,
   current: string,
   sharedSubject: string | undefined,
+  systemPrompt: string,
 ): ChatMessage[] {
   const subjectLine =
     sharedSubject === undefined ? '' : `\n\nBoth statements name: ${sharedSubject}`;
   return [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: systemPrompt },
     {
       role: 'user',
       content:
@@ -103,10 +105,11 @@ export type JudgeOutcome =
  * number for a judge the service does not run.
  */
 export async function judgeContradiction(
-  provider: Pick<Provider, 'generate'>,
+  provider: Pick<Provider, 'generate' | 'route'>,
   pair: ContradictionPair,
   options: JudgeContradictionOptions,
 ): Promise<JudgeOutcome> {
+  const systemPrompt = promptMode(provider) === 'keyed' ? JUDGE_KEYED : JUDGE_LOCAL;
   const deadline = deadlineFor(options.timeoutMs, options.signal);
   let raw: unknown;
   try {
@@ -118,6 +121,7 @@ export async function judgeContradiction(
         pair.prior,
         pair.current,
         pair.sharedSubject,
+        systemPrompt,
       ),
       schema: JUDGMENT_JSON_SCHEMA,
       temperature: JUDGE_TEMPERATURE,

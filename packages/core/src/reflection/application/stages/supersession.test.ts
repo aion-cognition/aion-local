@@ -493,6 +493,22 @@ describe('SupersessionStage', () => {
 
     await new SupersessionStage({ mode: 'propose' }).run(bed.context(EPISODE_ID));
 
+    // A provider that states no route reads the local text, where each discrimination is
+    // carried by a worked pair rather than by the general statement of the shape.
+    const prompt = bed.prompts()[0]!;
+    expect(prompt).toContain('Different subjects');
+    expect(prompt).toContain('A restatement');
+    expect(prompt).toContain('Different times');
+    expect(prompt).toContain('Two people');
+  });
+
+  it('carries the same four discriminations in the keyed text', async () => {
+    bed.route = { provider: 'anthropic' };
+    seedContradictingPair();
+    bed.responses = [{ contradicts: false, confidence: 0.1 }];
+
+    await new SupersessionStage({ mode: 'propose' }).run(bed.context(EPISODE_ID));
+
     const prompt = bed.prompts()[0]!;
     expect(prompt).toContain('different subjects');
     expect(prompt).toContain('restates, summarises, or rephrases');

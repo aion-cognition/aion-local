@@ -13,13 +13,18 @@ const PAIR = {
 
 const OPTIONS = { model: 'test-model', timeoutMs: 5_000 };
 
-function providerReturning(answer: unknown): {
+function providerReturning(
+  answer: unknown,
+  route?: { readonly provider: 'ollama' | 'anthropic' },
+): {
   readonly generate: (request: StructuredRequest) => Promise<unknown>;
+  readonly route?: { readonly provider: 'ollama' | 'anthropic' };
   readonly requests: StructuredRequest[];
 } {
   const requests: StructuredRequest[] = [];
   return {
     requests,
+    ...(route === undefined ? {} : { route }),
     generate: async (request: StructuredRequest) => {
       requests.push(request);
       if (answer instanceof Error) {
@@ -121,7 +126,10 @@ describe('the second pass over an affirmative judgment', () => {
    * are the four shapes the measured false positives came in.
    */
   it('leads with compatibility and names the shapes an earlier claim survives', async () => {
-    const provider = providerReturning({ earlier_survives: false, newer_is_well_formed: true });
+    const provider = providerReturning(
+      { earlier_survives: false, newer_is_well_formed: true },
+      { provider: 'anthropic' },
+    );
 
     await reviewContradiction(provider, PAIR, OPTIONS);
 
@@ -132,6 +140,27 @@ describe('the second pass over an affirmative judgment', () => {
     expect(prompt).toContain('the burden is on the replacement');
     expect(prompt).toContain('A record of a position');
     expect(prompt).toContain('widens, extends, or adds');
+    expect(prompt).toContain('different attributes of the subject');
+    expect(prompt).toContain('garbled extraction');
+  });
+
+  /**
+   * The local text keeps all four survival rules and asks for the two rival values first: a
+   * reviewer that reads the presumption alone answers earlier_survives on every pair it sees.
+   */
+  it('gives the local route the four rules with the replacement test in front of them', async () => {
+    const provider = providerReturning({ earlier_survives: false, newer_is_well_formed: true });
+
+    await reviewContradiction(provider, PAIR, OPTIONS);
+
+    const prompt = (provider.requests[0]?.messages ?? [])
+      .map((message) => message.content)
+      .join('\n');
+    expect(prompt).toContain('is the earlier statement, exactly as written, false now');
+    expect(prompt).toContain('name the attribute both statements give a value for');
+    expect(prompt).toContain('Then check the four rules');
+    expect(prompt).toContain('a record of a position');
+    expect(prompt).toContain('widens or adds');
     expect(prompt).toContain('different attributes of the subject');
     expect(prompt).toContain('garbled extraction');
   });
