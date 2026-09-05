@@ -47,6 +47,13 @@ export type QueueHealth = {
   readonly p95EnrichmentLagMs: number | undefined;
   /** Exhausted jobs `dead_letter` already gave their one retry, which failed again: needs a person. */
   readonly deadLetterAttentionCount: number;
+  /**
+   * Share of recent recalls that answered without the cue model. `undefined` until the first
+   * recall lands, so a fresh install reads as unmeasured rather than as healthy.
+   */
+  readonly cueDegradedRate: number | undefined;
+  /** Reinforcement signals the queue cap threw away: recall the substrate never learned from. */
+  readonly reinforcementDropped: number;
 };
 
 export type EnrichmentHealth = {
@@ -93,6 +100,18 @@ export type EntityHealth = {
   readonly identifierShaped: number;
 };
 
+/**
+ * What the substrate's own model calls have done. A generation ends at a provider the loop does
+ * not own, so this is the one health reading about something outside the substrate: a remote
+ * route failing every call is a number here rather than a log line nobody tails.
+ */
+export type GenerationHealth = {
+  readonly calls: number;
+  readonly failed: number;
+  /** Failures over calls, `undefined` until the first generation: no calls is not a clean record. */
+  readonly failureRate: number | undefined;
+};
+
 export type PlasticityHealth = {
   readonly reinforcementQueueDepth: number;
   readonly reinforcementLastRunAt: string | undefined;
@@ -131,6 +150,7 @@ export type HealthSnapshot = {
   readonly proposals: ProposalHealth;
   readonly entities: EntityHealth;
   readonly plasticity: PlasticityHealth;
+  readonly generation: GenerationHealth;
   readonly effectiveness: readonly OperationEffectiveness[];
   /** Collectors that failed and fell back to a neutral reading, named so a rule can discount them. */
   readonly degraded: readonly string[];
@@ -148,6 +168,7 @@ export const HEALTH_COLLECTORS = {
   proposals: 'proposals',
   entities: 'entities',
   plasticity: 'plasticity',
+  generation: 'generation',
   effectiveness: 'effectiveness',
 } as const;
 
@@ -175,6 +196,8 @@ export const NEUTRAL_QUEUE_HEALTH: QueueHealth = {
   exhausted: 0,
   p95EnrichmentLagMs: undefined,
   deadLetterAttentionCount: 0,
+  cueDegradedRate: undefined,
+  reinforcementDropped: 0,
 };
 
 export const NEUTRAL_ENRICHMENT_HEALTH: EnrichmentHealth = {
@@ -194,6 +217,12 @@ export const NEUTRAL_PROPOSAL_HEALTH: ProposalHealth = {
 };
 
 export const NEUTRAL_ENTITY_HEALTH: EntityHealth = { tier0Eligible: 0, identifierShaped: 0 };
+
+export const NEUTRAL_GENERATION_HEALTH: GenerationHealth = {
+  calls: 0,
+  failed: 0,
+  failureRate: undefined,
+};
 
 export const NEUTRAL_PLASTICITY_HEALTH: PlasticityHealth = {
   reinforcementQueueDepth: 0,
@@ -217,6 +246,7 @@ export function neutralSnapshot(cycle: number, observedAt: string): HealthSnapsh
     proposals: NEUTRAL_PROPOSAL_HEALTH,
     entities: NEUTRAL_ENTITY_HEALTH,
     plasticity: NEUTRAL_PLASTICITY_HEALTH,
+    generation: NEUTRAL_GENERATION_HEALTH,
     effectiveness: [],
     degraded: Object.values(HEALTH_COLLECTORS),
   };

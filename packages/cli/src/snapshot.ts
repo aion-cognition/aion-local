@@ -3,6 +3,7 @@ import {
   countNodesByLabel,
   describeError,
   edgeWeightDistribution,
+  generationCounters,
   introspectionCycle,
   introspectionOperations,
   latestLedgerEntry,
@@ -24,6 +25,7 @@ import {
   unbackedPins,
   type Config,
   type EdgeWeightDistribution,
+  type GenerationCounters,
   type GraphConnection,
   type GraphCounts,
   type OperationStats,
@@ -36,6 +38,7 @@ import {
 } from '@aion/core';
 
 import { ageOf, formatEdgeWeights } from './format.js';
+import { renderGeneration } from './generation-section.js';
 import {
   collectMergeShadow,
   renderMergeShadow,
@@ -81,6 +84,8 @@ export type SnapshotExtras = {
   /** Per-method sole/shared find counts and summed RRF contribution, the leg-share detail
    * behind the plain share above (see `fusion.ts`'s `MethodLegStats`). */
   readonly methodLegStats: PackMethodLegStats;
+  /** Per-route call counts and failure rate: whether the model calls behind a pack answered. */
+  readonly generation: GenerationCounters;
   readonly maintenance: MaintenanceSnapshot;
   readonly mergeShadow: MergeShadowSnapshot;
 };
@@ -220,6 +225,7 @@ export async function collectSnapshot(
       sessionsServed: listLastPackSessions(db).length,
       methodCounters: packMethodCounters(db),
       methodLegStats: packMethodLegStats(db),
+      generation: generationCounters(db),
       maintenance: collectMaintenance(db),
       mergeShadow,
     },
@@ -479,6 +485,7 @@ export function renderSnapshot(
     );
   }
 
+  renderGeneration(extras.generation, write);
   renderMaintenance(extras.maintenance, now, write);
   renderMergeShadow(extras.mergeShadow, write);
 }

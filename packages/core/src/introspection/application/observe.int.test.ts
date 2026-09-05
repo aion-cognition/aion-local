@@ -22,6 +22,8 @@ import {
 } from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { recordGenerationOutcome } from '../../infrastructure/sqlite/generation-counters.js';
+import { recordCueOutcome } from '../../infrastructure/sqlite/recall-samples.js';
 import { squashName } from '../../reflection/domain/entity-reconciliation.js';
 
 const EMBED_DIMENSION = 8;
@@ -232,6 +234,16 @@ describe('observeHealth', () => {
       now: NOW,
     });
 
+    // The two senses that reach the snapshot through SQLite alone: one recall that fell back to
+    // the degradation ladder, and one generation that failed at the provider.
+    recordCueOutcome(db, true);
+    recordGenerationOutcome(db, {
+      role: 'reflect',
+      provider: 'anthropic',
+      ok: false,
+      durationMs: 1_200,
+    });
+
     const snapshot = await observeHealth(
       { driver: harness.driver, db, config, logger },
       { operations: [{ name: 'fake_operation', measured: true }], cycle: 7, now: NOW },
@@ -256,6 +268,9 @@ describe('observeHealth', () => {
     expect(snapshot.graph.atFloorAssociationEdges).toBe(0);
     expect(snapshot.enrichment.unenriched).toBe(3);
     expect(snapshot.queue.depth).toBe(0);
+    expect(snapshot.queue.cueDegradedRate).toBe(1);
+    expect(snapshot.queue.reinforcementDropped).toBe(0);
+    expect(snapshot.generation).toEqual({ calls: 1, failed: 1, failureRate: 1 });
     expect(snapshot.proposals.oldestOpenAgeMs).toBeUndefined();
     expect(snapshot.effectiveness).toEqual([
       {

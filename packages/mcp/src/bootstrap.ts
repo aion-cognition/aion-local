@@ -23,6 +23,7 @@ import {
   readMemberName,
   RecallSideEffects,
   reconcileResidentModels,
+  recordGenerationOutcome,
   recordLifecycleEvent,
   ReflectionOrchestrator,
   reflectionStages,
@@ -217,6 +218,14 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       config,
       onGeneration: (event) => {
         logger.debug({ generation: event }, 'generation routed');
+        try {
+          recordGenerationOutcome(store.db, event);
+        } catch (err) {
+          // Fail open, and for more than the usual reason. The router reports a success from
+          // inside its own try, so a throw here would be caught there and counted as the
+          // generation failing; the cue role runs this on the recall hot path.
+          logger.warn({ err }, 'generation counter write failed');
+        }
       },
     });
     // Both roles embed through the same local model; only `generate` differs between them.

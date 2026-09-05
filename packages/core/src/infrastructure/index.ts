@@ -202,6 +202,9 @@ export type { EntityMergeProposal } from './sqlite/entity-merge-proposals.js';
 
 export { cueDegradedRate } from './sqlite/recall-samples.js';
 
+export { generationCounters, recordGenerationOutcome } from './sqlite/generation-counters.js';
+export type { GenerationCounters, GenerationRouteStat } from './sqlite/generation-counters.js';
+
 export {
   PACK_METHODS,
   packMethodCounters,
