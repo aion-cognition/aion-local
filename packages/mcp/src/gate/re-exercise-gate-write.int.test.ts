@@ -16,7 +16,7 @@ import type { ReflectionOutput } from '@aion/protocol';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { CROSS_STAGE_ENTITY_MISS } from './gate-batteries.fixture.js';
-import { GateSubstrate, waitFor, REMOTE_JUDGE_ABSENT  } from './gate-substrate.fixture.js';
+import { GateSubstrate, waitFor, REMOTE_JUDGE_ABSENT } from './gate-substrate.fixture.js';
 
 /**
  * What the write path stores, and who it serves first.

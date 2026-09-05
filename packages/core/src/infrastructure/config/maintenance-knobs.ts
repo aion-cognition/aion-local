@@ -145,6 +145,15 @@ export const MAINTENANCE_KNOBS = {
   // ceiling. Matches `retroSupersessionBatch`'s own reasoning: bound the cost of a run
   // that finds a full page of ordinary-residue pairs needing a verdict.
   hygieneJudgeBatch: ['AION_MAINTENANCE_HYGIENE_JUDGE_BATCH', positiveInt, 5],
+  // `proposal_resolution`'s kill switch. On by default: every verdict it reaches is terminal
+  // and recorded, an apply takes the same path and the same blade a person's apply takes, and
+  // `aion unsupersede` and `aion unmerge` reverse one exactly as they reverse anyone's. Off
+  // leaves both queues waiting for `aion proposals` and for the hygiene horizon behind it.
+  proposalResolution: ['AION_PROPOSAL_RESOLUTION', z.boolean(), true],
+  // Open rows one run decides, read oldest first across both queues. Each row costs two model
+  // calls and a handful of graph reads, so ten is an hour's modest spend and a queue of any
+  // size drains at ten an hour rather than in one burst nobody watched.
+  resolutionBatch: ['AION_RESOLUTION_BATCH', positiveInt, 10],
   // `reinforcement_flush` and `memory_decay`'s kill switches, the pair every other weight
   // operation already had. Off, the operation is a noop: signals wait in the queue, and stale
   // edges hold the strength they have. The rates and batch sizes stay in the `hebbian` group.

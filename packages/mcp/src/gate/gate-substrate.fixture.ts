@@ -196,6 +196,7 @@ export class GateSubstrate {
       // rate backstop untestable here and the starvation battery covering the flag path only.
       lanes: this.#lanes,
       workerMaxAttempts: this.config.operational.workerMaxAttempts,
+      acceptHookCapture: true,
     };
   }
 

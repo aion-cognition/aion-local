@@ -20,6 +20,11 @@ const ollamaStateTests = [
   'packages/mcp/src/routing-key-flip.int.test.ts',
 ];
 
+// Seeds AION_ANTHROPIC_API_KEY and AION_ANTHROPIC_MODEL from the repo `.env` when the shell
+// did not export them, so a run on the host generates on the same route the service does. Unit
+// tests get none of it: they talk to no provider.
+const loadEnv = `${root}packages/core/src/infrastructure/config/test-support/load-env.fixture.ts`;
+
 // Tests import workspace packages by their published specifier but must run against
 // TypeScript source, not dist, so `npm test` never depends on a prior `npm run build`.
 const alias = [
@@ -49,6 +54,7 @@ export default defineConfig({
           environment: 'node',
           testTimeout: 120_000,
           hookTimeout: 300_000,
+          setupFiles: [loadEnv],
           // Unit first, then this project, then the Ollama-state tail: groups with a lower
           // order finish before the next one starts.
           sequence: { groupOrder: 1 },
@@ -78,6 +84,7 @@ export default defineConfig({
           environment: 'node',
           testTimeout: 120_000,
           hookTimeout: 300_000,
+          setupFiles: [loadEnv],
           sequence: { groupOrder: 2 },
           // No pool: only routing-key-flip touches Neo4j, and it boots a dedicated container
           // through the harness fallback. Serial, so the two files cannot fight over the

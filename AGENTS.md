@@ -217,12 +217,17 @@ Integration tests that drive enrichment call `testGenerationProvider(options)`
 not `local`, generation runs on Anthropic (`claude-haiku-4-5`, override with
 `AION_ANTHROPIC_MODEL`) and returns in a second or two; embedding always stays on Ollama, since
 the substrate has one embedding space. With no key, or `TEST_AION_GENERATION=local`, generation
-runs on qwen3:8b instead, 35 to 100 seconds an episode. vitest does not load `.env`, so export
-the key before a run that should use it:
+runs on qwen3:8b instead, 35 to 100 seconds an episode.
 
-```
-export AION_ANTHROPIC_API_KEY="$(grep '^AION_ANTHROPIC_API_KEY=' .env | cut -d= -f2-)"
-```
+The key needs no export. The `integration` and `integration-ollama` projects run a setup file
+(`infrastructure/config/test-support/load-env.fixture.ts`) that reads `AION_ANTHROPIC_API_KEY`
+and `AION_ANTHROPIC_MODEL` from the repo `.env` and sets whichever of the two the shell left
+unset or blank. Setup files run before a test module is imported, so a battery reading the key
+at module scope sees the loaded value. An exported value wins over the file, and
+`TEST_AION_GENERATION=local` forces the local model whatever the key says: the loader never
+touches that variable. Those two keys are the only ones loaded, so a pin sitting in `.env`
+cannot reroute a run. `npm run quality:extraction` loads the same two from the working
+directory.
 
 A file whose subject is the local model itself (`cues.int.test.ts`, `ollama-provider.int.test.ts`)
 builds its own `OllamaProvider` and ignores this switch.

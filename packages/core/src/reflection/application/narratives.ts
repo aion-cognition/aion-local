@@ -1,5 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 
+import { compress, type Synthesis } from './narrative-compress.js';
 import {
   attachVector,
   closeSuperseded,
@@ -8,6 +9,7 @@ import {
   type NarrativeWrite,
 } from './narrative-write.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import type { Config } from '../../infrastructure/config/schema.js';
 import { describeError } from '../../infrastructure/errors.js';
 import {
   findIdleSessions,
@@ -16,22 +18,14 @@ import {
   loadSessionSourceNodes,
 } from '../../infrastructure/graph/narrative-queries.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
-import { deadlineFor } from '../../infrastructure/providers/deadline-signal.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import { decideSessionBoundary } from '../domain/mid-session.js';
+import { narrativeScale } from '../domain/narrative-scale.js';
 import {
-  assembleNarrative,
-  buildNarrativeMessages,
   decideSessionNarrative,
-  narrativeMaxTokens,
   narrativeNodeId,
   narrativeSpan,
   NARRATIVE_GROUNDING,
-  NARRATIVE_JSON_SCHEMA,
-  NarrativeOutputSchema,
-  renderNarrativeSource,
-  type GroundedNarrative,
-  type NarrativeSource,
 } from '../domain/narrative.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../domain/stage.js';
 
@@ -44,13 +38,6 @@ import type { ReflectionStage, StageContext, StageOutcome } from '../domain/stag
  */
 
 export const NARRATIVE_STAGE_NAME = 'narratives';
-
-/**
- * Named rather than left to the route's default, which the provider no longer sends. The
- * compression is a reading of episodes that are already closed, and the grounding check that
- * follows measures one narrative rather than a fresh sample of it.
- */
-const NARRATIVE_TEMPERATURE = 0;
 
 const MINUTE_MS = 60 * 1000;
 
@@ -69,8 +56,12 @@ export type NarrativeOptions = {
   readonly model?: string;
   readonly idleMs?: number;
   readonly timeoutMs?: number;
-  readonly maxSourceEpisodes?: number;
-  readonly maxEpisodeChars?: number;
+  /**
+   * The knob group the synthesis is sized out of. Both routes' numbers live in it and the
+   * resolved route picks between them, so a caller threads the group a deployment configured
+   * rather than picking a window itself and pinning the local one onto a remote model.
+   */
+  readonly reflection?: Config['reflection'];
   readonly now?: Date;
   /**
    * The world time to fall back on when the session's episodes carry no span end. Defaults
@@ -85,7 +76,7 @@ export type NarrativeOptions = {
   readonly midSessionEpisodes?: number;
   /** A pause inside a running session that crosses the same boundary. */
   readonly midSessionGapMs?: number;
-  /** The caller's shutdown signal, composed under the compression call's own deadline. */
+  /** The caller's shutdown signal, composed under each compression call's own deadline. */
   readonly signal?: AbortSignal;
 };
 
@@ -105,12 +96,14 @@ export type NarrativeResult = {
   readonly version?: number;
 };
 
-type NarrativeSettings = {
+/** Every option resolved, which is what the compression beside this reads its sizes from. */
+export type NarrativeSettings = {
   readonly model: string;
   readonly idleMs: number;
   readonly timeoutMs: number;
   readonly maxSourceEpisodes: number;
   readonly maxEpisodeChars: number;
+  readonly maxSentences: number;
   readonly now: Date;
   readonly occurredAt: Date;
   readonly regenerate: boolean;
@@ -120,14 +113,24 @@ type NarrativeSettings = {
   readonly signal?: AbortSignal;
 };
 
-function settingsOf(options: NarrativeOptions): NarrativeSettings {
+/**
+ * The provider decides how much of the session one call reads, and the keyed route reads three
+ * times as much. A session longer than that is not clipped to its most recent episodes: this is
+ * the size of the chunks it is read in instead.
+ */
+function settingsOf(options: NarrativeOptions, provider: Provider): NarrativeSettings {
   const now = options.now ?? new Date();
+  const scale = narrativeScale(
+    provider.route?.provider === 'anthropic',
+    options.reflection ?? DEFAULTS.reflection,
+  );
   return {
     model: options.model ?? DEFAULTS.models.reflect,
     idleMs: options.idleMs ?? DEFAULT_SESSION_IDLE_MS,
     timeoutMs: options.timeoutMs ?? DEFAULTS.reflection.stageTimeoutMs,
-    maxSourceEpisodes: options.maxSourceEpisodes ?? DEFAULTS.reflection.maxNarrativeEpisodes,
-    maxEpisodeChars: options.maxEpisodeChars ?? DEFAULTS.reflection.maxNarrativeEpisodeChars,
+    maxSourceEpisodes: scale.maxSourceEpisodes,
+    maxEpisodeChars: scale.episodeChars,
+    maxSentences: scale.maxSentences,
     now,
     occurredAt: options.occurredAt ?? now,
     regenerate: options.regenerate ?? false,
@@ -137,35 +140,6 @@ function settingsOf(options: NarrativeOptions): NarrativeSettings {
       options.midSessionGapMs ?? DEFAULTS.reflection.midSessionGapMinutes * MINUTE_MS,
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   };
-}
-
-/**
- * One structured-output call, guarded, and the grounding filter over its answer. Reflection's
- * latency regime is relaxed, not unbounded: `qwen3:8b` with reasoning on measured 10-44s with
- * occasional non-returns, so reasoning is off and the call carries its own deadline rather
- * than relying on the orchestrator, which imposes none. The token ceiling tracks the source's
- * own sentence budget: a fixed one is what a thin session pads with invention.
- */
-async function compress(
-  deps: NarrativeDeps,
-  settings: NarrativeSettings,
-  source: NarrativeSource,
-): Promise<GroundedNarrative> {
-  const deadline = deadlineFor(settings.timeoutMs, settings.signal);
-  try {
-    const raw = await deps.provider.generate({
-      model: settings.model,
-      messages: buildNarrativeMessages(source),
-      schema: NARRATIVE_JSON_SCHEMA,
-      maxTokens: narrativeMaxTokens(source.sentenceBudget),
-      temperature: NARRATIVE_TEMPERATURE,
-      think: false,
-      signal: deadline.signal,
-    });
-    return assembleNarrative(NarrativeOutputSchema.parse(raw), source);
-  } finally {
-    deadline.clear();
-  }
 }
 
 function skipped(sessionId: string, episodes: number, summary: string): NarrativeResult {
@@ -212,16 +186,11 @@ async function narrateSession(
     return skipped(sessionId, episodes.length, decision.reason);
   }
 
-  const source = renderNarrativeSource(
-    episodes,
-    await loadSessionSourceNodes(deps.driver, sessionId, settings.now),
-    settings.maxSourceEpisodes,
-    settings.maxEpisodeChars,
-  );
+  const extracted = await loadSessionSourceNodes(deps.driver, sessionId, settings.now);
 
-  let output: GroundedNarrative;
+  let synthesis: Synthesis;
   try {
-    output = await compress(deps, settings, source);
+    synthesis = await compress(deps, settings, episodes, extracted);
   } catch (err) {
     deps.logger.warn({ err, sessionId, episodes: episodes.length }, 'narrative compression failed');
     return {
@@ -231,6 +200,8 @@ async function narrateSession(
       episodes: episodes.length,
     };
   }
+
+  const { output, source } = synthesis;
 
   if (output.kept === 0) {
     deps.logger.warn(
@@ -294,7 +265,7 @@ export async function closeSessionNarrative(
   sessionId: string,
   options: NarrativeOptions = {},
 ): Promise<NarrativeResult> {
-  return narrateSession(deps, sessionId, settingsOf(options), false);
+  return narrateSession(deps, sessionId, settingsOf(options, deps.provider), false);
 }
 
 /**
@@ -305,7 +276,7 @@ export async function sweepIdleSessions(
   deps: NarrativeDeps,
   options: IdleSweepOptions = {},
 ): Promise<readonly NarrativeResult[]> {
-  const settings = settingsOf(options);
+  const settings = settingsOf(options, deps.provider);
   const idle = await findIdleSessions(deps.driver, {
     idleBefore: new Date(settings.now.getTime() - settings.idleMs),
     limit: options.limit ?? DEFAULTS.reflection.narrativeSweepLimit,
@@ -341,12 +312,15 @@ export class SessionNarrativeStage implements ReflectionStage {
       provider: ctx.provider,
       logger: ctx.logger,
     };
-    const settings = settingsOf({
-      ...this.#options,
-      now: ctx.now,
-      occurredAt: ctx.occurredAt,
-      ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
-    });
+    const settings = settingsOf(
+      {
+        ...this.#options,
+        now: ctx.now,
+        occurredAt: ctx.occurredAt,
+        ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
+      },
+      ctx.provider,
+    );
     const result = await narrateSession(deps, ctx.episode.sessionId, settings, true);
 
     if (result.status === 'created') {

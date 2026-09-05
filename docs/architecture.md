@@ -335,7 +335,7 @@ does, and one tick runs four phases: observe, decide, act, learn.
    too, whatever it did, which is what makes the cheapest way to answer a reading a fact.
 
 The catalog is one ordered list (`introspection/application/catalog.ts`), which is the only
-place an operation joins maintenance. Twenty-four are registered, in seven groups: substrate
+place an operation joins maintenance. Twenty-five are registered, in seven groups: substrate
 hygiene (`vector_backfill`, `reconcile_reenqueue`, `dead_letter`,
 `redaction_residue_purge`), plasticity (`reinforcement_flush`, `memory_decay`, `edge_prune`,
 `identifier_decay`), content maintenance (`narrative_cleanup`, `narrative_regrounding`,
@@ -343,7 +343,8 @@ hygiene (`vector_backfill`, `reconcile_reenqueue`, `dead_letter`,
 `narrative_rollup_week`, `claim_consolidation`), topology
 (`emergency_relationship_repair`, `orphan_cleanup`, `community_refresh`, `symbiosis_bridge`,
 `structural_discovery`), entity and claim-merge policy (`merge_auto`, `claim_dedup`,
-`merge_decision_reconcile`), and queue hygiene (`proposal_hygiene`). List order is
+`merge_decision_reconcile`), and the proposal queues (`proposal_resolution`,
+`proposal_hygiene`). List order is
 documentation: selection is by tier and urgency, and ties break on waiting time and then on
 name.
 

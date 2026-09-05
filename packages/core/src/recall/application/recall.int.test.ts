@@ -120,6 +120,7 @@ async function push(
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
       lanes: new LaneAssigner(DEFAULTS.lanes),
       workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+      acceptHookCapture: true,
     },
     { observations: [observation] },
     { identity, now },

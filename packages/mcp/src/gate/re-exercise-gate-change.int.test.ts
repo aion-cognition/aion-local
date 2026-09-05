@@ -26,7 +26,7 @@ import {
   type ChangeCase,
   type NarrativeFixture,
 } from './gate-batteries.fixture.js';
-import { GateSubstrate, waitFor, REMOTE_JUDGE_ABSENT  } from './gate-substrate.fixture.js';
+import { GateSubstrate, waitFor, REMOTE_JUDGE_ABSENT } from './gate-substrate.fixture.js';
 
 /**
  * What the substrate does when the world changes under it, and what it writes about a session

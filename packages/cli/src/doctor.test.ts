@@ -115,6 +115,70 @@ describe('the Ollama round-trip check under routing', () => {
   });
 });
 
+/** The env bit is injected, so no test ever depends on the machine's own `~/.claude`. */
+function runHooksCheck(config: Config, env: NodeJS.ProcessEnv): Promise<CheckResult> {
+  const checks = buildDoctorChecks({
+    config,
+    connection: undefined as unknown as GraphConnection,
+    db: undefined as unknown as SqliteHandle,
+    env,
+  });
+  const check = checks.find((candidate) => candidate.name === 'hooks-keyed-only');
+  if (check === undefined) {
+    throw new Error('no hooks-keyed-only check');
+  }
+  return check.run();
+}
+
+describe('the hooks-keyed-only check', () => {
+  const keyed: Config = {
+    ...DEFAULTS,
+    anthropic: { ...DEFAULTS.anthropic, apiKey: 'sk-ant-test' },
+  };
+
+  it('fails an install whose reflection runs on a local model', async () => {
+    const result = await runHooksCheck(DEFAULTS, { AION_HOOKS_INSTALLED: 'true' });
+
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain(DEFAULTS.models.reflect);
+    expect(result.detail).toContain('AION_ANTHROPIC_API_KEY');
+    expect(result.detail).toContain('aion hooks uninstall');
+  });
+
+  it('names the fire the hook client removes itself on, not a session boundary', async () => {
+    const result = await runHooksCheck(DEFAULTS, { AION_HOOKS_INSTALLED: 'true' });
+
+    expect(result.detail).toContain('strips them on its next fire');
+  });
+
+  it('fails an install whose key a pin sends back to the local model', async () => {
+    const pinned: Config = { ...keyed, routing: { cue: 'auto', reflect: 'ollama' } };
+
+    const result = await runHooksCheck(pinned, { AION_HOOKS_INSTALLED: 'true' });
+
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain(DEFAULTS.models.reflect);
+  });
+
+  it('passes an install whose reflection routes to anthropic', async () => {
+    const result = await runHooksCheck(keyed, { AION_HOOKS_INSTALLED: 'true' });
+
+    expect(result).toEqual({ ok: true, detail: 'hooks installed, keyed' });
+  });
+
+  it('passes a host with no hooks installed', async () => {
+    const result = await runHooksCheck(DEFAULTS, { AION_HOOKS_INSTALLED: 'false' });
+
+    expect(result).toEqual({ ok: true, detail: 'no hooks installed' });
+  });
+
+  it('passes when nothing computed the fact for this run', async () => {
+    const result = await runHooksCheck(DEFAULTS, {});
+
+    expect(result).toEqual({ ok: true, detail: 'hook settings not visible here' });
+  });
+});
+
 describe('runChecks', () => {
   it('runs every check in order and reports each result', async () => {
     const { lines, write } = collector();

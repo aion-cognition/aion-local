@@ -17,6 +17,7 @@ import {
 } from './operations/narrative-rollup.js';
 import { orphanCleanupOperation } from './operations/orphan-cleanup.js';
 import { proposalHygieneOperation } from './operations/proposal-hygiene.js';
+import { proposalResolutionOperation } from './operations/proposal-resolution.js';
 import { reconcileReenqueueOperation } from './operations/reconcile-reenqueue.js';
 import { redactionResiduePurgeOperation } from './operations/redaction-residue-purge.js';
 import { retroJudgmentSweepOperation } from './operations/retro-judgment-sweep-operation.js';
@@ -34,9 +35,9 @@ import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-
  * waiting time and then on name, so moving a line here changes nothing about what runs. The
  * comment above each group says what that group is for.
  *
- * Twelve of the twenty-four declare a `measure`, a number in the health snapshot their run is
- * scored on moving. The other twelve are recorded as unmeasured rather than scored, and each is
- * waiting on a gauge the snapshot does not carry yet:
+ * Twelve of the twenty-five declare a `measure`, a number in the health snapshot their run is
+ * scored on moving. The other thirteen are recorded as unmeasured rather than scored. Twelve of
+ * those are waiting on a gauge the snapshot does not carry yet:
  *
  * - `claim_dedup`: a near-duplicate claim-pair count.
  * - `claim_consolidation`: claim neighbourhoods above the derived density floor.
@@ -53,6 +54,11 @@ import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-
  *
  * Each is a graph read nothing computes on the tick today. Until one exists, its operation is
  * scored on relevance, waiting time, and cost alone, which is everything known about it.
+ *
+ * The thirteenth, `proposal_resolution`, declares none on purpose rather than for want of a
+ * gauge: the open-proposal count is the number it moves, and scoring it on lowering that would
+ * reward an applied correction and a dismissed one alike, which rewards emptying the queue
+ * rather than deciding it.
  */
 export function introspectionOperations(): readonly IntrospectionOperation[] {
   return [
@@ -109,8 +115,11 @@ export function introspectionOperations(): readonly IntrospectionOperation[] {
     // reaches SQLite, and no candidate read can find that pair again to re-decide it.
     mergeDecisionReconcileOperation(),
 
-    // The queue's own hygiene: ages a proposal out once nobody has acted on it inside its
-    // horizon, ledgered and reversible with `aion proposals reopen`.
+    // The two queues, in the order they read a row. Resolution decides an open proposal on its
+    // merits, applying or dismissing it in the run that reads it; hygiene stays the staleness
+    // backstop for the rows resolution keeps failing on, ageing one out past its horizon. Both
+    // are ledgered and both are reversed with `aion proposals reopen`.
+    proposalResolutionOperation(),
     proposalHygieneOperation(),
   ];
 }

@@ -241,11 +241,11 @@ const CHARS_PER_SENTENCE = 150;
 /**
  * Header plus per-sentence JSON, so a thin session cannot be padded to the ceiling. The
  * per-sentence allowance covers the citation envelope as well as the sentence: a truncated
- * answer is unparseable JSON, not a shorter narrative.
+ * answer is unparseable JSON, not a shorter narrative. Nothing caps the sum: a fixed ceiling
+ * over it would cut a twelve-sentence answer short, and the budget is already what bounds it.
  */
 const NARRATIVE_BASE_TOKENS = 160;
 const NARRATIVE_TOKENS_PER_SENTENCE = 150;
-const NARRATIVE_MAX_TOKENS_CEILING = 1_200;
 
 function round(value: number): number {
   return Math.round(value * 1000) / 1000;
@@ -266,35 +266,37 @@ export function renderItem(item: NarrativeSourceItem): string {
 }
 
 /**
- * Length scales with the source: the budget is what the rendered items can support, capped,
- * and one sentence is the floor. A session of one short observation is one sentence.
+ * Length scales with the source: the budget is what the rendered items can support, capped, and
+ * one sentence is the floor. `sources` is what the one-per-item term counts, which is the items
+ * unless a caller rendered one of them over many.
  */
-export function narrativeSentenceBudget(items: readonly NarrativeSourceItem[]): number {
+export function narrativeSentenceBudget(
+  items: readonly NarrativeSourceItem[],
+  maxSentences: number = NARRATIVE_MAX_SENTENCES,
+  sources: number = items.length,
+): number {
   const chars = items.reduce((total, item) => total + item.text.length, 0);
   const bySize = Math.floor(chars / CHARS_PER_SENTENCE);
-  return Math.max(1, Math.min(NARRATIVE_MAX_SENTENCES, items.length, bySize));
+  return Math.max(1, Math.min(maxSentences, sources, bySize));
 }
 
 export function narrativeMaxTokens(sentenceBudget: number): number {
-  return Math.min(
-    NARRATIVE_MAX_TOKENS_CEILING,
-    NARRATIVE_BASE_TOKENS + sentenceBudget * NARRATIVE_TOKENS_PER_SENTENCE,
-  );
+  return NARRATIVE_BASE_TOKENS + sentenceBudget * NARRATIVE_TOKENS_PER_SENTENCE;
 }
 
 /**
- * The compression input. A long session is rendered from its most recent episodes rather
- * than truncated mid-history, and the ratio it saw is recorded as the narrative's coverage
- * score, so the node says how much of what it claims to cover actually reached the model.
- * Every item carries a tag the answer must cite, and an extracted node follows the episode it
- * came from so the model reads the session as an arc rather than two lists. Clipping is a
- * byte slice, not term selection: nothing here decides what an episode means.
+ * The compression input, one call's worth: a set past `maxEpisodes` renders from its most recent
+ * rather than mid-history, and the ratio it saw is the coverage score the node carries. A session
+ * past the window is chunked before it reaches here, so the clip is a guard. Every item carries a
+ * tag the answer must cite, and an extracted node follows its episode so the model reads an arc
+ * rather than two lists. Clipping is a byte slice: nothing here decides what an episode means.
  */
 export function renderNarrativeSource(
   episodes: readonly NarrativeEpisode[],
   extracted: readonly NarrativeExtractedNode[],
   maxEpisodes: number,
   maxEpisodeChars: number,
+  maxSentences: number = NARRATIVE_MAX_SENTENCES,
 ): NarrativeSource {
   const rendered = episodes.slice(Math.max(0, episodes.length - maxEpisodes));
   const items: NarrativeSourceItem[] = [];
@@ -322,7 +324,7 @@ export function renderNarrativeSource(
     items,
     renderedCount: rendered.length,
     coverage: episodes.length === 0 ? 0 : round(rendered.length / episodes.length),
-    sentenceBudget: narrativeSentenceBudget(items),
+    sentenceBudget: narrativeSentenceBudget(items, maxSentences),
   };
 }
 

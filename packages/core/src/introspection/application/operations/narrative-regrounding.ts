@@ -46,8 +46,7 @@ export function narrativeRegroundingOperation(): IntrospectionOperation {
           limit: ctx.config.maintenance.narrativeCleanupBatch,
           model: ctx.config.models.reflect,
           timeoutMs: ctx.config.reflection.stageTimeoutMs,
-          maxSourceEpisodes: ctx.config.reflection.maxNarrativeEpisodes,
-          maxEpisodeChars: ctx.config.reflection.maxNarrativeEpisodeChars,
+          reflection: ctx.config.reflection,
           now: ctx.now,
         },
       );

@@ -11,7 +11,7 @@ import {
 import type { MemoryPackItem } from '@aion/protocol';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { GateSubstrate, waitFor, REMOTE_JUDGE_ABSENT  } from './gate-substrate.fixture.js';
+import { GateSubstrate, waitFor, REMOTE_JUDGE_ABSENT } from './gate-substrate.fixture.js';
 
 /**
  * The off-topic and on-topic batteries, paired on purpose. The measured miss queries have to
@@ -221,51 +221,54 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('an unrelated query returns a thin or empty
   }, 120_000);
 });
 
-describe.skipIf(REMOTE_JUDGE_ABSENT)('a question the substrate can answer is still answered', () => {
-  it.each(ON_TOPIC_BATTERY)(
-    'still answers: $query',
-    async (probe) => {
-      const result = await substrate.recall(probe.query, {
-        identity: READ_SESSION,
-        now: RECALLED_AT,
-      });
-      const expected = new Set(derivedIds.get(probe.expects) ?? []);
-      const buckets = new Map<string, readonly MemoryPackItem[]>([
-        ['facts', result.pack.facts ?? []],
-        ['episodes', result.pack.episodes ?? []],
-        ['narratives', result.pack.narratives ?? []],
-        ['preferences', result.pack.preferences ?? []],
-        ['resonant', result.pack.resonant ?? []],
-      ]);
-      const found = locate(result.items, buckets, expected);
+describe.skipIf(REMOTE_JUDGE_ABSENT)(
+  'a question the substrate can answer is still answered',
+  () => {
+    it.each(ON_TOPIC_BATTERY)(
+      'still answers: $query',
+      async (probe) => {
+        const result = await substrate.recall(probe.query, {
+          identity: READ_SESSION,
+          now: RECALLED_AT,
+        });
+        const expected = new Set(derivedIds.get(probe.expects) ?? []);
+        const buckets = new Map<string, readonly MemoryPackItem[]>([
+          ['facts', result.pack.facts ?? []],
+          ['episodes', result.pack.episodes ?? []],
+          ['narratives', result.pack.narratives ?? []],
+          ['preferences', result.pack.preferences ?? []],
+          ['resonant', result.pack.resonant ?? []],
+        ]);
+        const found = locate(result.items, buckets, expected);
 
-      onTopicRows.push({
-        query: probe.query,
-        items: result.items.length,
-        bucketRank: found.bucketRank,
-        packRank: found.packRank,
-      });
-      console.log(
-        `on-topic "${probe.query}": ${String(result.items.length)} items, answer at bucket rank ` +
-          `${String(found.bucketRank + 1)}, pack rank ${String(found.packRank)}`,
-      );
+        onTopicRows.push({
+          query: probe.query,
+          items: result.items.length,
+          bucketRank: found.bucketRank,
+          packRank: found.packRank,
+        });
+        console.log(
+          `on-topic "${probe.query}": ${String(result.items.length)} items, answer at bucket rank ` +
+            `${String(found.bucketRank + 1)}, pack rank ${String(found.packRank)}`,
+        );
 
-      expect(result.items.length).toBeGreaterThan(0);
-      expect(found.bucketRank).toBeGreaterThanOrEqual(0);
-      expect(found.bucketRank).toBeLessThan(3);
-    },
-    120_000,
-  );
-
-  // Last, so every probe above has already pushed its row.
-  it('keeps the answer at the head of its bucket more often than not', () => {
-    const first = onTopicRows.filter((row) => row.bucketRank === 0).length;
-    console.log(
-      `on-topic bucket-rank-1 rate: ${String(first)}/${String(onTopicRows.length)}, ` +
-        `bucket ranks ${onTopicRows.map((row) => row.bucketRank + 1).join(' ')}`,
+        expect(result.items.length).toBeGreaterThan(0);
+        expect(found.bucketRank).toBeGreaterThanOrEqual(0);
+        expect(found.bucketRank).toBeLessThan(3);
+      },
+      120_000,
     );
 
-    expect(onTopicRows).toHaveLength(ON_TOPIC_BATTERY.length);
-    expect(first / onTopicRows.length).toBeGreaterThanOrEqual(MIN_RANK_ONE_RATE);
-  });
-});
+    // Last, so every probe above has already pushed its row.
+    it('keeps the answer at the head of its bucket more often than not', () => {
+      const first = onTopicRows.filter((row) => row.bucketRank === 0).length;
+      console.log(
+        `on-topic bucket-rank-1 rate: ${String(first)}/${String(onTopicRows.length)}, ` +
+          `bucket ranks ${onTopicRows.map((row) => row.bucketRank + 1).join(' ')}`,
+      );
+
+      expect(onTopicRows).toHaveLength(ON_TOPIC_BATTERY.length);
+      expect(first / onTopicRows.length).toBeGreaterThanOrEqual(MIN_RANK_ONE_RATE);
+    });
+  },
+);

@@ -224,20 +224,21 @@ describe('renderStatus', () => {
 
     const text = lines.join('\n');
     expect(text).toContain('lanes');
-    expect(text).toContain('merge_auto         MODE: acting');
+    expect(text).toContain('merge_auto          MODE: acting');
     expect(text).toContain(
-      `entity_dedup       MODE: acting (${DEFAULTS.reflection.entityMergeMode})`,
+      `entity_dedup        MODE: acting (${DEFAULTS.reflection.entityMergeMode})`,
     );
     expect(text).toContain(
-      `supersession       MODE: acting (${DEFAULTS.reflection.supersedeMode})`,
+      `supersession        MODE: acting (${DEFAULTS.reflection.supersedeMode})`,
     );
     expect(text).toContain(
-      `keyed_close        MODE: acting (${DEFAULTS.reflection.keyedCloseMode})`,
+      `keyed_close         MODE: acting (${DEFAULTS.reflection.keyedCloseMode})`,
     );
-    expect(text).toContain('proposal_hygiene   MODE: acting');
-    expect(text).toContain('claim_dedup        MODE: acting');
+    expect(text).toContain('proposal_resolution MODE: acting');
+    expect(text).toContain('proposal_hygiene    MODE: acting');
+    expect(text).toContain('claim_dedup         MODE: acting');
     // tier3Mode ships `propose`: the advisor runs, but an accepted recommendation runs nothing.
-    expect(text).toContain('tier3              MODE: off');
+    expect(text).toContain('tier3               MODE: off');
   });
 
   it('reads off, not the mode name, for supersession under propose', () => {
@@ -249,7 +250,7 @@ describe('renderStatus', () => {
 
     renderStatus(healthy, proposeOnly, write);
 
-    expect(lines.join('\n')).toContain('supersession       MODE: off');
+    expect(lines.join('\n')).toContain('supersession        MODE: off');
   });
 
   it('reads off, not the mode name, for keyed_close under its own kill switch', () => {
@@ -262,10 +263,10 @@ describe('renderStatus', () => {
     renderStatus(healthy, killed, write);
 
     const text = lines.join('\n');
-    expect(text).toContain('keyed_close        MODE: off');
+    expect(text).toContain('keyed_close         MODE: off');
     // Independent switch: killing it does not touch the other autonomous lanes.
     expect(text).toContain(
-      `supersession       MODE: acting (${DEFAULTS.reflection.supersedeMode})`,
+      `supersession        MODE: acting (${DEFAULTS.reflection.supersedeMode})`,
     );
   });
 
@@ -279,9 +280,9 @@ describe('renderStatus', () => {
     renderStatus(healthy, proposeOnly, write);
 
     const text = lines.join('\n');
-    expect(text).toContain('entity_dedup       MODE: off');
+    expect(text).toContain('entity_dedup        MODE: off');
     // The deterministic tier is a separate switch and the mode over judgments does not reach it.
-    expect(text).toContain('merge_auto         MODE: acting');
+    expect(text).toContain('merge_auto          MODE: acting');
   });
 
   it('reads acting for tier3 only when the kill switch and the mode knob both agree', () => {
@@ -293,7 +294,7 @@ describe('renderStatus', () => {
 
     renderStatus(healthy, acting, write);
 
-    expect(lines.join('\n')).toContain('tier3              MODE: acting');
+    expect(lines.join('\n')).toContain('tier3               MODE: acting');
   });
 
   it('reads off for tier3 when the kill switch is off, whatever the mode knob says', () => {
@@ -305,7 +306,7 @@ describe('renderStatus', () => {
 
     renderStatus(healthy, killed, write);
 
-    expect(lines.join('\n')).toContain('tier3              MODE: off');
+    expect(lines.join('\n')).toContain('tier3               MODE: off');
   });
 
   it('reads off for merge_auto and proposal_hygiene with their knobs off', () => {
@@ -318,7 +319,22 @@ describe('renderStatus', () => {
     renderStatus(healthy, off, write);
 
     const text = lines.join('\n');
-    expect(text).toContain('merge_auto         MODE: off');
-    expect(text).toContain('proposal_hygiene   MODE: off');
+    expect(text).toContain('merge_auto          MODE: off');
+    expect(text).toContain('proposal_hygiene    MODE: off');
+  });
+
+  it('reads off for proposal_resolution under its own kill switch, hygiene untouched', () => {
+    const { lines, write } = collector();
+    const killed: Config = {
+      ...DEFAULTS,
+      maintenance: { ...DEFAULTS.maintenance, proposalResolution: false },
+    };
+
+    renderStatus(healthy, killed, write);
+
+    const text = lines.join('\n');
+    expect(text).toContain('proposal_resolution MODE: off');
+    // The backstop is a switch of its own: stopping the resolver leaves it ageing rows out.
+    expect(text).toContain('proposal_hygiene    MODE: acting');
   });
 });

@@ -9,7 +9,7 @@ import {
   RESEARCH_MATCHER,
   SESSION_START_MATCHER,
   type HookInstallSpec,
-} from './hooks-settings.js';
+} from './settings.js';
 
 const SCRIPT = '/Users/someone/aion-local/packages/cli/dist/hook-main.js';
 

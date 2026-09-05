@@ -87,6 +87,7 @@ services:
       - AION_REPO_PATH
       - AION_GIT_USER_NAME
       - AION_REPO_HEAD_SHA
+      - AION_HOOKS_INSTALLED
       - AION_NEO4J_URI=${AION_NEO4J_URI:-bolt://neo4j:7687}
       - AION_OLLAMA_URL=${AION_OLLAMA_URL:-http://host.docker.internal:11434}
       - AION_MCP_PORT=${AION_MCP_PORT:-8765}

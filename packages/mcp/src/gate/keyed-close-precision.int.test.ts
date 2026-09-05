@@ -19,7 +19,7 @@ import {
 } from '@aion/core/reflection/domain/claim-key.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { GateSubstrate, REMOTE_JUDGE_ABSENT  } from './gate-substrate.fixture.js';
+import { GateSubstrate, REMOTE_JUDGE_ABSENT } from './gate-substrate.fixture.js';
 import {
   casesOfClass,
   KEYED_BATTERY,

@@ -246,7 +246,7 @@ Where this build differs from the paper:
   They are the section above.
 - **Some tuned values disagree with the paper's appendix** (the episode cap, the summary cue
   weight, the cue-call budget), each on a measurement `architecture.md` records.
-- **Twenty-four maintenance operations are registered**, and two the paper names are not,
+- **Twenty-five maintenance operations are registered**, and two the paper names are not,
   each for a reason `architecture.md` gives. Entity unmerge sits outside the catalog on
   purpose, since a bad merge and a correct one have the same shape in the graph.
 - **A third implementation.** The paper describes two, TypeScript and Go, both multi-tenant

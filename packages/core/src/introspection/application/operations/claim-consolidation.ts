@@ -54,7 +54,7 @@ export function claimConsolidationOperation(): IntrospectionOperation {
         {
           model: ctx.config.models.reflect,
           timeoutMs: ctx.config.reflection.stageTimeoutMs,
-          maxMemberChars: ctx.config.reflection.maxNarrativeEpisodeChars,
+          reflection: ctx.config.reflection,
           now: ctx.now,
           signal: ctx.signal,
         },

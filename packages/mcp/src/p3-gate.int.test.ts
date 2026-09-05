@@ -45,7 +45,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { narrativeOptions, reflectionStages, workerOptions } from './bootstrap.js';
-import { waitFor, REMOTE_JUDGE_ABSENT  } from './gate/gate-substrate.fixture.js';
+import { waitFor, REMOTE_JUDGE_ABSENT } from './gate/gate-substrate.fixture.js';
 
 /**
  * The reflection pipeline's exit gate, assembled the way the service assembles itself: the
@@ -131,6 +131,7 @@ function intakeDeps(deps: {
     entropyThreshold: config.redaction.entropyThreshold,
     lanes: new LaneAssigner(config.lanes),
     workerMaxAttempts: config.operational.workerMaxAttempts,
+    acceptHookCapture: true,
   };
 }
 
@@ -332,52 +333,55 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('gate item 4: recall serves what reflection
   });
 });
 
-describe.skipIf(REMOTE_JUDGE_ABSENT)('gate item 5: an inference outage defers, it never loses', () => {
-  let outageEpisodeId: string;
+describe.skipIf(REMOTE_JUDGE_ABSENT)(
+  'gate item 5: an inference outage defers, it never loses',
+  () => {
+    let outageEpisodeId: string;
 
-  it('stores and queues the episode with its vectors pending', async () => {
-    // No wakeup, so the running worker hears nothing: the queue row is the only record.
-    const stored = await handleReflection(
-      intakeDeps({ provider: outageProvider }),
-      OUTAGE_PAYLOAD,
-      {
-        identity: OUTAGE_SESSION,
-        now: NOW,
-      },
-    );
-    outageEpisodeId = stored.episode_id;
+    it('stores and queues the episode with its vectors pending', async () => {
+      // No wakeup, so the running worker hears nothing: the queue row is the only record.
+      const stored = await handleReflection(
+        intakeDeps({ provider: outageProvider }),
+        OUTAGE_PAYLOAD,
+        {
+          identity: OUTAGE_SESSION,
+          now: NOW,
+        },
+      );
+      outageEpisodeId = stored.episode_id;
 
-    expect(stored.queued).toBe(true);
-    expect(listReflectionJobs(db).map((job) => job.payload)).toContainEqual({
-      episode_id: outageEpisodeId,
+      expect(stored.queued).toBe(true);
+      expect(listReflectionJobs(db).map((job) => job.payload)).toContainEqual({
+        episode_id: outageEpisodeId,
+      });
+
+      const pending = await findPendingVectorNodes(harness.driver, 100);
+      expect(pending.map((node) => node.id)).toContain(outageEpisodeId);
     });
 
-    const pending = await findPendingVectorNodes(harness.driver, 100);
-    expect(pending.map((node) => node.id)).toContain(outageEpisodeId);
-  });
+    it('backfills the vectors and runs the queued job once Ollama answers again', async () => {
+      const recovered = new ReflectionWorker(
+        {
+          driver: harness.driver,
+          db,
+          provider,
+          runner: orchestrator(),
+          logger,
+        },
+        workerOptions(config),
+      );
 
-  it('backfills the vectors and runs the queued job once Ollama answers again', async () => {
-    const recovered = new ReflectionWorker(
-      {
-        driver: harness.driver,
-        db,
-        provider,
-        runner: orchestrator(),
-        logger,
-      },
-      workerOptions(config),
-    );
+      const drain = await recovered.start();
+      await recovered.stop();
 
-    const drain = await recovered.start();
-    await recovered.stop();
+      expect(drain.vectored).toBeGreaterThan(0);
+      expect(drain.ran).toBeGreaterThan(0);
 
-    expect(drain.vectored).toBeGreaterThan(0);
-    expect(drain.ran).toBeGreaterThan(0);
-
-    const stillPending = await findPendingVectorNodes(harness.driver, 100);
-    expect(stillPending.map((node) => node.id)).not.toContain(outageEpisodeId);
-    expect(isLedgerApplied(db, orchestratorLedgerKey(PIPELINE_VERSION, outageEpisodeId))).toBe(
-      true,
-    );
-  }, 600_000);
-});
+      const stillPending = await findPendingVectorNodes(harness.driver, 100);
+      expect(stillPending.map((node) => node.id)).not.toContain(outageEpisodeId);
+      expect(isLedgerApplied(db, orchestratorLedgerKey(PIPELINE_VERSION, outageEpisodeId))).toBe(
+        true,
+      );
+    }, 600_000);
+  },
+);

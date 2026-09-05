@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  acceptsHookCapture,
   evictableModels,
   localChatModels,
   remoteBannerLines,
@@ -135,6 +136,20 @@ describe('what routing asks init and reconciliation to do', () => {
     );
 
     expect(evictableModels(routing)).toEqual([CUE_MODEL]);
+  });
+
+  it('takes hook capture only where the reflect role routes remote', () => {
+    expect(acceptsHookCapture(resolveProviderRouting(config()))).toBe(false);
+    expect(acceptsHookCapture(resolveProviderRouting(config({ key: 'sk-ant-test' })))).toBe(true);
+  });
+
+  // The key alone is not the profile: a reflect role pinned local digests capture on the same
+  // model a keyless install would, so the pin is refused the way a missing key is.
+  it('refuses hook capture when a key is set and the reflect role is pinned local', () => {
+    const routing = resolveProviderRouting(config({ key: 'sk-ant-test', reflect: 'ollama' }));
+
+    expect(routing.keyPresent).toBe(true);
+    expect(acceptsHookCapture(routing)).toBe(false);
   });
 });
 

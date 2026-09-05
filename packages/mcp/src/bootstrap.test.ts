@@ -83,6 +83,9 @@ const configured: Config = {
     narrativeIdleMinutes: 31,
     maxNarrativeEpisodes: 41,
     maxNarrativeEpisodeChars: 2_100,
+    keyedNarrativeEpisodes: 121,
+    keyedNarrativeSentences: 13,
+    keyedNarrativeEpisodeChars: 4_100,
     narrativeSweepLimit: 21,
     midSessionRollup: false,
     midSessionEpisodes: 13,
@@ -225,13 +228,14 @@ describe('reflectionStages', () => {
 });
 
 describe('narrativeOptions', () => {
-  it('threads the configured idle window, both source caps and the mid-session boundary', () => {
+  it('threads the configured idle window, the scale knobs and the mid-session boundary', () => {
     expect(narrativeOptions(configured)).toEqual({
       model: configured.models.reflect,
       idleMs: configured.reflection.narrativeIdleMinutes * MINUTE_MS,
       timeoutMs: configured.reflection.stageTimeoutMs,
-      maxSourceEpisodes: configured.reflection.maxNarrativeEpisodes,
-      maxEpisodeChars: configured.reflection.maxNarrativeEpisodeChars,
+      // The whole group, both routes' numbers included: the resolved route picks inside it at
+      // the moment of the call, which is the one place that knows which model reads the source.
+      reflection: configured.reflection,
       midSession: configured.reflection.midSessionRollup,
       midSessionEpisodes: configured.reflection.midSessionEpisodes,
       midSessionGapMs: configured.reflection.midSessionGapMinutes * MINUTE_MS,

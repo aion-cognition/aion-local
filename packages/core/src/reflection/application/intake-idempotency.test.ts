@@ -88,6 +88,7 @@ beforeEach(() => {
     entropyThreshold: 4.5,
     lanes: new LaneAssigner(LANE_LIMITS),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+    acceptHookCapture: true,
   };
 });
 

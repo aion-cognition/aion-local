@@ -10,6 +10,7 @@ import {
   DEFAULT_SESSION_IDLE_MS,
   sweepIdleSessions,
   type NarrativeDeps,
+  type NarrativeOptions,
 } from './narratives.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
@@ -83,12 +84,13 @@ function deterministicNarrativeProvider(): NarrativeDeps['provider'] {
 async function closeWithGroundingRetry(
   narrativeDeps: NarrativeDeps,
   identity: string,
+  options: NarrativeOptions = {},
 ): ReturnType<typeof closeSessionNarrative> {
-  const first = await closeSessionNarrative(narrativeDeps, identity);
+  const first = await closeSessionNarrative(narrativeDeps, identity, options);
   if (first.status !== 'failed') {
     return first;
   }
-  return closeSessionNarrative(narrativeDeps, identity);
+  return closeSessionNarrative(narrativeDeps, identity, options);
 }
 
 /**
@@ -189,6 +191,66 @@ const PLANNING_DECISIONS = [
 const PLANNING_INSIGHT =
   'Shadow reads are the only way to compare Meridian against the current path without user-visible risk';
 
+/**
+ * A session longer than the local window and shorter than the keyed one. Fifty short episodes
+ * in one arc: at the local scale the render keeps the last forty and the opening ten never
+ * reach the model at all.
+ */
+const WIDE_SESSION_IDENTITY = 'mcp-transport-session-narratives-wide';
+
+const WIDE_EPISODES = [
+  'the Kestrel billing migration was scoped against the orders table',
+  'the current orders schema was read end to end and written down',
+  'two columns were found to carry the same amount in different units',
+  'the finance team confirmed cents is the unit that ships',
+  'a conversion table was drafted for the four legacy currency rows',
+  'the migration was split into a backfill and a cutover',
+  'the backfill was written against a copy of the orders table',
+  'the copy was loaded from a Tuesday snapshot',
+  'the first backfill pass ran in eleven minutes over the copy',
+  'the eleven-minute figure was recorded as the planning number',
+  'index coverage on the copy was measured before any change',
+  'a partial index on paid orders was added to the plan',
+  'the index build on the copy took four minutes',
+  'the backfill was rerun with the index in place and took six minutes',
+  'the six-minute run became the number the cutover window is sized on',
+  'the rollback path was written as a second migration, not a manual undo',
+  'the rollback was rehearsed against the copy and left it clean',
+  'a check query was written to compare the two amount columns row by row',
+  'the check query found forty-one mismatched rows on the copy',
+  'every mismatched row traced back to the legacy currency conversion',
+  'the conversion table was corrected for Swiss francs',
+  'the check query came back empty after the correction',
+  'staging was refreshed from production to rehearse on real volume',
+  'the backfill on staging took nineteen minutes, three times the copy',
+  'the difference was traced to staging sharing its disk with the queue',
+  'the cutover window was widened to forty minutes on that reading',
+  'the on-call rota for the cutover night was agreed with the platform team',
+  'a dry run of the cutover was scheduled for the Thursday before',
+  'the Thursday dry run completed with no manual step needed',
+  'the dry run left one orphaned temporary table behind',
+  'the temporary table was added to the rollback migration',
+  'a second dry run left nothing behind',
+  'the reporting job was found to read the old amount column directly',
+  'the reporting job was changed to read the new column behind a flag',
+  'the flag defaults off until the backfill has finished',
+  'the finance dashboards were pointed at the reporting job, not the table',
+  'a read-only replica lag alert was added for the cutover night',
+  'the alert threshold was set at thirty seconds of lag',
+  'the runbook was written and reviewed by two people outside the team',
+  'the runbook review caught a missing step for the queue drain',
+  'the queue drain step was added before the cutover begins',
+  'the cutover ran on the Tuesday night inside the forty-minute window',
+  'the backfill finished in twenty-two minutes on production',
+  'the check query came back empty on production',
+  'the reporting flag was turned on the following morning',
+  'the finance dashboards matched the ledger to the cent',
+  'the old amount column was left in place, unread, for one billing cycle',
+  'a follow-up ticket was filed to drop the old column after that cycle',
+  'the rollback migration was kept in the repository rather than deleted',
+  'the Kestrel migration was closed out and the on-call rota stood down',
+];
+
 const LATE_EPISODE = {
   summary: 'the backfill finished and Ariadne launched',
   turns: [
@@ -244,6 +306,7 @@ beforeAll(async () => {
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+    acceptHookCapture: true,
   };
   deps = { driver: harness.driver, provider: provider(), logger };
   structuralDeps = { driver: harness.driver, provider: deterministicNarrativeProvider(), logger };
@@ -464,4 +527,136 @@ describe('grounding against a live substrate', () => {
     expect(citations.filter((id) => decisionIds.includes(id)).length).toBeGreaterThan(0);
     expect(Number(properties[NARRATIVE_PROPERTIES.sentenceCount])).toBeGreaterThan(1);
   }, 180_000);
+});
+
+/**
+ * The keyed profile's wider window, against the model it was sized for. The local scale renders
+ * a session's last forty episodes and records the fraction it saw; this session holds fifty, so
+ * a narrative that cites its opening ten is a narrative the local clip could not have written.
+ *
+ * Written out rather than imported: this is the read the gate batteries make, and `core` does
+ * not import from `mcp`, where that constant lives.
+ */
+const REMOTE_JUDGE_ABSENT =
+  (process.env.AION_ANTHROPIC_API_KEY ?? '').trim() === '' ||
+  process.env.TEST_AION_GENERATION === 'local';
+
+describe.skipIf(REMOTE_JUDGE_ABSENT)('the keyed route narrates past the local window', () => {
+  const wideEpisodeIds: string[] = [];
+
+  beforeAll(async () => {
+    for (const line of WIDE_EPISODES) {
+      // Intake refuses a payload of summary alone, and the render reads the summary, so the
+      // observation carries the same line rather than a second one nothing sees.
+      wideEpisodeIds.push(
+        await push({ summary: line, observations: [line] }, WIDE_SESSION_IDENTITY),
+      );
+    }
+  }, 300_000);
+
+  it('reads all fifty episodes and cites both ends of the session', async () => {
+    expect(wideEpisodeIds).toHaveLength(50);
+
+    const result = await closeWithGroundingRetry(deps, WIDE_SESSION_IDENTITY);
+
+    expect(result.status).toBe('created');
+    const properties = await nodeProperties(harness.driver, result.narrativeId!);
+    expect(properties[NARRATIVE_PROPERTIES.coverageCount]).toBe(50);
+    // The fraction the model saw. At the local scale this reads 0.8, and the ten episodes the
+    // clip dropped are the ones the citations below reach.
+    expect(properties[NARRATIVE_PROPERTIES.coverage]).toBe(1);
+
+    const citations = properties[NARRATIVE_PROPERTIES.citations] as string[];
+    const opening = wideEpisodeIds.slice(0, 10);
+    const closing = wideEpisodeIds.slice(-10);
+
+    expect(citations.every((id) => wideEpisodeIds.includes(id))).toBe(true);
+    expect(citations.some((id) => opening.includes(id))).toBe(true);
+    expect(citations.some((id) => closing.includes(id))).toBe(true);
+  }, 180_000);
+});
+
+/**
+ * The session no window holds. It is read in consecutive chunks, one call each, and the chunk
+ * texts are compressed once more, so its opening reaches the narrative rather than falling off
+ * the front of a single call.
+ *
+ * The keyed window is 120 episodes, so ninety of them would be one chunk and would exercise
+ * nothing. The close below runs at the local window of forty instead, which splits this session
+ * into three chunks of thirty, while generation still routes to the keyed provider, which is
+ * what keeps four calls to seconds rather than minutes.
+ */
+const CHUNKED_SESSION_IDENTITY = 'mcp-transport-session-narratives-chunked';
+
+const CHUNKED_SCALE = {
+  ...DEFAULTS.reflection,
+  keyedNarrativeEpisodes: DEFAULTS.reflection.maxNarrativeEpisodes,
+};
+
+const CHUNKED_TABLES = [
+  'orders',
+  'invoices',
+  'payments',
+  'refunds',
+  'ledger entry',
+  'payout',
+  'dispute',
+  'credit',
+  'adjustment',
+  'statement',
+];
+
+/**
+ * Ninety short episodes in three phases of thirty, which is one phase per chunk at the window
+ * above. Each phase carries its own vocabulary, so a final pass reading one text per chunk has
+ * something of its own to say about each.
+ */
+const CHUNKED_EPISODES = Array.from({ length: 90 }, (_, slot) => {
+  const table = CHUNKED_TABLES[slot % CHUNKED_TABLES.length] ?? 'orders';
+  const step = String(slot + 1);
+  if (slot < 30) {
+    return `Halcyon audit step ${step}: the ${table} table was read end to end and its row count written down`;
+  }
+  if (slot < 60) {
+    return `Halcyon backfill step ${step}: the ${table} rows were rewritten into cents on the copy`;
+  }
+  return `Halcyon cutover step ${step}: the ${table} table was switched over and its check query came back empty`;
+});
+
+describe.skipIf(REMOTE_JUDGE_ABSENT)('a session past the window narrates in chunks', () => {
+  const chunkedEpisodeIds: string[] = [];
+
+  beforeAll(async () => {
+    for (const line of CHUNKED_EPISODES) {
+      chunkedEpisodeIds.push(
+        await push({ summary: line, observations: [line] }, CHUNKED_SESSION_IDENTITY),
+      );
+    }
+  }, 900_000);
+
+  it('reads all ninety episodes and cites both the opening and the closing third', async () => {
+    expect(chunkedEpisodeIds).toHaveLength(90);
+    // What makes the close below chunk at all: the session is longer than the window it runs at.
+    expect(chunkedEpisodeIds.length).toBeGreaterThan(CHUNKED_SCALE.keyedNarrativeEpisodes);
+
+    const result = await closeWithGroundingRetry(deps, CHUNKED_SESSION_IDENTITY, {
+      reflection: CHUNKED_SCALE,
+    });
+
+    expect(result.status).toBe('created');
+    const properties = await nodeProperties(harness.driver, result.narrativeId!);
+    expect(properties[NARRATIVE_PROPERTIES.coverageCount]).toBe(90);
+    // Full, because every episode was read by the chunk that held it. One call over this
+    // session would have recorded 0.444 and dropped the other fifty.
+    expect(properties[NARRATIVE_PROPERTIES.coverage]).toBe(1);
+
+    const citations = properties[NARRATIVE_PROPERTIES.citations] as string[];
+    const opening = chunkedEpisodeIds.slice(0, 30);
+    const closing = chunkedEpisodeIds.slice(-30);
+
+    // Every id came through a chunk that cited it, so nothing here is reachable any other way.
+    expect(citations.every((id) => chunkedEpisodeIds.includes(id))).toBe(true);
+    expect(citations.some((id) => opening.includes(id))).toBe(true);
+    expect(citations.some((id) => closing.includes(id))).toBe(true);
+  }, 300_000);
 });

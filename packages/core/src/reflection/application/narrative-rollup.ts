@@ -3,6 +3,7 @@ import type { Driver } from 'neo4j-driver';
 import { synthesizeGrounded } from './consolidation-synthesis.js';
 import { attachContentVectors } from './vectors.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import type { Config } from '../../infrastructure/config/schema.js';
 import {
   supersede,
   writeStampedDerivedNodeInTransaction,
@@ -29,6 +30,7 @@ import {
   rollupNodeId,
   type ConsolidationMember,
 } from '../domain/consolidation.js';
+import { narrativeScale } from '../domain/narrative-scale.js';
 import { decideSessionNarrative, narrativeSpan, NARRATIVE_GROUNDING } from '../domain/narrative.js';
 import {
   groupRollupWindows,
@@ -79,7 +81,8 @@ export type RollupOptions = {
   readonly timeoutMs?: number;
   readonly memberLimit?: number;
   readonly windowLimit?: number;
-  readonly maxMemberChars?: number;
+  /** The knob group the synthesis is sized out of; the resolved route picks inside it. */
+  readonly reflection?: Config['reflection'];
   readonly now?: Date;
   readonly signal?: AbortSignal;
 };
@@ -103,18 +106,29 @@ type RollupSettings = {
   readonly memberLimit: number;
   readonly windowLimit: number;
   readonly maxMemberChars: number;
+  readonly maxSentences: number;
   readonly now: Date;
   readonly signal?: AbortSignal;
 };
 
-function settingsOf(options: RollupOptions): RollupSettings {
+/**
+ * Member counts and windows per tick are this operation's own bounds and do not move with the
+ * route. What the route sizes is the synthesis itself: how much of each member reaches the
+ * model and how long the answer runs, the same two numbers a session narrative reads.
+ */
+function settingsOf(options: RollupOptions, provider: Provider): RollupSettings {
+  const scale = narrativeScale(
+    provider.route?.provider === 'anthropic',
+    options.reflection ?? DEFAULTS.reflection,
+  );
   return {
     scope: options.scope,
     model: options.model ?? DEFAULTS.models.reflect,
     timeoutMs: options.timeoutMs ?? DEFAULTS.reflection.stageTimeoutMs,
     memberLimit: options.memberLimit ?? DEFAULT_ROLLUP_MEMBER_LIMIT,
     windowLimit: options.windowLimit ?? DEFAULT_ROLLUP_WINDOW_LIMIT,
-    maxMemberChars: options.maxMemberChars ?? DEFAULTS.reflection.maxNarrativeEpisodeChars,
+    maxMemberChars: scale.episodeChars,
+    maxSentences: scale.maxSentences,
     now: options.now ?? new Date(),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   };
@@ -269,7 +283,11 @@ async function rollUpWindow(
     return { outcome: 'skipped', absorbed: 0 };
   }
 
-  const source = renderConsolidationSource(toMembers(window, memberScope), settings.maxMemberChars);
+  const source = renderConsolidationSource(
+    toMembers(window, memberScope),
+    settings.maxMemberChars,
+    settings.maxSentences,
+  );
   const synthesis = await synthesizeGrounded(
     deps.provider,
     source,
@@ -347,7 +365,7 @@ export async function rollUpNarratives(
   deps: RollupDeps,
   options: RollupOptions,
 ): Promise<RollupReport> {
-  const settings = settingsOf(options);
+  const settings = settingsOf(options, deps.provider);
   const memberScope = rollupMemberScope(settings.scope);
   const members = await findRollupMembers(deps.driver, {
     scope: memberScope,

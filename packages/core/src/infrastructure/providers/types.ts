@@ -39,6 +39,13 @@ export type StructuredRequest = {
 export type Provider = {
   embed(texts: readonly string[]): Promise<Vector[]>;
   generate(req: StructuredRequest): Promise<unknown>;
+  /**
+   * Where `generate` resolved, for a call site that sizes its own prompt to the model behind it.
+   * Structural rather than the routing layer's own type, so this module stays free of that
+   * import and no existing implementation grows a field. An absent route reads as local: a test
+   * fake or a bare `OllamaProvider` gets the small-model behavior.
+   */
+  readonly route?: { readonly provider: 'ollama' | 'anthropic' };
 };
 
 /**

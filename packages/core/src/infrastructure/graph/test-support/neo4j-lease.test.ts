@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   claimPooledNeo4j,
   integrationPoolSize,
+  NEO4J_LEASE_DIR_ENV,
+  NEO4J_POOL_ENV,
   NEO4J_POOL_SIZE_ENV,
   publishedPool,
   releaseNeo4jLease,
@@ -94,7 +96,15 @@ describe('sizing the pool', () => {
 });
 
 describe('reading the published pool', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  // A combined unit-and-integration run inherits the runner's live pool, so the
+  // no-pool case has to clear the variables rather than trust the environment.
   it('reports no pool when the runner published none', () => {
+    vi.stubEnv(NEO4J_POOL_ENV, undefined);
+    vi.stubEnv(NEO4J_LEASE_DIR_ENV, undefined);
     expect(publishedPool()).toBeUndefined();
   });
 });

@@ -15,6 +15,11 @@ export type AnthropicTestProviderOptions = {
  * the product never produces.
  */
 export class AnthropicTestProvider implements Provider {
+  /**
+   * The same fact the service's routed provider carries, so a call site that sizes its prompt
+   * to the model behind it reads the keyed shape here rather than the local one.
+   */
+  readonly route = { provider: 'anthropic' } as const;
   readonly #client: AnthropicHaikuClient;
   readonly #embedder: OllamaProvider;
   readonly #model: string;

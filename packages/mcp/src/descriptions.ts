@@ -6,7 +6,7 @@
  *
  * Bump `DESCRIPTIONS_VERSION` on every edit to any string in this file.
  */
-export const DESCRIPTIONS_VERSION = 1;
+export const DESCRIPTIONS_VERSION = 2;
 
 /** The `_meta` key the version is published under, so a cadence report can group by it. */
 export const DESCRIPTIONS_VERSION_META_KEY = 'aion/descriptions_version';
@@ -46,6 +46,9 @@ export const REFLECTION_DESCRIPTION = [
   '- whenever the user states a preference or a fact about their system that should outlive this conversation.',
   '',
   'Prefer an observation over a transcript when the value is the conclusion rather than the exchange.',
+  'A good observation states the conclusion, the reason behind it, and the concrete names',
+  'involved (files, commands, decisions). A later session gets that line and nothing around it.',
+  'Reflect once per unit of work instead of batching a whole session into one call at the end.',
   'Intake returns as soon as the experience is durable; extraction runs afterward, so the call is fast',
   'and never blocks the work it describes. Credentials are redacted before anything is stored, and',
   'sending the same payload twice returns the original episode rather than storing it again.',

@@ -142,6 +142,7 @@ beforeAll(async () => {
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+    acceptHookCapture: true,
   };
 
   const stored = await handleReflection(intake, PAYLOAD, { identity: SESSION_IDENTITY });

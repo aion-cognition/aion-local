@@ -1,5 +1,6 @@
 import {
   ReflectionInputSchema,
+  ReflectionOriginSchema,
   type ReflectionOrigin,
   type ReflectionOutput,
 } from '@aion/protocol';
@@ -52,7 +53,26 @@ export type ReflectionIntakeDeps = ExperienceStoreDeps & {
   readonly lanes: LaneAssigner;
   /** `operational.workerMaxAttempts`, so `pending_ahead` counts only rows a worker will claim. */
   readonly workerMaxAttempts: number;
+  /**
+   * Whether a hook may push raw transcript windows at this service. True only where reflection
+   * is routed to the remote model: the local model spends tens of seconds an episode, so a hook
+   * that fires every turn buries the queue in transcript nobody asked to keep.
+   */
+  readonly acceptHookCapture: boolean;
 };
+
+/**
+ * A hook payload the service will not take is the caller's error, so it travels the path an
+ * invalid payload takes and arrives as invalid params carrying its own reason. Origins the
+ * client chooses deliberately (`mcp`, `cli`) and a payload naming none are untouched.
+ */
+const CapturableOriginSchema = ReflectionOriginSchema.optional().refine(
+  (origin) => origin?.channel !== 'hook',
+  {
+    message:
+      'hook capture needs the keyed profile: reflection is routed to a local model. Set AION_ANTHROPIC_API_KEY and restart, or run aion hooks uninstall.',
+  },
+);
 
 export type ReflectionIntakeOptions = {
   /** The transport's session identity. `session_id` in the payload overrides it. */
@@ -252,6 +272,9 @@ export async function handleReflection(
 ): Promise<ReflectionOutput> {
   const now = options.now ?? new Date();
   const payload = ReflectionInputSchema.parse(input);
+  if (!deps.acceptHookCapture) {
+    CapturableOriginSchema.parse(payload.origin);
+  }
 
   // `session_id` and `lane` are routing, not content. Redacting an identity would fork the
   // session and break the FOLLOWS chain; leaving either in would put scheduling metadata in

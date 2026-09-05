@@ -167,5 +167,16 @@ export const REFLECTION_KNOBS = {
   midSessionGapMinutes: ['AION_REFLECTION_MID_SESSION_GAP_MINUTES', positiveInt, 10],
   maxNarrativeEpisodes: ['AION_REFLECTION_MAX_NARRATIVE_EPISODES', positiveInt, 40],
   maxNarrativeEpisodeChars: ['AION_REFLECTION_MAX_NARRATIVE_EPISODE_CHARS', positiveInt, 2_000],
+  // The three above are what qwen3:8b was measured on, and these three are what the same
+  // synthesis reads and writes when generation routes to Haiku. Inert on the local route:
+  // `narrativeScale` reads one set or the other off the resolved route, so a substrate with no
+  // key never sees these values whatever they are set to. Three times the episodes and twice
+  // the sentences, sized to the model rather than measured: Haiku takes a 120-episode session
+  // in one call and answers at twelve sentences without strain, where the local model starts
+  // repeating itself. The character cap doubles with them, because a wider window that clips
+  // each episode harder trades one loss for another.
+  keyedNarrativeEpisodes: ['AION_KEYED_NARRATIVE_EPISODES', positiveInt, 120],
+  keyedNarrativeSentences: ['AION_KEYED_NARRATIVE_SENTENCES', positiveInt, 12],
+  keyedNarrativeEpisodeChars: ['AION_KEYED_NARRATIVE_EPISODE_CHARS', positiveInt, 4_000],
   narrativeSweepLimit: ['AION_REFLECTION_NARRATIVE_SWEEP_LIMIT', positiveInt, 20],
 } as const;

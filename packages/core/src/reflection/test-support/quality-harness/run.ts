@@ -6,6 +6,7 @@ import { extractCognitiveViaProvider, extractEntitiesViaProvider } from './provi
 import { renderJsonReport, renderMarkdownReport } from './report.js';
 import type { SkippedRoute } from './report.js';
 import { runQualityHarness, type RouteConfig } from './runner.js';
+import { applyEnvDefaults } from '../../../infrastructure/config/env-file.js';
 import { loadConfig } from '../../../infrastructure/config/load-config.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import { OllamaProvider } from '../../../infrastructure/providers/ollama-provider.js';
@@ -56,6 +57,9 @@ function buildAnthropicRoute(config: Config): RouteConfig {
 }
 
 async function main(): Promise<void> {
+  // Run from the repo root on the host, where nothing has loaded `.env`. Without this the
+  // remote route is skipped and the report compares the local model against nothing.
+  applyEnvDefaults(join(process.cwd(), '.env'), ['AION_ANTHROPIC_API_KEY', 'AION_ANTHROPIC_MODEL']);
   const config = loadConfig(process.env);
   const routes: RouteConfig[] = [buildLocalRoute(config)];
   const skippedRoutes: SkippedRoute[] = [];

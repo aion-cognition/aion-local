@@ -24,7 +24,13 @@ model every other caller is already waiting on. Routing generation to `claude-ha
 what makes the cadence affordable. Embeddings stay local either way, because the vector space
 is the substrate.
 
-`aion hooks install` does the hook half on its own, at any time.
+Hooks are a keyed-profile feature, enforced three times over. `aion hooks install` refuses
+without a key. The server refuses hook capture while reflection routes to a local model, whether
+that is a missing key or a pin. The hook client itself stops capturing and strips its own entries
+from `~/.claude/settings.json` on its next fire once the key is gone. `aion doctor` reports the
+pairing as `hooks-keyed-only`.
+
+`aion hooks install` does the hook half on its own, once the key is in `.env`.
 
 ## The events
 

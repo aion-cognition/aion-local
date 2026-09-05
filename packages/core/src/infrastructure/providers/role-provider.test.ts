@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { ProviderRouter, type GenerationEvent } from './role-provider.js';
 import type { ProviderPin } from './routing.js';
+import type { Provider } from './types.js';
 import { DEFAULTS } from '../config/defaults.js';
 import type { Config } from '../config/schema.js';
 
@@ -156,6 +157,24 @@ describe('the telemetry a caller reads the route from', () => {
         ok: true,
       }),
     ]);
+  });
+
+  it('carries the resolved provider on the role provider under a keyed config', () => {
+    const { impl } = recordingFetch();
+    const router = new ProviderRouter({ config: config({ key: 'sk-ant-test' }), fetchImpl: impl });
+
+    const reflect: Provider = router.forRole('reflect');
+
+    expect(reflect.route?.provider).toBe('anthropic');
+  });
+
+  it('carries the resolved provider on the role provider under a keyless config', () => {
+    const { impl } = recordingFetch();
+    const router = new ProviderRouter({ config: config(), fetchImpl: impl });
+
+    const reflect: Provider = router.forRole('reflect');
+
+    expect(reflect.route?.provider).toBe('ollama');
   });
 
   it('reports a failed generation rather than swallowing it', async () => {

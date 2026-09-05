@@ -1,5 +1,7 @@
 import {
+  acceptsHookCapture,
   queueLagSnapshot,
+  resolveProviderRouting,
   scanHorizonIntegrity,
   type Config,
   type HorizonIntegrity,
@@ -82,4 +84,32 @@ export function horizonIntegrityCheck(report: HorizonIntegrity): CheckResult {
 /** The same verdict over a live substrate, which is how `aion doctor` reaches it. */
 export async function readingHorizonCheck(driver: Driver): Promise<CheckResult> {
   return horizonIntegrityCheck(await scanHorizonIntegrity(driver));
+}
+
+/**
+ * Hooks push raw transcript windows at every turn, and only the keyed route digests that
+ * volume. The resolved reflect route answers the routing half, so a key pinned back to Ollama
+ * reads as the local profile it is. Whether hooks are installed is a host fact: the CLI runs in
+ * a container that cannot see `~/.claude`, so `bin/aion` computes it and passes it through, and
+ * a run reached any other way reports that it cannot see rather than guessing.
+ */
+export function hooksKeyedOnlyCheck(config: Config, env: NodeJS.ProcessEnv): CheckResult {
+  const installed = (env.AION_HOOKS_INSTALLED ?? '').trim();
+  if (installed === '') {
+    return { ok: true, detail: 'hook settings not visible here' };
+  }
+  if (installed !== 'true') {
+    return { ok: true, detail: 'no hooks installed' };
+  }
+  const routing = resolveProviderRouting(config);
+  if (acceptsHookCapture(routing)) {
+    return { ok: true, detail: 'hooks installed, keyed' };
+  }
+  return {
+    ok: false,
+    detail:
+      `hooks are installed but reflection runs locally on ${routing.roles.reflect.model}; ` +
+      'set AION_ANTHROPIC_API_KEY in .env, or remove the hooks (`aion hooks uninstall`; ' +
+      'the hook client also strips them on its next fire)',
+  };
 }

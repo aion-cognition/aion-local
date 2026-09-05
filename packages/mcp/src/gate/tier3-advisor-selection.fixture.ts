@@ -45,6 +45,11 @@ import {
  * `dead_letter` reads exhausted over 50, `reinforcement_flush` reads queue depth over 100, and
  * `reconcile_reenqueue` reads unenriched episodes over 200.
  *
+ * An open proposal is deterministic work rather than an idle reading: `proposal_resolution`
+ * scores the open count of both queues against its own shipped batch, so two open rows already
+ * reach the urgency threshold and the cycle is a tier-2 selection. A proposal case that is still
+ * a tier-3 cycle therefore carries exactly one open row, whichever queue holds it.
+ *
  * Nothing here is a fixture about a pathology the snapshot does not encode.
  * `retro_judgment_sweep` has a flat relevance and no gauge, so a case "about" it would measure
  * nothing; it appears as a candidate and never as an answer.
@@ -357,20 +362,20 @@ export const TIER3_SELECTION_BATTERY: readonly Tier3Case[] = [
     truthNote: 'all four exhausted rows already had their one retry, so a run changes nothing',
   },
   {
-    key: 'open-supersession-proposals',
+    key: 'one-fresh-supersession-proposal',
     health: snapshot({
       graph: populatedGraph(),
       enrichment: enrichment({ episodes: 96 }),
       proposals: proposals({
-        supersessionOpen: 7,
+        supersessionOpen: 1,
         oldestOpenAgeMs: 10_800_000,
-        medianOpenAgeMs: 3_600_000,
+        medianOpenAgeMs: 10_800_000,
       }),
       effectiveness: POPULATED_RECORD,
     }),
     expected: NO_OPERATION,
     truthNote:
-      'fresh open proposals are under every hygiene horizon, so nothing should run for them yet',
+      'a queue of one sits under what the resolver itself calls work, and hours inside every hygiene horizon',
   },
   {
     key: 'slow-worker-shallow-queue',

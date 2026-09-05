@@ -45,7 +45,7 @@ import {
   type Scored,
   type SeededCase,
 } from './entity-cascade-precision.scoring.js';
-import { GateSubstrate, REMOTE_JUDGE_ABSENT  } from './gate-substrate.fixture.js';
+import { GateSubstrate, REMOTE_JUDGE_ABSENT } from './gate-substrate.fixture.js';
 
 /**
  * The cascade's shipped default, measured rather than argued.

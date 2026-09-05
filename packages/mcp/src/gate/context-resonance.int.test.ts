@@ -26,7 +26,7 @@ import {
   TARGET_WORLD,
   type ResonanceWorld,
 } from './context-resonance.fixture.js';
-import { GateSubstrate, waitFor, REMOTE_JUDGE_ABSENT  } from './gate-substrate.fixture.js';
+import { GateSubstrate, waitFor, REMOTE_JUDGE_ABSENT } from './gate-substrate.fixture.js';
 
 /**
  * The second pass, on the shipped read path and in the embedding space the service actually
@@ -208,162 +208,165 @@ afterAll(async () => {
   await substrate.close();
 });
 
-describe.skipIf(REMOTE_JUDGE_ABSENT)('a memory the query shares no words with reaches the pack by the shape of its neighborhood', () => {
-  it('leaves the target out of reach of the content leg and the keyword leg', async () => {
-    const [queryVector] = await substrate.provider.embed([RESONANCE_QUERY]);
-    const [targetVector] = await substrate.provider.embed([TARGET_WORLD.observation]);
-    if (queryVector === undefined || targetVector === undefined) {
-      throw new Error('the embed model returned no vector for the query');
-    }
-
-    const nearest = await vectorSeeds(substrate.driver, {
-      vector: queryVector,
-      limit: SEED_BUDGET,
-      mode: withCurrency(),
-    });
-    const lexical = await fulltextSeeds(substrate.driver, {
-      query: lucenePhraseQuery(RESONANCE_QUERY),
-      limit: 10,
-      mode: withCurrency(),
-    });
-    const targetId = episodeIds.get(TARGET_WORLD.key) ?? '';
-
-    console.log(
-      `target content cosine to the query: ` +
-        `${cosineSimilarity(queryVector, targetVector).toFixed(3)} against an admission floor of ${String(
-          substrate.config.recall.vectorAdmissionFloor,
-        )}`,
-    );
-
-    expect(cosineSimilarity(queryVector, targetVector)).toBeLessThan(
-      substrate.config.recall.vectorAdmissionFloor,
-    );
-    expect(nearest.map((row) => row.id)).not.toContain(targetId);
-    expect(lexical.map((row) => row.id)).not.toContain(targetId);
-  }, 120_000);
-
-  /**
-   * The band `contextResonance.contextSearchThreshold` sits in, measured rather than assumed.
-   * The search runs from a centroid over what the first pass admitted, which is this query's
-   * anchor world, so the two readings against that world's own neighborhood shape are the two
-   * distributions the threshold has to separate: the memory whose crew has the same shape, and
-   * the memory whose crew has a different one.
-   */
-  it('measures the shape distance to the target against the shape distance to the distractor', async () => {
-    const anchor = await contextVector(substrate.driver, episodeIds.get(ANCHOR_WORLD.key) ?? '');
-    const target = await contextVector(substrate.driver, episodeIds.get(TARGET_WORLD.key) ?? '');
-    const distractor = await contextVector(
-      substrate.driver,
-      episodeIds.get(DISTRACTOR_WORLD.key) ?? '',
-    );
-    if (anchor === undefined || target === undefined || distractor === undefined) {
-      throw new Error('a world reached the read path with no context vector');
-    }
-
-    const matched = cosineSimilarity(anchor, target);
-    const mismatched = cosineSimilarity(anchor, distractor);
-    const threshold = substrate.config.contextResonance.contextSearchThreshold.toFixed(2);
-    console.log(
-      `neighborhood shape against the anchor: target ${matched.toFixed(3)}, distractor ${mismatched.toFixed(3)}, threshold ${threshold}`,
-    );
-
-    expect(matched).toBeGreaterThan(mismatched);
-  }, 120_000);
-
-  it('surfaces the target in the resonant bucket and in no other', async () => {
-    const result = await substrate.recall(RESONANCE_QUERY, {
-      identity: READ_SESSION,
-      now: RECALLED_AT,
-    });
-    const targetId = episodeIds.get(TARGET_WORLD.key) ?? '';
-
-    console.log(
-      `resonant bucket: ${String(result.pack.resonant?.length ?? 0)} item(s), ` +
-        `seeds ${String(result.seeds.length)}, admitted ${String(result.admission.admitted)}${(
-          result.pack.resonant ?? []
-        )
-          .map(
-            (item) =>
-              `\n    [${item.rationale.method} ${item.confidence.toFixed(3)}] ${item.content.slice(
-                0,
-                70,
-              )}`,
-          )
-          .join('')}`,
-    );
-
-    // Not found by a seed strategy and not reached by the spread: if either had, the second
-    // pass would have excluded it and the bucket would be empty.
-    expect(result.seeds.map((seed) => seed.id)).not.toContain(targetId);
-    expect(result.pack.resonant?.map((item) => item.id)).toContain(targetId);
-    for (const [name, bucket] of bucketsOf(result.pack)) {
-      if (name === 'resonant') {
-        continue;
+describe.skipIf(REMOTE_JUDGE_ABSENT)(
+  'a memory the query shares no words with reaches the pack by the shape of its neighborhood',
+  () => {
+    it('leaves the target out of reach of the content leg and the keyword leg', async () => {
+      const [queryVector] = await substrate.provider.embed([RESONANCE_QUERY]);
+      const [targetVector] = await substrate.provider.embed([TARGET_WORLD.observation]);
+      if (queryVector === undefined || targetVector === undefined) {
+        throw new Error('the embed model returned no vector for the query');
       }
-      expect(bucket.map((item) => item.id)).not.toContain(targetId);
-    }
-  }, 120_000);
 
-  it('explains every resonant item as a shape match above the context threshold', async () => {
-    const result = await substrate.recall(RESONANCE_QUERY, {
-      identity: READ_SESSION,
-      now: RECALLED_AT,
-    });
-    const resonant = result.pack.resonant ?? [];
+      const nearest = await vectorSeeds(substrate.driver, {
+        vector: queryVector,
+        limit: SEED_BUDGET,
+        mode: withCurrency(),
+      });
+      const lexical = await fulltextSeeds(substrate.driver, {
+        query: lucenePhraseQuery(RESONANCE_QUERY),
+        limit: 10,
+        mode: withCurrency(),
+      });
+      const targetId = episodeIds.get(TARGET_WORLD.key) ?? '';
 
-    expect(resonant.length).toBeGreaterThan(0);
-    for (const item of resonant) {
-      expect(item.rationale.method).toBe('resonance');
-      expect(item.rationale.path).toBe(RESONANCE_PATH);
-      // Admitted by the algorithm's own bar, which is a cosine between two neighborhoods and
-      // has nothing to say about the content floors.
-      expect(item.confidence).toBeGreaterThanOrEqual(
-        substrate.config.contextResonance.contextSearchThreshold,
+      console.log(
+        `target content cosine to the query: ` +
+          `${cosineSimilarity(queryVector, targetVector).toFixed(3)} against an admission floor of ${String(
+            substrate.config.recall.vectorAdmissionFloor,
+          )}`,
       );
-    }
-  }, 120_000);
 
-  // The bucket is a second way into the pack, never a second copy of it. The stage excludes
-  // what the first pass produced and the pack drops content twins, and this is the check that
-  // catches a regression in either of them.
-  it('never lets one memory reach the pack twice under two rationales', async () => {
-    const result = await substrate.recall(RESONANCE_QUERY, {
-      identity: READ_SESSION,
-      now: RECALLED_AT,
-    });
-    const resonant = new Set((result.pack.resonant ?? []).map((item) => item.id));
+      expect(cosineSimilarity(queryVector, targetVector)).toBeLessThan(
+        substrate.config.recall.vectorAdmissionFloor,
+      );
+      expect(nearest.map((row) => row.id)).not.toContain(targetId);
+      expect(lexical.map((row) => row.id)).not.toContain(targetId);
+    }, 120_000);
 
-    for (const [name, bucket] of bucketsOf(result.pack)) {
-      if (name === 'resonant') {
-        continue;
+    /**
+     * The band `contextResonance.contextSearchThreshold` sits in, measured rather than assumed.
+     * The search runs from a centroid over what the first pass admitted, which is this query's
+     * anchor world, so the two readings against that world's own neighborhood shape are the two
+     * distributions the threshold has to separate: the memory whose crew has the same shape, and
+     * the memory whose crew has a different one.
+     */
+    it('measures the shape distance to the target against the shape distance to the distractor', async () => {
+      const anchor = await contextVector(substrate.driver, episodeIds.get(ANCHOR_WORLD.key) ?? '');
+      const target = await contextVector(substrate.driver, episodeIds.get(TARGET_WORLD.key) ?? '');
+      const distractor = await contextVector(
+        substrate.driver,
+        episodeIds.get(DISTRACTOR_WORLD.key) ?? '',
+      );
+      if (anchor === undefined || target === undefined || distractor === undefined) {
+        throw new Error('a world reached the read path with no context vector');
       }
-      for (const item of bucket) {
-        expect(resonant.has(item.id)).toBe(false);
+
+      const matched = cosineSimilarity(anchor, target);
+      const mismatched = cosineSimilarity(anchor, distractor);
+      const threshold = substrate.config.contextResonance.contextSearchThreshold.toFixed(2);
+      console.log(
+        `neighborhood shape against the anchor: target ${matched.toFixed(3)}, distractor ${mismatched.toFixed(3)}, threshold ${threshold}`,
+      );
+
+      expect(matched).toBeGreaterThan(mismatched);
+    }, 120_000);
+
+    it('surfaces the target in the resonant bucket and in no other', async () => {
+      const result = await substrate.recall(RESONANCE_QUERY, {
+        identity: READ_SESSION,
+        now: RECALLED_AT,
+      });
+      const targetId = episodeIds.get(TARGET_WORLD.key) ?? '';
+
+      console.log(
+        `resonant bucket: ${String(result.pack.resonant?.length ?? 0)} item(s), ` +
+          `seeds ${String(result.seeds.length)}, admitted ${String(result.admission.admitted)}${(
+            result.pack.resonant ?? []
+          )
+            .map(
+              (item) =>
+                `\n    [${item.rationale.method} ${item.confidence.toFixed(3)}] ${item.content.slice(
+                  0,
+                  70,
+                )}`,
+            )
+            .join('')}`,
+      );
+
+      // Not found by a seed strategy and not reached by the spread: if either had, the second
+      // pass would have excluded it and the bucket would be empty.
+      expect(result.seeds.map((seed) => seed.id)).not.toContain(targetId);
+      expect(result.pack.resonant?.map((item) => item.id)).toContain(targetId);
+      for (const [name, bucket] of bucketsOf(result.pack)) {
+        if (name === 'resonant') {
+          continue;
+        }
+        expect(bucket.map((item) => item.id)).not.toContain(targetId);
       }
-    }
-  }, 120_000);
+    }, 120_000);
 
-  it('leaves the memory whose neighborhood has a different shape out of every bucket', async () => {
-    const result = await substrate.recall(RESONANCE_QUERY, {
-      identity: READ_SESSION,
-      now: RECALLED_AT,
-    });
+    it('explains every resonant item as a shape match above the context threshold', async () => {
+      const result = await substrate.recall(RESONANCE_QUERY, {
+        identity: READ_SESSION,
+        now: RECALLED_AT,
+      });
+      const resonant = result.pack.resonant ?? [];
 
-    for (const id of idsOf(DISTRACTOR_WORLD)) {
-      expect(result.items.map((item) => item.id)).not.toContain(id);
-    }
-  }, 120_000);
+      expect(resonant.length).toBeGreaterThan(0);
+      for (const item of resonant) {
+        expect(item.rationale.method).toBe('resonance');
+        expect(item.rationale.path).toBe(RESONANCE_PATH);
+        // Admitted by the algorithm's own bar, which is a cosine between two neighborhoods and
+        // has nothing to say about the content floors.
+        expect(item.confidence).toBeGreaterThanOrEqual(
+          substrate.config.contextResonance.contextSearchThreshold,
+        );
+      }
+    }, 120_000);
 
-  it('still answers the question it was asked, so the second pass adds rather than swaps', async () => {
-    const result = await substrate.recall(RESONANCE_QUERY, {
-      identity: READ_SESSION,
-      now: RECALLED_AT,
-    });
+    // The bucket is a second way into the pack, never a second copy of it. The stage excludes
+    // what the first pass produced and the pack drops content twins, and this is the check that
+    // catches a regression in either of them.
+    it('never lets one memory reach the pack twice under two rationales', async () => {
+      const result = await substrate.recall(RESONANCE_QUERY, {
+        identity: READ_SESSION,
+        now: RECALLED_AT,
+      });
+      const resonant = new Set((result.pack.resonant ?? []).map((item) => item.id));
 
-    expect(result.items.map((item) => item.id)).toContain(episodeIds.get(ANCHOR_WORLD.key));
-    expect(result.admission.anchored).toBe(true);
-  }, 120_000);
-});
+      for (const [name, bucket] of bucketsOf(result.pack)) {
+        if (name === 'resonant') {
+          continue;
+        }
+        for (const item of bucket) {
+          expect(resonant.has(item.id)).toBe(false);
+        }
+      }
+    }, 120_000);
+
+    it('leaves the memory whose neighborhood has a different shape out of every bucket', async () => {
+      const result = await substrate.recall(RESONANCE_QUERY, {
+        identity: READ_SESSION,
+        now: RECALLED_AT,
+      });
+
+      for (const id of idsOf(DISTRACTOR_WORLD)) {
+        expect(result.items.map((item) => item.id)).not.toContain(id);
+      }
+    }, 120_000);
+
+    it('still answers the question it was asked, so the second pass adds rather than swaps', async () => {
+      const result = await substrate.recall(RESONANCE_QUERY, {
+        identity: READ_SESSION,
+        now: RECALLED_AT,
+      });
+
+      expect(result.items.map((item) => item.id)).toContain(episodeIds.get(ANCHOR_WORLD.key));
+      expect(result.admission.anchored).toBe(true);
+    }, 120_000);
+  },
+);
 
 /**
  * Resonance cannot fire on a query the first pass could not answer: the centroid would be the

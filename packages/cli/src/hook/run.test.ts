@@ -1,15 +1,35 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { KeyState } from './key-state.js';
 import { mcpEndpoint, parseRpcBody, type FetchImpl } from './mcp.js';
-import { HOOK_TIMEOUT_MS, STOP_INSTRUCTION, type HookOptions, type StopMode } from './options.js';
+import {
+  HOOK_EVENTS,
+  HOOK_TIMEOUT_MS,
+  KEYLESS_NOTICE,
+  STOP_INSTRUCTION,
+  type HookOptions,
+  type StopMode,
+} from './options.js';
 import { OBSERVATION_LIMIT } from './payload.js';
 import { parseHookFlags, parseHookInput, runHook } from './run.js';
+import { backupPath } from './settings-file.js';
+import { describeAionHooks } from './settings.js';
 import { readHookState, stateFilePath } from './state.js';
 
 const SESSION_ID = 'claude-session-7';
+
+const NOW = new Date('2026-08-30T04:00:00.000Z');
 
 const ASSISTANT_LINE = JSON.stringify({
   type: 'assistant',
@@ -89,19 +109,28 @@ describe('hook events', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  function options(
-    event: HookOptions['event'],
-    overrides: { fetchImpl: FetchImpl; stopMode?: StopMode; minChars?: number },
-  ): HookOptions {
+  type Overrides = {
+    readonly fetchImpl: FetchImpl;
+    readonly stopMode?: StopMode;
+    readonly minChars?: number;
+    readonly keyState?: KeyState;
+    readonly settingsPath?: string;
+    readonly now?: () => Date;
+  };
+
+  function options(event: HookOptions['event'], overrides: Overrides): HookOptions {
     return {
       event,
       stopMode: overrides.stopMode ?? 'push',
       minChars: overrides.minChars ?? 40,
+      keyState: overrides.keyState ?? 'present',
+      // Under the temp directory whatever the case: no test may reach the real settings file.
+      settingsPath: overrides.settingsPath ?? join(dir, 'home', '.claude', 'settings.json'),
       stateDir: join(dir, 'state'),
       endpoint: 'http://127.0.0.1:8765/mcp',
       fetchImpl: overrides.fetchImpl,
       timeoutMs: HOOK_TIMEOUT_MS,
-      now: () => new Date('2026-08-30T04:00:00.000Z'),
+      now: overrides.now ?? ((): Date => NOW),
       stdout: (line) => stdout.push(line),
       stderr: (line) => stderr.push(line),
     };
@@ -555,6 +584,210 @@ describe('hook events', () => {
     ).resolves.toBe(0);
 
     expect(stdout).toEqual([]);
+  });
+
+  describe('with no anthropic key on the machine', () => {
+    const AION_COMMAND = 'node /repo/packages/cli/dist/hook-main.js';
+
+    const INSTALLED = {
+      model: 'opus',
+      hooks: {
+        SessionStart: [
+          {
+            matcher: 'startup|resume|clear|compact',
+            hooks: [{ type: 'command', command: `${AION_COMMAND} session-start` }],
+          },
+        ],
+        Stop: [
+          { hooks: [{ type: 'command', command: 'notify-send done' }] },
+          { hooks: [{ type: 'command', command: `${AION_COMMAND} stop --mode push` }] },
+        ],
+      },
+    };
+
+    const LATER = (): Date => new Date('2026-08-30T05:00:00.000Z');
+
+    let settingsPath: string;
+
+    beforeEach(() => {
+      settingsPath = join(dir, 'home', '.claude', 'settings.json');
+      mkdirSync(join(dir, 'home', '.claude'), { recursive: true });
+      writeFileSync(settingsPath, JSON.stringify(INSTALLED));
+    });
+
+    function settings(): Record<string, unknown> {
+      return JSON.parse(readFileSync(settingsPath, 'utf8'));
+    }
+
+    function backups(): readonly string[] {
+      return readdirSync(join(dir, 'home', '.claude')).filter((name) => name.includes('.aion-'));
+    }
+
+    function traceLines(): readonly Record<string, unknown>[] {
+      return readFileSync(join(dir, 'state', 'hooks.log'), 'utf8')
+        .split('\n')
+        .filter((line) => line !== '')
+        .map((line) => JSON.parse(line));
+    }
+
+    it.each(HOOK_EVENTS)('captures nothing on the %s event and exits 0', async (event) => {
+      writeFileSync(transcriptPath, `${USER_LINE}\n${ASSISTANT_LINE}\n`);
+      const { fetchImpl, calls } = transport({ structuredContent: POPULATED_PACK });
+
+      await expect(
+        runHook(
+          {
+            session_id: SESSION_ID,
+            transcript_path: transcriptPath,
+            prompt: 'why did the v3.21.596 migration deadlock against read-only joins',
+            tool_name: 'mcp__aion__reflection',
+            tool_input: { summary: 'the fix is a per-table split' },
+          },
+          options(event, { fetchImpl, keyState: 'absent' }),
+        ),
+      ).resolves.toBe(0);
+
+      expect(calls).toEqual([]);
+    });
+
+    it('records the keyless fire and what it removed in the trace', async () => {
+      const { fetchImpl } = transport({ structuredContent: POPULATED_PACK });
+
+      await runHook({ session_id: SESSION_ID }, options('session-end', { fetchImpl }));
+      await runHook(
+        { session_id: SESSION_ID },
+        options('session-end', { fetchImpl, keyState: 'absent' }),
+      );
+
+      const [capturing, keyless] = traceLines();
+      expect(capturing?.keyless).toBeUndefined();
+      expect(keyless).toMatchObject({ event: 'session-end', exit: 0, keyless: true, removed: 2 });
+    });
+
+    it('backs the settings file up and strips its own entries', async () => {
+      const { fetchImpl } = transport({ structuredContent: POPULATED_PACK });
+
+      await runHook(
+        { session_id: SESSION_ID },
+        options('session-start', { fetchImpl, keyState: 'absent' }),
+      );
+
+      expect(describeAionHooks(settings())).toEqual([]);
+      expect(JSON.parse(readFileSync(backupPath(settingsPath, NOW), 'utf8'))).toEqual(INSTALLED);
+    });
+
+    it('leaves every other setting and every foreign hook verbatim', async () => {
+      const { fetchImpl } = transport({ structuredContent: POPULATED_PACK });
+
+      await runHook(
+        { session_id: SESSION_ID },
+        options('session-end', { fetchImpl, keyState: 'absent' }),
+      );
+
+      expect(settings()).toEqual({
+        model: 'opus',
+        hooks: { Stop: [INSTALLED.hooks.Stop[0]] },
+      });
+    });
+
+    it('finds nothing left to remove on the next fire and writes nothing', async () => {
+      const { fetchImpl } = transport({ structuredContent: POPULATED_PACK });
+      const absent = { fetchImpl, keyState: 'absent' } as const;
+
+      await runHook({ session_id: SESSION_ID }, options('session-end', absent));
+      const stripped = readFileSync(settingsPath, 'utf8');
+
+      await runHook({ session_id: SESSION_ID }, options('session-end', { ...absent, now: LATER }));
+
+      expect(readFileSync(settingsPath, 'utf8')).toBe(stripped);
+      expect(backups()).toHaveLength(1);
+      expect(traceLines()[1]).toMatchObject({ keyless: true, removed: 0 });
+    });
+
+    it('tells the session why capture stopped', async () => {
+      const { fetchImpl } = transport({ structuredContent: POPULATED_PACK });
+
+      await runHook(
+        { session_id: SESSION_ID },
+        options('session-start', { fetchImpl, keyState: 'absent' }),
+      );
+
+      expect(JSON.parse(stdout[0] ?? '{}')).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'SessionStart',
+          additionalContext: KEYLESS_NOTICE,
+        },
+      });
+    });
+
+    it('says nothing to any event but session start', async () => {
+      const { fetchImpl } = transport({ structuredContent: POPULATED_PACK });
+
+      await runHook(
+        {
+          session_id: SESSION_ID,
+          prompt: 'why did the migration deadlock against read-only joins',
+        },
+        options('prompt-submit', { fetchImpl, keyState: 'absent' }),
+      );
+
+      expect(stdout).toEqual([]);
+    });
+
+    it('never blocks a turn in instruct mode', async () => {
+      writeFileSync(transcriptPath, `${USER_LINE}\n${ASSISTANT_LINE}\n`);
+      const { fetchImpl } = transport({ structuredContent: {} });
+
+      await expect(
+        runHook(
+          { session_id: SESSION_ID, transcript_path: transcriptPath },
+          options('stop', { fetchImpl, stopMode: 'instruct', keyState: 'absent' }),
+        ),
+      ).resolves.toBe(0);
+
+      expect(stderr).toEqual([]);
+    });
+  });
+
+  describe('with the key state unknown', () => {
+    let settingsPath: string;
+
+    beforeEach(() => {
+      settingsPath = join(dir, 'home', '.claude', 'settings.json');
+      mkdirSync(join(dir, 'home', '.claude'), { recursive: true });
+      writeFileSync(settingsPath, JSON.stringify({ hooks: {} }));
+    });
+
+    it('recalls on session start and leaves the settings file alone', async () => {
+      const { fetchImpl, calls } = transport({ structuredContent: POPULATED_PACK });
+
+      await expect(
+        runHook(
+          { session_id: SESSION_ID },
+          options('session-start', { fetchImpl, keyState: 'unknown' }),
+        ),
+      ).resolves.toBe(0);
+
+      expect(toolNamesIn(calls)).toEqual(['recall']);
+      expect(JSON.parse(stdout[0] ?? '{}').hookSpecificOutput.additionalContext).toContain(
+        'Aion memory',
+      );
+      expect(readdirSync(join(dir, 'home', '.claude'))).toEqual(['settings.json']);
+    });
+
+    it('still blocks in instruct mode when the model stored nothing', async () => {
+      writeFileSync(transcriptPath, `${USER_LINE}\n${ASSISTANT_LINE}\n`);
+      const { fetchImpl } = transport({ structuredContent: {} });
+
+      await expect(
+        runHook(
+          { session_id: SESSION_ID, transcript_path: transcriptPath },
+          options('stop', { fetchImpl, stopMode: 'instruct', keyState: 'unknown' }),
+        ),
+      ).resolves.toBe(2);
+
+      expect(stderr).toEqual([STOP_INSTRUCTION]);
+    });
   });
 });
 
