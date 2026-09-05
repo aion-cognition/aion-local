@@ -11,12 +11,14 @@ with nothing relevant, returns cleanly empty rather than padded with weak matche
 ## The ladder
 
 Each mode below states the trigger, what the pipeline does, the exact shape the caller
-receives, how to diagnose it live, and how it recovers. Eight modes, and each one names the
+receives, how to diagnose it live, and how it recovers. Ten modes, and each one names the
 evidence behind it. Four were induced live against a throwaway Neo4j plus host Ollama (both
 Ollama outages, both Neo4j outages). Two are covered by the unit suite, which is enough
 because they need only process inputs (cue extraction, context resonance). One is read off
 the MCP SDK's own behavior (client disconnect), and one is traced through the startup path
-without a probe (SQLite unwritable). Numbers are wall-clock from those runs, not guarantees.
+without a probe (SQLite unwritable). The two remote modes are traced through the provider and
+the routing rule, both under the unit suite, and neither has been induced against the live
+API. Numbers are wall-clock from those runs, not guarantees.
 
 ### Cue extraction failure (timeout, model error, malformed output)
 
@@ -118,6 +120,67 @@ against live Ollama filled all three at the configured dimension (1024,
 `snowflake-arctic-embed2`), a second pass wrote the same vectors and left the pending set
 empty. The failing embed call itself costs 12ms (`TypeError: fetch failed`), measured
 against `http://127.0.0.1:9`.
+
+### Anthropic outage, on the keyed profile
+
+**Trigger.** A key is set, so both generation roles route to `claude-haiku-4-5`, and the API
+answers 429, 5xx, or nothing at all: a rate limit, a regional outage, an expired key.
+
+**What happens.** Three attempts, then the breaker.
+`requestAnthropicJson` retries a 429 or any 5xx up to `MAX_ATTEMPTS` (3), waiting the
+`retry-after` header when the response carries one and `attempt * 2000` ms when it does not,
+capped at 30s and cut short by the caller's own signal
+(`packages/core/src/infrastructure/providers/anthropic-provider.ts:11`, `:218`, `:287-294`). A
+4xx that is not a 429 is not retried; it reaches the caller on the first answer. Every call goes
+through a `CircuitBreaker` (`anthropic-provider.ts:392-396`) that opens after 5 consecutive
+failures, fast-fails for 60s, then allows one trial call; a failed trial re-opens for another
+cooldown (`circuit-breaker.ts:32-34`). An abort is not counted, so a stage deadline or a
+shutdown never opens it. With the breaker open, a queued episode costs one call per cooldown
+instead of three HTTP attempts each.
+
+**What the caller sees.** On the write path, nothing: the episode is already stored and
+queued before any generation runs, so the failure lands on the reflection job. The job fails,
+the worker holds its claim through a backoff (5s base, doubling to a 300s cap) and retries up to
+`AION_WORKER_MAX_ATTEMPTS` (5). A job that spends its attempts is left in the queue with its
+last error, skipped by claiming, and becomes maintenance's to re-enqueue
+(`packages/core/src/reflection/application/worker.ts:411-421`). A session narrative fails the
+same way: `narrateSession` logs `narrative compression failed` and returns
+`status: 'failed'`, and the boundary that asked for it comes round again. On the read path, the
+cue call degrades exactly as the first rung above describes, with `reason: model_error`.
+
+**Diagnose.** The service log's `generation routed` debug line carries every call's provider,
+model and duration; a failing run shows `ok: false`. `aion doctor`'s model check names the
+roles routed to anthropic. `aion status` prints the same routing line, and `aion queue ls`
+shows the backlog the outage is building.
+
+**Recovers.** Automatically. The breaker's next trial call closes it, and the queue drains the
+episodes that failed while it was open. Nothing is lost: every episode was stored before its
+enrichment was attempted.
+
+### A role pinned to Anthropic with no key
+
+**Trigger.** `AION_CUE_PROVIDER` or `AION_REFLECT_PROVIDER` is set to `anthropic` and
+`AION_ANTHROPIC_API_KEY` is empty or unset.
+
+**What happens.** The role routes local rather than failing the boot. `resolveRole` returns the
+role's Ollama model with `reason: 'pin-without-key'`
+(`packages/core/src/infrastructure/providers/routing.ts:66-68`), and boot logs one warn line per
+such role naming the model it runs on instead (`packages/mcp/src/bootstrap.ts:225-229`). Routing
+local is the safe direction of the mistake: nothing leaves the machine. The consequences follow
+the local profile everywhere else, hook capture included, because every rule reads the resolved
+route rather than the key.
+
+**What the caller sees.** Ordinary answers, on the local models. Narratives are written at the
+local scale (40 source episodes, 6 sentences) rather than the keyed one, and hook-origin
+reflections are refused, since reflection resolved local.
+
+**Diagnose.** The boot warn line above. `aion status` prints
+`<role> is pinned to anthropic with no key set, so it runs on <model>`
+(`packages/cli/src/snapshot.ts:370-374`), and `aion doctor`'s `hooks-keyed-only` check fails when
+hooks are installed against a locally routed reflect role.
+
+**Recovers.** Not automatically; nothing is broken. Set the key or drop the pin, then restart
+the service: routing is resolved once, at boot.
 
 ### Neo4j down: recall
 
@@ -341,6 +404,7 @@ Every knob below is `AION_*`-overridable; the catalog is
 | `AION_RECONCILE_WARN_THRESHOLD` (`operational.reconcileWarnThreshold`) | 50 | Unenriched episodes `aion doctor` tolerates before it warns. | Raised past a real backlog, doctor goes back to reporting all-green over a substrate hours behind, which is the state EX-41 was filed for. | New in the fix round. |
 | `AION_LAG_OLDEST_UNCLAIMED_WARN_MS` (`operational.lagOldestUnclaimedWarnMs`) | 600000 | Age of the oldest unclaimed job `aion doctor`'s `queue-lag` check tolerates before it warns. | Raised past a real backlog, doctor stops naming a queue that has gone stale. Ten minutes is inside the 1.9 to 6.7 episodes/min drain rate EX-10 measured. | New in the fix round. |
 | `AION_LAG_QUEUE_DEPTH_WARN_THRESHOLD` (`operational.lagQueueDepthWarnThreshold`) | 200 | Total unclaimed jobs, either lane, `aion doctor`'s `queue-lag` check tolerates before it warns. | Raised past a real backlog, the same silence as above but by depth instead of age; either alone can miss a starved-then-drained queue the other catches. | New in the fix round. |
+| `AION_KEYED_NARRATIVE_EPISODES` / `AION_KEYED_NARRATIVE_SENTENCES` / `AION_KEYED_NARRATIVE_EPISODE_CHARS` | 120 / 12 / 4000 | How much of a session one synthesis reads and how long its answer runs, on the keyed route only. Three times the episodes and twice the sentences of the local numbers (`AION_REFLECTION_MAX_NARRATIVE_EPISODES` 40, six sentences, `AION_REFLECTION_MAX_NARRATIVE_EPISODE_CHARS` 2000), which is what a 120-episode session takes in one Haiku call. The same three govern the day and week rollups and the subject consolidation, so one rule sizes every synthesis source. | A longer prompt and a longer answer per call, and a wider window is still a window: past 120 episodes the render keeps the most recent ones and the narrative's stored `coverage` says what fraction reached the model. | New with the two profiles. Inert without a key: `narrativeScale` reads one set of numbers or the other off the resolved reflect route, so a local install never sees these whatever they are set to. |
 | `AION_SESSION_IDLE_EXPIRY_MINUTES` (`operational.sessionIdleExpiryMinutes`) | 30 | How long an MCP transport session may sit with no request before `SessionIdleSweeper` closes it, the backstop for a `client.close()` that never sends DELETE (EX-32). | Lowered, a client that legitimately pauses (an editor idle between edits) loses its session and its next call gets `unknown session` instead of resuming one. | New in the fix round. |
 
 Raising `AION_WORKER_COUNT` past 1 buys nothing on its own: the reflection worker, the

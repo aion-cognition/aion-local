@@ -9,6 +9,7 @@ import {
   lastActivityAt,
   narrativeMaxTokens,
   narrativeNodeId,
+  narrativeSentenceBudget,
   narrativeSpan,
   NARRATIVE_MAX_SENTENCES,
   NARRATIVE_GROUNDING,
@@ -17,6 +18,7 @@ import {
   type ExistingNarrative,
   type NarrativeEpisode,
   type NarrativeExtractedNode,
+  type NarrativeSourceItem,
 } from './narrative.js';
 
 const IDLE_MS = 30 * 60 * 1000;
@@ -27,6 +29,10 @@ function episode(id: string, overrides: Partial<NarrativeEpisode> = {}): Narrati
 
 function decisionNode(episodeId: string): NarrativeExtractedNode {
   return { id: 'd1', kind: 'decision', text: 'hold the launch', episodeId };
+}
+
+function sourceItem(handle: string, text: string): NarrativeSourceItem {
+  return { handle, id: handle.toLowerCase(), kind: 'episode', text };
 }
 
 function existing(overrides: Partial<ExistingNarrative> = {}): ExistingNarrative {
@@ -328,9 +334,37 @@ describe('length scaling', () => {
     expect(renderNarrativeSource([single], [], 40, 5000).sentenceBudget).toBe(1);
   });
 
-  it('scales the token ceiling of the answer with the budget', () => {
-    expect(narrativeMaxTokens(1)).toBeLessThan(narrativeMaxTokens(NARRATIVE_MAX_SENTENCES));
-    expect(narrativeMaxTokens(NARRATIVE_MAX_SENTENCES)).toBeLessThanOrEqual(1_200);
+  it('scales the token ceiling of the answer with the budget, at every budget', () => {
+    expect(narrativeMaxTokens(1)).toBe(310);
+    expect(narrativeMaxTokens(NARRATIVE_MAX_SENTENCES)).toBe(1_060);
+    // The wide budget is why the old fixed ceiling went: 1,200 tokens cut a twelve-sentence
+    // answer mid-JSON, which parses as nothing rather than as a shorter narrative.
+    expect(narrativeMaxTokens(12)).toBe(1_960);
+  });
+
+  it('honors a caller-supplied sentence ceiling above the local one', () => {
+    const wordy = Array.from({ length: 20 }, (_, slot) =>
+      sourceItem(`S${String(slot + 1)}`, 'a'.repeat(300)),
+    );
+
+    expect(narrativeSentenceBudget(wordy)).toBe(NARRATIVE_MAX_SENTENCES);
+    expect(narrativeSentenceBudget(wordy, 12)).toBe(12);
+  });
+
+  it('still floors at one sentence and never exceeds the items it was given', () => {
+    expect(narrativeSentenceBudget([sourceItem('S1', 'short')], 12)).toBe(1);
+    expect(narrativeSentenceBudget([sourceItem('S1', 'a'.repeat(3_000))], 12)).toBe(1);
+  });
+
+  it('renders a wider source at the wider ceiling', () => {
+    const episodes = Array.from({ length: 60 }, (_, slot) =>
+      episode(`e${String(slot)}`, { summary: 'a'.repeat(300) }),
+    );
+
+    expect(renderNarrativeSource(episodes, [], 120, 4_000, 12).sentenceBudget).toBe(12);
+    expect(renderNarrativeSource(episodes, [], 120, 4_000).sentenceBudget).toBe(
+      NARRATIVE_MAX_SENTENCES,
+    );
   });
 });
 

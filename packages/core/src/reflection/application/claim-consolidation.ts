@@ -3,6 +3,7 @@ import type { Driver } from 'neo4j-driver';
 import { synthesizeGrounded } from './consolidation-synthesis.js';
 import { attachContentVectors } from './vectors.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import type { Config } from '../../infrastructure/config/schema.js';
 import {
   supersede,
   writeStampedDerivedNodeInTransaction,
@@ -36,6 +37,7 @@ import {
   renderConsolidationSource,
   type ConsolidationMember,
 } from '../domain/consolidation.js';
+import { narrativeScale } from '../domain/narrative-scale.js';
 import { coverageKey, narrativeSpan, NARRATIVE_GROUNDING } from '../domain/narrative.js';
 
 /**
@@ -94,7 +96,8 @@ export type ConsolidationOptions = {
   readonly timeoutMs?: number;
   readonly subjectLimit?: number;
   readonly memberLimit?: number;
-  readonly maxMemberChars?: number;
+  /** The knob group the synthesis is sized out of; the resolved route picks inside it. */
+  readonly reflection?: Config['reflection'];
   readonly now?: Date;
   readonly signal?: AbortSignal;
 };
@@ -122,17 +125,24 @@ type ConsolidationSettings = {
   readonly subjectLimit: number;
   readonly memberLimit: number;
   readonly maxMemberChars: number;
+  readonly maxSentences: number;
   readonly now: Date;
   readonly signal?: AbortSignal;
 };
 
-function settingsOf(options: ConsolidationOptions): ConsolidationSettings {
+/** Sized off the route the same way every other synthesis source is. */
+function settingsOf(options: ConsolidationOptions, provider: Provider): ConsolidationSettings {
+  const scale = narrativeScale(
+    provider.route?.provider === 'anthropic',
+    options.reflection ?? DEFAULTS.reflection,
+  );
   return {
     model: options.model ?? DEFAULTS.models.reflect,
     timeoutMs: options.timeoutMs ?? DEFAULTS.reflection.stageTimeoutMs,
     subjectLimit: options.subjectLimit ?? DEFAULT_CONSOLIDATION_SUBJECTS,
     memberLimit: options.memberLimit ?? DEFAULT_CONSOLIDATION_MEMBERS,
-    maxMemberChars: options.maxMemberChars ?? DEFAULTS.reflection.maxNarrativeEpisodeChars,
+    maxMemberChars: scale.episodeChars,
+    maxSentences: scale.maxSentences,
     now: options.now ?? new Date(),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   };
@@ -285,7 +295,11 @@ async function consolidateSubject(
     return { outcome: 'skipped', absorbed: 0 };
   }
 
-  const source = renderConsolidationSource(toMembers(claims), settings.maxMemberChars);
+  const source = renderConsolidationSource(
+    toMembers(claims),
+    settings.maxMemberChars,
+    settings.maxSentences,
+  );
   const synthesis = await synthesizeGrounded(deps.provider, source, buildSubjectMessages(source), {
     model: settings.model,
     timeoutMs: settings.timeoutMs,
@@ -365,7 +379,7 @@ export async function consolidateClaims(
   deps: ConsolidationDeps,
   options: ConsolidationOptions = {},
 ): Promise<ConsolidationReport> {
-  const settings = settingsOf(options);
+  const settings = settingsOf(options, deps.provider);
   const profiles = await readClaimCommunityProfiles(deps.driver);
   const floor = derivedDensityFloor(profiles.map((profile) => profile.size));
 

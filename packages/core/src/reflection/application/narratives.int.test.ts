@@ -189,6 +189,66 @@ const PLANNING_DECISIONS = [
 const PLANNING_INSIGHT =
   'Shadow reads are the only way to compare Meridian against the current path without user-visible risk';
 
+/**
+ * A session longer than the local window and shorter than the keyed one. Fifty short episodes
+ * in one arc: at the local scale the render keeps the last forty and the opening ten never
+ * reach the model at all.
+ */
+const WIDE_SESSION_IDENTITY = 'mcp-transport-session-narratives-wide';
+
+const WIDE_EPISODES = [
+  'the Kestrel billing migration was scoped against the orders table',
+  'the current orders schema was read end to end and written down',
+  'two columns were found to carry the same amount in different units',
+  'the finance team confirmed cents is the unit that ships',
+  'a conversion table was drafted for the four legacy currency rows',
+  'the migration was split into a backfill and a cutover',
+  'the backfill was written against a copy of the orders table',
+  'the copy was loaded from a Tuesday snapshot',
+  'the first backfill pass ran in eleven minutes over the copy',
+  'the eleven-minute figure was recorded as the planning number',
+  'index coverage on the copy was measured before any change',
+  'a partial index on paid orders was added to the plan',
+  'the index build on the copy took four minutes',
+  'the backfill was rerun with the index in place and took six minutes',
+  'the six-minute run became the number the cutover window is sized on',
+  'the rollback path was written as a second migration, not a manual undo',
+  'the rollback was rehearsed against the copy and left it clean',
+  'a check query was written to compare the two amount columns row by row',
+  'the check query found forty-one mismatched rows on the copy',
+  'every mismatched row traced back to the legacy currency conversion',
+  'the conversion table was corrected for Swiss francs',
+  'the check query came back empty after the correction',
+  'staging was refreshed from production to rehearse on real volume',
+  'the backfill on staging took nineteen minutes, three times the copy',
+  'the difference was traced to staging sharing its disk with the queue',
+  'the cutover window was widened to forty minutes on that reading',
+  'the on-call rota for the cutover night was agreed with the platform team',
+  'a dry run of the cutover was scheduled for the Thursday before',
+  'the Thursday dry run completed with no manual step needed',
+  'the dry run left one orphaned temporary table behind',
+  'the temporary table was added to the rollback migration',
+  'a second dry run left nothing behind',
+  'the reporting job was found to read the old amount column directly',
+  'the reporting job was changed to read the new column behind a flag',
+  'the flag defaults off until the backfill has finished',
+  'the finance dashboards were pointed at the reporting job, not the table',
+  'a read-only replica lag alert was added for the cutover night',
+  'the alert threshold was set at thirty seconds of lag',
+  'the runbook was written and reviewed by two people outside the team',
+  'the runbook review caught a missing step for the queue drain',
+  'the queue drain step was added before the cutover begins',
+  'the cutover ran on the Tuesday night inside the forty-minute window',
+  'the backfill finished in twenty-two minutes on production',
+  'the check query came back empty on production',
+  'the reporting flag was turned on the following morning',
+  'the finance dashboards matched the ledger to the cent',
+  'the old amount column was left in place, unread, for one billing cycle',
+  'a follow-up ticket was filed to drop the old column after that cycle',
+  'the rollback migration was kept in the repository rather than deleted',
+  'the Kestrel migration was closed out and the on-call rota stood down',
+];
+
 const LATE_EPISODE = {
   summary: 'the backfill finished and Ariadne launched',
   turns: [
@@ -464,5 +524,52 @@ describe('grounding against a live substrate', () => {
     expect(citations.every((id) => sourceIds.has(id))).toBe(true);
     expect(citations.filter((id) => decisionIds.includes(id)).length).toBeGreaterThan(0);
     expect(Number(properties[NARRATIVE_PROPERTIES.sentenceCount])).toBeGreaterThan(1);
+  }, 180_000);
+});
+
+/**
+ * The keyed profile's wider window, against the model it was sized for. The local scale renders
+ * a session's last forty episodes and records the fraction it saw; this session holds fifty, so
+ * a narrative that cites its opening ten is a narrative the local clip could not have written.
+ *
+ * Written out rather than imported: this is the read the gate batteries make, and `core` does
+ * not import from `mcp`, where that constant lives.
+ */
+const REMOTE_JUDGE_ABSENT =
+  (process.env.AION_ANTHROPIC_API_KEY ?? '').trim() === '' ||
+  process.env.TEST_AION_GENERATION === 'local';
+
+describe.skipIf(REMOTE_JUDGE_ABSENT)('the keyed route narrates past the local window', () => {
+  const wideEpisodeIds: string[] = [];
+
+  beforeAll(async () => {
+    for (const line of WIDE_EPISODES) {
+      // Intake refuses a payload of summary alone, and the render reads the summary, so the
+      // observation carries the same line rather than a second one nothing sees.
+      wideEpisodeIds.push(
+        await push({ summary: line, observations: [line] }, WIDE_SESSION_IDENTITY),
+      );
+    }
+  }, 300_000);
+
+  it('reads all fifty episodes and cites both ends of the session', async () => {
+    expect(wideEpisodeIds).toHaveLength(50);
+
+    const result = await closeWithGroundingRetry(deps, WIDE_SESSION_IDENTITY);
+
+    expect(result.status).toBe('created');
+    const properties = await nodeProperties(harness.driver, result.narrativeId!);
+    expect(properties[NARRATIVE_PROPERTIES.coverageCount]).toBe(50);
+    // The fraction the model saw. At the local scale this reads 0.8, and the ten episodes the
+    // clip dropped are the ones the citations below reach.
+    expect(properties[NARRATIVE_PROPERTIES.coverage]).toBe(1);
+
+    const citations = properties[NARRATIVE_PROPERTIES.citations] as string[];
+    const opening = wideEpisodeIds.slice(0, 10);
+    const closing = wideEpisodeIds.slice(-10);
+
+    expect(citations.every((id) => wideEpisodeIds.includes(id))).toBe(true);
+    expect(citations.some((id) => opening.includes(id))).toBe(true);
+    expect(citations.some((id) => closing.includes(id))).toBe(true);
   }, 180_000);
 });

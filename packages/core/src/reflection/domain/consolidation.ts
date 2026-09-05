@@ -7,6 +7,7 @@ import {
   narrativeSentenceBudget,
   renderItem,
   synthesisSystemPrompt,
+  NARRATIVE_MAX_SENTENCES,
   type GroundedSentence,
   type NarrativeOutput,
   type NarrativeSource,
@@ -43,6 +44,7 @@ export type ConsolidationMember = {
 export function renderConsolidationSource(
   members: readonly ConsolidationMember[],
   maxChars: number,
+  maxSentences: number = NARRATIVE_MAX_SENTENCES,
 ): NarrativeSource {
   const items: NarrativeSourceItem[] = members.map((member, index) => ({
     handle: `S${String(index + 1)}`,
@@ -57,7 +59,7 @@ export function renderConsolidationSource(
     items,
     renderedCount: items.length,
     coverage: members.length === 0 ? 0 : 1,
-    sentenceBudget: narrativeSentenceBudget(items),
+    sentenceBudget: narrativeSentenceBudget(items, maxSentences),
   };
 }
 

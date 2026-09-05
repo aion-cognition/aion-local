@@ -61,7 +61,7 @@ function narrativeRollupOperation(
           scope,
           model: ctx.config.models.reflect,
           timeoutMs: ctx.config.reflection.stageTimeoutMs,
-          maxMemberChars: ctx.config.reflection.maxNarrativeEpisodeChars,
+          reflection: ctx.config.reflection,
           windowLimit: ctx.config.maintenance.narrativeRollupWindows,
           now: ctx.now,
           signal: ctx.signal,
