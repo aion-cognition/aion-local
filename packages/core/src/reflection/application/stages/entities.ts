@@ -10,8 +10,11 @@ import { linkEntityMentions } from '../../../infrastructure/graph/entity-queries
 import { deadlineFor } from '../../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage } from '../../../infrastructure/providers/types.js';
 import {
+  LOCAL as SYSTEM_PROMPT,
+  REFINEMENT_LOCAL as REFINEMENT_PROMPT,
+} from '../../../prompts/entity-extraction.js';
+import {
   ENTITY_EXTRACTION_JSON_SCHEMA,
-  ENTITY_TYPES,
   parseExtractedEntities,
   type ExtractedEntity,
 } from '../../domain/entity-extraction.js';
@@ -38,24 +41,6 @@ const EXTRACTION_TEMPERATURE = 0;
 
 /** The refinement prompt carries the rejected answer, capped so a runaway one cannot fill the context. */
 const MAX_ECHOED_OUTPUT_LENGTH = 2000;
-
-const SYSTEM_PROMPT =
-  'You extract named entities from a record of one session between a user and an AI ' +
-  'agent. The record holds a summary line, the conversation turns, any tools the agent ' +
-  'ran with their input and output, and any observations. Return every distinct thing the ' +
-  'record actually names: people, organizations, projects, tools, topics, locations, ' +
-  'and events. Give each one the name the record uses, one type from the allowed list, ' +
-  'and a short clause describing it as this record uses it. Name a thing once, under its ' +
-  'fullest name, and list every other name the record used for it in its aliases: an ' +
-  'abbreviation, an initialism, a handle, a shortened form. Set is_speaker true on the ' +
-  'person who is the user speaking in this record, and on no one else. Do not return a ' +
-  'thing the record does not name, a pronoun, or a generic noun that identifies nothing in ' +
-  `particular. Allowed types: ${ENTITY_TYPES.join(', ')}.`;
-
-const REFINEMENT_PROMPT =
-  'A previous extraction over the same record was rejected. Read the record again and ' +
-  'return a correct extraction. Keep the entities the previous attempt got right, drop ' +
-  'anything the record does not name, and use only the allowed types.';
 
 export type EntityStageOptions = {
   readonly model: string;

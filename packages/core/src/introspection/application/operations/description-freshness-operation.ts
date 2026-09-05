@@ -8,6 +8,7 @@ import {
 } from '../../../infrastructure/graph/entity-description-queries.js';
 import { deadlineFor } from '../../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema } from '../../../infrastructure/providers/types.js';
+import { LOCAL as SYSTEM_PROMPT } from '../../../prompts/description-freshness.js';
 import type { IntrospectionOperation, OperationOutcome } from '../../domain/operation.js';
 
 /**
@@ -42,17 +43,6 @@ const DESCRIPTION_JSON_SCHEMA: JsonSchema = {
 };
 
 const DescriptionSchema = z.object({ description: z.string() });
-
-const SYSTEM_PROMPT = [
-  "You maintain one entity's description in a personal memory system.",
-  'You are given the description written when the entity was first mentioned, and episodes',
-  'that have mentioned it since, most recent first.',
-  'Write an updated description in one to two sentences that folds in anything the newer',
-  'episodes add. State only what the current description or the episodes state; never invent',
-  'a fact, cause, or relationship none of them contain.',
-  'If the newer episodes add nothing worth keeping, answer with the current description',
-  'unchanged.',
-].join(' ');
 
 function clip(text: string, maxChars: number): string {
   return text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;

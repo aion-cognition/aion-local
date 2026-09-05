@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { hashContent } from './content.js';
 import type { ChatMessage, JsonSchema } from '../../infrastructure/providers/types.js';
+import { LOCAL as sessionNarrativePrompt } from '../../prompts/narrative-synthesis.js';
 
 /**
  * Three boundaries warrant a session narrative: the close (the MCP transport ending), silence
@@ -460,40 +461,9 @@ export function assembleNarrative(
   };
 }
 
-/**
- * The one synthesis prompt both axes run on. The rules are identical; what a caller supplies is
- * what it is compressing and the noun its members answer to, so a change to the grounding rule
- * reaches the day rollup and the session narrative together.
- */
-export function synthesisSystemPrompt(input: {
-  readonly opening: string;
-  readonly source: string;
-  readonly noun: string;
-  readonly sentenceBudget: number;
-}): string {
-  return [
-    input.opening,
-    `The input is ${input.source} in the order they happened; each starts with a header line tagged like [S1] and its content follows.`,
-    `Answer with sentences. Every sentence lists in "source_ids" the tags of the ${input.noun} it draws on.`,
-    `State only what the cited ${input.noun} state: never add a cause, motive, outcome, participant, quantity or judgement they do not contain.`,
-    `Name the concrete work, decisions and results the ${input.noun} record, in their own wording where it is specific.`,
-    'Write your own sentences; never copy a tag or a header line into one.',
-    `Write at most ${String(input.sentenceBudget)} sentences, and fewer when the ${input.noun} say little.`,
-    'A sentence you cannot cite is a sentence you must not write.',
-  ].join(' ');
-}
-
 export function buildNarrativeMessages(source: NarrativeSource): ChatMessage[] {
   return [
-    {
-      role: 'system',
-      content: synthesisSystemPrompt({
-        opening: "You compress an AI coding agent's work session into one durable memory.",
-        source: "the session's source items",
-        noun: 'items',
-        sentenceBudget: source.sentenceBudget,
-      }),
-    },
+    { role: 'system', content: sessionNarrativePrompt(source.sentenceBudget) },
     { role: 'user', content: `Session:\n${source.text}` },
   ];
 }

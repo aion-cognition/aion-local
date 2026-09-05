@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { errorMessage } from '../../infrastructure/errors.js';
 import { deadlineFor } from '../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../infrastructure/providers/types.js';
+import { LOCAL as SYSTEM_PROMPT } from '../../prompts/proposal-hygiene-judge.js';
 
 /**
  * The one model call `proposal_hygiene` makes: a fuzzy entity-merge pair nobody resolved
@@ -18,15 +19,6 @@ import type { ChatMessage, JsonSchema, Provider } from '../../infrastructure/pro
  * reason.
  */
 const JUDGE_TEMPERATURE = 0;
-
-const SYSTEM_PROMPT = [
-  'You review one candidate entity-merge pair a memory substrate found and nobody resolved.',
-  'You are given both names and types. Judge whether they name the same real-world thing or',
-  'are genuinely two different things.',
-  'Answer same only when you are confident a person would merge them; answer distinct',
-  'otherwise, including when you are unsure.',
-  'Answer with the verdict and one sentence of reason.',
-].join(' ');
 
 function buildMessages(pair: HygienePair): ChatMessage[] {
   return [

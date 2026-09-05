@@ -12,6 +12,7 @@ import {
 } from '../../../infrastructure/graph/community-queries.js';
 import { deadlineFor } from '../../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema } from '../../../infrastructure/providers/types.js';
+import { LOCAL as SYSTEM_PROMPT } from '../../../prompts/symbiosis-bridge.js';
 import { rankCommunityPairs, type CommunityPairScore } from '../../domain/bridge-pairs.js';
 import {
   CRITICAL_MIN_POPULATION,
@@ -75,18 +76,6 @@ const BridgeProposalSchema = z.object({
   rationale: z.string(),
   compatibility: z.number(),
 });
-
-const SYSTEM_PROMPT = [
-  'You connect two clusters of memory in a personal memory system.',
-  'You are given one memory from each cluster; the two were selected because their embeddings',
-  'are closer to each other than any other pair across the clusters.',
-  'Write a summary of one or two sentences naming what the two have in common, a rationale',
-  'saying why an association between them is worth storing, and a compatibility score from 0',
-  'to 1.',
-  'State only what the two memories state; never invent a fact, a cause, or a relationship',
-  'neither of them contains.',
-  'If they have nothing in common, say so plainly and score the compatibility near zero.',
-].join(' ');
 
 const ENDPOINT_EXCERPT_CHARS = 400;
 

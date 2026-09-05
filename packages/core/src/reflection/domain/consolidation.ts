@@ -6,7 +6,6 @@ import {
   groundSentences,
   narrativeSentenceBudget,
   renderItem,
-  synthesisSystemPrompt,
   NARRATIVE_MAX_SENTENCES,
   type GroundedSentence,
   type NarrativeOutput,
@@ -15,6 +14,11 @@ import {
 } from './narrative.js';
 import type { RollupScope } from './rollup.js';
 import type { ChatMessage, JsonSchema } from '../../infrastructure/providers/types.js';
+import {
+  REVIEW_LOCAL as REVIEW_SYSTEM_PROMPT,
+  ROLLUP_LOCAL as rollupPrompt,
+  SUBJECT_LOCAL as subjectPrompt,
+} from '../../prompts/consolidation-synthesis.js';
 
 /**
  * One engine, two axes. Compressing a day's narratives and compressing a subject's claims are
@@ -98,47 +102,19 @@ export function assembleConsolidation(
   };
 }
 
-function synthesisPrompt(subject: string, sentenceBudget: number): string {
-  return synthesisSystemPrompt({
-    opening: `You compress ${subject} from a memory substrate into one durable memory.`,
-    source: 'the members',
-    noun: 'members',
-    sentenceBudget,
-  });
-}
-
-function scopeSubject(scope: RollupScope): string {
-  return scope === 'day' ? "one day's session narratives" : "one week's daily narratives";
-}
-
 export function buildRollupMessages(source: NarrativeSource, scope: RollupScope): ChatMessage[] {
   return [
-    { role: 'system', content: synthesisPrompt(scopeSubject(scope), source.sentenceBudget) },
+    { role: 'system', content: rollupPrompt(scope, source.sentenceBudget) },
     { role: 'user', content: `Members:\n${source.text}` },
   ];
 }
 
 export function buildSubjectMessages(source: NarrativeSource): ChatMessage[] {
   return [
-    {
-      role: 'system',
-      content: synthesisPrompt('several standing claims about one subject', source.sentenceBudget),
-    },
+    { role: 'system', content: subjectPrompt(source.sentenceBudget) },
     { role: 'user', content: `Claims:\n${source.text}` },
   ];
 }
-
-const REVIEW_SYSTEM_PROMPT = [
-  'You review a draft memory written from a numbered list of source members, and your job is to',
-  'argue the other side.',
-  'Each drafted sentence is followed by the tags of the members it cites. Read the sentence',
-  'against those members only.',
-  'Answer unsupported true the moment one sentence states a cause, an outcome, a quantity, a',
-  'participant, a judgement or a certainty its own cited members do not state, naming the',
-  'sentence and the addition in one line.',
-  'Answer false only when every sentence stays inside what its citations say, however dull the',
-  'result reads.',
-].join(' ');
 
 const REVIEW_JSON_SCHEMA: JsonSchema = {
   type: 'object',
