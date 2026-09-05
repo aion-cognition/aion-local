@@ -1,6 +1,12 @@
 /**
  * Claim extraction: the nine cognitive types, the per-type fields, and the key a fact-bearing
  * claim asserts under.
+ *
+ * Both routes read this one text. A denser keyed variant carrying the goal/plan restatement rule
+ * in place of the second validation call was written and measured over the nine harness fixtures:
+ * it extracted 25 nodes in its first form and 28 after a repair, against 32 for these words, and
+ * lost a type from five fixtures. Fewer words cost claims here, so the remote model reads the
+ * same spelled-out rules the local one does.
  */
 
 const EXTRACTION = [
