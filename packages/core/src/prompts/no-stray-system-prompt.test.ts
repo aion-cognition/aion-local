@@ -14,24 +14,14 @@ const PACKAGES_DIR = join(REPO_ROOT, 'packages');
 const PROMPTS_DIR = fileURLToPath(new URL('.', import.meta.url));
 const THIS_FILE = fileURLToPath(import.meta.url);
 const TOOL_DESCRIPTIONS = join(PACKAGES_DIR, 'mcp', 'src', 'descriptions.ts');
-const HARNESS_PROMPTS = join(
-  PACKAGES_DIR,
-  'core',
-  'src',
-  'reflection',
-  'test-support',
-  'quality-harness',
-  'prompts.ts',
-);
 
 /**
- * The scan skips this file, which has to name the pattern it forbids, and two others. The MCP
+ * The scan skips this file, which has to name the pattern it forbids, and one other. The MCP
  * descriptions are what an agent reads when it decides whether to call a tool, which is product
- * surface rather than text a model generates against. The quality harness keeps its own copies
- * of the extraction prompts, and nothing the pipeline runs reads them. The test below pins the
- * list, so a fourth entry cannot land quietly.
+ * surface rather than text a model generates against. The test below pins the list, so a third
+ * entry cannot land quietly.
  */
-const EXEMPT = [THIS_FILE, TOOL_DESCRIPTIONS, HARNESS_PROMPTS];
+const EXEMPT = [THIS_FILE, TOOL_DESCRIPTIONS];
 
 /**
  * Any identifier ending in SYSTEM_PROMPT being assigned, which is how every surface in this
@@ -74,19 +64,10 @@ describe('every generation prompt lives in the prompts directory', () => {
     );
   });
 
-  it('skips exactly three files: itself, the tool descriptions, and the harness copies', () => {
+  it('skips exactly two files: itself and the tool descriptions', () => {
     expect(EXEMPT.map((file) => relative(REPO_ROOT, file))).toEqual([
       join('packages', 'core', 'src', 'prompts', 'no-stray-system-prompt.test.ts'),
       join('packages', 'mcp', 'src', 'descriptions.ts'),
-      join(
-        'packages',
-        'core',
-        'src',
-        'reflection',
-        'test-support',
-        'quality-harness',
-        'prompts.ts',
-      ),
     ]);
     for (const file of EXEMPT) {
       expect(existsSync(file)).toBe(true);

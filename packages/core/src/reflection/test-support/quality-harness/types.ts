@@ -1,19 +1,10 @@
+import type { CognitiveNodeLabel } from '../../../infrastructure/graph/cognitive-queries.js';
+import type { EntityType } from '../../domain/entity-extraction.js';
+
 /**
- * Seven entity types: person, organization, project, tool, topic, location, event.
- * The harness's own copy of the taxonomy, not a shared source with the real extraction stage, which is free to diverge.
+ * The taxonomies come from the stages themselves, so a type added to either one reaches the
+ * harness without a second edit and the two cannot disagree about what a valid answer is.
  */
-export const ENTITY_TYPES = [
-  'person',
-  'organization',
-  'project',
-  'tool',
-  'topic',
-  'location',
-  'event',
-] as const;
-
-export type EntityType = (typeof ENTITY_TYPES)[number];
-
 export type ExtractedEntity = {
   readonly name: string;
   readonly type: EntityType;
@@ -23,25 +14,10 @@ export type EntityExtractionResult = {
   readonly entities: readonly ExtractedEntity[];
 };
 
-/** Nine cognitive node types, lowercased for schema consistency. */
-export const COGNITIVE_TYPES = [
-  'goal',
-  'plan',
-  'decision',
-  'insight',
-  'concept',
-  'context',
-  'event',
-  'pattern',
-  'trend',
-] as const;
-
-export type CognitiveType = (typeof COGNITIVE_TYPES)[number];
-
+/** A claim's identity is its text: the graph folds and keys nodes on it, and gives them no name. */
 export type ExtractedCognitiveNode = {
-  readonly type: CognitiveType;
-  readonly name: string;
-  readonly description: string;
+  readonly type: CognitiveNodeLabel;
+  readonly text: string;
 };
 
 export type CognitiveExtractionResult = {
@@ -56,9 +32,9 @@ export type ExtractorOutcome<T> =
 
 /**
  * The injectable seam: given raw episode text, produce one extraction result. The
- * harness's default implementation (`provider-extractor.ts`) goes through its own prompts
- * and a `Provider`; a later caller can point this at the real reflection stage's extraction
- * function instead. Scoring and reporting stay unchanged.
+ * harness's default implementation (`provider-extractor.ts`) calls a `Provider` with the
+ * prompts and schemas the stages ship; a later caller can point this at the stages
+ * themselves instead. Scoring and reporting stay unchanged.
  */
 export type EntityExtractorFn = (text: string) => Promise<ExtractorOutcome<EntityExtractionResult>>;
 export type CognitiveExtractorFn = (

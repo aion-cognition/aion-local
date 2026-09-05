@@ -55,8 +55,8 @@ function renderFixture(fixture: FixtureReport): string[] {
   if (fixture.agreement.entityNameOverlap !== undefined) {
     lines.push(`Entity name agreement: ${percent(fixture.agreement.entityNameOverlap)}`);
   }
-  if (fixture.agreement.cognitiveNameOverlap !== undefined) {
-    lines.push(`Cognitive node name agreement: ${percent(fixture.agreement.cognitiveNameOverlap)}`);
+  if (fixture.agreement.cognitiveTextOverlap !== undefined) {
+    lines.push(`Cognitive node text agreement: ${percent(fixture.agreement.cognitiveTextOverlap)}`);
   }
   lines.push('');
 

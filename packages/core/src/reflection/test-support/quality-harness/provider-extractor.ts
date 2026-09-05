@@ -1,20 +1,31 @@
-import type { z } from 'zod';
+import { z } from 'zod';
 
-import {
-  buildCognitiveExtractionMessages,
-  buildEntityExtractionMessages,
-  COGNITIVE_EXTRACTION_JSON_SCHEMA,
-  CognitiveExtractionOutputSchema,
-  ENTITY_EXTRACTION_JSON_SCHEMA,
-  EntityExtractionOutputSchema,
-} from './prompts.js';
 import type {
   CognitiveExtractionResult,
   EntityExtractionResult,
   ExtractorOutcome,
 } from './types.js';
 import { describeError, formatZodError } from '../../../infrastructure/errors.js';
+import { COGNITIVE_NODE_LABELS } from '../../../infrastructure/graph/cognitive-queries.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../../infrastructure/providers/types.js';
+import {
+  KEYED as COGNITIVE_KEYED,
+  LOCAL as COGNITIVE_LOCAL,
+} from '../../../prompts/cognitive-extraction.js';
+import {
+  KEYED as ENTITY_KEYED,
+  LOCAL as ENTITY_LOCAL,
+} from '../../../prompts/entity-extraction.js';
+import { promptMode } from '../../../prompts/index.js';
+import { COGNITIVE_JSON_SCHEMA } from '../../application/stages/cognitive.js';
+import { ENTITY_EXTRACTION_JSON_SCHEMA, ENTITY_TYPES } from '../../domain/entity-extraction.js';
+
+/**
+ * The harness scores the extraction the pipeline runs: the same system prompt for the route,
+ * the same structured-output schema, and the same user framing each stage builds. Its own
+ * output schemas stay separate, since scoring wants the model's answer as it arrived rather
+ * than the folded, deduplicated form the graph stores.
+ */
 
 /**
  * qwen3:8b with thinking on measured 10-44s with occasional non-returns; reflection's
@@ -29,11 +40,47 @@ export const DEFAULT_GENERATE_TIMEOUT_MS = 60_000;
  */
 const EXTRACTION_TEMPERATURE = 0;
 
+const EntityExtractionOutputSchema = z.object({
+  entities: z.array(
+    z.object({
+      name: z.string().min(1),
+      type: z.enum(ENTITY_TYPES),
+    }),
+  ),
+});
+
+const CognitiveExtractionOutputSchema = z.object({
+  nodes: z.array(
+    z.object({
+      type: z.enum(COGNITIVE_NODE_LABELS),
+      text: z.string().min(1),
+    }),
+  ),
+});
+
 export type ProviderGenerateDeps = {
   readonly generate: Provider['generate'];
   readonly model: string;
+  /** Which variant a forked surface renders here. Absent reads local, as the provider contract does. */
+  readonly route?: Provider['route'];
   readonly timeoutMs?: number;
 };
+
+function entityMessages(deps: ProviderGenerateDeps, text: string): ChatMessage[] {
+  const system = promptMode(deps) === 'keyed' ? ENTITY_KEYED : ENTITY_LOCAL;
+  return [
+    { role: 'system', content: system },
+    { role: 'user', content: `Record:\n${text}` },
+  ];
+}
+
+function cognitiveMessages(deps: ProviderGenerateDeps, text: string): ChatMessage[] {
+  const system = promptMode(deps) === 'keyed' ? COGNITIVE_KEYED : COGNITIVE_LOCAL;
+  return [
+    { role: 'system', content: system },
+    { role: 'user', content: `Episode:\n${text}` },
+  ];
+}
 
 /**
  * One structured-output call, timed and guarded. Reasoning buys nothing for extraction and
@@ -84,7 +131,7 @@ export function extractEntitiesViaProvider(
 ): Promise<ExtractorOutcome<EntityExtractionResult>> {
   return runStructuredExtraction(
     deps,
-    buildEntityExtractionMessages(text),
+    entityMessages(deps, text),
     ENTITY_EXTRACTION_JSON_SCHEMA,
     EntityExtractionOutputSchema,
   );
@@ -96,8 +143,8 @@ export function extractCognitiveViaProvider(
 ): Promise<ExtractorOutcome<CognitiveExtractionResult>> {
   return runStructuredExtraction(
     deps,
-    buildCognitiveExtractionMessages(text),
-    COGNITIVE_EXTRACTION_JSON_SCHEMA,
+    cognitiveMessages(deps, text),
+    COGNITIVE_JSON_SCHEMA,
     CognitiveExtractionOutputSchema,
   );
 }

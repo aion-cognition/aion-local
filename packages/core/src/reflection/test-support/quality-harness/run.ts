@@ -25,6 +25,9 @@ const COMPILED_DIR = dirname(fileURLToPath(import.meta.url));
 const SOURCE_DIR = COMPILED_DIR.replace(`${sep}dist${sep}`, `${sep}src${sep}`);
 const REPORTS_DIR = join(SOURCE_DIR, 'reports');
 
+const OLLAMA_ROUTE = { provider: 'ollama' } as const;
+const ANTHROPIC_ROUTE = { provider: 'anthropic' } as const;
+
 function buildLocalRoute(config: Config): RouteConfig {
   const model = config.models.reflect;
   const provider = new OllamaProvider({
@@ -32,27 +35,28 @@ function buildLocalRoute(config: Config): RouteConfig {
     embedModel: config.models.embed,
   });
 
+  // Named rather than left absent: the route decides which variant of a forked prompt this
+  // measurement renders, and reading it off a default would make that silent.
+  const deps = { generate: provider.generate.bind(provider), model, route: OLLAMA_ROUTE };
+
   return {
     route: 'local',
     model,
-    extractEntities: (text) =>
-      extractEntitiesViaProvider({ generate: provider.generate.bind(provider), model }, text),
-    extractCognitive: (text) =>
-      extractCognitiveViaProvider({ generate: provider.generate.bind(provider), model }, text),
+    extractEntities: (text) => extractEntitiesViaProvider(deps, text),
+    extractCognitive: (text) => extractCognitiveViaProvider(deps, text),
   };
 }
 
 function buildAnthropicRoute(config: Config): RouteConfig {
   const { apiKey, model } = config.anthropic;
   const client = new AnthropicHaikuClient({ apiKey });
+  const deps = { generate: client.generate.bind(client), model, route: ANTHROPIC_ROUTE };
 
   return {
     route: 'anthropic',
     model,
-    extractEntities: (text) =>
-      extractEntitiesViaProvider({ generate: client.generate.bind(client), model }, text),
-    extractCognitive: (text) =>
-      extractCognitiveViaProvider({ generate: client.generate.bind(client), model }, text),
+    extractEntities: (text) => extractEntitiesViaProvider(deps, text),
+    extractCognitive: (text) => extractCognitiveViaProvider(deps, text),
   };
 }
 

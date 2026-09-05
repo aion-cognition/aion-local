@@ -15,8 +15,8 @@ const FIXED_REPORT: QualityReport = {
         {
           route: 'local',
           model: 'qwen3:8b',
-          entities: { ok: true, count: 2, byType: { tool: 1, concept: 1 }, latencyMs: 4200 },
-          cognitive: { ok: true, count: 1, byType: { decision: 1 }, latencyMs: 5100 },
+          entities: { ok: true, count: 2, byType: { tool: 1, topic: 1 }, latencyMs: 4200 },
+          cognitive: { ok: true, count: 1, byType: { Decision: 1 }, latencyMs: 5100 },
         },
         {
           route: 'anthropic',
@@ -28,10 +28,10 @@ const FIXED_REPORT: QualityReport = {
             latencyMs: 800,
             error: 'Error: request failed',
           },
-          cognitive: { ok: true, count: 1, byType: { decision: 1 }, latencyMs: 900 },
+          cognitive: { ok: true, count: 1, byType: { Decision: 1 }, latencyMs: 900 },
         },
       ],
-      agreement: { entityNameOverlap: undefined, cognitiveNameOverlap: 1 },
+      agreement: { entityNameOverlap: undefined, cognitiveTextOverlap: 1 },
     },
   ],
 };
@@ -47,7 +47,7 @@ describe('renderMarkdownReport', () => {
     expect(markdown).toContain('4200');
     expect(markdown).toContain('5100');
     expect(markdown).toContain('error: Error: request failed');
-    expect(markdown).toContain('Cognitive node name agreement: 100%');
+    expect(markdown).toContain('Cognitive node text agreement: 100%');
   });
 
   it('omits an agreement line the report never computed', () => {
@@ -72,8 +72,8 @@ describe('renderMarkdownReport', () => {
     const markdown = renderMarkdownReport(FIXED_REPORT);
 
     expect(markdown).toContain('- tool: 1');
-    expect(markdown).toContain('- concept: 1');
-    expect(markdown).toContain('- decision: 1');
+    expect(markdown).toContain('- topic: 1');
+    expect(markdown).toContain('- Decision: 1');
   });
 });
 

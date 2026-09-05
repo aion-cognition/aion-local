@@ -63,7 +63,8 @@ const NODE_TYPES = COGNITIVE_NODE_LABELS;
  */
 const EXTRACTION_TEMPERATURE = 0;
 
-const COGNITIVE_JSON_SCHEMA: JsonSchema = {
+/** Exported because the quality harness scores this call and must ask for the shape it ships. */
+export const COGNITIVE_JSON_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
     nodes: {
