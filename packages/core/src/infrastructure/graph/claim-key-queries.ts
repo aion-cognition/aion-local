@@ -1,5 +1,7 @@
-import { currentOnly } from './bitemporal.js';
+import { currentOnly, supersedeInTransaction } from './bitemporal.js';
+import type { CognitiveNodeLabel } from './cognitive-queries.js';
 import type { GraphTransaction } from './connection.js';
+import { INTENTION_NODE_LABELS, isIntentionNodeLabel } from './intention-queries.js';
 import { BASE_NODE_LABEL, EXTRACTION_TYPE, MEMORY_LABEL } from './labels.js';
 import { VALID_HORIZON_PROPERTY } from './read-modes.js';
 import { supersedeSubjectFamilyInTransaction, type SubjectFamilyResult } from './subject-family.js';
@@ -98,7 +100,7 @@ export function claimKeyProperties(input: ClaimKeyProperties): GraphProperties {
  * against each other.
  *
  * `Memory` anchors the seek because it is the label the composite index is declared on; the
- * fact-bearing labels are a post-filter over the rows it returns.
+ * caller's label set is a post-filter over the rows it returns.
  */
 const KEYED_CLAIM_MATES = [
   'MATCH (c:Memory)',
@@ -115,6 +117,12 @@ const KEYED_CLAIM_MATES = [
 export type KeyedCloseInput = {
   /** The claim just written, which is the successor every close records. */
   readonly newId: string;
+  /**
+   * Its cognitive type, which decides both what it may close and how. A fact closes facts and an
+   * intention closes intentions: the two populations never key against each other, so a plan to
+   * move the queue never closes the claim that says where the queue is.
+   */
+  readonly label: CognitiveNodeLabel;
   /** Its source episode, whose own claims the lookup excludes. */
   readonly episodeId: string;
   readonly subjectEntityId: string;
@@ -134,23 +142,35 @@ export type KeyedCloseInput = {
 export type KeyedCloseResult = {
   /** Every node the close took: the key-mates and the siblings that closed with them. */
   readonly closedIds: readonly string[];
-  /** One per key-mate, carrying the siblings it took, the ones it held, and the glosses it retired. */
+  /**
+   * One per key-mate, carrying the siblings it took, the ones it held, and the glosses it
+   * retired. Empty for an intention, which closes alone; see below for why.
+   */
   readonly families: readonly SubjectFamilyResult[];
 };
 
 /**
  * Closes every open claim that shares the new claim's key, in the caller's transaction.
  *
- * It closes through the subject-family path rather than a bare supersede, so a keyed close
+ * A fact closes through the subject-family path rather than a bare supersede, so a keyed close
  * takes the same scope a judged one does: the claim, the siblings from its observation that
  * are about the same thing, and the entity descriptions that restate what it said. A mechanical
  * close that left a frozen gloss stating the old value would answer with the sentence the
  * correction just retired.
+ *
+ * An intention closes the key-mate and nothing else. The family path reads a close as evidence
+ * that the world changed, and neither of the two things it then does is true of an intention.
+ * Its sibling scan is over the fact labels, so a superseded Goal would take the Decisions and
+ * Events recorded beside it that name the same subject, which are still true; and its gloss
+ * retirement blanks an entity's description on the grounds that the description restated the
+ * closed claim, which a description written from facts never did. A plan changing is news about
+ * the plan alone.
  */
 export async function closeKeyedClaimsInTransaction(
   tx: GraphTransaction,
   input: KeyedCloseInput,
 ): Promise<KeyedCloseResult> {
+  const intention = isIntentionNodeLabel(input.label);
   const mates = await tx.run(
     KEYED_CLAIM_MATES,
     {
@@ -158,10 +178,24 @@ export async function closeKeyedClaimsInTransaction(
       aspectNorm: input.aspectNorm,
       newId: input.newId,
       episodeId: input.episodeId,
-      labels: [...FACT_NODE_LABELS],
+      labels: intention ? [...INTENTION_NODE_LABELS] : [...FACT_NODE_LABELS],
     },
     (row) => row.id as string,
   );
+
+  if (intention) {
+    for (const mate of mates) {
+      await supersedeInTransaction(tx, {
+        oldId: mate,
+        newId: input.newId,
+        now: input.now,
+        validUntil: input.validUntil,
+        signals: KEYED_CLOSE_SIGNALS,
+        provenance: [KEYED_CLOSE_METHOD],
+      });
+    }
+    return { closedIds: mates, families: [] };
+  }
 
   const families: SubjectFamilyResult[] = [];
   for (const mate of mates) {

@@ -74,6 +74,16 @@ export function readingHorizon(occurredAt: Date, days: number): Date {
   return new Date(occurredAt.getTime() + days * MILLISECONDS_PER_DAY);
 }
 
+/**
+ * When an intention stops standing on its own, on the same clock and by the same arithmetic. It
+ * is a second function rather than a shared one because the two answer to separate knobs: how
+ * long a measurement stays fresh and how long a plan nobody restates is still the plan are
+ * different questions, and lengthening one must not lengthen the other.
+ */
+export function intentionHorizon(occurredAt: Date, days: number): Date {
+  return new Date(occurredAt.getTime() + days * MILLISECONDS_PER_DAY);
+}
+
 /** Appendix B provenance: the close came from the key, with no judgment in it. */
 export const KEYED_CLOSE_METHOD = 'keyed_close';
 

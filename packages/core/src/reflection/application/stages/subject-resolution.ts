@@ -7,6 +7,10 @@ import {
   findEpisodeEntities,
   findSpeakerEntity,
 } from '../../../infrastructure/graph/entity-queries.js';
+import {
+  INTENTION_NODE_LABELS,
+  isIntentionNodeLabel,
+} from '../../../infrastructure/graph/intention-queries.js';
 import { FACT_NODE_LABELS } from '../../../infrastructure/graph/supersession-queries.js';
 import { foldAspect, isTemporalClass, type TemporalClass } from '../../domain/claim-key.js';
 import { normalizeEntityName } from '../../domain/entity-extraction.js';
@@ -24,9 +28,16 @@ import type { StageContext } from '../../domain/stage.js';
  * tie-break: the wrong subject is a wrong close with nothing to catch it.
  */
 
-/** Keys attach to the fact-bearing types only, which is the same set supersession watches. */
-function isFactLabel(label: CognitiveNodeLabel): boolean {
-  return (FACT_NODE_LABELS as readonly string[]).includes(label);
+/**
+ * Which labels may carry a key: the fact-bearing types, plus the two intention types. The two
+ * sets stay separate below the key, because only the fact set is what the judged supersession
+ * stage scans for contradictions, and only the deterministic keyed close reaches an intention.
+ */
+function isKeyableLabel(label: CognitiveNodeLabel): boolean {
+  return (
+    (FACT_NODE_LABELS as readonly string[]).includes(label) ||
+    (INTENTION_NODE_LABELS as readonly string[]).includes(label)
+  );
 }
 
 /** The three key fields as the provider returned them, before anything is believed about them. */
@@ -47,16 +58,23 @@ export function narrowClaimKey(
   label: CognitiveNodeLabel,
   fields: ClaimKeyFields,
 ): ExtractedClaimKey {
-  if (!isFactLabel(label)) {
+  if (!isKeyableLabel(label)) {
     return {};
   }
 
   const subject = typeof fields.subjectEntity === 'string' ? fields.subjectEntity.trim() : '';
   const aspectNorm = typeof fields.aspect === 'string' ? foldAspect(fields.aspect) : undefined;
+  // An intention takes no temporal class. The three classes describe how long a statement about
+  // the world answers for, and an intention answers on its own horizon instead, which is dated
+  // at write from the episode's clock rather than named by the extractor.
+  const temporalClass =
+    isIntentionNodeLabel(label) || !isTemporalClass(fields.temporalClass)
+      ? undefined
+      : fields.temporalClass;
   return {
     ...(subject.length === 0 ? {} : { subject }),
     ...(aspectNorm === undefined ? {} : { aspectNorm }),
-    ...(isTemporalClass(fields.temporalClass) ? { temporalClass: fields.temporalClass } : {}),
+    ...(temporalClass === undefined ? {} : { temporalClass }),
   };
 }
 

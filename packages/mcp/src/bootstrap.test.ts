@@ -49,7 +49,7 @@ const configured: Config = {
   models: { ...DEFAULTS.models, reflect: 'wiring-probe-model' },
   hebbian: { ...DEFAULTS.hebbian, weightFloor: 0.13 },
   sqlite: { ...DEFAULTS.sqlite, reinforcementQueueCap: 4_242 },
-  temporal: { ...DEFAULTS.temporal, readingHorizonDays: 31 },
+  temporal: { ...DEFAULTS.temporal, readingHorizonDays: 31, intentionHorizonDays: 33 },
   operational: {
     ...DEFAULTS.operational,
     workerCount: 3,
@@ -215,6 +215,7 @@ describe('reflectionStages', () => {
       keyedCloseMode: configured.reflection.keyedCloseMode,
       familyRelatednessFloor: configured.reflection.supersedeFamilyRelatednessFloor,
       readingHorizonDays: configured.temporal.readingHorizonDays,
+      intentionHorizonDays: configured.temporal.intentionHorizonDays,
     });
     expect(semanticRelationshipOptions(configured)).toEqual({
       model: configured.models.reflect,

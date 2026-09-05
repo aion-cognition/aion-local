@@ -15,6 +15,12 @@ export const TEMPORAL_KNOBS = {
   // computed once at write and never against the wall clock. Thirty is a placeholder pending a
   // graph with enough readings to measure a real distribution against, not a calibrated value.
   readingHorizonDays: ['AION_READING_HORIZON_DAYS', positiveInt, 30],
+  // The same arithmetic for a Goal or a Plan: `occurredAt + intentionHorizonDays` is when the
+  // intention stops standing on its own and starts reading as expired. `intention_upkeep` waits
+  // a second horizon past that before it closes one, so thirty days here is a sixty-day life for
+  // an intention nobody restates. A placeholder for the same reason the reading value is one:
+  // no substrate has held enough intentions to measure a real distribution against.
+  intentionHorizonDays: ['AION_INTENTION_HORIZON_DAYS', positiveInt, 30],
   // Whether a reading past its horizon renders as `expired` at read: down-ranked and labeled,
   // never dropped. On by default. Off falls back to the read-side behavior from before a
   // reading horizon existed, reporting every node as `current` or `superseded` only, with no

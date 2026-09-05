@@ -14,6 +14,7 @@ const UNMEASURED_OPERATIONS = [
   'claim_dedup',
   'community_refresh',
   'description_freshness',
+  'intention_upkeep',
   'memory_decay',
   'merge_decision_reconcile',
   'narrative_cleanup',

@@ -7,6 +7,7 @@ import { deadLetterOperation } from './operations/dead-letter.js';
 import { descriptionFreshnessOperation } from './operations/description-freshness-operation.js';
 import { edgePruneOperation } from './operations/edge-prune.js';
 import { identifierDecayOperation } from './operations/identifier-decay.js';
+import { intentionUpkeepOperation } from './operations/intention-upkeep.js';
 import { mergeAutoOperation } from './operations/merge-auto-operation.js';
 import { mergeDecisionReconcileOperation } from './operations/merge-decision-reconcile-operation.js';
 import { narrativeCleanupOperation } from './operations/narrative-cleanup-operation.js';
@@ -35,9 +36,9 @@ import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-
  * waiting time and then on name, so moving a line here changes nothing about what runs. The
  * comment above each group says what that group is for.
  *
- * Twelve of the twenty-five declare a `measure`, a number in the health snapshot their run is
- * scored on moving. The other thirteen are recorded as unmeasured rather than scored. Twelve of
- * those are waiting on a gauge the snapshot does not carry yet:
+ * Twelve of the twenty-six declare a `measure`, a number in the health snapshot their run is
+ * scored on moving. The other fourteen are recorded as unmeasured rather than scored. Thirteen
+ * of those are waiting on a gauge the snapshot does not carry yet:
  *
  * - `claim_dedup`: a near-duplicate claim-pair count.
  * - `claim_consolidation`: claim neighbourhoods above the derived density floor.
@@ -51,11 +52,12 @@ import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-
  * - `symbiosis_bridge`: the count of community pairs the graph connects least.
  * - `merge_decision_reconcile`: merges committed to the graph with no decision record.
  * - `structural_discovery`: entities carrying fewer associations than a degree ceiling.
+ * - `intention_upkeep`: intentions past their horizon by a whole horizon.
  *
  * Each is a graph read nothing computes on the tick today. Until one exists, its operation is
  * scored on relevance, waiting time, and cost alone, which is everything known about it.
  *
- * The thirteenth, `proposal_resolution`, declares none on purpose rather than for want of a
+ * The fourteenth, `proposal_resolution`, declares none on purpose rather than for want of a
  * gauge: the open-proposal count is the number it moves, and scoring it on lowering that would
  * reward an applied correction and a dismissed one alike, which rewards emptying the queue
  * rather than deciding it.
@@ -86,6 +88,10 @@ export function introspectionOperations(): readonly IntrospectionOperation[] {
     narrativeRegroundingOperation(),
     retroJudgmentSweepOperation(),
     descriptionFreshnessOperation(),
+    // The other half of an intention's life. Extraction and the keyed close say what the
+    // substrate means to do and when a later statement replaces it; this closes what nobody
+    // came back to, long enough after its horizon that expiry alone was not the answer.
+    intentionUpkeepOperation(),
 
     // Compression, on both of its axes: the scopes above a session, and the claims that turn
     // out to be one subject said many times. Each writes one grounded memory and closes what it

@@ -18,6 +18,7 @@ import {
 } from '../../../infrastructure/graph/cognitive-queries.js';
 import { ENTITY_MENTION_TYPE } from '../../../infrastructure/graph/entity-queries.js';
 import { MEMORY_PROPERTIES } from '../../../infrastructure/graph/episodes.js';
+import { INTENTION_ORIGIN_PROPERTY } from '../../../infrastructure/graph/intention-queries.js';
 import { fromGraphDateTime } from '../../../infrastructure/graph/values.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import type {
@@ -26,7 +27,7 @@ import type {
   Vector,
 } from '../../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
-import { readingHorizon } from '../../domain/claim-key.js';
+import { intentionHorizon, readingHorizon } from '../../domain/claim-key.js';
 import { foldName } from '../../domain/name-fold.js';
 import type { StageContext } from '../../domain/stage.js';
 import { PIPELINE_VERSION } from '../../domain/version.js';
@@ -606,7 +607,7 @@ describe('CognitiveExtractionStage', () => {
       expect(decision?.properties[CLAIM_ASPECT_PROPERTY]).toBeUndefined();
     });
 
-    it('keys nothing on a Goal, whatever the model returned for it', async () => {
+    it('keys a Goal on its subject and aspect, and dates it on the intention horizon', async () => {
       seedMentionedEntity('Postgres', SUBJECT_ID);
       const generate = async (): Promise<unknown> => ({
         nodes: [
@@ -619,14 +620,19 @@ describe('CognitiveExtractionStage', () => {
           },
         ],
       });
-      const stage = new CognitiveExtractionStage();
+      const stage = new CognitiveExtractionStage({ intentionHorizonDays: 45 });
 
       await stage.run(buildContext(stubProvider(generate)));
 
       const [goal] = graph.nodesWithLabel('Goal');
-      expect(goal?.properties[CLAIM_SUBJECT_PROPERTY]).toBeUndefined();
-      expect(goal?.properties[CLAIM_ASPECT_PROPERTY]).toBeUndefined();
+      expect(goal?.properties[CLAIM_SUBJECT_PROPERTY]).toBe(SUBJECT_ID);
+      expect(goal?.properties[CLAIM_ASPECT_PROPERTY]).toBe('queue store');
+      // An intention answers on its own horizon, so the class the model offered is not stored.
       expect(goal?.properties[TEMPORAL_CLASS_PROPERTY]).toBeUndefined();
+      expect(fromGraphDateTime(goal?.properties[VALID_HORIZON_PROPERTY])).toEqual(
+        intentionHorizon(OCCURRED_AT, 45),
+      );
+      expect(goal?.properties[INTENTION_ORIGIN_PROPERTY]).toBeUndefined();
     });
 
     it('resolves no subject and stores no key when the keyed close is off', async () => {
@@ -666,6 +672,7 @@ describe('CognitiveExtractionStage', () => {
         keyedCloseMode: DEFAULTS.reflection.keyedCloseMode,
         familyRelatednessFloor: DEFAULTS.reflection.supersedeFamilyRelatednessFloor,
         readingHorizonDays: DEFAULTS.temporal.readingHorizonDays,
+        intentionHorizonDays: DEFAULTS.temporal.intentionHorizonDays,
       });
     });
   });

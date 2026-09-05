@@ -236,4 +236,12 @@ export const MAINTENANCE_KNOBS = {
   // pairs is a slow build by design: the pairs are ranked by cosine, so a capped run takes the
   // strongest of them and the next run takes what the substrate has grown into since.
   structuralDiscoveryBatch: ['AION_MAINTENANCE_STRUCTURAL_DISCOVERY_BATCH', positiveInt, 25],
+  // `intention_upkeep`'s kill switch. On by default: the close is an ordinary supersession and
+  // `aion unsupersede` reopens any intention it took. Off leaves every Goal and Plan open
+  // forever, still down-ranked as expired once its horizon passes but never closed.
+  intentionUpkeep: ['AION_MAINTENANCE_INTENTION_UPKEEP', z.boolean(), true],
+  // Intentions one run closes. Fifty on a day bucket, higher than the model-calling operations
+  // because this one asks nothing: it is one indexed read and one write over ids the read
+  // already chose. `temporal.intentionHorizonDays` is what decides which intentions qualify.
+  intentionUpkeepBatch: ['AION_MAINTENANCE_INTENTION_UPKEEP_BATCH', positiveInt, 50],
 } as const;

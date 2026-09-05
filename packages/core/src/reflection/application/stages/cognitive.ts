@@ -45,6 +45,7 @@ export type CognitiveExtractionStageOptions = {
   /** How close a sibling has to be before a keyed close takes it with the claim it closes. */
   readonly familyRelatednessFloor: number;
   readonly readingHorizonDays: number;
+  readonly intentionHorizonDays: number;
 };
 
 const NODE_TYPES = COGNITIVE_NODE_LABELS;
@@ -154,6 +155,8 @@ const SYSTEM_PROMPT = [
   'holds until it is corrected, and trend for a direction rather than a value.',
   'Leaving all three out is normal and expected: give them for a claim that states one attribute',
   'of one named thing, and omit them for everything else.',
+  'For a goal or plan, give subject_entity and aspect on the same terms and no temporal_class:',
+  'the thing the intention is about, and the attribute of it the intention means to settle.',
 ].join(' ');
 
 function buildMessages(text: string, summary: string | undefined): ChatMessage[] {
@@ -197,6 +200,7 @@ export class CognitiveExtractionStage implements ReflectionStage {
       keyedCloseMode: DEFAULT_KEYED_CLOSE_MODE,
       familyRelatednessFloor: DEFAULTS.reflection.supersedeFamilyRelatednessFloor,
       readingHorizonDays: DEFAULTS.temporal.readingHorizonDays,
+      intentionHorizonDays: DEFAULTS.temporal.intentionHorizonDays,
       ...options,
     };
   }
@@ -326,6 +330,7 @@ export class CognitiveExtractionStage implements ReflectionStage {
           now: ctx.now,
           ...storedClaimKey(keys[index] ?? {}, subjects),
           readingHorizonDays: this.#options.readingHorizonDays,
+          intentionHorizonDays: this.#options.intentionHorizonDays,
           keyedClose: {
             mode: this.#options.keyedCloseMode,
             relatednessFloor: this.#options.familyRelatednessFloor,
