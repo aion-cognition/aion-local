@@ -244,4 +244,13 @@ export const MAINTENANCE_KNOBS = {
   // because this one asks nothing: it is one indexed read and one write over ids the read
   // already chose. `temporal.intentionHorizonDays` is what decides which intentions qualify.
   intentionUpkeepBatch: ['AION_MAINTENANCE_INTENTION_UPKEEP_BATCH', positiveInt, 50],
+  // `curiosity`'s kill switch. On by default: a question is a Goal like any other, so it ages
+  // out on the intention horizon and `aion forget` removes one that missed. It is still the
+  // only operation that puts the substrate's own words in front of a person unasked, which is
+  // reason enough for an operator to be able to stop it without a deploy.
+  curiosity: ['AION_MAINTENANCE_CURIOSITY', z.boolean(), true],
+  // Questions one run files. Two on a day bucket, lower than any other model-calling batch:
+  // every question is a standing intention that will interrupt a later session on its own, and
+  // a substrate that asks faster than it is answered is nagging rather than curious.
+  curiosityBatch: ['AION_CURIOSITY_BATCH', positiveInt, 2],
 } as const;

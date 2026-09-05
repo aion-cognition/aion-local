@@ -220,12 +220,12 @@ aion forget <id | query> [--yes]
 
 ## Lifecycle events
 
-The substrate records its own life events as memory. Four of them exist: an init that created
+The substrate records its own life events as memory. Five of them exist: an init that created
 the backbone, an init that applied new migrations to a substrate that already existed, a replay
-that re-derived something, and a boot that unloaded a model routing no longer needs. Each goes
-through intake as an observation on the bulk lane, carrying the numbers that describe it
-(migration count, member name, profile; replay counts and pipeline version; which model left
-memory).
+that re-derived something, a boot that unloaded a model routing no longer needs, and a question
+`curiosity` filed (below). Each goes through intake as an observation on the bulk lane, carrying
+the numbers that describe it (migration count, member name, profile; replay counts and pipeline
+version; which model left memory).
 
 They are ordinary episodes, so recall serves them, `aion search` finds them, and `aion forget`
 removes one. All of them chain in one standing session, `aion-system`, which hangs off the
@@ -235,6 +235,32 @@ history rather than a conversation.
 ```
 aion search "substrate initialized"        # the birth event, and every init since
 ```
+
+## Curiosity
+
+`curiosity` is the one operation that adds to memory rather than tidying it. Once a day it
+takes the entities the substrate keeps meeting and cannot describe (a gloss a correction
+retired, or one written at the first mention and never re-derived while five or more mentions
+piled up), drafts one question about each, and files it as a Goal marked `origin_kind:
+substrate`. The Goal is keyed to the entity, so recall serves the question back in its
+`Intentions` bucket the next time that entity comes up, rather than at a moment nobody can
+answer it.
+
+```
+aion search "why does it keep coming up"   # the questions filed so far
+```
+
+Each question is an ordinary episode plus an ordinary intention, so everything that reaches
+one reaches these: `aion forget` removes a question, `aion unsupersede` reopens one a later
+intention replaced, and `intention_upkeep` closes one nobody answered a horizon after it
+expired. The entity carries a `curiosity_asked_at` stamp and is never asked about twice, even
+after its description comes back.
+
+`AION_MAINTENANCE_CURIOSITY` (default `true`) is the kill switch: off, no question is drafted
+and the ones already filed stand until they are answered or age out. `AION_CURIOSITY_BATCH`
+(default `2`) is how many questions one run files. Two is deliberately the lowest batch in the
+catalog: every question interrupts a later session on its own, and a substrate that asks faster
+than it is answered is nagging.
 
 ## Resetting the substrate
 

@@ -11,12 +11,15 @@ import { vectorInputHash } from '../../reflection/domain/vector-input.js';
 import type { Vector } from '../providers/types.js';
 
 /**
- * The reads and the one write behind description freshness. An entity's description is
- * written once, by whichever episode first named it, and never touched again by ordinary
- * extraction (`entity-queries.ts`'s merge is `ON CREATE` only). Mention count is not read off
- * a node property: `access_count` also moves on every recall a node is surfaced by, so it
- * cannot tell a description that fell behind real new mentions from one that fell behind
- * search traffic. Counting `MENTIONS` edges directly is the true signal.
+ * The reads and writes over an entity's description state, which two operations act on.
+ * An entity's description is written once, by whichever episode first named it, and never
+ * touched again by ordinary extraction (`entity-queries.ts`'s merge is `ON CREATE` only).
+ * Description freshness rewrites one that fell behind its mentions; curiosity asks about one
+ * that was never written or never re-derived, which is the same state read for a different
+ * answer. Mention count is not read off a node property: `access_count` also moves on every
+ * recall a node is surfaced by, so it cannot tell a description that fell behind real new
+ * mentions from one that fell behind search traffic. Counting `MENTIONS` edges directly is the
+ * true signal.
  */
 
 /** Baseline mention count as of the description currently on the node, absent until a refresh writes it. */
@@ -26,6 +29,14 @@ export const DESCRIPTION_REFRESHED_AT_PROPERTY = 'description_refreshed_at';
 export const DESCRIPTION_REFRESH_METHOD_PROPERTY = 'description_refresh_method';
 /** When a correction retired the description; the wording itself moves to `prior_descriptions`. */
 export const DESCRIPTION_RETIRED_AT_PROPERTY = 'description_retired_at';
+
+/**
+ * When the substrate filed a question about this entity. It is a permanent mark rather than a
+ * cooldown: a question already asked is either answered, superseded, or closed by its horizon,
+ * and asking again would put the same sentence back in front of whoever is already ignoring it.
+ * A later refresh of the description deliberately leaves it alone.
+ */
+export const CURIOSITY_ASKED_AT_PROPERTY = 'curiosity_asked_at';
 
 /** Provenance stamped on every regenerated description. */
 export const DESCRIPTION_REFRESH_METHOD = 'introspection_description_freshness';
@@ -89,6 +100,97 @@ export async function findStaleDescriptionEntities(
       baseline: typeof row.baseline === 'number' ? row.baseline : Number(row.baseline ?? 0),
     }),
   );
+}
+
+export type UndescribedEntity = {
+  readonly id: string;
+  readonly name: string;
+  readonly type: string;
+  /** Empty for the retired-gloss state, which is one of the two ways in here. */
+  readonly text: string;
+  readonly mentions: number;
+};
+
+/**
+ * Entities the substrate has no answer for: a gloss a correction retired, or one nothing has
+ * ever re-derived while the mentions piled up. The two are one population, since both describe
+ * a well-connected identity the store cannot say anything current about.
+ *
+ * An entity already carrying `curiosity_asked_at` is excluded outright rather than aged out.
+ * The question that stamped it is still standing or was already closed, and either way the hole
+ * has been named once.
+ */
+const FIND_UNDESCRIBED_ENTITIES = [
+  'MATCH (e:Entity)',
+  `WHERE ${currentOnly('e')}`,
+  `  AND coalesce(e.${STRUCTURAL_PROPERTY}, false) = false`,
+  `  AND e.${CURIOSITY_ASKED_AT_PROPERTY} IS NULL`,
+  `OPTIONAL MATCH (ep:Episode)-[:${ENTITY_MENTION_TYPE}]->(e)`,
+  // `count(ep)` for the reason the stale-description read uses it: an entity with no mention
+  // edge still yields one row with `ep` bound to null, which `count(*)` would read as one.
+  'WITH e, count(ep) AS mentions',
+  `WHERE e.${MEMORY_PROPERTIES.text} IS NULL`,
+  `   OR (e.${DESCRIPTION_REFRESHED_AT_PROPERTY} IS NULL AND mentions >= $mentionFloor)`,
+  `RETURN e.id AS id, e.${ENTITY_NAME_PROPERTY} AS name, e.${ENTITY_TYPE_PROPERTY} AS type,`,
+  `       e.${MEMORY_PROPERTIES.text} AS text, mentions`,
+  // Most mentioned first: the hole the substrate trips over most often is the one worth a
+  // question, and a run capped at a couple of entities has to spend them on that.
+  'ORDER BY mentions DESC, e.id',
+  'LIMIT $limit',
+].join('\n');
+
+export async function findUndescribedEntities(
+  driver: Driver,
+  input: { readonly mentionFloor: number; readonly limit: number },
+): Promise<UndescribedEntity[]> {
+  if (input.limit <= 0) {
+    return [];
+  }
+  return runRead(
+    driver,
+    {
+      cypher: FIND_UNDESCRIBED_ENTITIES,
+      parameters: {
+        mentionFloor: toGraphInteger(input.mentionFloor),
+        limit: toGraphInteger(input.limit),
+      },
+    },
+    (row: Row) => ({
+      id: row.id as string,
+      name: (row.name as string | null) ?? '',
+      type: (row.type as string | null) ?? '',
+      text: (row.text as string | null) ?? '',
+      mentions: typeof row.mentions === 'number' ? row.mentions : Number(row.mentions ?? 0),
+    }),
+  );
+}
+
+/**
+ * Marks the entity as asked about. The currency test is here because a whole model call runs
+ * between the selection read and this write, long enough for a merge or a forget to close the
+ * entity, and a stamp on a closed node would silence a question about the identity that
+ * absorbed it.
+ */
+const STAMP_CURIOSITY_ASKED = [
+  `MATCH (e:${BASE_NODE_LABEL}:${ENTITY_LABEL} { id: $id })`,
+  `WHERE ${currentOnly('e')}`,
+  `SET e.${CURIOSITY_ASKED_AT_PROPERTY} = $now`,
+  'RETURN e.id AS id',
+].join('\n');
+
+export async function stampCuriosityAsked(
+  driver: Driver,
+  input: { readonly id: string; readonly now: Date },
+): Promise<boolean> {
+  const rows = await runWrite(
+    driver,
+    {
+      cypher: STAMP_CURIOSITY_ASKED,
+      parameters: { id: input.id, now: toGraphDateTime(input.now) },
+    },
+    (row: Row) => row.id as string,
+  );
+  return rows.length > 0;
 }
 
 export type EntityMentionContext = {

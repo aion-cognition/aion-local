@@ -337,6 +337,10 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
         // One provider for the whole loop, so its circuit breaker counts failures across runs
         // rather than starting fresh inside each one.
         provider: reflectProvider,
+        // The same write path the tool call takes, for the operation that stores what it did as
+        // an experience. It is the service's own instance rather than a second one, so a
+        // question the loop files wakes the worker and counts toward the same arrival rate.
+        intake,
         operations: maintenanceOperations,
       },
       {

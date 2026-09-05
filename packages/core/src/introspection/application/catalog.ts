@@ -3,6 +3,7 @@ import { backboneRepairOperation } from './operations/backbone-repair.js';
 import { claimConsolidationOperation } from './operations/claim-consolidation.js';
 import { claimDedupOperation } from './operations/claim-dedup.js';
 import { communityRefreshOperation } from './operations/community-refresh.js';
+import { curiosityOperation } from './operations/curiosity.js';
 import { deadLetterOperation } from './operations/dead-letter.js';
 import { descriptionFreshnessOperation } from './operations/description-freshness-operation.js';
 import { edgePruneOperation } from './operations/edge-prune.js';
@@ -36,8 +37,8 @@ import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-
  * waiting time and then on name, so moving a line here changes nothing about what runs. The
  * comment above each group says what that group is for.
  *
- * Twelve of the twenty-six declare a `measure`, a number in the health snapshot their run is
- * scored on moving. The other fourteen are recorded as unmeasured rather than scored. Thirteen
+ * Twelve of the twenty-seven declare a `measure`, a number in the health snapshot their run is
+ * scored on moving. The other fifteen are recorded as unmeasured rather than scored. Fourteen
  * of those are waiting on a gauge the snapshot does not carry yet:
  *
  * - `claim_dedup`: a near-duplicate claim-pair count.
@@ -53,11 +54,12 @@ import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-
  * - `merge_decision_reconcile`: merges committed to the graph with no decision record.
  * - `structural_discovery`: entities carrying fewer associations than a degree ceiling.
  * - `intention_upkeep`: intentions past their horizon by a whole horizon.
+ * - `curiosity`: current entities the substrate holds no description for.
  *
  * Each is a graph read nothing computes on the tick today. Until one exists, its operation is
  * scored on relevance, waiting time, and cost alone, which is everything known about it.
  *
- * The fourteenth, `proposal_resolution`, declares none on purpose rather than for want of a
+ * The fifteenth, `proposal_resolution`, declares none on purpose rather than for want of a
  * gauge: the open-proposal count is the number it moves, and scoring it on lowering that would
  * reward an applied correction and a dismissed one alike, which rewards emptying the queue
  * rather than deciding it.
@@ -92,6 +94,10 @@ export function introspectionOperations(): readonly IntrospectionOperation[] {
     // substrate means to do and when a later statement replaces it; this closes what nobody
     // came back to, long enough after its horizon that expiry alone was not the answer.
     intentionUpkeepOperation(),
+    // Beside them because it writes one: an entity the substrate keeps meeting and cannot
+    // describe becomes a question filed as the substrate's own intention, which the entity
+    // itself brings back at recall.
+    curiosityOperation(),
 
     // Compression, on both of its axes: the scopes above a session, and the claims that turn
     // out to be one subject said many times. Each writes one grounded memory and closes what it

@@ -6,9 +6,18 @@ import { SYSTEM_SESSION_IDENTITY } from '../../infrastructure/graph/sessions.js'
  * advance, a replay, and a model swap are the events that change what the substrate is or
  * what it knows how to do; everything else it does is already recorded as graph lineage or
  * as an ops ledger row.
+ *
+ * `curiosity` is the one event the substrate authors rather than undergoes: a question it filed
+ * about something it cannot describe. It travels this path because it is the same kind of thing,
+ * an experience the substrate had that nobody typed, and it needs an episode of its own for the
+ * question to hang off.
  */
 export type LifecycleEvent =
-  'substrate_initialized' | 'migrations_applied' | 'replay_completed' | 'models_reconciled';
+  | 'substrate_initialized'
+  | 'migrations_applied'
+  | 'replay_completed'
+  | 'models_reconciled'
+  | 'curiosity';
 
 export type LifecycleEventInput = {
   readonly event: LifecycleEvent;
@@ -28,11 +37,15 @@ export type LifecycleEventInput = {
  * Recording is fail-open and this never throws: a substrate too broken to store its own
  * initialization is already reporting that through the command that failed, and turning a
  * missing memory into a failed init would cost the operator the substrate they were building.
+ *
+ * The episode id comes back for the one caller that has something to attach to it. Undefined is
+ * the fail-open path answering, and a caller that means to write against the episode has to
+ * treat it as the episode not existing rather than carry on with an id it never got.
  */
 export async function recordLifecycleEvent(
   deps: ReflectionIntakeDeps,
   input: LifecycleEventInput,
-): Promise<void> {
+): Promise<string | undefined> {
   try {
     const result = await handleReflection(
       deps,
@@ -51,7 +64,9 @@ export async function recordLifecycleEvent(
       { episodeId: result.episode_id, event: input.event },
       'lifecycle event recorded',
     );
+    return result.episode_id;
   } catch (err) {
     deps.logger.warn({ err, event: input.event }, 'lifecycle event not recorded');
+    return undefined;
   }
 }

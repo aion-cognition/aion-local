@@ -13,6 +13,7 @@ const UNMEASURED_OPERATIONS = [
   'claim_consolidation',
   'claim_dedup',
   'community_refresh',
+  'curiosity',
   'description_freshness',
   'intention_upkeep',
   'memory_decay',

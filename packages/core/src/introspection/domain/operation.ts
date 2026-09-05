@@ -6,6 +6,7 @@ import type { Config } from '../../infrastructure/config/schema.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import type { ReflectionIntakeDeps } from '../../reflection/application/intake.js';
 
 /**
  * The contract every maintenance operation implements. It is deliberately small: a name, the
@@ -39,6 +40,12 @@ export type OperationContext = {
    * which cannot count consecutive failures across the runs it exists to trip on.
    */
   readonly provider: Provider;
+  /**
+   * The write path into memory, for the one operation that records what it did as an experience
+   * rather than only as a graph edit. Absent wherever the loop was constructed without it, which
+   * an operation that needs it reads as no path to record through and declines the run over.
+   */
+  readonly intake?: ReflectionIntakeDeps;
   /** The same reading the decision was made from. An operation must not observe again. */
   readonly health: HealthSnapshot;
   readonly now: Date;
