@@ -191,8 +191,8 @@ nodes out of two thousand is a small share to a scoring function and an incident
 and before this there was no way to say so.
 
 `aion status` prints a `lanes` section: one line per operation that acts on its own between
-ticks (`merge_auto`, `entity_dedup`, `supersession`, `keyed_close`, `proposal_hygiene`,
-`claim_dedup`, `tier3`), each read as `acting` or
+ticks (`merge_auto`, `entity_dedup`, `supersession`, `keyed_close`, `proposal_resolution`,
+`proposal_hygiene`, `claim_dedup`, `tier3`), each read as `acting` or
 `off` from its own live knobs. Two states only, so the line answers "would this touch
 anything right now" without a third reading to interpret.
 
