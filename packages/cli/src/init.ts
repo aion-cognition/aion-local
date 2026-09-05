@@ -1,6 +1,7 @@
 import {
   bootstrapBackbone,
   ensureNeo4jPassword,
+  envFileValue,
   seedEnvFromTemplate,
   GraphConnection,
   isManagedNeo4jUri,
@@ -150,17 +151,6 @@ export async function resolveMemberName(input: MemberNameInput): Promise<string>
     throw new CliUsageError(MISSING_MEMBER_NAME);
   }
   return chosen;
-}
-
-/** Outside the container nothing loads `.env`, so a key already recorded there is invisible to `loadConfig`. */
-function envFileValue(path: string, key: string): string | undefined {
-  if (!existsSync(path)) {
-    return undefined;
-  }
-  const line = readFileSync(path, 'utf8')
-    .split('\n')
-    .find((entry) => entry.startsWith(`${key}=`));
-  return line === undefined ? undefined : line.slice(key.length + 1).trim();
 }
 
 function upsertEnvValue(path: string, key: string, value: string): void {

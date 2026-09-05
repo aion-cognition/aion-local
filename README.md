@@ -166,18 +166,22 @@ npm run format:check      # prettier --check .
 
 A change gates on all of those, plus the scripted re-exercise batteries and `./bin/aion
 doctor` green against the live stack. `AGENTS.md` holds the full gate definition. Integration
-tests read `AION_OLLAMA_URL` and `AION_ANTHROPIC_API_KEY`; when running them on the host
-rather than in the container, export both first:
+tests read `AION_OLLAMA_URL`; when running them on the host rather than in the container,
+export it first:
 
 ```
 export AION_OLLAMA_URL=http://127.0.0.1:11434
-export AION_ANTHROPIC_API_KEY=...   # from .env; see below
 ```
 
-Without the key, the reflect role routes to the local instruct model and the
-supersession-precision gate measures a judge the service does not run: it fails with
-precision and recall at zero while the shipped default stays `unanimous`. That failure
-says "wrong judge measured", not "the judge regressed".
+The Anthropic key needs no export. An integration run reads `AION_ANTHROPIC_API_KEY` and
+`AION_ANTHROPIC_MODEL` from the repo `.env` for whichever of the two the shell left unset, so
+a host run measures the same remote judge the service routes to. Those two keys are the only
+values loaded from the file.
+
+With no key anywhere, the gate batteries skip and say so. The reflect role would route to the
+local instruct model, and every floor and pinned default they assert on was measured against
+the remote judge, so the numbers would describe a judge the service does not run.
+`TEST_AION_GENERATION=local` forces that local route on purpose and skips them the same way.
 
 ## Status
 

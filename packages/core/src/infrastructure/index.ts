@@ -69,7 +69,7 @@ export {
   readServedItems,
 } from './sqlite/served-items.js';
 
-export { DEFAULTS, loadConfig, ConfigError } from './config/index.js';
+export { DEFAULTS, envFileValue, loadConfig, ConfigError } from './config/index.js';
 export type { Config } from './config/index.js';
 
 export {
