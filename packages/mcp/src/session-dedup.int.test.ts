@@ -117,6 +117,7 @@ async function push(observation: string, now: Date): Promise<string> {
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
       lanes: new LaneAssigner(DEFAULTS.lanes),
       workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+      acceptHookCapture: true,
     },
     { observations: [observation] },
     { identity: WRITE_SESSION, now },

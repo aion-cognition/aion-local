@@ -30,7 +30,9 @@ vi.mock('@aion/core', async (importOriginal) => {
   // eslint-disable-next-line @typescript-eslint/no-extraneous-class -- constructed structurally, mirroring the real class this stands in for.
   class FakeSessionManager {}
   class FakeProviderRouter {
-    readonly routing = { roles: {} };
+    // The reflect route is the one boot reads off the router itself, since hook capture
+    // follows it. The rest of the routing reaches boot through stubs below.
+    readonly routing = { roles: { reflect: { provider: 'ollama' } } };
     forRole(): unknown {
       return {};
     }

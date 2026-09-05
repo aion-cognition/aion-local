@@ -124,6 +124,7 @@ beforeAll(async () => {
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+    acceptHookCapture: true,
   };
 
   const stored = await handleReflection(intake, PAYLOAD, { identity: SESSION_IDENTITY });
@@ -216,6 +217,7 @@ describe('CognitiveExtractionStage against a live graph and a live model', () =>
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
       lanes: new LaneAssigner(DEFAULTS.lanes),
       workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+      acceptHookCapture: true,
     };
 
     const stored = await handleReflection(intake, payload, { identity });

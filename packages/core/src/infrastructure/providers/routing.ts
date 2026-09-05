@@ -106,6 +106,15 @@ export function remoteRoutes(routing: ProviderRouting): readonly RoleRoute[] {
   return routeList(routing).filter((route) => route.provider === 'anthropic');
 }
 
+/**
+ * Whether this routing will take raw transcript windows from a hook. The resolved reflect route
+ * answers it rather than the key: a key with that role pinned local leaves the same local model
+ * digesting a capture that fires every turn, which is the outcome the rule exists to prevent.
+ */
+export function acceptsHookCapture(routing: ProviderRouting): boolean {
+  return routing.roles.reflect.provider === 'anthropic';
+}
+
 /** Roles that ask a pinned remote provider for a key that is not set. */
 export function unbackedPins(routing: ProviderRouting): readonly RoleRoute[] {
   return routeList(routing).filter((route) => route.reason === 'pin-without-key');

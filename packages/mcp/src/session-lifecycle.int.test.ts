@@ -115,6 +115,7 @@ beforeAll(async () => {
     entropyThreshold: config.redaction.entropyThreshold,
     lanes: new LaneAssigner(config.lanes),
     workerMaxAttempts: config.operational.workerMaxAttempts,
+    acceptHookCapture: true,
   };
   const recall: RecallDeps = {
     driver: harness.driver,

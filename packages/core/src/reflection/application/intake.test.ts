@@ -121,6 +121,7 @@ beforeEach(() => {
     entropyThreshold: 4.5,
     lanes: new LaneAssigner(LANE_LIMITS),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+    acceptHookCapture: true,
   };
 });
 
@@ -163,6 +164,66 @@ describe('reflection intake validation', () => {
     ).rejects.toThrow();
 
     expect(graph.statements).toHaveLength(0);
+  });
+});
+
+describe('reflection intake hook capture', () => {
+  const HOOK_PAYLOAD = { ...PAYLOAD, origin: { channel: 'hook', event: 'stop' } };
+
+  /** Reflection routed to a local model, which is the profile that takes no hook traffic. */
+  function localReflect(): ReflectionIntakeDeps {
+    return { ...deps, acceptHookCapture: false };
+  }
+
+  async function rejectionOf(intake: ReflectionIntakeDeps, payload: unknown): Promise<Error> {
+    return await handleReflection(intake, payload, { identity: 'session-a' }).then(
+      () => {
+        throw new Error('the call was expected to reject');
+      },
+      (err: unknown) => err as Error,
+    );
+  }
+
+  it('refuses a hook payload before anything is stored when reflection runs local', async () => {
+    const refused = await rejectionOf(localReflect(), HOOK_PAYLOAD);
+
+    expect(refused.message).toContain('hook capture needs the keyed profile');
+    expect(graph.statements).toHaveLength(0);
+    expect(listReflectionJobs(db)).toHaveLength(0);
+    expect(listExperiencesAfter(db, undefined, 10)).toHaveLength(0);
+    expect(embed).not.toHaveBeenCalled();
+  });
+
+  // The refusal is the caller's error rather than the service's, so it comes back the way an
+  // invalid payload does: same class, carrying a message that says what to do about it.
+  it('refuses it the way an invalid payload is refused', async () => {
+    const invalid = await rejectionOf(deps, { summary: 'nothing happened' });
+    const refused = await rejectionOf(localReflect(), HOOK_PAYLOAD);
+
+    expect(refused.name).toBe(invalid.name);
+    expect(refused.message).toContain(
+      'hook capture needs the keyed profile: reflection is routed to a local model. Set AION_ANTHROPIC_API_KEY and restart, or run aion hooks uninstall.',
+    );
+  });
+
+  it('stores a hook payload when the keyed route accepts capture', async () => {
+    const result = await handleReflection(deps, HOOK_PAYLOAD, { identity: 'session-a' });
+
+    expect(graph.nodes.get(result.episode_id)?.properties.origin_channel).toBe('hook');
+  });
+
+  it('stores every other origin whichever way hook capture is set', async () => {
+    const origins = [{ channel: 'mcp' }, { channel: 'cli' }, undefined];
+
+    for (const [index, origin] of origins.entries()) {
+      const result = await handleReflection(
+        localReflect(),
+        { ...PAYLOAD, observations: [`episode number ${String(index)}`], origin },
+        { identity: 'session-a' },
+      );
+
+      expect(graph.nodes.get(result.episode_id)?.properties.origin_channel).toBe(origin?.channel);
+    }
   });
 });
 

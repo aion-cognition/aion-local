@@ -157,6 +157,7 @@ beforeAll(async () => {
         entropyThreshold: DEFAULTS.redaction.entropyThreshold,
         lanes: new LaneAssigner(DEFAULTS.lanes),
         workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+        acceptHookCapture: true,
       },
       { observations: [episode.observation] },
       { identity: WRITE_SESSION, now: new Date(STORED_AT.getTime() + index * 60_000) },

@@ -159,6 +159,7 @@ export type { EdgeWeightDistribution } from './graph/edge-weight-distribution.js
 export type { Provider } from './providers/types.js';
 export { embedQueryPrefix } from './providers/embed-models.js';
 export {
+  acceptsHookCapture,
   localChatModels,
   remoteBannerLines,
   remoteRoutes,
