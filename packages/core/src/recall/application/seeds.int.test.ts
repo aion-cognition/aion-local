@@ -26,6 +26,14 @@ import { openLogger, type Logger } from '../../infrastructure/logging/logger.js'
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { seedBudget } from '../domain/seed-selection.js';
 
+// The seeded graph has no entity named after the substrate, so the skip branch never fires here.
+function requireSubstrate(backbone: Awaited<ReturnType<typeof bootstrapBackbone>>) {
+  if (backbone.substrate === undefined) {
+    throw new Error('backbone skipped the substrate node on a clean graph');
+  }
+  return backbone.substrate;
+}
+
 const EMBED_DIMENSION = 8;
 const WRITTEN_AT = new Date('2026-08-01T00:00:00.000Z');
 const SUPERSEDED_AT = new Date('2026-08-10T00:00:00.000Z');
@@ -110,7 +118,7 @@ beforeAll(async () => {
   const backbone = await bootstrapBackbone(harness.driver, { memberName: 'Ryan Huber' });
   memberId = backbone.member.id;
   workspaceId = backbone.workspace.id;
-  substrateId = backbone.substrate.id;
+  substrateId = requireSubstrate(backbone).id;
 
   ids.claimPath = await writeEpisode(
     'the reflection queue claim path retries after SQLITE_BUSY',

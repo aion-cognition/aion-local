@@ -37,6 +37,14 @@ import { foldName } from '../../reflection/domain/name-fold.js';
 import { PIPELINE_VERSION } from '../../reflection/domain/version.js';
 import { SessionManager } from '../../session/session-manager.js';
 
+// The seeded graph has no entity named after the substrate, so the skip branch never fires here.
+function requireSubstrate(backbone: Awaited<ReturnType<typeof bootstrapBackbone>>) {
+  if (backbone.substrate === undefined) {
+    throw new Error('backbone skipped the substrate node on a clean graph');
+  }
+  return backbone.substrate;
+}
+
 const EMBED_DIMENSION = 8;
 const WRITE_SESSION = 'recall-int-write-session';
 const READ_SESSION = 'recall-int-read-session';
@@ -141,7 +149,7 @@ beforeAll(async () => {
   await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
 
   const backbone = await bootstrapBackbone(harness.driver, { memberName: 'Ryan Huber' });
-  substrateId = backbone.substrate.id;
+  substrateId = requireSubstrate(backbone).id;
   sessions = new SessionManager(harness.driver, {
     memberId: backbone.member.id,
     workspaceId: backbone.workspace.id,

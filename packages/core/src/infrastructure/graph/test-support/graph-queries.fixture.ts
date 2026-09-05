@@ -540,3 +540,34 @@ export async function relationshipsByProvenance(
     }),
   );
 }
+
+/**
+ * A bare current entity, the way a lived-in graph holds one: enough properties to stand in
+ * recall reads and to occupy the `entity_name_unique` constraint. Exists for tests that model
+ * a graph where a name the backbone wants is already taken.
+ */
+export async function seedBareEntity(
+  driver: Driver,
+  input: { readonly id: string; readonly name: string; readonly now: Date },
+): Promise<void> {
+  const iso = input.now.toISOString();
+  await runWrite(
+    driver,
+    {
+      cypher: [
+        'MERGE (e:AionNode:Entity:Memory {id: $id})',
+        'ON CREATE SET e.name = $name, e.name_norm = $nameNorm, e.text = $name,',
+        '  e.type = $type, e.occurred_at = datetime($iso), e.valid_from = datetime($iso),',
+        '  e.tx_from = datetime($iso)',
+      ].join('\n'),
+      parameters: {
+        id: input.id,
+        name: input.name,
+        nameNorm: input.name.trim().toLowerCase(),
+        type: 'project',
+        iso,
+      },
+    },
+    () => undefined,
+  );
+}

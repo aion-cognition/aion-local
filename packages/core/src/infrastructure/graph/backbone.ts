@@ -36,7 +36,8 @@ export type BootstrapBackboneInput = {
 export type BootstrapBackboneResult = {
   readonly member: StampedNodeResult;
   readonly workspace: StampedNodeResult;
-  readonly substrate: StampedNodeResult;
+  /** Undefined when an ordinary entity already holds the substrate's name; see the skip below. */
+  readonly substrate: StampedNodeResult | undefined;
 };
 
 /** Collapses whitespace and trims, keeping the case the user typed. */
@@ -151,7 +152,24 @@ export async function bootstrapBackbone(
     // never a second identity node. Separate personas with separate memory would be
     // workspace-level tenancy, which this is not. Structural like the Member and the Workspace:
     // an address and an attachment point, dropped from packs and never reinforced.
-    const substrateId = (await resolveSingletonIdInTransaction(tx, 'Substrate')) ?? randomUUID();
+    // A lived-in graph may already hold an ordinary entity named after the substrate, minted
+    // from conversations about it, and the Entity name constraint admits only one holder of
+    // the folded name. Renaming or absorbing that entity would rewrite the member's memory,
+    // which is not the backbone's call to make, so the node is skipped instead: sessions fall
+    // back to the Member as initiator, and a fresh graph (the reset included) creates the
+    // Substrate cleanly on its first init.
+    const existingSubstrateId = await resolveSingletonIdInTransaction(tx, 'Substrate');
+    if (existingSubstrateId === undefined) {
+      const collision = await tx.run(
+        `MATCH (e:Entity {name_norm: $nameNorm}) RETURN e.id AS id LIMIT 1`,
+        { nameNorm: normalizeEntityName(SUBSTRATE_NAME) },
+        (row) => row.id as string,
+      );
+      if (collision.length > 0) {
+        return { member, workspace, substrate: undefined };
+      }
+    }
+    const substrateId = existingSubstrateId ?? randomUUID();
     const substrate = await writeStampedNodeInTransaction(tx, {
       label: 'Substrate',
       id: substrateId,

@@ -85,6 +85,9 @@ describe('backbone bootstrap', () => {
     expect([...result.workspace.labels].sort()).toEqual(
       [BASE_NODE_LABEL, 'Entity', 'Workspace'].sort(),
     );
+    if (result.substrate === undefined) {
+      throw new Error('backbone skipped the substrate node on a clean graph');
+    }
     expect([...result.substrate.labels].sort()).toEqual(
       [BASE_NODE_LABEL, 'Entity', 'Substrate'].sort(),
     );
@@ -129,7 +132,7 @@ describe('backbone bootstrap', () => {
 
     expect(rerun.member.created).toBe(false);
     expect(rerun.workspace.created).toBe(false);
-    expect(rerun.substrate.created).toBe(false);
+    expect(rerun.substrate?.created).toBe(false);
     expect(await countLabel('Member')).toBe(1);
     expect(await countLabel('Workspace')).toBe(1);
     expect(await countLabel('Substrate')).toBe(1);

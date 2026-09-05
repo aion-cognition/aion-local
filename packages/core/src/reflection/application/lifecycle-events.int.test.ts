@@ -33,6 +33,14 @@ import { handleRecall, type RecallDeps } from '../../recall/application/recall.j
 import { waitFor } from '../../recall/application/test-support/wait-for.fixture.js';
 import { SessionManager } from '../../session/session-manager.js';
 
+// The seeded graph has no entity named after the substrate, so the skip branch never fires here.
+function requireSubstrate(backbone: Awaited<ReturnType<typeof bootstrapBackbone>>) {
+  if (backbone.substrate === undefined) {
+    throw new Error('backbone skipped the substrate node on a clean graph');
+  }
+  return backbone.substrate;
+}
+
 const EMBED_DIMENSION = 8;
 const READ_SESSION = 'lifecycle-int-read-session';
 
@@ -85,7 +93,7 @@ beforeAll(async () => {
   await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
 
   const backbone = await bootstrapBackbone(harness.driver, { memberName: 'Test User' });
-  substrateId = backbone.substrate.id;
+  substrateId = requireSubstrate(backbone).id;
   memberId = backbone.member.id;
   workspaceId = backbone.workspace.id;
 
