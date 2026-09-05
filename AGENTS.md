@@ -12,7 +12,7 @@ Conventions and commands for agents working in this repo.
 - Files stay under 500 lines. Lint enforces it (`max-lines`), off for tests and fixtures,
   where it stays a review-time rule.
 - No factory functions.
-- A knob is declared once: one row in `packages/core/src/infrastructure/config/knobs.ts`, as
+- A knob is declared once: one row in its group's table under `packages/core/src/infrastructure/config/` (knobs.ts, or the reflection/maintenance/temporal knob files), as
   `leaf: [envVar, zod schema, default]` under its group. The schema tree, the defaults, and the
   AION_* registry are folded out of that table, so nothing else needs an edit. The schema
   carries the real validation (enum, range, refinement), and the decoder that reads the env
@@ -51,8 +51,8 @@ packages/core/src/
   infrastructure/graph/                 every Cypher statement in the workspace
   infrastructure/logging/               pino wrapper
   infrastructure/providers/             Ollama client, circuit breaker, provisioning
-  infrastructure/sqlite/                reflection queue, experience archive, last-pack cache,
-                                        ops ledger, locks
+  infrastructure/sqlite/                reflection queue, experience archive, usage-event log,
+                                        last-pack cache, ops ledger, locks
   recall/domain/                        pure: activation, fusion (RRF/MMR), pack assembly
   recall/application/                   cue extraction, seed strategies, the recall pipeline
   plasticity/                           reinforcement folding and the decay curve, plus the
@@ -67,8 +67,8 @@ packages/core/src/
   session/                              identity-to-session-id resolution
 packages/mcp/src/                       MCP server: tool definitions, HTTP transport
 packages/cli/src/                       aion command: init, status, doctor, stats, last, why,
-                                        search, forget, unsupersede, queue, proposals, maintain,
-                                        unmerge
+                                        timeline, search, forget, unsupersede, queue, replay,
+                                        proposals, maintain, unmerge, hooks, help
 bin/aion                                host wrapper: rebuilds the image, runs the CLI container
 ```
 
