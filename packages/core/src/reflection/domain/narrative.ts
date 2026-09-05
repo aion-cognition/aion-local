@@ -266,16 +266,18 @@ export function renderItem(item: NarrativeSourceItem): string {
 }
 
 /**
- * Length scales with the source: the budget is what the rendered items can support, capped,
- * and one sentence is the floor. A session of one short observation is one sentence.
+ * Length scales with the source: the budget is what the rendered items can support, capped, and
+ * one sentence is the floor. `sources` is what the one-per-item term counts, which is the items
+ * unless a caller rendered one of them over many.
  */
 export function narrativeSentenceBudget(
   items: readonly NarrativeSourceItem[],
   maxSentences: number = NARRATIVE_MAX_SENTENCES,
+  sources: number = items.length,
 ): number {
   const chars = items.reduce((total, item) => total + item.text.length, 0);
   const bySize = Math.floor(chars / CHARS_PER_SENTENCE);
-  return Math.max(1, Math.min(maxSentences, items.length, bySize));
+  return Math.max(1, Math.min(maxSentences, sources, bySize));
 }
 
 export function narrativeMaxTokens(sentenceBudget: number): number {
@@ -283,12 +285,11 @@ export function narrativeMaxTokens(sentenceBudget: number): number {
 }
 
 /**
- * The compression input. A long session is rendered from its most recent episodes rather
- * than truncated mid-history, and the ratio it saw is recorded as the narrative's coverage
- * score, so the node says how much of what it claims to cover actually reached the model.
- * Every item carries a tag the answer must cite, and an extracted node follows the episode it
- * came from so the model reads the session as an arc rather than two lists. Clipping is a
- * byte slice, not term selection: nothing here decides what an episode means.
+ * The compression input, one call's worth: a set past `maxEpisodes` renders from its most recent
+ * rather than mid-history, and the ratio it saw is the coverage score the node carries. A session
+ * past the window is chunked before it reaches here, so the clip is a guard. Every item carries a
+ * tag the answer must cite, and an extracted node follows its episode so the model reads an arc
+ * rather than two lists. Clipping is a byte slice: nothing here decides what an episode means.
  */
 export function renderNarrativeSource(
   episodes: readonly NarrativeEpisode[],

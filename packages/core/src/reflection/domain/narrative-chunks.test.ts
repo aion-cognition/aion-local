@@ -25,9 +25,8 @@ function order(chunks: readonly (readonly NarrativeEpisode[])[]): string[] {
   return chunks.flatMap((run) => run.map((episode) => episode.id));
 }
 
-/** Long enough that the sentence budget is what the chunk count allows, not the character count. */
-function chunk(citations: readonly string[]): NarrativeChunkResult {
-  return { text: `${citations.join(' and ')} ${'a'.repeat(200)}`, citations };
+function chunk(citations: readonly string[], chars = 200): NarrativeChunkResult {
+  return { text: `${citations.join(' and ')} ${'a'.repeat(chars)}`, citations };
 }
 
 describe('splitting a session', () => {
@@ -77,7 +76,14 @@ describe('the source the final pass reads', () => {
 
     expect(source.renderedCount).toBe(90);
     expect(source.coverage).toBe(1);
+    // The characters the chunks hold, which is the term that binds a short pair of them.
     expect(source.sentenceBudget).toBe(2);
+  });
+
+  it('sizes the answer by the episodes behind the chunks rather than by the chunk count', () => {
+    const wide = [chunk(['e1'], 700), chunk(['e2'], 700), chunk(['e3'], 700)];
+
+    expect(renderChunkSource(wide, 90, SENTENCES).sentenceBudget).toBe(SENTENCES);
   });
 });
 

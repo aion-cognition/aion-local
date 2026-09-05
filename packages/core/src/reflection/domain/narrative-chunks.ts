@@ -85,7 +85,12 @@ export function renderChunkSource(
     items,
     renderedCount: episodeCount,
     coverage: 1,
-    sentenceBudget: narrativeSentenceBudget(items, maxSentences),
+    // The per-item term counts episodes rather than chunks. Three chunk texts are an artifact of
+    // the render window, not three things to say, and this narrative is the session's primary
+    // recall record: counting chunks would hand the longest sessions the shortest narratives.
+    // The day and week rollups keep counting their own items, where each member is a thing to
+    // say on its own.
+    sentenceBudget: narrativeSentenceBudget(items, maxSentences, episodeCount),
   };
 }
 
