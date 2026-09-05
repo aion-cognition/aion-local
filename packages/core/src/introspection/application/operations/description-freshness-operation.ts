@@ -8,7 +8,13 @@ import {
 } from '../../../infrastructure/graph/entity-description-queries.js';
 import { deadlineFor } from '../../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema } from '../../../infrastructure/providers/types.js';
-import { LOCAL as SYSTEM_PROMPT } from '../../../prompts/description-freshness.js';
+import {
+  KEYED as FRESHNESS_KEYED,
+  KEYED_MAX_TOKENS,
+  LOCAL as FRESHNESS_LOCAL,
+  LOCAL_MAX_TOKENS,
+} from '../../../prompts/description-freshness.js';
+import { promptMode, type PromptMode } from '../../../prompts/index.js';
 import type { IntrospectionOperation, OperationOutcome } from '../../domain/operation.js';
 
 /**
@@ -27,7 +33,6 @@ export const DESCRIPTION_FRESHNESS_OPERATION = 'description_freshness';
 /** How many recent mentioning episodes ground the re-synthesis prompt. */
 const MENTION_CONTEXT_LIMIT = 5;
 const MENTION_EXCERPT_CHARS = 400;
-const DESCRIPTION_MAX_TOKENS = 300;
 
 /**
  * Named rather than left to the route's default, which the provider no longer sends. The
@@ -48,15 +53,32 @@ function clip(text: string, maxChars: number): string {
   return text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;
 }
 
+type FreshnessPrompt = {
+  readonly system: string;
+  readonly maxTokens: number;
+};
+
+/**
+ * Text and budget travel together, since the number is only ever the room the words ask for: the
+ * keyed prompt wants three to four sentences naming connections, the local one wants two.
+ */
+function promptFor(mode: PromptMode): FreshnessPrompt {
+  if (mode === 'keyed') {
+    return { system: FRESHNESS_KEYED, maxTokens: KEYED_MAX_TOKENS };
+  }
+  return { system: FRESHNESS_LOCAL, maxTokens: LOCAL_MAX_TOKENS };
+}
+
 function buildMessages(
   entity: StaleDescriptionEntity,
   contexts: readonly { readonly text: string }[],
+  system: string,
 ): ChatMessage[] {
   const mentions = contexts
     .map((context, index) => `[M${String(index + 1)}] ${clip(context.text, MENTION_EXCERPT_CHARS)}`)
     .join('\n\n');
   return [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: system },
     {
       role: 'user',
       content:
@@ -91,6 +113,7 @@ export function descriptionFreshnessOperation(): IntrospectionOperation {
         };
       }
 
+      const prompt = promptFor(promptMode(ctx.provider));
       const batch = ctx.config.maintenance.descriptionRefreshBatch;
       const candidates = await findStaleDescriptionEntities(ctx.driver, {
         growthThreshold: ctx.config.maintenance.descriptionRefreshMentionGrowth,
@@ -116,9 +139,9 @@ export function descriptionFreshnessOperation(): IntrospectionOperation {
           try {
             const raw = await ctx.provider.generate({
               model: ctx.config.models.reflect,
-              messages: buildMessages(entity, contexts),
+              messages: buildMessages(entity, contexts, prompt.system),
               schema: DESCRIPTION_JSON_SCHEMA,
-              maxTokens: DESCRIPTION_MAX_TOKENS,
+              maxTokens: prompt.maxTokens,
               temperature: DESCRIPTION_TEMPERATURE,
               think: false,
               signal: deadline.signal,

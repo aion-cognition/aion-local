@@ -7,6 +7,12 @@ import type { Config } from '../../../infrastructure/config/schema.js';
 import type { Logger } from '../../../infrastructure/logging/logger.js';
 import type { Provider, StructuredRequest } from '../../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import {
+  KEYED as FRESHNESS_KEYED,
+  KEYED_MAX_TOKENS,
+  LOCAL as FRESHNESS_LOCAL,
+  LOCAL_MAX_TOKENS,
+} from '../../../prompts/description-freshness.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
 
@@ -137,6 +143,42 @@ describe('descriptionFreshnessOperation under a shutdown', () => {
     expect(reachedTheCall).toBe(true);
     expect(elapsedMs).toBeLessThan(PROMPT_RETURN_MS);
     expect(outcome.status).toBe('noop');
+  });
+});
+
+/** Drives the run as far as the model call, then stops it the way a shutdown would. */
+async function requestUnderRoute(route?: Provider['route']): Promise<StructuredRequest> {
+  const { provider, started } = hangingProvider();
+  const controller = new AbortController();
+  const routed: Provider = route === undefined ? provider : { ...provider, route };
+  const run = descriptionFreshnessOperation().run(contextFor(routed, controller.signal));
+  const request = await started;
+
+  controller.abort();
+  await run;
+  return request;
+}
+
+describe('the text and the budget the route asks under', () => {
+  it('asks the local model for the short gloss in the room that gloss needs', async () => {
+    const request = await requestUnderRoute({ provider: 'ollama' });
+
+    expect(request.messages[0]?.content).toBe(FRESHNESS_LOCAL);
+    expect(request.maxTokens).toBe(LOCAL_MAX_TOKENS);
+  });
+
+  it('asks the keyed route for the longer gloss and gives it the room to write one', async () => {
+    const request = await requestUnderRoute({ provider: 'anthropic' });
+
+    expect(request.messages[0]?.content).toBe(FRESHNESS_KEYED);
+    expect(request.maxTokens).toBe(KEYED_MAX_TOKENS);
+  });
+
+  it('reads a provider that states no route as the local one', async () => {
+    const request = await requestUnderRoute();
+
+    expect(request.messages[0]?.content).toBe(FRESHNESS_LOCAL);
+    expect(request.maxTokens).toBe(LOCAL_MAX_TOKENS);
   });
 });
 

@@ -27,6 +27,7 @@ import {
   type Neo4jHarness,
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger } from '../../../infrastructure/logging/logger.js';
+import { testGenerationProvider } from '../../../infrastructure/providers/test-support/generation-provider.js';
 import { refusingProvider } from '../../../infrastructure/providers/test-support/refusing-provider.fixture.js';
 import type { Provider, StructuredRequest } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
@@ -43,6 +44,15 @@ let harness: Neo4jHarness;
 let db: SqliteHandle;
 let dataDir: string;
 let entityId: string;
+
+/**
+ * The keyed text is the one the remote route reads, so a run on the local model would measure
+ * words nothing ships to it. Written out rather than imported, the way the gate batteries write
+ * it: `core` does not import from `mcp`, where that constant lives.
+ */
+const REMOTE_JUDGE_ABSENT =
+  (process.env.AION_ANTHROPIC_API_KEY ?? '').trim() === '' ||
+  process.env.TEST_AION_GENERATION === 'local';
 
 const NOW = new Date('2026-08-29T12:00:00.000Z');
 const ORIGINAL_DESCRIPTION = 'a Postgres connection pool (concept)';
@@ -203,4 +213,81 @@ describe('descriptionFreshnessOperation against a live graph', () => {
         'description freshness disabled by AION_MAINTENANCE_DESCRIPTION_FRESHNESS; no entity examined',
     });
   }, 60_000);
+});
+
+const KEYED_ENTITY_DESCRIPTION = 'a queue worker (concept)';
+
+/**
+ * Every mention names the same upstream queue and the same person, so the connections the keyed
+ * text asks for are in the sources rather than left to the model to supply.
+ */
+const KEYED_ENTITY_MENTIONS = [
+  'Priya moved the ingest worker behind the Valkey queue so its retries stopped doubling',
+  'the ingest worker takes its jobs from the Valkey queue and writes each result to the ledger service',
+  'after the June incident the ingest worker ran on two replicas, both fed by the Valkey queue',
+  'Priya owns the ingest worker rota, and the Valkey queue is the only thing upstream of it',
+  'the ingest worker drains the Valkey queue every night before the ledger service closes the day',
+];
+
+describe.skipIf(REMOTE_JUDGE_ABSENT)('a keyed-route refresh of the same shape', () => {
+  let keyedEntityId: string;
+  let live: Provider;
+
+  beforeAll(async () => {
+    live = testGenerationProvider({
+      baseUrl: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
+      embedModel: DEFAULTS.models.embed,
+    });
+
+    const [entity] = await mergeEntities(
+      harness.driver,
+      [
+        {
+          name: 'ingest worker',
+          nameNorm: 'ingest worker',
+          type: 'concept',
+          text: KEYED_ENTITY_DESCRIPTION,
+          sourceEpisodeId: 'keyed-seed-episode-0',
+          extractionMethod: 'test-seed',
+          confidence: 1,
+          occurredAt: NOW,
+        },
+      ],
+      NOW,
+    );
+    keyedEntityId = entity!.id;
+
+    for (const [index, text] of KEYED_ENTITY_MENTIONS.entries()) {
+      const episodeId = `keyed-mention-episode-${String(index)}`;
+      await writeStampedNode(harness.driver, {
+        label: 'Episode',
+        id: episodeId,
+        now: NOW,
+        properties: { text },
+      });
+      await linkEntityMentions(harness.driver, {
+        episodeId,
+        entityIds: [keyedEntityId],
+        now: NOW,
+        confidence: 1,
+        provenance: ['test-seed'],
+      });
+    }
+  }, 300_000);
+
+  it('writes a longer gloss that names what the entity connects to, and keeps the old one', async () => {
+    const outcome = await descriptionFreshnessOperation().run(contextFor(live));
+
+    expect(outcome.status).toBe('applied');
+    expect(outcome.itemsAffected).toBe(1);
+
+    const entity = await storedEntity(harness.driver, keyedEntityId);
+    const refreshed = entity?.text ?? '';
+    expect(refreshed.length).toBeGreaterThan(KEYED_ENTITY_DESCRIPTION.length);
+    expect(refreshed.toLowerCase()).toContain('valkey');
+    expect(entity?.contentVectorLength).toBe(EMBED_DIMENSION);
+
+    const props = await nodeProperties(harness.driver, keyedEntityId);
+    expect(props[PRIOR_DESCRIPTIONS_PROPERTY]).toEqual([KEYED_ENTITY_DESCRIPTION]);
+  }, 120_000);
 });
