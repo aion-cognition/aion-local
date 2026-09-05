@@ -12,6 +12,7 @@ import {
   deleteReinforcementSignals,
   recordReinforcementFlush,
 } from '../../infrastructure/sqlite/reinforcement-queue.js';
+import { appendReinforcementAppliedEvent } from '../../infrastructure/sqlite/usage-events.js';
 import { aggregateWindow, type AggregatedPair } from '../domain/reinforcement.js';
 
 /**
@@ -65,6 +66,29 @@ function toWeightReinforcements(pairs: readonly AggregatedPair[]): readonly Weig
 }
 
 /**
+ * The window as the usage stream records it, written once the graph has taken the steps. It is
+ * the applied step that replays, not the queue row: the queue is capped and trimmed, so a
+ * signal can be enqueued and never reach an edge.
+ *
+ * Fail-open, like the two writers it sits beside. A flush that moved the graph and could not
+ * write its own record has still done its work, and throwing here would strand the window's
+ * rows for a retry that has already been applied.
+ */
+function appendUsageEvent(
+  deps: HebbianFlushDeps,
+  pairs: readonly WeightReinforcement[],
+  triggers: readonly string[],
+  weightFloor: number,
+  now: Date,
+): void {
+  try {
+    appendReinforcementAppliedEvent(deps.db, { pairs, triggers, weightFloor, occurredAt: now });
+  } catch (err) {
+    deps.logger.warn({ err, pairs: pairs.length }, 'hebbian flush usage-event append failed');
+  }
+}
+
+/**
  * Claim, fold, apply, delete.
  *
  * The graph write lands before the rows go, so the failure mode is at-least-once: a crash
@@ -101,11 +125,21 @@ export async function flushReinforcementQueue(
   }
 
   const pairs = aggregateWindow(signals, learningRate);
+  const steps = toWeightReinforcements(pairs);
   const edges = await reinforceEdgeWeights(deps.driver, {
-    pairs: toWeightReinforcements(pairs),
+    pairs: steps,
     weightFloor,
     now,
   });
+  if (steps.length > 0) {
+    appendUsageEvent(
+      deps,
+      steps,
+      [...new Set(signals.map((signal) => signal.trigger))],
+      weightFloor,
+      now,
+    );
+  }
 
   const signalsDeleted = deleteReinforcementSignals(
     deps.db,

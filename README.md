@@ -137,7 +137,7 @@ does not work and says so: the CLI orchestrates the repo it lives in.
 - `forget`: bitemporal close of a node, by id or by query
 - `unsupersede`: reopen a claim a supersession closed, whatever made the close
 - `queue`: inspect and triage the reflection queue
-- `replay`: put archived experiences back through the pipeline
+- `replay`: put archived experiences back through the pipeline, and the usage stream back on top
 - `proposals`: review judged contradictions and duplicate entities
 - `maintain`: the maintenance catalog, and forcing one operation to run now
 - `unmerge`: split an identity back out of the entity dedup absorbed it into

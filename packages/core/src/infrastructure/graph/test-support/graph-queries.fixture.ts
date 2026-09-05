@@ -5,6 +5,7 @@ import { ACCESS_COUNT_PROPERTY } from '../access-tracking.js';
 import { CO_OCCURS_TYPE, SIMILAR_TYPE } from '../association-queries.js';
 import { readFirst, runRead, runWrite } from '../connection.js';
 import { CONTEXT_VECTOR_PROPERTY } from '../context-vector-queries.js';
+import { DECAYED_AT_PROPERTY } from '../edge-weights.js';
 import {
   ENTITY_ALIASES_NORM_PROPERTY,
   ENTITY_ALIASES_PROPERTY,
@@ -167,6 +168,47 @@ export async function accessMetadata(driver: Driver, id: string): Promise<Access
     }),
   );
   return row ?? {};
+}
+
+/**
+ * Access stamps back to absent, which is the state a node carries before any recall has
+ * surfaced it. A graph rebuilt from the experience archive has every fact and none of these,
+ * so this is the half a usage replay has to put back.
+ */
+export async function clearAccessMetadata(driver: Driver, ids: readonly string[]): Promise<void> {
+  await runWrite(
+    driver,
+    [
+      'UNWIND $ids AS nodeId',
+      `MATCH (n:${BASE_NODE_LABEL} { id: nodeId })`,
+      `SET n.${LAST_ACCESSED_PROPERTY} = null, n.${ACCESS_COUNT_PROPERTY} = null`,
+    ].join('\n'),
+    { ids: [...ids] },
+    () => undefined,
+  );
+}
+
+/**
+ * One edge's weight back to a named value with no record of a sweep having visited it, the
+ * same rebuild state for the other half of what plasticity writes. Keyed by id and type rather
+ * than by name, since a replay names node ids.
+ */
+export async function resetEdgePlasticity(
+  driver: Driver,
+  type: string,
+  sourceId: string,
+  targetId: string,
+  strength: number,
+): Promise<void> {
+  await runWrite(
+    driver,
+    [
+      `MATCH ({ id: $sourceId })-[r:${type}]-({ id: $targetId })`,
+      `SET r.strength = $strength, r.${DECAYED_AT_PROPERTY} = null`,
+    ].join('\n'),
+    { sourceId, targetId, strength },
+    () => undefined,
+  );
 }
 
 export async function countChainedTurns(driver: Driver, episodeId: string): Promise<number> {

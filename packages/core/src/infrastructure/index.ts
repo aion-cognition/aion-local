@@ -21,6 +21,8 @@ export {
   getExperienceByEpisode,
 } from './sqlite/experience-archive.js';
 
+export { countUsageEvents } from './sqlite/usage-events.js';
+
 export {
   getLedgerEntry,
   isLedgerApplied,

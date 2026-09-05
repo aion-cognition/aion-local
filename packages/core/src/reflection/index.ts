@@ -54,6 +54,9 @@ export type {
   ReplaySelection,
 } from './application/replay.js';
 
+export { replayUsageEvents } from './application/usage-replay.js';
+export type { UsageReplayProgress, UsageReplayReport } from './application/usage-replay.js';
+
 export { buildEpisodeTimeline } from './application/episode-timeline.js';
 export type { TimelineEvent } from './application/episode-timeline.js';
 

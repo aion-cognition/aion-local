@@ -25,7 +25,7 @@ status      services, models, routing, and graph counts
 doctor      check every substrate invariant and name what is broken
 last        the last MemoryPack served per session, with rationale
 queue       inspect the reflection queue: ls | drop | promote | reconcile
-replay      put archived experiences back through the pipeline: ls | run
+replay      put archived experiences and the usage stream back: ls | run | usage
 proposals   review judged contradictions and duplicate entities: ls | apply | dismiss
 maintain    the maintenance catalog, and forcing one operation to run now: ls | run
 unmerge     split an identity back out of the entity dedup absorbed it into: ls | apply

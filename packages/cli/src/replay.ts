@@ -1,6 +1,7 @@
 import {
   bootstrapBackbone,
   countExperiencesByVersion,
+  countUsageEvents,
   DEFAULT_SQLITE_PATH,
   experienceArchiveSpan,
   isManagedNeo4jUri,
@@ -11,12 +12,15 @@ import {
   recordLifecycleEvent,
   ReflectionOrchestrator,
   replayExperiences,
+  replayUsageEvents,
   SessionManager,
   type Config,
   type ReplayDeps,
   type ReplayProgress,
   type ReplayReport,
   type ReplaySelection,
+  type UsageReplayProgress,
+  type UsageReplayReport,
 } from '@aion/core';
 import { reflectionStages } from '@aion/mcp';
 
@@ -30,6 +34,11 @@ import { withSubstrate, type Substrate } from './substrate.js';
  * archive rather than a live transport, so a prompt or extraction change is re-derived from
  * what the substrate was actually told instead of migrated in place.
  *
+ * `usage` is the second half of the same rebuild. `run` restores what the substrate knows;
+ * `usage` restores what it found worth knowing, by re-applying the access, reinforcement and
+ * decay events the usage stream recorded. On a graph rebuilt from the archive the two run in
+ * that order, since the salience events name nodes and edges the pipeline has to write first.
+ *
  * A replay under a new pipeline version re-enters every stage, and two of the writes those
  * stages make count real observations rather than converging on one value: the MENTIONS
  * salience bump and the co-occurrence edge count. `last_accessed` also feeds identifier decay,
@@ -38,14 +47,14 @@ import { withSubstrate, type Substrate } from './substrate.js';
  * `--live --yes`.
  */
 
-const SUBCOMMANDS = ['ls', 'run'] as const;
+const SUBCOMMANDS = ['ls', 'run', 'usage'] as const;
 
 type Subcommand = (typeof SUBCOMMANDS)[number];
 
 const SPEC: ArgSpec<Subcommand> = {
   command: 'replay',
   usage:
-    'aion replay [ls | run] [--all] [--stale] [--episode <id>] [--session <id>] ' +
+    'aion replay [ls | run | usage] [--all] [--stale] [--episode <id>] [--session <id>] ' +
     '[--limit <n>] [--batch <n>] [--live] [--yes] [--json]',
   subcommands: SUBCOMMANDS,
   options: [
@@ -161,6 +170,10 @@ function renderLs(substrate: Substrate, flags: ReplayFlags): number {
     .filter((entry) => entry.version !== PIPELINE_VERSION)
     .reduce((sum, entry) => sum + entry.count, 0);
 
+  // Both streams, because a rebuild reads both: the archive says what a `run` would re-derive
+  // and the usage count says what a `usage` pass would put back on top of it.
+  const usage = countUsageEvents(db);
+
   if (flags.json) {
     substrate.write(
       JSON.stringify({
@@ -170,6 +183,7 @@ function renderLs(substrate: Substrate, flags: ReplayFlags): number {
         by_version: byVersion.map((entry) => ({ version: entry.version, count: entry.count })),
         oldest_occurred_at: span?.oldestOccurredAt ?? null,
         newest_occurred_at: span?.newestOccurredAt ?? null,
+        usage_events: usage,
       }),
     );
     return 0;
@@ -183,6 +197,7 @@ function renderLs(substrate: Substrate, flags: ReplayFlags): number {
   if (span !== undefined) {
     substrate.write(`occurred   ${span.oldestOccurredAt} to ${span.newestOccurredAt}`);
   }
+  substrate.write(`usage      ${String(usage)} events`);
   return 0;
 }
 
@@ -224,6 +239,50 @@ function toJson(report: ReplayReport): unknown {
   };
 }
 
+function renderUsageProgress(progress: UsageReplayProgress, write: Writer): void {
+  write(
+    `applied ${String(progress.scanned - progress.skipped - progress.failed)} of ` +
+      `${String(progress.scanned)}, at ${progress.cursor.occurredAt}`,
+  );
+}
+
+function renderUsageReport(report: UsageReplayReport, write: Writer): void {
+  write(`scanned       ${String(report.scanned)}`);
+  write(`access        ${String(report.accessApplied)}`);
+  write(
+    `reinforcement ${String(report.reinforcementApplied)}, ` +
+      `${String(report.edgesReinforced)} edges`,
+  );
+  write(`decay         ${String(report.decayApplied)}, ${String(report.edgesDecayed)} edges`);
+  write(`skipped       ${String(report.skipped)}`);
+  write(`failed        ${String(report.failed)}`);
+  if (report.aborted) {
+    write(
+      report.cursor === undefined
+        ? 'aborted before the first batch; nothing was applied'
+        : `aborted at ${report.cursor.occurredAt} / ${String(report.cursor.id)}`,
+    );
+  }
+}
+
+function toUsageJson(report: UsageReplayReport): unknown {
+  return {
+    scanned: report.scanned,
+    access_applied: report.accessApplied,
+    reinforcement_applied: report.reinforcementApplied,
+    edges_reinforced: report.edgesReinforced,
+    decay_applied: report.decayApplied,
+    edges_decayed: report.edgesDecayed,
+    skipped: report.skipped,
+    failed: report.failed,
+    aborted: report.aborted,
+    cursor:
+      report.cursor === undefined
+        ? null
+        : { occurred_at: report.cursor.occurredAt, id: report.cursor.id },
+  };
+}
+
 /**
  * Abort on the first interrupt, and let a second one kill the process outright: the first
  * stops the loop between batches so the cursor is reported, and an operator who asks twice is
@@ -237,23 +296,77 @@ export function abortOnInterrupt(): AbortController {
   return controller;
 }
 
+/**
+ * The two gates both writing paths pass: the scratch refusal, and a substrate that has been
+ * through `aion init` at all. Every message names what it was about to write to.
+ */
+function writeRefusal(substrate: Substrate, flags: ReplayFlags): string | undefined {
+  const refusal = defaultSubstrateRefusal(substrate.config, flags);
+  if (refusal !== undefined) {
+    return refusal;
+  }
+  if (latestAppliedGraphMigration(substrate.db()) === undefined) {
+    return (
+      `no schema on this substrate (${describeSubstrate(substrate.config)}); ` +
+      'run `aion init` against it first'
+    );
+  }
+  return undefined;
+}
+
+/**
+ * The usage stream re-applied over a rebuilt graph. It takes the same scratch gate `run` does,
+ * and for a sharper reason: every event it applies is an additive write, so a pass over a graph
+ * that already carries its own stamps counts each access twice.
+ */
+async function runUsageReplay(substrate: Substrate, flags: ReplayFlags): Promise<number> {
+  const { config, write } = substrate;
+  const refusal = writeRefusal(substrate, flags);
+  if (refusal !== undefined) {
+    stderrWriter(refusal);
+    return 1;
+  }
+
+  const connection = await substrate.requireGraph('replay usage');
+  if (connection === undefined) {
+    return 1;
+  }
+
+  const controller = abortOnInterrupt();
+  const report = await replayUsageEvents(
+    { driver: connection.driver, db: substrate.db(), logger: substrate.logger() },
+    {
+      batchSize: flags.batch ?? config.maintenance.replayBatchSize,
+      signal: controller.signal,
+      ...(flags.limit === undefined ? {} : { limit: flags.limit }),
+      // A JSON caller gets one document, so per-batch lines would corrupt it.
+      ...(flags.json
+        ? {}
+        : {
+            onBatch: (progress: UsageReplayProgress) => {
+              renderUsageProgress(progress, write);
+            },
+          }),
+    },
+  );
+
+  if (flags.json) {
+    write(JSON.stringify(toUsageJson(report)));
+  } else {
+    renderUsageReport(report, write);
+  }
+  return report.failed > 0 ? 1 : 0;
+}
+
 async function runReplay(substrate: Substrate, flags: ReplayFlags): Promise<number> {
   const { config, write } = substrate;
-  const refusal = defaultSubstrateRefusal(config, flags);
+  const refusal = writeRefusal(substrate, flags);
   if (refusal !== undefined) {
     stderrWriter(refusal);
     return 1;
   }
 
   const db = substrate.db();
-  if (latestAppliedGraphMigration(db) === undefined) {
-    stderrWriter(
-      `no schema on this substrate (${describeSubstrate(config)}); ` +
-        'run `aion init` against it first',
-    );
-    return 1;
-  }
-
   const connection = await substrate.requireGraph('replay');
   if (connection === undefined) {
     return 1;
@@ -343,6 +456,9 @@ export function runReplayCommand(
     run: async (substrate, flags) => {
       if (flags.subcommand === 'run') {
         return await runReplay(substrate, flags);
+      }
+      if (flags.subcommand === 'usage') {
+        return await runUsageReplay(substrate, flags);
       }
       return renderLs(substrate, flags);
     },
