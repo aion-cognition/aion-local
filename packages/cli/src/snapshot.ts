@@ -19,6 +19,7 @@ import {
   plasticityCounters,
   queueLagSnapshot,
   recallCadenceCounters,
+  recallProbeCounters,
   remoteBannerLines,
   resolveProviderRouting,
   routingSummary,
@@ -34,6 +35,7 @@ import {
   type PlasticityCounters,
   type QueueLagSnapshot,
   type RecallCadenceCounters,
+  type RecallProbeCounters,
   type SqliteHandle,
 } from '@aion/core';
 
@@ -45,6 +47,7 @@ import {
   type MergeShadowSnapshot,
 } from './merge-shadow-section.js';
 import type { Writer } from './output.js';
+import { renderRecallProbe } from './recall-probe-section.js';
 
 /**
  * `status` and `stats` read one substrate through one collector and render it through one
@@ -86,6 +89,8 @@ export type SnapshotExtras = {
   readonly methodLegStats: PackMethodLegStats;
   /** Per-route call counts and failure rate: whether the model calls behind a pack answered. */
   readonly generation: GenerationCounters;
+  /** What the loop found when it asked the substrate for what it was told, and what use it saw. */
+  readonly recallProbe: RecallProbeCounters;
   readonly maintenance: MaintenanceSnapshot;
   readonly mergeShadow: MergeShadowSnapshot;
 };
@@ -226,6 +231,7 @@ export async function collectSnapshot(
       methodCounters: packMethodCounters(db),
       methodLegStats: packMethodLegStats(db),
       generation: generationCounters(db),
+      recallProbe: recallProbeCounters(db),
       maintenance: collectMaintenance(db),
       mergeShadow,
     },
@@ -486,6 +492,7 @@ export function renderSnapshot(
   }
 
   renderGeneration(extras.generation, write);
+  renderRecallProbe(extras.recallProbe, write);
   renderMaintenance(extras.maintenance, now, write);
   renderMergeShadow(extras.mergeShadow, write);
 }

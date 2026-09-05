@@ -253,4 +253,12 @@ export const MAINTENANCE_KNOBS = {
   // every question is a standing intention that will interrupt a later session on its own, and
   // a substrate that asks faster than it is answered is nagging rather than curious.
   curiosityBatch: ['AION_CURIOSITY_BATCH', positiveInt, 2],
+  // `recall_probe`'s kill switch. On by default: the probe only reads, and it reads through a
+  // throwaway store so nothing it does reaches the substrate it is measuring. Off stops the
+  // sampling, and both rates stand at whatever the last run measured.
+  recallProbe: ['AION_MAINTENANCE_RECALL_PROBE', z.boolean(), true],
+  // Archived experiences one run asks back for. Three on a day bucket: each one is a full
+  // recall, cue call included, and the hit rate is a lifetime total that a few trials a day
+  // fill in without the probe becoming the substrate's busiest caller.
+  recallProbeSample: ['AION_RECALL_PROBE_SAMPLE', positiveInt, 3],
 } as const;

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SqliteStore } from './database.js';
 import {
   deleteServedItems,
+  listServedItemsBefore,
   purgeServedItemsIdleSince,
   readServedItems,
   recordServedItems,
@@ -151,5 +152,34 @@ describe('purging the sessions no close will name', () => {
     expect(purgeServedItemsIdleSince(store.db, '2026-08-30T10:30:00.000Z')).toBe(1);
     expect(readServedItems(store.db, SESSION).size).toBe(0);
     expect(readServedItems(store.db, OTHER).size).toBe(1);
+  });
+
+  it('ages an item on its earliest serve, whichever session got it first', () => {
+    recordServedItems(store.db, SESSION, [{ itemId: 'e1', fingerprint: 'hash-1' }], FIRST_AT);
+    recordServedItems(store.db, OTHER, [{ itemId: 'e1', fingerprint: 'hash-1' }], LATER_AT);
+
+    expect(listServedItemsBefore(store.db, '2026-08-30T10:30:00.000Z', 10)).toEqual([
+      { itemId: 'e1', firstServedAt: FIRST_AT },
+    ]);
+  });
+
+  it('leaves out an item nothing served before the cutoff', () => {
+    recordServedItems(store.db, SESSION, [{ itemId: 'e1', fingerprint: 'hash-1' }], LATER_AT);
+
+    expect(listServedItemsBefore(store.db, FIRST_AT, 10)).toEqual([]);
+  });
+
+  it('bounds the read at the limit it was given', () => {
+    recordServedItems(
+      store.db,
+      SESSION,
+      [
+        { itemId: 'e1', fingerprint: 'hash-1' },
+        { itemId: 'e2', fingerprint: 'hash-2' },
+      ],
+      FIRST_AT,
+    );
+
+    expect(listServedItemsBefore(store.db, LATER_AT, 1)).toHaveLength(1);
   });
 });

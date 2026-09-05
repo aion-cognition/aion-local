@@ -28,6 +28,7 @@ import {
   operationMeasurements,
   type IntrospectionOperation,
   type OperationOutcome,
+  type RecallProbe,
 } from '../domain/operation.js';
 import { proposeOnlyAdvisor, type Tier3Advisor } from '../domain/tier3.js';
 
@@ -63,6 +64,12 @@ export type IntrospectorDeps = {
    * operations that need it decline instead.
    */
   readonly intake?: ReflectionIntakeDeps;
+  /**
+   * The isolated recall the self-probe asks through, built by the caller that holds the real
+   * recall deps. Handed on unchanged for the same reason `intake` is: the loop never assembles
+   * one, so it cannot assemble one that writes.
+   */
+  readonly recallProbe?: RecallProbe;
   /**
    * The registered catalog, in order. Order decides nothing on its own: selection is by tier
    * and urgency, and ties break on waiting time and then on name.
@@ -391,6 +398,7 @@ export class Introspector {
         logger: this.#deps.logger,
         provider: this.#deps.provider,
         ...(this.#deps.intake === undefined ? {} : { intake: this.#deps.intake }),
+        ...(this.#deps.recallProbe === undefined ? {} : { recallProbe: this.#deps.recallProbe }),
         health,
         now,
         signal: this.#abort.signal,

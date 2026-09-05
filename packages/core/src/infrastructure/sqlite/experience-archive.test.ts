@@ -11,6 +11,7 @@ import {
   getExperienceByEpisode,
   insertExperience,
   listExperiencesAfter,
+  sampleExperiencesBefore,
   type ExperienceArchiveCursor,
   type ExperienceArchiveInput,
 } from './experience-archive.js';
@@ -182,6 +183,29 @@ describe('experience archive storage', () => {
       { version: 'v1', count: 2 },
       { version: 'v2', count: 1 },
     ]);
+  });
+
+  it('samples only experiences that happened before the mark', () => {
+    insertExperience(store.db, input({ episodeId: 'ep-old', occurredAt: '2026-01-01T00:00:00Z' }));
+    insertExperience(
+      store.db,
+      input({ episodeId: 'ep-new', identity: 'identity-2', occurredAt: '2026-01-09T00:00:00Z' }),
+    );
+
+    const sampled = sampleExperiencesBefore(store.db, '2026-01-05T00:00:00Z', 10);
+
+    expect(sampled.map((row) => row.episodeId)).toEqual(['ep-old']);
+  });
+
+  it('takes no more than the sample size asked for', () => {
+    for (let index = 0; index < 5; index += 1) {
+      insertExperience(
+        store.db,
+        input({ episodeId: `ep-${String(index)}`, identity: `identity-${String(index)}` }),
+      );
+    }
+
+    expect(sampleExperiencesBefore(store.db, '2026-01-05T00:00:00Z', 2)).toHaveLength(2);
   });
 });
 

@@ -262,6 +262,42 @@ and the ones already filed stand until they are answered or age out. `AION_CURIO
 catalog: every question interrupts a later session on its own, and a substrate that asks faster
 than it is answered is nagging.
 
+## The recall self-probe
+
+`recall_probe` is how the substrate measures its own memory. Once a day it takes a few
+experiences it was told about more than a day ago, asks for each of them back in the words they
+arrived in, and scores whether the pack answered. Three things count as an answer: the episode
+itself, something extraction pulled out of it, or the narrative that compressed it. The rate is
+a lifetime total, so it fills in a few questions a day.
+
+The same run reads the other half of the question. Of the items still on record as served to a
+session, first handed over more than a day ago, it counts how many a later episode went on to
+mention or cite. That says whether served memory was used, where the first rate says only
+whether it came back.
+
+```
+aion stats                    # the "recall self-probe" section carries both rates
+```
+
+A probe must teach the substrate nothing, or the next run scores what the last one taught it.
+Its recall runs with no listener (no reinforcement rows, no access stamps, no usage events),
+with session dedup off, under a session identity of its own, and against a throwaway in-memory
+store. The pack it persists, the served rows it would record, and the cadence and pack-method
+counters it moves all land in that store and go when the run ends. One thing it does count: the
+cue call, in `generation by route`, because a probe call is a real call on a real route.
+
+Both rates read as unmeasured rather than as zero until there is something to measure. Served
+rows go when their session closes, so on an install whose sessions are short the served rate
+reports that no item was old enough to judge. That is a fact about the sessions on file, not
+about how memory is being used.
+
+`AION_MAINTENANCE_RECALL_PROBE` (default `true`) is the kill switch: off, nothing is asked and
+both rates stand where the last run left them. `AION_RECALL_PROBE_SAMPLE` (default `3`) is how
+many experiences one run asks back for. Each one is a full recall, cue call included.
+
+`aion maintain run recall_probe` declines with a noop. The probe's recall is assembled by the
+running service, and a CLI run holds none, the same as `curiosity` and its intake path.
+
 ## Resetting the substrate
 
 A reset deletes everything the substrate holds, so it is a documented procedure rather than a

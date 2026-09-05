@@ -20,6 +20,7 @@ import {
 import { orphanCleanupOperation } from './operations/orphan-cleanup.js';
 import { proposalHygieneOperation } from './operations/proposal-hygiene.js';
 import { proposalResolutionOperation } from './operations/proposal-resolution.js';
+import { recallProbeOperation } from './operations/recall-probe.js';
 import { reconcileReenqueueOperation } from './operations/reconcile-reenqueue.js';
 import { redactionResiduePurgeOperation } from './operations/redaction-residue-purge.js';
 import { retroJudgmentSweepOperation } from './operations/retro-judgment-sweep-operation.js';
@@ -37,8 +38,8 @@ import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-
  * waiting time and then on name, so moving a line here changes nothing about what runs. The
  * comment above each group says what that group is for.
  *
- * Twelve of the twenty-seven declare a `measure`, a number in the health snapshot their run is
- * scored on moving. The other fifteen are recorded as unmeasured rather than scored. Fourteen
+ * Twelve of the twenty-eight declare a `measure`, a number in the health snapshot their run is
+ * scored on moving. The other sixteen are recorded as unmeasured rather than scored. Fourteen
  * of those are waiting on a gauge the snapshot does not carry yet:
  *
  * - `claim_dedup`: a near-duplicate claim-pair count.
@@ -59,10 +60,12 @@ import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-
  * Each is a graph read nothing computes on the tick today. Until one exists, its operation is
  * scored on relevance, waiting time, and cost alone, which is everything known about it.
  *
- * The fifteenth, `proposal_resolution`, declares none on purpose rather than for want of a
- * gauge: the open-proposal count is the number it moves, and scoring it on lowering that would
- * reward an applied correction and a dismissed one alike, which rewards emptying the queue
- * rather than deciding it.
+ * The last two declare none on purpose rather than for want of a gauge. `proposal_resolution`
+ * moves the open-proposal count, and scoring it on lowering that would reward an applied
+ * correction and a dismissed one alike, which rewards emptying the queue rather than deciding
+ * it. `recall_probe` produces the numbers instead of moving them: it measures retrieval and
+ * changes nothing, so a run that scored a miss did its job exactly as well as one that scored
+ * a hit.
  */
 export function introspectionOperations(): readonly IntrospectionOperation[] {
   return [
@@ -126,6 +129,12 @@ export function introspectionOperations(): readonly IntrospectionOperation[] {
     // The merge's own two-store seam: the graph commits a merge before the decision record
     // reaches SQLite, and no candidate read can find that pair again to re-decide it.
     mergeDecisionReconcileOperation(),
+
+    // The loop's one sense of its own product: ask the substrate for what it was told and score
+    // the answer, then read how much of what it served the conversation went on to use. It
+    // measures and writes nothing back, which is why its recall runs through a store that is
+    // thrown away.
+    recallProbeOperation(),
 
     // The two queues, in the order they read a row. Resolution decides an open proposal on its
     // merits, applying or dismissing it in the run that reads it; hygiene stays the staleness

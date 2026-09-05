@@ -215,3 +215,6 @@ export type { PackMethodCounters, PackMethodLegStats } from './sqlite/method-cou
 
 export { recallCadenceCounters, recordRecallOutcome } from './sqlite/recall-cadence.js';
 export type { RecallCadenceCounters } from './sqlite/recall-cadence.js';
+
+export { recallProbeCounters } from './sqlite/recall-probe-counters.js';
+export type { RecallProbeCounters } from './sqlite/recall-probe-counters.js';

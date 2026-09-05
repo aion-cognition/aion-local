@@ -22,6 +22,7 @@ const UNMEASURED_OPERATIONS = [
   'narrative_rollup_day',
   'narrative_rollup_week',
   'proposal_resolution',
+  'recall_probe',
   'retro_judgment_sweep',
   'structural_discovery',
   'symbiosis_bridge',

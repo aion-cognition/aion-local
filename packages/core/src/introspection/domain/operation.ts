@@ -1,3 +1,4 @@
+import type { MemoryPack } from '@aion/protocol';
 import type { Driver } from 'neo4j-driver';
 
 import type { OperationBucket } from './buckets.js';
@@ -29,6 +30,21 @@ import type { ReflectionIntakeDeps } from '../../reflection/application/intake.j
  */
 export type OperationTier = 1 | 2 | 3;
 
+export type RecallProbeRequest = {
+  readonly query: string;
+  /** The probe's own session identity, never a real one. */
+  readonly identity: string;
+  readonly now: Date;
+};
+
+/**
+ * One recall the loop runs on itself, in process. It is a closure rather than the recall deps
+ * because the caller that owns those deps is also the only place that can strip them down to a
+ * read that teaches the substrate nothing; an operation handed the deps could rebuild the
+ * polluting version by accident.
+ */
+export type RecallProbe = (request: RecallProbeRequest) => Promise<MemoryPack>;
+
 export type OperationContext = {
   readonly driver: Driver;
   readonly db: SqliteHandle;
@@ -46,6 +62,12 @@ export type OperationContext = {
    * an operation that needs it reads as no path to record through and declines the run over.
    */
   readonly intake?: ReflectionIntakeDeps;
+  /**
+   * The read path back out of memory, for the one operation that measures retrieval by using it.
+   * Absent wherever the loop was constructed without it, which the operation reads as no way to
+   * ask and declines the run over, the same as `intake` above.
+   */
+  readonly recallProbe?: RecallProbe;
   /** The same reading the decision was made from. An operation must not observe again. */
   readonly health: HealthSnapshot;
   readonly now: Date;

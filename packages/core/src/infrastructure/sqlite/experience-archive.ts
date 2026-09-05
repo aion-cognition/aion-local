@@ -198,6 +198,27 @@ export function listExperiencesAfter(
 }
 
 /**
+ * A random handful of experiences that happened before `before`, for a caller measuring the
+ * substrate against what it was told rather than walking the whole archive. Random rather than
+ * the keyset page above: a fixed page measures the same few experiences forever, and a retrieval
+ * rate read off three rows that never change says nothing about the rest of the substrate.
+ */
+export function sampleExperiencesBefore(
+  db: SqliteHandle,
+  before: string,
+  limit: number,
+): readonly ExperienceArchiveRow[] {
+  const rows = db
+    .prepare(
+      `SELECT * FROM experience_archive WHERE occurred_at < ?
+       ORDER BY RANDOM()
+       LIMIT ?`,
+    )
+    .all(before, limit) as ExperienceArchiveRowData[];
+  return rows.map(toExperienceArchiveRow);
+}
+
+/**
  * How far back the archive reaches, or `undefined` when it holds nothing. Both stamps are
  * world time, so the span says which experiences a replay covers rather than when they were
  * archived.

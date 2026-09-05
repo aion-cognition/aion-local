@@ -17,6 +17,7 @@ import {
   narrativeSweepOptions,
   openLogger,
   plasticityCounters,
+  probeRecall,
   ProviderRouter,
   purgeServedItemsIdleSince,
   queueLagSnapshot,
@@ -350,6 +351,10 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
         // an experience. It is the service's own instance rather than a second one, so a
         // question the loop files wakes the worker and counts toward the same arrival rate.
         intake,
+        // The read path back out, for the operation that measures retrieval by using it. Built
+        // from the same deps the tool call takes and stripped to a read that writes nothing;
+        // `recall-probe.ts` states what it leaves out and why.
+        recallProbe: probeRecall(recall),
         operations: maintenanceOperations,
       },
       {

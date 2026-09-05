@@ -108,6 +108,17 @@ const SNAPSHOT: StatsSnapshot = {
       failed: 2,
       failureRate: 0.1,
     },
+    recallProbe: {
+      samples: 8,
+      hits: 6,
+      hitRate: 0.75,
+      served: {
+        items: 12,
+        referenced: 3,
+        rate: 0.25,
+        measuredAt: '2026-08-29T00:00:00.000Z',
+      },
+    },
     maintenance: {
       cycle: 41,
       operations: [
@@ -285,6 +296,57 @@ describe('renderStats', () => {
     renderStats(fresh, DEFAULTS, write, NOW);
 
     expect(lines.join('\n')).toMatch(/all routes\s+0\s+no generations yet/);
+  });
+
+  it('renders both self-probe rates, the lifetime one and the latest served reading', () => {
+    const { lines, write } = collector();
+
+    renderStats(SNAPSHOT, DEFAULTS, write, NOW);
+
+    const text = lines.join('\n');
+    expect(text).toContain('recall self-probe');
+    expect(text).toMatch(/recalled\s+6 of 8 asked back\s+75\.0%/);
+    expect(text).toMatch(/referenced\s+3 of 12 served\s+25\.0% \(2026-08-29T00:00:00\.000Z\)/);
+  });
+
+  it('says a substrate nothing has probed is unmeasured rather than failing', () => {
+    const { lines, write } = collector();
+    const fresh: StatsSnapshot = {
+      ...SNAPSHOT,
+      extras: {
+        ...SNAPSHOT.extras,
+        recallProbe: { samples: 0, hits: 0, hitRate: undefined, served: undefined },
+      },
+    };
+
+    renderStats(fresh, DEFAULTS, write, NOW);
+
+    const text = lines.join('\n');
+    expect(text).toMatch(/recalled\s+nothing probed yet/);
+    expect(text).toMatch(/referenced\s+not measured yet/);
+  });
+
+  it('says so when no served item was old enough for the run to judge', () => {
+    const { lines, write } = collector();
+    const quiet: StatsSnapshot = {
+      ...SNAPSHOT,
+      extras: {
+        ...SNAPSHOT.extras,
+        recallProbe: {
+          ...SNAPSHOT.extras.recallProbe,
+          served: {
+            items: 0,
+            referenced: 0,
+            rate: undefined,
+            measuredAt: '2026-08-29T00:00:00.000Z',
+          },
+        },
+      },
+    };
+
+    renderStats(quiet, DEFAULTS, write, NOW);
+
+    expect(lines.join('\n')).toMatch(/referenced\s+no served item older than a day/);
   });
 
   it('renders one maintenance line per registered operation, with the last outcome', () => {
