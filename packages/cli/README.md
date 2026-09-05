@@ -71,10 +71,17 @@ fire it opens a streamable-HTTP MCP session against `http://127.0.0.1:8765/mcp`
 - `settings.ts`, `settings-file.ts`: what belongs in the `hooks` block of
   `~/.claude/settings.json`, and the reads, backups, and writes of that file. Both the
   install command and the hook client itself go through them.
+- `key-state.ts`: whether this machine holds an Anthropic key, read from the environment and
+  from the repo `.env` the compiled entry sits in.
+
+Hooks are a keyed-profile feature. With the key definitively gone, a fire captures nothing,
+backs the settings file up, and strips our own entries out of it, telling the next session
+start why. An unreadable `.env` says nothing about the key, so that case captures as usual.
 
 Everything fails open. A hook that throws, times out, or meets a service that is not running
 exits 0 with nothing on stdout, because blocking a turn over memory is worse than losing the
-memory. `stop --mode instruct`, which blocks by design, is the one exception.
+memory. `stop --mode instruct`, which blocks by design, is the one exception, and it too
+exits 0 rather than blocking when the key is gone.
 
 `hooks-cmd.ts` is the install side, and runs in the `aion` process rather than a hook one. It
 owns the invocation and what the user is told. Our entries are recognized by `hook-main.js`

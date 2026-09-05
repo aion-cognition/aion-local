@@ -1,4 +1,5 @@
 import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import {
@@ -11,16 +12,26 @@ import {
   stop,
   subagentStop,
 } from './events.js';
+import { anthropicKeyState } from './key-state.js';
 import { isRecord, mcpEndpoint, type FetchImpl } from './mcp.js';
 import {
   DEFAULT_MIN_CHARS,
   HOOK_EVENTS,
   HOOK_TIMEOUT_MS,
+  KEYLESS_NOTICE,
   type HookContext,
   type HookEvent,
   type HookOptions,
   type StopMode,
 } from './options.js';
+import { additionalContext } from './payload.js';
+import {
+  backupSettings,
+  claudeSettingsPath,
+  readSettings,
+  writeSettings,
+} from './settings-file.js';
+import { describeAionHooks, removeAionHooks } from './settings.js';
 import { defaultStateDir } from './state.js';
 
 /**
@@ -114,6 +125,40 @@ function trace(stateDir: string, entry: Record<string, unknown>): void {
   }
 }
 
+/**
+ * The same strip `aion hooks uninstall` performs, from the machine the hooks are installed on.
+ * Idempotent: a second fire finds nothing of ours left, writes nothing, and returns 0, so
+ * concurrent fires converge on one stripped file rather than racing to rewrite it.
+ */
+function stripInstalledHooks(options: HookOptions): number {
+  try {
+    const current = readSettings(options.settingsPath);
+    const removed = describeAionHooks(current).length;
+    if (removed === 0) {
+      return 0;
+    }
+    backupSettings(options.settingsPath, options.now());
+    writeSettings(options.settingsPath, removeAionHooks(current));
+    return removed;
+  } catch {
+    // A settings file this cannot read is not one to rewrite. Capture stops either way.
+    return 0;
+  }
+}
+
+/**
+ * Hooks capture raw transcript windows, which only the keyed profile digests, so a machine with
+ * no key stops capturing and takes its own hooks out of the settings file. Hooks a live session
+ * already registered keep firing until it ends; each fire lands here and does nothing.
+ */
+function runKeyless(options: HookOptions): number {
+  const removed = stripInstalledHooks(options);
+  if (options.event === 'session-start') {
+    options.stdout(additionalContext('SessionStart', KEYLESS_NOTICE));
+  }
+  return removed;
+}
+
 /** The one place an exit code other than 0 can survive: everything else collapses to fail-open. */
 export async function runHook(
   input: Record<string, unknown>,
@@ -125,6 +170,19 @@ export async function runHook(
     event: options.event,
     session: typeof input.session_id === 'string' ? input.session_id : undefined,
   };
+  // Ahead of the dispatch, so no handler reaches the service and stop's instruct mode cannot
+  // block a turn over memory this profile will never store.
+  if (options.keyState === 'absent') {
+    const removed = runKeyless(options);
+    trace(options.stateDir, {
+      ...base,
+      exit: 0,
+      keyless: true,
+      removed,
+      ms: options.now().getTime() - started,
+    });
+    return 0;
+  }
   try {
     const exit = await HANDLERS[options.event]({ input, options });
     trace(options.stateDir, { ...base, exit, ms: options.now().getTime() - started });
@@ -148,6 +206,9 @@ export type HookMainDeps = {
   readonly stdout?: (line: string) => void;
   readonly stderr?: (line: string) => void;
   readonly stateDir?: string;
+  readonly settingsPath?: string;
+  /** How the repo is found: the harness invokes `<repo>/packages/cli/dist/hook-main.js`. */
+  readonly scriptPath?: string;
   readonly fetchImpl?: FetchImpl;
   readonly now?: () => Date;
   readonly timeoutMs?: number;
@@ -182,6 +243,8 @@ export async function main(argv: readonly string[], deps: HookMainDeps = {}): Pr
       event: flags.event,
       stopMode: flags.stopMode,
       minChars: flags.minChars,
+      keyState: anthropicKeyState(env, deps.scriptPath ?? process.argv[1]),
+      settingsPath: deps.settingsPath ?? claudeSettingsPath(homedir()),
       stateDir: deps.stateDir ?? defaultStateDir(),
       endpoint: mcpEndpoint(env),
       fetchImpl: deps.fetchImpl ?? fetch,
