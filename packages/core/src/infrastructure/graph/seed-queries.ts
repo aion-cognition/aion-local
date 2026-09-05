@@ -46,9 +46,9 @@ export const ENTITY_ALIASES_NORM_PROPERTY = 'aliases_norm';
 export const LAST_ACCESSED_PROPERTY = 'last_accessed';
 
 /**
- * Set by `bootstrapBackbone` on the Member and the global Workspace. Those two are the graph's
- * connectivity backbone, not memories, so every read that feeds a MemoryPack carries the flag
- * and the pack drops them.
+ * Set by `bootstrapBackbone` on the Member, the global Workspace and the Substrate. Those three
+ * are the graph's connectivity backbone, not memories, so every read that feeds a MemoryPack
+ * carries the flag and the pack drops them.
  */
 export const STRUCTURAL_PROPERTY = 'is_structural';
 
@@ -62,8 +62,8 @@ export type SeedCandidate = CurrencyAnnotation & {
   readonly content: string;
   readonly occurredAt?: Date;
   /**
-   * `is_structural` from the backbone bootstrap. Absent on every node but the Member and the
-   * global Workspace, which mirrors how the property is stored: written only where true.
+   * `is_structural` from the backbone bootstrap. Absent on every node but the backbone
+   * singletons, which mirrors how the property is stored: written only where true.
    */
   readonly isStructural?: boolean;
   /** A Turn's parent episode. Absent on everything else, including the Episode itself. */

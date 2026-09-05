@@ -14,7 +14,15 @@ function statementsOf(version: number): readonly string[] {
 
 describe('the pinned migration list', () => {
   it('is ordered oldest-first with no gaps', () => {
-    expect(GRAPH_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4]);
+    expect(GRAPH_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5]);
+  });
+});
+
+describe('migration 005 substrate identity', () => {
+  it('keys the substrate singleton on its id, the way the other backbone labels are keyed', () => {
+    expect(statementsOf(5)).toEqual([
+      'CREATE CONSTRAINT substrate_id_unique IF NOT EXISTS FOR (n:Substrate) REQUIRE n.id IS UNIQUE',
+    ]);
   });
 });
 

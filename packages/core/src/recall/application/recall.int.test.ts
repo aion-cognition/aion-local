@@ -1,3 +1,4 @@
+import { packBuckets } from '@aion/protocol';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,7 +9,7 @@ import { handleRecall, type RecallDeps } from './recall.js';
 import { waitFor } from './test-support/wait-for.fixture.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Config } from '../../infrastructure/config/schema.js';
-import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
+import { bootstrapBackbone, SUBSTRATE_NAME } from '../../infrastructure/graph/backbone.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
 import { withCurrency } from '../../infrastructure/graph/read-modes.js';
 import { fulltextSeeds, vectorSeeds } from '../../infrastructure/graph/seed-queries.js';
@@ -104,6 +105,7 @@ let sessions: SessionManager;
 let deps: RecallDeps;
 let webhooksEpisodeId: string;
 let unrelatedEpisodeId: string;
+let substrateId: string;
 
 async function push(
   observation: string,
@@ -136,6 +138,7 @@ beforeAll(async () => {
   await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
 
   const backbone = await bootstrapBackbone(harness.driver, { memberName: 'Ryan Huber' });
+  substrateId = backbone.substrate.id;
   sessions = new SessionManager(harness.driver, {
     memberId: backbone.member.id,
     workspaceId: backbone.workspace.id,
@@ -284,6 +287,35 @@ describe('recall over a substrate written by the real intake path', () => {
     expect(pack.resonant).toBeUndefined();
     expect(pack.rendered_text).toContain('No memories matched this query.');
     expect(pack.metadata.cues).toHaveLength(2);
+  });
+
+  /**
+   * The substrate node answers to its own name, so a cue naming it resolves it as a seed. It
+   * is connectivity rather than something a person said, and the structural drop is what keeps
+   * it out of every bucket.
+   */
+  it('never serves the substrate node itself, however a cue names it', async () => {
+    const namingSubstrate: RecallDeps = {
+      ...deps,
+      provider: {
+        embed: (texts) => provider.embed(texts),
+        generate: () =>
+          Promise.resolve({ query_cues: [SUBSTRATE_NAME], summary_cues: [], recent_turn_cues: [] }),
+      },
+      cueCache: new CueCache(),
+    };
+
+    const pack = await handleRecall(
+      namingSubstrate,
+      { query: `what is ${SUBSTRATE_NAME}` },
+      { identity: READ_SESSION, now: RECALLED_AT },
+    );
+
+    const served = Object.values(packBuckets(pack)).flatMap((items) =>
+      items.map((item) => item.id),
+    );
+    expect(served).not.toContain(substrateId);
+    expect(pack.rendered_text).not.toContain(SUBSTRATE_NAME);
   });
 });
 

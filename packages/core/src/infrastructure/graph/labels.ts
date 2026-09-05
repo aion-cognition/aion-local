@@ -17,6 +17,7 @@ export type NodeLabel =
   | 'Entity'
   | 'Member'
   | 'Workspace'
+  | 'Substrate'
   | 'Narrative'
   | 'Goal'
   | 'Plan'
@@ -50,6 +51,7 @@ export const NODE_LABELS: readonly NodeLabel[] = [
   'Entity',
   'Member',
   'Workspace',
+  'Substrate',
   'Narrative',
   'Goal',
   'Plan',
@@ -78,10 +80,11 @@ const COMPANION_LABELS: Record<NodeLabel, readonly string[]> = {
   Episode: ['Memory'],
   Turn: ['Memory'],
   Entity: ['Memory'],
-  // The backbone stays out of `Memory`: the Member and the global Workspace are connectivity,
-  // not content, and the recency strategy reads `Memory` directly.
+  // The backbone stays out of `Memory`: the Member, the global Workspace and the Substrate are
+  // connectivity, not content, and the recency strategy reads `Memory` directly.
   Member: ['Entity'],
   Workspace: ['Entity'],
+  Substrate: ['Entity'],
   Narrative: ['Memory'],
   Goal: ['Memory'],
   Plan: ['Memory'],

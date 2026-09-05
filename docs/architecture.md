@@ -462,28 +462,33 @@ edges) are unaffected; that guarantee holds through `MERGE`.
 
 ## Graph schema surface
 
-**Node labels.** Seventeen primary labels, pinned in `infrastructure/graph/labels.ts`:
-`Session`, `Episode`, `Turn`, `Entity`, `Member`, `Workspace`, `Narrative`, `Bridge`, and
-the nine cognitive types (`Goal`, `Plan`, `Decision`, `Insight`, `Concept`, `Context`,
-`Event`, `Pattern`, `Trend`). Every node also carries `AionNode`, which is what gives
-type-agnostic id lookups (both edge endpoints, the supersession close) an index to seek.
-Neo4j has no label-free property index, so without it those lookups would scan the whole
-graph. Every content-bearing label carries `Memory` as well, which is everything above
-except `Session` and the two backbone nodes, because a Neo4j vector index cannot span a
+**Node labels.** Eighteen primary labels, pinned in `infrastructure/graph/labels.ts`:
+`Session`, `Episode`, `Turn`, `Entity`, `Member`, `Workspace`, `Substrate`, `Narrative`,
+`Bridge`, and the nine cognitive types (`Goal`, `Plan`, `Decision`, `Insight`, `Concept`,
+`Context`, `Event`, `Pattern`, `Trend`). Every node also carries `AionNode`, which is what
+gives type-agnostic id lookups (both edge endpoints, the supersession close) an index to
+seek. Neo4j has no label-free property index, so without it those lookups would scan the
+whole graph. Every content-bearing label carries `Memory` as well, which is everything above
+except `Session` and the three backbone nodes, because a Neo4j vector index cannot span a
 label union: `Memory` is the only mechanism that lets one vector index cover more than one
-node type. The backbone nodes (`Member`, `Workspace`) stay out of `Memory` (they are
-connectivity, not content) and carry `Entity` instead, so the `name_norm` uniqueness
-constraint and the entity-resolution seed strategy both apply to them.
+node type. The backbone nodes (`Member`, `Workspace`, `Substrate`) stay out of `Memory` (they
+are connectivity, not content) and carry `Entity` instead, so the `name_norm` uniqueness
+constraint and the entity-resolution seed strategy both apply to them. `Substrate` is the
+substrate's own identity, one node named `Aion` for the life of the substrate, linked
+`WITHIN_WORKSPACE` to the global workspace. It is not an agent identity: a session on any
+harness or model continues the one identity, and which harness produced an episode is
+provenance the episode carries.
 
-**Indexes and constraints** (migrations 001 through 004,
+**Indexes and constraints** (migrations 001 through 005,
 `infrastructure/graph/migrations.ts`):
 
 - Uniqueness constraints on `AionNode.id`, and on `.id` for every primary label except
   `Entity`, which takes `entity_name_unique` on `name_norm` alone instead. Migration 001
   covers `Session`, `Episode`, `Turn`, `Member`, `Workspace`; 002 adds `Narrative`,
-  `Bridge`, and the nine cognitive types; 003 drops the composite `(name_norm, type)`
-  constraint the entity key used to carry. One name is one identity whatever type the
-  extractor picked for it, and `type` follows counted readings as an ordinary property.
+  `Bridge`, and the nine cognitive types; 005 adds `Substrate`; 003 drops the composite
+  `(name_norm, type)` constraint the entity key used to carry. One name is one identity
+  whatever type the extractor picked for it, and `type` follows counted readings as an
+  ordinary property.
 - One range index, `entity_name_squash_idx` on `Entity.name_squash`, the separator-stripped
   second lookup key. Never a uniqueness rule and never a write-time route: `re-mark` and
   `remark` squash together and are two words, so squash equality is evidence the dedup

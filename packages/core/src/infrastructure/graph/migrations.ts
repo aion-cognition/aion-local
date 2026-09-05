@@ -18,11 +18,11 @@ import type { SqliteHandle } from '../sqlite/database.js';
 import { getMeta, setMeta } from '../sqlite/meta.js';
 
 /**
- * Backbone nodes (the single Member and the global Workspace) must carry BOTH their
- * structural label (`Member`/`Workspace`) and `Entity`, so the `Entity` name uniqueness
- * constraint and the `Member.id`/`Workspace.id` constraints all apply to the
- * same node. Every content-bearing memory node (Episode, Turn, and the cognitive types
- * that follow) must carry a shared `Memory` label: Neo4j vector indexes cannot span a
+ * Backbone nodes (the single Member, the global Workspace and the Substrate) must carry BOTH
+ * their structural label (`Member`/`Workspace`/`Substrate`) and `Entity`, so the `Entity` name
+ * uniqueness constraint and the per-label id constraints all apply to the same node. Every
+ * content-bearing memory node (Episode, Turn, and the cognitive types that follow) must carry
+ * a shared `Memory` label: Neo4j vector indexes cannot span a
  * label union, so `Memory` is the only way `content_vec_idx`/`context_vec_idx` cover more
  * than one node type. Every node carries `BASE_NODE_LABEL`, which is what gives the
  * type-agnostic id lookups an index to seek. All three are contracts for whoever writes
@@ -158,6 +158,20 @@ const MIGRATION_004_CLAIM_KEY_LOOKUP: GraphMigration = {
 };
 
 /**
+ * The substrate's own identity node, keyed the way the Member and the global Workspace are
+ * keyed in migration 001: one id constraint per structural label, so the singleton resolution
+ * that mints an id has a uniqueness rule behind it. The node carries `Entity` too, which puts
+ * its name under `entity_name_unique` and needs no statement here.
+ */
+const MIGRATION_005_SUBSTRATE_IDENTITY: GraphMigration = {
+  version: 5,
+  name: 'substrate identity node id constraint',
+  statements: (_ctx) => [
+    'CREATE CONSTRAINT substrate_id_unique IF NOT EXISTS FOR (n:Substrate) REQUIRE n.id IS UNIQUE',
+  ],
+};
+
+/**
  * Ordered oldest-first, and the runner replays every version's statements on every call. The
  * meta table records first application rather than gating the run, which is what lets 003 drop
  * a constraint 001 no longer creates.
@@ -167,6 +181,7 @@ export const GRAPH_MIGRATIONS: readonly GraphMigration[] = [
   MIGRATION_002_COGNITIVE_SCHEMA,
   MIGRATION_003_IDENTITY_REKEY,
   MIGRATION_004_CLAIM_KEY_LOOKUP,
+  MIGRATION_005_SUBSTRATE_IDENTITY,
 ];
 
 const META_KEY_PREFIX = 'graph:migration:';
