@@ -218,6 +218,34 @@ aion forget <id | query> [--yes]
 `forget` sets `forgotten_at` and deletes nothing. Default recall stops serving the node;
 `aion search --as-of` and `--knew-at` still return it, which is what keeps the act audited.
 
+## Standing intentions
+
+A Goal or a Plan comes back on its own, without being asked for. Recall reads the open ones
+after the second pass and serves the ones this moment matches in an `intentions` bucket of
+their own: the entity it is about is in play, the date its episode named has passed, or this
+situation resembles the one it was formed in. Provenance decides the bucket rather than the
+label, so a Goal the query itself found still answers in `facts`.
+
+```
+AION_RECALL_INTENTIONS=true                # the kill switch: no intention comes back on a trigger
+AION_RECALL_INTENTION_SITUATION_FLOOR=0.5  # the cosine a situation match has to clear
+AION_RECALL_MAX_INTENTIONS=3               # how many the bucket may hold
+```
+
+Off restores the pack exactly as it was before intentions had triggers. The situation floor is
+borrowed from `contextSearchThreshold` rather than measured, so treat it as a starting value;
+the entity and temporal triggers do not read it. Nothing here spends a model call.
+
+An intention is dated at write: `AION_INTENTION_HORIZON_DAYS` (default `30`) past its own
+episode's clock is when it stops standing and starts reading as expired, down-ranked and
+labeled, never dropped. `intention_upkeep` is the second half. Once a day it closes the Goals
+and Plans a whole further horizon past that, so what it takes is stale rather than merely
+expired: sixty days at the default. The close is an ordinary bitemporal close stamped with the
+operation's name, so `aion unsupersede` reopens one and a ledger row per close records which
+ones it took. `AION_MAINTENANCE_INTENTION_UPKEEP` (default `true`) is the kill switch, and
+`AION_MAINTENANCE_INTENTION_UPKEEP_BATCH` (default `50`) bounds one run, higher than the
+model-calling batches because this operation asks nothing.
+
 ## Lifecycle events
 
 The substrate records its own life events as memory. Five of them exist: an init that created
@@ -242,9 +270,9 @@ aion search "substrate initialized"        # the birth event, and every init sin
 takes the entities the substrate keeps meeting and cannot describe (a gloss a correction
 retired, or one written at the first mention and never re-derived while five or more mentions
 piled up), drafts one question about each, and files it as a Goal marked `origin_kind:
-substrate`. The Goal is keyed to the entity, so recall serves the question back in its
-`Intentions` bucket the next time that entity comes up, rather than at a moment nobody can
-answer it.
+substrate`. The Goal is keyed to the entity, so recall serves the question back in the
+`intentions` bucket above the next time that entity comes up, rather than at a moment nobody
+can answer it.
 
 ```
 aion search "why does it keep coming up"   # the questions filed so far
@@ -328,8 +356,9 @@ the containers; each fire appends one line to
 
 ## Configuration
 
-Every runtime knob is an `AION_*` environment variable, declared in
-`packages/core/src/infrastructure/config/knobs.ts` with its type and default. `.env` is for
+Every runtime knob is an `AION_*` environment variable, declared with its type and default in
+`packages/core/src/infrastructure/config/knobs.ts`, which folds in the `maintenance`,
+`reflection` and `temporal` groups' own tables from the files beside it. `.env` is for
 what an install has to decide: endpoints, models, the key, the behavior switches. Values
 copied into `.env` stop following the code that calibrated them, so leave a tuning knob
 alone unless a measurement says otherwise. An unknown `AION_*` variable fails the boot

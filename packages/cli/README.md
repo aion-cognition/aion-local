@@ -64,7 +64,7 @@ fire it opens a streamable-HTTP MCP session against `http://127.0.0.1:8765/mcp`
 (`AION_MCP_PORT` moves the port), makes one tool call, and deletes the session.
 
 - `run.ts`: the entry, the fail-open wrapper, and one JSON trace line per fire.
-- `events.ts`: the seven handlers, one MCP round trip at most each.
+- `events.ts`: the eight handlers, one MCP round trip at most each.
 - `mcp.ts`: the client, sized for a single fire. It reads plain JSON and SSE-framed bodies.
 - `transcript.ts`, `payload.ts`, `state.ts`, `options.ts`: reading the harness JSONL
   defensively, shaping tool arguments, the per-session cursor under `~/.aion/hook-state/`.

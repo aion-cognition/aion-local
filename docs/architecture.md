@@ -21,7 +21,7 @@ path, the container check, the usage protocol), and `mcp` imports nothing from `
 
 Each context that has both pure logic and orchestration splits into `domain/` and
 `application/` (everything that touches the graph, SQLite, or a model). `domain/` is not free
-of infrastructure: twenty-one of its modules import from `infrastructure/`, most for type-only DI
+of infrastructure: twenty-three of its modules import from `infrastructure/`, most for type-only DI
 contracts (`Config`, `Logger`, `Driver`, `SqliteHandle`, `Provider`, the shape `operation.ts`
 and `stage.ts` declare for what a stage or operation receives). Two cross into value coupling:
 `introspection/domain/proposal-hygiene.ts` imports the `DEFAULTS` config object and reads two
@@ -29,14 +29,15 @@ of its fields as fallback horizons, and `introspection/domain/tier3.ts`'s `propo
 takes a `Logger` and calls `logger.info`, I/O executed from inside domain code rather than
 merely typed against it. What still holds: `domain/` never imports `application/`;
 `application/` imports `domain/` and `infrastructure/`. `infrastructure/` reaches into one
-context, `reflection/domain/`, across fifteen files, for pure identity and content
+context, `reflection/domain/`, across nineteen files, for pure identity and content
 primitives only (name folding, claim keys, vector-input hashing, entity-extraction and
 entity-reconciliation helpers, two value types); it holds no application code and no notion
 of episodes, cues, or memory packs beyond those primitives.
 
 - **`infrastructure/`**: `graph/` (every Cypher statement in the workspace), `sqlite/`
   (the reflection queue, the experience archive `aion replay` and `aion timeline` read,
-  last-pack cache, the served-item record, ops ledger, claim locking, and the two proposal
+  the insert-only usage stream `aion replay usage` puts back, last-pack cache, the served-item
+  record, ops ledger, claim locking, and the two proposal
   queues, whose reads share one `proposal-table.ts` because both are an id, the pair the
   proposal is about, and a `resolved_at` that is null while a person still owes the row a
   decision), `providers/` (the Ollama and Anthropic clients, the circuit breaker, the
@@ -49,12 +50,14 @@ of episodes, cues, or memory packs beyond those primitives.
   `fusion.ts` (weighted RRF, the admission decision, and the currency policy), `ranking.ts`
   (the ordering machinery fusion hands its admitted list to: MMR, the near-duplicate cluster
   cap, cosine), `facts.ts` (the restatement floor and the gloss cap), `resonance.ts` (the
-  centroid and the shape of a resonant item), `pack-buckets.ts` (which bucket a node label
-  answers in), `pack.ts` (MemoryPack assembly).
+  centroid and the shape of a resonant item), `intention-triggers.ts` (whether a standing
+  intention's condition is met by what the run already holds), `pack-buckets.ts` (which bucket a
+  node label answers in), `pack.ts` (MemoryPack assembly).
 - **`recall/application/`**: `cues.ts` (cue extraction and its cache), `seeds.ts` (the
   four seed strategies' scoring and merge), `candidates.ts` (seeds plus activation into
   ranked lists), `stage-reads.ts` (the pipeline's batched graph reads), `resonance.ts` (the
-  second pass), `recall.ts` (the pipeline), `side-effects.ts` (post-recall listeners).
+  second pass), `intentions.ts` (the third), `recall.ts` (the pipeline), `side-effects.ts`
+  (post-recall listeners).
 - **`plasticity/`**: `domain/` folds a window of co-activation signals into per-pair
   learning rates and computes the staleness curve; `application/` runs the two operations
   that apply them, `flush.ts` (bounded reinforcement of the nominated pairs) and `decay.ts`
@@ -226,23 +229,35 @@ independently for the pack's `stage_timings_ms`:
    fused score. The stage is skippable (`AION_RECALL_USE_CONTEXT_RESONANCE`), timed like
    every other stage, and declines to run at all on a query nothing anchored: resonating from
    an unanchored pack searches the shape of nothing.
-7. **Pack assembly.** Fused items route to a bucket by node label (`pack-buckets.ts`):
+7. **Intention triggers.** A third pass, after resonance because it reads that stage's
+   centroid. One bounded read of the open intentions that carry a trigger condition, then three
+   comparisons per row against what the run already holds: the subject entity in the activated
+   set (`entity`), a named date the clock has passed (`temporal`), or the source episode's
+   content vector against the centroid above `AION_RECALL_INTENTION_SITUATION_FLOOR`
+   (`situation`). No model call and no embedding, so the hot path keeps exactly one generation
+   call. A match lands in `intentions` with method `intention_trigger` and the path that fired
+   it. Provenance decides the bucket, not the label: a Goal the query itself found stays in
+   `facts`, and only a trigger moves one here. `AION_RECALL_INTENTIONS=false` turns the stage
+   off, and a time-traveled read evaluates no trigger at all, since asking what the substrate
+   held last month is a question about the past and a trigger is the substrate acting now.
+8. **Pack assembly.** Fused items route to a bucket by node label (`pack-buckets.ts`):
    `Episode`/`Turn` to `episodes`, `Narrative` to `narratives`, and `Entity` plus the nine
    cognitive types (`Goal`, `Plan`, `Decision`, `Insight`, `Concept`, `Context`, `Event`,
    `Pattern`, `Trend`) to `facts`, since a Decision carries a fact the same way an entity
-   does. `resonant` is not in that table and never will be: every other bucket answers what
-   kind of memory this is, which a label decides, and resonance answers how it was found,
-   which only the stage that found it knows. A label with no bucket is dropped. Each bucket
-   is capped, trimmed to the token budget, and rendered into the pack's text block. The
-   episode cap (`AION_RECALL_MAX_EPISODES`)
+   does. `resonant` and `intentions` are not in that table and never will be: every other
+   bucket answers what kind of memory this is, which a label decides, and those two answer how
+   it was found, which only the stage that found it knows. A label with no bucket is dropped.
+   Each bucket is capped, trimmed to the token budget, and rendered into the pack's text block.
+   The episode cap (`AION_RECALL_MAX_EPISODES`)
    defaults to 20, a deliberate deviation from whitepaper Appendix E's 5: the cap cuts the
    fused list, so on a populated substrate a five-item cut is filled by near-tie vector hits
    before any traversal-reached item can land. The token budget is what actually bounds a
    pack's size. `preferences` has no producer yet, so it is structurally absent rather than
    empty. `narratives` gained one when a session's close, or the idle sweep, compresses its
-   episodes into a `Narrative` node. `resonant` gained one from the second pass above.
+   episodes into a `Narrative` node. `resonant` gained one from the second pass above, and
+   `intentions` from the third.
 
-8. **Session dedup.** One subtraction between the assembled candidate set and the wire. A
+9. **Session dedup.** One subtraction between the assembled candidate set and the wire. A
    per-prompt recall hook asks many times inside one conversation and the top of the ranked list
    barely moves, so the same memories are rendered again into a context that is still holding
    them (measured at nine recalls in one session, about 1,200 tokens each, heavily overlapping).
@@ -258,22 +273,22 @@ independently for the pack's `stage_timings_ms`:
    `AION_RECALL_SESSION_DEDUP=false` restores the full pack on every call. The record dies with
    the session, on the client's DELETE or on the idle sweep, whichever reaches it.
 
-9. **Own-session origin.** The second subtraction, and the one dedup cannot make. A turn is
-   reflected into the graph when the session stops, and the next prompt's recall finds that turn
-   and the claims extracted from it as memories the session has never been served, so no
-   fingerprint and no served row can catch them. What separates them is where they came from. One
-   batched read (`origin-queries.ts`), issued beside the related-claim lookup, answers which
-   sessions each candidate's provenance names: a Turn, an Episode and a session Narrative carry
-   `session_id` on the node, the nine cognitive types carry none and hang off `EXTRACTED_FROM` to
-   their source episode, and an Entity hangs off neither, so its provenance is the set of episodes
-   that `MENTIONS` it. An item whose provenance names the asking session and no other is cut from
-   the buckets, counted in `metadata.suppressed_own`, and named in the honesty line beside the
-   repeats. An item the substrate has corrected since (closed lineage, a currency marker, or the
-   current claim resonance found beside a raw turn) is served in full, because the correction is
-   the part the conversation does not hold. Origin decides before dedup and what it withholds
-   leaves no served row, since the session never read those items. Cognition is untouched here
-   too, a time-traveled read is exempt, and `AION_RECALL_OWN_SESSION_FILTER=false` restores every
-   item a session produced.
+10. **Own-session origin.** The second subtraction, and the one dedup cannot make. A turn is
+    reflected into the graph when the session stops, and the next prompt's recall finds that turn
+    and the claims extracted from it as memories the session has never been served, so no
+    fingerprint and no served row can catch them. What separates them is where they came from. One
+    batched read (`origin-queries.ts`), issued beside the related-claim lookup, answers which
+    sessions each candidate's provenance names: a Turn, an Episode and a session Narrative carry
+    `session_id` on the node, the nine cognitive types carry none and hang off `EXTRACTED_FROM` to
+    their source episode, and an Entity hangs off neither, so its provenance is the set of episodes
+    that `MENTIONS` it. An item whose provenance names the asking session and no other is cut from
+    the buckets, counted in `metadata.suppressed_own`, and named in the honesty line beside the
+    repeats. An item the substrate has corrected since (closed lineage, a currency marker, or the
+    current claim resonance found beside a raw turn) is served in full, because the correction is
+    the part the conversation does not hold. Origin decides before dedup and what it withholds
+    leaves no served row, since the session never read those items. Cognition is untouched here
+    too, a time-traveled read is exempt, and `AION_RECALL_OWN_SESSION_FILTER=false` restores every
+    item a session produced.
 
 Both paths inherit the driver timeouts `GraphConnection` sets: 5s to connect, 10s to acquire
 a pooled connection, 10s of transaction retries. The driver's defaults (60s and 30s) meet or
@@ -286,9 +301,19 @@ The pack is saved to SQLite's `last_pack` table (what `aion last` renders) and r
 row carries the read mode alongside the pack, `as_of` and `knew_at` when either was set, so
 `aion last` can say the pack answered a time-traveled read rather than the present graph. A
 registered listener fires afterward and is never awaited, so a listener failure cannot fail a
-recall that already succeeded: it stamps access metadata and nominates the co-activated pairs
-that the reinforcement flush later folds into edge weights. A time-travel read does neither,
-since asking what the substrate held last month is a question rather than a use.
+recall that already succeeded: it stamps access metadata, appends a `recall_access` row to the
+usage stream, and nominates the co-activated pairs that the reinforcement flush later folds
+into edge weights. A time-travel read does none of them, since asking what the substrate held
+last month is a question rather than a use.
+
+The usage stream is the salience half of the record, in SQLite's insert-only `usage_events`
+table beside the experience archive. The archive holds what the substrate was told, so a replay
+from it rebuilds every fact and knows nothing about what mattered: access stamps, edge weights
+and sweep moments live only in the graph. Three kinds close that gap, appended as they happen
+and read back oldest first: `recall_access` from the listener above, `reinforcement_applied`
+when the flush's graph write lands rather than when a signal is enqueued, and `decay_sweep`
+with the scan parameters a sweep is a pure function of. `aion replay run` restores what the
+substrate knows; `aion replay usage` puts back what it found worth knowing, on top.
 
 ## Maintenance path: the introspection loop
 
@@ -299,10 +324,13 @@ does, and one tick runs four phases: observe, decide, act, learn.
 1. **Observe.** `observeHealth` assembles one `HealthSnapshot` from the surfaces `aion
    doctor` and `/health` already read: graph structure (node population, vector parity,
    orphan share, episodes with no session link), queue (depth per lane, oldest unclaimed,
-   exhausted attempts, enrichment lag), enrichment (episodes with no orchestrator ledger
-   key), plasticity, proposals, entities (identities the deterministic tier-0 sweep could
-   still absorb), redaction residue. Every collector is caught independently; one that
-   throws names itself in `degraded` and costs its own metrics rather than the reading.
+   exhausted attempts, enrichment lag, the share of recent recalls that answered without the
+   cue model, and the reinforcement rows the queue cap threw away), enrichment (episodes with
+   no orchestrator ledger key), plasticity, proposals, entities (identities the deterministic
+   tier-0 sweep could still absorb), redaction residue. The cue-degradation share reads as
+   unmeasured rather than as healthy until the first recall lands. Every collector is caught
+   independently; one that throws names itself in `degraded` and costs its own metrics rather
+   than the reading.
 2. **Decide.** `decide` (`introspection/domain/decide.ts`) is pure: the same snapshot always
    produces the same answer, so a decision is arguable from the numbers. Tier is a property of
    the cycle rather than of the operation: an operation names the critical condition it repairs
@@ -335,18 +363,34 @@ does, and one tick runs four phases: observe, decide, act, learn.
    too, whatever it did, which is what makes the cheapest way to answer a reading a fact.
 
 The catalog is one ordered list (`introspection/application/catalog.ts`), which is the only
-place an operation joins maintenance. Twenty-five are registered, in seven groups: substrate
+place an operation joins maintenance. Twenty-eight are registered, in eight groups: substrate
 hygiene (`vector_backfill`, `reconcile_reenqueue`, `dead_letter`,
 `redaction_residue_purge`), plasticity (`reinforcement_flush`, `memory_decay`, `edge_prune`,
 `identifier_decay`), content maintenance (`narrative_cleanup`, `narrative_regrounding`,
-`retro_judgment_sweep`, `description_freshness`), compression (`narrative_rollup_day`,
-`narrative_rollup_week`, `claim_consolidation`), topology
+`retro_judgment_sweep`, `description_freshness`, `intention_upkeep`, `curiosity`), compression
+(`narrative_rollup_day`, `narrative_rollup_week`, `claim_consolidation`), topology
 (`emergency_relationship_repair`, `orphan_cleanup`, `community_refresh`, `symbiosis_bridge`,
 `structural_discovery`), entity and claim-merge policy (`merge_auto`, `claim_dedup`,
-`merge_decision_reconcile`), and the proposal queues (`proposal_resolution`,
-`proposal_hygiene`). List order is
+`merge_decision_reconcile`), the self-probe (`recall_probe`), and the proposal queues
+(`proposal_resolution`, `proposal_hygiene`). List order is
 documentation: selection is by tier and urgency, and ties break on waiting time and then on
 name.
+
+Twelve declare a `measure`, the health-snapshot number their run is scored on moving. The
+other sixteen record `unmeasured` instead. Fourteen of those wait on a gauge the snapshot does
+not carry yet; the last two decline one on purpose. `proposal_resolution` moves the
+open-proposal count, and scoring it on lowering that would reward an applied correction and a
+dismissed one alike, which rewards emptying the queue rather than deciding it. `recall_probe`
+produces numbers instead of moving them, so a run that scored a miss did its job exactly as
+well as one that scored a hit.
+
+One of the twenty-eight adds to memory rather than tidying it. `curiosity` files a question
+about an entity the substrate keeps meeting and cannot describe, as a Goal marked `origin_kind:
+substrate` keyed to that entity, which the entity itself brings back through the intention
+triggers above. It writes through reflection intake like any other experience, which is also
+how the substrate records its own lifecycle events, so both are recallable, replayable and
+forgettable by the ordinary commands. `docs/operations.md` carries both and their kill
+switches.
 
 One repair sits beside the catalog and is deliberately not in it. `entity_unmerge` splits an
 absorbed identity back out of the entity it was merged into. A bad merge is not measurable
@@ -477,7 +521,9 @@ constraint and the entity-resolution seed strategy both apply to them. `Substrat
 substrate's own identity, one node named `Aion` for the life of the substrate, linked
 `WITHIN_WORKSPACE` to the global workspace. It is not an agent identity: a session on any
 harness or model continues the one identity, and which harness produced an episode is
-provenance the episode carries.
+provenance the episode carries. It is also what one session links `INITIATED_BY`: every other
+Session points at the Member, and the standing `aion-system` session the lifecycle events chain
+in points here instead, because nobody typed them.
 
 **Indexes and constraints** (migrations 001 through 005,
 `infrastructure/graph/migrations.ts`):

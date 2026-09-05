@@ -42,7 +42,10 @@ resolution still run on the raw-query cue, so a real item can still come back.
 **Diagnose.** `aion doctor`'s `ollama-round-trip` check catches a broken or unreachable
 model before a caller hits it. Live, the service logs `cue extraction degraded` with the
 model name and reason (`cues.ts:317`, `:323`). `aion last` prints `degraded  cues: <reason>`
-above the pack (`packages/cli/src/last.ts:106-108`).
+above the pack (`packages/cli/src/last.ts:106-108`). Across calls rather than for one, `aion
+status`'s `recall` line prints the share of recent recalls that answered without the cue model,
+and reads as `no recalls yet` rather than as healthy until the first one lands. The
+introspection loop reads the same number off the health snapshot.
 
 **Recovers.** Automatically, next call. No state to reset.
 
@@ -149,9 +152,12 @@ same way: `narrateSession` logs `narrative compression failed` and returns
 cue call degrades exactly as the first rung above describes, with `reason: model_error`.
 
 **Diagnose.** The service log's `generation routed` debug line carries every call's provider,
-model and duration; a failing run shows `ok: false`. `aion doctor`'s model check names the
-roles routed to anthropic. `aion status` prints the same routing line, and `aion queue ls`
-shows the backlog the outage is building.
+model and duration; a failing run shows `ok: false`. A log line is gone on the next rotation,
+so the same outcomes also count in the meta table: `aion stats`'s `generation by route` section
+prints calls, failure share and mean cost per role and provider, and the counters survive a
+restart. A route nothing has called reads as `never called` rather than as a clean record.
+`aion doctor`'s model check names the roles routed to anthropic. `aion status` prints the same
+routing line, and `aion queue ls` shows the backlog the outage is building.
 
 **Recovers.** Automatically. The breaker's next trial call closes it, and the queue drains the
 episodes that failed while it was open. Nothing is lost: every episode was stored before its

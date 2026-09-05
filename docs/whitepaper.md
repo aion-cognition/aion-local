@@ -95,7 +95,9 @@ session into a narrative. Every stage fails independently, and an operations led
 re-entry, so no episode is learned twice through any number of retries or crashes.
 
 **Introspection repairs.** It is continuous, runs on the service's own clock through observe,
-decide, act, learn, and is the only loop no caller triggers.
+decide, act, learn, and is the only loop no caller triggers. It also writes memory nobody asked
+for: an entity it keeps meeting and cannot describe becomes a question it files as its own
+standing intention.
 
 Each separation buys something. If recall waited on reflection, every recently stored episode
 would degrade recall until the pipeline caught up. Under recall's latency budget, reflection
@@ -172,19 +174,22 @@ operation's own report of what it did.
 
 ## The MemoryPack is the contract
 
-Recall returns a MemoryPack, and that is the whole interface between memory and reasoning. Five
+Recall returns a MemoryPack, and that is the whole interface between memory and reasoning. Six
 buckets, each present only when it has content: `facts`, `episodes`, `narratives`,
-`preferences`, `resonant`. Every item carries its content, its rank, the confidence behind its
-admission, a rationale naming which method found it and through which path, and a currency
-marker. The pack also carries a rendered text block, the extracted cues, and stage timings.
+`intentions`, `preferences`, `resonant`. Every item carries its content, its rank, the
+confidence behind its admission, a rationale naming which method found it and through which
+path, and a currency marker. The pack also carries a rendered text block, the extracted cues,
+and stage timings.
 
 The pack is a self-contained context supplement, not a ranked result list. Ranking and
 admission are separate: an item reaches the pack only on absolute evidence, however well it
 ranks against its neighbors. And a pack says what it is short of. A degraded cue model, a
 spread that stopped on its budget, episodes stored but not yet enriched: all of it lands in one
 plain line at the top of the text block, so a client reading only the text sees the same
-honesty as one reading the metadata. `preferences` has no producer yet, so it is structurally
-absent rather than empty.
+honesty as one reading the metadata. `intentions` is the one bucket that answers a question the
+caller did not ask: a standing goal or plan whose trigger condition this moment meets, brought
+back on the entity it is about, the date it named, or a situation that resembles the one it was
+formed in. `preferences` has no producer yet, so it is structurally absent rather than empty.
 
 ## Cue extraction is inference-first
 
@@ -224,8 +229,9 @@ contract all carry over.
 
 The surface is two MCP tools, `recall` and `reflection`. Neo4j holds the graph and its vector
 indexes. SQLite holds the reflection queue, the append-only experience archive `aion replay`
-and `aion timeline` read back, the operations ledger, the proposal queues, and the last-pack
-cache. Generation runs on Ollama on the host. Set an Anthropic key and the two
+and `aion timeline` read back, the insert-only usage stream that records what recall and the
+weight sweeps did, the operations ledger, the proposal queues, and the last-pack cache.
+Generation runs on Ollama on the host. Set an Anthropic key and the two
 generation roles, cue extraction and reflection, route to Haiku instead of the local instruct
 model. Embeddings stay local either way, because the vector space is the substrate.
 
@@ -233,7 +239,8 @@ Where this build differs from the paper:
 
 - **No tenancy and no authorization.** The paper's tenant boundary and its access control exist
   to separate people, and one user on one machine has nobody to be separated from. The backbone
-  is a Member node and a Workspace node, with no Tenant.
+  is a Member node, a Workspace node, and a Substrate node for the system's own identity, with
+  no Tenant.
 - **One process, not three services.** The paper deploys a memory engine, a reflection worker,
   and an introspector over Postgres and Redis. Here one MCP server runs all three loops, and
   SQLite carries the queue and the ledger.
@@ -246,7 +253,7 @@ Where this build differs from the paper:
   They are the section above.
 - **Some tuned values disagree with the paper's appendix** (the episode cap, the summary cue
   weight, the cue-call budget), each on a measurement `architecture.md` records.
-- **Twenty-five maintenance operations are registered**, and two the paper names are not,
+- **Twenty-eight maintenance operations are registered**, and two the paper names are not,
   each for a reason `architecture.md` gives. Entity unmerge sits outside the catalog on
   purpose, since a bad merge and a correct one have the same shape in the graph.
 - **A third implementation.** The paper describes two, TypeScript and Go, both multi-tenant
