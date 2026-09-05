@@ -38,7 +38,8 @@ pair both passes agree on is merged during reflection, and the spellings one ide
 cannot tell apart (`re-mark` against `remark`, an identity already answering to the other's
 name as an alias) are merged with no model call at all, by the cascade's tier 0 during
 reflection and by `merge_auto` sweeping the whole graph on the hour. `aion proposals` is
-where a person decides the residue, until `proposal_hygiene` ages one out: past
+where a person decides the residue first, ahead of `proposal_resolution` deciding it on the
+hour (below) and of `proposal_hygiene` ageing one out: past
 `AION_MAINTENANCE_HYGIENE_RESIDUE_AGE_DAYS` (or the shorter
 `AION_MAINTENANCE_HYGIENE_POLLUTED_AGE_HOURS` for a proposal whose source episode was pure
 tool exhaust, no conversation to judge) it dismisses the row and ledgers the class, the
@@ -59,6 +60,34 @@ What reaches this queue depends on `AION_SUPERSEDE_MODE`. Under the shipped `una
 pipeline closes what two independent judgments agree on and queues the rest, so a row here is
 one the second pass vetoed and the veto is its rationale. Under `propose` every judgment lands
 here and nothing closes on its own.
+
+## Deciding proposals without a person
+
+```
+AION_PROPOSAL_RESOLUTION=true    # the default: the loop decides open proposals on their merits
+AION_PROPOSAL_RESOLUTION=false   # the kill switch: both queues wait for a person
+AION_RESOLUTION_BATCH=10         # open rows one run decides, oldest first across both queues
+```
+
+The `proposal_resolution` operation runs on the hour and takes the oldest open rows of both
+queues. It reads more than the pass that filed a row was given: the pair, each claim's subject
+family with the description the substrate holds for each subject now, when each statement was
+observed, and the session each one came from. A merge pair gets the dedup cascade's own evidence
+plus each side's one-hop neighbourhood. Every call runs at temperature 0, so a judge re-asked the
+filing question returns the filing answer, and the wider reading is what lets a second look reach
+a different one.
+
+The same two passes then decide. Both affirm and the row is applied through the path
+`aion proposals apply` takes, at the same default blade and the same relatedness floor, stamped
+`supersession_introspector_resolution` so lineage never reads as though a person decided.
+Anything else dismisses the row. Either way the verdict and both passes' reasons go to the ops
+ledger under `introspection:resolution:<table>:<id>`. A model call that throws or comes back
+unusable decides nothing, and the row waits for the next run.
+
+Every decision is reversed by the command that reverses a person's: `aion unsupersede` reopens a
+close, `aion unmerge` splits a merge back out, `aion proposals reopen` puts a dismissed row back
+in the queue. `proposal_hygiene` stays behind this as the staleness backstop, ageing out a row
+resolution keeps failing on.
 
 ## Supersession mode
 

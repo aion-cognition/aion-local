@@ -58,6 +58,19 @@ const HUMAN_REVIEW: ApplyAttribution = {
 };
 
 /**
+ * Provenance for a close the maintenance loop decided from the open queue, reading wider
+ * evidence than the filing judge saw. It is neither of the two above: a person did not decide
+ * it, and the pipeline did not close it as it wrote the correcting episode. Lineage, `aion why`
+ * and the unsupersede preview all read this string, so the resolver is named where it acted.
+ */
+export const INTROSPECTOR_RESOLUTION_METHOD = 'supersession_introspector_resolution';
+
+export const INTROSPECTOR_RESOLUTION: ApplyAttribution = {
+  provenance: [INTROSPECTOR_RESOLUTION_METHOD],
+  signals: ['proposal_resolution'],
+};
+
+/**
  * How wide a correction cuts.
  *
  * `family` is the default because the narrow cut measured no change in what recall answers: a
