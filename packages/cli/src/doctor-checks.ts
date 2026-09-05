@@ -110,6 +110,6 @@ export function hooksKeyedOnlyCheck(config: Config, env: NodeJS.ProcessEnv): Che
     detail:
       `hooks are installed but reflection runs locally on ${routing.roles.reflect.model}; ` +
       'set AION_ANTHROPIC_API_KEY in .env, or remove the hooks (`aion hooks uninstall`; ' +
-      'the hook client also removes them at the next session start)',
+      'the hook client also strips them on its next fire)',
   };
 }

@@ -145,6 +145,12 @@ describe('the hooks-keyed-only check', () => {
     expect(result.detail).toContain('aion hooks uninstall');
   });
 
+  it('names the fire the hook client removes itself on, not a session boundary', async () => {
+    const result = await runHooksCheck(DEFAULTS, { AION_HOOKS_INSTALLED: 'true' });
+
+    expect(result.detail).toContain('strips them on its next fire');
+  });
+
   it('fails an install whose key a pin sends back to the local model', async () => {
     const pinned: Config = { ...keyed, routing: { cue: 'auto', reflect: 'ollama' } };
 

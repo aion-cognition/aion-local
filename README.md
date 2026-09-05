@@ -12,10 +12,8 @@ idempotent: correcting a fact supersedes the old node instead of deleting it, so
 ever hard-deleted and the substrate can answer what it believed at any point in time.
 [docs/whitepaper.md](docs/whitepaper.md) explains the thinking; this page gets you running.
 
-The substrate never leaves the machine. Generation is the one part that can: set
-`AION_ANTHROPIC_API_KEY` and cue extraction, reflection, and narratives route to
-`claude-haiku-4-5` instead of the local instruct model. Embeddings stay local either way,
-because the vector space is the substrate.
+The substrate never leaves the machine. Generation is the one part that can, and whether it
+does is what separates the two profiles below.
 
 ## Quickstart
 
@@ -50,12 +48,41 @@ Check the install with `./bin/aion doctor`, which verifies every substrate invar
 the live stack and names anything broken. An archive install has no git history to stamp the
 image with, so `doctor` reports one service-freshness warning there; it is cosmetic.
 
-## Profiles
+## Two profiles
 
-`init` takes one of two profiles, and asks for it when you do not name one.
+Whether `AION_ANTHROPIC_API_KEY` is set decides the profile. Routing resolves it once at boot
+(`packages/core/src/infrastructure/providers/routing.ts`), and every difference below reads
+that resolved route rather than the key again, so a key with `AION_REFLECT_PROVIDER` pinned
+back to Ollama is the local profile.
 
-- `aion init local` provisions the substrate and nothing else. Generation runs on Ollama, and
-  the agent decides for itself when to call recall and reflection.
+**Keyed.** Both generation roles run on `claude-haiku-4-5`: recall's cue call, and reflection
+with every stage behind it, narratives included.
+
+**Local.** Cues run on `qwen3:1.7b` and reflection on `qwen3:8b`, both on the host Ollama.
+
+Embeddings run on `snowflake-arctic-embed2` on the host under either profile and are never
+routed: one model owns the vector space for the life of the substrate.
+
+What else the route decides:
+
+- **How wide a narrative reads.** One session synthesis reads 120 episodes and answers in 12
+  sentences on the keyed route, against 40 and 6 locally, at 4,000 characters an episode
+  against 2,000 (`packages/core/src/reflection/domain/narrative-scale.ts`). Neither route clips
+  a session longer than its own cap: it is narrated in chunks and the chunk texts folded once,
+  so the local route pays more calls for the same coverage.
+- **Whether hooks are allowed.** They are a keyed-profile feature, refused at install, refused
+  at intake while reflection routes local, stripped by the hook client itself on its next fire,
+  and reported by `aion doctor` as `hooks-keyed-only`. [docs/harness.md](docs/harness.md) states
+  the rule.
+- **What a failed generation call costs.** The Anthropic provider retries a throttled or failed
+  answer and trips a circuit breaker on a bad stretch; the Ollama provider has neither, and a
+  failed call costs its stage. [docs/degradation.md](docs/degradation.md) carries both rungs,
+  the keyed narrative knobs, and the case where a key is pinned to a role that has none.
+
+`init` takes one of the two profiles, and asks for it when you do not name one.
+
+- `aion init local` provisions the substrate and nothing else. The agent decides for itself
+  when to call recall and reflection.
 - `aion init full` also asks for an Anthropic key and installs the Claude Code harness hooks,
   which turn that judgment call into a fixed cadence: recall at session start and on a
   substantial prompt, capture on compaction, stop, subagent stop, and session end. The two
@@ -187,7 +214,7 @@ the remote judge, so the numbers would describe a judge the service does not run
 
 The substrate is complete and in daily use: provisioning, capture, recall with the full MCP
 surface, the reflection pipeline, Hebbian reinforcement and decay, the introspection loop
-scheduling twenty-four maintenance operations, per-role Anthropic routing with model
+scheduling twenty-five maintenance operations, per-role Anthropic routing with model
 reconciliation, the harness hooks, and the CLI above. Unit tests pass deterministically; the
 integration suite runs against a live Neo4j and host Ollama. Engrams, described in the
 whitepaper, are designed and not yet built, and the `preferences` pack bucket has no producer
