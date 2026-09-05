@@ -10,6 +10,7 @@ import {
   DEFAULT_SESSION_IDLE_MS,
   sweepIdleSessions,
   type NarrativeDeps,
+  type NarrativeOptions,
 } from './narratives.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
@@ -83,12 +84,13 @@ function deterministicNarrativeProvider(): NarrativeDeps['provider'] {
 async function closeWithGroundingRetry(
   narrativeDeps: NarrativeDeps,
   identity: string,
+  options: NarrativeOptions = {},
 ): ReturnType<typeof closeSessionNarrative> {
-  const first = await closeSessionNarrative(narrativeDeps, identity);
+  const first = await closeSessionNarrative(narrativeDeps, identity, options);
   if (first.status !== 'failed') {
     return first;
   }
-  return closeSessionNarrative(narrativeDeps, identity);
+  return closeSessionNarrative(narrativeDeps, identity, options);
 }
 
 /**
@@ -572,4 +574,89 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('the keyed route narrates past the local wi
     expect(citations.some((id) => opening.includes(id))).toBe(true);
     expect(citations.some((id) => closing.includes(id))).toBe(true);
   }, 180_000);
+});
+
+/**
+ * The session no window holds. It is read in consecutive chunks, one call each, and the chunk
+ * texts are compressed once more, so its opening reaches the narrative rather than falling off
+ * the front of a single call.
+ *
+ * The keyed window is 120 episodes, so ninety of them would be one chunk and would exercise
+ * nothing. The close below runs at the local window of forty instead, which splits this session
+ * into three chunks of thirty, while generation still routes to the keyed provider, which is
+ * what keeps four calls to seconds rather than minutes.
+ */
+const CHUNKED_SESSION_IDENTITY = 'mcp-transport-session-narratives-chunked';
+
+const CHUNKED_SCALE = {
+  ...DEFAULTS.reflection,
+  keyedNarrativeEpisodes: DEFAULTS.reflection.maxNarrativeEpisodes,
+};
+
+const CHUNKED_TABLES = [
+  'orders',
+  'invoices',
+  'payments',
+  'refunds',
+  'ledger entry',
+  'payout',
+  'dispute',
+  'credit',
+  'adjustment',
+  'statement',
+];
+
+/**
+ * Ninety short episodes in three phases of thirty, which is one phase per chunk at the window
+ * above. Each phase carries its own vocabulary, so a final pass reading one text per chunk has
+ * something of its own to say about each.
+ */
+const CHUNKED_EPISODES = Array.from({ length: 90 }, (_, slot) => {
+  const table = CHUNKED_TABLES[slot % CHUNKED_TABLES.length] ?? 'orders';
+  const step = String(slot + 1);
+  if (slot < 30) {
+    return `Halcyon audit step ${step}: the ${table} table was read end to end and its row count written down`;
+  }
+  if (slot < 60) {
+    return `Halcyon backfill step ${step}: the ${table} rows were rewritten into cents on the copy`;
+  }
+  return `Halcyon cutover step ${step}: the ${table} table was switched over and its check query came back empty`;
+});
+
+describe.skipIf(REMOTE_JUDGE_ABSENT)('a session past the window narrates in chunks', () => {
+  const chunkedEpisodeIds: string[] = [];
+
+  beforeAll(async () => {
+    for (const line of CHUNKED_EPISODES) {
+      chunkedEpisodeIds.push(
+        await push({ summary: line, observations: [line] }, CHUNKED_SESSION_IDENTITY),
+      );
+    }
+  }, 900_000);
+
+  it('reads all ninety episodes and cites both the opening and the closing third', async () => {
+    expect(chunkedEpisodeIds).toHaveLength(90);
+    // What makes the close below chunk at all: the session is longer than the window it runs at.
+    expect(chunkedEpisodeIds.length).toBeGreaterThan(CHUNKED_SCALE.keyedNarrativeEpisodes);
+
+    const result = await closeWithGroundingRetry(deps, CHUNKED_SESSION_IDENTITY, {
+      reflection: CHUNKED_SCALE,
+    });
+
+    expect(result.status).toBe('created');
+    const properties = await nodeProperties(harness.driver, result.narrativeId!);
+    expect(properties[NARRATIVE_PROPERTIES.coverageCount]).toBe(90);
+    // Full, because every episode was read by the chunk that held it. One call over this
+    // session would have recorded 0.444 and dropped the other fifty.
+    expect(properties[NARRATIVE_PROPERTIES.coverage]).toBe(1);
+
+    const citations = properties[NARRATIVE_PROPERTIES.citations] as string[];
+    const opening = chunkedEpisodeIds.slice(0, 30);
+    const closing = chunkedEpisodeIds.slice(-30);
+
+    // Every id came through a chunk that cited it, so nothing here is reachable any other way.
+    expect(citations.every((id) => chunkedEpisodeIds.includes(id))).toBe(true);
+    expect(citations.some((id) => opening.includes(id))).toBe(true);
+    expect(citations.some((id) => closing.includes(id))).toBe(true);
+  }, 300_000);
 });

@@ -10,6 +10,7 @@ import {
   sweepIdleSessions,
   type NarrativeDeps,
 } from './narratives.js';
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { BITEMPORAL_PROPERTIES } from '../../infrastructure/graph/bitemporal.js';
 import type { EpisodeContext } from '../../infrastructure/graph/episode-context.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
@@ -53,9 +54,14 @@ function fakeVectors(texts: readonly string[]): Vector[] {
   return texts.map(() => Array.from({ length: EMBED_DIMENSION }, (_, slot) => 1 / (slot + 1)));
 }
 
-function seedEpisode(id: string, writtenAt: string, sessionId = SESSION_ID): void {
+function seedEpisode(
+  id: string,
+  writtenAt: string,
+  sessionId = SESSION_ID,
+  text = `body of ${id}`,
+): void {
   graph.seedNode(id, ['Episode', 'Memory', 'AionNode'], {
-    [MEMORY_PROPERTIES.text]: `body of ${id}`,
+    [MEMORY_PROPERTIES.text]: text,
     [MEMORY_PROPERTIES.sessionId]: sessionId,
     [BITEMPORAL_PROPERTIES.occurredAt]: new Date(writtenAt),
     [BITEMPORAL_PROPERTIES.txFrom]: new Date(writtenAt),
@@ -236,6 +242,101 @@ describe('grounding', () => {
     const node = narrativeNode();
     expect(node.properties[MEMORY_PROPERTIES.text]).toBe('The orders table was left unsharded.');
     expect(node.properties[NARRATIVE_PROPERTIES.sentenceCount]).toBe(1);
+  });
+});
+
+/**
+ * A session longer than the window is read in consecutive chunks and the chunk texts are
+ * compressed once more, so its opening reaches the narrative instead of being clipped off.
+ * The window is pinned through the knob group the caller threads, which is the same seam a
+ * deployment moves it with.
+ */
+describe('a session past the window', () => {
+  const NARROW = { ...DEFAULTS.reflection, maxNarrativeEpisodes: 2 };
+  const CHUNK_OPENING = 'The audit read the orders table.';
+  const CHUNK_CLOSING = 'The backfill rewrote the amounts into cents.';
+  const FINAL_SENTENCE = 'The session audited the ledger and cut it over.';
+
+  /** Long enough that a chunk of two episodes supports a two-sentence answer. */
+  function wordy(id: string): string {
+    return `body of ${id}, ${'and the work went on. '.repeat(15)}`;
+  }
+
+  beforeEach(() => {
+    for (const [slot, stamp] of ['10:00', '10:05', '10:10', '10:15'].entries()) {
+      const id = `episode-${String(slot + 1)}`;
+      seedEpisode(id, `2026-04-02T${stamp}:00Z`, SESSION_ID, wordy(id));
+    }
+
+    // Every chunk answer cites both of its items; the final answer, which is the one call
+    // reading passages rather than episodes, cites the second chunk alone.
+    generate.mockImplementation((request) => {
+      const prompt = request.messages.map((message) => message.content).join('\n');
+      if (prompt.includes('] passage')) {
+        return Promise.resolve({ sentences: [{ text: FINAL_SENTENCE, source_ids: ['S2'] }] });
+      }
+      return Promise.resolve({
+        sentences: [
+          { text: CHUNK_OPENING, source_ids: ['S1'] },
+          { text: CHUNK_CLOSING, source_ids: ['S2'] },
+        ],
+      });
+    });
+  });
+
+  it('reads a session inside the window in one call, over the episodes themselves', async () => {
+    await closeSessionNarrative(deps, SESSION_ID, { now: NOW });
+
+    expect(generate).toHaveBeenCalledTimes(1);
+    const request = generate.mock.calls[0]?.[0] as { messages: readonly { content: string }[] };
+    expect(request.messages[1]?.content).toContain('[S1] episode');
+    expect(request.messages[1]?.content).toContain('body of episode-1');
+    expect(narrativeNode().properties[NARRATIVE_PROPERTIES.citations]).toEqual([
+      'episode-1',
+      'episode-2',
+    ]);
+  });
+
+  it('synthesizes each chunk and then the chunk texts', async () => {
+    await closeSessionNarrative(deps, SESSION_ID, { now: NOW, reflection: NARROW });
+
+    expect(generate).toHaveBeenCalledTimes(3);
+    const prompts = generate.mock.calls.map(
+      (call) =>
+        (call[0] as { messages: readonly { content: string }[] }).messages[1]?.content ?? '',
+    );
+    expect(prompts[0]).toContain('body of episode-1');
+    expect(prompts[0]).not.toContain('body of episode-3');
+    expect(prompts[1]).toContain('body of episode-3');
+    expect(prompts[2]).toContain(`[S1] passage\n${CHUNK_OPENING} ${CHUNK_CLOSING}`);
+    expect(prompts[2]).not.toContain('body of episode-1');
+  });
+
+  it('stores the episodes behind the chunk the final answer cited, and no others', async () => {
+    await closeSessionNarrative(deps, SESSION_ID, { now: NOW, reflection: NARROW });
+
+    const node = narrativeNode();
+    expect(node.properties[NARRATIVE_PROPERTIES.citations]).toEqual(['episode-3', 'episode-4']);
+    expect(node.properties[MEMORY_PROPERTIES.text]).toBe(FINAL_SENTENCE);
+  });
+
+  it('records the whole session as covered, because every episode was read', async () => {
+    await closeSessionNarrative(deps, SESSION_ID, { now: NOW, reflection: NARROW });
+
+    const node = narrativeNode();
+    expect(node.properties[NARRATIVE_PROPERTIES.coverageCount]).toBe(4);
+    expect(node.properties[NARRATIVE_PROPERTIES.coverage]).toBe(1);
+  });
+
+  it('fails the whole attempt on a failed chunk rather than narrating part of it', async () => {
+    generate.mockRejectedValueOnce(new Error('model timed out'));
+
+    const result = await closeSessionNarrative(deps, SESSION_ID, { now: NOW, reflection: NARROW });
+
+    expect(result.status).toBe('failed');
+    expect(result.summary).toContain('model timed out');
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(graph.nodesWithLabel('Narrative')).toEqual([]);
   });
 });
 
