@@ -68,7 +68,3 @@ export function resolveHostRepo(
 export function hookScriptPath(repoPath: string): string {
   return join(repoPath, HOOK_SCRIPT_RELATIVE);
 }
-
-export function claudeSettingsPath(home: string): string {
-  return join(home, '.claude', 'settings.json');
-}

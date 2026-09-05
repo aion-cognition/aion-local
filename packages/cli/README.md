@@ -68,17 +68,19 @@ fire it opens a streamable-HTTP MCP session against `http://127.0.0.1:8765/mcp`
 - `mcp.ts`: the client, sized for a single fire. It reads plain JSON and SSE-framed bodies.
 - `transcript.ts`, `payload.ts`, `state.ts`, `options.ts`: reading the harness JSONL
   defensively, shaping tool arguments, the per-session cursor under `~/.aion/hook-state/`.
+- `settings.ts`, `settings-file.ts`: what belongs in the `hooks` block of
+  `~/.claude/settings.json`, and the reads, backups, and writes of that file. Both the
+  install command and the hook client itself go through them.
 
 Everything fails open. A hook that throws, times out, or meets a service that is not running
 exits 0 with nothing on stdout, because blocking a turn over memory is worse than losing the
 memory. `stop --mode instruct`, which blocks by design, is the one exception.
 
-`hooks-cmd.ts` and `hooks-settings.ts` are the install side, and run in the `aion` process
-rather than a hook one. `hooks-settings.ts` is pure: it shapes and merges the `hooks` block.
-`hooks-cmd.ts` owns the file, the timestamped backup, and what the user is told. Our entries
-are recognized by `hook-main.js` in the command path, so a second install replaces them
-rather than stacking and every other hook survives. Inside the CLI container neither the host
-repo nor the host's settings is reachable, so install prints the block to merge by hand.
+`hooks-cmd.ts` is the install side, and runs in the `aion` process rather than a hook one. It
+owns the invocation and what the user is told. Our entries are recognized by `hook-main.js`
+in the command path, so a second install replaces them rather than stacking and every other
+hook survives. Inside the CLI container neither the host repo nor the host's settings is
+reachable, so install prints the block to merge by hand.
 
 ## Checks
 

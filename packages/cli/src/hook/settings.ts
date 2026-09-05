@@ -1,4 +1,4 @@
-import type { StopMode } from './hook/options.js';
+import type { StopMode } from './options.js';
 
 /**
  * Shaping and merging the `hooks` block of `~/.claude/settings.json`. Pure functions over

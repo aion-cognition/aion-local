@@ -11,16 +11,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { backupPath, SettingsUnreadableError } from './hook/settings-file.js';
+import { describeAionHooks } from './hook/settings.js';
 import {
-  backupPath,
   installHooks,
   parseHooksFlags,
-  SettingsUnreadableError,
   statusHooks,
   uninstallHooks,
   type HooksCommandOptions,
 } from './hooks-cmd.js';
-import { describeAionHooks } from './hooks-settings.js';
 
 const NOW = new Date('2026-08-30T04:05:06.789Z');
 
@@ -47,14 +46,6 @@ describe('parseHooksFlags', () => {
     expect(() => parseHooksFlags(['--force'])).toThrow("unknown option '--force' for hooks");
     expect(() => parseHooksFlags(['--profile', 'medium'])).toThrow(
       "unknown option '--profile' for hooks",
-    );
-  });
-});
-
-describe('backupPath', () => {
-  it('stamps the copy with compact UTC so a listing sorts by age', () => {
-    expect(backupPath('/home/me/.claude/settings.json', NOW)).toBe(
-      '/home/me/.claude/settings.json.aion-20260830T040506Z',
     );
   });
 });
