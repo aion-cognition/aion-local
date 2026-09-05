@@ -40,6 +40,19 @@ describe('reflection description', () => {
   it('says intake is fast so the agent does not batch calls to protect its latency', () => {
     expect(REFLECTION_DESCRIPTION).toContain('Intake returns as soon as the experience is durable');
   });
+
+  it('says what a good observation carries', () => {
+    expect(REFLECTION_DESCRIPTION).toContain(
+      'A good observation states the conclusion, the reason behind it, and the concrete names',
+    );
+    expect(REFLECTION_DESCRIPTION).toContain(
+      'A later session gets that line and nothing around it.',
+    );
+  });
+
+  it('asks for a call per unit of work', () => {
+    expect(REFLECTION_DESCRIPTION).toContain('Reflect once per unit of work');
+  });
 });
 
 describe('usage protocol', () => {
