@@ -65,6 +65,9 @@ packages/core/src/
   reflection/application/               intake (the write path), orchestrator, worker, lanes
   reflection/application/stages/        the pipeline, in the order bootstrap.ts registers them
   session/                              identity-to-session-id resolution
+  prompts/                              every generation system prompt, one file per surface,
+                                        exported as LOCAL and KEYED, forks named in
+                                        fork-registry.test.ts
 packages/mcp/src/                       MCP server: tool definitions, HTTP transport
 packages/cli/src/                       aion command: init, status, doctor, stats, last, why,
                                         timeline, search, forget, unsupersede, queue, replay,
@@ -114,11 +117,19 @@ every command). Use it to exercise the actual binary, not as a test runner.
   finds one outside the two files it skips. Those two are itself, which has to name the
   patterns it forbids, and `test-support/neo4j-harness.fixture.ts`, which clears the test
   database between files. A test in the same file pins the skip list at exactly those two,
-  so widening it takes a deliberate edit. It is the only convention enforced by a repo-wide
-  scan rather than by lint: the three lint-backed conventions are marked above, and
-  everything else in that list is a review-time rule.
+  so widening it takes a deliberate edit. It and the prompt scan below are the two conventions
+  enforced by a repo-wide scan rather than by lint: the three lint-backed conventions are
+  marked above, and everything else in that list is a review-time rule.
   A grep guard modeled on this one would be the cheap way to enforce Cypher confinement to
   `infrastructure/graph/`, if that becomes worth codifying.
+- `packages/core/src/prompts/no-stray-system-prompt.test.ts`: scans every `.ts` file under
+  `packages/` for an identifier ending in `SYSTEM_PROMPT` being assigned, and fails on one
+  found outside `prompts/`. It skips two files, itself and `packages/mcp/src/descriptions.ts`,
+  which is what an agent reads when it picks a tool rather than text a model generates
+  against, and a test in the same file pins the list at those two. `fork-registry.test.ts`
+  beside it names the surfaces whose two routes read different text and proves every other
+  surface exports one constant under both names, so a keyed prompt cannot drift from its local
+  twin unnamed.
 - `packages/core/src/infrastructure/config/config-surface.test.ts`: compares the live config
   surface against the committed `config-surface.json`, knob by knob. It covers the default
   tree, every env var with its path and kind, and the verdict the loader and the schema return
@@ -233,10 +244,14 @@ A file whose subject is the local model itself (`cues.int.test.ts`, `ollama-prov
 builds its own `OllamaProvider` and ignores this switch.
 
 `stages/supersession.int.test.ts` measures a real number this way. The recorded 0.400
-precision figure came from a live-stack exercise run on
-the local judge, not from this file, so re-measuring it means running the file with
-`TEST_AION_GENERATION=local`. The file's own assertions (propose not close, which rows land)
-hold on either model and are not what that figure describes.
+precision figure came from a live-stack exercise run on the local judge before that route read
+a judge pair of its own, so it describes words the local route no longer sends.
+`gate/supersession-precision.int.test.ts` scores the local judge directly: run it with
+`TEST_AION_GENERATION=local` and it reads the same 24 pairs against the small model, an hour
+rather than fifteen minutes. Its assertion about the shipped default skips on that route, since
+the default describes the route the service runs on. Measured 2026-09-05 on qwen3:8b, two-pass:
+precision 0.800, recall 0.333. The stage file's own assertions (propose not close, which rows
+land) hold on either model and are not what those figures describe.
 
 `gate/supersession-precision.int.test.ts` is what sets the shipped `AION_SUPERSEDE_MODE`.
 It scores the single-pass and the two-pass judge over the same 24 pairs and asserts the

@@ -30,6 +30,7 @@ plasticity/      domain: the Hebbian fold and the staleness curve
 redaction/       deterministic secret detection, no domain and application split
 session/         identity to session-id resolution, cached per process
 infrastructure/  graph/, sqlite/, providers/, config/, logging/
+prompts/         every generation system prompt, one file per surface, LOCAL and KEYED
 ```
 
 The layering rule: `domain/` never imports `application/`; `application/` imports `domain/`
@@ -67,6 +68,11 @@ sibling's `test-support/` fixtures and is not a production import route.
   the defaults and the `AION_*` registry all fold out of that table. Recapture
   `config-surface.json` when a knob is added, renamed or retuned, and let
   `config-surface.test.ts` be the diff.
+- Every generation system prompt lives in `prompts/`, one file per surface, exported as
+  `LOCAL` and `KEYED`. `prompts/no-stray-system-prompt.test.ts` scans `packages/` and fails on
+  a prompt declared anywhere else. `prompts/fork-registry.test.ts` names the three surfaces
+  whose routes read different text and proves every other surface exports one constant under
+  both names.
 - No regex or keyword machinery in the cognitive path: cue extraction, ranking and activation
   are model-driven or graph-structural. `redaction/` is the deliberate exception, because a
   credential leak cannot wait on a model's judgment.

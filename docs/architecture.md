@@ -93,6 +93,21 @@ of episodes, cues, or memory packs beyond those primitives.
 - **`session/`**: `session-manager.ts`, identity-to-session-id resolution, cached per
   process, backed by `infrastructure/graph/sessions.ts`.
 
+`prompts/` sits beside those contexts and belongs to none of them: it holds every generation
+system prompt the workspace runs, one file per surface, sixteen of them. Each surface exports
+its text twice, as `LOCAL` and `KEYED`, and a caller reads whichever its resolved route names
+through `promptMode(provider)` in the directory's `index.ts`, so that rule is written once.
+Where both routes read the same words the two names point at one constant, and
+`fork-registry.test.ts` proves it surface by surface. Three surfaces diverge:
+`description-freshness`, `supersession-judge`, and `supersession-review`. Each is named in that
+file's list, so forking is a listed act and a divergence cannot land unnamed. A fork ships only
+with the measurement that earned it, and staying shared is the ordinary result: cognitive
+extraction's keyed variant lost claims across the harness fixtures and was reverted, and
+semantic relationships stays shared because no relationship-level measurement exists to score
+a fork against. The quality harness imports these same constants instead of holding copies, so what it
+scores is what the stages send, and `no-stray-system-prompt.test.ts` scans `packages/` for a
+system prompt declared anywhere else.
+
 Cross-context imports run in one direction, context by context, and nothing crosses back into
 `recall/domain/`. `introspection/` is the heaviest importer: from `reflection/` it reaches
 queue lag, reconciliation, vector backfill, narrative cleanup and rollup, claim consolidation,

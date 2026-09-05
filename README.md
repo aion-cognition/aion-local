@@ -210,7 +210,9 @@ values loaded from the file.
 With no key anywhere, the gate batteries skip and say so. The reflect role would route to the
 local instruct model, and every floor and pinned default they assert on was measured against
 the remote judge, so the numbers would describe a judge the service does not run.
-`TEST_AION_GENERATION=local` forces that local route on purpose and skips them the same way.
+`TEST_AION_GENERATION=local` forces that local route on purpose and skips them the same way,
+with one exception: the supersession battery reads a judge pair written for the local model, so
+it scores either route and only its assertion about the shipped default stays keyed.
 
 ## Status
 
