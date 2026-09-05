@@ -238,153 +238,156 @@ afterAll(async () => {
   await substrate.close();
 });
 
-describe.skipIf(REMOTE_JUDGE_ABSENT)('a claim stored in one session answers the natural question asked in another', () => {
-  it.each(HELD_OUT_PROBES)(
-    'answers: $question',
-    async (probe) => {
-      const result = await substrate.recall(probe.question, {
-        identity: READ_SESSION,
-        now: RECALLED_AT,
-      });
-      const expected = new Set(derivedIds.get(probe.key) ?? []);
-      const rank = rankOf(result.items, expected);
-      const answered = statesTheAnswer(result.items, probe.answerTerms);
+describe.skipIf(REMOTE_JUDGE_ABSENT)(
+  'a claim stored in one session answers the natural question asked in another',
+  () => {
+    it.each(HELD_OUT_PROBES)(
+      'answers: $question',
+      async (probe) => {
+        const result = await substrate.recall(probe.question, {
+          identity: READ_SESSION,
+          now: RECALLED_AT,
+        });
+        const expected = new Set(derivedIds.get(probe.key) ?? []);
+        const rank = rankOf(result.items, expected);
+        const answered = statesTheAnswer(result.items, probe.answerTerms);
 
-      for (const item of result.items) {
-        methods.set(item.rationale.method, (methods.get(item.rationale.method) ?? 0) + 1);
-      }
-      const activated = result.items.filter((item) => item.rationale.method === 'activation');
-      const whys = result.items.filter((item) => item.why !== undefined);
-      rows.push({
-        key: probe.key,
-        question: probe.question,
-        items: result.items.length,
-        rank,
-        statesTheAnswer: answered,
-        activation: activated.length,
-        activationPaths: activated.filter((item) => (item.rationale.path ?? '') !== '').length,
-        considered: result.admission.considered,
-        unmeasured: result.admission.droppedUnmeasured,
-        unmeasurableSeeds: unmeasurableSeeds(result.seeds),
-        whys: whys.length,
-        whysRendered: whys.filter((item) =>
-          result.pack.rendered_text.includes(`why: ${item.why ?? ''}`),
-        ).length,
-      });
+        for (const item of result.items) {
+          methods.set(item.rationale.method, (methods.get(item.rationale.method) ?? 0) + 1);
+        }
+        const activated = result.items.filter((item) => item.rationale.method === 'activation');
+        const whys = result.items.filter((item) => item.why !== undefined);
+        rows.push({
+          key: probe.key,
+          question: probe.question,
+          items: result.items.length,
+          rank,
+          statesTheAnswer: answered,
+          activation: activated.length,
+          activationPaths: activated.filter((item) => (item.rationale.path ?? '') !== '').length,
+          considered: result.admission.considered,
+          unmeasured: result.admission.droppedUnmeasured,
+          unmeasurableSeeds: unmeasurableSeeds(result.seeds),
+          whys: whys.length,
+          whysRendered: whys.filter((item) =>
+            result.pack.rendered_text.includes(`why: ${item.why ?? ''}`),
+          ).length,
+        });
 
+        console.log(
+          `"${probe.question}": ${String(result.items.length)} items, ` +
+            `answer at rank ${String(rank)}, states the answer: ${String(answered)}, ` +
+            `seeds ${String(result.seeds.length)}, considered ${String(result.admission.considered)}${result.items
+              .slice(0, TOP_N)
+              .map(
+                (item) =>
+                  `\n    [${item.rationale.method} ${item.confidence.toFixed(2)}] ${item.content.slice(
+                    0,
+                    70,
+                  )}`,
+              )
+              .join('')}`,
+        );
+
+        // What every probe owes on its own: the episode holding the claim reached the pack. Rank
+        // zero is the failure this battery exists to catch: a genuinely on-topic recall that comes
+        // back with no answer in it. Whether the words of the answer land in the top five is judged
+        // over the whole battery below, because the substrate is rebuilt by live model calls.
+        expect(rank).toBeGreaterThan(0);
+      },
+      180_000,
+    );
+
+    // Last, so every probe above has already pushed its row.
+    it('answers out of the episode that holds the claim, not only out of a gloss', () => {
+      const found = rows.filter((row) => row.rank > 0 && row.rank <= TOP_N).length;
       console.log(
-        `"${probe.question}": ${String(result.items.length)} items, ` +
-          `answer at rank ${String(rank)}, states the answer: ${String(answered)}, ` +
-          `seeds ${String(result.seeds.length)}, considered ${String(result.admission.considered)}${result.items
-            .slice(0, TOP_N)
-            .map(
-              (item) =>
-                `\n    [${item.rationale.method} ${item.confidence.toFixed(2)}] ${item.content.slice(
-                  0,
-                  70,
-                )}`,
-            )
-            .join('')}`,
+        `held-out tally: ${String(found)}/${String(rows.length)} put the answering node in the top ` +
+          `${String(TOP_N)}; ranks ${rows.map((row) => row.rank).join(' ')}`,
       );
 
-      // What every probe owes on its own: the episode holding the claim reached the pack. Rank
-      // zero is the failure this battery exists to catch: a genuinely on-topic recall that comes
-      // back with no answer in it. Whether the words of the answer land in the top five is judged
-      // over the whole battery below, because the substrate is rebuilt by live model calls.
-      expect(rank).toBeGreaterThan(0);
-    },
-    180_000,
-  );
+      expect(rows).toHaveLength(HELD_OUT_PROBES.length);
+      expect(found / rows.length).toBeGreaterThanOrEqual(MIN_ANSWERING_NODE_RATE);
+    });
 
-  // Last, so every probe above has already pushed its row.
-  it('answers out of the episode that holds the claim, not only out of a gloss', () => {
-    const found = rows.filter((row) => row.rank > 0 && row.rank <= TOP_N).length;
-    console.log(
-      `held-out tally: ${String(found)}/${String(rows.length)} put the answering node in the top ` +
-        `${String(TOP_N)}; ranks ${rows.map((row) => row.rank).join(' ')}`,
-    );
+    // A pack can be full, confident and on-topic while saying nothing about what was asked, and
+    // item counts do not separate the two.
+    it('carries the answer in words, not only the episode it came from', () => {
+      const answering = rows.filter((row) => row.statesTheAnswer).length;
+      console.log(
+        `answered in words: ${String(answering)}/${String(rows.length)}; silent on ${
+          rows
+            .filter((row) => !row.statesTheAnswer)
+            .map((row) => `"${row.question}"`)
+            .join(', ') || 'nothing'
+        }`,
+      );
 
-    expect(rows).toHaveLength(HELD_OUT_PROBES.length);
-    expect(found / rows.length).toBeGreaterThanOrEqual(MIN_ANSWERING_NODE_RATE);
-  });
+      expect(answering / rows.length).toBeGreaterThanOrEqual(MIN_ANSWERING_RATE);
+    });
 
-  // A pack can be full, confident and on-topic while saying nothing about what was asked, and
-  // item counts do not separate the two.
-  it('carries the answer in words, not only the episode it came from', () => {
-    const answering = rows.filter((row) => row.statesTheAnswer).length;
-    console.log(
-      `answered in words: ${String(answering)}/${String(rows.length)}; silent on ${
-        rows
-          .filter((row) => !row.statesTheAnswer)
-          .map((row) => `"${row.question}"`)
-          .join(', ') || 'nothing'
-      }`,
-    );
+    // The traversal leg, from the reader's side. An activation item is one no seed strategy
+    // found: the graph reached it and something then measured it against the question. A battery
+    // with none of them is a vector search with a graph attached, whatever the graph cost to keep.
+    it('answers partly out of memories no seed strategy found, and prints the path to each', () => {
+      const contributed = rows.reduce((total, row) => total + row.activation, 0);
+      const withPath = rows.reduce((total, row) => total + row.activationPaths, 0);
+      const probes = rows.filter((row) => row.activation > 0).length;
+      console.log(
+        `activation contribution: ${String(contributed)} item(s) across ` +
+          `${String(probes)}/${String(rows.length)} probes, ${String(withPath)} with a path`,
+      );
 
-    expect(answering / rows.length).toBeGreaterThanOrEqual(MIN_ANSWERING_RATE);
-  });
+      expect(contributed).toBeGreaterThan(0);
+      expect(withPath).toBe(contributed);
+    });
 
-  // The traversal leg, from the reader's side. An activation item is one no seed strategy
-  // found: the graph reached it and something then measured it against the question. A battery
-  // with none of them is a vector search with a graph attached, whatever the graph cost to keep.
-  it('answers partly out of memories no seed strategy found, and prints the path to each', () => {
-    const contributed = rows.reduce((total, row) => total + row.activation, 0);
-    const withPath = rows.reduce((total, row) => total + row.activationPaths, 0);
-    const probes = rows.filter((row) => row.activation > 0).length;
-    console.log(
-      `activation contribution: ${String(contributed)} item(s) across ` +
-        `${String(probes)}/${String(rows.length)} probes, ${String(withPath)} with a path`,
-    );
+    // The other half of the same leg: what it costs. An arrival the spread reached is scored
+    // against the cues, so on an enriched substrate almost nothing should reach the gate with
+    // no measurement at all. A rate that climbs is arrival scoring falling back to a refusal.
+    it('judges what the spread reached rather than dropping it unmeasured', () => {
+      const considered = rows.reduce((total, row) => total + row.considered, 0);
+      const unmeasured = rows.reduce((total, row) => total + row.unmeasured, 0);
+      const unmeasurable = rows.reduce((total, row) => total + row.unmeasurableSeeds, 0);
+      const unexplained = Math.max(0, unmeasured - unmeasurable);
+      console.log(
+        `unmeasured candidates: ${String(unmeasured)}/${String(considered)} considered, ` +
+          `${String(unmeasurable)} of them seeds no cosine method touched, ` +
+          `${String(unexplained)} left unexplained ` +
+          `(${(considered === 0 ? 0 : (unexplained / considered) * 100).toFixed(1)}%)`,
+      );
 
-    expect(contributed).toBeGreaterThan(0);
-    expect(withPath).toBe(contributed);
-  });
+      expect(considered).toBeGreaterThan(0);
+      expect(unexplained / considered).toBeLessThanOrEqual(MAX_UNEXPLAINED_UNMEASURED_RATE);
+    });
 
-  // The other half of the same leg: what it costs. An arrival the spread reached is scored
-  // against the cues, so on an enriched substrate almost nothing should reach the gate with
-  // no measurement at all. A rate that climbs is arrival scoring falling back to a refusal.
-  it('judges what the spread reached rather than dropping it unmeasured', () => {
-    const considered = rows.reduce((total, row) => total + row.considered, 0);
-    const unmeasured = rows.reduce((total, row) => total + row.unmeasured, 0);
-    const unmeasurable = rows.reduce((total, row) => total + row.unmeasurableSeeds, 0);
-    const unexplained = Math.max(0, unmeasured - unmeasurable);
-    console.log(
-      `unmeasured candidates: ${String(unmeasured)}/${String(considered)} considered, ` +
-        `${String(unmeasurable)} of them seeds no cosine method touched, ` +
-        `${String(unexplained)} left unexplained ` +
-        `(${(considered === 0 ? 0 : (unexplained / considered) * 100).toFixed(1)}%)`,
-    );
+    // A decision the pack carries without its stated reason reads like a decision nobody argued
+    // for, and a structured field the rendered text drops is the same loss for a text-only
+    // consumer. How many reasons the substrate holds at all is extraction's business and moves
+    // run to run, so it is logged beside the count rather than asserted here; that the answering
+    // pack keeps every one it selected is this battery's to hold.
+    it('renders every stated reason its packs carry, not only the structured field', () => {
+      const carried = rows.reduce((total, row) => total + row.whys, 0);
+      const rendered = rows.reduce((total, row) => total + row.whysRendered, 0);
+      console.log(
+        `stated reasons: ${String(storedReasons)} stored on the substrate, ${String(carried)} ` +
+          `carried by the battery's packs, ${String(rendered)} rendered`,
+      );
 
-    expect(considered).toBeGreaterThan(0);
-    expect(unexplained / considered).toBeLessThanOrEqual(MAX_UNEXPLAINED_UNMEASURED_RATE);
-  });
+      expect(rendered).toBe(carried);
+    });
 
-  // A decision the pack carries without its stated reason reads like a decision nobody argued
-  // for, and a structured field the rendered text drops is the same loss for a text-only
-  // consumer. How many reasons the substrate holds at all is extraction's business and moves
-  // run to run, so it is logged beside the count rather than asserted here; that the answering
-  // pack keeps every one it selected is this battery's to hold.
-  it('renders every stated reason its packs carry, not only the structured field', () => {
-    const carried = rows.reduce((total, row) => total + row.whys, 0);
-    const rendered = rows.reduce((total, row) => total + row.whysRendered, 0);
-    console.log(
-      `stated reasons: ${String(storedReasons)} stored on the substrate, ${String(carried)} ` +
-        `carried by the battery's packs, ${String(rendered)} rendered`,
-    );
+    // The census that says whether retrieval is measuring meaning or matching tokens. A pack set
+    // that is almost all bm25 is a lexical search with a graph attached.
+    it('does not answer the whole battery on the lexical leg alone', () => {
+      const census = [...methods.entries()].sort((left, right) => right[1] - left[1]);
+      const packed = census.reduce((total, [, count]) => total + count, 0);
+      console.log(
+        `packed by method: ${census.map(([method, count]) => `${method} ${String(count)}`).join(', ')}`,
+      );
 
-    expect(rendered).toBe(carried);
-  });
-
-  // The census that says whether retrieval is measuring meaning or matching tokens. A pack set
-  // that is almost all bm25 is a lexical search with a graph attached.
-  it('does not answer the whole battery on the lexical leg alone', () => {
-    const census = [...methods.entries()].sort((left, right) => right[1] - left[1]);
-    const packed = census.reduce((total, [, count]) => total + count, 0);
-    console.log(
-      `packed by method: ${census.map(([method, count]) => `${method} ${String(count)}`).join(', ')}`,
-    );
-
-    expect(packed).toBeGreaterThan(0);
-    expect(methods.get('vector') ?? 0).toBeGreaterThan(methods.get('bm25') ?? 0);
-  });
-});
+      expect(packed).toBeGreaterThan(0);
+      expect(methods.get('vector') ?? 0).toBeGreaterThan(methods.get('bm25') ?? 0);
+    });
+  },
+);

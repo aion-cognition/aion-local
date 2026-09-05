@@ -17,7 +17,7 @@ import type { MemoryPackItem } from '@aion/protocol';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { OWNERSHIP_CORRECTION } from './apply-granularity.fixture.js';
-import { GateSubstrate, waitFor, REMOTE_JUDGE_ABSENT  } from './gate-substrate.fixture.js';
+import { GateSubstrate, waitFor, REMOTE_JUDGE_ABSENT } from './gate-substrate.fixture.js';
 
 /**
  * What an applied correction does to what recall answers.

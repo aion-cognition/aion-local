@@ -2,7 +2,7 @@ import { countQueueJobs, findEpisodeCognitiveNodes } from '@aion/core';
 import { nodeProperties } from '@aion/core/infrastructure/graph/test-support/graph-queries.fixture.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { GateSubstrate, waitFor, REMOTE_JUDGE_ABSENT  } from './gate-substrate.fixture.js';
+import { GateSubstrate, waitFor, REMOTE_JUDGE_ABSENT } from './gate-substrate.fixture.js';
 import { heldOutCase } from './held-out-recall.fixture.js';
 
 /**
