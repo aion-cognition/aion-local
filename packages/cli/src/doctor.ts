@@ -26,7 +26,7 @@ import { dirname, join } from 'node:path';
 
 import { parseArgs, type ArgSpec } from './args.js';
 import { mcpBaseUrl } from './compose.js';
-import { queueLagCheck, readingHorizonCheck } from './doctor-checks.js';
+import { hooksKeyedOnlyCheck, queueLagCheck, readingHorizonCheck } from './doctor-checks.js';
 import { stdoutWriter, type Writer } from './output.js';
 import { withSubstrate } from './substrate.js';
 
@@ -62,6 +62,8 @@ export type DoctorDeps = {
   readonly config: Config;
   readonly connection: GraphConnection;
   readonly db: SqliteHandle;
+  /** Where the host facts `bin/aion` computes are read from. Injected so tests supply their own. */
+  readonly env?: NodeJS.ProcessEnv;
 };
 
 /** Everything the two probes read off `/health`, typed once at the one place it is decoded. */
@@ -149,7 +151,7 @@ function writableDirectories(config: Config): readonly string[] {
 }
 
 export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
-  const { config, connection, db } = deps;
+  const { config, connection, db, env = process.env } = deps;
 
   return [
     {
@@ -378,6 +380,10 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
     {
       name: 'queue-lag',
       run: () => Promise.resolve(queueLagCheck(db, config)),
+    },
+    {
+      name: 'hooks-keyed-only',
+      run: () => Promise.resolve(hooksKeyedOnlyCheck(config, env)),
     },
     {
       name: 'volumes-writable',

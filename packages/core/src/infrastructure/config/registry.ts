@@ -90,14 +90,17 @@ export const KNOB_REGISTRY: readonly Knob[] = buildRegistry();
 /**
  * AION_*-prefixed variables that `bin/aion` passes through to the container for compose
  * and the CLI, not for config: the host repo path compose interpolates its bind mount
- * from, and the `git config user.name` the backbone bootstrap confirms. They are listed
- * here so the unknown-variable check keeps catching typos in real knobs.
+ * from, the `git config user.name` the backbone bootstrap confirms, and facts about the
+ * host the container cannot see for itself, such as whether the harness hooks are
+ * installed. They are listed here so the unknown-variable check keeps catching typos in
+ * real knobs.
  */
 export const RESERVED_ENV_VARS: ReadonlySet<string> = new Set([
   'AION_REPO_PATH',
   'AION_GIT_USER_NAME',
   'AION_BUILD_SHA',
   'AION_REPO_HEAD_SHA',
+  'AION_HOOKS_INSTALLED',
 ]);
 
 /**

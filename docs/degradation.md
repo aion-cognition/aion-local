@@ -276,7 +276,7 @@ reading `docker logs` sees a raw errno, not a domain error: `bootstrap.ts` defin
 `aion-mcp: Error: EEXIST: file already exists, mkdir '...'` rather than "aion could not
 open its SQLite store at `<path>`."
 
-**Diagnose.** `aion doctor`'s `volumes-writable` check (`packages/cli/src/doctor.ts:406-416`)
+**Diagnose.** `aion doctor`'s `volumes-writable` check (`packages/cli/src/doctor.ts:388-399`)
 catches this before it becomes a startup failure: it probes `AION_DATA_DIR`, the SQLite
 path's directory, and the log path's directory for a real write. Live, `docker logs
 aion-aion-mcp-1` shows the stderr line above; compose restarts the container, which fails

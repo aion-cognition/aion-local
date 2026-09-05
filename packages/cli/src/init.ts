@@ -398,8 +398,8 @@ export function runInit(
       if (profile === 'full') {
         installFullProfile(write);
       } else {
-        write('Hooks are not installed on the local profile.');
-        write('`aion hooks install` wires the Claude Code shims; see docs/harness.md.');
+        write('The local profile is MCP-only: intake is the reflection tool, and no hooks run.');
+        write('Hooks come with `aion init full`, which asks for a key; see docs/harness.md.');
       }
       write('\naion init: ready');
       return 0;
