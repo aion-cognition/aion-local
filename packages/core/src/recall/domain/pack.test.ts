@@ -2,6 +2,7 @@ import { MemoryPackSchema } from '@aion/protocol';
 import { describe, expect, it } from 'vitest';
 
 import type { FusedItem } from './fusion.js';
+import { triggeredIntentionItem, type IntentionTriggerKind } from './intention-triggers.js';
 import { bucketFor } from './pack-buckets.js';
 import { MAX_WHY_CHARS } from './pack-item.js';
 import { CHARS_PER_TOKEN, estimateTokens, packMethods } from './pack.js';
@@ -300,6 +301,86 @@ describe('the rendered text block', () => {
   it('omits the why line entirely for an item whose node carries no rationale', () => {
     const pack = assemble([item('e1')]);
     expect(pack.rendered_text).not.toContain('why:');
+  });
+});
+
+/**
+ * An intention reaches the pack by a condition it named rather than by anything the query
+ * asked, so its bucket is decided by that provenance and never by its label. The same Goal
+ * arriving through ordinary search answers in facts, where the label routes it.
+ */
+describe('the intentions bucket', () => {
+  const GOAL_LABELS = ['Goal', 'Memory', 'AionNode'];
+
+  function triggered(id: string, kind: IntentionTriggerKind = 'entity'): FusedItem {
+    return triggeredIntentionItem(
+      { id, labels: GOAL_LABELS, content: `content of ${id}`, currency: 'current' },
+      { id, kind, score: kind === 'situation' ? 0.62 : 1 },
+    );
+  }
+
+  it('routes a triggered Goal to intentions and a searched one to facts', () => {
+    const pack = assemble([item('g-searched', { labels: GOAL_LABELS })], {
+      intentions: [triggered('g-triggered')],
+    });
+
+    expect(pack.facts?.map((entry) => entry.id)).toEqual(['g-searched']);
+    expect(pack.intentions?.map((entry) => entry.id)).toEqual(['g-triggered']);
+  });
+
+  it('names the trigger as the method, so the rationale says how the item got in', () => {
+    const pack = assemble([], { intentions: [triggered('g1', 'situation')] });
+
+    expect(pack.intentions?.[0]?.rationale.method).toBe('intention_trigger');
+    expect(packMethods(pack)).toEqual(['intention_trigger']);
+  });
+
+  it('cuts the bucket at its own cap', () => {
+    const pack = assemble([], {
+      caps: { ...CAPS, intentions: 2 },
+      intentions: [triggered('g1'), triggered('g2'), triggered('g3')],
+    });
+
+    expect(pack.intentions?.map((entry) => entry.id)).toEqual(['g1', 'g2']);
+  });
+
+  it('renders after the narratives and before the preferences', () => {
+    const pack = assemble([item('n1', { labels: ['Narrative', 'Memory', 'AionNode'] })], {
+      intentions: [triggered('g1')],
+    });
+
+    expect(pack.rendered_text.indexOf('## Intentions')).toBeGreaterThan(
+      pack.rendered_text.indexOf('## Narratives'),
+    );
+  });
+
+  it('withholds an intention this session was already served', () => {
+    const pack = assemble([], {
+      intentions: [triggered('g1'), triggered('g2')],
+      suppressed: new Set(['g1']),
+    });
+
+    expect(pack.intentions?.map((entry) => entry.id)).toEqual(['g2']);
+  });
+
+  /** A node the query found is already in the pack; the trigger must not tell it twice. */
+  it('never packs one node in both buckets', () => {
+    const pack = assemble([item('g1', { labels: GOAL_LABELS })], {
+      intentions: [triggered('g1')],
+    });
+
+    expect(pack.facts?.map((entry) => entry.id)).toEqual(['g1']);
+    expect(pack.intentions).toBeUndefined();
+  });
+
+  it('goes over the wire as a bucket of its own', () => {
+    const pack = assemble([], { intentions: [triggered('g1')] });
+
+    expect(MemoryPackSchema.parse(pack).intentions).toHaveLength(1);
+  });
+
+  it('is absent, not empty, on a recall no trigger fired for', () => {
+    expect(assemble([item('e1')], { intentions: [] }).intentions).toBeUndefined();
   });
 });
 

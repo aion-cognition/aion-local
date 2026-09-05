@@ -58,6 +58,7 @@ const SNAPSHOT: StatsSnapshot = {
       resonance: 2,
       entity_resolution: 0,
       recency: 0,
+      intention_trigger: 0,
     },
     methodLegStats: {
       vector: { sole: 22, shared: 8, rrfContribution: 1.234 },
@@ -66,6 +67,7 @@ const SNAPSHOT: StatsSnapshot = {
       resonance: { sole: 2, shared: 0, rrfContribution: 0 },
       entity_resolution: { sole: 0, shared: 0, rrfContribution: 0 },
       recency: { sole: 0, shared: 0, rrfContribution: 0 },
+      intention_trigger: { sole: 0, shared: 0, rrfContribution: 0 },
     },
     maintenance: {
       cycle: 41,

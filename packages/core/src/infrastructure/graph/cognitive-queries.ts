@@ -101,6 +101,10 @@ export type CognitiveNodeWrite = {
   readonly intentionHorizonDays?: number;
   /** Whose intention this is. Read on a Goal or a Plan and ignored on every other label. */
   readonly originKind?: IntentionOriginKind;
+  /** The date an intention named for its own return. Read on a Goal or a Plan alone. */
+  readonly triggerAfter?: Date;
+  /** The source episode's content vector, which is an intention's situation trigger. */
+  readonly triggerVector?: Vector;
   /** Absent leaves the key inert: it is stored and nothing is closed on it. */
   readonly keyedClose?: KeyedCloseOptions;
 };
@@ -157,6 +161,8 @@ export async function writeCognitiveNode(
         ? {}
         : { horizonDays: input.intentionHorizonDays }),
       ...(input.originKind === undefined ? {} : { originKind: input.originKind }),
+      ...(input.triggerAfter === undefined ? {} : { triggerAfter: input.triggerAfter }),
+      ...(input.triggerVector === undefined ? {} : { triggerVector: input.triggerVector }),
     }),
     ...(input.contentVector === undefined
       ? {}

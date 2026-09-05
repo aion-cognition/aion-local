@@ -18,7 +18,11 @@ import {
 } from '../../../infrastructure/graph/cognitive-queries.js';
 import { ENTITY_MENTION_TYPE } from '../../../infrastructure/graph/entity-queries.js';
 import { MEMORY_PROPERTIES } from '../../../infrastructure/graph/episodes.js';
-import { INTENTION_ORIGIN_PROPERTY } from '../../../infrastructure/graph/intention-queries.js';
+import {
+  INTENTION_ORIGIN_PROPERTY,
+  TRIGGER_AFTER_PROPERTY,
+  TRIGGER_VECTOR_PROPERTY,
+} from '../../../infrastructure/graph/intention-queries.js';
 import { fromGraphDateTime } from '../../../infrastructure/graph/values.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import type {
@@ -38,6 +42,9 @@ const NOW = new Date('2026-08-28T09:05:00.000Z');
 const OCCURRED_AT = new Date('2026-08-28T09:00:00.000Z');
 
 const SUBJECT_ID = 'entity-postgres';
+
+/** The episode's own content vector, which is what an intention stores as its situation. */
+const EPISODE_VECTOR = [0.1, 0.2, 0.3];
 
 type GenerateFn = (req: StructuredRequest) => Promise<unknown>;
 type EmbedFn = (texts: readonly string[]) => Promise<Vector[]>;
@@ -633,6 +640,70 @@ describe('CognitiveExtractionStage', () => {
         intentionHorizon(OCCURRED_AT, 45),
       );
       expect(goal?.properties[INTENTION_ORIGIN_PROPERTY]).toBeUndefined();
+    });
+
+    it('carries the source episode vector and the date the episode named onto a Goal', async () => {
+      graph.seedNode(EPISODE_ID, ['Episode', 'Memory', 'AionNode'], {
+        [MEMORY_PROPERTIES.contentVector]: EPISODE_VECTOR,
+      });
+      const generate = async (): Promise<unknown> => ({
+        nodes: [
+          {
+            type: 'Goal',
+            text: 'move every queue write off Postgres',
+            trigger_after: '2026-10-01T00:00:00.000Z',
+          },
+        ],
+      });
+      const stage = new CognitiveExtractionStage();
+
+      await stage.run(buildContext(stubProvider(generate)));
+
+      const [goal] = graph.nodesWithLabel('Goal');
+      expect(goal?.properties[TRIGGER_VECTOR_PROPERTY]).toEqual(EPISODE_VECTOR);
+      expect(fromGraphDateTime(goal?.properties[TRIGGER_AFTER_PROPERTY])).toEqual(
+        new Date('2026-10-01T00:00:00.000Z'),
+      );
+    });
+
+    it('leaves an intention with no stated date its situation trigger alone', async () => {
+      graph.seedNode(EPISODE_ID, ['Episode', 'Memory', 'AionNode'], {
+        [MEMORY_PROPERTIES.contentVector]: EPISODE_VECTOR,
+      });
+      const generate = async (): Promise<unknown> => ({
+        nodes: [
+          { type: 'Plan', text: 'split the queue table', trigger_after: 'once the reset lands' },
+        ],
+      });
+      const stage = new CognitiveExtractionStage();
+
+      await stage.run(buildContext(stubProvider(generate)));
+
+      const [plan] = graph.nodesWithLabel('Plan');
+      expect(plan?.properties[TRIGGER_VECTOR_PROPERTY]).toEqual(EPISODE_VECTOR);
+      expect(plan?.properties[TRIGGER_AFTER_PROPERTY]).toBeUndefined();
+    });
+
+    it('triggers nothing on a type that states a fact rather than an intention', async () => {
+      graph.seedNode(EPISODE_ID, ['Episode', 'Memory', 'AionNode'], {
+        [MEMORY_PROPERTIES.contentVector]: EPISODE_VECTOR,
+      });
+      const generate = async (): Promise<unknown> => ({
+        nodes: [
+          {
+            type: 'Decision',
+            text: 'the queue moves onto its own SQLite file',
+            trigger_after: '2026-10-01T00:00:00.000Z',
+          },
+        ],
+      });
+      const stage = new CognitiveExtractionStage();
+
+      await stage.run(buildContext(stubProvider(generate)));
+
+      const [decision] = graph.nodesWithLabel('Decision');
+      expect(decision?.properties[TRIGGER_VECTOR_PROPERTY]).toBeUndefined();
+      expect(decision?.properties[TRIGGER_AFTER_PROPERTY]).toBeUndefined();
     });
 
     it('resolves no subject and stores no key when the keyed close is off', async () => {

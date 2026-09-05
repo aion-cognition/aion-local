@@ -48,6 +48,7 @@ describe('pack method counters', () => {
       resonance: 0,
       entity_resolution: 0,
       recency: 0,
+      intention_trigger: 0,
     });
   });
 

@@ -4,13 +4,15 @@
  * assembly is a budget.
  */
 
-export type PackBucket = 'facts' | 'episodes' | 'narratives' | 'preferences' | 'resonant';
+export type PackBucket =
+  'facts' | 'episodes' | 'narratives' | 'intentions' | 'preferences' | 'resonant';
 
 /** Schema order, which is also render order. */
 export const PACK_BUCKETS: readonly PackBucket[] = [
   'facts',
   'episodes',
   'narratives',
+  'intentions',
   'preferences',
   'resonant',
 ];
@@ -37,10 +39,13 @@ export type BucketCaps = Readonly<Record<PackBucket, number>>;
  * structurally absent from a pack rather than empty. A label with no bucket cannot be packed and
  * its item is dropped.
  *
- * The resonant bucket is not in this table and never will be. Every other bucket answers "what
- * kind of memory is this", which a label decides; resonance answers "how was this found", which
- * only the stage that found it knows. A resonant Episode belongs beside the other resonant
- * discoveries, not beside the episodes the query matched directly.
+ * The resonant and intentions buckets are not in this table and never will be. Every other
+ * bucket answers "what kind of memory is this", which a label decides; those two answer "how was
+ * this found", which only the stage that found it knows. A resonant Episode belongs beside the
+ * other resonant discoveries, not beside the episodes the query matched directly, and a Goal a
+ * trigger brought back belongs beside the other standing intentions rather than among the facts
+ * the query asked for. A Goal the search itself found is routed by this table, to facts, because
+ * the query is what put it there.
  */
 const BUCKET_BY_LABEL: Readonly<Record<string, PackBucket>> = {
   Episode: 'episodes',
@@ -63,6 +68,7 @@ export const BUCKET_HEADINGS: Readonly<Record<PackBucket, string>> = {
   facts: '## Facts',
   episodes: '## Episodes',
   narratives: '## Narratives',
+  intentions: '## Intentions',
   preferences: '## Preferences',
   resonant: '## Resonant',
 };

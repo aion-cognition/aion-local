@@ -24,6 +24,7 @@ export const CAPS: BucketCaps = {
   facts: 15,
   episodes: 5,
   narratives: 5,
+  intentions: 3,
   preferences: 3,
   resonant: 5,
 };

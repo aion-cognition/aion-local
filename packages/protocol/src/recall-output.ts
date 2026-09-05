@@ -4,9 +4,13 @@ import { CurrencySchema, IsoTimestampSchema, SupersededBySchema } from './common
 
 /**
  * Every method that can produce a recalled item: four seed strategies, hybrid-search
- * (vector, bm25, graph traversal), spreading activation, and context resonance. Fixed
- * rather than a plain string because the stages are a closed, specified set and every
- * consumer branches on this value.
+ * (vector, bm25, graph traversal), spreading activation, context resonance, and a standing
+ * intention whose own trigger condition the recall met. Fixed rather than a plain string
+ * because the stages are a closed, specified set and every consumer branches on this value.
+ *
+ * `intention_trigger` is the one method that answers a question the caller did not ask. The
+ * others all measure a candidate against the query; this one says the substrate had something
+ * standing and this was the moment for it.
  */
 export const RecallMethodSchema = z.enum([
   'vector',
@@ -16,6 +20,7 @@ export const RecallMethodSchema = z.enum([
   'resonance',
   'entity_resolution',
   'recency',
+  'intention_trigger',
 ]);
 
 export type RecallMethod = z.infer<typeof RecallMethodSchema>;
@@ -327,6 +332,12 @@ export const MemoryPackSchema = z.strictObject({
   facts: memoryPackBucket.optional(),
   episodes: memoryPackBucket.optional(),
   narratives: memoryPackBucket.optional(),
+  /**
+   * Standing intentions a trigger condition brought back, rather than anything the query asked
+   * for. Optional like every other bucket, and absent on most recalls; a Goal or Plan the search
+   * itself found answers in `facts`, where the query put it.
+   */
+  intentions: memoryPackBucket.optional(),
   preferences: memoryPackBucket.optional(),
   resonant: memoryPackBucket.optional(),
   rendered_text: z.string(),
@@ -340,6 +351,7 @@ export const MEMORY_PACK_BUCKETS = [
   'facts',
   'episodes',
   'narratives',
+  'intentions',
   'preferences',
   'resonant',
 ] as const satisfies readonly (keyof typeof MemoryPackSchema.shape)[];
@@ -357,6 +369,7 @@ export function packBuckets(
     facts: pack.facts ?? [],
     episodes: pack.episodes ?? [],
     narratives: pack.narratives ?? [],
+    intentions: pack.intentions ?? [],
     preferences: pack.preferences ?? [],
     resonant: pack.resonant ?? [],
   };

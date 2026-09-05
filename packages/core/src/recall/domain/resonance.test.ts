@@ -19,7 +19,14 @@ const TIMINGS: StageTimingsMs = {
 
 const CUES: readonly Cue[] = [{ text: 'webhooks', source: 'query', weight: 3 }];
 
-const CAPS: BucketCaps = { facts: 15, episodes: 5, narratives: 5, preferences: 3, resonant: 5 };
+const CAPS: BucketCaps = {
+  facts: 15,
+  episodes: 5,
+  narratives: 5,
+  intentions: 3,
+  preferences: 3,
+  resonant: 5,
+};
 
 const ADMISSION: AdmissionReport = {
   policy: { vectorFloor: 0.6, corroborationFloor: 0.55, bm25Mode: 'exact' },

@@ -4,9 +4,16 @@ import { BITEMPORAL_PROPERTIES, CLOSURE_PROVENANCE_PROPERTY, closeFragment } fro
 import type { CognitiveNodeLabel } from './cognitive-queries.js';
 import { runRead, runWrite, type GraphStatement } from './connection.js';
 import { GraphWriteError } from './errors.js';
-import { VALID_HORIZON_PROPERTY } from './read-modes.js';
-import { toGraphDateTime, type GraphProperties, type Row } from './values.js';
-import { intentionHorizon } from '../../reflection/domain/claim-key.js';
+import { readModeFragment, VALID_HORIZON_PROPERTY, type ReadMode } from './read-modes.js';
+import {
+  fromGraphDateTime,
+  fromGraphVector,
+  toGraphDateTime,
+  type GraphProperties,
+  type Row,
+} from './values.js';
+import { CLAIM_SUBJECT_PROPERTY, intentionHorizon } from '../../reflection/domain/claim-key.js';
+import type { Vector } from '../providers/types.js';
 
 /**
  * Goals and Plans: what the substrate means to do, as opposed to what it holds true.
@@ -51,12 +58,31 @@ export type IntentionOriginKind = (typeof INTENTION_ORIGIN_KINDS)[number];
 
 export const DEFAULT_INTENTION_ORIGIN: IntentionOriginKind = 'member';
 
+/**
+ * When the intention asks to be brought back, as a date it named itself. Absent on every
+ * intention whose text named no moment, which is most of them.
+ */
+export const TRIGGER_AFTER_PROPERTY = 'trigger_after';
+
+/**
+ * The situation the intention was formed in: the content vector of the episode it came from,
+ * stored on every intention. It is a second vector rather than the node's own `content_vec`
+ * because the two answer different questions. `content_vec` is the intention's sentence, which
+ * is what a query matches against; this is the surrounding conversation, which is what says
+ * whether a later moment resembles the one that produced it.
+ */
+export const TRIGGER_VECTOR_PROPERTY = 'trigger_vec';
+
 export type IntentionPropertiesInput = {
   readonly label: CognitiveNodeLabel;
   /** The world time of the experience the intention came from, which the horizon counts from. */
   readonly occurredAt: Date;
   readonly horizonDays?: number;
   readonly originKind?: IntentionOriginKind;
+  /** The moment the intention named for its own return, when its text named one. */
+  readonly triggerAfter?: Date;
+  /** The source episode's content vector. Absent when that episode's vector is still pending. */
+  readonly triggerVector?: Vector;
 };
 
 /**
@@ -75,6 +101,8 @@ export function intentionProperties(input: IntentionPropertiesInput): GraphPrope
         ? undefined
         : intentionHorizon(input.occurredAt, input.horizonDays),
     [INTENTION_ORIGIN_PROPERTY]: origin === DEFAULT_INTENTION_ORIGIN ? undefined : origin,
+    [TRIGGER_AFTER_PROPERTY]: input.triggerAfter,
+    [TRIGGER_VECTOR_PROPERTY]: input.triggerVector,
   };
 }
 
@@ -85,6 +113,93 @@ function assertPositiveInt(name: string, value: number): void {
   if (!Number.isInteger(value) || value <= 0) {
     throw new GraphWriteError(`${name} must be a positive integer, received ${value}`);
   }
+}
+
+/**
+ * How many open intentions one recall reads. The match that follows is three comparisons per
+ * row and costs nothing; the read is what needs a bound, because each row carries a stored
+ * vector and a substrate that accumulated thousands of open intentions would put all of them on
+ * a hot path that is allowed one generation call and no surprises.
+ *
+ * Newest first. An intention nobody has restated in months is the one the horizon sweep is
+ * already closing, so it is the right one to fall off the end of a full scan.
+ */
+export const TRIGGERABLE_INTENTION_SCAN_LIMIT = 100;
+
+/** An open intention as the trigger match reads it: an id and whatever conditions it carries. */
+export type TriggerableIntention = {
+  readonly id: string;
+  /** The entity the intention is about, which is the entity trigger. */
+  readonly subjectEntityId?: string;
+  readonly triggerAfter?: Date;
+  readonly triggerVector?: Vector;
+};
+
+export type TriggerableIntentionsInput = {
+  readonly mode: ReadMode;
+  /** The recall's clock. An intention past its horizon is down-ranked, so it never triggers. */
+  readonly now: Date;
+  readonly limit: number;
+};
+
+/**
+ * Open intentions carrying at least one condition for their own return: still current on both
+ * timelines, not yet expired, and naming a subject, a date, or a situation.
+ *
+ * Expired is excluded rather than down-ranked here. Everywhere else the read mode annotates an
+ * aged-out row and lets the reader judge it, but a trigger is the substrate volunteering
+ * something nobody asked for, and volunteering a plan whose own horizon has passed is the one
+ * case where the annotation arrives too late to help.
+ */
+export function buildTriggerableIntentionsStatement(
+  input: TriggerableIntentionsInput,
+): GraphStatement {
+  assertPositiveInt('limit', input.limit);
+  const fragment = readModeFragment(input.mode, 'n');
+  const cypher = [
+    `MATCH (n:${INTENTION_LABEL_EXPRESSION})`,
+    `WHERE n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
+    `  AND ${fragment.where}`,
+    `  AND (n.${VALID_HORIZON_PROPERTY} IS NULL OR n.${VALID_HORIZON_PROPERTY} > $now)`,
+    `  AND (n.${CLAIM_SUBJECT_PROPERTY} IS NOT NULL`,
+    `    OR n.${TRIGGER_AFTER_PROPERTY} IS NOT NULL`,
+    `    OR n.${TRIGGER_VECTOR_PROPERTY} IS NOT NULL)`,
+    'RETURN',
+    '  n.id AS id,',
+    `  n.${CLAIM_SUBJECT_PROPERTY} AS subject_entity_id,`,
+    `  n.${TRIGGER_AFTER_PROPERTY} AS trigger_after,`,
+    `  n.${TRIGGER_VECTOR_PROPERTY} AS trigger_vec`,
+    `ORDER BY n.${BITEMPORAL_PROPERTIES.occurredAt} DESC, n.id`,
+    'LIMIT $limit',
+  ].join('\n');
+  return {
+    cypher,
+    parameters: {
+      ...fragment.parameters,
+      now: toGraphDateTime(input.now),
+      limit: neo4j.int(input.limit),
+    },
+  };
+}
+
+function mapTriggerableIntention(row: Row): TriggerableIntention {
+  const subjectEntityId = row.subject_entity_id;
+  const triggerAfter = fromGraphDateTime(row.trigger_after);
+  const triggerVector = fromGraphVector(row.trigger_vec);
+  return {
+    id: row.id as string,
+    ...(typeof subjectEntityId === 'string' ? { subjectEntityId } : {}),
+    ...(triggerAfter === undefined ? {} : { triggerAfter }),
+    ...(triggerVector === undefined ? {} : { triggerVector }),
+  };
+}
+
+export async function findTriggerableIntentions(
+  driver: Driver,
+  input: TriggerableIntentionsInput,
+): Promise<TriggerableIntention[]> {
+  const statement = buildTriggerableIntentionsStatement(input);
+  return runRead(driver, statement.cypher, statement.parameters, mapTriggerableIntention);
 }
 
 /**

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { validateRestatements, type RestatementCandidate } from './cognitive-restatement.js';
+import { episodeTriggerVector, narrowTriggerAfter } from './cognitive-triggers.js';
 import {
   narrowClaimKey,
   resolveClaimSubjects,
@@ -15,7 +16,9 @@ import {
   COGNITIVE_NODE_LABELS,
   writeCognitiveNode,
   type CognitiveNodeMetadata,
+  type CognitiveNodeWrite,
 } from '../../../infrastructure/graph/cognitive-queries.js';
+import { isIntentionNodeLabel } from '../../../infrastructure/graph/intention-queries.js';
 import { deadlineFor } from '../../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Vector } from '../../../infrastructure/providers/types.js';
 import { TEMPORAL_CLASSES } from '../../domain/claim-key.js';
@@ -75,6 +78,7 @@ const COGNITIVE_JSON_SCHEMA: JsonSchema = {
           subject_entity: { type: 'string' },
           aspect: { type: 'string' },
           temporal_class: { type: 'string', enum: [...TEMPORAL_CLASSES] },
+          trigger_after: { type: 'string' },
         },
         // The key fields stay out of `required`: most claims name no subject the graph holds,
         // and forcing three fields onto every node buys a key the episode did not state.
@@ -97,6 +101,7 @@ const ExtractedNodeSchema = z.object({
   subject_entity: z.unknown().optional(),
   aspect: z.unknown().optional(),
   temporal_class: z.unknown().optional(),
+  trigger_after: z.unknown().optional(),
 });
 
 type ExtractedNode = z.infer<typeof ExtractedNodeSchema>;
@@ -157,6 +162,9 @@ const SYSTEM_PROMPT = [
   'of one named thing, and omit them for everything else.',
   'For a goal or plan, give subject_entity and aspect on the same terms and no temporal_class:',
   'the thing the intention is about, and the attribute of it the intention means to settle.',
+  'For a goal or plan only, add trigger_after as an ISO 8601 date or datetime when the episode',
+  'names a moment the intention waits for and that moment resolves to a calendar date; omit it',
+  'for a condition with no date in it ("after the reset lands") and for everything else.',
 ].join(' ');
 
 function buildMessages(text: string, summary: string | undefined): ChatMessage[] {
@@ -168,6 +176,24 @@ function buildMessages(text: string, summary: string | undefined): ChatMessage[]
     { role: 'system', content: SYSTEM_PROMPT },
     { role: 'user', content: `Episode:\n${text}${summaryLine}` },
   ];
+}
+
+/**
+ * What an intention is brought back by, empty for every other type. The situation vector is the
+ * whole run's, since every node it writes came from one episode; the date is this node's own.
+ */
+function triggersFor(
+  node: ExtractedNode,
+  situation: Vector | undefined,
+): Pick<CognitiveNodeWrite, 'triggerAfter' | 'triggerVector'> {
+  if (!isIntentionNodeLabel(node.type)) {
+    return {};
+  }
+  const triggerAfter = narrowTriggerAfter(node.trigger_after);
+  return {
+    ...(triggerAfter === undefined ? {} : { triggerAfter }),
+    ...(situation === undefined ? {} : { triggerVector: situation }),
+  };
 }
 
 /** The per-type fields; every other type carries `text` alone. */
@@ -313,6 +339,10 @@ export class CognitiveExtractionStage implements ReflectionStage {
       }),
     );
     const subjects = await this.#resolveSubjects(ctx, keys);
+    // One read for the run, and only when it has an intention to carry the situation.
+    const situation = nodes.some((node) => isIntentionNodeLabel(node.type))
+      ? await episodeTriggerVector(ctx)
+      : undefined;
 
     let written = 0;
     let created = 0;
@@ -331,6 +361,7 @@ export class CognitiveExtractionStage implements ReflectionStage {
           ...storedClaimKey(keys[index] ?? {}, subjects),
           readingHorizonDays: this.#options.readingHorizonDays,
           intentionHorizonDays: this.#options.intentionHorizonDays,
+          ...triggersFor(node, situation),
           keyedClose: {
             mode: this.#options.keyedCloseMode,
             relatednessFloor: this.#options.familyRelatednessFloor,

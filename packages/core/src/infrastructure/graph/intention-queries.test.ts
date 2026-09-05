@@ -5,14 +5,19 @@ import { GraphWriteError } from './errors.js';
 import {
   buildCloseStaleIntentionsStatement,
   buildStaleIntentionsStatement,
+  buildTriggerableIntentionsStatement,
   CLOSED_BY_INTENTION_UPKEEP,
   INTENTION_NODE_LABELS,
   INTENTION_ORIGIN_PROPERTY,
   intentionProperties,
   isIntentionNodeLabel,
+  TRIGGER_AFTER_PROPERTY,
+  TRIGGER_VECTOR_PROPERTY,
+  TRIGGERABLE_INTENTION_SCAN_LIMIT,
 } from './intention-queries.js';
-import { VALID_HORIZON_PROPERTY } from './read-modes.js';
+import { VALID_HORIZON_PROPERTY, withCurrency } from './read-modes.js';
 import { FACT_NODE_LABELS } from './supersession-queries.js';
+import { CLAIM_SUBJECT_PROPERTY } from '../../reflection/domain/claim-key.js';
 
 const NOW = new Date('2026-10-05T00:00:00.000Z');
 
@@ -89,6 +94,37 @@ describe('intentionProperties', () => {
 
     expect(properties[VALID_HORIZON_PROPERTY]).toBeUndefined();
   });
+
+  it('stores both triggers as given, so the date and the situation come back unchanged', () => {
+    const triggerAfter = new Date('2026-10-01T00:00:00.000Z');
+    const properties = intentionProperties({
+      label: 'Plan',
+      occurredAt: OCCURRED_AT,
+      triggerAfter,
+      triggerVector: [0.1, 0.2, 0.3],
+    });
+
+    expect(properties[TRIGGER_AFTER_PROPERTY]).toEqual(triggerAfter);
+    expect(properties[TRIGGER_VECTOR_PROPERTY]).toEqual([0.1, 0.2, 0.3]);
+  });
+
+  it('omits a trigger the intention never named, rather than writing an empty one', () => {
+    const properties = intentionProperties({ label: 'Goal', occurredAt: OCCURRED_AT });
+
+    expect(properties[TRIGGER_AFTER_PROPERTY]).toBeUndefined();
+    expect(properties[TRIGGER_VECTOR_PROPERTY]).toBeUndefined();
+  });
+
+  it('writes no trigger onto a label that states a fact rather than an intention', () => {
+    const properties = intentionProperties({
+      label: 'Insight',
+      occurredAt: OCCURRED_AT,
+      triggerAfter: new Date('2026-10-01T00:00:00.000Z'),
+      triggerVector: [0.1, 0.2, 0.3],
+    });
+
+    expect(properties).toEqual({});
+  });
 });
 
 describe('buildStaleIntentionsStatement', () => {
@@ -119,6 +155,53 @@ describe('buildStaleIntentionsStatement', () => {
   it('refuses a batch size that is not a positive integer', () => {
     expect(() => buildStaleIntentionsStatement(STALE_BEFORE, 0)).toThrow(GraphWriteError);
     expect(() => buildStaleIntentionsStatement(STALE_BEFORE, 2.5)).toThrow(GraphWriteError);
+  });
+});
+
+describe('buildTriggerableIntentionsStatement', () => {
+  function statement(): { cypher: string; parameters: Record<string, unknown> } {
+    return buildTriggerableIntentionsStatement({
+      mode: withCurrency(NOW),
+      now: NOW,
+      limit: TRIGGERABLE_INTENTION_SCAN_LIMIT,
+    });
+  }
+
+  it('reads the two intention labels and nothing else', () => {
+    expect(statement().cypher).toContain('MATCH (n:Goal|Plan)');
+  });
+
+  it('takes only intentions still open and still readable', () => {
+    const { cypher } = statement();
+    expect(cypher).toContain(`n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`);
+    expect(cypher).toContain(`n.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`);
+  });
+
+  it('leaves an intention past its own horizon out rather than annotating it', () => {
+    const { cypher, parameters } = statement();
+    expect(cypher).toContain(
+      `(n.${VALID_HORIZON_PROPERTY} IS NULL OR n.${VALID_HORIZON_PROPERTY} > $now)`,
+    );
+    expect(parameters.now).toBeDefined();
+  });
+
+  it('takes only an intention carrying at least one condition for its own return', () => {
+    const { cypher } = statement();
+    expect(cypher).toContain(`n.${CLAIM_SUBJECT_PROPERTY} IS NOT NULL`);
+    expect(cypher).toContain(`OR n.${TRIGGER_AFTER_PROPERTY} IS NOT NULL`);
+    expect(cypher).toContain(`OR n.${TRIGGER_VECTOR_PROPERTY} IS NOT NULL`);
+  });
+
+  it('bounds the scan and reads the newest intentions first', () => {
+    const { cypher } = statement();
+    expect(cypher).toContain(`ORDER BY n.${BITEMPORAL_PROPERTIES.occurredAt} DESC, n.id`);
+    expect(cypher).toContain('LIMIT $limit');
+  });
+
+  it('refuses a scan bound that is not a positive integer', () => {
+    expect(() =>
+      buildTriggerableIntentionsStatement({ mode: withCurrency(NOW), now: NOW, limit: 0 }),
+    ).toThrow(GraphWriteError);
   });
 });
 

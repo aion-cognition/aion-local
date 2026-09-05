@@ -20,7 +20,14 @@ import type { ToolBackend } from './tools.js';
  * in `service.int.test.ts`.
  */
 
-const CAPS: BucketCaps = { facts: 15, episodes: 5, narratives: 5, preferences: 3, resonant: 5 };
+const CAPS: BucketCaps = {
+  facts: 15,
+  episodes: 5,
+  narratives: 5,
+  intentions: 3,
+  preferences: 3,
+  resonant: 5,
+};
 const CUES: readonly Cue[] = [{ text: 'webhooks', source: 'query', weight: 3 }];
 const TIMINGS: StageTimingsMs = { embed: 1, cues: 2, seeds: 3, activation: 4, fusion: 5 };
 

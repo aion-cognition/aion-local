@@ -90,6 +90,13 @@ export type ResonanceResult = {
    */
   readonly covered: number;
   readonly activated: number;
+  /**
+   * The centroid this pass searched with, handed back rather than kept, so the intention
+   * triggers that run after it compare against the same shape instead of computing a second
+   * one. Absent whenever the stage skipped, which is what makes a situation trigger unable to
+   * fire on a run that had nothing to take a mean of.
+   */
+  readonly centroid?: Vector;
 };
 
 function skip(skipped: ResonanceSkip, activated: number, covered = 0): ResonanceResult {
@@ -183,7 +190,7 @@ export async function resonate(
       { activated, anchored: anchored.length, covered, hits: hits.length, items: items.length },
       'context resonance ran',
     );
-    return { items, covered, activated };
+    return { items, covered, activated, centroid };
   } catch (err) {
     deps.logger.warn({ err }, 'context resonance failed; the pack keeps its first-pass answer');
     return skip('unavailable', activated);
