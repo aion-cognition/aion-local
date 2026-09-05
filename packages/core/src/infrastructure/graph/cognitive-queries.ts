@@ -12,6 +12,7 @@ import { normalizeCognitiveText, TEXT_NORM_PROPERTY } from './cognitive-text.js'
 import { inWriteTransaction } from './connection.js';
 import { upsertEdgeInTransaction, type UpsertedEdge } from './edges.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
+import { intentionProperties, type IntentionOriginKind } from './intention-queries.js';
 import type { NodeLabel } from './labels.js';
 import { toGraphVector, type GraphProperties } from './values.js';
 import type { TemporalClass } from '../../reflection/domain/claim-key.js';
@@ -96,6 +97,14 @@ export type CognitiveNodeWrite = {
   readonly temporalClass?: TemporalClass;
   /** How long a reading answers for; the horizon is computed from `occurredAt`, never from `now`. */
   readonly readingHorizonDays?: number;
+  /** How long an intention stands before the upkeep sweep may close it, on the same clock. */
+  readonly intentionHorizonDays?: number;
+  /** Whose intention this is. Read on a Goal or a Plan and ignored on every other label. */
+  readonly originKind?: IntentionOriginKind;
+  /** The date an intention named for its own return. Read on a Goal or a Plan alone. */
+  readonly triggerAfter?: Date;
+  /** The source episode's content vector, which is an intention's situation trigger. */
+  readonly triggerVector?: Vector;
   /** Absent leaves the key inert: it is stored and nothing is closed on it. */
   readonly keyedClose?: KeyedCloseOptions;
 };
@@ -143,6 +152,18 @@ export async function writeCognitiveNode(
         ? {}
         : { readingHorizonDays: input.readingHorizonDays }),
     }),
+    // After the key block, so an intention's own horizon is the one that lands however the
+    // caller classed it. Empty for every label that is not a Goal or a Plan.
+    ...intentionProperties({
+      label: input.label,
+      occurredAt: input.occurredAt,
+      ...(input.intentionHorizonDays === undefined
+        ? {}
+        : { horizonDays: input.intentionHorizonDays }),
+      ...(input.originKind === undefined ? {} : { originKind: input.originKind }),
+      ...(input.triggerAfter === undefined ? {} : { triggerAfter: input.triggerAfter }),
+      ...(input.triggerVector === undefined ? {} : { triggerVector: input.triggerVector }),
+    }),
     ...(input.contentVector === undefined
       ? {}
       : {
@@ -182,6 +203,7 @@ export async function writeCognitiveNode(
 
     const keyedClose = await closeKeyedClaimsInTransaction(tx, {
       newId: id,
+      label: input.label,
       episodeId: input.episodeId,
       subjectEntityId: input.subjectEntityId,
       aspectNorm: input.aspectNorm,

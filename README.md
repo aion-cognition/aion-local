@@ -30,9 +30,9 @@ cd aion-local
 ```
 
 `init` provisions the whole substrate: starts Neo4j, pulls and verifies the Ollama models,
-applies the graph schema, creates the Member and Workspace backbone nodes, starts the MCP
-server, and prints a registration command. Along the way it asks which profile you want,
-and for a member name (defaulting to your git user.name): that names the graph node your
+applies the graph schema, creates the Member, Workspace and Substrate backbone nodes, starts
+the MCP server, and prints a registration command. Along the way it asks which profile you
+want, and for a member name (defaulting to your git user.name): that names the graph node your
 sessions attach to... the person this memory belongs to. The registration command it
 prints at the end:
 
@@ -103,8 +103,9 @@ for what each hook does and the settings JSON for a manual install.
 ## The two tools
 
 **recall** searches persistent memory and returns a `MemoryPack`: facts, episodes,
-narratives, and resonant associations, each item carrying its rank, confidence, rationale,
-and currency. The pack includes `rendered_text`, a block ready to drop into agent reasoning,
+narratives, standing intentions a trigger condition brought back, and resonant associations,
+each item carrying its rank, confidence, rationale, and currency. The pack includes
+`rendered_text`, a block ready to drop into agent reasoning,
 and it says what it is short of: degraded stages and not-yet-enriched episodes are named in
 one plain line. `as_of` asks what was true at a past date; `knew_at` asks what the substrate
 believed at one. An empty pack is a valid, honest answer.
@@ -130,14 +131,15 @@ does not work and says so: the CLI orchestrates the repo it lives in.
 - `hooks`: install, remove, or inspect the Claude Code harness hooks
 - `status`: services, models, routing, and graph counts
 - `doctor`: check every substrate invariant and name what is broken
-- `stats`: everything status shows, plus per-method pack shares, cadence, and plasticity
+- `stats`: everything status shows, plus cadence, per-method pack shares, generation by route,
+  the recall self-probe rates, and the maintenance loop's record
 - `last`: the last MemoryPack served per session, with rationale
 - `why`: provenance, lineage, and open proposals for one node
 - `search`: direct hybrid search through the seed layer, bypassing pack assembly
 - `forget`: bitemporal close of a node, by id or by query
 - `unsupersede`: reopen a claim a supersession closed, whatever made the close
 - `queue`: inspect and triage the reflection queue
-- `replay`: put archived experiences back through the pipeline
+- `replay`: put archived experiences back through the pipeline, and the usage stream back on top
 - `proposals`: review judged contradictions and duplicate entities
 - `maintain`: the maintenance catalog, and forcing one operation to run now
 - `unmerge`: split an identity back out of the entity dedup absorbed it into
@@ -214,7 +216,7 @@ the remote judge, so the numbers would describe a judge the service does not run
 
 The substrate is complete and in daily use: provisioning, capture, recall with the full MCP
 surface, the reflection pipeline, Hebbian reinforcement and decay, the introspection loop
-scheduling twenty-five maintenance operations, per-role Anthropic routing with model
+scheduling twenty-eight maintenance operations, per-role Anthropic routing with model
 reconciliation, the harness hooks, and the CLI above. Unit tests pass deterministically; the
 integration suite runs against a live Neo4j and host Ollama. Engrams, described in the
 whitepaper, are designed and not yet built, and the `preferences` pack bucket has no producer

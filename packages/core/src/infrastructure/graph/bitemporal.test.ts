@@ -64,6 +64,7 @@ describe('labels', () => {
   it('gives backbone nodes the Entity label the composite constraint needs', () => {
     expect(resolveLabels('Member')).toEqual(['Member', 'Entity', BASE_NODE_LABEL]);
     expect(resolveLabels('Workspace')).toEqual(['Workspace', 'Entity', BASE_NODE_LABEL]);
+    expect(resolveLabels('Substrate')).toEqual(['Substrate', 'Entity', BASE_NODE_LABEL]);
   });
 
   it('lists the primary label first for every known label', () => {

@@ -30,6 +30,12 @@ export { Introspector } from './application/engine.js';
 export { introspectionOperations } from './application/catalog.js';
 
 /**
+ * The self-probe's isolated recall, built where the real recall deps live. It is exported for
+ * the caller that wires the loop, since only that caller holds them.
+ */
+export { probeRecall } from './application/operations/recall-probe.js';
+
+/**
  * The repair the loop never selects. A person names the merge to reverse; `unmerge.ts` says why
  * it has no measurable trigger.
  */

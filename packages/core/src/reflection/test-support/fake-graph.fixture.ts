@@ -173,6 +173,9 @@ export class FakeGraph {
     if (cypher.includes('(:Member { id: $memberId })')) {
       return toResult(this.#priorSession(parameters));
     }
+    if (cypher.includes('MATCH (n:Substrate)')) {
+      return toResult(this.#substrateId());
+    }
 
     throw new Error(`FakeGraph has no model for this statement:\n${cypher}`);
   }
@@ -374,6 +377,12 @@ export class FakeGraph {
       }
     }
     return [];
+  }
+
+  /** The substrate's identity node, empty on a graph no backbone has been seeded into. */
+  #substrateId(): Row[] {
+    const substrate = this.nodesWithLabel('Substrate')[0];
+    return substrate === undefined ? [] : [{ id: substrate.id }];
   }
 
   /** The chain's tail: the member's session that no other session FOLLOWS. */

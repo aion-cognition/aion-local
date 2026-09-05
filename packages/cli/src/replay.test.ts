@@ -93,6 +93,14 @@ describe('parseReplayFlags', () => {
       '--all and --stale select different rows',
     );
   });
+
+  it('reads the usage stream as its own subcommand, sharing the batch and limit options', () => {
+    expect(parseReplayFlags(['usage', '--batch', '50', '--limit', '200'])).toMatchObject({
+      subcommand: 'usage',
+      batch: 50,
+      limit: 200,
+    });
+  });
 });
 
 describe('the scratch-substrate gate', () => {
@@ -194,6 +202,7 @@ describe('aion replay against a seeded archive', () => {
       '  v0         2',
       `  ${PIPELINE_VERSION.padEnd(10)} 1`,
       'occurred   2026-01-01T08:00:00.000Z to 2026-01-03T08:00:00.000Z',
+      'usage      0 events',
     ]);
   });
 
@@ -213,6 +222,7 @@ describe('aion replay against a seeded archive', () => {
       ],
       oldest_occurred_at: '2026-01-01T08:00:00.000Z',
       newest_occurred_at: '2026-01-03T08:00:00.000Z',
+      usage_events: 0,
     });
   });
 
@@ -223,6 +233,19 @@ describe('aion replay against a seeded archive', () => {
     const { lines, write } = collector();
 
     await expect(runReplayCommand(['run'], write)).resolves.toBe(1);
+
+    expect(String(stderr.mock.calls[0]?.[0])).toContain(
+      'AION_NEO4J_URI still point at the default',
+    );
+    expect(lines).toEqual([]);
+  });
+
+  // Every event a usage pass applies is an additive write, so it takes the same gate `run` does.
+  it('refuses to replay the usage stream against the shipped graph', async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const { lines, write } = collector();
+
+    await expect(runReplayCommand(['usage'], write)).resolves.toBe(1);
 
     expect(String(stderr.mock.calls[0]?.[0])).toContain(
       'AION_NEO4J_URI still point at the default',
@@ -248,7 +271,7 @@ describe('aion replay against a seeded archive', () => {
 
     await expect(runReplayCommand(['--help'], write)).resolves.toBe(0);
 
-    expect(lines[0]).toContain('usage: aion replay [ls | run]');
+    expect(lines[0]).toContain('usage: aion replay [ls | run | usage]');
   });
 });
 
@@ -277,7 +300,11 @@ describe('aion replay ls against an archive that holds nothing', () => {
 
     await expect(runReplayCommand(['ls'], write)).resolves.toBe(0);
 
-    expect(lines).toEqual([`pipeline   ${PIPELINE_VERSION}`, 'archived   0 experiences, 0 stale']);
+    expect(lines).toEqual([
+      `pipeline   ${PIPELINE_VERSION}`,
+      'archived   0 experiences, 0 stale',
+      'usage      0 events',
+    ]);
   });
 
   it('answers the same shape in json, with both span fields null', async () => {
@@ -292,6 +319,7 @@ describe('aion replay ls against an archive that holds nothing', () => {
       by_version: [],
       oldest_occurred_at: null,
       newest_occurred_at: null,
+      usage_events: 0,
     });
   });
 });

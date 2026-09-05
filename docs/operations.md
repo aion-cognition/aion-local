@@ -218,6 +218,129 @@ aion forget <id | query> [--yes]
 `forget` sets `forgotten_at` and deletes nothing. Default recall stops serving the node;
 `aion search --as-of` and `--knew-at` still return it, which is what keeps the act audited.
 
+## Standing intentions
+
+A Goal or a Plan comes back on its own, without being asked for. Recall reads the open ones
+after the second pass and serves the ones this moment matches in an `intentions` bucket of
+their own: the entity it is about is in play, the date its episode named has passed, or this
+situation resembles the one it was formed in. Provenance decides the bucket rather than the
+label, so a Goal the query itself found still answers in `facts`.
+
+```
+AION_RECALL_INTENTIONS=true                # the kill switch: no intention comes back on a trigger
+AION_RECALL_INTENTION_SITUATION_FLOOR=0.5  # the cosine a situation match has to clear
+AION_RECALL_MAX_INTENTIONS=3               # how many the bucket may hold
+```
+
+Off restores the pack exactly as it was before intentions had triggers. The situation floor is
+borrowed from `contextSearchThreshold` rather than measured, so treat it as a starting value;
+the entity and temporal triggers do not read it. Nothing here spends a model call.
+
+An intention is dated at write: `AION_INTENTION_HORIZON_DAYS` (default `30`) past its own
+episode's clock is when it stops standing and starts reading as expired, down-ranked and
+labeled, never dropped. `intention_upkeep` is the second half. Once a day it closes the Goals
+and Plans a whole further horizon past that, so what it takes is stale rather than merely
+expired: sixty days at the default. The close is an ordinary bitemporal close stamped with the
+operation's name, so `aion unsupersede` reopens one and a ledger row per close records which
+ones it took. `AION_MAINTENANCE_INTENTION_UPKEEP` (default `true`) is the kill switch, and
+`AION_MAINTENANCE_INTENTION_UPKEEP_BATCH` (default `50`) bounds one run, higher than the
+model-calling batches because this operation asks nothing.
+
+## Lifecycle events
+
+The substrate records its own life events as memory. Five of them exist: an init that created
+the backbone, an init that applied new migrations to a substrate that already existed, a replay
+that re-derived something, a boot that unloaded a model routing no longer needs, and a question
+`curiosity` filed (below). Each goes through intake as an observation on the bulk lane, carrying
+the numbers that describe it (migration count, member name, profile; replay counts and pipeline
+version; which model left memory).
+
+They are ordinary episodes, so recall serves them, `aion search` finds them, and `aion forget`
+removes one. All of them chain in one standing session, `aion-system`, which hangs off the
+Substrate node rather than off the Member: nobody typed these, and they are the substrate's own
+history rather than a conversation.
+
+```
+aion search "substrate initialized"        # the birth event, and every init since
+```
+
+## Curiosity
+
+`curiosity` is the one operation that adds to memory rather than tidying it. Once a day it
+takes the entities the substrate keeps meeting and cannot describe (a gloss a correction
+retired, or one written at the first mention and never re-derived while five or more mentions
+piled up), drafts one question about each, and files it as a Goal marked `origin_kind:
+substrate`. The Goal is keyed to the entity, so recall serves the question back in the
+`intentions` bucket above the next time that entity comes up, rather than at a moment nobody
+can answer it.
+
+```
+aion search "why does it keep coming up"   # the questions filed so far
+```
+
+Each question is an ordinary episode plus an ordinary intention, so everything that reaches
+one reaches these: `aion forget` removes a question, `aion unsupersede` reopens one a later
+intention replaced, and `intention_upkeep` closes one nobody answered a horizon after it
+expired. The entity carries a `curiosity_asked_at` stamp and is never asked about twice, even
+after its description comes back.
+
+`AION_MAINTENANCE_CURIOSITY` (default `true`) is the kill switch: off, no question is drafted
+and the ones already filed stand until they are answered or age out. `AION_CURIOSITY_BATCH`
+(default `2`) is how many questions one run files. Two is deliberately the lowest batch in the
+catalog: every question interrupts a later session on its own, and a substrate that asks faster
+than it is answered is nagging.
+
+## The recall self-probe
+
+`recall_probe` is how the substrate measures its own memory. Once a day it takes a few
+experiences it was told about more than a day ago, asks for each of them back in the words they
+arrived in, and scores whether the pack answered. Three things count as an answer: the episode
+itself, something extraction pulled out of it, or the narrative that compressed it. The rate is
+a lifetime total, so it fills in a few questions a day.
+
+The same run reads the other half of the question. Of the items still on record as served to a
+session, first handed over more than a day ago, it counts how many a later episode went on to
+mention or cite. That says whether served memory was used, where the first rate says only
+whether it came back.
+
+```
+aion stats                    # the "recall self-probe" section carries both rates
+```
+
+A probe must teach the substrate nothing, or the next run scores what the last one taught it.
+Its recall runs with no listener (no reinforcement rows, no access stamps, no usage events),
+with session dedup off, under a session identity of its own, and against a throwaway in-memory
+store. The pack it persists, the served rows it would record, and the cadence and pack-method
+counters it moves all land in that store and go when the run ends. One thing it does count: the
+cue call, in `generation by route`, because a probe call is a real call on a real route.
+
+Both rates read as unmeasured rather than as zero until there is something to measure. Served
+rows go when their session closes, so on an install whose sessions are short the served rate
+reports that no item was old enough to judge. That is a fact about the sessions on file, not
+about how memory is being used.
+
+`AION_MAINTENANCE_RECALL_PROBE` (default `true`) is the kill switch: off, nothing is asked and
+both rates stand where the last run left them. `AION_RECALL_PROBE_SAMPLE` (default `3`) is how
+many experiences one run asks back for. Each one is a full recall, cue call included.
+
+`aion maintain run recall_probe` declines with a noop. The probe's recall is assembled by the
+running service, and a CLI run holds none, the same as `curiosity` and its intake path.
+
+## Resetting the substrate
+
+A reset deletes everything the substrate holds, so it is a documented procedure rather than a
+command.
+
+1. Stop the service: `docker compose --profile mcp down`.
+2. Optional, if you want a way back: take a cold copy of the two volumes while nothing is
+   running.
+3. Drop them: `docker volume rm aion_aion-neo4j aion_aion-data`. This deletes the graph, the
+   SQLite database, and the experience archive. Nothing survives it.
+4. `aion init full` (or `local`).
+
+The next init is then the fresh-substrate case, so the first thing the new substrate remembers
+is being initialized.
+
 ## Logs
 
 Everything writes structured JSONL to one file on the data volume, `/data/logs/aion.jsonl` by
@@ -233,8 +356,9 @@ the containers; each fire appends one line to
 
 ## Configuration
 
-Every runtime knob is an `AION_*` environment variable, declared in
-`packages/core/src/infrastructure/config/knobs.ts` with its type and default. `.env` is for
+Every runtime knob is an `AION_*` environment variable, declared with its type and default in
+`packages/core/src/infrastructure/config/knobs.ts`, which folds in the `maintenance`,
+`reflection` and `temporal` groups' own tables from the files beside it. `.env` is for
 what an install has to decide: endpoints, models, the key, the behavior switches. Values
 copied into `.env` stop following the code that calibrated them, so leave a tuning knob
 alone unless a measurement says otherwise. An unknown `AION_*` variable fails the boot

@@ -51,6 +51,11 @@ export function currentOnly(variable: string): string {
  * identity is the surviving node, not this one. `identifier_decay` writes it precisely because
  * its close is a bet on silence rather than a verdict, and `entity-queries.ts`'s `buildEntityMerge`
  * reads it to tell the two apart before deciding whether the next mention reopens the node.
+ *
+ * `intention_upkeep` writes it for the provenance alone. Its close is the same bet on silence,
+ * but nothing reopens a cognitive node on a mention the way `buildEntityMerge` reopens an
+ * entity, so on a Goal or a Plan the stamp records which operation closed it and `aion
+ * unsupersede` is the undo.
  */
 export const CLOSURE_PROVENANCE_PROPERTY = 'closed_by';
 

@@ -36,7 +36,7 @@ The layering rule: `domain/` never imports `application/`; `application/` import
 and `infrastructure/`. `reflection/domain/` is the one context the other two draw pure value
 primitives from, and nothing draws back. `recall/domain/` takes `hashContent` from
 `content.js` and `weightedMeanVector` from `context-vector.js`; `introspection/domain/` takes
-`entity-cascade.js`'s relation checks. `infrastructure/` takes fifteen files' worth of the
+`entity-cascade.js`'s relation checks. `infrastructure/` takes nineteen files' worth of the
 same kind of primitive (name folding, claim keys, vector-input hashing, entity-extraction and
 entity-reconciliation helpers, the `ReflectionContent` and `ComputedContextVector` types) and
 nothing else: no application code, no I/O, no Cypher that reflection/ itself doesn't already

@@ -21,6 +21,8 @@ export {
   getExperienceByEpisode,
 } from './sqlite/experience-archive.js';
 
+export { countUsageEvents } from './sqlite/usage-events.js';
+
 export {
   getLedgerEntry,
   isLedgerApplied,
@@ -169,6 +171,7 @@ export {
 } from './providers/routing.js';
 export { ProviderRouter } from './providers/role-provider.js';
 export { listResidentModels, reconcileResidentModels } from './providers/model-reconciliation.js';
+export type { ReconciliationReport } from './providers/model-reconciliation.js';
 export { EmbedDimensionMismatchError } from './providers/errors.js';
 export { OllamaProvider } from './providers/ollama-provider.js';
 export {
@@ -199,6 +202,9 @@ export type { EntityMergeProposal } from './sqlite/entity-merge-proposals.js';
 
 export { cueDegradedRate } from './sqlite/recall-samples.js';
 
+export { generationCounters, recordGenerationOutcome } from './sqlite/generation-counters.js';
+export type { GenerationCounters, GenerationRouteStat } from './sqlite/generation-counters.js';
+
 export {
   PACK_METHODS,
   packMethodCounters,
@@ -209,3 +215,6 @@ export type { PackMethodCounters, PackMethodLegStats } from './sqlite/method-cou
 
 export { recallCadenceCounters, recordRecallOutcome } from './sqlite/recall-cadence.js';
 export type { RecallCadenceCounters } from './sqlite/recall-cadence.js';
+
+export { recallProbeCounters } from './sqlite/recall-probe-counters.js';
+export type { RecallProbeCounters } from './sqlite/recall-probe-counters.js';

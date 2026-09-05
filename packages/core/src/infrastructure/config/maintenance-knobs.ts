@@ -236,4 +236,29 @@ export const MAINTENANCE_KNOBS = {
   // pairs is a slow build by design: the pairs are ranked by cosine, so a capped run takes the
   // strongest of them and the next run takes what the substrate has grown into since.
   structuralDiscoveryBatch: ['AION_MAINTENANCE_STRUCTURAL_DISCOVERY_BATCH', positiveInt, 25],
+  // `intention_upkeep`'s kill switch. On by default: the close is an ordinary supersession and
+  // `aion unsupersede` reopens any intention it took. Off leaves every Goal and Plan open
+  // forever, still down-ranked as expired once its horizon passes but never closed.
+  intentionUpkeep: ['AION_MAINTENANCE_INTENTION_UPKEEP', z.boolean(), true],
+  // Intentions one run closes. Fifty on a day bucket, higher than the model-calling operations
+  // because this one asks nothing: it is one indexed read and one write over ids the read
+  // already chose. `temporal.intentionHorizonDays` is what decides which intentions qualify.
+  intentionUpkeepBatch: ['AION_MAINTENANCE_INTENTION_UPKEEP_BATCH', positiveInt, 50],
+  // `curiosity`'s kill switch. On by default: a question is a Goal like any other, so it ages
+  // out on the intention horizon and `aion forget` removes one that missed. It is still the
+  // only operation that puts the substrate's own words in front of a person unasked, which is
+  // reason enough for an operator to be able to stop it without a deploy.
+  curiosity: ['AION_MAINTENANCE_CURIOSITY', z.boolean(), true],
+  // Questions one run files. Two on a day bucket, lower than any other model-calling batch:
+  // every question is a standing intention that will interrupt a later session on its own, and
+  // a substrate that asks faster than it is answered is nagging rather than curious.
+  curiosityBatch: ['AION_CURIOSITY_BATCH', positiveInt, 2],
+  // `recall_probe`'s kill switch. On by default: the probe only reads, and it reads through a
+  // throwaway store so nothing it does reaches the substrate it is measuring. Off stops the
+  // sampling, and both rates stand at whatever the last run measured.
+  recallProbe: ['AION_MAINTENANCE_RECALL_PROBE', z.boolean(), true],
+  // Archived experiences one run asks back for. Three on a day bucket: each one is a full
+  // recall, cue call included, and the hit rate is a lifetime total that a few trials a day
+  // fill in without the probe becoming the substrate's busiest caller.
+  recallProbeSample: ['AION_RECALL_PROBE_SAMPLE', positiveInt, 3],
 } as const;

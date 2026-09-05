@@ -8,8 +8,9 @@ import {
 } from '@aion/protocol';
 import type { Driver } from 'neo4j-driver';
 
-import { buildRankedLists, toActivationSeed } from './candidates.js';
+import { arrivalIds, buildRankedLists, firstPassIds, toActivationSeed } from './candidates.js';
 import { extractCues, type CueCache, type CueExtractionResult } from './cues.js';
+import { triggeredIntentions } from './intentions.js';
 import { readModeFor } from './read-mode.js';
 import { resonate, type ResonanceResult } from './resonance.js';
 import { selectSeeds, type Seed } from './seeds.js';
@@ -140,38 +141,10 @@ function capsFor(config: Config): BucketCaps {
     facts: config.recall.maxFacts,
     episodes: config.recall.maxEpisodes,
     narratives: config.recall.maxNarratives,
+    intentions: config.recall.maxIntentions,
     preferences: config.recall.maxPreferences,
     resonant: config.recall.maxResonant,
   };
-}
-
-/** The activated ids no seed strategy found: what the spread reached on its own. */
-function arrivalIds(seeds: readonly Seed[], activated: readonly ActivatedNode[]): string[] {
-  const known = new Set(seeds.map((seed) => seed.id));
-  return activated.map((node) => node.nodeId).filter((id) => !known.has(id));
-}
-
-/**
- * Everything the first pass produced, which is what a resonant hit has to be new against. The
- * three sets overlap heavily on a normal run; the union is what makes "found by neither seed
- * nor spread" a property of the id rather than of which stage was asked.
- */
-function firstPassIds(
-  seeds: readonly Seed[],
-  activated: readonly ActivatedNode[],
-  items: readonly FusedItem[],
-): ReadonlySet<string> {
-  const ids = new Set<string>();
-  for (const seed of seeds) {
-    ids.add(seed.id);
-  }
-  for (const node of activated) {
-    ids.add(node.nodeId);
-  }
-  for (const item of items) {
-    ids.add(item.id);
-  }
-  return ids;
 }
 
 /**
@@ -343,12 +316,22 @@ export async function handleRecall(
     ),
   );
 
+  // The third way in, after the second pass because it reads the centroid that pass computed.
+  // Deterministic throughout: one bounded read and three comparisons per row.
+  const intentions = await triggeredIntentions(deps, {
+    activated: activation.value.activated,
+    resonance: resonance.value,
+    served: [...fusion.value.items, ...resonance.value.items],
+    mode,
+    now,
+  });
+
   // Started as early as the session resolves and awaited only once the pack is ready to
   // assemble, so this honesty field's own graph read never adds serial latency to the call.
   const pendingEnrichmentCount = await pendingEnrichmentPromise;
 
   const candidates = new Map<string, FusedItem>();
-  for (const item of [...fusion.value.items, ...resonance.value.items]) {
+  for (const item of [...fusion.value.items, ...resonance.value.items, ...intentions.items]) {
     candidates.set(item.id, item);
   }
 
@@ -409,6 +392,7 @@ export async function handleRecall(
     }),
     entityGlossCap: deps.config.recall.entityGlossCap,
     resonant: resonance.value.items,
+    intentions: intentions.items,
     ...(claims.size === 0 ? {} : { relatedClaims: claims }),
     suppressed,
     suppressedOwn,
@@ -444,7 +428,10 @@ export async function handleRecall(
   // Cadence's raw material: calls per session and the empty-pack rate, from a lifetime
   // total rather than the degraded-rate window above, which trims to the last 500.
   recordRecallOutcome(deps.db, {
-    empty: fusion.value.items.length === 0 && resonance.value.items.length === 0,
+    empty:
+      fusion.value.items.length === 0 &&
+      resonance.value.items.length === 0 &&
+      intentions.items.length === 0,
   });
 
   deps.logger.info(
@@ -458,6 +445,9 @@ export async function handleRecall(
       termination: activation.value.termination,
       items: fusion.value.items.length,
       resonant: resonance.value.items.length,
+      // What the substrate volunteered, and why it volunteered nothing when it did not.
+      intentions: intentions.items.length,
+      intentionsSkipped: intentions.skipped,
       // What the wire dropped that cognition still counted, so a pack that shrank mid-session
       // reads as the subtraction rather than as retrieval going quiet.
       suppressedRepeats: suppressed.size,

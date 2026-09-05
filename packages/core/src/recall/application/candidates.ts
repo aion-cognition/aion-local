@@ -34,6 +34,35 @@ export type RankedListInput = TraversalInput & {
   };
 };
 
+/** The activated ids no seed strategy found: what the spread reached on its own. */
+export function arrivalIds(seeds: readonly Seed[], activated: readonly ActivatedNode[]): string[] {
+  const known = new Set(seeds.map((seed) => seed.id));
+  return activated.map((node) => node.nodeId).filter((id) => !known.has(id));
+}
+
+/**
+ * Everything the first pass produced, which is what a later stage's hit has to be new against.
+ * The three sets overlap heavily on a normal run; the union is what makes "found by neither seed
+ * nor spread" a property of the id rather than of which stage was asked.
+ */
+export function firstPassIds(
+  seeds: readonly Seed[],
+  activated: readonly ActivatedNode[],
+  items: readonly { readonly id: string }[],
+): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const seed of seeds) {
+    ids.add(seed.id);
+  }
+  for (const node of activated) {
+    ids.add(node.nodeId);
+  }
+  for (const item of items) {
+    ids.add(item.id);
+  }
+  return ids;
+}
+
 function annotationOf(candidate: SeedCandidate): CurrencyAnnotation {
   if (candidate.supersededBy === undefined) {
     return { currency: candidate.currency };

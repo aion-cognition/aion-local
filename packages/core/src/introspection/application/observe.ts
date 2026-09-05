@@ -16,6 +16,7 @@ import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { countDeadLetterAttention } from '../../infrastructure/sqlite/dead-letter-queue.js';
 import { listOpenEntityMergeProposalCreatedAt } from '../../infrastructure/sqlite/entity-merge-proposals.js';
+import { generationCounters } from '../../infrastructure/sqlite/generation-counters.js';
 import {
   listOperationStats,
   meanOperationDurationMs,
@@ -30,6 +31,7 @@ import {
   HEALTH_COLLECTORS,
   NEUTRAL_ENRICHMENT_HEALTH,
   NEUTRAL_ENTITY_HEALTH,
+  NEUTRAL_GENERATION_HEALTH,
   NEUTRAL_GRAPH_HEALTH,
   NEUTRAL_PLASTICITY_HEALTH,
   NEUTRAL_PROPOSAL_HEALTH,
@@ -39,6 +41,7 @@ import {
   share,
   type EnrichmentHealth,
   type EntityHealth,
+  type GenerationHealth,
   type GraphStructureHealth,
   type HealthSnapshot,
   type OperationEffectiveness,
@@ -137,7 +140,13 @@ async function readGraph(
   };
 }
 
-function readQueue(db: SqliteHandle, config: Config, now: Date): QueueHealth {
+/**
+ * The operator's lag reading, carried whole. The degraded-cue rate and the dropped
+ * reinforcement rows are the two the operator has had all along and the loop could not see:
+ * both describe recall answering worse than the substrate could, which is a condition an
+ * operation can be written for and nothing can be written for while it is invisible.
+ */
+export function readQueue(db: SqliteHandle, config: Config, now: Date): QueueHealth {
   const snapshot = queueLagSnapshot(db, config.operational.workerMaxAttempts, now);
   const depth = Object.values(snapshot.depthByLane).reduce((total, count) => total + count, 0);
   return {
@@ -147,7 +156,15 @@ function readQueue(db: SqliteHandle, config: Config, now: Date): QueueHealth {
     exhausted: snapshot.exhausted,
     p95EnrichmentLagMs: snapshot.p95EnrichmentLagMs,
     deadLetterAttentionCount: countDeadLetterAttention(db, config.operational.workerMaxAttempts),
+    cueDegradedRate: snapshot.cueDegradedRate,
+    reinforcementDropped: snapshot.reinforcementDropped,
   };
+}
+
+/** The model calls the substrate made, summed across every route the router can take. */
+export function readGeneration(db: SqliteHandle): GenerationHealth {
+  const counters = generationCounters(db);
+  return { calls: counters.calls, failed: counters.failed, failureRate: counters.failureRate };
 }
 
 async function readEnrichment(
@@ -284,37 +301,49 @@ export async function observeHealth(
   const operations = options.operations ?? [];
   const degraded: string[] = [];
 
-  const [graph, queue, enrichment, redaction, proposals, entities, plasticity, effectiveness] =
-    await Promise.all([
-      collect(HEALTH_COLLECTORS.graph, deps.logger, degraded, NEUTRAL_GRAPH_HEALTH, () =>
-        readGraph(deps.driver, scanLimit, deps.config.hebbian.weightFloor),
-      ),
-      collect(HEALTH_COLLECTORS.queue, deps.logger, degraded, NEUTRAL_QUEUE_HEALTH, () =>
-        Promise.resolve(readQueue(deps.db, deps.config, now)),
-      ),
-      collect(HEALTH_COLLECTORS.enrichment, deps.logger, degraded, NEUTRAL_ENRICHMENT_HEALTH, () =>
-        readEnrichment(deps.driver, deps.db, scanLimit),
-      ),
-      collect(HEALTH_COLLECTORS.redaction, deps.logger, degraded, NEUTRAL_REDACTION_HEALTH, () =>
-        readRedaction(deps.driver, deps.config, residueLimit),
-      ),
-      collect(HEALTH_COLLECTORS.proposals, deps.logger, degraded, NEUTRAL_PROPOSAL_HEALTH, () =>
-        Promise.resolve(readProposals(deps.db, now)),
-      ),
-      collect(HEALTH_COLLECTORS.entities, deps.logger, degraded, NEUTRAL_ENTITY_HEALTH, () =>
-        readEntities(deps.driver, scanLimit),
-      ),
-      collect(HEALTH_COLLECTORS.plasticity, deps.logger, degraded, NEUTRAL_PLASTICITY_HEALTH, () =>
-        Promise.resolve(readPlasticity(deps.db)),
-      ),
-      collect(
-        HEALTH_COLLECTORS.effectiveness,
-        deps.logger,
-        degraded,
-        [] as readonly OperationEffectiveness[],
-        () => Promise.resolve(readOperationEffectiveness(deps.db, operations, cycle)),
-      ),
-    ]);
+  const [
+    graph,
+    queue,
+    enrichment,
+    redaction,
+    proposals,
+    entities,
+    plasticity,
+    generation,
+    effectiveness,
+  ] = await Promise.all([
+    collect(HEALTH_COLLECTORS.graph, deps.logger, degraded, NEUTRAL_GRAPH_HEALTH, () =>
+      readGraph(deps.driver, scanLimit, deps.config.hebbian.weightFloor),
+    ),
+    collect(HEALTH_COLLECTORS.queue, deps.logger, degraded, NEUTRAL_QUEUE_HEALTH, () =>
+      Promise.resolve(readQueue(deps.db, deps.config, now)),
+    ),
+    collect(HEALTH_COLLECTORS.enrichment, deps.logger, degraded, NEUTRAL_ENRICHMENT_HEALTH, () =>
+      readEnrichment(deps.driver, deps.db, scanLimit),
+    ),
+    collect(HEALTH_COLLECTORS.redaction, deps.logger, degraded, NEUTRAL_REDACTION_HEALTH, () =>
+      readRedaction(deps.driver, deps.config, residueLimit),
+    ),
+    collect(HEALTH_COLLECTORS.proposals, deps.logger, degraded, NEUTRAL_PROPOSAL_HEALTH, () =>
+      Promise.resolve(readProposals(deps.db, now)),
+    ),
+    collect(HEALTH_COLLECTORS.entities, deps.logger, degraded, NEUTRAL_ENTITY_HEALTH, () =>
+      readEntities(deps.driver, scanLimit),
+    ),
+    collect(HEALTH_COLLECTORS.plasticity, deps.logger, degraded, NEUTRAL_PLASTICITY_HEALTH, () =>
+      Promise.resolve(readPlasticity(deps.db)),
+    ),
+    collect(HEALTH_COLLECTORS.generation, deps.logger, degraded, NEUTRAL_GENERATION_HEALTH, () =>
+      Promise.resolve(readGeneration(deps.db)),
+    ),
+    collect(
+      HEALTH_COLLECTORS.effectiveness,
+      deps.logger,
+      degraded,
+      [] as readonly OperationEffectiveness[],
+      () => Promise.resolve(readOperationEffectiveness(deps.db, operations, cycle)),
+    ),
+  ]);
 
   return {
     observedAt: now.toISOString(),
@@ -326,6 +355,7 @@ export async function observeHealth(
     proposals,
     entities,
     plasticity,
+    generation,
     effectiveness,
     degraded,
   };

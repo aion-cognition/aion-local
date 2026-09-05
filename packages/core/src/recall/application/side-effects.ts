@@ -10,6 +10,7 @@ import {
   DEFAULT_REINFORCEMENT_QUEUE_CAP,
   enqueueReinforcementSignal,
 } from '../../infrastructure/sqlite/reinforcement-queue.js';
+import { appendRecallAccessEvent } from '../../infrastructure/sqlite/usage-events.js';
 import { RECALL_CO_ACTIVATION_TRIGGER } from '../../plasticity/domain/reinforcement.js';
 import type { ActivatedNode } from '../domain/activation.js';
 
@@ -162,6 +163,9 @@ export class RecallSideEffects {
         new Promise<void>((resolve) => {
           setImmediate(() => {
             recordAccess(this.#driver, { ids, now })
+              .then(() => {
+                this.#appendUsageEvent(ids, now, sessionId);
+              })
               .catch((err: unknown) => {
                 this.#logger.warn(
                   { err, sessionId, items: ids.length },
@@ -172,5 +176,19 @@ export class RecallSideEffects {
           });
         }),
     );
+  }
+
+  /**
+   * The stream row for the bump the graph just took, written after it rather than beside it, so
+   * the log records salience that actually landed. Fail-open and off the response path with the
+   * write it follows: a substrate that cannot append loses replayability for this one recall,
+   * which is not a reason to fail a read that already returned.
+   */
+  #appendUsageEvent(ids: readonly string[], now: Date, sessionId: string): void {
+    try {
+      appendRecallAccessEvent(this.#db, { ids, occurredAt: now });
+    } catch (err) {
+      this.#logger.warn({ err, sessionId, items: ids.length }, 'recall usage-event append failed');
+    }
   }
 }

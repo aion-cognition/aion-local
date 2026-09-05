@@ -11,14 +11,14 @@ with nothing relevant, returns cleanly empty rather than padded with weak matche
 ## The ladder
 
 Each mode below states the trigger, what the pipeline does, the exact shape the caller
-receives, how to diagnose it live, and how it recovers. Ten modes, and each one names the
+receives, how to diagnose it live, and how it recovers. Eleven modes, and each one names the
 evidence behind it. Four were induced live against a throwaway Neo4j plus host Ollama (both
-Ollama outages, both Neo4j outages). Two are covered by the unit suite, which is enough
-because they need only process inputs (cue extraction, context resonance). One is read off
-the MCP SDK's own behavior (client disconnect), and one is traced through the startup path
-without a probe (SQLite unwritable). The two remote modes are traced through the provider and
-the routing rule, both under the unit suite, and neither has been induced against the live
-API. Numbers are wall-clock from those runs, not guarantees.
+Ollama outages, both Neo4j outages). Three are covered by the unit suite, which is enough
+because they need only process inputs (cue extraction, context resonance, intention triggers).
+One is read off the MCP SDK's own behavior (client disconnect), and one is traced through the
+startup path without a probe (SQLite unwritable). The two remote modes are traced through the
+provider and the routing rule, both under the unit suite, and neither has been induced against
+the live API. Numbers are wall-clock from those runs, not guarantees.
 
 ### Cue extraction failure (timeout, model error, malformed output)
 
@@ -42,7 +42,10 @@ resolution still run on the raw-query cue, so a real item can still come back.
 **Diagnose.** `aion doctor`'s `ollama-round-trip` check catches a broken or unreachable
 model before a caller hits it. Live, the service logs `cue extraction degraded` with the
 model name and reason (`cues.ts:317`, `:323`). `aion last` prints `degraded  cues: <reason>`
-above the pack (`packages/cli/src/last.ts:106-108`).
+above the pack (`packages/cli/src/last.ts:106-108`). Across calls rather than for one, `aion
+status`'s `recall` line prints the share of recent recalls that answered without the cue model,
+and reads as `no recalls yet` rather than as healthy until the first one lands. The
+introspection loop reads the same number off the health snapshot.
 
 **Recovers.** Automatically, next call. No state to reset.
 
@@ -149,9 +152,12 @@ same way: `narrateSession` logs `narrative compression failed` and returns
 cue call degrades exactly as the first rung above describes, with `reason: model_error`.
 
 **Diagnose.** The service log's `generation routed` debug line carries every call's provider,
-model and duration; a failing run shows `ok: false`. `aion doctor`'s model check names the
-roles routed to anthropic. `aion status` prints the same routing line, and `aion queue ls`
-shows the backlog the outage is building.
+model and duration; a failing run shows `ok: false`. A log line is gone on the next rotation,
+so the same outcomes also count in the meta table: `aion stats`'s `generation by route` section
+prints calls, failure share and mean cost per role and provider, and the counters survive a
+restart. A route nothing has called reads as `never called` rather than as a clean record.
+`aion doctor`'s model check names the roles routed to anthropic. `aion status` prints the same
+routing line, and `aion queue ls` shows the backlog the outage is building.
 
 **Recovers.** Automatically. The breaker's next trial call closes it, and the queue drains the
 episodes that failed while it was open. Nothing is lost: every episode was stored before its
@@ -267,6 +273,42 @@ catches the underlying outage if it is still live when doctor runs.
 Verified by the unit suite, not live-induced: `resonance.test.ts:140-149` fails the driver's
 `executeQuery` call and asserts `skipped: 'unavailable'` with an empty item list and nothing
 thrown past `resonate`.
+
+### Intention trigger failure (graph error on the third pass)
+
+**Trigger.** The bounded read of open intentions, or the hydration of the ones that fired,
+fails after the query has already been answered.
+
+**What happens.** `triggeredIntentions`
+(`packages/core/src/recall/application/intentions.ts`) wraps both reads in one try/catch. A
+graph error is caught, logged as `intention triggers failed; the pack keeps the answer it
+has`, and returns `{items: [], skipped: 'unavailable'}` instead of propagating.
+`handleRecall` logs the skip reason on its own `recall served` line (field
+`intentionsSkipped`) and does not add it to `degradations`, the list `metadata.degraded` is
+built from. This matters most on the empty-pack path: a recall that matched nothing still
+returns its empty pack rather than failing on a stage that had nothing to add to it.
+
+**What the caller sees.** The pack the query already produced, with no `intentions` bucket
+and no `metadata.degraded` entry naming it. Silent to the caller by the same trade context
+resonance makes: an intention is something the substrate volunteered, and losing a whole
+recall over one would be the wrong exchange every time. The cost is that an absent bucket
+reads the same whether no intention was due or the read failed under it.
+
+**Diagnose.** Not visible over MCP. Live, the `intentionsSkipped: "unavailable"` field on the
+`recall served` line is the only signal; `aion doctor`'s `neo4j-bolt` check catches the
+underlying outage if it is still live when doctor runs.
+
+**Recovers.** Automatically, next call, once the graph answers again. No state to reset.
+
+Verified by the unit suite, not live-induced: `intentions.test.ts` rejects the driver's
+`executeQuery` call and asserts `skipped: 'unavailable'` with an empty item list and nothing
+thrown past the stage.
+
+Two other skips share that empty bucket and are not degradation. `AION_RECALL_INTENTIONS=false`
+turns the stage off, which restores the pack exactly as it was before intentions had triggers,
+and a time-traveled read (`as_of` or `knew_at`) evaluates no trigger at all: asking what the
+substrate held last month is a question about the past, and a trigger is the substrate acting
+in the present. Both are reported as their own `intentionsSkipped` values.
 
 ### Neo4j down: reflection
 
@@ -396,7 +438,8 @@ Every knob below is `AION_*`-overridable; the catalog is
 | `AION_PACK_CLUSTER_CAP` (`recall.clusterCap`) | 2 | Stops one near-duplicate content cluster from filling a bucket. EX-22 measured a burst of near-identical episodes taking 29.5% of a pack's slots. | Raised, a repeated shape crowds out more of a bucket's real diversity before the cap stops it. | New in the fix round. |
 | `contextResonance.seedLimit` / `.activationLimit` | 32 / 50 | `seedLimit` caps the scaled seed budget (`seedBudgetBase + seedBudgetGrowth * ln(population)`, 10 and 2); `activationLimit` bounds the co-activated set, so activation's cost is predictable. | A true signal ranked past the cap is not considered at all, not degraded. | Raised from a flat 10, which was the whole budget: ten seeds are the entire candidate set, so on a substrate of several thousand memories a node above the admission floor was never measured because it was never a candidate. The curve reaches 32 near sixty thousand memory nodes and stays under `activationLimit`. |
 | `activation.maxNodesVisited` / `.hubThreshold` | 500 / 10 | Bounds worst-case traversal cost; the hub threshold keeps one high-degree node from flooding the frontier. | A legitimate multi-hop path through a dense area can be cut before it is explored. | Not flagged as a deviation. |
-| Other bucket caps: `maxFacts` / `maxNarratives` / `maxPreferences` / `maxResonant` / `vectorLimit` | 15 / 5 / 3 / 5 / 5 | Same shape as `maxEpisodes`: each decides what survives fusion for its bucket. | Same cost as `maxEpisodes`, unverified at other values: only the episode cap has a live pass/fail checkpoint behind it. `resonant` gained its producer with the second recall pass; `preferences` still has none, so that one cap is inert today. | Not flagged as a deviation. |
+| Other bucket caps: `maxFacts` / `maxNarratives` / `maxIntentions` / `maxPreferences` / `maxResonant` / `vectorLimit` | 15 / 5 / 3 / 3 / 5 / 5 | Same shape as `maxEpisodes`: each decides what survives fusion for its bucket. | Same cost as `maxEpisodes`, unverified at other values: only the episode cap has a live pass/fail checkpoint behind it. `resonant` gained its producer with the second recall pass; `preferences` still has none, so that one cap is inert today. | Not flagged as a deviation. |
+| `AION_RECALL_INTENTIONS` / `AION_RECALL_INTENTION_SITUATION_FLOOR` | true / 0.5 | The kill switch on standing intentions coming back on their own trigger, and the cosine a situation trigger has to clear against the centroid the second pass built. Off restores the pack exactly as it was before intentions had triggers. | The floor is borrowed from `contextSearchThreshold` rather than measured: a situation trigger reads an episode's content vector against a mean of context vectors, which is not the comparison that number was derived on. Too low and every open intention resonates with everything; the entity and temporal triggers are unaffected either way. | New; no spec pin, and the floor is a starting value to re-derive. |
 | `AION_WORKER_COUNT` (`operational.workerCount`) | 1 | Concurrent reflection claim-and-run slots on one shared queue claimant, so more than one episode enriches at once. | Every worker still calls the same host Ollama for its model stages (`AION_REFLECT_MODEL`), and nothing prioritizes between them; see the contention note below. | PRD §7 pins 1. |
 | `AION_LANE_SESSION_ARRIVAL_MAX` (`lanes.sessionArrivalMax`) | 10 | Head-room for a legitimate session-end flush of a long conversation, which arrives as several episodes at once and must stay interactive. | Raised far enough, a client flooding from one session keeps priority for longer before the backstop sees it. The measured flood ran 51 arrivals per session per minute. | New in the fix round. |
 | `AION_LANE_GLOBAL_ARRIVAL_MAX` (`lanes.globalArrivalMax`) | 120 | Arrivals across every session inside the window before the substrate counts as hot. Twelve busy sessions' worth. | Below ordinary multi-agent load, every session drops to the hot allowance for no reason. | New in the fix round. |

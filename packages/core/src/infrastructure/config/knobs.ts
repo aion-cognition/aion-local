@@ -118,7 +118,24 @@ export const KNOBS = {
     maxNarratives: ['AION_RECALL_MAX_NARRATIVES', nonNegativeInt, 5],
     maxPreferences: ['AION_RECALL_MAX_PREFERENCES', nonNegativeInt, 3],
     maxResonant: ['AION_RECALL_MAX_RESONANT', nonNegativeInt, 5],
+    // Three, well under every other bucket's cap. The intentions bucket answers a question the
+    // caller did not ask, so it is the one bucket whose cost is paid by every recall whether or
+    // not it wanted one; three standing commitments is a reminder and a dozen is an agenda.
+    maxIntentions: ['AION_RECALL_MAX_INTENTIONS', nonNegativeInt, 3],
     useContextResonance: ['AION_RECALL_USE_CONTEXT_RESONANCE', z.boolean(), true],
+    // Whether a standing intention may come back on its own trigger rather than on the query.
+    // Off skips the read and the match outright, which restores the pack exactly as it was
+    // before intentions had triggers.
+    intentionTriggers: ['AION_RECALL_INTENTIONS', z.boolean(), true],
+    // The cosine between an intention's stored situation (its source episode's content vector)
+    // and the centroid of what this recall activated, at or above which the situation counts as
+    // the one the intention was filed in. It borrows `contextSearchThreshold`'s 0.5 rather than
+    // being measured in its own right: the two comparisons are not the same one, since a
+    // situation trigger reads an episode vector against a mean of context vectors, so this is a
+    // starting value to re-derive rather than a calibrated floor. The entity and temporal
+    // triggers are unaffected, which is what keeps the loosest of the three from being the only
+    // one that fires.
+    intentionSituationFloor: ['AION_RECALL_INTENTION_SITUATION_FLOOR', proportion, 0.5],
     // Whether a session is served the same unchanged memory twice. On by default: a per-prompt
     // hook recalls many times inside one conversation, the top of the ranked list barely moves
     // between them, and everything already served is still in the agent's context, so the

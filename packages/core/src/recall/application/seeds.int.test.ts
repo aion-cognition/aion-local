@@ -7,7 +7,7 @@ import { selectSeeds, type Seed, type SeedCue, type SelectSeedsDeps } from './se
 import { waitFor } from './test-support/wait-for.fixture.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Config } from '../../infrastructure/config/schema.js';
-import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
+import { bootstrapBackbone, SUBSTRATE_NAME } from '../../infrastructure/graph/backbone.js';
 import { supersede, writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
 import { asOf, withCurrency } from '../../infrastructure/graph/read-modes.js';
@@ -38,6 +38,7 @@ let dataDir: string;
 let logger: Logger;
 let memberId: string;
 let workspaceId: string;
+let substrateId: string;
 
 const ids = {
   claimPath: '',
@@ -109,6 +110,7 @@ beforeAll(async () => {
   const backbone = await bootstrapBackbone(harness.driver, { memberName: 'Ryan Huber' });
   memberId = backbone.member.id;
   workspaceId = backbone.workspace.id;
+  substrateId = backbone.substrate.id;
 
   ids.claimPath = await writeEpisode(
     'the reflection queue claim path retries after SQLITE_BUSY',
@@ -241,8 +243,10 @@ describe('entity resolution before any name embeddings are written', () => {
   });
 
   it('still selects seeds, so a cold-start graph degrades to the other three strategies', async () => {
+    // A name no entity in the fixture answers to, the backbone singletons included: an exact
+    // name match would resolve on the leg this asserts is empty.
     const selection = await selectSeeds(deps(), {
-      cues: [cue('aion', 3, VECTORS.entityName)],
+      cues: [cue('kestrel', 3, VECTORS.entityName)],
     });
     expect(selection.seeds.length).toBeGreaterThan(0);
     expect(selection.byStrategy.entity_resolution).toEqual([]);
@@ -325,6 +329,20 @@ describe('merge', () => {
     expect(seed?.provenance.map((entry) => entry.strategy)).toContain('bm25');
     expect(seed?.isStructural).toBe(true);
   });
+
+  it('resolves the substrate by its own name, structural like the rest of the backbone', async () => {
+    const selection = await selectSeeds(deps(), { cues: [cue(SUBSTRATE_NAME, 3)] });
+    const seed = find(selection.seeds, substrateId);
+
+    expect(seed?.provenance).toContainEqual({
+      strategy: 'entity_resolution',
+      score: 1,
+      relevance: 1,
+      exact: true,
+      cue: SUBSTRATE_NAME,
+    });
+    expect(seed?.isStructural).toBe(true);
+  });
 });
 
 describe('the seed budget the substrate earns', () => {
@@ -363,8 +381,8 @@ describe('entity name similarity once name embeddings exist', () => {
       now: WRITTEN_AT,
       properties: {
         type: 'project',
-        name: 'Aion',
-        name_norm: 'aion',
+        name: 'Kestrel',
+        name_norm: 'kestrel',
         name_vec: [...VECTORS.entityName],
       },
     });
@@ -382,7 +400,7 @@ describe('entity name similarity once name embeddings exist', () => {
     expect(rows[0]?.score).toBeCloseTo(1, 5);
 
     const selection = await selectSeeds(deps(), {
-      cues: [cue('the aion substrate', 3, VECTORS.entityName)],
+      cues: [cue('the kestrel project', 3, VECTORS.entityName)],
     });
     const seed = find(selection.byStrategy.entity_resolution, entity.id);
     expect(seed?.provenance[0]?.strategy).toBe('entity_resolution');

@@ -9,6 +9,7 @@ import {
   localChatModels,
   provisionOllama,
   reconcileResidentModels,
+  recordLifecycleEvent,
   resolveProviderRouting,
   routingSummary,
   runGraphMigrations,
@@ -32,6 +33,7 @@ import {
   waitForMcpHealth,
 } from './compose.js';
 import { installFullProfile } from './hooks-cmd.js';
+import { lifecycleIntakeDeps, type LifecycleTarget } from './lifecycle.js';
 import { stdoutWriter, type Writer } from './output.js';
 import { envFilePath, envTemplatePath, resolveRepoDir } from './paths.js';
 import { withSubstrate } from './substrate.js';
@@ -259,9 +261,44 @@ async function provisionGraph(
   write(`  bolt ready, graph-data-science ${gdsVersion}`);
 }
 
+type LifecycleSubstrate = LifecycleTarget & {
+  /** True when this init is the one that created the backbone, which is the substrate's birth. */
+  readonly created: boolean;
+};
+
+/**
+ * What the substrate remembers about the run that made it. The fresh case is the birth event,
+ * and the only other thing an init changes about the substrate itself is the schema it runs on,
+ * so an existing substrate records an event only when a migration actually applied.
+ */
+async function recordInit(
+  target: LifecycleSubstrate,
+  applied: readonly number[],
+  memberName: string,
+  profile: InitProfile,
+): Promise<void> {
+  const deps = lifecycleIntakeDeps(target);
+  if (target.created) {
+    await recordLifecycleEvent(deps, {
+      event: 'substrate_initialized',
+      text:
+        `substrate initialized: ${String(applied.length)} migrations applied, ` +
+        `backbone created for ${memberName}, profile ${profile}`,
+    });
+    return;
+  }
+  if (applied.length > 0) {
+    await recordLifecycleEvent(deps, {
+      event: 'migrations_applied',
+      text: `graph schema advanced: migrations ${applied.join(', ')} applied on an existing substrate`,
+    });
+  }
+}
+
 async function initialize(
   config: Config,
   flags: InitFlags,
+  profile: InitProfile,
   write: Writer,
   logger: Logger,
 ): Promise<void> {
@@ -328,6 +365,23 @@ async function initialize(
         `global Workspace ${backbone.workspace.created ? 'created' : 'present'}`,
     );
     logger.info({ applied, created, backbone, memberName }, 'init finished');
+
+    // Recorded before the service starts, so the drain the service opens with is what enriches
+    // the substrate's first memory.
+    await recordInit(
+      {
+        connection,
+        db: store.db,
+        config,
+        logger,
+        memberId: backbone.member.id,
+        workspaceId: backbone.workspace.id,
+        created: backbone.member.created,
+      },
+      applied,
+      memberName,
+      profile,
+    );
   } finally {
     await connection.close();
     store.close();
@@ -392,7 +446,7 @@ export function runInit(
       });
       const resolved = profile === 'full' ? await prepareFullProfile(config, flags, write) : config;
 
-      await initialize(resolved, flags, write, logger);
+      await initialize(resolved, flags, profile, write, logger);
 
       write('');
       if (profile === 'full') {

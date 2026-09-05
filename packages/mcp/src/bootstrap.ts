@@ -17,12 +17,15 @@ import {
   narrativeSweepOptions,
   openLogger,
   plasticityCounters,
+  probeRecall,
   ProviderRouter,
   purgeServedItemsIdleSince,
   queueLagSnapshot,
   readMemberName,
   RecallSideEffects,
   reconcileResidentModels,
+  recordGenerationOutcome,
+  recordLifecycleEvent,
   ReflectionOrchestrator,
   reflectionStages,
   ReflectionWorker,
@@ -36,6 +39,7 @@ import {
   type Logger,
   type Provider,
   type RecallDeps,
+  type ReconciliationReport,
   type ReflectionIntakeDeps,
 } from '@aion/core';
 import { userInfo } from 'node:os';
@@ -95,7 +99,7 @@ async function reconcileModels(
   config: Config,
   router: ProviderRouter,
   logger: Logger,
-): Promise<void> {
+): Promise<ReconciliationReport | undefined> {
   try {
     const report = await reconcileResidentModels({
       baseUrl: config.ollama.url,
@@ -104,8 +108,10 @@ async function reconcileModels(
     if (report.checked) {
       logger.info({ reconciliation: report }, `model reconciliation: ${report.detail}`);
     }
+    return report;
   } catch (err) {
     logger.warn({ err }, 'model reconciliation failed');
+    return undefined;
   }
 }
 
@@ -213,6 +219,14 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       config,
       onGeneration: (event) => {
         logger.debug({ generation: event }, 'generation routed');
+        try {
+          recordGenerationOutcome(store.db, event);
+        } catch (err) {
+          // Fail open, and for more than the usual reason. The router reports a success from
+          // inside its own try, so a throw here would be caught there and counted as the
+          // generation failing; the cue role runs this on the recall hot path.
+          logger.warn({ err }, 'generation counter write failed');
+        }
       },
     });
     // Both roles embed through the same local model; only `generate` differs between them.
@@ -228,7 +242,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
         `${route.role} is pinned to anthropic with no AION_ANTHROPIC_API_KEY set; routing it to ${route.localModel} instead`,
       );
     }
-    await reconcileModels(config, router, logger);
+    const reconciliation = await reconcileModels(config, router, logger);
     // Deliberately not awaited: binding the port never waits on Ollama, and an early recall
     // queues behind the same model load either way.
     void warmEmbedModel(router.embedder, logger);
@@ -287,6 +301,19 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       lanes: new LaneAssigner(config.lanes),
       acceptHookCapture: acceptsHookCapture(router.routing),
     };
+    // A boot that unloaded a model changed what the substrate runs on, which is worth
+    // remembering; a boot that found nothing resident changed nothing. Recorded through the
+    // intake deps above, and not awaited for the reason the embed warm-up is not: binding the
+    // port never waits on Ollama.
+    if (reconciliation !== undefined && reconciliation.evicted.length > 0) {
+      void recordLifecycleEvent(intake, {
+        event: 'models_reconciled',
+        text:
+          `boot reconciled resident models: ${reconciliation.detail}. ` +
+          `Routing is now ${routingSummary(router.routing)}`,
+      });
+    }
+
     if (stages.length > 0) {
       // The drain runs alongside the first tool calls rather than in front of them: a long
       // backlog would otherwise hold the service off the port it is supposed to be answering.
@@ -320,6 +347,14 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
         // One provider for the whole loop, so its circuit breaker counts failures across runs
         // rather than starting fresh inside each one.
         provider: reflectProvider,
+        // The same write path the tool call takes, for the operation that stores what it did as
+        // an experience. It is the service's own instance rather than a second one, so a
+        // question the loop files wakes the worker and counts toward the same arrival rate.
+        intake,
+        // The read path back out, for the operation that measures retrieval by using it. Built
+        // from the same deps the tool call takes and stripped to a read that writes nothing;
+        // `recall-probe.ts` states what it leaves out and why.
+        recallProbe: probeRecall(recall),
         operations: maintenanceOperations,
       },
       {

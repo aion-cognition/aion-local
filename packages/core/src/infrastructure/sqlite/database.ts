@@ -196,6 +196,31 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     origin_json TEXT,
     payload_json TEXT NOT NULL
   )`,
+  /**
+   * What use did to the graph, kept beside the record of what the substrate was told. The
+   * archive replays the facts; salience lives only in the graph, so a rebuilt graph knows
+   * everything and remembers nothing about what mattered. These rows are what a replay reads
+   * to put access stamps, edge weights and sweep moments back.
+   *
+   * Insert-only on the same terms as `experience_archive`: there is no `UPDATE` and no
+   * `DELETE` anywhere this table is written. A record of use that can be edited is a record
+   * a later reader cannot trust, and the stream is what makes the weights reproducible.
+   *
+   * `AUTOINCREMENT` rather than a bare rowid alias, so an id is never handed out twice: the
+   * id is the stream position a replay cursor carries, and a reused one would replay a step
+   * a second time or skip one.
+   *
+   * `occurred_at` is the operation's own clock, the moment the recall, flush or sweep says it
+   * happened, and it is what a replay re-applies at. `recorded_at` is the wall clock at write
+   * time and the only wall-clock value on the row.
+   */
+  `CREATE TABLE IF NOT EXISTS usage_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    recorded_at TEXT NOT NULL
+  )`,
 ];
 
 /**
@@ -228,6 +253,10 @@ const INDEX_STATEMENTS: readonly string[] = [
      ON experience_archive (episode_id)`,
   `CREATE INDEX IF NOT EXISTS experience_archive_version_idx
      ON experience_archive (pipeline_version)`,
+  // The usage replay walks rows oldest first by the same keyset shape the archive uses, so an
+  // aborted pass resumes where it stopped instead of re-applying the steps it already made.
+  `CREATE INDEX IF NOT EXISTS usage_events_replay_idx
+     ON usage_events (occurred_at, id)`,
 ];
 
 type ColumnAddition = {

@@ -3,10 +3,12 @@ import { backboneRepairOperation } from './operations/backbone-repair.js';
 import { claimConsolidationOperation } from './operations/claim-consolidation.js';
 import { claimDedupOperation } from './operations/claim-dedup.js';
 import { communityRefreshOperation } from './operations/community-refresh.js';
+import { curiosityOperation } from './operations/curiosity.js';
 import { deadLetterOperation } from './operations/dead-letter.js';
 import { descriptionFreshnessOperation } from './operations/description-freshness-operation.js';
 import { edgePruneOperation } from './operations/edge-prune.js';
 import { identifierDecayOperation } from './operations/identifier-decay.js';
+import { intentionUpkeepOperation } from './operations/intention-upkeep.js';
 import { mergeAutoOperation } from './operations/merge-auto-operation.js';
 import { mergeDecisionReconcileOperation } from './operations/merge-decision-reconcile-operation.js';
 import { narrativeCleanupOperation } from './operations/narrative-cleanup-operation.js';
@@ -18,6 +20,7 @@ import {
 import { orphanCleanupOperation } from './operations/orphan-cleanup.js';
 import { proposalHygieneOperation } from './operations/proposal-hygiene.js';
 import { proposalResolutionOperation } from './operations/proposal-resolution.js';
+import { recallProbeOperation } from './operations/recall-probe.js';
 import { reconcileReenqueueOperation } from './operations/reconcile-reenqueue.js';
 import { redactionResiduePurgeOperation } from './operations/redaction-residue-purge.js';
 import { retroJudgmentSweepOperation } from './operations/retro-judgment-sweep-operation.js';
@@ -35,9 +38,9 @@ import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-
  * waiting time and then on name, so moving a line here changes nothing about what runs. The
  * comment above each group says what that group is for.
  *
- * Twelve of the twenty-five declare a `measure`, a number in the health snapshot their run is
- * scored on moving. The other thirteen are recorded as unmeasured rather than scored. Twelve of
- * those are waiting on a gauge the snapshot does not carry yet:
+ * Twelve of the twenty-eight declare a `measure`, a number in the health snapshot their run is
+ * scored on moving. The other sixteen are recorded as unmeasured rather than scored. Fourteen
+ * of those are waiting on a gauge the snapshot does not carry yet:
  *
  * - `claim_dedup`: a near-duplicate claim-pair count.
  * - `claim_consolidation`: claim neighbourhoods above the derived density floor.
@@ -51,14 +54,18 @@ import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-
  * - `symbiosis_bridge`: the count of community pairs the graph connects least.
  * - `merge_decision_reconcile`: merges committed to the graph with no decision record.
  * - `structural_discovery`: entities carrying fewer associations than a degree ceiling.
+ * - `intention_upkeep`: intentions past their horizon by a whole horizon.
+ * - `curiosity`: current entities the substrate holds no description for.
  *
  * Each is a graph read nothing computes on the tick today. Until one exists, its operation is
  * scored on relevance, waiting time, and cost alone, which is everything known about it.
  *
- * The thirteenth, `proposal_resolution`, declares none on purpose rather than for want of a
- * gauge: the open-proposal count is the number it moves, and scoring it on lowering that would
- * reward an applied correction and a dismissed one alike, which rewards emptying the queue
- * rather than deciding it.
+ * The last two declare none on purpose rather than for want of a gauge. `proposal_resolution`
+ * moves the open-proposal count, and scoring it on lowering that would reward an applied
+ * correction and a dismissed one alike, which rewards emptying the queue rather than deciding
+ * it. `recall_probe` produces the numbers instead of moving them: it measures retrieval and
+ * changes nothing, so a run that scored a miss did its job exactly as well as one that scored
+ * a hit.
  */
 export function introspectionOperations(): readonly IntrospectionOperation[] {
   return [
@@ -86,6 +93,14 @@ export function introspectionOperations(): readonly IntrospectionOperation[] {
     narrativeRegroundingOperation(),
     retroJudgmentSweepOperation(),
     descriptionFreshnessOperation(),
+    // The other half of an intention's life. Extraction and the keyed close say what the
+    // substrate means to do and when a later statement replaces it; this closes what nobody
+    // came back to, long enough after its horizon that expiry alone was not the answer.
+    intentionUpkeepOperation(),
+    // Beside them because it writes one: an entity the substrate keeps meeting and cannot
+    // describe becomes a question filed as the substrate's own intention, which the entity
+    // itself brings back at recall.
+    curiosityOperation(),
 
     // Compression, on both of its axes: the scopes above a session, and the claims that turn
     // out to be one subject said many times. Each writes one grounded memory and closes what it
@@ -114,6 +129,12 @@ export function introspectionOperations(): readonly IntrospectionOperation[] {
     // The merge's own two-store seam: the graph commits a merge before the decision record
     // reaches SQLite, and no candidate read can find that pair again to re-decide it.
     mergeDecisionReconcileOperation(),
+
+    // The loop's one sense of its own product: ask the substrate for what it was told and score
+    // the answer, then read how much of what it served the conversation went on to use. It
+    // measures and writes nothing back, which is why its recall runs through a store that is
+    // thrown away.
+    recallProbeOperation(),
 
     // The two queues, in the order they read a row. Resolution decides an open proposal on its
     // merits, applying or dismissing it in the run that reads it; hygiene stays the staleness

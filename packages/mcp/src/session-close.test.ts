@@ -18,7 +18,14 @@ import type { ToolBackend } from './tools.js';
  * service down with it.
  */
 
-const CAPS: BucketCaps = { facts: 15, episodes: 5, narratives: 5, preferences: 3, resonant: 5 };
+const CAPS: BucketCaps = {
+  facts: 15,
+  episodes: 5,
+  narratives: 5,
+  intentions: 3,
+  preferences: 3,
+  resonant: 5,
+};
 
 function emptyPack(): MemoryPack {
   return assemblePack({

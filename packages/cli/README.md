@@ -25,7 +25,7 @@ status      services, models, routing, and graph counts
 doctor      check every substrate invariant and name what is broken
 last        the last MemoryPack served per session, with rationale
 queue       inspect the reflection queue: ls | drop | promote | reconcile
-replay      put archived experiences back through the pipeline: ls | run
+replay      put archived experiences and the usage stream back: ls | run | usage
 proposals   review judged contradictions and duplicate entities: ls | apply | dismiss
 maintain    the maintenance catalog, and forcing one operation to run now: ls | run
 unmerge     split an identity back out of the entity dedup absorbed it into: ls | apply
@@ -64,7 +64,7 @@ fire it opens a streamable-HTTP MCP session against `http://127.0.0.1:8765/mcp`
 (`AION_MCP_PORT` moves the port), makes one tool call, and deletes the session.
 
 - `run.ts`: the entry, the fail-open wrapper, and one JSON trace line per fire.
-- `events.ts`: the seven handlers, one MCP round trip at most each.
+- `events.ts`: the eight handlers, one MCP round trip at most each.
 - `mcp.ts`: the client, sized for a single fire. It reads plain JSON and SSE-framed bodies.
 - `transcript.ts`, `payload.ts`, `state.ts`, `options.ts`: reading the harness JSONL
   defensively, shaping tool arguments, the per-session cursor under `~/.aion/hook-state/`.

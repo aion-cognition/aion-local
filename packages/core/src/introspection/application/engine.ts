@@ -20,6 +20,7 @@ import {
   recordOperationSelected,
 } from '../../infrastructure/sqlite/introspection-counters.js';
 import { markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
+import type { ReflectionIntakeDeps } from '../../reflection/application/intake.js';
 import { operationBucketKey } from '../domain/buckets.js';
 import { decide, type Decision, type OperationCandidate } from '../domain/decide.js';
 import { neutralSnapshot, type HealthSnapshot } from '../domain/health.js';
@@ -27,6 +28,7 @@ import {
   operationMeasurements,
   type IntrospectionOperation,
   type OperationOutcome,
+  type RecallProbe,
 } from '../domain/operation.js';
 import { proposeOnlyAdvisor, type Tier3Advisor } from '../domain/tier3.js';
 
@@ -55,6 +57,19 @@ export type IntrospectorDeps = {
   readonly logger: Logger;
   /** Handed to every operation through its context, so the whole loop shares one breaker. */
   readonly provider: Provider;
+  /**
+   * The service's own write path into memory, handed on unchanged. The loop never builds one:
+   * intake carries per-process state (the lane counters, the worker wakeup) that a second
+   * instance would measure nothing with, so a caller that has no intake leaves this out and the
+   * operations that need it decline instead.
+   */
+  readonly intake?: ReflectionIntakeDeps;
+  /**
+   * The isolated recall the self-probe asks through, built by the caller that holds the real
+   * recall deps. Handed on unchanged for the same reason `intake` is: the loop never assembles
+   * one, so it cannot assemble one that writes.
+   */
+  readonly recallProbe?: RecallProbe;
   /**
    * The registered catalog, in order. Order decides nothing on its own: selection is by tier
    * and urgency, and ties break on waiting time and then on name.
@@ -382,6 +397,8 @@ export class Introspector {
         config: this.#deps.config,
         logger: this.#deps.logger,
         provider: this.#deps.provider,
+        ...(this.#deps.intake === undefined ? {} : { intake: this.#deps.intake }),
+        ...(this.#deps.recallProbe === undefined ? {} : { recallProbe: this.#deps.recallProbe }),
         health,
         now,
         signal: this.#abort.signal,

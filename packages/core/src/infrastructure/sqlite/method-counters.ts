@@ -21,6 +21,7 @@ export const PACK_METHODS = [
   'resonance',
   'entity_resolution',
   'recency',
+  'intention_trigger',
 ] as const;
 
 export type PackMethod = (typeof PACK_METHODS)[number];

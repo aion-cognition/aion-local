@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { bootstrapBackbone, GLOBAL_WORKSPACE_NAME } from './backbone.js';
+import { bootstrapBackbone, GLOBAL_WORKSPACE_NAME, SUBSTRATE_NAME } from './backbone.js';
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { runRead } from './connection.js';
 import { BASE_NODE_LABEL } from './labels.js';
@@ -35,7 +35,9 @@ afterAll(async () => {
   rmSync(dataDir, { recursive: true, force: true });
 });
 
-async function countLabel(label: 'Member' | 'Workspace'): Promise<number> {
+type BackboneLabel = 'Member' | 'Workspace' | 'Substrate';
+
+async function countLabel(label: BackboneLabel): Promise<number> {
   const rows = await runRead(
     harness.driver,
     `MATCH (n:${label}) RETURN count(n) AS c`,
@@ -45,7 +47,17 @@ async function countLabel(label: 'Member' | 'Workspace'): Promise<number> {
   return rows[0] ?? 0;
 }
 
-async function nodeProperty(label: 'Member' | 'Workspace', property: string): Promise<unknown> {
+async function countSubstrateWorkspaceEdges(): Promise<number> {
+  const rows = await runRead(
+    harness.driver,
+    'MATCH (:Substrate)-[r:WITHIN_WORKSPACE]->(:Workspace) RETURN count(r) AS c',
+    {},
+    (row) => row.c as number,
+  );
+  return rows[0] ?? 0;
+}
+
+async function nodeProperty(label: BackboneLabel, property: string): Promise<unknown> {
   const rows = await runRead(
     harness.driver,
     `MATCH (n:${label}) RETURN n.\`${property}\` AS value`,
@@ -66,17 +78,22 @@ async function memberId(): Promise<string | undefined> {
 }
 
 describe('backbone bootstrap', () => {
-  it('creates exactly one Member and one Workspace, labeled, structural, and bitemporally stamped', async () => {
+  it('creates exactly one Member, one Workspace and one Substrate, labeled, structural, and bitemporally stamped', async () => {
     const result = await bootstrapBackbone(harness.driver, { memberName: 'Ryan Huber', now: NOW });
 
     expect([...result.member.labels].sort()).toEqual([BASE_NODE_LABEL, 'Entity', 'Member'].sort());
     expect([...result.workspace.labels].sort()).toEqual(
       [BASE_NODE_LABEL, 'Entity', 'Workspace'].sort(),
     );
+    expect([...result.substrate.labels].sort()).toEqual(
+      [BASE_NODE_LABEL, 'Entity', 'Substrate'].sort(),
+    );
     expect(result.member.created).toBe(true);
     expect(result.workspace.created).toBe(true);
+    expect(result.substrate.created).toBe(true);
     expect(await countLabel('Member')).toBe(1);
     expect(await countLabel('Workspace')).toBe(1);
+    expect(await countLabel('Substrate')).toBe(1);
 
     expect(await nodeProperty('Member', 'name')).toBe('Ryan Huber');
     expect(await nodeProperty('Member', 'name_norm')).toBe('ryan huber');
@@ -91,9 +108,20 @@ describe('backbone bootstrap', () => {
     expect(await nodeProperty('Workspace', 'name_norm')).toBe(GLOBAL_WORKSPACE_NAME);
     expect(await nodeProperty('Workspace', 'is_structural')).toBe(true);
     expect(await nodeProperty('Workspace', BITEMPORAL_PROPERTIES.validUntil)).toBeNull();
+
+    expect(await nodeProperty('Substrate', 'name')).toBe(SUBSTRATE_NAME);
+    expect(await nodeProperty('Substrate', 'name_norm')).toBe('aion');
+    expect(await nodeProperty('Substrate', 'type')).toBe('substrate');
+    expect(await nodeProperty('Substrate', 'is_structural')).toBe(true);
+    expect(await nodeProperty('Substrate', BITEMPORAL_PROPERTIES.txFrom)).toEqual(NOW);
+    expect(await nodeProperty('Substrate', BITEMPORAL_PROPERTIES.validUntil)).toBeNull();
   });
 
-  it('running it again is a no-op: still one node each, and both report unmatched-not-created', async () => {
+  it('links the Substrate to the global Workspace with one structural edge', async () => {
+    expect(await countSubstrateWorkspaceEdges()).toBe(1);
+  });
+
+  it('running it again is a no-op: still one node each, and all three report unmatched-not-created', async () => {
     const rerun = await bootstrapBackbone(harness.driver, {
       memberName: 'Ryan Huber',
       now: new Date('2026-06-06T00:00:00.000Z'),
@@ -101,9 +129,13 @@ describe('backbone bootstrap', () => {
 
     expect(rerun.member.created).toBe(false);
     expect(rerun.workspace.created).toBe(false);
+    expect(rerun.substrate.created).toBe(false);
     expect(await countLabel('Member')).toBe(1);
     expect(await countLabel('Workspace')).toBe(1);
+    expect(await countLabel('Substrate')).toBe(1);
+    expect(await countSubstrateWorkspaceEdges()).toBe(1);
     expect(await nodeProperty('Member', BITEMPORAL_PROPERTIES.txFrom)).toEqual(NOW);
+    expect(await nodeProperty('Substrate', BITEMPORAL_PROPERTIES.txFrom)).toEqual(NOW);
   });
 
   it('collapses whitespace in the stored name and keeps the case the user typed', async () => {

@@ -48,7 +48,7 @@ const commands: Record<string, Command> = {
     run: (argv) => runQueue(argv),
   },
   replay: {
-    summary: 'put archived experiences back through the pipeline: ls | run',
+    summary: 'put archived experiences and the usage stream back: ls | run | usage',
     run: (argv) => runReplayCommand(argv),
   },
   proposals: {

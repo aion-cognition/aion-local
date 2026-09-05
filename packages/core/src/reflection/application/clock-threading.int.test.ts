@@ -174,6 +174,12 @@ async function stampsOf(label: string): Promise<Stamps[]> {
   );
 }
 
+const BACKBONE_LABELS = ['Member', 'Workspace', 'Substrate'];
+
+function isBackbone(row: Stamps): boolean {
+  return row.labels.some((label) => BACKBONE_LABELS.includes(label));
+}
+
 /**
  * Every node the substrate holds except the backbone, which is derived from nothing and
  * predates the experience. Scanning the base label rather than a list of the types this
@@ -181,7 +187,7 @@ async function stampsOf(label: string): Promise<Stamps[]> {
  */
 async function everyNodeButTheBackbone(): Promise<Stamps[]> {
   const rows = await stampsOf(BASE_NODE_LABEL);
-  return rows.filter((row) => !row.labels.includes('Member') && !row.labels.includes('Workspace'));
+  return rows.filter((row) => !isBackbone(row));
 }
 
 function expectExperienceClock(rows: readonly Stamps[]): void {
@@ -253,9 +259,7 @@ describe('an experience replayed onto an empty graph long after it happened', ()
   });
 
   it('stamps every entity the pipeline resolved with the experience clock', async () => {
-    const entities = (await stampsOf('Entity')).filter(
-      (entity) => !entity.labels.includes('Member') && !entity.labels.includes('Workspace'),
-    );
+    const entities = (await stampsOf('Entity')).filter((entity) => !isBackbone(entity));
     expect(entities.length).toBeGreaterThan(0);
     expectExperienceClock(entities);
   });

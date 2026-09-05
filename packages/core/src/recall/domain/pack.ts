@@ -147,6 +147,13 @@ export type AssemblePackInput = {
    */
   readonly resonant?: readonly FusedItem[];
   /**
+   * Standing intentions whose own trigger condition this recall met, best first. Routed to the
+   * intentions bucket by how they arrived rather than by their labels, and laid down after
+   * everything the query itself found: an answer to what was asked outranks something the
+   * substrate volunteered, whatever the two numbers say.
+   */
+  readonly intentions?: readonly FusedItem[];
+  /**
    * The current claim in a raw turn's subject family, keyed by the turn's node id. Only the
    * resonant bucket reads it: a turn the query matched directly arrives beside whatever else
    * the query matched, while a turn resonance surfaced alone carries a stated belief with
@@ -227,9 +234,9 @@ function honestyNote(input: AssemblePackInput): string | undefined {
  * The running estimate charges a bucket's heading to its first accepted item, because the
  * heading is text the agent pays for too.
  *
- * The fused items are laid down first and the resonant ones after, so a direct answer always
- * outranks an association and takes the budget first. Their two scores are not on one scale,
- * so there is no order to merge them into.
+ * The fused items are laid down first, then the triggered intentions, then the resonant ones,
+ * so a direct answer always outranks what the substrate volunteered and takes the budget first.
+ * The three scores are not on one scale, so there is no order to merge them into.
  */
 function select(input: AssemblePackInput, note: string | undefined): Selection {
   const selection: Selection = new Map();
@@ -304,9 +311,19 @@ function select(input: AssemblePackInput, note: string | undefined): Selection {
     accept(item, bucket, gloss);
   }
 
-  // Resonance runs beside fusion rather than inside it, so its hits are the one place a pack
-  // could hold the same memory twice. The stage already excludes every id the first pass
-  // produced; this catches the other half, a distinct node whose text says the same thing.
+  // Both stages below run beside fusion rather than inside it, so their hits are where a pack
+  // could hold the same memory twice. Each already excludes every id the run produced before
+  // it; this catches the other half, a distinct node whose text says the same thing.
+  for (const item of input.intentions ?? []) {
+    if (withheld(item.id)) {
+      continue;
+    }
+    if (packedIds.has(item.id) || packedContent.has(hashContent(item.content))) {
+      continue;
+    }
+    accept(item, 'intentions', false);
+  }
+
   for (const item of input.resonant ?? []) {
     if (withheld(item.id)) {
       continue;

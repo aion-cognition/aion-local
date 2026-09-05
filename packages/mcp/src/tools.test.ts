@@ -19,7 +19,14 @@ import { z } from 'zod';
 import { DESCRIPTIONS_VERSION, DESCRIPTIONS_VERSION_META_KEY } from './descriptions.js';
 import { callTool, TOOL_DEFINITIONS, type ToolBackend } from './tools.js';
 
-const CAPS: BucketCaps = { facts: 15, episodes: 5, narratives: 5, preferences: 3, resonant: 5 };
+const CAPS: BucketCaps = {
+  facts: 15,
+  episodes: 5,
+  narratives: 5,
+  intentions: 3,
+  preferences: 3,
+  resonant: 5,
+};
 const CUES: readonly Cue[] = [{ text: 'webhooks', source: 'query', weight: 3 }];
 const TIMINGS: StageTimingsMs = { embed: 12, cues: 340, seeds: 55, activation: 80, fusion: 4 };
 

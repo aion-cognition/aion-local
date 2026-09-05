@@ -1,3 +1,4 @@
+import type { MemoryPack } from '@aion/protocol';
 import type { Driver } from 'neo4j-driver';
 
 import type { OperationBucket } from './buckets.js';
@@ -6,6 +7,7 @@ import type { Config } from '../../infrastructure/config/schema.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import type { ReflectionIntakeDeps } from '../../reflection/application/intake.js';
 
 /**
  * The contract every maintenance operation implements. It is deliberately small: a name, the
@@ -28,6 +30,21 @@ import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
  */
 export type OperationTier = 1 | 2 | 3;
 
+export type RecallProbeRequest = {
+  readonly query: string;
+  /** The probe's own session identity, never a real one. */
+  readonly identity: string;
+  readonly now: Date;
+};
+
+/**
+ * One recall the loop runs on itself, in process. It is a closure rather than the recall deps
+ * because the caller that owns those deps is also the only place that can strip them down to a
+ * read that teaches the substrate nothing; an operation handed the deps could rebuild the
+ * polluting version by accident.
+ */
+export type RecallProbe = (request: RecallProbeRequest) => Promise<MemoryPack>;
+
 export type OperationContext = {
   readonly driver: Driver;
   readonly db: SqliteHandle;
@@ -39,6 +56,18 @@ export type OperationContext = {
    * which cannot count consecutive failures across the runs it exists to trip on.
    */
   readonly provider: Provider;
+  /**
+   * The write path into memory, for the one operation that records what it did as an experience
+   * rather than only as a graph edit. Absent wherever the loop was constructed without it, which
+   * an operation that needs it reads as no path to record through and declines the run over.
+   */
+  readonly intake?: ReflectionIntakeDeps;
+  /**
+   * The read path back out of memory, for the one operation that measures retrieval by using it.
+   * Absent wherever the loop was constructed without it, which the operation reads as no way to
+   * ask and declines the run over, the same as `intake` above.
+   */
+  readonly recallProbe?: RecallProbe;
   /** The same reading the decision was made from. An operation must not observe again. */
   readonly health: HealthSnapshot;
   readonly now: Date;

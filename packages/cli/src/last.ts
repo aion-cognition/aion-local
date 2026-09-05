@@ -41,6 +41,7 @@ const BUCKET_LABELS: Readonly<Record<PackBucket, string>> = {
   facts: 'Facts',
   episodes: 'Episodes',
   narratives: 'Narratives',
+  intentions: 'Intentions',
   preferences: 'Preferences',
   resonant: 'Resonant',
 };

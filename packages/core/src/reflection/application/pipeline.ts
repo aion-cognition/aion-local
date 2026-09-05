@@ -85,6 +85,7 @@ export function cognitiveOptions(config: Config): CognitiveExtractionStageOption
     keyedCloseMode: config.reflection.keyedCloseMode,
     familyRelatednessFloor: config.reflection.supersedeFamilyRelatednessFloor,
     readingHorizonDays: config.temporal.readingHorizonDays,
+    intentionHorizonDays: config.temporal.intentionHorizonDays,
   };
 }
 

@@ -15,6 +15,7 @@ import { upsertEdge } from './edges.js';
 import { PRIOR_DESCRIPTIONS_PROPERTY } from './entity-description-queries.js';
 import { ENTITY_MENTION_TYPE } from './entity-queries.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
+import { INTENTION_ORIGIN_PROPERTY } from './intention-queries.js';
 import { runGraphMigrations } from './migrations.js';
 import { ENTITY_NAME_NORM_PROPERTY, ENTITY_NAME_PROPERTY } from './seed-queries.js';
 import { supersedeSubjectFamily } from './subject-family.js';
@@ -28,7 +29,7 @@ import {
   stopNeo4jHarness,
   type Neo4jHarness,
 } from './test-support/neo4j-harness.fixture.js';
-import { foldAspect, readingHorizon } from '../../reflection/domain/claim-key.js';
+import { foldAspect, intentionHorizon, readingHorizon } from '../../reflection/domain/claim-key.js';
 import { foldName } from '../../reflection/domain/name-fold.js';
 import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
 
@@ -526,5 +527,133 @@ describe('the keyed close', () => {
     // through is still there.
     expect(retired[ENTITY_NAME_NORM_PROPERTY]).toBe(foldName('Quillon ingest pipeline'));
     expect(await isClosed(pipeline)).toBe(false);
+  });
+});
+
+/**
+ * An intention keys and closes like a fact and takes a narrower scope when it does.
+ *
+ * The family path reads a close as the world having changed, and neither thing it then does is
+ * true of a plan changing: it would take the facts recorded in the same observation that name
+ * the same subject, and it would blank an entity description on the grounds that the
+ * description restated the closed claim. The fixture below arranges both, so a close that ran
+ * the family path fails here rather than passing quietly.
+ */
+describe('the keyed close on an intention', () => {
+  it('dates a Goal on the intention horizon and leaves a member intention unmarked', async () => {
+    await seedEpisode('ep-intent-horizon');
+    const written = await writeClaim({
+      episodeId: 'ep-intent-horizon',
+      label: 'Goal',
+      text: 'We plan to move the Larkspur ledger onto its own volume.',
+      intentionHorizonDays: HORIZON_DAYS,
+    });
+
+    const properties = await nodeProperties(harness.driver, written.node.id);
+    expect(properties[VALID_HORIZON_PROPERTY]).toEqual(intentionHorizon(OCCURRED_AT, HORIZON_DAYS));
+    expect(properties[INTENTION_ORIGIN_PROPERTY]).toBeUndefined();
+    expect(await isClosed(written.node.id)).toBe(false);
+  });
+
+  it('marks an intention the substrate filed for itself', async () => {
+    await seedEpisode('ep-intent-origin');
+    const written = await writeClaim({
+      episodeId: 'ep-intent-origin',
+      label: 'Plan',
+      text: 'We plan to ask what the Larkspur ledger volume costs.',
+      originKind: 'substrate',
+    });
+
+    const properties = await nodeProperties(harness.driver, written.node.id);
+    expect(properties[INTENTION_ORIGIN_PROPERTY]).toBe('substrate');
+  });
+
+  it('closes the earlier intention on the key and takes nothing else with it', async () => {
+    await seedEpisode('ep-intent-old');
+    await seedEpisode('ep-intent-new');
+    const pipeline = await seedEntity(
+      'entity-larkspur-pipeline',
+      'Larkspur ingest pipeline',
+      'The Larkspur ingest pipeline is owned by Perrin Ashdown.',
+    );
+    const owner = await seedEntity('entity-perrin-ashdown', 'Perrin Ashdown');
+    await mention('ep-intent-old', pipeline);
+    await mention('ep-intent-old', owner);
+    const vector = [1, 0, 0, 0, 0, 0, 0, 0];
+    const key = { subjectEntityId: pipeline, aspectNorm: aspect('owner') };
+    const prior = await writeClaim({
+      episodeId: 'ep-intent-old',
+      label: 'Goal',
+      text: 'We plan to hand the Larkspur ingest pipeline to Perrin Ashdown.',
+      contentVector: vector,
+      ...key,
+    });
+    // A fact from the same observation, naming the same subject and carrying the same vector,
+    // which is everything the family path admits a sibling on.
+    const factSibling = await writeClaim({
+      episodeId: 'ep-intent-old',
+      label: 'Concept',
+      text: 'The Larkspur ingest pipeline runs nightly.',
+      contentVector: vector,
+    });
+
+    const correction = await writeClaim({
+      episodeId: 'ep-intent-new',
+      label: 'Goal',
+      text: 'We plan to hand the Larkspur ingest pipeline to Tobias Reyes.',
+      contentVector: vector,
+      ...key,
+      keyedClose: { mode: 'close', relatednessFloor: FAMILY_FLOOR },
+    });
+
+    expect(correction.keyedClose?.closedIds).toEqual([prior.node.id]);
+    expect(correction.keyedClose?.families).toEqual([]);
+    expect(await isClosed(prior.node.id)).toBe(true);
+    expect(await supersedingNodeIds(harness.driver, prior.node.id)).toEqual([correction.node.id]);
+    const edge = await supersessionEdge(harness.driver, prior.node.id);
+    expect(edge?.provenance).toEqual(['keyed_close']);
+    expect(edge?.signals).toEqual(['subject_key']);
+
+    // The fact recorded beside the old plan is still true, and the description of the pipeline
+    // still describes it.
+    expect(await isClosed(factSibling.node.id)).toBe(false);
+    const gloss = await nodeProperties(harness.driver, pipeline);
+    expect(gloss[MEMORY_PROPERTIES.text]).toBe(
+      'The Larkspur ingest pipeline is owned by Perrin Ashdown.',
+    );
+    expect(gloss[PRIOR_DESCRIPTIONS_PROPERTY]).toBeUndefined();
+  });
+
+  it('never closes across the two populations, in either direction', async () => {
+    await seedEpisode('ep-cross-fact');
+    await seedEpisode('ep-cross-goal');
+    await seedEpisode('ep-cross-fact-later');
+    const key = { subjectEntityId: 'entity-thornfield-queue', aspectNorm: aspect('owner') };
+    const fact = await writeClaim({
+      episodeId: 'ep-cross-fact',
+      label: 'Decision',
+      text: 'The Thornfield queue is owned by the platform group.',
+      ...key,
+    });
+
+    const goal = await writeClaim({
+      episodeId: 'ep-cross-goal',
+      label: 'Goal',
+      text: 'We plan to hand the Thornfield queue to the ingest group.',
+      ...key,
+      keyedClose: { mode: 'close', relatednessFloor: FAMILY_FLOOR },
+    });
+    const laterFact = await writeClaim({
+      episodeId: 'ep-cross-fact-later',
+      label: 'Insight',
+      text: 'The Thornfield queue is owned by the ingest group now.',
+      ...key,
+      keyedClose: { mode: 'close', relatednessFloor: FAMILY_FLOOR },
+    });
+
+    // The intention found no intention to close, and the fact closed the fact alone.
+    expect(goal.keyedClose?.closedIds).toEqual([]);
+    expect(laterFact.keyedClose?.closedIds).toEqual([fact.node.id]);
+    expect(await isClosed(goal.node.id)).toBe(false);
   });
 });

@@ -37,16 +37,16 @@ const NOW = new Date('2026-08-28T12:00:00.000Z');
 
 /** A real working session: named people, a project, a tool, and a decision to reason over. */
 const LIVE_PAYLOAD = {
-  summary: 'planning the Aion reflection pipeline with Priya Raman',
+  summary: 'planning the Kestrel reflection pipeline with Priya Raman',
   turns: [
     {
       role: 'user',
-      text: 'Priya Raman and I reviewed the Aion reflection pipeline this morning. We are keeping Neo4j as the graph store.',
+      text: 'Priya Raman and I reviewed the Kestrel reflection pipeline this morning. We are keeping Neo4j as the graph store.',
       occurred_at: '2026-08-28T09:00:00Z',
     },
     {
       role: 'assistant',
-      text: 'Understood. Aion will extract entities with Ollama running locally, and Priya Raman owns the Neo4j migration.',
+      text: 'Understood. Kestrel will extract entities with Ollama running locally, and Priya Raman owns the Neo4j migration.',
       occurred_at: '2026-08-28T09:00:30Z',
     },
   ],
@@ -59,7 +59,7 @@ const STUB_PAYLOAD = {
   turns: [
     {
       role: 'user',
-      text: 'Ryan Huber merged the Aion entity stage',
+      text: 'Ryan Huber merged the Kestrel entity stage',
       occurred_at: '2026-08-28T11:00:00Z',
     },
   ],
@@ -73,9 +73,14 @@ const STUB_EXTRACTION = {
       context: 'the member the backbone already answers to',
       is_speaker: true,
     },
-    { name: 'Aion', type: 'project', context: 'the memory substrate', aliases: ['aion-local'] },
-    { name: 'Aion', type: 'tool', context: 'the same name under a second reading' },
-    { name: 'Aion', type: 'project', context: 'a duplicate the model returned twice' },
+    {
+      name: 'Kestrel',
+      type: 'project',
+      context: 'the memory substrate',
+      aliases: ['kestrel-local'],
+    },
+    { name: 'Kestrel', type: 'tool', context: 'the same name under a second reading' },
+    { name: 'Kestrel', type: 'project', context: 'a duplicate the model returned twice' },
     {
       name: 'proposal-hygiene',
       type: 'tool',
@@ -89,7 +94,7 @@ const STUB_EXTRACTION = {
 const RESPELLED_EXTRACTION = {
   entities: [
     { name: 'Ry', type: 'person', context: 'the speaker under a short name', is_speaker: true },
-    { name: 'aion-local', type: 'topic', context: 'the substrate under one of its aliases' },
+    { name: 'kestrel-local', type: 'topic', context: 'the substrate under one of its aliases' },
     // Squash equality routes nothing at write, so this spelling reaches its identity only
     // because the record that named it first gave it as an alias.
     { name: 'proposal_hygiene', type: 'topic', context: 'the same operation, other separator' },
@@ -191,13 +196,13 @@ describe('canonicalization against the live constraint', () => {
 
     expect(entities.filter((entity) => entity.nameNorm === 'ryan huber')).toHaveLength(1);
 
-    const aion = entities.filter((entity) => entity.nameNorm === 'aion');
-    expect(aion).toHaveLength(1);
+    const project = entities.filter((entity) => entity.nameNorm === 'kestrel');
+    expect(project).toHaveLength(1);
     // Two readings, one identity: both are counted and the first one stands as the label.
-    expect(aion[0]?.type).toBe('project');
-    expect(aion[0]?.typeCounts).toBe('{"project":1,"tool":1}');
-    expect(aion[0]?.aliasesNorm).toEqual(['aion-local']);
-    expect(aion[0]?.nameSquash).toBe('aion');
+    expect(project[0]?.type).toBe('project');
+    expect(project[0]?.typeCounts).toBe('{"project":1,"tool":1}');
+    expect(project[0]?.aliasesNorm).toEqual(['kestrel-local']);
+    expect(project[0]?.nameSquash).toBe('kestrel');
   });
 
   it('gives every extracted entity the Memory label, its text, and both vectors', async () => {
@@ -218,7 +223,7 @@ describe('canonicalization against the live constraint', () => {
 
     expect(mentions).toHaveLength(3);
     expect(entities.map((entity) => entity.nameNorm)).toEqual([
-      'aion',
+      'kestrel',
       'proposal-hygiene',
       'ryan huber',
     ]);
@@ -263,8 +268,8 @@ describe('canonicalization against the live constraint', () => {
     expect(member?.type).toBe('member');
 
     // The alias tier, on a nickname and on a separator variant the first record declared.
-    const aion = after.find((entity) => entity.nameNorm === 'aion');
-    expect(aion?.aliasesNorm).toContain('aion-local');
+    const project = after.find((entity) => entity.nameNorm === 'kestrel');
+    expect(project?.aliasesNorm).toContain('kestrel-local');
     const hygiene = after.find((entity) => entity.nameNorm === 'proposal-hygiene');
     expect(hygiene?.aliasesNorm).toContain('proposal_hygiene');
   });

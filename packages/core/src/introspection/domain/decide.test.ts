@@ -16,6 +16,7 @@ import {
   criticalConditions,
   HEALTH_COLLECTORS,
   NEUTRAL_GRAPH_HEALTH,
+  NEUTRAL_QUEUE_HEALTH,
   type OperationEffectiveness,
 } from './health.js';
 import { healthFixture } from './test-support/health.fixture.js';
@@ -202,6 +203,23 @@ describe('costDivisor', () => {
 });
 
 describe('decide', () => {
+  it('decides the same cycle whether or not the new senses read badly', () => {
+    const candidates = [
+      candidate({ name: 'routine', relevance: 0.4 }),
+      candidate({ name: 'vector_backfill', answers: 'vector_parity', relevance: 0.9 }),
+    ];
+    // Every recall degraded, the reinforcement cap throwing rows away, and every generation
+    // failing. No operation declares relevance over any of it yet, so the loop must not move.
+    const sensed = healthFixture({
+      queue: { ...NEUTRAL_QUEUE_HEALTH, cueDegradedRate: 1, reinforcementDropped: 4_000 },
+      generation: { calls: 40, failed: 40, failureRate: 1 },
+    });
+
+    expect(decide(baseInput({ health: sensed, candidates }))).toEqual(
+      decide(baseInput({ candidates })),
+    );
+  });
+
   it('selects the critical operation ahead of a more urgent routine one', () => {
     const health = healthFixture({
       graph: {

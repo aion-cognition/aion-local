@@ -58,6 +58,7 @@ const SNAPSHOT: StatsSnapshot = {
       resonance: 2,
       entity_resolution: 0,
       recency: 0,
+      intention_trigger: 0,
     },
     methodLegStats: {
       vector: { sole: 22, shared: 8, rrfContribution: 1.234 },
@@ -66,6 +67,57 @@ const SNAPSHOT: StatsSnapshot = {
       resonance: { sole: 2, shared: 0, rrfContribution: 0 },
       entity_resolution: { sole: 0, shared: 0, rrfContribution: 0 },
       recency: { sole: 0, shared: 0, rrfContribution: 0 },
+      intention_trigger: { sole: 0, shared: 0, rrfContribution: 0 },
+    },
+    generation: {
+      routes: [
+        {
+          role: 'cue',
+          provider: 'ollama',
+          calls: 12,
+          failed: 0,
+          failureRate: 0,
+          meanDurationMs: 900,
+        },
+        {
+          role: 'cue',
+          provider: 'anthropic',
+          calls: 0,
+          failed: 0,
+          failureRate: undefined,
+          meanDurationMs: undefined,
+        },
+        {
+          role: 'reflect',
+          provider: 'ollama',
+          calls: 0,
+          failed: 0,
+          failureRate: undefined,
+          meanDurationMs: undefined,
+        },
+        {
+          role: 'reflect',
+          provider: 'anthropic',
+          calls: 8,
+          failed: 2,
+          failureRate: 0.25,
+          meanDurationMs: 2_400,
+        },
+      ],
+      calls: 20,
+      failed: 2,
+      failureRate: 0.1,
+    },
+    recallProbe: {
+      samples: 8,
+      hits: 6,
+      hitRate: 0.75,
+      served: {
+        items: 12,
+        referenced: 3,
+        rate: 0.25,
+        measuredAt: '2026-08-29T00:00:00.000Z',
+      },
     },
     maintenance: {
       cycle: 41,
@@ -197,6 +249,104 @@ describe('renderStats', () => {
     // method contributing nothing is a visible reading, not a silently missing line.
     expect(text).toMatch(/entity_resolution\s+0\s+0\.0%/);
     expect(text).toMatch(/recency\s+0\s+0\.0%/);
+  });
+
+  it('renders per-route generation calls and the failure rate beside them', () => {
+    const { lines, write } = collector();
+
+    renderStats(SNAPSHOT, DEFAULTS, write, NOW);
+
+    const text = lines.join('\n');
+    expect(text).toMatch(/all routes\s+20\s+10\.0% failed/);
+    expect(text).toMatch(/cue via ollama\s+12\s+0\.0% failed\s+~0\.9s\/call/);
+    expect(text).toMatch(/reflect via anthropic\s+8\s+25\.0% failed\s+~2\.4s\/call/);
+  });
+
+  it('says a route nothing has called was never called, rather than reporting it clean', () => {
+    const { lines, write } = collector();
+
+    renderStats(SNAPSHOT, DEFAULTS, write, NOW);
+
+    const text = lines.join('\n');
+    expect(text).toMatch(/cue via anthropic\s+0\s+never called/);
+    expect(text).toMatch(/reflect via ollama\s+0\s+never called/);
+  });
+
+  it('says a substrate that has generated nothing has no reading yet', () => {
+    const { lines, write } = collector();
+    const fresh: StatsSnapshot = {
+      ...SNAPSHOT,
+      extras: {
+        ...SNAPSHOT.extras,
+        generation: {
+          routes: SNAPSHOT.extras.generation.routes.map((route) => ({
+            ...route,
+            calls: 0,
+            failed: 0,
+            failureRate: undefined,
+            meanDurationMs: undefined,
+          })),
+          calls: 0,
+          failed: 0,
+          failureRate: undefined,
+        },
+      },
+    };
+
+    renderStats(fresh, DEFAULTS, write, NOW);
+
+    expect(lines.join('\n')).toMatch(/all routes\s+0\s+no generations yet/);
+  });
+
+  it('renders both self-probe rates, the lifetime one and the latest served reading', () => {
+    const { lines, write } = collector();
+
+    renderStats(SNAPSHOT, DEFAULTS, write, NOW);
+
+    const text = lines.join('\n');
+    expect(text).toContain('recall self-probe');
+    expect(text).toMatch(/recalled\s+6 of 8 asked back\s+75\.0%/);
+    expect(text).toMatch(/referenced\s+3 of 12 served\s+25\.0% \(2026-08-29T00:00:00\.000Z\)/);
+  });
+
+  it('says a substrate nothing has probed is unmeasured rather than failing', () => {
+    const { lines, write } = collector();
+    const fresh: StatsSnapshot = {
+      ...SNAPSHOT,
+      extras: {
+        ...SNAPSHOT.extras,
+        recallProbe: { samples: 0, hits: 0, hitRate: undefined, served: undefined },
+      },
+    };
+
+    renderStats(fresh, DEFAULTS, write, NOW);
+
+    const text = lines.join('\n');
+    expect(text).toMatch(/recalled\s+nothing probed yet/);
+    expect(text).toMatch(/referenced\s+not measured yet/);
+  });
+
+  it('says so when no served item was old enough for the run to judge', () => {
+    const { lines, write } = collector();
+    const quiet: StatsSnapshot = {
+      ...SNAPSHOT,
+      extras: {
+        ...SNAPSHOT.extras,
+        recallProbe: {
+          ...SNAPSHOT.extras.recallProbe,
+          served: {
+            items: 0,
+            referenced: 0,
+            rate: undefined,
+            measuredAt: '2026-08-29T00:00:00.000Z',
+          },
+        },
+      },
+    };
+
+    renderStats(quiet, DEFAULTS, write, NOW);
+
+    expect(lines.join('\n')).toMatch(/referenced\s+no served item older than a day/);
   });
 
   it('renders one maintenance line per registered operation, with the last outcome', () => {

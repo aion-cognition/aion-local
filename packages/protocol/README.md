@@ -27,8 +27,8 @@ Five files, all re-exported from `src/index.ts`.
 - `recall-output.ts`: `MemoryPackSchema` and everything under it, including
   `MemoryPackItemSchema`, `RationaleSchema`, `AdmittedBySchema`, `CueSchema` and
   `MemoryPackMetadataSchema`. `RecallOutput` is `MemoryPack`. Also `MEMORY_PACK_BUCKETS` and
-  `packBuckets`, the one function in the package: it reads a pack's five optional buckets as
-  five arrays, so a typed consumer indexes them without an `undefined` check at every site.
+  `packBuckets`, the one function in the package: it reads a pack's six optional buckets as
+  six arrays, so a typed consumer indexes them without an `undefined` check at every site.
 - `reflection-input.ts`: `ReflectionInputSchema`, refined so at least one of `turns`,
   `tool_executions` or `observations` carries an entry. `ReflectionLaneSchema` is the
   `interactive` or `bulk` service class.

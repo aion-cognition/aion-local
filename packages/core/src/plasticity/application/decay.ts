@@ -5,6 +5,7 @@ import { decayEdgeWeights } from '../../infrastructure/graph/edge-weights.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { recordDecaySweep } from '../../infrastructure/sqlite/decay-counters.js';
+import { appendDecaySweepEvent } from '../../infrastructure/sqlite/usage-events.js';
 
 /**
  * The Hebbian decay sweep: one callable operation, run to completion and returning what it
@@ -77,6 +78,22 @@ export async function sweepEdgeDecay(
 
   const edgesDecayed = edges.filter((edge) => edge.strength !== edge.previousStrength).length;
   const report: HebbianDecayReport = { edgesScanned: edges.length, edgesDecayed };
+
+  // Every sweep, including one that moved nothing. A sweep advances `decayed_at` on the edges
+  // it scanned, which is what decides the next sweep's candidates, so a stream missing the
+  // quiet runs replays a different scan order from the one that happened.
+  try {
+    appendDecaySweepEvent(deps.db, {
+      batchSize,
+      decayRate,
+      peakDays,
+      sigma,
+      weightFloor,
+      occurredAt: now,
+    });
+  } catch (err) {
+    deps.logger.warn({ err }, 'hebbian decay usage-event append failed');
+  }
 
   recordDecaySweep(deps.db, {
     edgesScanned: report.edgesScanned,

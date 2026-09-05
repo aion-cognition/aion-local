@@ -58,6 +58,40 @@ export function recordServedItems(
   writeAll(items);
 }
 
+/** One item a pack handed out, with the earliest moment any session received it. */
+export type ServedItemAge = {
+  readonly itemId: string;
+  readonly firstServedAt: string;
+};
+
+/**
+ * Items first served before `cutoff`, one row per item rather than per (session, item): the
+ * question a caller asks of this is whether serving a memory led anywhere, and the first serve
+ * is when that clock starts. Two sessions holding the same item are one item here.
+ *
+ * The rows are a live-context record, so a session's rows go when it closes and the idle purge
+ * takes the rest: what survives long enough to read here is what a still-running conversation
+ * was handed. That makes this a small read on a healthy substrate and an empty one on a quiet
+ * install, which is a real answer rather than a gap.
+ */
+export function listServedItemsBefore(
+  db: SqliteHandle,
+  cutoff: string,
+  limit: number,
+): readonly ServedItemAge[] {
+  const rows = db
+    .prepare(
+      `SELECT item_id, MIN(first_served_at) AS first_served_at
+       FROM served_items
+       GROUP BY item_id
+       HAVING MIN(first_served_at) < ?
+       ORDER BY first_served_at ASC
+       LIMIT ?`,
+    )
+    .all(cutoff, limit) as { item_id: string; first_served_at: string }[];
+  return rows.map((row) => ({ itemId: row.item_id, firstServedAt: row.first_served_at }));
+}
+
 /**
  * Drops the whole record for one session, and answers how many rows went. The rows describe an
  * agent's live context, so they are worthless the moment that context is gone.

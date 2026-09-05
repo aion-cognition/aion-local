@@ -8,6 +8,7 @@ import { STRUCTURAL_DISCOVERY_OPERATION } from '@aion/core/introspection/applica
 import {
   NEUTRAL_ENRICHMENT_HEALTH,
   NEUTRAL_ENTITY_HEALTH,
+  NEUTRAL_GENERATION_HEALTH,
   NEUTRAL_GRAPH_HEALTH,
   NEUTRAL_PLASTICITY_HEALTH,
   NEUTRAL_PROPOSAL_HEALTH,
@@ -185,6 +186,7 @@ function snapshot(reading: Reading): HealthSnapshot {
     proposals: reading.proposals ?? proposals(),
     entities: reading.entities ?? NEUTRAL_ENTITY_HEALTH,
     plasticity: reading.plasticity ?? plasticity(),
+    generation: NEUTRAL_GENERATION_HEALTH,
     effectiveness: reading.effectiveness,
     degraded: [],
   };
