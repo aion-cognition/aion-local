@@ -89,6 +89,9 @@ describe('hooks install and uninstall', () => {
       settingsPath,
       repo: { path: repoDir, verified: true },
       now: NOW,
+      // Every case names its own environment, so a key exported in the developer's shell
+      // never decides whether install refuses.
+      env: { AION_ANTHROPIC_API_KEY: 'sk-from-env' },
       ...overrides,
     };
   }
@@ -189,6 +192,89 @@ describe('hooks install and uninstall', () => {
     expect(block.hooks.SessionStart[0].hooks[0].command).toContain(
       '/host/aion-local/packages/cli/dist/hook-main.js',
     );
+  });
+
+  it('refuses to install when neither the environment nor the repo .env carries a key', () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+
+    expect(installHooks(options({ env: {} }), write)).toBe(1);
+
+    expect(existsSync(settingsPath)).toBe(false);
+    expect(written).toEqual([]);
+    const message = String(stderr.mock.calls[0]?.[0]);
+    expect(message).toContain('AION_ANTHROPIC_API_KEY');
+    expect(message).toContain('aion init full');
+    expect(message).toContain(join(repoDir, '.env'));
+  });
+
+  it('leaves an existing settings file and its directory untouched when it refuses', () => {
+    mkdirSync(join(dir, 'home', '.claude'), { recursive: true });
+    const original = { model: 'opus' };
+    writeFileSync(settingsPath, JSON.stringify(original));
+    vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+
+    expect(installHooks(options({ env: {} }), write)).toBe(1);
+
+    expect(settings()).toEqual(original);
+    expect(readdirSync(join(dir, 'home', '.claude'))).toEqual(['settings.json']);
+  });
+
+  it('refuses without a key instead of printing the block to merge by hand', () => {
+    vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+
+    expect(
+      installHooks(
+        options({ env: {}, repo: { path: '/host/aion-local', verified: false } }),
+        write,
+      ),
+    ).toBe(1);
+
+    expect(written).toEqual([]);
+  });
+
+  it('refuses the lite profile without a key the same way as the full profile', () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+
+    expect(
+      installHooks(
+        options({
+          env: {},
+          flags: { profile: 'lite', withResearchCapture: false, stopMode: 'push' },
+        }),
+        write,
+      ),
+    ).toBe(1);
+
+    expect(existsSync(settingsPath)).toBe(false);
+    expect(String(stderr.mock.calls[0]?.[0])).toContain('AION_ANTHROPIC_API_KEY');
+  });
+
+  it('reads a blank key as no key at all', () => {
+    vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    writeFileSync(join(repoDir, '.env'), 'AION_ANTHROPIC_API_KEY=\n');
+
+    expect(installHooks(options({ env: { AION_ANTHROPIC_API_KEY: '   ' } }), write)).toBe(1);
+
+    expect(existsSync(settingsPath)).toBe(false);
+  });
+
+  it('installs when the key is recorded only in the repo .env', () => {
+    writeFileSync(join(repoDir, '.env'), '# comment\nAION_ANTHROPIC_API_KEY="sk-from-file"\n');
+
+    expect(installHooks(options({ env: {} }), write)).toBe(0);
+
+    expect(describeAionHooks(settings())).toHaveLength(7);
+  });
+
+  it('removes entries and reports status with no key anywhere', () => {
+    installHooks(options(), write);
+    written = [];
+
+    expect(statusHooks(options({ env: {} }), write)).toBe(0);
+    expect(uninstallHooks(options({ env: {} }), write)).toBe(0);
+
+    expect(written.join('\n')).toContain('SessionStart');
+    expect(describeAionHooks(settings())).toHaveLength(0);
   });
 
   it('removes its own entries and leaves the rest of the file alone', () => {

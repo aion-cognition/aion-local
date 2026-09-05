@@ -1,4 +1,4 @@
-import { describeError } from '@aion/core';
+import { describeError, envFileValue } from '@aion/core';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname } from 'node:path';
@@ -14,7 +14,13 @@ import {
   type SettingsHooks,
 } from './hooks-settings.js';
 import { stderrWriter, stdoutWriter, type Writer } from './output.js';
-import { claudeSettingsPath, hookScriptPath, resolveHostRepo, type HostRepo } from './paths.js';
+import {
+  claudeSettingsPath,
+  envFilePath,
+  hookScriptPath,
+  resolveHostRepo,
+  type HostRepo,
+} from './paths.js';
 
 /**
  * `aion hooks install | uninstall | status`. The merge itself lives in `hooks-settings.ts`;
@@ -81,6 +87,7 @@ export type HooksCommandOptions = {
   readonly settingsPath: string;
   readonly repo: HostRepo;
   readonly now: Date;
+  readonly env: NodeJS.ProcessEnv;
 };
 
 export function defaultHooksOptions(flags: HooksFlags): HooksCommandOptions {
@@ -89,7 +96,33 @@ export function defaultHooksOptions(flags: HooksFlags): HooksCommandOptions {
     settingsPath: claudeSettingsPath(homedir()),
     repo: resolveHostRepo(),
     now: new Date(),
+    env: process.env,
   };
+}
+
+// init.ts owns the same name but imports this module, so naming it there and reading it here
+// would close an import cycle over a string.
+const ANTHROPIC_KEY_ENV_VAR = 'AION_ANTHROPIC_API_KEY';
+
+/**
+ * Both invocation paths reach the key through one of these two reads. Inside the CLI container
+ * compose's `env_file` has already put it in the environment; a host invocation reads the same
+ * file from the repo the hook script would be installed from.
+ */
+function anthropicKeyPresent(options: HooksCommandOptions): boolean {
+  if ((options.env[ANTHROPIC_KEY_ENV_VAR] ?? '').trim() !== '') {
+    return true;
+  }
+  const recorded = envFileValue(envFilePath(options.repo.path), ANTHROPIC_KEY_ENV_VAR);
+  return (recorded ?? '').trim() !== '';
+}
+
+function keylessRefusal(repoPath: string): string {
+  return (
+    'aion hooks install: no Anthropic key is set. Hooks capture raw transcript windows and ' +
+    `need the keyed profile to digest them. Set ${ANTHROPIC_KEY_ENV_VAR} in ` +
+    `${envFilePath(repoPath)} or run aion init full, then re-run.`
+  );
 }
 
 /** Compact UTC, so a directory listing sorts the backups in the order they were taken. */
@@ -167,6 +200,13 @@ function renderManualInstall(hooks: SettingsHooks, write: Writer): void {
 }
 
 export function installHooks(options: HooksCommandOptions, write: Writer): number {
+  // Every hook profile is keyed-only, so the refusal comes before the spec is built and before
+  // the manual block is printed: a keyless run leaves with nothing to write and nothing to paste.
+  if (!anthropicKeyPresent(options)) {
+    stderrWriter(keylessRefusal(options.repo.path));
+    return 1;
+  }
+
   const hooks = specFor(options);
   if (!options.repo.verified) {
     renderManualInstall(hooks, write);
