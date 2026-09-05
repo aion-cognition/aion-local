@@ -169,6 +169,7 @@ export {
 } from './providers/routing.js';
 export { ProviderRouter } from './providers/role-provider.js';
 export { listResidentModels, reconcileResidentModels } from './providers/model-reconciliation.js';
+export type { ReconciliationReport } from './providers/model-reconciliation.js';
 export { EmbedDimensionMismatchError } from './providers/errors.js';
 export { OllamaProvider } from './providers/ollama-provider.js';
 export {

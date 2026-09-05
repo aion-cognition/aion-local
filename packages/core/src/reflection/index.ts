@@ -10,6 +10,8 @@ export type { ReflectionIntakeDeps } from './application/intake.js';
 
 export { LaneAssigner } from './application/lanes.js';
 
+export { recordLifecycleEvent } from './application/lifecycle-events.js';
+
 export { reconcileEnrichment } from './application/reconcile.js';
 
 export { queueLagSnapshot } from './application/lag.js';

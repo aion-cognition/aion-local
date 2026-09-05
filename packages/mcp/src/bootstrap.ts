@@ -23,6 +23,7 @@ import {
   readMemberName,
   RecallSideEffects,
   reconcileResidentModels,
+  recordLifecycleEvent,
   ReflectionOrchestrator,
   reflectionStages,
   ReflectionWorker,
@@ -36,6 +37,7 @@ import {
   type Logger,
   type Provider,
   type RecallDeps,
+  type ReconciliationReport,
   type ReflectionIntakeDeps,
 } from '@aion/core';
 import { userInfo } from 'node:os';
@@ -95,7 +97,7 @@ async function reconcileModels(
   config: Config,
   router: ProviderRouter,
   logger: Logger,
-): Promise<void> {
+): Promise<ReconciliationReport | undefined> {
   try {
     const report = await reconcileResidentModels({
       baseUrl: config.ollama.url,
@@ -104,8 +106,10 @@ async function reconcileModels(
     if (report.checked) {
       logger.info({ reconciliation: report }, `model reconciliation: ${report.detail}`);
     }
+    return report;
   } catch (err) {
     logger.warn({ err }, 'model reconciliation failed');
+    return undefined;
   }
 }
 
@@ -228,7 +232,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
         `${route.role} is pinned to anthropic with no AION_ANTHROPIC_API_KEY set; routing it to ${route.localModel} instead`,
       );
     }
-    await reconcileModels(config, router, logger);
+    const reconciliation = await reconcileModels(config, router, logger);
     // Deliberately not awaited: binding the port never waits on Ollama, and an early recall
     // queues behind the same model load either way.
     void warmEmbedModel(router.embedder, logger);
@@ -287,6 +291,19 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       lanes: new LaneAssigner(config.lanes),
       acceptHookCapture: acceptsHookCapture(router.routing),
     };
+    // A boot that unloaded a model changed what the substrate runs on, which is worth
+    // remembering; a boot that found nothing resident changed nothing. Recorded through the
+    // intake deps above, and not awaited for the reason the embed warm-up is not: binding the
+    // port never waits on Ollama.
+    if (reconciliation !== undefined && reconciliation.evicted.length > 0) {
+      void recordLifecycleEvent(intake, {
+        event: 'models_reconciled',
+        text:
+          `boot reconciled resident models: ${reconciliation.detail}. ` +
+          `Routing is now ${routingSummary(router.routing)}`,
+      });
+    }
+
     if (stages.length > 0) {
       // The drain runs alongside the first tool calls rather than in front of them: a long
       // backlog would otherwise hold the service off the port it is supposed to be answering.

@@ -74,6 +74,16 @@ async function resolveSingletonIdInTransaction(
 }
 
 /**
+ * The substrate's own identity node, undefined on a graph the backbone has never bootstrapped.
+ * Read inside the caller's transaction, beside the write it decides.
+ */
+export async function readSubstrateIdInTransaction(
+  tx: GraphTransaction,
+): Promise<string | undefined> {
+  return resolveSingletonIdInTransaction(tx, 'Substrate');
+}
+
+/**
  * The stored Member's display name, undefined before the backbone exists. `bootstrapBackbone`
  * merges the name it is given on every call, so a process that did not create the backbone
  * (the long-lived MCP service, which never prompts) reads the name back and passes it in

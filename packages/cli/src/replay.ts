@@ -8,6 +8,7 @@ import {
   PIPELINE_VERSION,
   ProviderRouter,
   readMemberName,
+  recordLifecycleEvent,
   ReflectionOrchestrator,
   replayExperiences,
   SessionManager,
@@ -20,6 +21,7 @@ import {
 import { reflectionStages } from '@aion/mcp';
 
 import { CliUsageError, parseArgs, type ArgSpec } from './args.js';
+import { lifecycleIntakeDeps } from './lifecycle.js';
 import { stderrWriter, stdoutWriter, type Writer } from './output.js';
 import { withSubstrate, type Substrate } from './substrate.js';
 
@@ -298,6 +300,28 @@ async function runReplay(substrate: Substrate, flags: ReplayFlags): Promise<numb
           },
         }),
   });
+
+  // A pass that re-derived nothing changed nothing about the substrate, and a run that skipped
+  // every row is the ordinary no-op. Only a pass that actually replayed is worth remembering.
+  if (report.replayed > 0) {
+    await recordLifecycleEvent(
+      lifecycleIntakeDeps({
+        connection,
+        db,
+        config,
+        logger,
+        memberId: backbone.member.id,
+        workspaceId: backbone.workspace.id,
+      }),
+      {
+        event: 'replay_completed',
+        text:
+          `replay completed: ${String(report.replayed)} of ${String(report.scanned)} experiences ` +
+          `replayed, ${String(report.skipped)} skipped, ${String(report.failed)} failed, ` +
+          `pipeline ${PIPELINE_VERSION}`,
+      },
+    );
+  }
 
   if (flags.json) {
     write(JSON.stringify(toJson(report)));

@@ -56,9 +56,12 @@ export const ReflectionLaneSchema = z
  * dismissal or any other policy decision, so a caller-settable field is not a trust hole.
  * `event` names the hook event or transport call that pushed the payload; a caller that
  * does not know one omits it.
+ *
+ * `system` is the substrate writing about itself: an init, a replay, a model swap. Nobody
+ * sat at a keyboard for one, so it is a channel rather than a call the member made.
  */
 export const ReflectionOriginSchema = z.strictObject({
-  channel: z.enum(['hook', 'mcp', 'cli']),
+  channel: z.enum(['hook', 'mcp', 'cli', 'system']),
   event: z.string().optional(),
 });
 

@@ -115,7 +115,9 @@ vi.mock('@aion/core', async (importOriginal) => {
     }),
     readMemberName: async () => 'member-1',
     latestAppliedGraphMigration: () => 'migration-1',
-    reconcileResidentModels: async () => ({ checked: false }),
+    // The shape the real report returns when routing has nothing to unload, `evicted` included:
+    // boot reads that list to decide whether the run is worth recording.
+    reconcileResidentModels: async () => ({ checked: false, evicted: [] }),
   };
 });
 

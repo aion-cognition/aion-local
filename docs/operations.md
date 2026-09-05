@@ -218,6 +218,39 @@ aion forget <id | query> [--yes]
 `forget` sets `forgotten_at` and deletes nothing. Default recall stops serving the node;
 `aion search --as-of` and `--knew-at` still return it, which is what keeps the act audited.
 
+## Lifecycle events
+
+The substrate records its own life events as memory. Four of them exist: an init that created
+the backbone, an init that applied new migrations to a substrate that already existed, a replay
+that re-derived something, and a boot that unloaded a model routing no longer needs. Each goes
+through intake as an observation on the bulk lane, carrying the numbers that describe it
+(migration count, member name, profile; replay counts and pipeline version; which model left
+memory).
+
+They are ordinary episodes, so recall serves them, `aion search` finds them, and `aion forget`
+removes one. All of them chain in one standing session, `aion-system`, which hangs off the
+Substrate node rather than off the Member: nobody typed these, and they are the substrate's own
+history rather than a conversation.
+
+```
+aion search "substrate initialized"        # the birth event, and every init since
+```
+
+## Resetting the substrate
+
+A reset deletes everything the substrate holds, so it is a documented procedure rather than a
+command.
+
+1. Stop the service: `docker compose --profile mcp down`.
+2. Optional, if you want a way back: take a cold copy of the two volumes while nothing is
+   running.
+3. Drop them: `docker volume rm aion_aion-neo4j aion_aion-data`. This deletes the graph, the
+   SQLite database, and the experience archive. Nothing survives it.
+4. `aion init full` (or `local`).
+
+The next init is then the fresh-substrate case, so the first thing the new substrate remembers
+is being initialized.
+
 ## Logs
 
 Everything writes structured JSONL to one file on the data volume, `/data/logs/aion.jsonl` by

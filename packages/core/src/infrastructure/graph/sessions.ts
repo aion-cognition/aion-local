@@ -1,9 +1,16 @@
 import type { Driver } from 'neo4j-driver';
 
+import { readSubstrateIdInTransaction } from './backbone.js';
 import { writeStampedDerivedNodeInTransaction } from './bitemporal.js';
 import { inWriteTransaction, type GraphTransaction } from './connection.js';
 import { upsertEdgeInTransaction } from './edges.js';
 import { lockNodeInTransaction } from './locks.js';
+
+/**
+ * The one session the substrate keeps for itself. Every lifecycle event it records chains
+ * here, so its own history reads as one continuing session rather than a new one per boot.
+ */
+export const SYSTEM_SESSION_IDENTITY = 'aion-system';
 
 /**
  * A session's node id is the caller-supplied identity itself (the MCP transport's session
@@ -64,6 +71,37 @@ async function findPriorSessionId(
   return rows[0];
 }
 
+type SessionInitiator = {
+  readonly id: string;
+  /**
+   * True when the substrate initiated the session rather than the member, which is what takes
+   * it out of the member's FOLLOWS chain.
+   */
+  readonly substrate: boolean;
+};
+
+/**
+ * Who the session hangs off. Every session but one is the member's. The substrate's own
+ * session records lifecycle events nobody typed, so it points at the Substrate node instead:
+ * an init or a model swap is the substrate's history, not a conversation the member had.
+ *
+ * A graph whose backbone predates the identity node falls back to the member, so an
+ * uninitialized or older substrate still writes the edge rather than none.
+ */
+async function resolveInitiator(
+  tx: GraphTransaction,
+  input: EnsureGraphSessionInput,
+): Promise<SessionInitiator> {
+  if (input.sessionId !== SYSTEM_SESSION_IDENTITY) {
+    return { id: input.memberId, substrate: false };
+  }
+  const substrateId = await readSubstrateIdInTransaction(tx);
+  if (substrateId === undefined) {
+    return { id: input.memberId, substrate: false };
+  }
+  return { id: substrateId, substrate: true };
+}
+
 /** Reads back an already-linked session's FOLLOWS target; undefined for the member's first session. */
 async function readFollowsTarget(
   tx: GraphTransaction,
@@ -111,11 +149,12 @@ export async function ensureGraphSession(
       now,
       occurredAt,
     });
+    const initiator = await resolveInitiator(tx, input);
 
     await upsertEdgeInTransaction(tx, {
       type: 'INITIATED_BY',
       sourceId: node.id,
-      targetId: input.memberId,
+      targetId: initiator.id,
       strength: 1,
       confidence: 1,
       signals: STRUCTURAL_SIGNALS,
@@ -139,6 +178,12 @@ export async function ensureGraphSession(
     if (!node.created) {
       const follows = await readFollowsTarget(tx, node.id);
       return { sessionId: node.id, created: false, follows };
+    }
+
+    // The substrate's session is one node for the life of the substrate and stands outside the
+    // member's chain, so there is no prior to derive and no member to lock while deriving it.
+    if (initiator.substrate) {
+      return { sessionId: node.id, created: true };
     }
 
     await lockNodeInTransaction(tx, input.memberId, now);
