@@ -3,7 +3,7 @@ import type { Driver } from 'neo4j-driver';
 import { BITEMPORAL_PROPERTIES, currentOnly } from './bitemporal.js';
 import { runRead } from './connection.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
-import { BASE_NODE_LABEL, MEMORY_LABEL } from './labels.js';
+import { BASE_NODE_LABEL } from './labels.js';
 import {
   readCurrencyAnnotation,
   readModeFragment,
@@ -21,6 +21,9 @@ import type { Vector } from '../providers/types.js';
  * already holds: hydrating an activated node into a candidate, and pulling content vectors
  * for MMR. They all splice the same `readModeFragment` in, so currency annotation and
  * forget suppression have exactly one definition behind every entry point into recall.
+ *
+ * The fifth strategy is `recency-queries.ts`, which projects the same candidate through the
+ * two helpers exported below.
  */
 
 export { CONTENT_VECTOR_INDEX } from './vector-indexes.js';
@@ -131,7 +134,12 @@ export function lucenePhraseQuery(text: string): string {
   return `"${escaped}"`;
 }
 
-function candidateProjection(nodeVar: string, fragment: ReadFragment): string {
+/**
+ * The candidate contract every seed strategy returns, exported for the one strategy that lives
+ * in a file of its own (`recency-queries.ts`): a strategy projecting different columns would
+ * hand fusion a differently shaped candidate depending on which leg found it.
+ */
+export function candidateProjection(nodeVar: string, fragment: ReadFragment): string {
   return [
     `${nodeVar}.id AS id`,
     `labels(${nodeVar}) AS labels`,
@@ -150,7 +158,8 @@ function candidateProjection(nodeVar: string, fragment: ReadFragment): string {
   ].join(', ');
 }
 
-function mapCandidate(row: Row): SeedCandidate {
+/** The read side of `candidateProjection`, exported for the same reason. */
+export function mapCandidate(row: Row): SeedCandidate {
   const occurredAt = row.occurred_at;
   const sourceEpisodeId = row.source_episode_id;
   const { why } = row;
@@ -455,46 +464,5 @@ export async function contentVectors(
       id: row.id as string,
       vector: fromGraphVector(row.vector) ?? [],
     }),
-  );
-}
-
-export type RecencySeedInput = {
-  readonly limit: number;
-  readonly mode: ReadMode;
-};
-
-/**
- * Rows come back newest-first and unscored; the caller turns position into a score, because
- * recency is an ordering, not a measurement.
- *
- * Two-tier ordering rather than a coalesce: nodes that have actually been recalled outrank
- * nodes that are merely new. On a substrate that has served no recalls nothing carries
- * `last_accessed`, the first tier is empty, and the whole ordering degrades to `tx_from`
- * DESC. Ranking policy, not text machinery: both tiers answer "recently relevant".
- *
- * No index covers either ordering key, so this sorts a `:Memory` scan. Bounded by `LIMIT` and
- * by a single-user graph; it is the one seed strategy whose cost grows with total memory.
- */
-export async function recencySeeds(
-  driver: Driver,
-  input: RecencySeedInput,
-): Promise<SeedCandidate[]> {
-  const fragment = readModeFragment(input.mode, 'n');
-  const cypher = [
-    `MATCH (n:${MEMORY_LABEL})`,
-    `WHERE ${fragment.where}`,
-    'WITH n',
-    `ORDER BY CASE WHEN n.${LAST_ACCESSED_PROPERTY} IS NULL THEN 1 ELSE 0 END,`,
-    `         n.${LAST_ACCESSED_PROPERTY} DESC,`,
-    `         n.${BITEMPORAL_PROPERTIES.txFrom} DESC`,
-    'LIMIT $limit',
-    `RETURN ${candidateProjection('n', fragment)}`,
-  ].join('\n');
-
-  return runRead(
-    driver,
-    cypher,
-    { ...fragment.parameters, limit: toGraphInteger(input.limit) },
-    mapCandidate,
   );
 }

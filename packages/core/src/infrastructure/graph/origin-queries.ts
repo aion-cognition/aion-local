@@ -40,11 +40,43 @@ export type ItemOriginInput = {
 const SESSION_PROPERTY = MEMORY_PROPERTIES.sessionId;
 
 /** A mention from an episode this session did not write, which is what makes an entity shared. */
-function mentionedBy(predicate: string): string {
+function mentionedBy(nodeVar: string, predicate: string): string {
   return (
-    `(n:${ENTITY_LABEL} AND EXISTS { MATCH (m:Episode)-[:${ENTITY_MENTION_TYPE}]->(n)` +
-    ` WHERE ${predicate} })`
+    `(${nodeVar}:${ENTITY_LABEL} AND ` +
+    `EXISTS { MATCH (m:Episode)-[:${ENTITY_MENTION_TYPE}]->(${nodeVar}) WHERE ${predicate} })`
   );
+}
+
+export type OriginPredicates = {
+  /** Cypher boolean: the named session is among the sessions this node's provenance names. */
+  readonly own: string;
+  /** Cypher boolean: so is some other session, or a session nothing can name. */
+  readonly other: string;
+};
+
+/**
+ * The provenance verdict as two Cypher expressions over any node variable, so the read that
+ * subtracts an item from a pack and the read that ranks one behind another cannot disagree
+ * about whose memory a node is. The extraction leg is inlined in each expression rather than
+ * staged through a `WITH`, because a caller ordering a scan has nowhere to hang one.
+ *
+ * `sessionParam` is the parameter reference the caller binds, `$sessionId` in both callers.
+ */
+export function originPredicates(nodeVar: string, sessionParam: string): OriginPredicates {
+  const session = `${nodeVar}.${SESSION_PROPERTY}`;
+  const sources = `[ (${nodeVar})-[:${EXTRACTION_TYPE}]->(src:Episode) | src.${SESSION_PROPERTY} ]`;
+  const own = [
+    `((${session} IS NOT NULL AND ${session} = ${sessionParam})`,
+    `OR any(s IN ${sources} WHERE s IS NOT NULL AND s = ${sessionParam})`,
+    `OR ${mentionedBy(nodeVar, `m.${SESSION_PROPERTY} = ${sessionParam}`)})`,
+  ].join('\n        ');
+  const otherMention = `m.${SESSION_PROPERTY} IS NULL OR m.${SESSION_PROPERTY} <> ${sessionParam}`;
+  const other = [
+    `((${session} IS NOT NULL AND ${session} <> ${sessionParam})`,
+    `OR any(s IN ${sources} WHERE s IS NULL OR s <> ${sessionParam})`,
+    `OR ${mentionedBy(nodeVar, otherMention)})`,
+  ].join('\n        ');
+  return { own, other };
 }
 
 /**
@@ -57,19 +89,14 @@ function statement(input: ItemOriginInput): {
   parameters: Record<string, unknown>;
 } {
   const fragment = readModeFragment(input.mode, 'n');
-  const extracted = `[ (n)-[:${EXTRACTION_TYPE}]->(src:Episode) | src.${SESSION_PROPERTY} ]`;
+  const origin = originPredicates('n', '$sessionId');
   const cypher = [
     'UNWIND $ids AS wantedId',
     `MATCH (n:${BASE_NODE_LABEL} { id: wantedId })`,
     `WHERE ${fragment.where}`,
-    `WITH n, ${extracted} AS sources`,
     'RETURN n.id AS id,',
-    `       ((n.${SESSION_PROPERTY} IS NOT NULL AND n.${SESSION_PROPERTY} = $sessionId)`,
-    '        OR any(s IN sources WHERE s IS NOT NULL AND s = $sessionId)',
-    `        OR ${mentionedBy(`m.${SESSION_PROPERTY} = $sessionId`)}) AS own,`,
-    `       ((n.${SESSION_PROPERTY} IS NOT NULL AND n.${SESSION_PROPERTY} <> $sessionId)`,
-    '        OR any(s IN sources WHERE s IS NULL OR s <> $sessionId)',
-    `        OR ${mentionedBy(`m.${SESSION_PROPERTY} IS NULL OR m.${SESSION_PROPERTY} <> $sessionId`)}) AS other`,
+    `       ${origin.own} AS own,`,
+    `       ${origin.other} AS other`,
   ].join('\n');
 
   return {

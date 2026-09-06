@@ -207,10 +207,14 @@ export async function handleRecall(
 
   const embedded = await timed(() => embedCues(deps, cues.value.cues));
 
+  // Both origin-aware steps read one setting and one exemption: a time-traveled read is asking
+  // what the substrate held, so it neither discounts nor subtracts the asker's own record.
+  const ownFilter = deps.config.recall.ownSessionFilter && !isTimeTravel(mode);
+
   const selection = await timed(() =>
     selectSeeds(
       { driver: deps.driver, config: deps.config, logger: deps.logger },
-      { cues: embedded.value.cues, mode },
+      { cues: embedded.value.cues, mode, ...(ownFilter ? { sessionId } : {}) },
     ),
   );
   const { seeds } = selection.value;
@@ -304,7 +308,6 @@ export async function handleRecall(
   // month is a question about the past rather than a re-serve, and reading back what a session
   // itself wrote is the whole point of asking.
   const dedup = deps.config.recall.sessionDedup && !isTimeTravel(mode);
-  const ownFilter = deps.config.recall.ownSessionFilter && !isTimeTravel(mode);
 
   // All three run after the second pass, against the candidate set, which is final only now. A
   // pack holding no raw turn issues no claim query at all. None of the three needs another's

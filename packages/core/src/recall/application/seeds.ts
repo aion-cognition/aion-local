@@ -3,6 +3,7 @@ import type { Driver } from 'neo4j-driver';
 
 import type { Config } from '../../infrastructure/config/schema.js';
 import { withCurrency, type ReadMode } from '../../infrastructure/graph/read-modes.js';
+import { recencySeeds } from '../../infrastructure/graph/recency-queries.js';
 import {
   contextVectorSeeds,
   entityNameSeeds,
@@ -12,7 +13,6 @@ import {
   lucenePhraseQuery,
   memoryPopulation,
   normalizeSeedName,
-  recencySeeds,
   vectorSeeds,
   type ScoredSeedCandidate,
 } from '../../infrastructure/graph/seed-queries.js';
@@ -98,6 +98,13 @@ export type SelectSeedsInput = {
   readonly cues: readonly SeedCue[];
   /** Defaults to `withCurrency()`; the pipeline passes `asOf`/`knewAt` straight through. */
   readonly mode?: ReadMode;
+  /**
+   * The asking session, which only the recency leg reads: it is the one strategy that answers
+   * with what the substrate touched last rather than with what matches a cue, so on a graph
+   * one session both writes and reads it answers with that session's own transcript. Absent
+   * leaves the leg ordering on recency alone, which is what a historical read wants.
+   */
+  readonly sessionId?: string;
 };
 
 function budgetCurve(config: Config): SeedBudgetCurve {
@@ -369,9 +376,14 @@ async function recencyContributions(
   deps: SelectSeedsDeps,
   mode: ReadMode,
   limit: number,
+  sessionId: string | undefined,
 ): Promise<SettledLeg> {
   const task = (async () => {
-    const rows = await recencySeeds(deps.driver, { limit, mode });
+    const rows = await recencySeeds(deps.driver, {
+      limit,
+      mode,
+      ...(sessionId === undefined ? {} : { sessionId }),
+    });
     return rows.map((row, rank) => ({
       candidate: row,
       strategy: 'recency' as const,
@@ -410,7 +422,7 @@ export async function selectSeeds(
     contextVectorContributions(deps, cues, mode, limits.context_vector),
     bm25Contributions(deps, cues, mode, limits.bm25),
     entityContributions(deps, cues, mode, limits.entity_resolution),
-    recencyContributions(deps, mode, limits.recency),
+    recencyContributions(deps, mode, limits.recency, input.sessionId),
   ]);
 
   const byStrategy = emptyByStrategy();

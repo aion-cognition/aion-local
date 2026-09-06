@@ -11,6 +11,7 @@ import { bootstrapBackbone, SUBSTRATE_NAME } from '../../infrastructure/graph/ba
 import { supersede, writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
 import { asOf, withCurrency } from '../../infrastructure/graph/read-modes.js';
+import { recencySeeds } from '../../infrastructure/graph/recency-queries.js';
 import {
   countMemoryNodes,
   entitySimilaritySeeds,
@@ -48,6 +49,9 @@ let memberId: string;
 let workspaceId: string;
 let substrateId: string;
 
+const ASKING_SESSION = 'session-asking';
+const OTHER_SESSION = 'session-other';
+
 const ids = {
   claimPath: '',
   activation: '',
@@ -55,6 +59,8 @@ const ids = {
   oldTruth: '',
   newTruth: '',
   forgotten: '',
+  ownRecent: '',
+  otherRecent: '',
 };
 
 function axis(index: number): number[] {
@@ -70,6 +76,8 @@ const VECTORS = {
   truth: axis(3),
   forgotten: axis(4),
   entityName: axis(5),
+  ownRecent: axis(6),
+  otherRecent: axis(7),
 };
 
 function config(overrides: Partial<Config['contextResonance']> = {}): Config {
@@ -138,6 +146,21 @@ beforeAll(async () => {
   ids.forgotten = await writeEpisode('a forgotten episode about claim paths', VECTORS.forgotten, {
     forgotten_at: SUPERSEDED_AT,
   });
+
+  // Written after everything else so the recency ordering alone puts the asking session's own
+  // episode in front of the one another session wrote.
+  ids.otherRecent = await writeEpisode(
+    'another session wrote down the pool lease',
+    VECTORS.otherRecent,
+    { session_id: OTHER_SESSION },
+    BETWEEN,
+  );
+  ids.ownRecent = await writeEpisode(
+    'this session wrote down the pool lease',
+    VECTORS.ownRecent,
+    { session_id: ASKING_SESSION },
+    SUPERSEDED_AT,
+  );
 
   const turn = await writeStampedNode(harness.driver, {
     label: 'Turn',
@@ -227,6 +250,24 @@ describe('per-strategy hits', () => {
     expect(selection.byStrategy.recency[0]?.id).toBe(ids.activation);
     expect(selection.byStrategy.recency[0]?.score).toBe(1);
     expect(selection.byStrategy.recency.map((seed) => seed.id)).toContain(ids.turn);
+  });
+
+  it('recency ranks a memory only the asking session produced behind every other source', async () => {
+    const order = (rows: readonly { id: string }[]): string[] => rows.map((row) => row.id);
+    const plain = order(await recencySeeds(harness.driver, { limit: 50, mode: withCurrency() }));
+    const asked = order(
+      await recencySeeds(harness.driver, {
+        limit: 50,
+        mode: withCurrency(),
+        sessionId: ASKING_SESSION,
+      }),
+    );
+
+    expect(plain.indexOf(ids.ownRecent)).toBeLessThan(plain.indexOf(ids.otherRecent));
+    expect(asked.indexOf(ids.ownRecent)).toBeGreaterThan(asked.indexOf(ids.otherRecent));
+    // Behind the nodes carrying no session at all as well: provenance nothing can attribute is
+    // provenance the asker has no claim on.
+    expect(asked.indexOf(ids.ownRecent)).toBeGreaterThan(asked.indexOf(ids.claimPath));
   });
 
   it('scales a strategy score by the weight of the cue behind it', async () => {
