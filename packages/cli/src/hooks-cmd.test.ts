@@ -331,8 +331,17 @@ describe('hooks install and uninstall', () => {
 
     expect(statusHooks(options(), write)).toBe(0);
 
+    expect(written[0]).toBe(`settings: ${settingsPath}`);
     expect(written.join('\n')).toContain('SessionStart');
     expect(written[written.length - 1]).toContain('present');
+  });
+
+  it('leaves no hooks key behind when nothing else was in the claude file', () => {
+    installHooks(options(), write);
+
+    expect(uninstallHooks(options(), write)).toBe(0);
+
+    expect(settings()).toEqual({});
   });
 
   it('reports the build as uncheckable from inside the container', () => {
@@ -449,6 +458,31 @@ describe('hooks install and uninstall', () => {
       expect(readFileSync(backupPath(codexConfigPath, NOW), 'utf8')).toBe(original);
     });
 
+    it('reads the quoted and the spaced spelling of the header as the server already being there', () => {
+      for (const header of ['[mcp_servers."aion"]', '[ mcp_servers . aion ]']) {
+        mkdirSync(codexDir, { recursive: true });
+        const original = `model = "gpt-5"\n\n${header}\nurl = "http://127.0.0.1:8765/mcp"\n`;
+        writeFileSync(codexConfigPath, original);
+        written = [];
+
+        installHooks(codexOptions(), write);
+
+        expect(configFile()).toBe(original);
+        expect(existsSync(backupPath(codexConfigPath, NOW))).toBe(false);
+        expect(written.join('\n')).toContain('already in');
+      }
+    });
+
+    it('reads a server whose name only starts with ours as a different one', () => {
+      mkdirSync(codexDir, { recursive: true });
+      const original = '[mcp_servers.aion-old]\nurl = "http://127.0.0.1:1/mcp"\n';
+      writeFileSync(codexConfigPath, original);
+
+      installHooks(codexOptions(), write);
+
+      expect(configFile()).toBe(`${original}\n${SERVER_BLOCK}`);
+    });
+
     it('refuses without a key and writes neither file', () => {
       const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
 
@@ -473,6 +507,26 @@ describe('hooks install and uninstall', () => {
       expect(out).toContain(codexConfigPath);
     });
 
+    it('leaves an empty hooks block behind when nothing else was in the file', () => {
+      installHooks(codexOptions(), write);
+
+      expect(uninstallHooks(codexOptions(), write)).toBe(0);
+
+      expect(hooksFile()).toEqual({ hooks: {} });
+    });
+
+    it('names the server block again on a second uninstall', () => {
+      installHooks(codexOptions(), write);
+      uninstallHooks(codexOptions(), write);
+      written = [];
+
+      expect(uninstallHooks(codexOptions(), write)).toBe(0);
+
+      const out = written.join('\n');
+      expect(out).toContain('no aion entries');
+      expect(out).toContain(`[mcp_servers.aion] left in ${codexConfigPath}`);
+    });
+
     it('reports the entries, the server block, and the build', () => {
       installHooks(codexOptions(), write);
       written = [];
@@ -480,7 +534,7 @@ describe('hooks install and uninstall', () => {
       expect(statusHooks(codexOptions(), write)).toBe(0);
 
       const out = written.join('\n');
-      expect(out).toContain(`settings: ${codexHooksPath}`);
+      expect(out).toContain(`hooks: ${codexHooksPath}`);
       expect(out).toContain('SessionStart');
       expect(out).toContain(`[mcp_servers.aion] present in ${codexConfigPath}`);
       expect(written[written.length - 1]).toContain('hook-main.js present');

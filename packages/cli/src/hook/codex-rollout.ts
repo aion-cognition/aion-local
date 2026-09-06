@@ -39,12 +39,18 @@ function readFirstLine(path: string): string | undefined {
     while (position < size && position < FIRST_LINE_SCAN_BYTES) {
       const length = Math.min(READ_CHUNK_BYTES, size - position);
       const buffer = Buffer.alloc(length);
-      readSync(handle, buffer, 0, length, position);
-      position += length;
-      chunks.push(buffer);
+      // A read may answer with fewer bytes than it was asked for, so the cursor follows what
+      // arrived and the chunk is cut to it. A read of nothing ends the scan.
+      const read = readSync(handle, buffer, 0, length, position);
+      if (read === 0) {
+        break;
+      }
+      position += read;
+      const chunk = buffer.subarray(0, read);
+      chunks.push(chunk);
       // The newline is found in the bytes, not in a decoded string, because a chunk boundary can
       // fall inside a multi-byte character and decoding each chunk alone would mangle it.
-      const scanned = chunks.length === 1 ? buffer : Buffer.concat(chunks);
+      const scanned = chunks.length === 1 ? chunk : Buffer.concat(chunks);
       const firstBreak = scanned.indexOf(0x0a);
       if (firstBreak !== -1) {
         return scanned.subarray(0, firstBreak).toString('utf8');
@@ -104,7 +110,7 @@ function textFromItemContent(content: unknown): string {
       parts.push(record.text);
     }
   }
-  return parts.join('\n');
+  return parts.join('\n').trim();
 }
 
 function turnFromCompletedItem(
@@ -129,7 +135,7 @@ function turnFromPayload(
       return undefined;
     }
     const role = payload.type === 'user_message' ? 'user' : 'assistant';
-    return { role, text: payload.message };
+    return { role, text: payload.message.trim() };
   }
   if (payload.type === 'item_completed') {
     return turnFromCompletedItem(payload);

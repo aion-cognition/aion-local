@@ -185,9 +185,16 @@ function codexMcpBlock(env: NodeJS.ProcessEnv): string {
   return `${CODEX_MCP_HEADER}\nurl = "${mcpEndpoint(env)}"\n`;
 }
 
-/** An exact line, so a server named aion-old and a header inside a comment both read as absent. */
+/**
+ * Toml spells one table both `[mcp_servers.aion]` and `[mcp_servers."aion"]`, and codex writes
+ * the quoted form itself. Reading only the literal header would append a second table for a
+ * server that is already declared, which toml rejects and codex then refuses to start on.
+ */
+const CODEX_MCP_TABLE = /^\[\s*mcp_servers\s*\.\s*"?aion"?\s*\]$/;
+
+/** The table path, so a server named aion-old and a header inside a comment both read as absent. */
 function hasCodexMcpServer(config: string): boolean {
-  return config.split('\n').some((line) => line.trim() === CODEX_MCP_HEADER);
+  return config.split('\n').some((line) => CODEX_MCP_TABLE.test(line.trim()));
 }
 
 function readCodexConfig(path: string): string | undefined {
@@ -220,9 +227,13 @@ function ensureCodexMcpServer(options: HooksCommandOptions, write: Writer): void
   write(`  ${CODEX_MCP_HEADER} appended to ${path}`);
 }
 
-function codexMcpStatus(path: string): string {
+function codexMcpPresent(path: string): boolean {
   const config = readCodexConfig(path);
-  if (config !== undefined && hasCodexMcpServer(config)) {
+  return config !== undefined && hasCodexMcpServer(config);
+}
+
+function codexMcpStatus(path: string): string {
+  if (codexMcpPresent(path)) {
     return `config: ${CODEX_MCP_HEADER} present in ${path}`;
   }
   return `config: ${CODEX_MCP_HEADER} missing from ${path}`;
@@ -295,7 +306,29 @@ export function installHooks(options: HooksCommandOptions, write: Writer): numbe
   return 0;
 }
 
+/**
+ * The server block costs nothing without hooks, and a model that calls recall or reflection on
+ * its own still needs it. Both uninstall paths say so: the second run removes nothing and would
+ * otherwise leave the block unmentioned.
+ */
+function reportCodexMcpKept(options: HooksCommandOptions, write: Writer): void {
+  write(`  ${CODEX_MCP_HEADER} left in ${options.codexConfigPath}, still callable as tools`);
+}
+
+/**
+ * Codex parses hooks.json with unknown fields denied and only `description` and `hooks` legal,
+ * and whether it tolerates a document carrying neither is unverified. Removing the last aion
+ * entry leaves the key behind empty rather than testing that.
+ */
+function withCodexHooksKey(document: Record<string, unknown>): Record<string, unknown> {
+  if ('hooks' in document) {
+    return document;
+  }
+  return { ...document, hooks: {} };
+}
+
 export function uninstallHooks(options: HooksCommandOptions, write: Writer): number {
+  const codex = options.flags.harness === 'codex';
   const path = hooksFilePath(options);
   if (!existsSync(path)) {
     write(`aion hooks: nothing to remove, ${path} does not exist`);
@@ -305,15 +338,17 @@ export function uninstallHooks(options: HooksCommandOptions, write: Writer): num
   const removed = describeAionHooks(current).length;
   if (removed === 0) {
     write(`aion hooks: no aion entries in ${path}`);
+    if (codex && codexMcpPresent(options.codexConfigPath)) {
+      reportCodexMcpKept(options, write);
+    }
     return 0;
   }
   backupAndReport(path, options.now, write);
-  writeSettings(path, removeAionHooks(current));
+  const stripped = removeAionHooks(current);
+  writeSettings(path, codex ? withCodexHooksKey(stripped) : stripped);
   write(`aion hooks: removed ${removed} entries from ${path}`);
-  if (options.flags.harness === 'codex') {
-    // The server block costs nothing without hooks, and a model that calls recall or
-    // reflection on its own still needs it.
-    write(`  ${CODEX_MCP_HEADER} left in ${options.codexConfigPath}, still callable as tools`);
+  if (codex) {
+    reportCodexMcpKept(options, write);
   }
   return 0;
 }
@@ -321,7 +356,9 @@ export function uninstallHooks(options: HooksCommandOptions, write: Writer): num
 export function statusHooks(options: HooksCommandOptions, write: Writer): number {
   const path = hooksFilePath(options);
   const settings = readSettings(path);
-  write(`settings: ${path}`);
+  // Codex keeps its hooks in hooks.json and its settings in the config.toml beside it, so
+  // labelling this file settings would point the reader at the wrong one.
+  write(`${options.flags.harness === 'codex' ? 'hooks' : 'settings'}: ${path}`);
   if (describeAionHooks(settings).length === 0) {
     write('  no aion entries');
   } else {

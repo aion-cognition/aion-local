@@ -261,7 +261,7 @@ export async function sessionEnd(context: HookContext): Promise<number> {
 
 /**
  * The one hook that runs before its tool rather than after it, and the only one that rewrites a
- * call. It fires on the model's own aion tool calls and stamps the Claude session id into the
+ * call. It fires on the model's own aion tool calls and stamps the harness session id into the
  * arguments, so a session writes to one Session node however the tool was reached. Stdin to
  * stdout, no round trip: this sits on the critical path of every recall and reflection the model
  * makes.

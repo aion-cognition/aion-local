@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import type * as NodeFs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   extractRolloutMessage,
@@ -10,6 +11,26 @@ import {
   readRolloutTail,
   rolloutFingerprint,
 } from './codex-rollout.js';
+
+/** Bytes one `readSync` may answer with, however many the caller asked for. Zero is the real call. */
+const shortRead = vi.hoisted(() => ({ bytes: 0 }));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof NodeFs>();
+  return {
+    ...actual,
+    readSync: (
+      handle: number,
+      buffer: NodeJS.ArrayBufferView,
+      offset: number,
+      length: number,
+      position: number | null,
+    ): number => {
+      const asked = shortRead.bytes === 0 ? length : Math.min(length, shortRead.bytes);
+      return actual.readSync(handle, buffer, offset, asked, position);
+    },
+  };
+});
 
 const SESSION_META = JSON.stringify({
   timestamp: '2026-09-05T18:00:00.000Z',
@@ -267,6 +288,26 @@ describe('extractRolloutMessage', () => {
     ).toEqual({ role: 'assistant', text: 'no timestamp here', occurredAt: undefined });
   });
 
+  it('returns nothing for a turn whose text is only whitespace', () => {
+    expect(
+      extractRolloutMessage({
+        timestamp: '2026-09-05T18:00:01.000Z',
+        type: 'event_msg',
+        payload: { type: 'user_message', message: '   ' },
+      }),
+    ).toBeUndefined();
+    expect(
+      extractRolloutMessage({
+        timestamp: '2026-09-05T19:00:01.000Z',
+        type: 'event_msg',
+        payload: {
+          type: 'item_completed',
+          item: { type: 'UserMessage', content: [{ type: 'text', text: '  \n  ' }] },
+        },
+      }),
+    ).toBeUndefined();
+  });
+
   it('returns nothing for shapes that are not objects', () => {
     expect(extractRolloutMessage(null)).toBeUndefined();
     expect(extractRolloutMessage('event_msg')).toBeUndefined();
@@ -337,6 +378,7 @@ describe('rolloutFingerprint', () => {
   });
 
   afterEach(() => {
+    shortRead.bytes = 0;
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -362,6 +404,13 @@ describe('rolloutFingerprint', () => {
     writeFileSync(path, fileOf(OTHER_SESSION_META));
 
     expect(rolloutFingerprint(path)).not.toBe(opening);
+  });
+
+  it('hashes the same line when the reads come back short of what was asked for', () => {
+    writeFileSync(path, fileOf(SESSION_META, LEGACY_USER));
+    shortRead.bytes = 16;
+
+    expect(rolloutFingerprint(path)).toBe(createHash('sha256').update(SESSION_META).digest('hex'));
   });
 
   it('says nothing about a file with no complete line yet', () => {

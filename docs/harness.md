@@ -46,7 +46,7 @@ whether hooks are installed at all.
 | SubagentStop | `subagent-stop` | Stores the subagent's synthesis (`last_assistant_message`) as one observation. |
 | SessionEnd | `session-end` | Flushes the last window and drops the cursor. |
 | PostToolUse | `post-tool-use` | Buffers a research tool result for the next flush. |
-| PreToolUse | `pre-tool-use` | Stamps the Claude session id onto a direct recall or reflection call. |
+| PreToolUse | `pre-tool-use` | Stamps the harness session id onto a direct recall or reflection call. |
 
 Every hook fails open. A service that is down, a transcript it cannot read, a malformed
 payload, a fetch that never answers: all of them exit 0 with nothing on stdout. Ten seconds is
@@ -83,9 +83,9 @@ processed would never settle.
 
 ## One session, one Session node
 
-The hooks pass the Claude session id as the `session_id` tool argument. A tool call the model
+The hooks pass the harness session id as the `session_id` tool argument. A tool call the model
 makes for itself can leave that argument out, and the server then falls back to the MCP
-transport's own uuid, so one Claude session writes to two Session nodes.
+transport's own uuid, so one session writes to two Session nodes.
 
 The PreToolUse hook closes that gap before the call leaves the client. It matches
 `mcp__aion__reflection` and `mcp__aion__recall` and returns the arguments with `session_id` set
@@ -100,7 +100,7 @@ to the id the harness gave it:
 }
 ```
 
-Reflection writes, so the Claude session id always wins there, including over an id the model
+Reflection writes, so the harness session id always wins there, including over an id the model
 supplied itself. Recall only reads, so an id it passed on purpose stays and only an absent one
 is filled in. A call that already carries the right id gets no rewrite, which keeps the normal
 permission flow for the common case. The hook reads stdin and writes stdout with no round trip,
@@ -240,6 +240,11 @@ approvals, and every other server out of that file. `--profile`, `--stop-mode`,
 side. `aion hooks uninstall --harness codex` and `aion hooks status --harness codex` read the same
 pair. Uninstall leaves the server block, since a model calling recall on its own still needs it.
 
+Codex runs each hook command through a login shell, so your rc files execute on every fire.
+Anything they print on stdout breaks a Stop hook, where non-JSON stdout on a sync hook is a
+failure, and pollutes a SessionStart injection. Run `zsh -lc 'node --version'` before installing:
+it should print the version and nothing else.
+
 The entries are the Claude ones, edited where codex differs. Every command ends in
 `--harness codex`, which is what tells the client which parser to use. SessionEnd carries
 `timeout: 3`, the most codex allows there against a default of 1 that node startup alone can eat.
@@ -262,7 +267,7 @@ else trusted keeps its trust through an aion install.
 ### What differs from the Claude profile
 
 SessionEnd drops the cursor file and does nothing else. Codex clamps that event to three seconds
-and never parses what it writes, which is no room for a round trip, so Stop and PreCompact carry
+and never parses what it writes, leaving no room for a round trip, so Stop and PreCompact carry
 the close flush. Tool results buffered after the last Stop flush are dropped at session end.
 
 The session-id stamp approves the call it rewrites. Codex honors `updatedInput` only next to a
@@ -291,7 +296,7 @@ fires on one.
 
 The hook entry is `packages/cli/dist/hook-main.js`, compiled from a subtree that imports node
 builtins and its own siblings, nothing else. It runs on the host's bare node, from whatever
-directory the Claude session is in, with no install step and no container. A unit test scans
+directory the session is in, with no install step and no container. A unit test scans
 the subtree and fails the build on any other import.
 
 Per fire it opens a streamable-HTTP MCP session against `http://127.0.0.1:8765/mcp`

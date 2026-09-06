@@ -64,9 +64,9 @@ export function allowedUpdatedToolInput(
 /**
  * The session id a direct tool call must carry, or undefined when the call already carries the
  * right one and nothing needs rewriting. A tool call that omits `session_id` falls back to the
- * MCP transport's own uuid, which splits one Claude session into two Session nodes in the graph.
+ * MCP transport's own uuid, which splits one session into two Session nodes in the graph.
  *
- * Reflection writes, so the Claude session id always wins: an id the model supplied itself is
+ * Reflection writes, so the harness session id always wins: an id the model supplied itself is
  * wrong for a write. Recall only reads, so an id it passed on purpose stays and only an absent
  * one is filled in.
  */
