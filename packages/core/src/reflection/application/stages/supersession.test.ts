@@ -471,21 +471,24 @@ describe('SupersessionStage', () => {
     expect(bed.requests).toHaveLength(2);
   });
 
-  /** One basis vector per subject, so a distractor's candidates never match another subject's query. */
-  function axis(index: number): number[] {
-    const vector = new Array<number>(6).fill(0);
-    vector[index] = 1;
-    return vector;
-  }
-
   it('still judges the sixth subject once five subjects ahead have spent ten judgments of their own', async () => {
+    // One basis vector per subject, so a distractor's candidates never match another subject's query.
+    const AXES: readonly (readonly number[])[] = [
+      [1, 0, 0, 0, 0, 0],
+      [0, 1, 0, 0, 0, 0],
+      [0, 0, 1, 0, 0, 0],
+      [0, 0, 0, 1, 0, 0],
+      [0, 0, 0, 0, 1, 0],
+      [0, 0, 0, 0, 0, 1],
+    ];
+
     bed.seedEpisode(EPISODE_ID);
     for (let index = 0; index < 6; index += 1) {
       seedFactNode(bed.graph, {
         id: `decision-${index}`,
         label: 'Decision',
         text: `Decision ${index} statement.`,
-        vector: axis(index),
+        vector: AXES[index],
         episodeId: EPISODE_ID,
       });
     }
@@ -496,14 +499,14 @@ describe('SupersessionStage', () => {
         id: `prior-${index}-a`,
         label: 'Concept',
         text: `Prior ${index} statement a.`,
-        vector: axis(index),
+        vector: AXES[index],
         episodeId: priorEpisodeId,
       });
       seedFactNode(bed.graph, {
         id: `prior-${index}-b`,
         label: 'Concept',
         text: `Prior ${index} statement b.`,
-        vector: axis(index),
+        vector: AXES[index],
         episodeId: priorEpisodeId,
       });
     }
@@ -512,7 +515,7 @@ describe('SupersessionStage', () => {
       id: 'prior-5',
       label: 'Concept',
       text: 'Decision 5 used to say the opposite.',
-      vector: axis(5),
+      vector: AXES[5],
       episodeId: 'episode-prior-5',
     });
     bed.responses = [

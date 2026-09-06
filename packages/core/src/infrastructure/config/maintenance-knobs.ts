@@ -82,8 +82,9 @@ export const MAINTENANCE_KNOBS = {
   // duplicate scan and the stale-grounding sweep; ten is a modest tick even at the worst mix.
   narrativeCleanupBatch: ['AION_MAINTENANCE_NARRATIVE_CLEANUP_BATCH', positiveInt, 10],
   // `retro_judgment_sweep`'s bound: fact-bearing episodes judged per run. Each episode costs
-  // up to eight judgment calls (supersession's own ceiling), so five keeps one tick's model
-  // spend in line with an ordinary reflection run.
+  // up to twenty-four judgment calls (supersession's own ceiling), so five keeps one tick's
+  // model spend in the same order of magnitude as an ordinary reflection run, which checks
+  // one freshly written episode rather than five archived ones.
   retroSupersessionBatch: ['AION_MAINTENANCE_RETRO_SUPERSESSION_BATCH', positiveInt, 5],
   // `description_freshness`'s kill switch. It is the one operation that replaces stored text
   // with model output in place rather than closing a node and writing a new one, so an
