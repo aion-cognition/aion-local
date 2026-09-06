@@ -31,8 +31,10 @@ import type { Provider, StructuredRequest, Vector } from '../../infrastructure/p
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { getExperienceByEpisode } from '../../infrastructure/sqlite/experience-archive.js';
 import { findPendingReflectionJob } from '../../infrastructure/sqlite/reflection-queue.js';
+import * as storeQueries from '../../reflection/application/experience-store.js';
 import { handleReflection } from '../../reflection/application/intake.js';
 import { LaneAssigner } from '../../reflection/application/lanes.js';
+import type { ReflectionRun } from '../../reflection/application/orchestrator.js';
 import { settleStatedReferences } from '../../reflection/application/stated-references.js';
 import { ReflectionWorker } from '../../reflection/application/worker.js';
 import { SessionManager } from '../../session/session-manager.js';
@@ -867,6 +869,135 @@ describe('a reference that arrives while its job is being handled', () => {
       release();
       await started;
       await worker.stop();
+    }
+  });
+
+  /**
+   * The narrowest of the three: the reference is archived after the running job's last look at
+   * it and before that job is acked. The duplicate's own attach is refused, so the job is the
+   * only thing left that can write the reference, and acking it would leave nothing pending.
+   */
+  it('repairs duplicate provenance archived between the settle and the ack', async () => {
+    const text = 'review final ack duplicate';
+    const identity = 'review-final-ack';
+    const id = await push(text, identity, { derived_from: [ROOT_ID] });
+    const secondRoot = 'review-second-root';
+    await writeEpisode(secondRoot, 'a second independent capture', OFF_TOPIC);
+    function completedRun(episodeId: string): ReflectionRun {
+      return {
+        episodeId,
+        status: 'completed',
+        applied: true,
+        summary: { episodeId, durationMs: 1, stages: [], counts: {}, skippedStages: [] },
+      };
+    }
+    // Replaced synchronously below: a Promise executor runs before the constructor returns.
+    let enter = (): void => undefined;
+    let releaseRun = (): void => undefined;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    const heldRun = new Promise<ReflectionRun>((resolve) => {
+      releaseRun = (): void => {
+        resolve(completedRun(id));
+      };
+    });
+    const runner = {
+      run: vi.fn((episodeId: string) => {
+        if (episodeId === id) {
+          enter();
+          return heldRun;
+        }
+        return Promise.resolve(completedRun(episodeId));
+      }),
+    };
+    const worker = new ReflectionWorker(
+      { driver: harness.driver, db, provider, logger, runner },
+      {
+        clock: () => SEEDED_AT,
+      },
+    );
+    const started = worker.start();
+    // The duplicate is held at its own store, so releasing it puts everything it does after
+    // that point, the archive merge included, inside the worker's own await.
+    let releaseStore = (): void => undefined;
+    let storeIsReady = (): void => undefined;
+    const storeReady = new Promise<void>((resolve) => {
+      storeIsReady = resolve;
+    });
+    // Read out before the spy replaces it: the held call still makes the real write.
+    const { storeExperience } = storeQueries;
+    type Stored = Awaited<ReturnType<typeof storeExperience>>;
+    let resolveStored: (value: Stored) => void = () => undefined;
+    let rejectStored: (reason: unknown) => void = () => undefined;
+    const heldStore = new Promise<Stored>((resolve, reject) => {
+      resolveStored = resolve;
+      rejectStored = reject;
+    });
+    const storeSpy = vi.spyOn(storeQueries, 'storeExperience');
+    const targetSpy = vi.spyOn(claimQueries, 'resolveProvenanceTargets');
+    let duplicate: Promise<unknown> | undefined;
+    try {
+      await entered;
+      storeSpy.mockImplementationOnce((...args) => {
+        void storeExperience(...args).then((stored) => {
+          releaseStore = (): void => {
+            resolveStored(stored);
+          };
+          storeIsReady();
+        }, rejectStored);
+        return heldStore;
+      });
+      duplicate = handleReflection(
+        {
+          driver: harness.driver,
+          db,
+          sessions: deps.sessions,
+          provider,
+          logger,
+          entropyThreshold: DEFAULTS.redaction.entropyThreshold,
+          lanes: new LaneAssigner(DEFAULTS.lanes),
+          workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+          acceptHookCapture: true,
+          onJobEnqueued: () => {
+            worker.wake();
+          },
+        },
+        { observations: [text], provenance: { derived_from: [secondRoot] } },
+        {
+          identity,
+          now: SEEDED_AT,
+        },
+      );
+      await storeReady;
+      targetSpy.mockRejectedValueOnce(new Error('injected temporary graph error'));
+      // One turn, the worker's continuation first: its settle finds the archive as it left it,
+      // and the duplicate archives its reference before the ack that follows.
+      releaseRun();
+      releaseStore();
+      await started;
+      await duplicate;
+      await worker.whenIdle();
+      expect(getExperienceByEpisode(db, id)?.payload.provenance?.derived_from).toEqual([
+        ROOT_ID,
+        secondRoot,
+      ]);
+      expect(findPendingReflectionJob(db, 'integrate', 'episode_id', id)).toBeUndefined();
+      expect(worker.retrying).toBe(0);
+      const rows = await fetchClaimProvenance(harness.driver, {
+        ids: [id],
+        maxRoots: 3,
+        mode: withCurrency(RECALLED_AT),
+      });
+      expect(rows.get(id)?.roots).toEqual([ROOT_ID, secondRoot].sort());
+    } finally {
+      releaseStore();
+      releaseRun();
+      await duplicate;
+      await started;
+      await worker.stop();
+      storeSpy.mockRestore();
+      targetSpy.mockRestore();
     }
   });
 });

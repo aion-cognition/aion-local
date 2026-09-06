@@ -159,6 +159,12 @@ function acknowledgedVersion(db: SqliteHandle, episodeId: string): string | unde
  */
 const MAX_SETTLE_PASSES = 3;
 
+/** Whether what the archive holds for an episode is what that episode acknowledged writing. */
+function referencesSettled(db: SqliteHandle, episodeId: string): boolean {
+  const references = getExperienceByEpisode(db, episodeId)?.payload.provenance;
+  return references === undefined || versionOf(references) === acknowledgedVersion(db, episodeId);
+}
+
 /**
  * Whatever the archive holds for this episode, attached and acknowledged.
  *
@@ -190,4 +196,44 @@ export async function settleStatedReferences(
     markLedgerApplied(deps.db, statedReferenceKey(episodeId), { version });
   }
   throw new Error(`stated references for ${episodeId} changed on every settle pass`);
+}
+
+/**
+ * A settle, then `complete`, taken only while the archive still holds what was acknowledged.
+ *
+ * The comparison and `complete` are one synchronous transaction, and that is what closes the
+ * window between them: better-sqlite3 runs a transaction to its end with nothing interleaving,
+ * so an intake merging new references either commits before the comparison reads the archive,
+ * and this leaves the job alone for another pass, or commits after `complete` has run, finds no
+ * job to reuse, and queues one of its own. Comparing before the settle's await, or after it and
+ * outside the commit, leaves an update archived with nothing pending to attach it.
+ *
+ * `complete` is called inside that commit, so it has to be synchronous, and a throw from it
+ * rolls the commit back. When the archive keeps moving under the passes this throws instead,
+ * which leaves the caller its own failure path with the references still archived and pending.
+ */
+export async function settleAndComplete(
+  deps: StatedReferenceDeps,
+  episodeId: string,
+  now: Date,
+  complete: () => void,
+): Promise<void> {
+  for (let pass = 0; pass < MAX_SETTLE_PASSES; pass += 1) {
+    await settleStatedReferences(deps, episodeId, now);
+    // Immediate: the commit reads before it writes, and a deferred one holding a read lock
+    // another connection wrote under cannot take the write lock it then needs.
+    const completed = deps.db
+      .transaction((): boolean => {
+        if (!referencesSettled(deps.db, episodeId)) {
+          return false;
+        }
+        complete();
+        return true;
+      })
+      .immediate();
+    if (completed) {
+      return;
+    }
+  }
+  throw new Error(`stated references for ${episodeId} changed on every completion pass`);
 }

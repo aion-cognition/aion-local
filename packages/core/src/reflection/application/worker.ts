@@ -2,7 +2,7 @@ import type { Driver } from 'neo4j-driver';
 
 import { INTEGRATE_JOB_TYPE } from './intake.js';
 import type { ReflectionRun, ReflectionRunOptions } from './orchestrator.js';
-import { settleStatedReferences } from './stated-references.js';
+import { settleAndComplete } from './stated-references.js';
 import { attachContentVectors, findPendingVectorNodes } from './vectors.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { errorMessage } from '../../infrastructure/errors.js';
@@ -368,9 +368,9 @@ export class ReflectionWorker {
       // `applied` and not `status` decides: a completed run that enriched nothing left the
       // ledger open, which is the orchestrator saying the episode is still worth a retry.
       if (run.applied || run.status !== 'completed') {
-        // A reference accepted while the job ran is one nothing has written yet.
-        await settleStatedReferences(this.#deps, episodeId, now);
-        this.#succeed(job, episodeId, run);
+        // Acked inside the comparison, since a reference accepted while the job ran is unwritten.
+        const ack = this.#succeed.bind(this, job, episodeId, run);
+        await settleAndComplete(this.#deps, episodeId, now, ack);
         return;
       }
       this.#fail(job, describeFailedRun(episodeId, run));
