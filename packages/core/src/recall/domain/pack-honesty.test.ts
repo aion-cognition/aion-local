@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { AdmissionEvidence } from './admission.js';
 import type { FusedItem } from './fusion.js';
+import { STANDING_LEGEND } from './pack-item.js';
 import { estimateTokens } from './pack.js';
 import { assemble, CAPS, item, report } from './test-support/pack.fixture.js';
 
@@ -460,7 +461,8 @@ describe('repeats this session already holds', () => {
 
   it('spends the freed budget on what the session has not seen', () => {
     const long = 'a memory long enough that two of them will not fit together '.repeat(4);
-    const budget = 120;
+    // Room for the legend every pack carries plus exactly one of the two memories.
+    const budget = 120 + estimateTokens(`${STANDING_LEGEND}\n\n`);
 
     const withRepeat = assemble([item('e1', { content: long }), item('e2', { content: long })], {
       tokenBudget: budget,

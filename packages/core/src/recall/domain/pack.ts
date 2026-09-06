@@ -24,6 +24,7 @@ import {
   renderBucket,
   renderItem,
   toPackItem,
+  STANDING_LEGEND,
   type ItemAnnotations,
   type PackEntry,
 } from './pack-item.js';
@@ -207,10 +208,14 @@ function select(input: AssemblePackInput, note: string | undefined): Selection {
   const packedContent = new Set<string>();
   /** First packed item to claim each root, which is what a later sibling points back at. */
   const rootOwners = new Map<string, string>();
-  // The note is charged with its own blank-line separator: it is text the agent pays for, and
-  // a caller that asked for a small budget should not lose an item to it silently.
+  // The note and the standing legend are charged with their own blank-line separators: both are
+  // text the agent pays for, and a caller that asked for a small budget should not lose an item
+  // to either of them silently. The legend is charged whether or not the pack ends up with an
+  // item to print it above, which errs toward a pack one memory smaller rather than one over.
   let tokens =
-    estimateTokens(PACK_HEADING) + (note === undefined ? 0 : estimateTokens(`${note}\n\n`));
+    estimateTokens(PACK_HEADING) +
+    estimateTokens(`${STANDING_LEGEND}\n\n`) +
+    (note === undefined ? 0 : estimateTokens(`${note}\n\n`));
   let ranked = 0;
   let glosses = 0;
 
@@ -219,16 +224,25 @@ function select(input: AssemblePackInput, note: string | undefined): Selection {
     return input.suppressed?.has(id) === true || input.suppressedOwn?.has(id) === true;
   }
 
-  /** Roots this item has beyond itself, in the order the provenance read returned them. */
-  function rootsOf(item: FusedItem): readonly string[] {
-    return (input.provenance?.get(item.id)?.roots ?? []).filter((root) => root !== item.id);
+  /**
+   * Every ancestor the item overlaps on, its own capture included. Overlap is not the same
+   * question as display: a capture and a claim pulled out of it are one source, and dropping
+   * the capture's own id here (it prints as nothing, since a capture derives from itself) let
+   * the two render side by side as though somebody had said it twice.
+   */
+  function overlapKeysOf(item: FusedItem): readonly string[] {
+    const provenance = input.provenance?.get(item.id);
+    if (provenance === undefined) {
+      return [];
+    }
+    return provenance.lineage ?? provenance.roots;
   }
 
   /**
    * Everything the item carries from outside itself, assembled before the cost is measured so
    * an annotation is charged to the item that prints it rather than to the pack's last slot.
    */
-  function annotationsFor(item: FusedItem, roots: readonly string[]): ItemAnnotations {
+  function annotationsFor(item: FusedItem, overlap: readonly string[]): ItemAnnotations {
     const provenance = input.provenance?.get(item.id);
     // The annotation carries a claim the reader would otherwise not see. One the pack already
     // holds is in front of them, and printing it a second time costs the budget a memory to
@@ -238,9 +252,9 @@ function select(input: AssemblePackInput, note: string | undefined): Selection {
     const found = input.relatedClaims?.get(item.id);
     const claim = found !== undefined && packedIds.has(found.id) ? undefined : found;
     const sharedWith = new Set<string>();
-    for (const root of roots) {
-      const owner = rootOwners.get(root);
-      if (owner !== undefined) {
+    for (const ancestor of overlap) {
+      const owner = rootOwners.get(ancestor);
+      if (owner !== undefined && owner !== item.id) {
         sharedWith.add(owner);
       }
     }
@@ -268,9 +282,9 @@ function select(input: AssemblePackInput, note: string | undefined): Selection {
       return;
     }
 
-    const roots = rootsOf(item);
+    const overlap = overlapKeysOf(item);
     const entry: PackEntry = {
-      item: toPackItem(item, ranked + 1, annotationsFor(item, roots)),
+      item: toPackItem(item, ranked + 1, annotationsFor(item, overlap)),
       gloss,
     };
     const cost =
@@ -289,9 +303,9 @@ function select(input: AssemblePackInput, note: string | undefined): Selection {
     packedContent.add(hashContent(item.content));
     // Claimed only once the item is actually in the pack: an item the budget cut is not a
     // witness anyone read, so it must not make the next item look like a second one.
-    for (const root of roots) {
-      if (!rootOwners.has(root)) {
-        rootOwners.set(root, item.id);
+    for (const ancestor of overlap) {
+      if (!rootOwners.has(ancestor)) {
+        rootOwners.set(ancestor, item.id);
       }
     }
     held.push(entry);
@@ -302,16 +316,18 @@ function select(input: AssemblePackInput, note: string | undefined): Selection {
   }
 
   /**
-   * Superseded material goes last within the ranked pass, so a current answer takes the budget
-   * first and the pack that holds both prefers the successor. It is a discount and not a gate:
-   * whatever the budget still has room for is served, and a historical read skips the deferral
-   * entirely, because what the substrate held then is the question there.
+   * Superseded material goes last across every population, not last within its own. A successor
+   * resonance found and a predecessor fusion ranked compete for one budget, and spending it on
+   * the predecessor first leaves the correction outside the pack while the thing it corrected
+   * is inside it. It is a discount and not a gate: whatever the budget still has room for is
+   * served, and a historical read skips the deferral entirely, because what the substrate held
+   * then is the question there.
    */
   function deferred(item: FusedItem): boolean {
     return input.historical !== true && item.currency === 'superseded';
   }
 
-  function place(item: FusedItem): void {
+  function placeRanked(item: FusedItem): void {
     if (withheld(item.id)) {
       return;
     }
@@ -331,39 +347,42 @@ function select(input: AssemblePackInput, note: string | undefined): Selection {
     accept(item, bucket, gloss);
   }
 
-  for (const item of input.items) {
-    if (!deferred(item)) {
-      place(item);
+  /**
+   * Both stages that run beside fusion rather than inside it are where a pack could hold the
+   * same memory twice. Each already excludes every id the run produced before it; this catches
+   * the other half, a distinct node whose text says the same thing.
+   */
+  function placeBeside(item: FusedItem, bucket: PackBucket): void {
+    if (withheld(item.id)) {
+      return;
     }
+    if (packedIds.has(item.id) || packedContent.has(hashContent(item.content))) {
+      return;
+    }
+    accept(item, bucket, false);
   }
-  for (const item of input.items) {
-    if (deferred(item)) {
-      place(item);
+
+  /** Every population in serving order, so one sweep can take the current and a later one the rest. */
+  function sweep(wanted: (item: FusedItem) => boolean): void {
+    for (const item of input.items) {
+      if (wanted(item)) {
+        placeRanked(item);
+      }
+    }
+    for (const item of input.intentions ?? []) {
+      if (wanted(item)) {
+        placeBeside(item, 'intentions');
+      }
+    }
+    for (const item of input.resonant ?? []) {
+      if (wanted(item)) {
+        placeBeside(item, 'resonant');
+      }
     }
   }
 
-  // Both stages below run beside fusion rather than inside it, so their hits are where a pack
-  // could hold the same memory twice. Each already excludes every id the run produced before
-  // it; this catches the other half, a distinct node whose text says the same thing.
-  for (const item of input.intentions ?? []) {
-    if (withheld(item.id)) {
-      continue;
-    }
-    if (packedIds.has(item.id) || packedContent.has(hashContent(item.content))) {
-      continue;
-    }
-    accept(item, 'intentions', false);
-  }
-
-  for (const item of input.resonant ?? []) {
-    if (withheld(item.id)) {
-      continue;
-    }
-    if (packedIds.has(item.id) || packedContent.has(hashContent(item.content))) {
-      continue;
-    }
-    accept(item, 'resonant', false);
-  }
+  sweep((item) => !deferred(item));
+  sweep(deferred);
 
   return selection;
 }
@@ -379,15 +398,20 @@ function render(
   if (note !== undefined) {
     sections.push(note);
   }
+  const buckets: string[] = [];
   for (const bucket of PACK_BUCKETS) {
     const entries = selection.get(bucket);
     if (entries === undefined || entries.length === 0) {
       continue;
     }
-    sections.push(renderBucket(bucket, entries));
+    buckets.push(renderBucket(bucket, entries));
   }
-  if (sections.length === (note === undefined ? 0 : 1)) {
+  if (buckets.length === 0) {
     sections.push(emptyPackBody(admission, repeats, own));
+  } else {
+    // The legend explains a word every item below carries, so it goes above them and only when
+    // there are items to explain. An empty pack has nothing to key.
+    sections.push(STANDING_LEGEND, ...buckets);
   }
   return `${PACK_HEADING}\n\n${sections.join('\n\n')}`;
 }

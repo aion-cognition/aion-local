@@ -1,6 +1,12 @@
 import type { Driver } from 'neo4j-driver';
 
-import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
+import { EDGE_RECORDED_AT, edgeVisibility } from './adjacency.js';
+import {
+  foldAncestry,
+  readAncestry,
+  STATED_SOURCE_TYPE,
+  UNRESOLVED_REFERENCES_PROPERTY,
+} from './claim-lineage-queries.js';
 import { runRead, runWrite, type GraphStatement } from './connection.js';
 import { upsertEdge } from './edges.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
@@ -26,9 +32,6 @@ import { toGraphDateTime, toGraphInteger, type Row } from './values.js';
 /** The claimed-correction edge: `(Episode)-[:CORRECTS]->(node the caller says is wrong)`. */
 export const CORRECTION_TYPE: RelationshipType = 'CORRECTS';
 
-/** The stated-source edge: `(Episode)-[:DERIVES_FROM]->(what it came from)`. */
-export const STATED_SOURCE_TYPE: RelationshipType = 'DERIVES_FROM';
-
 /** The edge a confirmation record hangs on, its three properties written beside the standard shape. */
 export const CONFIRMATION_TYPE: RelationshipType = 'EVIDENCES';
 
@@ -44,13 +47,6 @@ export const CONFIRMATION_PROPERTIES = {
   evidence: 'confirmation_evidence',
 } as const;
 
-/**
- * How many stated references the substrate could not resolve, kept on the episode they were
- * stated about. A descendant reads it and says its lineage is short, which is the alternative
- * to reporting fewer roots as though that were the whole set.
- */
-export const UNRESOLVED_REFERENCES_PROPERTY = 'provenance_unresolved';
-
 export type ConfirmationEvidence = {
   readonly by: string;
   readonly at: Date;
@@ -64,9 +60,17 @@ export type ClaimedCorrection = {
 };
 
 export type ItemProvenance = {
-  /** Nearest sources, ordered and cut at the caller's bound. Empty when the substrate holds none. */
+  /** Terminal sources, ordered and cut at the caller's bound. Empty when the substrate holds none. */
   readonly roots: readonly string[];
-  /** False when the bound cut the list, or when a stated reference resolved to nothing. */
+  /**
+   * Every ancestor the walk reached, the item's own capture and the intermediate captures
+   * included, unbounded by `maxRoots`. Two memories are one witness when these sets meet, and
+   * a terminal root alone cannot answer that: a capture and a claim extracted from it share the
+   * capture and nothing further up. Optional, because a caller assembling a record by hand is
+   * saying the roots are all the overlap it knows.
+   */
+  readonly lineage?: readonly string[];
+  /** False when the walk hit its hop bound, or when a stated reference resolved to nothing. */
   readonly complete: boolean;
   /**
    * The role capture stored on a Turn, verbatim. It says something was said and never who said
@@ -125,11 +129,23 @@ export type ClaimProvenanceWrite = {
   readonly now: Date;
 };
 
+/**
+ * The confirmation properties, written once and never rewritten.
+ *
+ * A retry of the same experience resolves to the same episode and reaches the same edge, and a
+ * retry carries a fresh clock whenever the caller stated no time of its own. Overwriting would
+ * move the confirmation's recorded moment forward every time a client resent a payload, change
+ * what a session had already been served, and reorder which confirmation counts as the newest.
+ * The first record stands: an edge already carrying a confirmer is left exactly as it was, and
+ * a caller with something new to say about the same target says it in a new experience, which
+ * is a different episode and a different edge.
+ */
 function confirmationStatement(episodeId: string, confirmation: ConfirmationWrite): GraphStatement {
   return {
     cypher: [
       `MATCH (src:${BASE_NODE_LABEL} { id: $episodeId })` +
         `-[r:${CONFIRMATION_TYPE}]->(target:${BASE_NODE_LABEL} { id: $targetId })`,
+      `WHERE r.${CONFIRMATION_PROPERTIES.by} IS NULL`,
       `SET r.${CONFIRMATION_PROPERTIES.by} = $by,`,
       `    r.${CONFIRMATION_PROPERTIES.at} = $at,`,
       `    r.${CONFIRMATION_PROPERTIES.evidence} = $evidence`,
@@ -217,11 +233,21 @@ type CaptureRow = {
  * The capture is reached by id equality rather than by scanning episodes: a Turn or a claim
  * names its episode in `source_episode_id`, an Episode is its own capture, and an extracted
  * claim reaches its episode over `EXTRACTED_FROM`.
+ *
+ * Every arm carries the read mode, the evidence edges included. A correction and a confirmation
+ * are records the substrate acquired at a moment, so a read pinned before that moment must not
+ * see them: a pack answering what was known on Tuesday cannot carry Friday's correction. The
+ * node filter alone is not enough, because a reference written later between two nodes that
+ * both already existed leaks backward through it.
  */
 function captureStatement(input: ClaimProvenanceInput): GraphStatement {
   const node = readModeFragment(input.mode, 'n');
   const own = readModeFragment(input.mode, 'own', 'rmown');
   const extracted = readModeFragment(input.mode, 'ex', 'rmex');
+  const corrector = readModeFragment(input.mode, 'corrector', 'rmcorr');
+  const witness = readModeFragment(input.mode, 'witness', 'rmwit');
+  const correctionEdge = edgeVisibility(input.mode, 'cr', 'rmcorr');
+  const evidenceEdge = edgeVisibility(input.mode, 'ev', 'rmwit');
   const cypher = [
     'UNWIND $ids AS wantedId',
     `MATCH (n:${BASE_NODE_LABEL} { id: wantedId })`,
@@ -231,20 +257,23 @@ function captureStatement(input: ClaimProvenanceInput): GraphStatement {
     'WITH n, collect(DISTINCT own.id) AS ownIds',
     `WITH n, ownIds + [ (n)-[:${EXTRACTION_TYPE}]->(ex:Episode)` +
       ` WHERE ${extracted.where} | ex.id ] AS captureIds`,
-    `OPTIONAL MATCH (corrector:Episode)-[:${CORRECTION_TYPE}]->(n)`,
-    'WITH n, captureIds, corrector',
-    `ORDER BY corrector.${BITEMPORAL_PROPERTIES.txFrom} DESC, corrector.id`,
-    'WITH n, captureIds, head(collect(corrector)) AS corrector',
-    `OPTIONAL MATCH (:Episode)-[ev:${CONFIRMATION_TYPE}]->(n)`,
+    `OPTIONAL MATCH (corrector:Episode)-[cr:${CORRECTION_TYPE}]->(n)`,
+    `WHERE ${corrector.where} AND ${correctionEdge}`,
+    'WITH n, captureIds, corrector, cr',
+    `ORDER BY cr.${EDGE_RECORDED_AT} DESC, corrector.id`,
+    'WITH n, captureIds, head(collect({ id: corrector.id, at: cr.' +
+      `${EDGE_RECORDED_AT} })) AS correction`,
+    `OPTIONAL MATCH (witness:Episode)-[ev:${CONFIRMATION_TYPE}]->(n)`,
     `WHERE ev.${CONFIRMATION_PROPERTIES.by} IS NOT NULL`,
-    'WITH n, captureIds, corrector, ev',
+    `  AND ${witness.where} AND ${evidenceEdge}`,
+    'WITH n, captureIds, correction, ev',
     `ORDER BY ev.${CONFIRMATION_PROPERTIES.at} DESC`,
-    'WITH n, captureIds, corrector, head(collect(ev)) AS ev',
+    'WITH n, captureIds, correction, head(collect(ev)) AS ev',
     'RETURN n.id AS id,',
     '       captureIds AS capture_ids,',
     `       n.${MEMORY_PROPERTIES.role} AS recorded_role,`,
-    '       corrector.id AS corrected_by,',
-    `       corrector.${BITEMPORAL_PROPERTIES.txFrom} AS corrected_at,`,
+    '       correction.id AS corrected_by,',
+    '       correction.at AS corrected_at,',
     `       ev.${CONFIRMATION_PROPERTIES.by} AS confirmed_by,`,
     `       ev.${CONFIRMATION_PROPERTIES.at} AS confirmed_at,`,
     `       ev.${CONFIRMATION_PROPERTIES.evidence} AS confirmation_evidence`,
@@ -256,6 +285,8 @@ function captureStatement(input: ClaimProvenanceInput): GraphStatement {
       ...node.parameters,
       ...own.parameters,
       ...extracted.parameters,
+      ...corrector.parameters,
+      ...witness.parameters,
       ids: [...new Set(input.ids)],
     },
   };
@@ -284,36 +315,6 @@ function mapCapture(row: Row): CaptureRow {
   };
 }
 
-type CaptureSources = {
-  readonly roots: readonly string[];
-  readonly unresolved: number;
-};
-
-/**
- * What each capture was stated to have come from. A capture with no stated source stands as its
- * own root, which is what makes two turns of one episode read as one witness.
- */
-function sourceStatement(captureIds: readonly string[], mode: ReadMode): GraphStatement {
-  const capture = readModeFragment(mode, 'c');
-  const root = readModeFragment(mode, 'root', 'rmroot');
-  const cypher = [
-    'UNWIND $ids AS wantedId',
-    `MATCH (c:Episode { id: wantedId })`,
-    `WHERE ${capture.where}`,
-    `OPTIONAL MATCH (c)-[:${STATED_SOURCE_TYPE}]->(root:${BASE_NODE_LABEL})`,
-    `WHERE ${root.where}`,
-    'WITH c, root',
-    'ORDER BY root.id',
-    'RETURN c.id AS id,',
-    '       collect(DISTINCT root.id) AS roots,',
-    `       coalesce(c.${UNRESOLVED_REFERENCES_PROPERTY}, 0) AS unresolved`,
-  ].join('\n');
-  return {
-    cypher,
-    parameters: { ...capture.parameters, ...root.parameters, ids: [...new Set(captureIds)] },
-  };
-}
-
 export type ClaimProvenanceInput = {
   readonly ids: readonly string[];
   /** Nearest roots per item. A wider set reports `complete: false` rather than growing. */
@@ -321,40 +322,6 @@ export type ClaimProvenanceInput = {
   readonly mode: ReadMode;
 };
 
-function foldSources(
-  captures: readonly string[],
-  sources: ReadonlyMap<string, CaptureSources>,
-  maxRoots: number,
-): { roots: readonly string[]; complete: boolean } {
-  const roots = new Set<string>();
-  let unresolved = 0;
-  for (const capture of captures) {
-    const source = sources.get(capture);
-    if (source === undefined) {
-      roots.add(capture);
-      continue;
-    }
-    unresolved += source.unresolved;
-    if (source.roots.length === 0) {
-      roots.add(capture);
-      continue;
-    }
-    for (const root of source.roots) {
-      roots.add(root);
-    }
-  }
-  const ordered = [...roots].sort();
-  return {
-    roots: ordered.slice(0, maxRoots),
-    complete: ordered.length <= maxRoots && unresolved === 0,
-  };
-}
-
-/**
- * Two batched reads: what each candidate's capture is, and what those captures were stated to
- * come from. An id missing from the answer carries no source record, which a caller has to
- * read as unknown rather than as having none.
- */
 export async function fetchClaimProvenance(
   driver: Driver,
   input: ClaimProvenanceInput,
@@ -370,23 +337,13 @@ export async function fetchClaimProvenance(
     }
   }
 
-  const sourceRows =
-    captureIds.size === 0
-      ? []
-      : await runRead(driver, sourceStatement([...captureIds], input.mode), (row: Row) => ({
-          id: row.id as string,
-          roots: ((row.roots as string[] | null) ?? []).filter((id) => id.length > 0),
-          unresolved: (row.unresolved as number | null) ?? 0,
-        }));
-  const sources = new Map<string, CaptureSources>(
-    sourceRows.map((row) => [row.id, { roots: row.roots, unresolved: row.unresolved }]),
-  );
+  const sources = await readAncestry(driver, captureIds, input.mode);
 
   return new Map(
     captures.map((row) => [
       row.id,
       {
-        ...foldSources(row.captureIds, sources, input.maxRoots),
+        ...foldAncestry(row.captureIds, sources, input.maxRoots),
         ...(row.recordedRole === undefined ? {} : { recordedRole: row.recordedRole }),
         ...(row.confirmation === undefined ? {} : { confirmation: row.confirmation }),
         ...(row.claimedCorrection === undefined

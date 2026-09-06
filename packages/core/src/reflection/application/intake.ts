@@ -5,6 +5,7 @@ import {
   type ReflectionOutput,
   type ReflectionProvenance,
 } from '@aion/protocol';
+import type { Driver } from 'neo4j-driver';
 
 import {
   storeExperience,
@@ -254,6 +255,49 @@ async function attachVectors(
 }
 
 /**
+ * The stated references with their free text redacted, ids untouched.
+ *
+ * `by` and `evidence` are arbitrary caller text that recall renders back, so they are the same
+ * leak surface every other content field is and they go through the same detector. The ids are
+ * references to nodes the substrate already holds, and rewriting one would point the reference
+ * at nothing, so the walk is scoped to the two text fields rather than run over the block.
+ */
+function redactProvenance(
+  deps: ProvenanceAttachDeps,
+  provenance: ReflectionProvenance | undefined,
+  entropyThreshold: number,
+): ReflectionProvenance | undefined {
+  const confirmations = provenance?.confirmations;
+  if (provenance === undefined || confirmations === undefined || confirmations.length === 0) {
+    return provenance;
+  }
+  const redacted = redactPayload(
+    confirmations.map((entry) => ({ by: entry.by, evidence: entry.evidence })),
+    entropyThreshold,
+  );
+  if (redacted.matches.length > 0) {
+    deps.logger.warn(
+      { matches: redacted.matches, count: redacted.matches.length },
+      'redacted secrets from stated confirmation evidence',
+    );
+  }
+  return {
+    ...provenance,
+    confirmations: confirmations.map((entry, index) => ({
+      ...entry,
+      by: redacted.value[index]?.by ?? entry.by,
+      evidence: redacted.value[index]?.evidence ?? entry.evidence,
+    })),
+  };
+}
+
+/** What `attachProvenance` needs, which is far less than the whole intake: replay reuses it. */
+export type ProvenanceAttachDeps = {
+  readonly driver: Driver;
+  readonly logger: Logger;
+};
+
+/**
  * The stated references as edges on the episode, once the targets are checked against the
  * substrate. An id nothing resolves is dropped and counted rather than written, so the graph
  * never holds lineage pointing at something that does not exist.
@@ -265,10 +309,12 @@ async function attachVectors(
  *
  * Best-effort, and last, like the vector attach: the experience is already durable and queued
  * by the time it runs, so a graph hiccup costs the episode its stated references and never the
- * caller's write. A retry re-states them, since every write here is idempotent.
+ * caller's write. What makes that survivable rather than lossy is the archive: the references
+ * are stored with the payload, so a re-push and `aion replay` both re-state them, and every
+ * write here is idempotent, so re-stating changes nothing that already landed.
  */
-async function attachProvenance(
-  deps: ReflectionIntakeDeps,
+export async function attachProvenance(
+  deps: ProvenanceAttachDeps,
   episodeId: string,
   provenance: ReflectionProvenance | undefined,
   now: Date,
@@ -310,9 +356,12 @@ async function attachProvenance(
       );
     }
   } catch (err) {
-    deps.logger.warn(
-      { err, episodeId },
-      'stated references deferred; the episode is stored and queued',
+    // The archive holds them, so this is a retry away from landing rather than a loss. Error
+    // rather than warn: nothing sweeps for it, and the repair is a person or a client pushing
+    // the same experience again.
+    deps.logger.error(
+      { err, episodeId, named: named.length },
+      'stated references not attached; the archive holds them and a replay re-states them',
     );
   }
 }
@@ -370,6 +419,8 @@ export async function handleReflection(
     );
   }
 
+  const statedReferences = redactProvenance(deps, provenance, deps.entropyThreshold);
+
   const identity = suppliedIdentity ?? options.identity;
   const prepared = prepareEpisode(redacted.value, now);
   const { sessionId, stored } = await storeExperience(deps, prepared, identity, now, origin);
@@ -382,7 +433,13 @@ export async function handleReflection(
     sessionId,
     episodeId: stored.episodeId,
     prepared,
-    payload: redacted.value,
+    // The references ride along in the archive without ever reaching the hash above: the graph
+    // write is best-effort and a graph that was down when the call landed would otherwise take
+    // them with it, and unlike a pending vector nothing can reconstruct a caller's assertion.
+    payload:
+      statedReferences === undefined
+        ? redacted.value
+        : { ...redacted.value, provenance: statedReferences },
     lane: requestedLane,
     origin,
     now,
@@ -408,7 +465,7 @@ export async function handleReflection(
     }
   }
 
-  await attachProvenance(deps, stored.episodeId, provenance, now);
+  await attachProvenance(deps, stored.episodeId, statedReferences, now);
   await attachVectors(deps, stored, sessionId);
 
   if (!stored.created) {

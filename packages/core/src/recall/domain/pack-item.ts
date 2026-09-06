@@ -171,22 +171,34 @@ function renderDay(timestamp: string): string {
 }
 
 /**
- * The two kinds a reader can take for something they are not, and nothing else.
+ * How each kind of statement names itself, one word each.
  *
- * A quotation read as the substrate's own conclusion is the whole failure this marks, so the
- * utterance is named and everything unnamed is thereby not one. A decision is named because a
- * position somebody settled reads differently from a claim a model drew. The other four say
- * what they are through the bucket they sit in, and the wire item carries every kind for a
- * consumer that reads more than the rendered line.
- *
- * The line prints under every memory in the pack, and each word on it costs the budget a share
- * of another memory: a phrase on every item measured two memories out of twelve at the shipped
- * budget, which is a worse trade than the phrase is worth.
+ * A bucket heading does not supply this: `Facts` holds extracted claims beside entity
+ * descriptions, and `Resonant` holds whatever the second pass reached, so a reader working from
+ * the heading alone cannot tell a sentence somebody typed from one a model drew out of it. The
+ * word is the whole distinction and it costs about a token, which is what makes it affordable
+ * on every memory in the pack.
  */
-const STANDING_PHRASES: Readonly<Partial<Record<StandingKind, string>>> = {
-  recorded_utterance: 'utterance',
-  recorded_decision: 'decision',
+const STANDING_PHRASES: Readonly<Record<StandingKind, string>> = {
+  recorded_utterance: 'said',
+  recorded_session: 'captured',
+  recorded_decision: 'decided',
+  extracted_interpretation: 'inferred',
+  synthesized: 'summarized',
+  stated_description: 'described',
 };
+
+/**
+ * One line under the pack heading, so the per-item words stay one word.
+ *
+ * Authorship is the part every item would otherwise restate: nearly every memory the substrate
+ * holds is unattributed, and printing that on each of them tells the reader nothing new and
+ * costs a whole memory of budget across a full pack. Saying it once, as the default, leaves the
+ * item line to carry only the departures from it: a recorded role, or a confirmation.
+ */
+export const STANDING_LEGEND =
+  'standing: said, decided, inferred, captured, summarized, described.' +
+  ' Authorship is unattributed unless a line names a role or a confirmation.';
 
 /**
  * The kind, and what the substrate can say about who stands behind it.
@@ -196,11 +208,8 @@ const STANDING_PHRASES: Readonly<Partial<Record<StandingKind, string>>> = {
  * agent-to-agent traffic arrives under `user`. An attributed item says nothing here: its
  * confirmation line below names the confirmer and cites the evidence.
  */
-function renderStanding(standing: Standing): string | undefined {
+function renderStanding(standing: Standing): string {
   const kind = STANDING_PHRASES[standing.kind];
-  if (kind === undefined) {
-    return undefined;
-  }
   if (standing.attribution === 'attributed' || standing.recorded_role === undefined) {
     return kind;
   }
@@ -261,9 +270,8 @@ function renderDerivation(derivation: Derivation): string {
 export function renderItem(entry: PackEntry): string {
   const { item } = entry;
   const facts = [`[${item.id}]`, item.rationale.method, renderAdmission(item)];
-  const standing = item.standing === undefined ? undefined : renderStanding(item.standing);
-  if (standing !== undefined) {
-    facts.push(standing);
+  if (item.standing !== undefined) {
+    facts.push(renderStanding(item.standing));
   }
   if (item.occurred_at !== undefined) {
     facts.push(

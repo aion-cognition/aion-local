@@ -1,5 +1,6 @@
 import { ReflectionNotStoredError } from './errors.js';
 import { storeExperience, type ExperienceStoreDeps } from './experience-store.js';
+import { attachProvenance } from './intake.js';
 import type { ReflectionRun, ReflectionRunOptions } from './orchestrator.js';
 import { errorMessage } from '../../infrastructure/errors.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
@@ -133,8 +134,15 @@ async function replayRow(
   pipelineVersion: string,
   now: Date,
 ): Promise<ReflectionRun> {
-  const prepared = prepareEpisode(row.payload, new Date(row.occurredAt));
+  // The stated references are archived beside the content and were never in the hash, so they
+  // come back out before the payload is re-prepared: folding them in would hash to a different
+  // episode than the one the archive names. Re-stating them is also the repair path for an
+  // intake whose graph write failed, and every write behind it is idempotent, so a row whose
+  // references already landed is a no-op.
+  const { provenance, ...content } = row.payload;
+  const prepared = prepareEpisode(content, new Date(row.occurredAt));
   const { stored } = await storeExperience(deps, prepared, row.identity, now, row.origin);
+  await attachProvenance(deps, stored.episodeId, provenance, now);
   return deps.runner.run(stored.episodeId, { now, pipelineVersion });
 }
 

@@ -500,3 +500,35 @@ describe('superseded material in an ordinary recall', () => {
     expect(pack.rendered_text).toContain('superseded by stale-successor');
   });
 });
+
+describe('one source reaching the pack twice', () => {
+  it('marks the root and its own extracted claim as one source', () => {
+    const pack = assemble(
+      [item('root'), item('claim', { labels: ['Insight', 'Memory', 'AionNode'] })],
+      {
+        provenance: new Map([
+          ['root', { roots: ['root'], complete: true }],
+          ['claim', { roots: ['root'], complete: true }],
+        ]),
+      },
+    );
+    expect(pack.episodes?.map((entry) => entry.id)).toContain('root');
+    expect(pack.facts?.map((entry) => entry.id)).toContain('claim');
+    expect(pack.rendered_text).toContain('not independent corroboration');
+  });
+  it('prefers a known successor arriving through resonance', () => {
+    const stale = item('stale', { superseded: true, content: 'old account' });
+    const fresh = item('stale-successor', { content: 'new account' });
+    const alone = assemble([stale]);
+    const freshAlone = assemble([], {
+      resonant: [fresh],
+      tokenBudget: alone.metadata.token_estimate,
+    });
+    expect(freshAlone.resonant?.map((entry) => entry.id) ?? []).toContain('stale-successor');
+    const pack = assemble([stale], {
+      resonant: [fresh],
+      tokenBudget: alone.metadata.token_estimate,
+    });
+    expect(pack.resonant?.map((entry) => entry.id) ?? []).toContain('stale-successor');
+  });
+});

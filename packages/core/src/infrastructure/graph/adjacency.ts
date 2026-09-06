@@ -86,7 +86,7 @@ const ACTIVE_DEGREE_EDGE = `${NEIGHBOUR_PREFIX}d`;
  * as a literal for the same reason `read-modes.ts` names it as one: no writer declares it in
  * `BITEMPORAL_PROPERTIES`, because it is not one of the two intervals.
  */
-const EDGE_RECORDED_AT = 'created_at';
+export const EDGE_RECORDED_AT = 'created_at';
 
 /**
  * Which relationships this read may traverse. A bitemporal close leaves the row stored, so the
@@ -107,7 +107,7 @@ const EDGE_RECORDED_AT = 'created_at';
  * The parameters are the ones `readModeFragment` already binds for the neighbour: `_reference`
  * is the pinned world time, `_known_at` the pinned knowledge time.
  */
-function edgeVisibility(mode: ReadMode, edgeVar: string, prefix: string): string {
+export function edgeVisibility(mode: ReadMode, edgeVar: string, prefix: string): string {
   const clauses: string[] = [];
   if (mode.validAt !== undefined) {
     clauses.push(

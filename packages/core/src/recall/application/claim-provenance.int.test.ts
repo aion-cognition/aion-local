@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { CueCache } from './cues.js';
 import { handleRecall, type RecallDeps } from './recall.js';
@@ -10,10 +10,13 @@ import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
 import { supersede, writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
+import { fetchClaimProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
+import * as claimQueries from '../../infrastructure/graph/claim-provenance-queries.js';
 import {
   normalizeCognitiveText,
   TEXT_NORM_PROPERTY,
 } from '../../infrastructure/graph/cognitive-queries.js';
+import { upsertEdge } from '../../infrastructure/graph/edges.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
 import { fetchNodeProvenance } from '../../infrastructure/graph/node-provenance.js';
 import { knewAt, withCurrency } from '../../infrastructure/graph/read-modes.js';
@@ -26,6 +29,7 @@ import {
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider, StructuredRequest, Vector } from '../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { getExperienceByEpisode } from '../../infrastructure/sqlite/experience-archive.js';
 import { handleReflection } from '../../reflection/application/intake.js';
 import { LaneAssigner } from '../../reflection/application/lanes.js';
 import { SessionManager } from '../../session/session-manager.js';
@@ -55,6 +59,13 @@ const TURN_EPISODE_ID = 'prov-turn-episode';
 const TURN_ID = 'prov-stale-turn';
 const OLD_CLAIM_ID = 'prov-old-claim';
 const NEW_CLAIM_ID = 'prov-new-claim';
+const SUBJECT_ID = 'prov-subject-entity';
+const CLAIM_EPISODE_ID = 'prov-claim-episode';
+const FAMILY_CLAIM_ID = 'prov-family-claim';
+
+const SUBJECT_NAME = 'ingest queue';
+/** Opens on its own words: the near-duplicate cap keys on the first sixteen characters. */
+const FAMILY_CLAIM_TEXT = 'a worker is what drains the ingest queue, and nothing else does';
 
 // Each pushed observation opens with its own marker. The near-duplicate cap keys on the first
 // sixteen characters of an item's content, and every observation renders under one prefix, so
@@ -160,6 +171,7 @@ async function push(
   observation: string,
   identity: string,
   provenance?: StatedReferences,
+  now: Date = SEEDED_AT,
 ): Promise<string> {
   const result = await handleReflection(
     {
@@ -174,7 +186,7 @@ async function push(
       acceptHookCapture: true,
     },
     { observations: [observation], ...(provenance === undefined ? {} : { provenance }) },
-    { identity, now: SEEDED_AT },
+    { identity, now },
   );
   return result.episode_id;
 }
@@ -271,6 +283,38 @@ beforeAll(async () => {
     now: SUPERSEDED_AT,
   });
 
+  // The turn's subject family: an entity whose stored name sits inside the turn's own fold, and
+  // a current claim about it extracted somewhere else. Nothing distils a turn into a claim, so
+  // this is the only thing that can stand beside the belief the turn states.
+  await writeStampedNode(harness.driver, {
+    label: 'Entity',
+    id: SUBJECT_ID,
+    now: SEEDED_AT,
+    occurredAt: SEEDED_AT,
+    properties: {
+      name: SUBJECT_NAME,
+      name_norm: SUBJECT_NAME,
+      type: 'concept',
+      text: `${SUBJECT_NAME} (concept): the path uploads take into storage`,
+      content_vec: [...OFF_TOPIC],
+    },
+  });
+  await writeEpisode(CLAIM_EPISODE_ID, 'a separate look at the drain path', OFF_TOPIC);
+  // Near the turn and away from the cue, so no leg admits the claim on its own: the annotation
+  // under the turn is the only way it reaches the pack, which is what the assertion measures.
+  await writeClaim(FAMILY_CLAIM_ID, FAMILY_CLAIM_TEXT, unit(5, 0.001));
+  await upsertEdge(harness.driver, {
+    type: 'EXTRACTED_FROM',
+    sourceId: FAMILY_CLAIM_ID,
+    targetId: CLAIM_EPISODE_ID,
+    strength: 1,
+    confidence: 1,
+    signals: ['provenance'],
+    provenance: ['test-fixture'],
+    count: 0,
+    now: SEEDED_AT,
+  });
+
   alphaId = await push(
     `${ALPHA_MARKER} drains the ingest queue through a webhook worker`,
     'prov-session-alpha',
@@ -329,11 +373,10 @@ describe('two memories that name one source', () => {
     expect(alpha?.derivation?.roots).toEqual([ROOT_ID]);
     expect(beta?.derivation?.roots).toEqual([ROOT_ID]);
 
-    const shared = episodes.filter((entry) => entry.derivation?.shared_with !== undefined);
-    expect(shared).toHaveLength(1);
-    expect(shared[0]?.derivation?.shared_with).toEqual([
-      shared[0]?.id === alphaId ? betaId : alphaId,
-    ]);
+    // The root episode is in the pack too, and it is the source both of them name, so each of
+    // the two points back at whichever item claimed the root first rather than at each other.
+    expect(alpha?.derivation?.shared_with).toEqual([ROOT_ID]);
+    expect(beta?.derivation?.shared_with).toEqual([ROOT_ID]);
     expect(pack.rendered_text).toContain('not independent corroboration');
   });
 
@@ -355,7 +398,7 @@ describe('what the substrate can say about who stands behind a line', () => {
     expect(turn?.standing?.recorded_role).toBe('user');
     expect(turn?.standing?.attribution).toBe('reported');
     expect(turn?.standing?.confirmed).toBeUndefined();
-    expect(pack.rendered_text).toContain('utterance, role user, authorship unknown');
+    expect(pack.rendered_text).toContain('said, role user, authorship unknown');
   });
 
   it('names the confirmer only where a confirmation record cites its evidence', async () => {
@@ -368,6 +411,24 @@ describe('what the substrate can say about who stands behind a line', () => {
     expect(pack.rendered_text).toContain(
       `confirmed by ${CONFIRMER} at 2026-06-01T09:00:00.000Z, evidence: ${CONFIRMATION_EVIDENCE}`,
     );
+  });
+});
+
+/**
+ * Nothing ever supersedes a turn, so a belief stated in one answers as current whichever pass
+ * found it. The annotation has to reach a turn the query matched head on, not only one the
+ * second pass surfaced alone, and such a turn carries no supersession edge to key on.
+ */
+describe('a stale belief the query matched directly', () => {
+  it('carries the current claim from its subject family in the episodes bucket', async () => {
+    const pack = await recall('prov-read-family');
+    const turn = (pack.episodes ?? []).find((entry) => entry.id === TURN_ID);
+
+    expect(turn?.related_claim?.id).toBe(FAMILY_CLAIM_ID);
+    expect((pack.facts ?? []).map((entry) => entry.id)).not.toContain(FAMILY_CLAIM_ID);
+    expect(turn?.currency).toBe('current');
+    expect(turn?.superseded_by).toBeUndefined();
+    expect(pack.rendered_text).toContain(`current related claim: ${FAMILY_CLAIM_TEXT}`);
   });
 });
 
@@ -441,4 +502,120 @@ describe('a memory whose standing moved after the session read it', () => {
     const beta = (third.episodes ?? []).find((entry) => entry.id === betaId);
     expect(beta?.standing?.confirmed?.evidence).toBe('standup notes');
   });
+});
+
+describe('lineage the substrate did not hold at the pinned moment', () => {
+  it('preserves the root through two source episodes and extraction', async () => {
+    const echo = await push('echo through alpha', 'review-chain', { derived_from: [alphaId] });
+    await writeClaim('review-extracted', 'claim from echoed alpha', VECTORS.alpha ?? CUE_VECTOR);
+    await upsertEdge(harness.driver, {
+      type: 'EXTRACTED_FROM',
+      sourceId: 'review-extracted',
+      targetId: echo,
+      strength: 1,
+      confidence: 1,
+      signals: ['provenance'],
+      provenance: ['test'],
+      count: 0,
+      now: SEEDED_AT,
+    });
+    const rows = await fetchClaimProvenance(harness.driver, {
+      ids: ['review-extracted', betaId],
+      maxRoots: 3,
+      mode: withCurrency(RECALLED_AT),
+    });
+    expect(rows.get(betaId)?.roots).toEqual([ROOT_ID]);
+    expect(rows.get('review-extracted')).toMatchObject({ roots: [ROOT_ID], complete: true });
+  });
+
+  it('does not report a correction learned after knew_at', async () => {
+    await writeEpisode('review-history-target', 'history target', OFF_TOPIC);
+    await push(
+      'later correction evidence',
+      'review-history-correction',
+      {
+        supersedes: ['review-history-target'],
+      },
+      SUPERSEDED_AT,
+    );
+    const rows = await fetchClaimProvenance(harness.driver, {
+      ids: ['review-history-target'],
+      maxRoots: 3,
+      mode: knewAt(BEFORE_SUPERSESSION),
+    });
+    expect(rows.get('review-history-target')?.claimedCorrection).toBeUndefined();
+  });
+
+  it('does not report a confirmation learned after knew_at', async () => {
+    await writeEpisode('review-confirm-history-target', 'confirmation history target', OFF_TOPIC);
+    await push(
+      'later confirmation evidence',
+      'review-history-confirmation',
+      {
+        confirmations: [
+          { target: 'review-confirm-history-target', by: CONFIRMER, evidence: 'later review' },
+        ],
+      },
+      SUPERSEDED_AT,
+    );
+    const rows = await fetchClaimProvenance(harness.driver, {
+      ids: ['review-confirm-history-target'],
+      maxRoots: 3,
+      mode: knewAt(BEFORE_SUPERSESSION),
+    });
+    expect(rows.get('review-confirm-history-target')?.confirmation).toBeUndefined();
+  });
+
+  it('preserves confirmation time on an identical intake retry', async () => {
+    await writeEpisode('review-retry-target', 'confirmation retry target', OFF_TOPIC);
+    const provenance = {
+      confirmations: [{ target: 'review-retry-target', by: CONFIRMER, evidence: 'same review' }],
+    };
+    const first = await push('same confirmation', 'review-retry', provenance, SEEDED_AT);
+    const second = await push('same confirmation', 'review-retry', provenance, SUPERSEDED_AT);
+    expect(second).toBe(first);
+    const rows = await fetchClaimProvenance(harness.driver, {
+      ids: ['review-retry-target'],
+      maxRoots: 3,
+      mode: withCurrency(RECALLED_AT),
+    });
+    expect(rows.get('review-retry-target')?.confirmation?.at).toEqual(SEEDED_AT);
+  });
+
+  it('redacts a known synthetic credential inside confirmation evidence', async () => {
+    await writeEpisode('review-redact-target', 'redaction target', OFF_TOPIC);
+    const secret = 'sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    await push('confirmation containing a credential', 'review-redact', {
+      confirmations: [
+        { target: 'review-redact-target', by: CONFIRMER, evidence: `review contains ${secret}` },
+      ],
+    });
+    const rows = await fetchClaimProvenance(harness.driver, {
+      ids: ['review-redact-target'],
+      maxRoots: 3,
+      mode: withCurrency(RECALLED_AT),
+    });
+    expect(rows.get('review-redact-target')?.confirmation?.evidence).not.toContain(secret);
+  });
+});
+
+it('retains accepted source references durably when graph attachment fails', async () => {
+  const spy = vi
+    .spyOn(claimQueries, 'resolveProvenanceTargets')
+    .mockRejectedValueOnce(new Error('injected temporary graph error'));
+  let id: string;
+  try {
+    id = await push('durable source on graph error', 'review-durability', {
+      derived_from: [ROOT_ID],
+    });
+  } finally {
+    spy.mockRestore();
+  }
+  const rows = await fetchClaimProvenance(harness.driver, {
+    ids: [id],
+    maxRoots: 3,
+    mode: withCurrency(RECALLED_AT),
+  });
+  expect(rows.get(id)?.roots).toEqual([id]);
+  expect(getExperienceByEpisode(db, id)?.payload.provenance?.derived_from).toEqual([ROOT_ID]);
 });

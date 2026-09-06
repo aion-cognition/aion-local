@@ -98,19 +98,20 @@ describe('what kind of statement the line is', () => {
       gloss: false,
     });
 
-    expect(line).toContain('utterance, role user, authorship unknown');
+    expect(line).toContain('said, role user, authorship unknown');
     expect(line).not.toContain('confirmed by');
   });
 
   /**
-   * The mark exists so a quotation is never read as a conclusion. An extracted claim is the
-   * default and the wire item still names its kind, so the rendered line spends nothing on it.
+   * The bucket heading cannot supply this: `Facts` holds extracted claims beside entity
+   * descriptions, so a reader working from the heading alone cannot tell a model's reading of a
+   * capture from a sentence somebody typed.
    */
-  it('leaves an extracted claim unmarked and still names its kind on the wire', () => {
+  it('marks an extracted claim as a reading rather than as something said', () => {
     const item = toPackItem(fused(), 1);
 
     expect(item.standing?.kind).toBe('extracted_interpretation');
-    expect(renderItem({ item, gloss: false })).not.toContain('utterance');
+    expect(renderItem({ item, gloss: false })).toContain('inferred');
   });
 
   it('names a decision as one', () => {
@@ -119,7 +120,7 @@ describe('what kind of statement the line is', () => {
       gloss: false,
     });
 
-    expect(line).toContain('decision');
+    expect(line).toContain('decided');
   });
 
   it('names the confirmer only against evidence, and cites the evidence', () => {
