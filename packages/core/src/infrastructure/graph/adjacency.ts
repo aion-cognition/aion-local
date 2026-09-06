@@ -25,8 +25,19 @@ export type AdjacencyNeighbor = {
   readonly relationshipType: string;
   readonly strength: number;
   readonly confidence: number;
-  /** Active fan-out at this read's vantage point, which is smaller than the stored degree. */
+  /**
+   * Physical degree: every relationship stored on the neighbour, the ones a close has ended
+   * included. This is the number hub inhibition prices a neighbour by, and it means what it
+   * has always meant.
+   */
   readonly degree: number;
+  /**
+   * Fan-out still open at this read's vantage point, present only when the request asked for
+   * it. Measured, never scored. The two numbers diverge once supersession starts closing
+   * edges, and which one inhibition should read is a policy question this read does not
+   * decide.
+   */
+  readonly activeDegree?: number;
   readonly currency: CurrencyAnnotation;
   /** The Member and the global Workspace. Traversed like any node, never packed or reinforced. */
   readonly isStructural: boolean;
@@ -54,21 +65,44 @@ export type AdjacencyRequest = {
    * bounds that to the strongest K, which is what a hub's growing degree can no longer inflate.
    */
   readonly topK: number;
+  /**
+   * Also count the fan-out still open at this read's vantage point, returned as
+   * `activeDegree`. Off by default and off on every recall path, because it costs a second
+   * subquery per returned row and nothing scores on it. A caller measuring how much of the
+   * stored degree a traversal can still walk turns it on.
+   */
+  readonly measureActiveDegree?: boolean;
 };
 
 /** Namespaces the read mode's parameters and comprehension variables inside this statement. */
 const NEIGHBOUR_PREFIX = 'nb';
 
-/** The relationship variable inside the degree subquery, namespaced the same way. */
-const DEGREE_EDGE = `${NEIGHBOUR_PREFIX}d`;
+/** The relationship variable inside the active-fan-out subquery, namespaced the same way. */
+const ACTIVE_DEGREE_EDGE = `${NEIGHBOUR_PREFIX}d`;
 
 /**
- * Which relationships this read may traverse, and which ones count toward a neighbour's
- * fan-out. A bitemporal close leaves the row stored, so the two answers differ by read mode: a
- * default read skips a closed edge, and a time-travel read judges it against its own vantage
- * point, where the association still held. Without that second arm, closing a superseded
- * narrative's summarization edges would erase them from history as well as from the present,
- * which is the one thing closing rather than deleting exists to prevent.
+ * When the substrate recorded the relationship. `edges.ts` sets it on create and a reopen
+ * never moves it, so it is the edge's recording stamp rather than its latest touch. Named here
+ * as a literal for the same reason `read-modes.ts` names it as one: no writer declares it in
+ * `BITEMPORAL_PROPERTIES`, because it is not one of the two intervals.
+ */
+const EDGE_RECORDED_AT = 'created_at';
+
+/**
+ * Which relationships this read may traverse. A bitemporal close leaves the row stored, so the
+ * answer differs by read mode: a default read skips a closed edge, and a time-travel read
+ * judges it against its own vantage point, where the association still held. Without that
+ * second arm, closing a superseded narrative's summarization edges would erase them from
+ * history as well as from the present, which is the one thing closing rather than deleting
+ * exists to prevent.
+ *
+ * The two timelines ask different questions and only one of them has a lower bound to test.
+ * World time asks what held at that moment: an edge carries no `valid_from`, so all a pinned
+ * world time can ask is whether the close had happened yet. Knowledge time asks what the
+ * substrate held at that moment, and that does have a floor: an edge recorded after the pinned
+ * instant was not known at it, whatever its close says, so a read pinned before an edge existed
+ * must not traverse it. `read-modes.ts` bounds its own knowledge-time lineage arm by the same
+ * stamp.
  *
  * The parameters are the ones `readModeFragment` already binds for the neighbour: `_reference`
  * is the pinned world time, `_known_at` the pinned knowledge time.
@@ -83,8 +117,9 @@ function edgeVisibility(mode: ReadMode, edgeVar: string, prefix: string): string
   }
   if (mode.knownAt !== undefined) {
     clauses.push(
-      `(${edgeVar}.${BITEMPORAL_PROPERTIES.txUntil} IS NULL` +
-        ` OR ${edgeVar}.${BITEMPORAL_PROPERTIES.txUntil} > $${prefix}_known_at)`,
+      `(${edgeVar}.${EDGE_RECORDED_AT} <= $${prefix}_known_at` +
+        ` AND (${edgeVar}.${BITEMPORAL_PROPERTIES.txUntil} IS NULL` +
+        ` OR ${edgeVar}.${BITEMPORAL_PROPERTIES.txUntil} > $${prefix}_known_at))`,
     );
   }
   if (clauses.length === 0) {
@@ -127,16 +162,20 @@ const ABSENT_PROPORTION = '1.0';
  * so a closed edge is skipped by a default read and still walked by a read pinned before its
  * close.
  *
- * `degree` is active fan-out, not physical degree: it counts the neighbour's relationships that
- * are open at this read's own vantage point, and the closed ones stay stored and uncounted.
- * The two numbers diverge sharply once narrative supersession starts closing edges, and it is
- * the active one hub inhibition wants: a node whose old associations were all closed is no
- * longer a hub, and pricing it as one would damp traffic through connectivity it no longer has.
+ * `degree` counts every relationship stored on the neighbour, closed ones included, which is
+ * what it has always counted and what hub inhibition is calibrated against. Traversability and
+ * fan-out are deliberately different questions here: a closed edge is not walked and is still
+ * part of the node's connectivity. `measureActiveDegree` asks for the other number beside it,
+ * for a caller measuring the gap rather than scoring on it.
  */
 export function buildAdjacencyStatement(request: AdjacencyRequest): GraphStatement {
   const fragment = readModeFragment(request.mode, 'm', NEIGHBOUR_PREFIX);
   const traversable = edgeVisibility(request.mode, 'r', NEIGHBOUR_PREFIX);
-  const counted = edgeVisibility(request.mode, DEGREE_EDGE, NEIGHBOUR_PREFIX);
+  const active = edgeVisibility(request.mode, ACTIVE_DEGREE_EDGE, NEIGHBOUR_PREFIX);
+  const activeDegree =
+    request.measureActiveDegree === true
+      ? [`       COUNT { (m)-[${ACTIVE_DEGREE_EDGE}]-() WHERE ${active} } AS active_degree,`]
+      : [];
 
   const cypher = [
     'UNWIND $frontier AS frontierId',
@@ -154,7 +193,8 @@ export function buildAdjacencyStatement(request: AdjacencyRequest): GraphStateme
     '       type(r) AS relationshipType,',
     '       strength,',
     `       coalesce(r.confidence, ${ABSENT_PROPORTION}) AS confidence,`,
-    `       COUNT { (m)-[${DEGREE_EDGE}]-() WHERE ${counted} } AS degree,`,
+    '       COUNT { (m)--() } AS degree,',
+    ...activeDegree,
     `       m.${STRUCTURAL_PROPERTY} AS is_structural,`,
     `       ${fragment.projection}`,
   ].join('\n');
@@ -172,6 +212,7 @@ export function buildAdjacencyStatement(request: AdjacencyRequest): GraphStateme
 }
 
 function mapNeighbor(row: Row): AdjacencyNeighbor {
+  const active = row.active_degree;
   return {
     sourceId: row.sourceId as string,
     nodeId: row.nodeId as string,
@@ -179,6 +220,7 @@ function mapNeighbor(row: Row): AdjacencyNeighbor {
     strength: row.strength as number,
     confidence: row.confidence as number,
     degree: row.degree as number,
+    ...(typeof active === 'number' ? { activeDegree: active } : {}),
     currency: readCurrencyAnnotation(row),
     isStructural: row.is_structural === true,
   };

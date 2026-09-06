@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { buildAdjacencyStatement, fetchAdjacency } from './adjacency.js';
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { BASE_NODE_LABEL } from './labels.js';
-import { asOf, knewAt, withCurrency } from './read-modes.js';
+import { asOf, bitemporalAt, knewAt, withCurrency } from './read-modes.js';
 
 const AS_OF = new Date('2026-05-01T00:00:00.000Z');
 const MIN_STRENGTH = 0.1;
@@ -55,12 +55,29 @@ describe('buildAdjacencyStatement', () => {
     expect(statement.cypher).toContain('type(r) AS relationshipType');
     expect(statement.cypher).toContain('coalesce(r.strength, 1.0) AS strength');
     expect(statement.cypher).toContain('coalesce(r.confidence, 1.0) AS confidence');
-    expect(statement.cypher).toContain('AS degree');
+    expect(statement.cypher).toContain('COUNT { (m)--() } AS degree');
   });
 
-  it('counts the neighbour’s active fan-out rather than every relationship stored on it', () => {
-    expect(statement.cypher).toContain(
-      `COUNT { (m)-[nbd]-() WHERE nbd.${BITEMPORAL_PROPERTIES.validUntil} IS NULL } AS degree`,
+  it('prices a neighbour by every relationship stored on it, closed ones included', () => {
+    // Traversability and connectivity are different questions: an edge a close ended is not
+    // walked and is still part of the node's degree, which is what inhibition is tuned on.
+    expect(statement.cypher).toContain('COUNT { (m)--() } AS degree');
+    expect(statement.cypher).not.toContain('active_degree');
+  });
+
+  it('measures active fan-out beside the stored degree only when asked', () => {
+    const measured = buildAdjacencyStatement({
+      frontier: ['a'],
+      visited: [],
+      mode: withCurrency(),
+      minStrength: MIN_STRENGTH,
+      topK: TOP_K,
+      measureActiveDegree: true,
+    });
+
+    expect(measured.cypher).toContain('COUNT { (m)--() } AS degree');
+    expect(measured.cypher).toContain(
+      `COUNT { (m)-[nbd]-() WHERE nbd.${BITEMPORAL_PROPERTIES.validUntil} IS NULL } AS active_degree`,
     );
   });
 
@@ -136,18 +153,54 @@ describe('buildAdjacencyStatement', () => {
     expect(timeTravel.cypher).not.toContain(`AND r.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`);
   });
 
-  it('prices a historical neighbour by the fan-out it had at that moment', () => {
+  it('refuses an edge the substrate had not recorded yet at the knowledge time being read', () => {
+    const timeTravel = buildAdjacencyStatement({
+      frontier: ['a'],
+      visited: [],
+      mode: knewAt(AS_OF),
+      minStrength: MIN_STRENGTH,
+      topK: TOP_K,
+    });
+
+    expect(timeTravel.cypher).toContain('r.created_at <= $nb_known_at');
+  });
+
+  it('bounds both timelines when the read pins both, on the edge as well as the node', () => {
+    const both = buildAdjacencyStatement({
+      frontier: ['a'],
+      visited: [],
+      mode: bitemporalAt(AS_OF, AS_OF),
+      minStrength: MIN_STRENGTH,
+      topK: TOP_K,
+      measureActiveDegree: true,
+    });
+
+    // World time asks whether the close had happened; knowledge time asks whether the
+    // substrate held the edge at all, which is the arm with a floor to test.
+    expect(both.cypher).toContain(
+      `(r.${BITEMPORAL_PROPERTIES.validUntil} IS NULL` +
+        ` OR r.${BITEMPORAL_PROPERTIES.validUntil} > $nb_reference)` +
+        ` AND (r.created_at <= $nb_known_at` +
+        ` AND (r.${BITEMPORAL_PROPERTIES.txUntil} IS NULL` +
+        ` OR r.${BITEMPORAL_PROPERTIES.txUntil} > $nb_known_at))`,
+    );
+    expect(both.cypher).toContain('nbd.created_at <= $nb_known_at');
+  });
+
+  it('measures a historical neighbour’s fan-out at that moment, degree still physical', () => {
     const timeTravel = buildAdjacencyStatement({
       frontier: ['a'],
       visited: [],
       mode: asOf(AS_OF),
       minStrength: MIN_STRENGTH,
       topK: TOP_K,
+      measureActiveDegree: true,
     });
 
+    expect(timeTravel.cypher).toContain('COUNT { (m)--() } AS degree');
     expect(timeTravel.cypher).toContain(
       `COUNT { (m)-[nbd]-() WHERE (nbd.${BITEMPORAL_PROPERTIES.validUntil} IS NULL` +
-        ` OR nbd.${BITEMPORAL_PROPERTIES.validUntil} > $nb_reference) } AS degree`,
+        ` OR nbd.${BITEMPORAL_PROPERTIES.validUntil} > $nb_reference) } AS active_degree`,
     );
   });
 });
