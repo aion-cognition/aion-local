@@ -25,6 +25,7 @@ export type AdjacencyNeighbor = {
   readonly relationshipType: string;
   readonly strength: number;
   readonly confidence: number;
+  /** Active fan-out at this read's vantage point, which is smaller than the stored degree. */
   readonly degree: number;
   readonly currency: CurrencyAnnotation;
   /** The Member and the global Workspace. Traversed like any node, never packed or reinforced. */
@@ -58,6 +59,40 @@ export type AdjacencyRequest = {
 /** Namespaces the read mode's parameters and comprehension variables inside this statement. */
 const NEIGHBOUR_PREFIX = 'nb';
 
+/** The relationship variable inside the degree subquery, namespaced the same way. */
+const DEGREE_EDGE = `${NEIGHBOUR_PREFIX}d`;
+
+/**
+ * Which relationships this read may traverse, and which ones count toward a neighbour's
+ * fan-out. A bitemporal close leaves the row stored, so the two answers differ by read mode: a
+ * default read skips a closed edge, and a time-travel read judges it against its own vantage
+ * point, where the association still held. Without that second arm, closing a superseded
+ * narrative's summarization edges would erase them from history as well as from the present,
+ * which is the one thing closing rather than deleting exists to prevent.
+ *
+ * The parameters are the ones `readModeFragment` already binds for the neighbour: `_reference`
+ * is the pinned world time, `_known_at` the pinned knowledge time.
+ */
+function edgeVisibility(mode: ReadMode, edgeVar: string, prefix: string): string {
+  const clauses: string[] = [];
+  if (mode.validAt !== undefined) {
+    clauses.push(
+      `(${edgeVar}.${BITEMPORAL_PROPERTIES.validUntil} IS NULL` +
+        ` OR ${edgeVar}.${BITEMPORAL_PROPERTIES.validUntil} > $${prefix}_reference)`,
+    );
+  }
+  if (mode.knownAt !== undefined) {
+    clauses.push(
+      `(${edgeVar}.${BITEMPORAL_PROPERTIES.txUntil} IS NULL` +
+        ` OR ${edgeVar}.${BITEMPORAL_PROPERTIES.txUntil} > $${prefix}_known_at)`,
+    );
+  }
+  if (clauses.length === 0) {
+    clauses.push(`${edgeVar}.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`);
+  }
+  return clauses.join(' AND ');
+}
+
 /**
  * An edge written without the merge policy's proportions is traversed unweighted rather
  * than at zero, which would silently sever a path. Every writer sets both.
@@ -88,22 +123,27 @@ const ABSENT_PROPORTION = '1.0';
  *
  * The read mode is spliced in against the neighbour: a forgotten node is suppressed here
  * and never enters the frontier, while a superseded one stays traversable and comes back
- * annotated with what replaced it.
+ * annotated with what replaced it. `edgeVisibility` applies the same mode to the relationship,
+ * so a closed edge is skipped by a default read and still walked by a read pinned before its
+ * close.
  *
- * `r.valid_until IS NULL` excludes an edge `edge_prune` has bitemporally closed. No writer
- * before it ever set that property on a relationship, so this is a no-op for every edge type
- * that predates it; it is what makes a pruned edge actually vanish from this read rather than
- * merely from decay's floor clamp, which left it traversable at zero cost saved.
+ * `degree` is active fan-out, not physical degree: it counts the neighbour's relationships that
+ * are open at this read's own vantage point, and the closed ones stay stored and uncounted.
+ * The two numbers diverge sharply once narrative supersession starts closing edges, and it is
+ * the active one hub inhibition wants: a node whose old associations were all closed is no
+ * longer a hub, and pricing it as one would damp traffic through connectivity it no longer has.
  */
 export function buildAdjacencyStatement(request: AdjacencyRequest): GraphStatement {
   const fragment = readModeFragment(request.mode, 'm', NEIGHBOUR_PREFIX);
+  const traversable = edgeVisibility(request.mode, 'r', NEIGHBOUR_PREFIX);
+  const counted = edgeVisibility(request.mode, DEGREE_EDGE, NEIGHBOUR_PREFIX);
 
   const cypher = [
     'UNWIND $frontier AS frontierId',
     `MATCH (n:${BASE_NODE_LABEL} { id: frontierId })-[r]-(m:${BASE_NODE_LABEL})`,
     'WHERE m.id <> frontierId AND NOT m.id IN $visited' +
       ` AND coalesce(r.strength, ${ABSENT_PROPORTION}) >= $minStrength AND ${fragment.where}` +
-      ` AND r.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
+      ` AND ${traversable}`,
     `WITH frontierId, r, m, coalesce(r.strength, ${ABSENT_PROPORTION}) AS strength`,
     'ORDER BY strength DESC',
     'WITH frontierId, collect({ r: r, m: m, strength: strength })[0..$topK] AS ranked',
@@ -114,7 +154,7 @@ export function buildAdjacencyStatement(request: AdjacencyRequest): GraphStateme
     '       type(r) AS relationshipType,',
     '       strength,',
     `       coalesce(r.confidence, ${ABSENT_PROPORTION}) AS confidence,`,
-    '       COUNT { (m)--() } AS degree,',
+    `       COUNT { (m)-[${DEGREE_EDGE}]-() WHERE ${counted} } AS degree,`,
     `       m.${STRUCTURAL_PROPERTY} AS is_structural,`,
     `       ${fragment.projection}`,
   ].join('\n');

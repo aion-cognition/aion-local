@@ -3,6 +3,7 @@ import neo4j, { type Driver } from 'neo4j-driver';
 import type { Vector } from '../../providers/types.js';
 import { ACCESS_COUNT_PROPERTY } from '../access-tracking.js';
 import { CO_OCCURS_TYPE, SIMILAR_TYPE } from '../association-queries.js';
+import { BITEMPORAL_PROPERTIES } from '../bitemporal.js';
 import { readFirst, runRead, runWrite } from '../connection.js';
 import { CONTEXT_VECTOR_PROPERTY } from '../context-vector-queries.js';
 import { DECAYED_AT_PROPERTY } from '../edge-weights.js';
@@ -17,7 +18,7 @@ import {
 import { BASE_NODE_LABEL } from '../labels.js';
 import { SUPERSEDES_TYPE } from '../relationships.js';
 import { LAST_ACCESSED_PROPERTY } from '../seed-queries.js';
-import { fromGraphVector, toGraphVector, type Row } from '../values.js';
+import { fromGraphVector, toGraphDateTime, toGraphVector, type Row } from '../values.js';
 
 /**
  * Read-only assertions for integration tests that live outside this directory. Cypher lives
@@ -463,6 +464,51 @@ export async function edgeStrength(
     `MATCH ({ id: $sourceId })-[r:${type}]-({ id: $targetId }) RETURN r.strength AS strength`,
     { sourceId, targetId },
     (row) => row.strength as number,
+  );
+}
+
+/**
+ * The world time one edge stopped holding, undefined while it is still open. Directed, unlike
+ * `edgeStrength`: a bitemporal close is about the relationship the writer stated, so the
+ * assertion reads it the way the writer wrote it.
+ */
+export async function edgeValidUntil(
+  driver: Driver,
+  type: string,
+  sourceId: string,
+  targetId: string,
+): Promise<Date | undefined> {
+  return readFirst(
+    driver,
+    [
+      `MATCH ({ id: $sourceId })-[r:${type}]->({ id: $targetId })`,
+      `RETURN r.${BITEMPORAL_PROPERTIES.validUntil} AS validUntil`,
+    ].join('\n'),
+    { sourceId, targetId },
+    // An absent property reads back as null, and an open interval is an absent property.
+    (row) => (row.validUntil instanceof Date ? row.validUntil : undefined),
+  );
+}
+
+/**
+ * Closes one edge outright, so a traversal test can start from a substrate that already holds
+ * a closed relationship without replaying the operation that closed it.
+ */
+export async function closeEdge(
+  driver: Driver,
+  type: string,
+  sourceId: string,
+  targetId: string,
+  at: Date,
+): Promise<void> {
+  await runWrite(
+    driver,
+    [
+      `MATCH ({ id: $sourceId })-[r:${type}]->({ id: $targetId })`,
+      `SET r.${BITEMPORAL_PROPERTIES.validUntil} = $at, r.${BITEMPORAL_PROPERTIES.txUntil} = $at`,
+    ].join('\n'),
+    { sourceId, targetId, at: toGraphDateTime(at) },
+    () => undefined,
   );
 }
 

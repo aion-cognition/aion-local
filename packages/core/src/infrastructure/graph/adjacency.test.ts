@@ -46,7 +46,7 @@ describe('buildAdjacencyStatement', () => {
     // The cap has to come before this: a hub returning every incident edge means every one of
     // them pays for its own degree count, which is exactly the cost the cap exists to bound.
     const capIndex = statement.cypher.indexOf('[0..$topK]');
-    const degreeIndex = statement.cypher.indexOf('COUNT { (m)--() }');
+    const degreeIndex = statement.cypher.indexOf('AS degree');
     expect(capIndex).toBeGreaterThan(-1);
     expect(capIndex).toBeLessThan(degreeIndex);
   });
@@ -55,11 +55,17 @@ describe('buildAdjacencyStatement', () => {
     expect(statement.cypher).toContain('type(r) AS relationshipType');
     expect(statement.cypher).toContain('coalesce(r.strength, 1.0) AS strength');
     expect(statement.cypher).toContain('coalesce(r.confidence, 1.0) AS confidence');
-    expect(statement.cypher).toContain('COUNT { (m)--() } AS degree');
+    expect(statement.cypher).toContain('AS degree');
   });
 
-  it('excludes an edge edge_prune has bitemporally closed', () => {
-    expect(statement.cypher).toContain(`r.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`);
+  it('counts the neighbour’s active fan-out rather than every relationship stored on it', () => {
+    expect(statement.cypher).toContain(
+      `COUNT { (m)-[nbd]-() WHERE nbd.${BITEMPORAL_PROPERTIES.validUntil} IS NULL } AS degree`,
+    );
+  });
+
+  it('excludes an edge a bitemporal close has already ended', () => {
+    expect(statement.cypher).toContain(`AND r.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`);
   });
 
   it('suppresses forgotten nodes and annotates currency on the neighbour by default', () => {
@@ -95,6 +101,54 @@ describe('buildAdjacencyStatement', () => {
 
     expect(timeTravel.cypher).toContain(`m.${BITEMPORAL_PROPERTIES.txFrom} <= $nb_known_at`);
     expect(timeTravel.parameters.nb_known_at).toBeDefined();
+  });
+
+  it('traverses an edge closed after the world time being read', () => {
+    const timeTravel = buildAdjacencyStatement({
+      frontier: ['a'],
+      visited: [],
+      mode: asOf(AS_OF),
+      minStrength: MIN_STRENGTH,
+      topK: TOP_K,
+    });
+
+    expect(timeTravel.cypher).toContain(
+      `(r.${BITEMPORAL_PROPERTIES.validUntil} IS NULL` +
+        ` OR r.${BITEMPORAL_PROPERTIES.validUntil} > $nb_reference)`,
+    );
+    // The default read's own predicate, which would hide the edge from history as well.
+    expect(timeTravel.cypher).not.toContain(`AND r.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`);
+  });
+
+  it('traverses an edge closed after the knowledge time being read', () => {
+    const timeTravel = buildAdjacencyStatement({
+      frontier: ['a'],
+      visited: [],
+      mode: knewAt(AS_OF),
+      minStrength: MIN_STRENGTH,
+      topK: TOP_K,
+    });
+
+    expect(timeTravel.cypher).toContain(
+      `(r.${BITEMPORAL_PROPERTIES.txUntil} IS NULL` +
+        ` OR r.${BITEMPORAL_PROPERTIES.txUntil} > $nb_known_at)`,
+    );
+    expect(timeTravel.cypher).not.toContain(`AND r.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`);
+  });
+
+  it('prices a historical neighbour by the fan-out it had at that moment', () => {
+    const timeTravel = buildAdjacencyStatement({
+      frontier: ['a'],
+      visited: [],
+      mode: asOf(AS_OF),
+      minStrength: MIN_STRENGTH,
+      topK: TOP_K,
+    });
+
+    expect(timeTravel.cypher).toContain(
+      `COUNT { (m)-[nbd]-() WHERE (nbd.${BITEMPORAL_PROPERTIES.validUntil} IS NULL` +
+        ` OR nbd.${BITEMPORAL_PROPERTIES.validUntil} > $nb_reference) } AS degree`,
+    );
   });
 });
 
