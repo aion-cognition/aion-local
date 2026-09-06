@@ -1,7 +1,9 @@
+import { readRolloutTail } from './codex-rollout.js';
 import { McpHookClient, type McpCallResult } from './mcp.js';
 import { STOP_INSTRUCTION, type HookContext } from './options.js';
 import {
   additionalContext,
+  allowedUpdatedToolInput,
   booleanField,
   bufferedToolFrom,
   packHasContent,
@@ -15,8 +17,13 @@ import {
   toolExecutions,
   updatedToolInput,
 } from './payload.js';
-import { dropHookState, readHookState, writeHookState } from './state.js';
-import { hasAssistantText, mentionsReflectionCall, readTranscriptTail } from './transcript.js';
+import { dropHookState, readHookState, writeHookState, type HookState } from './state.js';
+import {
+  hasAssistantText,
+  mentionsReflectionCall,
+  readTranscriptTail,
+  type TranscriptTail,
+} from './transcript.js';
 
 /**
  * The eight events, one MCP round trip at most each. Every handler returns an exit code, and
@@ -111,23 +118,39 @@ type Capture = {
   readonly sessionId: string | undefined;
   readonly offset: number;
   readonly raw: string;
+  readonly fingerprint: string | undefined;
   readonly turns: ReturnType<typeof reflectionTurns>;
   readonly executions: ReturnType<typeof toolExecutions>;
   readonly assistantSpoke: boolean;
 };
 
+/** What either parser hands back. Only a rollout read keys its offset to the file it read. */
+type CapturedTail = TranscriptTail & { readonly fingerprint: string | undefined };
+
+/**
+ * The two harnesses record a turn in two line shapes, so the parser is the only thing the
+ * harness chooses here. A codex read also names the file it read, and that name rides on the
+ * capture so the flush that follows stores it beside the offset.
+ */
+function readTail(context: HookContext, path: string | undefined, state: HookState): CapturedTail {
+  if (path === undefined) {
+    return { messages: [], offset: state.offset ?? 0, raw: '', fingerprint: state.fingerprint };
+  }
+  if (context.options.harness === 'codex') {
+    return readRolloutTail(path, state.offset, state.fingerprint);
+  }
+  return { ...readTranscriptTail(path, state.offset), fingerprint: undefined };
+}
+
 function capture(context: HookContext): Capture {
   const sessionId = stringField(context.input, 'session_id');
   const state = readHookState(context.options.stateDir, sessionId ?? '');
-  const path = stringField(context.input, 'transcript_path');
-  const tail =
-    path === undefined
-      ? { messages: [], offset: state.offset ?? 0, raw: '' }
-      : readTranscriptTail(path, state.offset);
+  const tail = readTail(context, stringField(context.input, 'transcript_path'), state);
   return {
     sessionId,
     offset: tail.offset,
     raw: tail.raw,
+    fingerprint: tail.fingerprint,
     turns: reflectionTurns(tail.messages),
     executions: toolExecutions(state.tools),
     assistantSpoke: hasAssistantText(tail.messages),
@@ -139,6 +162,7 @@ function advance(context: HookContext, taken: Capture): void {
   writeHookState(context.options.stateDir, taken.sessionId ?? '', {
     offset: taken.offset,
     lastFlushAt: context.options.now().toISOString(),
+    fingerprint: taken.fingerprint,
     tools: [],
   });
 }
@@ -220,6 +244,12 @@ export async function subagentStop(context: HookContext): Promise<number> {
 }
 
 export async function sessionEnd(context: HookContext): Promise<number> {
+  // Codex gives this event a few seconds at most and reads nothing it writes, which is not room
+  // for a round trip. Stop already flushed the turn, so the codex path only lets the cursor go.
+  if (context.options.harness === 'codex') {
+    dropHookState(context.options.stateDir, stringField(context.input, 'session_id') ?? '');
+    return 0;
+  }
   const taken = capture(context);
   await push(context, taken);
   dropHookState(context.options.stateDir, taken.sessionId ?? '');
@@ -241,7 +271,11 @@ export function preToolUse(context: HookContext): Promise<number> {
   }
   const stamped = stampedToolInput(context.input, tool, sessionId);
   if (stamped !== undefined) {
-    context.options.stdout(updatedToolInput('PreToolUse', stamped));
+    const frame =
+      context.options.harness === 'codex'
+        ? allowedUpdatedToolInput('PreToolUse', stamped)
+        : updatedToolInput('PreToolUse', stamped);
+    context.options.stdout(frame);
   }
   return Promise.resolve(0);
 }
@@ -260,6 +294,7 @@ export function postToolUse(context: HookContext): Promise<number> {
   writeHookState(context.options.stateDir, sessionId ?? '', {
     offset: state.offset,
     lastFlushAt: state.lastFlushAt,
+    fingerprint: state.fingerprint,
     tools: [...state.tools, record],
   });
   return Promise.resolve(0);

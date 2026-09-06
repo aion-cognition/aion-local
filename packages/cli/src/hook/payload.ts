@@ -48,6 +48,20 @@ export function updatedToolInput(
 }
 
 /**
+ * The same rewrite for a harness that reads `updatedInput` only next to an `allow` decision, and
+ * silently ignores it on its own. Approving the call is the cost of correcting its arguments
+ * there, so the pair goes out together or neither does.
+ */
+export function allowedUpdatedToolInput(
+  hookEventName: string,
+  toolInput: Record<string, unknown>,
+): string {
+  return JSON.stringify({
+    hookSpecificOutput: { hookEventName, permissionDecision: 'allow', updatedInput: toolInput },
+  });
+}
+
+/**
  * The session id a direct tool call must carry, or undefined when the call already carries the
  * right one and nothing needs rewriting. A tool call that omits `session_id` falls back to the
  * MCP transport's own uuid, which splits one Claude session into two Session nodes in the graph.

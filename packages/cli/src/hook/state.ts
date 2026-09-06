@@ -22,10 +22,21 @@ export type HookState = {
   /** Absent until the first flush, which is what sends the next read to the tail. */
   readonly offset: number | undefined;
   readonly lastFlushAt: string | undefined;
+  /**
+   * Names the file the offset was measured in, so a transcript rewritten in place is read from
+   * its tail rather than from bytes that no longer exist. Only the harnesses that rewrite one
+   * ever set it.
+   */
+  readonly fingerprint: string | undefined;
   readonly tools: readonly BufferedTool[];
 };
 
-export const EMPTY_STATE: HookState = { offset: undefined, lastFlushAt: undefined, tools: [] };
+export const EMPTY_STATE: HookState = {
+  offset: undefined,
+  lastFlushAt: undefined,
+  fingerprint: undefined,
+  tools: [],
+};
 
 export function defaultStateDir(): string {
   return join(homedir(), '.aion', HOOK_STATE_DIR_NAME);
@@ -85,6 +96,7 @@ export function readHookState(dir: string, sessionId: string): HookState {
   return {
     offset,
     lastFlushAt: typeof record.lastFlushAt === 'string' ? record.lastFlushAt : undefined,
+    fingerprint: typeof record.fingerprint === 'string' ? record.fingerprint : undefined,
     tools,
   };
 }

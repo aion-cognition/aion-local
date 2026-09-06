@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -18,6 +19,7 @@ import {
   HOOK_TIMEOUT_MS,
   KEYLESS_NOTICE,
   STOP_INSTRUCTION,
+  type Harness,
   type HookOptions,
   type StopMode,
 } from './options.js';
@@ -59,6 +61,35 @@ const USER_LINE = JSON.stringify({
   type: 'user',
   message: { role: 'user', content: 'why did the migration deadlock' },
   timestamp: '2026-08-30T02:59:00.000Z',
+});
+
+const ROLLOUT_META = JSON.stringify({
+  timestamp: '2026-09-06T03:00:00.000Z',
+  type: 'session_meta',
+  payload: {
+    id: '019f7d6b-c1f3-72f2-8a1c-2f0d6f3b9a11',
+    cwd: '/work',
+    originator: 'codex_cli_rs',
+    cli_version: '0.144.6',
+  },
+});
+
+const ROLLOUT_USER = JSON.stringify({
+  timestamp: '2026-09-06T03:00:01.000Z',
+  type: 'event_msg',
+  payload: { type: 'user_message', message: 'why did the migration deadlock' },
+});
+
+const ROLLOUT_ASSISTANT = JSON.stringify({
+  timestamp: '2026-09-06T03:00:03.000Z',
+  type: 'event_msg',
+  payload: { type: 'agent_message', message: 'the fix is a per-table split' },
+});
+
+const ROLLOUT_REFLECTION_CALL = JSON.stringify({
+  timestamp: '2026-09-06T03:00:04.000Z',
+  type: 'response_item',
+  payload: { type: 'function_call', name: 'mcp__aion__reflection', arguments: '{}', call_id: 'c1' },
 });
 
 const POPULATED_PACK = {
@@ -113,12 +144,14 @@ function toolArgsIn(calls: readonly RecordedCall[]): Record<string, unknown> {
 describe('hook events', () => {
   let dir: string;
   let transcriptPath: string;
+  let rolloutPath: string;
   let stdout: string[];
   let stderr: string[];
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'aion-hook-'));
     transcriptPath = join(dir, 'transcript.jsonl');
+    rolloutPath = join(dir, 'rollout.jsonl');
     stdout = [];
     stderr = [];
   });
@@ -129,6 +162,7 @@ describe('hook events', () => {
 
   type Overrides = {
     readonly fetchImpl: FetchImpl;
+    readonly harness?: Harness;
     readonly stopMode?: StopMode;
     readonly minChars?: number;
     readonly keyState?: KeyState;
@@ -139,7 +173,7 @@ describe('hook events', () => {
   function options(event: HookOptions['event'], overrides: Overrides): HookOptions {
     return {
       event,
-      harness: 'claude',
+      harness: overrides.harness ?? 'claude',
       stopMode: overrides.stopMode ?? 'push',
       minChars: overrides.minChars ?? 40,
       keyState: overrides.keyState ?? 'present',
@@ -603,6 +637,183 @@ describe('hook events', () => {
     ).resolves.toBe(0);
 
     expect(stdout).toEqual([]);
+  });
+
+  describe('fired by codex', () => {
+    const META_FINGERPRINT = createHash('sha256').update(ROLLOUT_META).digest('hex');
+
+    it('pushes the rollout turn on stop and keys the cursor to the file it read', async () => {
+      const window = `${ROLLOUT_META}\n${ROLLOUT_USER}\n${ROLLOUT_ASSISTANT}\n`;
+      writeFileSync(rolloutPath, window);
+      const { fetchImpl, calls } = transport({ structuredContent: { episode_id: 'e1' } });
+
+      await expect(
+        runHook(
+          { session_id: SESSION_ID, transcript_path: rolloutPath },
+          options('stop', { fetchImpl, harness: 'codex' }),
+        ),
+      ).resolves.toBe(0);
+
+      expect(toolNamesIn(calls)).toEqual(['reflection']);
+      expect(toolArgsIn(calls).turns).toEqual([
+        {
+          role: 'user',
+          text: 'why did the migration deadlock',
+          occurred_at: '2026-09-06T03:00:01.000Z',
+        },
+        {
+          role: 'assistant',
+          text: 'the fix is a per-table split',
+          occurred_at: '2026-09-06T03:00:03.000Z',
+        },
+      ]);
+
+      const state = readHookState(join(dir, 'state'), SESSION_ID);
+      expect(state.offset).toBe(Buffer.byteLength(window));
+      expect(state.fingerprint).toBe(META_FINGERPRINT);
+    });
+
+    it('leaves the cursor keyed to its file while a tool result is buffered', async () => {
+      writeFileSync(rolloutPath, `${ROLLOUT_META}\n${ROLLOUT_USER}\n${ROLLOUT_ASSISTANT}\n`);
+      const flushing = transport({ structuredContent: { episode_id: 'e1' } });
+      await runHook(
+        { session_id: SESSION_ID, transcript_path: rolloutPath },
+        options('stop', { fetchImpl: flushing.fetchImpl, harness: 'codex' }),
+      );
+
+      const buffering = transport({ structuredContent: {} });
+      await runHook(
+        {
+          session_id: SESSION_ID,
+          tool_name: 'mcp__slack__conversations_history',
+          tool_input: { channel: 'C123' },
+          tool_response: { messages: ['the deploy is blocked'] },
+        },
+        options('post-tool-use', { fetchImpl: buffering.fetchImpl, harness: 'codex' }),
+      );
+
+      const state = readHookState(join(dir, 'state'), SESSION_ID);
+      expect(state.fingerprint).toBe(META_FINGERPRINT);
+      expect(state.tools).toHaveLength(1);
+    });
+
+    it('lets the turn end in instruct mode once the rollout names a reflection call', async () => {
+      writeFileSync(
+        rolloutPath,
+        `${ROLLOUT_META}\n${ROLLOUT_ASSISTANT}\n${ROLLOUT_REFLECTION_CALL}\n`,
+      );
+      const { fetchImpl } = transport({ structuredContent: {} });
+
+      await expect(
+        runHook(
+          { session_id: SESSION_ID, transcript_path: rolloutPath },
+          options('stop', { fetchImpl, stopMode: 'instruct', harness: 'codex' }),
+        ),
+      ).resolves.toBe(0);
+
+      expect(stderr).toEqual([]);
+    });
+
+    it('lets the cursor file go on session end without a round trip', async () => {
+      writeFileSync(rolloutPath, `${ROLLOUT_META}\n${ROLLOUT_USER}\n${ROLLOUT_ASSISTANT}\n`);
+      const buffering = transport({ structuredContent: {} });
+      await runHook(
+        {
+          session_id: SESSION_ID,
+          tool_name: 'mcp__slack__conversations_history',
+          tool_input: { channel: 'C123' },
+          tool_response: { messages: ['the deploy is blocked'] },
+        },
+        options('post-tool-use', { fetchImpl: buffering.fetchImpl, harness: 'codex' }),
+      );
+      expect(existsSync(stateFilePath(join(dir, 'state'), SESSION_ID))).toBe(true);
+
+      const { fetchImpl, calls } = transport({ structuredContent: { episode_id: 'e2' } });
+
+      await expect(
+        runHook(
+          { session_id: SESSION_ID, transcript_path: rolloutPath },
+          options('session-end', { fetchImpl, harness: 'codex' }),
+        ),
+      ).resolves.toBe(0);
+
+      expect(calls).toEqual([]);
+      expect(stdout).toEqual([]);
+      expect(existsSync(stateFilePath(join(dir, 'state'), SESSION_ID))).toBe(false);
+    });
+
+    it('approves the stamped call so the rewritten arguments are honoured', async () => {
+      const { fetchImpl } = transport({ structuredContent: {} });
+
+      await expect(
+        runHook(
+          {
+            session_id: SESSION_ID,
+            tool_name: 'mcp__aion__reflection',
+            tool_input: { summary: 'the fix is a per-table split', session_id: 'transport-1' },
+          },
+          options('pre-tool-use', { fetchImpl, harness: 'codex' }),
+        ),
+      ).resolves.toBe(0);
+
+      expect(JSON.parse(stdout[0] ?? '{}')).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'allow',
+          updatedInput: { summary: 'the fix is a per-table split', session_id: SESSION_ID },
+        },
+      });
+    });
+
+    it('approves nothing when the call already carries the right session id', async () => {
+      const { fetchImpl } = transport({ structuredContent: {} });
+
+      await expect(
+        runHook(
+          {
+            session_id: SESSION_ID,
+            tool_name: 'mcp__aion__reflection',
+            tool_input: { summary: 'already right', session_id: SESSION_ID },
+          },
+          options('pre-tool-use', { fetchImpl, harness: 'codex' }),
+        ),
+      ).resolves.toBe(0);
+
+      expect(stdout).toEqual([]);
+    });
+
+    it('recalls on session start into the same envelope', async () => {
+      const { fetchImpl, calls } = transport({ structuredContent: POPULATED_PACK });
+
+      await expect(
+        runHook(
+          { session_id: SESSION_ID },
+          options('session-start', { fetchImpl, harness: 'codex' }),
+        ),
+      ).resolves.toBe(0);
+
+      expect(toolNamesIn(calls)).toEqual(['recall']);
+      expect(toolArgsIn(calls)).toMatchObject({
+        session_id: SESSION_ID,
+        budget: { max_tokens: 2000 },
+      });
+      expect(JSON.parse(stdout[0] ?? '{}').hookSpecificOutput.hookEventName).toBe('SessionStart');
+    });
+
+    it('recalls on a prompt long enough to be worth it', async () => {
+      const { fetchImpl, calls } = transport({ structuredContent: POPULATED_PACK });
+      const prompt = 'why did the v3.21.596 migration deadlock against read-only joins';
+
+      await runHook(
+        { session_id: SESSION_ID, prompt },
+        options('prompt-submit', { fetchImpl, harness: 'codex' }),
+      );
+
+      expect(toolArgsIn(calls)).toMatchObject({ query: prompt, budget: { max_tokens: 1200 } });
+      expect(JSON.parse(stdout[0] ?? '{}').hookSpecificOutput.hookEventName).toBe(
+        'UserPromptSubmit',
+      );
+    });
   });
 
   describe('with no anthropic key on the machine', () => {
