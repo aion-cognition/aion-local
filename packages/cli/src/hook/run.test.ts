@@ -714,6 +714,31 @@ describe('hook events', () => {
       expect(stderr).toEqual([]);
     });
 
+    it('keeps the cursor keyed to its file when the rollout can no longer be opened', async () => {
+      const window = `${ROLLOUT_META}\n${ROLLOUT_USER}\n${ROLLOUT_ASSISTANT}\n`;
+      writeFileSync(rolloutPath, window);
+      const flushing = transport({ structuredContent: { episode_id: 'e1' } });
+      await runHook(
+        { session_id: SESSION_ID, transcript_path: rolloutPath },
+        options('stop', { fetchImpl: flushing.fetchImpl, harness: 'codex' }),
+      );
+      rmSync(rolloutPath);
+
+      const { fetchImpl } = transport({ structuredContent: {} });
+
+      await expect(
+        runHook(
+          { session_id: SESSION_ID, transcript_path: rolloutPath },
+          options('stop', { fetchImpl, stopMode: 'instruct', harness: 'codex' }),
+        ),
+      ).resolves.toBe(0);
+
+      const state = readHookState(join(dir, 'state'), SESSION_ID);
+      expect(state.offset).toBe(Buffer.byteLength(window));
+      expect(state.fingerprint).toBe(META_FINGERPRINT);
+      expect(stderr).toEqual([]);
+    });
+
     it('lets the cursor file go on session end without a round trip', async () => {
       writeFileSync(rolloutPath, `${ROLLOUT_META}\n${ROLLOUT_USER}\n${ROLLOUT_ASSISTANT}\n`);
       const buffering = transport({ structuredContent: {} });

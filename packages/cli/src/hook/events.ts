@@ -130,14 +130,17 @@ type CapturedTail = TranscriptTail & { readonly fingerprint: string | undefined 
 /**
  * The two harnesses record a turn in two line shapes, so the parser is the only thing the
  * harness chooses here. A codex read also names the file it read, and that name rides on the
- * capture so the flush that follows stores it beside the offset.
+ * capture so the flush that follows stores it beside the offset. A read that names no file
+ * keeps the name already stored: the offset outlives an unreadable file, and an offset whose
+ * key was dropped is trusted blindly by the next read.
  */
 function readTail(context: HookContext, path: string | undefined, state: HookState): CapturedTail {
   if (path === undefined) {
     return { messages: [], offset: state.offset ?? 0, raw: '', fingerprint: state.fingerprint };
   }
   if (context.options.harness === 'codex') {
-    return readRolloutTail(path, state.offset, state.fingerprint);
+    const tail = readRolloutTail(path, state.offset, state.fingerprint);
+    return { ...tail, fingerprint: tail.fingerprint ?? state.fingerprint };
   }
   return { ...readTranscriptTail(path, state.offset), fingerprint: undefined };
 }
