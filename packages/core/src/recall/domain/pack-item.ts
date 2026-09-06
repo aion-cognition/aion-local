@@ -101,7 +101,7 @@ function derivationOf(itemId: string, annotations: ItemAnnotations): Derivation 
     return undefined;
   }
   const roots = provenance.roots.filter((root) => root !== itemId);
-  if (roots.length === 0) {
+  if (roots.length === 0 && provenance.complete) {
     return undefined;
   }
   const shared = annotations.sharedWith ?? [];
@@ -209,6 +209,9 @@ function renderDerivation(derivation: Derivation): string {
       ? ''
       : `\n   shares this origin with ${derivation.shared_with.join(', ')}:` +
         ' not independent corroboration';
+  if (derivation.roots.length === 0) {
+    return `\n   derives from an unrecorded source (lineage incomplete)${shared}`;
+  }
   return `\n   derives from ${derivation.roots.join(', ')}${cut}${shared}`;
 }
 

@@ -150,11 +150,12 @@ export const MAX_DERIVATION_ROOTS = 3;
  * twice. The field names the other items rather than asserting agreement between them.
  *
  * `complete` is false when the chain was cut at `MAX_DERIVATION_ROOTS`, or when a source the
- * caller named did not resolve to anything the substrate holds. No lineage is invented to
- * fill the gap.
+ * caller named did not resolve to anything the substrate holds. No lineage is invented to fill
+ * the gap, so `roots` is empty on an item whose only stated source resolved to nothing: the
+ * field is there to say the chain is short, not to name something in its place.
  */
 export const DerivationSchema = z.strictObject({
-  roots: z.array(z.string().min(1)).min(1).max(MAX_DERIVATION_ROOTS),
+  roots: z.array(z.string().min(1)).max(MAX_DERIVATION_ROOTS),
   complete: z.boolean(),
   shared_with: z.array(z.string().min(1)).min(1).optional(),
 });
