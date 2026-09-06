@@ -170,49 +170,66 @@ function renderDay(timestamp: string): string {
   return timestamp.slice(0, 'YYYY-MM-DD'.length);
 }
 
-/** How each kind of statement names itself, so a quotation never prints like a conclusion. */
-const STANDING_PHRASES: Readonly<Record<StandingKind, string>> = {
-  recorded_utterance: 'recorded utterance',
-  recorded_session: 'recorded session',
-  recorded_decision: 'decision recorded',
-  extracted_interpretation: 'extracted interpretation',
-  synthesized: 'synthesized narrative',
-  stated_description: 'stated description',
+/**
+ * The two kinds a reader can take for something they are not, and nothing else.
+ *
+ * A quotation read as the substrate's own conclusion is the whole failure this marks, so the
+ * utterance is named and everything unnamed is thereby not one. A decision is named because a
+ * position somebody settled reads differently from a claim a model drew. The other four say
+ * what they are through the bucket they sit in, and the wire item carries every kind for a
+ * consumer that reads more than the rendered line.
+ *
+ * The line prints under every memory in the pack, and each word on it costs the budget a share
+ * of another memory: a phrase on every item measured two memories out of twelve at the shipped
+ * budget, which is a worse trade than the phrase is worth.
+ */
+const STANDING_PHRASES: Readonly<Partial<Record<StandingKind, string>>> = {
+  recorded_utterance: 'utterance',
+  recorded_decision: 'decision',
 };
 
 /**
- * The kind, and what the substrate can say about who stands behind it. A recorded role prints
- * verbatim and prints beside "authorship unknown", because the role is a label the calling
- * client set and agent-to-agent traffic arrives under `user`. An attributed item says nothing
- * here: its confirmation line below names the confirmer and cites the evidence.
+ * The kind, and what the substrate can say about who stands behind it.
+ *
+ * Only an utterance carries a role, so the authorship clause prints exactly there: the role
+ * verbatim, then "authorship unknown", because the role is a label the calling client set and
+ * agent-to-agent traffic arrives under `user`. An attributed item says nothing here: its
+ * confirmation line below names the confirmer and cites the evidence.
  */
-function renderStanding(standing: Standing): string {
+function renderStanding(standing: Standing): string | undefined {
   const kind = STANDING_PHRASES[standing.kind];
-  if (standing.attribution === 'attributed') {
+  if (kind === undefined) {
+    return undefined;
+  }
+  if (standing.attribution === 'attributed' || standing.recorded_role === undefined) {
     return kind;
   }
-  if (standing.recorded_role === undefined) {
-    return `${kind}, authorship unknown`;
-  }
-  return `${kind}, recorded role ${standing.recorded_role}, authorship unknown`;
+  return `${kind}, role ${standing.recorded_role}, authorship unknown`;
 }
 
 /**
- * The source line. `shared_with` is the part a reader cannot reconstruct: two items pulled out
- * of one capture say the same thing once, and a pack that prints both without saying so lets
- * one source count as two.
+ * The source line, printed only when it changes how the item should be read: another item in
+ * this pack came from the same place, or the chain is short. A bare ancestor is on the wire
+ * item and reachable from the node itself, and printing it under every extracted claim
+ * measured two memories out of twelve at the shipped token budget, which is a worse trade than
+ * the line is worth.
+ *
+ * `shared_with` is the part a reader cannot reconstruct: two items pulled out of one capture
+ * say the same thing once, and a pack that prints both without saying so lets one source count
+ * as two.
  */
 function renderDerivation(derivation: Derivation): string {
-  const cut = derivation.complete ? '' : ' (lineage incomplete)';
   const shared =
     derivation.shared_with === undefined
       ? ''
       : `\n   shares this origin with ${derivation.shared_with.join(', ')}:` +
         ' not independent corroboration';
-  if (derivation.roots.length === 0) {
-    return `\n   derives from an unrecorded source (lineage incomplete)${shared}`;
+  if (derivation.complete) {
+    return shared;
   }
-  return `\n   derives from ${derivation.roots.join(', ')}${cut}${shared}`;
+  const roots =
+    derivation.roots.length === 0 ? 'an unrecorded source' : derivation.roots.join(', ');
+  return `\n   derives from ${roots} (lineage incomplete)${shared}`;
 }
 
 /**
@@ -244,8 +261,9 @@ function renderDerivation(derivation: Derivation): string {
 export function renderItem(entry: PackEntry): string {
   const { item } = entry;
   const facts = [`[${item.id}]`, item.rationale.method, renderAdmission(item)];
-  if (item.standing !== undefined) {
-    facts.push(renderStanding(item.standing));
+  const standing = item.standing === undefined ? undefined : renderStanding(item.standing);
+  if (standing !== undefined) {
+    facts.push(standing);
   }
   if (item.occurred_at !== undefined) {
     facts.push(

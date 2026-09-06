@@ -355,7 +355,7 @@ describe('what the substrate can say about who stands behind a line', () => {
     expect(turn?.standing?.recorded_role).toBe('user');
     expect(turn?.standing?.attribution).toBe('reported');
     expect(turn?.standing?.confirmed).toBeUndefined();
-    expect(pack.rendered_text).toContain('recorded role user, authorship unknown');
+    expect(pack.rendered_text).toContain('utterance, role user, authorship unknown');
   });
 
   it('names the confirmer only where a confirmation record cites its evidence', async () => {

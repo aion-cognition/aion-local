@@ -98,14 +98,19 @@ describe('what kind of statement the line is', () => {
       gloss: false,
     });
 
-    expect(line).toContain('recorded utterance, recorded role user, authorship unknown');
+    expect(line).toContain('utterance, role user, authorship unknown');
     expect(line).not.toContain('confirmed by');
   });
 
-  it('marks an extracted claim as an interpretation rather than as something said', () => {
-    const line = renderItem({ item: toPackItem(fused(), 1), gloss: false });
+  /**
+   * The mark exists so a quotation is never read as a conclusion. An extracted claim is the
+   * default and the wire item still names its kind, so the rendered line spends nothing on it.
+   */
+  it('leaves an extracted claim unmarked and still names its kind on the wire', () => {
+    const item = toPackItem(fused(), 1);
 
-    expect(line).toContain('extracted interpretation, authorship unknown');
+    expect(item.standing?.kind).toBe('extracted_interpretation');
+    expect(renderItem({ item, gloss: false })).not.toContain('utterance');
   });
 
   it('names a decision as one', () => {
@@ -114,7 +119,7 @@ describe('what kind of statement the line is', () => {
       gloss: false,
     });
 
-    expect(line).toContain('decision recorded');
+    expect(line).toContain('decision');
   });
 
   it('names the confirmer only against evidence, and cites the evidence', () => {
@@ -150,7 +155,6 @@ describe('the source line', () => {
       gloss: false,
     });
 
-    expect(line).toContain('derives from ep-1');
     expect(line).toContain('shares this origin with claim-1: not independent corroboration');
   });
 

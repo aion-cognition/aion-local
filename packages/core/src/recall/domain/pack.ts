@@ -230,7 +230,13 @@ function select(input: AssemblePackInput, note: string | undefined): Selection {
    */
   function annotationsFor(item: FusedItem, roots: readonly string[]): ItemAnnotations {
     const provenance = input.provenance?.get(item.id);
-    const claim = input.relatedClaims?.get(item.id);
+    // The annotation carries a claim the reader would otherwise not see. One the pack already
+    // holds is in front of them, and printing it a second time costs the budget a memory to
+    // repeat a sentence: the claim is dropped rather than the annotation being suppressed
+    // wholesale outside the resonant bucket, which was the older rule and left a turn the query
+    // matched head on standing uncontested.
+    const found = input.relatedClaims?.get(item.id);
+    const claim = found !== undefined && packedIds.has(found.id) ? undefined : found;
     const sharedWith = new Set<string>();
     for (const root of roots) {
       const owner = rootOwners.get(root);
