@@ -25,6 +25,10 @@ model every other caller is already waiting on. Routing generation to `claude-ha
 what makes the cadence affordable. Embeddings stay local either way, because the vector space
 is the substrate.
 
+`AION_CUE_PROVIDER=ollama` routes cue extraction locally while reflection stays keyed.
+Hooks remain enabled because their rule reads the reflect route. The cue pin saves all cue
+generation API charges; its quality and latency comparison is still pending.
+
 Hooks are a keyed-profile feature, enforced three times over. `aion hooks install` refuses
 without a key. The server refuses hook capture while reflection routes to a local model, whether
 that is a missing key or a pin. The hook client itself stops capturing and strips its own entries
