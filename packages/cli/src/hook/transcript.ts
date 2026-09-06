@@ -135,7 +135,7 @@ export function parseTranscriptLines(raw: string): readonly TranscriptMessage[] 
   return messages;
 }
 
-function readRange(path: string, from: number | undefined): { text: string; start: number } {
+export function readRange(path: string, from: number | undefined): { text: string; start: number } {
   const handle = openSync(path, 'r');
   try {
     const { size } = fstatSync(handle);
