@@ -10,6 +10,7 @@ import {
   BITEMPORAL_PROPERTIES,
   writeStampedNode,
 } from '../../../infrastructure/graph/bitemporal.js';
+import { upsertEdge } from '../../../infrastructure/graph/edges.js';
 import { MEMORY_PROPERTIES } from '../../../infrastructure/graph/episodes.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import {
@@ -21,6 +22,7 @@ import { asOf, withCurrency } from '../../../infrastructure/graph/read-modes.js'
 import { fulltextSeeds } from '../../../infrastructure/graph/seed-queries.js';
 import {
   countEdges,
+  edgeValidUntil,
   nodeLabels,
   nodeProperties,
   supersedingNodeIds,
@@ -143,6 +145,11 @@ function context(
   };
 }
 
+/** The episode underneath a session narrative, which is where its traversal edge starts. */
+function episodeIdFor(narrativeId: string): string {
+  return `${narrativeId}-episode`;
+}
+
 async function seedSessionNarrative(seed: (typeof SESSIONS)[number]): Promise<void> {
   const occurredAt = new Date(seed.occurredAt);
   await writeStampedNode(harness.driver, {
@@ -159,6 +166,28 @@ async function seedSessionNarrative(seed: (typeof SESSIONS)[number]): Promise<vo
       [NARRATIVE_PROPERTIES.coverageCount]: 2,
       [NARRATIVE_PROPERTIES.grounding]: 'grounded-1',
     },
+  });
+
+  // The edge a session close leaves behind. Without one the rollup absorbs a narrative nothing
+  // points at, which is the one case where leaving the edges open costs nothing.
+  const episodeId = episodeIdFor(seed.id);
+  await writeStampedNode(harness.driver, {
+    label: 'Episode',
+    id: episodeId,
+    now: occurredAt,
+    occurredAt,
+    properties: { [MEMORY_PROPERTIES.text]: `the turns behind ${seed.id}` },
+  });
+  await upsertEdge(harness.driver, {
+    type: SUMMARIZED_BY_TYPE,
+    sourceId: episodeId,
+    targetId: seed.id,
+    strength: 1,
+    confidence: 1,
+    signals: ['compression'],
+    provenance: ['test-seed'],
+    count: 0,
+    now: occurredAt,
   });
 }
 
@@ -208,6 +237,16 @@ describe('narrative rollups against a live substrate', () => {
     expect(outcome.detail).toContain('2 vetoed by review');
     const member = await nodeProperties(harness.driver, SESSIONS[0]!.id);
     expect(member[BITEMPORAL_PROPERTIES.validUntil]).toBeUndefined();
+    // The member still stands, so its episode still reaches it. Closure follows supersession,
+    // not the operation running.
+    expect(
+      await edgeValidUntil(
+        harness.driver,
+        SUMMARIZED_BY_TYPE,
+        episodeIdFor(SESSIONS[0]!.id),
+        SESSIONS[0]!.id,
+      ),
+    ).toBeUndefined();
   });
 
   it('compresses each closed day into one narrative citing its sessions', async () => {
@@ -232,6 +271,38 @@ describe('narrative rollups against a live substrate', () => {
     for (const seed of [SESSIONS[0]!, SESSIONS[1]!]) {
       expect(await countEdges(harness.driver, SUMMARIZED_BY_TYPE, seed.id, rollupId)).toBe(1);
     }
+  });
+
+  /**
+   * The absorbed members' own edges, in the run that absorbed them. A rollup takes a day of
+   * session narratives at once, so this is where the residue would pile up fastest if closure
+   * waited for the bounded repair instead.
+   */
+  it('closes the absorbed members’ traversal edges in the run that supersedes them', async () => {
+    const rollupId = await rollupIdFor('2026-04-02');
+
+    for (const seed of [SESSIONS[0]!, SESSIONS[1]!]) {
+      expect(
+        await edgeValidUntil(harness.driver, SUMMARIZED_BY_TYPE, episodeIdFor(seed.id), seed.id),
+      ).toBeInstanceOf(Date);
+      // Stored, not removed, and the member's edge into the rollup stays open.
+      expect(
+        await countEdges(harness.driver, SUMMARIZED_BY_TYPE, episodeIdFor(seed.id), seed.id),
+      ).toBe(1);
+      expect(
+        await edgeValidUntil(harness.driver, SUMMARIZED_BY_TYPE, seed.id, rollupId),
+      ).toBeUndefined();
+    }
+
+    // A day nothing has rolled up yet keeps its edge: this closes what it absorbed, nothing else.
+    expect(
+      await edgeValidUntil(
+        harness.driver,
+        SUMMARIZED_BY_TYPE,
+        episodeIdFor(SESSIONS[3]!.id),
+        SESSIONS[3]!.id,
+      ),
+    ).toBeUndefined();
   });
 
   it('marks the rolled-up sessions superseded in a default read and current under as_of', async () => {
@@ -267,6 +338,34 @@ describe('narrative rollups against a live substrate', () => {
     expect(
       (await nodeProperties(harness.driver, SESSIONS[1]!.id))[BITEMPORAL_PROPERTIES.validUntil],
     ).toBeUndefined();
+  });
+
+  /**
+   * A reopened narrative its episodes cannot reach is reopened in name only, and the bounded
+   * repair would never notice: that scan closes edges into narratives that are still closed.
+   */
+  it('brings the reopened member’s traversal edges back with it, idempotently', async () => {
+    const episodeId = episodeIdFor(SESSIONS[1]!.id);
+    expect(
+      await edgeValidUntil(harness.driver, SUMMARIZED_BY_TYPE, episodeId, SESSIONS[1]!.id),
+    ).toBeUndefined();
+
+    // Already open, so a second reversal has nothing to restore and says so.
+    const repeat = await unsupersedeNode(harness.driver, { id: SESSIONS[1]!.id, now: NOW });
+    expect(repeat.reopenedEdges).toBe(0);
+    expect(
+      await edgeValidUntil(harness.driver, SUMMARIZED_BY_TYPE, episodeId, SESSIONS[1]!.id),
+    ).toBeUndefined();
+
+    // The member nobody reopened keeps the close the rollup wrote.
+    expect(
+      await edgeValidUntil(
+        harness.driver,
+        SUMMARIZED_BY_TYPE,
+        episodeIdFor(SESSIONS[0]!.id),
+        SESSIONS[0]!.id,
+      ),
+    ).toBeInstanceOf(Date);
   });
 
   it('rolls the days up into the week they belong to', async () => {

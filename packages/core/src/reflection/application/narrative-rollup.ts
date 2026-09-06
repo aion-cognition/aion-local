@@ -5,12 +5,13 @@ import { attachContentVectors } from './vectors.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import {
-  supersede,
+  supersedeInTransaction,
   writeStampedDerivedNodeInTransaction,
 } from '../../infrastructure/graph/bitemporal.js';
 import { inWriteTransaction } from '../../infrastructure/graph/connection.js';
 import { upsertEdgeInTransaction } from '../../infrastructure/graph/edges.js';
 import { MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
+import { closeNarrativeEdgesInTransaction } from '../../infrastructure/graph/narrative-edge-queries.js';
 import {
   NARRATIVE_PROPERTIES,
   SUMMARIZED_BY_TYPE,
@@ -214,9 +215,15 @@ async function writeRollup(deps: RollupDeps, input: RollupWrite): Promise<void> 
 
 /**
  * Closing what the rollup absorbed, and any earlier version of the rollup itself. Both go
- * through `supersede`, so both are reversible by `aion unsupersede` and both stay readable
+ * through supersession, so both are reversible by `aion unsupersede` and both stay readable
  * through `as_of`. `validUntil` is the world time the rollup covers up to rather than the moment
  * the sweep ran.
+ *
+ * The absorbed members' own summarization edges close in the same transaction, the way a
+ * session close ends the ones into the version it replaces. A rollup absorbs a whole day of
+ * session narratives at once, so leaving those edges open would make this the largest producer
+ * of exactly the residue the write path stopped creating, and the episodes underneath would go
+ * on traversing to a narrative the rollup has already replaced.
  */
 async function closeInto(
   deps: RollupDeps,
@@ -225,22 +232,30 @@ async function closeInto(
   now: Date,
   validUntil: Date,
 ): Promise<number> {
-  let closed = 0;
-  for (const oldId of ids) {
-    if (oldId === rollupId) {
-      continue;
-    }
-    await supersede(deps.driver, {
-      oldId,
-      newId: rollupId,
-      now,
-      validUntil,
-      signals: ROLLUP_SIGNALS,
-      provenance: ROLLUP_PROVENANCE,
-    });
-    closed += 1;
+  const absorbed = ids.filter((oldId) => oldId !== rollupId);
+  if (absorbed.length === 0) {
+    return 0;
   }
-  return closed;
+
+  await inWriteTransaction(deps.driver, async (tx) => {
+    for (const oldId of absorbed) {
+      await supersedeInTransaction(tx, {
+        oldId,
+        newId: rollupId,
+        now,
+        validUntil,
+        signals: ROLLUP_SIGNALS,
+        provenance: ROLLUP_PROVENANCE,
+      });
+    }
+    await closeNarrativeEdgesInTransaction(tx, {
+      narrativeIds: absorbed,
+      validUntil,
+      txUntil: now,
+    });
+  });
+
+  return absorbed.length;
 }
 
 async function attachVector(deps: RollupDeps, rollupId: string, text: string): Promise<void> {

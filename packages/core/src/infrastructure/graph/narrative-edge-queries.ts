@@ -89,6 +89,46 @@ export async function closeNarrativeEdgesInTransaction(
   return tx.run(statement.cypher, statement.parameters, mapClosedEdge);
 }
 
+/**
+ * The inverse, for a close somebody undid. `unsupersede` restores a narrative's currency by
+ * dropping the two stamps the close wrote, and these edges have to come back with it: a
+ * narrative current again that no episode can reach is reachable by id and by nothing else,
+ * and the backlog repair will not find it either, since that scan only closes edges into
+ * narratives that are still closed.
+ *
+ * Attribution is the narrative itself. An edge into it is closed only when it is closed, by
+ * the supersession or by the repair standing in for one, so every closed edge into a narrative
+ * being reopened belongs to the close being undone.
+ *
+ * `REMOVE` rather than a later interval, matching how `unsupersede.ts` restores a node: both
+ * timelines say the association holds again. Provenance, signals, strength, and count are not
+ * touched, so the edge comes back as the one that was there. `valid_until IS NOT NULL` is what
+ * makes a second call match nothing.
+ */
+export function buildNarrativeEdgeReopen(narrativeIds: readonly string[]): GraphStatement {
+  const cypher = [
+    'UNWIND $narrativeIds AS narrativeId',
+    `MATCH (:${BASE_NODE_LABEL})-[r:${SUMMARIZED_BY_TYPE}]->(:Narrative { id: narrativeId })`,
+    `WHERE r.${BITEMPORAL_PROPERTIES.validUntil} IS NOT NULL`,
+    `REMOVE r.${BITEMPORAL_PROPERTIES.validUntil}, r.${BITEMPORAL_PROPERTIES.txUntil}`,
+    CLOSED_EDGE_RETURN,
+  ].join('\n');
+
+  return { cypher, parameters: { narrativeIds: [...new Set(narrativeIds)] } };
+}
+
+/** Joined to the transaction that restores the narrative's own currency. */
+export async function reopenNarrativeEdgesInTransaction(
+  tx: GraphTransaction,
+  narrativeIds: readonly string[],
+): Promise<ClosedNarrativeEdge[]> {
+  if (narrativeIds.length === 0) {
+    return [];
+  }
+  const statement = buildNarrativeEdgeReopen(narrativeIds);
+  return tx.run(statement.cypher, statement.parameters, mapClosedEdge);
+}
+
 export type StaleNarrativeEdgeInput = {
   /** Caps how many edges one call closes. */
   readonly batchSize: number;

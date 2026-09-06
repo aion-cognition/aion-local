@@ -5,6 +5,7 @@ import { inWriteTransaction, runRead } from './connection.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
 import { GraphNodeNotFoundError } from './errors.js';
 import { BASE_NODE_LABEL } from './labels.js';
+import { reopenNarrativeEdgesInTransaction } from './narrative-edge-queries.js';
 import { SUPERSEDES_TYPE } from './relationships.js';
 import { ENTITY_NAME_PROPERTY } from './seed-queries.js';
 import { toGraphDateTime, type Row } from './values.js';
@@ -40,6 +41,11 @@ export type UnsupersedeResult = {
   readonly content: string;
   /** The lineage this call closed. Empty when the node was already open. */
   readonly reopenedFrom: readonly ReopenedLineage[];
+  /**
+   * Traversal edges the close had stamped and this call brought back, zero for every node
+   * that is not a narrative. A restored node nothing can reach is restored in name only.
+   */
+  readonly reopenedEdges: number;
   /** False when the node was already current, which makes a repeated call a no-op. */
   readonly justReopened: boolean;
   readonly reopenedAt: Date;
@@ -151,6 +157,12 @@ export type UnsupersedeInput = {
  * Closes the lineage and restores the currency in one transaction: a node current again while
  * an open `SUPERSEDES` edge still points at it would read as superseded to every lineage
  * projection, and the two halves have to land together or neither.
+ *
+ * A narrative's summarization edges are the third half. Its close stamps them alongside the
+ * node, so reopening the node alone leaves a current narrative no episode can reach, and the
+ * backlog repair cannot correct that either: it only closes edges into narratives that are
+ * still closed. The reopen is scoped to `:Narrative` by its own pattern, so it matches nothing
+ * for every other kind of node and costs one indexed miss.
  */
 export async function unsupersedeNode(
   driver: Driver,
@@ -166,6 +178,7 @@ export async function unsupersedeNode(
         provenance: (row.provenance as string[] | null) ?? [],
       }),
     );
+    const reopenedEdges = await reopenNarrativeEdgesInTransaction(tx, [input.id]);
     const restored = await tx.run(RESTORE_CURRENCY, { id: input.id }, (row) => ({
       id: row.id as string,
       labels: (row.labels as string[] | null) ?? [],
@@ -181,6 +194,7 @@ export async function unsupersedeNode(
       labels: node.labels,
       content: node.content,
       reopenedFrom,
+      reopenedEdges: reopenedEdges.length,
       justReopened: node.wasClosed || reopenedFrom.length > 0,
       reopenedAt: now,
     };

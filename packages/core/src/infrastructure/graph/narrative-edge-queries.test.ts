@@ -4,6 +4,7 @@ import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import {
   buildNarrativeEdgeClose,
   buildNarrativeEdgeCounts,
+  buildNarrativeEdgeReopen,
   buildStaleNarrativeEdgeClose,
 } from './narrative-edge-queries.js';
 import { SUMMARIZED_BY_TYPE } from './narrative-queries.js';
@@ -40,6 +41,27 @@ describe('buildNarrativeEdgeClose', () => {
 
   it('never deletes', () => {
     expect(statement.cypher).not.toContain('DELETE');
+  });
+});
+
+describe('buildNarrativeEdgeReopen', () => {
+  const statement = buildNarrativeEdgeReopen(['n-1', 'n-1', 'n-2']);
+
+  it('drops both stamps rather than writing a later interval', () => {
+    expect(statement.cypher).toContain(
+      `REMOVE r.${BITEMPORAL_PROPERTIES.validUntil}, r.${BITEMPORAL_PROPERTIES.txUntil}`,
+    );
+    expect(statement.parameters.narrativeIds).toEqual(['n-1', 'n-2']);
+  });
+
+  it('touches only the edges a close had stamped, so a repeat restores nothing twice', () => {
+    expect(statement.cypher).toContain(`r.${BITEMPORAL_PROPERTIES.validUntil} IS NOT NULL`);
+  });
+
+  it('leaves the edge’s own provenance and weight alone', () => {
+    expect(statement.cypher).not.toContain('provenance');
+    expect(statement.cypher).not.toContain('strength');
+    expect(statement.cypher).not.toContain('count');
   });
 });
 
