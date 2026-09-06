@@ -51,6 +51,7 @@ export function entityOptions(config: Config): EntityStageOptions {
     model: config.models.reflect,
     timeoutMs: config.reflection.stageTimeoutMs,
     maxEntities: config.reflection.maxEntities,
+    minExtractionChars: config.reflection.minExtractionChars,
   };
 }
 
@@ -86,6 +87,7 @@ export function cognitiveOptions(config: Config): CognitiveExtractionStageOption
     familyRelatednessFloor: config.reflection.supersedeFamilyRelatednessFloor,
     readingHorizonDays: config.temporal.readingHorizonDays,
     intentionHorizonDays: config.temporal.intentionHorizonDays,
+    minExtractionChars: config.reflection.minExtractionChars,
   };
 }
 

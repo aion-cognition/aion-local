@@ -22,6 +22,15 @@ export const REFLECTION_KNOBS = {
   // guard takes it as a constructor option instead of a knob nobody sets.
   stageTimeoutMs: ['AION_REFLECTION_STAGE_TIMEOUT_MS', positiveInt, 60_000],
   maxEntities: ['AION_REFLECTION_MAX_ENTITIES', positiveInt, 32],
+  // The byte floor under which a subagent-stop capture is stored and embedded but not read by
+  // the generating stages (`reflection/domain/capture-class.ts`). It bounds one capture class
+  // and no other: a short turn, a short observation pushed over MCP, and a short tool result
+  // are all extracted as before. Sixty-four bytes is about a line of English, which is the
+  // whole of a progress line ("wrote the plan file", "3 of 7 checks done") and well under the
+  // shortest subagent synthesis worth a node. Nothing measured it; it is a starting value, and
+  // the cost of setting it too high is structure the substrate never extracts from a real
+  // synthesis, so it errs low.
+  minExtractionChars: ['AION_REFLECTION_MIN_EXTRACTION_CHARS', positiveInt, 64],
   // The cosine the name-vector nominator's hits have to clear. A nomination floor, not a
   // decision line: the evidence tiers and the two-pass judge behind it decide, and nothing
   // merges on this number alone. Re-derived 2026-09-02 against snowflake-arctic-embed2 over

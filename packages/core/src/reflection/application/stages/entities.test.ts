@@ -498,12 +498,23 @@ describe('refinement', () => {
     expect(entityNames()).toEqual(['Aion', 'Ryan Huber']);
   });
 
-  it('retries when the first pass named nothing, and says so in the refinement', async () => {
+  it('takes an extraction that named nothing as the answer rather than asking again', async () => {
     const provider = fakeProvider({ generate: [{ entities: [] }, EXTRACTION] });
-    await new EntityExtractionStage().run(context(provider));
+    const outcome = await new EntityExtractionStage().run(context(provider));
 
-    expect(provider.generateCalls).toHaveLength(2);
-    expect(provider.generateCalls[1]?.messages[1]?.content).toContain('named no entities');
+    expect(outcome).toMatchObject({ status: 'ok', counts: { entities: 0, mentions: 0 } });
+    expect(provider.generateCalls).toHaveLength(1);
+    expect(graph.entities()).toHaveLength(0);
+  });
+
+  it('takes a payload of nothing but declined entities as the same answer', async () => {
+    const provider = fakeProvider({
+      generate: [{ entities: [{ name: 'the progress line', type: 'topic', context: null }] }],
+    });
+    const outcome = await new EntityExtractionStage().run(context(provider));
+
+    expect(outcome).toMatchObject({ status: 'ok', counts: { entities: 0, mentions: 0 } });
+    expect(provider.generateCalls).toHaveLength(1);
   });
 
   it('retries a call that failed outright', async () => {
@@ -515,10 +526,11 @@ describe('refinement', () => {
   });
 
   it('accepts an empty second answer as the episode naming nothing', async () => {
-    const provider = fakeProvider({ generate: [{ entities: [] }, { entities: [] }] });
+    const provider = fakeProvider({ generate: [{ bad: true }, { entities: [] }] });
     const outcome = await new EntityExtractionStage().run(context(provider));
 
     expect(outcome).toMatchObject({ status: 'ok', counts: { entities: 0, mentions: 0 } });
+    expect(provider.generateCalls).toHaveLength(2);
     expect(graph.entities()).toHaveLength(0);
   });
 

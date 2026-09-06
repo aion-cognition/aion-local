@@ -65,6 +65,7 @@ const configured: Config = {
     ...DEFAULTS.reflection,
     stageTimeoutMs: 61_000,
     maxEntities: 31,
+    minExtractionChars: 65,
     entityDedupThreshold: 0.91,
     entityNominationJaccardFloor: 0.42,
     entityMergeMode: 'propose',
@@ -156,6 +157,7 @@ describe('reflectionStages', () => {
       model: configured.models.reflect,
       timeoutMs: configured.reflection.stageTimeoutMs,
       maxEntities: configured.reflection.maxEntities,
+      minExtractionChars: configured.reflection.minExtractionChars,
     });
     expect(entityOptions(configured)).toEqual(entities.describe());
   });
@@ -216,6 +218,7 @@ describe('reflectionStages', () => {
       familyRelatednessFloor: configured.reflection.supersedeFamilyRelatednessFloor,
       readingHorizonDays: configured.temporal.readingHorizonDays,
       intentionHorizonDays: configured.temporal.intentionHorizonDays,
+      minExtractionChars: configured.reflection.minExtractionChars,
     });
     expect(semanticRelationshipOptions(configured)).toEqual({
       model: configured.models.reflect,

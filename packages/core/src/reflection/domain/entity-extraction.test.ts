@@ -93,6 +93,40 @@ describe('parseExtractedEntities', () => {
     });
   });
 
+  it('drops a reading whose context is null, which is how the model declines an entity', () => {
+    const parsed = parseExtractedEntities(
+      {
+        entities: [
+          entity('Aion', 'project', 'the memory substrate'),
+          { name: 'the progress line', type: 'topic', context: null },
+        ],
+      },
+      MAX,
+    );
+    expect(parsed?.map((extracted) => extracted.name)).toEqual(['Aion']);
+  });
+
+  it('keeps a name another reading described, since one declined reading is not the answer', () => {
+    const parsed = parseExtractedEntities(
+      {
+        entities: [
+          { name: 'Aion', type: 'project', context: null },
+          entity('Aion', 'project', 'the memory substrate'),
+        ],
+      },
+      MAX,
+    );
+    expect(parsed?.[0]).toMatchObject({ name: 'Aion', context: 'the memory substrate' });
+  });
+
+  it('reads a payload of nothing but declined entities as an extraction that named none', () => {
+    const parsed = parseExtractedEntities(
+      { entities: [{ name: 'the progress line', type: 'topic', context: null }] },
+      MAX,
+    );
+    expect(parsed).toEqual([]);
+  });
+
   it('drops an empty name and a name long enough to be a sentence', () => {
     const parsed = parseExtractedEntities(
       { entities: [entity('   '), entity('a'.repeat(200)), entity('Aion', 'project')] },
@@ -225,13 +259,18 @@ describe('entityContentText', () => {
   });
 });
 
-type SchemaField = { type: string; enum?: string[]; items?: { type: string } };
+type SchemaField = { type: string | string[]; enum?: string[]; items?: { type: string } };
 
 type SchemaShape = {
   properties: {
     entities: {
       items: {
-        properties: { type: SchemaField; aliases: SchemaField; is_speaker: SchemaField };
+        properties: {
+          type: SchemaField;
+          context: SchemaField;
+          aliases: SchemaField;
+          is_speaker: SchemaField;
+        };
         required: string[];
       };
     };
@@ -262,6 +301,10 @@ describe('the structured-output schema', () => {
     expect(schemaItem.properties.aliases).toEqual({ type: 'array', items: { type: 'string' } });
     expect(schemaItem.properties.is_speaker).toEqual({ type: 'boolean' });
     expect(schemaItem.required).toEqual(['name', 'type', 'context']);
+  });
+
+  it('lets the required context be null, which is the way out of naming an entity', () => {
+    expect(schemaItem.properties.context).toEqual({ type: ['string', 'null'] });
   });
 
   it('asks the model for no confidence anywhere', () => {

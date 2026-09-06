@@ -13,6 +13,7 @@ import {
   LOCAL as SYSTEM_PROMPT,
   REFINEMENT_LOCAL as REFINEMENT_PROMPT,
 } from '../../../prompts/entity-extraction.js';
+import { generationSkipReason } from '../../domain/capture-class.js';
 import {
   ENTITY_EXTRACTION_JSON_SCHEMA,
   parseExtractedEntities,
@@ -31,7 +32,7 @@ export { ENTITY_EXTRACTION_METHOD } from './entity-resolution.js';
  * the prompt, triggered by an unusable answer rather than by scoring the text the model was
  * given, and a second failure fails the stage: the episode stays queued behind an unmarked
  * ledger key instead of being enriched with regex-shaped entities the rest of the graph would
- * then treat as real.
+ * then treat as real. An answer that names nothing is not an unusable one.
  */
 
 export const ENTITY_STAGE_NAME = 'entities';
@@ -46,6 +47,8 @@ export type EntityStageOptions = {
   readonly model: string;
   readonly timeoutMs: number;
   readonly maxEntities: number;
+  /** The byte floor `capture-class.ts` applies to the one capture class it bounds. */
+  readonly minExtractionChars: number;
 };
 
 type ExtractionResult =
@@ -104,6 +107,7 @@ export class EntityExtractionStage implements ReflectionStage {
       model: DEFAULTS.models.reflect,
       timeoutMs: DEFAULTS.reflection.stageTimeoutMs,
       maxEntities: DEFAULTS.reflection.maxEntities,
+      minExtractionChars: DEFAULTS.reflection.minExtractionChars,
       ...options,
     };
   }
@@ -121,6 +125,10 @@ export class EntityExtractionStage implements ReflectionStage {
     const body = ctx.episode.text.trim();
     if (body.length === 0) {
       return { status: 'skipped', summary: 'episode carries no text to extract from' };
+    }
+    const declined = generationSkipReason(ctx.episode, this.#options.minExtractionChars);
+    if (declined !== undefined) {
+      return { status: 'skipped', summary: declined };
     }
 
     const extraction = await this.#extract(ctx, body);
@@ -156,24 +164,24 @@ export class EntityExtractionStage implements ReflectionStage {
     };
   }
 
-  /** One `generate` call, then at most one refinement of it. Each carries its own abort signal. */
+  /**
+   * One `generate` call, then at most one refinement of it. Each carries its own abort signal.
+   *
+   * An extraction that named nothing is an answer and is taken as one. Re-reading the record
+   * asks the model to find an entity in a record that may hold none, and a model asked twice
+   * answers with the phrase it declined the first time.
+   */
   async #extract(ctx: StageContext, body: string): Promise<ExtractionResult> {
     const first = await this.#call(ctx, firstAttemptMessages(body));
     const attempted = first.ok
       ? parseExtractedEntities(first.data, this.#options.maxEntities)
       : undefined;
-    if (attempted !== undefined && attempted.length > 0) {
+    if (attempted !== undefined) {
       return { ok: true, entities: attempted };
     }
 
     const rejected = first.ok ? echo(first.data) : '(the call failed)';
-    let reason: string;
-    if (first.ok) {
-      reason =
-        attempted === undefined ? 'it did not match the required shape' : 'it named no entities';
-    } else {
-      ({ reason } = first);
-    }
+    const reason = first.ok ? 'it did not match the required shape' : first.reason;
     ctx.logger.info(
       { episodeId: ctx.episodeId, model: this.#options.model, reason },
       'entity extraction refining',

@@ -33,6 +33,14 @@ export type EpisodeContext = {
   readonly summary?: string;
   readonly occurredAt?: Date;
   readonly turns: readonly EpisodeTurnContext[];
+  /**
+   * How the reflection call that wrote the episode reached intake, as intake recorded it.
+   * Absent on an episode written before capture carried an origin, and on any caller that
+   * stated none. A stage reads it to know which capture class it is looking at; nothing
+   * downstream treats it as evidence about what happened.
+   */
+  readonly originChannel?: string;
+  readonly originEvent?: string;
 };
 
 /**
@@ -65,6 +73,8 @@ function loadStatement(episodeId: string): GraphStatement {
     `  e.${MEMORY_PROPERTIES.text} AS text,`,
     `  e.${MEMORY_PROPERTIES.summary} AS summary,`,
     `  e.${BITEMPORAL_PROPERTIES.occurredAt} AS occurred_at,`,
+    `  e.${MEMORY_PROPERTIES.originChannel} AS origin_channel,`,
+    `  e.${MEMORY_PROPERTIES.originEvent} AS origin_event,`,
     '  turns',
   ].join('\n');
 
@@ -108,6 +118,8 @@ function readEpisodeContext(row: Row): EpisodeContext {
   const turns = Array.isArray(row.turns) ? row.turns : [];
   const summary = asOptionalText(row.summary);
   const occurredAt = asDate(row.occurred_at);
+  const originChannel = asOptionalText(row.origin_channel);
+  const originEvent = asOptionalText(row.origin_event);
   return {
     id: row.id as string,
     sessionId: asText(row.session_id),
@@ -115,6 +127,8 @@ function readEpisodeContext(row: Row): EpisodeContext {
     turns: turns.map(readTurn).filter((turn): turn is EpisodeTurnContext => turn !== undefined),
     ...(summary === undefined ? {} : { summary }),
     ...(occurredAt === undefined ? {} : { occurredAt }),
+    ...(originChannel === undefined ? {} : { originChannel }),
+    ...(originEvent === undefined ? {} : { originEvent }),
   };
 }
 

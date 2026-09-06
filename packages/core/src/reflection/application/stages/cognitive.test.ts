@@ -744,6 +744,7 @@ describe('CognitiveExtractionStage', () => {
         familyRelatednessFloor: DEFAULTS.reflection.supersedeFamilyRelatednessFloor,
         readingHorizonDays: DEFAULTS.temporal.readingHorizonDays,
         intentionHorizonDays: DEFAULTS.temporal.intentionHorizonDays,
+        minExtractionChars: DEFAULTS.reflection.minExtractionChars,
       });
     });
   });

@@ -22,6 +22,7 @@ import { isIntentionNodeLabel } from '../../../infrastructure/graph/intention-qu
 import { deadlineFor } from '../../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Vector } from '../../../infrastructure/providers/types.js';
 import { LOCAL as SYSTEM_PROMPT } from '../../../prompts/cognitive-extraction.js';
+import { generationSkipReason } from '../../domain/capture-class.js';
 import { TEMPORAL_CLASSES } from '../../domain/claim-key.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
 
@@ -50,6 +51,8 @@ export type CognitiveExtractionStageOptions = {
   readonly familyRelatednessFloor: number;
   readonly readingHorizonDays: number;
   readonly intentionHorizonDays: number;
+  /** The byte floor `capture-class.ts` applies to the one capture class it bounds. */
+  readonly minExtractionChars: number;
 };
 
 const NODE_TYPES = COGNITIVE_NODE_LABELS;
@@ -198,6 +201,7 @@ export class CognitiveExtractionStage implements ReflectionStage {
       familyRelatednessFloor: DEFAULTS.reflection.supersedeFamilyRelatednessFloor,
       readingHorizonDays: DEFAULTS.temporal.readingHorizonDays,
       intentionHorizonDays: DEFAULTS.temporal.intentionHorizonDays,
+      minExtractionChars: DEFAULTS.reflection.minExtractionChars,
       ...options,
     };
   }
@@ -216,6 +220,10 @@ export class CognitiveExtractionStage implements ReflectionStage {
     const text = ctx.episode.text.trim();
     if (text.length === 0) {
       return { status: 'skipped', summary: 'episode has no text to extract from' };
+    }
+    const declined = generationSkipReason(ctx.episode, this.#options.minExtractionChars);
+    if (declined !== undefined) {
+      return { status: 'skipped', summary: declined };
     }
 
     const deadline = deadlineFor(this.#options.timeoutMs, ctx.signal);

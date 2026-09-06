@@ -95,7 +95,17 @@ export const ENTITY_EXTRACTION_JSON_SCHEMA: JsonSchema = {
         properties: {
           name: { type: 'string' },
           type: { type: 'string', enum: [...ENTITY_TYPES] },
-          context: { type: 'string' },
+          // Nullable, which is the way out of a required field. `context` is required, so a
+          // model told to return every distinct thing a record names has to write a clause
+          // about something; on a record that names nothing it writes one about a phrase and
+          // the entity lands. A null says the model reached for an entity it could not
+          // describe, and the row is dropped.
+          //
+          // The prompt does not ask for it. Measured over the held-out battery, a sentence
+          // offering the null cost the packs their entity glosses: lexical items overtook
+          // vector ones (bm25 94 to vector 83 against 93 to 80 without it) and answering nodes
+          // ranked deeper. The grammar offers the escape; the instructions stay as they were.
+          context: { type: ['string', 'null'] },
           aliases: { type: 'array', items: { type: 'string' } },
           is_speaker: { type: 'boolean' },
         },
@@ -118,7 +128,10 @@ const EntityExtractionOutputSchema = z.object({
     z.object({
       name: z.string(),
       type: z.string().optional(),
-      context: z.string().optional(),
+      // Nullable and optional mean different things here. Omitted is an entity the model named
+      // and said nothing about, which keeps its node; null is the model declining the entity,
+      // which drops the row.
+      context: z.string().nullish(),
       // Unknown rather than typed: a model that answers `aliases` with a bare string or
       // `is_speaker` with "yes" is wrong about one field, and rejecting the payload over it
       // would spend the one retry re-reading an episode the model already read correctly.
@@ -201,7 +214,8 @@ function absorb(existing: ExtractedEntity, addition: ExtractedEntity): Extracted
 /**
  * Undefined means the payload was not an extraction at all and the caller should retry with
  * it in the prompt. An empty array means the model read the episode and named nothing in it,
- * which is a real answer about an episode that mentions no entity.
+ * which is a real answer about an episode that mentions no entity, and it is also what a
+ * payload of nothing but declined entities comes back as.
  */
 export function parseExtractedEntities(
   raw: unknown,
@@ -214,6 +228,11 @@ export function parseExtractedEntities(
 
   const byIdentity = new Map<string, ExtractedEntity>();
   for (const candidate of parsed.data.entities) {
+    // The row, not the identity: a name one reading declined and another described is an entity
+    // the record names, and the reading that described it is the one that stands.
+    if (candidate.context === null) {
+      continue;
+    }
     const name = collapse(candidate.name);
     if (name.length === 0 || name.length > MAX_ENTITY_NAME_LENGTH) {
       continue;

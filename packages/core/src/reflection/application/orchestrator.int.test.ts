@@ -13,6 +13,8 @@ import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
 import { findEpisodeEntities } from '../../infrastructure/graph/entity-queries.js';
 import { loadEpisodeContext } from '../../infrastructure/graph/episode-context.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
+import { withCurrency } from '../../infrastructure/graph/read-modes.js';
+import { contentVectors } from '../../infrastructure/graph/seed-queries.js';
 import { findEpisodeCognitiveNodes } from '../../infrastructure/graph/semantic-relationship-queries.js';
 import {
   startNeo4jHarness,
@@ -21,6 +23,7 @@ import {
 } from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger } from '../../infrastructure/logging/logger.js';
 import { testGenerationProvider } from '../../infrastructure/providers/test-support/generation-provider.js';
+import type { Provider } from '../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { getLedgerEntry, isLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import { SessionManager } from '../../session/session-manager.js';
@@ -62,6 +65,12 @@ const RETRY_PAYLOAD = {
     'Keeping Neo4j means the entity graph stays queryable by traversal rather than by join',
   ],
   summary: 'deciding to keep Neo4j over Postgres for the reflection pipeline',
+};
+
+/** The capture class the generating stages decline: one short observation from the hook. */
+const PROGRESS_PAYLOAD = {
+  observations: ['[Explore] wrote the plan file'],
+  origin: { channel: 'hook' as const, event: 'subagent-stop' },
 };
 
 let harness: Neo4jHarness;
@@ -112,6 +121,32 @@ function orchestrator(stages: readonly ReflectionStage[]): ReflectionOrchestrato
         baseUrl: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
         embedModel: DEFAULTS.models.embed,
       }),
+      logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
+    },
+    stages,
+  );
+}
+
+/**
+ * The same orchestrator over a provider that throws on `generate`, so a stage that reaches for
+ * a model fails the run loudly rather than passing on an answer nobody asked for.
+ */
+function refusingOrchestrator(stages: readonly ReflectionStage[]): ReflectionOrchestrator {
+  const base = testGenerationProvider({
+    baseUrl: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
+    embedModel: DEFAULTS.models.embed,
+  });
+  const provider: Provider = {
+    embed: (texts) => base.embed(texts),
+    generate: () => {
+      throw new Error('the stage asked a model to read a capture it should have declined');
+    },
+  };
+  return new ReflectionOrchestrator(
+    {
+      driver: harness.driver,
+      db,
+      provider,
       logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     },
     stages,
@@ -306,5 +341,37 @@ describe('reflection orchestrator against a live graph', () => {
     expect(cognitiveAfterSecond.map((n) => n.id).sort()).toEqual(
       cognitiveAfterFirst.map((n) => n.id).sort(),
     );
+  }, 300_000);
+
+  it('stores a sub-floor subagent-stop capture with its embedding and asks no model to read it', async () => {
+    const stored = await handleReflection(intake, PROGRESS_PAYLOAD, {
+      identity: `${SESSION_IDENTITY}-progress`,
+    });
+    const { episode_id: progressEpisodeId } = stored;
+
+    const episode = await loadEpisodeContext(harness.driver, progressEpisodeId);
+    expect(episode?.originChannel).toBe('hook');
+    expect(episode?.originEvent).toBe('subagent-stop');
+    const vectors = await contentVectors(harness.driver, {
+      ids: [progressEpisodeId],
+      mode: withCurrency(),
+    });
+    expect(vectors[0]?.vector.length).toBe(DEFAULTS.models.embedDimension);
+
+    const run = await refusingOrchestrator([
+      new EntityExtractionStage(),
+      new CognitiveExtractionStage(),
+    ]).run(progressEpisodeId);
+
+    expect(run.summary.stages.map((record) => record.status)).toEqual(['skipped', 'skipped']);
+    for (const name of ['entities', 'cognitive']) {
+      const entry = getLedgerEntry(db, stageLedgerKey(PIPELINE_VERSION, name, progressEpisodeId));
+      expect(entry?.summary).toMatchObject({
+        status: 'skipped',
+        summary: expect.stringContaining('subagent-stop capture of') as unknown,
+      });
+    }
+    expect(await findEpisodeEntities(harness.driver, progressEpisodeId)).toEqual([]);
+    expect(await findEpisodeCognitiveNodes(harness.driver, progressEpisodeId)).toEqual([]);
   }, 300_000);
 });
