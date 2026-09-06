@@ -108,14 +108,24 @@ export function packText(
   return fallback;
 }
 
+/**
+ * `resetDeliverySuppression` rides along only for a SessionStart the harness itself marks as a
+ * compaction re-prime: the flag tells recall to forget what this session was already served,
+ * since the compaction wiped the model's context but nothing here wipes the substrate's record
+ * of it.
+ */
 export function recallArgs(
   query: string,
   maxTokens: number,
   sessionId: string | undefined,
+  resetDeliverySuppression = false,
 ): Record<string, unknown> {
   const args: Record<string, unknown> = { query, budget: { max_tokens: maxTokens } };
   if (sessionId !== undefined) {
     args.session_id = sessionId;
+  }
+  if (resetDeliverySuppression) {
+    args.reset_delivery_suppression = true;
   }
   return args;
 }

@@ -36,7 +36,11 @@ import { saveLastPack } from '../../infrastructure/sqlite/last-pack.js';
 import { recordPackMethodMetrics } from '../../infrastructure/sqlite/method-counters.js';
 import { recordRecallOutcome } from '../../infrastructure/sqlite/recall-cadence.js';
 import { recordCueOutcome } from '../../infrastructure/sqlite/recall-samples.js';
-import { readServedItems, recordServedItems } from '../../infrastructure/sqlite/served-items.js';
+import {
+  deleteServedItems,
+  readServedItems,
+  recordServedItems,
+} from '../../infrastructure/sqlite/served-items.js';
 import { redactPayload } from '../../redaction/deep-walk.js';
 import type { SessionManager } from '../../session/session-manager.js';
 import {
@@ -207,6 +211,15 @@ export async function handleRecall(
   // Session node, no INITIATED_BY, no WITHIN_WORKSPACE and no link in the FOLLOWS chain;
   // intake is what brings the node into existence, on the first thing worth remembering.
   const sessionId = deps.sessions.sessionIdFor(payload.session_id ?? options.identity);
+
+  // A compaction empties the caller's context without emptying this session's served-items
+  // ledger, so an unmarked recall right after one would keep withholding text the caller no
+  // longer holds. The caller names the epoch itself; recall has no other way to learn one
+  // happened. Scoped to this session only, and applied before the dedup read below runs, so
+  // this one call sees a session that has been served nothing yet.
+  if (payload.reset_delivery_suppression === true) {
+    deleteServedItems(deps.db, sessionId);
+  }
 
   // Fired here rather than awaited here: it depends only on `sessionId` and `mode`, so
   // starting it now lets it run alongside every stage below instead of adding its own

@@ -33,6 +33,14 @@ export const RecallInputSchema = z.strictObject({
   session_id: z.string().min(1).optional(),
   as_of: IsoTimestampSchema.optional(),
   knew_at: IsoTimestampSchema.optional(),
+  /**
+   * Forgets what this session was already served, before this call is answered. A compaction
+   * empties the caller's context without telling the substrate, so a caller marking a new
+   * epoch here is what lets recall stop withholding text the caller no longer holds. Receipt of
+   * a re-served item is never proof it landed back in context, only the conservative answer to
+   * not knowing.
+   */
+  reset_delivery_suppression: z.boolean().optional(),
 });
 
 export type RecallInput = z.infer<typeof RecallInputSchema>;

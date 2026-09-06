@@ -109,6 +109,7 @@ describe('tool definitions', () => {
       'session_id',
       'as_of',
       'knew_at',
+      'reset_delivery_suppression',
     ]);
     expect(recall?.inputSchema.additionalProperties).toBe(false);
 

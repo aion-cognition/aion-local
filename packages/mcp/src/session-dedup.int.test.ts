@@ -264,6 +264,51 @@ describe('a second recall inside one session', () => {
 });
 
 /**
+ * A compaction empties the caller's own context, but nothing about that event reaches this
+ * substrate on its own: the served-items ledger still lists everything the session was ever
+ * handed. `reset_delivery_suppression` is the marker a caller sends to say a new context epoch
+ * started, so recall forgets that session's ledger for the one call that asks.
+ */
+describe('a session whose context was reset by compaction', () => {
+  it('re-serves what it already held, then resumes suppressing on the next ordinary call', async () => {
+    const session = 'dedup-int-compaction-reset-session';
+    const first = await recall(session);
+    expect(episodeIdsOf(first).length).toBeGreaterThan(0);
+
+    const compacted = await handleRecall(
+      deps,
+      { query: QUERY, reset_delivery_suppression: true },
+      { identity: session, now: RECALLED_AT },
+    );
+    expect([...episodeIdsOf(compacted)].sort()).toEqual([...episodeIdsOf(first)].sort());
+    expect(compacted.metadata.suppressed_repeats).toBeUndefined();
+
+    // The reset clears one call's worth of suppression, not a standing mode: the pack it just
+    // served is recorded like any other, so the very next ordinary recall suppresses it again.
+    const resumed = await recall(session);
+    expect(resumed.episodes).toBeUndefined();
+    expect(resumed.metadata.suppressed_repeats).toBe(episodeIdsOf(compacted).length);
+  });
+
+  it('leaves a different session suppressing its own repeats, since the reset names one session only', async () => {
+    const target = 'dedup-int-compaction-target-session';
+    const bystander = 'dedup-int-compaction-bystander-session';
+    const bystanderFirst = await recall(bystander);
+    await recall(target);
+
+    await handleRecall(
+      deps,
+      { query: QUERY, reset_delivery_suppression: true },
+      { identity: target, now: RECALLED_AT },
+    );
+
+    const bystanderSecond = await recall(bystander);
+    expect(bystanderSecond.episodes).toBeUndefined();
+    expect(bystanderSecond.metadata.suppressed_repeats).toBe(episodeIdsOf(bystanderFirst).length);
+  });
+});
+
+/**
  * A memory the substrate corrected is not the memory the session was handed, whatever its id
  * says. The fingerprint is over what the item renders as, so a close moves it and the item is
  * told again, this time carrying the lineage marker the first serve could not have had.

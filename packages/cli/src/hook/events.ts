@@ -87,25 +87,36 @@ async function recallInto(
   header: string,
   query: string,
   budget: number,
+  resetDeliverySuppression = false,
 ): Promise<number> {
   const sessionId = stringField(context.input, 'session_id');
   const result = await withMcp(context, (client) =>
-    client.call(RECALL_TOOL, recallArgs(query, budget, sessionId)),
+    client.call(RECALL_TOOL, recallArgs(query, budget, sessionId, resetDeliverySuppression)),
   );
   emitRecall(context, event, header, result);
   return 0;
 }
 
+/**
+ * Claude Code fires SessionStart on a real start plus three re-primes: `/clear`, `/resume`,
+ * and a context compaction. Compaction is the one the model did not choose: its transcript is
+ * gone, but nothing here tells the substrate that, so the source the harness names is the only
+ * signal recall gets. Only that source resets delivery suppression; `/clear` and `/resume`
+ * still see the session's own prior turns and stay ordinary recalls.
+ */
 export function sessionStart(context: HookContext): Promise<number> {
+  const compacted = stringField(context.input, 'source') === 'compact';
   return recallInto(
     context,
     'SessionStart',
     SESSION_START_HEADER,
     GROUNDING_QUERY,
     SESSION_START_BUDGET,
+    compacted,
   );
 }
 
+/** Never resets suppression: a prompt mid-session is not a context wipe, whatever it asks. */
 export function promptSubmit(context: HookContext): Promise<number> {
   const prompt = stringField(context.input, 'prompt');
   if (prompt === undefined || prompt.trim().length < context.options.minChars) {

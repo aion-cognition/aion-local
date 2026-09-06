@@ -39,6 +39,11 @@ describe('RecallInputSchema valid fixtures', () => {
     };
     expect(RecallInputSchema.parse(input)).toEqual(input);
   });
+
+  it('accepts an explicit reset_delivery_suppression flag', () => {
+    const input = { query: 'q', reset_delivery_suppression: true };
+    expect(RecallInputSchema.parse(input)).toEqual(input);
+  });
 });
 
 describe('RecallInputSchema invalid shapes', () => {
