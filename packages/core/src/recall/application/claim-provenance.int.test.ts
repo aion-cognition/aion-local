@@ -32,6 +32,7 @@ import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite
 import { getExperienceByEpisode } from '../../infrastructure/sqlite/experience-archive.js';
 import { handleReflection } from '../../reflection/application/intake.js';
 import { LaneAssigner } from '../../reflection/application/lanes.js';
+import { repairStatedReferences } from '../../reflection/application/stated-references.js';
 import { SessionManager } from '../../session/session-manager.js';
 
 /**
@@ -618,4 +619,97 @@ it('retains accepted source references durably when graph attachment fails', asy
   });
   expect(rows.get(id)?.roots).toEqual([id]);
   expect(getExperienceByEpisode(db, id)?.payload.provenance?.derived_from).toEqual([ROOT_ID]);
+});
+
+/**
+ * The three shapes that let an accepted reference go missing: a source that points at an
+ * extracted claim rather than a capture, a chain that loops back on itself, and a re-push that
+ * adds references to content the archive already holds.
+ */
+describe('references the substrate has to keep hold of', () => {
+  it("retains an extracted source claim's capture root through a stated derivation", async () => {
+    const claimId = 'fix-review-source-claim';
+    await writeClaim(claimId, 'a claim extracted from the common root', OFF_TOPIC);
+    await upsertEdge(harness.driver, {
+      type: 'EXTRACTED_FROM',
+      sourceId: claimId,
+      targetId: ROOT_ID,
+      strength: 1,
+      confidence: 1,
+      signals: ['provenance'],
+      provenance: ['test'],
+      count: 0,
+      now: SEEDED_AT,
+    });
+    const echoId = await push('echo derived from a source claim', 'fix-review-claim-source', {
+      derived_from: [claimId],
+    });
+    const rows = await fetchClaimProvenance(harness.driver, {
+      ids: [claimId, echoId, ROOT_ID],
+      maxRoots: 3,
+      mode: withCurrency(RECALLED_AT),
+    });
+    expect(rows.get(claimId)?.roots).toEqual([ROOT_ID]);
+    expect(rows.get(echoId)).toMatchObject({ roots: [ROOT_ID], complete: true });
+  });
+
+  it('marks a source cycle incomplete rather than claiming an empty complete ancestry', async () => {
+    const a = await push('cycle alpha source', 'fix-review-cycle-a');
+    const b = await push('cycle beta source', 'fix-review-cycle-b', { derived_from: [a] });
+    await push('cycle alpha source', 'fix-review-cycle-a', { derived_from: [b] });
+    const rows = await fetchClaimProvenance(harness.driver, {
+      ids: [a],
+      maxRoots: 3,
+      mode: withCurrency(RECALLED_AT),
+    });
+    expect(rows.get(a)?.complete).toBe(false);
+  });
+
+  /**
+   * The repair the reflection worker runs on every integrate job, so an attachment the graph
+   * refused at intake lands without anyone asking for it.
+   */
+  it('re-states references the graph refused at intake, from the archive alone', async () => {
+    const spy = vi
+      .spyOn(claimQueries, 'resolveProvenanceTargets')
+      .mockRejectedValueOnce(new Error('injected temporary graph error'));
+    let id: string;
+    try {
+      id = await push('a source the graph refused once', 'review-repair', {
+        derived_from: [ROOT_ID],
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    const before = await fetchClaimProvenance(harness.driver, {
+      ids: [id],
+      maxRoots: 3,
+      mode: withCurrency(RECALLED_AT),
+    });
+    expect(before.get(id)?.roots).toEqual([id]);
+
+    await repairStatedReferences({ driver: harness.driver, db, logger }, id, SEEDED_AT);
+
+    const after = await fetchClaimProvenance(harness.driver, {
+      ids: [id],
+      maxRoots: 3,
+      mode: withCurrency(RECALLED_AT),
+    });
+    expect(after.get(id)?.roots).toEqual([ROOT_ID]);
+  });
+
+  it('archives references newly supplied on duplicate content before a failed attachment', async () => {
+    const text = 'same experience gains references later';
+    const identity = 'fix-review-durable-duplicate';
+    const id = await push(text, identity);
+    const spy = vi
+      .spyOn(claimQueries, 'resolveProvenanceTargets')
+      .mockRejectedValueOnce(new Error('injected temporary graph error'));
+    try {
+      expect(await push(text, identity, { derived_from: [ROOT_ID] })).toBe(id);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(getExperienceByEpisode(db, id)?.payload.provenance?.derived_from).toEqual([ROOT_ID]);
+  });
 });

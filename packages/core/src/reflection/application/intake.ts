@@ -3,9 +3,7 @@ import {
   ReflectionOriginSchema,
   type ReflectionOrigin,
   type ReflectionOutput,
-  type ReflectionProvenance,
 } from '@aion/protocol';
-import type { Driver } from 'neo4j-driver';
 
 import {
   storeExperience,
@@ -13,19 +11,15 @@ import {
   type StoredEpisode,
 } from './experience-store.js';
 import type { LaneAssigner, LaneDecision } from './lanes.js';
+import { attachProvenance, redactProvenance } from './stated-references.js';
 import { attachContentVectors } from './vectors.js';
-import {
-  resolveProvenanceTargets,
-  writeClaimProvenance,
-  type ConfirmationWrite,
-} from '../../infrastructure/graph/claim-provenance-queries.js';
-import { withCurrency } from '../../infrastructure/graph/read-modes.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   ARCHIVE_SCHEMA_VERSION,
   insertExperience,
+  mergeExperienceProvenance,
 } from '../../infrastructure/sqlite/experience-archive.js';
 import { countQueueJobs } from '../../infrastructure/sqlite/reflection-queue-admin.js';
 import {
@@ -255,118 +249,6 @@ async function attachVectors(
 }
 
 /**
- * The stated references with their free text redacted, ids untouched.
- *
- * `by` and `evidence` are arbitrary caller text that recall renders back, so they are the same
- * leak surface every other content field is and they go through the same detector. The ids are
- * references to nodes the substrate already holds, and rewriting one would point the reference
- * at nothing, so the walk is scoped to the two text fields rather than run over the block.
- */
-function redactProvenance(
-  deps: ProvenanceAttachDeps,
-  provenance: ReflectionProvenance | undefined,
-  entropyThreshold: number,
-): ReflectionProvenance | undefined {
-  const confirmations = provenance?.confirmations;
-  if (provenance === undefined || confirmations === undefined || confirmations.length === 0) {
-    return provenance;
-  }
-  const redacted = redactPayload(
-    confirmations.map((entry) => ({ by: entry.by, evidence: entry.evidence })),
-    entropyThreshold,
-  );
-  if (redacted.matches.length > 0) {
-    deps.logger.warn(
-      { matches: redacted.matches, count: redacted.matches.length },
-      'redacted secrets from stated confirmation evidence',
-    );
-  }
-  return {
-    ...provenance,
-    confirmations: confirmations.map((entry, index) => ({
-      ...entry,
-      by: redacted.value[index]?.by ?? entry.by,
-      evidence: redacted.value[index]?.evidence ?? entry.evidence,
-    })),
-  };
-}
-
-/** What `attachProvenance` needs, which is far less than the whole intake: replay reuses it. */
-export type ProvenanceAttachDeps = {
-  readonly driver: Driver;
-  readonly logger: Logger;
-};
-
-/**
- * The stated references as edges on the episode, once the targets are checked against the
- * substrate. An id nothing resolves is dropped and counted rather than written, so the graph
- * never holds lineage pointing at something that does not exist.
- *
- * Nothing here closes anything. A `supersedes` reference records that somebody holds the target
- * to be wrong; the target keeps its currency, and the supersession judge is still what closes
- * it. A confirmation is recorded the same way: it is evidence beside the claim, and no stage
- * waits on one.
- *
- * Best-effort, and last, like the vector attach: the experience is already durable and queued
- * by the time it runs, so a graph hiccup costs the episode its stated references and never the
- * caller's write. What makes that survivable rather than lossy is the archive: the references
- * are stored with the payload, so a re-push and `aion replay` both re-state them, and every
- * write here is idempotent, so re-stating changes nothing that already landed.
- */
-export async function attachProvenance(
-  deps: ProvenanceAttachDeps,
-  episodeId: string,
-  provenance: ReflectionProvenance | undefined,
-  now: Date,
-): Promise<void> {
-  const supersedes = provenance?.supersedes ?? [];
-  const derivedFrom = provenance?.derived_from ?? [];
-  const confirmations = provenance?.confirmations ?? [];
-  const named = [...supersedes, ...derivedFrom, ...confirmations.map((entry) => entry.target)];
-  if (named.length === 0) {
-    return;
-  }
-
-  try {
-    const resolved = await resolveProvenanceTargets(deps.driver, {
-      ids: named,
-      mode: withCurrency(now),
-    });
-    const unresolved = new Set(named.filter((id) => !resolved.has(id))).size;
-    const attached: ConfirmationWrite[] = confirmations
-      .filter((entry) => resolved.has(entry.target))
-      .map((entry) => ({
-        target: entry.target,
-        by: entry.by,
-        evidence: entry.evidence,
-        at: entry.occurred_at === undefined ? now : new Date(entry.occurred_at),
-      }));
-    await writeClaimProvenance(deps.driver, {
-      episodeId,
-      derivedFrom: derivedFrom.filter((id) => resolved.has(id)),
-      corrects: supersedes.filter((id) => resolved.has(id)),
-      confirmations: attached,
-      unresolved,
-      now,
-    });
-    if (unresolved > 0) {
-      deps.logger.warn(
-        { episodeId, named: named.length, unresolved },
-        'reflection named references the substrate does not hold; the lineage is marked incomplete',
-      );
-    }
-  } catch (err) {
-    // The archive holds them, so this is a retry away from landing rather than a loss. Error
-    // rather than warn: nothing sweeps for it, and the repair is a person or a client pushing
-    // the same experience again.
-    deps.logger.error(
-      { err, episodeId, named: named.length },
-      'stated references not attached; the archive holds them and a replay re-states them',
-    );
-  }
-}
-
-/**
  * The write path. Validate, redact, store the episode and its turns with a full bitemporal
  * stamp, link the backbone, archive the payload beside the integrate job in one commit, wake
  * the worker, then embed.
@@ -465,7 +347,23 @@ export async function handleReflection(
     }
   }
 
-  await attachProvenance(deps, stored.episodeId, statedReferences, now);
+  // A re-push conflicts on the idempotency key and inserts nothing, so references the first
+  // push did not carry reach the archive only through this. Nothing about the episode's identity
+  // moves: the references were never in the content hash.
+  if (!archived && statedReferences !== undefined) {
+    mergeExperienceProvenance(deps.db, stored.episodeId, statedReferences);
+  }
+  try {
+    await attachProvenance(deps, stored.episodeId, statedReferences, now);
+  } catch (err) {
+    // Not the caller's problem: the experience is durable and the archive holds the references,
+    // so the integrate job the queue is about to run re-states them and retries on its own
+    // backoff if the graph is still refusing.
+    deps.logger.error(
+      { err, episodeId: stored.episodeId },
+      'stated references not attached; the archive holds them and the integrate job re-states them',
+    );
+  }
   await attachVectors(deps, stored, sessionId);
 
   if (!stored.created) {

@@ -1,4 +1,4 @@
-import type { ReflectionOrigin } from '@aion/protocol';
+import type { ReflectionOrigin, ReflectionProvenance } from '@aion/protocol';
 import { createHash, randomUUID } from 'node:crypto';
 
 import type { SqliteHandle } from './database.js';
@@ -138,6 +138,56 @@ export function insertExperience(db: SqliteHandle, input: ExperienceArchiveInput
       JSON.stringify(input.payload),
     ) as { id: string } | undefined;
   return row !== undefined;
+}
+
+/** The union of two reference lists, order preserved and the first mention winning. */
+function mergeReferences(
+  held: readonly string[] | undefined,
+  added: readonly string[] | undefined,
+): readonly string[] {
+  return [...new Set([...(held ?? []), ...(added ?? [])])];
+}
+
+/**
+ * Stated references folded into a row the archive already holds.
+ *
+ * A re-push of the same experience carrying references it did not carry the first time conflicts
+ * on the idempotency key and inserts nothing, so without this the references live only in the
+ * graph write that may have just failed, and nothing can reconstruct a caller's assertion.
+ * References were never in the content hash, so folding them in leaves the episode's identity
+ * and every other column exactly as the first push wrote them.
+ *
+ * Additive and first-write-wins, matching the graph: a confirmation already recorded against a
+ * target is left alone and a genuinely new reference is appended. Returns whether the row moved.
+ */
+export function mergeExperienceProvenance(
+  db: SqliteHandle,
+  episodeId: string,
+  provenance: ReflectionProvenance,
+): boolean {
+  const row = getExperienceByEpisode(db, episodeId);
+  if (row === undefined) {
+    return false;
+  }
+  const held = row.payload.provenance;
+  const confirmed = new Set((held?.confirmations ?? []).map((entry) => entry.target));
+  const supersedes = mergeReferences(held?.supersedes, provenance.supersedes);
+  const derivedFrom = mergeReferences(held?.derived_from, provenance.derived_from);
+  const confirmations = [
+    ...(held?.confirmations ?? []),
+    ...(provenance.confirmations ?? []).filter((entry) => !confirmed.has(entry.target)),
+  ];
+  const merged: ReflectionProvenance = {
+    ...(supersedes.length === 0 ? {} : { supersedes: [...supersedes] }),
+    ...(derivedFrom.length === 0 ? {} : { derived_from: [...derivedFrom] }),
+    ...(confirmations.length === 0 ? {} : { confirmations }),
+  };
+  const payload = JSON.stringify({ ...row.payload, provenance: merged });
+  if (payload === JSON.stringify(row.payload)) {
+    return false;
+  }
+  db.prepare('UPDATE experience_archive SET payload_json = ? WHERE id = ?').run(payload, row.id);
+  return true;
 }
 
 /**

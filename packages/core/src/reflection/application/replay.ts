@@ -1,7 +1,7 @@
 import { ReflectionNotStoredError } from './errors.js';
 import { storeExperience, type ExperienceStoreDeps } from './experience-store.js';
-import { attachProvenance } from './intake.js';
 import type { ReflectionRun, ReflectionRunOptions } from './orchestrator.js';
+import { attachProvenance } from './stated-references.js';
 import { errorMessage } from '../../infrastructure/errors.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import { abortRequested } from '../../infrastructure/providers/deadline-signal.js';

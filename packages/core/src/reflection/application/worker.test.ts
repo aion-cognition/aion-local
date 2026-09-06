@@ -11,6 +11,10 @@ import { openLogger, type Logger } from '../../infrastructure/logging/logger.js'
 import type { Provider, Vector } from '../../infrastructure/providers/types.js';
 import { ReflectionQueueClaimant } from '../../infrastructure/sqlite/claim.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
+import {
+  ARCHIVE_SCHEMA_VERSION,
+  insertExperience,
+} from '../../infrastructure/sqlite/experience-archive.js';
 import { listEnrichmentLagSamplesMs } from '../../infrastructure/sqlite/lag-samples.js';
 import {
   enqueueReflectionJob,
@@ -19,6 +23,8 @@ import {
 import { FakeGraph } from '../test-support/fake-graph.fixture.js';
 
 const EPISODE_ID = 'episode-under-reflection';
+
+const NOW = '2026-06-01T09:00:00.000Z';
 
 /** Resolves once the runner has been entered `target` times, so no test waits on a clock. */
 class RunLatch {
@@ -508,5 +514,62 @@ describe('stale-claim reaper', () => {
     // Still parked on its backoff under this worker's own name: the sweep skipped it.
     expect(getReflectionJob(store.db, jobId)?.claimedBy).toBe(started.claimantId);
     expect(runner.episodeIds).toHaveLength(1);
+  });
+});
+
+/**
+ * References intake accepted and could not write live in the archive, and nothing outside the
+ * substrate is asked to notice. Every integrate job re-states whatever the archive holds, which
+ * is the same shape the pending-vector backfill uses.
+ */
+describe('the stated references an episode arrived with', () => {
+  function archiveWithSource(episodeId: string, sourceId: string): void {
+    insertExperience(store.db, {
+      schemaVersion: ARCHIVE_SCHEMA_VERSION,
+      pipelineVersion: 'test',
+      identity: 'worker-provenance',
+      sessionId: 'worker-provenance-session',
+      episodeId,
+      contentHash: `${episodeId}-hash`,
+      occurredAt: NOW,
+      archivedAt: NOW,
+      payload: { observations: ['a note'], provenance: { derived_from: [sourceId] } },
+    });
+  }
+
+  /**
+   * The fake models no reference read, so the job fails on it. That is the point: the statement
+   * was issued without anyone asking, and the failure returned the job to the queue instead of
+   * dropping the references the archive still holds.
+   */
+  it('are re-stated on the job and returned to the backoff when the graph refuses', async () => {
+    archiveWithSource(EPISODE_ID, 'some-source-episode');
+    const runner = new StubRunner();
+    const started = build(runner, { retryBaseMs: 60_000 });
+
+    const jobId = enqueue();
+    await started.start();
+    await started.whenIdle();
+
+    expect(
+      graph.statements.some((statement) => statement.cypher.includes('MATCH (n:AionNode { id:')),
+    ).toBe(true);
+    expect(runner.episodeIds).toEqual([]);
+    expect(getReflectionJob(store.db, jobId)?.claimedBy).toBe(started.claimantId);
+    expect(started.retrying).toBe(1);
+  });
+
+  it('leave an episode that stated none paying nothing but the archive read', async () => {
+    const runner = new StubRunner();
+    const started = build(runner);
+    await started.start();
+    enqueue();
+    signal();
+    await started.whenIdle();
+
+    expect(runner.episodeIds).toEqual([EPISODE_ID]);
+    expect(
+      graph.statements.filter((statement) => statement.cypher.includes('DERIVES_FROM')),
+    ).toEqual([]);
   });
 });
