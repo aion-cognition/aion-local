@@ -108,6 +108,53 @@ describe('SqliteStore', () => {
     reopened.close();
   });
 
+  it('adds usage error tracking to an existing API ledger without losing its rows', () => {
+    const legacy = new Database(dbPathWithDirectory());
+    legacy.exec(`CREATE TABLE api_calls (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      occurred_at TEXT NOT NULL,
+      model TEXT NOT NULL,
+      surface TEXT NOT NULL,
+      input_tokens INTEGER NOT NULL,
+      output_tokens INTEGER NOT NULL,
+      cache_creation_tokens INTEGER NOT NULL,
+      cache_read_tokens INTEGER NOT NULL,
+      duration_ms REAL NOT NULL,
+      attempts INTEGER NOT NULL
+    )`);
+    legacy
+      .prepare(
+        `INSERT INTO api_calls VALUES (
+      1, '2026-09-06T00:00:00.000Z', 'claude-haiku-4-5', 'cues', 123, 45, 0, 0, 500, 1
+    )`,
+      )
+      .run();
+    legacy.close();
+
+    for (let open = 0; open < 2; open += 1) {
+      const store = new SqliteStore({ filePath: dbPath });
+      try {
+        expect(store.db.prepare('SELECT * FROM api_calls').all()).toEqual([
+          {
+            id: 1,
+            occurred_at: '2026-09-06T00:00:00.000Z',
+            model: 'claude-haiku-4-5',
+            surface: 'cues',
+            input_tokens: 123,
+            output_tokens: 45,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            duration_ms: 500,
+            attempts: 1,
+            usage_error: null,
+          },
+        ]);
+      } finally {
+        store.close();
+      }
+    }
+  });
+
   it('re-opening the same file is idempotent: no errors, schema unchanged, data preserved', () => {
     const first = new SqliteStore({ filePath: dbPath });
     first.db.prepare("INSERT INTO meta (key, value) VALUES ('probe', 'one')").run();

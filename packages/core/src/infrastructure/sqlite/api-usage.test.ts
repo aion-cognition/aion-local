@@ -30,7 +30,7 @@ afterEach(() => {
 
 describe('the API call ledger', () => {
   it('receives keyed usage through the production router without metering local calls', async () => {
-    const recorder = new ApiUsageRecorder(store.db, { warn: vi.fn() });
+    const recorder = new ApiUsageRecorder(store.db, { warn: vi.fn(), error: vi.fn() });
     const fetchImpl = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -102,6 +102,7 @@ describe('the API call ledger', () => {
         cacheReadTokens: 1400,
         durationMs: 250,
         attempts: 4,
+        usageErrors: 0,
       },
     ]);
     expect(report.surfaces.map((row) => [row.key, row.calls])).toEqual([
@@ -112,11 +113,47 @@ describe('the API call ledger', () => {
 
   it('reports a storage failure without failing generation or paying for it again', () => {
     const warn = vi.fn();
-    const recorder = new ApiUsageRecorder(store.db, { warn });
+    const recorder = new ApiUsageRecorder(store.db, { warn, error: vi.fn() });
     store.close();
     expect(() => {
       recorder.recordApiCall(CALL);
     }).not.toThrow();
     expect(warn).toHaveBeenCalledOnce();
   });
+});
+
+it('records and error-logs invalid usage through the router without leaking response contents', async () => {
+  const error = vi.fn();
+  const recorder = new ApiUsageRecorder(store.db, { warn: vi.fn(), error });
+  const router = new ProviderRouter({
+    config: { ...DEFAULTS, anthropic: { ...DEFAULTS.anthropic, apiKey: 'test' } },
+    recordApiCall: recorder.recordApiCall,
+    fetchImpl: vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          content: [{ type: 'text', text: '{}' }],
+          usage: { input_tokens: 'private-response-value' },
+        }),
+      ),
+    ),
+  });
+  await expect(
+    router.forRole('reflect').generate({
+      model: 'local',
+      surface: 'cognitive',
+      messages: [{ role: 'user', content: 'private-input' }],
+      schema: { type: 'object' },
+    }),
+  ).resolves.toEqual({});
+  expect(listApiCalls(store.db)).toEqual([
+    expect.objectContaining({ usageError: 'invalid_usage' }),
+  ]);
+  expect(error).toHaveBeenCalledExactlyOnceWith(
+    { model: DEFAULTS.anthropic.model, surface: 'cognitive', usageError: 'invalid_usage' },
+    'API usage parse failed; billed token counts are unknown',
+  );
+  expect(JSON.stringify(error.mock.calls)).not.toContain('private-');
+  const report = summarizeApiCalls(store.db, new Date(0), new Date('2100-01-01'));
+  expect(report.days[0]?.usageErrors).toBe(1);
+  expect(report.surfaces[0]?.usageErrors).toBe(1);
 });

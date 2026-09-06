@@ -144,3 +144,39 @@ it('keeps a billed response even when the final constrained answer cannot parse'
   await expect(provider.generate(REQUEST)).rejects.toThrow('no complete JSON');
   expect(recordApiCall).toHaveBeenCalledOnce();
 });
+
+it.each([
+  undefined,
+  null,
+  {},
+  { input_tokens: 'changed', output_tokens: 2 },
+  { input_tokens: 1, output_tokens: -1 },
+  { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 'changed' },
+])('records an unknown-usage row when the billed usage cannot parse (%j)', async (usage) => {
+  const recordApiCall = vi.fn();
+  const provider = new AnthropicProvider({
+    apiKey: 'test',
+    model: 'claude-haiku-4-5',
+    recordApiCall,
+    fetchImpl: vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          content: [{ type: 'text', text: '{}' }],
+          usage,
+        }),
+      ),
+    ),
+  });
+  await expect(provider.generate(REQUEST)).resolves.toEqual({});
+  expect(recordApiCall).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      surface: 'cognitive',
+      usageError: 'invalid_usage',
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      attempts: 1,
+    }),
+  );
+});

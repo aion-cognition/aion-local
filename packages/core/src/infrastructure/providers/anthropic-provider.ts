@@ -275,7 +275,7 @@ async function askAnthropic(
   const fetchImpl = options.fetchImpl ?? fetch;
   const { system, rest } = splitSystem(req.messages);
   const instructions = viaPrompt ? joinInstructions(system, schemaInstruction(req.schema)) : system;
-  // Only static instructions precede the breakpoint. Changing records stay in user messages.
+  // In system_prompt mode a per-call schema also changes the cached prefix.
   const cachedInstructions =
     options.promptCache === false || instructions === undefined
       ? instructions
@@ -332,23 +332,30 @@ async function askAnthropic(
   const body = (await response.json()) as {
     content?: { type: string; text?: string }[];
     usage?: unknown;
-  };
-  const usage = USAGE_SCHEMA.safeParse(body.usage);
+  } | null;
+  const usage = USAGE_SCHEMA.safeParse(body?.usage);
   // A successful HTTP response is billed even if its text forces a constrained retry.
-  if (usage.success) {
-    options.recordApiCall?.({
-      occurredAt: new Date(started),
-      model: req.model,
-      surface: req.surface ?? 'unlabeled',
-      inputTokens: usage.data.input_tokens,
-      outputTokens: usage.data.output_tokens,
-      cacheCreationTokens: usage.data.cache_creation_input_tokens,
-      cacheReadTokens: usage.data.cache_read_input_tokens,
-      durationMs: Math.max(0, now() - started),
-      attempts,
-    });
-  }
-  const textBlock = body.content?.find((block) => block.type === 'text');
+  const counters = usage.success
+    ? usage.data
+    : {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+      };
+  options.recordApiCall?.({
+    occurredAt: new Date(started),
+    model: req.model,
+    surface: req.surface ?? 'unlabeled',
+    inputTokens: counters.input_tokens,
+    outputTokens: counters.output_tokens,
+    cacheCreationTokens: counters.cache_creation_input_tokens,
+    cacheReadTokens: counters.cache_read_input_tokens,
+    durationMs: Math.max(0, now() - started),
+    attempts,
+    ...(usage.success ? {} : { usageError: 'invalid_usage' }),
+  });
+  const textBlock = body?.content?.find((block) => block.type === 'text');
   if (textBlock?.text === undefined) {
     throw new AnthropicResponseError('missing text content');
   }

@@ -67,3 +67,25 @@ it('rejects zero, fractional, missing, and nonnumeric day counts', async () => {
   }
   expect(await runCosts(['--days'], () => undefined)).toBe(1);
 });
+
+it('marks unknown charges instead of presenting invalid usage as zero spend', async () => {
+  appendApiCall(store.db, {
+    occurredAt: new Date(),
+    model: 'claude-haiku-4-5',
+    surface: 'cognitive',
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheCreationTokens: 0,
+    cacheReadTokens: 0,
+    durationMs: 1,
+    attempts: 1,
+    usageError: 'invalid_usage',
+  });
+  const lines: string[] = [];
+  await runCosts([], (line) => lines.push(line));
+  const output = lines.join('\n');
+  expect(output).toContain('usage-errors');
+  expect(output).toContain('estimated total: $0.000000 + unknown charges (1 usage parse failures)');
+  expect(output).toContain('cache effectiveness unavailable: usage parse failures');
+  expect(output).not.toContain('no metered API calls');
+});

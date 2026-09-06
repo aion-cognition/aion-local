@@ -33,7 +33,8 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     cache_creation_tokens INTEGER NOT NULL CHECK (cache_creation_tokens >= 0),
     cache_read_tokens INTEGER NOT NULL CHECK (cache_read_tokens >= 0),
     duration_ms REAL NOT NULL CHECK (duration_ms >= 0),
-    attempts INTEGER NOT NULL CHECK (attempts > 0)
+    attempts INTEGER NOT NULL CHECK (attempts > 0),
+    usage_error TEXT
   )`,
   `CREATE TABLE IF NOT EXISTS ops_ledger (
     key TEXT PRIMARY KEY,
@@ -285,6 +286,7 @@ type ColumnAddition = {
  * what makes a fresh file and a retrofitted one the same table.
  */
 const COLUMN_ADDITIONS: readonly ColumnAddition[] = [
+  { table: 'api_calls', column: 'usage_error', definition: 'TEXT' },
   { table: 'reflection_queue', column: 'lane', definition: "TEXT NOT NULL DEFAULT 'interactive'" },
   { table: 'reflection_queue', column: 'session_id', definition: 'TEXT' },
   { table: 'reflection_queue', column: 'lane_seq', definition: 'INTEGER NOT NULL DEFAULT 0' },

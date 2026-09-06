@@ -24,7 +24,7 @@ function parseDays(argv: readonly string[]): number {
 
 function renderGroups(title: string, rows: readonly ApiUsageGroup[], write: Writer): void {
   write(title);
-  write('group  model  calls  input  output  cache-write  cache-read  estimated USD');
+  write('group  model  calls  input  output  cache-write  cache-read  usage-errors  estimated USD');
   for (const row of rows) {
     const cost = estimateApiCost(row);
     write(
@@ -36,7 +36,9 @@ function renderGroups(title: string, rows: readonly ApiUsageGroup[], write: Writ
         row.outputTokens,
         row.cacheCreationTokens,
         row.cacheReadTokens,
-        cost === undefined ? 'unpriced' : `$${cost.toFixed(6)}`,
+        row.usageErrors,
+        (cost === undefined ? 'unpriced' : `$${cost.toFixed(6)}`) +
+          (row.usageErrors > 0 ? ' + unknown' : ''),
       ].join('  '),
     );
   }
@@ -67,6 +69,7 @@ export function runCosts(
       let priced = 0;
       let reads = 0;
       let input = 0;
+      let usageErrors = 0;
       const unpriced = new Set<string>();
       for (const row of report.days) {
         const cost = estimateApiCost(row);
@@ -76,13 +79,18 @@ export function runCosts(
           priced += cost;
         }
         reads += row.cacheReadTokens;
+        usageErrors += row.usageErrors;
         input += row.inputTokens + row.cacheCreationTokens + row.cacheReadTokens;
       }
+      const unknownCharges =
+        usageErrors === 0 ? '' : ` + unknown charges (${String(usageErrors)} usage parse failures)`;
       write(
-        `estimated total: $${priced.toFixed(6)}${unpriced.size === 0 ? '' : ` + unpriced: ${[...unpriced].join(', ')}`}`,
+        `estimated total: $${priced.toFixed(6)}${unpriced.size === 0 ? '' : ` + unpriced: ${[...unpriced].join(', ')}`}${unknownCharges}`,
       );
       write(
-        `cache effectiveness: ${String(reads)} / ${String(input)} input tokens (${(input === 0 ? 0 : (reads / input) * 100).toFixed(1)}%)`,
+        usageErrors > 0
+          ? 'cache effectiveness unavailable: usage parse failures'
+          : `cache effectiveness: ${String(reads)} / ${String(input)} input tokens (${(input === 0 ? 0 : (reads / input) * 100).toFixed(1)}%)`,
       );
       return Promise.resolve(0);
     },

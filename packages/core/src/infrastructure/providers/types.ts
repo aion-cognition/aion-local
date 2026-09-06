@@ -44,6 +44,8 @@ export type ApiCall = {
   readonly cacheReadTokens: number;
   readonly durationMs: number;
   readonly attempts: number;
+  /** Token counters are placeholders when the billed response has no valid usage block. */
+  readonly usageError?: 'invalid_usage';
 };
 
 /**

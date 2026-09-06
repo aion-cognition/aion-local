@@ -9,13 +9,18 @@ flags.
 
 Run `aion costs [--days N]` to group billed API responses by UTC day and calling surface.
 The default window includes today and the preceding six days. Each row reports the model,
-call count, input and output tokens, cache-write and cache-read tokens, and estimated dollars.
+call count, input and output tokens, cache-write and cache-read tokens, usage-error count, and estimated dollars.
 Unknown models are marked `unpriced`; their charges are not silently counted as zero.
 
-The append-only SQLite `api_calls` ledger records each successful HTTP response carrying
-usage, including an answer that fails JSON parsing and needs another paid call. Failed HTTP
-requests have no usage row. `unlabeled` exposes callers that omit a surface label. A failed
-ledger write logs `API usage write failed` without retrying the paid generation.
+The append-only SQLite `api_calls` ledger records successful HTTP responses, including answers
+whose text fails JSON parsing and needs another paid call. Failed HTTP requests have no usage
+row. `unlabeled` exposes callers that omit a surface label.
+
+Missing or invalid usage produces a row with zero placeholder counters and `usage_error=invalid_usage`.
+The error log says `API usage parse failed; billed token counts are unknown` without including response content.
+`aion costs` counts these failures, adds `unknown charges` to its known subtotal, and marks cache effectiveness unavailable.
+
+A failed ledger write logs `API usage write failed` without retrying the paid generation.
 
 Estimates use the provider price table dated 2026-09-06. For Haiku 4.5, rates per million
 tokens are $1 input, $5 output, $1.25 cache write, and $0.10 cache read. The cache-effectiveness
@@ -23,7 +28,7 @@ line divides read tokens by all input tokens, including newly written and uncach
 
 | Control | Default | Effect |
 |---|---|---|
-| `AION_ANTHROPIC_PROMPT_CACHE` | `true` | Marks the static system prefix for five-minute provider caching. `false` sends the original string format. |
+| `AION_ANTHROPIC_PROMPT_CACHE` | `true` | Marks the system prefix for five-minute provider caching, including the schema in `system_prompt` mode. Inert on every production surface today under shipped prompts and defaults. `false` sends the original string format. |
 | `AION_CUE_CACHE_TTL_MINUTES` | `30` | Reuses successful cue results in this process for identical generation requests. `0` disables it. The cache holds at most 256 entries. |
 | `AION_CUE_PROVIDER` | `auto` | `ollama` removes cue generation API charges while reflection remains keyed. See [the cue pin measurement limits](degradation.md#cue-extraction-pinned-local). |
 
@@ -31,6 +36,14 @@ The extraction floor, `AION_REFLECTION_MIN_EXTRACTION_CHARS`, is owned by the se
 hardening change and is not present on this branch. `AION_NARRATIVE_MIN_NEW_EPISODES` is
 deferred and is not a supported setting. Neither should be set before its implementation lands.
 Bulk batching also remains deferred until the ledger measures its share of spend.
+
+In `system_prompt` mode, per-call schemas break the static-prefix premise even when only user messages otherwise change.
+Semantic relationships, the tier-3 advisor, and cognitive restatement build schemas per call;
+entity merge judgment and consolidation synthesis accept caller-supplied schemas.
+Changing those schemas changes the cached block and can prevent reuse.
+
+Eligible prefixes that change can incur cache-write charges without subsequent savings.
+Recheck reuse when changing prompts, schemas, or models; the switch alone does not guarantee savings.
 
 ### Prompt cache measurements
 
@@ -43,8 +56,10 @@ prompts and schemas. Each surface made two identical requests per schema-deliver
 | Entities | 364 / 569 | 0 of 2 / 0 of 2 |
 | Cognitive | 756 / 1005 | 0 of 2 / 0 of 2 |
 
-These total inputs are below Haiku 4.5's 4096-token minimum cacheable prefix, so these samples
-saved nothing. Production prompts were not padded. [Anthropic's cache documentation](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
+Prompt caching is inert on every production surface today under shipped Haiku 4.5 prompts and defaults.
+The largest instruction constant is roughly 1300 tokens, below the 4096-token minimum cacheable prefix;
+the three live samples above confirm zero reuse for their requests.
+Production prompts were not padded. [Anthropic's cache documentation](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
 defines the minimum and token accounting.
 
 A separate long-prefix control verified both modes: second requests read 7865 tokens in

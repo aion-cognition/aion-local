@@ -7,8 +7,8 @@ export function appendApiCall(db: SqliteHandle, call: ApiCall): void {
   db.prepare(
     `INSERT INTO api_calls (
     occurred_at, model, surface, input_tokens, output_tokens, cache_creation_tokens,
-    cache_read_tokens, duration_ms, attempts
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    cache_read_tokens, duration_ms, attempts, usage_error
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     call.occurredAt.toISOString(),
     call.model,
@@ -19,21 +19,28 @@ export function appendApiCall(db: SqliteHandle, call: ApiCall): void {
     call.cacheReadTokens,
     call.durationMs,
     call.attempts,
+    call.usageError ?? null,
   );
 }
 
 /** Storage failures must be visible without turning a paid response into another paid retry. */
 export class ApiUsageRecorder {
   readonly #db: SqliteHandle;
-  readonly #logger: Pick<Logger, 'warn'>;
+  readonly #logger: Pick<Logger, 'warn' | 'error'>;
 
-  constructor(db: SqliteHandle, logger: Pick<Logger, 'warn'>) {
+  constructor(db: SqliteHandle, logger: Pick<Logger, 'warn' | 'error'>) {
     this.#db = db;
     this.#logger = logger;
   }
 
   readonly recordApiCall = (call: ApiCall): void => {
     try {
+      if (call.usageError !== undefined) {
+        this.#logger.error(
+          { model: call.model, surface: call.surface, usageError: call.usageError },
+          'API usage parse failed; billed token counts are unknown',
+        );
+      }
       appendApiCall(this.#db, call);
     } catch (err) {
       this.#logger.warn(
@@ -46,7 +53,7 @@ export class ApiUsageRecorder {
 
 const TOKEN_COLUMNS = `input_tokens AS inputTokens, output_tokens AS outputTokens,
   cache_creation_tokens AS cacheCreationTokens, cache_read_tokens AS cacheReadTokens,
-  duration_ms AS durationMs, attempts`;
+  duration_ms AS durationMs, attempts, usage_error AS usageError`;
 
 /** Ordered by insertion so identical timestamps still identify distinct requests. */
 export function listApiCalls(db: SqliteHandle): (ApiCall & { readonly id: number })[] {
@@ -55,11 +62,16 @@ export function listApiCalls(db: SqliteHandle): (ApiCall & { readonly id: number
       `SELECT id, occurred_at AS occurredAt, model, surface,
     ${TOKEN_COLUMNS} FROM api_calls ORDER BY id`,
     )
-    .all() as (Omit<ApiCall, 'occurredAt'> & {
+    .all() as (Omit<ApiCall, 'occurredAt' | 'usageError'> & {
     id: number;
     occurredAt: string;
+    usageError: NonNullable<ApiCall['usageError']> | null;
   })[];
-  return rows.map((row) => ({ ...row, occurredAt: new Date(row.occurredAt) }));
+  return rows.map(({ usageError, ...row }) => ({
+    ...row,
+    occurredAt: new Date(row.occurredAt),
+    ...(usageError === null ? {} : { usageError }),
+  }));
 }
 
 export type ApiUsageGroup = {
@@ -72,6 +84,7 @@ export type ApiUsageGroup = {
   readonly cacheReadTokens: number;
   readonly durationMs: number;
   readonly attempts: number;
+  readonly usageErrors: number;
 };
 
 export type ApiUsageSummary = {
@@ -91,7 +104,8 @@ function groupedUsage(
       `SELECT ${key} AS key, model, count(*) AS calls,
     sum(input_tokens) AS inputTokens, sum(output_tokens) AS outputTokens,
     sum(cache_creation_tokens) AS cacheCreationTokens, sum(cache_read_tokens) AS cacheReadTokens,
-    sum(duration_ms) AS durationMs, sum(attempts) AS attempts
+    sum(duration_ms) AS durationMs, sum(attempts) AS attempts,
+    sum(CASE WHEN usage_error IS NOT NULL THEN 1 ELSE 0 END) AS usageErrors
     FROM api_calls WHERE occurred_at >= ? AND occurred_at < ?
     GROUP BY ${key}, model ORDER BY key, model`,
     )
