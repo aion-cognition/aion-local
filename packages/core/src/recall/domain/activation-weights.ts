@@ -97,6 +97,10 @@ export const ACTIVATION_WEIGHTS: Record<RelationshipType, number> = {
   // old truth recallable, but the path is deliberately weak, and the node at the far end is
   // down-weighted again by SUPERSEDED_ACTIVATION_WEIGHT.
   SUPERSEDES: 0.4,
+
+  // A stated correction, which nothing has judged yet. Held at the lineage tier for the same
+  // reason: the path exists so a reader can reach the claim, not so it can pull the spread.
+  CORRECTS: 0.4,
 };
 
 for (const type of MODEL_INFERRED_TYPES) {

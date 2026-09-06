@@ -9,6 +9,7 @@ describe('protected relationship set', () => {
   it('names every type plasticity leaves alone', () => {
     expect([...PROTECTED_RELATIONSHIP_TYPES].sort()).toEqual(
       [
+        'CORRECTS',
         'DERIVES_FROM',
         'EXTRACTED_FROM',
         'FOLLOWS',

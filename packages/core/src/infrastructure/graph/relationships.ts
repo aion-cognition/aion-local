@@ -38,6 +38,9 @@ export const DIRECTED_RELATIONSHIP_TYPES = [
   'EXTRACTED_FROM',
   'FEATURED_IN',
   'SUPERSEDES',
+  // What a caller stated outright: this experience corrects that node. It is a record of the
+  // claim and never the close. `SUPERSEDES` is the close, and only the judge writes one.
+  'CORRECTS',
 ] as const;
 
 export type UndirectedRelationshipType = (typeof UNDIRECTED_RELATIONSHIP_TYPES)[number];

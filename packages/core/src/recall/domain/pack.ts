@@ -20,7 +20,15 @@ import {
   type BucketCaps,
   type PackBucket,
 } from './pack-buckets.js';
-import { renderBucket, renderItem, toPackItem, type PackEntry } from './pack-item.js';
+import {
+  renderBucket,
+  renderItem,
+  toPackItem,
+  type ItemAnnotations,
+  type PackEntry,
+} from './pack-item.js';
+import { emptyPackBody } from './pack-notes.js';
+import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 import { hashContent } from '../../reflection/domain/content.js';
 
 /**
@@ -49,65 +57,7 @@ function episodeKey(item: FusedItem): string {
  */
 export const CHARS_PER_TOKEN = 4;
 
-const PACK_HEADING = '# Memory';
-
-const EMPTY_PACK_BODY = 'No memories matched this query.';
-
-/**
- * The three other ways a pack empties, all of them the wire cutting matches the substrate did
- * hold. Saying "no memories matched" for any of them would be false, and it is the one sentence
- * a reader would act on by asking again.
- */
-const EMPTY_AFTER_REPEATS_BODY = 'This session already holds every memory this query matched.';
-
-const EMPTY_AFTER_OWN_BODY = "Every memory this query matched came from this session's own record.";
-
-const EMPTY_AFTER_BOTH_BODY =
-  'This session already holds every memory this query matched, from earlier recalls and from ' +
-  'its own record.';
-
-function emptyOpening(repeats: number, own: number): string {
-  if (repeats > 0 && own > 0) {
-    return EMPTY_AFTER_BOTH_BODY;
-  }
-  if (own > 0) {
-    return EMPTY_AFTER_OWN_BODY;
-  }
-  if (repeats > 0) {
-    return EMPTY_AFTER_REPEATS_BODY;
-  }
-  return EMPTY_PACK_BODY;
-}
-
-/**
- * What an empty pack says about itself, in the rendered text rather than only in metadata.
- *
- * The sentence alone reads the same for three states that call for three different responses:
- * a substrate with nothing in it, a floor that judged real candidates and refused all of them,
- * and a set of candidates nothing could measure at all. The counts are in metadata already;
- * this is the copy that reaches a client reading only the rendered block, which is also the
- * client most likely to read a note about a truncated spread as the reason the pack is empty.
- */
-function emptyPackBody(report: AdmissionReport, repeats: number, own: number): string {
-  const opening = emptyOpening(repeats, own);
-  if (report.considered === 0) {
-    return `${opening} Nothing reached the admission gate.`;
-  }
-
-  const clauses: string[] = [];
-  if (report.droppedBelowFloor > 0) {
-    clauses.push(
-      `${String(report.droppedBelowFloor)} measured under the ${report.policy.vectorFloor.toFixed(2)} floor`,
-    );
-  }
-  if (report.droppedUnmeasured > 0) {
-    clauses.push(`${String(report.droppedUnmeasured)} that nothing measured against it`);
-  }
-  if (clauses.length === 0) {
-    return opening;
-  }
-  return `${opening} Of ${String(report.considered)} candidates: ${clauses.join(', ')}.`;
-}
+export const PACK_HEADING = '# Memory';
 
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN);
@@ -154,13 +104,25 @@ export type AssemblePackInput = {
    */
   readonly intentions?: readonly FusedItem[];
   /**
-   * The current claim in a raw turn's subject family, keyed by the turn's node id. Only the
-   * resonant bucket reads it: a turn the query matched directly arrives beside whatever else
-   * the query matched, while a turn resonance surfaced alone carries a stated belief with
-   * nothing around it, and a turn is never distilled into a claim, so supersession never
-   * judges one.
+   * The current claim in a raw turn's subject family, keyed by the turn's node id. Every bucket
+   * reads it. A turn is captured text, never distilled into a claim, so supersession never
+   * judges one and a belief stated in a turn answers as current however often it was corrected
+   * since. That holds wherever the turn surfaced, so the annotation belongs on the turn rather
+   * than on the way it arrived.
    */
   readonly relatedClaims?: ReadonlyMap<string, RelatedClaim>;
+  /**
+   * What each candidate descends from and what the substrate holds about it, keyed by node id
+   * (`claim-provenance-queries.ts`). Absent for a caller that assembles a pack by hand and for
+   * a run whose provenance read failed.
+   */
+  readonly provenance?: ReadonlyMap<string, ItemProvenance>;
+  /**
+   * A read pinned to a past vantage point. Superseded material keeps its place in the ranking
+   * there and carries no unresolved marker: inspecting what the substrate held then is the
+   * question, and preferring a successor written afterwards would answer a different one.
+   */
+  readonly historical?: boolean;
   /**
    * Ids this session was already served, unchanged since (`session-dedup.ts`). They are cut
    * here rather than upstream, so the admitted set that reaches cognition is the same set it
@@ -243,6 +205,8 @@ function select(input: AssemblePackInput, note: string | undefined): Selection {
   const packedEpisodes = new Set<string>();
   const packedIds = new Set<string>();
   const packedContent = new Set<string>();
+  /** First packed item to claim each root, which is what a later sibling points back at. */
+  const rootOwners = new Map<string, string>();
   // The note is charged with its own blank-line separator: it is text the agent pays for, and
   // a caller that asked for a small budget should not lose an item to it silently.
   let tokens =
@@ -253,6 +217,38 @@ function select(input: AssemblePackInput, note: string | undefined): Selection {
   /** Cut at the wire by either subtraction: already in this session's context, either way. */
   function withheld(id: string): boolean {
     return input.suppressed?.has(id) === true || input.suppressedOwn?.has(id) === true;
+  }
+
+  /** Roots this item has beyond itself, in the order the provenance read returned them. */
+  function rootsOf(item: FusedItem): readonly string[] {
+    return (input.provenance?.get(item.id)?.roots ?? []).filter((root) => root !== item.id);
+  }
+
+  /**
+   * Everything the item carries from outside itself, assembled before the cost is measured so
+   * an annotation is charged to the item that prints it rather than to the pack's last slot.
+   */
+  function annotationsFor(item: FusedItem, roots: readonly string[]): ItemAnnotations {
+    const provenance = input.provenance?.get(item.id);
+    const claim = input.relatedClaims?.get(item.id);
+    const sharedWith = new Set<string>();
+    for (const root of roots) {
+      const owner = rootOwners.get(root);
+      if (owner !== undefined) {
+        sharedWith.add(owner);
+      }
+    }
+    const successorAbsent =
+      input.historical !== true &&
+      item.currency === 'superseded' &&
+      item.supersededBy !== undefined &&
+      !packedIds.has(item.supersededBy.id);
+    return {
+      ...(claim === undefined ? {} : { relatedClaim: claim }),
+      ...(provenance === undefined ? {} : { provenance }),
+      ...(sharedWith.size === 0 ? {} : { sharedWith: [...sharedWith] }),
+      ...(successorAbsent ? { successorAbsent: true } : {}),
+    };
   }
 
   /** Places the item in the named bucket when the cap and the budget still leave room for it. */
@@ -266,10 +262,11 @@ function select(input: AssemblePackInput, note: string | undefined): Selection {
       return;
     }
 
-    // The annotation is charged to the item that carries it, so a claim long enough to cost
-    // the pack another memory costs this one its own slot instead.
-    const claim = bucket === 'resonant' ? input.relatedClaims?.get(item.id) : undefined;
-    const entry: PackEntry = { item: toPackItem(item, ranked + 1, claim), gloss };
+    const roots = rootsOf(item);
+    const entry: PackEntry = {
+      item: toPackItem(item, ranked + 1, annotationsFor(item, roots)),
+      gloss,
+    };
     const cost =
       estimateTokens(renderItem(entry)) +
       (held.length === 0 ? estimateTokens(BUCKET_HEADINGS[bucket]) : 0);
@@ -284,6 +281,13 @@ function select(input: AssemblePackInput, note: string | undefined): Selection {
     }
     packedIds.add(item.id);
     packedContent.add(hashContent(item.content));
+    // Claimed only once the item is actually in the pack: an item the budget cut is not a
+    // witness anyone read, so it must not make the next item look like a second one.
+    for (const root of roots) {
+      if (!rootOwners.has(root)) {
+        rootOwners.set(root, item.id);
+      }
+    }
     held.push(entry);
     selection.set(bucket, held);
     if (key !== undefined) {
@@ -291,24 +295,45 @@ function select(input: AssemblePackInput, note: string | undefined): Selection {
     }
   }
 
-  for (const item of input.items) {
+  /**
+   * Superseded material goes last within the ranked pass, so a current answer takes the budget
+   * first and the pack that holds both prefers the successor. It is a discount and not a gate:
+   * whatever the budget still has room for is served, and a historical read skips the deferral
+   * entirely, because what the substrate held then is the question there.
+   */
+  function deferred(item: FusedItem): boolean {
+    return input.historical !== true && item.currency === 'superseded';
+  }
+
+  function place(item: FusedItem): void {
     if (withheld(item.id)) {
-      continue;
+      return;
     }
     const bucket = bucketFor(item.labels);
     if (bucket === undefined) {
-      continue;
+      return;
     }
     if (bucket === 'facts' && input.restating?.has(item.id) === true) {
-      continue;
+      return;
     }
 
     const gloss = bucket === 'facts' && item.labels.includes(GLOSS_LABEL);
     if (gloss && glosses >= (input.entityGlossCap ?? Number.POSITIVE_INFINITY)) {
-      continue;
+      return;
     }
 
     accept(item, bucket, gloss);
+  }
+
+  for (const item of input.items) {
+    if (!deferred(item)) {
+      place(item);
+    }
+  }
+  for (const item of input.items) {
+    if (deferred(item)) {
+      place(item);
+    }
   }
 
   // Both stages below run beside fusion rather than inside it, so their hits are where a pack

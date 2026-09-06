@@ -1,7 +1,16 @@
-import type { AdmissionRule, MemoryPackItem, RelatedClaim } from '@aion/protocol';
+import type {
+  AdmissionRule,
+  Derivation,
+  MemoryPackItem,
+  RelatedClaim,
+  Standing,
+  StandingKind,
+} from '@aion/protocol';
 
 import type { FusedItem } from './fusion.js';
 import { BUCKET_HEADINGS, type PackBucket } from './pack-buckets.js';
+import { standingFor } from './standing.js';
+import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 
 /**
  * One item as the pack holds it and as the agent reads it: the wire shape, and the two or
@@ -66,11 +75,51 @@ function renderAdmission(item: MemoryPackItem): string {
   return `${RULE_PHRASES[admitted.rule]}: ${admitted.evidence.join(' + ')}`;
 }
 
+/**
+ * Everything about an item the pack learned from somewhere other than the item itself: the
+ * current claim in its subject family, its source record, the other pack items that share one
+ * of its roots, and whether the pack holds what replaced it.
+ */
+export type ItemAnnotations = {
+  readonly relatedClaim?: RelatedClaim;
+  readonly provenance?: ItemProvenance;
+  /** Ids of other items in this pack descending from one of the same roots. */
+  readonly sharedWith?: readonly string[];
+  /** Set when the item is superseded and its successor is nowhere in this pack. */
+  readonly successorAbsent?: boolean;
+};
+
+/**
+ * What the item descends from, with its own id taken out: a capture that names no source
+ * stands as its own root, and printing "derives from itself" says nothing. What survives the
+ * filter is a real ancestor, and `shared_with` is what stops two of them reading as two
+ * independent witnesses.
+ */
+function derivationOf(itemId: string, annotations: ItemAnnotations): Derivation | undefined {
+  const { provenance } = annotations;
+  if (provenance === undefined) {
+    return undefined;
+  }
+  const roots = provenance.roots.filter((root) => root !== itemId);
+  if (roots.length === 0) {
+    return undefined;
+  }
+  const shared = annotations.sharedWith ?? [];
+  return {
+    roots,
+    complete: provenance.complete,
+    ...(shared.length === 0 ? {} : { shared_with: [...shared] }),
+  };
+}
+
 export function toPackItem(
   item: FusedItem,
   rank: number,
-  relatedClaim?: RelatedClaim,
+  annotations: ItemAnnotations = {},
 ): MemoryPackItem {
+  const { relatedClaim } = annotations;
+  const derivation = derivationOf(item.id, annotations);
+  const correction = annotations.provenance?.claimedCorrection;
   return {
     id: item.id,
     content: item.content,
@@ -107,12 +156,60 @@ export function toPackItem(
             text: capText(relatedClaim.text, MAX_RELATED_CLAIM_CHARS),
           },
         }),
+    standing: standingFor(item, annotations.provenance),
+    ...(derivation === undefined ? {} : { derivation }),
+    ...(correction === undefined
+      ? {}
+      : { claimed_correction: { by: correction.by, at: correction.at.toISOString() } }),
+    ...(annotations.successorAbsent === true ? { successor_absent: true as const } : {}),
   };
 }
 
 /** Calendar day only: the age is the point, and a timestamp to the millisecond hides it. */
 function renderDay(timestamp: string): string {
   return timestamp.slice(0, 'YYYY-MM-DD'.length);
+}
+
+/** How each kind of statement names itself, so a quotation never prints like a conclusion. */
+const STANDING_PHRASES: Readonly<Record<StandingKind, string>> = {
+  recorded_utterance: 'recorded utterance',
+  recorded_session: 'recorded session',
+  recorded_decision: 'decision recorded',
+  extracted_interpretation: 'extracted interpretation',
+  synthesized: 'synthesized narrative',
+  stated_description: 'stated description',
+};
+
+/**
+ * The kind, and what the substrate can say about who stands behind it. A recorded role prints
+ * verbatim and prints beside "authorship unknown", because the role is a label the calling
+ * client set and agent-to-agent traffic arrives under `user`. An attributed item says nothing
+ * here: its confirmation line below names the confirmer and cites the evidence.
+ */
+function renderStanding(standing: Standing): string {
+  const kind = STANDING_PHRASES[standing.kind];
+  if (standing.attribution === 'attributed') {
+    return kind;
+  }
+  if (standing.recorded_role === undefined) {
+    return `${kind}, authorship unknown`;
+  }
+  return `${kind}, recorded role ${standing.recorded_role}, authorship unknown`;
+}
+
+/**
+ * The source line. `shared_with` is the part a reader cannot reconstruct: two items pulled out
+ * of one capture say the same thing once, and a pack that prints both without saying so lets
+ * one source count as two.
+ */
+function renderDerivation(derivation: Derivation): string {
+  const cut = derivation.complete ? '' : ' (lineage incomplete)';
+  const shared =
+    derivation.shared_with === undefined
+      ? ''
+      : `\n   shares this origin with ${derivation.shared_with.join(', ')}:` +
+        ' not independent corroboration';
+  return `\n   derives from ${derivation.roots.join(', ')}${cut}${shared}`;
 }
 
 /**
@@ -144,6 +241,9 @@ function renderDay(timestamp: string): string {
 export function renderItem(entry: PackEntry): string {
   const { item } = entry;
   const facts = [`[${item.id}]`, item.rationale.method, renderAdmission(item)];
+  if (item.standing !== undefined) {
+    facts.push(renderStanding(item.standing));
+  }
   if (item.occurred_at !== undefined) {
     facts.push(
       entry.gloss
@@ -157,15 +257,35 @@ export function renderItem(entry: PackEntry): string {
   if (item.superseded_by !== undefined) {
     facts.push(`superseded by ${item.superseded_by.id} at ${item.superseded_by.at}`);
   }
+  // The successor is named in the lineage marker either way, and a reader has no way to tell
+  // whether the id points at something in front of them or at something they would have to ask
+  // for. Unresolved superseded material is exactly what a correction-aware pack has to mark.
+  if (item.successor_absent === true) {
+    facts.push('successor not served');
+  }
   if (item.currency === 'expired') {
     facts.push('expired');
   }
   const why = item.why === undefined ? '' : `\n   why: ${item.why}`;
+  const confirmed =
+    item.standing?.confirmed === undefined
+      ? ''
+      : `\n   confirmed by ${item.standing.confirmed.by} at ${item.standing.confirmed.at},` +
+        ` evidence: ${item.standing.confirmed.evidence}`;
+  const correction =
+    item.claimed_correction === undefined
+      ? ''
+      : `\n   correction stated by ${item.claimed_correction.by} at ${item.claimed_correction.at},` +
+        ' nothing has closed it';
+  const derivation = item.derivation === undefined ? '' : renderDerivation(item.derivation);
   const related =
     item.related_claim === undefined
       ? ''
       : `\n   current related claim: ${item.related_claim.text} [${item.related_claim.id}]`;
-  return `${String(item.rank)}. ${item.content}${why}\n   ${facts.join(' | ')}${related}`;
+  return (
+    `${String(item.rank)}. ${item.content}${why}\n   ${facts.join(' | ')}` +
+    `${confirmed}${correction}${derivation}${related}`
+  );
 }
 
 export function renderBucket(bucket: PackBucket, entries: readonly PackEntry[]): string {

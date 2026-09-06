@@ -2,7 +2,6 @@ import {
   RecallInputSchema,
   type Degradation,
   type MemoryPack,
-  type PackTruncation,
   type RecallOutput,
   type StageTimingsMs,
 } from '@aion/protocol';
@@ -12,9 +11,11 @@ import { arrivalIds, buildRankedLists, firstPassIds, toActivationSeed } from './
 import { extractCues, type CueCache, type CueExtractionResult } from './cues.js';
 import { triggeredIntentions } from './intentions.js';
 import { readModeFor } from './read-mode.js';
+import { activationBudget, admissionFor, capsFor, truncationFor } from './recall-policy.js';
 import { resonate, type ResonanceResult } from './resonance.js';
 import { selectSeeds, type Seed } from './seeds.js';
 import {
+  claimProvenance,
   embedCues,
   hydrate,
   itemOrigins,
@@ -43,17 +44,10 @@ import {
 } from '../../infrastructure/sqlite/served-items.js';
 import { redactPayload } from '../../redaction/deep-walk.js';
 import type { SessionManager } from '../../session/session-manager.js';
-import {
-  spreadActivation,
-  type ActivatedNode,
-  type ActivationBudget,
-  type ActivationRun,
-  type ActivationTermination,
-} from '../domain/activation.js';
-import type { AdmissionPolicy, AdmissionReport } from '../domain/admission.js';
+import { spreadActivation, type ActivatedNode, type ActivationRun } from '../domain/activation.js';
+import type { AdmissionReport } from '../domain/admission.js';
 import { labelBoosts, queryCueTexts, queryRestatements } from '../domain/facts.js';
 import { fuse, withSoleMethod, type FusedItem, type FusionResult } from '../domain/fusion.js';
-import type { BucketCaps } from '../domain/pack-buckets.js';
 import { assemblePack, packMethods } from '../domain/pack.js';
 import { servedRecords, suppressedRepeats } from '../domain/session-dedup.js';
 import { suppressedOwnSession } from '../domain/session-origin.js';
@@ -128,49 +122,6 @@ async function timed<T>(run: () => Promise<T>): Promise<Timed<T>> {
   const started = performance.now();
   const value = await run();
   return { value, ms: roundMs(performance.now() - started) };
-}
-
-function admissionFor(config: Config): AdmissionPolicy {
-  return {
-    vectorFloor: config.recall.vectorAdmissionFloor,
-    corroborationFloor: config.recall.corroborationFloor,
-    bm25Mode: config.recall.bm25AdmissionMode,
-    typedAdmissionEnabled: config.recall.typedAdmission,
-    typedAdmissionActivationFloor: config.recall.typedAdmissionActivationFloor,
-  };
-}
-
-function capsFor(config: Config): BucketCaps {
-  return {
-    facts: config.recall.maxFacts,
-    episodes: config.recall.maxEpisodes,
-    narratives: config.recall.maxNarratives,
-    intentions: config.recall.maxIntentions,
-    preferences: config.recall.maxPreferences,
-    resonant: config.recall.maxResonant,
-  };
-}
-
-/**
- * Which terminations mean the answer was cut short. `hop_limit` is not one of them: traversal
- * depth is bounded by design, so stopping there is the spread finishing its job. The other two
- * are budgets. `node_budget` measured on 60.2% of recalls against a populated substrate,
- * invisible to every caller.
- */
-function truncationFor(termination: ActivationTermination): PackTruncation | undefined {
-  if (termination === 'node_budget' || termination === 'max_iterations') {
-    return 'activation_budget';
-  }
-  return undefined;
-}
-
-function activationBudget(config: Config): ActivationBudget {
-  return {
-    ...config.activation,
-    maxHops: config.recall.maxHops,
-    associationStrength: config.recall.associationStrength,
-    maxActivated: config.contextResonance.activationLimit,
-  };
 }
 
 function notify(deps: RecallDeps, completion: RecallCompletion): void {
@@ -355,13 +306,14 @@ export async function handleRecall(
   const dedup = deps.config.recall.sessionDedup && !isTimeTravel(mode);
   const ownFilter = deps.config.recall.ownSessionFilter && !isTimeTravel(mode);
 
-  // Both run after the second pass. Claims are asked only about what resonance surfaced, and a
-  // pack whose resonant bucket holds no raw turn issues no query at all; origins are asked about
-  // the whole candidate set, which is final only now. Neither needs the other's answer, so the
-  // pair costs one round trip rather than two.
-  const [claims, origins] = await Promise.all([
-    relatedClaims(deps, resonance.value.items, mode),
+  // All three run after the second pass, against the candidate set, which is final only now. A
+  // pack holding no raw turn issues no claim query at all. None of the three needs another's
+  // answer, so they cost one round trip rather than three.
+  const ranked = [...candidates.values()];
+  const [claims, origins, provenance] = await Promise.all([
+    relatedClaims(deps, ranked, mode),
     ownFilter ? itemOrigins(deps, [...candidates.keys()], sessionId, mode) : NO_ORIGINS,
+    claimProvenance(deps, [...candidates.keys()], mode),
   ]);
 
   const timings: StageTimingsMs = {
@@ -380,12 +332,12 @@ export async function handleRecall(
   // Origin decides first, and what it withholds leaves no served row: the session never read
   // those items, so a later recall must be free to offer them the moment they stop being its own
   // record. Dedup then judges what is left.
-  const ranked = [...candidates.values()];
   const suppressedOwn = suppressedOwnSession({ items: ranked, origins, relatedClaims: claims });
   const suppressed = dedup
     ? suppressedRepeats(
         ranked.filter((item) => !suppressedOwn.has(item.id)),
         readServedItems(deps.db, sessionId),
+        provenance,
       )
     : new Set<string>();
 
@@ -408,6 +360,8 @@ export async function handleRecall(
     resonant: resonance.value.items,
     intentions: intentions.items,
     ...(claims.size === 0 ? {} : { relatedClaims: claims }),
+    ...(provenance.size === 0 ? {} : { provenance }),
+    historical: isTimeTravel(mode),
     suppressed,
     suppressedOwn,
   });
@@ -423,7 +377,7 @@ export async function handleRecall(
     recordServedItems(
       deps.db,
       sessionId,
-      servedRecords(pack, suppressed, candidates),
+      servedRecords(pack, suppressed, candidates, provenance),
       now.toISOString(),
     );
   }

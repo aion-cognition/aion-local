@@ -71,4 +71,103 @@ describe('the wire item', () => {
   it('carries the expiry marker onto the wire', () => {
     expect(toPackItem(fused({ currency: 'expired' }), 1).currency).toBe('expired');
   });
+
+  it('drops a root that is the item itself, since a capture is its own source', () => {
+    const item = toPackItem(fused({ id: 'ep-1' }), 1, {
+      provenance: { roots: ['ep-1'], complete: true },
+    });
+
+    expect(item.derivation).toBeUndefined();
+  });
+
+  it('keeps a real ancestor and reports whether the chain was cut', () => {
+    const item = toPackItem(fused({ id: 'claim-1' }), 1, {
+      provenance: { roots: ['ep-1', 'ep-2'], complete: false },
+    });
+
+    expect(item.derivation).toEqual({ roots: ['ep-1', 'ep-2'], complete: false });
+  });
+});
+
+describe('what kind of statement the line is', () => {
+  it('reads a recorded utterance and its role without turning the role into a person', () => {
+    const line = renderItem({
+      item: toPackItem(fused({ id: 't1', labels: ['Turn', 'Memory', 'AionNode'] }), 1, {
+        provenance: { roots: [], complete: true, recordedRole: 'user' },
+      }),
+      gloss: false,
+    });
+
+    expect(line).toContain('recorded utterance, recorded role user, authorship unknown');
+    expect(line).not.toContain('confirmed by');
+  });
+
+  it('marks an extracted claim as an interpretation rather than as something said', () => {
+    const line = renderItem({ item: toPackItem(fused(), 1), gloss: false });
+
+    expect(line).toContain('extracted interpretation, authorship unknown');
+  });
+
+  it('names a decision as one', () => {
+    const line = renderItem({
+      item: toPackItem(fused({ labels: ['Decision', 'Memory', 'AionNode'] }), 1),
+      gloss: false,
+    });
+
+    expect(line).toContain('decision recorded');
+  });
+
+  it('names the confirmer only against evidence, and cites the evidence', () => {
+    const line = renderItem({
+      item: toPackItem(fused(), 1, {
+        provenance: {
+          roots: [],
+          complete: true,
+          confirmation: {
+            by: 'Ryan Huber',
+            at: new Date('2026-09-01T10:00:00.000Z'),
+            evidence: 'review thread 41',
+          },
+        },
+      }),
+      gloss: false,
+    });
+
+    expect(line).toContain(
+      'confirmed by Ryan Huber at 2026-09-01T10:00:00.000Z, evidence: review thread 41',
+    );
+    expect(line).not.toContain('authorship unknown');
+  });
+});
+
+describe('the source line', () => {
+  it('says who else in the pack came from the same place', () => {
+    const line = renderItem({
+      item: toPackItem(fused({ id: 'claim-2' }), 2, {
+        provenance: { roots: ['ep-1'], complete: true },
+        sharedWith: ['claim-1'],
+      }),
+      gloss: false,
+    });
+
+    expect(line).toContain('derives from ep-1');
+    expect(line).toContain('shares this origin with claim-1: not independent corroboration');
+  });
+
+  it('marks a stated correction as stated and closed by nothing', () => {
+    const line = renderItem({
+      item: toPackItem(fused(), 1, {
+        provenance: {
+          roots: [],
+          complete: true,
+          claimedCorrection: { by: 'ep-9', at: new Date('2026-09-02T08:00:00.000Z') },
+        },
+      }),
+      gloss: false,
+    });
+
+    expect(line).toContain(
+      'correction stated by ep-9 at 2026-09-02T08:00:00.000Z, nothing has closed it',
+    );
+  });
 });

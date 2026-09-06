@@ -2,6 +2,8 @@ import type { MemoryPack } from '@aion/protocol';
 import { packBuckets } from '@aion/protocol';
 
 import type { FusedItem } from './fusion.js';
+import { standingFor } from './standing.js';
+import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 import type { ServedItem } from '../../infrastructure/sqlite/served-items.js';
 import { hashContent } from '../../reflection/domain/content.js';
 
@@ -20,19 +22,31 @@ import { hashContent } from '../../reflection/domain/content.js';
  * What an item said the last time it was served, as one hash. The node's own `updated_at` is
  * the other candidate and is a weaker signal here: it is not hydrated onto a candidate, and it
  * does not move when a supersession closes the node, which changes the rendered line from a
- * current fact into one with a lineage marker. These four fields are exactly the parts of a
+ * current fact into one with a lineage marker. These fields are exactly the parts of a
  * rendered item that can change, so the hash moves when, and only when, the agent would read
  * something new.
  *
+ * Standing is in for the same reason the lineage marker is. A confirmation arriving, or a
+ * stated correction landing against a line the session already read, changes what the memory
+ * means without touching a character of its text, and a correction that never re-serves is a
+ * correction nobody sees.
+ *
  * The rank, the score and the admitting rule are deliberately out: they move with the query,
  * not with the memory, and hashing them would re-serve everything on every reworded prompt.
+ * So is `shared_with`, which is a fact about one pack rather than about the memory.
  */
-export function servedFingerprint(item: FusedItem): string {
+export function servedFingerprint(item: FusedItem, provenance?: ItemProvenance): string {
+  const standing = standingFor(item, provenance);
   return hashContent({
     content: item.content,
     currency: item.currency,
     supersededBy: item.supersededBy?.id ?? null,
     why: item.why ?? null,
+    standing: `${standing.kind}:${standing.attribution}:${standing.recorded_role ?? ''}`,
+    confirmed: standing.confirmed === undefined ? null : JSON.stringify(standing.confirmed),
+    correctedBy: provenance?.claimedCorrection?.by ?? null,
+    roots: (provenance?.roots ?? []).join(','),
+    lineageComplete: provenance?.complete ?? null,
   });
 }
 
@@ -47,13 +61,14 @@ export function servedFingerprint(item: FusedItem): string {
 export function suppressedRepeats(
   items: readonly FusedItem[],
   served: ReadonlyMap<string, string>,
+  provenance?: ReadonlyMap<string, ItemProvenance>,
 ): ReadonlySet<string> {
   const suppressed = new Set<string>();
   if (served.size === 0) {
     return suppressed;
   }
   for (const item of items) {
-    if (served.get(item.id) === servedFingerprint(item)) {
+    if (served.get(item.id) === servedFingerprint(item, provenance?.get(item.id))) {
       suppressed.add(item.id);
     }
   }
@@ -70,6 +85,7 @@ export function servedRecords(
   pack: MemoryPack,
   suppressed: ReadonlySet<string>,
   candidates: ReadonlyMap<string, FusedItem>,
+  provenance?: ReadonlyMap<string, ItemProvenance>,
 ): readonly ServedItem[] {
   const ids = new Set<string>(suppressed);
   for (const items of Object.values(packBuckets(pack))) {
@@ -84,7 +100,7 @@ export function servedRecords(
     if (candidate === undefined) {
       continue;
     }
-    records.push({ itemId: id, fingerprint: servedFingerprint(candidate) });
+    records.push({ itemId: id, fingerprint: servedFingerprint(candidate, provenance?.get(id)) });
   }
   return records;
 }

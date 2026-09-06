@@ -3,6 +3,7 @@ import {
   ReflectionOriginSchema,
   type ReflectionOrigin,
   type ReflectionOutput,
+  type ReflectionProvenance,
 } from '@aion/protocol';
 
 import {
@@ -12,6 +13,12 @@ import {
 } from './experience-store.js';
 import type { LaneAssigner, LaneDecision } from './lanes.js';
 import { attachContentVectors } from './vectors.js';
+import {
+  resolveProvenanceTargets,
+  writeClaimProvenance,
+  type ConfirmationWrite,
+} from '../../infrastructure/graph/claim-provenance-queries.js';
+import { withCurrency } from '../../infrastructure/graph/read-modes.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
@@ -247,6 +254,70 @@ async function attachVectors(
 }
 
 /**
+ * The stated references as edges on the episode, once the targets are checked against the
+ * substrate. An id nothing resolves is dropped and counted rather than written, so the graph
+ * never holds lineage pointing at something that does not exist.
+ *
+ * Nothing here closes anything. A `supersedes` reference records that somebody holds the target
+ * to be wrong; the target keeps its currency, and the supersession judge is still what closes
+ * it. A confirmation is recorded the same way: it is evidence beside the claim, and no stage
+ * waits on one.
+ *
+ * Best-effort, and last, like the vector attach: the experience is already durable and queued
+ * by the time it runs, so a graph hiccup costs the episode its stated references and never the
+ * caller's write. A retry re-states them, since every write here is idempotent.
+ */
+async function attachProvenance(
+  deps: ReflectionIntakeDeps,
+  episodeId: string,
+  provenance: ReflectionProvenance | undefined,
+  now: Date,
+): Promise<void> {
+  const supersedes = provenance?.supersedes ?? [];
+  const derivedFrom = provenance?.derived_from ?? [];
+  const confirmations = provenance?.confirmations ?? [];
+  const named = [...supersedes, ...derivedFrom, ...confirmations.map((entry) => entry.target)];
+  if (named.length === 0) {
+    return;
+  }
+
+  try {
+    const resolved = await resolveProvenanceTargets(deps.driver, {
+      ids: named,
+      mode: withCurrency(now),
+    });
+    const unresolved = new Set(named.filter((id) => !resolved.has(id))).size;
+    const attached: ConfirmationWrite[] = confirmations
+      .filter((entry) => resolved.has(entry.target))
+      .map((entry) => ({
+        target: entry.target,
+        by: entry.by,
+        evidence: entry.evidence,
+        at: entry.occurred_at === undefined ? now : new Date(entry.occurred_at),
+      }));
+    await writeClaimProvenance(deps.driver, {
+      episodeId,
+      derivedFrom: derivedFrom.filter((id) => resolved.has(id)),
+      corrects: supersedes.filter((id) => resolved.has(id)),
+      confirmations: attached,
+      unresolved,
+      now,
+    });
+    if (unresolved > 0) {
+      deps.logger.warn(
+        { episodeId, named: named.length, unresolved },
+        'reflection named references the substrate does not hold; the lineage is marked incomplete',
+      );
+    }
+  } catch (err) {
+    deps.logger.warn(
+      { err, episodeId },
+      'stated references deferred; the episode is stored and queued',
+    );
+  }
+}
+
+/**
  * The write path. Validate, redact, store the episode and its turns with a full bitemporal
  * stamp, link the backbone, archive the payload beside the integrate job in one commit, wake
  * the worker, then embed.
@@ -281,7 +352,16 @@ export async function handleReflection(
   // the content hash, so the same experience pushed on two lanes would be two episodes.
   // `origin` is provenance about the call, not about what happened, so it is carved out the
   // same way: pushing the same experience via a hook and via the MCP client stays one episode.
-  const { session_id: suppliedIdentity, lane: requestedLane, origin, ...content } = payload;
+  // `provenance` joins them: it is a statement about other nodes rather than about what
+  // happened here, so folding it into the content hash would make the same experience pushed
+  // with and without its references two separate episodes.
+  const {
+    session_id: suppliedIdentity,
+    lane: requestedLane,
+    origin,
+    provenance,
+    ...content
+  } = payload;
   const redacted = redactPayload(content, deps.entropyThreshold);
   if (redacted.matches.length > 0) {
     deps.logger.warn(
@@ -328,6 +408,7 @@ export async function handleReflection(
     }
   }
 
+  await attachProvenance(deps, stored.episodeId, provenance, now);
   await attachVectors(deps, stored, sessionId);
 
   if (!stored.created) {

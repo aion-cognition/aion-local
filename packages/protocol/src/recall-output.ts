@@ -88,6 +88,94 @@ export const RelatedClaimSchema = z.strictObject({
 export type RelatedClaim = z.infer<typeof RelatedClaimSchema>;
 
 /**
+ * How the substrate came by the line, so a quotation and a conclusion drawn from one never
+ * read alike. A Turn is text somebody typed and the substrate stored verbatim; a Decision is a
+ * position the extraction found stated; every other cognitive type is a model's reading of a
+ * capture. Collapsing the three renders an inference in the voice of a quotation.
+ */
+export const StandingKindSchema = z.enum([
+  'recorded_utterance',
+  'recorded_session',
+  'recorded_decision',
+  'extracted_interpretation',
+  'synthesized',
+  'stated_description',
+]);
+
+export type StandingKind = z.infer<typeof StandingKindSchema>;
+
+/**
+ * How far the line can be traced to anyone. A transport role is a label the calling client
+ * chose, and agent-to-agent traffic arrives under `user`, so a recorded role is a report and
+ * never an identity: it renders as `reported`. `attributed` needs a confirmation record that
+ * names who confirmed and cites where the confirmation is written down. Nothing infers either
+ * one from a retrieval score.
+ */
+export const AttributionSchema = z.enum(['unknown', 'reported', 'attributed']);
+
+export type Attribution = z.infer<typeof AttributionSchema>;
+
+/**
+ * A confirmation as the substrate holds it: who, when, and the reference the confirmation is
+ * recorded under. It is evidence a reader weighs, never a permission the substrate waits on,
+ * so nothing in recall or reflection branches on its presence.
+ */
+export const ConfirmationSchema = z.strictObject({
+  by: z.string().min(1),
+  at: IsoTimestampSchema,
+  evidence: z.string().min(1),
+});
+
+export type Confirmation = z.infer<typeof ConfirmationSchema>;
+
+export const StandingSchema = z.strictObject({
+  kind: StandingKindSchema,
+  /** The role capture recorded, verbatim and uninterpreted. Absent when none was recorded. */
+  recorded_role: z.string().min(1).optional(),
+  attribution: AttributionSchema,
+  /** Present only where a confirmation record names a confirmer and cites its evidence. */
+  confirmed: ConfirmationSchema.optional(),
+});
+
+export type Standing = z.infer<typeof StandingSchema>;
+
+/** How many roots one item reports. A long chain names its nearest roots and says it was cut. */
+export const MAX_DERIVATION_ROOTS = 3;
+
+/**
+ * What the item descends from, and who else in the pack descends from the same place.
+ *
+ * `shared_with` is the part a reader cannot reconstruct: two claims extracted from one capture
+ * read as two witnesses, and a pack that admits both without saying so lets one source count
+ * twice. The field names the other items rather than asserting agreement between them.
+ *
+ * `complete` is false when the chain was cut at `MAX_DERIVATION_ROOTS`, or when a source the
+ * caller named did not resolve to anything the substrate holds. No lineage is invented to
+ * fill the gap.
+ */
+export const DerivationSchema = z.strictObject({
+  roots: z.array(z.string().min(1)).min(1).max(MAX_DERIVATION_ROOTS),
+  complete: z.boolean(),
+  shared_with: z.array(z.string().min(1)).min(1).optional(),
+});
+
+export type Derivation = z.infer<typeof DerivationSchema>;
+
+/**
+ * A correction somebody stated outright on the reflection call, carried beside the item it
+ * names. It is a claim on the record, not a closure: the node keeps answering as current and
+ * its `currency` does not move, because a caller-supplied reference cannot close lineage on
+ * its own.
+ */
+export const ClaimedCorrectionSchema = z.strictObject({
+  /** The episode whose reflection call stated the correction. */
+  by: z.string().min(1),
+  at: IsoTimestampSchema,
+});
+
+export type ClaimedCorrection = z.infer<typeof ClaimedCorrectionSchema>;
+
+/**
  * One recalled memory, shaped identically across every bucket. `currency` and
  * `superseded_by` carry lineage annotation on every item, not just facts. Default recall
  * is currency-aware, not currency-filtered, so any bucket may surface a superseded node.
@@ -140,6 +228,21 @@ export const MemoryPackItemSchema = z.strictObject({
   why: z.string().min(1).optional(),
   currency: CurrencySchema,
   superseded_by: SupersededBySchema.optional(),
+  /**
+   * What kind of statement this is and how far it can be attributed. Optional because a pack
+   * is persisted to `last_pack` and read back later, so packs written before the field existed
+   * have to keep parsing; every pack this version assembles carries one.
+   */
+  standing: StandingSchema.optional(),
+  /** Absent when the substrate holds no source record for the item. */
+  derivation: DerivationSchema.optional(),
+  /** Absent unless a reflection call named this item as something it corrects. */
+  claimed_correction: ClaimedCorrectionSchema.optional(),
+  /**
+   * True when the item is superseded and the pack does not hold what replaced it. The reader
+   * would otherwise see a lineage marker naming an id that is nowhere in front of them.
+   */
+  successor_absent: z.literal(true).optional(),
 });
 
 export type MemoryPackItem = z.infer<typeof MemoryPackItemSchema>;

@@ -20,6 +20,7 @@ export const PROTECTED_RELATIONSHIP_TYPES: readonly RelationshipType[] = [
   'PARTICIPATES_IN',
   'FOLLOWS',
   'SUPERSEDES',
+  'CORRECTS',
   'SUMMARIZED_BY',
   'DERIVES_FROM',
   'EXTRACTED_FROM',

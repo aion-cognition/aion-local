@@ -1,8 +1,17 @@
-import type { Cue, Degradation, RelatedClaim } from '@aion/protocol';
+import {
+  MAX_DERIVATION_ROOTS,
+  type Cue,
+  type Degradation,
+  type RelatedClaim,
+} from '@aion/protocol';
 import type { Driver } from 'neo4j-driver';
 
 import type { SeedCue } from './seeds.js';
 import type { Config } from '../../infrastructure/config/schema.js';
+import {
+  fetchClaimProvenance,
+  type ItemProvenance,
+} from '../../infrastructure/graph/claim-provenance-queries.js';
 import { normalizeCognitiveText } from '../../infrastructure/graph/cognitive-queries.js';
 import { listSessionEpisodeIds } from '../../infrastructure/graph/episodes.js';
 import { fetchItemOrigins, type ItemOrigin } from '../../infrastructure/graph/origin-queries.js';
@@ -155,27 +164,33 @@ export async function measureArrivals(
   });
 }
 
-/** The label that says a resonant hit is captured text rather than a distilled claim. */
+/** The label that says a hit is captured text rather than a distilled claim. */
 const TURN_LABEL = 'Turn';
 
 /**
- * The current claim beside each raw turn resonance surfaced, keyed by the turn's id.
+ * The current claim beside each raw turn the run holds, keyed by the turn's id.
  *
- * Only resonant turns are asked about. A turn the query matched directly arrives beside
- * whatever else the query matched, so the pack already carries its context; a turn resonance
- * found alone carries a stated belief and nothing else, and nothing ever supersedes a turn.
- * One query for the batch, and none at all when the bucket holds no turns.
+ * Every candidate turn is asked about, not only the resonant ones. Nothing distils a turn into
+ * a claim, so supersession never judges one and a belief stated in a turn answers as current
+ * however often the substrate corrected it since. That is true of a turn a query matched head
+ * on as much as of one resonance found alone, and a pack that annotates only the second serves
+ * the first as an uncontested statement.
+ *
+ * Bounded by what the pack could hold, ranked order first: the annotation costs one query per
+ * pack, and asking about turns no bucket has room for spends the query on rows nobody reads.
  *
  * Best-effort, like the pending-enrichment count: a failure here costs the pack an annotation
  * and never the recall itself.
  */
 export async function relatedClaims(
   deps: StageReadDeps,
-  resonant: readonly FusedItem[],
+  candidates: readonly FusedItem[],
   mode: ReadMode,
 ): Promise<ReadonlyMap<string, RelatedClaim>> {
-  const turns = resonant
+  const { maxEpisodes, maxResonant } = deps.config.recall;
+  const turns = candidates
     .filter((item) => item.labels.includes(TURN_LABEL))
+    .slice(0, maxEpisodes + maxResonant)
     .map((item) => ({ id: item.id, textNorm: normalizeCognitiveText(item.content) }));
   if (turns.length === 0) {
     return new Map();
@@ -188,7 +203,35 @@ export async function relatedClaims(
     });
     return new Map(rows.map((row) => [row.turnId, { id: row.id, text: row.text }]));
   } catch (err) {
-    deps.logger.warn({ err }, 'related-claim lookup failed; the resonant turns go unannotated');
+    deps.logger.warn({ err }, 'related-claim lookup failed; the turns go unannotated');
+    return new Map();
+  }
+}
+
+/**
+ * The source record behind every candidate: what it descends from, what somebody stated
+ * corrects it, and who confirmed it with evidence naming them.
+ *
+ * Batched beside the other late reads, since the candidate set is only final after the second
+ * pass. Best-effort, and the empty answer is the safe one: without it the pack renders no
+ * standing beyond what the node itself carries, which is a thinner pack rather than a wrong one.
+ */
+export async function claimProvenance(
+  deps: StageReadDeps,
+  ids: readonly string[],
+  mode: ReadMode,
+): Promise<ReadonlyMap<string, ItemProvenance>> {
+  if (ids.length === 0) {
+    return new Map();
+  }
+  try {
+    return await fetchClaimProvenance(deps.driver, {
+      ids,
+      maxRoots: MAX_DERIVATION_ROOTS,
+      mode,
+    });
+  } catch (err) {
+    deps.logger.warn({ err }, 'provenance lookup failed; the pack carries no source records');
     return new Map();
   }
 }

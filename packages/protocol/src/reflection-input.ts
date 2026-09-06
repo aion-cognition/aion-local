@@ -67,6 +67,51 @@ export const ReflectionOriginSchema = z.strictObject({
 
 export type ReflectionOrigin = z.infer<typeof ReflectionOriginSchema>;
 
+/** How many references of one kind a single call may carry, so one payload cannot fan out. */
+export const MAX_PROVENANCE_REFERENCES = 16;
+
+/**
+ * A confirmation the caller states outright: who confirmed the target, and where that is
+ * written down. The reference is what makes it attributable, since a transport role names no
+ * person and agent-to-agent traffic arrives under `user`.
+ *
+ * It is recorded and rendered, and it decides nothing. No stage waits on one, no closure
+ * follows from one, and an absent confirmation is not a rejection.
+ */
+export const ConfirmationRecordSchema = z.strictObject({
+  /** The node the confirmation is about. Validated against the substrate; unknown ids are dropped. */
+  target: z.string().min(1),
+  /** Who confirmed it. Free text, because the substrate holds no roster to check it against. */
+  by: z.string().min(1),
+  /** Where the confirmation is recorded, so a pack cites a reference rather than asserting one. */
+  evidence: z.string().min(1),
+  occurred_at: IsoTimestampSchema.optional(),
+});
+
+export type ConfirmationRecord = z.infer<typeof ConfirmationRecordSchema>;
+
+/**
+ * The two reference kinds a caller may state, kept apart because they mean different things.
+ *
+ * `supersedes` says this experience corrects those nodes. It routes straight to lineage as a
+ * stated correction and closes nothing: the named node keeps its currency, and only the
+ * supersession judge closes anything.
+ *
+ * `derived_from` says this experience descends from those nodes. It marks a source, asserts no
+ * disagreement, and is what keeps two claims that share a root from reading as two witnesses.
+ *
+ * Both are validated against the substrate. A reference to something the substrate does not
+ * hold is dropped and counted, and the episode's lineage is marked incomplete rather than
+ * padded with an id nothing backs.
+ */
+export const ReflectionProvenanceSchema = z.strictObject({
+  supersedes: z.array(z.string().min(1)).max(MAX_PROVENANCE_REFERENCES).optional(),
+  derived_from: z.array(z.string().min(1)).max(MAX_PROVENANCE_REFERENCES).optional(),
+  confirmations: z.array(ConfirmationRecordSchema).max(MAX_PROVENANCE_REFERENCES).optional(),
+});
+
+export type ReflectionProvenance = z.infer<typeof ReflectionProvenanceSchema>;
+
 const ReflectionPayloadSchema = z.strictObject({
   turns: z.array(ReflectionTurnSchema).optional(),
   tool_executions: z.array(ToolExecutionSchema).optional(),
@@ -75,6 +120,7 @@ const ReflectionPayloadSchema = z.strictObject({
   session_id: z.string().min(1).optional(),
   lane: ReflectionLaneSchema.optional(),
   origin: ReflectionOriginSchema.optional(),
+  provenance: ReflectionProvenanceSchema.optional(),
 });
 
 /**

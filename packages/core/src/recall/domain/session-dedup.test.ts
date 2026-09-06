@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { FusedItem } from './fusion.js';
 import { servedFingerprint, suppressedRepeats } from './session-dedup.js';
+import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 
 type ItemOverrides = {
   readonly content?: string;
@@ -127,5 +128,66 @@ describe('suppressing what a session already holds', () => {
    */
   it('suppresses nothing when the session has no record to match against', () => {
     expect([...suppressedRepeats([item('e1'), item('e2')], new Map())]).toEqual([]);
+  });
+});
+
+describe('a memory whose standing moved', () => {
+  const CONFIRMED: ItemProvenance = {
+    roots: ['ep-1'],
+    complete: true,
+    confirmation: {
+      by: 'Ryan Huber',
+      at: new Date('2026-09-01T10:00:00.000Z'),
+      evidence: 'review thread 41',
+    },
+  };
+
+  const UNCONFIRMED: ItemProvenance = { roots: ['ep-1'], complete: true };
+
+  /**
+   * The words did not change, and what they are worth to a reader did. A session that read the
+   * unconfirmed line has to be told the confirmation, or the confirmation reaches nobody.
+   */
+  it('re-serves a line somebody has since confirmed', () => {
+    const stored = item('c1');
+
+    expect(servedFingerprint(stored, CONFIRMED)).not.toBe(servedFingerprint(stored, UNCONFIRMED));
+    expect([
+      ...suppressedRepeats(
+        [stored],
+        new Map([['c1', servedFingerprint(stored, UNCONFIRMED)]]),
+        new Map([['c1', CONFIRMED]]),
+      ),
+    ]).toEqual([]);
+  });
+
+  it('re-serves a line somebody has since stated a correction against', () => {
+    const stored = item('c1');
+    const corrected: ItemProvenance = {
+      ...UNCONFIRMED,
+      claimedCorrection: { by: 'ep-9', at: new Date('2026-09-02T08:00:00.000Z') },
+    };
+
+    expect(servedFingerprint(stored, corrected)).not.toBe(servedFingerprint(stored, UNCONFIRMED));
+  });
+
+  it('re-serves a line whose lineage went from complete to short', () => {
+    const stored = item('c1');
+
+    expect(servedFingerprint(stored, { roots: ['ep-1'], complete: false })).not.toBe(
+      servedFingerprint(stored, UNCONFIRMED),
+    );
+  });
+
+  it('holds still when the source record did not move', () => {
+    const stored = item('c1');
+
+    expect([
+      ...suppressedRepeats(
+        [stored],
+        new Map([['c1', servedFingerprint(stored, UNCONFIRMED)]]),
+        new Map([['c1', UNCONFIRMED]]),
+      ),
+    ]).toEqual(['c1']);
   });
 });

@@ -215,6 +215,8 @@ describe('the structured items', () => {
       rationale: { method: 'vector', score: 0.8 },
       currency: 'superseded',
       superseded_by: { id: 'stale-successor', at: '2026-08-10T00:00:00.000Z' },
+      standing: { kind: 'recorded_session', attribution: 'unknown' },
+      successor_absent: true,
     });
   });
 
@@ -423,5 +425,78 @@ describe('packMethods', () => {
 
   it('is empty for a pack that served nothing', () => {
     expect(packMethods(assemble([]))).toEqual([]);
+  });
+});
+
+describe('two memories from one source', () => {
+  const ROOT = new Map([
+    ['c1', { roots: ['ep-root'], complete: true }],
+    ['c2', { roots: ['ep-root'], complete: true }],
+  ]);
+
+  it('exposes the shared origin rather than letting one source read as two witnesses', () => {
+    const pack = assemble([item('c1'), item('c2')], { provenance: ROOT });
+
+    expect(pack.episodes?.[0]?.derivation?.shared_with).toBeUndefined();
+    expect(pack.episodes?.[1]?.derivation?.shared_with).toEqual(['c1']);
+    expect(pack.rendered_text).toContain(
+      'shares this origin with c1: not independent corroboration',
+    );
+  });
+
+  it('claims a root only for an item the pack actually served', () => {
+    // c1 is cut by the cap, so c2 is the first item in the pack to descend from the root and
+    // has nobody to share it with.
+    const pack = assemble([item('c1'), item('c2')], {
+      provenance: ROOT,
+      caps: { ...CAPS, episodes: 1 },
+    });
+
+    expect(pack.episodes?.map((entry) => entry.id)).toEqual(['c1']);
+    expect(pack.episodes?.[0]?.derivation?.shared_with).toBeUndefined();
+  });
+
+  it('leaves two memories from different roots alone', () => {
+    const pack = assemble([item('c1'), item('c2')], {
+      provenance: new Map([
+        ['c1', { roots: ['ep-a'], complete: true }],
+        ['c2', { roots: ['ep-b'], complete: true }],
+      ]),
+    });
+
+    expect(pack.episodes?.[1]?.derivation?.shared_with).toBeUndefined();
+  });
+});
+
+describe('superseded material in an ordinary recall', () => {
+  it('serves the successor first and still serves the history behind it', () => {
+    const pack = assemble([item('stale', { superseded: true }), item('fresh')]);
+
+    expect(pack.episodes?.map((entry) => entry.id)).toEqual(['fresh', 'stale']);
+  });
+
+  it('says nothing about a successor the pack is holding', () => {
+    const pack = assemble([item('stale', { superseded: true }), item('stale-successor')]);
+
+    expect(pack.episodes?.map((entry) => entry.id)).toEqual(['stale-successor', 'stale']);
+    expect(pack.episodes?.[1]?.successor_absent).toBeUndefined();
+    expect(pack.rendered_text).not.toContain('successor not served');
+  });
+
+  it('marks superseded material whose correction is nowhere in the pack', () => {
+    const pack = assemble([item('stale', { superseded: true }), item('fresh')]);
+
+    expect(pack.episodes?.[1]?.successor_absent).toBe(true);
+    expect(pack.rendered_text).toContain('successor not served');
+  });
+
+  it('leaves the ranking and the marker alone on a read pinned to the past', () => {
+    const pack = assemble([item('stale', { superseded: true }), item('fresh')], {
+      historical: true,
+    });
+
+    expect(pack.episodes?.map((entry) => entry.id)).toEqual(['stale', 'fresh']);
+    expect(pack.episodes?.[0]?.successor_absent).toBeUndefined();
+    expect(pack.rendered_text).toContain('superseded by stale-successor');
   });
 });

@@ -245,11 +245,15 @@ describe('a raw turn in the resonant bucket', () => {
     expect(pack.rendered_text).not.toContain('current related claim');
   });
 
-  /** The annotation answers a turn surfaced alone; a turn the query matched has its own context. */
-  it('leaves a turn the first pass admitted unannotated', () => {
+  /**
+   * Nothing ever supersedes a turn, so a stated belief answers as current wherever it surfaced.
+   * A turn the query matched head on is served in the episodes bucket and needs the annotation
+   * exactly as much as one resonance found alone.
+   */
+  it('annotates a turn the first pass admitted, not only one resonance surfaced', () => {
     const pack = assemble([turn('t1')], { relatedClaims: new Map([['t1', CLAIM]]) });
 
-    expect(pack.episodes?.[0]?.related_claim).toBeUndefined();
+    expect(pack.episodes?.[0]?.related_claim).toEqual(CLAIM);
   });
 
   it('charges the annotation to the item that carries it', () => {
