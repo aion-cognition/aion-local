@@ -24,21 +24,31 @@ import {
 const NOW = new Date('2026-08-30T04:05:06.789Z');
 
 describe('parseHooksFlags', () => {
-  it('defaults to the full profile, push stop mode, and research capture on', () => {
+  it('defaults to claude, the full profile, push stop mode, and research capture on', () => {
     expect(parseHooksFlags([])).toEqual({
       profile: 'full',
       withResearchCapture: true,
       stopMode: 'push',
+      harness: 'claude',
     });
   });
 
   it('reads every supported flag', () => {
     expect(
-      parseHooksFlags(['--profile', 'lite', '--stop-mode', 'instruct', '--no-research-capture']),
+      parseHooksFlags([
+        '--profile',
+        'lite',
+        '--stop-mode',
+        'instruct',
+        '--no-research-capture',
+        '--harness',
+        'codex',
+      ]),
     ).toEqual({
       profile: 'lite',
       withResearchCapture: false,
       stopMode: 'instruct',
+      harness: 'codex',
     });
   });
 
@@ -47,6 +57,9 @@ describe('parseHooksFlags', () => {
     expect(() => parseHooksFlags(['--profile', 'medium'])).toThrow(
       "unknown option '--profile' for hooks",
     );
+    expect(() => parseHooksFlags(['--harness', 'cursor'])).toThrow(
+      "unknown option '--harness' for hooks",
+    );
   });
 });
 
@@ -54,12 +67,18 @@ describe('hooks install and uninstall', () => {
   let dir: string;
   let repoDir: string;
   let settingsPath: string;
+  let codexDir: string;
+  let codexHooksPath: string;
+  let codexConfigPath: string;
   let written: string[];
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'aion-hooks-'));
     repoDir = join(dir, 'repo');
     settingsPath = join(dir, 'home', '.claude', 'settings.json');
+    codexDir = join(dir, 'home', '.codex');
+    codexHooksPath = join(codexDir, 'hooks.json');
+    codexConfigPath = join(codexDir, 'config.toml');
     written = [];
     mkdirSync(join(repoDir, 'packages', 'cli', 'dist'), { recursive: true });
     writeFileSync(join(repoDir, 'compose.yaml'), 'name: aion\n');
@@ -76,8 +95,10 @@ describe('hooks install and uninstall', () => {
 
   function options(overrides: Partial<HooksCommandOptions> = {}): HooksCommandOptions {
     return {
-      flags: { profile: 'full', withResearchCapture: false, stopMode: 'push' },
+      flags: { profile: 'full', withResearchCapture: false, stopMode: 'push', harness: 'claude' },
       settingsPath,
+      codexHooksPath,
+      codexConfigPath,
       repo: { path: repoDir, verified: true },
       now: NOW,
       // Every case names its own environment, so a key exported in the developer's shell
@@ -147,7 +168,14 @@ describe('hooks install and uninstall', () => {
 
   it('adds the research capture entry only when it is asked for', () => {
     installHooks(
-      options({ flags: { profile: 'full', withResearchCapture: true, stopMode: 'push' } }),
+      options({
+        flags: {
+          profile: 'full',
+          withResearchCapture: true,
+          stopMode: 'push',
+          harness: 'claude',
+        },
+      }),
       write,
     );
 
@@ -230,7 +258,12 @@ describe('hooks install and uninstall', () => {
       installHooks(
         options({
           env: {},
-          flags: { profile: 'lite', withResearchCapture: false, stopMode: 'push' },
+          flags: {
+            profile: 'lite',
+            withResearchCapture: false,
+            stopMode: 'push',
+            harness: 'claude',
+          },
         }),
         write,
       ),
@@ -341,5 +374,150 @@ describe('hooks install and uninstall', () => {
     expect(caught).toBeInstanceOf(SettingsUnreadableError);
     expect((caught as Error).message).toContain('could not be read');
     expect((caught as Error).cause).toBeInstanceOf(Error);
+  });
+
+  describe('on codex', () => {
+    const SERVER_BLOCK = '[mcp_servers.aion]\nurl = "http://127.0.0.1:8765/mcp"\n';
+    const TRUST_WALKTHROUGH = [
+      'codex trusts a hook only after you review it. Run codex, then /hooks, and trust the aion entries.',
+      'A reinstall with different flags changes those entries and codex will ask again. Hooks are enabled',
+      'by default (features.hooks); if /hooks shows them disabled, enable the feature first.',
+    ].join('\n');
+
+    function codexOptions(overrides: Partial<HooksCommandOptions> = {}): HooksCommandOptions {
+      return options({
+        flags: { profile: 'full', withResearchCapture: false, stopMode: 'push', harness: 'codex' },
+        ...overrides,
+      });
+    }
+
+    function hooksFile(): Record<string, unknown> {
+      return JSON.parse(readFileSync(codexHooksPath, 'utf8'));
+    }
+
+    function configFile(): string {
+      return readFileSync(codexConfigPath, 'utf8');
+    }
+
+    it('writes the codex hooks file and creates the config with the server block', () => {
+      expect(installHooks(codexOptions(), write)).toBe(0);
+
+      const rows = describeAionHooks(hooksFile());
+      expect(rows).toHaveLength(7);
+      expect(rows.every((row) => row.command.endsWith('--harness codex'))).toBe(true);
+      expect(configFile()).toBe(SERVER_BLOCK);
+      expect(existsSync(settingsPath)).toBe(false);
+      expect(written[0]).toContain(`aion hooks installed (full) in ${codexHooksPath}`);
+    });
+
+    it('reads the mcp port from the environment when one is set', () => {
+      installHooks(
+        codexOptions({ env: { AION_ANTHROPIC_API_KEY: 'sk-from-env', AION_MCP_PORT: '9100' } }),
+        write,
+      );
+
+      expect(configFile()).toContain('url = "http://127.0.0.1:9100/mcp"');
+    });
+
+    it('prints the trust walkthrough after writing', () => {
+      installHooks(codexOptions(), write);
+
+      expect(written.join('\n')).toContain(TRUST_WALKTHROUGH);
+    });
+
+    it('leaves the config alone and the hooks file identical on a second install', () => {
+      installHooks(codexOptions(), write);
+      const first = hooksFile();
+      const config = configFile();
+      written = [];
+
+      installHooks(codexOptions(), write);
+
+      expect(hooksFile()).toEqual(first);
+      expect(configFile()).toBe(config);
+      expect(written.join('\n')).toContain('already in');
+    });
+
+    it('appends to a config that has other servers and backs it up first', () => {
+      mkdirSync(codexDir, { recursive: true });
+      const original = 'model = "gpt-5"\n\n[mcp_servers.other]\nurl = "http://127.0.0.1:1/mcp"\n';
+      writeFileSync(codexConfigPath, original);
+
+      installHooks(codexOptions(), write);
+
+      expect(configFile()).toBe(`${original}\n${SERVER_BLOCK}`);
+      expect(readFileSync(backupPath(codexConfigPath, NOW), 'utf8')).toBe(original);
+    });
+
+    it('refuses without a key and writes neither file', () => {
+      const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+
+      expect(installHooks(codexOptions({ env: {} }), write)).toBe(1);
+
+      expect(existsSync(codexHooksPath)).toBe(false);
+      expect(existsSync(codexConfigPath)).toBe(false);
+      expect(written).toEqual([]);
+      expect(String(stderr.mock.calls[0]?.[0])).toContain('AION_ANTHROPIC_API_KEY');
+    });
+
+    it('removes the hook entries and says the server block stays', () => {
+      installHooks(codexOptions(), write);
+      written = [];
+
+      expect(uninstallHooks(codexOptions(), write)).toBe(0);
+
+      expect(describeAionHooks(hooksFile())).toHaveLength(0);
+      expect(configFile()).toBe(SERVER_BLOCK);
+      const out = written.join('\n');
+      expect(out).toContain(`removed 7 entries from ${codexHooksPath}`);
+      expect(out).toContain(codexConfigPath);
+    });
+
+    it('reports the entries, the server block, and the build', () => {
+      installHooks(codexOptions(), write);
+      written = [];
+
+      expect(statusHooks(codexOptions(), write)).toBe(0);
+
+      const out = written.join('\n');
+      expect(out).toContain(`settings: ${codexHooksPath}`);
+      expect(out).toContain('SessionStart');
+      expect(out).toContain(`[mcp_servers.aion] present in ${codexConfigPath}`);
+      expect(written[written.length - 1]).toContain('hook-main.js present');
+    });
+
+    it('reports a config that carries no server block', () => {
+      expect(statusHooks(codexOptions(), write)).toBe(0);
+
+      const out = written.join('\n');
+      expect(out).toContain('no aion entries');
+      expect(out).toContain(`[mcp_servers.aion] missing from ${codexConfigPath}`);
+    });
+
+    it('prints both blocks to merge by hand when the host repo cannot be reached', () => {
+      expect(
+        installHooks(codexOptions({ repo: { path: '/host/aion-local', verified: false } }), write),
+      ).toBe(0);
+
+      expect(existsSync(codexHooksPath)).toBe(false);
+      expect(existsSync(codexConfigPath)).toBe(false);
+      const block = JSON.parse(written.find((line) => line.startsWith('{')) ?? '{}');
+      expect(Object.keys(block.hooks).sort()).toEqual([
+        'PreCompact',
+        'PreToolUse',
+        'SessionEnd',
+        'SessionStart',
+        'Stop',
+        'SubagentStop',
+        'UserPromptSubmit',
+      ]);
+      expect(block.hooks.SessionStart[0].hooks[0].command).toContain(
+        '/host/aion-local/packages/cli/dist/hook-main.js session-start --harness codex',
+      );
+      const out = written.join('\n');
+      expect(out).toContain('hooks.json');
+      expect(out).toContain(SERVER_BLOCK.trimEnd());
+      expect(out).toContain('config.toml');
+    });
   });
 });

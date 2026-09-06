@@ -78,8 +78,13 @@ fi
 # The container's mounts are the repo, the docker socket, and the data volumes, so nothing
 # inside it can see the harness settings. Whether hooks are installed is a host fact, computed
 # here and passed through for `doctor` to check against the route reflection resolved to.
-CLAUDE_SETTINGS="$HOME/.claude/settings.json"
-if [ -f "$CLAUDE_SETTINGS" ] && grep -q 'hook-main.js' "$CLAUDE_SETTINGS"; then
+# Either harness counts: the check reads the routing, not which CLI fires the hook.
+hooks_installed_in() {
+  [ -f "$1" ] && grep -q 'hook-main.js' "$1"
+}
+
+if hooks_installed_in "$HOME/.claude/settings.json" ||
+  hooks_installed_in "${CODEX_HOME:-$HOME/.codex}/hooks.json"; then
   AION_HOOKS_INSTALLED=true
 else
   AION_HOOKS_INSTALLED=false

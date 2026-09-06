@@ -1,12 +1,16 @@
 import { describeError, envFileValue } from '@aion/core';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 
 import { CliUsageError, wantsHelp } from './args.js';
-import type { StopMode } from './hook/options.js';
+import { buildCodexAionHooks, mergeCodexAionHooks } from './hook/codex-settings.js';
+import { mcpEndpoint } from './hook/mcp.js';
+import type { Harness, StopMode } from './hook/options.js';
 import {
   backupSettings,
   claudeSettingsPath,
+  codexHooksPath,
   readSettings,
   writeSettings,
 } from './hook/settings-file.js';
@@ -22,14 +26,29 @@ import { stderrWriter, stdoutWriter, type Writer } from './output.js';
 import { envFilePath, hookScriptPath, resolveHostRepo, type HostRepo } from './paths.js';
 
 /**
- * `aion hooks install | uninstall | status`. The merge lives in `hook/settings.ts` and the file
- * itself in `hook/settings-file.ts`; this owns the invocation and what the user is told.
+ * `aion hooks install | uninstall | status`. The merge lives in `hook/settings.ts` and
+ * `hook/codex-settings.ts`, the hooks file itself in `hook/settings-file.ts`; this owns the
+ * invocation, the codex server block, and what the user is told.
  */
+
+/** Codex keeps it beside hooks.json, and reads far more than the server list out of it. */
+const CODEX_CONFIG_FILE = 'config.toml';
+
+/** The header codex reads the aion server off, and the line an install looks for. */
+const CODEX_MCP_HEADER = '[mcp_servers.aion]';
+
+/** Printed verbatim after a codex install, because nothing fires until the user trusts it. */
+const CODEX_TRUST_WALKTHROUGH = [
+  'codex trusts a hook only after you review it. Run codex, then /hooks, and trust the aion entries.',
+  'A reinstall with different flags changes those entries and codex will ask again. Hooks are enabled',
+  'by default (features.hooks); if /hooks shows them disabled, enable the feature first.',
+];
 
 function unknownHooksOption(option: string): CliUsageError {
   return new CliUsageError(
-    `unknown option '${option}' for hooks (supported: --profile full|lite, ` +
-      '--with-research-capture, --no-research-capture, --stop-mode push|instruct)',
+    `unknown option '${option}' for hooks (supported: --harness claude|codex, ` +
+      '--profile full|lite, --with-research-capture, --no-research-capture, ' +
+      '--stop-mode push|instruct)',
   );
 }
 
@@ -37,16 +56,18 @@ export type HooksFlags = {
   readonly profile: HookProfile;
   readonly withResearchCapture: boolean;
   readonly stopMode: StopMode;
+  readonly harness: Harness;
 };
 
 export const DEFAULT_HOOKS_FLAGS: HooksFlags = {
   profile: 'full',
   withResearchCapture: true,
   stopMode: 'push',
+  harness: 'claude',
 };
 
 export function parseHooksFlags(argv: readonly string[]): HooksFlags {
-  let { profile, withResearchCapture, stopMode } = DEFAULT_HOOKS_FLAGS;
+  let { profile, withResearchCapture, stopMode, harness } = DEFAULT_HOOKS_FLAGS;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -69,23 +90,33 @@ export function parseHooksFlags(argv: readonly string[]): HooksFlags {
       index += 1;
       continue;
     }
+    if (arg === '--harness' && (value === 'claude' || value === 'codex')) {
+      harness = value;
+      index += 1;
+      continue;
+    }
     throw unknownHooksOption(arg ?? '');
   }
-  return { profile, withResearchCapture, stopMode };
+  return { profile, withResearchCapture, stopMode, harness };
 }
 
 export type HooksCommandOptions = {
   readonly flags: HooksFlags;
   readonly settingsPath: string;
+  readonly codexHooksPath: string;
+  readonly codexConfigPath: string;
   readonly repo: HostRepo;
   readonly now: Date;
   readonly env: NodeJS.ProcessEnv;
 };
 
 export function defaultHooksOptions(flags: HooksFlags): HooksCommandOptions {
+  const codexHooks = codexHooksPath(homedir(), process.env);
   return {
     flags,
     settingsPath: claudeSettingsPath(homedir()),
+    codexHooksPath: codexHooks,
+    codexConfigPath: join(dirname(codexHooks), CODEX_CONFIG_FILE),
     repo: resolveHostRepo(),
     now: new Date(),
     env: process.env,
@@ -117,20 +148,84 @@ function keylessRefusal(repoPath: string): string {
   );
 }
 
-function backupAndReport(options: HooksCommandOptions, write: Writer): void {
-  const target = backupSettings(options.settingsPath, options.now);
+function backupAndReport(path: string, now: Date, write: Writer): void {
+  const target = backupSettings(path, now);
   if (target !== undefined) {
     write(`  backup ${target}`);
   }
 }
 
+/** One install writes one file: each harness keeps its hooks in its own. */
+function hooksFilePath(options: HooksCommandOptions): string {
+  return options.flags.harness === 'codex' ? options.codexHooksPath : options.settingsPath;
+}
+
 function specFor(options: HooksCommandOptions): SettingsHooks {
-  return buildAionHooks({
+  const spec = {
     profile: options.flags.profile,
     withResearchCapture: options.flags.withResearchCapture,
     stopMode: options.flags.stopMode,
     scriptPath: hookScriptPath(options.repo.path),
-  });
+  };
+  return options.flags.harness === 'codex' ? buildCodexAionHooks(spec) : buildAionHooks(spec);
+}
+
+function mergedFor(
+  options: HooksCommandOptions,
+  current: unknown,
+  aion: SettingsHooks,
+): Record<string, unknown> {
+  if (options.flags.harness === 'codex') {
+    return mergeCodexAionHooks(current, aion);
+  }
+  return mergeAionHooks(current, aion);
+}
+
+function codexMcpBlock(env: NodeJS.ProcessEnv): string {
+  return `${CODEX_MCP_HEADER}\nurl = "${mcpEndpoint(env)}"\n`;
+}
+
+/** An exact line, so a server named aion-old and a header inside a comment both read as absent. */
+function hasCodexMcpServer(config: string): boolean {
+  return config.split('\n').some((line) => line.trim() === CODEX_MCP_HEADER);
+}
+
+function readCodexConfig(path: string): string | undefined {
+  if (!existsSync(path)) {
+    return undefined;
+  }
+  return readFileSync(path, 'utf8');
+}
+
+/**
+ * Append-only. Codex reads its model, its approvals, and every other server out of this file,
+ * so an install that cannot find our header adds one block at the end and rewrites nothing
+ * above it.
+ */
+function ensureCodexMcpServer(options: HooksCommandOptions, write: Writer): void {
+  const path = options.codexConfigPath;
+  const current = readCodexConfig(path);
+  if (current === undefined) {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, codexMcpBlock(options.env), 'utf8');
+    write(`  ${CODEX_MCP_HEADER} written to ${path}`);
+    return;
+  }
+  if (hasCodexMcpServer(current)) {
+    write(`  ${CODEX_MCP_HEADER} already in ${path}, left alone`);
+    return;
+  }
+  backupAndReport(path, options.now, write);
+  writeFileSync(path, `${current}\n${codexMcpBlock(options.env)}`, 'utf8');
+  write(`  ${CODEX_MCP_HEADER} appended to ${path}`);
+}
+
+function codexMcpStatus(path: string): string {
+  const config = readCodexConfig(path);
+  if (config !== undefined && hasCodexMcpServer(config)) {
+    return `config: ${CODEX_MCP_HEADER} present in ${path}`;
+  }
+  return `config: ${CODEX_MCP_HEADER} missing from ${path}`;
 }
 
 function renderRows(settings: unknown, write: Writer): void {
@@ -142,14 +237,27 @@ function renderRows(settings: unknown, write: Writer): void {
 }
 
 /**
- * The container can reach neither the host repo nor the host's Claude settings, so the block
- * is printed for the user to merge by hand instead of the command failing.
+ * The container can reach neither the host repo nor the host's harness settings, so the blocks
+ * are printed for the user to merge by hand instead of the command failing.
  */
-function renderManualInstall(hooks: SettingsHooks, write: Writer): void {
+function renderManualInstall(
+  options: HooksCommandOptions,
+  hooks: SettingsHooks,
+  write: Writer,
+): void {
+  const codex = options.flags.harness === 'codex';
+  const target = codex ? '~/.codex/hooks.json' : '~/.claude/settings.json';
   write('aion hooks: this process cannot see the host repo, so nothing was written.');
-  write('Merge this into ~/.claude/settings.json on the host, under its "hooks" key:');
+  write(`Merge this into ${target} on the host, under its "hooks" key:`);
   write('');
   write(JSON.stringify({ hooks }, null, 2));
+  if (!codex) {
+    return;
+  }
+  write('');
+  write('Add this to ~/.codex/config.toml on the host, so the tools stay reachable:');
+  write('');
+  write(codexMcpBlock(options.env).trimEnd());
 }
 
 export function installHooks(options: HooksCommandOptions, write: Writer): number {
@@ -162,7 +270,7 @@ export function installHooks(options: HooksCommandOptions, write: Writer): numbe
 
   const hooks = specFor(options);
   if (!options.repo.verified) {
-    renderManualInstall(hooks, write);
+    renderManualInstall(options, hooks, write);
     return 0;
   }
 
@@ -172,38 +280,55 @@ export function installHooks(options: HooksCommandOptions, write: Writer): numbe
     return 1;
   }
 
-  const merged = mergeAionHooks(readSettings(options.settingsPath), hooks);
-  backupAndReport(options, write);
-  writeSettings(options.settingsPath, merged);
-  write(`aion hooks installed (${options.flags.profile}) in ${options.settingsPath}`);
+  const path = hooksFilePath(options);
+  const merged = mergedFor(options, readSettings(path), hooks);
+  backupAndReport(path, options.now, write);
+  writeSettings(path, merged);
+  write(`aion hooks installed (${options.flags.profile}) in ${path}`);
   renderRows(merged, write);
+  if (options.flags.harness === 'codex') {
+    ensureCodexMcpServer(options, write);
+    for (const line of CODEX_TRUST_WALKTHROUGH) {
+      write(line);
+    }
+  }
   return 0;
 }
 
 export function uninstallHooks(options: HooksCommandOptions, write: Writer): number {
-  if (!existsSync(options.settingsPath)) {
-    write(`aion hooks: nothing to remove, ${options.settingsPath} does not exist`);
+  const path = hooksFilePath(options);
+  if (!existsSync(path)) {
+    write(`aion hooks: nothing to remove, ${path} does not exist`);
     return 0;
   }
-  const current = readSettings(options.settingsPath);
+  const current = readSettings(path);
   const removed = describeAionHooks(current).length;
   if (removed === 0) {
-    write(`aion hooks: no aion entries in ${options.settingsPath}`);
+    write(`aion hooks: no aion entries in ${path}`);
     return 0;
   }
-  backupAndReport(options, write);
-  writeSettings(options.settingsPath, removeAionHooks(current));
-  write(`aion hooks: removed ${removed} entries from ${options.settingsPath}`);
+  backupAndReport(path, options.now, write);
+  writeSettings(path, removeAionHooks(current));
+  write(`aion hooks: removed ${removed} entries from ${path}`);
+  if (options.flags.harness === 'codex') {
+    // The server block costs nothing without hooks, and a model that calls recall or
+    // reflection on its own still needs it.
+    write(`  ${CODEX_MCP_HEADER} left in ${options.codexConfigPath}, still callable as tools`);
+  }
   return 0;
 }
 
 export function statusHooks(options: HooksCommandOptions, write: Writer): number {
-  const settings = readSettings(options.settingsPath);
-  write(`settings: ${options.settingsPath}`);
+  const path = hooksFilePath(options);
+  const settings = readSettings(path);
+  write(`settings: ${path}`);
   if (describeAionHooks(settings).length === 0) {
     write('  no aion entries');
   } else {
     renderRows(settings, write);
+  }
+  if (options.flags.harness === 'codex') {
+    write(codexMcpStatus(options.codexConfigPath));
   }
 
   const script = hookScriptPath(options.repo.path);
@@ -225,6 +350,10 @@ function usage(): string {
   return [
     'usage: aion hooks <install | uninstall | status> [options]',
     '',
+    '  --harness claude|codex       which harness to write (default claude). codex keeps its',
+    '                               hooks in $CODEX_HOME/hooks.json, takes the aion mcp server',
+    '                               in config.toml beside it, and runs nothing until the entries',
+    '                               are trusted in /hooks',
     '  --profile full|lite          full: recall on session start and every prompt, capture on',
     '                               compact, stop, subagent stop, and session end. lite: session',
     '                               start and session end only. both stamp the session id onto a',
