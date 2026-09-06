@@ -16,6 +16,13 @@ export type HookEvent = (typeof HOOK_EVENTS)[number];
 
 export type StopMode = 'push' | 'instruct';
 
+/**
+ * Which CLI is firing the hook. The two keep their hooks in different files and do not name the
+ * fields of a fire alike, so the invocation says which one it is and the client never has to
+ * guess from the payload it was handed.
+ */
+export type Harness = 'claude' | 'codex';
+
 /** Hard ceiling on everything one fire does. A hook that outlives it has already cost the turn more than the memory is worth. */
 export const HOOK_TIMEOUT_MS = 10_000;
 
@@ -33,6 +40,7 @@ export const KEYLESS_NOTICE =
 
 export type HookOptions = {
   readonly event: HookEvent;
+  readonly harness: Harness;
   readonly stopMode: StopMode;
   readonly minChars: number;
   /** Decided once per process, so eight handlers cannot disagree about it mid-session. */

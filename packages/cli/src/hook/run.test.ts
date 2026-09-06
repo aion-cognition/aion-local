@@ -22,7 +22,7 @@ import {
   type StopMode,
 } from './options.js';
 import { OBSERVATION_LIMIT } from './payload.js';
-import { parseHookFlags, parseHookInput, runHook } from './run.js';
+import { main, parseHookFlags, parseHookInput, runHook } from './run.js';
 import { backupPath } from './settings-file.js';
 import { describeAionHooks } from './settings.js';
 import { readHookState, stateFilePath } from './state.js';
@@ -30,6 +30,24 @@ import { readHookState, stateFilePath } from './state.js';
 const SESSION_ID = 'claude-session-7';
 
 const NOW = new Date('2026-08-30T04:00:00.000Z');
+
+const AION_COMMAND = 'node /repo/packages/cli/dist/hook-main.js';
+
+const INSTALLED = {
+  model: 'opus',
+  hooks: {
+    SessionStart: [
+      {
+        matcher: 'startup|resume|clear|compact',
+        hooks: [{ type: 'command', command: `${AION_COMMAND} session-start` }],
+      },
+    ],
+    Stop: [
+      { hooks: [{ type: 'command', command: 'notify-send done' }] },
+      { hooks: [{ type: 'command', command: `${AION_COMMAND} stop --mode push` }] },
+    ],
+  },
+};
 
 const ASSISTANT_LINE = JSON.stringify({
   type: 'assistant',
@@ -121,6 +139,7 @@ describe('hook events', () => {
   function options(event: HookOptions['event'], overrides: Overrides): HookOptions {
     return {
       event,
+      harness: 'claude',
       stopMode: overrides.stopMode ?? 'push',
       minChars: overrides.minChars ?? 40,
       keyState: overrides.keyState ?? 'present',
@@ -587,24 +606,6 @@ describe('hook events', () => {
   });
 
   describe('with no anthropic key on the machine', () => {
-    const AION_COMMAND = 'node /repo/packages/cli/dist/hook-main.js';
-
-    const INSTALLED = {
-      model: 'opus',
-      hooks: {
-        SessionStart: [
-          {
-            matcher: 'startup|resume|clear|compact',
-            hooks: [{ type: 'command', command: `${AION_COMMAND} session-start` }],
-          },
-        ],
-        Stop: [
-          { hooks: [{ type: 'command', command: 'notify-send done' }] },
-          { hooks: [{ type: 'command', command: `${AION_COMMAND} stop --mode push` }] },
-        ],
-      },
-    };
-
     const LATER = (): Date => new Date('2026-08-30T05:00:00.000Z');
 
     let settingsPath: string;
@@ -791,9 +792,63 @@ describe('hook events', () => {
   });
 });
 
+describe('main', () => {
+  let dir: string;
+  let codexHome: string;
+  let scriptPath: string;
+  let stdout: string[];
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'aion-hook-main-'));
+    // The claude branch resolves against the real home directory, so a fire that took the wrong
+    // one would reach the developer's own settings file. HOME moves it under the temp directory.
+    vi.stubEnv('HOME', join(dir, 'home'));
+    mkdirSync(join(dir, 'home'), { recursive: true });
+
+    // A readable .env with a blank key is what tells the client this machine is keyless.
+    scriptPath = join(dir, 'repo', 'packages', 'cli', 'dist', 'hook-main.js');
+    mkdirSync(join(dir, 'repo', 'packages', 'cli', 'dist'), { recursive: true });
+    writeFileSync(join(dir, 'repo', '.env'), 'AION_ANTHROPIC_API_KEY=\n');
+
+    codexHome = join(dir, 'codex');
+    mkdirSync(codexHome, { recursive: true });
+    writeFileSync(join(codexHome, 'hooks.json'), JSON.stringify(INSTALLED));
+    stdout = [];
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('strips the codex hooks file when the flag names codex and the machine has no key', async () => {
+    await expect(
+      main(['session-start', '--harness', 'codex'], {
+        env: { CODEX_HOME: codexHome },
+        readInput: () => Promise.resolve(JSON.stringify({ session_id: SESSION_ID })),
+        stateDir: join(dir, 'state'),
+        scriptPath,
+        stdout: (line) => stdout.push(line),
+        stderr: () => undefined,
+        now: (): Date => NOW,
+      }),
+    ).resolves.toBe(0);
+
+    const hooksFile = join(codexHome, 'hooks.json');
+    expect(describeAionHooks(JSON.parse(readFileSync(hooksFile, 'utf8')))).toEqual([]);
+    expect(existsSync(backupPath(hooksFile, NOW))).toBe(true);
+    expect(JSON.parse(stdout[0] ?? '{}').hookSpecificOutput.additionalContext).toBe(KEYLESS_NOTICE);
+  });
+});
+
 describe('parseHookFlags', () => {
-  it('defaults to push mode and a forty character floor', () => {
-    expect(parseHookFlags(['stop'])).toEqual({ event: 'stop', stopMode: 'push', minChars: 40 });
+  it('defaults to push mode, a forty character floor, and the claude harness', () => {
+    expect(parseHookFlags(['stop'])).toEqual({
+      event: 'stop',
+      harness: 'claude',
+      stopMode: 'push',
+      minChars: 40,
+    });
   });
 
   it('reads the stop mode and the min-chars threshold', () => {
@@ -801,6 +856,18 @@ describe('parseHookFlags', () => {
       stopMode: 'instruct',
     });
     expect(parseHookFlags(['prompt-submit', '--min-chars', '80'])).toMatchObject({ minChars: 80 });
+  });
+
+  it('reads the harness the flag names', () => {
+    expect(parseHookFlags(['stop', '--harness', 'codex'])).toMatchObject({ harness: 'codex' });
+    expect(parseHookFlags(['stop', '--mode', 'instruct', '--harness', 'codex'])).toMatchObject({
+      stopMode: 'instruct',
+      harness: 'codex',
+    });
+  });
+
+  it('answers claude for a harness it does not know, rather than failing the fire', () => {
+    expect(parseHookFlags(['stop', '--harness', 'weird']).harness).toBe('claude');
   });
 
   it('reports an unrecognised event as undefined rather than throwing', () => {

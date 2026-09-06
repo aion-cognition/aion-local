@@ -19,6 +19,7 @@ import {
   HOOK_EVENTS,
   HOOK_TIMEOUT_MS,
   KEYLESS_NOTICE,
+  type Harness,
   type HookContext,
   type HookEvent,
   type HookOptions,
@@ -28,6 +29,7 @@ import { additionalContext } from './payload.js';
 import {
   backupSettings,
   claudeSettingsPath,
+  codexHooksPath,
   readSettings,
   writeSettings,
 } from './settings-file.js';
@@ -59,6 +61,7 @@ const HANDLERS: Record<HookEvent, (context: HookContext) => Promise<number>> = {
 
 export type HookFlags = {
   readonly event: HookEvent | undefined;
+  readonly harness: Harness;
   readonly stopMode: StopMode;
   readonly minChars: number;
 };
@@ -69,11 +72,19 @@ export function parseHookFlags(argv: readonly string[]): HookFlags {
     ? (name as HookEvent)
     : undefined;
 
+  let harness: Harness = 'claude';
   let stopMode: StopMode = 'push';
   let minChars = DEFAULT_MIN_CHARS;
   for (let index = 0; index < rest.length; index += 1) {
     const flag = rest[index];
     const value = rest[index + 1];
+    // A name this does not know leaves the default standing, the way an unusable value does
+    // everywhere else here: argv is not worth failing a fire over.
+    if (flag === '--harness' && (value === 'claude' || value === 'codex')) {
+      harness = value;
+      index += 1;
+      continue;
+    }
     if (flag === '--mode' && (value === 'push' || value === 'instruct')) {
       stopMode = value;
       index += 1;
@@ -87,7 +98,7 @@ export function parseHookFlags(argv: readonly string[]): HookFlags {
       index += 1;
     }
   }
-  return { event, stopMode, minChars };
+  return { event, harness, stopMode, minChars };
 }
 
 export function parseHookInput(raw: string): Record<string, unknown> {
@@ -225,6 +236,14 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+/** The file the keyless strip rewrites, which is the one the harness that fired reads its hooks from. */
+function hooksFilePath(harness: Harness, env: NodeJS.ProcessEnv): string {
+  if (harness === 'codex') {
+    return codexHooksPath(homedir(), env);
+  }
+  return claudeSettingsPath(homedir());
+}
+
 export async function main(argv: readonly string[], deps: HookMainDeps = {}): Promise<number> {
   const stderr =
     deps.stderr ??
@@ -241,10 +260,11 @@ export async function main(argv: readonly string[], deps: HookMainDeps = {}): Pr
     const input = parseHookInput(await (deps.readInput ?? readStdin)());
     return await runHook(input, {
       event: flags.event,
+      harness: flags.harness,
       stopMode: flags.stopMode,
       minChars: flags.minChars,
       keyState: anthropicKeyState(env, deps.scriptPath ?? process.argv[1]),
-      settingsPath: deps.settingsPath ?? claudeSettingsPath(homedir()),
+      settingsPath: deps.settingsPath ?? hooksFilePath(flags.harness, env),
       stateDir: deps.stateDir ?? defaultStateDir(),
       endpoint: mcpEndpoint(env),
       fetchImpl: deps.fetchImpl ?? fetch,

@@ -7,6 +7,7 @@ import {
   backupPath,
   backupSettings,
   claudeSettingsPath,
+  codexHooksPath,
   readSettings,
   SettingsUnreadableError,
   writeSettings,
@@ -17,6 +18,20 @@ const NOW = new Date('2026-08-30T04:05:06.789Z');
 describe('claudeSettingsPath', () => {
   it('names the file under the home directory it is given', () => {
     expect(claudeSettingsPath('/home/me')).toBe('/home/me/.claude/settings.json');
+  });
+});
+
+describe('codexHooksPath', () => {
+  it('names the file under .codex in the home directory it is given', () => {
+    expect(codexHooksPath('/home/me', {})).toBe('/home/me/.codex/hooks.json');
+  });
+
+  it('follows CODEX_HOME when the environment sets one', () => {
+    expect(codexHooksPath('/home/me', { CODEX_HOME: '/custom' })).toBe('/custom/hooks.json');
+  });
+
+  it('falls back to the home directory when CODEX_HOME holds only blanks', () => {
+    expect(codexHooksPath('/home/me', { CODEX_HOME: '  ' })).toBe('/home/me/.codex/hooks.json');
   });
 });
 

@@ -2,7 +2,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import { dirname, join } from 'node:path';
 
 /**
- * The `~/.claude/settings.json` file itself: where it sits, reading it, copying it aside, and
+ * The file a harness keeps its hooks in: where it sits, reading it, copying it aside, and
  * writing it back. `settings.ts` decides what belongs in the hooks block; this touches the
  * disk. The install command and the hook client both write this file, so they share one
  * implementation and the backup rule holds whichever of them wrote.
@@ -10,6 +10,12 @@ import { dirname, join } from 'node:path';
 
 export function claudeSettingsPath(home: string): string {
   return join(home, '.claude', 'settings.json');
+}
+
+/** Codex keeps its own directory, which `CODEX_HOME` moves the way `HOME` moves a home directory. */
+export function codexHooksPath(home: string, env: NodeJS.ProcessEnv): string {
+  const configured = (env.CODEX_HOME ?? '').trim();
+  return join(configured === '' ? join(home, '.codex') : configured, 'hooks.json');
 }
 
 export class SettingsUnreadableError extends Error {
