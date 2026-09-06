@@ -15,6 +15,8 @@ export type ChatMessage = {
 export type JsonSchema = Record<string, unknown>;
 
 export type StructuredRequest = {
+  /** The stage or operation charged for this generation call. */
+  readonly surface?: string;
   model: string;
   messages: readonly ChatMessage[];
   schema: JsonSchema;
@@ -29,6 +31,19 @@ export type StructuredRequest = {
    * set this false; a caller that wants the model to reason leaves it unset.
    */
   think?: boolean;
+};
+
+/** Usage reported by one billed API response; the input token classes do not overlap. */
+export type ApiCall = {
+  readonly occurredAt: Date;
+  readonly model: string;
+  readonly surface: string;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cacheCreationTokens: number;
+  readonly cacheReadTokens: number;
+  readonly durationMs: number;
+  readonly attempts: number;
 };
 
 /**

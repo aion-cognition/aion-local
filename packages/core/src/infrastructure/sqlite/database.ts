@@ -23,6 +23,18 @@ export type SqliteTarget = {
 };
 
 const SCHEMA_STATEMENTS: readonly string[] = [
+  `CREATE TABLE IF NOT EXISTS api_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    occurred_at TEXT NOT NULL,
+    model TEXT NOT NULL,
+    surface TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL CHECK (input_tokens >= 0),
+    output_tokens INTEGER NOT NULL CHECK (output_tokens >= 0),
+    cache_creation_tokens INTEGER NOT NULL CHECK (cache_creation_tokens >= 0),
+    cache_read_tokens INTEGER NOT NULL CHECK (cache_read_tokens >= 0),
+    duration_ms REAL NOT NULL CHECK (duration_ms >= 0),
+    attempts INTEGER NOT NULL CHECK (attempts > 0)
+  )`,
   `CREATE TABLE IF NOT EXISTS ops_ledger (
     key TEXT PRIMARY KEY,
     applied_at TEXT NOT NULL,
@@ -229,6 +241,7 @@ const SCHEMA_STATEMENTS: readonly string[] = [
  * fails outright on a table that predates it.
  */
 const INDEX_STATEMENTS: readonly string[] = [
+  `CREATE INDEX IF NOT EXISTS api_calls_occurred_at_idx ON api_calls (occurred_at)`,
   // The claim's whole ORDER BY, so a claim seeks the first unclaimed row instead of sorting
   // every pending one. The lane CASE is indexed as the expression the statement writes, since
   // an index on `lane` alone sorts bulk ahead of interactive.

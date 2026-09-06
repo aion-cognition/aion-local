@@ -218,3 +218,10 @@ export type { RecallCadenceCounters } from './sqlite/recall-cadence.js';
 
 export { recallProbeCounters } from './sqlite/recall-probe-counters.js';
 export type { RecallProbeCounters } from './sqlite/recall-probe-counters.js';
+export {
+  appendApiCall,
+  ApiUsageRecorder,
+  summarizeApiCalls,
+  type ApiUsageGroup,
+} from './sqlite/api-usage.js';
+export { estimateApiCost } from './providers/api-pricing.js';

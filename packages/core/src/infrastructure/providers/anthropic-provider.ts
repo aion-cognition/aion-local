@@ -1,7 +1,15 @@
+import { z } from 'zod';
+
 import { CircuitBreaker } from './circuit-breaker.js';
 import { abortRequested } from './deadline-signal.js';
 import { summarizeErrorBody } from './errors.js';
-import type { ChatMessage, GenerationBackend, JsonSchema, StructuredRequest } from './types.js';
+import type {
+  ApiCall,
+  ChatMessage,
+  GenerationBackend,
+  JsonSchema,
+  StructuredRequest,
+} from './types.js';
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
@@ -212,7 +220,16 @@ export type AnthropicRequestOptions = {
   readonly fetchImpl?: typeof fetch;
   readonly maxTokens?: number;
   readonly schemaDelivery?: SchemaDelivery;
+  readonly recordApiCall?: (call: ApiCall) => void;
+  readonly now?: () => number;
 };
+
+const USAGE_SCHEMA = z.object({
+  input_tokens: z.number().int().nonnegative(),
+  output_tokens: z.number().int().nonnegative(),
+  cache_creation_input_tokens: z.number().int().nonnegative().default(0),
+  cache_read_input_tokens: z.number().int().nonnegative().default(0),
+});
 
 function throttled(status: number): boolean {
   return status === 429 || status >= 500;
@@ -252,12 +269,15 @@ async function askAnthropic(
   req: StructuredRequest,
   viaPrompt: boolean,
 ): Promise<unknown> {
+  const now = options.now ?? Date.now;
+  const started = now();
   const fetchImpl = options.fetchImpl ?? fetch;
   const { system, rest } = splitSystem(req.messages);
   const instructions = viaPrompt ? joinInstructions(system, schemaInstruction(req.schema)) : system;
 
   let response!: Response;
-  for (let attempt = 1; ; attempt += 1) {
+  let attempts = 1;
+  for (; ; attempts += 1) {
     response = await fetchImpl(ANTHROPIC_API_URL, {
       method: 'POST',
       headers: {
@@ -284,12 +304,12 @@ async function askAnthropic(
       }),
       ...(req.signal === undefined ? {} : { signal: req.signal }),
     });
-    if (!throttled(response.status) || attempt >= MAX_ATTEMPTS || abortRequested(req.signal)) {
+    if (!throttled(response.status) || attempts >= MAX_ATTEMPTS || abortRequested(req.signal)) {
       break;
     }
     const retryAfter = Number(response.headers.get('retry-after'));
     const waitMs =
-      Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : attempt * 2000;
+      Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : attempts * 2000;
     await response.text().catch(() => undefined);
     await backoff(Math.min(waitMs, MAX_BACKOFF_MS), req.signal);
     if (abortRequested(req.signal)) {
@@ -303,7 +323,25 @@ async function askAnthropic(
     throw new AnthropicRequestError(response.status, await response.text());
   }
 
-  const body = (await response.json()) as { content?: { type: string; text?: string }[] };
+  const body = (await response.json()) as {
+    content?: { type: string; text?: string }[];
+    usage?: unknown;
+  };
+  const usage = USAGE_SCHEMA.safeParse(body.usage);
+  // A successful HTTP response is billed even if its text forces a constrained retry.
+  if (usage.success) {
+    options.recordApiCall?.({
+      occurredAt: new Date(started),
+      model: req.model,
+      surface: req.surface ?? 'unlabeled',
+      inputTokens: usage.data.input_tokens,
+      outputTokens: usage.data.output_tokens,
+      cacheCreationTokens: usage.data.cache_creation_input_tokens,
+      cacheReadTokens: usage.data.cache_read_input_tokens,
+      durationMs: Math.max(0, now() - started),
+      attempts,
+    });
+  }
   const textBlock = body.content?.find((block) => block.type === 'text');
   if (textBlock?.text === undefined) {
     throw new AnthropicResponseError('missing text content');
@@ -349,6 +387,7 @@ export type AnthropicProviderOptions = {
   readonly fetchImpl?: typeof fetch;
   readonly maxTokens?: number;
   readonly schemaDelivery?: SchemaDelivery;
+  readonly recordApiCall?: (call: ApiCall) => void;
   readonly breakerFailureThreshold?: number;
   readonly breakerCooldownMs?: number;
   /** The breaker's clock, passed in like every other clock rather than read from the module. */
@@ -376,6 +415,8 @@ export class AnthropicProvider implements GenerationBackend {
       ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
       ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
       ...(options.schemaDelivery === undefined ? {} : { schemaDelivery: options.schemaDelivery }),
+      ...(options.recordApiCall === undefined ? {} : { recordApiCall: options.recordApiCall }),
+      ...(options.now === undefined ? {} : { now: options.now }),
     };
     this.#model = options.model;
     this.#breaker = new CircuitBreaker({

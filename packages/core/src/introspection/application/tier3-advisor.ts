@@ -207,6 +207,7 @@ export async function adviseTier3(
   let raw: unknown;
   try {
     raw = await provider.generate({
+      surface: 'tier3_advisor',
       model: options.model,
       messages: buildAdviceMessages(request),
       schema: adviceSchema(names),
@@ -276,6 +277,7 @@ export async function reviewTier3Proposal(
   let raw: unknown;
   try {
     raw = await provider.generate({
+      surface: 'tier3_review',
       model: options.model,
       messages: buildReviewMessages(request, proposal),
       schema: REVIEW_JSON_SCHEMA,

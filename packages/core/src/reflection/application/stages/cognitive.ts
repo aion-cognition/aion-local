@@ -222,6 +222,7 @@ export class CognitiveExtractionStage implements ReflectionStage {
     let raw: unknown;
     try {
       raw = await ctx.provider.generate({
+        surface: 'cognitive',
         model: this.#options.model,
         messages: buildMessages(text, ctx.episode.summary),
         schema: COGNITIVE_JSON_SCHEMA,

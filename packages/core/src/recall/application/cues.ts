@@ -161,6 +161,7 @@ async function callCueModel(
   }, deps.budgetMs);
   try {
     const data = await deps.provider.generate({
+      surface: 'cues',
       model: deps.model,
       messages: buildMessages(input),
       schema: CUE_OUTPUT_JSON_SCHEMA,

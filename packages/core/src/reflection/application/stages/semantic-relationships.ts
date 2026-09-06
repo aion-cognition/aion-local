@@ -247,6 +247,7 @@ export class SemanticRelationshipStage implements ReflectionStage {
     let raw: unknown;
     try {
       raw = await ctx.provider.generate({
+        surface: 'semantic_relationships',
         model: this.#model,
         messages: buildMessages(text, candidates),
         schema: buildJsonSchema(candidates),

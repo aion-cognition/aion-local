@@ -81,6 +81,7 @@ export async function judgeHygienePair(
   let raw: unknown;
   try {
     raw = await provider.generate({
+      surface: 'proposal_hygiene',
       model: options.model,
       messages: buildMessages(pair),
       schema: JUDGE_JSON_SCHEMA,

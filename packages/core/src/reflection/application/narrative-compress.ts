@@ -56,6 +56,7 @@ async function generateNarrative(
   const deadline = deadlineFor(settings.timeoutMs, settings.signal);
   try {
     const raw = await deps.provider.generate({
+      surface: 'narrative_synthesis',
       model: settings.model,
       messages: buildNarrativeMessages(source),
       schema: NARRATIVE_JSON_SCHEMA,

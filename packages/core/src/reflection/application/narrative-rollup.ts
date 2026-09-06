@@ -294,6 +294,7 @@ async function rollUpWindow(
     buildRollupMessages(source, settings.scope),
     {
       model: settings.model,
+      surface: 'narrative_rollup',
       timeoutMs: settings.timeoutMs,
       ...(settings.signal === undefined ? {} : { signal: settings.signal }),
     },

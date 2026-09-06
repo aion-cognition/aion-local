@@ -34,6 +34,7 @@ import {
 const SYNTHESIS_TEMPERATURE = 0;
 
 export type SynthesisOptions = {
+  readonly surface?: string;
   readonly model: string;
   readonly timeoutMs: number;
   /** The tick's own abort. A shutdown must not wait out a model call with a minute left. */
@@ -61,6 +62,7 @@ async function callModel(
   }
   try {
     const raw = await provider.generate({
+      surface: options.surface ?? 'consolidation_synthesis',
       model: options.model,
       messages: [...request.messages],
       schema: request.schema,

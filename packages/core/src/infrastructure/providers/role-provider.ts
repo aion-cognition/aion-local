@@ -7,7 +7,7 @@ import {
   type ProviderRouting,
   type RoleRoute,
 } from './routing.js';
-import type { GenerationBackend, Provider, StructuredRequest, Vector } from './types.js';
+import type { ApiCall, GenerationBackend, Provider, StructuredRequest, Vector } from './types.js';
 import type { Config } from '../config/schema.js';
 
 /**
@@ -28,6 +28,7 @@ export type ProviderRouterOptions = {
   readonly fetchImpl?: typeof fetch;
   readonly onGeneration?: (event: GenerationEvent) => void;
   readonly now?: () => number;
+  readonly recordApiCall?: (call: ApiCall) => void;
 };
 
 /**
@@ -118,6 +119,7 @@ export class ProviderRouter {
           apiKey: config.anthropic.apiKey.trim(),
           model: config.anthropic.model,
           now: this.#now,
+          ...(options.recordApiCall === undefined ? {} : { recordApiCall: options.recordApiCall }),
           ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
         })
       : undefined;

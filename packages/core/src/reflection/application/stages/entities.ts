@@ -197,6 +197,7 @@ export class EntityExtractionStage implements ReflectionStage {
     const deadline = deadlineFor(this.#options.timeoutMs, ctx.signal);
     try {
       const data = await ctx.provider.generate({
+        surface: 'entities',
         model: this.#options.model,
         messages,
         schema: ENTITY_EXTRACTION_JSON_SCHEMA,

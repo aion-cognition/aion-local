@@ -302,6 +302,7 @@ async function consolidateSubject(
   );
   const synthesis = await synthesizeGrounded(deps.provider, source, buildSubjectMessages(source), {
     model: settings.model,
+    surface: 'claim_consolidation',
     timeoutMs: settings.timeoutMs,
     ...(settings.signal === undefined ? {} : { signal: settings.signal }),
   });
