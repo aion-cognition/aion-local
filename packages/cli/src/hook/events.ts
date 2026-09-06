@@ -17,6 +17,7 @@ import {
   toolExecutions,
   updatedToolInput,
 } from './payload.js';
+import { withHookStateLock } from './state-lock.js';
 import { dropHookState, readHookState, writeHookState, type HookState } from './state.js';
 import {
   hasAssistantText,
@@ -172,6 +173,20 @@ function capture(context: HookContext): Capture {
   };
 }
 
+/**
+ * Every read-modify-write of a session's state runs in here. The window a flush holds open is
+ * a round trip wide, and a fire that appended inside it would be overwritten by the advance
+ * that follows.
+ */
+function withState<T>(context: HookContext, critical: () => Promise<T>): Promise<T | undefined> {
+  return withHookStateLock(
+    context.options.stateDir,
+    stringField(context.input, 'session_id') ?? '',
+    context.options.timeoutMs,
+    critical,
+  );
+}
+
 /** The cursor and the tool buffer move together: both describe the same flushed window. */
 function advance(context: HookContext, taken: Capture): void {
   writeHookState(context.options.stateDir, taken.sessionId ?? '', {
@@ -199,23 +214,34 @@ async function push(context: HookContext, taken: Capture): Promise<boolean> {
 
 /** Compaction discards the window this reads, so pushing it first is what makes the memory outlive the context. */
 export async function preCompact(context: HookContext): Promise<number> {
-  await push(context, capture(context));
+  await withState(context, async () => {
+    await push(context, capture(context));
+  });
   return 0;
 }
 
 async function pushTurn(context: HookContext): Promise<number> {
-  const taken = capture(context);
-  if (!taken.assistantSpoke) {
-    return 0;
-  }
-  await push(context, taken);
+  await withState(context, async () => {
+    const taken = capture(context);
+    if (taken.assistantSpoke) {
+      await push(context, taken);
+    }
+  });
   return 0;
 }
 
-function instruct(context: HookContext): number {
-  const taken = capture(context);
-  if (!taken.assistantSpoke || mentionsReflectionCall(taken.raw)) {
-    advance(context, taken);
+async function instruct(context: HookContext): Promise<number> {
+  // A fire that never took the lock read no window and advanced nothing, so it has no standing
+  // to block the turn either.
+  const spoke = await withState(context, () => {
+    const taken = capture(context);
+    if (!taken.assistantSpoke || mentionsReflectionCall(taken.raw)) {
+      advance(context, taken);
+      return Promise.resolve(false);
+    }
+    return Promise.resolve(true);
+  });
+  if (spoke !== true) {
     return 0;
   }
   // A block that is already being processed must never produce a second one: the pair would
@@ -231,7 +257,7 @@ export function stop(context: HookContext): Promise<number> {
   if (context.options.stopMode === 'push') {
     return pushTurn(context);
   }
-  return Promise.resolve(instruct(context));
+  return instruct(context);
 }
 
 /**
@@ -262,12 +288,17 @@ export async function sessionEnd(context: HookContext): Promise<number> {
   // Codex gives this event a few seconds at most and reads nothing it writes, which is not room
   // for a round trip. Stop already flushed the turn, so the codex path only lets the cursor go.
   if (context.options.harness === 'codex') {
-    dropHookState(context.options.stateDir, stringField(context.input, 'session_id') ?? '');
+    await withState(context, () => {
+      dropHookState(context.options.stateDir, stringField(context.input, 'session_id') ?? '');
+      return Promise.resolve();
+    });
     return 0;
   }
-  const taken = capture(context);
-  await push(context, taken);
-  dropHookState(context.options.stateDir, taken.sessionId ?? '');
+  await withState(context, async () => {
+    const taken = capture(context);
+    await push(context, taken);
+    dropHookState(context.options.stateDir, taken.sessionId ?? '');
+  });
   return 0;
 }
 
@@ -299,18 +330,21 @@ export function preToolUse(context: HookContext): Promise<number> {
  * No MCP call at all. The record joins the buffer the next flush folds into its reflection,
  * which is what keeps a research-heavy turn from paying a round trip per tool.
  */
-export function postToolUse(context: HookContext): Promise<number> {
+export async function postToolUse(context: HookContext): Promise<number> {
   const sessionId = stringField(context.input, 'session_id');
   const record = bufferedToolFrom(context.input, context.options.now().toISOString());
   if (record === undefined) {
-    return Promise.resolve(0);
+    return 0;
   }
-  const state = readHookState(context.options.stateDir, sessionId ?? '');
-  writeHookState(context.options.stateDir, sessionId ?? '', {
-    offset: state.offset,
-    lastFlushAt: state.lastFlushAt,
-    fingerprint: state.fingerprint,
-    tools: [...state.tools, record],
+  await withState(context, () => {
+    const state = readHookState(context.options.stateDir, sessionId ?? '');
+    writeHookState(context.options.stateDir, sessionId ?? '', {
+      offset: state.offset,
+      lastFlushAt: state.lastFlushAt,
+      fingerprint: state.fingerprint,
+      tools: [...state.tools, record],
+    });
+    return Promise.resolve();
   });
-  return Promise.resolve(0);
+  return 0;
 }

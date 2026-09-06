@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -101,13 +101,25 @@ export function readHookState(dir: string, sessionId: string): HookState {
   };
 }
 
-/** Write failures are swallowed for the same reason read failures are: state is a cursor, not the work. */
+/**
+ * Write failures are swallowed for the same reason read failures are: state is a cursor, not
+ * the work. The file is replaced whole through a rename rather than written in place, so a
+ * fire that dies mid-write leaves the previous state standing instead of a truncated one.
+ */
 export function writeHookState(dir: string, sessionId: string, state: HookState): void {
+  const path = stateFilePath(dir, sessionId);
+  const staging = `${path}.${String(process.pid)}.staging`;
   try {
     mkdirSync(dir, { recursive: true });
-    writeFileSync(stateFilePath(dir, sessionId), `${JSON.stringify(state)}\n`, 'utf8');
+    writeFileSync(staging, `${JSON.stringify(state)}\n`, 'utf8');
+    renameSync(staging, path);
   } catch {
     // A cursor that cannot be written costs one re-read of the same window, never the turn.
+    try {
+      rmSync(staging, { force: true });
+    } catch {
+      // Nothing left to do about a staging file this process cannot remove.
+    }
   }
 }
 

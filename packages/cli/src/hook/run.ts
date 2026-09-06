@@ -34,6 +34,7 @@ import {
   writeSettings,
 } from './settings-file.js';
 import { describeAionHooks, removeAionHooks } from './settings.js';
+import { takeLockReport } from './state-lock.js';
 import { defaultStateDir } from './state.js';
 
 /**
@@ -137,6 +138,15 @@ function trace(stateDir: string, entry: Record<string, unknown>): void {
 }
 
 /**
+ * What the fire could not serialize. A handler that gave up waiting dropped the observation it
+ * was holding, and the log is the only place that would otherwise go unsaid.
+ */
+function lockFields(): Record<string, unknown> {
+  const report = takeLockReport();
+  return report === undefined ? {} : { lock: report };
+}
+
+/**
  * The same strip `aion hooks uninstall` performs, from the machine the hooks are installed on.
  * Idempotent: a second fire finds nothing of ours left, writes nothing, and returns 0, so
  * concurrent fires converge on one stripped file rather than racing to rewrite it.
@@ -196,7 +206,12 @@ export async function runHook(
   }
   try {
     const exit = await HANDLERS[options.event]({ input, options });
-    trace(options.stateDir, { ...base, exit, ms: options.now().getTime() - started });
+    trace(options.stateDir, {
+      ...base,
+      exit,
+      ...lockFields(),
+      ms: options.now().getTime() - started,
+    });
     return exit;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -205,6 +220,7 @@ export async function runHook(
       ...base,
       exit: 0,
       error: message,
+      ...lockFields(),
       ms: options.now().getTime() - started,
     });
     return 0;
