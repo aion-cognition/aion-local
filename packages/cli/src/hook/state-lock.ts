@@ -204,8 +204,10 @@ export async function withHookStateLock<T>(
   for (;;) {
     const owner = claim(path, token);
     if (owner !== undefined) {
+      // An uncontended take says nothing worth a line: only a fire that queued behind another
+      // one or cleared a lock nobody released reports.
       const waitedMs = Date.now() - started;
-      if (waitedMs > 0 || recovered) {
+      if (waitedMs >= POLL_MS || recovered) {
         pending = { waitedMs, acquired: true, recovered };
       }
       try {
