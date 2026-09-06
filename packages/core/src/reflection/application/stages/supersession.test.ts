@@ -471,6 +471,62 @@ describe('SupersessionStage', () => {
     expect(bed.requests).toHaveLength(2);
   });
 
+  /** One basis vector per subject, so a distractor's candidates never match another subject's query. */
+  function axis(index: number): number[] {
+    const vector = new Array<number>(6).fill(0);
+    vector[index] = 1;
+    return vector;
+  }
+
+  it('still judges the sixth subject once five subjects ahead have spent ten judgments of their own', async () => {
+    bed.seedEpisode(EPISODE_ID);
+    for (let index = 0; index < 6; index += 1) {
+      seedFactNode(bed.graph, {
+        id: `decision-${index}`,
+        label: 'Decision',
+        text: `Decision ${index} statement.`,
+        vector: axis(index),
+        episodeId: EPISODE_ID,
+      });
+    }
+    for (let index = 0; index < 5; index += 1) {
+      const priorEpisodeId = `episode-prior-${index}`;
+      bed.seedEpisode(priorEpisodeId);
+      seedFactNode(bed.graph, {
+        id: `prior-${index}-a`,
+        label: 'Concept',
+        text: `Prior ${index} statement a.`,
+        vector: axis(index),
+        episodeId: priorEpisodeId,
+      });
+      seedFactNode(bed.graph, {
+        id: `prior-${index}-b`,
+        label: 'Concept',
+        text: `Prior ${index} statement b.`,
+        vector: axis(index),
+        episodeId: priorEpisodeId,
+      });
+    }
+    bed.seedEpisode('episode-prior-5');
+    seedFactNode(bed.graph, {
+      id: 'prior-5',
+      label: 'Concept',
+      text: 'Decision 5 used to say the opposite.',
+      vector: axis(5),
+      episodeId: 'episode-prior-5',
+    });
+    bed.responses = [
+      ...Array.from({ length: 10 }, () => ({ contradicts: false, confidence: 0 })),
+      { contradicts: true, confidence: 0.9, rationale: 'the sixth subject changed' },
+    ];
+
+    const outcome = await new SupersessionStage({ mode: 'propose' }).run(bed.context(EPISODE_ID));
+
+    expect(bed.requests).toHaveLength(11);
+    expect(outcome.counts?.supersessionProposals).toBe(1);
+    expect(bed.proposals()[0]).toMatchObject({ oldId: 'prior-5', newId: 'decision-5' });
+  });
+
   it('sends one unsampled judgment per pair, with both statements, the kinds, and thinking off', async () => {
     seedContradictingPair();
     bed.responses = [{ contradicts: false, confidence: 0.1 }];

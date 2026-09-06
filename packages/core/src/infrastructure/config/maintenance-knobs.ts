@@ -92,14 +92,15 @@ export const MAINTENANCE_KNOBS = {
   // `description_freshness`'s bound: entities re-synthesized per run. Each entity costs one
   // generation call and one embed. Small on purpose: a refresh a tick behind is a staleness
   // window, not an outage.
-  descriptionRefreshBatch: ['AION_MAINTENANCE_DESCRIPTION_REFRESH_BATCH', positiveInt, 3],
+  descriptionRefreshBatch: ['AION_MAINTENANCE_DESCRIPTION_REFRESH_BATCH', positiveInt, 10],
   // Mentions an entity must gain since its description was last written before it qualifies
-  // for refresh. Five is enough traffic to plausibly have added something worth folding in,
-  // without refreshing on every other mention.
+  // for refresh. A gloss that gained only a couple of mentions since its last write is still
+  // stale traffic worth folding in; the floor is low enough that a slow-moving entity still
+  // qualifies within a few sessions rather than sitting short of five indefinitely.
   descriptionRefreshMentionGrowth: [
     'AION_MAINTENANCE_DESCRIPTION_REFRESH_MENTION_GROWTH',
     positiveInt,
-    5,
+    2,
   ],
   // `emergency_relationship_repair`'s bound: broken episode-to-session links restored in one
   // run. One indexed lookup and one edge write per break, the cheapest repair in the catalog,

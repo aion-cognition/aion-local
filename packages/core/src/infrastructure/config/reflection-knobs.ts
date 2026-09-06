@@ -151,7 +151,12 @@ export const REFLECTION_KNOBS = {
   ],
   maxSupersessionSubjects: ['AION_REFLECTION_MAX_SUPERSESSION_SUBJECTS', positiveInt, 6],
   maxContradictionNeighbors: ['AION_REFLECTION_MAX_CONTRADICTION_NEIGHBORS', positiveInt, 3],
-  maxContradictionJudgments: ['AION_REFLECTION_MAX_CONTRADICTION_JUDGMENTS', positiveInt, 8],
+  // The ceiling on judge calls one run spends across every subject's candidates, read down
+  // subjects in text_norm order. Six subjects at three neighbors apiece is eighteen pairs at
+  // most; a cap under that spends itself out on whichever subjects sort first and never reaches
+  // the rest, however real the later ones are. Set above the full eighteen so the six-subject
+  // search can finish once, with headroom for the keyed leg's own candidates on top.
+  maxContradictionJudgments: ['AION_REFLECTION_MAX_CONTRADICTION_JUDGMENTS', positiveInt, 24],
   /** Minutes, because that is the unit the pinned trigger is stated in (30 min idle). */
   narrativeIdleMinutes: ['AION_REFLECTION_NARRATIVE_IDLE_MINUTES', positiveInt, 30],
   // The mid-session boundary: a running session is compressed before anyone closes it, so what
