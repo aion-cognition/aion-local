@@ -264,10 +264,11 @@ describe('a second recall inside one session', () => {
 });
 
 /**
- * A compaction empties the caller's own context, but nothing about that event reaches this
- * substrate on its own: the served-items ledger still lists everything the session was ever
- * handed. `reset_delivery_suppression` is the marker a caller sends to say a new context epoch
- * started, so recall forgets that session's ledger for the one call that asks.
+ * A compaction summarizes the caller's own transcript, and nothing about that event reaches
+ * this substrate on its own: the served-items ledger still lists everything the session was
+ * ever handed, whether or not it survived the summary. `reset_delivery_suppression` is the
+ * marker a caller sends to say a new context epoch started, so recall forgets that session's
+ * ledger for the one call that asks.
  */
 describe('a session whose context was reset by compaction', () => {
   it('re-serves what it already held, then resumes suppressing on the next ordinary call', async () => {

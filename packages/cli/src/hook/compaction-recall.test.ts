@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { promptSubmit, sessionStart } from './events.js';
 import type { FetchImpl } from './mcp.js';
@@ -9,6 +9,10 @@ import { HOOK_TIMEOUT_MS, type HookOptions } from './options.js';
  * context compaction, distinguished only by an input field named `source`. Whether that field
  * ever reaches the recall call, and whether it reaches it as anything other than an ordinary
  * repeat, is what these tests read off the real hook code rather than off the source.
+ *
+ * This is argument shaping only, against a fake transport with no memory behind it: whether
+ * the reset marker actually stops a real ledger from withholding a real memory is
+ * `compaction-recall.int.test.ts`, run against a live substrate.
  */
 
 const SESSION_ID = 'claude-session-compact-1';
@@ -18,15 +22,17 @@ const EMPTY_PACK = { rendered_text: '# Memory\n\nNo memories matched this query.
 
 type RecordedCall = { readonly method: string; readonly body: Record<string, unknown> | undefined };
 
-function transport(): { fetchImpl: FetchImpl; calls: RecordedCall[] } {
-  const calls: RecordedCall[] = [];
-  const impl = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+/** Records every request it answers, so a test can read the arguments a hook fire sent. */
+class FakeMcpTransport {
+  readonly calls: RecordedCall[] = [];
+
+  readonly fetchImpl: FetchImpl = async (_url, init) => {
     const method = init?.method ?? 'GET';
     const body =
       typeof init?.body === 'string'
         ? (JSON.parse(init.body) as Record<string, unknown>)
         : undefined;
-    calls.push({ method, body });
+    this.calls.push({ method, body });
 
     if (body?.method === 'initialize') {
       return new Response(JSON.stringify({ jsonrpc: '2.0', id: body.id, result: {} }), {
@@ -46,8 +52,7 @@ function transport(): { fetchImpl: FetchImpl; calls: RecordedCall[] } {
       });
     }
     return new Response(null, { status: 202 });
-  });
-  return { fetchImpl: impl as unknown as FetchImpl, calls };
+  };
 }
 
 function toolArgsIn(calls: readonly RecordedCall[]): Record<string, unknown> {
@@ -76,14 +81,14 @@ function options(fetchImpl: FetchImpl): HookOptions {
 
 describe('a SessionStart recall after a context compaction', () => {
   it('marks a reset only when the harness names the source compact', async () => {
-    const startup = transport();
+    const startup = new FakeMcpTransport();
     await sessionStart({
       input: { session_id: SESSION_ID, source: 'startup' },
       options: options(startup.fetchImpl),
     });
     expect(toolArgsIn(startup.calls).reset_delivery_suppression).toBeUndefined();
 
-    const compact = transport();
+    const compact = new FakeMcpTransport();
     await sessionStart({
       input: { session_id: SESSION_ID, source: 'compact' },
       options: options(compact.fetchImpl),
@@ -97,21 +102,21 @@ describe('a SessionStart recall after a context compaction', () => {
       { session_id: SESSION_ID, source: 'clear' },
       { session_id: SESSION_ID },
     ]) {
-      const { fetchImpl, calls } = transport();
-      await sessionStart({ input, options: options(fetchImpl) });
-      expect(toolArgsIn(calls).reset_delivery_suppression).toBeUndefined();
+      const transport = new FakeMcpTransport();
+      await sessionStart({ input, options: options(transport.fetchImpl) });
+      expect(toolArgsIn(transport.calls).reset_delivery_suppression).toBeUndefined();
     }
   });
 
   it('never marks a reset on an ordinary prompt, even mid-session', async () => {
-    const { fetchImpl, calls } = transport();
+    const transport = new FakeMcpTransport();
     await promptSubmit({
       input: {
         session_id: SESSION_ID,
         prompt: 'why did the migration deadlock against read-only joins',
       },
-      options: options(fetchImpl),
+      options: options(transport.fetchImpl),
     });
-    expect(toolArgsIn(calls).reset_delivery_suppression).toBeUndefined();
+    expect(toolArgsIn(transport.calls).reset_delivery_suppression).toBeUndefined();
   });
 });

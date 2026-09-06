@@ -212,11 +212,12 @@ export async function handleRecall(
   // intake is what brings the node into existence, on the first thing worth remembering.
   const sessionId = deps.sessions.sessionIdFor(payload.session_id ?? options.identity);
 
-  // A compaction empties the caller's context without emptying this session's served-items
-  // ledger, so an unmarked recall right after one would keep withholding text the caller no
-  // longer holds. The caller names the epoch itself; recall has no other way to learn one
-  // happened. Scoped to this session only, and applied before the dedup read below runs, so
-  // this one call sees a session that has been served nothing yet.
+  // A compaction summarizes the caller's own transcript, and nothing here can tell which of
+  // what it served survived that summary. Leaving the served-items ledger untouched risks
+  // withholding text the caller no longer holds. The caller names the epoch itself; recall
+  // has no other way to learn one happened. Scoped to this session only, and applied before
+  // the dedup read below runs, so this one call sees a session that has been served nothing
+  // yet.
   if (payload.reset_delivery_suppression === true) {
     deleteServedItems(deps.db, sessionId);
   }

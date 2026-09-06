@@ -111,8 +111,8 @@ export function packText(
 /**
  * `resetDeliverySuppression` rides along only for a SessionStart the harness itself marks as a
  * compaction re-prime: the flag tells recall to forget what this session was already served,
- * since the compaction wiped the model's context but nothing here wipes the substrate's record
- * of it.
+ * since nothing here can tell which of it survived the compaction's own summary and
+ * withholding by default risks losing memories the model no longer holds.
  */
 export function recallArgs(
   query: string,

@@ -99,10 +99,11 @@ async function recallInto(
 
 /**
  * Claude Code fires SessionStart on a real start plus three re-primes: `/clear`, `/resume`,
- * and a context compaction. Compaction is the one the model did not choose: its transcript is
- * gone, but nothing here tells the substrate that, so the source the harness names is the only
- * signal recall gets. Only that source resets delivery suppression; `/clear` and `/resume`
- * still see the session's own prior turns and stay ordinary recalls.
+ * and a context compaction. Compaction is the one the model did not choose, and which of its
+ * prior turns survived the compaction's own summary is not something a hook can know, so the
+ * source the harness names is the only signal recall gets. Only that source resets delivery
+ * suppression; `/clear` and `/resume` still see the session's own prior turns and stay
+ * ordinary recalls.
  */
 export function sessionStart(context: HookContext): Promise<number> {
   const compacted = stringField(context.input, 'source') === 'compact';
