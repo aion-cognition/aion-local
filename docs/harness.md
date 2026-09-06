@@ -2,11 +2,12 @@
 
 ## What they are
 
-Claude Code hooks that put recall and reflection on a schedule. Without them the agent
-decides when to call the tools, guided by the descriptions and the usage protocol. That is a
-judgment call the model makes hundreds of times a session, and it makes it inconsistently: a
-long session ends with no reflection, a new topic starts with no recall, and a compaction
-throws away work nobody stored.
+Hooks that put recall and reflection on a schedule. Claude Code and Codex both run them. What
+follows describes the Claude profile, and the Codex section names what the second harness does
+differently. Without them the agent decides when to call the tools, guided by the descriptions
+and the usage protocol. That is a judgment call the model makes hundreds of times a session, and
+it makes it inconsistently: a long session ends with no reflection, a new topic starts with no
+recall, and a compaction throws away work nobody stored.
 
 The shims replace the judgment with a cadence. Session start recalls. A substantial prompt
 recalls. Compaction, stop, subagent stop, and session end capture. Nothing changes in the
@@ -27,8 +28,10 @@ is the substrate.
 Hooks are a keyed-profile feature, enforced three times over. `aion hooks install` refuses
 without a key. The server refuses hook capture while reflection routes to a local model, whether
 that is a missing key or a pin. The hook client itself stops capturing and strips its own entries
-from `~/.claude/settings.json` on its next fire once the key is gone. `aion doctor` reports the
-pairing as `hooks-keyed-only`.
+on its next fire once the key is gone, out of `~/.claude/settings.json` or
+`$CODEX_HOME/hooks.json`, whichever file the harness that fired reads its hooks from. `aion
+doctor` reports the pairing as `hooks-keyed-only`, and `bin/aion` looks in both files to decide
+whether hooks are installed at all.
 
 `aion hooks install` does the hook half on its own, once the key is in `.env`.
 
@@ -218,6 +221,72 @@ arguments it returns.
 `aion hooks status` prints which entries are installed, their flags, and whether the build
 exists. `aion hooks uninstall` removes exactly those entries.
 
+## Codex
+
+Codex runs the same hooks out of its own files. Install from the host, not through `./bin/aion`:
+the container can see neither the host repo nor `~/.codex`, so it prints the blocks to merge by
+hand instead of writing them.
+
+```
+npm run build
+aion hooks install --harness codex
+```
+
+That writes `$CODEX_HOME/hooks.json` (`~/.codex/hooks.json` when `CODEX_HOME` is unset) and adds
+an `[mcp_servers.aion]` block to the `config.toml` beside it, so the tools stay reachable for the
+calls the model makes itself. The config write is append-only, because codex reads its model, its
+approvals, and every other server out of that file. `--profile`, `--stop-mode`,
+`--with-research-capture`, and `--no-research-capture` mean there what they mean on the Claude
+side. `aion hooks uninstall --harness codex` and `aion hooks status --harness codex` read the same
+pair. Uninstall leaves the server block, since a model calling recall on its own still needs it.
+
+The entries are the Claude ones, edited where codex differs. Every command ends in
+`--harness codex`, which is what tells the client which parser to use. SessionEnd carries
+`timeout: 3`, the most codex allows there against a default of 1 that node startup alone can eat.
+SessionStart takes no matcher, so all four start sources fire and there is one less thing to
+re-trust. The research matcher is unanchored (`mcp__(slack|linear|notion|Notion)`), because codex
+keys an MCP server by whatever name the user gave it.
+
+Nothing fires until the entries are trusted. The installer prints the walkthrough:
+
+```
+codex trusts a hook only after you review it. Run codex, then /hooks, and trust the aion entries.
+A reinstall with different flags changes those entries and codex will ask again. Hooks are enabled
+by default (features.hooks); if /hooks shows them disabled, enable the feature first.
+```
+
+Trust is keyed by group and handler index, so the merge puts our groups back at the index the
+last install left them on and never inserts ahead of a group that is not ours. A hook someone
+else trusted keeps its trust through an aion install.
+
+### What differs from the Claude profile
+
+SessionEnd drops the cursor file and does nothing else. Codex clamps that event to three seconds
+and never parses what it writes, which is no room for a round trip, so Stop and PreCompact carry
+the close flush. Tool results buffered after the last Stop flush are dropped at session end.
+
+The session-id stamp approves the call it rewrites. Codex honors `updatedInput` only next to a
+`permissionDecision` of `allow` and ignores it on its own, so the PreToolUse frame carries the
+pair and the one rewritten recall or reflection call is auto-approved. A call that already carries
+the right session id is not rewritten, and it takes the normal permission flow.
+
+Recall injections arrive as developer-role messages. The text is the same block the Claude
+profile injects as additional context.
+
+Capture reads the rollout file rather than a Claude transcript. Turns come off the `event_msg`
+lines; everything else on disk is context codex assembled for the model. The byte cursor is keyed
+to a hash of the rollout's first line, so a file codex rewrote in place is read from its tail
+instead of from an offset that no longer describes it. An ephemeral run passes no rollout path and
+captures nothing.
+
+### One memory system
+
+Leave `features.memories` off while the aion hooks are installed. Codex ships its own memory
+consolidation, and running both writes the same sessions into two stores the model reads
+separately, with nobody reconciling them. They do not collide on a turn either way: a codex
+consolidation runs managed hooks only, and the aion Stop hook sits in the user layer, so it never
+fires on one.
+
 ## How the client works
 
 The hook entry is `packages/cli/dist/hook-main.js`, compiled from a subtree that imports node
@@ -240,8 +309,9 @@ the shapes that plausibly carry one rather than by asserting a schema.
 
 ## State files
 
-`~/.aion/hook-state/<session_id>.json`, one per Claude session. Each holds the transcript byte
-offset of the last flush and the tool results buffered since. `session-end` deletes the file.
+`~/.aion/hook-state/<session_id>.json`, one per harness session. Each holds the transcript byte
+offset of the last flush, the tool results buffered since, and on codex the fingerprint the
+offset was measured against. `session-end` deletes the file.
 
 State is a convenience, never a dependency. Missing or corrupt, the next read starts 64KB from
 the end of the transcript rather than at the beginning, and the session continues.

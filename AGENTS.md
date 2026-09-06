@@ -72,6 +72,8 @@ packages/mcp/src/                       MCP server: tool definitions, HTTP trans
 packages/cli/src/                       aion command: init, status, doctor, stats, last, why,
                                         timeline, search, forget, unsupersede, queue, replay,
                                         proposals, maintain, unmerge, hooks, help
+packages/cli/src/hook/                  the harness hook client: codex-rollout.ts reads the codex
+                                        rollout, codex-settings.ts shapes its hooks file
 bin/aion                                host wrapper: rebuilds the image, runs the CLI container
 ```
 

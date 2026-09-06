@@ -94,11 +94,13 @@ one to an existing `local` install, put it in `.env` as `AION_ANTHROPIC_API_KEY=
 rerun `./bin/aion init`; the service restarts with the key and routing follows it. Removing
 it from `.env` and rerunning init routes everything back to local models the same way.
 
-`aion hooks install | uninstall | status` does the hook half on its own. The hook client
-runs on host Node from `packages/cli/dist`, so hooks (unlike the substrate) need one host
-build first: `npm ci && npm run build`. Every hook fails open: a service that is down or a
-payload it cannot read exits 0 and the turn proceeds. See [docs/harness.md](docs/harness.md)
-for what each hook does and the settings JSON for a manual install.
+`aion hooks install | uninstall | status` does the hook half on its own, and
+`--harness codex` points the same commands at `$CODEX_HOME/hooks.json` and the aion server
+block in the `config.toml` beside it. The hook client runs on host Node from
+`packages/cli/dist`, so hooks (unlike the substrate) need one host build first:
+`npm ci && npm run build`. Every hook fails open: a service that is down or a payload it
+cannot read exits 0 and the turn proceeds. See [docs/harness.md](docs/harness.md) for what
+each hook does, what codex does differently, and the settings JSON for a manual install.
 
 ## The two tools
 
@@ -128,7 +130,7 @@ checkout. `npm unlink -g aion-local` removes it. A copying install (`npm install
 does not work and says so: the CLI orchestrates the repo it lives in.
 
 - `init`: provision the substrate (neo4j, models, schema, backbone)
-- `hooks`: install, remove, or inspect the Claude Code harness hooks
+- `hooks`: install, remove, or inspect the harness hooks, for Claude Code or Codex
 - `status`: services, models, routing, and graph counts
 - `doctor`: check every substrate invariant and name what is broken
 - `stats`: everything status shows, plus cadence, per-method pack shares, generation by route,
@@ -177,7 +179,7 @@ Where to read deeper:
 - [docs/architecture.md](docs/architecture.md): the bounded contexts, pipelines, and graph schema
 - [docs/operations.md](docs/operations.md): running it day to day
 - [docs/degradation.md](docs/degradation.md): what happens when Ollama or Neo4j is down or slow
-- [docs/harness.md](docs/harness.md): the Claude Code hooks and the two cadence profiles
+- [docs/harness.md](docs/harness.md): the Claude Code and Codex hooks, and the two cadence profiles
 - [AGENTS.md](AGENTS.md): conventions and the gate, for anyone (or any agent) changing the code
 
 ## Development
