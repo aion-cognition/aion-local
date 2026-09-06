@@ -2,9 +2,15 @@ import type { Cue, CueSource, CueWeight, Degradation, RecallTurn } from '@aion/p
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { isAbortError } from '../../infrastructure/errors.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
-import type { ChatMessage, JsonSchema, Provider } from '../../infrastructure/providers/types.js';
+import type {
+  ChatMessage,
+  JsonSchema,
+  Provider,
+  StructuredRequest,
+} from '../../infrastructure/providers/types.js';
 import { LOCAL as CUE_SYSTEM_PROMPT } from '../../prompts/cue-extraction.js';
 
 /**
@@ -47,25 +53,40 @@ const DEFAULT_CACHE_MAX_ENTRIES = 256;
  * defeats the point of the ladder being a per-call fallback.
  */
 export class CueCache {
-  readonly #entries = new Map<string, CueExtractionResult>();
+  readonly #entries = new Map<string, { result: CueExtractionResult; expiresAt: number }>();
   readonly #maxEntries: number;
+  readonly #ttlMs: number;
+  readonly #now: () => number;
 
-  constructor(maxEntries: number = DEFAULT_CACHE_MAX_ENTRIES) {
-    this.#maxEntries = maxEntries;
+  constructor(options: { maxEntries?: number; ttlMinutes?: number; now?: () => number } = {}) {
+    this.#maxEntries = options.maxEntries ?? DEFAULT_CACHE_MAX_ENTRIES;
+    this.#ttlMs = (options.ttlMinutes ?? DEFAULTS.recall.cueCacheTtlMinutes) * 60_000;
+    this.#now = options.now ?? Date.now;
   }
 
   get(key: string): CueExtractionResult | undefined {
-    return this.#entries.get(key);
+    const entry = this.#entries.get(key);
+    if (entry === undefined) {
+      return undefined;
+    }
+    if (this.#now() >= entry.expiresAt) {
+      this.#entries.delete(key);
+      return undefined;
+    }
+    return entry.result;
   }
 
   set(key: string, value: CueExtractionResult): void {
+    if (this.#ttlMs <= 0 || this.#maxEntries <= 0 || value.degraded) {
+      return;
+    }
     if (!this.#entries.has(key) && this.#entries.size >= this.#maxEntries) {
       const oldestKey = this.#entries.keys().next().value;
       if (oldestKey !== undefined) {
         this.#entries.delete(oldestKey);
       }
     }
-    this.#entries.set(key, value);
+    this.#entries.set(key, { result: value, expiresAt: this.#now() + this.#ttlMs });
   }
 
   get size(): number {
@@ -132,13 +153,11 @@ function buildMessages(input: CueExtractionInput): ChatMessage[] {
   ];
 }
 
-/** Deterministic key over exactly the fields cue extraction takes as input, plus the model. */
-function cacheKey(input: CueExtractionInput, model: string): string {
-  const turns = (input.recentTurns ?? [])
-    .map((turn) => `${turn.role}\u0000${turn.text}`)
-    .join('\u0001');
-  const raw = [model, input.query, input.summary ?? '', turns].join('\u0002');
-  return createHash('sha256').update(raw).digest('hex');
+/** JSON preserves field boundaries even when user text contains control characters. */
+function cacheKey(request: StructuredRequest, provider: Provider): string {
+  return createHash('sha256')
+    .update(JSON.stringify({ request, route: provider.route?.provider ?? 'ollama' }))
+    .digest('hex');
 }
 
 type CueModelCallResult =
@@ -153,7 +172,7 @@ type CueModelCallResult =
 /** The one `generate` call, under the budget as a hang guard via `AbortController`. */
 async function callCueModel(
   deps: CueExtractionDeps,
-  input: CueExtractionInput,
+  request: StructuredRequest,
 ): Promise<CueModelCallResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => {
@@ -161,14 +180,7 @@ async function callCueModel(
   }, deps.budgetMs);
   try {
     const data = await deps.provider.generate({
-      surface: 'cues',
-      model: deps.model,
-      messages: buildMessages(input),
-      schema: CUE_OUTPUT_JSON_SCHEMA,
-      temperature: CUE_MODEL_TEMPERATURE,
-      // Cue extraction reads three sections and names what is in them. Reasoning buys nothing
-      // here and costs the budget: with it on the pinned model busts 2000ms on every call.
-      think: false,
+      ...request,
       signal: controller.signal,
     });
     return { ok: true, data };
@@ -274,13 +286,22 @@ export async function extractCues(
   deps: CueExtractionDeps,
   input: CueExtractionInput,
 ): Promise<CueExtractionResult> {
-  const key = cacheKey(input, deps.model);
+  const request: StructuredRequest = {
+    surface: 'cues',
+    model: deps.model,
+    messages: buildMessages(input),
+    schema: CUE_OUTPUT_JSON_SCHEMA,
+    temperature: CUE_MODEL_TEMPERATURE,
+    // Reasoning costs the cue budget without improving extraction from the supplied text.
+    think: false,
+  };
+  const key = cacheKey(request, deps.provider);
   const cached = deps.cache.get(key);
   if (cached !== undefined) {
     return cached;
   }
 
-  const call = await callCueModel(deps, input);
+  const call = await callCueModel(deps, request);
   if (!call.ok) {
     deps.logger.warn(
       { err: call.error, model: deps.model, reason: call.reason },

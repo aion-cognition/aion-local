@@ -164,6 +164,7 @@ export const KNOBS = {
     // 2288ms on host Ollama against 527-937ms warm, and 2000 still fired on an ordinary recall
     // at 2030ms, so the headroom a cold start needs is several multiples of the warm case.
     cueBudgetMs: ['AION_CUE_BUDGET_MS', positiveInt, 8000],
+    cueCacheTtlMinutes: ['AION_CUE_CACHE_TTL_MINUTES', nonNegativeInt, 30],
     tokenBudget: ['AION_RECALL_TOKEN_BUDGET', positiveInt, 1200],
     // Absolute cosine floors, measured against the embedding model's noise rather than pinned.
     // Re-derived 2026-09-02 against snowflake-arctic-embed2 on 43 unrelated pairs and 10 genuine

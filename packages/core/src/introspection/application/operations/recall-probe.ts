@@ -119,7 +119,7 @@ export function probeQuery(payload: ReflectionContent): string | undefined {
 export function probeRecall(deps: RecallDeps): RecallProbe {
   // The probe's own cue cache, so probe queries never fill or answer from the cache the live
   // recalls share.
-  const cueCache = new CueCache();
+  const cueCache = new CueCache({ ttlMinutes: deps.config.recall.cueCacheTtlMinutes });
   return async (request) => {
     const scratch = openSqliteHandle({ filePath: ':memory:' });
     try {
