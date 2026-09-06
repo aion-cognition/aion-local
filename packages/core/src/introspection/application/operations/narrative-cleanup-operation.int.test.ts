@@ -8,6 +8,7 @@ import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import {
   BITEMPORAL_PROPERTIES,
+  supersede,
   writeStampedNode,
 } from '../../../infrastructure/graph/bitemporal.js';
 import { upsertEdge } from '../../../infrastructure/graph/edges.js';
@@ -16,8 +17,13 @@ import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js'
 import {
   DERIVES_FROM_TYPE,
   NARRATIVE_PROPERTIES,
+  SUMMARIZED_BY_TYPE,
 } from '../../../infrastructure/graph/narrative-queries.js';
-import { nodeProperties } from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
+import {
+  countNodesWithId,
+  edgeValidUntil,
+  nodeProperties,
+} from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
@@ -42,10 +48,16 @@ let dataDir: string;
 
 const NOW = new Date('2026-08-29T12:00:00.000Z');
 
-const config: Config = {
-  ...DEFAULTS,
-  maintenance: { ...DEFAULTS.maintenance, narrativeCleanupBatch: 50 },
-};
+function configWith(narrativeEdgeRepairBatch: number): Config {
+  return {
+    ...DEFAULTS,
+    maintenance: {
+      ...DEFAULTS.maintenance,
+      narrativeCleanupBatch: 50,
+      narrativeEdgeRepairBatch,
+    },
+  };
+}
 
 beforeAll(async () => {
   harness = await startNeo4jHarness();
@@ -114,11 +126,31 @@ async function seedNarrative(
   });
 }
 
-function contextFor(): OperationContext {
+/** One `(episode)-[:SUMMARIZED_BY]->(narrative)` edge, the shape a session close writes. */
+async function summarize(episodeId: string, narrativeId: string): Promise<void> {
+  await upsertEdge(harness.driver, {
+    type: SUMMARIZED_BY_TYPE,
+    sourceId: episodeId,
+    targetId: narrativeId,
+    strength: 1,
+    confidence: 1,
+    signals: ['compression'],
+    provenance: ['test-seed'],
+    count: 0,
+    now: NOW,
+  });
+}
+
+/** Closes the node alone, which is the state every supersession before this repair left. */
+async function closeNarrative(id: string): Promise<void> {
+  await supersede(harness.driver, { oldId: id, newId: 'edge-narrative-standing', now: NOW });
+}
+
+function contextFor(narrativeEdgeRepairBatch = 50): OperationContext {
   return {
     driver: harness.driver,
     db,
-    config,
+    config: configWith(narrativeEdgeRepairBatch),
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     provider: refusingProvider,
     health: healthFixture(),
@@ -169,5 +201,74 @@ describe('narrativeCleanupOperation against a live graph', () => {
     const props = await nodeProperties(harness.driver, 'healthy-narrative');
     expect(props[BITEMPORAL_PROPERTIES.validUntil]).toBeUndefined();
     expect(props[BITEMPORAL_PROPERTIES.forgottenAt]).toBeUndefined();
+  }, 120_000);
+});
+
+/**
+ * The residue of every close that ran before the write path started closing these edges with
+ * the narrative, plus the rollup's own absorbs, which take a member narrative without touching
+ * the episode edges into it. Seeded as the state those closes leave: a closed narrative with
+ * open summarization edges still pointing at it.
+ */
+describe('the summarization-edge backlog', () => {
+  const EPISODES = ['edge-e1', 'edge-e2', 'edge-e3'];
+
+  beforeAll(async () => {
+    await seedSession('edge-session');
+    for (const id of EPISODES) {
+      await seedEpisode(id, 'edge-session');
+    }
+    await seedNarrative('edge-narrative-closed', 'edge-session', 1, 3);
+    await seedNarrative('edge-narrative-standing', 'edge-session', 2, 3);
+    for (const id of EPISODES) {
+      await summarize(id, 'edge-narrative-closed');
+      await summarize(id, 'edge-narrative-standing');
+    }
+    await closeNarrative('edge-narrative-closed');
+  }, 120_000);
+
+  it('closes only what one batch allows', async () => {
+    const outcome = await narrativeCleanupOperation().run(contextFor(2));
+
+    expect(outcome.status).toBe('applied');
+    expect(outcome.detail).toContain('2 stale summarization edge(s)');
+
+    const closed = await Promise.all(
+      EPISODES.map(async (id) =>
+        edgeValidUntil(harness.driver, SUMMARIZED_BY_TYPE, id, 'edge-narrative-closed'),
+      ),
+    );
+    expect(closed.filter((at) => at !== undefined)).toHaveLength(2);
+  }, 120_000);
+
+  it('finishes the backlog on the next run and then finds nothing left', async () => {
+    await narrativeCleanupOperation().run(contextFor());
+
+    for (const id of EPISODES) {
+      expect(
+        await edgeValidUntil(harness.driver, SUMMARIZED_BY_TYPE, id, 'edge-narrative-closed'),
+      ).toBeInstanceOf(Date);
+      // The standing version keeps every edge the traversal actually needs.
+      expect(
+        await edgeValidUntil(harness.driver, SUMMARIZED_BY_TYPE, id, 'edge-narrative-standing'),
+      ).toBeUndefined();
+    }
+
+    const again = await narrativeCleanupOperation().run(contextFor());
+    expect(again.detail).toContain('0 stale summarization edge(s)');
+  }, 120_000);
+
+  it('leaves the closed narrative and its provenance in place', async () => {
+    await narrativeCleanupOperation().run(contextFor());
+
+    expect(await countNodesWithId(harness.driver, 'Narrative', 'edge-narrative-closed')).toBe(1);
+    expect(
+      await edgeValidUntil(
+        harness.driver,
+        DERIVES_FROM_TYPE,
+        'edge-narrative-closed',
+        'edge-session',
+      ),
+    ).toBeUndefined();
   }, 120_000);
 });

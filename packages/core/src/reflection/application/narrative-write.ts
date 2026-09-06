@@ -1,12 +1,13 @@
 import type { NarrativeDeps } from './narratives.js';
 import { attachContentVectors } from './vectors.js';
 import {
-  supersede,
+  supersedeInTransaction,
   writeStampedDerivedNodeInTransaction,
 } from '../../infrastructure/graph/bitemporal.js';
 import { inWriteTransaction } from '../../infrastructure/graph/connection.js';
 import { upsertEdgeInTransaction } from '../../infrastructure/graph/edges.js';
 import { MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
+import { closeNarrativeEdgesInTransaction } from '../../infrastructure/graph/narrative-edge-queries.js';
 import {
   DERIVES_FROM_TYPE,
   NARRATIVE_PROPERTIES,
@@ -117,7 +118,19 @@ export async function writeNarrative(deps: NarrativeDeps, input: NarrativeWrite)
   });
 }
 
-/** Lineage, not deletion: the old version stays readable and time travel still returns it. */
+/**
+ * Lineage, not deletion: the old version stays readable and time travel still returns it. Its
+ * summarization edges close with it, in the same transaction, so no reader ever sees a
+ * superseded version still summarizing the session. Nothing else about it moves: the node, its
+ * citations, its `DERIVES_FROM` edge, and the `SUPERSEDES` link naming its replacement all stay
+ * open. Without this the episodes of a session that narrates repeatedly keep one live edge per
+ * dead version, and every traversal through those episodes pays for all of them.
+ *
+ * A crash between the two writes leaves nothing half-done, since they commit together, and a
+ * repeat of the whole call is a no-op: the close `coalesce`s and the edge statement only
+ * matches what is still open. `narrative_cleanup` repairs the residue of any close that ran
+ * before this one existed.
+ */
 export async function closeSuperseded(
   deps: NarrativeDeps,
   decision: NarrativeDecision,
@@ -125,9 +138,14 @@ export async function closeSuperseded(
   now: Date,
   occurredAt: Date,
 ): Promise<void> {
-  for (const oldId of decision.supersedes) {
-    if (oldId !== narrativeId) {
-      await supersede(deps.driver, {
+  const superseded = decision.supersedes.filter((oldId) => oldId !== narrativeId);
+  if (superseded.length === 0) {
+    return;
+  }
+
+  await inWriteTransaction(deps.driver, async (tx) => {
+    for (const oldId of superseded) {
+      await supersedeInTransaction(tx, {
         oldId,
         newId: narrativeId,
         now,
@@ -138,7 +156,13 @@ export async function closeSuperseded(
         provenance: NARRATIVE_PROVENANCE,
       });
     }
-  }
+
+    await closeNarrativeEdgesInTransaction(tx, {
+      narrativeIds: superseded,
+      validUntil: occurredAt,
+      txUntil: now,
+    });
+  });
 }
 
 /**

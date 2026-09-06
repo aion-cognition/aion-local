@@ -31,6 +31,9 @@ export type FakeEdge = {
   rationale?: string;
   createdAt: unknown;
   updatedAt: unknown;
+  /** Set by a bitemporal close; the edge stays in the map, which is the point of closing. */
+  validUntil?: unknown;
+  txUntil?: unknown;
 };
 
 export type RecordedStatement = {

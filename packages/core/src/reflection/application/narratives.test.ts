@@ -387,6 +387,43 @@ describe('versioning', () => {
     expect(standing).toHaveLength(1);
     expect(standing[0]?.properties[NARRATIVE_PROPERTIES.coverageCount]).toBe(3);
   });
+
+  it('closes the summarization edges into the version it superseded, and no others', async () => {
+    seedEpisode('episode-1', '2026-04-02T10:00:00Z');
+    seedEpisode('episode-2', '2026-04-02T10:05:00Z');
+    const first = await closeSessionNarrative(deps, SESSION_ID, { now: NOW });
+
+    seedEpisode('episode-3', '2026-04-02T10:20:00Z');
+    const second = await closeSessionNarrative(deps, SESSION_ID, { now: NOW });
+
+    const edges = graph.edgesOfType(SUMMARIZED_BY_TYPE);
+    const closed = edges.filter((edge) => edge.targetId === first.narrativeId);
+    const standing = edges.filter((edge) => edge.targetId === second.narrativeId);
+
+    expect(closed).toHaveLength(2);
+    expect(closed.every((edge) => edge.validUntil !== undefined)).toBe(true);
+    expect(standing).toHaveLength(3);
+    expect(standing.every((edge) => edge.validUntil === undefined)).toBe(true);
+  });
+
+  it('keeps the superseded version’s own provenance and lineage open', async () => {
+    seedEpisode('episode-1', '2026-04-02T10:00:00Z');
+    const first = await closeSessionNarrative(deps, SESSION_ID, { now: NOW });
+
+    seedEpisode('episode-2', '2026-04-02T10:20:00Z');
+    const second = await closeSessionNarrative(deps, SESSION_ID, { now: NOW });
+
+    const derives = graph
+      .edgesOfType(DERIVES_FROM_TYPE)
+      .filter((edge) => edge.sourceId === first.narrativeId);
+    expect(derives.map((edge) => edge.validUntil)).toEqual([undefined]);
+    expect(
+      graph
+        .edgesOfType('SUPERSEDES')
+        .filter((edge) => edge.sourceId === second.narrativeId)
+        .map((edge) => edge.validUntil),
+    ).toEqual([undefined]);
+  });
 });
 
 describe('failure isolation', () => {

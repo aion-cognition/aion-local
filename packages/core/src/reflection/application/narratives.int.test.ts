@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { handleReflection, type ReflectionIntakeDeps } from './intake.js';
 import { LaneAssigner } from './lanes.js';
+import { closeSuperseded } from './narrative-write.js';
 import {
   closeSessionNarrative,
   DEFAULT_SESSION_IDLE_MS,
@@ -37,6 +38,7 @@ import {
   countEdges,
   countOutgoingEdges,
   edgeTargetId,
+  edgeValidUntil,
   episodeIdsInSession,
   nodeLabels,
   nodeProperties,
@@ -270,6 +272,10 @@ let intake: ReflectionIntakeDeps;
 let deps: NarrativeDeps;
 let structuralDeps: NarrativeDeps;
 let firstNarrativeId: string;
+let secondNarrativeId: string;
+
+/** Well past every close in this file, so a retry that moved a stamp would be obvious. */
+const RETRY_AT = new Date('2026-09-01T00:00:00.000Z');
 
 function provider(): Provider {
   return testGenerationProvider({ baseUrl: OLLAMA_URL, embedModel: DEFAULTS.models.embed });
@@ -283,6 +289,12 @@ async function push(payload: unknown, identity: string): Promise<string> {
 /** The sweep measures idleness against its own clock, so a session written seconds ago looks quiet from here. */
 function afterTheIdleWindow(): Date {
   return new Date(Date.now() + DEFAULT_SESSION_IDLE_MS + 60_000);
+}
+
+/** In the order the session happened, which is the order the versions covered them in. */
+async function orderedEpisodeIds(): Promise<string[]> {
+  const episodes = await loadSessionEpisodes(harness.driver, SESSION_IDENTITY);
+  return episodes.map((episode) => episode.id);
 }
 
 beforeAll(async () => {
@@ -432,7 +444,77 @@ describe('session close against a live substrate', () => {
     const closed = await nodeProperties(harness.driver, firstNarrativeId);
     expect(closed[BITEMPORAL_PROPERTIES.validUntil]).toBeInstanceOf(Date);
     expect(closed[BITEMPORAL_PROPERTIES.txUntil]).toBeInstanceOf(Date);
+
+    secondNarrativeId = result.narrativeId!;
   }, 120_000);
+
+  it('closes the summarization edges into the version it replaced, and stores them still', async () => {
+    const episodeIds = await orderedEpisodeIds();
+
+    for (const episodeId of episodeIds.slice(0, 3)) {
+      expect(
+        await edgeValidUntil(harness.driver, SUMMARIZED_BY_TYPE, episodeId, firstNarrativeId),
+      ).toBeInstanceOf(Date);
+      // Closed, not removed: the row is what a read pinned before the close still walks.
+      expect(
+        await countEdges(harness.driver, SUMMARIZED_BY_TYPE, episodeId, firstNarrativeId),
+      ).toBe(1);
+    }
+
+    for (const episodeId of episodeIds) {
+      expect(
+        await edgeValidUntil(harness.driver, SUMMARIZED_BY_TYPE, episodeId, secondNarrativeId),
+      ).toBeUndefined();
+    }
+  });
+
+  it('leaves the replaced version’s own provenance edge open', async () => {
+    expect(
+      await edgeValidUntil(harness.driver, DERIVES_FROM_TYPE, firstNarrativeId, SESSION_IDENTITY),
+    ).toBeUndefined();
+  });
+
+  it('converges on a retry rather than moving the stamps it already wrote', async () => {
+    const episodeIds = (await orderedEpisodeIds()).slice(0, 3);
+    const before = await Promise.all(
+      episodeIds.map(async (episodeId) =>
+        edgeValidUntil(harness.driver, SUMMARIZED_BY_TYPE, episodeId, firstNarrativeId),
+      ),
+    );
+    const nodeBefore = await nodeProperties(harness.driver, firstNarrativeId);
+
+    // The shape a crashed close leaves behind: the same work, asked for a second time, against
+    // a much later clock. Everything it touches is already closed, so nothing may move.
+    await closeSuperseded(
+      structuralDeps,
+      {
+        action: 'skip',
+        reason: 'a retry of an interrupted close',
+        coverageKey: '',
+        version: 2,
+        episodeIds,
+        supersedes: [firstNarrativeId],
+      },
+      secondNarrativeId,
+      RETRY_AT,
+      RETRY_AT,
+    );
+
+    const after = await Promise.all(
+      episodeIds.map(async (episodeId) =>
+        edgeValidUntil(harness.driver, SUMMARIZED_BY_TYPE, episodeId, firstNarrativeId),
+      ),
+    );
+    expect(after).toEqual(before);
+
+    const nodeAfter = await nodeProperties(harness.driver, firstNarrativeId);
+    expect(nodeAfter[BITEMPORAL_PROPERTIES.validUntil]).toEqual(
+      nodeBefore[BITEMPORAL_PROPERTIES.validUntil],
+    );
+    expect(nodeAfter[BITEMPORAL_PROPERTIES.txUntil]).toEqual(
+      nodeBefore[BITEMPORAL_PROPERTIES.txUntil],
+    );
+  });
 });
 
 describe('idle sweep against a live substrate', () => {

@@ -5,6 +5,7 @@ import {
   DERIVES_FROM_TYPE,
   NARRATIVE_PROPERTIES,
   NARRATIVE_SOURCE_LABELS,
+  SUMMARIZED_BY_TYPE,
 } from '../../infrastructure/graph/narrative-queries.js';
 import { coerceGraphValue, type Row } from '../../infrastructure/graph/values.js';
 
@@ -61,6 +62,11 @@ export class NarrativeFakeGraph extends FakeGraph {
     if (cypher.includes('AS last_activity')) {
       this.statements.push({ cypher, parameters });
       return toResult(this.#idleSessions(parameters));
+    }
+    // Matched on the close's own UNWIND: the edge upsert names the same relationship type.
+    if (cypher.includes('UNWIND $narrativeIds AS narrativeId')) {
+      this.statements.push({ cypher, parameters });
+      return toResult(this.#closeNarrativeEdges(parameters));
     }
     if (cypher.includes('(n:Narrative)')) {
       this.statements.push({ cypher, parameters });
@@ -204,6 +210,24 @@ export class NarrativeFakeGraph extends FakeGraph {
     }
 
     return rows.sort((left, right) => timeOf(left.last_activity) - timeOf(right.last_activity));
+  }
+
+  /**
+   * The summarization edges into a superseded narrative, closed rather than removed: the edge
+   * stays in the map with both timelines stamped, which is what a default traversal now skips.
+   */
+  #closeNarrativeEdges(parameters: Record<string, unknown>): Row[] {
+    const targets = new Set((parameters.narrativeIds as string[] | undefined) ?? []);
+    const rows: Row[] = [];
+    for (const edge of this.edgesOfType(SUMMARIZED_BY_TYPE)) {
+      if (!targets.has(edge.targetId) || edge.validUntil !== undefined) {
+        continue;
+      }
+      edge.validUntil = parameters.validUntil;
+      edge.txUntil = parameters.txUntil;
+      rows.push({ id: edge.id, sourceId: edge.sourceId, targetId: edge.targetId });
+    }
+    return rows;
   }
 
   /** `coalesce` on both timelines, so a repeated supersession keeps the first one's stamps. */

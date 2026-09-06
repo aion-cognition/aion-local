@@ -10,19 +10,29 @@ import {
   type DuplicateNarrativeGroup,
   type DuplicateNarrativeVersion,
 } from '../../../infrastructure/graph/narrative-cleanup-queries.js';
+import {
+  closeStaleNarrativeEdges,
+  countNarrativeEdges,
+} from '../../../infrastructure/graph/narrative-edge-queries.js';
 import { forgetNarrative } from '../../../infrastructure/graph/narrative-queries.js';
 import type { IntrospectionOperation, OperationOutcome } from '../../domain/operation.js';
 
 /**
- * The two narrative pathologies that need no model call to repair. A duplicate is two open
+ * The three narrative pathologies that need no model call to repair. A duplicate is two open
  * narratives left standing after a crash landed between a write and its supersession, and an
  * orphan is an open narrative whose session has since had every one of its episodes forgotten.
  * Neither is rare enough on a long-running substrate to leave for the next session close: a
  * session that stopped being written to stops triggering the ordinary repair path too.
  *
+ * The third is the summarization-edge backlog. The write path now closes those edges with the
+ * narrative they point at, so what is left is what earlier closes left behind, plus the rollup's
+ * own absorbs, which take a member narrative without touching the episode edges into it. Bounded
+ * per run and idempotent, so the backlog drains at a fixed pace and a repaired substrate costs
+ * one scan.
+ *
  * The grounding-stale regeneration path (`reflection/application/narrative-cleanup.ts`) is out
- * of scope here because it calls a model to rewrite the narrative body, which neither of these
- * two repairs needs. `narrative_regrounding` is the operation that drives that path.
+ * of scope here because it calls a model to rewrite the narrative body, which none of these
+ * three repairs needs. `narrative_regrounding` is the operation that drives that path.
  */
 
 export const NARRATIVE_CLEANUP_OPERATION = 'narrative_cleanup';
@@ -97,6 +107,22 @@ async function closeDuplicates(
   return { sessions: groups.length, closed };
 }
 
+/**
+ * The backlog measured before it is touched, so the detail line reports the whole residue
+ * against what one batch reached, and reports active fan-out beside it. The two numbers are
+ * separate on purpose: physical edge count says nothing about how much of the graph a
+ * traversal can actually walk, and only the active half is the fan-out recall pays for.
+ */
+async function repairSummarizationEdges(
+  driver: Driver,
+  batch: number,
+  now: Date,
+): Promise<{ stale: number; active: number; closed: number }> {
+  const before = await countNarrativeEdges(driver);
+  const closed = await closeStaleNarrativeEdges(driver, { batchSize: batch, now });
+  return { stale: before.stale, active: before.active, closed: closed.length };
+}
+
 export function narrativeCleanupOperation(): IntrospectionOperation {
   return {
     name: NARRATIVE_CLEANUP_OPERATION,
@@ -114,15 +140,24 @@ export function narrativeCleanupOperation(): IntrospectionOperation {
         }
       }
 
-      const processed = duplicates.sessions + orphans.length;
-      const affected = duplicates.closed + forgotten;
+      // Last, so the closes above are part of the backlog this run already repairs.
+      const edges = await repairSummarizationEdges(
+        ctx.driver,
+        ctx.config.maintenance.narrativeEdgeRepairBatch,
+        ctx.now,
+      );
+
+      const processed = duplicates.sessions + orphans.length + edges.stale;
+      const affected = duplicates.closed + forgotten + edges.closed;
       return {
         status: affected === 0 ? 'noop' : 'applied',
         itemsProcessed: processed,
         itemsAffected: affected,
         detail:
           `${String(duplicates.closed)} duplicate narrative(s) superseded across ` +
-          `${String(duplicates.sessions)} session(s), ${String(forgotten)} orphan(s) forgotten`,
+          `${String(duplicates.sessions)} session(s), ${String(forgotten)} orphan(s) forgotten, ` +
+          `${String(edges.closed)} stale summarization edge(s) closed of ${String(edges.stale)}; ` +
+          `${String(edges.active)} active`,
       };
     },
   };

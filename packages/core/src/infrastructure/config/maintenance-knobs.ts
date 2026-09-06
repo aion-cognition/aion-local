@@ -81,6 +81,13 @@ export const MAINTENANCE_KNOBS = {
   // `narrative_cleanup`'s bound: sessions (not narratives) examined per run, for both the
   // duplicate scan and the stale-grounding sweep; ten is a modest tick even at the worst mix.
   narrativeCleanupBatch: ['AION_MAINTENANCE_NARRATIVE_CLEANUP_BATCH', positiveInt, 10],
+  // The same operation's edge-repair bound: summarization edges into an already-closed
+  // narrative that one run closes. Higher than the session bound beside it because the work is
+  // one relationship scan and a pair of property writes per edge, with no model call and no
+  // node write anywhere in it, and because the backlog is a multiple of the narrative count:
+  // every rewrite of a session leaves one edge per episode behind. Five hundred an hour drains
+  // a few thousand of them inside a day.
+  narrativeEdgeRepairBatch: ['AION_MAINTENANCE_NARRATIVE_EDGE_REPAIR_BATCH', positiveInt, 500],
   // `retro_judgment_sweep`'s bound: fact-bearing episodes judged per run. Each episode costs
   // up to twenty-four judgment calls (supersession's own ceiling), so five keeps one tick's
   // model spend in the same order of magnitude as an ordinary reflection run, which checks
