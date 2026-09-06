@@ -105,9 +105,21 @@ export type ConfirmationRecord = z.infer<typeof ConfirmationRecordSchema>;
  * padded with an id nothing backs.
  */
 export const ReflectionProvenanceSchema = z.strictObject({
-  supersedes: z.array(z.string().min(1)).max(MAX_PROVENANCE_REFERENCES).optional(),
-  derived_from: z.array(z.string().min(1)).max(MAX_PROVENANCE_REFERENCES).optional(),
-  confirmations: z.array(ConfirmationRecordSchema).max(MAX_PROVENANCE_REFERENCES).optional(),
+  supersedes: z
+    .array(z.string().min(1))
+    .max(MAX_PROVENANCE_REFERENCES)
+    .optional()
+    .describe('ids this experience corrects; recorded as a stated correction, closes nothing'),
+  derived_from: z
+    .array(z.string().min(1))
+    .max(MAX_PROVENANCE_REFERENCES)
+    .optional()
+    .describe('ids this experience came from, so two claims sharing a source say so'),
+  confirmations: z
+    .array(ConfirmationRecordSchema)
+    .max(MAX_PROVENANCE_REFERENCES)
+    .optional()
+    .describe('who confirmed a stored memory and where that is written down'),
 });
 
 export type ReflectionProvenance = z.infer<typeof ReflectionProvenanceSchema>;

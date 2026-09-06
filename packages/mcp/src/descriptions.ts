@@ -6,7 +6,7 @@
  *
  * Bump `DESCRIPTIONS_VERSION` on every edit to any string in this file.
  */
-export const DESCRIPTIONS_VERSION = 2;
+export const DESCRIPTIONS_VERSION = 3;
 
 /** The `_meta` key the version is published under, so a cadence report can group by it. */
 export const DESCRIPTIONS_VERSION_META_KEY = 'aion/descriptions_version';
@@ -49,6 +49,13 @@ export const REFLECTION_DESCRIPTION = [
   'A good observation states the conclusion, the reason behind it, and the concrete names',
   'involved (files, commands, decisions). A later session gets that line and nothing around it.',
   'Reflect once per unit of work instead of batching a whole session into one call at the end.',
+  '',
+  'Send `provenance` when this experience stands in a relation to memories already stored.',
+  '`supersedes` names ids this experience corrects, and routes the correction to lineage; it',
+  'closes nothing on its own. `derived_from` names ids this experience came from, so two claims',
+  'that share a source stop reading as two independent witnesses. `confirmations` records who',
+  'confirmed a stored memory and where that is written down: it is evidence a later reader',
+  'weighs, and nothing waits on it.',
   'Intake returns as soon as the experience is durable; extraction runs afterward, so the call is fast',
   'and never blocks the work it describes. Credentials are redacted before anything is stored, and',
   'sending the same payload twice returns the original episode rather than storing it again.',
