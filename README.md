@@ -136,6 +136,7 @@ does not work and says so: the CLI orchestrates the repo it lives in.
 - `init`: provision the substrate (neo4j, models, schema, backbone)
 - `hooks`: install, remove, or inspect the harness hooks, for Claude Code or Codex
 - `status`: services, models, routing, and graph counts
+- `costs [--days N]`: metered API tokens and estimated dollars by UTC day and calling surface
 - `doctor`: check every substrate invariant and name what is broken
 - `stats`: everything status shows, plus cadence, per-method pack shares, generation by route,
   the recall self-probe rates, and the maintenance loop's record
