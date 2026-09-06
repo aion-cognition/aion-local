@@ -30,9 +30,11 @@ import { openLogger, type Logger } from '../../infrastructure/logging/logger.js'
 import type { Provider, StructuredRequest, Vector } from '../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { getExperienceByEpisode } from '../../infrastructure/sqlite/experience-archive.js';
+import { findPendingReflectionJob } from '../../infrastructure/sqlite/reflection-queue.js';
 import { handleReflection } from '../../reflection/application/intake.js';
 import { LaneAssigner } from '../../reflection/application/lanes.js';
-import { repairStatedReferences } from '../../reflection/application/stated-references.js';
+import { settleStatedReferences } from '../../reflection/application/stated-references.js';
+import { ReflectionWorker } from '../../reflection/application/worker.js';
 import { SessionManager } from '../../session/session-manager.js';
 
 /**
@@ -688,7 +690,7 @@ describe('references the substrate has to keep hold of', () => {
     });
     expect(before.get(id)?.roots).toEqual([id]);
 
-    await repairStatedReferences({ driver: harness.driver, db, logger }, id, SEEDED_AT);
+    await settleStatedReferences({ driver: harness.driver, db, logger }, id, SEEDED_AT);
 
     const after = await fetchClaimProvenance(harness.driver, {
       ids: [id],
@@ -711,5 +713,160 @@ describe('references the substrate has to keep hold of', () => {
       spy.mockRestore();
     }
     expect(getExperienceByEpisode(db, id)?.payload.provenance?.derived_from).toEqual([ROOT_ID]);
+  });
+});
+
+/**
+ * Two orderings that can lose a reference the substrate already accepted: a worker woken the
+ * instant the job exists, and one already running when the reference arrives. Both end with the
+ * job acked, so if the write is not made before the ack nothing is left to make it.
+ */
+describe('a reference that arrives while its job is being handled', () => {
+  it('repairs duplicate provenance when the enqueue callback wakes the worker immediately', async () => {
+    const text = 'review immediate wake duplicate';
+    const identity = 'review-immediate-wake';
+    const id = await push(text, identity);
+    const runner = {
+      run: vi.fn(async (episodeId: string) => ({
+        episodeId,
+        status: 'completed' as const,
+        applied: true,
+        summary: { episodeId, durationMs: 1, stages: [], counts: {}, skippedStages: [] },
+      })),
+    };
+    const worker = new ReflectionWorker(
+      { driver: harness.driver, db, provider, logger, runner },
+      {
+        clock: () => SEEDED_AT,
+      },
+    );
+    try {
+      await worker.start();
+      expect(findPendingReflectionJob(db, 'integrate', 'episode_id', id)).toBeUndefined();
+      const spy = vi
+        .spyOn(claimQueries, 'resolveProvenanceTargets')
+        .mockRejectedValueOnce(new Error('injected temporary graph error'));
+      try {
+        const result = await handleReflection(
+          {
+            driver: harness.driver,
+            db,
+            sessions: deps.sessions,
+            provider,
+            logger,
+            entropyThreshold: DEFAULTS.redaction.entropyThreshold,
+            lanes: new LaneAssigner(DEFAULTS.lanes),
+            workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+            acceptHookCapture: true,
+            onJobEnqueued: () => {
+              worker.wake();
+            },
+          },
+          { observations: [text], provenance: { derived_from: [ROOT_ID] } },
+          {
+            identity,
+            now: SEEDED_AT,
+          },
+        );
+        expect(result.episode_id).toBe(id);
+      } finally {
+        spy.mockRestore();
+      }
+      await worker.whenIdle();
+      expect(getExperienceByEpisode(db, id)?.payload.provenance?.derived_from).toEqual([ROOT_ID]);
+      expect(findPendingReflectionJob(db, 'integrate', 'episode_id', id)).toBeUndefined();
+      expect(worker.retrying).toBe(0);
+      const rows = await fetchClaimProvenance(harness.driver, {
+        ids: [id],
+        maxRoots: 3,
+        mode: withCurrency(RECALLED_AT),
+      });
+      expect(rows.get(id)?.roots).toEqual([ROOT_ID]);
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  it('repairs duplicate provenance supplied after a running job read the archive', async () => {
+    const text = 'review running job duplicate';
+    const identity = 'review-running-job';
+    const id = await push(text, identity);
+    // Replaced synchronously below: a Promise executor runs before the constructor returns.
+    let enter = (): void => undefined;
+    let release = (): void => undefined;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const runner = {
+      run: vi.fn(async (episodeId: string) => {
+        if (episodeId === id) {
+          enter();
+          await held;
+        }
+        return {
+          episodeId,
+          status: 'completed' as const,
+          applied: true,
+          summary: { episodeId, durationMs: 1, stages: [], counts: {}, skippedStages: [] },
+        };
+      }),
+    };
+    const worker = new ReflectionWorker(
+      { driver: harness.driver, db, provider, logger, runner },
+      {
+        clock: () => SEEDED_AT,
+      },
+    );
+    const started = worker.start();
+    try {
+      await entered;
+      const spy = vi
+        .spyOn(claimQueries, 'resolveProvenanceTargets')
+        .mockRejectedValueOnce(new Error('injected temporary graph error'));
+      try {
+        await handleReflection(
+          {
+            driver: harness.driver,
+            db,
+            sessions: deps.sessions,
+            provider,
+            logger,
+            entropyThreshold: DEFAULTS.redaction.entropyThreshold,
+            lanes: new LaneAssigner(DEFAULTS.lanes),
+            workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+            acceptHookCapture: true,
+            onJobEnqueued: () => {
+              worker.wake();
+            },
+          },
+          { observations: [text], provenance: { derived_from: [ROOT_ID] } },
+          {
+            identity,
+            now: SEEDED_AT,
+          },
+        );
+      } finally {
+        spy.mockRestore();
+      }
+      release();
+      await started;
+      await worker.whenIdle();
+      expect(getExperienceByEpisode(db, id)?.payload.provenance?.derived_from).toEqual([ROOT_ID]);
+      expect(findPendingReflectionJob(db, 'integrate', 'episode_id', id)).toBeUndefined();
+      expect(worker.retrying).toBe(0);
+      const rows = await fetchClaimProvenance(harness.driver, {
+        ids: [id],
+        maxRoots: 3,
+        mode: withCurrency(RECALLED_AT),
+      });
+      expect(rows.get(id)?.roots).toEqual([ROOT_ID]);
+    } finally {
+      release();
+      await started;
+      await worker.stop();
+    }
   });
 });

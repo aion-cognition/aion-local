@@ -10,7 +10,9 @@ import { withCurrency } from '../../infrastructure/graph/read-modes.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { getExperienceByEpisode } from '../../infrastructure/sqlite/experience-archive.js';
+import { getLedgerEntry, markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import { redactPayload } from '../../redaction/deep-walk.js';
+import { hashContent } from '../domain/content.js';
 
 /**
  * What a caller states about other memories: where this experience came from, what it corrects,
@@ -122,22 +124,70 @@ export async function attachProvenance(
   }
 }
 
+export type StatedReferenceDeps = ProvenanceAttachDeps & {
+  readonly db: SqliteHandle;
+};
+
 /**
- * The references this episode is known to have accepted, re-stated from the archive rather than
- * from the call: the worker runs long after the call returned, and the archive is the only place
- * a caller's assertion survives a graph that was down when it landed.
+ * Where an episode's attached reference version is acknowledged.
  *
- * Every write behind it is idempotent, so an episode whose references already landed pays one
- * archive read and nothing else. A graph still refusing throws, and the caller decides.
+ * The archive says what the substrate accepted; this says what it managed to write. Without the
+ * second half a job cannot tell "already attached" from "never attached", so it either rewrites
+ * the same edges on every run or completes over an update nobody made.
  */
-export async function repairStatedReferences(
-  deps: ProvenanceAttachDeps & { readonly db: SqliteHandle },
+export function statedReferenceKey(episodeId: string): string {
+  return `stated-references:${episodeId}`;
+}
+
+/** One comparable value for what the archive holds, so a later read can tell that it moved. */
+function versionOf(references: ReflectionProvenance): string {
+  return hashContent(references);
+}
+
+function acknowledgedVersion(db: SqliteHandle, episodeId: string): string | undefined {
+  const summary = getLedgerEntry(db, statedReferenceKey(episodeId))?.summary;
+  if (typeof summary !== 'object' || summary === null) {
+    return undefined;
+  }
+  const { version } = summary as { version?: unknown };
+  return typeof version === 'string' ? version : undefined;
+}
+
+/**
+ * How many times one call re-reads before it hands the rest back to the queue. A caller adding
+ * references faster than the graph accepts them is a queue's problem, not a loop's.
+ */
+const MAX_SETTLE_PASSES = 3;
+
+/**
+ * Whatever the archive holds for this episode, attached and acknowledged.
+ *
+ * The archive is the only place a caller's assertion survives a graph that was down when it
+ * landed, so this reads from it rather than from the call, and it re-reads after writing: a
+ * re-push that added references while the attach was in flight moves the version again, and a
+ * completion that compared against nothing would discard the update. When the version will not
+ * settle inside the pass bound this throws, which leaves the work to whatever called it: intake
+ * logs and lets the queued job carry it, and the worker fails the job into its own backoff.
+ *
+ * An episode that stated no references costs one archive read. One whose references already
+ * landed costs a ledger read on top, and no graph write at all.
+ */
+export async function settleStatedReferences(
+  deps: StatedReferenceDeps,
   episodeId: string,
   now: Date,
 ): Promise<void> {
-  const references = getExperienceByEpisode(deps.db, episodeId)?.payload.provenance;
-  if (references === undefined) {
-    return;
+  for (let pass = 0; pass < MAX_SETTLE_PASSES; pass += 1) {
+    const references = getExperienceByEpisode(deps.db, episodeId)?.payload.provenance;
+    if (references === undefined) {
+      return;
+    }
+    const version = versionOf(references);
+    if (version === acknowledgedVersion(deps.db, episodeId)) {
+      return;
+    }
+    await attachProvenance(deps, episodeId, references, now);
+    markLedgerApplied(deps.db, statedReferenceKey(episodeId), { version });
   }
-  await attachProvenance(deps, episodeId, references, now);
+  throw new Error(`stated references for ${episodeId} changed on every settle pass`);
 }

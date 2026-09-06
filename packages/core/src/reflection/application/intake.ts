@@ -3,6 +3,7 @@ import {
   ReflectionOriginSchema,
   type ReflectionOrigin,
   type ReflectionOutput,
+  type ReflectionProvenance,
 } from '@aion/protocol';
 
 import {
@@ -11,7 +12,7 @@ import {
   type StoredEpisode,
 } from './experience-store.js';
 import type { LaneAssigner, LaneDecision } from './lanes.js';
-import { attachProvenance, redactProvenance } from './stated-references.js';
+import { redactProvenance, settleStatedReferences } from './stated-references.js';
 import { attachContentVectors } from './vectors.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
@@ -189,6 +190,8 @@ type IntakeArchive = {
   readonly payload: ReflectionContent;
   readonly lane: ReflectionLane | undefined;
   readonly origin: ReflectionOrigin | undefined;
+  /** Stated references, folded into a row the archive already holds. Never in the hash. */
+  readonly references: ReflectionProvenance | undefined;
   readonly now: Date;
 };
 
@@ -205,11 +208,16 @@ type ArchivedIntake = {
  *
  * `occurred_at` is the payload's own clock and `archived_at` is the caller's, which is the
  * only wall-clock value on the row. A re-pushed payload conflicts on the idempotency key and
- * inserts nothing, so the row the first push wrote stays exactly as it was written.
+ * inserts nothing, so the row the first push wrote stays exactly as it was written apart from
+ * its stated references, which are additive and were never in the hash.
+ *
+ * The references land before the job row does, inside the same commit. A worker reads the
+ * archive to learn what to attach, so a job published ahead of the merge can be claimed, find
+ * nothing to attach, and complete with the update still unmade.
  */
 function archiveAndQueue(deps: ReflectionIntakeDeps, input: IntakeArchive): ArchivedIntake {
-  return deps.db.transaction((): ArchivedIntake => ({
-    archived: insertExperience(deps.db, {
+  return deps.db.transaction((): ArchivedIntake => {
+    const archived = insertExperience(deps.db, {
       schemaVersion: ARCHIVE_SCHEMA_VERSION,
       pipelineVersion: PIPELINE_VERSION,
       identity: input.identity,
@@ -221,9 +229,15 @@ function archiveAndQueue(deps: ReflectionIntakeDeps, input: IntakeArchive): Arch
       lane: input.lane,
       origin: input.origin,
       payload: input.payload,
-    }),
-    job: ensureIntegrateJob(deps, input.episodeId, input.sessionId, input.lane, input.now),
-  }))();
+    });
+    if (!archived && input.references !== undefined) {
+      mergeExperienceProvenance(deps.db, input.episodeId, input.references);
+    }
+    return {
+      archived,
+      job: ensureIntegrateJob(deps, input.episodeId, input.sessionId, input.lane, input.now),
+    };
+  })();
 }
 
 /**
@@ -324,9 +338,25 @@ export async function handleReflection(
         : { ...redacted.value, provenance: statedReferences },
     lane: requestedLane,
     origin,
+    references: statedReferences,
     now,
   });
   const ahead = job.countedInDepth ? depth - 1 : depth;
+
+  try {
+    await settleStatedReferences(deps, stored.episodeId, now);
+  } catch (err) {
+    // Not the caller's problem: the experience is durable and the archive holds the references,
+    // so the job below carries them and retries on its own backoff if the graph is still
+    // refusing. Error rather than warn, because nothing else reports it.
+    deps.logger.error(
+      { err, episodeId: stored.episodeId },
+      'stated references not attached; the archive holds them and the integrate job re-states them',
+    );
+  }
+  // After the attach, not before it: waking a worker first lets it claim the job and settle the
+  // references from under this call, and whichever of the two loses the race would then be the
+  // one whose failure decides whether they are ever written.
   if (job.enqueued) {
     notifyEnqueued(deps, job.jobId);
   }
@@ -347,23 +377,6 @@ export async function handleReflection(
     }
   }
 
-  // A re-push conflicts on the idempotency key and inserts nothing, so references the first
-  // push did not carry reach the archive only through this. Nothing about the episode's identity
-  // moves: the references were never in the content hash.
-  if (!archived && statedReferences !== undefined) {
-    mergeExperienceProvenance(deps.db, stored.episodeId, statedReferences);
-  }
-  try {
-    await attachProvenance(deps, stored.episodeId, statedReferences, now);
-  } catch (err) {
-    // Not the caller's problem: the experience is durable and the archive holds the references,
-    // so the integrate job the queue is about to run re-states them and retries on its own
-    // backoff if the graph is still refusing.
-    deps.logger.error(
-      { err, episodeId: stored.episodeId },
-      'stated references not attached; the archive holds them and the integrate job re-states them',
-    );
-  }
   await attachVectors(deps, stored, sessionId);
 
   if (!stored.created) {

@@ -538,11 +538,11 @@ describe('the stated references an episode arrived with', () => {
   }
 
   /**
-   * The fake models no reference read, so the job fails on it. That is the point: the statement
-   * was issued without anyone asking, and the failure returned the job to the queue instead of
-   * dropping the references the archive still holds.
+   * The fake models no reference read, so the settle fails on it. That is the point: the job
+   * asked without anyone telling it to, and the failure returned the job to the queue instead
+   * of acking over references the archive still holds and nothing has written.
    */
-  it('are re-stated on the job and returned to the backoff when the graph refuses', async () => {
+  it('are settled before the job is acked, and refuse to ack when the graph refuses', async () => {
     archiveWithSource(EPISODE_ID, 'some-source-episode');
     const runner = new StubRunner();
     const started = build(runner, { retryBaseMs: 60_000 });
@@ -554,7 +554,7 @@ describe('the stated references an episode arrived with', () => {
     expect(
       graph.statements.some((statement) => statement.cypher.includes('MATCH (n:AionNode { id:')),
     ).toBe(true);
-    expect(runner.episodeIds).toEqual([]);
+    expect(runner.episodeIds).toEqual([EPISODE_ID]);
     expect(getReflectionJob(store.db, jobId)?.claimedBy).toBe(started.claimantId);
     expect(started.retrying).toBe(1);
   });

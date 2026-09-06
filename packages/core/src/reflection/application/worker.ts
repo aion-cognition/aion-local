@@ -2,7 +2,7 @@ import type { Driver } from 'neo4j-driver';
 
 import { INTEGRATE_JOB_TYPE } from './intake.js';
 import type { ReflectionRun, ReflectionRunOptions } from './orchestrator.js';
-import { repairStatedReferences } from './stated-references.js';
+import { settleStatedReferences } from './stated-references.js';
 import { attachContentVectors, findPendingVectorNodes } from './vectors.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { errorMessage } from '../../infrastructure/errors.js';
@@ -364,12 +364,12 @@ export class ReflectionWorker {
       // this: the orchestrator takes it from the episode, which is what lets a replay run a
       // years-old episode on today's clock without dating its writes to the conversation.
       const now = this.#clock();
-      // References intake accepted and could not write, re-stated the way pending vectors are.
-      await repairStatedReferences(this.#deps, episodeId, now);
       const run = await this.#deps.runner.run(episodeId, { now });
       // `applied` and not `status` decides: a completed run that enriched nothing left the
       // ledger open, which is the orchestrator saying the episode is still worth a retry.
       if (run.applied || run.status !== 'completed') {
+        // A reference accepted while the job ran is one nothing has written yet.
+        await settleStatedReferences(this.#deps, episodeId, now);
         this.#succeed(job, episodeId, run);
         return;
       }
