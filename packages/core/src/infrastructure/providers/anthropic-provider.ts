@@ -68,7 +68,7 @@ type AnthropicMessage = { role: 'user' | 'assistant'; content: string };
 /** The model wraps JSON in a fence often enough that stripping one is cheaper than a retry. */
 const FENCED_JSON = /^```(?:json)?\s*([\s\S]*?)\s*```$/;
 
-/** Anthropic takes system instructions as a top-level string, not a `system`-role message. */
+/** Anthropic takes system instructions outside the conversation messages. */
 function splitSystem(messages: readonly ChatMessage[]): {
   system: string | undefined;
   rest: AnthropicMessage[];
@@ -220,6 +220,7 @@ export type AnthropicRequestOptions = {
   readonly fetchImpl?: typeof fetch;
   readonly maxTokens?: number;
   readonly schemaDelivery?: SchemaDelivery;
+  readonly promptCache?: boolean;
   readonly recordApiCall?: (call: ApiCall) => void;
   readonly now?: () => number;
 };
@@ -274,6 +275,11 @@ async function askAnthropic(
   const fetchImpl = options.fetchImpl ?? fetch;
   const { system, rest } = splitSystem(req.messages);
   const instructions = viaPrompt ? joinInstructions(system, schemaInstruction(req.schema)) : system;
+  // Only static instructions precede the breakpoint. Changing records stay in user messages.
+  const cachedInstructions =
+    options.promptCache === false || instructions === undefined
+      ? instructions
+      : [{ type: 'text', text: instructions, cache_control: { type: 'ephemeral' } }];
 
   let response!: Response;
   let attempts = 1;
@@ -292,7 +298,7 @@ async function askAnthropic(
         // already the repeatable behaviour the 0 was there to ask for.
         ...(req.temperature === undefined ? {} : { temperature: req.temperature }),
         max_tokens: req.maxTokens ?? options.maxTokens ?? DEFAULT_MAX_TOKENS,
-        ...(instructions === undefined ? {} : { system: instructions }),
+        ...(cachedInstructions === undefined ? {} : { system: cachedInstructions }),
         ...(viaPrompt
           ? {}
           : {
@@ -387,6 +393,7 @@ export type AnthropicProviderOptions = {
   readonly fetchImpl?: typeof fetch;
   readonly maxTokens?: number;
   readonly schemaDelivery?: SchemaDelivery;
+  readonly promptCache?: boolean;
   readonly recordApiCall?: (call: ApiCall) => void;
   readonly breakerFailureThreshold?: number;
   readonly breakerCooldownMs?: number;
@@ -415,6 +422,7 @@ export class AnthropicProvider implements GenerationBackend {
       ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
       ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
       ...(options.schemaDelivery === undefined ? {} : { schemaDelivery: options.schemaDelivery }),
+      ...(options.promptCache === undefined ? {} : { promptCache: options.promptCache }),
       ...(options.recordApiCall === undefined ? {} : { recordApiCall: options.recordApiCall }),
       ...(options.now === undefined ? {} : { now: options.now }),
     };

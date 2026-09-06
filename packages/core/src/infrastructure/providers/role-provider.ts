@@ -118,6 +118,7 @@ export class ProviderRouter {
           // from a file keeps its trailing newline, and fetch rejects that header value outright.
           apiKey: config.anthropic.apiKey.trim(),
           model: config.anthropic.model,
+          promptCache: config.anthropic.promptCache,
           now: this.#now,
           ...(options.recordApiCall === undefined ? {} : { recordApiCall: options.recordApiCall }),
           ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),

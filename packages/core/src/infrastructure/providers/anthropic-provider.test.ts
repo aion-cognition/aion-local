@@ -60,8 +60,14 @@ describe('the request the provider sends', () => {
     expect(body.model).toBe('claude-haiku-4-5');
     expect(body.think).toBeUndefined();
     expect(body.output_config).toBeUndefined();
-    expect(String(body.system)).toContain('you extract entities');
-    expect(String(body.system)).toContain(JSON.stringify(SCHEMA));
+    expect(body.system).toEqual([
+      {
+        type: 'text',
+        text: expect.stringContaining('you extract entities'),
+        cache_control: { type: 'ephemeral' },
+      },
+    ]);
+    expect((body.system as { text: string }[])[0]?.text).toContain(JSON.stringify(SCHEMA));
     // The system message is lifted out; only the conversation turns stay in `messages`.
     expect(body.messages).toEqual([{ role: 'user', content: 'the episode text' }]);
   });
@@ -127,7 +133,9 @@ describe('the reply the provider reads', () => {
       format: { type: 'json_schema', schema: { ...SCHEMA, additionalProperties: false } },
     });
     // The retry constrains the answer, so it stops restating the schema as an instruction.
-    expect(String(sentBody(fetchImpl, 1).system)).toBe('you extract entities');
+    expect(sentBody(fetchImpl, 1).system).toEqual([
+      { type: 'text', text: 'you extract entities', cache_control: { type: 'ephemeral' } },
+    ]);
   });
 
   it('closes every nested object on the constrained retry, and leaves one that states its own rule', async () => {

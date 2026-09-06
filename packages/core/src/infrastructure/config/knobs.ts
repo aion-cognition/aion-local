@@ -89,6 +89,7 @@ export const KNOBS = {
     apiKey: ['AION_ANTHROPIC_API_KEY', z.string(), ''],
     /** The model every remote-routed generation names, whatever model the caller asked for. */
     model: ['AION_ANTHROPIC_MODEL', text, DEFAULT_ANTHROPIC_MODEL],
+    promptCache: ['AION_ANTHROPIC_PROMPT_CACHE', z.boolean(), true],
   },
   /**
    * Per-role provider pins. `auto` follows the key: set, and every generation role goes to
