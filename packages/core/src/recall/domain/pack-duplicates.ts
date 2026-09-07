@@ -3,46 +3,44 @@ import type { RelatedClaim } from '@aion/protocol';
 import type { FusedItem } from './fusion.js';
 import { standingFor } from './standing.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
-import type { ClaimSimilarity } from '../../infrastructure/graph/near-duplicate-queries.js';
+import type { RestatedClaimPair } from '../../infrastructure/graph/near-duplicate-queries.js';
 
 /**
- * The third serving-layer subtraction: one assertion the substrate holds twice is printed once.
+ * Which candidates may stand in for which, so a pack that would print one claim twice prints it
+ * once. This decides eligibility only; whether anything is actually withheld is `pack.ts`'s,
+ * because only assembly knows what it served.
  *
- * It is a pack decision and nothing more. No record is merged, no lineage is closed, and the
- * admitted set that reaches reinforcement, access tracking and the method counters is the set
- * it has always been. The next recall in the next session makes the decision again from
- * scratch, and `claim_dedup` in maintenance remains the only thing that merges a claim, behind
- * a two-pass judge this path deliberately does not have.
+ * The subtraction is a pack decision and nothing more. No record is merged, no lineage is
+ * closed, the admitted set that reaches reinforcement and access tracking is unchanged, and the
+ * next recall decides again from scratch. `claim_dedup` in maintenance remains the only thing
+ * that merges a claim, behind a two-pass judge this path deliberately does not have.
  *
- * Because it has no judge, it fires only where the substrate's own structure and its own
- * measurement agree. Three gates, all of them structural except the last:
- *
- * a matching claim key, so the two assert the same attribute of the same entity; compatible
- * standing and currency, so a quotation is never folded into an inference and a superseded
- * claim never into a current one; and a cosine above a floor sitting over the whole measured
- * band of claims about one subject that are not one assertion. Anything a corrective
- * relationship touches is out: a claim somebody stated is wrong, a claim with a successor, and
- * a claim the substrate has since answered differently all stay served, because the reason to
- * read the second one is exactly that it disagrees with the first.
+ * Because it has no judge it withholds only where the substrate's own structure says the two
+ * are one sentence: the nomination query pairs claims on a matching subject key and a matching
+ * stored text fold, and the gates below add the reasons a reader still needs both. Standing and
+ * currency have to agree, so a quotation is never folded into an inference and a superseded
+ * claim never into a current one. Anything a correction touches stays served, because
+ * disagreeing is the reason to read the second one. And nothing is folded on absent evidence:
+ * a provenance lookup that did not answer for both sides withholds nothing at all.
  */
 
-export type NearDuplicateInput = {
-  /** In serving order, best first: the first member of a group is the one the pack keeps. */
+export type FoldableClaimsInput = {
   readonly items: readonly FusedItem[];
-  /** Same-key pairs and the cosine between them, from `near-duplicate-queries.ts`. */
-  readonly similarities: readonly ClaimSimilarity[];
-  /** `AION_PACK_DUPLICATE_COSINE_FLOOR`: the cosine a pair clears to be one assertion. */
-  readonly floor: number;
-  /** Standing and stated corrections, by node id. An item with no entry carries neither. */
+  /** Same key, same fold, no recorded disagreement (`near-duplicate-queries.ts`). */
+  readonly pairs: readonly RestatedClaimPair[];
+  /**
+   * Standing and stated corrections, by node id. The read fails soft to an empty map, and an id
+   * with no entry is one this run could not establish either for, so it is left alone: a
+   * successful read answers for every candidate it was asked about.
+   */
   readonly provenance: ReadonlyMap<string, ItemProvenance>;
   /** The current claim in a raw turn's family, keyed as the pack annotates it. */
   readonly relatedClaims: ReadonlyMap<string, RelatedClaim>;
 };
 
 /**
- * Whether the item is one the substrate has said something further about. Each of the three
- * makes the item's own text news rather than a repeat, and each is a reason to print it beside
- * whatever it is a near-duplicate of.
+ * Whether the substrate has said something further about the item. Each of the three makes its
+ * text news rather than a repeat, and each is a reason to print it beside whatever it restates.
  */
 function contested(
   item: FusedItem,
@@ -58,20 +56,25 @@ function contested(
 
 /**
  * Whether the two are the same kind of statement, told with the same authority, standing at the
- * same point in the lineage. A recorded utterance and a model's reading of it say the same words
- * with different weight behind them, and folding one into the other prints the weaker as though
- * it were the stronger.
+ * same point in the lineage. A recorded utterance and a model's reading of it can carry one
+ * sentence with different weight behind them, and folding one into the other prints the weaker
+ * as though it were the stronger.
  */
 function comparable(
   left: FusedItem,
   right: FusedItem,
-  provenance: NearDuplicateInput['provenance'],
+  provenance: ReadonlyMap<string, ItemProvenance>,
 ): boolean {
+  const leftRecord = provenance.get(left.id);
+  const rightRecord = provenance.get(right.id);
+  if (leftRecord === undefined || rightRecord === undefined) {
+    return false;
+  }
   if (left.currency !== right.currency) {
     return false;
   }
-  const leftStanding = standingFor(left, provenance.get(left.id));
-  const rightStanding = standingFor(right, provenance.get(right.id));
+  const leftStanding = standingFor(left, leftRecord);
+  const rightStanding = standingFor(right, rightRecord);
   return (
     leftStanding.kind === rightStanding.kind &&
     leftStanding.attribution === rightStanding.attribution
@@ -79,53 +82,43 @@ function comparable(
 }
 
 /**
- * The ids to leave out of the pack. Items arrive best first, so the member of a group this walk
- * reaches first is the one the reader gets, and every later member measured against it is a
- * second copy of an answer already in front of them.
- *
- * A pair is compared against the item actually kept rather than against every earlier item, so
- * suppression never chains: an item held back cannot itself hold anything back.
+ * For each candidate, the candidates it may be withheld in favour of. Symmetric on purpose:
+ * assembly walks its own serving order and folds whichever member it reaches second, so the map
+ * carries no preference of its own about which of a pair a reader should get.
  */
-export function suppressedNearDuplicates(input: NearDuplicateInput): ReadonlySet<string> {
-  const suppressed = new Set<string>();
-  if (input.similarities.length === 0) {
-    return suppressed;
+export function foldableClaims(
+  input: FoldableClaimsInput,
+): ReadonlyMap<string, ReadonlySet<string>> {
+  const foldable = new Map<string, Set<string>>();
+  if (input.pairs.length === 0) {
+    return foldable;
   }
 
-  const above = new Map<string, Set<string>>();
-  for (const pair of input.similarities) {
-    if (pair.similarity < input.floor) {
+  const byId = new Map(input.items.map((item) => [item.id, item]));
+  for (const pair of input.pairs) {
+    const left = byId.get(pair.left);
+    const right = byId.get(pair.right);
+    if (left === undefined || right === undefined) {
+      continue;
+    }
+    if (contested(left, input.provenance, input.relatedClaims)) {
+      continue;
+    }
+    if (contested(right, input.provenance, input.relatedClaims)) {
+      continue;
+    }
+    if (!comparable(left, right, input.provenance)) {
       continue;
     }
     for (const [id, other] of [
-      [pair.left, pair.right],
-      [pair.right, pair.left],
+      [left.id, right.id],
+      [right.id, left.id],
     ] as const) {
-      const held = above.get(id) ?? new Set<string>();
+      const held = foldable.get(id) ?? new Set<string>();
       held.add(other);
-      above.set(id, held);
+      foldable.set(id, held);
     }
   }
 
-  const kept: FusedItem[] = [];
-  for (const item of input.items) {
-    const neighbours = above.get(item.id);
-    if (neighbours === undefined || contested(item, input.provenance, input.relatedClaims)) {
-      kept.push(item);
-      continue;
-    }
-    const twin = kept.find(
-      (earlier) =>
-        neighbours.has(earlier.id) &&
-        !contested(earlier, input.provenance, input.relatedClaims) &&
-        comparable(earlier, item, input.provenance),
-    );
-    if (twin === undefined) {
-      kept.push(item);
-      continue;
-    }
-    suppressed.add(item.id);
-  }
-
-  return suppressed;
+  return foldable;
 }

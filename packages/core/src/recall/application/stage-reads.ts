@@ -15,8 +15,8 @@ import {
 import { normalizeCognitiveText } from '../../infrastructure/graph/cognitive-queries.js';
 import { listSessionEpisodeIds } from '../../infrastructure/graph/episodes.js';
 import {
-  claimSimilarities,
-  type ClaimSimilarity,
+  restatedClaims,
+  type RestatedClaimPair,
 } from '../../infrastructure/graph/near-duplicate-queries.js';
 import { fetchItemOrigins, type ItemOrigin } from '../../infrastructure/graph/origin-queries.js';
 import type { ReadMode } from '../../infrastructure/graph/read-modes.js';
@@ -268,24 +268,24 @@ export async function itemOrigins(
 }
 
 /**
- * How close each pair of candidates carrying one claim key is, beside the two reads above.
+ * Which candidates are one claim recorded twice, beside the two reads above.
  *
- * Best-effort in the same way and for the same reason: no answer means no pair clears the
- * floor, so the pack prints everything it would have printed before, which is the knob turned
- * off rather than a subtraction nobody can account for.
+ * Best-effort in the same way and for the same reason: no answer means no pair, so the pack
+ * prints everything it would have printed before, which is the knob turned off rather than a
+ * subtraction nobody can account for.
  */
-export async function claimSimilarity(
+export async function restatedClaimPairs(
   deps: StageReadDeps,
   ids: readonly string[],
   mode: ReadMode,
-): Promise<readonly ClaimSimilarity[]> {
+): Promise<readonly RestatedClaimPair[]> {
   if (!deps.config.recall.packDuplicateSuppression) {
     return [];
   }
   try {
-    return await claimSimilarities(deps.driver, { ids, mode });
+    return await restatedClaims(deps.driver, { ids, mode });
   } catch (err) {
-    deps.logger.warn({ err }, 'claim similarity read failed; the pack prints every candidate');
+    deps.logger.warn({ err }, 'restated-claim read failed; the pack prints every candidate');
     return [];
   }
 }

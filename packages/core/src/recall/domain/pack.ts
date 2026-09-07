@@ -1,6 +1,5 @@
 import {
   MemoryPackSchema,
-  type AdmissionReportOutput,
   type Cue,
   type Degradation,
   type MemoryPack,
@@ -10,7 +9,7 @@ import {
   type StageTimingsMs,
 } from '@aion/protocol';
 
-import type { AdmissionReport } from './admission.js';
+import { toAdmissionOutput, type AdmissionReport } from './admission.js';
 import { GLOSS_LABEL } from './facts.js';
 import type { FusedItem } from './fusion.js';
 import {
@@ -139,14 +138,22 @@ export type AssemblePackInput = {
    */
   readonly suppressedOwn?: ReadonlySet<string>;
   /**
-   * Ids restating an assertion a better-ranked item already carries (`pack-duplicates.ts`). Cut
-   * here for the same reason and with the same reach as the other two: the stored records are
-   * untouched, cognition sees the full admitted set, and only this pack's budget is smaller.
+   * For each candidate, the candidates it may be withheld in favour of (`pack-duplicates.ts`).
+   * Eligibility, not a decision: an item is withheld only where one of its own entries is
+   * already in this pack, so a representative the budget, a cap or the restatement filter
+   * rejected withholds nothing and the next member of the group takes its place. The stored
+   * records are untouched and cognition sees the full admitted set; only this pack is smaller.
    */
-  readonly suppressedDuplicates?: ReadonlySet<string>;
+  readonly foldable?: ReadonlyMap<string, ReadonlySet<string>>;
 };
 
 type Selection = Map<PackBucket, PackEntry[]>;
+
+/** What assembly produced, and how many memories it printed once that it holds twice. */
+type Assembled = {
+  readonly selection: Selection;
+  readonly folded: number;
+};
 
 /**
  * Rank order decides everything; the caps and the budget only decide where it stops. An
@@ -160,8 +167,9 @@ type Selection = Map<PackBucket, PackEntry[]>;
  * so a direct answer always outranks what the substrate volunteered and takes the budget first.
  * The three scores are not on one scale, so there is no order to merge them into.
  */
-function select(input: AssemblePackInput, note: string | undefined): Selection {
+function select(input: AssemblePackInput, note: string | undefined): Assembled {
   const selection: Selection = new Map();
+  let folded = 0;
   const packedEpisodes = new Set<string>();
   const packedIds = new Set<string>();
   const packedContent = new Set<string>();
@@ -178,13 +186,28 @@ function select(input: AssemblePackInput, note: string | undefined): Selection {
   let ranked = 0;
   let glosses = 0;
 
-  /** Cut at the wire by any of the three subtractions: text the reader already has, either way. */
+  /** Cut at the wire by either subtraction: already in this session's context, either way. */
   function withheld(id: string): boolean {
-    return (
-      input.suppressed?.has(id) === true ||
-      input.suppressedOwn?.has(id) === true ||
-      input.suppressedDuplicates?.has(id) === true
-    );
+    return input.suppressed?.has(id) === true || input.suppressedOwn?.has(id) === true;
+  }
+
+  /**
+   * Whether this pack already carries the same claim under another id. Asked at the moment an
+   * item would be placed rather than over the ranked list beforehand, because a representative
+   * the budget or a cap turned away is one nobody read: only an item in `packedIds` can stand
+   * in for another.
+   */
+  function alreadyPrinted(id: string): boolean {
+    const twins = input.foldable?.get(id);
+    if (twins === undefined) {
+      return false;
+    }
+    for (const twin of twins) {
+      if (packedIds.has(twin)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -254,6 +277,12 @@ function select(input: AssemblePackInput, note: string | undefined): Selection {
       estimateTokens(renderItem(entry)) +
       (held.length === 0 ? estimateTokens(BUCKET_HEADINGS[bucket]) : 0);
     if (tokens + cost > input.tokenBudget) {
+      return;
+    }
+    // Last, after every other reason the item could have been turned away, so the number the
+    // pack reports counts memories this rule withheld and no others.
+    if (alreadyPrinted(item.id)) {
+      folded += 1;
       return;
     }
 
@@ -347,7 +376,7 @@ function select(input: AssemblePackInput, note: string | undefined): Selection {
   sweep((item) => !deferred(item));
   sweep(deferred);
 
-  return selection;
+  return { selection, folded };
 }
 
 function render(
@@ -379,23 +408,6 @@ function render(
   return `${PACK_HEADING}\n\n${sections.join('\n\n')}`;
 }
 
-/** Snake_case on the wire, and the policy flattened alongside the counts it explains. */
-function toAdmissionOutput(report: AdmissionReport): AdmissionReportOutput {
-  return {
-    considered: report.considered,
-    admitted: report.admitted,
-    dropped_below_floor: report.droppedBelowFloor,
-    dropped_unmeasured: report.droppedUnmeasured,
-    dropped_unmeasured_arrival: report.droppedUnmeasuredArrival,
-    dropped_duplicate_content: report.droppedDuplicateContent,
-    dropped_near_duplicate: report.droppedNearDuplicate,
-    typed_admitted: report.typedAdmitted,
-    vector_floor: report.policy.vectorFloor,
-    corroboration_floor: report.policy.corroborationFloor,
-    bm25_mode: report.policy.bm25Mode,
-  };
-}
-
 /**
  * The producing method of every item the pack holds, read off the assembled pack rather than
  * off the stages that fed it. Assembly drops items on bucket caps, the budget, the restatement
@@ -422,8 +434,7 @@ export function packMethods(pack: MemoryPack): readonly string[] {
 export function assemblePack(input: AssemblePackInput): MemoryPack {
   const repeats = input.suppressed?.size ?? 0;
   const own = input.suppressedOwn?.size ?? 0;
-  const duplicates = input.suppressedDuplicates?.size ?? 0;
-  const note = honestyNote({
+  const signals = {
     ...(input.degraded === undefined ? {} : { degraded: input.degraded }),
     ...(input.truncated === undefined ? {} : { truncated: input.truncated }),
     ...(input.pendingEnrichment === undefined
@@ -431,14 +442,20 @@ export function assemblePack(input: AssemblePackInput): MemoryPack {
       : { pendingEnrichment: input.pendingEnrichment }),
     repeats,
     own,
-    duplicates,
-  });
-  const selection = select(input, note);
-  const renderedText = render(selection, note, input.admission, repeats, own);
+  };
+  // The fold's count cannot be known before assembly, and assembly cannot start without knowing
+  // what its note costs. So the budget is charged against the largest fold this pack could make,
+  // one per eligible candidate, and the text printed is the note assembly actually earned. A
+  // fold that came out smaller leaves the pack one memory short rather than one over.
+  const charged = honestyNote({ ...signals, duplicates: input.foldable?.size ?? 0 });
+  const assembled = select(input, charged);
+  const duplicates = assembled.folded;
+  const note = honestyNote({ ...signals, duplicates });
+  const renderedText = render(assembled.selection, note, input.admission, repeats, own);
 
   const buckets: Record<string, readonly MemoryPackItem[]> = {};
   for (const bucket of PACK_BUCKETS) {
-    const entries = selection.get(bucket);
+    const entries = assembled.selection.get(bucket);
     if (entries !== undefined && entries.length > 0) {
       buckets[bucket] = entries.map((entry) => entry.item);
     }

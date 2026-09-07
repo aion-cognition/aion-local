@@ -55,6 +55,9 @@ export const RELATIONSHIP_TYPES: readonly RelationshipType[] = [
 /** The edge a replacement node points at the node it replaced: `(new)-[:SUPERSEDES]->(old)`. */
 export const SUPERSEDES_TYPE = 'SUPERSEDES';
 
+/** The disagreement the relationship stage records between two claims, short of a close. */
+export const CONTRADICTION_TYPE = 'CONTRADICTS';
+
 export function isRelationshipType(value: string): value is RelationshipType {
   return (RELATIONSHIP_TYPES as readonly string[]).includes(value);
 }

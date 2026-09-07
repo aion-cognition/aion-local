@@ -2,178 +2,221 @@ import type { RelatedClaim } from '@aion/protocol';
 import { describe, expect, it } from 'vitest';
 
 import type { FusedItem } from './fusion.js';
-import { suppressedNearDuplicates } from './pack-duplicates.js';
+import { foldableClaims } from './pack-duplicates.js';
 import { assemble, item } from './test-support/pack.fixture.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
-import type { ClaimSimilarity } from '../../infrastructure/graph/near-duplicate-queries.js';
+import type { RestatedClaimPair } from '../../infrastructure/graph/near-duplicate-queries.js';
 
 /**
- * The readings the cases are built on are the ones committed against the shipped embedding
- * model on claim text: one assertion written twice runs to 0.981, and claims about one subject
- * that are not one assertion run to 0.932. The floor sits between them, so a pair standing at
- * the top of the second band is served at the worst reading that measurement recorded rather
- * than at a number chosen to make a test pass.
+ * What a pack does with two records of one claim. Which pairs reach here at all is the
+ * nomination query's, and `near-duplicate.int.test.ts` holds the counterexamples that decide
+ * it against a real graph.
  */
-const FLOOR = 0.965;
 
-/** The strongest reading measured for two claims about one subject that state different things. */
-const DISTINCT = 0.932;
+const LABELS = ['Insight', 'Memory', 'AionNode'];
 
-/** Inside the top of the band where two claims are one assertion written twice. */
-const RESTATED = 0.978;
-
-const NO_PROVENANCE: ReadonlyMap<string, ItemProvenance> = new Map();
 const NO_CLAIMS: ReadonlyMap<string, RelatedClaim> = new Map();
 
-function pair(left: string, right: string, similarity: number): ClaimSimilarity {
-  return { left, right, similarity };
+/** A successful provenance read answers for every candidate, with or without anything to say. */
+function read(...ids: readonly string[]): ReadonlyMap<string, ItemProvenance> {
+  return new Map(ids.map((id) => [id, { roots: [id], complete: true }]));
 }
 
-function suppress(
+function pairOf(items: readonly FusedItem[]): readonly RestatedClaimPair[] {
+  return [{ left: items[0]?.id ?? '', right: items[1]?.id ?? '' }];
+}
+
+function foldable(
   items: readonly FusedItem[],
-  similarities: readonly ClaimSimilarity[],
   overrides: {
     provenance?: ReadonlyMap<string, ItemProvenance>;
     relatedClaims?: ReadonlyMap<string, RelatedClaim>;
+    pairs?: readonly RestatedClaimPair[];
   } = {},
-): ReadonlySet<string> {
-  return suppressedNearDuplicates({
+): ReadonlyMap<string, ReadonlySet<string>> {
+  return foldableClaims({
     items,
-    similarities,
-    floor: FLOOR,
-    provenance: overrides.provenance ?? NO_PROVENANCE,
+    pairs: overrides.pairs ?? pairOf(items),
+    provenance: overrides.provenance ?? read(...items.map((entry) => entry.id)),
     relatedClaims: overrides.relatedClaims ?? NO_CLAIMS,
   });
 }
 
-const LOGIN = ['Event', 'Memory', 'AionNode'];
+function twins(): FusedItem[] {
+  return [
+    item('first', { labels: LABELS, content: 'The queue runs on Valkey.' }),
+    item('second', { labels: LABELS, content: 'the queue runs on Valkey' }),
+  ];
+}
 
-describe('near-duplicate suppression', () => {
-  it('prints one assertion once when the substrate holds two wordings of it', () => {
-    const items = [
-      item('login-a', { labels: LOGIN, content: 'the login flow moved to the edge worker' }),
-      item('login-b', { labels: LOGIN, content: 'login now runs on the edge worker' }),
-    ];
+describe('which records of one claim may stand in for each other', () => {
+  it('lets either of a nominated pair stand in for the other', () => {
+    const map = foldable(twins());
 
-    expect([...suppress(items, [pair('login-a', 'login-b', RESTATED)])]).toEqual(['login-b']);
+    expect([...(map.get('first') ?? [])]).toEqual(['second']);
+    expect([...(map.get('second') ?? [])]).toEqual(['first']);
   });
 
-  it('serves two occurrences of one kind of event, which state different things', () => {
-    const items = [
-      item('login-mon', { labels: LOGIN, content: 'Ana signed in from the Berlin office' }),
-      item('login-fri', { labels: LOGIN, content: 'Ana signed in from the Tokyo office' }),
-    ];
-
-    expect(suppress(items, [pair('login-mon', 'login-fri', DISTINCT)]).size).toBe(0);
+  it('folds nothing the nomination query did not pair', () => {
+    expect(foldable(twins(), { pairs: [] }).size).toBe(0);
   });
 
-  it('serves a claim and its negation, which is the pair a reader most needs both of', () => {
-    const items = [
-      item('flag-on', { labels: LOGIN, content: 'passkey login is enabled for staff' }),
-      item('flag-off', { labels: LOGIN, content: 'passkey login is disabled for staff' }),
-    ];
-
-    expect(suppress(items, [pair('flag-on', 'flag-off', DISTINCT)]).size).toBe(0);
-  });
-
-  it('serves a claim somebody stated is wrong, however closely it is worded', () => {
-    const items = [
-      item('claim', { labels: LOGIN, content: 'the seed limit is ten' }),
-      item('correction', { labels: LOGIN, content: 'the seed limit is now twelve' }),
-    ];
+  it('keeps a claim somebody stated is wrong, however it is worded', () => {
     const provenance = new Map<string, ItemProvenance>([
+      ['first', { roots: ['a'], complete: true }],
       [
-        'claim',
+        'second',
         {
-          roots: [],
+          roots: ['b'],
           complete: true,
           claimedCorrection: { by: 'episode-9', at: new Date('2026-09-01T00:00:00.000Z') },
         },
       ],
     ]);
 
-    expect(suppress(items, [pair('claim', 'correction', RESTATED)], { provenance }).size).toBe(0);
+    expect(foldable(twins(), { provenance }).size).toBe(0);
   });
 
-  it('serves a claim with a successor, since the lineage is what the reader is missing', () => {
+  it('keeps a claim with a successor, since the lineage is what the reader is missing', () => {
     const items = [
-      item('old', { labels: LOGIN, content: 'the seed limit is ten', superseded: true }),
-      item('new', { labels: LOGIN, content: 'the seed limit is ten now' }),
+      item('first', { labels: LABELS, content: 'The queue runs on Valkey.', superseded: true }),
+      item('second', { labels: LABELS, content: 'the queue runs on Valkey' }),
     ];
 
-    expect(suppress(items, [pair('old', 'new', RESTATED)]).size).toBe(0);
+    expect(foldable(items).size).toBe(0);
   });
 
-  it('serves a claim the substrate has since answered differently', () => {
-    const items = [
-      item('turn', { labels: LOGIN, content: 'we run Postgres for the queue' }),
-      item('claim', { labels: LOGIN, content: 'the queue runs on Postgres' }),
-    ];
+  it('keeps a claim the substrate has since answered differently', () => {
     const relatedClaims = new Map<string, RelatedClaim>([
-      ['turn', { id: 'claim-current', text: 'the queue runs on Valkey' }],
+      ['first', { id: 'claim-current', text: 'the queue runs on Postgres' }],
     ]);
 
-    expect(suppress(items, [pair('turn', 'claim', RESTATED)], { relatedClaims }).size).toBe(0);
+    expect(foldable(twins(), { relatedClaims }).size).toBe(0);
   });
 
-  it('never folds a quotation into an inference, whatever the two measure', () => {
+  it('never folds a quotation into an inference', () => {
     const items = [
-      item('said', {
+      item('first', {
         labels: ['Turn', 'Memory', 'AionNode'],
-        content: 'we decided to keep Neo4j',
+        content: 'the queue runs on Valkey',
       }),
-      item('read', { labels: LOGIN, content: 'the team decided to keep Neo4j' }),
+      item('second', { labels: LABELS, content: 'The queue runs on Valkey.' }),
     ];
 
-    expect(suppress(items, [pair('said', 'read', RESTATED)]).size).toBe(0);
+    expect(foldable(items).size).toBe(0);
   });
 
-  it('leaves a pair under the floor alone, which is the whole not-one-assertion band', () => {
-    const items = [
-      item('one', { labels: LOGIN, content: 'the worker retries on SQLITE_BUSY' }),
-      item('two', { labels: LOGIN, content: 'the worker gives up on SQLITE_BUSY' }),
-    ];
-
-    expect(suppress(items, [pair('one', 'two', FLOOR - 0.001)]).size).toBe(0);
-    expect(suppress(items, [pair('one', 'two', FLOOR)]).size).toBe(1);
+  it('withholds nothing when provenance could not answer for both sides', () => {
+    // The read fails soft to an empty map while the pairing read can still succeed, so an
+    // absent record is an unknown standing and an unknown correction, never a licence.
+    expect(foldable(twins(), { provenance: new Map() }).size).toBe(0);
+    expect(foldable(twins(), { provenance: read('first') }).size).toBe(0);
+    expect(foldable(twins(), { provenance: read('second') }).size).toBe(0);
   });
 
-  it('holds nothing back on the strength of an item it already held back', () => {
-    const items = [
-      item('first', { labels: LOGIN, content: 'the queue drains newest first' }),
-      item('second', { labels: LOGIN, content: 'the queue drains newest first, always' }),
-      item('third', { labels: LOGIN, content: 'draining is newest first' }),
-    ];
-    // The middle item is a restatement of the first and the third is a restatement only of the
-    // middle one, so the third is a memory the reader has not been shown.
-    const suppressed = suppress(items, [
-      pair('first', 'second', RESTATED),
-      pair('second', 'third', RESTATED),
-    ]);
-
-    expect([...suppressed]).toEqual(['second']);
+  it('ignores a pair naming a candidate this pack never held', () => {
+    expect(foldable(twins(), { pairs: [{ left: 'first', right: 'absent' }] }).size).toBe(0);
   });
 });
 
-describe('a pack that suppressed a near-duplicate', () => {
-  const items = [
-    item('login-a', { labels: LOGIN, content: 'the login flow moved to the edge worker' }),
-    item('login-b', { labels: LOGIN, content: 'login now runs on the edge worker' }),
-  ];
+describe('a pack that holds one claim twice', () => {
+  const eligible = new Map<string, ReadonlySet<string>>([
+    ['first', new Set(['second'])],
+    ['second', new Set(['first'])],
+  ]);
 
-  it('spends its budget once and says in the rendered text that it did', () => {
-    const pack = assemble(items, { suppressedDuplicates: new Set(['login-b']) });
+  it('prints the better-ranked record and says in the rendered text that it did', () => {
+    const pack = assemble(twins(), { foldable: eligible });
 
-    expect(pack.facts?.map((fact) => fact.id)).toEqual(['login-a']);
+    expect(pack.facts?.map((fact) => fact.id)).toEqual(['first']);
     expect(pack.rendered_text).toContain('1 item restating one already served here');
     expect(pack.metadata.suppressed_duplicates).toBe(1);
   });
 
-  it('prints both and says nothing when the subtraction found no pair', () => {
-    const pack = assemble(items);
+  it('prints both and says nothing when nothing was eligible', () => {
+    const pack = assemble(twins());
 
-    expect(pack.facts?.map((fact) => fact.id)).toEqual(['login-a', 'login-b']);
+    expect(pack.facts?.map((fact) => fact.id)).toEqual(['first', 'second']);
     expect(pack.rendered_text).not.toContain('restating');
     expect(pack.metadata.suppressed_duplicates).toBeUndefined();
+  });
+
+  it('serves the fitting record when the better-ranked one exceeds the token budget', () => {
+    const items = [
+      item('first', {
+        labels: LABELS,
+        content: 'The queue retries five times.',
+        why: 'The archived operational rationale explains the retry policy. '.repeat(120),
+      }),
+      item('second', { labels: LABELS, content: 'The queue retries at most five times.' }),
+    ];
+
+    expect(assemble(items, { tokenBudget: 110 }).facts?.map((fact) => fact.id)).toEqual(['second']);
+    const pack = assemble(items, { tokenBudget: 110, foldable: eligible });
+    expect(pack.facts?.map((fact) => fact.id)).toEqual(['second']);
+    expect(pack.metadata.suppressed_duplicates).toBeUndefined();
+  });
+
+  it('serves the second record when the first is cut as a cue restatement', () => {
+    const items = [
+      item('first', { labels: ['Goal', 'Memory', 'AionNode'], content: 'The queue retries.' }),
+      item('second', { labels: ['Goal', 'Memory', 'AionNode'], content: 'the queue retries' }),
+    ];
+    const pack = assemble(items, { restating: new Set(['first']), foldable: eligible });
+
+    expect(pack.facts?.map((fact) => fact.id)).toEqual(['second']);
+    expect(pack.metadata.suppressed_duplicates).toBeUndefined();
+  });
+
+  it('serves the second record when a bucket cap turned the first away', () => {
+    const items = [
+      item('first', { labels: ['Episode', 'Memory', 'AionNode'], content: 'The queue retries.' }),
+      item('second', { labels: LABELS, content: 'the queue retries' }),
+    ];
+    const caps = {
+      facts: 15,
+      episodes: 0,
+      narratives: 5,
+      intentions: 3,
+      preferences: 3,
+      resonant: 5,
+    };
+    const pack = assemble(items, { caps, foldable: eligible });
+
+    expect(pack.episodes).toBeUndefined();
+    expect(pack.facts?.map((fact) => fact.id)).toEqual(['second']);
+    expect(pack.metadata.suppressed_duplicates).toBeUndefined();
+  });
+
+  it('counts nothing when a cap, and not the fold, is what turned a record away', () => {
+    const items = [
+      item('other', { labels: LABELS, content: 'Something else entirely.' }),
+      item('first', { labels: LABELS, content: 'The queue retries.' }),
+      item('second', { labels: LABELS, content: 'the queue retries' }),
+    ];
+    const caps = {
+      facts: 2,
+      episodes: 5,
+      narratives: 5,
+      intentions: 3,
+      preferences: 3,
+      resonant: 5,
+    };
+    const pack = assemble(items, { caps, foldable: eligible });
+
+    expect(pack.facts?.map((fact) => fact.id)).toEqual(['other', 'first']);
+    expect(pack.metadata.suppressed_duplicates).toBeUndefined();
+  });
+
+  it('folds a resonant discovery into the fused record the query already answered with', () => {
+    const [first, second] = twins();
+    const pack = assemble(first === undefined ? [] : [first], {
+      resonant: second === undefined ? [] : [second],
+      foldable: eligible,
+    });
+
+    expect(pack.facts?.map((fact) => fact.id)).toEqual(['first']);
+    expect(pack.resonant).toBeUndefined();
+    expect(pack.metadata.suppressed_duplicates).toBe(1);
   });
 });

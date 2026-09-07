@@ -16,7 +16,6 @@ import { resonate, type ResonanceResult } from './resonance.js';
 import { selectSeeds, type Seed } from './seeds.js';
 import {
   claimProvenance,
-  claimSimilarity,
   embedCues,
   hydrate,
   itemOrigins,
@@ -24,6 +23,7 @@ import {
   mmrVectors,
   pendingEnrichment,
   relatedClaims,
+  restatedClaimPairs,
 } from './stage-reads.js';
 import { recordTypedAdmissions } from './typed-admission-ledger.js';
 import type { Config } from '../../infrastructure/config/schema.js';
@@ -49,7 +49,7 @@ import { spreadActivation, type ActivatedNode, type ActivationRun } from '../dom
 import type { AdmissionReport } from '../domain/admission.js';
 import { labelBoosts, queryCueTexts, queryRestatements } from '../domain/facts.js';
 import { fuse, withSoleMethod, type FusedItem, type FusionResult } from '../domain/fusion.js';
-import { suppressedNearDuplicates } from '../domain/pack-duplicates.js';
+import { foldableClaims } from '../domain/pack-duplicates.js';
 import { assemblePack, packMethods } from '../domain/pack.js';
 import { servedRecords, suppressedRepeats } from '../domain/session-dedup.js';
 import { suppressedOwnSession } from '../domain/session-origin.js';
@@ -315,11 +315,11 @@ export async function handleRecall(
   // pack holding no raw turn issues no claim query at all. None of the three needs another's
   // answer, so they cost one round trip rather than three.
   const ranked = [...candidates.values()];
-  const [claims, origins, provenance, similarities] = await Promise.all([
+  const [claims, origins, provenance, restated] = await Promise.all([
     relatedClaims(deps, ranked, mode),
     ownFilter ? itemOrigins(deps, [...candidates.keys()], sessionId, mode) : NO_ORIGINS,
     claimProvenance(deps, [...candidates.keys()], mode),
-    claimSimilarity(deps, [...candidates.keys()], mode),
+    restatedClaimPairs(deps, [...candidates.keys()], mode),
   ]);
 
   const timings: StageTimingsMs = {
@@ -346,12 +346,12 @@ export async function handleRecall(
         provenance,
       )
     : new Set<string>();
-  // Third and last, over what the other two left: an item already cut is not a copy anyone
-  // reads, so it must not be the one a later item is folded into.
-  const suppressedDuplicates = suppressedNearDuplicates({
-    items: ranked.filter((item) => !suppressedOwn.has(item.id) && !suppressed.has(item.id)),
-    similarities,
-    floor: deps.config.recall.packDuplicateCosineFloor,
+  // The third subtraction is only made eligible here. Assembly decides it, because an item the
+  // other two already cut, or one the budget turns away, is not a copy anybody read and so
+  // cannot stand in for another.
+  const foldable = foldableClaims({
+    items: ranked,
+    pairs: restated,
     provenance,
     relatedClaims: claims,
   });
@@ -379,7 +379,7 @@ export async function handleRecall(
     historical: isTimeTravel(mode),
     suppressed,
     suppressedOwn,
-    suppressedDuplicates,
+    foldable,
   });
 
   saveLastPack(deps.db, sessionId, pack, now.toISOString(), {
@@ -438,8 +438,9 @@ export async function handleRecall(
       // The other half of the same reading: how much of the answer was this session quoting
       // itself, which is a number worth watching as the conversation gets long.
       suppressedOwn: suppressedOwn.size,
-      // And the third: one assertion the substrate holds twice, printed once.
-      suppressedDuplicates: suppressedDuplicates.size,
+      // And the third: one assertion the substrate holds twice, printed once. Read off the
+      // pack, because eligibility is decided here and the withholding is decided by assembly.
+      suppressedDuplicates: pack.metadata.suppressed_duplicates ?? 0,
       // Why the second pass was quiet: a setting, a query nothing anchored, or a substrate
       // whose enrichment has not written the context vectors yet. Absent when it searched.
       resonanceSkipped: resonance.value.skipped,

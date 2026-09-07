@@ -1,4 +1,4 @@
-import type { AdmissionRule, RecallMethod } from '@aion/protocol';
+import type { AdmissionReportOutput, AdmissionRule, RecallMethod } from '@aion/protocol';
 
 /**
  * Empty beats noisy, as an absolute rule rather than a rank one. What a retrieval leg
@@ -329,4 +329,21 @@ export function absoluteRelevance(measurements: readonly Measurement[]): number 
     best = Math.max(best, measurement.relevance);
   }
   return best;
+}
+
+/** Snake_case on the wire, and the policy flattened alongside the counts it explains. */
+export function toAdmissionOutput(report: AdmissionReport): AdmissionReportOutput {
+  return {
+    considered: report.considered,
+    admitted: report.admitted,
+    dropped_below_floor: report.droppedBelowFloor,
+    dropped_unmeasured: report.droppedUnmeasured,
+    dropped_unmeasured_arrival: report.droppedUnmeasuredArrival,
+    dropped_duplicate_content: report.droppedDuplicateContent,
+    dropped_near_duplicate: report.droppedNearDuplicate,
+    typed_admitted: report.typedAdmitted,
+    vector_floor: report.policy.vectorFloor,
+    corroboration_floor: report.policy.corroborationFloor,
+    bm25_mode: report.policy.bm25Mode,
+  };
 }
