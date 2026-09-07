@@ -54,7 +54,7 @@ of episodes, cues, or memory packs beyond those primitives.
   intention's condition is met by what the run already holds), `pack-buckets.ts` (which bucket a
   node label answers in), `pack.ts` (MemoryPack assembly).
 - **`recall/application/`**: `cues.ts` (cue extraction and its cache), `seeds.ts` (the
-  four seed strategies' scoring and merge), `candidates.ts` (seeds plus activation into
+  five seed strategies' scoring and merge), `candidates.ts` (seeds plus activation into
   ranked lists), `stage-reads.ts` (the pipeline's batched graph reads), `resonance.ts` (the
   second pass), `intentions.ts` (the third), `recall.ts` (the pipeline), `side-effects.ts`
   (post-recall listeners).
@@ -172,6 +172,15 @@ half-written, and the message says the experience was not kept. An Ollama outage
 loses anything: the record commits, the job queues, and the vectors arrive when the model
 does. `docs/degradation.md` holds the live-verified behavior for both modes.
 
+A caller's stated provenance (a source, a `CORRECTS` reference, a confirmation) attaches the
+same way vectors do: best-effort and last. `attachProvenance` validates every reference against
+the substrate, drops and counts what does not resolve, and writes idempotent edges; a reference
+the graph would not take at the time is archived anyway, and the worker replays it on every job
+it claims, so a transient outage repairs itself with no person. A caller's stated feedback
+(delivery, use, a confirmation) is recorded the same idempotent way in the same local database,
+settled against its own durable version so a completion race between a duplicate push and a job
+finishing cannot drop it.
+
 No generation call happens after step 7. Extraction, turning an episode into entities,
 associations, cognitive structure and narratives, is a separate pipeline. `ReflectionWorker`
 runs its own claim loop and `wake()` pumps it; the wakeup carries no job, so a wakeup for a
@@ -209,10 +218,15 @@ independently for the pack's `stage_timings_ms`:
    vector leg only; BM25 and exact entity resolution still run on cue text. The pack records
    that rung too, so a full Ollama outage (cues and embeddings both gone) is legible as more
    than a cue-model failure.
-3. **Seeds.** Four strategies run together: `vector` (nearest neighbors in the two content
-   vector indexes), `bm25` (the fulltext index), `entity_resolution` (exact and
-   fuzzy name match against `Entity` nodes), and `recency` (a `tx_from`-ordered fallback
-   for a substrate with no access history yet). Candidates merge by node id; a node found
+3. **Seeds.** Five strategies run together: `vector` (nearest neighbors in the content
+   vector index), `context_vector` (nearest neighbors in the context vector index, the same
+   cue embedding against a second index; it reports as a `vector` hit downstream, since it is
+   one leg searching a second index rather than a method of its own), `bm25` (the fulltext
+   index), `entity_resolution` (exact and fuzzy name match against `Entity` nodes), and
+   `recency` (a `tx_from`-ordered fallback for a substrate with no access history yet, which
+   also orders a memory only the asking session produced behind every other source, before its
+   own `LIMIT`; a historical read and `AION_RECALL_OWN_SESSION_FILTER=false` both exempt it).
+   Candidates merge by node id; a node found
    by more than one strategy keeps every strategy that found it. A rejected query costs its
    own leg and nothing else, but the rejections are counted: when every query issued was
    rejected the graph is gone, and the pack says so (`degraded: [{stage: graph, reason:
@@ -270,7 +284,17 @@ independently for the pack's `stage_timings_ms`:
    pack's size. `preferences` has no producer yet, so it is structurally absent rather than
    empty. `narratives` gained one when a session's close, or the idle sweep, compresses its
    episodes into a `Narrative` node. `resonant` gained one from the second pass above, and
-   `intentions` from the third.
+   `intentions` from the third. Each item also carries standing, one word read off the node's
+   label and any stated evidence (`said`, `decided`, `inferred`, `captured`, `summarized`,
+   `described`; attribution to a person needs a confirmation record naming who and where it was
+   written down, a recorded role reads as `reported`, and everything else as `unknown`, never a
+   retrieval score), and derivation, up to three root sources with `shared_with` naming a
+   sibling item that traces to the same root. A caller can also state a `CORRECTS` reference
+   against a node it names outright: a record of the claim, never a close, since only the
+   supersession judge writes `SUPERSEDES`. Superseded material is laid down after current
+   material, across every population, so a current answer takes the budget first, and it marks
+   `successor_absent` when its replacement did not also reach the pack. A historical read
+   (`as_of`/`knew_at`) carries none of this.
 
 9. **Session dedup.** One subtraction between the assembled candidate set and the wire. A
    per-prompt recall hook asks many times inside one conversation and the top of the ranked list
@@ -280,7 +304,8 @@ independently for the pack's `stage_timings_ms`:
    item) carrying a fingerprint over what the item said. On the next recall in that session, an
    admitted item whose fingerprint still matches is cut from the buckets, counted in
    `metadata.suppressed_repeats`, and named in the honesty line; an item whose fingerprint moved
-   (superseded, description regrown, currency changed) is told again in full. Only the wire
+   (superseded, description regrown, currency changed, or its standing changed: a confirmation
+   recorded, a correction stated) is told again in full. Only the wire
    shrinks: reinforcement, access tracking and the pack-method counters all still see everything
    fusion admitted, because the subtraction is about what the agent already read rather than
    about what recall found. A time-traveled read is exempt in both directions, since inspecting
@@ -305,6 +330,23 @@ independently for the pack's `stage_timings_ms`:
     too, a time-traveled read is exempt, and `AION_RECALL_OWN_SESSION_FILTER=false` restores every
     item a session produced.
 
+11. **Near-duplicate fold.** The third subtraction, decided inside pack assembly itself rather
+    than against a served-items record. `near-duplicate-queries.ts` groups a pack's candidates by
+    subject key and stored text fold (`text_norm`), the same identity the substrate already keys
+    a claim node on, and excludes a whole group's member from folding wherever a `SUPERSEDES` or
+    `CONTRADICTS` edge says the substrate holds two of its members apart (the rest of the group
+    still folds among itself). No cosine decides this: measured against the shipped embedding
+    model, a one-digit change to an otherwise-identical sentence reads a higher cosine (0.997)
+    than a genuine rewording of one claim does (0.788), so no floor separates the two
+    populations. `pack-duplicates.ts` withholds a nominated pair only when both sides answered
+    for provenance, share currency, standing kind and attribution, and neither is contested (no
+    `supersededBy`, no related-current-claim annotation, no stated correction). Assembly folds an
+    item only in favour of one already placed, walking its own serving order, so a held-back item
+    can never itself hold another back. Counted in `metadata.suppressed_duplicates` and named in
+    the honesty line. Unlike the two subtractions above, a folded item leaves no `served_items`
+    row, since the session was never shown it, so a later recall is free to offer it.
+    `AION_PACK_DUPLICATE_SUPPRESSION=false` is the kill switch.
+
 Both paths inherit the driver timeouts `GraphConnection` sets: 5s to connect, 10s to acquire
 a pooled connection, 10s of transaction retries. The driver's defaults (60s and 30s) meet or
 exceed the MCP client's 60s request timeout, which is how a call against a stopped Neo4j
@@ -316,19 +358,28 @@ The pack is saved to SQLite's `last_pack` table (what `aion last` renders) and r
 row carries the read mode alongside the pack, `as_of` and `knew_at` when either was set, so
 `aion last` can say the pack answered a time-traveled read rather than the present graph. A
 registered listener fires afterward and is never awaited, so a listener failure cannot fail a
-recall that already succeeded: it stamps access metadata, appends a `recall_access` row to the
-usage stream, and nominates the co-activated pairs that the reinforcement flush later folds
-into edge weights. A time-travel read does none of them, since asking what the substrate held
+recall that already succeeded: it stamps access metadata and nominates reinforcement pairs, both
+scoped to what the pack actually emitted onto the wire rather than to the wider co-activated or
+admission-passed set, and it appends a `pack_emitted` row naming both populations (the emitted
+ids and, separately, everything fusion, resonance and the intention pass retrieved) to the usage
+stream ahead of the graph writes that follow, since a pack is emitted whether or not the access
+bump behind it lands. A time-travel read does none of them, since asking what the substrate held
 last month is a question rather than a use.
 
 The usage stream is the salience half of the record, in SQLite's insert-only `usage_events`
 table beside the experience archive. The archive holds what the substrate was told, so a replay
 from it rebuilds every fact and knows nothing about what mattered: access stamps, edge weights
-and sweep moments live only in the graph. Three kinds close that gap, appended as they happen
-and read back oldest first: `recall_access` from the listener above, `reinforcement_applied`
-when the flush's graph write lands rather than when a signal is enqueued, and `decay_sweep`
-with the scan parameters a sweep is a pure function of. `aion replay run` restores what the
-substrate knows; `aion replay usage` puts back what it found worth knowing, on top.
+and sweep moments live only in the graph. Seven kinds close that gap, appended as they happen
+and read back oldest first: `recall_access` and `pack_emitted` from the listener above,
+`reinforcement_applied` when the flush's graph write lands rather than when a signal is
+enqueued, `decay_sweep` with the scan parameters a sweep is a pure function of, and three
+feedback kinds a caller states through the reflection tool's `feedback` block:
+`delivery_acknowledged` (a caller says a pack reached it, which server-side assembly alone
+cannot establish), `memory_used` (a caller says it acted on named memories, a self-report by
+construction), and `memory_confirmed` (a confirmer and a reference, with evidence required
+rather than optional, the same confirmation record a pack's standing renders). `aion replay
+run` restores what the substrate knows; `aion replay usage` puts
+back what it found worth knowing, on top.
 
 ## Maintenance path: the introspection loop
 
@@ -580,7 +631,9 @@ undirected types (`SIMILAR`, `CO_OCCURS`, `RELATED_TO`, `ANALOGOUS_TO`, `CONTRAD
 normalize their endpoint order before the merge, so writing an edge from node A to node B
 and later from B to A lands on one edge, not two. `CONTRADICTS` is undirected because
 tension is mutual: two claims in tension state the same thing from either end.
-Twenty-two directed types cover containment
+Twenty-three directed types cover containment
 (`PARTICIPATES_IN`), temporal chaining (`FOLLOWS`, `PRECEDES`), provenance
-(`DERIVES_FROM`, `EVIDENCES`, `EXTRACTED_FROM`), the backbone (`HAS_MEMBER`,
-`HAS_WORKSPACE`), and this build's bitemporal extension, `SUPERSEDES`.
+(`DERIVES_FROM`, `EVIDENCES`, `EXTRACTED_FROM`, `CORRECTS`), the backbone (`HAS_MEMBER`,
+`HAS_WORKSPACE`), and this build's bitemporal extension, `SUPERSEDES`. `CORRECTS` is what a
+caller states outright against a node it names: a record of the claim, never a close, since
+only the supersession judge writes `SUPERSEDES`.

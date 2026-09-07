@@ -39,7 +39,7 @@ whether hooks are installed at all.
 
 | Event | Hook | What it does |
 | --- | --- | --- |
-| SessionStart | `session-start` | Recalls against a fixed grounding query and injects the pack. |
+| SessionStart | `session-start` | Recalls against a fixed grounding query and injects the pack. A compact-sourced fire also resets that session's served-items suppression before it recalls, since a hook cannot know which prior turns survived the compaction's own summary. |
 | UserPromptSubmit | `prompt-submit` | Recalls against the prompt, when the prompt is long enough to be a question. |
 | PreCompact | `pre-compact` | Pushes the window compaction is about to discard. |
 | Stop | `stop` | Stores the turn, or asks the model to store it. |
@@ -300,7 +300,7 @@ directory the session is in, with no install step and no container. A unit test 
 the subtree and fails the build on any other import.
 
 Per fire it opens a streamable-HTTP MCP session against `http://127.0.0.1:8765/mcp`
-(`AION_MCP_PORT` moves the port), makes one tool call, and deletes the session. The Claude
+(`AION_MCP_PORT` moves the port), makes one tool call, and deletes the session. The harness
 session id travels as the `session_id` tool argument, which overrides the transport identity.
 `pre-tool-use` puts the same argument on the model's own calls, so both land in one memory
 stream rather than two.
