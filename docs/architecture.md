@@ -176,10 +176,14 @@ A caller's stated provenance (a source, a `CORRECTS` reference, a confirmation) 
 same way vectors do: best-effort and last. `attachProvenance` validates every reference against
 the substrate, drops and counts what does not resolve, and writes idempotent edges; a reference
 the graph would not take at the time is archived anyway, and the worker replays it on every job
-it claims, so a transient outage repairs itself with no person. A caller's stated feedback
-(delivery, use, a confirmation) is recorded the same idempotent way in the same local database,
-settled against its own durable version so a completion race between a duplicate push and a job
-finishing cannot drop it.
+it claims, so a transient outage repairs itself with no person. A caller's stated feedback splits
+in two, deliberately. Delivery and use are self-reports in the `feedback` block, appended
+idempotently to the same local database and best-effort: nothing acknowledges them, so a failed
+append is logged and swallowed rather than failing an experience that is already durable. A
+confirmation is evidence and arrives under `provenance.confirmations` instead. Its append is
+settled against the same durable version the references are, so an append that fails leaves the
+references unacknowledged and the worker replays them, and a completion race between a duplicate
+push and a job finishing cannot drop it.
 
 No generation call happens after step 7. Extraction, turning an episode into entities,
 associations, cognitive structure and narratives, is a separate pipeline. `ReflectionWorker`
@@ -245,8 +249,10 @@ independently for the pack's `stage_timings_ms`:
    an item reaches the pack only on absolute evidence: a cosine at or above
    `AION_VECTOR_ADMISSION_FLOOR`, a Lucene match on the verbatim cue, two independent
    measurements at or above `AION_CORROBORATION_FLOOR`, or traversal from a pack something
-   else anchored, however well it ranks. Duplicates collapse by content hash, keeping the
-   higher-ranked instance. An item the spread reached and no strategy seeded is scored
+   else anchored, however well it ranks. One node several legs found merges into one candidate
+   here, scored once and explained by its strongest leg; two different nodes carrying the same
+   sentence both go through, because whether they are one claim is decided in assembly, at step
+   11, where the provenance read has arrived. An item the spread reached and no strategy seeded is scored
    against the query cues on its own content vector, so traversal supplies candidates and
    never admission.
 6. **Context resonance.** A second pass, after fusion because it needs to know the first one
@@ -294,7 +300,9 @@ independently for the pack's `stage_timings_ms`:
    supersession judge writes `SUPERSEDES`. Superseded material is laid down after current
    material, across every population, so a current answer takes the budget first, and it marks
    `successor_absent` when its replacement did not also reach the pack. A historical read
-   (`as_of`/`knew_at`) carries none of this.
+   (`as_of`/`knew_at`) still renders standing and provenance, at the vantage it asked about; what
+   it is exempt from is ordinary successor preference, the deferral of superseded material and the
+   `successor_absent` marker, since what the substrate held then is the question there.
 
 9. **Session dedup.** One subtraction between the assembled candidate set and the wire. A
    per-prompt recall hook asks many times inside one conversation and the top of the ranked list
@@ -304,11 +312,14 @@ independently for the pack's `stage_timings_ms`:
    item) carrying a fingerprint over what the item said. On the next recall in that session, an
    admitted item whose fingerprint still matches is cut from the buckets, counted in
    `metadata.suppressed_repeats`, and named in the honesty line; an item whose fingerprint moved
-   (superseded, description regrown, currency changed, or its standing changed: a confirmation
-   recorded, a correction stated) is told again in full. Only the wire
-   shrinks: reinforcement, access tracking and the pack-method counters all still see everything
-   fusion admitted, because the subtraction is about what the agent already read rather than
-   about what recall found. A time-traveled read is exempt in both directions, since inspecting
+   (superseded, description regrown, currency changed, its standing changed with a confirmation
+   recorded or a correction stated, or the current claim standing beside a raw turn replaced) is
+   told again in full. Ranking is untouched: fusion still measures everything it admitted, the
+   admission report still counts the whole set, and the retrieved population the usage stream
+   records is still the union of all three passes, because the subtraction is about what the agent
+   already read rather than about what recall found. Reinforcement and access tracking are a
+   different question and follow the pack: both are charged only against what it emitted, so a
+   withheld repeat earns neither. A time-traveled read is exempt in both directions, since inspecting
    the past neither repeats a serve nor decides what the present may repeat, and
    `AION_RECALL_SESSION_DEDUP=false` restores the full pack on every call. The record dies with
    the session, on the client's DELETE or on the idle sweep, whichever reaches it.
@@ -323,15 +334,24 @@ independently for the pack's `stage_timings_ms`:
     their source episode, and an Entity hangs off neither, so its provenance is the set of episodes
     that `MENTIONS` it. An item whose provenance names the asking session and no other is cut from
     the buckets, counted in `metadata.suppressed_own`, and named in the honesty line beside the
-    repeats. An item the substrate has corrected since (closed lineage, a currency marker, or the
-    current claim resonance found beside a raw turn) is served in full, because the correction is
-    the part the conversation does not hold. Origin decides before dedup and what it withholds
-    leaves no served row, since the session never read those items. Cognition is untouched here
-    too, a time-traveled read is exempt, and `AION_RECALL_OWN_SESSION_FILTER=false` restores every
-    item a session produced.
+    repeats. An item the substrate now holds evidence about is served in full instead: closed
+    lineage, a currency marker, the current claim resonance found beside a raw turn, a `CORRECTS`
+    reference somebody stated against it, or a confirmation naming a confirmer. None of those move
+    the item's capture origin, and all of them are the part the conversation does not hold. The
+    evidence is read off the provenance the run already fetched, so an item that read answered for
+    with nothing to say is suppressed as usual, and an item it could not answer for at all is
+    preserved: withholding on a failed lookup would assert the session already knows something
+    nobody could read. Origin decides before dedup and what it withholds leaves no served row,
+    since the session never read those items, which is why the fingerprint cannot repair this on
+    its own. Ranking is untouched here too, a time-traveled read is exempt, and
+    `AION_RECALL_OWN_SESSION_FILTER=false` restores every item a session produced.
 
 11. **Near-duplicate fold.** The third subtraction, decided inside pack assembly itself rather
-    than against a served-items record. `near-duplicate-queries.ts` groups a pack's candidates by
+    than against a served-items record, and the only place two different node ids are ever read as
+    one claim. Fusion merges by id and nothing else: two ids carrying one sentence both reach
+    assembly, because whether they are one memory is a question about standing, subject identity
+    and the substrate's own key, and none of those are answered until the provenance read comes
+    back. `near-duplicate-queries.ts` groups a pack's candidates by
     subject key and stored text fold (`text_norm`), the same identity the substrate already keys
     a claim node on, and excludes a whole group's member from folding wherever a `SUPERSEDES` or
     `CONTRADICTS` edge says the substrate holds two of its members apart (the rest of the group
@@ -345,7 +365,17 @@ independently for the pack's `stage_timings_ms`:
     can never itself hold another back. Counted in `metadata.suppressed_duplicates` and named in
     the honesty line. Unlike the two subtractions above, a folded item leaves no `served_items`
     row, since the session was never shown it, so a later recall is free to offer it.
-    `AION_PACK_DUPLICATE_SUPPRESSION=false` is the kill switch.
+    `AION_PACK_DUPLICATE_SUPPRESSION=false` is the kill switch, and it turns the fold off without
+    licensing a pack to print one node twice: the same id reached by two passes is still placed
+    once, which is identity rather than a fold.
+
+    The near-duplicate cluster cap in `ranking.ts` is a separate rule and runs earlier, before
+    assembly sees anything. It is a crowding limit on how many members of one near-identical
+    cluster a ranked list may carry (`AION_PACK_CLUSTER_CAP`, keyed on a text prefix and on cosine
+    where vectors are loaded), it counts its own loss in `dropped_near_duplicate`, and it makes no
+    claim about two records being one claim. So not every admitted candidate reaches assembly, and
+    the promise here is one explicit claim-equivalence policy rather than a guarantee that every
+    retrieved record is judged by it.
 
 Both paths inherit the driver timeouts `GraphConnection` sets: 5s to connect, 10s to acquire
 a pooled connection, 10s of transaction retries. The driver's defaults (60s and 30s) meet or
@@ -373,11 +403,13 @@ and sweep moments live only in the graph. Seven kinds close that gap, appended a
 and read back oldest first: `recall_access` and `pack_emitted` from the listener above,
 `reinforcement_applied` when the flush's graph write lands rather than when a signal is
 enqueued, `decay_sweep` with the scan parameters a sweep is a pure function of, and three
-feedback kinds a caller states through the reflection tool's `feedback` block:
-`delivery_acknowledged` (a caller says a pack reached it, which server-side assembly alone
-cannot establish), `memory_used` (a caller says it acted on named memories, a self-report by
-construction), and `memory_confirmed` (a confirmer and a reference, with evidence required
-rather than optional, the same confirmation record a pack's standing renders). `aion replay
+kinds a caller states: `delivery_acknowledged` (a caller says a pack reached it, which server-side
+assembly alone cannot establish) and `memory_used` (a caller says it acted on named memories, a
+self-report by construction), both from the reflection tool's `feedback` block, and
+`memory_confirmed` (a confirmer and a reference, with evidence required rather than optional, the
+same confirmation record a pack's standing renders), which arrives under
+`provenance.confirmations` because it is evidence about a memory rather than a report about a
+pack. `aion replay
 run` restores what the substrate knows; `aion replay usage` puts
 back what it found worth knowing, on top.
 

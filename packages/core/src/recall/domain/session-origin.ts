@@ -14,10 +14,11 @@ import type { ItemOrigin } from '../../infrastructure/graph/origin-queries.js';
  * Dedup cannot catch this, because each of these is served exactly once. What separates them is
  * where they came from, not how often they have been sent.
  *
- * Cognition is untouched, exactly as with dedup: the full admitted set still reaches
- * reinforcement and access tracking, and only the wire gets smaller. The pack-method counters
- * are the one exception, and by design: they are read off the assembled pack, so a withheld
- * item's method is uncredited there.
+ * Ranking is untouched, exactly as with dedup: fusion measures everything it admitted, the
+ * admission report counts the whole set, and the retrieved telemetry carries every candidate.
+ * Only the wire gets smaller. What follows the wire follows it: reinforcement and access tracking
+ * are charged against what the pack emitted, and the pack-method counters are read off the
+ * assembled pack, so a withheld item earns none of the three.
  */
 
 export type OwnSessionInput = {

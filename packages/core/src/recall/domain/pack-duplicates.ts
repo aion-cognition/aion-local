@@ -10,10 +10,16 @@ import type { RestatedClaimPair } from '../../infrastructure/graph/near-duplicat
  * once. This decides eligibility only; whether anything is actually withheld is `pack.ts`'s,
  * because only assembly knows what it served.
  *
- * The subtraction is a pack decision and nothing more. No record is merged, no lineage is
- * closed, the admitted set that reaches reinforcement and access tracking is unchanged, and the
- * next recall decides again from scratch. `claim_dedup` in maintenance remains the only thing
- * that merges a claim, behind a two-pass judge this path deliberately does not have.
+ * The subtraction is a pack decision and nothing more. No record is merged, no lineage is closed,
+ * the ranked set and the admission report are unchanged, both retrieved ids stay in the usage
+ * stream's telemetry, and the next recall decides again from scratch. Exposure follows the pack,
+ * so only the record a reader was actually handed is charged one. `claim_dedup` in maintenance
+ * remains the only thing that merges a claim, behind a two-pass judge this path deliberately
+ * does not have.
+ *
+ * This is also the only place two different node ids are read as one claim. Fusion merges by id
+ * and carries the rest through, so a decision that needs standing, subject identity or a stated
+ * correction is made here, once, with the provenance read in front of it.
  *
  * Because it has no judge it withholds only where the substrate's own structure says the two
  * are one sentence: the nomination query pairs claims on a matching subject key and a matching

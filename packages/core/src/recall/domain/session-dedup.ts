@@ -11,8 +11,10 @@ import { hashContent } from '../../reflection/domain/content.js';
  * The serving-layer subtraction. A hook-driven agent recalls on every prompt, and inside one
  * session the top of the ranked list barely moves, so the same memories are rendered again
  * into a conversation that already holds them. Ranking is untouched by this: fusion still
- * measures everything it admitted, and the pack-method counters still read the whole set. Only
- * what goes over the wire is cut.
+ * measures everything it admitted, the admission report counts the whole set, and the retrieved
+ * telemetry names every candidate. Only what goes over the wire is cut, and what follows the wire
+ * is cut with it: reinforcement, access tracking and the pack-method counters all read the
+ * assembled pack, so a withheld repeat earns none of the three.
  *
  * Suppression is per (session, item) and never crosses sessions: a second agent, or the same
  * agent tomorrow, holds none of this and gets the full pack.
