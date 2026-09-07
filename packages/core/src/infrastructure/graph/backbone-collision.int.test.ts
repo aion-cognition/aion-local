@@ -41,7 +41,7 @@ async function substrateCount(): Promise<number> {
     {},
     (row) => row.c as number,
   );
-  return Number(rows[0] ?? 0);
+  return rows[0] ?? 0;
 }
 
 describe('backbone bootstrap on a graph that already names the substrate', () => {

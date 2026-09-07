@@ -235,3 +235,75 @@ describe('two ids that carry one sentence', () => {
     expect(pack.metadata.suppressed_duplicates).toBeUndefined();
   });
 });
+
+describe('two memories from one source', () => {
+  const ROOT = new Map([
+    ['c1', { roots: ['ep-root'], complete: true }],
+    ['c2', { roots: ['ep-root'], complete: true }],
+  ]);
+
+  it('exposes the shared origin rather than letting one source read as two witnesses', () => {
+    const pack = assemble([item('c1'), item('c2')], { provenance: ROOT });
+
+    expect(pack.episodes?.[0]?.derivation?.shared_with).toBeUndefined();
+    expect(pack.episodes?.[1]?.derivation?.shared_with).toEqual(['c1']);
+    expect(pack.rendered_text).toContain(
+      'shares this origin with c1: not independent corroboration',
+    );
+  });
+
+  it('claims a root only for an item the pack actually served', () => {
+    // c1 is cut by the cap, so c2 is the first item in the pack to descend from the root and
+    // has nobody to share it with.
+    const pack = assemble([item('c1'), item('c2')], {
+      provenance: ROOT,
+      caps: { ...CAPS, episodes: 1 },
+    });
+
+    expect(pack.episodes?.map((entry) => entry.id)).toEqual(['c1']);
+    expect(pack.episodes?.[0]?.derivation?.shared_with).toBeUndefined();
+  });
+
+  it('leaves two memories from different roots alone', () => {
+    const pack = assemble([item('c1'), item('c2')], {
+      provenance: new Map([
+        ['c1', { roots: ['ep-a'], complete: true }],
+        ['c2', { roots: ['ep-b'], complete: true }],
+      ]),
+    });
+
+    expect(pack.episodes?.[1]?.derivation?.shared_with).toBeUndefined();
+  });
+});
+
+describe('one source reaching the pack twice', () => {
+  it('marks the root and its own extracted claim as one source', () => {
+    const pack = assemble(
+      [item('root'), item('claim', { labels: ['Insight', 'Memory', 'AionNode'] })],
+      {
+        provenance: new Map([
+          ['root', { roots: ['root'], complete: true }],
+          ['claim', { roots: ['root'], complete: true }],
+        ]),
+      },
+    );
+    expect(pack.episodes?.map((entry) => entry.id)).toContain('root');
+    expect(pack.facts?.map((entry) => entry.id)).toContain('claim');
+    expect(pack.rendered_text).toContain('not independent corroboration');
+  });
+  it('prefers a known successor arriving through resonance', () => {
+    const stale = item('stale', { superseded: true, content: 'old account' });
+    const fresh = item('stale-successor', { content: 'new account' });
+    const alone = assemble([stale]);
+    const freshAlone = assemble([], {
+      resonant: [fresh],
+      tokenBudget: alone.metadata.token_estimate,
+    });
+    expect(freshAlone.resonant?.map((entry) => entry.id) ?? []).toContain('stale-successor');
+    const pack = assemble([stale], {
+      resonant: [fresh],
+      tokenBudget: alone.metadata.token_estimate,
+    });
+    expect(pack.resonant?.map((entry) => entry.id) ?? []).toContain('stale-successor');
+  });
+});
