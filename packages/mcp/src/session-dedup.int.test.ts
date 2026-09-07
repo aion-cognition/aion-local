@@ -223,20 +223,24 @@ describe('a second recall inside one session', () => {
   });
 
   /**
-   * A repeat is withheld because the session already holds it, which is the one subtraction that
-   * leaves the caller holding the memory anyway. So it stays inside the pack's membership and
-   * still earns its exposure, where an item the floors refused or the budget cut does not.
+   * The session read these memories on the recall that printed them, and that recall is what
+   * earned their exposure. Withholding them again serves nobody anything, so the second call
+   * strengthens nothing and stamps nothing, and the record it leaves behind is only what the
+   * next call subtracts against.
    */
-  it('still fires the exposure side effects for the repeats it withheld', async () => {
+  it('charges no second exposure for the repeats it withheld', async () => {
     const session = 'dedup-int-reinforcement-session';
-    await recall(session);
+    const first = await recall(session);
     const afterFirst = listReinforcementSignals(db).length;
     expect(afterFirst).toBeGreaterThan(0);
+    const held = readServedItems(db, session);
+    expect(held.size).toBe(episodeIdsOf(first).length);
 
     const repeat = await recall(session);
 
     expect(repeat.episodes).toBeUndefined();
-    expect(listReinforcementSignals(db).length).toBeGreaterThan(afterFirst);
+    expect(listReinforcementSignals(db).length).toBe(afterFirst);
+    expect(readServedItems(db, session)).toEqual(held);
   });
 
   it('offers a memory stored after the first serve, and nothing the session already has', async () => {

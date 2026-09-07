@@ -20,6 +20,7 @@ import {
 
 const NOW = new Date('2026-09-06T12:00:00.000Z');
 const SESSION = 'session-1';
+const EPISODE = 'episode-1';
 const THRESHOLD = DEFAULTS.redaction.entropyThreshold;
 
 let dir: string;
@@ -40,11 +41,15 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-function record(feedback: RecallFeedback, sessionId = SESSION, now = NOW): void {
+function record(
+  feedback: RecallFeedback,
+  overrides: { sessionId?: string; episodeId?: string; now?: Date } = {},
+): void {
   recordRecallFeedback(deps, {
     feedback: redactFeedback(deps, feedback, THRESHOLD),
-    sessionId,
-    now,
+    sessionId: overrides.sessionId ?? SESSION,
+    episodeId: overrides.episodeId ?? EPISODE,
+    now: overrides.now ?? NOW,
   });
 }
 
@@ -79,7 +84,61 @@ describe('what a caller states about a pack it was served', () => {
 
     record(feedback);
     record(feedback);
-    record(feedback, SESSION, new Date('2026-09-07T09:00:00.000Z'));
+    record(feedback, { now: new Date('2026-09-07T09:00:00.000Z') });
+
+    expect(stream()).toHaveLength(1);
+  });
+
+  /**
+   * Using a memory at noon and again at one are two occurrences, and the caller is the only one
+   * who can say so. Both are retried under a later clock, which is the arrival time and not the
+   * occurrence, so the retries fold and the two occurrences stand.
+   */
+  it('keeps two stated occurrence times apart while folding a retry of each', () => {
+    for (const occurredAt of ['2026-09-06T12:00:00.000Z', '2026-09-06T13:00:00.000Z']) {
+      const feedback: RecallFeedback = {
+        used: [{ memories: ['node-a'], reporter: 'the calling agent', occurred_at: occurredAt }],
+      };
+      record(feedback);
+      record(feedback, { now: new Date('2026-09-07T09:00:00.000Z') });
+    }
+
+    expect(stream().map((event) => event.occurredAt)).toEqual([
+      '2026-09-06T12:00:00.000Z',
+      '2026-09-06T13:00:00.000Z',
+    ]);
+  });
+
+  /**
+   * With no stated time there is no occurrence to identify, so the experience carrying the report
+   * stands in for one: a re-push resolves to the same episode and folds, and a later experience
+   * saying the same thing is the caller reporting again.
+   */
+  it('reads the same wordless report on a later experience as a second report', () => {
+    const feedback: RecallFeedback = {
+      used: [{ memories: ['node-a'], reporter: 'the calling agent' }],
+    };
+
+    record(feedback);
+    record(feedback, { episodeId: 'episode-2' });
+
+    expect(stream()).toHaveLength(2);
+  });
+
+  /** A named occurrence is the caller's own identity for it, so which experience carried it changes nothing. */
+  it('folds one stated occurrence reported across two experiences', () => {
+    const feedback: RecallFeedback = {
+      used: [
+        {
+          memories: ['node-a'],
+          reporter: 'the calling agent',
+          occurred_at: '2026-09-06T12:00:00.000Z',
+        },
+      ],
+    };
+
+    record(feedback);
+    record(feedback, { episodeId: 'episode-2' });
 
     expect(stream()).toHaveLength(1);
   });
@@ -90,7 +149,7 @@ describe('what a caller states about a pack it was served', () => {
     };
 
     record(feedback);
-    record(feedback, 'session-2');
+    record(feedback, { sessionId: 'session-2' });
 
     expect(stream().map((event) => (event.payload as { sessionId: string }).sessionId)).toEqual([
       SESSION,
@@ -130,7 +189,12 @@ describe('what a caller states about a pack it was served', () => {
   });
 
   it('writes nothing for a call that stated no feedback', () => {
-    recordRecallFeedback(deps, { feedback: undefined, sessionId: SESSION, now: NOW });
+    recordRecallFeedback(deps, {
+      feedback: undefined,
+      sessionId: SESSION,
+      episodeId: EPISODE,
+      now: NOW,
+    });
 
     expect(stream()).toEqual([]);
   });
@@ -170,5 +234,23 @@ describe('a confirmation mirrored into the stream', () => {
     recordConfirmationFeedback(deps, 'episode-2', [CONFIRMATION]);
 
     expect(stream()).toHaveLength(2);
+  });
+
+  /**
+   * A settle acknowledges the references it wrote, and a swallowed failure here would let it
+   * acknowledge one it never recorded. The caller's retry is the repair, so the failure has to
+   * reach it.
+   */
+  it('throws rather than losing a confirmation the stream refused', () => {
+    store.db.exec(
+      `CREATE TRIGGER refuse_confirmation BEFORE INSERT ON usage_events
+       WHEN NEW.kind = 'memory_confirmed'
+       BEGIN SELECT RAISE(ABORT, 'refused'); END`,
+    );
+
+    expect(() => {
+      recordConfirmationFeedback(deps, 'episode-1', [CONFIRMATION]);
+    }).toThrow();
+    expect(stream()).toEqual([]);
   });
 });

@@ -178,7 +178,9 @@ function referencesSettled(db: SqliteHandle, episodeId: string): boolean {
  * re-push that added references while the attach was in flight moves the version again, and a
  * completion that compared against nothing would discard the update. When the version will not
  * settle inside the pass bound this throws, which leaves the work to whatever called it: intake
- * logs and lets the queued job carry it, and the worker fails the job into its own backoff.
+ * logs and lets the queued job carry it, and the worker fails the job into its own backoff. A
+ * confirmation the stream refused throws the same way and for the same reason, since the
+ * acknowledgement below is what a later pass reads to decide there is nothing left to do.
  *
  * An episode that stated no references costs one archive read. One whose references already
  * landed costs a ledger read on top, and no graph write at all.
@@ -198,9 +200,11 @@ export async function settleStatedReferences(
       return;
     }
     const confirmed = await attachProvenance(deps, episodeId, references, now);
-    // Between the edge and the acknowledgement, so a process that stops here leaves the signal
-    // still owed rather than acknowledged and missing. The row is keyed on the statement rather
-    // than on this pass, so the pass that re-runs writes one row for it either way.
+    // Between the edge and the acknowledgement, and it throws rather than warning: a version
+    // marked applied over a signal nothing wrote is a signal no later settle ever looks for
+    // again. A throw here leaves the episode unacknowledged, so the caller's existing failure
+    // path runs the settle again, and every write behind it is keyed on the statement rather
+    // than on the attempt.
     recordConfirmationFeedback(deps, episodeId, confirmed);
     markLedgerApplied(deps.db, statedReferenceKey(episodeId), { version });
   }

@@ -139,6 +139,34 @@ describe('a caller reporting on a pack it was served', () => {
     ).toHaveLength(1);
   });
 
+  /**
+   * The same words on a later experience are the caller reporting again, since a report that
+   * names no occurrence time has nothing else to identify it by.
+   */
+  it('reads a wordless report on a second experience as a second report', async () => {
+    const reporter = 'the agent reporting twice';
+    await push(
+      {
+        observations: ['the first experience carrying this report'],
+        feedback: { used: [{ memories: ['node-e'], reporter }] },
+      },
+      STORED_AT,
+    );
+    await push(
+      {
+        observations: ['the second experience carrying the same report'],
+        feedback: { used: [{ memories: ['node-e'], reporter }] },
+      },
+      REPORTED_AT,
+    );
+
+    expect(
+      rowsOf('memory_used').filter(
+        (event) => (event.payload as { reporter: string }).reporter === reporter,
+      ),
+    ).toHaveLength(2);
+  });
+
   it('reads the same experience with and without a report as one episode', async () => {
     const observations = ['feedback is a statement about other memories, not about this one'];
     const bare = await push({ observations }, STORED_AT);

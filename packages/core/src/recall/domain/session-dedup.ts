@@ -76,20 +76,15 @@ export function suppressedRepeats(
 }
 
 /**
- * What the session holds once this pack is handed over: every item the pack rendered, plus
- * every repeat it withheld, which the agent still has from the recall that first served it.
+ * The ids this pack printed, and the only population an exposure write may be charged against.
  *
- * Two questions have this one answer. It is what the next recall in this session subtracts
- * against, and it is the population recall's exposure side effects are charged to. A memory a
- * bucket cap, the token budget, the near-duplicate fold or the admission floor turned away is
- * absent from both, and so is one origin suppression cut, which the session wrote itself and
- * never read back from a pack.
+ * A memory the pack left out was not served, whatever the reason it was left out. That covers a
+ * bucket cap, the token budget, the near-duplicate fold and the admission floor, and it covers
+ * both subtractions below: withholding a repeat serves nobody anything, and the session already
+ * counted that memory on the recall that did serve it.
  */
-export function finalPackMembership(
-  pack: MemoryPack,
-  suppressed: ReadonlySet<string>,
-): ReadonlySet<string> {
-  const ids = new Set<string>(suppressed);
+export function emittedPackIds(pack: MemoryPack): ReadonlySet<string> {
+  const ids = new Set<string>();
   for (const items of Object.values(packBuckets(pack))) {
     for (const item of items) {
       ids.add(item.id);
@@ -98,14 +93,30 @@ export function finalPackMembership(
   return ids;
 }
 
-/** One fingerprint per member, which is what the next recall in this session matches against. */
+/**
+ * What the session holds once this pack is handed over: what the pack printed, plus every repeat
+ * it withheld, which the agent still has from the recall that first served it.
+ *
+ * This is the suppression record and only that. A withheld repeat is in it because the session
+ * can still read the memory, which is the question the next recall asks; it is not in the
+ * emitted set above, because that asks a different one. An item a cap or the budget cut is in
+ * neither: the caller never saw it, so the next recall must offer it in full.
+ */
+export function sessionHoldings(
+  pack: MemoryPack,
+  suppressed: ReadonlySet<string>,
+): ReadonlySet<string> {
+  return new Set([...suppressed, ...emittedPackIds(pack)]);
+}
+
+/** One fingerprint per holding, which is what the next recall in this session matches against. */
 export function servedRecords(
-  membership: ReadonlySet<string>,
+  holdings: ReadonlySet<string>,
   candidates: ReadonlyMap<string, FusedItem>,
   provenance?: ReadonlyMap<string, ItemProvenance>,
 ): readonly ServedItem[] {
   const records: ServedItem[] = [];
-  for (const id of membership) {
+  for (const id of holdings) {
     const candidate = candidates.get(id);
     if (candidate === undefined) {
       continue;

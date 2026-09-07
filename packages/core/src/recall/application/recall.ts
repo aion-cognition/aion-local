@@ -51,7 +51,12 @@ import { labelBoosts, queryCueTexts, queryRestatements } from '../domain/facts.j
 import { fuse, withSoleMethod, type FusedItem, type FusionResult } from '../domain/fusion.js';
 import { foldableClaims } from '../domain/pack-duplicates.js';
 import { assemblePack, packMethods } from '../domain/pack.js';
-import { finalPackMembership, servedRecords, suppressedRepeats } from '../domain/session-dedup.js';
+import {
+  emittedPackIds,
+  servedRecords,
+  sessionHoldings,
+  suppressedRepeats,
+} from '../domain/session-dedup.js';
 import { suppressedOwnSession } from '../domain/session-origin.js';
 
 /**
@@ -67,20 +72,19 @@ import { suppressedOwnSession } from '../domain/session-origin.js';
 export type RecallCompletion = {
   readonly sessionId: string;
   readonly seeds: readonly Seed[];
-  /**
-   * The co-activated set, seeds included. Telemetry: it says what the spread reached, which is
-   * not the same as what any caller was handed, so nothing charges exposure against it.
-   */
+  /** The co-activated set, seeds included. Telemetry: the spread reached it, nobody read it. */
   readonly activated: readonly ActivatedNode[];
-  /** Everything fusion admitted, before any cap or serving-layer subtraction. Telemetry too. */
-  readonly items: readonly FusedItem[];
   /**
-   * What this pack put in front of the caller: the ids assembly printed, plus the repeats it
-   * withheld because the session already holds them. Every cap and every subtraction have been
-   * applied by the time it is built, and it is the population reinforcement and access tracking
-   * are charged against.
+   * Every candidate assembly was offered, in the order the three passes produced them: fusion,
+   * then resonance, then the intention triggers. Telemetry, and the whole of it, because read
+   * against `emitted` the difference is what the caps and the subtractions cost this pack.
    */
-  readonly packMembership: ReadonlySet<string>;
+  readonly retrieved: readonly string[];
+  /**
+   * The ids this pack printed, which is what the caller was handed and the one population an
+   * exposure write may be charged against.
+   */
+  readonly emitted: ReadonlySet<string>;
   /** What the admission gate dropped and the floors it used, for a caller that reports honesty signals. */
   readonly admission: AdmissionReport;
   readonly pack: MemoryPack;
@@ -344,8 +348,8 @@ export async function handleRecall(
 
   // The two serving-layer subtractions, applied once the candidate set is final so that nothing
   // above them measures a smaller set: ranking, the admission report and the method counters all
-  // still see everything fusion admitted. What the subtractions cut is cut from exposure too,
-  // through the membership built below.
+  // still see everything fusion admitted. What they cut is cut from exposure too, since exposure
+  // is read off the assembled pack below.
   //
   // Origin decides first, and what it withholds leaves no served row: the session never read
   // those items, so a later recall must be free to offer them the moment they stop being its own
@@ -394,7 +398,7 @@ export async function handleRecall(
     foldable,
   });
 
-  const membership = finalPackMembership(pack, suppressed);
+  const emitted = emittedPackIds(pack);
 
   saveLastPack(deps.db, sessionId, pack, now.toISOString(), {
     ...(payload.as_of === undefined ? {} : { asOf: payload.as_of }),
@@ -407,7 +411,7 @@ export async function handleRecall(
     recordServedItems(
       deps.db,
       sessionId,
-      servedRecords(membership, candidates, provenance),
+      servedRecords(sessionHoldings(pack, suppressed), candidates, provenance),
       now.toISOString(),
     );
   }
@@ -455,9 +459,9 @@ export async function handleRecall(
       // And the third: one assertion the substrate holds twice, printed once. Read off the
       // pack, because eligibility is decided here and the withholding is decided by assembly.
       suppressedDuplicates: pack.metadata.suppressed_duplicates ?? 0,
-      // What the caller was actually handed, which is the number every exposure write is
-      // charged against. Beside `items` it reads as how much of retrieval reached the wire.
-      packMembership: membership.size,
+      // What the caller was handed, which is the number every exposure write is charged
+      // against. Beside the candidate count it reads as how much of retrieval reached the wire.
+      emitted: emitted.size,
       // Why the second pass was quiet: a setting, a query nothing anchored, or a substrate
       // whose enrichment has not written the context vectors yet. Absent when it searched.
       resonanceSkipped: resonance.value.skipped,
@@ -474,8 +478,8 @@ export async function handleRecall(
     sessionId,
     seeds,
     activated: activation.value.activated,
-    items: fusion.value.items,
-    packMembership: membership,
+    retrieved: [...candidates.keys()],
+    emitted,
     admission: fusion.value.admission,
     pack,
     now,

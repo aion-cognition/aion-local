@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import type { FusedItem } from './fusion.js';
-import { finalPackMembership, servedFingerprint, suppressedRepeats } from './session-dedup.js';
+import {
+  emittedPackIds,
+  servedFingerprint,
+  sessionHoldings,
+  suppressedRepeats,
+} from './session-dedup.js';
 import { assemble } from './test-support/pack.fixture.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 
@@ -132,21 +137,24 @@ describe('suppressing what a session already holds', () => {
   });
 });
 
-describe('the membership a pack hands over', () => {
-  it('holds what it printed and the repeats it withheld', () => {
-    const pack = assemble([item('e1'), item('e2')], { suppressed: new Set(['e2']) });
+describe('what a pack printed', () => {
+  /**
+   * Withholding a repeat serves nobody anything. The session read that memory on the recall that
+   * printed it, and this one put nothing new in front of anybody by leaving it out.
+   */
+  it('leaves out a repeat the pack withheld', () => {
+    const suppressed = new Set(['e2']);
+    const pack = assemble([item('e1'), item('e2')], { suppressed });
 
-    expect([...finalPackMembership(pack, new Set(['e2']))].sort()).toEqual(['e1', 'e2']);
+    expect([...emittedPackIds(pack)]).toEqual(['e1']);
+    expect([...sessionHoldings(pack, suppressed)].sort()).toEqual(['e1', 'e2']);
   });
 
-  /**
-   * The session wrote it and never read it back from a pack, so it is not something the pack put
-   * in front of anyone.
-   */
-  it('leaves out an item origin suppression withheld', () => {
+  it('leaves out an item origin suppression withheld, and so does the session record', () => {
     const pack = assemble([item('e1'), item('own')], { suppressedOwn: new Set(['own']) });
 
-    expect([...finalPackMembership(pack, new Set())]).toEqual(['e1']);
+    expect([...emittedPackIds(pack)]).toEqual(['e1']);
+    expect([...sessionHoldings(pack, new Set())]).toEqual(['e1']);
   });
 
   it('leaves out an item the token budget cut', () => {
@@ -156,7 +164,8 @@ describe('the membership a pack hands over', () => {
     });
 
     expect(pack.episodes?.map((entry) => entry.id)).toEqual(['e1']);
-    expect([...finalPackMembership(pack, new Set())]).toEqual(['e1']);
+    expect([...emittedPackIds(pack)]).toEqual(['e1']);
+    expect([...sessionHoldings(pack, new Set())]).toEqual(['e1']);
   });
 
   it('leaves out an item a bucket cap cut', () => {
@@ -171,7 +180,19 @@ describe('the membership a pack hands over', () => {
       },
     });
 
-    expect([...finalPackMembership(pack, new Set())]).toEqual(['e1']);
+    expect([...emittedPackIds(pack)]).toEqual(['e1']);
+  });
+
+  /**
+   * The record is what the next recall subtracts against, so it keeps the repeat: the session can
+   * still read that memory whether or not this pack printed it again.
+   */
+  it('keeps a withheld repeat in the session record while an emitted pack has none of it', () => {
+    const pack = assemble([item('e1'), item('e2')], { suppressed: new Set(['e1', 'e2']) });
+
+    expect(pack.episodes).toBeUndefined();
+    expect([...emittedPackIds(pack)]).toEqual([]);
+    expect([...sessionHoldings(pack, new Set(['e1', 'e2']))].sort()).toEqual(['e1', 'e2']);
   });
 });
 

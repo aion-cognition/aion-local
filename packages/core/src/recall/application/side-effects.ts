@@ -25,10 +25,10 @@ import type { ActivatedNode } from '../domain/activation.js';
  * `whenIdle()` is the only way to observe it finishing, and only tests should call it.
  * Construct one instance per process, the same lifetime as `SessionManager` and `CueCache`.
  *
- * Both writes that change the graph are charged against the pack's own membership, which is what
- * the caller was handed. A node the spread reached, the floors refused, a cap cut or the budget
- * turned away is retrieval, and retrieval is a fact about this query rather than about the
- * memory: strengthening on it teaches the graph that a search ran.
+ * Both writes that change the graph are charged against what the pack printed. A node the spread
+ * reached, the floors refused, a cap cut, the budget turned away or a subtraction withheld is
+ * retrieval, and retrieval is a fact about this query rather than about the memory: strengthening
+ * on it teaches the graph that a search ran.
  */
 
 /**
@@ -48,8 +48,8 @@ export { RECALL_PACK_EXPOSURE_TRIGGER as REINFORCEMENT_TRIGGER };
 
 /**
  * Every pair among the top-N nodes handed over, ordered by rank so the same recall enqueues the
- * same pairs in the same order. Callers pass the activated set already narrowed to the pack's
- * membership; it arrives score-descending (`activation.ts`'s `collect`), so slicing to
+ * same pairs in the same order. Callers pass the activated set already narrowed to what the pack
+ * printed; it arrives score-descending (`activation.ts`'s `collect`), so slicing to
  * `REINFORCEMENT_TOP_N` first keeps the strongest of what was served and drops the long tail
  * rather than sampling it arbitrarily.
  *
@@ -128,20 +128,21 @@ export class RecallSideEffects {
   /**
    * The emission row, written inline and before the graph write it precedes, so a run that loses
    * the graph still records what it served. Both populations ride it: what the caller was handed
-   * and what fusion admitted, which is the only place the difference between the two is legible
-   * once the pack is gone.
+   * and every candidate assembly was offered, all three passes included. Once the pack is gone
+   * this row is the only place the difference between the two is legible, so a candidate a cap
+   * or a subtraction turned away has to be in it or nothing can say what serving cost.
    */
   #appendPackEmitted(completion: RecallCompletion): void {
     try {
       appendPackEmittedEvent(this.#db, {
         sessionId: completion.sessionId,
-        ids: [...completion.packMembership],
-        retrieved: [...new Set(completion.items.map((item) => item.id))],
+        ids: [...completion.emitted],
+        retrieved: [...new Set(completion.retrieved)],
         occurredAt: completion.now,
       });
     } catch (err) {
       this.#logger.warn(
-        { err, sessionId: completion.sessionId, items: completion.packMembership.size },
+        { err, sessionId: completion.sessionId, items: completion.emitted.size },
         'recall pack-emitted append failed',
       );
     }
@@ -155,9 +156,7 @@ export class RecallSideEffects {
       const burstId = randomUUID();
       // Narrowed before the fan-out, so the top-N slice spends its budget on what was served
       // rather than on the strongest of what the spread merely reached.
-      const served = completion.activated.filter((node) =>
-        completion.packMembership.has(node.nodeId),
-      );
+      const served = completion.activated.filter((node) => completion.emitted.has(node.nodeId));
       for (const [sourceId, targetId] of reinforcementPairs(served)) {
         enqueueReinforcementSignal(
           this.#db,
@@ -186,12 +185,12 @@ export class RecallSideEffects {
    * caller has already received the pack, not merely after this synchronous listener
    * returns. `recall.ts`'s `notify` invokes `onRecalled` without awaiting it, but a
    * synchronous listener body still runs to completion before `handleRecall`'s `return`.
-   * Ids come from the pack's membership, not from everything fusion ranked: `last_accessed` is
-   * read back by the recency seed strategy, so stamping a memory the budget cut would make the
+   * Ids come from what the pack printed, not from everything the passes ranked: `last_accessed`
+   * is read back by the recency seed strategy, so stamping a memory the budget cut would make the
    * next recall prefer something no agent has ever been shown.
    */
   #scheduleAccessTracking(completion: RecallCompletion): void {
-    const ids = [...completion.packMembership];
+    const ids = [...completion.emitted];
     if (ids.length === 0) {
       return;
     }

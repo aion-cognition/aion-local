@@ -329,6 +329,7 @@ export async function handleReflection(
   recordRecallFeedback(deps, {
     feedback: redactFeedback(deps, feedback, deps.entropyThreshold),
     sessionId,
+    episodeId: stored.episodeId,
     now,
   });
   // Measured before this call's own row lands, so a fresh enqueue is not counted against

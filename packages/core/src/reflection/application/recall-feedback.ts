@@ -85,23 +85,38 @@ export function redactFeedback(
 }
 
 /**
- * The digest a repeat is recognised by. The clock stays out of it: a client retrying a push
- * states the same report again under a fresh wall clock, and a second row for one statement
- * would read as a second report. A caller with something new to say names other memories or says
- * it in other words, and either moves the digest.
+ * The digest a repeat is recognised by, built from what the caller stated and never from when
+ * the statement arrived. A client retrying a push resends the same words under a fresh wall
+ * clock, and a second row for one statement would read as a second report.
+ *
+ * The occurrence is whatever the caller says it is. A report that names an `occurred_at` is
+ * identified by that time, so using a memory at noon and again at one are two occurrences and
+ * either one retried stays one row. A report that names no time has no occurrence identity of
+ * its own, so it takes the experience it rode in on: the same experience re-pushed resolves to
+ * the same episode and folds, a later experience saying the same thing is a second report. Two
+ * reports of one stated occurrence stay one row however many experiences carry them, since the
+ * caller named the moment rather than the telling.
  */
-function selfReportKey(kind: SelfReportKind, sessionId: string, report: FeedbackReport): string {
+function selfReportKey(
+  kind: SelfReportKind,
+  input: RecallFeedbackInput,
+  report: FeedbackReport,
+): string {
   return `feedback:${kind}:${hashContent({
-    sessionId,
+    sessionId: input.sessionId,
     memories: report.memories,
     reporter: report.reporter,
     evidence: report.evidence ?? null,
+    occurredAt: report.occurred_at ?? null,
+    episodeId: report.occurred_at === undefined ? input.episodeId : null,
   })}`;
 }
 
 export type RecallFeedbackInput = {
   readonly feedback: RecallFeedback | undefined;
   readonly sessionId: string;
+  /** The experience the reports rode in on, which is what identifies one that named no time. */
+  readonly episodeId: string;
   /** The stamp a report that named no time of its own is dated to. */
   readonly now: Date;
 };
@@ -109,8 +124,11 @@ export type RecallFeedbackInput = {
 /**
  * Every report the call stated, recorded once each.
  *
- * Failure is logged and swallowed. The experience these rode in on is already durable, and a
- * signal the stream lost is not a reason to fail a write that succeeded.
+ * Failure is logged and swallowed, which is the opposite of what the confirmation path below
+ * does and for one reason: nothing acknowledges these. No ledger records that they landed and no
+ * completion runs behind them, so a lost row leaves no false claim that it was written, and
+ * failing an experience that is already durable would cost the caller more than the row is
+ * worth.
  */
 export function recordRecallFeedback(deps: FeedbackDeps, input: RecallFeedbackInput): void {
   if (input.feedback === undefined) {
@@ -120,7 +138,7 @@ export function recordRecallFeedback(deps: FeedbackDeps, input: RecallFeedbackIn
     for (const report of input.feedback[field] ?? []) {
       try {
         const recorded = appendSelfReportEvent(deps.db, kind, {
-          key: selfReportKey(kind, input.sessionId, report),
+          key: selfReportKey(kind, input, report),
           sessionId: input.sessionId,
           memories: report.memories,
           reporter: report.reporter,
@@ -156,6 +174,12 @@ function confirmationKey(episodeId: string, confirmation: ConfirmationWrite): st
  * observable beside the other two signals rather than only as a property on an edge.
  *
  * Only the ones that resolved reach here, so every row names a memory the substrate holds.
+ *
+ * Throws when the append fails, and the caller's own acknowledgement is what makes that the
+ * right answer: a settle that swallowed this would mark the references applied over a signal it
+ * never wrote, and every later settle would skip the episode. The throw leaves the version
+ * unacknowledged, so the queue's own backoff runs the settle again. Rows already written stay
+ * one row each, since the key is the statement rather than the attempt.
  */
 export function recordConfirmationFeedback(
   deps: FeedbackDeps,
@@ -163,17 +187,13 @@ export function recordConfirmationFeedback(
   confirmations: readonly ConfirmationWrite[],
 ): void {
   for (const confirmation of confirmations) {
-    try {
-      appendMemoryConfirmedEvent(deps.db, {
-        key: confirmationKey(episodeId, confirmation),
-        episodeId,
-        memories: [confirmation.target],
-        confirmedBy: confirmation.by,
-        evidence: confirmation.evidence,
-        occurredAt: confirmation.at,
-      });
-    } catch (err) {
-      deps.logger.warn({ err, episodeId }, 'confirmation feedback append failed');
-    }
+    appendMemoryConfirmedEvent(deps.db, {
+      key: confirmationKey(episodeId, confirmation),
+      episodeId,
+      memories: [confirmation.target],
+      confirmedBy: confirmation.by,
+      evidence: confirmation.evidence,
+      occurredAt: confirmation.at,
+    });
   }
 }
