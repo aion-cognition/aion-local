@@ -360,6 +360,7 @@ export async function handleRecall(
         ranked.filter((item) => !suppressedOwn.has(item.id)),
         readServedItems(deps.db, sessionId),
         provenance,
+        claims,
       )
     : new Set<string>();
   // The third subtraction is only made eligible here. Assembly decides it, because an item the
@@ -411,7 +412,7 @@ export async function handleRecall(
     recordServedItems(
       deps.db,
       sessionId,
-      servedRecords(sessionHoldings(pack, suppressed), candidates, provenance),
+      servedRecords(sessionHoldings(pack, suppressed), candidates, provenance, claims),
       now.toISOString(),
     );
   }

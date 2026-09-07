@@ -1,4 +1,4 @@
-import type { MemoryPack } from '@aion/protocol';
+import type { MemoryPack, RelatedClaim } from '@aion/protocol';
 import { packBuckets } from '@aion/protocol';
 
 import type { FusedItem } from './fusion.js';
@@ -31,11 +31,22 @@ import { hashContent } from '../../reflection/domain/content.js';
  * means without touching a character of its text, and a correction that never re-serves is a
  * correction nobody sees.
  *
+ * The related claim is in for the third time the same reason applies. Nothing supersedes a turn,
+ * so the current claim beside it is the only thing that can say the substrate has moved on, and a
+ * fingerprint blind to it reports a turn whose family claim was replaced as unchanged. What is
+ * hashed is the annotation the read returned, not what the pack rendered: assembly drops the text
+ * when that claim is printed elsewhere, and hashing the rendered form would make the fingerprint
+ * oscillate with pack order.
+ *
  * The rank, the score and the admitting rule are deliberately out: they move with the query,
  * not with the memory, and hashing them would re-serve everything on every reworded prompt.
  * So is `shared_with`, which is a fact about one pack rather than about the memory.
  */
-export function servedFingerprint(item: FusedItem, provenance?: ItemProvenance): string {
+export function servedFingerprint(
+  item: FusedItem,
+  provenance?: ItemProvenance,
+  relatedClaim?: RelatedClaim,
+): string {
   const standing = standingFor(item, provenance);
   return hashContent({
     content: item.content,
@@ -47,6 +58,11 @@ export function servedFingerprint(item: FusedItem, provenance?: ItemProvenance):
     correctedBy: provenance?.claimedCorrection?.by ?? null,
     roots: (provenance?.roots ?? []).join(','),
     lineageComplete: provenance?.complete ?? null,
+    // Absent rather than null on an item that carries none, so every fingerprint already stored
+    // for an unannotated memory still matches and nothing is re-served for a claim it never had.
+    ...(relatedClaim === undefined
+      ? {}
+      : { relatedClaim: { id: relatedClaim.id, text: relatedClaim.text } }),
   });
 }
 
@@ -62,13 +78,19 @@ export function suppressedRepeats(
   items: readonly FusedItem[],
   served: ReadonlyMap<string, string>,
   provenance?: ReadonlyMap<string, ItemProvenance>,
+  relatedClaims?: ReadonlyMap<string, RelatedClaim>,
 ): ReadonlySet<string> {
   const suppressed = new Set<string>();
   if (served.size === 0) {
     return suppressed;
   }
   for (const item of items) {
-    if (served.get(item.id) === servedFingerprint(item, provenance?.get(item.id))) {
+    const fingerprint = servedFingerprint(
+      item,
+      provenance?.get(item.id),
+      relatedClaims?.get(item.id),
+    );
+    if (served.get(item.id) === fingerprint) {
       suppressed.add(item.id);
     }
   }
@@ -114,6 +136,7 @@ export function servedRecords(
   holdings: ReadonlySet<string>,
   candidates: ReadonlyMap<string, FusedItem>,
   provenance?: ReadonlyMap<string, ItemProvenance>,
+  relatedClaims?: ReadonlyMap<string, RelatedClaim>,
 ): readonly ServedItem[] {
   const records: ServedItem[] = [];
   for (const id of holdings) {
@@ -121,7 +144,10 @@ export function servedRecords(
     if (candidate === undefined) {
       continue;
     }
-    records.push({ itemId: id, fingerprint: servedFingerprint(candidate, provenance?.get(id)) });
+    records.push({
+      itemId: id,
+      fingerprint: servedFingerprint(candidate, provenance?.get(id), relatedClaims?.get(id)),
+    });
   }
   return records;
 }

@@ -1,3 +1,4 @@
+import type { RelatedClaim } from '@aion/protocol';
 import { describe, expect, it } from 'vitest';
 
 import type { FusedItem } from './fusion.js';
@@ -254,5 +255,94 @@ describe('a memory whose standing moved', () => {
         new Map([['c1', UNCONFIRMED]]),
       ),
     ]).toEqual(['c1']);
+  });
+});
+
+/**
+ * Nothing supersedes a turn, so the claim standing beside it is the only thing that can carry
+ * news about it. A turn whose family claim was replaced says the same words and means something
+ * else, and a fingerprint blind to the annotation reports it as unchanged.
+ */
+describe('a memory whose related claim moved', () => {
+  const OLD_CLAIM: RelatedClaim = { id: 'claim-old', text: 'no worker is necessary' };
+  const NEW_CLAIM: RelatedClaim = { id: 'claim-new', text: 'a worker is required' };
+
+  function claims(claim: RelatedClaim): ReadonlyMap<string, RelatedClaim> {
+    return new Map([['t1', claim]]);
+  }
+
+  it('moves when a claim first appears beside the turn', () => {
+    const turn = item('t1');
+
+    expect(servedFingerprint(turn, undefined, OLD_CLAIM)).not.toBe(servedFingerprint(turn));
+    expect([
+      ...suppressedRepeats(
+        [turn],
+        new Map([['t1', servedFingerprint(turn)]]),
+        undefined,
+        claims(OLD_CLAIM),
+      ),
+    ]).toEqual([]);
+  });
+
+  it('moves when the claim beside the turn is replaced', () => {
+    const turn = item('t1');
+
+    expect(servedFingerprint(turn, undefined, NEW_CLAIM)).not.toBe(
+      servedFingerprint(turn, undefined, OLD_CLAIM),
+    );
+    expect([
+      ...suppressedRepeats(
+        [turn],
+        new Map([['t1', servedFingerprint(turn, undefined, OLD_CLAIM)]]),
+        undefined,
+        claims(NEW_CLAIM),
+      ),
+    ]).toEqual([]);
+  });
+
+  it('moves when the claim is rewritten under the id the session already read', () => {
+    const turn = item('t1');
+
+    expect(
+      servedFingerprint(turn, undefined, { id: OLD_CLAIM.id, text: 'a worker is required' }),
+    ).not.toBe(servedFingerprint(turn, undefined, OLD_CLAIM));
+  });
+
+  /**
+   * An item that never carried one hashes exactly as it did before the annotation joined the
+   * fingerprint, so nothing already served is re-served for a claim it never had.
+   */
+  it('returns to the unannotated fingerprint once the claim goes away', () => {
+    const turn = item('t1');
+
+    expect(servedFingerprint(turn, undefined, undefined)).toBe(servedFingerprint(turn));
+    expect([
+      ...suppressedRepeats(
+        [turn],
+        new Map([['t1', servedFingerprint(turn)]]),
+        undefined,
+        new Map(),
+      ),
+    ]).toEqual(['t1']);
+  });
+
+  it('holds still when the same claim stands beside it', () => {
+    const turn = item('t1');
+
+    expect([
+      ...suppressedRepeats(
+        [turn],
+        new Map([['t1', servedFingerprint(turn, undefined, OLD_CLAIM)]]),
+        undefined,
+        claims(OLD_CLAIM),
+      ),
+    ]).toEqual(['t1']);
+  });
+
+  it('holds still when only the query moved an annotated item up the list', () => {
+    expect(servedFingerprint(item('t1', { rank: 0.4, measured: 0.62 }), undefined, OLD_CLAIM)).toBe(
+      servedFingerprint(item('t1', { rank: 0.9, measured: 0.91 }), undefined, OLD_CLAIM),
+    );
   });
 });
