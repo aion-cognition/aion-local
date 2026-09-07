@@ -61,6 +61,9 @@ export const NARRATIVE_SOURCE_LABELS = [
 export const SUMMARIZED_BY_TYPE: RelationshipType = 'SUMMARIZED_BY';
 export const DERIVES_FROM_TYPE: RelationshipType = 'DERIVES_FROM';
 
+/** Compression is the only writer of this label, so it is the whole test for a synthesized node. */
+export const NARRATIVE_LABEL: NodeLabel = 'Narrative';
+
 /** A session accumulates versions one at a time; reading fifty back covers any real history. */
 const NARRATIVE_VERSION_LIMIT = 50;
 

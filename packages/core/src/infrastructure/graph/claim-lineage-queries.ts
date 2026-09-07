@@ -4,6 +4,7 @@ import { edgeVisibility } from './adjacency.js';
 import { runRead, type GraphStatement } from './connection.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
 import { BASE_NODE_LABEL, EXTRACTION_TYPE } from './labels.js';
+import { NARRATIVE_LABEL, NARRATIVE_PROPERTIES } from './narrative-queries.js';
 import { readModeFragment, type ReadMode } from './read-modes.js';
 import type { RelationshipType } from './relationships.js';
 import type { Row } from './values.js';
@@ -36,25 +37,40 @@ export type NodeParents = {
   /** One step further back. Empty means the chain ends here and this node is a root. */
   readonly parents: readonly string[];
   readonly unresolved: number;
+  /**
+   * Set when the node's own sources cannot be established: a narrative that cites nothing, and
+   * one whose citations name something no reader at this vantage can reach. Neither is a chain
+   * that ended, and reporting either as a terminal root would invent a source.
+   */
+  readonly unknownSource?: boolean;
 };
 
 /**
  * One step back from any node.
  *
- * A stated source wins when the node has one: that is somebody saying outright where this came
- * from. Otherwise the step is the node's own capture, which is how a claim stated as a source
+ * A narrative wins first, and it answers with the ids its stored sentences cited. It names no
+ * capture and hangs off no extraction edge, so without this it looks like a node that came from
+ * nowhere. Its `DERIVES_FROM` edge is deliberately passed over: that points at the session the
+ * narrative compresses, which says where it lives rather than what it was drawn from, and reading
+ * it as ancestry would make every narrative of a session one witness with every other.
+ *
+ * A stated source wins next, when the node has one: that is somebody saying outright where this
+ * came from. Otherwise the step is the node's own capture, which is how a claim stated as a source
  * hands the walk the episode it was extracted from instead of ending the chain at itself. A
  * capture that is its own only parent is where the chain ends, and that is what makes two turns
  * of one episode read as one witness.
  *
- * The stated-source edge carries the read mode for the same reason the evidence edges do: a
- * source stated on Friday about an episode written on Monday is not lineage a Tuesday read held.
+ * Citations are resolved here rather than only at the first read, because a narrative is reached
+ * mid-walk too: a rollup cites member narratives, and an episode can state a narrative as its
+ * source. Every arm carries the read mode for the same reason the evidence edges do: a source
+ * stated on Friday about an episode written on Monday is not lineage a Tuesday read held.
  */
 function parentStatement(ids: readonly string[], mode: ReadMode): GraphStatement {
   const node = readModeFragment(mode, 'c');
   const root = readModeFragment(mode, 'root', 'rmroot');
   const own = readModeFragment(mode, 'own', 'rmown');
   const extracted = readModeFragment(mode, 'ex', 'rmex');
+  const cited = readModeFragment(mode, 'cited', 'rmcited');
   const sourceEdge = edgeVisibility(mode, 'sr', 'rmroot');
   const cypher = [
     'UNWIND $ids AS wantedId',
@@ -70,10 +86,21 @@ function parentStatement(ids: readonly string[], mode: ReadMode): GraphStatement
     'WITH c, stated, collect(DISTINCT own.id) AS ownIds',
     `WITH c, stated, ownIds + [ (c)-[:${EXTRACTION_TYPE}]->(ex:Episode)` +
       ` WHERE ${extracted.where} | ex.id ] AS captures`,
+    'WITH c, stated, captures, $narrativeLabel IN labels(c) AS narrated,',
+    `     [ id IN coalesce(c.${NARRATIVE_PROPERTIES.citations}, []) WHERE id <> c.id ] AS citations`,
+    `OPTIONAL MATCH (cited:${BASE_NODE_LABEL})`,
+    `WHERE cited.id IN citations AND ${cited.where}`,
+    'WITH c, stated, captures, narrated, citations, cited',
+    'ORDER BY cited.id',
+    'WITH c, stated, captures, narrated, citations, collect(DISTINCT cited.id) AS citedIds',
     'RETURN c.id AS id,',
-    '       CASE WHEN size(stated) > 0 THEN stated',
+    '       CASE WHEN narrated THEN citedIds',
+    '            WHEN size(stated) > 0 THEN stated',
     '            ELSE [ id IN captures WHERE id <> c.id ] END AS parents,',
-    `       coalesce(c.${UNRESOLVED_REFERENCES_PROPERTY}, 0) AS unresolved`,
+    `       coalesce(c.${UNRESOLVED_REFERENCES_PROPERTY}, 0) AS unresolved,`,
+    '       narrated AS narrated,',
+    '       citations AS citations,',
+    '       size(citedIds) AS resolved_citations',
   ].join('\n');
   return {
     cypher,
@@ -82,6 +109,8 @@ function parentStatement(ids: readonly string[], mode: ReadMode): GraphStatement
       ...root.parameters,
       ...own.parameters,
       ...extracted.parameters,
+      ...cited.parameters,
+      narrativeLabel: NARRATIVE_LABEL,
       ids: [...new Set(ids)],
     },
   };
@@ -125,6 +154,8 @@ export function foldAncestry(
   const counted = new Set<string>();
   /** Where a branch stopped without reaching an end: a loop, or the hop bound. */
   const cutAt = new Set<string>();
+  /** Nodes that must have come from somewhere and could not say where. */
+  const unknown = new Set<string>();
   let unresolved = 0;
 
   function walk(id: string, path: ReadonlySet<string>): void {
@@ -150,6 +181,9 @@ export function foldAncestry(
       counted.add(id);
       unresolved += step.unresolved;
     }
+    if (step.unknownSource === true) {
+      unknown.add(id);
+    }
     if (step.parents.length === 0) {
       roots.add(id);
       return;
@@ -168,7 +202,8 @@ export function foldAncestry(
   return {
     roots: ordered.slice(0, maxRoots),
     lineage: [...lineage],
-    complete: cutAt.size === 0 && ordered.length <= maxRoots && unresolved === 0,
+    complete:
+      cutAt.size === 0 && unknown.size === 0 && ordered.length <= maxRoots && unresolved === 0,
   };
 }
 
@@ -186,14 +221,27 @@ export async function readAncestry(
   let frontier = [...captureIds];
 
   for (let hop = 0; hop <= MAX_LINEAGE_HOPS && frontier.length > 0; hop += 1) {
-    const rows = await runRead(driver, parentStatement(frontier, mode), (row: Row) => ({
-      id: row.id as string,
-      parents: ((row.parents as string[] | null) ?? []).filter((id) => id.length > 0),
-      unresolved: (row.unresolved as number | null) ?? 0,
-    }));
+    const rows = await runRead(driver, parentStatement(frontier, mode), (row: Row) => {
+      // Deduplicated here rather than in the statement: the resolved side already comes back
+      // distinct, so the two counts compare only once both name each cited node at most once.
+      const citations = new Set(
+        ((row.citations as string[] | null) ?? []).filter((id) => id.length > 0),
+      );
+      const resolved = (row.resolved_citations as number | null) ?? 0;
+      return {
+        id: row.id as string,
+        parents: ((row.parents as string[] | null) ?? []).filter((id) => id.length > 0),
+        unresolved: (row.unresolved as number | null) ?? 0,
+        unknownSource: row.narrated === true && (citations.size === 0 || resolved < citations.size),
+      };
+    });
     const next: string[] = [];
     for (const row of rows) {
-      parents.set(row.id, { parents: row.parents, unresolved: row.unresolved });
+      parents.set(row.id, {
+        parents: row.parents,
+        unresolved: row.unresolved,
+        ...(row.unknownSource ? { unknownSource: true } : {}),
+      });
       for (const parent of row.parents) {
         if (!parents.has(parent)) {
           next.push(parent);

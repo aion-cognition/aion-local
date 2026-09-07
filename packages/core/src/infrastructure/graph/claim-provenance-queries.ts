@@ -11,6 +11,7 @@ import { runRead, runWrite, type GraphStatement } from './connection.js';
 import { upsertEdge } from './edges.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
 import { BASE_NODE_LABEL, EXTRACTION_TYPE } from './labels.js';
+import { NARRATIVE_LABEL } from './narrative-queries.js';
 import { readModeFragment, type ReadMode } from './read-modes.js';
 import type { RelationshipType } from './relationships.js';
 import { toGraphDateTime, toGraphInteger, type Row } from './values.js';
@@ -232,7 +233,8 @@ type CaptureRow = {
  *
  * The capture is reached by id equality rather than by scanning episodes: a Turn or a claim
  * names its episode in `source_episode_id`, an Episode is its own capture, and an extracted
- * claim reaches its episode over `EXTRACTED_FROM`.
+ * claim reaches its episode over `EXTRACTED_FROM`. A Narrative has none of the three and starts
+ * the walk at itself, so the step below can ask it what its stored sentences cited.
  *
  * Every arm carries the read mode, the evidence edges included. A correction and a confirmation
  * are records the substrate acquired at a moment, so a read pinned before that moment must not
@@ -256,7 +258,8 @@ function captureStatement(input: ClaimProvenanceInput): GraphStatement {
     `WHERE own.id = coalesce(n.${MEMORY_PROPERTIES.sourceEpisodeId}, n.id) AND ${own.where}`,
     'WITH n, collect(DISTINCT own.id) AS ownIds',
     `WITH n, ownIds + [ (n)-[:${EXTRACTION_TYPE}]->(ex:Episode)` +
-      ` WHERE ${extracted.where} | ex.id ] AS captureIds`,
+      ` WHERE ${extracted.where} | ex.id ]` +
+      ` + CASE WHEN $narrativeLabel IN labels(n) THEN [n.id] ELSE [] END AS captureIds`,
     `OPTIONAL MATCH (corrector:Episode)-[cr:${CORRECTION_TYPE}]->(n)`,
     `WHERE ${corrector.where} AND ${correctionEdge}`,
     'WITH n, captureIds, corrector, cr',
@@ -287,6 +290,7 @@ function captureStatement(input: ClaimProvenanceInput): GraphStatement {
       ...extracted.parameters,
       ...corrector.parameters,
       ...witness.parameters,
+      narrativeLabel: NARRATIVE_LABEL,
       ids: [...new Set(input.ids)],
     },
   };
