@@ -14,6 +14,10 @@ import {
 } from '../../infrastructure/graph/claim-provenance-queries.js';
 import { normalizeCognitiveText } from '../../infrastructure/graph/cognitive-queries.js';
 import { listSessionEpisodeIds } from '../../infrastructure/graph/episodes.js';
+import {
+  claimSimilarities,
+  type ClaimSimilarity,
+} from '../../infrastructure/graph/near-duplicate-queries.js';
 import { fetchItemOrigins, type ItemOrigin } from '../../infrastructure/graph/origin-queries.js';
 import type { ReadMode } from '../../infrastructure/graph/read-modes.js';
 import { findRelatedClaims } from '../../infrastructure/graph/related-claim-queries.js';
@@ -260,6 +264,29 @@ export async function itemOrigins(
   } catch (err) {
     deps.logger.warn({ err, sessionId }, 'origin lookup failed; the pack repeats what it holds');
     return new Map();
+  }
+}
+
+/**
+ * How close each pair of candidates carrying one claim key is, beside the two reads above.
+ *
+ * Best-effort in the same way and for the same reason: no answer means no pair clears the
+ * floor, so the pack prints everything it would have printed before, which is the knob turned
+ * off rather than a subtraction nobody can account for.
+ */
+export async function claimSimilarity(
+  deps: StageReadDeps,
+  ids: readonly string[],
+  mode: ReadMode,
+): Promise<readonly ClaimSimilarity[]> {
+  if (!deps.config.recall.packDuplicateSuppression) {
+    return [];
+  }
+  try {
+    return await claimSimilarities(deps.driver, { ids, mode });
+  } catch (err) {
+    deps.logger.warn({ err }, 'claim similarity read failed; the pack prints every candidate');
+    return [];
   }
 }
 

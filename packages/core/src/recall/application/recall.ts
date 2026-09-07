@@ -16,6 +16,7 @@ import { resonate, type ResonanceResult } from './resonance.js';
 import { selectSeeds, type Seed } from './seeds.js';
 import {
   claimProvenance,
+  claimSimilarity,
   embedCues,
   hydrate,
   itemOrigins,
@@ -48,6 +49,7 @@ import { spreadActivation, type ActivatedNode, type ActivationRun } from '../dom
 import type { AdmissionReport } from '../domain/admission.js';
 import { labelBoosts, queryCueTexts, queryRestatements } from '../domain/facts.js';
 import { fuse, withSoleMethod, type FusedItem, type FusionResult } from '../domain/fusion.js';
+import { suppressedNearDuplicates } from '../domain/pack-duplicates.js';
 import { assemblePack, packMethods } from '../domain/pack.js';
 import { servedRecords, suppressedRepeats } from '../domain/session-dedup.js';
 import { suppressedOwnSession } from '../domain/session-origin.js';
@@ -313,10 +315,11 @@ export async function handleRecall(
   // pack holding no raw turn issues no claim query at all. None of the three needs another's
   // answer, so they cost one round trip rather than three.
   const ranked = [...candidates.values()];
-  const [claims, origins, provenance] = await Promise.all([
+  const [claims, origins, provenance, similarities] = await Promise.all([
     relatedClaims(deps, ranked, mode),
     ownFilter ? itemOrigins(deps, [...candidates.keys()], sessionId, mode) : NO_ORIGINS,
     claimProvenance(deps, [...candidates.keys()], mode),
+    claimSimilarity(deps, [...candidates.keys()], mode),
   ]);
 
   const timings: StageTimingsMs = {
@@ -343,6 +346,15 @@ export async function handleRecall(
         provenance,
       )
     : new Set<string>();
+  // Third and last, over what the other two left: an item already cut is not a copy anyone
+  // reads, so it must not be the one a later item is folded into.
+  const suppressedDuplicates = suppressedNearDuplicates({
+    items: ranked.filter((item) => !suppressedOwn.has(item.id) && !suppressed.has(item.id)),
+    similarities,
+    floor: deps.config.recall.packDuplicateCosineFloor,
+    provenance,
+    relatedClaims: claims,
+  });
 
   const truncated = truncationFor(activation.value.termination);
   const pack = assemblePack({
@@ -367,6 +379,7 @@ export async function handleRecall(
     historical: isTimeTravel(mode),
     suppressed,
     suppressedOwn,
+    suppressedDuplicates,
   });
 
   saveLastPack(deps.db, sessionId, pack, now.toISOString(), {
@@ -425,6 +438,8 @@ export async function handleRecall(
       // The other half of the same reading: how much of the answer was this session quoting
       // itself, which is a number worth watching as the conversation gets long.
       suppressedOwn: suppressedOwn.size,
+      // And the third: one assertion the substrate holds twice, printed once.
+      suppressedDuplicates: suppressedDuplicates.size,
       // Why the second pass was quiet: a setting, a query nothing anchored, or a substrate
       // whose enrichment has not written the context vectors yet. Absent when it searched.
       resonanceSkipped: resonance.value.skipped,

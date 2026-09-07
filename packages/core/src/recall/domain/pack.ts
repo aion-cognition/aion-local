@@ -28,7 +28,7 @@ import {
   type ItemAnnotations,
   type PackEntry,
 } from './pack-item.js';
-import { emptyPackBody } from './pack-notes.js';
+import { emptyPackBody, honestyNote } from './pack-notes.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 import { hashContent } from '../../reflection/domain/content.js';
 
@@ -138,56 +138,15 @@ export type AssemblePackInput = {
    * knob is off.
    */
   readonly suppressedOwn?: ReadonlySet<string>;
+  /**
+   * Ids restating an assertion a better-ranked item already carries (`pack-duplicates.ts`). Cut
+   * here for the same reason and with the same reach as the other two: the stored records are
+   * untouched, cognition sees the full admitted set, and only this pack's budget is smaller.
+   */
+  readonly suppressedDuplicates?: ReadonlySet<string>;
 };
 
 type Selection = Map<PackBucket, PackEntry[]>;
-
-const STAGE_PHRASES: Readonly<Record<Degradation['stage'], string>> = {
-  cues: 'cue extraction',
-  embed: 'embedding',
-  graph: 'graph reads',
-};
-
-const TRUNCATION_PHRASES: Readonly<Record<PackTruncation, string>> = {
-  activation_budget: 'spread truncated on the activation budget',
-};
-
-/**
- * The honesty signals as one plain line at the top of the rendered block. A client reading
- * only `content` from an MCP tool result sees the rendered text and nothing else, so a pack
- * whose metadata says "degraded" reads to that client exactly like a confident answer, which
- * already cost one full baseline run. The same three signals stay in `metadata` for a
- * structured consumer; this is the copy that reaches everyone.
- */
-function honestyNote(input: AssemblePackInput): string | undefined {
-  const clauses: string[] = [];
-  for (const rung of input.degraded ?? []) {
-    clauses.push(`degraded ${STAGE_PHRASES[rung.stage]} (${rung.reason})`);
-  }
-  if (input.truncated !== undefined) {
-    clauses.push(TRUNCATION_PHRASES[input.truncated]);
-  }
-  const pending = input.pendingEnrichment ?? 0;
-  if (pending > 0) {
-    clauses.push(`${String(pending)} recent episode${pending === 1 ? '' : 's'} not yet enriched`);
-  }
-  const repeats = input.suppressed?.size ?? 0;
-  if (repeats > 0) {
-    clauses.push(
-      `${String(repeats)} item${repeats === 1 ? '' : 's'} already served this session, unchanged`,
-    );
-  }
-  // Named separately from the repeats, because the two withhold for different reasons and a
-  // reader deciding whether to ask again needs to know which one it is looking at.
-  const own = input.suppressedOwn?.size ?? 0;
-  if (own > 0) {
-    clauses.push(`${String(own)} item${own === 1 ? '' : 's'} from this session's own turns`);
-  }
-  if (clauses.length === 0) {
-    return undefined;
-  }
-  return `note: ${clauses.join('; ')}`;
-}
 
 /**
  * Rank order decides everything; the caps and the budget only decide where it stops. An
@@ -219,9 +178,13 @@ function select(input: AssemblePackInput, note: string | undefined): Selection {
   let ranked = 0;
   let glosses = 0;
 
-  /** Cut at the wire by either subtraction: already in this session's context, either way. */
+  /** Cut at the wire by any of the three subtractions: text the reader already has, either way. */
   function withheld(id: string): boolean {
-    return input.suppressed?.has(id) === true || input.suppressedOwn?.has(id) === true;
+    return (
+      input.suppressed?.has(id) === true ||
+      input.suppressedOwn?.has(id) === true ||
+      input.suppressedDuplicates?.has(id) === true
+    );
   }
 
   /**
@@ -459,7 +422,17 @@ export function packMethods(pack: MemoryPack): readonly string[] {
 export function assemblePack(input: AssemblePackInput): MemoryPack {
   const repeats = input.suppressed?.size ?? 0;
   const own = input.suppressedOwn?.size ?? 0;
-  const note = honestyNote(input);
+  const duplicates = input.suppressedDuplicates?.size ?? 0;
+  const note = honestyNote({
+    ...(input.degraded === undefined ? {} : { degraded: input.degraded }),
+    ...(input.truncated === undefined ? {} : { truncated: input.truncated }),
+    ...(input.pendingEnrichment === undefined
+      ? {}
+      : { pendingEnrichment: input.pendingEnrichment }),
+    repeats,
+    own,
+    duplicates,
+  });
   const selection = select(input, note);
   const renderedText = render(selection, note, input.admission, repeats, own);
 
@@ -488,6 +461,7 @@ export function assemblePack(input: AssemblePackInput): MemoryPack {
       ...(input.truncated === undefined ? {} : { truncated: input.truncated }),
       ...(repeats === 0 ? {} : { suppressed_repeats: repeats }),
       ...(own === 0 ? {} : { suppressed_own: own }),
+      ...(duplicates === 0 ? {} : { suppressed_duplicates: duplicates }),
     },
   });
 }

@@ -202,6 +202,24 @@ export const KNOBS = {
     // shared prefix. Nomic-era, and strict for snowflake-arctic-embed2, where one assertion
     // written twice measures p50 0.929: the prefix key is what does most of the clustering.
     clusterCosineThreshold: ['AION_PACK_CLUSTER_COSINE_THRESHOLD', proportion, 0.95],
+    // Whether a pack prints one assertion twice when the substrate holds it twice. On by
+    // default. Off skips the similarity read and every subtraction behind it, which restores
+    // the pack exactly as it was before the third subtraction existed, and is what a caller
+    // auditing what the substrate actually stores wants.
+    packDuplicateSuppression: ['AION_PACK_DUPLICATE_SUPPRESSION', z.boolean(), true],
+    // The cosine two claims carrying one subject key have to reach before the pack prints only
+    // the better-ranked of them. It is deliberately far stricter than
+    // `maintenance.claimDedupCosineFloor` (0.73), which is a nomination floor with a two-pass
+    // judge behind it; this floor decides on its own, so it sits above the whole band where a
+    // judge is needed. Read off the same 2026-09-02 measurement on claim text under
+    // snowflake-arctic-embed2: one assertion written twice min 0.787, p05 0.830, p50 0.929, max
+    // 0.981; claims about one subject that are not one assertion (the 24 supersession battery
+    // pairs, which is where a changed value, a different time and a negation all sit) min 0.408,
+    // p50 0.814, max 0.932. 0.965 clears that whole not-one-assertion band by 0.033, above the
+    // 0.03 drift tolerance, and leaves the top 0.016 of the restatement band to suppress. That
+    // buys precision with recall on purpose: it catches only the tightest restatements, and the
+    // cost of a miss is a repeated line where the cost of a false positive is an answer withheld.
+    packDuplicateCosineFloor: ['AION_PACK_DUPLICATE_COSINE_FLOOR', proportion, 0.965],
     // The facts bucket's own three rules, after entity glosses took 58% of fact slots and
     // Decision nodes 3% on a decision-oriented workload. `entityGlossCap` bounds the glosses at
     // four: a pack that answers "who is involved in X" needs room for more than one name while

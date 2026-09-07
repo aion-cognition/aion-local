@@ -419,6 +419,14 @@ export const MemoryPackMetadataSchema = z.strictObject({
    * and absent on a time-traveled read, where inspecting one's own record is the question.
    */
   suppressed_own: z.number().int().positive().optional(),
+  /**
+   * Matches asserting the same attribute of the same entity as a better-ranked item in this
+   * pack, close enough in wording to be that assertion restated. Only this pack's budget is
+   * affected: no record is merged and the next recall decides again. A claim with a successor,
+   * one somebody stated is wrong, and one the substrate has since answered differently are all
+   * served in full, because disagreeing is the reason to read the second one. Absent at zero.
+   */
+  suppressed_duplicates: z.number().int().positive().optional(),
 });
 
 /**

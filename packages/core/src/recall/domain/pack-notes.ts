@@ -1,10 +1,73 @@
+import type { Degradation, PackTruncation } from '@aion/protocol';
+
 import type { AdmissionReport } from './admission.js';
 
 /**
- * What an empty pack says about itself. The copy lives apart from assembly because it is prose
- * a reader acts on, and the wrong sentence sends them to ask again for something the wire had
- * already withheld on purpose.
+ * What a pack says about itself: the honesty line at the top, and what an empty one says in
+ * place of memories. The copy lives apart from assembly because it is prose a reader acts on,
+ * and the wrong sentence sends them to ask again for something the wire had already withheld
+ * on purpose.
  */
+
+const STAGE_PHRASES: Readonly<Record<Degradation['stage'], string>> = {
+  cues: 'cue extraction',
+  embed: 'embedding',
+  graph: 'graph reads',
+};
+
+const TRUNCATION_PHRASES: Readonly<Record<PackTruncation, string>> = {
+  activation_budget: 'spread truncated on the activation budget',
+};
+
+export type HonestyInput = {
+  readonly degraded?: readonly Degradation[];
+  readonly truncated?: PackTruncation;
+  readonly pendingEnrichment?: number;
+  readonly repeats: number;
+  readonly own: number;
+  readonly duplicates: number;
+};
+
+function plural(count: number, noun: string): string {
+  return `${String(count)} ${noun}${count === 1 ? '' : 's'}`;
+}
+
+/**
+ * The honesty signals as one plain line at the top of the rendered block. A client reading
+ * only `content` from an MCP tool result sees the rendered text and nothing else, so a pack
+ * whose metadata says "degraded" reads to that client exactly like a confident answer, which
+ * already cost one full baseline run. The same signals stay in `metadata` for a structured
+ * consumer; this is the copy that reaches everyone.
+ *
+ * The three subtractions are named apart, because they withhold for three different reasons and
+ * a reader deciding whether to ask again needs to know which one it is looking at.
+ */
+export function honestyNote(input: HonestyInput): string | undefined {
+  const clauses: string[] = [];
+  for (const rung of input.degraded ?? []) {
+    clauses.push(`degraded ${STAGE_PHRASES[rung.stage]} (${rung.reason})`);
+  }
+  if (input.truncated !== undefined) {
+    clauses.push(TRUNCATION_PHRASES[input.truncated]);
+  }
+  const pending = input.pendingEnrichment ?? 0;
+  if (pending > 0) {
+    clauses.push(`${plural(pending, 'recent episode')} not yet enriched`);
+  }
+  if (input.repeats > 0) {
+    clauses.push(`${plural(input.repeats, 'item')} already served this session, unchanged`);
+  }
+  if (input.own > 0) {
+    clauses.push(`${plural(input.own, 'item')} from this session's own turns`);
+  }
+  if (input.duplicates > 0) {
+    clauses.push(`${plural(input.duplicates, 'item')} restating one already served here`);
+  }
+  if (clauses.length === 0) {
+    return undefined;
+  }
+  return `note: ${clauses.join('; ')}`;
+}
 
 const EMPTY_PACK_BODY = 'No memories matched this query.';
 
