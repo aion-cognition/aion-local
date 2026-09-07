@@ -14,13 +14,20 @@ import {
   NARRATIVE_PROPERTIES,
   SUMMARIZED_BY_TYPE,
 } from '../../infrastructure/graph/narrative-queries.js';
-import { knewAt, withCurrency, type ReadMode } from '../../infrastructure/graph/read-modes.js';
+import {
+  asOf,
+  bitemporalAt,
+  knewAt,
+  withCurrency,
+  type ReadMode,
+} from '../../infrastructure/graph/read-modes.js';
 import type { RelationshipType } from '../../infrastructure/graph/relationships.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
   type Neo4jHarness,
 } from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
+import { unsupersedeNode } from '../../infrastructure/graph/unsupersede.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { assemble, item } from '../domain/test-support/pack.fixture.js';
 
@@ -284,5 +291,83 @@ describe('a narrative and a claim drawn from one capture', () => {
 
     expect(pack.narratives?.[0]?.derivation?.shared_with).toEqual([CLAIM_ID]);
     expect(pack.rendered_text).toContain('not independent corroboration');
+  });
+});
+
+describe('citation boundaries under historical reads and bounded walks', () => {
+  it('keeps stored citations through close and reopen in every applicable read mode', async () => {
+    await supersede(harness.driver, { oldId: CLOSED_ID, newId: DIRECT_ID, now: LATE });
+    await inWriteTransaction(harness.driver, async (tx) => {
+      await closeNarrativeEdgesInTransaction(tx, {
+        narrativeIds: [CLOSED_ID],
+        validUntil: LATE,
+        txUntil: LATE,
+      });
+    });
+    const after = new Date('2026-06-08T09:00:00.000Z');
+    for (const mode of [
+      withCurrency(after),
+      asOf(BEFORE_LATE),
+      knewAt(BEFORE_LATE),
+      bitemporalAt(BEFORE_LATE, BEFORE_LATE),
+    ]) {
+      expect((await provenanceOf([CLOSED_ID], 4, mode)).get(CLOSED_ID)).toMatchObject({
+        roots: [ROOT_ID],
+        complete: true,
+      });
+    }
+    for (const mode of [asOf(after), knewAt(after), bitemporalAt(after, after)]) {
+      expect((await provenanceOf([CLOSED_ID], 4, mode)).has(CLOSED_ID)).toBe(false);
+    }
+    const result = await unsupersedeNode(harness.driver, { id: CLOSED_ID, now: after });
+    expect(result.reopenedEdges).toBe(1);
+    for (const mode of [
+      withCurrency(after),
+      asOf(after),
+      knewAt(after),
+      bitemporalAt(after, after),
+    ]) {
+      expect((await provenanceOf([CLOSED_ID], 4, mode)).get(CLOSED_ID)).toMatchObject({
+        roots: [ROOT_ID],
+        complete: true,
+      });
+    }
+  });
+
+  it('never turns a future cited source into a root under either temporal filter', async () => {
+    const after = new Date('2026-06-08T09:00:00.000Z');
+    for (const mode of [
+      asOf(BEFORE_LATE),
+      knewAt(BEFORE_LATE),
+      bitemporalAt(BEFORE_LATE, after),
+      bitemporalAt(after, BEFORE_LATE),
+    ]) {
+      const row = (await provenanceOf([EARLY_ID], 4, mode)).get(EARLY_ID);
+      expect(row?.roots).not.toContain(LATE_SOURCE_ID);
+      expect(row?.complete).toBe(false);
+    }
+  });
+
+  it('reports a narrative chain beyond the hop bound as incomplete', async () => {
+    for (let index = 0; index < 6; index += 1) {
+      await writeNarrative(`boundary-deep-${index}`, [
+        index === 5 ? ROOT_ID : `boundary-deep-${index + 1}`,
+      ]);
+    }
+    const row = (await provenanceOf(['boundary-deep-0'])).get('boundary-deep-0');
+    expect(row?.complete).toBe(false);
+    expect(row?.roots).not.toContain(ROOT_ID);
+  });
+
+  it('retains the source exactly at the hop bound', async () => {
+    const row = (await provenanceOf(['boundary-deep-2'])).get('boundary-deep-2');
+    expect(row).toMatchObject({ roots: [ROOT_ID], complete: true });
+  });
+
+  it('does not let a real root turn a second cyclic branch into complete ancestry', async () => {
+    await writeNarrative('boundary-mixed-cycle', [ROOT_ID, CYCLE_A_ID]);
+    const row = (await provenanceOf(['boundary-mixed-cycle'])).get('boundary-mixed-cycle');
+    expect(row?.roots).toEqual([ROOT_ID]);
+    expect(row?.complete).toBe(false);
   });
 });

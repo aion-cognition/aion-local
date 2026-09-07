@@ -124,24 +124,25 @@ export type AssemblePackInput = {
   readonly historical?: boolean;
   /**
    * Ids this session was already served, unchanged since (`session-dedup.ts`). They are cut
-   * here rather than upstream, so the admitted set that reaches cognition is the same set it
-   * has always been and only the wire gets smaller. Empty on a first recall, on a
+   * here rather than upstream: ranking and candidate telemetry are unchanged by the
+   * subtraction, and exposure follows emitted pack membership. Empty on a first recall, on a
    * time-traveled read, and whenever the knob is off.
    */
   readonly suppressed?: ReadonlySet<string>;
   /**
    * Ids whose only source is this session's own turns (`session-origin.ts`). Cut here for the
-   * same reason and with the same reach as the repeats: the admitted set that reaches cognition
-   * is unchanged, and only the wire gets smaller. Empty on a time-traveled read and whenever the
-   * knob is off.
+   * same reason and with the same reach as the repeats: ranking and candidate telemetry are
+   * unchanged by the subtraction, and exposure follows emitted pack membership. Empty on a
+   * time-traveled read and whenever the knob is off.
    */
   readonly suppressedOwn?: ReadonlySet<string>;
   /**
    * For each candidate, the candidates it may be withheld in favour of (`pack-duplicates.ts`).
    * Eligibility, not a decision: an item is withheld only where one of its own entries is
    * already in this pack, so a representative the budget, a cap or the restatement filter
-   * rejected withholds nothing and the next member of the group takes its place. The stored
-   * records are untouched and cognition sees the full admitted set; only this pack is smaller.
+   * rejected withholds nothing and the next member of the group takes its place. Ranking and
+   * candidate telemetry are unchanged by the subtraction; exposure follows emitted pack
+   * membership.
    */
   readonly foldable?: ReadonlyMap<string, ReadonlySet<string>>;
 };

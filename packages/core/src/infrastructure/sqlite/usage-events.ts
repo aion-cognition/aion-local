@@ -97,10 +97,10 @@ export type DecaySweepPayload = {
 /**
  * One recall's two populations, kept apart.
  *
- * `ids` is what the pack put in front of the caller: what assembly printed, plus the repeats it
- * withheld because the session already holds them. `retrieved` is everything fusion admitted,
- * whatever the caps and the subtractions then did with it, so the gap between the two reads as
- * how much of retrieval reached the wire.
+ * `ids` holds the ids assembly emitted to the caller, and nothing else: withheld repeats are
+ * not in it. `retrieved` holds the full pre-assembly candidate union from fusion, resonance
+ * and intentions, before caps or subtractions apply, so the gap between the two reads as how
+ * much of retrieval reached the wire.
  *
  * Emission is what this process did. It is not receipt: no row here says the pack reached a
  * client, and none says a model read it.
