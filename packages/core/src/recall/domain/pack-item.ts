@@ -94,6 +94,11 @@ export type ItemAnnotations = {
  * stands as its own root, and printing "derives from itself" says nothing. What survives the
  * filter is a real ancestor, and `shared_with` is what stops two of them reading as two
  * independent witnesses.
+ *
+ * The overlap is asked before the derivation is dropped. A capture whose own claim is already in
+ * the pack has nothing to say about its ancestors and everything to say about that claim, and
+ * dropping the whole derivation on the empty root list let the same pair read as one witness or
+ * as two depending on which of them assembly reached first.
  */
 function derivationOf(itemId: string, annotations: ItemAnnotations): Derivation | undefined {
   const { provenance } = annotations;
@@ -101,10 +106,10 @@ function derivationOf(itemId: string, annotations: ItemAnnotations): Derivation 
     return undefined;
   }
   const roots = provenance.roots.filter((root) => root !== itemId);
-  if (roots.length === 0 && provenance.complete) {
+  const shared = annotations.sharedWith ?? [];
+  if (roots.length === 0 && provenance.complete && shared.length === 0) {
     return undefined;
   }
-  const shared = annotations.sharedWith ?? [];
   return {
     roots,
     complete: provenance.complete,

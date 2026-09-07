@@ -80,6 +80,15 @@ describe('the wire item', () => {
     expect(item.derivation).toBeUndefined();
   });
 
+  it('keeps the overlap of a capture whose own claim is in the pack', () => {
+    const item = toPackItem(fused({ id: 'ep-1' }), 1, {
+      provenance: { roots: ['ep-1'], complete: true },
+      sharedWith: ['claim-1'],
+    });
+
+    expect(item.derivation).toEqual({ roots: [], complete: true, shared_with: ['claim-1'] });
+  });
+
   it('keeps a real ancestor and reports whether the chain was cut', () => {
     const item = toPackItem(fused({ id: 'claim-1' }), 1, {
       provenance: { roots: ['ep-1', 'ep-2'], complete: false },
