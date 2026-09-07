@@ -8,6 +8,7 @@ import {
   CLAIM_ASPECT_PROPERTY,
   CLAIM_SUBJECT_PROPERTY,
 } from '../../infrastructure/graph/claim-key-queries.js';
+import { fetchClaimProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 import {
   normalizeCognitiveText,
   TEXT_NORM_PROPERTY,
@@ -22,6 +23,8 @@ import {
   type Neo4jHarness,
 } from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { foldableClaims } from '../domain/pack-duplicates.js';
+import { assemble, item } from '../domain/test-support/pack.fixture.js';
 
 /**
  * Which pairs of a pack's candidates the substrate calls one claim recorded twice. What the
@@ -159,6 +162,16 @@ beforeAll(async () => {
     text: 'the Worker drains newest first.',
     aspect: 'drain order',
   });
+  await writeClaim({
+    id: 'clash-c',
+    text: 'THE WORKER DRAINS NEWEST FIRST.',
+    aspect: 'drain order',
+  });
+  await writeClaim({
+    id: 'clash-d',
+    text: ' the worker drains newest first. ',
+    aspect: 'drain order',
+  });
   await writeSemanticRelationship(harness.driver, {
     sourceId: 'clash-a',
     targetId: 'clash-b',
@@ -205,10 +218,49 @@ describe('which candidates the substrate calls one claim recorded twice', () => 
     expect(await pairsAmong(['clash-a', 'clash-b'], BEFORE_LATER)).toEqual(['clash-a|clash-b']);
   });
 
+  it('pairs neither end of a contradiction with a third record of the same sentence', async () => {
+    // Group-wise, not pairwise. Excluding only the edge itself leaves both ends free to fold
+    // into the third record, and a reader served that one alone loses the disagreement.
+    expect(await pairsAmong(['clash-c', 'clash-a', 'clash-b'])).toEqual([]);
+  });
+
+  it('still pairs the members of that group no contradiction touches', async () => {
+    expect(await pairsAmong(['clash-c', 'clash-d', 'clash-a', 'clash-b'])).toEqual([
+      'clash-c|clash-d',
+    ]);
+  });
+
   it('asks nothing of the graph for a candidate set too small to hold a pair', async () => {
     expect(await restatedClaims(harness.driver, { ids: [], mode: withCurrency() })).toEqual([]);
     expect(await restatedClaims(harness.driver, { ids: ['fold-a'], mode: withCurrency() })).toEqual(
       [],
     );
+  });
+});
+
+describe('a contradictory pair beside a third record of the same sentence', () => {
+  const CLASH_IDS = ['clash-c', 'clash-a', 'clash-b'];
+  const CLASH_LABELS = ['Insight', 'Memory', 'AionNode'];
+
+  it('serves both contradictory endpoints when the third record ranks first', async () => {
+    const mode = withCurrency();
+    const pairs = await restatedClaims(harness.driver, { ids: CLASH_IDS, mode });
+    const provenance = await fetchClaimProvenance(harness.driver, {
+      ids: CLASH_IDS,
+      mode,
+      maxRoots: 16,
+    });
+    const items = [
+      item('clash-c', { labels: CLASH_LABELS, content: 'THE WORKER DRAINS NEWEST FIRST.' }),
+      item('clash-a', { labels: CLASH_LABELS, content: 'The worker drains newest first.' }),
+      item('clash-b', { labels: CLASH_LABELS, content: 'the Worker drains newest first.' }),
+    ];
+    const pack = assemble(items, {
+      provenance,
+      foldable: foldableClaims({ items, pairs, provenance, relatedClaims: new Map() }),
+    });
+
+    expect(pack.facts?.map((entry) => entry.id)).toEqual(['clash-c', 'clash-a', 'clash-b']);
+    expect(pack.metadata.suppressed_duplicates).toBeUndefined();
   });
 });

@@ -23,11 +23,16 @@ import type { Row } from './values.js';
  * left is the fold the substrate already stores and already keys node identity on: two nodes
  * carrying it are the same sentence, whatever else differs.
  *
- * A pair the substrate holds apart is never offered. `SUPERSEDES` is the close the judge wrote
- * and `CONTRADICTS` is the disagreement the relationship stage recorded: in both cases the
- * reason to read the second claim is that the substrate says it differs from the first. Edge
- * visibility follows the read's own vantage point, so a historical read is judged against the
- * relationships the substrate held then.
+ * A claim the substrate holds apart from another is never offered at all, in any pair. That is
+ * the group and not the pair, because excluding only the edge itself leaves both ends free to
+ * fold into a third record of the same sentence, and a reader served that third one loses the
+ * disagreement entirely. `SUPERSEDES` is the close the judge wrote and `CONTRADICTS` is the
+ * disagreement the relationship stage recorded; in both cases the reason to read the second
+ * claim is that the substrate says it differs from the first, and that reason does not go away
+ * because a third record exists. The rest of the group still folds among itself.
+ *
+ * Edge visibility follows the read's own vantage point, so a historical read is judged against
+ * the relationships the substrate held then.
  */
 
 export type RestatedClaimPair = {
@@ -53,16 +58,21 @@ function statement(input: RestatedClaimInput): GraphStatement {
     `  AND n.${CLAIM_ASPECT_PROPERTY} IS NOT NULL`,
     `  AND n.${TEXT_NORM_PROPERTY} IS NOT NULL`,
     `WITH n.${CLAIM_SUBJECT_PROPERTY} AS subject, n.${CLAIM_ASPECT_PROPERTY} AS aspect,`,
-    `     n.${TEXT_NORM_PROPERTY} AS fold, collect(n) AS claims`,
+    `     n.${TEXT_NORM_PROPERTY} AS fold, collect(n) AS claims, collect(n.id) AS claimIds`,
     'WHERE size(claims) > 1',
-    'UNWIND claims AS a',
-    'UNWIND claims AS b',
-    'WITH a, b',
-    'WHERE a.id < b.id',
-    `  AND NOT EXISTS {`,
-    `    MATCH (a)-[r:${SUPERSEDES_TYPE}|${CONTRADICTION_TYPE}]-(b) WHERE ${held}`,
-    '  }',
-    'RETURN a.id AS left, b.id AS right',
+    'UNWIND claims AS member',
+    'WITH subject, aspect, fold, claimIds, member,',
+    `     [ (member)-[r:${SUPERSEDES_TYPE}|${CONTRADICTION_TYPE}]-(other)`,
+    `       WHERE other.id IN claimIds AND ${held} | other.id ] AS apart`,
+    'WITH subject, aspect, fold,',
+    '     collect(CASE WHEN size(apart) = 0 THEN member.id ELSE null END) AS members',
+    'WITH [ id IN members WHERE id IS NOT NULL ] AS foldable',
+    'WHERE size(foldable) > 1',
+    'UNWIND foldable AS leftId',
+    'UNWIND foldable AS rightId',
+    'WITH leftId, rightId',
+    'WHERE leftId < rightId',
+    'RETURN leftId AS left, rightId AS right',
   ].join('\n');
 
   return { cypher, parameters: { ...fragment.parameters, ids: [...new Set(input.ids)] } };
