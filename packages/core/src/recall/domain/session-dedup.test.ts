@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import type { FusedItem } from './fusion.js';
-import { servedFingerprint, suppressedRepeats } from './session-dedup.js';
+import { finalPackMembership, servedFingerprint, suppressedRepeats } from './session-dedup.js';
+import { assemble } from './test-support/pack.fixture.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 
 type ItemOverrides = {
@@ -128,6 +129,49 @@ describe('suppressing what a session already holds', () => {
    */
   it('suppresses nothing when the session has no record to match against', () => {
     expect([...suppressedRepeats([item('e1'), item('e2')], new Map())]).toEqual([]);
+  });
+});
+
+describe('the membership a pack hands over', () => {
+  it('holds what it printed and the repeats it withheld', () => {
+    const pack = assemble([item('e1'), item('e2')], { suppressed: new Set(['e2']) });
+
+    expect([...finalPackMembership(pack, new Set(['e2']))].sort()).toEqual(['e1', 'e2']);
+  });
+
+  /**
+   * The session wrote it and never read it back from a pack, so it is not something the pack put
+   * in front of anyone.
+   */
+  it('leaves out an item origin suppression withheld', () => {
+    const pack = assemble([item('e1'), item('own')], { suppressedOwn: new Set(['own']) });
+
+    expect([...finalPackMembership(pack, new Set())]).toEqual(['e1']);
+  });
+
+  it('leaves out an item the token budget cut', () => {
+    const alone = assemble([item('e1')]);
+    const pack = assemble([item('e1'), item('e2')], {
+      tokenBudget: alone.metadata.token_estimate,
+    });
+
+    expect(pack.episodes?.map((entry) => entry.id)).toEqual(['e1']);
+    expect([...finalPackMembership(pack, new Set())]).toEqual(['e1']);
+  });
+
+  it('leaves out an item a bucket cap cut', () => {
+    const pack = assemble([item('e1'), item('e2')], {
+      caps: {
+        facts: 15,
+        episodes: 1,
+        narratives: 5,
+        intentions: 3,
+        preferences: 3,
+        resonant: 5,
+      },
+    });
+
+    expect([...finalPackMembership(pack, new Set())]).toEqual(['e1']);
   });
 });
 

@@ -10,8 +10,8 @@ import { hashContent } from '../../reflection/domain/content.js';
 /**
  * The serving-layer subtraction. A hook-driven agent recalls on every prompt, and inside one
  * session the top of the ranked list barely moves, so the same memories are rendered again
- * into a conversation that already holds them. Cognition is untouched by this: the full
- * admitted set still reaches reinforcement, access tracking and the pack-method counters. Only
+ * into a conversation that already holds them. Ranking is untouched by this: fusion still
+ * measures everything it admitted, and the pack-method counters still read the whole set. Only
  * what goes over the wire is cut.
  *
  * Suppression is per (session, item) and never crosses sessions: a second agent, or the same
@@ -78,24 +78,34 @@ export function suppressedRepeats(
 /**
  * What the session holds once this pack is handed over: every item the pack rendered, plus
  * every repeat it withheld, which the agent still has from the recall that first served it.
- * Items a bucket cap or the token budget cut are deliberately absent, since a memory the
- * caller never saw must not be subtracted from the next pack.
+ *
+ * Two questions have this one answer. It is what the next recall in this session subtracts
+ * against, and it is the population recall's exposure side effects are charged to. A memory a
+ * bucket cap, the token budget, the near-duplicate fold or the admission floor turned away is
+ * absent from both, and so is one origin suppression cut, which the session wrote itself and
+ * never read back from a pack.
  */
-export function servedRecords(
+export function finalPackMembership(
   pack: MemoryPack,
   suppressed: ReadonlySet<string>,
-  candidates: ReadonlyMap<string, FusedItem>,
-  provenance?: ReadonlyMap<string, ItemProvenance>,
-): readonly ServedItem[] {
+): ReadonlySet<string> {
   const ids = new Set<string>(suppressed);
   for (const items of Object.values(packBuckets(pack))) {
     for (const item of items) {
       ids.add(item.id);
     }
   }
+  return ids;
+}
 
+/** One fingerprint per member, which is what the next recall in this session matches against. */
+export function servedRecords(
+  membership: ReadonlySet<string>,
+  candidates: ReadonlyMap<string, FusedItem>,
+  provenance?: ReadonlyMap<string, ItemProvenance>,
+): readonly ServedItem[] {
   const records: ServedItem[] = [];
-  for (const id of ids) {
+  for (const id of membership) {
     const candidate = candidates.get(id);
     if (candidate === undefined) {
       continue;

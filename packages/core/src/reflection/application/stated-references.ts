@@ -1,6 +1,7 @@
 import type { ReflectionProvenance } from '@aion/protocol';
 import type { Driver } from 'neo4j-driver';
 
+import { recordConfirmationFeedback } from './recall-feedback.js';
 import {
   resolveProvenanceTargets,
   writeClaimProvenance,
@@ -80,19 +81,22 @@ export type ProvenanceAttachDeps = {
  * usual backoff. The archive is what makes either survivable: the references are stored with
  * the payload, so the worker, a re-push and `aion replay` all re-state them, and every write
  * here is idempotent, so re-stating changes nothing that already landed.
+ *
+ * Returns the confirmations that resolved, so a caller with the local database can record the
+ * signal beside the edge. An unresolvable one is not among them: it was never written.
  */
 export async function attachProvenance(
   deps: ProvenanceAttachDeps,
   episodeId: string,
   provenance: ReflectionProvenance | undefined,
   now: Date,
-): Promise<void> {
+): Promise<readonly ConfirmationWrite[]> {
   const supersedes = provenance?.supersedes ?? [];
   const derivedFrom = provenance?.derived_from ?? [];
   const confirmations = provenance?.confirmations ?? [];
   const named = [...supersedes, ...derivedFrom, ...confirmations.map((entry) => entry.target)];
   if (named.length === 0) {
-    return;
+    return [];
   }
 
   const resolved = await resolveProvenanceTargets(deps.driver, {
@@ -122,6 +126,7 @@ export async function attachProvenance(
       'reflection named references the substrate does not hold; the lineage is marked incomplete',
     );
   }
+  return attached;
 }
 
 export type StatedReferenceDeps = ProvenanceAttachDeps & {
@@ -192,7 +197,11 @@ export async function settleStatedReferences(
     if (version === acknowledgedVersion(deps.db, episodeId)) {
       return;
     }
-    await attachProvenance(deps, episodeId, references, now);
+    const confirmed = await attachProvenance(deps, episodeId, references, now);
+    // Between the edge and the acknowledgement, so a process that stops here leaves the signal
+    // still owed rather than acknowledged and missing. The row is keyed on the statement rather
+    // than on this pass, so the pass that re-runs writes one row for it either way.
+    recordConfirmationFeedback(deps, episodeId, confirmed);
     markLedgerApplied(deps.db, statedReferenceKey(episodeId), { version });
   }
   throw new Error(`stated references for ${episodeId} changed on every settle pass`);

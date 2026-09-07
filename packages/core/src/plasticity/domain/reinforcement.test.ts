@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_TRIGGER_POLICY,
   RECALL_CO_ACTIVATION_TRIGGER,
+  RECALL_PACK_EXPOSURE_TRIGGER,
   REFLECTION_CO_EXTRACTION_TRIGGER,
   TRIGGER_POLICIES,
   aggregateWindow,
@@ -41,8 +42,21 @@ function clique(ids: readonly string[], ts = TS) {
 describe('trigger strings carry a policy', () => {
   it('gives the string each producer writes a row in the table', () => {
     expect(Object.keys(TRIGGER_POLICIES).sort()).toEqual(
-      [RECALL_CO_ACTIVATION_TRIGGER, REFLECTION_CO_EXTRACTION_TRIGGER].sort(),
+      [
+        RECALL_CO_ACTIVATION_TRIGGER,
+        RECALL_PACK_EXPOSURE_TRIGGER,
+        REFLECTION_CO_EXTRACTION_TRIGGER,
+      ].sort(),
     );
+  });
+
+  /**
+   * Rows written under the wider population keep their own name, so a reader of the queue or the
+   * stream can tell what a step was charged against rather than seeing one signal that narrowed
+   * without saying so.
+   */
+  it("keeps recall's two populations under two names", () => {
+    expect(RECALL_PACK_EXPOSURE_TRIGGER).not.toBe(RECALL_CO_ACTIVATION_TRIGGER);
   });
 });
 
@@ -105,8 +119,16 @@ describe('bounded reinforcement', () => {
 });
 
 describe('per-trigger learning rates', () => {
-  it('gives recall co-activation the full rate and no clique discount', () => {
+  /**
+   * Both recall names take the same step. Only the population changed, and a narrower population
+   * is not a reason to pay more for one, so a row written under either name folds the same way.
+   */
+  it('gives both recall triggers the full rate and no clique discount', () => {
     expect(triggerPolicy(RECALL_CO_ACTIVATION_TRIGGER)).toEqual({
+      etaFactor: 1,
+      cliqueDiscounted: false,
+    });
+    expect(triggerPolicy(RECALL_PACK_EXPOSURE_TRIGGER)).toEqual({
       etaFactor: 1,
       cliqueDiscounted: false,
     });

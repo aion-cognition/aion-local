@@ -223,11 +223,11 @@ describe('a second recall inside one session', () => {
   });
 
   /**
-   * The subtraction is a serving-layer decision and cognition never sees it: reinforcement
-   * pairs the co-activated set, which is what the spread reached rather than what the pack
-   * rendered. A recall that suppressed everything is still a use of every memory it found.
+   * A repeat is withheld because the session already holds it, which is the one subtraction that
+   * leaves the caller holding the memory anyway. So it stays inside the pack's membership and
+   * still earns its exposure, where an item the floors refused or the budget cut does not.
    */
-  it('still fires the cognition side effects for the items it withheld', async () => {
+  it('still fires the exposure side effects for the repeats it withheld', async () => {
     const session = 'dedup-int-reinforcement-session';
     await recall(session);
     const afterFirst = listReinforcementSignals(db).length;

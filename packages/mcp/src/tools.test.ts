@@ -123,6 +123,7 @@ describe('tool definitions', () => {
       'lane',
       'origin',
       'provenance',
+      'feedback',
     ]);
   });
 

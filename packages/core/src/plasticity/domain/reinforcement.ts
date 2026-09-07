@@ -18,10 +18,19 @@
  */
 
 /**
- * Recall's trigger string. It is declared here, beside the policy table keyed on it, and the
- * side effect that enqueues it imports it, so the producer and the flush cannot drift.
+ * Recall's older trigger string, from when exposure was charged against everything the spread
+ * co-activated. Nothing enqueues it now. It stays in the table so rows already carrying it fold
+ * under the policy they were written under, and so a reader can tell the two populations apart
+ * instead of seeing one signal that quietly narrowed.
  */
 export const RECALL_CO_ACTIVATION_TRIGGER = 'recall_co_activation';
+
+/**
+ * Recall's trigger string today: the pair fired together and both ends reached the pack the
+ * caller was handed. Declared here, beside the policy table keyed on it, and the side effect
+ * that enqueues it imports it, so the producer and the flush cannot drift.
+ */
+export const RECALL_PACK_EXPOSURE_TRIGGER = 'recall_pack_exposure';
 
 /** Reflection's trigger string, imported by the stage that enqueues it. */
 export const REFLECTION_CO_EXTRACTION_TRIGGER = 'reflection:co-extraction';
@@ -36,15 +45,18 @@ export type TriggerPolicy = {
 /**
  * What each trigger's evidence is worth.
  *
- * Recall co-activation is a measurement: spreading activation ranked these nodes and only the
+ * Both recall triggers are measurements: spreading activation ranked these nodes and only the
  * strongest handful reach the queue, so a signal stands for its own pair and takes the full
- * rate. Reflection co-extraction is an assertion about an episode, not about a pair: every
- * entity the episode produced is paired with every other one whether or not the text related
- * them. It takes 0.3 of the rate and it takes the clique discount, which is the pair of
- * corrections that keeps a rich episode from reading as hundreds of equally strong facts.
+ * rate. They share a rate because only the population changed, and a narrower population is not
+ * a reason to pay more for a step. Reflection co-extraction is an assertion about an episode,
+ * not about a pair: every entity the episode produced is paired with every other one whether or
+ * not the text related them. It takes 0.3 of the rate and it takes the clique discount, which is
+ * the pair of corrections that keeps a rich episode from reading as hundreds of equally strong
+ * facts.
  */
 export const TRIGGER_POLICIES: Readonly<Record<string, TriggerPolicy>> = {
   [RECALL_CO_ACTIVATION_TRIGGER]: { etaFactor: 1, cliqueDiscounted: false },
+  [RECALL_PACK_EXPOSURE_TRIGGER]: { etaFactor: 1, cliqueDiscounted: false },
   [REFLECTION_CO_EXTRACTION_TRIGGER]: { etaFactor: 0.3, cliqueDiscounted: true },
 };
 

@@ -50,7 +50,12 @@ const WEBHOOKS_OBSERVATION =
 const UNRELATED_OBSERVATION = 'the standup moved to nine thirty on tuesdays';
 
 const QUERY = 'why did we pick webhooks for ingestion';
+const BOTH_QUERY = 'why did we pick webhooks for ingestion, and when is standup';
 const CUE = 'webhooks';
+const UNRELATED_CUE = 'standup';
+
+/** Swapped per test, so one file can ask a question one memory answers and one that two do. */
+let queryCues: readonly string[] = [CUE];
 
 function axis(index: number): Vector {
   const vector = new Array<number>(EMBED_DIMENSION).fill(0);
@@ -71,7 +76,8 @@ function vectorFor(text: string): Vector {
 
 const provider: Provider = {
   embed: (texts) => Promise.resolve(texts.map(vectorFor)),
-  generate: () => Promise.resolve({ query_cues: [CUE], summary_cues: [], recent_turn_cues: [] }),
+  generate: () =>
+    Promise.resolve({ query_cues: [...queryCues], summary_cues: [], recent_turn_cues: [] }),
 };
 
 function config(): Config {
@@ -171,8 +177,15 @@ afterAll(async () => {
 });
 
 describe('recall side effects over a substrate written by the real intake path', () => {
-  it('enqueues reinforcement pairs inline and batches access tracking off the response path', async () => {
+  /**
+   * The spread reaches the second episode and nothing measures it, so the floors refuse it. It
+   * is co-activated and it was never served, and exposure follows the pack rather than the
+   * spread: one memory reached the caller, one memory pairs with nothing, and the refused one
+   * takes neither a pair nor a stamp.
+   */
+  it('charges nothing to a node the spread reached and the pack refused', async () => {
     expect(listReinforcementSignals(db)).toHaveLength(0);
+    queryCues = [CUE];
 
     const pack = await handleRecall(
       deps,
@@ -183,46 +196,48 @@ describe('recall side effects over a substrate written by the real intake path',
       },
     );
 
-    // Reinforcement is written inline from the listener, before handleRecall's caller
-    // resumes.
-    const signals = listReinforcementSignals(db);
-    expect(signals.length).toBeGreaterThan(0);
-
-    // Every id the spread could have co-activated. The reading session's node is not among
-    // them any more, since recall produces no content and mints nothing, but the write
-    // session's is, since both episodes participate in it.
-    const knownIds = new Set([
-      webhooksEpisodeId,
-      unrelatedEpisodeId,
-      WRITE_SESSION,
-      READ_SESSION,
-      backbone.member.id,
-      backbone.workspace.id,
-    ]);
-    for (const signal of signals) {
-      expect(signal.trigger).toBe(REINFORCEMENT_TRIGGER);
-      expect(knownIds.has(signal.sourceId)).toBe(true);
-      expect(knownIds.has(signal.targetId)).toBe(true);
-    }
-    const enqueuedPairs = new Set(signals.map((s) => sortedPair(s.sourceId, s.targetId)));
-    expect(enqueuedPairs.has(sortedPair(webhooksEpisodeId, unrelatedEpisodeId))).toBe(true);
-
     // The access-tracking write is deferred, which means the response never waits on it,
     // not that the write is provably absent at any instant after the response. Asserting
     // absence here is a race the batcher can legitimately win on fast infrastructure, so
     // the contract check is whenIdle() resolving separately from the already-held pack.
     await sideEffects.whenIdle();
 
-    // One episode surfaces, not two: the spread reached the other and nothing measured it,
-    // so it is co-activated for reinforcement and refused for the pack. Access tracking
-    // follows what was served, which is the narrower of the two sets.
+    expect(listReinforcementSignals(db)).toHaveLength(0);
+
     const surfacedIds = (pack.episodes ?? []).map((item) => item.id).sort();
     expect(surfacedIds).toEqual([webhooksEpisodeId]);
 
-    for (const id of surfacedIds) {
-      const after = await accessMetadata(harness.driver, id);
-      expect(after.lastAccessed).toBeInstanceOf(Date);
-      expect(after.accessCount).toBe(1);
+    const served = await accessMetadata(harness.driver, webhooksEpisodeId);
+    expect(served.lastAccessed).toBeInstanceOf(Date);
+    expect(served.accessCount).toBe(1);
+    expect(await accessMetadata(harness.driver, unrelatedEpisodeId)).toEqual({});
+  });
+
+  it('enqueues a pair inline once two memories reach one pack', async () => {
+    const before = listReinforcementSignals(db).length;
+    queryCues = [CUE, UNRELATED_CUE];
+
+    const pack = await handleRecall(
+      deps,
+      { query: BOTH_QUERY },
+      { identity: 'side-effects-int-both-session', now: RECALLED_AT },
+    );
+    // Reinforcement is written inline from the listener, before handleRecall's caller resumes.
+    const signals = listReinforcementSignals(db).slice(before);
+    await sideEffects.whenIdle();
+
+    expect((pack.episodes ?? []).map((item) => item.id).sort()).toEqual(
+      [webhooksEpisodeId, unrelatedEpisodeId].sort(),
+    );
+    expect(signals.map((signal) => signal.trigger)).toEqual([REINFORCEMENT_TRIGGER]);
+    expect(signals.map((signal) => sortedPair(signal.sourceId, signal.targetId))).toEqual([
+      sortedPair(webhooksEpisodeId, unrelatedEpisodeId),
+    ]);
+    // Neither the sessions the spread walks through nor the backbone reach the pack, so nothing
+    // structural is paired even though everything co-activates with them.
+    const involved = new Set(signals.flatMap((signal) => [signal.sourceId, signal.targetId]));
+    for (const id of [WRITE_SESSION, READ_SESSION, backbone.member.id, backbone.workspace.id]) {
+      expect(involved.has(id)).toBe(false);
     }
   });
 });

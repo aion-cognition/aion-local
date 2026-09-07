@@ -7,8 +7,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SqliteStore } from './database.js';
 import {
   appendDecaySweepEvent,
+  appendMemoryConfirmedEvent,
+  appendPackEmittedEvent,
   appendReinforcementAppliedEvent,
   appendRecallAccessEvent,
+  appendSelfReportEvent,
   listUsageEventsAfter,
   type UsageEventCursor,
 } from './usage-events.js';
@@ -164,6 +167,132 @@ describe('usage event storage', () => {
     expect(new Set(ids).size).toBe(2);
   });
 
+  it('appends what one recall emitted apart from what it retrieved', () => {
+    appendPackEmittedEvent(store.db, {
+      sessionId: 'session-1',
+      ids: ['served'],
+      retrieved: ['served', 'cut'],
+      occurredAt: OCCURRED_AT,
+      recordedAt: RECORDED_AT,
+    });
+
+    const [event] = listUsageEventsAfter(store.db, undefined, 10);
+
+    expect(event?.kind).toBe('pack_emitted');
+    expect(event?.payload).toEqual({
+      sessionId: 'session-1',
+      ids: ['served'],
+      retrieved: ['served', 'cut'],
+    });
+  });
+});
+
+describe('the signals nobody can read off the graph', () => {
+  const REPORT = {
+    sessionId: 'session-1',
+    memories: ['node-a'],
+    reporter: 'the calling agent',
+    evidence: 'turn 12',
+    occurredAt: OCCURRED_AT,
+    recordedAt: RECORDED_AT,
+  };
+
+  it('keeps receipt and use apart rather than folding them into one signal', () => {
+    appendSelfReportEvent(store.db, 'delivery_acknowledged', { ...REPORT, key: 'received-1' });
+    appendSelfReportEvent(store.db, 'memory_used', { ...REPORT, key: 'used-1' });
+
+    expect(listUsageEventsAfter(store.db, undefined, 10).map((event) => event.kind)).toEqual([
+      'delivery_acknowledged',
+      'memory_used',
+    ]);
+  });
+
+  it('records a report once however many times it is stated', () => {
+    expect(appendSelfReportEvent(store.db, 'memory_used', { ...REPORT, key: 'used-1' })).toBe(true);
+    expect(appendSelfReportEvent(store.db, 'memory_used', { ...REPORT, key: 'used-1' })).toBe(
+      false,
+    );
+    expect(
+      appendSelfReportEvent(store.db, 'memory_used', {
+        ...REPORT,
+        key: 'used-1',
+        occurredAt: new Date('2026-04-01T10:00:00.000Z'),
+      }),
+    ).toBe(false);
+
+    expect(listUsageEventsAfter(store.db, undefined, 10)).toHaveLength(1);
+  });
+
+  it('takes a second report of the same kind under its own name', () => {
+    appendSelfReportEvent(store.db, 'memory_used', { ...REPORT, key: 'used-1' });
+    appendSelfReportEvent(store.db, 'memory_used', {
+      ...REPORT,
+      key: 'used-2',
+      memories: ['node-b'],
+    });
+
+    expect(listUsageEventsAfter(store.db, undefined, 10)).toHaveLength(2);
+  });
+
+  it('omits the evidence field entirely when the reporter cited nothing', () => {
+    appendSelfReportEvent(store.db, 'memory_used', {
+      sessionId: 'session-1',
+      memories: ['node-a'],
+      reporter: 'the calling agent',
+      key: 'used-1',
+      occurredAt: OCCURRED_AT,
+    });
+
+    expect(listUsageEventsAfter(store.db, undefined, 10)[0]?.payload).toEqual({
+      sessionId: 'session-1',
+      memories: ['node-a'],
+      reporter: 'the calling agent',
+    });
+  });
+
+  /** A confirmation names a confirmer and cites where it is written down, which a report need not. */
+  it('carries a confirmation with the reference that makes it attributable', () => {
+    appendMemoryConfirmedEvent(store.db, {
+      key: 'confirmed-1',
+      episodeId: 'episode-1',
+      memories: ['node-a'],
+      confirmedBy: 'Ryan Huber',
+      evidence: 'review thread 41',
+      occurredAt: OCCURRED_AT,
+      recordedAt: RECORDED_AT,
+    });
+
+    expect(listUsageEventsAfter(store.db, undefined, 10)[0]).toEqual({
+      id: 1,
+      kind: 'memory_confirmed',
+      payload: {
+        episodeId: 'episode-1',
+        memories: ['node-a'],
+        confirmedBy: 'Ryan Huber',
+        evidence: 'review thread 41',
+      },
+      occurredAt: OCCURRED_AT.toISOString(),
+      recordedAt: RECORDED_AT.toISOString(),
+    });
+  });
+
+  it('records a confirmation once however many times the same experience re-states it', () => {
+    const event = {
+      key: 'confirmed-1',
+      episodeId: 'episode-1',
+      memories: ['node-a'],
+      confirmedBy: 'Ryan Huber',
+      evidence: 'review thread 41',
+      occurredAt: OCCURRED_AT,
+    };
+
+    expect(appendMemoryConfirmedEvent(store.db, event)).toBe(true);
+    expect(appendMemoryConfirmedEvent(store.db, event)).toBe(false);
+    expect(listUsageEventsAfter(store.db, undefined, 10)).toHaveLength(1);
+  });
+});
+
+describe('usage event storage, continued', () => {
   it('writes no statement that could change or drop a row it already recorded', () => {
     const source = readFileSync(fileURLToPath(new URL('usage-events.ts', import.meta.url)), 'utf8');
     // Prose names the two statements the module forbids, and prose is not a statement.

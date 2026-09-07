@@ -31,7 +31,11 @@ import {
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider, Vector } from '../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { listUsageEventsAfter } from '../../infrastructure/sqlite/usage-events.js';
+import {
+  appendRecallAccessEvent,
+  appendSelfReportEvent,
+  listUsageEventsAfter,
+} from '../../infrastructure/sqlite/usage-events.js';
 import { sweepEdgeDecay } from '../../plasticity/application/decay.js';
 import { flushReinforcementQueue } from '../../plasticity/application/flush.js';
 import { boundedReinforcement } from '../../plasticity/domain/reinforcement.js';
@@ -80,8 +84,14 @@ const WEBHOOKS_OBSERVATION =
   'we picked webhooks for the ingestion service because polling was too slow';
 const UNRELATED_OBSERVATION = 'the standup moved to nine thirty on tuesdays';
 
-const QUERY = 'why did we pick webhooks for ingestion';
+/**
+ * Both topics, because the flush needs a pair and exposure is charged against what the pack
+ * served: a question only one of the two memories answers puts one memory in the pack, and one
+ * memory pairs with nothing.
+ */
+const QUERY = 'why did we pick webhooks for ingestion, and when is standup';
 const CUE = 'webhooks';
+const UNRELATED_CUE = 'standup';
 
 function axis(index: number): Vector {
   const vector = new Array<number>(EMBED_DIMENSION).fill(0);
@@ -102,7 +112,12 @@ function vectorFor(text: string): Vector {
 
 const provider: Provider = {
   embed: (texts) => Promise.resolve(texts.map(vectorFor)),
-  generate: () => Promise.resolve({ query_cues: [CUE], summary_cues: [], recent_turn_cues: [] }),
+  generate: () =>
+    Promise.resolve({
+      query_cues: [CUE, UNRELATED_CUE],
+      summary_cues: [],
+      recent_turn_cues: [],
+    }),
 };
 
 function config(): Config {
@@ -253,8 +268,10 @@ describe('the usage stream replayed over a graph that kept its facts and lost it
       },
     );
 
-    // All three emitters wrote, in the order the substrate lived them.
+    // Every emitter wrote, in the order the substrate lived them. The emission row leads: it is
+    // written inline from the listener, ahead of the graph write the access row follows.
     expect(listUsageEventsAfter(db, undefined, 100).map((event) => event.kind)).toEqual([
+      'pack_emitted',
       'recall_access',
       'reinforcement_applied',
       'decay_sweep',
@@ -288,15 +305,47 @@ describe('the usage stream replayed over a graph that kept its facts and lost it
       { batchSize: 2 },
     );
 
+    // The emission row is stepped over rather than applied: it records what the pack served,
+    // which is a statement about a moment and not a change a rebuilt graph is missing.
     expect(report).toMatchObject({
-      scanned: 3,
+      scanned: 4,
       accessApplied: 1,
       reinforcementApplied: 1,
       decayApplied: 1,
-      skipped: 0,
+      skipped: 1,
       failed: 0,
     });
     expect(await accessSnapshot()).toEqual(stamps);
     expect(await similarStrength()).toBe(weight);
+  });
+
+  /**
+   * A row written before exposure narrowed names a population today's recall would not stamp.
+   * The replay applies what the row says rather than what the rule says now, so the salience a
+   * rebuilt graph gets back is the salience it had. The stated signals beside it are stepped
+   * over: they recorded no write, so there is none to put back.
+   */
+  it('applies an older access row as it was written and steps over the stated signals', async () => {
+    const older = new Date('2026-05-01T09:00:00.000Z');
+    appendRecallAccessEvent(db, { ids: [backbone.member.id], occurredAt: older });
+    appendSelfReportEvent(db, 'memory_used', {
+      key: 'usage-replay-int-used',
+      sessionId: READ_SESSION,
+      memories: [webhooksEpisodeId],
+      reporter: 'the calling agent',
+      occurredAt: older,
+    });
+    await clearAccessMetadata(harness.driver, [backbone.member.id]);
+
+    const report = await replayUsageEvents(
+      { driver: harness.driver, db, logger },
+      { batchSize: 10 },
+    );
+
+    expect(await accessMetadata(harness.driver, backbone.member.id)).toMatchObject({
+      accessCount: 1,
+    });
+    expect(report.skipped).toBe(2);
+    expect(report.failed).toBe(0);
   });
 });

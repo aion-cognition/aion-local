@@ -124,6 +124,50 @@ export const ReflectionProvenanceSchema = z.strictObject({
 
 export type ReflectionProvenance = z.infer<typeof ReflectionProvenanceSchema>;
 
+/**
+ * One thing a caller says about memories it was served.
+ *
+ * `reporter` is who the report is filed under. It never establishes who filed it: a transport
+ * role names no person and agent-to-agent traffic arrives under `user`, so a report of this
+ * shape is a self-report whatever the field says. `evidence` is where it is written down, when
+ * there is anywhere to point at.
+ */
+export const FeedbackReportSchema = z.strictObject({
+  memories: z.array(z.string().min(1)).min(1).max(MAX_PROVENANCE_REFERENCES),
+  reporter: z.string().min(1),
+  evidence: z.string().min(1).optional(),
+  occurred_at: IsoTimestampSchema.optional(),
+});
+
+export type FeedbackReport = z.infer<typeof FeedbackReportSchema>;
+
+/**
+ * What became of a pack, told by the only party that can tell it.
+ *
+ * `received` says a pack arrived. Assembling one proves nothing about that, so without a caller
+ * saying so the substrate knows only what it put on the wire. `used` says the caller acted on
+ * the named memories. The two are apart because delivery is not use, and neither is truth:
+ * confirming a memory is a different statement and goes in `provenance.confirmations`, which
+ * requires a reference.
+ *
+ * Recorded and nothing more. No stage waits on one, no weight moves for one, and a pack nobody
+ * reported on is not a pack that went unread.
+ */
+export const RecallFeedbackSchema = z.strictObject({
+  received: z
+    .array(FeedbackReportSchema)
+    .max(MAX_PROVENANCE_REFERENCES)
+    .optional()
+    .describe('memories that reached this caller, which server-side assembly cannot establish'),
+  used: z
+    .array(FeedbackReportSchema)
+    .max(MAX_PROVENANCE_REFERENCES)
+    .optional()
+    .describe('memories this caller acted on; recorded as its own report, never as confirmation'),
+});
+
+export type RecallFeedback = z.infer<typeof RecallFeedbackSchema>;
+
 const ReflectionPayloadSchema = z.strictObject({
   turns: z.array(ReflectionTurnSchema).optional(),
   tool_executions: z.array(ToolExecutionSchema).optional(),
@@ -133,6 +177,7 @@ const ReflectionPayloadSchema = z.strictObject({
   lane: ReflectionLaneSchema.optional(),
   origin: ReflectionOriginSchema.optional(),
   provenance: ReflectionProvenanceSchema.optional(),
+  feedback: RecallFeedbackSchema.optional(),
 });
 
 /**

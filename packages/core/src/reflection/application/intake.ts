@@ -12,6 +12,7 @@ import {
   type StoredEpisode,
 } from './experience-store.js';
 import type { LaneAssigner, LaneDecision } from './lanes.js';
+import { recordRecallFeedback, redactFeedback } from './recall-feedback.js';
 import { redactProvenance, settleStatedReferences } from './stated-references.js';
 import { attachContentVectors } from './vectors.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
@@ -299,12 +300,14 @@ export async function handleReflection(
   // same way: pushing the same experience via a hook and via the MCP client stays one episode.
   // `provenance` joins them: it is a statement about other nodes rather than about what
   // happened here, so folding it into the content hash would make the same experience pushed
-  // with and without its references two separate episodes.
+  // with and without its references two separate episodes. `feedback` is carved out for the
+  // same reason: it says what became of memories already stored, not what happened.
   const {
     session_id: suppliedIdentity,
     lane: requestedLane,
     origin,
     provenance,
+    feedback,
     ...content
   } = payload;
   const redacted = redactPayload(content, deps.entropyThreshold);
@@ -320,6 +323,14 @@ export async function handleReflection(
   const identity = suppliedIdentity ?? options.identity;
   const prepared = prepareEpisode(redacted.value, now);
   const { sessionId, stored } = await storeExperience(deps, prepared, identity, now, origin);
+  // Recorded against the session the call resolved to, and not archived: these rows live in the
+  // same local database the archive does, so a replay that rebuilds the graph finds them already
+  // there rather than re-stating them.
+  recordRecallFeedback(deps, {
+    feedback: redactFeedback(deps, feedback, deps.entropyThreshold),
+    sessionId,
+    now,
+  });
   // Measured before this call's own row lands, so a fresh enqueue is not counted against
   // itself. A duplicate push matched a row that is already inside this figure, and that row is
   // the caller's own, so it comes back out below.

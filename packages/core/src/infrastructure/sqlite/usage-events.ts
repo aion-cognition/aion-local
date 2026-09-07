@@ -1,21 +1,51 @@
 import type { SqliteHandle } from './database.js';
+import { isLedgerApplied, markLedgerApplied } from './ops-ledger.js';
 
 /**
  * The usage stream: what recall, the flush and the decay sweep did to the graph, appended as
- * it happens and read back oldest first.
+ * it happens and read back oldest first, plus the signals nobody can read off the graph at all.
  *
  * The experience archive holds what the substrate was told, so a replay from it rebuilds every
  * fact. Salience is not a fact: access stamps, edge weights and sweep moments live only in the
  * graph, and a rebuilt graph therefore knows everything and remembers nothing about what
  * mattered. These rows close that gap.
  *
+ * Four kinds record no graph change at all. What a pack emitted, that it arrived, that a caller
+ * used it and that somebody confirmed it are four different statements, and the substrate can
+ * observe exactly one of them on its own. They are kept apart rather than folded together
+ * because collapsing them is how assembly starts reading as proof that a model used something.
+ *
  * Every appender is insert-only, which is why they are named for the append rather than for a
  * record or an update. A row is a measurement of a moment that has passed.
  */
 
-export const USAGE_EVENT_KINDS = ['recall_access', 'reinforcement_applied', 'decay_sweep'] as const;
+export const USAGE_EVENT_KINDS = [
+  'recall_access',
+  'reinforcement_applied',
+  'decay_sweep',
+  'pack_emitted',
+  'delivery_acknowledged',
+  'memory_used',
+  'memory_confirmed',
+] as const;
 
 export type UsageEventKind = (typeof USAGE_EVENT_KINDS)[number];
+
+/**
+ * The kinds that state a signal instead of recording a write. A replay steps over them: there is
+ * no graph change to put back, and nothing about them is reconstructible from a rebuilt graph.
+ */
+export const SIGNAL_EVENT_KINDS = [
+  'pack_emitted',
+  'delivery_acknowledged',
+  'memory_used',
+  'memory_confirmed',
+] as const;
+
+export type SignalEventKind = (typeof SIGNAL_EVENT_KINDS)[number];
+
+/** The two kinds a caller states about itself, which is what keeps them out of the third. */
+export type SelfReportKind = 'delivery_acknowledged' | 'memory_used';
 
 /**
  * The nodes one recall's access tracking bumped, in the order the surfaced set produced them.
@@ -64,8 +94,59 @@ export type DecaySweepPayload = {
   readonly weightFloor: number;
 };
 
+/**
+ * One recall's two populations, kept apart.
+ *
+ * `ids` is what the pack put in front of the caller: what assembly printed, plus the repeats it
+ * withheld because the session already holds them. `retrieved` is everything fusion admitted,
+ * whatever the caps and the subtractions then did with it, so the gap between the two reads as
+ * how much of retrieval reached the wire.
+ *
+ * Emission is what this process did. It is not receipt: no row here says the pack reached a
+ * client, and none says a model read it.
+ */
+export type PackEmittedPayload = {
+  readonly sessionId: string;
+  readonly ids: readonly string[];
+  readonly retrieved: readonly string[];
+};
+
+/**
+ * A caller's account of memories it was served: that they arrived, or that it acted on them.
+ *
+ * Always a self-report, whatever `reporter` says. A transport role names no person and
+ * agent-to-agent traffic arrives under `user`, so the field records who the report is filed
+ * under and never establishes who filed it. Nothing here is evidence that a memory is true.
+ */
+export type SelfReportPayload = {
+  readonly sessionId: string;
+  readonly memories: readonly string[];
+  readonly reporter: string;
+  /** Where the report is written down, when the caller had anywhere to point at. */
+  readonly evidence?: string;
+};
+
+/**
+ * A confirmation somebody stated, carried into the stream from the record the reflection call
+ * wrote. Evidence is required here and optional above, which is the whole difference: a
+ * confirmation is attributable because the reference is, and one that cites nothing is a
+ * self-report wearing a confirmer's name.
+ */
+export type MemoryConfirmedPayload = {
+  /** The experience the confirmation was stated in. */
+  readonly episodeId: string;
+  readonly memories: readonly string[];
+  readonly confirmedBy: string;
+  readonly evidence: string;
+};
+
 export type UsageEventPayload =
-  RecallAccessPayload | ReinforcementAppliedPayload | DecaySweepPayload;
+  | RecallAccessPayload
+  | ReinforcementAppliedPayload
+  | DecaySweepPayload
+  | PackEmittedPayload
+  | SelfReportPayload
+  | MemoryConfirmedPayload;
 
 export type UsageEventRow = {
   /** The stream position. Never reused, so a cursor holding one can only move forward. */
@@ -148,6 +229,95 @@ export function appendReinforcementAppliedEvent(
       })),
       triggers: [...event.triggers],
       weightFloor: event.weightFloor,
+    },
+    event,
+  );
+}
+
+export type PackEmittedEvent = PackEmittedPayload & UsageEventStamps;
+
+/**
+ * Called inline from recall's listener, before the graph write it precedes. The two are separate
+ * rows because they can disagree: a pack is emitted whether or not the access bump behind it
+ * lands, and a run that lost the graph still served somebody a pack.
+ */
+export function appendPackEmittedEvent(db: SqliteHandle, event: PackEmittedEvent): void {
+  append(
+    db,
+    'pack_emitted',
+    {
+      sessionId: event.sessionId,
+      ids: [...event.ids],
+      retrieved: [...event.retrieved],
+    },
+    event,
+  );
+}
+
+/**
+ * A feedback row's own name, which is what makes a second statement of the same thing a no-op.
+ * The clock is deliberately out of it: a client retrying a push states the same report again
+ * under a fresh wall clock, and two rows for one statement would read as two reports.
+ */
+export type KeyedEvent = { readonly key: string };
+
+/**
+ * Recorded once per key, inside one transaction so a concurrent writer cannot land between the
+ * check and the append. Returns false when the key was already recorded, which is a caller
+ * repeating itself rather than a failure.
+ */
+function appendOnce(
+  db: SqliteHandle,
+  kind: SignalEventKind,
+  key: string,
+  payload: UsageEventPayload,
+  stamps: UsageEventStamps,
+): boolean {
+  return db
+    .transaction((): boolean => {
+      if (isLedgerApplied(db, key)) {
+        return false;
+      }
+      append(db, kind, payload, stamps);
+      markLedgerApplied(db, key, { kind });
+      return true;
+    })
+    .immediate();
+}
+
+export type SelfReportEvent = SelfReportPayload & UsageEventStamps & KeyedEvent;
+
+export function appendSelfReportEvent(
+  db: SqliteHandle,
+  kind: SelfReportKind,
+  event: SelfReportEvent,
+): boolean {
+  return appendOnce(
+    db,
+    kind,
+    event.key,
+    {
+      sessionId: event.sessionId,
+      memories: [...event.memories],
+      reporter: event.reporter,
+      ...(event.evidence === undefined ? {} : { evidence: event.evidence }),
+    },
+    event,
+  );
+}
+
+export type MemoryConfirmedEvent = MemoryConfirmedPayload & UsageEventStamps & KeyedEvent;
+
+export function appendMemoryConfirmedEvent(db: SqliteHandle, event: MemoryConfirmedEvent): boolean {
+  return appendOnce(
+    db,
+    'memory_confirmed',
+    event.key,
+    {
+      episodeId: event.episodeId,
+      memories: [...event.memories],
+      confirmedBy: event.confirmedBy,
+      evidence: event.evidence,
     },
     event,
   );

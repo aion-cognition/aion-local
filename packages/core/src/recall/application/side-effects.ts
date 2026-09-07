@@ -10,17 +10,25 @@ import {
   DEFAULT_REINFORCEMENT_QUEUE_CAP,
   enqueueReinforcementSignal,
 } from '../../infrastructure/sqlite/reinforcement-queue.js';
-import { appendRecallAccessEvent } from '../../infrastructure/sqlite/usage-events.js';
-import { RECALL_CO_ACTIVATION_TRIGGER } from '../../plasticity/domain/reinforcement.js';
+import {
+  appendPackEmittedEvent,
+  appendRecallAccessEvent,
+} from '../../infrastructure/sqlite/usage-events.js';
+import { RECALL_PACK_EXPOSURE_TRIGGER } from '../../plasticity/domain/reinforcement.js';
 import type { ActivatedNode } from '../domain/activation.js';
 
 /**
- * The two recall-hot-path side effects, wired through `RecallDeps.onRecalled` so
- * `handleRecall` itself stays free of a second Neo4j round trip. Reinforcement rows are cheap
- * local SQLite inserts and are written inline from the listener; the access-tracking write is
- * a real network round trip, so it is deferred and never awaited by the listener.
+ * The recall-hot-path side effects, wired through `RecallDeps.onRecalled` so `handleRecall`
+ * itself stays free of a second Neo4j round trip. Reinforcement rows and the emission row are
+ * cheap local SQLite inserts and are written inline from the listener; the access-tracking write
+ * is a real network round trip, so it is deferred and never awaited by the listener.
  * `whenIdle()` is the only way to observe it finishing, and only tests should call it.
  * Construct one instance per process, the same lifetime as `SessionManager` and `CueCache`.
+ *
+ * Both writes that change the graph are charged against the pack's own membership, which is what
+ * the caller was handed. A node the spread reached, the floors refused, a cap cut or the budget
+ * turned away is retrieval, and retrieval is a fact about this query rather than about the
+ * memory: strengthening on it teaches the graph that a search ran.
  */
 
 /**
@@ -32,16 +40,18 @@ import type { ActivatedNode } from '../domain/activation.js';
 export const REINFORCEMENT_TOP_N = 10;
 
 /**
- * The name for this trigger source, distinct from reflection's co-occurrence signal. The string
- * lives with the policy table that reads it, so the producer and the flush cannot drift.
+ * The name for this trigger source, distinct from reflection's co-occurrence signal and from the
+ * wider-population name recall used to write. The string lives with the policy table that reads
+ * it, so the producer and the flush cannot drift.
  */
-export { RECALL_CO_ACTIVATION_TRIGGER as REINFORCEMENT_TRIGGER };
+export { RECALL_PACK_EXPOSURE_TRIGGER as REINFORCEMENT_TRIGGER };
 
 /**
- * Every pair among the top-N activated nodes, ordered by rank so the same activation result
- * enqueues the same pairs in the same order. `activated` arrives score-descending
- * (`activation.ts`'s `collect`), so slicing to `REINFORCEMENT_TOP_N` first keeps the
- * strongest co-activations and drops the long tail rather than sampling it arbitrarily.
+ * Every pair among the top-N nodes handed over, ordered by rank so the same recall enqueues the
+ * same pairs in the same order. Callers pass the activated set already narrowed to the pack's
+ * membership; it arrives score-descending (`activation.ts`'s `collect`), so slicing to
+ * `REINFORCEMENT_TOP_N` first keeps the strongest of what was served and drops the long tail
+ * rather than sampling it arbitrarily.
  *
  * Structural nodes are dropped before the slice. Every session hangs off the Member and the
  * global Workspace, so those two co-activate with everything by construction; reinforcing them
@@ -98,6 +108,7 @@ export class RecallSideEffects {
     if (isTimeTravel(completion.mode)) {
       return;
     }
+    this.#appendPackEmitted(completion);
     this.#enqueueReinforcement(completion);
     this.#scheduleAccessTracking(completion);
   };
@@ -114,18 +125,45 @@ export class RecallSideEffects {
     await this.#pending;
   }
 
+  /**
+   * The emission row, written inline and before the graph write it precedes, so a run that loses
+   * the graph still records what it served. Both populations ride it: what the caller was handed
+   * and what fusion admitted, which is the only place the difference between the two is legible
+   * once the pack is gone.
+   */
+  #appendPackEmitted(completion: RecallCompletion): void {
+    try {
+      appendPackEmittedEvent(this.#db, {
+        sessionId: completion.sessionId,
+        ids: [...completion.packMembership],
+        retrieved: [...new Set(completion.items.map((item) => item.id))],
+        occurredAt: completion.now,
+      });
+    } catch (err) {
+      this.#logger.warn(
+        { err, sessionId: completion.sessionId, items: completion.packMembership.size },
+        'recall pack-emitted append failed',
+      );
+    }
+  }
+
   #enqueueReinforcement(completion: RecallCompletion): void {
     try {
       const ts = completion.now.toISOString();
       // One id per recall, so two recalls landing in the same millisecond stay two bursts and
       // the flush discounts each as the clique it actually was.
       const burstId = randomUUID();
-      for (const [sourceId, targetId] of reinforcementPairs(completion.activated)) {
+      // Narrowed before the fan-out, so the top-N slice spends its budget on what was served
+      // rather than on the strongest of what the spread merely reached.
+      const served = completion.activated.filter((node) =>
+        completion.packMembership.has(node.nodeId),
+      );
+      for (const [sourceId, targetId] of reinforcementPairs(served)) {
         enqueueReinforcementSignal(
           this.#db,
           sourceId,
           targetId,
-          RECALL_CO_ACTIVATION_TRIGGER,
+          RECALL_PACK_EXPOSURE_TRIGGER,
           ts,
           this.#reinforcementQueueCap,
           burstId,
@@ -148,12 +186,12 @@ export class RecallSideEffects {
    * caller has already received the pack, not merely after this synchronous listener
    * returns. `recall.ts`'s `notify` invokes `onRecalled` without awaiting it, but a
    * synchronous listener body still runs to completion before `handleRecall`'s `return`.
-   * Ids come from the fused, surfaced set (`completion.items`), not the trimmed pack: a
-   * memory recall judged relevant enough to rank counts as accessed even when the token
-   * budget cut it from the rendered text.
+   * Ids come from the pack's membership, not from everything fusion ranked: `last_accessed` is
+   * read back by the recency seed strategy, so stamping a memory the budget cut would make the
+   * next recall prefer something no agent has ever been shown.
    */
   #scheduleAccessTracking(completion: RecallCompletion): void {
-    const ids = [...new Set(completion.items.map((item) => item.id))];
+    const ids = [...completion.packMembership];
     if (ids.length === 0) {
       return;
     }

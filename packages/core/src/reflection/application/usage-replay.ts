@@ -140,6 +140,14 @@ async function applyUsageEvent(deps: UsageReplayDeps, row: UsageEventRow): Promi
       const moved = edges.filter((edge) => edge.strength !== edge.previousStrength);
       return { counter: 'decay', edges: moved.length };
     }
+    case 'pack_emitted':
+    case 'delivery_acknowledged':
+    case 'memory_used':
+    case 'memory_confirmed':
+      // Stated signals, not writes. What a pack served and what somebody said about it changed
+      // no weight and no stamp when it happened, so there is nothing to put back, and the rows
+      // themselves survive the rebuild in the stream this pass is reading.
+      return { counter: 'skipped', edges: 0 };
     default:
       // A kind this build has no write for is stepped over rather than stopping the pass.
       return { counter: 'skipped', edges: 0 };

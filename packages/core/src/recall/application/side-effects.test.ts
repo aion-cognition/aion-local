@@ -16,6 +16,7 @@ import { asOf, knewAt, withCurrency } from '../../infrastructure/graph/read-mode
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import { listReinforcementSignals } from '../../infrastructure/sqlite/reinforcement-queue.js';
+import { listUsageEventsAfter } from '../../infrastructure/sqlite/usage-events.js';
 import type { ActivatedNode } from '../domain/activation.js';
 import type { AdmissionReport } from '../domain/admission.js';
 import type { FusedItem } from '../domain/fusion.js';
@@ -87,12 +88,18 @@ function completion(overrides: Partial<RecallCompletion> = {}): RecallCompletion
     seeds: [],
     activated: [],
     items: [],
+    packMembership: new Set(),
     admission: NOTHING_ADMITTED,
     pack: EMPTY_PACK,
     now: NOW,
     mode: withCurrency(),
     ...overrides,
   };
+}
+
+/** A recall that served everything it ranked, which is the shape most of these tests want. */
+function served(...ids: readonly string[]): Partial<RecallCompletion> {
+  return { items: ids.map(fusedItem), packMembership: new Set(ids) };
 }
 
 describe('reinforcementPairs', () => {
@@ -198,10 +205,13 @@ describe('RecallSideEffects', () => {
     } as unknown as Driver;
   }
 
-  it('enqueues one reinforcement row per co-activated pair, trigger naming the recall', () => {
+  it('enqueues one reinforcement row per served pair, trigger naming the recall', () => {
     const sideEffects = new RecallSideEffects(fakeDriver([]), store.db, logger);
     void sideEffects.onRecalled(
-      completion({ activated: [activatedNode('a'), activatedNode('b'), activatedNode('c')] }),
+      completion({
+        activated: [activatedNode('a'), activatedNode('b'), activatedNode('c')],
+        ...served('a', 'b', 'c'),
+      }),
     );
 
     const signals = listReinforcementSignals(store.db);
@@ -215,11 +225,43 @@ describe('RecallSideEffects', () => {
     ]);
   });
 
+  /**
+   * A node the spread reached and the pack never carried is a fact about this query. Pairing it
+   * teaches the graph that a search ran, which is the thing exposure is supposed to be about.
+   */
+  it('pairs only the nodes the pack handed over', () => {
+    const sideEffects = new RecallSideEffects(fakeDriver([]), store.db, logger);
+    void sideEffects.onRecalled(
+      completion({
+        activated: [activatedNode('a'), activatedNode('cut'), activatedNode('b')],
+        items: [fusedItem('a'), fusedItem('cut'), fusedItem('b')],
+        packMembership: new Set(['a', 'b']),
+      }),
+    );
+
+    expect(
+      listReinforcementSignals(store.db).map((signal) => [signal.sourceId, signal.targetId]),
+    ).toEqual([['a', 'b']]);
+  });
+
+  it('enqueues nothing when the pack handed over one memory, since one memory pairs with none', () => {
+    const sideEffects = new RecallSideEffects(fakeDriver([]), store.db, logger);
+    void sideEffects.onRecalled(
+      completion({
+        activated: [activatedNode('a'), activatedNode('b')],
+        items: [fusedItem('a'), fusedItem('b')],
+        packMembership: new Set(['a']),
+      }),
+    );
+
+    expect(listReinforcementSignals(store.db)).toEqual([]);
+  });
+
   it('does not touch the graph until whenIdle is awaited', async () => {
     const calls: Record<string, unknown>[] = [];
     const sideEffects = new RecallSideEffects(fakeDriver(calls), store.db, logger);
 
-    void sideEffects.onRecalled(completion({ items: [fusedItem('a'), fusedItem('b')] }));
+    void sideEffects.onRecalled(completion(served('a', 'b')));
     expect(calls).toHaveLength(0);
 
     await sideEffects.whenIdle();
@@ -227,23 +269,32 @@ describe('RecallSideEffects', () => {
     expect(calls[0]?.ids).toEqual(['a', 'b']);
   });
 
-  it('dedupes surfaced ids from the fused item set', async () => {
+  /**
+   * `last_accessed` is what the recency seed strategy reads back, so stamping a memory the wire
+   * never carried makes the next recall prefer something nobody has been shown.
+   */
+  it('stamps only what the pack handed over, not everything fusion ranked', async () => {
     const calls: Record<string, unknown>[] = [];
     const sideEffects = new RecallSideEffects(fakeDriver(calls), store.db, logger);
 
     void sideEffects.onRecalled(
-      completion({ items: [fusedItem('a'), fusedItem('a'), fusedItem('b')] }),
+      completion({
+        items: [fusedItem('a'), fusedItem('budget-cut'), fusedItem('b')],
+        packMembership: new Set(['a', 'b']),
+      }),
     );
     await sideEffects.whenIdle();
 
     expect(calls[0]?.ids).toEqual(['a', 'b']);
   });
 
-  it('schedules no write and resolves immediately when nothing surfaced', async () => {
+  it('schedules no write and resolves immediately when nothing reached the pack', async () => {
     const calls: Record<string, unknown>[] = [];
     const sideEffects = new RecallSideEffects(fakeDriver(calls), store.db, logger);
 
-    void sideEffects.onRecalled(completion({ items: [] }));
+    void sideEffects.onRecalled(
+      completion({ items: [fusedItem('refused')], packMembership: new Set() }),
+    );
     await sideEffects.whenIdle();
 
     expect(calls).toHaveLength(0);
@@ -254,7 +305,7 @@ describe('RecallSideEffects', () => {
     const sideEffects = new RecallSideEffects(fakeDriver(calls), store.db, logger);
     const surfaced = {
       activated: [activatedNode('a'), activatedNode('b')],
-      items: [fusedItem('a')],
+      ...served('a', 'b'),
     };
 
     void sideEffects.onRecalled(
@@ -266,6 +317,7 @@ describe('RecallSideEffects', () => {
     await sideEffects.whenIdle();
 
     expect(listReinforcementSignals(store.db)).toEqual([]);
+    expect(listUsageEventsAfter(store.db, undefined, 10)).toEqual([]);
     expect(calls).toHaveLength(0);
   });
 
@@ -273,7 +325,7 @@ describe('RecallSideEffects', () => {
     const calls: Record<string, unknown>[] = [];
     const sideEffects = new RecallSideEffects(fakeDriver(calls, true), store.db, logger);
 
-    void sideEffects.onRecalled(completion({ items: [fusedItem('a'), fusedItem('b')] }));
+    void sideEffects.onRecalled(completion(served('a', 'b')));
 
     await expect(sideEffects.whenIdle()).resolves.toBeUndefined();
     expect(calls).toHaveLength(1);
@@ -292,15 +344,78 @@ describe('RecallSideEffects', () => {
     void sideEffects.onRecalled(
       completion({
         activated: [activatedNode('a'), activatedNode('b')],
-        items: [fusedItem('a')],
+        ...served('a', 'b'),
       }),
     );
     await sideEffects.whenIdle();
 
     expect(calls).toHaveLength(1);
+    expect(loggedWarning('recall pack-emitted append failed')).toBeDefined();
     expect(loggedWarning('recall reinforcement enqueue failed')).toMatchObject({
       sessionId: 'session-1',
       activated: 2,
     });
+  });
+});
+
+describe('what a recall emitted, recorded apart from what it retrieved', () => {
+  let dir: string;
+  let store: SqliteStore;
+  let logger: Logger;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'aion-pack-emitted-'));
+    store = new SqliteStore({ filePath: join(dir, 'aion.sqlite') });
+    logger = openLogger({ filePath: join(dir, 'aion.jsonl'), level: 'debug' });
+  });
+
+  afterEach(() => {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function driver(): Driver {
+    return {
+      executeQuery: () =>
+        Promise.resolve({
+          records: [],
+          summary: { counters: { updates: () => ({ propertiesSet: 0 }) } },
+        }),
+    } as unknown as Driver;
+  }
+
+  /**
+   * The row is written before the graph write it precedes and never waits on it, so what the
+   * caller was handed is recorded whether or not the access bump behind it lands.
+   */
+  it('records both populations inline, before the deferred graph write', () => {
+    const sideEffects = new RecallSideEffects(driver(), store.db, logger);
+
+    void sideEffects.onRecalled(
+      completion({
+        items: [fusedItem('a'), fusedItem('cut'), fusedItem('b')],
+        packMembership: new Set(['a', 'b']),
+      }),
+    );
+
+    expect(listUsageEventsAfter(store.db, undefined, 10)).toEqual([
+      {
+        id: 1,
+        kind: 'pack_emitted',
+        payload: { sessionId: 'session-1', ids: ['a', 'b'], retrieved: ['a', 'cut', 'b'] },
+        occurredAt: NOW.toISOString(),
+        recordedAt: expect.any(String),
+      },
+    ]);
+  });
+
+  it('records an emission of nothing rather than staying silent about a pack that served none', () => {
+    const sideEffects = new RecallSideEffects(driver(), store.db, logger);
+
+    void sideEffects.onRecalled(completion({ items: [fusedItem('refused')] }));
+
+    expect(listUsageEventsAfter(store.db, undefined, 10)).toMatchObject([
+      { kind: 'pack_emitted', payload: { ids: [], retrieved: ['refused'] } },
+    ]);
   });
 });
