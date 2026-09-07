@@ -1,3 +1,4 @@
+import { runCosts } from './costs.js';
 import { runDoctor } from './doctor.js';
 import { runForget } from './forget.js';
 import { runHooks } from './hooks-cmd.js';
@@ -23,6 +24,10 @@ type Command = {
 };
 
 const commands: Record<string, Command> = {
+  costs: {
+    summary: 'API token usage and estimated cost by day and surface',
+    run: (argv) => runCosts(argv),
+  },
   init: {
     summary: 'provision the substrate: neo4j, models, schema, backbone',
     run: (argv) => runInit(argv),

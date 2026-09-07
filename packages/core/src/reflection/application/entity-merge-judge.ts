@@ -46,6 +46,7 @@ export type EntityMergePair = {
 };
 
 export type EntityMergeCallOptions = {
+  readonly surface?: string;
   readonly model: string;
   readonly timeoutMs: number;
   /** The run's own abort. A shutdown must not wait out a model call with a minute left. */
@@ -167,6 +168,7 @@ async function ask(
   }
   try {
     const raw = await provider.generate({
+      surface: options.surface ?? 'entity_merge_judge',
       model: options.model,
       messages,
       schema,

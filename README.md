@@ -55,8 +55,12 @@ Whether `AION_ANTHROPIC_API_KEY` is set decides the profile. Routing resolves it
 that resolved route rather than the key again, so a key with `AION_REFLECT_PROVIDER` pinned
 back to Ollama is the local profile.
 
-**Keyed.** Both generation roles run on `claude-haiku-4-5`: recall's cue call, and reflection
-with every stage behind it, narratives included.
+**Keyed.** With both provider pins at `auto`, both generation roles run on `claude-haiku-4-5`:
+recall's cue call, and reflection with every stage behind it, narratives included.
+`AION_CUE_PROVIDER=ollama` keeps cue extraction local while reflection stays keyed and hooks
+stay enabled. That pin removes the cue surface's API spend. Its pack-quality and latency
+comparison is pending; the shipped pin default stays `auto`. [Cue pin tradeoff](docs/degradation.md#cue-extraction-pinned-local)
+states the measurement limits.
 
 **Local.** Cues run on `qwen3:1.7b` and reflection on `qwen3:8b`, both on the host Ollama.
 
@@ -132,6 +136,7 @@ does not work and says so: the CLI orchestrates the repo it lives in.
 - `init`: provision the substrate (neo4j, models, schema, backbone)
 - `hooks`: install, remove, or inspect the harness hooks, for Claude Code or Codex
 - `status`: services, models, routing, and graph counts
+- `costs [--days N]`: metered API tokens and estimated dollars by UTC day and calling surface
 - `doctor`: check every substrate invariant and name what is broken
 - `stats`: everything status shows, plus cadence, per-method pack shares, generation by route,
   the recall self-probe rates, and the maintenance loop's record

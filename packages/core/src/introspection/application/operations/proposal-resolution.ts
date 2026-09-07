@@ -111,6 +111,7 @@ type Verdict =
   | { readonly decision: 'unanswered'; readonly detail: string };
 
 type JudgeOptions = {
+  readonly surface: string;
   readonly model: string;
   readonly timeoutMs: number;
   readonly signal: AbortSignal;
@@ -118,6 +119,7 @@ type JudgeOptions = {
 
 function judgeOptions(ctx: OperationContext): JudgeOptions {
   return {
+    surface: 'proposal_resolution',
     model: ctx.config.models.reflect,
     timeoutMs: ctx.config.reflection.stageTimeoutMs,
     signal: ctx.signal,

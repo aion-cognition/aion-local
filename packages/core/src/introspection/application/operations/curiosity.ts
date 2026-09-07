@@ -137,6 +137,7 @@ async function draftQuestion(
   const deadline = deadlineFor(ctx.config.reflection.stageTimeoutMs, ctx.signal);
   try {
     const raw = await ctx.provider.generate({
+      surface: 'curiosity',
       model: ctx.config.models.reflect,
       messages: buildMessages(entity, contexts),
       schema: QUESTION_JSON_SCHEMA,

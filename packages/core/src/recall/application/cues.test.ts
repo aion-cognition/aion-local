@@ -121,6 +121,54 @@ describe('bucket weighting', () => {
 });
 
 describe('caching', () => {
+  it('expires after the configured TTL without extending it on a hit', async () => {
+    let now = 0;
+    deps = { ...deps, cache: new CueCache({ ttlMinutes: 1, now: () => now }) };
+    generate.mockResolvedValue(fullOutput());
+    await extractCues(deps, { query: 'same query' });
+    now = 59_999;
+    await extractCues(deps, { query: 'same query' });
+    expect(generate).toHaveBeenCalledTimes(1);
+    now = 60_000;
+    await extractCues(deps, { query: 'same query' });
+    expect(generate).toHaveBeenCalledTimes(2);
+  });
+
+  it('makes every call when the TTL is zero and stores no results', async () => {
+    deps = { ...deps, cache: new CueCache({ ttlMinutes: 0 }) };
+    generate.mockResolvedValue(fullOutput());
+    await extractCues(deps, { query: 'same query' });
+    await extractCues(deps, { query: 'same query' });
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(deps.cache.size).toBe(0);
+  });
+
+  it('does not collide when different input fields contain separator characters', async () => {
+    generate.mockResolvedValue(fullOutput());
+    await extractCues(deps, { query: 'a\u0002b', summary: 'c' });
+    await extractCues(deps, { query: 'a', summary: 'b\u0002c' });
+    expect(generate).toHaveBeenCalledTimes(2);
+  });
+
+  it('reuses identical model messages after surrounding whitespace is removed', async () => {
+    generate.mockResolvedValue(fullOutput());
+    await extractCues(deps, { query: ' query ', summary: ' summary ' });
+    await extractCues(deps, { query: 'query', summary: 'summary' });
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it('misses when the summary or recent turns change', async () => {
+    generate.mockResolvedValue(fullOutput());
+    await extractCues(deps, { query: 'q', summary: 's' });
+    await extractCues(deps, { query: 'q', summary: 'different' });
+    await extractCues(deps, {
+      query: 'q',
+      summary: 'different',
+      recentTurns: [{ role: 'user', text: 't' }],
+    });
+    expect(generate).toHaveBeenCalledTimes(3);
+  });
+
   it('calls the model once for two identical inputs sharing a cache', async () => {
     generate.mockResolvedValue(fullOutput());
     const input = { query: 'why did the migration deadlock' };
@@ -162,7 +210,7 @@ describe('caching', () => {
   });
 
   it('evicts the oldest entry once the cache is full (FIFO)', async () => {
-    const cache = new CueCache(2);
+    const cache = new CueCache({ maxEntries: 2 });
     deps = { ...deps, cache };
     generate.mockResolvedValue(fullOutput());
 

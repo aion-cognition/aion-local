@@ -138,6 +138,7 @@ export function descriptionFreshnessOperation(): IntrospectionOperation {
           const deadline = deadlineFor(ctx.config.reflection.stageTimeoutMs, ctx.signal);
           try {
             const raw = await ctx.provider.generate({
+              surface: 'description_freshness',
               model: ctx.config.models.reflect,
               messages: buildMessages(entity, contexts, prompt.system),
               schema: DESCRIPTION_JSON_SCHEMA,

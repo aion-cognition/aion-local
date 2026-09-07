@@ -1,4 +1,5 @@
 import {
+  ApiUsageRecorder,
   introspectionOperations,
   markLedgerApplied,
   observeHealth,
@@ -104,7 +105,10 @@ async function runOne(substrate: Substrate, name: string): Promise<number> {
     logger,
     // One forced run, so the breaker this router builds has nothing to count across; the
     // service's loop is where sharing one matters.
-    provider: new ProviderRouter({ config }).forRole('reflect'),
+    provider: new ProviderRouter({
+      config,
+      recordApiCall: new ApiUsageRecorder(db, logger).recordApiCall,
+    }).forRole('reflect'),
     health,
     now,
     signal: controller.signal,

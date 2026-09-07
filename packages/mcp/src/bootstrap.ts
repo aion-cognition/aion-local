@@ -1,5 +1,6 @@
 import {
   acceptsHookCapture,
+  ApiUsageRecorder,
   bootstrapBackbone,
   CueCache,
   deleteServedItems,
@@ -217,6 +218,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
 
     const router = new ProviderRouter({
       config,
+      recordApiCall: new ApiUsageRecorder(store.db, logger).recordApiCall,
       onGeneration: (event) => {
         logger.debug({ generation: event }, 'generation routed');
         try {
@@ -260,7 +262,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       sessions,
       provider: cueProvider,
       config,
-      cueCache: new CueCache(),
+      cueCache: new CueCache({ ttlMinutes: config.recall.cueCacheTtlMinutes }),
       logger,
       onRecalled: sideEffects.onRecalled,
     };

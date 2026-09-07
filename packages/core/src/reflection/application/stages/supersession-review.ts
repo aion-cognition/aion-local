@@ -48,6 +48,7 @@ export type ReviewPair = {
 };
 
 export type ReviewContradictionOptions = {
+  readonly surface?: string;
   readonly model: string;
   readonly timeoutMs: number;
   /** The caller's shutdown signal, composed under the call's own deadline. */
@@ -130,6 +131,7 @@ export async function reviewContradiction(
   let raw: unknown;
   try {
     raw = await provider.generate({
+      surface: options.surface ?? 'supersession_review',
       model: options.model,
       messages: buildReviewMessages(pair, systemPrompt),
       schema: REVIEW_JSON_SCHEMA,

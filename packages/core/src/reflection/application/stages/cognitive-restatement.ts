@@ -80,6 +80,7 @@ async function restatementCall(
   const deadline = deadlineFor(request.timeoutMs, ctx.signal);
   try {
     const raw = await ctx.provider.generate({
+      surface: 'cognitive_restatement',
       model: request.model,
       messages: buildRestatementMessages(request.summary, request.candidates),
       schema: buildRestatementSchema(request.candidates),

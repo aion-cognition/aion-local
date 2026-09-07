@@ -163,6 +163,24 @@ routing line, and `aion queue ls` shows the backlog the outage is building.
 episodes that failed while it was open. Nothing is lost: every episode was stored before its
 enrichment was attempted.
 
+### Cue extraction pinned local
+
+`AION_CUE_PROVIDER=ollama` keeps cue generation on the host model while reflection stays
+on Anthropic. Status reports the cue route as `pinned-local`; embeddings already run locally.
+Hooks remain enabled because their eligibility reads the reflect route.
+
+The pin removes all API charges for the `cues` surface. It does not remove local generation
+latency or embedding work. A cache hit avoids the cue call on either route.
+
+The operational pin was applied on 2026-09-06. The shipped default remains `auto`.
+The before/after day of `aion costs` and the recall-quality comparison are pending after
+metering and hardening merge. No measured dollar-per-day saving or pack-quality result is
+available yet. Earlier local cue measurements were 527-937ms warm and 2288ms cold; those
+numbers do not establish the pin's quality or its latency under current load.
+
+Compare the recall batteries and cue latency against the 2000ms evaluation target before
+changing the default. `AION_CUE_BUDGET_MS` remains the separate 8000ms hang guard.
+
 ### A role pinned to Anthropic with no key
 
 **Trigger.** `AION_CUE_PROVIDER` or `AION_REFLECT_PROVIDER` is set to `anthropic` and
@@ -427,6 +445,9 @@ Every knob below is `AION_*`-overridable; the catalog is
 
 | Knob | Default | Buys (raising it) | Costs (raising it) | Vs. spec |
 |---|---|---|---|---|
+| `AION_CUE_CACHE_TTL_MINUTES` (`recall.cueCacheTtlMinutes`) | 30 | Reuses successful cue results longer and avoids repeated generation calls. `0` disables storage and reuse. | Results can persist longer after model behavior changes. Entries expire from insertion time; the 256-entry FIFO limit still bounds memory. | Only this process shares the cache. Full request content and route identify an entry; failed extractions are not cached. |
+| `AION_ANTHROPIC_PROMPT_CACHE` (`anthropic.promptCache`) | true | Repeated eligible system prefixes use five-minute provider caching at the read rate. | Cache creation costs 1.25x ordinary input. Short prefixes do not cache; per-call schemas in `system_prompt` mode can prevent reuse. | Inert on every production surface today under shipped Haiku 4.5 prompts and defaults. [Live measurements](operations.md#prompt-cache-measurements) verified reuse with long synthetic controls in both modes. `false` disables the marker. |
+| `AION_CUE_PROVIDER` (`routing.cue`) | `auto` | `ollama` reports `pinned-local` and removes all cue generation API charges while keyed reflection and hooks continue. | Local model latency and any pack-quality difference. The comparison is pending; earlier warm/cold timings are not a current-load measurement. | The operational pin is local; the shipped default stays `auto`. |
 | `AION_CUE_BUDGET_MS` (`recall.cueBudgetMs`) | 8000 | Headroom past a cold cue-model start (measured 2288ms cold vs. 527-937ms warm), so the hang guard stays a hang guard instead of firing on ordinary recalls. | A call that has actually hung blocks recall that much longer before the ladder degrades it. | PRD §14 pins 2000. Raised to 5000 in the original build, then to 8000 after a live gate rerun busted 2000 at a measured 2030ms. |
 | `AION_EMBED_KEEP_ALIVE` (`ollama.embedKeepAlive`) | -1 | Raised to a positive number of seconds, Ollama gives the embed model's 1.2GB of unified memory back after that idle window instead of holding it resident forever. | Every reload after the window lands inside recall's embed stage, which the harness hooks await synchronously: measured against warm embeds under a second, reloads added 1 to 16 seconds, and the worst carried a session-start hook past its 10s timeout. Boot softens the first hit either way: `warmEmbedModel` (`packages/mcp/src/bootstrap.ts`) embeds one probe at service start, fail-open, so a cold Ollama pays its load there rather than on the first recall. | New; no spec pin. |
 | `AION_RECALL_MAX_EPISODES` (`recall.maxEpisodes`) | 20 | Room for a graph-traversal item to survive fusion against near-tie vector hits. The checkpoint's one traversal-reached item ranked 13th: absent from the pack at 5, 8, and 12, present at 20. | A bigger `episodes` bucket before the token budget trims it; `episodes` is the pack's largest bucket. | Whitepaper Appendix E pins 5. Checked live at 5/8/12/20; only 20 passed. |

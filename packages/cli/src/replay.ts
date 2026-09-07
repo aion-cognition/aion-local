@@ -1,4 +1,5 @@
 import {
+  ApiUsageRecorder,
   bootstrapBackbone,
   countExperiencesByVersion,
   countUsageEvents,
@@ -383,7 +384,10 @@ async function runReplay(substrate: Substrate, flags: ReplayFlags): Promise<numb
   }
 
   const backbone = await bootstrapBackbone(driver, { memberName });
-  const provider = new ProviderRouter({ config }).forRole('reflect');
+  const provider = new ProviderRouter({
+    config,
+    recordApiCall: new ApiUsageRecorder(db, logger).recordApiCall,
+  }).forRole('reflect');
   const deps: ReplayDeps = {
     driver,
     db,

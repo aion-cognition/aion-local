@@ -1,4 +1,5 @@
 import {
+  ApiUsageRecorder,
   LaneAssigner,
   ProviderRouter,
   SessionManager,
@@ -39,7 +40,10 @@ export function lifecycleIntakeDeps(target: LifecycleTarget): ReflectionIntakeDe
       workspaceId: target.workspaceId,
     }),
     // Intake only embeds, so the role it borrows changes nothing about where its calls go.
-    provider: new ProviderRouter({ config: target.config }).forRole('reflect'),
+    provider: new ProviderRouter({
+      config: target.config,
+      recordApiCall: new ApiUsageRecorder(target.db, target.logger).recordApiCall,
+    }).forRole('reflect'),
     logger: target.logger,
     entropyThreshold: target.config.redaction.entropyThreshold,
     lanes: new LaneAssigner(target.config.lanes),

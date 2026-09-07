@@ -83,6 +83,7 @@ export type ContradictionPair = {
 };
 
 export type JudgeContradictionOptions = {
+  readonly surface?: string;
   readonly model: string;
   readonly timeoutMs: number;
   /** The caller's shutdown signal, composed under the call's own deadline. */
@@ -114,6 +115,7 @@ export async function judgeContradiction(
   let raw: unknown;
   try {
     raw = await provider.generate({
+      surface: options.surface ?? 'supersession_judge',
       model: options.model,
       messages: buildMessages(
         pair.priorLabel,

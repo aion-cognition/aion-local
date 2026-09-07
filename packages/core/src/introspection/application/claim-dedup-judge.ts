@@ -130,6 +130,7 @@ export async function judgeClaimDedup(
   let raw: unknown;
   try {
     raw = await provider.generate({
+      surface: 'claim_dedup_judge',
       model: options.model,
       messages: buildDetectMessages(pair),
       schema: DETECT_JSON_SCHEMA,
@@ -177,6 +178,7 @@ export async function reviewClaimDedup(
   let raw: unknown;
   try {
     raw = await provider.generate({
+      surface: 'claim_dedup_review',
       model: options.model,
       messages: buildReviewMessages(pair),
       schema: REVIEW_JSON_SCHEMA,

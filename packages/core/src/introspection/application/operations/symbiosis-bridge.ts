@@ -140,6 +140,7 @@ async function proposeBridgeText(
   const deadline = deadlineFor(ctx.config.reflection.stageTimeoutMs, ctx.signal);
   try {
     const raw = await ctx.provider.generate({
+      surface: 'symbiosis_bridge',
       model: ctx.config.models.reflect,
       messages: buildMessages(pair, closest),
       schema: BRIDGE_JSON_SCHEMA,
