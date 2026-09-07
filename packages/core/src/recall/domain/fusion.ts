@@ -12,7 +12,6 @@ import {
 import { applyClusterCap, mmrOrder } from './ranking.js';
 import type { Currency, SupersededBy } from '../../infrastructure/graph/read-modes.js';
 import type { Vector } from '../../infrastructure/providers/types.js';
-import { hashContent } from '../../reflection/domain/content.js';
 
 /**
  * Each retrieval leg hands over its own ranked list; this module turns them into one ordered
@@ -239,25 +238,6 @@ function compareFused(left: FusedItem, right: FusedItem): number {
 }
 
 /**
- * Dedupe by content hash before packaging: two node ids carrying the same text are one
- * memory to the reader. The higher-ranked one survives with its own rationale; nothing
- * merges, because a rationale that named two paths would explain neither.
- */
-function dedupeByContent(items: readonly FusedItem[]): FusedItem[] {
-  const seen = new Set<string>();
-  const kept: FusedItem[] = [];
-  for (const item of items) {
-    const hash = hashContent(item.content);
-    if (seen.has(hash)) {
-      continue;
-    }
-    seen.add(hash);
-    kept.push(item);
-  }
-  return kept;
-}
-
-/**
  * Ranks fuse reciprocally so the legs need no score calibration between them, and each leg's
  * contribution is scaled by its weight (0.4 vector, 0.3 keyword, 0.3 graph). RRF decides the
  * shape, the weights decide how much each leg is trusted.
@@ -398,9 +378,11 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
   }
 
   items.sort(compareFused);
-  const deduped = dedupeByContent(items);
+  // Merging by id above is the whole of the identity question fusion can answer. Two ids carrying
+  // one sentence are a decision about standing, subject identity and the graph's own key, and
+  // none of those are here: the pack fold makes it, once the provenance read has come back.
   const capped = applyClusterCap(
-    deduped,
+    items,
     options.clusterCap,
     options.vectors,
     options.clusterCosineThreshold,
@@ -417,8 +399,10 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
       droppedBelowFloor,
       droppedUnmeasured,
       droppedUnmeasuredArrival,
-      droppedDuplicateContent: items.length - deduped.length,
-      droppedNearDuplicate: deduped.length - capped.length,
+      // Nothing is dropped here for saying the same thing: the wire field stays so a reader of an
+      // older pack can compare, and it reports the zero it now always is.
+      droppedDuplicateContent: 0,
+      droppedNearDuplicate: items.length - capped.length,
       anchored,
       typedAdmitted,
     },

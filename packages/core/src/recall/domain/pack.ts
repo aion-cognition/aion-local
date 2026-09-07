@@ -29,7 +29,6 @@ import {
 } from './pack-item.js';
 import { emptyPackBody, honestyNote } from './pack-notes.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
-import { hashContent } from '../../reflection/domain/content.js';
 
 /**
  * The ranked candidate set becomes the MemoryPack: routed to buckets, capped per bucket, cut
@@ -172,7 +171,6 @@ function select(input: AssemblePackInput, note: string | undefined): Assembled {
   let folded = 0;
   const packedEpisodes = new Set<string>();
   const packedIds = new Set<string>();
-  const packedContent = new Set<string>();
   /** First packed item to claim each root, which is what a later sibling points back at. */
   const rootOwners = new Map<string, string>();
   // The note and the standing legend are charged with their own blank-line separators: both are
@@ -259,6 +257,11 @@ function select(input: AssemblePackInput, note: string | undefined): Assembled {
 
   /** Places the item in the named bucket when the cap and the budget still leave room for it. */
   function accept(item: FusedItem, bucket: PackBucket, gloss: boolean): void {
+    // One node prints once, whichever population reached it. This is identity and not a fold: it
+    // is the same memory under the same id, so there is nothing here for a reader to compare.
+    if (packedIds.has(item.id)) {
+      return;
+    }
     const held = selection.get(bucket) ?? [];
     if (held.length >= input.caps[bucket]) {
       return;
@@ -292,7 +295,6 @@ function select(input: AssemblePackInput, note: string | undefined): Assembled {
       glosses += 1;
     }
     packedIds.add(item.id);
-    packedContent.add(hashContent(item.content));
     // Claimed only once the item is actually in the pack: an item the budget cut is not a
     // witness anyone read, so it must not make the next item look like a second one.
     for (const ancestor of overlap) {
@@ -340,15 +342,13 @@ function select(input: AssemblePackInput, note: string | undefined): Assembled {
   }
 
   /**
-   * Both stages that run beside fusion rather than inside it are where a pack could hold the
-   * same memory twice. Each already excludes every id the run produced before it; this catches
-   * the other half, a distinct node whose text says the same thing.
+   * The two stages that run beside fusion rather than inside it. Each already excludes every id
+   * the run produced before it, and `accept` holds the same guard for all three populations, so
+   * a node reached twice prints once. A distinct node whose text says the same thing is left to
+   * the fold, which is the one decision that can see standing and the substrate's own key.
    */
   function placeBeside(item: FusedItem, bucket: PackBucket): void {
     if (withheld(item.id)) {
-      return;
-    }
-    if (packedIds.has(item.id) || packedContent.has(hashContent(item.content))) {
       return;
     }
     accept(item, bucket, false);

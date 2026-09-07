@@ -176,9 +176,40 @@ describe('a resonant discovery', () => {
     expect(pack.resonant?.[0]?.rank).toBe(2);
   });
 
-  it('is dropped when the first pass already packed the same memory under another id', () => {
+  /**
+   * Two ids saying one thing are two records until something that can see standing and the
+   * substrate's own key says otherwise, and the fold is where that is decided. Assembly reads
+   * `foldable`, so a run that nominated nothing serves both.
+   */
+  it('is served when the first pass packed the same words under another id', () => {
     const direct = {
       id: 'd1',
+      labels: ['Episode', 'Memory', 'AionNode'],
+      content: 'the same memory, twice over',
+      rationale: { method: 'vector' as const, score: 0.61 },
+      relevance: 0.61,
+      measured: 0.61,
+      score: 0.02,
+      currency: 'current' as const,
+    };
+
+    const pack = assemblePack({
+      items: [direct],
+      admission: ADMISSION,
+      caps: CAPS,
+      tokenBudget: 1200,
+      cues: CUES,
+      timings: TIMINGS,
+      resonant: [resonantItem(candidate('r1', 'the same memory, twice over'), 0.9)],
+    });
+
+    expect(pack.resonant?.map((packed) => packed.id)).toEqual(['r1']);
+    expect(MemoryPackSchema.parse(pack).episodes).toHaveLength(1);
+  });
+
+  it('is dropped when the first pass already packed that very node', () => {
+    const direct = {
+      id: 'r1',
       labels: ['Episode', 'Memory', 'AionNode'],
       content: 'the same memory, twice over',
       rationale: { method: 'vector' as const, score: 0.61 },

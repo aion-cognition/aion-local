@@ -72,8 +72,13 @@ describe('rationale', () => {
   });
 });
 
-describe('content dedupe', () => {
-  it('keeps the higher-ranked of two node ids carrying the same text', () => {
+describe('two node ids carrying one sentence', () => {
+  /**
+   * Whether they are one memory is a question about standing, subject identity and the graph's
+   * own key, and none of those are here. Fusion carries both through and the pack fold decides,
+   * once the provenance read has answered.
+   */
+  it('keeps both, since ranking cannot tell a repeat from a second record', () => {
     const fused = items([
       list('vector', [
         candidate('first', { content: 'we keyed the sync on id_slug' }),
@@ -81,7 +86,23 @@ describe('content dedupe', () => {
       ]),
     ]);
 
+    expect(ids(fused)).toEqual(['first', 'second']);
+  });
+
+  it('still merges one id that two legs found, so it is scored once', () => {
+    const fused = items([
+      list('vector', [candidate('first', { content: 'we keyed the sync on id_slug' })]),
+      list('bm25', [
+        candidate('first', {
+          method: 'bm25',
+          relevance: 0.5,
+          content: 'we keyed the sync on id_slug',
+        }),
+      ]),
+    ]);
+
     expect(ids(fused)).toEqual(['first']);
+    expect(fused[0]?.evidence).toHaveLength(2);
   });
 });
 
@@ -176,7 +197,7 @@ describe('near-duplicate crowding cap', () => {
     expect(ids(fused)).toEqual(['burst-0', 'burst-1']);
   });
 
-  it('counts what the cap declined, distinct from exact-content dedupe', () => {
+  it('counts what the cap declined, which is the only loss left to count here', () => {
     const result = fuse([list('vector', BURST_CLUSTER)], RRF);
     expect(result.admission.admitted).toBe(2);
     expect(result.admission.droppedNearDuplicate).toBe(18);

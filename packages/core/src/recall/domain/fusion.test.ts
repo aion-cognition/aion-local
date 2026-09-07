@@ -313,14 +313,16 @@ describe('the admission report', () => {
       { ...RRF, admission: CALIBRATED },
     );
 
+    // The twin says what `kept` says and is admitted beside it: which of the two a reader needs
+    // is decided later, by the fold, against standing and the substrate's own key.
     expect(result.admission).toEqual({
       policy: CALIBRATED,
       considered: 4,
-      admitted: 1,
+      admitted: 2,
       droppedBelowFloor: 1,
       droppedUnmeasured: 1,
       droppedUnmeasuredArrival: 1,
-      droppedDuplicateContent: 1,
+      droppedDuplicateContent: 0,
       droppedNearDuplicate: 0,
       anchored: true,
       typedAdmitted: 0,

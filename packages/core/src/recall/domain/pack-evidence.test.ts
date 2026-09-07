@@ -1,5 +1,9 @@
+import type { RelatedClaim } from '@aion/protocol';
 import { describe, expect, it } from 'vitest';
 
+import { foldableClaims } from './pack-duplicates.js';
+import { emittedPackIds } from './session-dedup.js';
+import { candidate, ids, items, list } from './test-support/fusion.fixture.js';
 import { assemble, CAPS, item } from './test-support/pack.fixture.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 
@@ -96,5 +100,138 @@ describe('a source and its own extracted claim in one pack', () => {
     expect(pack.episodes).toBeUndefined();
     expect(pack.facts?.[0]?.derivation?.shared_with).toBeUndefined();
     expect(pack.rendered_text).not.toContain('not independent corroboration');
+  });
+});
+
+/**
+ * Two node ids carrying one sentence are not one memory. A quotation and a model's reading of it
+ * say the same words with different authority behind them, and a record somebody corrected or
+ * confirmed says the same words and means something else. Only a decision that can see standing,
+ * subject identity and the graph's own key can tell a repeat from a second record, so text alone
+ * decides nothing before that decision runs.
+ */
+describe('two ids that carry one sentence', () => {
+  const TEXT = 'The queue runs on Valkey.';
+  const CLAIM_LABELS_FULL = ['Insight', 'Memory', 'AionNode'];
+  const NO_CLAIMS: ReadonlyMap<string, RelatedClaim> = new Map();
+
+  const CORRECTION = { by: 'correction-episode', at: new Date('2026-09-01T08:00:00.000Z') };
+  const CONFIRMATION = {
+    by: 'Ryan Huber',
+    at: new Date('2026-09-01T10:00:00.000Z'),
+    evidence: 'design review 42',
+  };
+
+  it('keeps a recorded utterance and an extracted reading of it apart through fusion', () => {
+    const fused = items([
+      list('vector', [
+        candidate('utterance', { labels: ['Turn'], content: TEXT }),
+        candidate('interpretation', { labels: ['Insight'], content: TEXT }),
+      ]),
+    ]);
+
+    expect(ids(fused)).toEqual(['utterance', 'interpretation']);
+  });
+
+  it('still merges one id two retrieval legs found into a single candidate', () => {
+    const fused = items([
+      list('vector', [candidate('one', { content: TEXT })]),
+      list('bm25', [candidate('one', { method: 'bm25', relevance: 0.5, content: TEXT })]),
+    ]);
+
+    expect(ids(fused)).toEqual(['one']);
+    expect(fused[0]?.evidence).toHaveLength(2);
+  });
+
+  it('keeps a corrected record whose text equals one the query already answered with', () => {
+    const first = item('first', { labels: CLAIM_LABELS_FULL, content: TEXT });
+    const corrected = item('corrected', { labels: CLAIM_LABELS_FULL, content: TEXT });
+    const provenance = new Map<string, ItemProvenance>([
+      ['first', { roots: ['root-a'], complete: true }],
+      ['corrected', { roots: ['root-b'], complete: true, claimedCorrection: CORRECTION }],
+    ]);
+    const foldable = foldableClaims({
+      items: [first, corrected],
+      pairs: [{ left: first.id, right: corrected.id }],
+      provenance,
+      relatedClaims: NO_CLAIMS,
+    });
+
+    // The eligibility policy already refuses this pair, which is what makes an earlier text-only
+    // subtraction of the same two records a decision nothing checked.
+    expect(foldable.size).toBe(0);
+    const ranked = assemble([first, corrected], { provenance, foldable });
+    expect([...emittedPackIds(ranked)]).toEqual(['first', 'corrected']);
+    const beside = assemble([first], { resonant: [corrected], provenance, foldable });
+    expect([...emittedPackIds(beside)]).toContain('corrected');
+    const volunteered = assemble([first], { intentions: [corrected], provenance, foldable });
+    expect([...emittedPackIds(volunteered)]).toContain('corrected');
+  });
+
+  it('keeps a confirmed interpretation beside the identical recorded utterance', () => {
+    const utterance = item('utterance', { labels: ['Turn', 'Memory', 'AionNode'], content: TEXT });
+    const confirmed = item('interpretation', { labels: CLAIM_LABELS_FULL, content: TEXT });
+    const provenance = new Map<string, ItemProvenance>([
+      [utterance.id, { roots: ['root-a'], complete: true, recordedRole: 'assistant' }],
+      [confirmed.id, { roots: ['root-b'], complete: true, confirmation: CONFIRMATION }],
+    ]);
+
+    const pack = assemble([utterance], { resonant: [confirmed], provenance });
+
+    expect(pack.rendered_text).toContain('design review 42');
+  });
+
+  it('still folds a pair the substrate keys and reads as one claim', () => {
+    const first = item('first', { labels: CLAIM_LABELS_FULL, content: TEXT });
+    const second = item('second', {
+      labels: CLAIM_LABELS_FULL,
+      content: 'the queue runs on valkey',
+    });
+    const provenance = new Map<string, ItemProvenance>([
+      ['first', { roots: ['first'], complete: true }],
+      ['second', { roots: ['second'], complete: true }],
+    ]);
+    const foldable = foldableClaims({
+      items: [first, second],
+      pairs: [{ left: first.id, right: second.id }],
+      provenance,
+      relatedClaims: NO_CLAIMS,
+    });
+
+    const pack = assemble([first, second], { provenance, foldable });
+
+    expect(pack.facts?.map((entry) => entry.id)).toEqual(['first']);
+    expect(pack.metadata.suppressed_duplicates).toBe(1);
+  });
+
+  it('folds nothing when the provenance read answered for only one of the two', () => {
+    const first = item('first', { labels: CLAIM_LABELS_FULL, content: TEXT });
+    const second = item('second', { labels: CLAIM_LABELS_FULL, content: TEXT });
+    const provenance = new Map<string, ItemProvenance>([
+      ['first', { roots: ['first'], complete: true }],
+    ]);
+    const foldable = foldableClaims({
+      items: [first, second],
+      pairs: [{ left: first.id, right: second.id }],
+      provenance,
+      relatedClaims: NO_CLAIMS,
+    });
+
+    expect(foldable.size).toBe(0);
+    expect(assemble([first, second], { provenance, foldable }).facts?.map((e) => e.id)).toEqual([
+      'first',
+      'second',
+    ]);
+  });
+
+  /** The knob turns the fold off; it never licenses printing one node twice. */
+  it('prints one node once when duplicate suppression is off', () => {
+    const pack = assemble([item('one', { content: TEXT })], {
+      resonant: [item('one', { content: TEXT })],
+    });
+
+    expect(pack.episodes?.map((entry) => entry.id)).toEqual(['one']);
+    expect(pack.resonant).toBeUndefined();
+    expect(pack.metadata.suppressed_duplicates).toBeUndefined();
   });
 });

@@ -3,6 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { CueCache } from './cues.js';
+import { handleRecall, type RecallCompletion, type RecallDeps } from './recall.js';
+import { RecallSideEffects } from './side-effects.js';
+import { waitFor } from './test-support/wait-for.fixture.js';
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
 import { supersede, writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
 import {
   CLAIM_ASPECT_PROPERTY,
@@ -16,13 +22,18 @@ import {
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
 import { restatedClaims } from '../../infrastructure/graph/near-duplicate-queries.js';
 import { knewAt, withCurrency } from '../../infrastructure/graph/read-modes.js';
+import { vectorSeeds } from '../../infrastructure/graph/seed-queries.js';
 import { writeSemanticRelationship } from '../../infrastructure/graph/semantic-relationship-queries.js';
+import { accessMetadata } from '../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
   type Neo4jHarness,
 } from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
+import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
+import type { Provider, Vector } from '../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { SessionManager } from '../../session/session-manager.js';
 import { foldableClaims } from '../domain/pack-duplicates.js';
 import { assemble, item } from '../domain/test-support/pack.fixture.js';
 
@@ -45,9 +56,36 @@ const OTHER_SUBJECT = 'entity-token-budget';
 const ASPECT = 'retry ceiling';
 const OTHER_ASPECT = 'owning team';
 
+/** The keyed pair the recall case reads back, worded so nothing else in the file shares it. */
+const RECALL_SUBJECT = 'entity-dispatcher';
+const RECALL_ASPECT = 'drain day';
+const RECALL_FIRST = 'recall-fold-first';
+const RECALL_SECOND = 'recall-fold-second';
+const RECALL_CUE = 'dispatcher';
+const RECALL_SESSION = 'near-duplicate-recall';
+
 let harness: Neo4jHarness;
 let db: SqliteHandle;
 let dataDir: string;
+let logger: Logger;
+let sideEffects: RecallSideEffects;
+let deps: RecallDeps;
+
+/** Only the recall pair carries a content vector, so the pack that comes back is those two. */
+function unit(axis: number): Vector {
+  const raw = new Array<number>(EMBED_DIMENSION).fill(0.001);
+  raw[axis] = 0.99;
+  const norm = Math.sqrt(raw.reduce((sum, value) => sum + value * value, 0));
+  return raw.map((value) => value / norm);
+}
+
+const RECALL_VECTOR = unit(0);
+
+const provider: Provider = {
+  embed: (texts) => Promise.resolve(texts.map(() => RECALL_VECTOR)),
+  generate: () =>
+    Promise.resolve({ query_cues: [RECALL_CUE], summary_cues: [], recent_turn_cues: [] }),
+};
 
 type ClaimInput = {
   readonly id: string;
@@ -56,6 +94,7 @@ type ClaimInput = {
   readonly aspect?: string;
   readonly keyed?: false;
   readonly at?: Date;
+  readonly vector?: Vector;
 };
 
 async function writeClaim(input: ClaimInput): Promise<void> {
@@ -72,6 +111,7 @@ async function writeClaim(input: ClaimInput): Promise<void> {
         : { [TEXT_NORM_PROPERTY]: normalizeCognitiveText(input.text) }),
       ...(input.keyed === false ? {} : { [CLAIM_SUBJECT_PROPERTY]: input.subject ?? SUBJECT }),
       ...(input.keyed === false ? {} : { [CLAIM_ASPECT_PROPERTY]: input.aspect ?? ASPECT }),
+      ...(input.vector === undefined ? {} : { content_vec: [...input.vector] }),
     },
   });
 }
@@ -179,6 +219,51 @@ beforeAll(async () => {
     confidence: 1,
     now: LATER,
   });
+
+  await writeClaim({
+    id: RECALL_FIRST,
+    text: 'The dispatcher drains on Tuesdays.',
+    subject: RECALL_SUBJECT,
+    aspect: RECALL_ASPECT,
+    vector: RECALL_VECTOR,
+  });
+  await writeClaim({
+    id: RECALL_SECOND,
+    text: '  the Dispatcher   drains on tuesdays. ',
+    subject: RECALL_SUBJECT,
+    aspect: RECALL_ASPECT,
+    at: LATER,
+    vector: RECALL_VECTOR,
+  });
+
+  logger = openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'debug' });
+  const backbone = await bootstrapBackbone(harness.driver, { memberName: 'Ryan Huber' });
+  sideEffects = new RecallSideEffects(harness.driver, db, logger);
+  deps = {
+    driver: harness.driver,
+    db,
+    sessions: new SessionManager(harness.driver, {
+      memberId: backbone.member.id,
+      workspaceId: backbone.workspace.id,
+    }),
+    provider,
+    config: {
+      ...DEFAULTS,
+      models: { ...DEFAULTS.models, embedDimension: EMBED_DIMENSION },
+    },
+    cueCache: new CueCache(),
+    logger,
+  };
+
+  await waitFor('the vector index to cover the recall pair', async () => {
+    const rows = await vectorSeeds(harness.driver, {
+      vector: RECALL_VECTOR,
+      limit: 10,
+      mode: withCurrency(),
+    });
+    const found = new Set(rows.map((row) => row.id));
+    return found.has(RECALL_FIRST) && found.has(RECALL_SECOND);
+  });
 }, 300_000);
 
 afterAll(async () => {
@@ -262,5 +347,39 @@ describe('a contradictory pair beside a third record of the same sentence', () =
 
     expect(pack.facts?.map((entry) => entry.id)).toEqual(['clash-c', 'clash-a', 'clash-b']);
     expect(pack.metadata.suppressed_duplicates).toBeUndefined();
+  });
+});
+
+/**
+ * The whole path, from the substrate's own key to what the caller was handed. Cognition still
+ * sees both records: the fold is a pack decision, so both ids stay in the retrieved set, and only
+ * the record the reader actually got is charged an exposure.
+ */
+describe('a keyed pair the whole recall path folds', () => {
+  it('keeps both ids in telemetry and stamps only the record it served', async () => {
+    let completion: RecallCompletion | undefined;
+    const pack = await handleRecall(
+      {
+        ...deps,
+        onRecalled: (event) => {
+          completion = event;
+          return sideEffects.onRecalled(event);
+        },
+      },
+      { query: 'when does the dispatcher drain' },
+      { identity: RECALL_SESSION, now: LATER },
+    );
+    await sideEffects.whenIdle();
+
+    const served = (pack.facts ?? []).map((entry) => entry.id);
+    const withheld = served.includes(RECALL_FIRST) ? RECALL_SECOND : RECALL_FIRST;
+    expect(served).toHaveLength(1);
+    expect([RECALL_FIRST, RECALL_SECOND]).toContain(served[0]);
+    expect(pack.metadata.suppressed_duplicates).toBe(1);
+
+    expect(completion?.retrieved).toEqual(expect.arrayContaining([RECALL_FIRST, RECALL_SECOND]));
+    expect([...(completion?.emitted ?? [])]).toEqual(served);
+    expect((await accessMetadata(harness.driver, served[0] ?? '')).accessCount).toBe(1);
+    expect(await accessMetadata(harness.driver, withheld)).toEqual({});
   });
 });
