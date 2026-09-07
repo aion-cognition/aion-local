@@ -1,15 +1,17 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { CueCache } from './cues.js';
 import { handleRecall, type RecallDeps } from './recall.js';
+import { RecallSideEffects } from './side-effects.js';
 import { waitFor } from './test-support/wait-for.fixture.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
 import { supersede, writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
+import * as provenanceQueries from '../../infrastructure/graph/claim-provenance-queries.js';
 import {
   normalizeCognitiveText,
   TEXT_NORM_PROPERTY,
@@ -18,6 +20,7 @@ import { upsertEdge } from '../../infrastructure/graph/edges.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
 import { withCurrency } from '../../infrastructure/graph/read-modes.js';
 import { vectorSeeds } from '../../infrastructure/graph/seed-queries.js';
+import { accessMetadata } from '../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
@@ -26,6 +29,8 @@ import {
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider, StructuredRequest, Vector } from '../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { handleReflection } from '../../reflection/application/intake.js';
+import { LaneAssigner } from '../../reflection/application/lanes.js';
 import { SessionManager } from '../../session/session-manager.js';
 
 /**
@@ -86,8 +91,31 @@ function queryOf(request: StructuredRequest): string {
   return match?.[1]?.trim() ?? '';
 }
 
+/**
+ * Each pushed observation opens with its own marker and gets its own axis. The near-duplicate cap
+ * keys on the first sixteen characters and on the cosine between content vectors, so observations
+ * that opened alike or embedded alike would be one cluster and the cap would drop all but two.
+ */
+const MARKER_AXES: Readonly<Record<string, number>> = {
+  epsilonward: 2,
+  zetaward: 3,
+  etaward: 4,
+  thetaward: 6,
+  iotaward: 1,
+};
+
+function vectorFor(text: string): Vector {
+  const lowered = text.toLowerCase();
+  for (const [marker, axis] of Object.entries(MARKER_AXES)) {
+    if (lowered.includes(marker)) {
+      return unit(axis);
+    }
+  }
+  return CUE_VECTOR;
+}
+
 const provider: Provider = {
-  embed: (texts) => Promise.resolve(texts.map(() => CUE_VECTOR)),
+  embed: (texts) => Promise.resolve(texts.map(vectorFor)),
   generate: (request) =>
     Promise.resolve({
       query_cues: [queryOf(request)],
@@ -108,7 +136,66 @@ let harness: Neo4jHarness;
 let db: SqliteHandle;
 let dataDir: string;
 let logger: Logger;
+let sideEffects: RecallSideEffects;
 let deps: RecallDeps;
+
+type StatedReferences = {
+  readonly supersedes?: readonly string[];
+  readonly confirmations?: readonly {
+    readonly target: string;
+    readonly by: string;
+    readonly evidence: string;
+  }[];
+};
+
+async function push(
+  observation: string,
+  identity: string,
+  provenance?: StatedReferences,
+): Promise<string> {
+  const result = await handleReflection(
+    {
+      driver: harness.driver,
+      db,
+      sessions: deps.sessions,
+      provider,
+      logger,
+      entropyThreshold: DEFAULTS.redaction.entropyThreshold,
+      lanes: new LaneAssigner(DEFAULTS.lanes),
+      workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+      acceptHookCapture: true,
+    },
+    { observations: [observation], ...(provenance === undefined ? {} : { provenance }) },
+    { identity, now: SEEDED_AT },
+  );
+  return result.episode_id;
+}
+
+/** The same query with both serving-layer subtractions off, so retrieval alone answers. */
+async function unfilteredRecall(identity: string) {
+  return handleRecall(
+    {
+      ...deps,
+      config: {
+        ...deps.config,
+        recall: { ...deps.config.recall, ownSessionFilter: false, sessionDedup: false },
+      },
+    },
+    { query: QUERY },
+    { identity, now: RECALLED_AT },
+  );
+}
+
+async function indexed(id: string): Promise<void> {
+  await waitFor(`the vector index to cover ${id}`, async () => {
+    const rows = await vectorSeeds(harness.driver, {
+      vector: CUE_VECTOR,
+      limit: 80,
+      mode: withCurrency(),
+    });
+    return rows.some((row) => row.id === id);
+  });
+}
 
 async function writeEpisode(id: string, text: string, vector: Vector): Promise<void> {
   await writeStampedNode(harness.driver, {
@@ -161,6 +248,7 @@ beforeAll(async () => {
   await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
 
   const backbone = await bootstrapBackbone(harness.driver, { memberName: MEMBER_NAME });
+  sideEffects = new RecallSideEffects(harness.driver, db, logger);
   deps = {
     driver: harness.driver,
     db,
@@ -172,6 +260,7 @@ beforeAll(async () => {
     config: config(),
     cueCache: new CueCache(),
     logger,
+    onRecalled: sideEffects.onRecalled,
   };
 
   await writeEpisode(TURN_EPISODE_ID, 'an unrelated capture', OFF_TOPIC);
@@ -255,5 +344,92 @@ describe('a related claim that changes after the turn was served', () => {
     const third = await recall(identity);
     expect(turnOf(third)).toBeUndefined();
     expect(third.metadata.suppressed_repeats ?? 0).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * A memory the session itself wrote, that somebody else has since put evidence beside. The
+ * conversation holds every word of its own observation and none of the evidence, and an origin
+ * subtraction that reads only where a memory came from withholds both.
+ */
+describe('own-session memories after new external evidence', () => {
+  const CONFIRMER = 'Ryan Huber';
+
+  it('serves an own episode once another session states a correction', async () => {
+    const identity = 'evidence-own-correction';
+    const id = await push('epsilonward a unique queue drain observation', identity);
+    await indexed(id);
+
+    const before = await recall(identity);
+    expect(before.episodes?.some((entry) => entry.id === id) ?? false).toBe(false);
+
+    await push('zetaward an external correction of that observation', 'evidence-other-correction', {
+      supersedes: [id],
+    });
+
+    // Retrieval and the graph attachment both work, so the origin subtraction is the only thing
+    // that can be removing the episode from the reader's own pack.
+    const controlled = await unfilteredRecall(identity);
+    expect(controlled.episodes?.find((entry) => entry.id === id)?.claimed_correction).toBeDefined();
+
+    const after = await recall(identity);
+    expect(after.episodes?.find((entry) => entry.id === id)?.claimed_correction).toBeDefined();
+    await sideEffects.whenIdle();
+    const exposed = await accessMetadata(harness.driver, id);
+
+    // Nothing moved after that delivery, so the fingerprint holds it and the session is charged
+    // nothing further for a memory it was not handed again.
+    const again = await recall(identity);
+    expect(again.episodes?.some((entry) => entry.id === id) ?? false).toBe(false);
+    await sideEffects.whenIdle();
+    expect((await accessMetadata(harness.driver, id)).accessCount).toBe(exposed.accessCount);
+  });
+
+  it('serves an own episode once another session confirms it', async () => {
+    const identity = 'evidence-own-confirmation';
+    const id = await push('etaward a unique queue observation for confirmation', identity);
+    await indexed(id);
+
+    const before = await recall(identity);
+    expect(before.episodes?.some((entry) => entry.id === id) ?? false).toBe(false);
+
+    await push('thetaward an external confirmation', 'evidence-other-confirmation', {
+      confirmations: [{ target: id, by: CONFIRMER, evidence: 'external review 555' }],
+    });
+
+    const controlled = await unfilteredRecall(identity);
+    expect(
+      controlled.episodes?.find((entry) => entry.id === id)?.standing?.confirmed,
+    ).toBeDefined();
+
+    const after = await recall(identity);
+    expect(after.episodes?.find((entry) => entry.id === id)?.standing?.confirmed).toBeDefined();
+
+    const again = await recall(identity);
+    expect(again.episodes?.some((entry) => entry.id === id) ?? false).toBe(false);
+  });
+
+  /**
+   * The read that says whether anybody put evidence beside a memory is the same read that can
+   * fail. A larger pack during that failure is the cheaper mistake, since the alternative asserts
+   * the session already knows what nothing could answer for.
+   */
+  it('serves an own episode when the provenance read answers for nothing', async () => {
+    const identity = 'evidence-own-outage';
+    const id = await push('iotaward an observation nobody else has touched', identity);
+    await indexed(id);
+
+    const before = await recall(identity);
+    expect(before.episodes?.some((entry) => entry.id === id) ?? false).toBe(false);
+
+    const spy = vi
+      .spyOn(provenanceQueries, 'fetchClaimProvenance')
+      .mockRejectedValueOnce(new Error('injected temporary graph error'));
+    try {
+      const during = await recall(identity);
+      expect(during.episodes?.some((entry) => entry.id === id) ?? false).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

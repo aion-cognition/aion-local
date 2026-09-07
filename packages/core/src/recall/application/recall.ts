@@ -354,7 +354,12 @@ export async function handleRecall(
   // Origin decides first, and what it withholds leaves no served row: the session never read
   // those items, so a later recall must be free to offer them the moment they stop being its own
   // record. Dedup then judges what is left.
-  const suppressedOwn = suppressedOwnSession({ items: ranked, origins, relatedClaims: claims });
+  const suppressedOwn = suppressedOwnSession({
+    items: ranked,
+    origins,
+    relatedClaims: claims,
+    provenance,
+  });
   const suppressed = dedup
     ? suppressedRepeats(
         ranked.filter((item) => !suppressedOwn.has(item.id)),

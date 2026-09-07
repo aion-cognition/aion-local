@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { FusedItem } from './fusion.js';
 import { suppressedOwnSession } from './session-origin.js';
+import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 import type { ItemOrigin } from '../../infrastructure/graph/origin-queries.js';
 
 type ItemOverrides = {
@@ -47,12 +48,18 @@ function origins(entries: Readonly<Record<string, ItemOrigin>>): ReadonlyMap<str
 
 const NO_CLAIMS: ReadonlyMap<string, RelatedClaim> = new Map();
 
+/** A read that answered for every item and found nothing beyond its own capture. */
+function answered(items: readonly FusedItem[]): ReadonlyMap<string, ItemProvenance> {
+  return new Map(items.map((entry) => [entry.id, { roots: [entry.id], complete: true }]));
+}
+
 function suppress(
   items: readonly FusedItem[],
   resolved: ReadonlyMap<string, ItemOrigin>,
   relatedClaims: ReadonlyMap<string, RelatedClaim> = NO_CLAIMS,
+  provenance: ReadonlyMap<string, ItemProvenance> = answered(items),
 ): readonly string[] {
-  return [...suppressedOwnSession({ items, origins: resolved, relatedClaims })];
+  return [...suppressedOwnSession({ items, origins: resolved, relatedClaims, provenance })];
 }
 
 describe('memories a session made out of its own turns', () => {
@@ -126,6 +133,52 @@ describe('a memory the substrate corrected after the session stored it', () => {
     const claims = new Map([['t1', { id: 'c9', text: 'polling came back' }]]);
 
     expect(suppress(items, origins({ t1: OWN, t2: OWN }), claims)).toEqual(['t2']);
+  });
+});
+
+/**
+ * The session wrote the memory and somebody else has since put evidence against it. That
+ * evidence is the part the conversation does not hold, and an origin subtraction that reads only
+ * where the memory came from hides it: the session never reads the correction, and nothing
+ * downstream can restore it, because a withheld own memory leaves no served row either.
+ */
+describe('a memory of its own that the graph now holds evidence about', () => {
+  const OWN_ITEM = item('c1');
+
+  function record(entry: Partial<ItemProvenance>): ReadonlyMap<string, ItemProvenance> {
+    return new Map([['c1', { roots: ['c1'], complete: true, ...entry }]]);
+  }
+
+  it('serves a memory another session stated a correction against', () => {
+    const corrected = record({
+      claimedCorrection: { by: 'ep-9', at: new Date('2026-09-02T08:00:00.000Z') },
+    });
+
+    expect(suppress([OWN_ITEM], origins({ c1: OWN }), NO_CLAIMS, corrected)).toEqual([]);
+  });
+
+  it('serves a memory another session confirmed with evidence naming them', () => {
+    const confirmed = record({
+      confirmation: {
+        by: 'Ryan Huber',
+        at: new Date('2026-09-01T10:00:00.000Z'),
+        evidence: 'review thread 41',
+      },
+    });
+
+    expect(suppress([OWN_ITEM], origins({ c1: OWN }), NO_CLAIMS, confirmed)).toEqual([]);
+  });
+
+  it('still withholds a memory the read answered for and found nothing about', () => {
+    expect(suppress([OWN_ITEM], origins({ c1: OWN }), NO_CLAIMS, record({}))).toEqual(['c1']);
+  });
+
+  /**
+   * Withholding on a lookup that did not answer would assert the session already knows evidence
+   * nobody could read. A larger pack during an outage is the cheaper mistake.
+   */
+  it('serves a memory the provenance read never answered for', () => {
+    expect(suppress([OWN_ITEM], origins({ c1: OWN }), NO_CLAIMS, new Map())).toEqual([]);
   });
 });
 

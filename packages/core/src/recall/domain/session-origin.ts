@@ -1,6 +1,7 @@
 import type { RelatedClaim } from '@aion/protocol';
 
 import type { FusedItem } from './fusion.js';
+import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 import type { ItemOrigin } from '../../infrastructure/graph/origin-queries.js';
 
 /**
@@ -29,6 +30,12 @@ export type OwnSessionInput = {
   readonly origins: ReadonlyMap<string, ItemOrigin>;
   /** The current claim beside a raw turn, keyed as the pack would annotate it. */
   readonly relatedClaims: ReadonlyMap<string, RelatedClaim>;
+  /**
+   * What the substrate holds about each candidate (`claim-provenance-queries.ts`), the same read
+   * the pack renders standing from. An id with no entry is one this run established nothing for,
+   * and it serves for the same reason an unresolved origin does.
+   */
+  readonly provenance: ReadonlyMap<string, ItemProvenance>;
 };
 
 /**
@@ -45,12 +52,28 @@ export type OwnSessionInput = {
  * supersedes a turn, so a turn the substrate has since contradicted surfaces as current, and the
  * annotation beside it is the whole of the news.
  *
- * An expired reading is not one of the three. A horizon is a clock running out on a measurement
+ * A stated correction and a confirmation are the last two, and they are read off the graph rather
+ * than guessed from a role or a score. Neither moves the node's capture origin, so the memory is
+ * still this session's own record; what changed is that somebody else put evidence beside it, and
+ * that evidence reaches the session through this pack or through nothing. A withheld own memory
+ * leaves no served row, so no later subtraction can hand it over instead.
+ *
+ * An expired reading is not one of these. A horizon is a clock running out on a measurement
  * the session itself made, and the session holds every word of it; the substrate has said
  * nothing new, so serving it back is the echo this subtraction exists to stop.
  */
-function correctedSince(item: FusedItem, claims: ReadonlyMap<string, RelatedClaim>): boolean {
-  return item.currency === 'superseded' || item.supersededBy !== undefined || claims.has(item.id);
+function newSinceCapture(
+  item: FusedItem,
+  claims: ReadonlyMap<string, RelatedClaim>,
+  record: ItemProvenance,
+): boolean {
+  return (
+    item.currency === 'superseded' ||
+    item.supersededBy !== undefined ||
+    claims.has(item.id) ||
+    record.claimedCorrection !== undefined ||
+    record.confirmation !== undefined
+  );
 }
 
 /**
@@ -71,7 +94,13 @@ export function suppressedOwnSession(input: OwnSessionInput): ReadonlySet<string
     if (origin === undefined || !origin.own || origin.other) {
       continue;
     }
-    if (correctedSince(item, input.relatedClaims)) {
+    const record = input.provenance.get(item.id);
+    // A read that did not answer for this item cannot say whether anybody put evidence beside it,
+    // and asserting the session already knows what nobody could read is the worse mistake.
+    if (record === undefined) {
+      continue;
+    }
+    if (newSinceCapture(item, input.relatedClaims, record)) {
       continue;
     }
     suppressed.add(item.id);
