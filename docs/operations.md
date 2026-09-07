@@ -9,8 +9,10 @@ flags.
 
 Run `aion costs [--days N]` to group billed API responses by UTC day and calling surface.
 The default window includes today and the preceding six days. Each row reports the model,
-call count, input and output tokens, cache-write and cache-read tokens, usage-error count, and estimated dollars.
-Unknown models are marked `unpriced`; their charges are not silently counted as zero.
+call count, input and output tokens, cache-write and cache-read tokens, the cache-read share of that
+group's input tokens, usage-error count, and estimated dollars.
+Unknown models are marked `unpriced`; their charges are not silently counted as zero. A model with no
+price still reports its cache share, and a group that spent no input tokens reads `no-input`.
 
 The append-only SQLite `api_calls` ledger records successful HTTP responses, including answers
 whose text fails JSON parsing and needs another paid call. Failed HTTP requests have no usage
@@ -18,13 +20,17 @@ row. `unlabeled` exposes callers that omit a surface label.
 
 Missing or invalid usage produces a row with zero placeholder counters and `usage_error=invalid_usage`.
 The error log says `API usage parse failed; billed token counts are unknown` without including response content.
-`aion costs` counts these failures, adds `unknown charges` to its known subtotal, and marks cache effectiveness unavailable.
+`aion costs` counts these failures, adds `unknown charges` to its known subtotal, and prints
+`unavailable` for the cache share of every group that carries one. Groups whose usage parsed
+completely still report their share. The whole-window cache-effectiveness line stays unavailable,
+because one unknown row leaves the window's denominator unknown.
 
 A failed ledger write logs `API usage write failed` without retrying the paid generation.
 
 Estimates use the provider price table dated 2026-09-06. For Haiku 4.5, rates per million
 tokens are $1 input, $5 output, $1.25 cache write, and $0.10 cache read. The cache-effectiveness
 line divides read tokens by all input tokens, including newly written and uncached tokens.
+Each group's cache share uses the same denominator.
 
 | Control | Default | Effect |
 |---|---|---|

@@ -68,6 +68,113 @@ it('rejects zero, fractional, missing, and nonnumeric day counts', async () => {
   expect(await runCosts(['--days'], () => undefined)).toBe(1);
 });
 
+function lineStartingWith(lines: readonly string[], prefix: string): string {
+  const line = lines.find((candidate) => candidate.startsWith(prefix));
+  if (line === undefined) {
+    throw new Error(`no line starts with ${prefix}: ${lines.join('\n')}`);
+  }
+  return line;
+}
+
+it('reports cache share for a complete group beside one whose usage failed to parse', async () => {
+  appendApiCall(store.db, {
+    occurredAt: new Date('2026-09-06T10:00:00Z'),
+    model: 'claude-haiku-4-5',
+    surface: 'cues',
+    inputTokens: 1000,
+    outputTokens: 200,
+    cacheCreationTokens: 2000,
+    cacheReadTokens: 7000,
+    durationMs: 50,
+    attempts: 1,
+  });
+  appendApiCall(store.db, {
+    occurredAt: new Date('2026-09-06T11:00:00Z'),
+    model: 'claude-haiku-4-5',
+    surface: 'cognitive',
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheCreationTokens: 0,
+    cacheReadTokens: 0,
+    durationMs: 1,
+    attempts: 1,
+    usageError: 'invalid_usage',
+  });
+  const lines: string[] = [];
+  await runCosts([], (line) => lines.push(line));
+  expect(lineStartingWith(lines, 'cues')).toContain('70.0%');
+  expect(lineStartingWith(lines, 'cognitive')).toContain('unavailable');
+  expect(lineStartingWith(lines, 'cognitive')).not.toContain('%');
+  expect(lines).toContain('cache effectiveness unavailable: usage parse failures');
+});
+
+it('marks a group unavailable when only some of its calls have unusable usage', async () => {
+  appendApiCall(store.db, {
+    occurredAt: new Date('2026-09-06T10:00:00Z'),
+    model: 'claude-haiku-4-5',
+    surface: 'cues',
+    inputTokens: 1000,
+    outputTokens: 200,
+    cacheCreationTokens: 2000,
+    cacheReadTokens: 7000,
+    durationMs: 50,
+    attempts: 1,
+  });
+  appendApiCall(store.db, {
+    occurredAt: new Date('2026-09-06T11:00:00Z'),
+    model: 'claude-haiku-4-5',
+    surface: 'cues',
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheCreationTokens: 0,
+    cacheReadTokens: 0,
+    durationMs: 1,
+    attempts: 1,
+    usageError: 'invalid_usage',
+  });
+  const lines: string[] = [];
+  await runCosts([], (line) => lines.push(line));
+  expect(lineStartingWith(lines, 'cues')).toContain('unavailable');
+  expect(lineStartingWith(lines, '2026-09-06')).toContain('unavailable');
+});
+
+it('reports no share for a complete group that spent no input tokens', async () => {
+  appendApiCall(store.db, {
+    occurredAt: new Date('2026-09-06T10:00:00Z'),
+    model: 'claude-haiku-4-5',
+    surface: 'cues',
+    inputTokens: 0,
+    outputTokens: 200,
+    cacheCreationTokens: 0,
+    cacheReadTokens: 0,
+    durationMs: 50,
+    attempts: 1,
+  });
+  const lines: string[] = [];
+  await runCosts([], (line) => lines.push(line));
+  expect(lineStartingWith(lines, 'cues')).toContain('no-input');
+  expect(lineStartingWith(lines, 'cues')).not.toContain('NaN');
+  expect(lineStartingWith(lines, 'cues')).not.toContain('unavailable');
+});
+
+it('reports cache share for a complete group whose model has no price', async () => {
+  appendApiCall(store.db, {
+    occurredAt: new Date('2026-09-06T10:00:00Z'),
+    model: 'unknown-model',
+    surface: 'cues',
+    inputTokens: 1000,
+    outputTokens: 200,
+    cacheCreationTokens: 0,
+    cacheReadTokens: 1000,
+    durationMs: 50,
+    attempts: 1,
+  });
+  const lines: string[] = [];
+  await runCosts([], (line) => lines.push(line));
+  expect(lineStartingWith(lines, 'cues')).toContain('50.0%');
+  expect(lineStartingWith(lines, 'cues')).toContain('unpriced');
+});
+
 it('marks unknown charges instead of presenting invalid usage as zero spend', async () => {
   appendApiCall(store.db, {
     occurredAt: new Date(),

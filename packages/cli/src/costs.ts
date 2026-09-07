@@ -22,9 +22,26 @@ function parseDays(argv: readonly string[]): number {
   return days;
 }
 
+/**
+ * A usage parse failure leaves that group's token counts unknown, so its denominator is
+ * unknown too. Only the groups carrying one lose their share.
+ */
+function cacheShare(row: ApiUsageGroup): string {
+  if (row.usageErrors > 0) {
+    return 'unavailable';
+  }
+  const input = row.inputTokens + row.cacheCreationTokens + row.cacheReadTokens;
+  if (input === 0) {
+    return 'no-input';
+  }
+  return `${((row.cacheReadTokens / input) * 100).toFixed(1)}%`;
+}
+
 function renderGroups(title: string, rows: readonly ApiUsageGroup[], write: Writer): void {
   write(title);
-  write('group  model  calls  input  output  cache-write  cache-read  usage-errors  estimated USD');
+  write(
+    'group  model  calls  input  output  cache-write  cache-read  cache-share  usage-errors  estimated USD',
+  );
   for (const row of rows) {
     const cost = estimateApiCost(row);
     write(
@@ -36,6 +53,7 @@ function renderGroups(title: string, rows: readonly ApiUsageGroup[], write: Writ
         row.outputTokens,
         row.cacheCreationTokens,
         row.cacheReadTokens,
+        cacheShare(row),
         row.usageErrors,
         (cost === undefined ? 'unpriced' : `$${cost.toFixed(6)}`) +
           (row.usageErrors > 0 ? ' + unknown' : ''),
