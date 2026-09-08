@@ -1,5 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 
+import { withheldReason } from '../../../evidence/application/judgment.js';
+import { applyMergeWithRecovery } from '../../../evidence/application/merge-recovery.js';
 import {
   findRecentCurrentClaims,
   loadClaimDedupDetails,
@@ -18,8 +20,13 @@ import {
   CLAIM_DEDUP_SCAN_PREFIX,
   selectClaimDedupSurvivor,
 } from '../../domain/claim-dedup.js';
-import type { IntrospectionOperation, OperationOutcome } from '../../domain/operation.js';
+import type {
+  IntrospectionOperation,
+  OperationContext,
+  OperationOutcome,
+} from '../../domain/operation.js';
 import {
+  CLAIM_DEDUP_ROUTE_RESERVE,
   judgeClaimDedup,
   reviewClaimDedup,
   type ClaimDedupCallOptions,
@@ -93,6 +100,26 @@ async function findUnscannedRecentClaims(
   }
 }
 
+/**
+ * Asked before anything is paid for. Neither an abstention nor an incomplete assembly stamps
+ * anything: the pair keeps its obligation, and a later run or an unforget reaches it again.
+ */
+async function requiredEvidence(
+  ctx: OperationContext,
+  subject: RecentClaim,
+  neighbor: { readonly id: string; readonly text: string },
+): Promise<string | undefined> {
+  return withheldReason(ctx.evidence, {
+    route: 'claim_dedup',
+    reservedUnits: CLAIM_DEDUP_ROUTE_RESERVE,
+    use: 'claim_judgment',
+    sides: [
+      { nodeId: subject.id, statement: subject.text },
+      { nodeId: neighbor.id, statement: neighbor.text },
+    ],
+  });
+}
+
 function toPair(
   subject: { label: string; text: string },
   candidate: { label: string; text: string },
@@ -147,6 +174,9 @@ export function claimDedupOperation(): IntrospectionOperation {
       let vetoed = 0;
       let stale = 0;
       let failed = 0;
+      let withheld = 0;
+      /** Why the run stopped short of its batch, when an uncertain publication stopped it. */
+      let halted: string | undefined;
 
       for (const subject of recent) {
         if (ctx.signal.aborted || judged >= batch) {
@@ -185,6 +215,18 @@ export function claimDedupOperation(): IntrospectionOperation {
         const neighbor = unjudged.entry;
         const { pairKey } = unjudged;
         attempted.add(pairKey);
+
+        // Asked before anything is paid for. A pair whose required sources are suppressed or
+        // cannot be established is left exactly where it was: unstamped, unjudged, and owed.
+        const assembled = await requiredEvidence(ctx, subject, neighbor);
+        if (assembled !== undefined) {
+          withheld += 1;
+          ctx.logger.info(
+            { subjectId: subject.id, candidateId: neighbor.id, reason: assembled },
+            'claim dedup withheld a pair its required evidence does not support',
+          );
+          continue;
+        }
         judged += 1;
 
         const pair = toPair(subject, neighbor);
@@ -240,14 +282,31 @@ export function claimDedupOperation(): IntrospectionOperation {
           { id: subject.id, occurredAt: subjectDetail.occurredAt },
           { id: neighbor.id, occurredAt: candidateDetail.occurredAt },
         );
-        const merge = await mergeClaimPair(ctx.driver, {
-          survivorId: survivor.id,
-          loserId: loser.id,
-          now: ctx.now,
+        // One failure here is one failed pair. Nothing is stamped, so the pair and its subject
+        // are both still owed, and the pairs this run already merged keep their tally.
+        const applied = await applyMergeWithRecovery({
+          operationId: pairKey,
+          attempt: () =>
+            mergeClaimPair(ctx.driver, {
+              survivorId: survivor.id,
+              loserId: loser.id,
+              now: ctx.now,
+            }),
+          ...(ctx.publications === undefined ? {} : { coordinator: ctx.publications }),
+          logger: ctx.logger,
         });
+        if (applied.status === 'failed' || applied.status === 'halted') {
+          failed += 1;
+          if (applied.status === 'halted') {
+            halted = applied.reason;
+            break;
+          }
+          continue;
+        }
         // The write re-reads currency under its own transaction, which is the reading that
-        // decides: a side taken between the read above and the commit is stale, not merged.
-        if (!merge.merged) {
+        // decides: a side taken between the read above and the commit is stale, not merged. A
+        // settled attempt already committed, and its receipt is what says so.
+        if (applied.status === 'applied' && !applied.value.merged) {
           stale += 1;
           markLedgerApplied(ctx.db, pairKey, { verdict: 'stale' });
           stampScanned('stale');
@@ -269,7 +328,9 @@ export function claimDedupOperation(): IntrospectionOperation {
         itemsAffected: merged,
         detail:
           `${String(judged)} pair(s) judged: ${String(merged)} merged, ${String(related)} related, ` +
-          `${String(vetoed)} vetoed, ${String(stale)} stale, ${String(failed)} failed`,
+          `${String(vetoed)} vetoed, ${String(stale)} stale, ${String(failed)} failed${
+            withheld === 0 ? '' : `, ${String(withheld)} withheld for want of evidence`
+          }${halted === undefined ? '' : `; stopped early on ${halted}`}`,
       };
     },
   };

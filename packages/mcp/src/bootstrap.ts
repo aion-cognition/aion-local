@@ -387,6 +387,9 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
         // from the same deps the tool call takes and stripped to a read that writes nothing;
         // `recall-probe.ts` states what it leaves out and why.
         recallProbe: probeRecall(recall),
+        // The position an uncertain apply reconciles against. The same coordinator the writers
+        // publish through, so a receipt one of them left behind is the receipt this reads.
+        publications,
         operations: maintenanceOperations,
       },
       {
