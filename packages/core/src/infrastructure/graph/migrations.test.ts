@@ -14,7 +14,19 @@ function statementsOf(version: number): readonly string[] {
 
 describe('the pinned migration list', () => {
   it('is ordered oldest-first with no gaps', () => {
-    expect(GRAPH_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5]);
+    expect(GRAPH_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+});
+
+describe('migration 006 publication guard', () => {
+  it('declares the uniqueness rule and nothing that writes a node', () => {
+    const statements = statementsOf(6);
+
+    expect(statements).toEqual([
+      'CREATE CONSTRAINT publication_guard_substrate_id_unique IF NOT EXISTS FOR (n:PublicationGuard) REQUIRE n.substrate_id IS UNIQUE',
+    ]);
+    // A replayed MERGE here would mint a replacement for a guard that went missing.
+    expect(statements.some((statement) => statement.includes('MERGE'))).toBe(false);
   });
 });
 

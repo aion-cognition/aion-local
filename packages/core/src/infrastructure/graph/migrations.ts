@@ -5,6 +5,7 @@ import { CONTEXT_VECTOR_PROPERTY } from './context-vector-queries.js';
 import { ENTITY_NAME_SQUASH_PROPERTY } from './entity-identity-queries.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
 import { BASE_NODE_LABEL, MEMORY_LABEL } from './labels.js';
+import { PUBLICATION_GUARD_CONSTRAINT_STATEMENT } from './publication-guard.js';
 import {
   CONTENT_FULLTEXT_INDEX,
   ENTITY_NAME_NORM_PROPERTY,
@@ -172,6 +173,19 @@ const MIGRATION_005_SUBSTRATE_IDENTITY: GraphMigration = {
 };
 
 /**
+ * The uniqueness rule behind the publication guard, declared before any coordinator can use
+ * one. Only the constraint belongs here: the runner replays every statement on every call, and
+ * the guard node itself is created under the substrate's bootstrap marker instead, so a guard
+ * that goes missing after initialization is reported rather than silently replaced
+ * (`publication-guard.ts`).
+ */
+const MIGRATION_006_PUBLICATION_GUARD: GraphMigration = {
+  version: 6,
+  name: 'publication guard substrate id constraint',
+  statements: (_ctx) => [PUBLICATION_GUARD_CONSTRAINT_STATEMENT],
+};
+
+/**
  * Ordered oldest-first, and the runner replays every version's statements on every call. The
  * meta table records first application rather than gating the run, which is what lets 003 drop
  * a constraint 001 no longer creates.
@@ -182,6 +196,7 @@ export const GRAPH_MIGRATIONS: readonly GraphMigration[] = [
   MIGRATION_003_IDENTITY_REKEY,
   MIGRATION_004_CLAIM_KEY_LOOKUP,
   MIGRATION_005_SUBSTRATE_IDENTITY,
+  MIGRATION_006_PUBLICATION_GUARD,
 ];
 
 const META_KEY_PREFIX = 'graph:migration:';

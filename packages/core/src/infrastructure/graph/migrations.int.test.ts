@@ -36,6 +36,11 @@ const EXPECTED_CONSTRAINTS = [
   { name: 'narrative_id_unique', labelsOrTypes: ['Narrative'], properties: ['id'] },
   { name: 'pattern_id_unique', labelsOrTypes: ['Pattern'], properties: ['id'] },
   { name: 'plan_id_unique', labelsOrTypes: ['Plan'], properties: ['id'] },
+  {
+    name: 'publication_guard_substrate_id_unique',
+    labelsOrTypes: ['PublicationGuard'],
+    properties: ['substrate_id'],
+  },
   { name: 'session_id_unique', labelsOrTypes: ['Session'], properties: ['id'] },
   { name: 'substrate_id_unique', labelsOrTypes: ['Substrate'], properties: ['id'] },
   { name: 'trend_id_unique', labelsOrTypes: ['Trend'], properties: ['id'] },
@@ -147,7 +152,7 @@ async function fetchNonLookupIndexes(harness: Neo4jHarness): Promise<IndexRow[]>
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-describe('graph schema migrations 001 + 002 + 003 + 004 + 005', () => {
+describe('graph schema migrations 001 + 002 + 003 + 004 + 005 + 006', () => {
   let harness: Neo4jHarness;
   let db: SqliteHandle;
   let dir: string;
@@ -171,7 +176,7 @@ describe('graph schema migrations 001 + 002 + 003 + 004 + 005', () => {
       embedDimension: EMBED_DIMENSION,
     });
 
-    expect(applied).toEqual([1, 2, 3, 4, 5]);
+    expect(applied).toEqual([1, 2, 3, 4, 5, 6]);
     expect(created).toContain('content_vec_idx');
     expect(created).toContain('aion_node_id_unique');
     expect(created).toContain('goal_id_unique');
@@ -179,6 +184,7 @@ describe('graph schema migrations 001 + 002 + 003 + 004 + 005', () => {
     expect(created).toContain('entity_name_unique');
     expect(created).toContain('entity_name_squash_idx');
     expect(created).toContain('claim_subject_aspect_idx');
+    expect(created).toContain('publication_guard_substrate_id_unique');
     // The composite key 003 retires is never created in the first place, so a fresh graph
     // never carries it and the drop has nothing to do.
     expect(created).not.toContain('entity_name_type_unique');
@@ -187,7 +193,8 @@ describe('graph schema migrations 001 + 002 + 003 + 004 + 005', () => {
     expect(getMeta(db, graphMigrationMetaKey(3))).toBeDefined();
     expect(getMeta(db, graphMigrationMetaKey(4))).toBeDefined();
     expect(getMeta(db, graphMigrationMetaKey(5))).toBeDefined();
-    expect(latestAppliedGraphMigration(db)).toBe(5);
+    expect(getMeta(db, graphMigrationMetaKey(6))).toBeDefined();
+    expect(latestAppliedGraphMigration(db)).toBe(6);
   });
 
   it('creates exactly the pinned constraints, including one id constraint per new cognitive label', async () => {
@@ -268,8 +275,8 @@ describe('graph schema migrations 001 + 002 + 003 + 004 + 005', () => {
     ).toEqual(EXPECTED_NON_LOOKUP_INDEXES);
   });
 
-  it('the pinned migration list is exactly migrations 1, 2, 3, 4 and 5', () => {
-    expect(GRAPH_MIGRATIONS.map((m) => m.version)).toEqual([1, 2, 3, 4, 5]);
+  it('the pinned migration list is exactly migrations 1 through 6', () => {
+    expect(GRAPH_MIGRATIONS.map((m) => m.version)).toEqual([1, 2, 3, 4, 5, 6]);
   });
 });
 
