@@ -9,9 +9,9 @@ import type { SqliteHandle } from './database.js';
  * backstop demoted. Claiming serves interactive strictly first, so a bulk flood can never
  * delay an interactive episode by more than the job already running.
  *
- * `database.ts` and `claim.ts` carry these strings as SQL literals rather than importing
- * them: both are loaded by the forked claim fixture through native ESM, which does not map a
- * `.js` specifier back to its `.ts` sibling.
+ * `database.ts` and `claim.ts` carry these strings as SQL literals: a column default, and the
+ * ordering claiming reads. Reading one back is `toReflectionLane` below, which claim.ts calls
+ * rather than testing the names a second time.
  */
 export const REFLECTION_LANES = ['interactive', 'bulk'] as const;
 

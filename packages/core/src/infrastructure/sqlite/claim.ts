@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { SqliteHandle } from './database.js';
-import type { ReflectionJob } from './reflection-queue.js';
+import { toReflectionLane, type ReflectionJob } from './reflection-queue.js';
 
 type ReflectionJobRow = {
   id: string;
@@ -17,12 +17,12 @@ type ReflectionJobRow = {
 };
 
 /**
- * Row mapping duplicated from reflection-queue.ts rather than imported: the
- * claim-two-process test loads this file directly via native ESM in a forked
- * child process, which (unlike the project's tsc/vitest resolvers) does not map a
- * relative `.js` specifier back to its sibling `.ts` source, so claim.ts cannot
- * take a runtime (non-type-only) import from reflection-queue.ts. The lane literals
- * below are inline for the same reason.
+ * Row mapping duplicated from reflection-queue.ts, whose lane conversion this one calls: a
+ * second list of the lane names would let a third lane reach one of them and not the other.
+ *
+ * The claim-two-process test loads this file directly via native ESM in a forked child
+ * process, where a relative `.js` specifier resolves only through
+ * ts-specifier-hook.fixture.ts, so an import added here has to name a real sibling source.
  */
 function toReflectionJob(row: ReflectionJobRow): ReflectionJob {
   return {
@@ -34,7 +34,7 @@ function toReflectionJob(row: ReflectionJobRow): ReflectionJob {
     claimedAt: row.claimed_at,
     claimedBy: row.claimed_by,
     lastError: row.last_error,
-    lane: row.lane === 'bulk' ? 'bulk' : 'interactive',
+    lane: toReflectionLane(row.lane),
     sessionId: row.session_id,
   };
 }
