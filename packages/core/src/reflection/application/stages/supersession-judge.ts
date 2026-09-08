@@ -106,11 +106,19 @@ export type JudgeContradictionOptions = {
  * `failed` is a call that threw or timed out; `unusable` is an answer that came back in a
  * shape the schema refuses. The stage logs the two differently and a precision battery
  * scores neither, so the caller needs them apart rather than folded into one `undefined`.
+ *
+ * `over-allowance` is neither. Nothing was submitted and nothing answered: the messages this
+ * pass assembled do not fit what the route may spend, so the pair is required evidence the
+ * substrate could not put to a judge. A caller folding it into `failed` counts an unasked pair
+ * as an unusable answer and lets the run close on it.
  */
+export type OverAllowance = { readonly status: 'over-allowance'; readonly units: number };
+
 export type JudgeOutcome =
   | { readonly status: 'judged'; readonly judgment: ContradictionJudgment }
   | { readonly status: 'failed'; readonly error: unknown }
-  | { readonly status: 'unusable' };
+  | { readonly status: 'unusable' }
+  | OverAllowance;
 
 /**
  * One judgment, prompt and schema included. Exported because precision is measured on this
@@ -133,8 +141,9 @@ export async function judgeContradiction(
   );
   // What this pass is about to send, measured as it will be sent. A pair that does not fit is
   // not asked about, because a clipped prompt answers a different question.
-  if (admitRenderedInput('live_supersession', messages).status === 'over') {
-    return { status: 'failed', error: new Error(OVER_ALLOWANCE) };
+  const admission = admitRenderedInput('live_supersession', messages);
+  if (admission.status === 'over') {
+    return { status: 'over-allowance', units: admission.units };
   }
   const deadline = deadlineFor(options.timeoutMs, options.signal);
   let raw: unknown;

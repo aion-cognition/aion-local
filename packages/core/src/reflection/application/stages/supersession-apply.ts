@@ -1,3 +1,4 @@
+import { OVER_ALLOWANCE } from './supersession-judge.js';
 import {
   describeVeto,
   reviewContradiction,
@@ -21,7 +22,7 @@ import {
   resolveSupersessionProposal,
 } from '../../../infrastructure/sqlite/supersession-proposals.js';
 import type { StageContext } from '../../domain/stage.js';
-import { movedWork } from '../evidence-fence.js';
+import { movedWork, withheldFor } from '../evidence-fence.js';
 import {
   applySupersessionProposal,
   UNANIMOUS_APPLY_METHOD,
@@ -120,12 +121,18 @@ function record(ctx: StageContext, pair: JudgedPair, second: string | undefined)
   });
 }
 
-/** A review that threw, timed out, or came back unusable vetoes: an undefended close is not made. */
+/**
+ * A review that threw, timed out, or came back unusable vetoes: an undefended close is not made.
+ *
+ * A review that was never submitted is different. An unasked reviewer refused nothing, and
+ * recording a veto for it would settle the pair on an opinion nobody gave, so the caller is told
+ * so and the pair goes back to being owed.
+ */
 async function secondPass(
   ctx: StageContext,
   pair: JudgedPair,
   policy: SupersessionWritePolicy,
-): Promise<ReviewVerdict> {
+): Promise<ReviewVerdict | undefined> {
   const outcome = await reviewContradiction(
     ctx.provider,
     {
@@ -152,6 +159,13 @@ async function secondPass(
     subjectId: pair.subject.id,
     candidateId: pair.candidate.id,
   };
+  if (outcome.status === 'over-allowance') {
+    ctx.logger.info(
+      { ...where, units: outcome.units },
+      'contradiction review withheld because its rendered input exceeds the route allowance',
+    );
+    return undefined;
+  }
   if (outcome.status === 'failed') {
     const how = isAbortError(outcome.error) ? 'timed out' : 'failed';
     ctx.logger.warn({ err: outcome.error, ...where }, `contradiction review ${how}`);
@@ -182,6 +196,14 @@ function retainMoved(pair: JudgedPair, tally: RunTally, moved: string): void {
   );
 }
 
+/** The same, for a pass whose own input could not be submitted at all. */
+function retainUnsubmitted(pair: JudgedPair, tally: RunTally, reason: string): void {
+  tally.recordWithheld(
+    'retryable',
+    withheldFor([pair.candidate.id, pair.subject.id], pair.revision, reason),
+  );
+}
+
 /** Whether this exact pair already carries a decision, applied or dismissed. */
 function decidedAlready(ctx: StageContext, pair: JudgedPair): boolean {
   return findSupersessionProposalsForNode(ctx.db, pair.candidate.id).some(
@@ -208,6 +230,10 @@ async function applyUnanimous(
   tally: RunTally,
 ): Promise<JudgmentOutcome> {
   const verdict = await secondPass(ctx, pair, policy);
+  if (verdict === undefined) {
+    retainUnsubmitted(pair, tally, OVER_ALLOWANCE);
+    return 'withheld';
+  }
   // Asked after the last model answer, before either terminal record. A veto is a decision too,
   // and one made on evidence that has moved is not this pair's decision.
   const moved = evidenceMoved(ctx, pair);

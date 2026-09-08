@@ -5,6 +5,7 @@ import {
   committedIncidenceForNode,
   committedIncidenceForNodesAt,
   countCommittedIncidenceForNode,
+  countCommittedIncidenceForNodeAt,
 } from '../../infrastructure/sqlite/committed-evidence.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
@@ -146,7 +147,13 @@ class Frontier {
 
   /** A retained interpretation: the captures it was extracted from, and what it cites. */
   #fromRetained(id: string): readonly Step[] {
-    if (!this.#afford(countCommittedIncidenceForNode(this.#db, id, 'extraction'))) {
+    // Charged against the population this step is about to read, not the one a present read
+    // would have found: a vanished projection counts zero over a chain that still holds origins.
+    const declared =
+      this.#at === undefined
+        ? countCommittedIncidenceForNode(this.#db, id, 'extraction')
+        : countCommittedIncidenceForNodeAt(this.#db, id, this.#at, 'extraction');
+    if (!this.#afford(declared)) {
       return [];
     }
     const rows =

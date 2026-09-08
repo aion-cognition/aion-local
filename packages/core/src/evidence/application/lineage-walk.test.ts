@@ -21,7 +21,13 @@ import {
   publishNarrativeRevision,
   OVERVIEW_REVISION_FAMILY,
 } from '../../infrastructure/sqlite/narrative-revisions.js';
-import { seedSource, commitSourceState, establishScope } from '../test-support/evidence.fixture.js';
+import { EVIDENCE_LIMITS, RequestBudget } from '../domain/budget.js';
+import {
+  seedSource,
+  commitIncidence,
+  commitSourceState,
+  establishScope,
+} from '../test-support/evidence.fixture.js';
 
 const NOW = new Date('2026-09-08T10:00:00.000Z');
 const LATER = new Date('2026-09-08T11:00:00.000Z');
@@ -158,6 +164,28 @@ it('keeps the root reachable through a shorter path after the longer path hit th
   const result = walkLineage(store.db, ['left', 'right'], undefined);
   expect.soft(result.complete).toBe(false);
   expect.soft(result.roots).toEqual(['root']);
+});
+it('charges the historical frontier population rather than its vanished current projection', () => {
+  source('third-root');
+  derive('left', 'retained', 'to-retained', 'retained_node');
+  for (const id of ['root', 'right', 'third-root']) {
+    commitIncidence(store.db, {
+      sourceId: id,
+      nodeId: 'retained',
+      role: 'extraction',
+      operationId: `extract-${id}`,
+      at: NOW,
+    });
+  }
+  establishScope(store.db, 'retained', 'sqlite:extraction:out', NOW);
+  store.db.prepare("DELETE FROM source_incidence WHERE node_id='retained'").run();
+  const result = walkLineage(
+    store.db,
+    ['left'],
+    NOW,
+    new RequestBudget({ ...EVIDENCE_LIMITS, relationRows: 2 }),
+  );
+  expect(result.complete).toBe(false);
 });
 it('keeps a still-open unresolved declaration incomplete when a second qualified declaration exists', () => {
   derive('left', 'late-source', 'unknown-link', 'unresolved', NOW);

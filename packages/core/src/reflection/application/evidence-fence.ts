@@ -30,22 +30,31 @@ export function evidenceMoved(
 }
 
 /**
- * What a decision made on moved evidence leaves behind: the same pair, the reading it lost, and
- * a disposition saying a rerun can decide it. A counter here would say a pair went unanswered
- * and nothing about which one or against what.
+ * What an undecided pair leaves behind: the pair itself, the reading it was held against, and a
+ * disposition saying a rerun can decide it. A counter here would say a pair went unanswered and
+ * nothing about which one or against what.
  */
-export function movedWork(
+export function withheldFor(
   nodeIds: readonly string[],
   revision: EvidenceRevision | undefined,
-  moved: string,
+  reason: string,
 ): WithheldWork | undefined {
   if (revision === undefined) {
     return undefined;
   }
   return withheldWorkFor(nodeIds, {
     kind: 'retryable',
-    reason: `evidence_${moved}`,
+    reason,
     addresses: nodeIds.map((nodeId) => idAddress(nodeId)),
     revision,
   });
+}
+
+/** The same, for a decision whose evidence moved between the answer and the write. */
+export function movedWork(
+  nodeIds: readonly string[],
+  revision: EvidenceRevision | undefined,
+  moved: string,
+): WithheldWork | undefined {
+  return withheldFor(nodeIds, revision, `evidence_${moved}`);
 }

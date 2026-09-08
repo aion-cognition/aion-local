@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { OVER_ALLOWANCE } from './supersession-judge.js';
+import type { OverAllowance } from './supersession-judge.js';
 import { admitRenderedInput } from '../../../evidence/domain/budget.js';
 import { deadlineFor } from '../../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../../infrastructure/providers/types.js';
@@ -39,7 +39,9 @@ export type ReviewVerdict =
 export type ReviewOutcome =
   | { readonly status: 'reviewed'; readonly verdict: ReviewVerdict }
   | { readonly status: 'failed'; readonly error: unknown }
-  | { readonly status: 'unusable' };
+  | { readonly status: 'unusable' }
+  /** The second pass could not be submitted either, and an unasked reviewer vetoes nothing. */
+  | OverAllowance;
 
 export type ReviewPair = {
   readonly priorLabel: string;
@@ -130,8 +132,9 @@ export async function reviewContradiction(
 ): Promise<ReviewOutcome> {
   const systemPrompt = promptMode(provider) === 'keyed' ? REVIEW_KEYED : REVIEW_LOCAL;
   const messages = buildReviewMessages(pair, systemPrompt);
-  if (admitRenderedInput('live_supersession', messages).status === 'over') {
-    return { status: 'failed', error: new Error(OVER_ALLOWANCE) };
+  const admission = admitRenderedInput('live_supersession', messages);
+  if (admission.status === 'over') {
+    return { status: 'over-allowance', units: admission.units };
   }
   const deadline = deadlineFor(options.timeoutMs, options.signal);
   let raw: unknown;

@@ -2,11 +2,13 @@ import { applyJudgment, type SupersessionMode } from './supersession-apply.js';
 import {
   judgeContradiction,
   LIVE_SUPERSESSION_ROUTE_RESERVE,
+  OVER_ALLOWANCE,
   type ContradictionJudgment,
   type ContradictionPair,
   type JudgeContradictionOptions,
   type JudgeOutcome,
 } from './supersession-judge.js';
+import { reportRun } from './supersession-report.js';
 import { RunTally } from './supersession-tally.js';
 import {
   judgmentEvidenceFor,
@@ -15,7 +17,7 @@ import {
   type JudgmentEvidenceOutcome,
 } from '../../../evidence/application/judgment.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
-import { describeError, isAbortError } from '../../../infrastructure/errors.js';
+import { isAbortError } from '../../../infrastructure/errors.js';
 import type { KeyedCloseMode } from '../../../infrastructure/graph/claim-key-queries.js';
 import {
   findContradictionCandidates,
@@ -27,7 +29,7 @@ import {
 } from '../../../infrastructure/graph/supersession-queries.js';
 import type { Vector } from '../../../infrastructure/providers/types.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
-import { evidenceMoved, movedWork } from '../evidence-fence.js';
+import { evidenceMoved, movedWork, withheldFor } from '../evidence-fence.js';
 
 /**
  * The detection half of supersession. Each fact-bearing node this episode minted is compared against
@@ -159,7 +161,7 @@ export class SupersessionStage implements ReflectionStage {
       }
     }
 
-    return this.#report(tally, writeError);
+    return reportRun(tally, writeError, this.#options.mode);
   }
 
   /**
@@ -333,7 +335,6 @@ export class SupersessionStage implements ReflectionStage {
     evidence: JudgmentEvidenceOutcome,
   ): Promise<ContradictionJudgment | undefined> {
     const sides = evidence.status === 'ready' ? evidence.sides : undefined;
-    tally.recordJudgment();
     const outcome = await judgeContradiction(
       ctx.provider,
       {
@@ -352,6 +353,15 @@ export class SupersessionStage implements ReflectionStage {
       },
     );
 
+    // Nothing was submitted and nothing answered, so this pair was never judged. Counting it as
+    // a judgment would let one refused pair pass for an unusable answer in a run that otherwise
+    // succeeded, and the pair would be gone.
+    if (outcome.status === 'over-allowance') {
+      this.#refuseAdmission(ctx, subject, candidate, tally, evidence, outcome.units);
+      return undefined;
+    }
+
+    tally.recordJudgment();
     if (outcome.status === 'judged') {
       return outcome.judgment;
     }
@@ -367,6 +377,33 @@ export class SupersessionStage implements ReflectionStage {
     }
     ctx.logger.warn(where, 'contradiction judgment returned an invalid shape');
     return undefined;
+  }
+
+  /**
+   * A pair whose own rendered messages exceed what the route may spend. It is owed rather than
+   * answered: no provider was asked, no decision was made, and the run keeps the pair with the
+   * reading it was assembled against so a later one can submit it.
+   */
+  #refuseAdmission(
+    ctx: StageContext,
+    subject: EpisodeFactNode,
+    candidate: ContradictionCandidate,
+    tally: RunTally,
+    evidence: JudgmentEvidenceOutcome,
+    units: number,
+  ): void {
+    ctx.logger.info(
+      { episodeId: ctx.episodeId, subjectId: subject.id, candidateId: candidate.id, units },
+      'contradiction judgment withheld because its rendered input exceeds the route allowance',
+    );
+    tally.recordWithheld(
+      'retryable',
+      withheldFor(
+        [candidate.id, subject.id],
+        evidence.status === 'ready' ? evidence.revision : undefined,
+        OVER_ALLOWANCE,
+      ),
+    );
   }
 
   /** What an affirmative judgment does per mode, including the second pass `unanimous` gates on. */
@@ -411,75 +448,5 @@ export class SupersessionStage implements ReflectionStage {
       },
       `contradiction judgment ${outcome}`,
     );
-  }
-
-  #report(tally: RunTally, writeError: unknown): StageOutcome {
-    const counts = {
-      supersessions: tally.superseded,
-      supersessionProposals: tally.proposed,
-      // Named even at zero, so a reader of one run's counts can tell "none went stale" from
-      // "this build does not measure that".
-      supersessionStaleTargets: tally.staleTargets,
-      // Named at zero for the same reason the stale count is: a reader can tell "none withheld"
-      // from a build that does not measure it.
-      supersessionWithheld: tally.withheld,
-      // Blocked work is owed and undecidable until its source returns; retryable work is owed and
-      // decidable once a backfill or a settled publication lands. Naming them apart is what keeps
-      // a run from reading as if it had finished either one.
-      supersessionBlocked: tally.blocked,
-    };
-
-    if (writeError !== undefined) {
-      return {
-        status: 'failed',
-        summary: `supersession recorded ${tally.superseded} closure(s) before a write failed: ${describeError(writeError)}`,
-        counts,
-      };
-    }
-
-    if (tally.judgments === 0 && tally.withheld > 0) {
-      return {
-        status: 'skipped',
-        summary: `${tally.withheld} pair(s) withheld for want of required evidence`,
-        counts,
-        retryable: true,
-        ...(tally.work.length === 0 ? {} : { withheldWork: tally.work }),
-      };
-    }
-
-    if (tally.judgeErrors > 0 && tally.judgeErrors === tally.judgments) {
-      return {
-        status: 'failed',
-        summary: `all ${tally.judgments} contradiction judgment(s) failed`,
-        counts,
-      };
-    }
-
-    // The second pass runs in `unanimous` mode alone, so its counters are named only there
-    // rather than reported as two zeroes on every other run. The stale count is named by both
-    // closing modes, since either can find its target already taken.
-    const stale =
-      this.#options.mode === 'propose'
-        ? ''
-        : `, ${tally.staleTargets} with the target already gone`;
-    const review =
-      this.#options.mode === 'unanimous'
-        ? `, second pass ${tally.unanimous} unanimous and ${tally.vetoed} vetoed`
-        : '';
-
-    return {
-      status: 'ok',
-      // Work nobody could ask about is still owed. The stage's key stays open so the run that
-      // can decide it re-enters the stage, whatever else this run managed to close, and what it
-      // is owed travels with the result rather than as a number.
-      ...(tally.withheld > 0 ? { retryable: true } : {}),
-      ...(tally.work.length === 0 ? {} : { withheldWork: tally.work }),
-      summary:
-        `${tally.judgments} contradiction judgment(s) in ${this.#options.mode} mode: ` +
-        `${tally.superseded} superseded, ${tally.proposed} proposed for review ` +
-        `(${tally.proposedBySubject} by shared subject)` +
-        `${tally.withheld === 0 ? '' : `, ${tally.withheld} withheld`}${review}${stale}`,
-      counts,
-    };
   }
 }

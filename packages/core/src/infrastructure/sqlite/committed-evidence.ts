@@ -257,6 +257,39 @@ export function committedIncidenceForNodesAt(
 }
 
 /**
+ * How many rows one node's role held at a past moment, charged before the chain is materialized.
+ *
+ * The present projection cannot answer it. A retired projection leaves a count of zero over a
+ * chain that still holds three origins, so a reader charging the current count and then reading
+ * the history has bounded nothing at all: count and read the same population at the same vantage.
+ */
+export function countCommittedIncidenceForNodeAt(
+  db: SqliteHandle,
+  nodeId: string,
+  at: Date,
+  role: string,
+): number {
+  const kinds = STATED_LINK_KINDS.map(() => '?').join(', ');
+  const moment = at.toISOString();
+  const row = db
+    .prepare(
+      `SELECT count(*) AS n FROM (${HISTORICAL_INCIDENCE}
+       WHERE l.to_id = ?
+         AND (s.role IS NOT NULL OR l.kind NOT IN (${kinds}))
+         AND COALESCE(s.role, l.kind) = ?
+         AND v.known_from IS NOT NULL AND v.known_from <= ?
+         AND v.version = (
+           SELECT MAX(h.version) FROM evidence_link_versions h
+           JOIN publication_intents hi
+             ON hi.operation_id = h.operation_id AND hi.state = 'acknowledged'
+           WHERE h.link_id = l.link_id AND h.known_from IS NOT NULL AND h.known_from <= ?
+         ))`,
+    )
+    .get(nodeId, ...STATED_LINK_KINDS, role, moment, moment) as { n: number };
+  return row.n;
+}
+
+/**
  * The other direction at a past moment: everything one source carried then, read from the same
  * chain. A subject join that fell back to the records needs it, because the present rows say
  * what the source carries now and nothing about what it carried at the vantage asked for.
