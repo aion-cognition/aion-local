@@ -2,7 +2,7 @@ import type { Driver } from 'neo4j-driver';
 
 import { readRelationScope } from './dependencies.js';
 import { loadEntityDedupDetails } from '../../infrastructure/graph/entity-dedup-queries.js';
-import { isTimeTravel } from '../../infrastructure/graph/read-modes.js';
+import { isTimeTravel, type ReadMode } from '../../infrastructure/graph/read-modes.js';
 import { findClaimSubjects, type ClaimSubject } from '../../infrastructure/graph/subject-family.js';
 import type { EvidenceDependency } from '../../infrastructure/publication/preconditions.js';
 import {
@@ -61,56 +61,75 @@ function withoutGloss(subject: ClaimSubject): ClaimSubject {
   return gloss === undefined ? subject : rest;
 }
 
-/** Whether a recorded end had already passed at the vantage, which an absent one never has. */
-function stillOpenAt(stamp: string | undefined, at: Date): boolean {
+/** Whether a recorded end had already passed at a vantage, which an absent one never has. */
+function endsAfter(stamp: string | undefined, at: Date): boolean {
   return stamp === undefined || Date.parse(stamp) > at.getTime();
 }
 
 /**
  * Whether an incidence row was a live link at the vantage it was selected for.
  *
- * The archive path answers the same question the graph join does, so it applies the same policy:
- * a retracted link is not a relationship, and a version that recorded its own close is retracted
- * from that moment. Handing back a closed row because the graph could no longer be walked would
- * turn a correct absence into a positive answer.
+ * The archive path answers the same question the graph join does, so it applies the same policy,
+ * and that policy has two clocks. World time asks whether the relationship still held then, which
+ * only its recorded world end can answer; knowledge time asks whether the substrate still stated
+ * it then, which only its recorded retraction can answer. Comparing either end against the other
+ * axis reports a relationship that ended in one timeline as absent from the other.
+ *
+ * The currency flag is a statement about now, so a pinned read does not consult it. Where a
+ * pinned axis has no recorded end on a row the records call closed, the close cannot be placed on
+ * that axis and the row is left out rather than assumed open. An unpinned read is a question
+ * about now, and there the flag is exactly the answer.
  */
-function liveAt(row: CommittedIncidence, at: Date | undefined): boolean {
-  if (row.currency === 'closed') {
+function liveAt(row: CommittedIncidence, mode: ReadMode): boolean {
+  const { validAt, knownAt } = mode;
+  if (validAt === undefined && knownAt === undefined) {
+    return row.currency !== 'closed';
+  }
+  const placed =
+    row.currency !== 'closed' ||
+    (validAt !== undefined && row.validUntil !== undefined) ||
+    (knownAt !== undefined && row.txUntil !== undefined);
+  if (!placed) {
     return false;
   }
-  return at === undefined || (stillOpenAt(row.validUntil, at) && stillOpenAt(row.txUntil, at));
+  return (
+    (validAt === undefined || endsAfter(row.validUntil, validAt)) &&
+    (knownAt === undefined || endsAfter(row.txUntil, knownAt))
+  );
 }
 
 /**
- * The sources a claim was extracted from, at the vantage the request was checked against. The
- * present rows answer for now; an earlier question is answered from the version chain, because
- * today's projection cannot say which sources carried the claim then.
+ * The sources a claim was extracted from, at the vantage the request was checked against.
+ *
+ * The present rows answer for now. A question pinned in either timeline is answered from the
+ * version chain, because today's projection carries neither the sources the claim had then nor
+ * the intervals that say so, and a world-only question needs those intervals just as much as a
+ * knowledge-time one does.
  */
 function extractionSources(
   db: SqliteHandle,
   claimId: string,
-  knownAt: Date | undefined,
+  mode: ReadMode,
 ): readonly CommittedIncidence[] {
-  const rows =
-    knownAt === undefined
-      ? committedIncidenceForNode(db, claimId, 'extraction')
-      : committedIncidenceForNodesAt(db, [claimId], knownAt, 'extraction');
-  return rows.filter((row) => liveAt(row, knownAt));
+  const rows = isTimeTravel(mode)
+    ? committedIncidenceForNodesAt(db, [claimId], mode.knownAt, 'extraction')
+    : committedIncidenceForNode(db, claimId, 'extraction');
+  return rows.filter((row) => liveAt(row, mode));
 }
 
 /** Entities the records say this claim's sources mention, with the source that carries each. */
 function mentionedEntities(
   db: SqliteHandle,
   claimId: string,
-  knownAt: Date | undefined,
+  mode: ReadMode,
 ): readonly { readonly entityId: string; readonly sourceId: string }[] {
-  const sources = extractionSources(db, claimId, knownAt);
+  const sources = extractionSources(db, claimId, mode);
   return sources.flatMap((source) =>
-    (knownAt === undefined
-      ? committedIncidenceForSource(db, source.sourceId)
-      : committedIncidenceForSourceAt(db, source.sourceId, knownAt)
+    (isTimeTravel(mode)
+      ? committedIncidenceForSourceAt(db, source.sourceId, mode.knownAt)
+      : committedIncidenceForSource(db, source.sourceId)
     )
-      .filter((row) => row.role === 'mention' && liveAt(row, knownAt))
+      .filter((row) => row.role === 'mention' && liveAt(row, mode))
       .map((row) => ({ entityId: row.nodeId, sourceId: source.sourceId })),
   );
 }
@@ -118,9 +137,9 @@ function mentionedEntities(
 async function subjectsFromRecords(
   deps: SubjectDeps,
   claimId: string,
-  knownAt: Date | undefined,
+  mode: ReadMode,
 ): Promise<readonly ClaimSubject[]> {
-  const mentions = mentionedEntities(deps.db, claimId, knownAt);
+  const mentions = mentionedEntities(deps.db, claimId, mode);
   if (mentions.length === 0) {
     return [];
   }
@@ -173,7 +192,7 @@ export async function readClaimSubjects(
       // that was not visible then is not part of the answer now.
       subjects = await findClaimSubjects(deps.driver, claimId, input.context.mode);
       if (subjects.length === 0) {
-        subjects = await subjectsFromRecords(deps, claimId, input.context.mode.knownAt);
+        subjects = await subjectsFromRecords(deps, claimId, input.context.mode);
       }
     } catch {
       const issue = issueOn(address, 'interpretation_text', 'store_unavailable', true);
@@ -189,7 +208,7 @@ export async function readClaimSubjects(
     // The join runs claim to source to entity, so the scopes it rests on are the claim's own
     // extraction and each contributing source's mentions. Asking the claim for a mention scope
     // would make a writer invent a relation it does not own.
-    const sources = extractionSources(deps.db, claimId, input.context.mode.knownAt);
+    const sources = extractionSources(deps.db, claimId, input.context.mode);
     const consulted = [
       {
         endpointId: claimId,

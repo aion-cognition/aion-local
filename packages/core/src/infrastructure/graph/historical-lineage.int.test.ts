@@ -150,3 +150,121 @@ it('does not reintroduce a retracted mention through the historical archive fall
   expect.soft(await read(MID)).toHaveLength(1);
   expect.soft(await read(AFTER)).toEqual([]);
 });
+
+it('preserves world-time subjects across raw projection retirement', async () => {
+  await seedGraph('relocated');
+  seedSource(store.db, {
+    sourceId: 'relocated-source',
+    sessionId: 'session',
+    identity: 'review',
+    content: { turns: [{ role: 'user', text: 'Atlas result' }] },
+    turnIds: ['relocated-turn'],
+    now: EARLY,
+  });
+  for (const [node, role] of [
+    ['relocated-claim', 'extraction'],
+    ['relocated-entity', 'mention'],
+  ]) {
+    commitIncidence(store.db, {
+      sourceId: 'relocated-source',
+      nodeId: node!,
+      role: role!,
+      operationId: `incidence-${role}`,
+      at: EARLY,
+    });
+  }
+  establishScope(store.db, 'relocated-claim', 'sqlite:extraction:out', EARLY);
+  establishScope(store.db, 'relocated-source', 'sqlite:mention:out', EARLY);
+  commitSourceState(store.db, {
+    sourceId: 'relocated-source',
+    stateKind: 'unforgotten',
+    operationId: 'retract-mention',
+    at: LATER,
+  });
+  store.db
+    .prepare(
+      "INSERT INTO evidence_link_versions(link_id,version,prev_version,state,recorded_values_json,temporal_proof_json,observed_at,operation_key,operation_id,known_from,observed_ack_at) VALUES (?,2,1,'closed',?,'{}',?,'retract-mention','retract-mention',?,?)",
+    )
+    .run(
+      'relocated-source:relocated-entity:mention',
+      JSON.stringify({
+        currency: 'closed',
+        valid_until: LATER.toISOString(),
+        tx_until: LATER.toISOString(),
+      }),
+      LATER.toISOString(),
+      LATER.toISOString(),
+      LATER.toISOString(),
+    );
+  store.db
+    .prepare("UPDATE source_incidence SET currency='closed',link_version=2 WHERE role='mention'")
+    .run();
+  expect(
+    await findClaimSubjects(substrate.harness.driver, 'relocated-claim', asOf(MID)),
+  ).toHaveLength(1);
+  expect(await findClaimSubjects(substrate.harness.driver, 'relocated-claim', asOf(AFTER))).toEqual(
+    [],
+  );
+  await retireEpisodeProjection(substrate.harness.driver, 'relocated-source');
+  const r = new EvidenceResolver({
+    driver: substrate.harness.driver,
+    db: store.db,
+    logger: { warn: () => undefined },
+  });
+  const read = async (at: Date) =>
+    (await r.resolveSubjects(['relocated-claim'], checkedContext({ mode: asOf(at) }))).results.get(
+      JSON.stringify(['id', 'relocated-claim']),
+    )?.value;
+  expect.soft(await read(MID)).toHaveLength(1);
+  expect.soft(await read(AFTER)).toEqual([]);
+});
+
+it('keeps world-time and knowledge-time bounds independent after relocation', async () => {
+  await seedGraph('independent');
+  await substrate.harness.driver.executeQuery(
+    'MATCH (s:Episode {id:$source})-[r:MENTIONS]->() REMOVE r.tx_until',
+    { source: 'independent-source' },
+  );
+  seedSource(store.db, {
+    sourceId: 'independent-source',
+    sessionId: 'session',
+    identity: 'review',
+    content: { turns: [{ role: 'user', text: 'Atlas result' }] },
+    turnIds: ['independent-turn'],
+    now: EARLY,
+  });
+  for (const [nodeId, role] of [
+    ['independent-claim', 'extraction'],
+    ['independent-entity', 'mention'],
+  ] as const) {
+    commitIncidence(store.db, {
+      sourceId: 'independent-source',
+      nodeId,
+      role,
+      operationId: `independent-${role}`,
+      at: EARLY,
+    });
+  }
+  establishScope(store.db, 'independent-claim', 'sqlite:extraction:out', EARLY);
+  establishScope(store.db, 'independent-source', 'sqlite:mention:out', EARLY);
+  // The initial evidence already knows the relationship's world-time end.
+  // No later knowledge-time retraction exists.
+  store.db
+    .prepare('UPDATE evidence_link_versions SET recorded_values_json=? WHERE link_id=?')
+    .run(
+      JSON.stringify({ currency: 'open', valid_until: LATER.toISOString() }),
+      'independent-source:independent-entity:mention',
+    );
+  const mode = { knownAt: AFTER, validAt: MID };
+  expect(await findClaimSubjects(substrate.harness.driver, 'independent-claim', mode)).toHaveLength(
+    1,
+  );
+  await retireEpisodeProjection(substrate.harness.driver, 'independent-source');
+  const resolver = new EvidenceResolver({
+    driver: substrate.harness.driver,
+    db: store.db,
+    logger: { warn: () => undefined },
+  });
+  const result = await resolver.resolveSubjects(['independent-claim'], checkedContext({ mode }));
+  expect(result.results.get(JSON.stringify(['id', 'independent-claim']))?.value).toHaveLength(1);
+});

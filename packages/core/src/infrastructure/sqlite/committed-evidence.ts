@@ -201,6 +201,35 @@ const HISTORICAL_INCIDENCE = `SELECT l.from_id AS source_id, l.to_id AS node_id,
     ON s.link_id = l.link_id AND s.source_id = l.from_id AND s.node_id = l.to_id`;
 
 /**
+ * Which acknowledged version of each link the read selects.
+ *
+ * A knowledge vantage takes the newest version that had entered the view by then. Without one the
+ * read still goes through the chain and takes the newest acknowledged version there is, because a
+ * question pinned only in world time is asked with everything the substrate knows now and needs
+ * the recorded intervals that the current projection does not carry.
+ */
+function knownBy(at: Date | undefined): {
+  readonly clause: string;
+  readonly parameters: readonly string[];
+} {
+  const bound = at === undefined ? '' : 'AND h.known_from <= ?';
+  const newest = `AND v.version = (
+           SELECT MAX(h.version) FROM evidence_link_versions h
+           JOIN publication_intents hi
+             ON hi.operation_id = h.operation_id AND hi.state = 'acknowledged'
+           WHERE h.link_id = l.link_id AND h.known_from IS NOT NULL ${bound}
+         )`;
+  if (at === undefined) {
+    return { clause: `AND v.known_from IS NOT NULL ${newest}`, parameters: [] };
+  }
+  const moment = at.toISOString();
+  return {
+    clause: `AND v.known_from IS NOT NULL AND v.known_from <= ? ${newest}`,
+    parameters: [moment, moment],
+  };
+}
+
+/**
  * The same batch as it stood at a past moment.
  *
  * Incidence is a current projection: its `link_version` pointer says which version is in force
@@ -218,7 +247,7 @@ const HISTORICAL_INCIDENCE = `SELECT l.from_id AS source_id, l.to_id AS node_id,
 export function committedIncidenceForNodesAt(
   db: SqliteHandle,
   nodeIds: readonly string[],
-  at: Date,
+  at: Date | undefined,
   role?: string,
 ): readonly CommittedIncidence[] {
   const unique = [...new Set(nodeIds)];
@@ -228,29 +257,21 @@ export function committedIncidenceForNodesAt(
   const placeholders = unique.map(() => '?').join(', ');
   const kinds = STATED_LINK_KINDS.map(() => '?').join(', ');
   const roleClause = role === undefined ? '' : 'AND COALESCE(s.role, l.kind) = ?';
-  const moment = at.toISOString();
-  const parameters = [
-    ...unique,
-    ...STATED_LINK_KINDS,
-    ...(role === undefined ? [] : [role]),
-    moment,
-    moment,
-  ];
+  const known = knownBy(at);
   const rows = db
     .prepare(
       `${HISTORICAL_INCIDENCE}
        WHERE l.to_id IN (${placeholders})
          AND (s.role IS NOT NULL OR l.kind NOT IN (${kinds})) ${roleClause}
-         AND v.known_from IS NOT NULL AND v.known_from <= ?
-         AND v.version = (
-           SELECT MAX(h.version) FROM evidence_link_versions h
-           JOIN publication_intents hi
-             ON hi.operation_id = h.operation_id AND hi.state = 'acknowledged'
-           WHERE h.link_id = l.link_id AND h.known_from IS NOT NULL AND h.known_from <= ?
-         )
+         ${known.clause}
        ORDER BY node_id, source_id, role`,
     )
-    .all(...parameters) as (IncidenceRowData & {
+    .all(
+      ...unique,
+      ...STATED_LINK_KINDS,
+      ...(role === undefined ? [] : [role]),
+      ...known.parameters,
+    ) as (IncidenceRowData & {
     recorded_values_json: string;
   })[];
   return rows.map(toHistoricalIncidence);
@@ -266,26 +287,20 @@ export function committedIncidenceForNodesAt(
 export function countCommittedIncidenceForNodeAt(
   db: SqliteHandle,
   nodeId: string,
-  at: Date,
+  at: Date | undefined,
   role: string,
 ): number {
   const kinds = STATED_LINK_KINDS.map(() => '?').join(', ');
-  const moment = at.toISOString();
+  const known = knownBy(at);
   const row = db
     .prepare(
       `SELECT count(*) AS n FROM (${HISTORICAL_INCIDENCE}
        WHERE l.to_id = ?
          AND (s.role IS NOT NULL OR l.kind NOT IN (${kinds}))
          AND COALESCE(s.role, l.kind) = ?
-         AND v.known_from IS NOT NULL AND v.known_from <= ?
-         AND v.version = (
-           SELECT MAX(h.version) FROM evidence_link_versions h
-           JOIN publication_intents hi
-             ON hi.operation_id = h.operation_id AND hi.state = 'acknowledged'
-           WHERE h.link_id = l.link_id AND h.known_from IS NOT NULL AND h.known_from <= ?
-         ))`,
+         ${known.clause})`,
     )
-    .get(nodeId, ...STATED_LINK_KINDS, role, moment, moment) as { n: number };
+    .get(nodeId, ...STATED_LINK_KINDS, role, ...known.parameters) as { n: number };
   return row.n;
 }
 
@@ -297,25 +312,19 @@ export function countCommittedIncidenceForNodeAt(
 export function committedIncidenceForSourceAt(
   db: SqliteHandle,
   sourceId: string,
-  at: Date,
+  at: Date | undefined,
 ): readonly CommittedIncidence[] {
   const kinds = STATED_LINK_KINDS.map(() => '?').join(', ');
-  const moment = at.toISOString();
+  const known = knownBy(at);
   const rows = db
     .prepare(
       `${HISTORICAL_INCIDENCE}
        WHERE l.from_id = ?
          AND (s.role IS NOT NULL OR l.kind NOT IN (${kinds}))
-         AND v.known_from IS NOT NULL AND v.known_from <= ?
-         AND v.version = (
-           SELECT MAX(h.version) FROM evidence_link_versions h
-           JOIN publication_intents hi
-             ON hi.operation_id = h.operation_id AND hi.state = 'acknowledged'
-           WHERE h.link_id = l.link_id AND h.known_from IS NOT NULL AND h.known_from <= ?
-         )
+         ${known.clause}
        ORDER BY node_id, role`,
     )
-    .all(sourceId, ...STATED_LINK_KINDS, moment, moment) as (IncidenceRowData & {
+    .all(sourceId, ...STATED_LINK_KINDS, ...known.parameters) as (IncidenceRowData & {
     recorded_values_json: string;
   })[];
   return rows.map(toHistoricalIncidence);
