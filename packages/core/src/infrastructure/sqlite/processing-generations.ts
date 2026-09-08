@@ -228,6 +228,52 @@ export function createSourceWork(db: SqliteHandle, work: SourceWorkInput): numbe
     .immediate();
 }
 
+/**
+ * One obligation on a generation that is not yet live, written the way the stage skeleton is:
+ * durable while the generation is allocated, advancing the counter only once the generation is
+ * active, and silent about a replaced one.
+ *
+ * `createSourceWork` above is the steady-state path and requires an active generation, because
+ * owing new work to a live generation is what invalidates a readiness proof. A generation still
+ * being prepared has no proof to invalidate, and an obligation that could not be written until
+ * activation would leave the window this exists to close.
+ *
+ * Returns the generation's readiness revision, or undefined when the generation is replaced or
+ * absent, in which case nothing was written.
+ */
+export function prepareGenerationWork(db: SqliteHandle, work: SourceWorkInput): number | undefined {
+  return db
+    .transaction((): number | undefined => {
+      const current = readGeneration(db, work.sourceId, work.processingGeneration);
+      if (current === undefined || current.state === 'replaced') {
+        return undefined;
+      }
+      const advanced =
+        current.state === 'active'
+          ? advanceOperationalRevision(db, work.sourceId, work.processingGeneration)
+          : current.operationalRevision;
+      db.prepare(
+        `INSERT INTO source_work
+           (work_id, source_id, processing_generation, kind, stage_name, work_key, state,
+            input_revision_json, capability_revision, due_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+         ON CONFLICT (source_id, processing_generation, kind, work_key) DO NOTHING`,
+      ).run(
+        work.workId,
+        work.sourceId,
+        work.processingGeneration,
+        work.kind,
+        work.stageName ?? null,
+        work.workKey,
+        work.inputRevisionJson ?? null,
+        work.capabilityRevision ?? null,
+        work.dueAt.toISOString(),
+      );
+      return advanced;
+    })
+    .immediate();
+}
+
 /** The work id a stage row gets, so a restart writes the same row rather than a second one. */
 export function stageWorkId(
   sourceId: string,

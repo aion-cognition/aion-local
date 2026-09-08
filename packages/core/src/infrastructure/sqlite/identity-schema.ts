@@ -238,6 +238,11 @@ export const IDENTITY_INDEX_STATEMENTS: readonly string[] = [
   `CREATE INDEX IF NOT EXISTS source_records_session_idx
      ON source_records (session_id, capture_order_value)`,
   `CREATE INDEX IF NOT EXISTS source_records_archive_idx ON source_records (canonical_archive_id)`,
+  // The occurrence lookup an accepted payload runs before anything else. Two occurrences of one
+  // payload share this key and hold different canonical archive rows, so the canonical index
+  // above cannot serve it.
+  `CREATE INDEX IF NOT EXISTS source_records_identity_idx
+     ON source_records (identity_hash, session_id) WHERE identity_hash IS NOT NULL`,
   // Unique where an original turn id exists, and silent about parts that have none. A
   // constraint would force every observation part to invent one.
   `CREATE UNIQUE INDEX IF NOT EXISTS source_parts_turn_idx
