@@ -62,6 +62,7 @@ describe('judgment evidence assembly', () => {
         sessionId: 'session-1',
         identity: 'agent-1',
         content: content(`${claim!} was stated here`),
+        turnIds: [`${source!}-turn`],
         now: NOW,
       });
       commitIncidence(store.db, {
@@ -100,6 +101,7 @@ describe('judgment evidence assembly', () => {
       sessionId: 'session-1',
       identity: 'agent-1',
       content: content('the same fact, stated again'),
+      turnIds: ['episode-folded-turn'],
       now: NOW,
     });
     commitIncidence(store.db, {
@@ -206,6 +208,7 @@ describe('judgment evidence assembly', () => {
       sessionId: 'session-1',
       identity: 'agent-1',
       content: content('another witness'),
+      turnIds: ['added-source-turn'],
       now: NOW,
     });
     commitIncidence(store.db, {

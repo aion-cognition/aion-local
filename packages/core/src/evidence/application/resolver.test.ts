@@ -109,6 +109,7 @@ describe('the evidence resolver', () => {
       sessionId: 'session-1',
       identity: 'agent-1',
       content: CONTENT,
+      turnIds: ['episode-1-turn'],
       now: NOW,
     });
   });
@@ -357,6 +358,7 @@ describe('the evidence resolver', () => {
       sessionId: 'later-session',
       identity: 'later-agent',
       content: { turns: [{ role: 'user', text: 'a later witness' }] },
+      turnIds: ['episode-later-turn'],
       now: later,
     });
     commitIncidence(store.db, {

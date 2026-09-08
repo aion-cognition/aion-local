@@ -344,6 +344,13 @@ function verifyParts(
       (match.occurredAt ?? null) !== part.occurredAt
     ) {
       mismatch(part.partKind, part.ordinal);
+      continue;
+    }
+    // A turn is the one part kind the projection gave a graph identity. Without the recorded id
+    // the address it was cited under cannot be resolved, so the mapping is not proved whole even
+    // though the bytes behind it still are.
+    if (part.partKind === 'turn' && part.turnId === null) {
+      mismatch(part.partKind, part.ordinal);
     }
   }
   // A part the archive holds and the manifest never recorded is not addressable, and a source

@@ -322,6 +322,31 @@ describe('raw source evidence', () => {
     expect(resolution.value).toBeUndefined();
   });
 
+  it('does not certify a full mapping after its original turn id is lost', () => {
+    store.db
+      .prepare("UPDATE source_parts SET turn_id=NULL WHERE source_id='episode-1' AND part_kind='turn'")
+      .run();
+    const resolution = resolveSourceEvidence(
+      store.db,
+      idAddress('episode-1'),
+      request({ use: 'claim_judgment' }),
+    );
+
+    expect(resolution.issues.length).toBeGreaterThan(0);
+    expect(resolution.value).toBeUndefined();
+  });
+
+  it('asks no graph identity of a part that never had one', () => {
+    const resolution = resolveSourceEvidence(
+      store.db,
+      partAddress('episode-1', 'observation', 0),
+      request(),
+    );
+
+    expect(resolution.issues).toEqual([]);
+    expect(resolution.value?.text).toContain('the runbook was out of date');
+  });
+
   it('cites the four source scopes it read under', () => {
     const resolution = resolveSourceEvidence(store.db, idAddress('episode-1'), request());
 
