@@ -141,3 +141,65 @@ it('classifies a native guard timeout before an intent exists as retryable', asy
     await session.close();
   }
 }, 25_000);
+
+it('degrades completion under a guard timeout without running its effects', async () => {
+  const checkpoint = await coordinator.checkpoint();
+  if (checkpoint.status !== 'ready') {
+    throw new Error('fixture checkpoint unavailable');
+  }
+  const session = substrate.harness.driver.session();
+  const native = await session.beginTransaction({ timeout: 20_000 });
+  let validated = false;
+  let completed = false;
+  try {
+    await lockPublicationGuard(
+      new GraphTransaction(native),
+      coordinatorControl(store.db).substrateId,
+      new Date(),
+    );
+    expect(
+      await coordinator.completeRead(
+        checkpoint.checkpoint,
+        () => {
+          validated = true;
+          return Promise.resolve(true);
+        },
+        () => {
+          completed = true;
+          return 1;
+        },
+      ),
+    ).toEqual({ status: 'retry', reason: 'store_unavailable' });
+    expect(validated).toBe(false);
+    expect(completed).toBe(false);
+  } finally {
+    await native.rollback();
+    await session.close();
+  }
+}, 25_000);
+
+it('degrades a completion SQLite conflict without committing an effect', async () => {
+  const checkpoint = await coordinator.checkpoint();
+  if (checkpoint.status !== 'ready') {
+    throw new Error('fixture checkpoint unavailable');
+  }
+  const other = new Database(substrate.sqlitePath);
+  other.exec('BEGIN IMMEDIATE');
+  let completed = false;
+  try {
+    expect(
+      await coordinator.completeRead(
+        checkpoint.checkpoint,
+        () => Promise.resolve(true),
+        () => {
+          completed = true;
+          return 1;
+        },
+      ),
+    ).toEqual({ status: 'retry', reason: 'store_busy' });
+    expect(completed).toBe(false);
+  } finally {
+    other.exec('ROLLBACK');
+    other.close();
+  }
+});

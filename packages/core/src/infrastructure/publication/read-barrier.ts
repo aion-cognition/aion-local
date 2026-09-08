@@ -61,6 +61,21 @@ export class PublicationReadBarrier {
     validate: (context: PublicationContext) => Promise<boolean>,
     complete: (db: SqliteHandle) => SynchronousResult<T>,
   ): Promise<ReadCompletion<T>> {
+    try {
+      return await this.#complete(checkpoint, validate, complete);
+    } catch (err) {
+      return {
+        status: 'retry',
+        reason: err instanceof PublicationUnavailable ? err.reason : 'store_unavailable',
+      };
+    }
+  }
+
+  async #complete<T>(
+    checkpoint: PublicationCheckpoint,
+    validate: (context: PublicationContext) => Promise<boolean>,
+    complete: (db: SqliteHandle) => SynchronousResult<T>,
+  ): Promise<ReadCompletion<T>> {
     const { db, now, transactions } = this.#options;
     if (coordinatorControl(db).pendingOperationId !== null) {
       return { status: 'retry', reason: 'pending_publication' };
