@@ -68,9 +68,14 @@ function toReceipt(row: ReceiptRowData): PublicationReceipt {
 }
 
 /**
- * Writes the intent and allocates its sequence in one step. The sequence comes from
- * `AUTOINCREMENT`, so a number is never handed out twice even when the transaction that took
- * it rolled back, and the row is durable before any external effect starts.
+ * Writes the intent and allocates its sequence in one step. `AUTOINCREMENT` never hands out a
+ * committed number twice. A number taken inside a transaction that then rolls back goes back
+ * with it, and the next prepare takes that number again, so non-reuse covers committed
+ * allocations and nothing else.
+ *
+ * That is enough because an allocation has to commit before anything outside uses it, and the
+ * durability boundary is the outermost transaction rather than this call: a caller that nests
+ * this helper must not expose the sequence it returns until its own transaction commits.
  *
  * Preparing the same operation twice returns the sequence it already has: a retry of a prepare
  * is a caller repeating itself.
