@@ -27,7 +27,8 @@ import { countQueueJobs } from '../../infrastructure/sqlite/reflection-queue-adm
 import {
   DEFAULT_REFLECTION_LANE,
   enqueueReflectionJob,
-  findPendingReflectionJob,
+  findPendingJobForEpisode,
+  REFLECTION_QUEUE_EPISODE_FIELD,
   type ReflectionLane,
 } from '../../infrastructure/sqlite/reflection-queue.js';
 import { redactPayload } from '../../redaction/deep-walk.js';
@@ -38,7 +39,7 @@ import { PIPELINE_VERSION } from '../domain/version.js';
 export const INTEGRATE_JOB_TYPE = 'integrate';
 
 /** The payload field the integrate job is keyed on, and how a queued job is matched back to its episode. */
-const EPISODE_ID_FIELD = 'episode_id';
+const EPISODE_ID_FIELD = REFLECTION_QUEUE_EPISODE_FIELD;
 
 export type ReflectionIntakeDeps = ExperienceStoreDeps & {
   readonly db: SqliteHandle;
@@ -153,12 +154,7 @@ function ensureIntegrateJob(
 ): IntegrateJob {
   // A payload the substrate already holds is not an arrival: counting a client's own retries
   // against it would let a repeated push demote the session for work already queued.
-  const pending = findPendingReflectionJob(
-    deps.db,
-    INTEGRATE_JOB_TYPE,
-    EPISODE_ID_FIELD,
-    episodeId,
-  );
+  const pending = findPendingJobForEpisode(deps.db, INTEGRATE_JOB_TYPE, episodeId);
   if (pending !== undefined) {
     return {
       jobId: pending.id,
@@ -177,7 +173,7 @@ function ensureIntegrateJob(
     deps.db,
     INTEGRATE_JOB_TYPE,
     { [EPISODE_ID_FIELD]: episodeId },
-    { lane: decision.lane, sessionId, now },
+    { lane: decision.lane, sessionId, now, episodeId },
   );
   return { jobId, enqueued: true, lane: decision.lane, decision, countedInDepth: false };
 }

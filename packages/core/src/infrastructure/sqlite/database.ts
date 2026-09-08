@@ -16,6 +16,7 @@ import {
   READINESS_INDEX_STATEMENTS,
   READINESS_SCHEMA_STATEMENTS,
 } from './readiness-schema.js';
+import { backfillReflectionQueueEpisodeIds } from './reflection-queue.js';
 
 /** Name for the config registry, which is the only place the variable is read. */
 export const SQLITE_PATH_ENV_VAR = 'AION_SQLITE_PATH';
@@ -374,6 +375,7 @@ export function openSqliteHandle(target: SqliteTarget): SqliteHandle {
       // Runs on every open so every entrypoint gets it, and does nothing once a substrate has
       // been through it.
       migrateUnversionedLedgerKeys(db);
+      backfillReflectionQueueEpisodeIds(db);
       return db;
     } catch (err) {
       db.close();

@@ -19,6 +19,9 @@ export type ReflectionLane = (typeof REFLECTION_LANES)[number];
 
 export const DEFAULT_REFLECTION_LANE: ReflectionLane = 'interactive';
 
+/** The payload field a source-keyed job carried before it had a column of its own. */
+export const REFLECTION_QUEUE_EPISODE_FIELD = 'episode_id';
+
 export function isReflectionLane(value: unknown): value is ReflectionLane {
   return REFLECTION_LANES.includes(value as ReflectionLane);
 }
@@ -72,6 +75,12 @@ export function toReflectionJob(row: ReflectionJobRow): ReflectionJob {
 
 export type EnqueueReflectionJobOptions = {
   readonly lane?: ReflectionLane;
+  /**
+   * The source this job is about, stored in its own column. Every writer that enqueues work
+   * keyed on a source passes it, which is what lets the duplicate-job lookup read a column
+   * instead of decoding every payload in the queue.
+   */
+  readonly episodeId?: string;
   /** The graph Session the job's episode belongs to; what round-robin claiming groups by. */
   readonly sessionId?: string;
   /**
@@ -108,8 +117,8 @@ export function enqueueReflectionJob(
   const enqueuedAt = options.now ?? new Date();
   db.prepare(
     `INSERT INTO reflection_queue
-       (id, job_type, payload_json, enqueued_at, attempts, lane, session_id, lane_seq)
-     VALUES (?, ?, ?, ?, 0, ?, ?, (
+       (id, job_type, payload_json, enqueued_at, attempts, lane, session_id, episode_id, lane_seq)
+     VALUES (?, ?, ?, ?, 0, ?, ?, ?, (
        SELECT COALESCE(MAX(lane_seq), 0) + 1 FROM reflection_queue
        WHERE lane = ? AND session_id IS ?
      ))`,
@@ -120,10 +129,42 @@ export function enqueueReflectionJob(
     enqueuedAt.toISOString(),
     lane,
     sessionId,
+    options.episodeId ?? null,
     lane,
     sessionId,
   );
   return id;
+}
+
+/**
+ * Rows enqueued before the column existed, which is what the compatibility lookup below is
+ * for. A pending row is the only kind that matters: a claimed-and-completed job's row is gone,
+ * so a null on a row nobody can claim any more decides nothing.
+ */
+export function legacyEpisodeQueueRows(db: SqliteHandle): number {
+  const row = db
+    .prepare('SELECT count(*) AS n FROM reflection_queue WHERE episode_id IS NULL')
+    .get() as { n: number };
+  return row.n;
+}
+
+/**
+ * Fills the column on rows written before it existed, reading each payload once. Returns how
+ * many rows moved, so a repeat returns zero and the caller can tell a finished backfill from
+ * one that has more to do.
+ *
+ * A row whose payload names no episode is left alone rather than given an empty string: it is
+ * not an integrate job, and inventing a key for it would make the lookup below answer for
+ * something nobody enqueued.
+ */
+export function backfillReflectionQueueEpisodeIds(db: SqliteHandle): number {
+  const path = `$.${REFLECTION_QUEUE_EPISODE_FIELD}`;
+  return db
+    .prepare(
+      `UPDATE reflection_queue SET episode_id = json_extract(payload_json, ?)
+       WHERE episode_id IS NULL AND json_extract(payload_json, ?) IS NOT NULL`,
+    )
+    .run(path, path).changes;
 }
 
 /**
@@ -148,6 +189,36 @@ export function findPendingReflectionJob(
     )
     .get(jobType, `$.${field}`, value) as ReflectionJobRow | undefined;
   return row === undefined ? undefined : toReflectionJob(row);
+}
+
+/**
+ * The pending job for one source, read off the column, with the old payload scan still guarding
+ * duplicates while any row predates the column.
+ *
+ * The compatibility read is what keeps the transition safe in both directions: a legacy row
+ * carries no column value, so the column lookup alone would miss it and queue a second job for
+ * work already pending. It runs only while such a row exists, and the scan disappears on its own
+ * once the backfill has accounted for every one of them.
+ */
+export function findPendingJobForEpisode(
+  db: SqliteHandle,
+  jobType: string,
+  episodeId: string,
+): ReflectionJob | undefined {
+  const row = db
+    .prepare(
+      `SELECT * FROM reflection_queue
+       WHERE job_type = ? AND episode_id = ?
+       ORDER BY rowid ASC LIMIT 1`,
+    )
+    .get(jobType, episodeId) as ReflectionJobRow | undefined;
+  if (row !== undefined) {
+    return toReflectionJob(row);
+  }
+  if (legacyEpisodeQueueRows(db) === 0) {
+    return undefined;
+  }
+  return findPendingReflectionJob(db, jobType, REFLECTION_QUEUE_EPISODE_FIELD, episodeId);
 }
 
 export function getReflectionJob(db: SqliteHandle, id: string): ReflectionJob | undefined {

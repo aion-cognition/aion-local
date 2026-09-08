@@ -123,6 +123,7 @@ export async function reconcileEnrichment(
         { episode_id: episode.id },
         {
           lane: 'bulk',
+          episodeId: episode.id,
           ...(episode.sessionId === undefined ? {} : { sessionId: episode.sessionId }),
         },
       );
