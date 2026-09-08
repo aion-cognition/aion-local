@@ -15,6 +15,18 @@ import {
   ARCHIVE_SCHEMA_VERSION,
   insertExperience,
 } from '../../infrastructure/sqlite/experience-archive.js';
+import {
+  acceptReferenceBatch,
+  listReferenceBatches,
+  recordSourceParts,
+  recordSourceRecord,
+} from '../../infrastructure/sqlite/source-identity.js';
+import {
+  listEvidenceAcknowledgments,
+  recordEvidenceAcknowledgment,
+  SEMANTIC_PROCESSING_EFFECT,
+  transitionSourceResidency,
+} from '../../infrastructure/sqlite/source-lifecycle.js';
 import { SessionManager } from '../../session/session-manager.js';
 import type { ReflectionContent } from '../domain/content.js';
 import { PIPELINE_VERSION } from '../domain/version.js';
@@ -230,6 +242,7 @@ describe('replaying the whole archive', () => {
       replayed: 0,
       skipped: 0,
       unavailable: 0,
+      skippedEvicted: 0,
       failed: 0,
       cursor: undefined,
       aborted: false,
@@ -392,6 +405,113 @@ describe('aborting a replay', () => {
       scanned: 0,
       cursor: undefined,
     });
+    expect(calls).toEqual([]);
+  });
+});
+
+describe('replay and residency', () => {
+  function recordIdentity(index: number, turnIds: readonly string[]): string {
+    const sourceId = `archived-episode-${String(index)}`;
+    recordSourceRecord(store.db, {
+      sourceId,
+      sessionId: IDENTITY,
+      verificationStatus: 'verified',
+      occurredAt: OCCURRED[index] ?? ARCHIVED_AT,
+      createdAt: WALL_NOW,
+      archive: {
+        canonicalArchiveId: `archive-${String(index)}`,
+        archiveSchemaVersion: ARCHIVE_SCHEMA_VERSION,
+        identityHash: `identity-${String(index)}`,
+        verifiedContentDigest: `hash-${String(index)}`,
+        verificationPolicyVersion: 1,
+        archivedAt: ARCHIVED_AT,
+      },
+    });
+    recordSourceParts(
+      store.db,
+      sourceId,
+      turnIds.map((turnId, ordinal) => ({
+        partKind: 'turn' as const,
+        ordinal,
+        turnId,
+        contentHash: `turn-${String(ordinal)}`,
+      })),
+    );
+    return sourceId;
+  }
+
+  it('skips an evicted source and names the path its projection comes back through', async () => {
+    archive(0);
+    const sourceId = recordIdentity(0, ['turn-a']);
+    transitionSourceResidency(store.db, {
+      sourceId,
+      state: 'evicted',
+      operationId: 'operation-evict',
+      transitionedAt: WALL_NOW,
+    });
+
+    const report = await replayExperiences(deps, { batchSize: 2, clock: () => WALL_NOW });
+
+    expect(report).toMatchObject({ scanned: 1, replayed: 0, skippedEvicted: 1, failed: 0 });
+    expect(calls).toEqual([]);
+    expect(graph.statements).toHaveLength(0);
+  });
+
+  it('leaves what an evicted source owes exactly where the skip found it', async () => {
+    archive(0);
+    const sourceId = recordIdentity(0, ['turn-a']);
+    acceptReferenceBatch(store.db, {
+      sourceId,
+      acceptedHash: 'accepted-1',
+      receivedAt: WALL_NOW,
+      operationKey: 'delivery-1',
+      introduced: ['node-1'],
+    });
+    recordEvidenceAcknowledgment(store.db, {
+      sourceId,
+      referenceVersion: 1,
+      effectKind: SEMANTIC_PROCESSING_EFFECT,
+      state: 'owed',
+    });
+    transitionSourceResidency(store.db, {
+      sourceId,
+      state: 'evicted',
+      operationId: 'operation-evict',
+      transitionedAt: WALL_NOW,
+    });
+
+    await replayExperiences(deps, { batchSize: 2, clock: () => WALL_NOW });
+
+    expect(listEvidenceAcknowledgments(store.db, sourceId)).toEqual([
+      {
+        sourceId,
+        referenceVersion: 1,
+        effectKind: SEMANTIC_PROCESSING_EFFECT,
+        state: 'owed',
+        completedAt: null,
+      },
+    ]);
+    expect(listReferenceBatches(store.db, sourceId)).toHaveLength(1);
+  });
+
+  it('projects a resident source under the ids its records already carry', async () => {
+    archive(0);
+    const sourceId = recordIdentity(0, ['turn-a']);
+
+    const report = await replayExperiences(deps, { batchSize: 2, clock: () => WALL_NOW });
+
+    expect(report).toMatchObject({ scanned: 1, replayed: 1, skippedEvicted: 0 });
+    expect(calls.map((call) => call.episodeId)).toEqual([sourceId]);
+    expect(graph.nodesWithLabel('Turn').map((node) => node.id)).toEqual(['turn-a']);
+  });
+
+  it('refuses a source whose recorded parts disagree with the archived turns', async () => {
+    archive(0);
+    recordIdentity(0, ['turn-a', 'turn-b']);
+
+    const report = await replayExperiences(deps, { batchSize: 2, clock: () => WALL_NOW });
+
+    expect(report).toMatchObject({ scanned: 1, replayed: 0, failed: 1 });
     expect(calls).toEqual([]);
   });
 });

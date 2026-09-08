@@ -214,6 +214,7 @@ function renderReport(report: ReplayReport, write: Writer): void {
   write(`replayed    ${String(report.replayed)}`);
   write(`skipped     ${String(report.skipped)}`);
   write(`unavailable ${String(report.unavailable)}`);
+  write(`evicted     ${String(report.skippedEvicted)}`);
   write(`failed      ${String(report.failed)}`);
   if (report.aborted) {
     write(
@@ -231,6 +232,7 @@ function toJson(report: ReplayReport): unknown {
     replayed: report.replayed,
     skipped: report.skipped,
     unavailable: report.unavailable,
+    skipped_evicted: report.skippedEvicted,
     failed: report.failed,
     aborted: report.aborted,
     cursor:

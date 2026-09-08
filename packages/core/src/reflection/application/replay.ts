@@ -1,8 +1,14 @@
 import { ReflectionNotStoredError } from './errors.js';
-import { storeExperience, type ExperienceStoreDeps } from './experience-store.js';
+import {
+  projectEpisodeInTransaction,
+  storeExperience,
+  type ExperienceStoreDeps,
+  type StoredEpisode,
+} from './experience-store.js';
 import type { ReflectionRun, ReflectionRunOptions } from './orchestrator.js';
 import { attachProvenance } from './stated-references.js';
 import { errorMessage } from '../../infrastructure/errors.js';
+import { inWriteTransaction } from '../../infrastructure/graph/connection.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import { abortRequested } from '../../infrastructure/providers/deadline-signal.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
@@ -12,7 +18,12 @@ import {
   type ExperienceArchiveFilter,
   type ExperienceArchiveRow,
 } from '../../infrastructure/sqlite/experience-archive.js';
-import { prepareEpisode } from '../domain/content.js';
+import {
+  readSourcePartTurnIds,
+  readSourceRecord,
+} from '../../infrastructure/sqlite/source-identity.js';
+import { sourceResidencyState } from '../../infrastructure/sqlite/source-lifecycle.js';
+import { prepareEpisode, type PreparedEpisode } from '../domain/content.js';
 import { PIPELINE_VERSION } from '../domain/version.js';
 
 /**
@@ -78,6 +89,13 @@ export type ReplayCounts = {
   readonly skipped: number;
   /** Rows whose episode the graph could not read back. */
   readonly unavailable: number;
+  /**
+   * Rows whose source no longer has a raw projection. An ordinary replay never rebuilds one:
+   * the stage pipeline needs graph context, and inventing a projection to satisfy it is the
+   * implicit rehydration the residency rules forbid. The skip discharges nothing the source
+   * owes, and `aion rebuild` is the path that puts the projection back.
+   */
+  readonly skippedEvicted: number;
   readonly failed: number;
 };
 
@@ -98,6 +116,7 @@ type Tally = {
   replayed: number;
   skipped: number;
   unavailable: number;
+  skippedEvicted: number;
   failed: number;
 };
 
@@ -114,6 +133,7 @@ function countsOf(tally: Tally): ReplayCounts {
     replayed: tally.replayed,
     skipped: tally.skipped,
     unavailable: tally.unavailable,
+    skippedEvicted: tally.skippedEvicted,
     failed: tally.failed,
   };
 }
@@ -141,9 +161,49 @@ async function replayRow(
   // references already landed is a no-op.
   const { provenance, ...content } = row.payload;
   const prepared = prepareEpisode(content, new Date(row.occurredAt));
-  const { stored } = await storeExperience(deps, prepared, row.identity, now, row.origin);
+  const stored = await projectRow(deps, row, prepared, now);
   await attachProvenance(deps, stored.episodeId, provenance, now);
   return deps.runner.run(stored.episodeId, { now, pipelineVersion });
+}
+
+/**
+ * The episode this row is, under the id the records already carry.
+ *
+ * Identity comes from the occurrence record rather than from a content-hash lookup in the
+ * graph: the lookup answers only while the projection is there, and a replay is exactly the
+ * pass that runs after it may not be. A row the records do not know yet is a legacy one, and it
+ * takes the old path so the first replay of an unbackfilled substrate still works.
+ */
+async function projectRow(
+  deps: ReplayDeps,
+  row: ExperienceArchiveRow,
+  prepared: PreparedEpisode,
+  now: Date,
+): Promise<StoredEpisode> {
+  const record = readSourceRecord(deps.db, row.episodeId);
+  if (record === undefined) {
+    return (await storeExperience(deps, prepared, row.identity, now, row.origin)).stored;
+  }
+  const turnIds = readSourcePartTurnIds(deps.db, row.episodeId);
+  if (turnIds.length !== prepared.turns.length) {
+    throw new Error(
+      `source ${row.episodeId} records ${String(turnIds.length)} turn parts for ${String(prepared.turns.length)} archived turns`,
+    );
+  }
+  await deps.sessions.ensureSession({
+    identity: row.identity,
+    now,
+    occurredAt: prepared.occurredAt,
+  });
+  return inWriteTransaction(deps.driver, (tx) =>
+    projectEpisodeInTransaction(tx, {
+      prepared,
+      sessionId: record.sessionId,
+      origin: row.origin,
+      now,
+      identity: { episodeId: row.episodeId, turnIds },
+    }),
+  );
 }
 
 /**
@@ -157,6 +217,13 @@ async function rowOutcome(
   pipelineVersion: string,
   now: Date,
 ): Promise<keyof ReplayCounts> {
+  if (sourceResidencyState(deps.db, row.episodeId) === 'evicted') {
+    deps.logger.info(
+      { archiveId: row.id, episodeId: row.episodeId },
+      'replay skipped an evicted source; its projection returns through rebuild, not through replay',
+    );
+    return 'skippedEvicted';
+  }
   try {
     const run = await replayRow(deps, row, pipelineVersion, now);
     if (run.status === 'already_applied') {
@@ -190,7 +257,14 @@ export async function replayExperiences(
   const pipelineVersion = options.pipelineVersion ?? PIPELINE_VERSION;
   const clock = options.clock ?? ((): Date => new Date());
   const filter = filterOf(options.selection ?? {}, pipelineVersion);
-  const tally: Tally = { scanned: 0, replayed: 0, skipped: 0, unavailable: 0, failed: 0 };
+  const tally: Tally = {
+    scanned: 0,
+    replayed: 0,
+    skipped: 0,
+    unavailable: 0,
+    skippedEvicted: 0,
+    failed: 0,
+  };
   let cursor: ExperienceArchiveCursor | undefined;
   let aborted = false;
 

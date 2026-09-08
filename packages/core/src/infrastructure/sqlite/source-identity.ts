@@ -332,3 +332,19 @@ export function listReferenceBatches(
     receivedAt: row.received_at,
   }));
 }
+
+/**
+ * The graph turn ids a source's parts record, in ordinal order. A rebuild or a replay projects
+ * under these rather than minting fresh ones: the whole point of recording them is that the same
+ * turn comes back as the same node.
+ */
+export function readSourcePartTurnIds(db: SqliteHandle, sourceId: string): readonly string[] {
+  const rows = db
+    .prepare(
+      `SELECT turn_id FROM source_parts
+       WHERE source_id = ? AND part_kind = 'turn' AND turn_id IS NOT NULL
+       ORDER BY ordinal`,
+    )
+    .all(sourceId) as { turn_id: string }[];
+  return rows.map((row) => row.turn_id);
+}
