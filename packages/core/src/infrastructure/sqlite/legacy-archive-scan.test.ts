@@ -213,6 +213,42 @@ describe('the frozen migration cohort', () => {
     expect(readMigrationProgress(store.db, 'cohort-1', 'archived-1')?.status).toBe('verified');
   });
 
+  it('refuses a repeat freeze that carries a different census', () => {
+    freeze(['archived-1']);
+    const before = readMigrationCohort(store.db, 'cohort-1');
+
+    expect(() =>
+      freezeMigrationCohort(store.db, {
+        cohortId: 'cohort-1',
+        cohortDigest: 'digest-2',
+        intakeWatermark: 5,
+        archiveRowidLow: 1,
+        archiveRowidHigh: 200,
+        graphCensusDigest: 'census-2',
+        orderingPolicyVersion: 1,
+        createdAt: NOW,
+        members: ['archived-1', 'late-arrival'],
+      }),
+    ).toThrow(/already frozen under a different census/);
+
+    expect(readMigrationCohort(store.db, 'cohort-1')).toEqual(before);
+    expect(readMigrationProgress(store.db, 'cohort-1', 'late-arrival')).toBeUndefined();
+    expect(countMigrationProgress(store.db, 'cohort-1')).toEqual({
+      accounted: 1,
+      verified: 0,
+      pinned: 0,
+    });
+  });
+
+  it('refuses a repeat freeze that keeps the header and changes the members', () => {
+    freeze(['archived-1']);
+
+    expect(() => freeze(['archived-1', 'late-arrival'])).toThrow(
+      /already frozen over a different member set/,
+    );
+    expect(readMigrationProgress(store.db, 'cohort-1', 'late-arrival')).toBeUndefined();
+  });
+
   it('the membership survives a close and reopen', () => {
     const path = join(dir, 'restart.sqlite');
     const first = new SqliteStore({ filePath: path });

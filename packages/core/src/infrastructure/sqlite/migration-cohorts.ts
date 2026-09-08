@@ -50,21 +50,65 @@ type CohortRowData = {
 
 export type MigrationStatus = 'accounted' | 'verified' | 'pinned';
 
+/** The header a retry has to repeat exactly, since the membership is the denominator it describes. */
+function headerMatches(frozen: MigrationCohort, freeze: CohortFreeze): boolean {
+  return (
+    frozen.cohortDigest === freeze.cohortDigest &&
+    frozen.intakeWatermark === freeze.intakeWatermark &&
+    frozen.archiveRowidLow === freeze.archiveRowidLow &&
+    frozen.archiveRowidHigh === freeze.archiveRowidHigh &&
+    frozen.graphCensusDigest === freeze.graphCensusDigest &&
+    frozen.orderingPolicyVersion === freeze.orderingPolicyVersion
+  );
+}
+
+function frozenMembers(db: SqliteHandle, cohortId: string): ReadonlySet<string> {
+  const rows = db
+    .prepare('SELECT source_id FROM migration_progress WHERE cohort_id = ?')
+    .all(cohortId) as { source_id: string }[];
+  return new Set(rows.map((row) => row.source_id));
+}
+
+function sameMembers(frozen: ReadonlySet<string>, supplied: readonly string[]): boolean {
+  const asked = new Set(supplied);
+  return asked.size === frozen.size && [...asked].every((sourceId) => frozen.has(sourceId));
+}
+
 /**
  * Writes the cohort and its whole membership in one transaction, so a restart between the two
- * cannot leave a cohort whose members are unknowable. Re-running it against the same cohort id
- * adds nothing: the rows are keyed and a member already accounted keeps whatever status the
- * scan has since given it.
+ * cannot leave a cohort whose members are unknowable, and an existing cohort row therefore
+ * proves its members were written too.
+ *
+ * Only the first call establishes the enumeration. A repeat reads the frozen record first and
+ * writes no member at all: the header records what the membership was counted over, so adding a
+ * source from a fresher census under the old digest and bounds would leave a denominator that
+ * describes a set nobody enumerated. A repeat that carries a different header or a different
+ * member set is refused rather than half-applied; a source that arrived since the freeze belongs
+ * to the tail, and a resumed pass updates progress rather than re-freezing.
+ *
+ * Returns the number of members written, which is zero for every repeat.
  */
 export function freezeMigrationCohort(db: SqliteHandle, freeze: CohortFreeze): number {
   return db
     .transaction((): number => {
+      const frozen = readMigrationCohort(db, freeze.cohortId);
+      if (frozen !== undefined) {
+        if (!headerMatches(frozen, freeze)) {
+          throw new Error(`cohort ${freeze.cohortId} is already frozen under a different census`);
+        }
+        if (!sameMembers(frozenMembers(db, freeze.cohortId), freeze.members)) {
+          throw new Error(
+            `cohort ${freeze.cohortId} is already frozen over a different member set`,
+          );
+        }
+        return 0;
+      }
+
       db.prepare(
         `INSERT INTO migration_cohorts
            (cohort_id, cohort_digest, intake_watermark, archive_rowid_low, archive_rowid_high,
             graph_census_digest, ordering_policy_version, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (cohort_id) DO NOTHING`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         freeze.cohortId,
         freeze.cohortDigest,
