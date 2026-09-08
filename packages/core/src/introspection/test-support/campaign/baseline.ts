@@ -1,12 +1,21 @@
 import type { Driver } from 'neo4j-driver';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
+import { archiveLimitReports } from './limits.js';
+import {
+  reading,
+  walkArchive,
+  walkGraphSources,
+  walkNarrativeEdges,
+  walkNarratives,
+  type WalkOutcome,
+} from './walks.js';
 import {
   readEntityMentionDistribution,
-  readGraphSourcePage,
-  readNarrativeEdgeStatePage,
   readRelationshipTypeCounts,
   type MentionBucket,
-  type NarrativeEdgeState,
   type RelationshipTypeCount,
 } from '../../../infrastructure/graph/campaign-cohort-queries.js';
 import {
@@ -20,7 +29,6 @@ import {
 import {
   readApiCallCensus,
   readArchiveCensus,
-  readArchiveShapePage,
   readUsageEventCensus,
   type ApiCallCensus,
   type ArchiveCensus,
@@ -29,7 +37,6 @@ import {
 } from '../../../infrastructure/sqlite/campaign-archive-reads.js';
 import { sqliteTableExists, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import {
-  checkLimit,
   distributionOf,
   type Distribution,
   type LimitReport,
@@ -46,34 +53,32 @@ import {
   type GaugeBasis,
   type GaugeStamp,
 } from '../../domain/campaign-gauges.js';
-import { COHORT_PAGE_BOUNDS } from '../../domain/campaign-paging.js';
 
 /**
  * The read-only baseline: what the substrate holds now, taken through the gauge envelope so
  * every number carries the population it was counted over.
  *
- * Groups whose producing schema does not exist yet report their whole observation set as
- * unavailable rather than as zero. A backlog of nothing and a table that was never installed
- * look identical at the number, and only one of them means there is no work to do.
+ * Nothing here throws. A store that refuses one read still leaves every other reading standing,
+ * and the refusal comes back as an unavailable gauge with its reason, because a collector that
+ * dies on the first outage reports nothing at all and a report of nothing is indistinguishable
+ * from a substrate holding nothing.
  */
 
 export const METRIC_VERSION = 1;
 
-/** Both walks page at the cohort bound, so an interrupted run resumes on the same key. */
-const PAGE_ROWS = COHORT_PAGE_BOUNDS.maxRows;
-
-/** Ceiling on the entity scan, reported beside the distribution it bounds. */
+/** Ceiling on the entity and orphan scans, reported beside the readings it bounds. */
 const MENTION_SCAN_LIMIT = DEFAULT_HEALTH_SCAN_LIMIT;
 
 export type CampaignBaseline = {
   readonly stamp: GaugeStamp;
   readonly gauges: Readonly<Record<GaugeGroup, Record<string, Gauge>>>;
-  readonly labelPopulations: Readonly<Record<string, number>>;
-  readonly relationshipTypes: readonly RelationshipTypeCount[];
-  readonly mentionBuckets: readonly MentionBucket[];
-  readonly staleEdgeIds: readonly string[];
-  readonly narrativeIds: readonly string[];
-  readonly graphSourceIds: readonly string[];
+  readonly labelPopulations?: Readonly<Record<string, number>>;
+  readonly relationshipTypes?: readonly RelationshipTypeCount[];
+  readonly mentionBuckets?: readonly MentionBucket[];
+  /** Absent when its walk failed. Empty membership is a reading, not a substitute for one. */
+  readonly staleEdgeIds?: readonly string[];
+  readonly narrativeIds?: readonly string[];
+  readonly graphSourceIds?: readonly string[];
   readonly archive?: ArchiveCensus;
   readonly usageEvents?: UsageEventCensus;
   readonly apiCalls?: ApiCallCensus;
@@ -82,110 +87,19 @@ export type CampaignBaseline = {
   readonly distributions: Readonly<Record<string, Distribution>>;
   /** Named observations no producer exists for yet, so a reader is not left guessing. */
   readonly notInstalled: readonly GaugeGroup[];
+  /** Every walk or reading that did not answer, with the reason it did not. */
+  readonly failures: Readonly<Record<string, string>>;
+  /** True only when every cohort walk persisted every member it examined. */
+  readonly exportComplete: boolean;
 };
-
-function stampFor(sampledAt: string, basis: GaugeBasis): GaugeStamp {
-  return { sampledAt, basis, metricVersion: METRIC_VERSION };
-}
-
-async function walkNarrativeEdges(driver: Driver): Promise<readonly NarrativeEdgeState[]> {
-  const all: NarrativeEdgeState[] = [];
-  let cursor: string | undefined;
-  for (;;) {
-    const page = await readNarrativeEdgeStatePage(driver, PAGE_ROWS, cursor);
-    if (page.length === 0) {
-      return all;
-    }
-    all.push(...page);
-    cursor = page[page.length - 1]?.id;
-  }
-}
-
-async function walkGraphSources(
-  driver: Driver,
-): Promise<
-  readonly { readonly id: string; readonly textLength: number; readonly turnCount: number }[]
-> {
-  const all: { id: string; textLength: number; turnCount: number }[] = [];
-  let cursor: string | undefined;
-  for (;;) {
-    const page = await readGraphSourcePage(driver, PAGE_ROWS, cursor);
-    if (page.length === 0) {
-      return all;
-    }
-    all.push(
-      ...page.map((row) => ({ id: row.id, textLength: row.textLength, turnCount: row.turnCount })),
-    );
-    cursor = page[page.length - 1]?.id;
-  }
-}
-
-function walkArchive(db: SqliteHandle): readonly ArchiveRecordShape[] {
-  const all: ArchiveRecordShape[] = [];
-  let cursor: { occurredAt: string; id: string } | undefined;
-  for (;;) {
-    const page = readArchiveShapePage(db, cursor, PAGE_ROWS);
-    if (page.length === 0) {
-      return all;
-    }
-    all.push(...page);
-    const last = page[page.length - 1];
-    cursor = last === undefined ? undefined : { occurredAt: last.occurredAt, id: last.id };
-  }
-}
-
-/**
- * The proposed bounds the stored corpus is checked against. Only the ones whose subject is
- * already stored are here: a limit on a record shape nothing writes yet has no corpus to be
- * measured against, and reporting it as passing would be reporting an absence as a result.
- */
-const REQUEST_LIMITS = {
-  turns: 200,
-  observations: 64,
-  toolExecutions: 64,
-  payloadBytes: 512 * 1024,
-  rawPayloadBytes: 256 * 1024,
-} as const;
-
-function archiveLimitReports(
-  shapes: readonly ArchiveRecordShape[],
-): Readonly<Record<string, LimitReport>> {
-  const keyed = (pick: (shape: ArchiveRecordShape) => number) =>
-    shapes.map((shape) => ({ key: shape.episodeId, value: pick(shape) }));
-  return {
-    request_turns: checkLimit(
-      keyed((shape) => shape.turnCount),
-      REQUEST_LIMITS.turns,
-      'turns',
-    ),
-    request_observations: checkLimit(
-      keyed((shape) => shape.observationCount),
-      REQUEST_LIMITS.observations,
-      'observations',
-    ),
-    request_tool_executions: checkLimit(
-      keyed((shape) => shape.toolExecutionCount),
-      REQUEST_LIMITS.toolExecutions,
-      'tool executions',
-    ),
-    request_payload_bytes: checkLimit(
-      keyed((shape) => shape.payloadBytes),
-      REQUEST_LIMITS.payloadBytes,
-      'bytes',
-    ),
-    raw_source_bytes: checkLimit(
-      keyed((shape) => shape.payloadBytes),
-      REQUEST_LIMITS.rawPayloadBytes,
-      'bytes',
-    ),
-  };
-}
 
 export type BaselineDeps = {
   readonly driver: Driver;
   /** Absent when no substrate file was reachable, which every SQLite group then reports. */
   readonly db?: SqliteHandle;
   readonly sampledAt: string;
+  /** Where the cohort pages are persisted. A temporary directory when the caller names none. */
+  readonly exportDir?: string;
 };
 
 /** The groups whose producing schema does not ship yet, reported whole rather than skipped. */
@@ -197,117 +111,219 @@ const PENDING_GROUPS: readonly GaugeGroup[] = [
   'work_preservation',
 ];
 
+type Collected = {
+  readonly outcomes: Map<string, Gauge>;
+  readonly failures: Map<string, string>;
+};
+
+function note<T>(collected: Collected, name: string, outcome: WalkOutcome<T>): void {
+  if (outcome.status === 'failed') {
+    collected.failures.set(name, `${outcome.reason}: ${outcome.detail}`);
+  }
+}
+
 export async function collectBaseline(deps: BaselineDeps): Promise<CampaignBaseline> {
   const live: GaugeBasis = { population: 'live', denominator: 'the whole substrate' };
-  const stamp = stampFor(deps.sampledAt, live);
+  const stamp: GaugeStamp = {
+    sampledAt: deps.sampledAt,
+    basis: live,
+    metricVersion: METRIC_VERSION,
+  };
+  const owned = deps.exportDir === undefined;
+  const dir = deps.exportDir ?? mkdtempSync(join(tmpdir(), 'aion-campaign-export-'));
 
-  const edges = await walkNarrativeEdges(deps.driver);
-  const sources = await walkGraphSources(deps.driver);
-  const labels = await countNodesByLabel(deps.driver);
-  const elements = await countGraphElements(deps.driver);
-  const orphans = await countOrphanNodes(deps.driver, MENTION_SCAN_LIMIT);
-  const relationshipTypes = await readRelationshipTypeCounts(deps.driver);
-  const mentionBuckets = await readEntityMentionDistribution(deps.driver, MENTION_SCAN_LIMIT);
+  try {
+    return await collect(deps, stamp, dir);
+  } finally {
+    if (owned) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+}
 
-  const staleEdgeIds = edges
-    .filter((edge) => edge.open && edge.targetClosed)
-    .map((edge) => edge.id);
-  const narrativeIds = [...new Set(edges.map((edge) => edge.targetId))].sort();
+async function collect(
+  deps: BaselineDeps,
+  stamp: GaugeStamp,
+  dir: string,
+): Promise<CampaignBaseline> {
+  const collected: Collected = { outcomes: new Map(), failures: new Map() };
+  const scanned = (what: string): GaugeBasis => ({
+    population: 'live',
+    denominator: `${what}, first ${String(MENTION_SCAN_LIMIT)} scanned`,
+  });
 
-  const substrate = deps.db;
-  const archiveInstalled =
-    substrate !== undefined && sqliteTableExists(substrate, 'experience_archive');
-  const shapes = substrate !== undefined && archiveInstalled ? walkArchive(substrate) : [];
+  const edges = await walkNarrativeEdges(deps.driver, dir);
+  const sources = await walkGraphSources(deps.driver, dir);
+  const narratives = await walkNarratives(deps.driver, dir);
+  const labels = await reading(async () => countNodesByLabel(deps.driver));
+  const elements = await reading(async () => countGraphElements(deps.driver));
+  const orphans = await reading(async () => countOrphanNodes(deps.driver, MENTION_SCAN_LIMIT));
+  const types = await reading(async () => readRelationshipTypeCounts(deps.driver));
+  const buckets = await reading(async () =>
+    readEntityMentionDistribution(deps.driver, MENTION_SCAN_LIMIT),
+  );
+  const archive = walkArchive(deps.db);
 
-  const outcomes = new Map<string, Gauge>([
-    ['stale_edge_partition', measuredGauge(staleEdgeIds.length, 'edges', stamp)],
-    ['label_populations', measuredGauge(labels.size, 'labels', stamp)],
-    ['physical_node_count', measuredGauge(elements.nodes, 'nodes', stamp)],
-    ['physical_relationship_count', measuredGauge(elements.relationships, 'relationships', stamp)],
-    [
-      'orphan_count',
-      measuredGauge(orphans.orphans, 'nodes', {
-        ...stamp,
-        basis: {
-          population: 'live',
-          denominator: `current Memory nodes past enrichment, first ${String(MENTION_SCAN_LIMIT)} scanned`,
-        },
-      }),
-    ],
-    [
-      'entity_mention_distribution',
-      measuredGauge(mentionBuckets.length, 'buckets', {
-        ...stamp,
-        basis: {
-          population: 'live',
-          denominator: `current entities, first ${String(MENTION_SCAN_LIMIT)} scanned`,
-        },
-      }),
-    ],
-    [
-      'inspectable_original_sources',
-      measuredGauge(sources.length, 'episodes', {
-        ...stamp,
-        basis: { population: 'live', denominator: 'Episode nodes, whatever their currency' },
-      }),
-    ],
-    // Physical byte figures need the server's own store reading and a disk measurement, and
-    // neither is taken here. Reported as not collected rather than left out.
-    ['physical_removal_bytes', unavailableGauge('not_collected', stamp)],
-    ['vector_bytes', unavailableGauge('not_collected', stamp)],
-    ['recall_trace_latency_ms', unavailableGauge('not_collected', stamp)],
-    ['unmeasured_pagecache_disk', unavailableGauge('not_collected', stamp)],
-    ['retained_node_state', unavailableGauge('not_collected', stamp)],
-  ]);
+  note(collected, 'narrative_edges', edges);
+  note(collected, 'graph_sources', sources);
+  note(collected, 'narratives', narratives);
+  note(collected, 'label_populations', labels);
+  note(collected, 'graph_elements', elements);
+  note(collected, 'orphan_count', orphans);
+  note(collected, 'relationship_types', types);
+  note(collected, 'entity_mentions', buckets);
+  note(collected, 'experience_archive', archive);
 
+  const staleEdgeIds =
+    edges.status === 'ok'
+      ? edges.rows.filter((edge) => edge.open && edge.targetClosed).map((edge) => edge.id)
+      : undefined;
+  const labelMap = labels.status === 'ok' ? labels.rows[0] : undefined;
+  const elementCounts = elements.status === 'ok' ? elements.rows[0] : undefined;
+  const orphanCounts = orphans.status === 'ok' ? orphans.rows[0] : undefined;
+  const shapes: readonly ArchiveRecordShape[] = archive.status === 'ok' ? archive.rows : [];
+
+  const { outcomes } = collected;
+  outcomes.set(
+    'stale_edge_partition',
+    staleEdgeIds === undefined
+      ? unavailableGauge('collector_failed', stamp)
+      : measuredGauge(staleEdgeIds.length, 'edges', stamp),
+  );
+  outcomes.set(
+    'label_populations',
+    labelMap === undefined
+      ? unavailableGauge('collector_failed', stamp)
+      : measuredGauge(labelMap.size, 'labels', stamp),
+  );
+  outcomes.set(
+    'physical_node_count',
+    elementCounts === undefined
+      ? unavailableGauge('collector_failed', stamp)
+      : measuredGauge(elementCounts.nodes, 'nodes', stamp),
+  );
+  outcomes.set(
+    'physical_relationship_count',
+    elementCounts === undefined
+      ? unavailableGauge('collector_failed', stamp)
+      : measuredGauge(elementCounts.relationships, 'relationships', stamp),
+  );
+  outcomes.set(
+    'orphan_count',
+    orphanCounts === undefined
+      ? unavailableGauge('collector_failed', stamp)
+      : measuredGauge(orphanCounts.orphans, 'nodes', {
+          ...stamp,
+          basis: scanned('current Memory nodes past enrichment'),
+        }),
+  );
+  outcomes.set(
+    'entity_mention_distribution',
+    buckets.status === 'ok' && buckets.rows[0] !== undefined
+      ? measuredGauge(buckets.rows[0].length, 'buckets', {
+          ...stamp,
+          basis: scanned('current entities'),
+        })
+      : unavailableGauge('collector_failed', stamp),
+  );
+  outcomes.set(
+    'inspectable_original_sources',
+    sources.status === 'ok'
+      ? measuredGauge(sources.rows.length, 'episodes', {
+          ...stamp,
+          basis: { population: 'live', denominator: 'Episode nodes, whatever their currency' },
+        })
+      : unavailableGauge('collector_failed', stamp),
+  );
+  // Physical byte figures need the server's own store reading and a disk measurement, and
+  // neither is taken here. A cost figure needs a bounded surface measurement, which is a
+  // later obligation: the call census below counts calls and says so in its own name.
+  for (const name of [
+    'physical_removal_bytes',
+    'vector_bytes',
+    'recall_trace_latency_ms',
+    'unmeasured_pagecache_disk',
+    'retained_node_state',
+    'cost_by_surface',
+  ]) {
+    outcomes.set(name, unavailableGauge('not_collected', stamp));
+  }
+  outcomes.set('api_call_census', apiCallGauge(deps.db, stamp));
   if (deps.db === undefined) {
     outcomes.set('cost_by_surface', unavailableGauge('store_unavailable', stamp));
-  } else {
-    const calls = readApiCallCensus(deps.db);
-    outcomes.set('cost_by_surface', measuredGauge(calls.rows, 'api calls', stamp));
+  } else if (!sqliteTableExists(deps.db, 'api_calls')) {
+    outcomes.set('cost_by_surface', unavailableGauge('not_installed', stamp));
   }
 
-  const gauges = {
-    seal_demand: Object.fromEntries(unavailableGroup('seal_demand', 'not_installed', stamp)),
-    eviction_demand: Object.fromEntries(
-      unavailableGroup('eviction_demand', 'not_installed', stamp),
-    ),
-    recovery: Object.fromEntries(unavailableGroup('recovery', 'not_installed', stamp)),
-    evidence_integrity: Object.fromEntries(
-      unavailableGroup('evidence_integrity', 'not_installed', stamp),
-    ),
-    work_preservation: Object.fromEntries(
-      unavailableGroup('work_preservation', 'not_installed', stamp),
-    ),
-    independent_outcomes: Object.fromEntries(
-      withUncollected('independent_outcomes', outcomes, stamp),
-    ),
-  };
-
-  const sourceTextLengths = distributionOf(sources.map((source) => source.textLength));
-  const turnCounts = distributionOf(sources.map((source) => source.turnCount));
-
-  return {
-    stamp,
-    gauges,
-    labelPopulations: Object.fromEntries([...labels.entries()].sort()),
-    relationshipTypes,
-    mentionBuckets,
-    staleEdgeIds,
-    narrativeIds,
-    graphSourceIds: sources.map((source) => source.id),
-    ...(deps.db === undefined || !archiveInstalled
-      ? {}
-      : {
+  const sourceRows = sources.status === 'ok' ? sources.rows : [];
+  const textLengths = distributionOf(sourceRows.map((source) => source.textLength));
+  const turnCounts = distributionOf(sourceRows.map((source) => source.turnCount));
+  const census =
+    deps.db !== undefined && archive.status === 'ok'
+      ? {
           archive: readArchiveCensus(deps.db),
           usageEvents: readUsageEventCensus(deps.db),
           apiCalls: readApiCallCensus(deps.db),
-        }),
-    limitReports: archiveLimitReports(shapes),
+        }
+      : {};
+
+  return {
+    stamp,
+    gauges: {
+      seal_demand: Object.fromEntries(unavailableGroup('seal_demand', 'not_installed', stamp)),
+      eviction_demand: Object.fromEntries(
+        unavailableGroup('eviction_demand', 'not_installed', stamp),
+      ),
+      recovery: Object.fromEntries(unavailableGroup('recovery', 'not_installed', stamp)),
+      evidence_integrity: Object.fromEntries(
+        unavailableGroup('evidence_integrity', 'not_installed', stamp),
+      ),
+      work_preservation: Object.fromEntries(
+        unavailableGroup('work_preservation', 'not_installed', stamp),
+      ),
+      independent_outcomes: Object.fromEntries(
+        withUncollected('independent_outcomes', outcomes, stamp),
+      ),
+    },
+    ...(labelMap === undefined
+      ? {}
+      : { labelPopulations: Object.fromEntries([...labelMap.entries()].sort()) }),
+    ...(types.status === 'ok' && types.rows[0] !== undefined
+      ? { relationshipTypes: types.rows[0] }
+      : {}),
+    ...(buckets.status === 'ok' && buckets.rows[0] !== undefined
+      ? { mentionBuckets: buckets.rows[0] }
+      : {}),
+    ...(staleEdgeIds === undefined ? {} : { staleEdgeIds }),
+    ...(narratives.status === 'ok'
+      ? { narrativeIds: narratives.rows.map((narrative) => narrative.id) }
+      : {}),
+    ...(sources.status === 'ok' ? { graphSourceIds: sourceRows.map((source) => source.id) } : {}),
+    ...census,
+    limitReports: archive.status === 'ok' ? archiveLimitReports(shapes) : {},
     distributions: {
-      ...(sourceTextLengths === undefined ? {} : { episode_text_characters: sourceTextLengths }),
+      ...(textLengths === undefined ? {} : { episode_text_characters: textLengths }),
       ...(turnCounts === undefined ? {} : { episode_turn_count: turnCounts }),
     },
     notInstalled: PENDING_GROUPS,
+    failures: Object.fromEntries(collected.failures),
+    exportComplete: [edges, sources, narratives].every(
+      (walk) => walk.status === 'ok' && walk.exportComplete,
+    ),
   };
+}
+
+/** The call meter counted as calls, under its own name. It is not a cost. */
+function apiCallGauge(db: SqliteHandle | undefined, stamp: GaugeStamp): Gauge {
+  if (db === undefined) {
+    return unavailableGauge('store_unavailable', stamp);
+  }
+  if (!sqliteTableExists(db, 'api_calls')) {
+    return unavailableGauge('not_installed', stamp);
+  }
+  try {
+    return measuredGauge(readApiCallCensus(db).rows, 'api calls', stamp);
+  } catch {
+    return unavailableGauge('collector_failed', stamp);
+  }
 }

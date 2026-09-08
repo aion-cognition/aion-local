@@ -184,3 +184,48 @@ export async function readRelationshipTypeCounts(
     closed: (row.closed as number | null) ?? 0,
   }));
 }
+
+export type NarrativeRow = {
+  readonly id: string;
+  readonly sessionId: string;
+  readonly open: boolean;
+  readonly validUntil?: string;
+};
+
+/**
+ * A page of Narrative nodes by id, standing and closed alike.
+ *
+ * Enumerated from the label rather than from the endpoints of summarization edges. A narrative
+ * whose source edges are gone still occupies the substrate, still has to be accounted for by
+ * cleanup and by any eviction comparison, and reading membership off the edges is exactly how
+ * such a record goes missing from the census that is supposed to find it.
+ */
+export function buildNarrativePage(limit: number, cursor?: string): GraphStatement {
+  assertPositiveInt('limit', limit);
+  const { validUntil } = BITEMPORAL_PROPERTIES;
+  const cypher = [
+    'MATCH (n:Narrative)',
+    'WHERE $cursor IS NULL OR n.id > $cursor',
+    'WITH n ORDER BY n.id ASC LIMIT $limit',
+    `RETURN n.id AS id, n.${MEMORY_PROPERTIES.sessionId} AS sessionId,`,
+    `       n.${validUntil} IS NULL AS open, toString(n.${validUntil}) AS validUntil`,
+  ].join('\n');
+
+  return { cypher, parameters: { limit: toGraphInteger(limit), cursor: cursor ?? null } };
+}
+
+export async function readNarrativePage(
+  driver: Driver,
+  limit: number,
+  cursor?: string,
+): Promise<readonly NarrativeRow[]> {
+  return runRead(driver, buildNarrativePage(limit, cursor), (row) => {
+    const { validUntil } = row;
+    return {
+      id: (row.id as string | null) ?? '',
+      sessionId: (row.sessionId as string | null) ?? '',
+      open: row.open === true,
+      ...(typeof validUntil === 'string' ? { validUntil } : {}),
+    };
+  });
+}

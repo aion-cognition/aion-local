@@ -5,10 +5,13 @@
  * page that happens to hold large rows from becoming one enormous serialization. A single row
  * bigger than the whole page ceiling is named and streamed on its own rather than dropped,
  * because a cohort member that silently does not appear is a member the comparison later
- * cannot account for.
+ * cannot account for. Naming it is not exporting it: an oversized member is accounted for only
+ * once its own bytes and their checksum are persisted.
  *
- * The cursor is the stable key of the last row the page accounted for, never an offset: an
- * offset into a graph that is still taking writes skips and repeats members between pages.
+ * The cursor is the stable key of the last row the page examined, never an offset: an offset
+ * into a graph that is still taking writes skips and repeats members between pages. A page that
+ * consumed everything it was handed still reports a cursor, because the rows it was handed are
+ * one fetch and not the store.
  */
 
 export type PageBounds = {
@@ -56,20 +59,20 @@ export function boundPage<T>(
   const oversized: OversizedMember[] = [];
   let bytes = 0;
   let lastKey: string | undefined;
-  let consumed = 0;
 
   for (const row of rows) {
     const key = shape.key(row);
     const size = shape.bytes(row);
 
+    // Every member the page looks at counts against the row cap, oversized ones included: a
+    // page that examined a thousand members did that work whatever it managed to carry.
+    if (kept.length + oversized.length >= bounds.maxRows) {
+      break;
+    }
     if (size > bounds.maxBytes) {
       oversized.push({ key, bytes: size });
       lastKey = key;
-      consumed += 1;
       continue;
-    }
-    if (kept.length >= bounds.maxRows) {
-      break;
     }
     if (bytes + size > bounds.maxBytes) {
       break;
@@ -78,15 +81,13 @@ export function boundPage<T>(
     kept.push(row);
     bytes += size;
     lastKey = key;
-    consumed += 1;
   }
 
-  const exhausted = consumed === rows.length;
   return {
     rows: kept,
     bytes,
     oversized,
-    ...(exhausted || lastKey === undefined ? {} : { nextCursor: lastKey }),
+    ...(lastKey === undefined ? {} : { nextCursor: lastKey }),
   };
 }
 
@@ -97,22 +98,46 @@ export function boundPage<T>(
  */
 export type ExportProgress = {
   readonly cursor?: string;
+  /** Members whose content is persisted. */
   readonly accounted: readonly string[];
+  /**
+   * Members named by a page and still owed their own stream. Never counted as exported.
+   * Absent on a record written before any page named one, which reads as none owed.
+   */
+  readonly pendingOversized?: readonly OversizedMember[];
 };
 
+export const EMPTY_PROGRESS: ExportProgress = { accounted: [], pendingOversized: [] };
+
+/**
+ * Folds one written page into the record. Rows the page carried are accounted for, since the
+ * page holding them is what was persisted. An oversized member only becomes owed work here:
+ * naming it in a page exports nothing, so it waits for its own transfer.
+ */
 export function advanceProgress<T>(
   progress: ExportProgress,
   page: BoundedPage<T>,
   shape: PageShape<T>,
 ): ExportProgress {
-  const accounted = [
-    ...progress.accounted,
-    ...page.rows.map(shape.key),
-    ...page.oversized.map((member) => member.key),
-  ];
+  const pending = progress.pendingOversized ?? [];
+  const named = new Set(pending.map((member) => member.key));
   return {
-    accounted,
+    accounted: [...progress.accounted, ...page.rows.map(shape.key)],
+    pendingOversized: [...pending, ...page.oversized.filter((member) => !named.has(member.key))],
     ...(page.nextCursor === undefined ? {} : { cursor: page.nextCursor }),
+  };
+}
+
+/** Moves one oversized member across, once its bytes and their checksum are on disk. */
+export function recordOversizedExport(progress: ExportProgress, key: string): ExportProgress {
+  const pending = progress.pendingOversized ?? [];
+  if (!pending.some((member) => member.key === key)) {
+    return progress;
+  }
+  return {
+    ...progress,
+    accounted: [...progress.accounted, key],
+    pendingOversized: pending.filter((member) => member.key !== key),
   };
 }
 
@@ -132,7 +157,8 @@ export function exportIsComplete(
   for (const key of progress.accounted) {
     seen.set(key, (seen.get(key) ?? 0) + 1);
   }
-  const missing = expected.filter((key) => !seen.has(key));
+  const pending = new Set((progress.pendingOversized ?? []).map((member) => member.key));
+  const missing = expected.filter((key) => !seen.has(key) || pending.has(key));
   const duplicated = [...seen.entries()]
     .filter(([, count]) => count > 1)
     .map(([key]) => key)

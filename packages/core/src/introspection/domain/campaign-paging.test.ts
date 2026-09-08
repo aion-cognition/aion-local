@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   advanceProgress,
   boundPage,
+  EMPTY_PROGRESS,
   exportIsComplete,
+  recordOversizedExport,
   type ExportProgress,
   type PageShape,
 } from './campaign-paging.js';
@@ -42,24 +44,43 @@ describe('bounding one page of a cohort export', () => {
     expect(page.rows.map((row) => row.id)).toEqual(['r0000', 'r0001']);
   });
 
-  it('reports no cursor once the rows it was given run out', () => {
+  it('reports the last key it examined, since one fetch is not the store', () => {
     const page = boundPage(rows(2), SHAPE, { maxRows: 10, maxBytes: 1000 });
-    expect(page.nextCursor).toBe(undefined);
+    expect(page.nextCursor).toBe('r0001');
   });
 
-  it('advances past an oversized row so a resumed read does not see it twice', () => {
+  it('reports no cursor when it was handed nothing', () => {
+    expect(boundPage([], SHAPE, { maxRows: 10, maxBytes: 1000 }).nextCursor).toBe(undefined);
+  });
+
+  it('counts an oversized row against the row cap', () => {
+    const page = boundPage([{ id: 'huge', size: 5000 }, ...rows(3)], SHAPE, {
+      maxRows: 2,
+      maxBytes: 1000,
+    });
+    expect(page.oversized).toHaveLength(1);
+    expect(page.rows).toHaveLength(1);
+  });
+
+  it('owes an oversized row its own transfer rather than counting it exported', () => {
     const page = boundPage([{ id: 'huge', size: 5000 }], SHAPE, { maxRows: 10, maxBytes: 10 });
     expect(page.rows).toEqual([]);
-    expect(page.nextCursor).toBe(undefined);
-    const progress = advanceProgress({ accounted: [] }, page, SHAPE);
-    expect(progress.accounted).toEqual(['huge']);
+    const progress = advanceProgress(EMPTY_PROGRESS, page, SHAPE);
+    expect(progress.accounted).toEqual([]);
+    expect(progress.pendingOversized).toEqual([{ key: 'huge', bytes: 5000 }]);
+    expect(exportIsComplete(progress, ['huge']).complete).toBe(false);
+
+    const transferred = recordOversizedExport(progress, 'huge');
+    expect(transferred.accounted).toEqual(['huge']);
+    expect(transferred.pendingOversized).toEqual([]);
+    expect(exportIsComplete(transferred, ['huge']).complete).toBe(true);
   });
 });
 
 describe('resuming an interrupted export', () => {
   it('visits every member exactly once across pages', () => {
     const all = rows(7);
-    let progress: ExportProgress = { accounted: [] };
+    let progress: ExportProgress = EMPTY_PROGRESS;
     let cursor: string | undefined;
 
     for (let pass = 0; pass < 10; pass += 1) {
@@ -84,7 +105,7 @@ describe('resuming an interrupted export', () => {
   });
 
   it('names the member a restart lost', () => {
-    const progress: ExportProgress = { accounted: ['a', 'c'] };
+    const progress: ExportProgress = { accounted: ['a', 'c'], pendingOversized: [] };
     expect(exportIsComplete(progress, ['a', 'b', 'c'])).toMatchObject({
       complete: false,
       missing: ['b'],
@@ -92,7 +113,7 @@ describe('resuming an interrupted export', () => {
   });
 
   it('names the member a restart read twice', () => {
-    const progress: ExportProgress = { accounted: ['a', 'a', 'b'] };
+    const progress: ExportProgress = { accounted: ['a', 'a', 'b'], pendingOversized: [] };
     expect(exportIsComplete(progress, ['a', 'b'])).toMatchObject({
       complete: false,
       duplicated: ['a'],

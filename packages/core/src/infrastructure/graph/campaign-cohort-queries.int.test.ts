@@ -25,6 +25,7 @@ import { toGraphDateTime } from './values.js';
 import {
   advanceProgress,
   boundPage,
+  EMPTY_PROGRESS,
   exportIsComplete,
   type ExportProgress,
   type PageShape,
@@ -161,7 +162,7 @@ describe('walking the summarization edges', () => {
   });
 
   it('visits every edge exactly once across pages and resumes from the cursor', async () => {
-    let progress: ExportProgress = { accounted: [] };
+    let progress: ExportProgress = EMPTY_PROGRESS;
     let cursor: string | undefined;
 
     for (let pass = 0; pass < 10; pass += 1) {

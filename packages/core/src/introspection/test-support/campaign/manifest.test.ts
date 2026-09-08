@@ -20,11 +20,21 @@ function input(overrides: Partial<ManifestInput> = {}): ManifestInput {
     startedAt: '2026-09-07T00:00:00.000Z',
     finishedAt: '2026-09-07T00:01:00.000Z',
     buildSha: 'abc1234',
+    provenance: {
+      collectorBuildSha: 'abc1234',
+      deployedBuildSha: 'unknown',
+      collectorArchiveSchemaVersion: 1,
+      installedSqliteTables: ['experience_archive'],
+      appliedGraphMigrations: ['graph:migration:001'],
+    },
     config: DEFAULTS,
     substrate: {
       graphEndpoint: 'bolt://127.0.0.1:7687',
       sqlitePath: '/tmp/copy/aion.sqlite',
-      sqliteSource: 'copy_of_live',
+      sqliteSource: 'backup_api',
+      sqliteAcquiredFrom: '2026-09-07T23:00:00.000Z',
+      sqliteAcquiredUntil: '2026-09-07T23:00:04.000Z',
+      sqliteDigest: 'f'.repeat(64),
     },
     frozen: { staleEdgeIds: ['e1', 'e2'], graphSourceIds: ['s1'], narrativeIds: ['n1'] },
     ...overrides,
@@ -70,7 +80,22 @@ describe('the campaign manifest', () => {
   it('says the readings are bounded by their window rather than a snapshot', () => {
     const manifest = buildCampaignManifest(input());
     expect(manifest.observationKind).toBe('bounded_window');
-    expect(manifest.substrate.sqliteSource).toBe('copy_of_live');
+    expect(manifest.substrate.sqliteSource).toBe('backup_api');
+  });
+
+  it('records the substrate acquisition apart from the graph read window', () => {
+    const manifest = buildCampaignManifest(input());
+    expect(manifest.substrate.sqliteAcquiredFrom).toBe('2026-09-07T23:00:00.000Z');
+    expect(manifest.substrate.sqliteAcquiredUntil).toBe('2026-09-07T23:00:04.000Z');
+    expect(manifest.substrate.sqliteDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(manifest.startedAt).not.toBe(manifest.substrate.sqliteAcquiredFrom);
+  });
+
+  it('keeps the collector build apart from the one the service runs', () => {
+    const manifest = buildCampaignManifest(input());
+    expect(manifest.provenance.collectorBuildSha).toBe('abc1234');
+    expect(manifest.provenance.deployedBuildSha).toBe('unknown');
+    expect(manifest.provenance.appliedGraphMigrations).toEqual(['graph:migration:001']);
   });
 
   it('carries no secret value', () => {

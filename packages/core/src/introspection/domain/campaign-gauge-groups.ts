@@ -93,6 +93,9 @@ export const GAUGE_OBSERVATIONS: Readonly<Record<GaugeGroup, readonly string[]>>
     'physical_removal_bytes',
     'vector_bytes',
     'recall_trace_latency_ms',
+    // Calls counted as calls. A cost needs a bounded per-surface measurement, and until one
+    // exists the two must not share a name.
+    'api_call_census',
     'cost_by_surface',
     'unmeasured_pagecache_disk',
   ],

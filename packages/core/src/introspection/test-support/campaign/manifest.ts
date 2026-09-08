@@ -14,15 +14,38 @@ import type { Config } from '../../../infrastructure/config/schema.js';
 /** Config leaves that hold a secret. Their values never reach a digest, a report, or a log. */
 const SECRET_PATHS: readonly string[] = ['neo4j.password', 'anthropic.apiKey'];
 
+/**
+ * How the SQLite figures were acquired.
+ *
+ * `backup_api` is the supported consistent read: SQLite copies the database through a reader
+ * that holds its own transaction, so the result is one state rather than a mixture. A plain
+ * file copy taken while writers are active is not that, and it keeps its own name so a reading
+ * derived from one is never read as the other.
+ */
+export type SqliteAcquisition = 'live_file' | 'copy_of_live' | 'backup_api';
+
 export type SubstrateIdentity = {
   readonly graphEndpoint: string;
   readonly sqlitePath: string;
-  /**
-   * Whether the SQLite figures came from the running file or from a copy taken beside it.
-   * A copy taken while the service is running is an observational capture: the two stores
-   * were not stopped, so their readings are bounded by the window rather than atomic.
-   */
-  readonly sqliteSource: 'live_file' | 'copy_of_live';
+  readonly sqliteSource: SqliteAcquisition;
+  /** When the copy was taken, which is a different window from the graph read. */
+  readonly sqliteAcquiredFrom?: string;
+  readonly sqliteAcquiredUntil?: string;
+  /** sha256 of the file the readings were taken from. */
+  readonly sqliteDigest?: string;
+};
+
+/**
+ * What produced the readings and what the substrate had installed. The collector's build is
+ * knowable here; the running service's is not, and it says so rather than borrowing the
+ * collector's.
+ */
+export type BuildProvenance = {
+  readonly collectorBuildSha: string;
+  readonly deployedBuildSha: string;
+  readonly collectorArchiveSchemaVersion: number;
+  readonly installedSqliteTables: readonly string[];
+  readonly appliedGraphMigrations: readonly string[];
 };
 
 export type FrozenMembership = {
@@ -38,6 +61,7 @@ export type CampaignManifest = {
   readonly startedAt: string;
   readonly finishedAt: string;
   readonly buildSha: string;
+  readonly provenance: BuildProvenance;
   readonly configDigest: string;
   readonly substrate: SubstrateIdentity;
   readonly frozen: FrozenMembership;
@@ -75,6 +99,7 @@ export type ManifestInput = {
   readonly startedAt: string;
   readonly finishedAt: string;
   readonly buildSha: string;
+  readonly provenance: BuildProvenance;
   readonly config: Config;
   readonly substrate: SubstrateIdentity;
   readonly frozen: FrozenMembership;
@@ -99,6 +124,7 @@ export function buildCampaignManifest(input: ManifestInput): CampaignManifest {
     startedAt: input.startedAt,
     finishedAt: input.finishedAt,
     buildSha: input.buildSha,
+    provenance: input.provenance,
     configDigest: configDigest(input.config),
     substrate: input.substrate,
     frozen: input.frozen,
