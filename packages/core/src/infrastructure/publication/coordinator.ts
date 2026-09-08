@@ -4,6 +4,7 @@ import {
   PublicationInvariantError,
   PublicationPendingError,
   PublicationUnavailable,
+  publicationFailure,
 } from './errors.js';
 import { canonicalJson, parseJson } from './json.js';
 import { needsGraphCompletion, validatePublicationEffects } from './operation.js';
@@ -366,10 +367,12 @@ export class PublicationCoordinator {
       }
       return await this.#ack(saved, handler, plan);
     } catch (err) {
-      if (err instanceof PublicationInvariantError) {
+      if (err instanceof PublicationUnavailable) {
         throw err;
       }
-      throw new PublicationPendingError(record.operationId, err);
+      throw lock.commitAttempted
+        ? new PublicationPendingError(record.operationId, err)
+        : publicationFailure(err, record.operationId);
     }
   }
 

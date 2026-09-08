@@ -1,5 +1,5 @@
 import type { SqliteHandle } from './database.js';
-import { PublicationInvariantError } from '../publication/errors.js';
+import { PublicationInvariantError, publicationFailure } from '../publication/errors.js';
 
 /** A graph lock must not be held through the connection's ordinary long busy timeout. */
 export function publicationWrite<T>(db: SqliteHandle, work: () => T): T {
@@ -25,6 +25,8 @@ export function publicationWrite<T>(db: SqliteHandle, work: () => T): T {
         return value;
       })
       .immediate();
+  } catch (err) {
+    throw publicationFailure(err);
   } finally {
     db.pragma(`busy_timeout = ${timeout}`);
   }

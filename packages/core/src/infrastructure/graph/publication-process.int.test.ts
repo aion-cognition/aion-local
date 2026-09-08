@@ -235,7 +235,9 @@ it('yields immediately on SQLite contention and releases its graph lock', async 
   await expect(
     coordinator.publish({ kind: 'semantic_write', operationId: 'sqlite-busy', payload }),
   ).rejects.toMatchObject({
-    code: 'SQLITE_BUSY',
+    reason: 'store_busy',
+    retryable: true,
+    cause: { code: 'SQLITE_BUSY' },
   });
   const elapsed = performance.now() - started;
   expect(elapsed).toBeLessThan(1500);

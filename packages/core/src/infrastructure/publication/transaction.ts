@@ -1,7 +1,7 @@
 import neo4j, { type Driver, type Transaction } from 'neo4j-driver';
 import { performance } from 'node:perf_hooks';
 
-import { PublicationInvariantError } from './errors.js';
+import { PublicationInvariantError, publicationFailure } from './errors.js';
 import { verifyPublicationState } from './protocol.js';
 import type { PublicationMetric } from './types.js';
 import { GraphTransaction } from '../graph/connection.js';
@@ -14,6 +14,7 @@ export type LockedPublication = {
   readonly graph: GraphTransaction;
   readonly receipt: GuardReceipt;
   readonly acquiredAt: number;
+  readonly commitAttempted: boolean;
   committedAt?: number;
   commit(): Promise<void>;
 };
@@ -38,6 +39,18 @@ export class PublicationTransactions {
     work: (lock: LockedPublication) => Promise<T>,
     deadlineMs: number = this.#options.timeoutMs,
   ): Promise<T> {
+    try {
+      return await this.#run(operation, work, deadlineMs);
+    } catch (err) {
+      throw publicationFailure(err);
+    }
+  }
+
+  async #run<T>(
+    operation: PublicationMetric['operation'],
+    work: (lock: LockedPublication) => Promise<T>,
+    deadlineMs: number,
+  ): Promise<T> {
     const { db, driver, logger, now } = this.#options;
     if (db.inTransaction) {
       throw new PublicationInvariantError('enclosing_sqlite_transaction');
@@ -53,16 +66,19 @@ export class PublicationTransactions {
       native = active;
       const graph = new GraphTransaction(active);
       const receipt = await lockPublicationGuard(graph, control.substrateId, now());
-      let commitStarted = false;
+      let commitAttempted = false;
       const held: LockedPublication = {
         graph,
         receipt,
         acquiredAt: performance.now(),
+        get commitAttempted() {
+          return commitAttempted;
+        },
         commit: async () => {
-          if (db.inTransaction || commitStarted) {
+          if (db.inTransaction || commitAttempted) {
             throw new PublicationInvariantError('invalid_publication_commit_boundary');
           }
-          commitStarted = true;
+          commitAttempted = true;
           await active.commit();
           held.committedAt = performance.now();
         },
