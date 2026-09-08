@@ -14,6 +14,7 @@ type ReflectionJobRow = {
   last_error: string | null;
   lane: string | null;
   session_id: string | null;
+  episode_id: string | null;
 };
 
 /**
@@ -36,6 +37,7 @@ function toReflectionJob(row: ReflectionJobRow): ReflectionJob {
     lastError: row.last_error,
     lane: toReflectionLane(row.lane),
     sessionId: row.session_id,
+    episodeId: row.episode_id,
   };
 }
 
@@ -59,15 +61,19 @@ function toReflectionJob(row: ReflectionJobRow): ReflectionJob {
  * ROW_NUMBER would renumber every group as rows are claimed, so after the first claim the
  * interleave collapses back into first-in-first-out.
  */
-const CLAIM_NEXT = `UPDATE reflection_queue
+function claimNextStatement(typeCount: number): string {
+  const typeClause =
+    typeCount === 0 ? '' : `AND job_type IN (${new Array(typeCount).fill('?').join(', ')})`;
+  return `UPDATE reflection_queue
          SET claimed_at = ?, claimed_by = ?
          WHERE id = (
            SELECT id FROM reflection_queue
-           WHERE claimed_at IS NULL AND attempts < ?
+           WHERE claimed_at IS NULL AND attempts < ? ${typeClause}
            ORDER BY CASE lane WHEN 'interactive' THEN 0 ELSE 1 END, lane_seq, rowid
            LIMIT 1
          )
          RETURNING *`;
+}
 
 /**
  * Claims reflection_queue jobs on behalf of one process. `id` is minted once per
@@ -94,10 +100,21 @@ export class ReflectionQueueClaimant {
    * rather than in the caller, is what keeps the selection atomic. A claimant that
    * claimed the row first and then declined it would have to release it, and release
    * counts another attempt.
+   *
+   * `jobTypes` narrows the claim to work this caller can actually run. The table carries more
+   * than one kind of job now, and a claimant that took a row it has no runner for would spend
+   * that row's attempts failing it rather than leaving it for the process that owns it.
+   * Omitting the list claims any type, which is what an operator draining the queue wants.
    */
-  claimNext(db: SqliteHandle, maxAttempts?: number): ReflectionJob | undefined {
+  claimNext(
+    db: SqliteHandle,
+    maxAttempts?: number,
+    jobTypes: readonly string[] = [],
+  ): ReflectionJob | undefined {
     const attemptBound = maxAttempts ?? Number.MAX_SAFE_INTEGER;
-    const row = db.prepare(CLAIM_NEXT).get(new Date().toISOString(), this.id, attemptBound) as
+    const row = db
+      .prepare(claimNextStatement(jobTypes.length))
+      .get(new Date().toISOString(), this.id, attemptBound, ...jobTypes) as
       ReflectionJobRow | undefined;
     return row === undefined ? undefined : toReflectionJob(row);
   }

@@ -38,6 +38,8 @@ export type ReflectionJob = {
   lane: ReflectionLane;
   /** Absent on a row enqueued before the column existed; such a row is its own round-robin group. */
   sessionId: string | null;
+  /** Null on a row written before the column existed, until the backfill accounts for it. */
+  episodeId: string | null;
 };
 
 export type ReflectionJobRow = {
@@ -51,6 +53,7 @@ export type ReflectionJobRow = {
   last_error: string | null;
   lane: string | null;
   session_id: string | null;
+  episode_id: string | null;
 };
 
 /** A lane written before this column existed, or by a future version, reads as the default. */
@@ -70,6 +73,7 @@ export function toReflectionJob(row: ReflectionJobRow): ReflectionJob {
     lastError: row.last_error,
     lane: toReflectionLane(row.lane),
     sessionId: row.session_id,
+    episodeId: row.episode_id,
   };
 }
 

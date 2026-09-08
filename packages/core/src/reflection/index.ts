@@ -8,6 +8,8 @@
 export { handleReflection, INTEGRATE_JOB_TYPE } from './application/intake.js';
 export type { ReflectionIntakeDeps } from './application/intake.js';
 
+export { intakePublication } from './application/intake-publication.js';
+
 export { LaneAssigner } from './application/lanes.js';
 
 export { recordLifecycleEvent } from './application/lifecycle-events.js';

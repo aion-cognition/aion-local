@@ -108,6 +108,65 @@ async function linkStructural(
   });
 }
 
+/** Ids minted before the graph is touched, so a retry projects the same nodes. */
+export type ProjectionIdentity = {
+  readonly episodeId: string;
+  readonly turnIds: readonly string[];
+};
+
+/**
+ * The episode and its turns under ids the caller already committed to.
+ *
+ * Identity is decided before this runs and is not rediscovered here: the caller holds the
+ * publication guard and has resolved the occurrence against the durable records, so a
+ * content-hash lookup would only offer a second opinion on a question already settled. The
+ * writes MERGE on those ids, which is what makes a replayed projection land on the same nodes
+ * rather than a second set.
+ */
+export async function projectEpisodeInTransaction(
+  tx: GraphTransaction,
+  input: {
+    readonly prepared: PreparedEpisode;
+    readonly sessionId: string;
+    readonly origin: ReflectionOrigin | undefined;
+    readonly now: Date;
+    readonly identity: ProjectionIdentity;
+  },
+): Promise<StoredEpisode> {
+  await lockNodeInTransaction(tx, input.sessionId, input.now);
+  const episode = await writeStampedNodeInTransaction(tx, {
+    label: 'Episode',
+    id: input.identity.episodeId,
+    now: input.now,
+    occurredAt: input.prepared.occurredAt,
+    properties: episodeProperties(input.prepared, input.sessionId, input.origin),
+  });
+  const pending: PendingVectorNode[] = [{ id: episode.id, text: input.prepared.text }];
+  await linkStructural(tx, CONTAINMENT_TYPE, episode.id, input.sessionId, input.now);
+
+  let previousTurnId: string | undefined;
+  for (const [index, turn] of input.prepared.turns.entries()) {
+    const turnId = input.identity.turnIds[index];
+    if (turnId === undefined) {
+      throw new Error(`turn ${String(index)} of ${episode.id} was projected with no minted id`);
+    }
+    const node = await writeStampedNodeInTransaction(tx, {
+      label: 'Turn',
+      id: turnId,
+      now: input.now,
+      occurredAt: turn.occurredAt,
+      properties: turnProperties(turn, episode.id, input.sessionId),
+    });
+    pending.push({ id: node.id, text: turn.text });
+    await linkStructural(tx, CONTAINMENT_TYPE, node.id, episode.id, input.now);
+    if (previousTurnId !== undefined) {
+      await linkStructural(tx, 'FOLLOWS', node.id, previousTurnId, input.now);
+    }
+    previousTurnId = node.id;
+  }
+  return { episodeId: episode.id, created: true, pending };
+}
+
 /**
  * Every graph write of one intake, in one transaction: the episode, its turns, and the
  * edges that reach them. Nothing here is separately visible, so a failure at any point

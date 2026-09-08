@@ -114,6 +114,9 @@ export function describeFailedRun(episodeId: string, run: ReflectionRun): string
   return `${String(failed.length)} stage(s) failed for ${episodeId}${context}: ${named}`;
 }
 
+/** Claiming another kind of source work would spend its attempts failing it here. */
+const RUNNABLE_JOB_TYPES: readonly string[] = [INTEGRATE_JOB_TYPE];
+
 /** Intake writes `{ episode_id }` and nothing else enqueues an integrate job. */
 function episodeIdOf(job: ReflectionJob): string | undefined {
   const payload = job.payload as { episode_id?: unknown } | null | undefined;
@@ -316,7 +319,7 @@ export class ReflectionWorker {
     while (this.#running.size < this.#workerCount) {
       let job: ReflectionJob | undefined;
       try {
-        job = this.#claimant.claimNext(this.#deps.db, this.#maxAttempts);
+        job = this.#claimant.claimNext(this.#deps.db, this.#maxAttempts, RUNNABLE_JOB_TYPES);
       } catch (err) {
         this.#deps.logger.error({ err }, 'reflection worker could not claim a job');
         return;

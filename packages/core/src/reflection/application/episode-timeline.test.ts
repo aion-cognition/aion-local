@@ -38,6 +38,7 @@ function queueJob(overrides: Partial<ReflectionJob> = {}): ReflectionJob {
     lastError: null,
     lane: 'interactive',
     sessionId: 'session-1',
+    episodeId: EPISODE_ID,
     ...overrides,
   };
 }
