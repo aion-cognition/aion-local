@@ -32,15 +32,6 @@ export type ResolvedEvidenceView = {
   readonly issues: readonly EvidenceIssue[];
 };
 
-/** The empty view, for a caller assembling a pack with nothing read behind it. */
-export const NO_EVIDENCE_VIEW: ResolvedEvidenceView = {
-  provenance: new Map(),
-  relatedClaims: new Map(),
-  ownership: new Map(),
-  degraded: new Set(),
-  issues: [],
-};
-
 /** The verdict for one item. An id nothing answered about is unknown rather than either answer. */
 export function ownershipOf(view: ResolvedEvidenceView, id: string): OwnershipVerdict {
   return view.ownership.get(id) ?? 'unknown';

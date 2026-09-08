@@ -94,7 +94,8 @@ export async function projectOwnershipSummary(
   return rows.length === 1;
 }
 
-export const OWNERSHIP_PARAMETERS = {
+/** The parameters a caller binds beside the predicate below. */
+const OWNERSHIP_PARAMETERS = {
   sessionId: '$ownSessionId',
   substrateId: '$ownSubstrateId',
   acknowledged: '$ownAcknowledgedSequence',
