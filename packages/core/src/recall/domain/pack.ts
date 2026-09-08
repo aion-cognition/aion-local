@@ -19,6 +19,7 @@ import {
   type BucketCaps,
   type PackBucket,
 } from './pack-buckets.js';
+import type { PackDecisionObserver, PackDecisionReason } from './pack-decisions.js';
 import {
   renderBucket,
   renderItem,
@@ -145,6 +146,13 @@ export type AssemblePackInput = {
    * membership.
    */
   readonly foldable?: ReadonlyMap<string, ReadonlySet<string>>;
+  /**
+   * A reader of the decision assembly is making, called where the decision is made and in the
+   * order the rules run. Absent everywhere but a comparison run, and it decides nothing: a
+   * second copy of these rules living beside them would drift, and then two answers would
+   * describe one pack.
+   */
+  readonly onDecision?: PackDecisionObserver;
 };
 
 type Selection = Map<PackBucket, PackEntry[]>;
@@ -191,22 +199,18 @@ function select(input: AssemblePackInput, note: string | undefined): Assembled {
   }
 
   /**
-   * Whether this pack already carries the same claim under another id. Asked at the moment an
-   * item would be placed rather than over the ranked list beforehand, because a representative
-   * the budget or a cap turned away is one nobody read: only an item in `packedIds` can stand
-   * in for another.
+   * The twin already in this pack that would stand in for the item, or undefined. Asked at the
+   * moment an item would be placed rather than over the ranked list beforehand, because a
+   * representative the budget or a cap turned away is one nobody read: only an item in
+   * `packedIds` can stand in for another.
    */
-  function alreadyPrinted(id: string): boolean {
-    const twins = input.foldable?.get(id);
-    if (twins === undefined) {
-      return false;
-    }
-    for (const twin of twins) {
+  function printedTwin(id: string): string | undefined {
+    for (const twin of input.foldable?.get(id) ?? []) {
       if (packedIds.has(twin)) {
-        return true;
+        return twin;
       }
     }
-    return false;
+    return undefined;
   }
 
   /**
@@ -256,19 +260,26 @@ function select(input: AssemblePackInput, note: string | undefined): Assembled {
     };
   }
 
+  function decided(id: string, bucket: PackBucket, reason: PackDecisionReason, extra = {}): void {
+    input.onDecision?.({ id, bucket, reason, ...extra });
+  }
+
   /** Places the item in the named bucket when the cap and the budget still leave room for it. */
   function accept(item: FusedItem, bucket: PackBucket, gloss: boolean): void {
     // One node prints once, whichever population reached it. This is identity and not a fold: it
     // is the same memory under the same id, so there is nothing here for a reader to compare.
     if (packedIds.has(item.id)) {
+      decided(item.id, bucket, 'already_packed');
       return;
     }
     const held = selection.get(bucket) ?? [];
     if (held.length >= input.caps[bucket]) {
+      decided(item.id, bucket, 'bucket_cap');
       return;
     }
     const key = bucket === 'episodes' ? episodeKey(item) : undefined;
     if (key !== undefined && packedEpisodes.has(key)) {
+      decided(item.id, bucket, 'episode_duplicate');
       return;
     }
 
@@ -281,12 +292,15 @@ function select(input: AssemblePackInput, note: string | undefined): Assembled {
       estimateTokens(renderItem(entry)) +
       (held.length === 0 ? estimateTokens(BUCKET_HEADINGS[bucket]) : 0);
     if (tokens + cost > input.tokenBudget) {
+      decided(item.id, bucket, 'token_budget');
       return;
     }
     // Last, after every other reason the item could have been turned away, so the number the
     // pack reports counts memories this rule withheld and no others.
-    if (alreadyPrinted(item.id)) {
+    const twin = printedTwin(item.id);
+    if (twin !== undefined) {
       folded += 1;
+      decided(item.id, bucket, 'folded', { standsInFor: twin });
       return;
     }
 
@@ -308,6 +322,7 @@ function select(input: AssemblePackInput, note: string | undefined): Assembled {
     if (key !== undefined) {
       packedEpisodes.add(key);
     }
+    decided(item.id, bucket, 'accepted', { rank: ranked });
   }
 
   /**

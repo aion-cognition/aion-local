@@ -104,7 +104,11 @@ describe('recall with a trace observer attached', () => {
 
     const traces: RecallTrace[] = [];
     const traced = await handleRecall(
-      deps({ onTrace: (trace) => traces.push(trace) }),
+      deps({
+        onTrace: (trace) => {
+          traces.push(trace);
+        },
+      }),
       { query: QUERY },
       { identity: IDENTITY, now: NOW },
     );
@@ -123,7 +127,11 @@ describe('recall with a trace observer attached', () => {
   it('records the resolved session and the run identity as digests', async () => {
     const traces: RecallTrace[] = [];
     await handleRecall(
-      deps({ onTrace: (trace) => traces.push(trace) }),
+      deps({
+        onTrace: (trace) => {
+          traces.push(trace);
+        },
+      }),
       { query: QUERY },
       { identity: IDENTITY, now: NOW },
     );
@@ -135,7 +143,8 @@ describe('recall with a trace observer attached', () => {
     }).sessionIdFor(IDENTITY);
     expect(trace?.sessionId).toBe(resolved);
     expect(trace?.sampledAt).toBe(NOW.toISOString());
-    expect(trace?.readMode).toBe('default');
+    // R7 names the vantage with its clocks; the code is the same answer this asserted before.
+    expect(trace?.readMode.code).toBe('default');
     expect(trace?.queryDigest).toMatch(/^[0-9a-f]{16}$/);
     expect(JSON.stringify(trace)).not.toContain('webhooks');
   });
@@ -143,17 +152,26 @@ describe('recall with a trace observer attached', () => {
   it('names the vantage a time-traveled read bound the run to', async () => {
     const traces: RecallTrace[] = [];
     await handleRecall(
-      deps({ onTrace: (trace) => traces.push(trace) }),
+      deps({
+        onTrace: (trace) => {
+          traces.push(trace);
+        },
+      }),
       { query: QUERY, as_of: '2026-03-01' },
       { identity: IDENTITY, now: NOW },
     );
-    expect(traces[0]?.readMode).toBe('as_of');
+    expect(traces[0]?.readMode.code).toBe('as_of');
+    expect(traces[0]?.readMode.validAt).toBe(new Date('2026-03-01').toISOString());
   });
 
   it('reports every seed leg, including the ones that found nothing', async () => {
     const traces: RecallTrace[] = [];
     await handleRecall(
-      deps({ onTrace: (trace) => traces.push(trace) }),
+      deps({
+        onTrace: (trace) => {
+          traces.push(trace);
+        },
+      }),
       { query: QUERY },
       { identity: IDENTITY, now: NOW },
     );
@@ -169,7 +187,11 @@ describe('recall with a trace observer attached', () => {
   it('keeps what the pack printed inside what assembly was offered', async () => {
     const traces: RecallTrace[] = [];
     await handleRecall(
-      deps({ onTrace: (trace) => traces.push(trace) }),
+      deps({
+        onTrace: (trace) => {
+          traces.push(trace);
+        },
+      }),
       { query: QUERY },
       { identity: IDENTITY, now: NOW },
     );
@@ -185,7 +207,9 @@ describe('recall with a trace observer attached', () => {
         onRecalled: (completion) => {
           listened.push(completion.sessionId);
         },
-        onTrace: (trace) => traces.push(trace),
+        onTrace: (trace) => {
+          traces.push(trace);
+        },
       }),
       { query: QUERY },
       { identity: IDENTITY, now: NOW },

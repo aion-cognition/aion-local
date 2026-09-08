@@ -1,5 +1,6 @@
 import type { ActivationTermination } from './activation.js';
 import type { AdmissionReport } from './admission.js';
+import type { PackDecision } from './pack-decisions.js';
 import type { SeedStrategy } from './seed-selection.js';
 
 /**
@@ -32,12 +33,42 @@ export function traceIds(ids: Iterable<string>, cap: number = TRACE_ID_CAP): Tra
   };
 }
 
+/** One candidate as a leg scored it, on that leg's own scale. */
+export type SeedCandidateTrace = {
+  readonly id: string;
+  readonly score: number;
+  readonly relevance: number;
+};
+
 export type SeedLegTrace = {
   readonly strategy: SeedStrategy;
   readonly candidates: TraceIdSet;
-  /** The leg's own best numbers, on the leg's own scale, as the leg reported them. */
+  /**
+   * Per candidate, not only the leg's maximum. Two runs disagreeing about one node cannot be
+   * read off a maximum, which moves when any candidate moves.
+   */
+  readonly scored: readonly SeedCandidateTrace[];
+  readonly scoredTruncated: boolean;
+  /** The leg's own best numbers, as the leg reported them. */
   readonly bestScore?: number;
   readonly bestRelevance?: number;
+};
+
+/** The vantage the run read from, as the run bound it, not as a name for it. */
+export type TraceReadMode = {
+  readonly code: string;
+  readonly validAt?: string;
+  readonly knownAt?: string;
+  readonly reference?: string;
+  readonly expiryAnnotation?: boolean;
+};
+
+/** What the run generated and embedded against, as the routing rule actually resolved it. */
+export type TraceRoute = {
+  readonly cueProvider: string;
+  readonly cueModel: string;
+  readonly cueReason: string;
+  readonly embedModel: string;
 };
 
 export type ActivationTrace = TraceIdSet & {
@@ -50,11 +81,11 @@ export type RecallTrace = {
   /** Resolved by the session manager, which is what makes an independence check possible. */
   readonly sessionId: string;
   readonly sampledAt: string;
-  /** `default`, or the vantage a time-traveled read bound the whole run to. */
-  readonly readMode: string;
+  readonly readMode: TraceReadMode;
   readonly queryDigest: string;
+  /** Over the whole configuration, secrets excluded, so no setting drifts unnoticed. */
   readonly configDigest: string;
-  readonly providerDigest: string;
+  readonly route: TraceRoute;
   readonly seedLegs: readonly SeedLegTrace[];
   readonly activation: ActivationTrace;
   /** What fusion admitted, before the serving-layer subtractions run. */
@@ -78,27 +109,33 @@ export type RecallTrace = {
    * here together, because nothing in the run separates them by id.
    */
   readonly withheldRemainder: TraceIdSet;
+  /**
+   * What assembly decided, per candidate, in the order it decided. This is where a fold, a
+   * bucket cap and the token budget become different answers rather than one remainder.
+   */
+  readonly assemblyDecisions: readonly PackDecision[];
+  readonly assemblyDecisionsTruncated: boolean;
   readonly emitted: TraceIdSet;
 };
 
-export type RecallTraceObserver = (trace: RecallTrace) => void;
+/**
+ * A sink may be asynchronous, and one that rejects after this call returns is still a broken
+ * diagnostic rather than a broken recall, so the contract says so and the caller catches it.
+ */
+export type RecallTraceObserver = (trace: RecallTrace) => void | Promise<void>;
 
 export type SeedLegInput = {
   readonly strategy: SeedStrategy;
-  readonly candidates: readonly {
-    readonly id: string;
-    readonly score: number;
-    readonly relevance: number;
-  }[];
+  readonly candidates: readonly SeedCandidateTrace[];
 };
 
 export type RecallTraceInput = {
   readonly sessionId: string;
   readonly sampledAt: string;
-  readonly readMode: string;
+  readonly readMode: TraceReadMode;
   readonly queryDigest: string;
   readonly configDigest: string;
-  readonly providerDigest: string;
+  readonly route: TraceRoute;
   readonly seedLegs: readonly SeedLegInput[];
   readonly activated: readonly { readonly nodeId: string }[];
   readonly activationIterations: number;
@@ -111,6 +148,7 @@ export type RecallTraceInput = {
   readonly withheldRepeat: ReadonlySet<string>;
   readonly foldEligible: Iterable<string>;
   readonly foldedCount: number;
+  readonly assemblyDecisions: readonly PackDecision[];
   readonly emitted: ReadonlySet<string>;
 };
 
@@ -135,7 +173,7 @@ export function buildRecallTrace(input: RecallTraceInput, cap: number = TRACE_ID
     readMode: input.readMode,
     queryDigest: input.queryDigest,
     configDigest: input.configDigest,
-    providerDigest: input.providerDigest,
+    route: input.route,
     seedLegs: input.seedLegs.map((leg) => {
       const bestScore = bestOf(leg.candidates, 'score');
       const bestRelevance = bestOf(leg.candidates, 'relevance');
@@ -145,6 +183,8 @@ export function buildRecallTrace(input: RecallTraceInput, cap: number = TRACE_ID
           leg.candidates.map((candidate) => candidate.id),
           cap,
         ),
+        scored: leg.candidates.slice(0, cap),
+        scoredTruncated: leg.candidates.length > cap,
         ...(bestScore === undefined ? {} : { bestScore }),
         ...(bestRelevance === undefined ? {} : { bestRelevance }),
       };
@@ -169,19 +209,31 @@ export function buildRecallTrace(input: RecallTraceInput, cap: number = TRACE_ID
     foldEligible: traceIds(input.foldEligible, cap),
     foldedCount: input.foldedCount,
     withheldRemainder: traceIds(remainder, cap),
+    assemblyDecisions: input.assemblyDecisions.slice(0, cap),
+    assemblyDecisionsTruncated: input.assemblyDecisions.length > cap,
     emitted: traceIds(input.emitted, cap),
   };
 }
 
+export type SubsetVerdict = 'within' | 'outside' | 'indeterminate';
+
 /**
- * Whether what the pack printed is a subset of what assembly was offered. A trace that fails
- * this is describing a pack holding an item no stage nominated, which is a defect in the
- * instrumentation or in the pipeline, and either way not a reading anybody should compare.
+ * Whether what the pack printed is a subset of what assembly was offered.
+ *
+ * A truncated set proves nothing either way, so it answers `indeterminate` rather than
+ * reporting the check as passed. A pack outside the offered set is describing an item no stage
+ * nominated, which is a defect in the instrumentation or in the pipeline and either way not a
+ * reading anybody should compare.
  */
-export function emittedWithinCandidates(trace: RecallTrace): boolean {
+export function emittedSubsetVerdict(trace: RecallTrace): SubsetVerdict {
   if (trace.preAssembly.truncated || trace.emitted.truncated) {
-    return true;
+    return 'indeterminate';
   }
   const offered = new Set(trace.preAssembly.ids);
-  return trace.emitted.ids.every((id) => offered.has(id));
+  return trace.emitted.ids.every((id) => offered.has(id)) ? 'within' : 'outside';
+}
+
+/** True only on proof. An indeterminate check is not a passed one. */
+export function emittedWithinCandidates(trace: RecallTrace): boolean {
+  return emittedSubsetVerdict(trace) === 'within';
 }

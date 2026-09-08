@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildCampaignManifest, configDigest, type ManifestInput } from './manifest.js';
+import { buildCampaignManifest, type ManifestInput } from './manifest.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
+import { configDigest } from '../../../infrastructure/config/digest.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 
 const SECRET = 'sk-ant-not-a-real-key';

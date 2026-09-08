@@ -48,6 +48,7 @@ import type { SessionManager } from '../../session/session-manager.js';
 import { spreadActivation, type ActivationRun } from '../domain/activation.js';
 import { labelBoosts, queryCueTexts, queryRestatements } from '../domain/facts.js';
 import { fuse, withSoleMethod, type FusedItem, type FusionResult } from '../domain/fusion.js';
+import type { PackDecision } from '../domain/pack-decisions.js';
 import { foldableClaims } from '../domain/pack-duplicates.js';
 import { assemblePack, packMethods } from '../domain/pack.js';
 import type { RecallTraceObserver } from '../domain/recall-trace.js';
@@ -335,7 +336,17 @@ export async function handleRecall(
   });
 
   const truncated = truncationFor(activation.value.termination);
+  // Recorded where assembly decides, and only when somebody is watching: a fold, a bucket cap
+  // and the token budget are three different answers, and only this call site knows which.
+  const assemblyDecisions: PackDecision[] = [];
   const pack = assemblePack({
+    ...(deps.onTrace === undefined
+      ? {}
+      : {
+          onDecision: (decision: PackDecision) => {
+            assemblyDecisions.push(decision);
+          },
+        }),
     items: fusion.value.items,
     admission: fusion.value.admission,
     caps: capsFor(deps.config),
@@ -437,7 +448,7 @@ export async function handleRecall(
   );
 
   const retrieved = [...candidates.keys()];
-  emitRecallTrace(deps.onTrace, deps.config, {
+  emitRecallTrace(deps.onTrace, deps.logger, deps.config, {
     sessionId,
     query: payload.query,
     mode,
@@ -451,6 +462,7 @@ export async function handleRecall(
     withheldRepeat: suppressed,
     foldEligible: foldable,
     foldedCount: pack.metadata.suppressed_duplicates ?? 0,
+    assemblyDecisions,
     emitted,
   });
 

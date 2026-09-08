@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { AdmissionReport } from './admission.js';
 import {
   buildRecallTrace,
+  emittedSubsetVerdict,
   emittedWithinCandidates,
   traceIds,
   type RecallTraceInput,
@@ -25,10 +26,15 @@ function input(overrides: Partial<RecallTraceInput> = {}): RecallTraceInput {
   return {
     sessionId: 'session-1',
     sampledAt: '2026-09-07T00:00:00.000Z',
-    readMode: 'default',
+    readMode: { code: 'default' },
     queryDigest: 'q',
     configDigest: 'c',
-    providerDigest: 'p',
+    route: {
+      cueProvider: 'ollama',
+      cueModel: 'qwen3:8b',
+      cueReason: 'local-default',
+      embedModel: 'snowflake',
+    },
     seedLegs: [
       {
         strategy: 'vector',
@@ -50,6 +56,11 @@ function input(overrides: Partial<RecallTraceInput> = {}): RecallTraceInput {
     withheldRepeat: new Set(['d']),
     foldEligible: ['a', 'b'],
     foldedCount: 1,
+    assemblyDecisions: [
+      { id: 'a', bucket: 'episodes', reason: 'accepted', rank: 1 },
+      { id: 'b', bucket: 'episodes', reason: 'folded', standsInFor: 'a' },
+      { id: 'd', bucket: 'episodes', reason: 'token_budget' },
+    ],
     emitted: new Set(['a']),
     ...overrides,
   };
@@ -103,6 +114,35 @@ describe('the stage trace', () => {
     expect(trace.foldEligible.ids).toEqual(['a', 'b']);
   });
 
+  it('names which candidate folded, behind which twin, apart from a budget rejection', () => {
+    const trace = buildRecallTrace(input());
+    expect(trace.assemblyDecisions).toEqual([
+      { id: 'a', bucket: 'episodes', reason: 'accepted', rank: 1 },
+      { id: 'b', bucket: 'episodes', reason: 'folded', standsInFor: 'a' },
+      { id: 'd', bucket: 'episodes', reason: 'token_budget' },
+    ]);
+    expect(trace.assemblyDecisionsTruncated).toBe(false);
+  });
+
+  it('keeps the per-candidate scores of each leg, not only its maximum', () => {
+    const [vector] = buildRecallTrace(input()).seedLegs;
+    expect(vector?.scored).toEqual([
+      { id: 'a', score: 0.9, relevance: 0.8 },
+      { id: 'b', score: 0.4, relevance: 0.3 },
+    ]);
+  });
+
+  it('carries the vantage clocks rather than only a name for the mode', () => {
+    const trace = buildRecallTrace(
+      input({ readMode: { code: 'as_of', validAt: '2026-03-01T00:00:00.000Z' } }),
+    );
+    expect(trace.readMode).toEqual({ code: 'as_of', validAt: '2026-03-01T00:00:00.000Z' });
+  });
+
+  it('carries the route the run resolved rather than a configured alias', () => {
+    expect(buildRecallTrace(input()).route.cueReason).toBe('local-default');
+  });
+
   it('holds no query text, only its digest', () => {
     const trace = buildRecallTrace(input({ queryDigest: 'deadbeef' }));
     expect(JSON.stringify(trace)).not.toContain('what did we decide');
@@ -120,9 +160,10 @@ describe('reading emitted against what was offered', () => {
     expect(emittedWithinCandidates(trace)).toBe(false);
   });
 
-  it('draws no conclusion from a truncated set', () => {
+  it('reports indeterminate rather than success on a truncated set', () => {
     const trace = buildRecallTrace(input({ emitted: new Set(['never-seen']) }), 0);
     expect(trace.preAssembly.truncated).toBe(true);
-    expect(emittedWithinCandidates(trace)).toBe(true);
+    expect(emittedSubsetVerdict(trace)).toBe('indeterminate');
+    expect(emittedWithinCandidates(trace)).toBe(false);
   });
 });

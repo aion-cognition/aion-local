@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 
+import { configDigest } from '../../../infrastructure/config/digest.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 
 /**
@@ -10,9 +11,6 @@ import type { Config } from '../../../infrastructure/config/schema.js';
  * observation, not a correction of this one, and the only way to tell a real change from a
  * changed denominator is to have the membership itself written down.
  */
-
-/** Config leaves that hold a secret. Their values never reach a digest, a report, or a log. */
-const SECRET_PATHS: readonly string[] = ['neo4j.password', 'anthropic.apiKey'];
 
 /**
  * How the SQLite figures were acquired.
@@ -71,28 +69,6 @@ export type CampaignManifest = {
    */
   readonly observationKind: 'bounded_window';
 };
-
-/** Every leaf, with a secret's value replaced by the fact that one is set. */
-function redacted(config: Config): Record<string, unknown> {
-  const flat: Record<string, unknown> = {};
-  for (const [group, leaves] of Object.entries(config)) {
-    for (const [leaf, value] of Object.entries(leaves as Record<string, unknown>)) {
-      const path = `${group}.${leaf}`;
-      flat[path] = SECRET_PATHS.includes(path)
-        ? `set:${String(typeof value === 'string' && value.length > 0)}`
-        : value;
-    }
-  }
-  return flat;
-}
-
-export function configDigest(config: Config): string {
-  const flat = redacted(config);
-  const ordered = Object.keys(flat)
-    .sort()
-    .map((key) => [key, flat[key]]);
-  return createHash('sha256').update(JSON.stringify(ordered)).digest('hex');
-}
 
 export type ManifestInput = {
   readonly metricVersion: number;
