@@ -3,6 +3,11 @@ import type { Driver } from 'neo4j-driver';
 
 import { recordConfirmationFeedback } from './recall-feedback.js';
 import {
+  confirmationMoment,
+  referenceStatementsOf,
+  type ReferenceStatements,
+} from './reference-statements.js';
+import {
   resolveProvenanceTargets,
   writeClaimProvenance,
   type ConfirmationWrite,
@@ -82,18 +87,22 @@ export type ProvenanceAttachDeps = {
  * the payload, so the worker, a re-push and `aion replay` all re-state them, and every write
  * here is idempotent, so re-stating changes nothing that already landed.
  *
+ * Each confirmation is written under its own moment rather than under this call's: the one the
+ * acceptance resolved, or the caller's claim when that is all there is. `now` stands in only when
+ * neither exists, so an edge restored by a later pass does not date itself to that pass.
+ *
  * Returns the confirmations that resolved, so a caller with the local database can record the
  * signal beside the edge. An unresolvable one is not among them: it was never written.
  */
 export async function attachProvenance(
   deps: ProvenanceAttachDeps,
   episodeId: string,
-  provenance: ReflectionProvenance | undefined,
+  statements: ReferenceStatements | undefined,
   now: Date,
 ): Promise<readonly ConfirmationWrite[]> {
-  const supersedes = provenance?.supersedes ?? [];
-  const derivedFrom = provenance?.derived_from ?? [];
-  const confirmations = provenance?.confirmations ?? [];
+  const supersedes = statements?.supersedes ?? [];
+  const derivedFrom = statements?.derivedFrom ?? [];
+  const confirmations = statements?.confirmations ?? [];
   const named = [...supersedes, ...derivedFrom, ...confirmations.map((entry) => entry.target)];
   if (named.length === 0) {
     return [];
@@ -110,7 +119,7 @@ export async function attachProvenance(
       target: entry.target,
       by: entry.by,
       evidence: entry.evidence,
-      at: entry.occurred_at === undefined ? now : new Date(entry.occurred_at),
+      at: confirmationMoment(entry, now),
     }));
   await writeClaimProvenance(deps.driver, {
     episodeId,
@@ -199,7 +208,12 @@ export async function settleStatedReferences(
     if (version === acknowledgedVersion(deps.db, episodeId)) {
       return;
     }
-    const confirmed = await attachProvenance(deps, episodeId, references, now);
+    const confirmed = await attachProvenance(
+      deps,
+      episodeId,
+      referenceStatementsOf(references),
+      now,
+    );
     // Between the edge and the acknowledgement, and it throws rather than warning: a version
     // marked applied over a signal nothing wrote is a signal no later settle ever looks for
     // again. A throw here leaves the episode unacknowledged, so the caller's existing failure

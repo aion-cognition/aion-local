@@ -8,6 +8,11 @@ import {
 } from './experience-store.js';
 import type { ReflectionRun } from './orchestrator.js';
 import { acceptedReferencesOf } from './reference-acceptance.js';
+import {
+  referenceStatementsOf,
+  type ConfirmationStatement,
+  type ReferenceStatements,
+} from './reference-statements.js';
 import type {
   ReplayCounts,
   ReplayCursor,
@@ -141,35 +146,38 @@ async function replayRow(
  * Statements still awaiting their acknowledgment are absent on purpose. They are owed to the
  * publication that prepared them, and replaying one would publish a decision that publication
  * may still refuse; leaving it out discharges nothing.
+ *
+ * The two halves are unioned over the targets they name, and where both name one the accepted
+ * version keeps it. The block is a fallback, not a correction: an occurrence whose block and
+ * whose records disagree about who confirmed a target has a proof to repair, and repairing it
+ * belongs to whoever produces that proof rather than to a replay quietly taking the later text.
  */
 function statementsOf(
   deps: ReplayDeps,
   row: ExperienceArchiveRow,
   sourceId: string,
   archived: ReflectionProvenance | undefined,
-): ReflectionProvenance | undefined {
+): ReferenceStatements | undefined {
+  const legacy =
+    row.episodeId === sourceId && archived !== undefined
+      ? referenceStatementsOf(archived)
+      : undefined;
   const accepted = acceptedReferencesOf(deps.db, sourceId);
-  const legacy = row.episodeId === sourceId ? archived : undefined;
   if (accepted === undefined) {
     return legacy;
   }
-  const supersedes = new Set([...accepted.supersedes, ...(legacy?.supersedes ?? [])]);
-  const derivedFrom = new Set([...accepted.derivedFrom, ...(legacy?.derived_from ?? [])]);
-  const confirmations = new Map(
-    [
-      ...accepted.confirmations.map((entry) => ({
-        target: entry.target,
-        by: entry.by,
-        evidence: entry.evidence,
-        ...(entry.occurredAt === undefined ? {} : { occurred_at: entry.occurredAt }),
-      })),
-      ...(legacy?.confirmations ?? []),
-    ].map((entry) => [entry.target, entry] as const),
+  const confirmations = new Map<string, ConfirmationStatement>(
+    accepted.confirmations.map((entry) => [entry.target, entry] as const),
   );
+  for (const entry of legacy?.confirmations ?? []) {
+    if (!confirmations.has(entry.target)) {
+      confirmations.set(entry.target, entry);
+    }
+  }
   return {
-    ...(supersedes.size === 0 ? {} : { supersedes: [...supersedes] }),
-    ...(derivedFrom.size === 0 ? {} : { derived_from: [...derivedFrom] }),
-    ...(confirmations.size === 0 ? {} : { confirmations: [...confirmations.values()] }),
+    supersedes: [...new Set([...accepted.supersedes, ...(legacy?.supersedes ?? [])])],
+    derivedFrom: [...new Set([...accepted.derivedFrom, ...(legacy?.derivedFrom ?? [])])],
+    confirmations: [...confirmations.values()],
   };
 }
 

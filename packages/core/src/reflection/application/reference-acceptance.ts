@@ -1,3 +1,4 @@
+import type { ConfirmationStatement, ReferenceStatements } from './reference-statements.js';
 import { durableRoleScope, type DurableRole } from '../../evidence/domain/scopes.js';
 import { writeClaimProvenanceInTransaction } from '../../infrastructure/graph/claim-provenance-queries.js';
 import type { GraphTransaction } from '../../infrastructure/graph/connection.js';
@@ -435,18 +436,22 @@ export function discardReferenceAcceptance(
  *
  * Only committed versions are returned: a statement still awaiting its acknowledgment has not
  * been accepted yet, and replaying it would publish a decision its publication may still refuse.
+ *
+ * A confirmation comes back with the clock it was accepted under, because that is the moment its
+ * edge was written with and a writer restoring that edge is reproducing a record rather than
+ * making one.
  */
 export function acceptedReferencesOf(
   db: SqliteHandle,
   sourceId: string,
-): StatedReferenceInput | undefined {
+): ReferenceStatements | undefined {
   const links = listStatedLinks(db, sourceId).filter((link) => link.knownFrom !== null);
   if (links.length === 0) {
     return undefined;
   }
   const supersedes = new Set<string>();
   const derivedFrom = new Set<string>();
-  const confirmations = new Map<string, StatedReferenceInput['confirmations'][number]>();
+  const confirmations = new Map<string, ConfirmationStatement>();
   for (const link of links) {
     if (link.kind === 'corrects') {
       supersedes.add(link.toId);
@@ -458,10 +463,13 @@ export function acceptedReferencesOf(
         target: link.toId,
         by: typeof values.by === 'string' ? values.by : '',
         evidence: typeof values.evidence === 'string' ? values.evidence : '',
-        // The stated moment when the caller gave one; a resolved fallback is this substrate's
-        // receipt and is not restated as though somebody had claimed it.
+        // Both clocks, and they are not the same fact. The resolved one is the moment this
+        // acceptance recorded, so a writer restoring the edge writes the moment it already had.
+        // The stated one is present only when the caller gave a time, so a receipt is never
+        // handed back as though somebody had claimed it.
+        ...(typeof values.occurredAt === 'string' ? { occurredAt: values.occurredAt } : {}),
         ...(typeof values.statedOccurredAt === 'string'
-          ? { occurredAt: values.statedOccurredAt }
+          ? { statedOccurredAt: values.statedOccurredAt }
           : {}),
       });
     }
