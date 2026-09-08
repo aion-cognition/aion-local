@@ -2,7 +2,7 @@ import type { Driver } from 'neo4j-driver';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { exportCohort } from './export.js';
+import { completedTransfers, exportCohort, readTransferred } from './export.js';
 import {
   readGraphSourcePage,
   readNarrativeEdgeStatePage,
@@ -42,17 +42,26 @@ export type WalkOutcome<T> =
 
 const PAGE_ROWS = COHORT_PAGE_BOUNDS.maxRows;
 
-/** Reads back what the export persisted, which is what the report is allowed to cite. */
-function readExportedRows(dir: string, name: string): readonly unknown[] {
+/**
+ * Reads back what the export persisted, which is what the report is allowed to cite.
+ *
+ * The pages and the transferred payloads together: a member too large for a page is exported to
+ * a file of its own, and a readback that walked only the pages would report the cohort without
+ * it. Order comes from the stable key, which is the order the keyset walk visited them in.
+ */
+function readExportedRows<T>(dir: string, name: string, shape: PageShape<T>): readonly T[] {
+  const rows: T[] = [];
   const files = readdirSync(join(dir, name))
     .filter((file) => file.startsWith('page-'))
     .sort();
-  const rows: unknown[] = [];
   for (const file of files) {
-    const page = JSON.parse(readFileSync(join(dir, name, file), 'utf8')) as { rows: unknown[] };
+    const page = JSON.parse(readFileSync(join(dir, name, file), 'utf8')) as { rows: T[] };
     rows.push(...page.rows);
   }
-  return rows;
+  for (const key of completedTransfers(dir, name)) {
+    rows.push(readTransferred(dir, name, key) as T);
+  }
+  return rows.sort((left, right) => shape.key(left).localeCompare(shape.key(right)));
 }
 
 async function exportedWalk<T>(
@@ -65,7 +74,7 @@ async function exportedWalk<T>(
     const result = await exportCohort({ name, dir, fetch, shape });
     return {
       status: 'ok',
-      rows: readExportedRows(dir, name) as readonly T[],
+      rows: readExportedRows(dir, name, shape),
       exportComplete: result.complete,
     };
   } catch (err) {

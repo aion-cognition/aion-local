@@ -1,9 +1,9 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { exportCohort } from './export.js';
+import { exportCohort, readProgress } from './export.js';
 import type { PageShape } from '../../domain/campaign-paging.js';
 
 type Row = { readonly id: string; readonly size: number };
@@ -130,5 +130,49 @@ describe('exporting a cohort to disk', () => {
       }),
     ).rejects.toThrow('interrupted');
     expect(pageFiles('members')).toEqual([]);
+  });
+});
+
+describe('recovering an interrupted export', () => {
+  it('refuses to continue over a progress record it cannot read', async () => {
+    mkdirSync(join(dir, 'members', 'oversized'), { recursive: true });
+    writeFileSync(join(dir, 'members', 'progress.json'), 'not json');
+    await expect(
+      exportCohort({ name: 'members', dir, fetch: fetcher(corpus(2)), shape: SHAPE }),
+    ).rejects.toThrow('cannot read');
+  });
+
+  it('tells an absent record from an unreadable one', () => {
+    expect(readProgress(dir, 'members')).toEqual({ status: 'absent' });
+    mkdirSync(join(dir, 'members'), { recursive: true });
+    writeFileSync(join(dir, 'members', 'progress.json'), 'not json');
+    expect(readProgress(dir, 'members').status).toBe('unreadable');
+  });
+
+  it('reports a member the record claims that no page holds', async () => {
+    const rows = corpus(3);
+    await exportCohort({
+      name: 'members',
+      dir,
+      fetch: fetcher(rows),
+      shape: SHAPE,
+      bounds: { maxRows: 3, maxBytes: 4096 },
+    });
+    rmSync(join(dir, 'members', 'page-00000.json'));
+
+    const again = await exportCohort({
+      name: 'members',
+      dir,
+      fetch: fetcher(rows),
+      shape: SHAPE,
+      bounds: { maxRows: 3, maxBytes: 4096 },
+    });
+    expect(again.complete).toBe(false);
+    expect(again.missing).toEqual(['r0000', 'r0001', 'r0002']);
+  });
+
+  it('leaves no half-written progress record behind', async () => {
+    await exportCohort({ name: 'members', dir, fetch: fetcher(corpus(2)), shape: SHAPE });
+    expect(readdirSync(join(dir, 'members')).some((file) => file.endsWith('.writing'))).toBe(false);
   });
 });

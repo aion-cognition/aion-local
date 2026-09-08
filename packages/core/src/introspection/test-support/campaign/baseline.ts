@@ -258,14 +258,16 @@ async function collect(
   const sourceRows = sources.status === 'ok' ? sources.rows : [];
   const textLengths = distributionOf(sourceRows.map((source) => source.textLength));
   const turnCounts = distributionOf(sourceRows.map((source) => source.turnCount));
-  const census =
-    deps.db !== undefined && archive.status === 'ok'
-      ? {
-          archive: readArchiveCensus(deps.db),
-          usageEvents: readUsageEventCensus(deps.db),
-          apiCalls: readApiCallCensus(deps.db),
-        }
-      : {};
+  // One census per table, each behind its own schema check. A substrate holding a valid archive
+  // and no usage log is a substrate whose archive can still be reported: reading all three
+  // together made one absent optional table throw away every reading beside it.
+  const census = {
+    ...(archive.status === 'ok'
+      ? censusOf(collected, 'archive', deps.db, 'experience_archive', readArchiveCensus)
+      : {}),
+    ...censusOf(collected, 'usageEvents', deps.db, 'usage_events', readUsageEventCensus),
+    ...censusOf(collected, 'apiCalls', deps.db, 'api_calls', readApiCallCensus),
+  };
 
   return {
     stamp,
@@ -311,6 +313,33 @@ async function collect(
       (walk) => walk.status === 'ok' && walk.exportComplete,
     ),
   };
+}
+
+/**
+ * One census, or nothing and a recorded reason. Each table is checked on its own, so a
+ * substrate missing an optional one still reports the tables it does hold.
+ */
+function censusOf<K extends string, T>(
+  collected: Collected,
+  field: K,
+  db: SqliteHandle | undefined,
+  table: string,
+  read: (handle: SqliteHandle) => T,
+): Partial<Record<K, T>> {
+  if (db === undefined) {
+    collected.failures.set(table, 'store_unavailable: no substrate was reachable');
+    return {};
+  }
+  if (!sqliteTableExists(db, table)) {
+    collected.failures.set(table, `not_installed: the substrate holds no ${table} table`);
+    return {};
+  }
+  try {
+    return { [field]: read(db) } as Record<K, T>;
+  } catch (err) {
+    collected.failures.set(table, `collector_failed: ${String(err)}`);
+    return {};
+  }
 }
 
 /** The call meter counted as calls, under its own name. It is not a cost. */

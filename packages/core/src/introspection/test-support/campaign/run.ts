@@ -1,4 +1,4 @@
-import neo4j from 'neo4j-driver';
+import neo4j, { type Driver } from 'neo4j-driver';
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -77,6 +77,16 @@ function parseArgs(argv: readonly string[]): Args {
   };
 }
 
+/** Undefined when the graph answered; the reason it did not otherwise. */
+async function reachable(driver: Driver): Promise<string | undefined> {
+  try {
+    await driver.verifyConnectivity();
+    return undefined;
+  } catch (err) {
+    return String(err);
+  }
+}
+
 function fileDigest(path: string): string | undefined {
   try {
     return createHash('sha256').update(readFileSync(path)).digest('hex');
@@ -140,7 +150,10 @@ async function main(): Promise<void> {
   mkdirSync(args.outDir, { recursive: true });
 
   try {
-    await driver.verifyConnectivity();
+    // Attempted, not required. A graph that will not answer is one set of unavailable readings;
+    // stopping here would throw away the substrate readings beside them, which is the same
+    // mistake at the level of the whole run.
+    const graphReachable = await reachable(driver);
     const baseline = await collectBaseline({
       driver,
       ...(substrate.db === undefined ? {} : { db: substrate.db }),
@@ -149,6 +162,7 @@ async function main(): Promise<void> {
     });
     writeOnce(join(args.outDir, `campaign-baseline-${runId}.json`), {
       substrateNote: substrate.note,
+      graphNote: graphReachable ?? 'reachable',
       ...baseline,
     });
 
