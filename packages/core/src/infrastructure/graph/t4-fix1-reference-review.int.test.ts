@@ -284,3 +284,56 @@ it('recovers a new source with references that crashed before its acknowledgment
   );
   expect(edges.records[0]?.get('n').toNumber()).toBe(1);
 });
+
+it('records the receipt clock for a confirmation that stated none, and says it was not stated', async () => {
+  skipRecovery = false;
+  const target = 'claim-no-stated-time';
+  await substrate.harness.driver.executeQuery('CREATE (:AionNode:Memory:Claim {id:$id})', {
+    id: target,
+  });
+  const request = {
+    kind: 'intake' as const,
+    operationId: 'confirmation-without-time',
+    payload: intakePayload(
+      'confirmation-without-time',
+      NOW.toISOString(),
+      JSON.stringify({
+        confirmations: [{ target, by: 'reviewer', evidence: 'checked the receipt' }],
+      }),
+    ),
+  };
+  const events = (): { n: number; payload: string | null } =>
+    store.db
+      .prepare(
+        `SELECT count(*) AS n, MAX(payload_json) AS payload FROM usage_events
+         WHERE kind = 'memory_confirmed' AND payload_json LIKE ?`,
+      )
+      .get(`%${target}%`) as { n: number; payload: string | null };
+
+  const outcome = await coordinator.publish(request);
+
+  expect(outcome.status).toBe('acknowledged');
+  const source = (outcome as unknown as { result: { sourceId: string } }).result.sourceId;
+  const values = store.db
+    .prepare(
+      `SELECT v.recorded_values_json FROM evidence_links l
+       JOIN evidence_link_versions v ON v.link_id = l.link_id
+       WHERE l.from_id = ? AND l.to_id = ? ORDER BY v.version LIMIT 1`,
+    )
+    .get(source, target) as { recorded_values_json: string };
+  const recorded = JSON.parse(values.recorded_values_json) as Record<string, unknown>;
+  // The receipt stands in for the moment, and nothing claims the caller supplied one.
+  expect(recorded.occurredAt).toBe(NOW.toISOString());
+  expect(recorded.statedOccurredAt).toBeUndefined();
+  expect(events().n).toBe(1);
+  expect(JSON.parse(events().payload ?? '{}')).toMatchObject({
+    confirmedBy: 'reviewer',
+    evidence: 'checked the receipt',
+    memories: [target],
+  });
+
+  // A retry resolves nothing afresh: the plan already fixed the clock.
+  expect(await coordinator.publish(request)).toEqual(outcome);
+  expect(events().n).toBe(1);
+  expect(listStatedLinks(store.db, source)).toHaveLength(1);
+});

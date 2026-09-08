@@ -91,6 +91,7 @@ const ReferenceTarget = z.strictObject({
       by: z.string().min(1),
       evidence: z.string().min(1),
       occurredAt: z.string().min(1),
+      statedOccurredAt: z.string().min(1).optional(),
     })
     .optional(),
 });
@@ -174,7 +175,7 @@ function statedInput(stated: ReflectionContent['provenance']): StatedReferenceIn
       target: entry.target,
       by: entry.by,
       evidence: entry.evidence,
-      occurredAt: entry.occurred_at ?? '',
+      ...(entry.occurred_at === undefined ? {} : { occurredAt: entry.occurred_at }),
     })),
   };
 }
@@ -322,7 +323,7 @@ export const intakePublication = new PublicationOperation({
       referenceTargets:
         selected.decision === 'pinned'
           ? []
-          : classifyStatedReferences(context.db, stated, retained),
+          : classifyStatedReferences(context.db, stated, retained, context.now.toISOString()),
       candidateDigest: candidateDigest(context.db, key, selected.sourceId),
     };
     return {

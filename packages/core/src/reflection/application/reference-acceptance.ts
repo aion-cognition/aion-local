@@ -60,7 +60,16 @@ export type ReferenceTargetPlan = {
   readonly confirmation?: {
     readonly by: string;
     readonly evidence: string;
+    /**
+     * The clock this confirmation is recorded under, resolved while the guard was held.
+     *
+     * A caller may legitimately omit the moment it confirmed something; what it cannot do is
+     * make the substrate invent one later. The resolved value is fixed in the plan, so a retry
+     * or a recovery records the moment the first attempt accepted rather than its own.
+     */
     readonly occurredAt: string;
+    /** Set only when the caller stated a time, so a fallback is never mistaken for a claim. */
+    readonly statedOccurredAt?: string;
   };
 };
 
@@ -112,7 +121,8 @@ export type StatedReferenceInput = {
     readonly target: string;
     readonly by: string;
     readonly evidence: string;
-    readonly occurredAt: string;
+    /** Absent when the caller stated none; the acceptance clock stands in for it. */
+    readonly occurredAt?: string;
   }[];
 };
 
@@ -136,6 +146,7 @@ export function classifyStatedReferences(
   db: SqliteHandle,
   input: StatedReferenceInput,
   retained: ReadonlySet<string>,
+  acceptedAt: string,
 ): ReferenceTargetPlan[] {
   const named: {
     id: string;
@@ -147,7 +158,12 @@ export function classifyStatedReferences(
     ...input.confirmations.map((entry) => ({
       id: entry.target,
       kind: 'confirms' as const,
-      confirmation: { by: entry.by, evidence: entry.evidence, occurredAt: entry.occurredAt },
+      confirmation: {
+        by: entry.by,
+        evidence: entry.evidence,
+        occurredAt: entry.occurredAt ?? acceptedAt,
+        ...(entry.occurredAt === undefined ? {} : { statedOccurredAt: entry.occurredAt }),
+      },
     })),
   ];
   return named.map((entry) => ({
@@ -213,6 +229,9 @@ export function prepareReferenceAcceptance(
               by: target.confirmation.by,
               evidence: target.confirmation.evidence,
               occurredAt: target.confirmation.occurredAt,
+              ...(target.confirmation.statedOccurredAt === undefined
+                ? {}
+                : { statedOccurredAt: target.confirmation.statedOccurredAt }),
             }),
       },
       temporalProof: { acceptedAt: acceptance.acceptedAt },
@@ -439,7 +458,11 @@ export function acceptedReferencesOf(
         target: link.toId,
         by: typeof values.by === 'string' ? values.by : '',
         evidence: typeof values.evidence === 'string' ? values.evidence : '',
-        occurredAt: typeof values.occurredAt === 'string' ? values.occurredAt : '',
+        // The stated moment when the caller gave one; a resolved fallback is this substrate's
+        // receipt and is not restated as though somebody had claimed it.
+        ...(typeof values.statedOccurredAt === 'string'
+          ? { occurredAt: values.statedOccurredAt }
+          : {}),
       });
     }
   }

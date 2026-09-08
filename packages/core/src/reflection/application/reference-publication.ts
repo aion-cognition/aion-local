@@ -39,7 +39,8 @@ const Confirmation = z.strictObject({
   target: z.string().min(1),
   by: z.string().min(1),
   evidence: z.string().min(1),
-  occurredAt: z.string().min(1),
+  /** Optional: a caller may confirm something without saying when it did so. */
+  occurredAt: z.string().min(1).optional(),
 });
 
 const Payload = z.strictObject({
@@ -56,7 +57,15 @@ const Target = z.strictObject({
   id: z.string().min(1),
   kind: z.enum(['corrects', 'derived_from', 'confirms']),
   targetClass: z.enum(['source', 'part', 'retained_node', 'unresolved']),
-  confirmation: Confirmation.omit({ target: true }).optional(),
+  /** The resolved clock is required in the PLAN even when the caller stated none. */
+  confirmation: z
+    .strictObject({
+      by: z.string().min(1),
+      evidence: z.string().min(1),
+      occurredAt: z.string().min(1),
+      statedOccurredAt: z.string().min(1).optional(),
+    })
+    .optional(),
 });
 
 const Data = Payload.extend({
@@ -104,12 +113,13 @@ export const statedReferencesPublication = new PublicationOperation({
     // A retained interpretation is only knowable from the graph, so presence is asked once here
     // and used to classify the ids the durable records do not account for.
     const retained = await presentNodeIds(context.graph, statedReferenceIds(payload));
-    const targets = classifyStatedReferences(context.db, payload, retained);
+    const acceptedAt = context.now.toISOString();
+    const targets = classifyStatedReferences(context.db, payload, retained, acceptedAt);
     const source = readSourceRecord(context.db, payload.sourceId);
     const data: ReferenceData = {
       ...payload,
       acceptedHash: acceptedTargetsHash(targets),
-      acceptedAt: context.now.toISOString(),
+      acceptedAt,
       targets,
     };
     return {
