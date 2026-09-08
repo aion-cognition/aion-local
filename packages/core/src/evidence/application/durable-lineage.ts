@@ -8,7 +8,7 @@ import {
   listStatedLinksTo,
   readStatedLinkValues,
 } from '../../infrastructure/sqlite/evidence-links.js';
-import { readCitationsOf } from '../../infrastructure/sqlite/narrative-revisions.js';
+import { readCitationsOf } from '../../infrastructure/sqlite/narrative-citations.js';
 import type { RequestBudget } from '../domain/budget.js';
 import { NARRATIVE_SCOPES } from '../domain/scopes.js';
 

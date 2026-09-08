@@ -15,7 +15,7 @@ import {
   countCitationsFrom,
   isNarrativeRevisionNode,
   readCitationsFrom,
-} from '../../infrastructure/sqlite/narrative-revisions.js';
+} from '../../infrastructure/sqlite/narrative-citations.js';
 import { partOwnerSource } from '../../infrastructure/sqlite/reference-targets.js';
 import type { RequestBudget } from '../domain/budget.js';
 import { durableRoleScope, NARRATIVE_SCOPES } from '../domain/scopes.js';
@@ -76,7 +76,8 @@ class Frontier {
   readonly roots = new Set<string>();
   readonly lineage = new Set<string>();
   readonly dependencies: EvidenceDependency[] = [];
-  readonly #expanded = new Set<string>();
+  /** The shallowest depth each step was expanded at, which is what its allowance was worth. */
+  readonly #expanded = new Map<string, number>();
   complete = true;
 
   constructor(db: SqliteHandle, at: Date | undefined, budget: RequestBudget | undefined) {
@@ -158,7 +159,7 @@ class Frontier {
       durableRoleScope('extraction', 'out'),
       rows.length === 0,
     );
-    const cited = isNarrativeRevisionNode(this.#db, id) ? this.#fromNarrative(id) : [];
+    const cited = isNarrativeRevisionNode(this.#db, id, this.#at) ? this.#fromNarrative(id) : [];
     if (proved && rows.length === 0 && cited.length === 0) {
       // A retained node whose origin nobody recorded is a missing initial capture, which the
       // signed cut keeps apart from a chain that ended.
@@ -212,6 +213,11 @@ class Frontier {
   /**
    * One branch, depth-first, with the path it came down held open. A parent already on that path
    * is a loop; one merely seen before is a shared ancestor whose own chain was already walked.
+   *
+   * What was already walked depends on how much allowance it had left. A node first reached five
+   * hops out ran out of bound before its own parents; the same node reached again one hop out has
+   * four hops to spend, and skipping it would hide a root that is plainly in reach. So the memo
+   * records the shallowest depth each step was expanded at and yields to anything shallower.
    */
   walk(step: Step, path: Set<string>, depth: number): void {
     this.lineage.add(step.id);
@@ -219,10 +225,11 @@ class Frontier {
       this.complete = false;
       return;
     }
-    if (this.#expanded.has(step.id)) {
+    const expandedAt = this.#expanded.get(step.id);
+    if (expandedAt !== undefined && expandedAt <= depth) {
       return;
     }
-    this.#expanded.add(step.id);
+    this.#expanded.set(step.id, depth);
     path.add(step.id);
     for (const parent of this.#parentsOf(step)) {
       this.lineage.add(parent.id);
