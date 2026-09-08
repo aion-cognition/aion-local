@@ -1,4 +1,4 @@
-import { realpathSync } from 'node:fs';
+import { lstatSync, readlinkSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, sep } from 'node:path';
 
 /**
@@ -81,6 +81,56 @@ export function normalizeEndpoint(uri: string): string {
 /** Resolves one path through the filesystem, or says why it could not. */
 export type LinkResolver = (path: string) => string;
 
+/** Longer than this is a chain of links the filesystem has not yet called a loop. */
+const MAX_LINK_HOPS = 32;
+
+/**
+ * Components rejoined under a resolved path.
+ *
+ * The root of the filesystem is its own separator, so a blind join writes `//`, which is a
+ * second root on some systems and never the child that was meant. The root is also why
+ * containment is asked the same way: `/` contains everything below it, and a prefix test that
+ * assumes a separator has to be added answers no for every one of them.
+ */
+function below(root: string, components: readonly string[]): string {
+  if (components.length === 0) {
+    return root;
+  }
+  const tail = components.join(sep);
+  return root.endsWith(sep) ? `${root}${tail}` : `${root}${sep}${tail}`;
+}
+
+/**
+ * What occupies a name the resolver refused with ENOENT.
+ *
+ * ENOENT answers two different questions the same way: a name nothing occupies, and a symlink
+ * that exists whose destination does not. The second one is a live route. Appending its name to
+ * a resolved parent describes a file in the parent's directory, while a write through it lands
+ * wherever the link points, which is how a clone path admits itself and then creates a file in
+ * the production directory.
+ */
+type AbsentEntry =
+  | { readonly kind: 'nothing' }
+  | { readonly kind: 'dangling_link'; readonly destination: string }
+  | { readonly kind: 'unreadable' };
+
+function absentEntry(path: string): AbsentEntry {
+  try {
+    const entry = lstatSync(path, { throwIfNoEntry: false });
+    if (entry?.isSymbolicLink() !== true) {
+      return { kind: 'nothing' };
+    }
+    const destination = readlinkSync(path);
+    // Left untidied on purpose: the filesystem, not this function, traverses what it names.
+    return {
+      kind: 'dangling_link',
+      destination: isAbsolute(destination) ? destination : below(dirname(path), [destination]),
+    };
+  } catch {
+    return { kind: 'unreadable' };
+  }
+}
+
 /**
  * The path with every symlink on it resolved, by the filesystem's own traversal.
  *
@@ -90,11 +140,20 @@ export type LinkResolver = (path: string) => string;
  * different files, and the wrong one admitted.
  *
  * A target that does not exist yet is resolved through the nearest ancestor that does, and only
- * the components genuinely absent below it are rejoined. Absence is the one condition that
- * climbs: a loop, a permission refusal or anything else is an identity nobody resolved, and
- * appending components to a parent reached that way invents one.
+ * the components genuinely absent below it are rejoined. A dangling link is not one of them: it
+ * is followed to the identity it names. Absence is the one condition that climbs: a loop, a
+ * permission refusal or anything else is an identity nobody resolved, and appending components
+ * to a parent reached that way invents one.
  */
 export function canonicalPath(path: string, resolveLink?: LinkResolver): string | undefined {
+  return resolveIdentity(path, resolveLink, MAX_LINK_HOPS);
+}
+
+function resolveIdentity(
+  path: string,
+  resolveLink: LinkResolver | undefined,
+  hops: number,
+): string | undefined {
   const resolver = resolveLink ?? ((candidate: string) => realpathSync.native(candidate));
   if (path === IN_MEMORY_SQLITE) {
     return path;
@@ -107,10 +166,21 @@ export function canonicalPath(path: string, resolveLink?: LinkResolver): string 
   let head = path;
   for (;;) {
     try {
-      return [resolver(head), ...absent].join(sep);
+      return below(resolver(head), absent);
     } catch (err) {
       if ((err as { code?: string }).code !== 'ENOENT') {
         return undefined;
+      }
+      const entry = absentEntry(head);
+      if (entry.kind === 'unreadable') {
+        return undefined;
+      }
+      if (entry.kind === 'dangling_link') {
+        if (hops === 0) {
+          return undefined;
+        }
+        const destination = resolveIdentity(entry.destination, resolveLink, hops - 1);
+        return destination === undefined ? undefined : below(destination, absent);
       }
       const parent = dirname(head);
       if (parent === head) {
@@ -158,7 +228,8 @@ export function sharesDataRoot(target: string, production: string): boolean {
 }
 
 function contains(root: string, path: string): boolean {
-  return path === root || path.startsWith(`${root}${sep}`);
+  const prefix = root.endsWith(sep) ? root : `${root}${sep}`;
+  return path === root || path.startsWith(prefix);
 }
 
 export type RehearsalCheck = {
