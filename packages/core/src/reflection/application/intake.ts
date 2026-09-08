@@ -23,7 +23,6 @@ import { attachContentVectors } from './vectors.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { mergeExperienceProvenance } from '../../infrastructure/sqlite/experience-archive.js';
 import { readCurrentReadinessPolicy } from '../../infrastructure/sqlite/readiness-policies.js';
 import { countQueueJobs } from '../../infrastructure/sqlite/reflection-queue-admin.js';
 import {
@@ -243,9 +242,6 @@ function archiveAndQueue(deps: ReflectionIntakeDeps, input: IntakeArchive): Arch
       },
       input.turnIds,
     );
-    if (!manifest.archived && input.references !== undefined) {
-      mergeExperienceProvenance(deps.db, input.episodeId, input.references);
-    }
     activateSourceManifest(deps.db, {
       sourceId: input.episodeId,
       processingGeneration: manifest.processingGeneration,

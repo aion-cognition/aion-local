@@ -96,18 +96,20 @@ export function recordSourceRecord(db: SqliteHandle, input: SourceRecordInput): 
         capture_order_basis, origin, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (source_id) DO UPDATE SET
-       canonical_archive_id = excluded.canonical_archive_id,
-       archive_aliases_json = excluded.archive_aliases_json,
-       archive_schema_version = excluded.archive_schema_version,
-       identity_hash = excluded.identity_hash,
-       verified_content_digest = excluded.verified_content_digest,
-       verification_policy_version = excluded.verification_policy_version,
+       canonical_archive_id = COALESCE(excluded.canonical_archive_id, canonical_archive_id),
+       archive_aliases_json = COALESCE(excluded.archive_aliases_json, archive_aliases_json),
+       archive_schema_version = COALESCE(excluded.archive_schema_version, archive_schema_version),
+       identity_hash = COALESCE(excluded.identity_hash, identity_hash),
+       verified_content_digest = COALESCE(excluded.verified_content_digest,
+                                          verified_content_digest),
+       verification_policy_version = COALESCE(excluded.verification_policy_version,
+                                              verification_policy_version),
        verification_status = excluded.verification_status,
        verification_reason = excluded.verification_reason,
-       archived_at = excluded.archived_at,
-       graph_clocks_json = excluded.graph_clocks_json,
-       capture_order_value = excluded.capture_order_value,
-       capture_order_basis = excluded.capture_order_basis`,
+       archived_at = COALESCE(excluded.archived_at, archived_at),
+       graph_clocks_json = COALESCE(excluded.graph_clocks_json, graph_clocks_json),
+       capture_order_value = COALESCE(excluded.capture_order_value, capture_order_value),
+       capture_order_basis = COALESCE(excluded.capture_order_basis, capture_order_basis)`,
   ).run(
     input.sourceId,
     input.sessionId,
@@ -180,7 +182,14 @@ export function sourcePartAddress(sourceId: string, partKind: string, ordinal: n
   return `part:${sourceId}:${partKind}:${ordinal}`;
 }
 
-/** Writes a source's parts in one transaction. Re-running a batch refreshes the same rows. */
+/**
+ * Writes a source's parts in one transaction. Re-running a batch refreshes the same rows.
+ *
+ * An absent field never erases a known one. A duplicate push writes no graph nodes and so has
+ * no Turn ids to supply; overwriting the recorded ids with null would break every original-ID
+ * lookup the records exist for, and leave replay and rebuild failing their own part checks
+ * against a source still marked verified. A caller that means to change an id supplies it.
+ */
 export function recordSourceParts(
   db: SqliteHandle,
   sourceId: string,
@@ -191,11 +200,11 @@ export function recordSourceParts(
        (source_id, part_kind, ordinal, turn_id, role, content_hash, occurred_at, graph_clocks_json)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (source_id, part_kind, ordinal) DO UPDATE SET
-       turn_id = excluded.turn_id,
-       role = excluded.role,
+       turn_id = COALESCE(excluded.turn_id, turn_id),
+       role = COALESCE(excluded.role, role),
        content_hash = excluded.content_hash,
-       occurred_at = excluded.occurred_at,
-       graph_clocks_json = excluded.graph_clocks_json`,
+       occurred_at = COALESCE(excluded.occurred_at, occurred_at),
+       graph_clocks_json = COALESCE(excluded.graph_clocks_json, graph_clocks_json)`,
   );
   db.transaction((): void => {
     for (const part of parts) {

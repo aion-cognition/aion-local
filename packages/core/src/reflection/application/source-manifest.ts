@@ -4,8 +4,10 @@ import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   ARCHIVE_SCHEMA_VERSION,
   experienceArchiveKey,
+  getExperienceByEpisode,
   getExperienceByKey,
   insertExperience,
+  mergeExperienceProvenance,
 } from '../../infrastructure/sqlite/experience-archive.js';
 import { recordIngest } from '../../infrastructure/sqlite/migration-cohorts.js';
 import {
@@ -127,6 +129,29 @@ function introducedReferences(references: ReflectionProvenance | undefined): rea
 }
 
 /**
+ * What this occurrence has now accepted, after folding in whatever arrived with this push.
+ *
+ * A source whose own archive row this is takes the merged union, so the batch history and the
+ * archive agree about what was stated. An occurrence sharing a forgotten predecessor's bytes has
+ * no row of its own: the predecessor's statements belong to the predecessor, and this push's
+ * references are this occurrence's own.
+ */
+function acceptedReferenceSet(
+  db: SqliteHandle,
+  sourceId: string,
+  references: ReflectionProvenance | undefined,
+): ReflectionProvenance | undefined {
+  const own = getExperienceByEpisode(db, sourceId);
+  if (own === undefined) {
+    return references;
+  }
+  if (references !== undefined) {
+    mergeExperienceProvenance(db, sourceId, references);
+  }
+  return getExperienceByEpisode(db, sourceId)?.payload.provenance ?? references;
+}
+
+/**
  * The archive row and every identity record of one acceptance, in the caller's transaction.
  *
  * It refuses outside one: the records are only worth having together, and a partial write would
@@ -191,12 +216,18 @@ export function writeSourceManifest(
     ...(input.origin === undefined ? {} : { origin: input.origin.channel }),
   });
   recordSourceParts(db, input.sourceId, sourcePartsOf(input.prepared, input.payload, turnIds));
+  // The delivery is identified by the SET it accepted, not by the occurrence. Keying on the
+  // occurrence alone made every later push of the same experience reuse the first delivery's
+  // key, so a genuinely new reference arrived under a key already bound to a different set and
+  // was refused. The set's own hash keeps a real retry idempotent and lets an addition through.
+  const accepted = acceptedReferenceSet(db, input.sourceId, input.references);
+  const acceptedHash = referenceSetHash(accepted);
   const batch = acceptReferenceBatch(db, {
     sourceId: input.sourceId,
-    acceptedHash: referenceSetHash(input.references),
+    acceptedHash,
     receivedAt: input.now,
-    operationKey: input.operationKey,
-    introduced: introducedReferences(input.references),
+    operationKey: `${input.operationKey}:${acceptedHash}`,
+    introduced: introducedReferences(accepted),
   });
   const processingGeneration = generationFor(db, input);
   writeInventorySkeleton(db, input, processingGeneration);
