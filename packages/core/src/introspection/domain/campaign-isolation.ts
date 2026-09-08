@@ -1,5 +1,5 @@
 import { realpathSync } from 'node:fs';
-import { dirname, isAbsolute, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, sep } from 'node:path';
 
 /**
  * The check a rehearsal runner makes before it loads a fixture, injects a fault, or tears a
@@ -78,33 +78,47 @@ export function normalizeEndpoint(uri: string): string {
   return withPort.replace(/^(localhost|127\.0\.0\.1|\[::1\]|::1|0\.0\.0\.0):/, 'localhost:');
 }
 
+/** Resolves one path through the filesystem, or says why it could not. */
+export type LinkResolver = (path: string) => string;
+
 /**
- * The path with every symlink on it resolved.
+ * The path with every symlink on it resolved, by the filesystem's own traversal.
  *
- * A target that does not exist yet still has an existing parent, and that parent is what says
- * where the file will land, so the walk climbs to the nearest directory the filesystem knows
- * and rejoins the rest. Undefined when nothing on the path resolves, which is an identity
- * nobody can vouch for.
+ * The raw path goes to the resolver untouched. Tidying `..` first is not the same operation:
+ * `clone/link/../aion.sqlite` where `link` points elsewhere resolves, on the filesystem, into
+ * the directory the link names, and a syntactic tidy answers `clone/aion.sqlite` instead. Two
+ * different files, and the wrong one admitted.
+ *
+ * A target that does not exist yet is resolved through the nearest ancestor that does, and only
+ * the components genuinely absent below it are rejoined. Absence is the one condition that
+ * climbs: a loop, a permission refusal or anything else is an identity nobody resolved, and
+ * appending components to a parent reached that way invents one.
  */
-export function canonicalPath(path: string, resolveLink = realpathSync): string | undefined {
+export function canonicalPath(path: string, resolveLink?: LinkResolver): string | undefined {
+  const resolver = resolveLink ?? ((candidate: string) => realpathSync.native(candidate));
   if (path === IN_MEMORY_SQLITE) {
     return path;
   }
   if (!isAbsolute(path)) {
     return undefined;
   }
-  const absolute = resolve(path);
-  const trailing: string[] = [];
-  let head = absolute;
+
+  const absent: string[] = [];
+  let head = path;
   for (;;) {
     try {
-      return [resolveLink(head), ...trailing].join(sep);
-    } catch {
+      return [resolver(head), ...absent].join(sep);
+    } catch (err) {
+      if ((err as { code?: string }).code !== 'ENOENT') {
+        return undefined;
+      }
       const parent = dirname(head);
       if (parent === head) {
         return undefined;
       }
-      trailing.unshift(head.slice(parent.length + sep.length));
+      // `basename` rather than a slice: the component may be `..`, which is a real step the
+      // parent's own resolution has to make.
+      absent.unshift(basename(head));
       head = parent;
     }
   }
@@ -120,7 +134,7 @@ export type DataRootVerdict = 'distinct' | 'overlapping' | 'unresolvable';
 export function dataRootVerdict(
   target: string,
   production: string,
-  resolveLink = realpathSync,
+  resolveLink?: LinkResolver,
 ): DataRootVerdict {
   if (target === IN_MEMORY_SQLITE || production === IN_MEMORY_SQLITE) {
     return 'distinct';
