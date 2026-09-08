@@ -26,15 +26,17 @@ const EVER_PUBLISHED = `SELECT node_id, known_from, closed_at, state FROM chunk_
   SELECT node_id, known_from, closed_at, state FROM overview_revisions
     WHERE known_from IS NOT NULL AND state IN ('published', 'closed')`;
 
+type Selection = { readonly clause: string; readonly parameters: readonly string[] };
+
 /**
- * Which of those a read may see. A question about a past vantage selects the revision that held
- * the interval containing it; a question about now selects the current head, because a closed
- * revision is no longer what the family serves.
+ * Which revision the family was serving. A question about a past vantage selects the revision
+ * that held the interval containing it; a question about now selects the current head, because a
+ * closed revision is no longer what the family serves.
+ *
+ * This is representation selection, and it belongs to the reader that asks which revision speaks
+ * for a family now, or spoke for it then.
  */
-function revisionSelection(at: Date | undefined): {
-  readonly clause: string;
-  readonly parameters: readonly string[];
-} {
+function headSelection(at: Date | undefined): Selection {
   if (at === undefined) {
     return { clause: "AND p.state = 'published'", parameters: [] };
   }
@@ -46,14 +48,28 @@ function revisionSelection(at: Date | undefined): {
 }
 
 /**
+ * Whether a named revision published at all, and had published by the vantage asked about.
+ *
+ * A caller following a recorded parent is not asking which revision the family serves. It named
+ * this one, and what that revision cited is a fact about it: a successor taking over the family
+ * changes which revision is current and changes nothing about what its predecessor rested on. So
+ * retirement never withdraws it, and the only bound is that it had published by K.
+ */
+function publicationSelection(at: Date | undefined): Selection {
+  return at === undefined
+    ? { clause: '', parameters: [] }
+    : { clause: 'AND p.known_from <= ?', parameters: [at.toISOString()] };
+}
+
+/**
  * The published revisions that cite one target, read from the citation records themselves. A
  * part is cited under its own address, so two parts of one source stay two citations.
  *
- * `at` is the knowledge vantage the question was asked from. Without it the answer is what is
- * published now; with it, only what had published by then.
+ * This is the binding question, so it selects the revision the family serves: without a vantage,
+ * what is published now; with one, whichever revision held that moment.
  */
 export function readCitationsOf(db: SqliteHandle, targetId: string, at?: Date): readonly CitedBy[] {
-  const selection = revisionSelection(at);
+  const selection = headSelection(at);
   const rows = db
     .prepare(
       `SELECT c.narrative_node_id, c.target_kind FROM revision_citations c
@@ -71,22 +87,24 @@ export function readCitationsOf(db: SqliteHandle, targetId: string, at?: Date): 
   }));
 }
 
-/** What one published revision cites, which is the outbound half a lineage walk crosses. */
+/** What one revision cites, which is the outbound half a lineage walk crosses. */
 export type Citation = {
   readonly targetId: string;
   readonly targetKind: string;
 };
 
 /**
- * The targets one narrative revision cites at a vantage. A revision is a witness's own step in a
- * chain: what it rests on is what it named, and the walk crosses it the way it crosses a source.
+ * The targets one narrative revision cites at a vantage, selected by publication rather than by
+ * headship. A revision is a witness's own step in a chain: what it rests on is what it named, and
+ * the walk crosses it the way it crosses a source, whether or not a successor has taken the
+ * family since.
  */
 export function readCitationsFrom(
   db: SqliteHandle,
   narrativeNodeId: string,
   at?: Date,
 ): readonly Citation[] {
-  const selection = revisionSelection(at);
+  const selection = publicationSelection(at);
   const rows = db
     .prepare(
       `SELECT c.target_id, c.target_kind FROM revision_citations c
@@ -101,9 +119,9 @@ export function readCitationsFrom(
   return rows.map((row) => ({ targetId: row.target_id, targetKind: row.target_kind }));
 }
 
-/** How many targets a revision cites, charged before the rows are read. */
+/** How many targets a revision cites, charged before the rows are read, on the same selection. */
 export function countCitationsFrom(db: SqliteHandle, narrativeNodeId: string, at?: Date): number {
-  const selection = revisionSelection(at);
+  const selection = publicationSelection(at);
   const row = db
     .prepare(
       `SELECT count(*) AS n FROM revision_citations c
@@ -114,9 +132,13 @@ export function countCitationsFrom(db: SqliteHandle, narrativeNodeId: string, at
   return row.n;
 }
 
-/** Whether an id names a narrative revision at all, which decides if it has citations to cross. */
+/**
+ * Whether an id names a revision that had published by the vantage, which decides whether it has
+ * citations to cross. It agrees with the outbound count and read: a walk that could follow the
+ * citations must be able to recognize the revision holding them.
+ */
 export function isNarrativeRevisionNode(db: SqliteHandle, nodeId: string, at?: Date): boolean {
-  const selection = revisionSelection(at);
+  const selection = publicationSelection(at);
   return (
     db
       .prepare(
