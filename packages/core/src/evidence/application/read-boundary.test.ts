@@ -13,10 +13,13 @@ import {
 } from '../../infrastructure/sqlite/committed-evidence.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import { recordScopeMirror } from '../../infrastructure/sqlite/evidence-scope.js';
+import * as publicationStore from '../../infrastructure/sqlite/publication-coordinator-store.js';
+import { idAddress } from '../domain/address.js';
 import { GRAPH_NODE_SCOPE } from '../domain/scopes.js';
 import {
   checkedContext,
   commitIncidence,
+  commitSourceState,
   establishNodeState,
   establishScope,
   seedSource,
@@ -137,4 +140,60 @@ it('can derive old incidence from the preserved chain after its current row is r
   expect(
     committedIncidenceForNodesAt(store.db, ['old'], NOW, 'extraction').map((row) => row.sourceId),
   ).toEqual(['left']);
+});
+
+it('keeps a source-state snapshot local when another request indexes the same source', async () => {
+  vi.spyOn(publicationStore, 'pendingPublicationKind').mockReturnValue('episode_eviction');
+  let release: (value: CheckpointResult) => void = () => undefined;
+  let reached: () => void = () => undefined;
+  const secondRead = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  const delayed = new Promise<CheckpointResult>((resolve) => {
+    release = resolve;
+  });
+  let count = 0;
+  const r = resolver(() => {
+    count++;
+    if (count === 2) {
+      reached();
+      return delayed;
+    }
+    return Promise.resolve(ready('2'));
+  });
+  const first = r.resolveSources([idAddress('left')], checkedContext(), 'raw_inspection');
+  await secondRead;
+  commitSourceState(store.db, {
+    sourceId: 'left',
+    stateKind: 'forgotten',
+    operationId: 'forgot-in-between',
+    at: NOW,
+  });
+  await r.resolveSources([idAddress('left')], checkedContext(), 'search_indexing');
+  release({ status: 'unavailable', reason: 'pending_publication' });
+  const result = await first;
+  expect(result.results.get(JSON.stringify(['id', 'left']))?.evidence.status).not.toBe(
+    'complete-for-use',
+  );
+});
+
+it('does not borrow the raw exception after mapping verification was withdrawn', async () => {
+  vi.spyOn(publicationStore, 'pendingPublicationKind').mockReturnValue('episode_eviction');
+  let count = 0;
+  const r = resolver(async () => {
+    count++;
+    if (count === 2) {
+      store.db
+        .prepare(
+          "UPDATE source_records SET verification_status='pinned', verification_reason='mapping withdrawn' WHERE source_id='left'",
+        )
+        .run();
+      return { status: 'unavailable', reason: 'pending_publication' };
+    }
+    return ready();
+  });
+  const result = await r.resolveSources([idAddress('left')], checkedContext(), 'raw_inspection');
+  expect(result.results.get(JSON.stringify(['id', 'left']))?.evidence.status).not.toBe(
+    'complete-for-use',
+  );
 });

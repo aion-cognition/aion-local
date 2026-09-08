@@ -17,7 +17,10 @@ import { resolveSourceEvidence, type SourceEvidence } from './sources.js';
 import { readClaimSubjects } from './subjects.js';
 import type { ClaimSubject } from '../../infrastructure/graph/subject-family.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
-import type { EvidenceRevision } from '../../infrastructure/publication/preconditions.js';
+import type {
+  EvidenceDependency,
+  EvidenceRevision,
+} from '../../infrastructure/publication/preconditions.js';
 import { sameCheckpoint } from '../../infrastructure/publication/protocol.js';
 import type {
   CheckpointResult,
@@ -87,11 +90,27 @@ function uncertifiedIssue(
   return { address, field: 'interpretation_text', reason, required };
 }
 
+/**
+ * The scopes the raw exception rests on: what the substrate says may be disclosed, the proof
+ * behind the bytes, and the mapping that says which part is which. A pure eviction moves none of
+ * them, and a change in any one is a change in what the read was entitled to hand back. Stated
+ * references are outside it: they are claims about other memories rather than about these bytes.
+ */
+const EXCEPTION_SCOPES = ['source.state', 'source.content', 'source.parts'] as const;
+
+/** One request's own record of what it read, which no other request may write into. */
+type ProofSnapshot = Map<string, readonly EvidenceDependency[]>;
+
+function versionOf(
+  dependencies: readonly EvidenceDependency[] | undefined,
+  scope: string,
+): string | undefined {
+  return dependencies?.find((dependency) => dependency.scope === scope)?.version;
+}
+
 export class EvidenceResolver {
   readonly #options: EvidenceResolverOptions;
   readonly #limits: EvidenceLimits;
-  /** What each source's state chain said when its bytes were read, for the recheck to compare. */
-  readonly #stateVersions = new Map<string, string>();
 
   constructor(options: EvidenceResolverOptions) {
     this.#options = options;
@@ -153,6 +172,10 @@ export class EvidenceResolver {
     const results = new Map<string, EvidenceResult<SourceEvidence>>();
     const issues: EvidenceIssue[] = [];
     const dependencies = new EvidenceDependencies();
+    // Held by the request rather than by the resolver. One instance serves concurrent reads, and
+    // a second read of the same source would otherwise overwrite what the first one saw and hand
+    // it back its own answer about somebody else's moment.
+    const proof: ProofSnapshot = new Map();
 
     for (const address of addresses) {
       const overflow = budget.chargeIds(1);
@@ -172,11 +195,8 @@ export class EvidenceResolver {
       }
       const resolution = this.#readSource(address, { use, context, budget, required });
       dependencies.addAll(resolution.dependencies);
-      const stateVersion = resolution.dependencies.find(
-        (dependency) => dependency.scope === 'source.state',
-      );
-      if (resolution.value !== undefined && stateVersion !== undefined) {
-        this.#stateVersions.set(resolution.value.sourceId, stateVersion.version);
+      if (resolution.value !== undefined) {
+        proof.set(resolution.value.sourceId, resolution.dependencies);
       }
       issues.push(...resolution.issues);
       results.set(
@@ -203,7 +223,7 @@ export class EvidenceResolver {
         const evictionOnly =
           drift === 'pending_publication' &&
           pendingPublicationKind(this.#options.db) === 'episode_eviction' &&
-          !this.#stateMoved(result, before);
+          !this.#proofMoved(result, before, proof);
         const issue = uncertifiedIssue(
           result.address,
           drift,
@@ -317,17 +337,27 @@ export class EvidenceResolver {
 
   /**
    * Whether what the substrate says about this source moved while the read was in flight. Raw
-   * bytes are immutable; what may be disclosed about them is not.
+   * bytes are immutable; what may be disclosed about them, what proves them, and which part is
+   * which are not. A snapshot this request did not take proves nothing, so its absence moves.
    */
-  #stateMoved(result: EvidenceResult<SourceEvidence>, before: Certification): boolean {
+  #proofMoved(
+    result: EvidenceResult<SourceEvidence>,
+    before: Certification,
+    proof: ProofSnapshot,
+  ): boolean {
     const sourceId = result.value?.sourceId;
     if (sourceId === undefined || before.status !== 'certified') {
       return true;
     }
-    const state = sourceScopeDependencies(this.#options.db, sourceId).find(
-      (dependency) => dependency.scope === 'source.state',
-    );
-    return state?.version !== this.#stateVersions.get(sourceId);
+    const captured = proof.get(sourceId);
+    if (captured === undefined) {
+      return true;
+    }
+    const current = sourceScopeDependencies(this.#options.db, sourceId);
+    return EXCEPTION_SCOPES.some((scope) => {
+      const held = versionOf(captured, scope);
+      return held === undefined || held !== versionOf(current, scope);
+    });
   }
 
   /** Whether a stored revision still describes the substrate, before a decision is applied. */
