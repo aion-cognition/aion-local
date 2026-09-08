@@ -5,6 +5,7 @@ import type { GraphTransaction } from './connection.js';
 import { PUBLICATION_GUARD_LABEL } from './publication-guard.js';
 import { PublicationInvariantError } from '../publication/errors.js';
 import { decimalSequence } from '../publication/json.js';
+import type { PublicationReceipt } from '../publication/types.js';
 
 export type GuardReceipt = {
   readonly substrateId: string;
@@ -65,7 +66,7 @@ export async function lockPublicationGuard(
 
 export async function writePublicationGuardReceipt(
   tx: GraphTransaction,
-  next: GuardReceipt,
+  next: PublicationReceipt,
 ): Promise<void> {
   const rows = await tx.run(
     `MATCH (g:${PUBLICATION_GUARD_LABEL} {substrate_id: $substrateId})
@@ -77,7 +78,7 @@ export async function writePublicationGuardReceipt(
     (row) => row.id,
   );
   if (rows.length !== 1) {
-    throw new PublicationInvariantError('publication_guard_changed', next.operationId ?? undefined);
+    throw new PublicationInvariantError('publication_guard_changed', next.operationId);
   }
 }
 

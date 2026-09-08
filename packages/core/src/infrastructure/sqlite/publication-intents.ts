@@ -21,7 +21,7 @@ export type PublicationIntent = {
   readonly createdAt: Date;
 };
 
-export type PublicationReceipt = {
+export type PublicationIntentReceipt = {
   readonly sequence: string;
   readonly operationId: string;
   readonly kind: string;
@@ -39,7 +39,7 @@ type ReceiptRowData = {
   sequence: string;
   operation_id: string;
   kind: string;
-  state: PublicationReceipt['state'];
+  state: PublicationIntentReceipt['state'];
   result_digest: string | null;
   result_json: string | null;
   known_from: string | null;
@@ -52,7 +52,7 @@ const SELECT_RECEIPT = `SELECT CAST(sequence AS TEXT) AS sequence, operation_id,
     known_from, observed_ack_at, clock_clamped, error
   FROM publication_intents WHERE operation_id = ?`;
 
-function toReceipt(row: ReceiptRowData): PublicationReceipt {
+function toReceipt(row: ReceiptRowData): PublicationIntentReceipt {
   return {
     sequence: row.sequence,
     operationId: row.operation_id,
@@ -135,9 +135,9 @@ export type PublicationAcknowledgment = {
 export function acknowledgePublicationIntent(
   db: SqliteHandle,
   acknowledgment: PublicationAcknowledgment,
-): PublicationReceipt {
+): PublicationIntentReceipt {
   return db
-    .transaction((): PublicationReceipt => {
+    .transaction((): PublicationIntentReceipt => {
       const current = db.prepare(SELECT_RECEIPT).get(acknowledgment.operationId) as
         ReceiptRowData | undefined;
       if (current === undefined) {
@@ -216,7 +216,7 @@ export function settleUnacknowledgedIntent(
 export function readPublicationReceipt(
   db: SqliteHandle,
   operationId: string,
-): PublicationReceipt | undefined {
+): PublicationIntentReceipt | undefined {
   const row = db.prepare(SELECT_RECEIPT).get(operationId) as ReceiptRowData | undefined;
   return row === undefined ? undefined : toReceipt(row);
 }
@@ -232,7 +232,7 @@ export function isOperationAcknowledged(db: SqliteHandle, operationId: string): 
 }
 
 /** Acknowledged operations in visibility order, which is the clock first and the sequence after it. */
-export function listAcknowledgedOperations(db: SqliteHandle): readonly PublicationReceipt[] {
+export function listAcknowledgedOperations(db: SqliteHandle): readonly PublicationIntentReceipt[] {
   const rows = db
     .prepare(
       `SELECT CAST(sequence AS TEXT) AS sequence, operation_id, kind, state, result_digest, result_json, known_from,

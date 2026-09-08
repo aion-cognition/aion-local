@@ -100,10 +100,21 @@ export type PublicationOutcome =
       readonly reason: string;
     };
 
-export type PublicationCheckpoint = {
+/** The complete receipt written atomically with a committed graph mutation. */
+export type PublicationReceipt = {
   readonly substrateId: string;
   readonly protocolVersion: 1;
   readonly sequence: string;
+  readonly operationId: string;
+  readonly intentDigest: string;
+  readonly resultDigest: string;
+};
+
+/** A verified read position also represents the empty, pre-publication guard. */
+export type PublicationCheckpoint = Pick<
+  PublicationReceipt,
+  'substrateId' | 'protocolVersion' | 'sequence'
+> & {
   readonly operationId: string | null;
   readonly intentDigest: string | null;
   readonly resultDigest: string | null;
