@@ -1,0 +1,273 @@
+import type { Driver } from 'neo4j-driver';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { EvidenceResolver, type EvidenceCheckpointReader } from './resolver.js';
+import type { CheckpointResult } from '../../infrastructure/publication/types.js';
+import { SqliteStore } from '../../infrastructure/sqlite/database.js';
+import type { ReflectionContent } from '../../reflection/domain/content.js';
+import { idAddress } from '../domain/address.js';
+import { durableRoleScope } from '../domain/scopes.js';
+import {
+  checkedContext,
+  commitIncidence,
+  commitSourceState,
+  establishScope,
+  seedSource,
+} from '../test-support/evidence.fixture.js';
+
+const NOW = new Date('2026-09-08T10:00:00.000Z');
+const logger = { warn: vi.fn() };
+
+const CONTENT: ReflectionContent = {
+  turns: [{ role: 'user', text: 'the migration took 45 seconds', occurred_at: NOW.toISOString() }],
+};
+
+type QueryLog = { readonly cyphers: string[] };
+
+/**
+ * Answers the two lineage reads a metadata batch makes, and counts them. `unresolved` on the
+ * capture is what a claim with a reference nobody could place reports.
+ */
+function lineageDriver(input: { readonly unresolved: number; readonly log: QueryLog }): Driver {
+  const executeQuery = (cypher: string): Promise<unknown> => {
+    input.log.cyphers.push(cypher);
+    if (cypher.includes('capture_ids')) {
+      return Promise.resolve({
+        records: [
+          { toObject: () => ({ id: 'claim-1', capture_ids: ['episode-1'] }) },
+          { toObject: () => ({ id: 'claim-2', capture_ids: ['episode-1'] }) },
+        ],
+      });
+    }
+    if (cypher.includes('AS parents')) {
+      return Promise.resolve({
+        records: [
+          {
+            toObject: () => ({
+              id: 'episode-1',
+              parents: [],
+              unresolved: input.unresolved,
+              narrated: false,
+              citations: [],
+              resolved_citations: 0,
+            }),
+          },
+        ],
+      });
+    }
+    return Promise.resolve({ records: [] });
+  };
+  return { executeQuery } as unknown as Driver;
+}
+
+function failingDriver(): Driver {
+  return {
+    executeQuery: () => Promise.reject(new Error('graph unreachable')),
+  } as unknown as Driver;
+}
+
+function checkpoints(results: readonly CheckpointResult[]): EvidenceCheckpointReader {
+  let index = 0;
+  return {
+    checkpoint: () => {
+      const result = results[Math.min(index, results.length - 1)];
+      index += 1;
+      return Promise.resolve(result!);
+    },
+  };
+}
+
+function ready(sequence: string): CheckpointResult {
+  return {
+    status: 'ready',
+    checkpoint: {
+      substrateId: 'substrate-1',
+      protocolVersion: 1,
+      sequence,
+      operationId: null,
+      intentDigest: null,
+      resultDigest: null,
+    },
+  };
+}
+
+describe('the evidence resolver', () => {
+  let dir: string;
+  let store: SqliteStore;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'aion-resolver-'));
+    store = new SqliteStore({ filePath: join(dir, 'aion.sqlite') });
+    seedSource(store.db, {
+      sourceId: 'episode-1',
+      sessionId: 'session-1',
+      identity: 'agent-1',
+      content: CONTENT,
+      now: NOW,
+    });
+  });
+
+  afterEach(() => {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function resolver(options: {
+    readonly driver: Driver;
+    readonly publications?: EvidenceCheckpointReader;
+  }): EvidenceResolver {
+    return new EvidenceResolver({
+      driver: options.driver,
+      db: store.db,
+      logger,
+      ...(options.publications === undefined ? {} : { publications: options.publications }),
+    });
+  }
+
+  it('reads a batch of candidates in bounded reads rather than one per candidate', async () => {
+    const log: QueryLog = { cyphers: [] };
+    const batch = await resolver({ driver: lineageDriver({ unresolved: 0, log }) }).resolveMetadata(
+      ['claim-1', 'claim-2'],
+      checkedContext(),
+      { maxRoots: 4 },
+    );
+
+    expect(batch.results.size).toBe(2);
+    expect(log.cyphers).toHaveLength(2);
+    expect(log.cyphers.some((cypher) => cypher.includes('payload_json'))).toBe(false);
+  });
+
+  it('keeps a known incomplete lineage apart from a store that could not be read', async () => {
+    const log: QueryLog = { cyphers: [] };
+    const known = await resolver({ driver: lineageDriver({ unresolved: 1, log }) }).resolveMetadata(
+      ['claim-1'],
+      checkedContext(),
+      { maxRoots: 4 },
+    );
+    const failed = await resolver({ driver: failingDriver() }).resolveMetadata(
+      ['claim-1'],
+      checkedContext(),
+      { maxRoots: 4 },
+    );
+    const first = known.results.get('["id","claim-1"]');
+    const second = failed.results.get('["id","claim-1"]');
+
+    expect(first?.value?.provenance.complete).toBe(false);
+    expect(first?.evidence.status).toBe('complete-for-use');
+    expect(second?.evidence.status).toBe('unavailable-retryable');
+    expect(second?.value).toBeUndefined();
+  });
+
+  it('gives every requested address a result, over the bound included', async () => {
+    const log: QueryLog = { cyphers: [] };
+    const wide = new EvidenceResolver({
+      driver: lineageDriver({ unresolved: 0, log }),
+      db: store.db,
+      logger,
+      limits: {
+        requestedIds: 1,
+        relationRows: 4096,
+        metadataBytes: 1024,
+        decodedRawBytes: 1024,
+        checkpointAttempts: 2,
+        lineageHops: 4,
+      },
+    });
+    const batch = await wide.resolveMetadata(['claim-1', 'claim-2'], checkedContext(), {
+      maxRoots: 4,
+    });
+
+    expect([...batch.results.keys()].sort()).toEqual(['["id","claim-1"]', '["id","claim-2"]']);
+    expect(batch.issues.map((issue) => issue.reason)).toContain('budget_limit');
+  });
+
+  it('degrades a source read under a pending publication rather than blocking it', async () => {
+    const batch = await resolver({
+      driver: lineageDriver({ unresolved: 0, log: { cyphers: [] } }),
+      publications: checkpoints([{ status: 'unavailable', reason: 'pending_publication' }]),
+    }).resolveSources([idAddress('episode-1')], checkedContext(), 'raw_inspection');
+    const result = batch.results.get('["id","episode-1"]');
+
+    expect(result?.value?.text).toContain('the migration took 45 seconds');
+    expect(batch.issues.map((issue) => issue.reason)).toContain('pending_publication');
+  });
+
+  it('refuses to assemble a judgment it cannot certify against a publication position', async () => {
+    const assembly = await resolver({
+      driver: lineageDriver({ unresolved: 0, log: { cyphers: [] } }),
+    }).assembleJudgment(
+      {
+        route: 'claim_dedup',
+        reservedUnits: 0,
+        use: 'claim_judgment',
+        sides: [
+          { nodeId: 'claim-1', statement: 'one' },
+          { nodeId: 'claim-2', statement: 'two' },
+        ],
+      },
+      checkedContext(),
+    );
+
+    expect(assembly.status).toBe('incomplete');
+    expect(
+      assembly.status === 'incomplete' ? assembly.reasons.map((reason) => reason.reason) : [],
+    ).toEqual(['required_scope_missing', 'required_scope_missing']);
+  });
+
+  it('refuses a judgment whose position moved while its evidence was read', async () => {
+    commitIncidence(store.db, {
+      sourceId: 'episode-1',
+      nodeId: 'claim-1',
+      role: 'extraction',
+      operationId: 'extract:claim-1',
+      at: NOW,
+    });
+    establishScope(store.db, 'claim-1', durableRoleScope('extraction', 'out'), NOW);
+    const assembly = await resolver({
+      driver: lineageDriver({ unresolved: 0, log: { cyphers: [] } }),
+      publications: checkpoints([ready('4'), ready('5')]),
+    }).assembleJudgment(
+      {
+        route: 'claim_dedup',
+        reservedUnits: 0,
+        use: 'claim_judgment',
+        sides: [
+          { nodeId: 'claim-1', statement: 'one' },
+          { nodeId: 'claim-1', statement: 'two' },
+        ],
+      },
+      checkedContext(),
+    );
+
+    expect(assembly.status).toBe('incomplete');
+    expect(
+      assembly.status === 'incomplete' ? assembly.reasons.map((reason) => reason.reason) : [],
+    ).toEqual(['pending_publication', 'pending_publication']);
+  });
+
+  it('refuses a stored revision once the source it cites has moved', async () => {
+    const batch = await resolver({
+      driver: lineageDriver({ unresolved: 0, log: { cyphers: [] } }),
+    }).resolveSources([idAddress('episode-1')], checkedContext(), 'raw_inspection');
+
+    expect(resolver({ driver: failingDriver() }).confirm(batch.revision)).toEqual({
+      status: 'current',
+    });
+
+    commitSourceState(store.db, {
+      sourceId: 'episode-1',
+      stateKind: 'forgotten',
+      operationId: 'forget-1',
+      at: NOW,
+    });
+    const check = resolver({ driver: failingDriver() }).confirm(batch.revision);
+
+    expect(check.status).toBe('stale');
+    expect(check.status === 'stale' ? check.changed.map((entry) => entry.scope) : []).toEqual([
+      'source.state',
+    ]);
+  });
+});
