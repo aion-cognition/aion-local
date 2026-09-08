@@ -1,7 +1,6 @@
 import {
   RecallInputSchema,
   type Degradation,
-  type MemoryPack,
   type RecallOutput,
   type StageTimingsMs,
 } from '@aion/protocol';
@@ -11,9 +10,10 @@ import { arrivalIds, buildRankedLists, firstPassIds, toActivationSeed } from './
 import { extractCues, type CueCache, type CueExtractionResult } from './cues.js';
 import { triggeredIntentions } from './intentions.js';
 import { readModeFor } from './read-mode.js';
+import { emitRecallTrace, notifyRecalled, type RecallListener } from './recall-observers.js';
 import { activationBudget, admissionFor, capsFor, truncationFor } from './recall-policy.js';
 import { resonate, type ResonanceResult } from './resonance.js';
-import { selectSeeds, type Seed } from './seeds.js';
+import { selectSeeds } from './seeds.js';
 import {
   claimProvenance,
   embedCues,
@@ -30,7 +30,7 @@ import type { Config } from '../../infrastructure/config/schema.js';
 import { roundMs } from '../../infrastructure/errors.js';
 import { adjacencyFetchFor } from '../../infrastructure/graph/adjacency.js';
 import type { ItemOrigin } from '../../infrastructure/graph/origin-queries.js';
-import { isTimeTravel, type ReadMode } from '../../infrastructure/graph/read-modes.js';
+import { isTimeTravel } from '../../infrastructure/graph/read-modes.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
@@ -45,12 +45,12 @@ import {
 } from '../../infrastructure/sqlite/served-items.js';
 import { redactPayload } from '../../redaction/deep-walk.js';
 import type { SessionManager } from '../../session/session-manager.js';
-import { spreadActivation, type ActivatedNode, type ActivationRun } from '../domain/activation.js';
-import type { AdmissionReport } from '../domain/admission.js';
+import { spreadActivation, type ActivationRun } from '../domain/activation.js';
 import { labelBoosts, queryCueTexts, queryRestatements } from '../domain/facts.js';
 import { fuse, withSoleMethod, type FusedItem, type FusionResult } from '../domain/fusion.js';
 import { foldableClaims } from '../domain/pack-duplicates.js';
 import { assemblePack, packMethods } from '../domain/pack.js';
+import type { RecallTraceObserver } from '../domain/recall-trace.js';
 import {
   emittedPackIds,
   servedRecords,
@@ -69,41 +69,7 @@ import { suppressedOwnSession } from '../domain/session-origin.js';
  * vantage point, so seeds, traversal, and hydration cannot disagree about what was true when.
  */
 
-export type RecallCompletion = {
-  readonly sessionId: string;
-  readonly seeds: readonly Seed[];
-  /** The co-activated set, seeds included. Telemetry: the spread reached it, nobody read it. */
-  readonly activated: readonly ActivatedNode[];
-  /**
-   * Every candidate assembly was offered, in the order the three passes produced them: fusion,
-   * then resonance, then the intention triggers. Telemetry, and the whole of it, because read
-   * against `emitted` the difference is what the caps and the subtractions cost this pack.
-   */
-  readonly retrieved: readonly string[];
-  /**
-   * The ids this pack printed, which is what the caller was handed and the one population an
-   * exposure write may be charged against.
-   */
-  readonly emitted: ReadonlySet<string>;
-  /** What the admission gate dropped and the floors it used, for a caller that reports honesty signals. */
-  readonly admission: AdmissionReport;
-  readonly pack: MemoryPack;
-  readonly now: Date;
-  /**
-   * The bitemporal vantage point the whole run read from. A listener that writes consults it:
-   * inspecting the past is a question, not a use, so it must not stamp `last_accessed` on
-   * historical nodes or strengthen edges as though the memory had just fired.
-   */
-  readonly mode: ReadMode;
-};
-
-/**
- * Fired after the pack is persisted and never awaited, so a rejected listener cannot fail
- * a recall that already succeeded. The reinforcement hooks attach here; a listener that does
- * real work owes it to the caller to schedule it rather than run it inline, since a
- * synchronous listener still runs before the pack returns.
- */
-export type RecallListener = (completion: RecallCompletion) => void | Promise<void>;
+export type { RecallCompletion, RecallListener } from './recall-observers.js';
 
 export type RecallDeps = {
   readonly driver: Driver;
@@ -115,6 +81,12 @@ export type RecallDeps = {
   readonly cueCache: CueCache;
   readonly logger: Logger;
   readonly onRecalled?: RecallListener;
+  /**
+   * A diagnostic reader of the stages this run went through. Absent everywhere but a
+   * comparison run: it issues no query and no provider call, and what it records is read off
+   * values the run already produced.
+   */
+  readonly onTrace?: RecallTraceObserver;
 };
 
 export type RecallOptions = {
@@ -139,22 +111,6 @@ async function timed<T>(run: () => Promise<T>): Promise<Timed<T>> {
   const started = performance.now();
   const value = await run();
   return { value, ms: roundMs(performance.now() - started) };
-}
-
-function notify(deps: RecallDeps, completion: RecallCompletion): void {
-  if (deps.onRecalled === undefined) {
-    return;
-  }
-  try {
-    const result = deps.onRecalled(completion);
-    if (result instanceof Promise) {
-      result.catch((err: unknown) => {
-        deps.logger.warn({ err }, 'recall listener failed');
-      });
-    }
-  } catch (err) {
-    deps.logger.warn({ err }, 'recall listener failed');
-  }
 }
 
 /**
@@ -480,11 +436,29 @@ export async function handleRecall(
     'recall served',
   );
 
-  notify(deps, {
+  const retrieved = [...candidates.keys()];
+  emitRecallTrace(deps.onTrace, deps.config, {
+    sessionId,
+    query: payload.query,
+    mode,
+    sampledAt: now,
+    byStrategy: selection.value.byStrategy,
+    activation: activation.value,
+    fused: fusion.value.items,
+    admission: fusion.value.admission,
+    preAssembly: retrieved,
+    withheldOwn: suppressedOwn,
+    withheldRepeat: suppressed,
+    foldEligible: foldable,
+    foldedCount: pack.metadata.suppressed_duplicates ?? 0,
+    emitted,
+  });
+
+  notifyRecalled(deps.onRecalled, deps.logger, {
     sessionId,
     seeds,
     activated: activation.value.activated,
-    retrieved: [...candidates.keys()],
+    retrieved,
     emitted,
     admission: fusion.value.admission,
     pack,
