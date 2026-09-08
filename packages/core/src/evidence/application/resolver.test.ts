@@ -17,6 +17,7 @@ import {
   checkedContext,
   commitIncidence,
   commitSourceState,
+  establishNodeState,
   establishScope,
   seedSource,
 } from '../test-support/evidence.fixture.js';
@@ -287,6 +288,7 @@ describe('the evidence resolver', () => {
     });
     establishScope(store.db, 'claim-1', durableRoleScope('extraction', 'out'), NOW);
     establishScope(store.db, 'claim-1', durableRoleScope('stated_correction', 'in'), NOW);
+    establishNodeState(store.db, 'claim-1', { revision: 1, at: NOW });
     const assembly = await resolver({
       driver: lineageDriver({ unresolved: 0, log: { cyphers: [] } }),
       publications: checkpoints([ready('4'), ready('5')]),

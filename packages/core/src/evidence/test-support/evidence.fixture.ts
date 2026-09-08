@@ -3,6 +3,7 @@ import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   acknowledgeScopeAdvance,
   prepareScopeAdvance,
+  recordScopeMirror,
 } from '../../infrastructure/sqlite/evidence-scope.js';
 import {
   acknowledgePublicationIntent,
@@ -19,6 +20,7 @@ import {
 } from '../../reflection/application/source-manifest.js';
 import type { ReflectionContent } from '../../reflection/domain/content.js';
 import { prepareEpisode } from '../../reflection/domain/content.js';
+import { GRAPH_NODE_SCOPE } from '../domain/scopes.js';
 
 /**
  * Substrate seeding for the evidence reads: an accepted source with its records, committed
@@ -155,6 +157,25 @@ export function establishScope(
     operationId,
     updatedAt: at,
     censusStatus: 'established',
+  });
+}
+
+/**
+ * The graph counter a node's semantic state is read from: counted, and mirrored at one reading.
+ * A judgment binds it, so a node without it has a statement nobody has proved is the current one.
+ */
+export function establishNodeState(
+  db: SqliteHandle,
+  nodeId: string,
+  input: { readonly revision: number; readonly at: Date },
+): void {
+  establishScope(db, nodeId, GRAPH_NODE_SCOPE, input.at);
+  recordScopeMirror(db, {
+    endpointId: nodeId,
+    relationClass: GRAPH_NODE_SCOPE,
+    mirroredRevision: input.revision,
+    operationId: `state:${nodeId}:${String(input.revision)}`,
+    mirroredAt: input.at,
   });
 }
 

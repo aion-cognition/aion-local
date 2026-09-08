@@ -15,6 +15,7 @@ import {
   checkedContext,
   commitIncidence,
   commitSourceState,
+  establishNodeState,
   establishScope,
   seedSource,
 } from '../test-support/evidence.fixture.js';
@@ -76,6 +77,8 @@ describe('judgment evidence assembly', () => {
       // The negative scope a correction would arrive in is counted too: an uncounted one cannot
       // say that none arrived.
       establishScope(store.db, claim!, durableRoleScope('stated_correction', 'in'), NOW);
+      // And the graph counter behind the statement itself, which the revision binds.
+      establishNodeState(store.db, claim!, { revision: 1, at: NOW });
     }
   });
 
@@ -162,7 +165,18 @@ describe('judgment evidence assembly', () => {
       expect(assembly).toMatchObject({ status: 'incomplete' });
       expect(
         assembly.status === 'incomplete' ? assembly.reasons.map((reason) => reason.reason) : [],
-      ).toEqual(['required_scope_missing', 'required_scope_missing']);
+      ).toEqual([
+        'required_scope_missing',
+        'required_scope_missing',
+        'required_scope_missing',
+        'required_scope_missing',
+      ]);
+      // Two of the four are the node states nobody counted, which the statements rest on.
+      expect(
+        assembly.status === 'incomplete'
+          ? assembly.reasons.filter((reason) => reason.field === 'interpretation_text').length
+          : 0,
+      ).toBe(2);
     } finally {
       fresh.close();
     }
@@ -271,6 +285,7 @@ describe('judgment evidence assembly', () => {
           NOW,
         );
       }
+      establishNodeState(store.db, id, { revision: 1, at: NOW });
     }
     const result = await assembleJudgmentEvidence(
       deps,
