@@ -118,6 +118,42 @@ export function transitionSourceResidency(
 }
 
 /**
+ * Settles the state of a transition that already took its generation. It moves nothing unless
+ * the row still carries that generation, so an acknowledgment arriving after a later attempt
+ * replaced it changes nothing: the attempt it belongs to is over.
+ *
+ * Returns whether the state moved.
+ */
+export function settleSourceResidency(
+  db: SqliteHandle,
+  settlement: {
+    readonly sourceId: string;
+    readonly state: SourceResidencyState;
+    readonly projectionGeneration: number;
+    readonly operationId: string;
+    readonly transitionedAt: Date;
+    readonly rebuildAckAt?: Date;
+  },
+): boolean {
+  return (
+    db
+      .prepare(
+        `UPDATE source_residency
+         SET state = ?, transitioned_at = ?, rebuild_ack_at = COALESCE(?, rebuild_ack_at)
+         WHERE source_id = ? AND projection_generation = ? AND active_operation_id = ?`,
+      )
+      .run(
+        settlement.state,
+        settlement.transitionedAt.toISOString(),
+        settlement.rebuildAckAt?.toISOString() ?? null,
+        settlement.sourceId,
+        settlement.projectionGeneration,
+        settlement.operationId,
+      ).changes === 1
+  );
+}
+
+/**
  * Statements about the source itself: a forget, a suppression, an unforget. Append-only, so the
  * record of a forget survives whatever replaced the content it was about.
  */

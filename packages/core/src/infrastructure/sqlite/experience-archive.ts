@@ -190,6 +190,16 @@ export function mergeExperienceProvenance(
   return true;
 }
 
+/** The archive row by its own id, which is what a verified source record points at. */
+export function getExperienceById(
+  db: SqliteHandle,
+  archiveId: string,
+): ExperienceArchiveRow | undefined {
+  const row = db.prepare('SELECT * FROM experience_archive WHERE id = ?').get(archiveId) as
+    ExperienceArchiveRowData | undefined;
+  return row === undefined ? undefined : toExperienceArchiveRow(row);
+}
+
 /**
  * The archive row holding one payload's raw bytes, found by the key that decides whether a
  * second write inserts anything.

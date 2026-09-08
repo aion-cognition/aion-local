@@ -11,6 +11,7 @@ import {
   type RehearsalSubstrate,
 } from './test-support/consolidation-rehearsal.fixture.js';
 import { intakePublication } from '../../reflection/application/intake-publication.js';
+import { projectionRebuildPublication } from '../../reflection/application/rebuild-publication.js';
 import { statedReferencesPublication } from '../../reflection/application/reference-publication.js';
 import type { ReflectionContent } from '../../reflection/domain/content.js';
 import { PIPELINE_VERSION } from '../../reflection/domain/version.js';
@@ -22,6 +23,7 @@ import { listStatedLinks } from '../sqlite/evidence-links.js';
 import { listReferenceBatches } from '../sqlite/source-identity.js';
 import {
   listEvidenceAcknowledgments,
+  readSourceResidency,
   transitionSourceResidency,
 } from '../sqlite/source-lifecycle.js';
 
@@ -95,7 +97,12 @@ beforeAll(async () => {
     driver: substrate.harness.driver,
     db: store.db,
     logger,
-    handlers: [...PUBLICATION_HANDLERS, intakePublication, statedReferencesPublication],
+    handlers: [
+      ...PUBLICATION_HANDLERS,
+      intakePublication,
+      statedReferencesPublication,
+      projectionRebuildPublication,
+    ],
     now: () => NOW,
   });
   await coordinator.initialize();
@@ -249,4 +256,103 @@ it('refuses a statement about a source the records do not hold', async () => {
   });
 
   expect(outcome).toMatchObject({ status: 'rejected', reason: 'source_unknown' });
+});
+
+/** Removes a source's raw projection the way an eviction does, leaving its records behind. */
+async function evict(sourceId: string): Promise<void> {
+  transitionSourceResidency(store.db, {
+    sourceId,
+    state: 'evicted',
+    operationId: `evict-${sourceId}`,
+    transitionedAt: NOW,
+  });
+  await substrate.harness.driver.executeQuery('MATCH (n:AionNode { id: $id }) REMOVE n:AionNode', {
+    id: sourceId,
+  });
+  const turnIds = store.db
+    .prepare("SELECT turn_id FROM source_parts WHERE source_id = ? AND part_kind = 'turn'")
+    .all(sourceId) as { turn_id: string }[];
+  for (const row of turnIds) {
+    await substrate.harness.driver.executeQuery(
+      'MATCH (n:AionNode { id: $id }) REMOVE n:AionNode',
+      { id: row.turn_id },
+    );
+  }
+}
+
+it('puts an evicted projection back under the ids it always had', async () => {
+  const marker = `rebuild-${String(serial)}`;
+  const sourceId = await acceptSource(marker);
+  const turnIds = (
+    store.db
+      .prepare("SELECT turn_id FROM source_parts WHERE source_id = ? AND part_kind = 'turn'")
+      .all(sourceId) as { turn_id: string }[]
+  ).map((row) => row.turn_id);
+  await evict(sourceId);
+  const before = readSourceResidency(store.db, sourceId)?.projectionGeneration ?? 0;
+
+  const outcome = await coordinator.publish({
+    kind: 'projection_rebuild',
+    operationId: `rebuild-${marker}`,
+    payload: { sourceId, observedAt: NOW.toISOString() },
+  });
+
+  expect(outcome.status).toBe('acknowledged');
+  expect(outcome.status === 'acknowledged' ? outcome.result : undefined).toMatchObject({
+    sourceId,
+    turnIds,
+    pinnedOversized: [],
+  });
+  const residency = readSourceResidency(store.db, sourceId);
+  expect(residency).toMatchObject({ state: 'resident', projectionGeneration: before + 1 });
+  expect(residency?.rebuildAckAt).not.toBeNull();
+  const nodes = await substrate.harness.driver.executeQuery(
+    'UNWIND $ids AS id MATCH (n:AionNode { id: id }) RETURN count(n) AS n',
+    { ids: [sourceId, ...turnIds] },
+  );
+  expect(nodes.records[0]?.get('n').toNumber()).toBe(turnIds.length + 1);
+  // Raw reconstruction and semantic processing never share a row: the rebuild discharges only
+  // its own effect, and nothing it did queued extraction or appended feedback.
+  expect(
+    listEvidenceAcknowledgments(store.db, sourceId).filter(
+      (entry) => entry.effectKind === 'raw_rebuild',
+    ),
+  ).toMatchObject([{ state: 'completed' }]);
+  expect(
+    listEvidenceAcknowledgments(store.db, sourceId).filter(
+      (entry) => entry.effectKind === 'semantic_processing',
+    ),
+  ).toMatchObject([{ state: 'owed' }]);
+});
+
+it('refuses to restore an id an unrelated node now occupies', async () => {
+  const marker = `occupied-${String(serial)}`;
+  const sourceId = await acceptSource(marker);
+  await evict(sourceId);
+  await substrate.harness.driver.executeQuery(
+    'MATCH (n { id: $id }) SET n:AionNode SET n.occupied_by = "someone-else"',
+    { id: sourceId },
+  );
+
+  const outcome = await coordinator.publish({
+    kind: 'projection_rebuild',
+    operationId: `rebuild-${marker}`,
+    payload: { sourceId, observedAt: NOW.toISOString() },
+  });
+
+  expect(outcome).toMatchObject({ status: 'rejected', reason: 'original_ids_occupied' });
+  expect(readSourceResidency(store.db, sourceId)?.state).toBe('evicted');
+});
+
+it('refuses to rebuild a source whose projection is already there', async () => {
+  const marker = `resident-rebuild-${String(serial)}`;
+  const sourceId = await acceptSource(marker);
+
+  const outcome = await coordinator.publish({
+    kind: 'projection_rebuild',
+    operationId: `rebuild-${marker}`,
+    payload: { sourceId, observedAt: NOW.toISOString() },
+  });
+
+  expect(outcome).toMatchObject({ status: 'rejected', reason: 'source_not_evicted' });
 });

@@ -12,6 +12,8 @@ export { intakePublication } from './application/intake-publication.js';
 
 export { statedReferencesPublication } from './application/reference-publication.js';
 
+export { projectionRebuildPublication } from './application/rebuild-publication.js';
+
 export { LaneAssigner } from './application/lanes.js';
 
 export { recordLifecycleEvent } from './application/lifecycle-events.js';
