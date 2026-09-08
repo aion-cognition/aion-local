@@ -419,6 +419,11 @@ export function discardCoordinatorRecord(
   if (!settleUnacknowledgedIntent(db, record.operationId, state, reason)) {
     throw new PublicationInvariantError('publication_not_prepared', record.operationId);
   }
+  // The immutable plan retains the audit; these effects never became published obligations.
+  db.prepare('DELETE FROM publication_effects WHERE operation_id = ?').run(record.operationId);
+  db.prepare(
+    'UPDATE publication_intents SET result_json = NULL, result_digest = NULL WHERE operation_id = ?',
+  ).run(record.operationId);
   db.prepare(
     'UPDATE publication_control SET pending_operation_id = NULL WHERE pending_operation_id = ?',
   ).run(record.operationId);
