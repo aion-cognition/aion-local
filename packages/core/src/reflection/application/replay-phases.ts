@@ -29,6 +29,7 @@ import {
 import {
   listCohortSourcesAfter,
   listMigrationCohorts,
+  type CohortSourceFilter,
 } from '../../infrastructure/sqlite/migration-cohorts.js';
 import {
   readSourcePartTurnIds,
@@ -125,12 +126,21 @@ async function replayRow(
 }
 
 /**
- * What this occurrence stated, which is not always what its raw row carries.
+ * What THIS occurrence stated, which is not what its raw row carries.
  *
- * A source whose own archive row this is keeps the row's block: that is the compatibility
- * projection intake writes beside the content. A replacement sharing a forgotten predecessor's
- * bytes reads its own accepted history instead, because the row's statements belong to the
- * predecessor and re-stating them here would assert them under a different occurrence.
+ * The accepted history is the answer for every occurrence, its own row's owner included: a
+ * registered acceptance records statements durably and need not put them in the payload at all,
+ * so a source that reads only its archive block loses the references it actually holds and a
+ * rebuilt projection comes back without them.
+ *
+ * The block survives as a compatibility fallback for statements no acceptance has materialized
+ * yet, and only for the source whose own row it is. A replacement never reads it: those
+ * statements belong to the predecessor, and re-stating them here would assert them under an
+ * occurrence that never made them.
+ *
+ * Statements still awaiting their acknowledgment are absent on purpose. They are owed to the
+ * publication that prepared them, and replaying one would publish a decision that publication
+ * may still refuse; leaving it out discharges nothing.
  */
 function statementsOf(
   deps: ReplayDeps,
@@ -138,26 +148,28 @@ function statementsOf(
   sourceId: string,
   archived: ReflectionProvenance | undefined,
 ): ReflectionProvenance | undefined {
-  if (row.episodeId === sourceId) {
-    return archived;
-  }
   const accepted = acceptedReferencesOf(deps.db, sourceId);
+  const legacy = row.episodeId === sourceId ? archived : undefined;
   if (accepted === undefined) {
-    return undefined;
+    return legacy;
   }
+  const supersedes = new Set([...accepted.supersedes, ...(legacy?.supersedes ?? [])]);
+  const derivedFrom = new Set([...accepted.derivedFrom, ...(legacy?.derived_from ?? [])]);
+  const confirmations = new Map(
+    [
+      ...accepted.confirmations.map((entry) => ({
+        target: entry.target,
+        by: entry.by,
+        evidence: entry.evidence,
+        ...(entry.occurredAt === undefined ? {} : { occurred_at: entry.occurredAt }),
+      })),
+      ...(legacy?.confirmations ?? []),
+    ].map((entry) => [entry.target, entry] as const),
+  );
   return {
-    ...(accepted.supersedes.length === 0 ? {} : { supersedes: [...accepted.supersedes] }),
-    ...(accepted.derivedFrom.length === 0 ? {} : { derived_from: [...accepted.derivedFrom] }),
-    ...(accepted.confirmations.length === 0
-      ? {}
-      : {
-          confirmations: accepted.confirmations.map((entry) => ({
-            target: entry.target,
-            by: entry.by,
-            evidence: entry.evidence,
-            ...(entry.occurredAt === '' ? {} : { occurred_at: entry.occurredAt }),
-          })),
-        }),
+    ...(supersedes.size === 0 ? {} : { supersedes: [...supersedes] }),
+    ...(derivedFrom.size === 0 ? {} : { derived_from: [...derivedFrom] }),
+    ...(confirmations.size === 0 ? {} : { confirmations: [...confirmations.values()] }),
   };
 }
 
@@ -332,7 +344,8 @@ export async function walkCohorts(
   state: ReplayPass,
 ): Promise<number> {
   const resume = options.cursor?.kind === 'cohort' ? options.cursor : undefined;
-  const filter = {
+  const filter: CohortSourceFilter = {
+    ...(pass.selection.stale === true ? { excludePipelineVersion: pass.pipelineVersion } : {}),
     ...(pass.selection.episodeId === undefined ? {} : { sourceId: pass.selection.episodeId }),
     ...(pass.selection.sessionId === undefined ? {} : { sessionId: pass.selection.sessionId }),
   };

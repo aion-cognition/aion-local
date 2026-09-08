@@ -340,13 +340,25 @@ export function listMigrationCohorts(db: SqliteHandle): readonly string[] {
  * skips exactly the population the migration exists for, so the frozen membership is its own
  * cursor. Source id orders it because the cohort's membership is fixed at the freeze and a
  * source's id does not move.
+ *
+ * Every selection the other populations honour is applied HERE, inside the bounded query, and
+ * not to the page it returns: a member filtered out afterwards would still have consumed a row
+ * of the limit and moved the cursor past itself, so a caller asking for stale rows would page
+ * through a cohort of current ones and call the walk finished.
  */
+export type CohortSourceFilter = {
+  readonly sourceId?: string;
+  readonly sessionId?: string;
+  /** Selects members whose raw row was written under some other pipeline version. */
+  readonly excludePipelineVersion?: string;
+};
+
 export function listCohortSourcesAfter(
   db: SqliteHandle,
   cohortId: string,
   afterSourceId: string,
   limit: number,
-  filter: { readonly sourceId?: string; readonly sessionId?: string } = {},
+  filter: CohortSourceFilter = {},
 ): readonly { readonly sourceId: string; readonly canonicalArchiveId: string | null }[] {
   const clauses: string[] = [];
   const parameters: unknown[] = [cohortId, afterSourceId];
@@ -358,11 +370,16 @@ export function listCohortSourcesAfter(
     clauses.push('AND r.session_id = ?');
     parameters.push(filter.sessionId);
   }
+  if (filter.excludePipelineVersion !== undefined) {
+    clauses.push('AND (a.pipeline_version IS NULL OR a.pipeline_version <> ?)');
+    parameters.push(filter.excludePipelineVersion);
+  }
   const rows = db
     .prepare(
       `SELECT r.source_id, r.canonical_archive_id
        FROM migration_progress m
        JOIN source_records r ON r.source_id = m.source_id
+       LEFT JOIN experience_archive a ON a.id = r.canonical_archive_id
        WHERE m.cohort_id = ? AND m.source_id > ? ${clauses.join(' ')}
          AND NOT EXISTS (SELECT 1 FROM ingest_log i WHERE i.source_id = m.source_id)
        ORDER BY m.source_id
