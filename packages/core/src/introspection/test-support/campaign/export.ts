@@ -14,7 +14,6 @@ import {
   boundPage,
   COHORT_PAGE_BOUNDS,
   EMPTY_PROGRESS,
-  exportIsComplete,
   recordOversizedExport,
   type ExportProgress,
   type OversizedMember,
@@ -58,6 +57,14 @@ export type CohortExportResult = {
   readonly missing: readonly string[];
   readonly duplicated: readonly string[];
 };
+
+function occurrences(keys: readonly string[]): ReadonlyMap<string, number> {
+  const counted = new Map<string, number>();
+  for (const key of keys) {
+    counted.set(key, (counted.get(key) ?? 0) + 1);
+  }
+  return counted;
+}
 
 function progressPath(dir: string, name: string): string {
   return join(dir, name, PROGRESS_FILE);
@@ -121,15 +128,36 @@ function persistedPageFiles(dir: string, name: string): readonly string[] {
   }
 }
 
+/**
+ * One past the highest index on disk, never the file count. A directory missing `page-00001`
+ * has two files and a highest index of two, and numbering from the count would write over
+ * `page-00002`.
+ */
+function nextPageIndex(dir: string, name: string): number {
+  let highest = -1;
+  for (const file of persistedPageFiles(dir, name)) {
+    const index = Number.parseInt(file.slice(PAGE_PREFIX.length), 10);
+    if (Number.isInteger(index)) {
+      highest = Math.max(highest, index);
+    }
+  }
+  return highest + 1;
+}
+
+/** The keys one persisted page holds, in the order it holds them. */
+function pageKeys(dir: string, name: string, file: string): readonly string[] {
+  const page = JSON.parse(readFileSync(join(dir, name, file), 'utf8')) as {
+    rows: { id?: string }[];
+    keys?: string[];
+  };
+  return page.keys ?? page.rows.map((row) => row.id ?? '');
+}
+
 /** Every member the persisted pages and completed transfers actually hold. */
 export function persistedMembers(dir: string, name: string): readonly string[] {
   const members: string[] = [];
   for (const file of persistedPageFiles(dir, name)) {
-    const page = JSON.parse(readFileSync(join(dir, name, file), 'utf8')) as {
-      rows: { id?: string }[];
-      keys?: string[];
-    };
-    members.push(...(page.keys ?? page.rows.map((row) => row.id ?? '')));
+    members.push(...pageKeys(dir, name, file));
   }
   for (const key of completedTransfers(dir, name)) {
     members.push(key);
@@ -137,34 +165,99 @@ export function persistedMembers(dir: string, name: string): readonly string[] {
   return members;
 }
 
-/** The oversized members whose digest file is on disk, which is what makes a transfer done. */
-export function completedTransfers(dir: string, name: string): readonly string[] {
+type TransferReceipt = {
+  readonly key: string;
+  readonly bytes: number;
+  readonly sha256: string;
+};
+
+/**
+ * The payload a receipt covers, if the bytes on disk are the bytes it covers.
+ *
+ * A receipt beside a payload is not a verified transfer: the payload can be gone, truncated or
+ * rewritten while the receipt still sits there claiming otherwise. So the bytes are read, their
+ * length and digest are recomputed, and the key on the receipt has to be the key asked for.
+ */
+export function verifyTransfer(dir: string, name: string, key: string): string | undefined {
+  let receipt: TransferReceipt;
   try {
-    return readdirSync(join(dir, name, OVERSIZED_DIR))
-      .filter((file) => file.endsWith('.sha256.json'))
-      .map(
-        (file) =>
-          (
-            JSON.parse(readFileSync(join(dir, name, OVERSIZED_DIR, file), 'utf8')) as {
-              key: string;
-            }
-          ).key,
-      )
-      .sort();
+    receipt = JSON.parse(
+      readFileSync(join(dir, name, OVERSIZED_DIR, `${safeName(key)}.sha256.json`), 'utf8'),
+    ) as TransferReceipt;
+  } catch {
+    return undefined;
+  }
+  if (receipt.key !== key) {
+    return undefined;
+  }
+  let body: string;
+  try {
+    body = readFileSync(join(dir, name, OVERSIZED_DIR, `${safeName(key)}.json`), 'utf8');
+  } catch {
+    return undefined;
+  }
+  if (Buffer.byteLength(body, 'utf8') !== receipt.bytes) {
+    return undefined;
+  }
+  if (createHash('sha256').update(body).digest('hex') !== receipt.sha256) {
+    return undefined;
+  }
+  return body;
+}
+
+/** The oversized members whose bytes verify against their receipt. Nothing else counts as done. */
+export function completedTransfers(dir: string, name: string): readonly string[] {
+  let receipts: readonly string[];
+  try {
+    receipts = readdirSync(join(dir, name, OVERSIZED_DIR)).filter((file) =>
+      file.endsWith('.sha256.json'),
+    );
   } catch {
     return [];
   }
+  const keys: string[] = [];
+  for (const file of receipts) {
+    try {
+      const receipt = JSON.parse(
+        readFileSync(join(dir, name, OVERSIZED_DIR, file), 'utf8'),
+      ) as TransferReceipt;
+      if (verifyTransfer(dir, name, receipt.key) !== undefined) {
+        keys.push(receipt.key);
+      }
+    } catch {
+      // A receipt nothing can read covers nothing, so it names no completed transfer.
+    }
+  }
+  return keys.sort();
 }
 
-/** One transferred payload, read back from the bytes its digest covers. */
+export class TransferUnverified extends Error {
+  constructor(name: string, key: string) {
+    super(`cohort export ${name} holds no verified transfer for ${key}`);
+    this.name = 'TransferUnverified';
+  }
+}
+
+/** One transferred payload, read back from the bytes its digest covers, or a refusal. */
 export function readTransferred(dir: string, name: string, key: string): unknown {
-  return JSON.parse(readFileSync(join(dir, name, OVERSIZED_DIR, `${safeName(key)}.json`), 'utf8'));
+  const body = verifyTransfer(dir, name, key);
+  if (body === undefined) {
+    throw new TransferUnverified(name, key);
+  }
+  return JSON.parse(body);
 }
 
 export type CohortExportRequest<T> = {
   readonly name: string;
   readonly dir: string;
   readonly fetch: CohortFetch<T>;
+  /**
+   * One member by its own key, for finishing a transfer the previous run owed. The cursor has
+   * already moved past that row, so no keyset read will offer it again, and there is no
+   * ordering trick that reaches one key from another: a cohort key is an arbitrary string.
+   * Absent when the caller has no direct read, and then the walk finds it by starting over.
+   */
+  readonly fetchKey?: (key: string) => Promise<readonly T[]> | readonly T[];
   readonly shape: PageShape<T>;
   readonly bounds?: PageBounds;
   /** Raised after this many pages, for a test that needs the run to die mid-walk. */
@@ -172,24 +265,56 @@ export type CohortExportRequest<T> = {
 };
 
 /**
- * Services a transfer the previous run owed. The cursor has already moved past the row, so the
- * fetch will never offer it again; the only way to finish it is to ask for it by its own key.
+ * The one row a key names.
+ *
+ * A direct read answers it outright. Without one the walk starts at the beginning and pages
+ * forward until the key appears, which is exact rather than a guess: it compares keys instead
+ * of assuming an ordering trick reaches one from another.
+ */
+async function memberByKey<T>(
+  request: CohortExportRequest<T>,
+  key: string,
+): Promise<T | undefined> {
+  const { fetch, fetchKey, shape } = request;
+  if (fetchKey !== undefined) {
+    return (await fetchKey(key)).find((candidate) => shape.key(candidate) === key);
+  }
+  const limit = request.bounds?.maxRows ?? COHORT_PAGE_BOUNDS.maxRows;
+  let cursor: string | undefined;
+  for (;;) {
+    const page = await fetch(cursor, limit);
+    if (page.length === 0) {
+      return undefined;
+    }
+    const found = page.find((candidate) => shape.key(candidate) === key);
+    if (found !== undefined) {
+      return found;
+    }
+    const last = page[page.length - 1];
+    if (last === undefined) {
+      return undefined;
+    }
+    cursor = shape.key(last);
+  }
+}
+
+/**
+ * Services a transfer the previous run owed. A key whose bytes already verify is simply marked
+ * done; one whose bytes are gone or no longer match is streamed again.
  */
 async function recoverPending<T>(
   request: CohortExportRequest<T>,
   progress: ExportProgress,
 ): Promise<ExportProgress> {
-  const { name, dir, fetch, shape } = request;
-  const done = new Set(completedTransfers(dir, name));
+  const { name, dir } = request;
   let recovered = progress;
   for (const member of progress.pendingOversized ?? []) {
-    if (done.has(member.key)) {
+    if (verifyTransfer(dir, name, member.key) !== undefined) {
       recovered = recordOversizedExport(recovered, member.key);
       writeJson(progressPath(dir, name), recovered);
       continue;
     }
-    const reachable = await fetch(priorKey(member.key), request.bounds?.maxRows ?? 200);
-    const row = reachable.find((candidate) => shape.key(candidate) === member.key);
+    const row = await memberByKey(request, member.key);
     if (row === undefined) {
       continue;
     }
@@ -201,16 +326,36 @@ async function recoverPending<T>(
 }
 
 /**
- * The cursor that puts one key back in reach. Keyset reads answer with everything after the
- * cursor, so the key just before this one is what asks for this one.
+ * Adopts a page the previous run wrote and did not live to record.
+ *
+ * Writing the page before the record is what makes the page durable; the cost is that a run
+ * killed between the two leaves work nobody accounted for. Replaying it would write the same
+ * members a second time under a new page, so the members are adopted from the file that
+ * already holds them and the cursor moves to the last of them.
  */
-function priorKey(key: string): string | undefined {
-  const last = key.slice(-1);
-  if (last === '') {
-    return undefined;
+function reconcileUnaccounted(dir: string, name: string, progress: ExportProgress): ExportProgress {
+  const accounted = new Set(progress.accounted);
+  const adopted: string[] = [];
+  let { cursor } = progress;
+  for (const file of persistedPageFiles(dir, name)) {
+    for (const key of pageKeys(dir, name, file)) {
+      if (!accounted.has(key)) {
+        adopted.push(key);
+        accounted.add(key);
+      }
+      cursor = cursor === undefined || key > cursor ? key : cursor;
+    }
   }
-  const previous = String.fromCharCode(last.charCodeAt(0) - 1);
-  return `${key.slice(0, -1)}${previous}`;
+  if (adopted.length === 0) {
+    return progress;
+  }
+  const reconciled: ExportProgress = {
+    accounted: [...progress.accounted, ...adopted],
+    pendingOversized: progress.pendingOversized ?? [],
+    ...(cursor === undefined ? {} : { cursor }),
+  };
+  writeJson(progressPath(dir, name), reconciled);
+  return reconciled;
 }
 
 export async function exportCohort<T>(
@@ -227,9 +372,10 @@ export async function exportCohort<T>(
     );
   }
   let progress = record.status === 'read' ? record.progress : EMPTY_PROGRESS;
-  // Continue the numbering the previous run left, or a resumed page overwrites its first page.
-  let pages = persistedPageFiles(dir, name).length;
+  // One past the highest index on disk, so a resumed page never lands on a name already taken.
+  let pages = nextPageIndex(dir, name);
 
+  progress = reconcileUnaccounted(dir, name, progress);
   progress = await recoverPending(request, progress);
 
   const written = pages;
@@ -272,22 +418,24 @@ export async function exportCohort<T>(
   // directory with no record cannot say whether it was.
   writeJson(progressPath(dir, name), progress);
 
-  // Against the files, not against the list. A list compared with itself agrees every time.
+  // Against the files, not against the list. A list compared with itself agrees every time, and
+  // counting occurrences on both sides is what catches one member written into two pages.
   const onDisk = persistedMembers(dir, name);
-  const verdict = exportIsComplete(progress, onDisk);
-  const onDiskKeys = new Set(onDisk);
-  // Both directions: a member the record claims that no file holds, and a member a file holds
-  // that the record never accounted for.
-  const unwritten = progress.accounted.filter((key) => !onDiskKeys.has(key));
+  const held = occurrences(onDisk);
+  const claimed = occurrences(progress.accounted);
+  const keys = [...new Set([...held.keys(), ...claimed.keys()])].sort();
+  const missing = keys.filter((key) => (held.get(key) ?? 0) < (claimed.get(key) ?? 0));
+  const duplicated = keys.filter(
+    (key) => (held.get(key) ?? 0) > 1 || (held.get(key) ?? 0) > (claimed.get(key) ?? 0),
+  );
   const owed: readonly OversizedMember[] = progress.pendingOversized ?? [];
-  const missing = [...new Set([...verdict.missing, ...unwritten])].sort();
   return {
     name,
     pages,
     members: onDisk,
     oversized: owed.map((member) => member.key),
-    complete: missing.length === 0 && verdict.duplicated.length === 0 && owed.length === 0,
+    complete: missing.length === 0 && duplicated.length === 0 && owed.length === 0,
     missing,
-    duplicated: verdict.duplicated,
+    duplicated,
   };
 }

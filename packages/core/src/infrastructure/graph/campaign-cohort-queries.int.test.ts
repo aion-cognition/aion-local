@@ -8,6 +8,7 @@ import {
   readEntityMentionDistribution,
   readGraphSourcePage,
   readNarrativeEdgeStatePage,
+  readNarrativePage,
   readRelationshipTypeCounts,
   type NarrativeEdgeState,
 } from './campaign-cohort-queries.js';
@@ -226,5 +227,26 @@ describe('the mention distribution', () => {
       { mentions: 0, entities: 1 },
       { mentions: 1, entities: 1 },
     ]);
+  });
+});
+
+describe('reaching one member by its own key', () => {
+  it('answers with the edge the key names, whatever the cursor would have skipped', async () => {
+    const page = await readNarrativeEdgeStatePage(harness.driver, 1, undefined, 'edge-0002');
+    expect(page.map((edge) => edge.id)).toEqual(['edge-0002']);
+  });
+
+  it('answers with the episode the key names', async () => {
+    const page = await readGraphSourcePage(harness.driver, 1, undefined, 'campaign-episode-2');
+    expect(page.map((row) => row.id)).toEqual(['campaign-episode-2']);
+  });
+
+  it('answers with the narrative the key names', async () => {
+    const page = await readNarrativePage(harness.driver, 1, undefined, CLOSED_NARRATIVE);
+    expect(page.map((row) => row.id)).toEqual([CLOSED_NARRATIVE]);
+  });
+
+  it('answers with nothing for a key the cohort does not hold', async () => {
+    expect(await readNarrativePage(harness.driver, 1, undefined, 'no-such-narrative')).toEqual([]);
   });
 });

@@ -18,6 +18,30 @@ import { toGraphInteger } from './values.js';
  * skips members and repeats others. Nothing in this file writes.
  */
 
+/**
+ * Either the one member a key names, or the page after a cursor. A recovery asks for a key
+ * outright: the cursor has already moved past the row it owes, and no ordering trick reaches
+ * one arbitrary string id from another.
+ */
+function keyOrCursor(column: string): string {
+  return [
+    `WHERE ($exactKey IS NOT NULL AND ${column} = $exactKey)`,
+    `   OR ($exactKey IS NULL AND ($cursor IS NULL OR ${column} > $cursor))`,
+  ].join('\n');
+}
+
+function keyedParameters(
+  limit: number,
+  cursor: string | undefined,
+  exactKey: string | undefined,
+): Record<string, unknown> {
+  return {
+    limit: toGraphInteger(limit),
+    cursor: cursor ?? null,
+    exactKey: exactKey ?? null,
+  };
+}
+
 /** One summarization edge and the state of the narrative it points at. */
 export type NarrativeEdgeState = {
   readonly id: string;
@@ -34,26 +58,31 @@ export type NarrativeEdgeState = {
  * lets a later read tell a repair from a removal: an edge that is simply absent is a different
  * result from one this walk found closed.
  */
-export function buildNarrativeEdgeStatePage(limit: number, cursor?: string): GraphStatement {
+export function buildNarrativeEdgeStatePage(
+  limit: number,
+  cursor?: string,
+  exactKey?: string,
+): GraphStatement {
   assertPositiveInt('limit', limit);
   const { validUntil } = BITEMPORAL_PROPERTIES;
   const cypher = [
     `MATCH (s)-[r:${SUMMARIZED_BY_TYPE}]->(n:Narrative)`,
-    'WHERE $cursor IS NULL OR r.id > $cursor',
+    keyOrCursor('r.id'),
     'WITH r, s, n ORDER BY r.id ASC LIMIT $limit',
     'RETURN r.id AS id, s.id AS sourceId, n.id AS targetId,',
     `       r.${validUntil} IS NULL AS open, n.${validUntil} IS NOT NULL AS targetClosed`,
   ].join('\n');
 
-  return { cypher, parameters: { limit: toGraphInteger(limit), cursor: cursor ?? null } };
+  return { cypher, parameters: keyedParameters(limit, cursor, exactKey) };
 }
 
 export async function readNarrativeEdgeStatePage(
   driver: Driver,
   limit: number,
   cursor?: string,
+  exactKey?: string,
 ): Promise<readonly NarrativeEdgeState[]> {
-  return runRead(driver, buildNarrativeEdgeStatePage(limit, cursor), (row) => ({
+  return runRead(driver, buildNarrativeEdgeStatePage(limit, cursor, exactKey), (row) => ({
     id: (row.id as string | null) ?? '',
     sourceId: (row.sourceId as string | null) ?? '',
     targetId: (row.targetId as string | null) ?? '',
@@ -78,11 +107,15 @@ export type GraphSourceRow = {
  * measures how large a member is without pulling the payload through the driver, and the
  * payload has its own named export when one member is over a page ceiling.
  */
-export function buildGraphSourcePage(limit: number, cursor?: string): GraphStatement {
+export function buildGraphSourcePage(
+  limit: number,
+  cursor?: string,
+  exactKey?: string,
+): GraphStatement {
   assertPositiveInt('limit', limit);
   const cypher = [
     'MATCH (e:Episode)',
-    'WHERE $cursor IS NULL OR e.id > $cursor',
+    keyOrCursor('e.id'),
     'WITH e ORDER BY e.id ASC LIMIT $limit',
     `OPTIONAL MATCH (t:Turn)-[:${CONTAINMENT_TYPE}]->(e)`,
     'WITH e, count(t) AS turns',
@@ -93,15 +126,16 @@ export function buildGraphSourcePage(limit: number, cursor?: string): GraphState
     `       EXISTS { MATCH ()-[:${EXTRACTION_TYPE}]->(e) } AS enriched`,
   ].join('\n');
 
-  return { cypher, parameters: { limit: toGraphInteger(limit), cursor: cursor ?? null } };
+  return { cypher, parameters: keyedParameters(limit, cursor, exactKey) };
 }
 
 export async function readGraphSourcePage(
   driver: Driver,
   limit: number,
   cursor?: string,
+  exactKey?: string,
 ): Promise<readonly GraphSourceRow[]> {
-  return runRead(driver, buildGraphSourcePage(limit, cursor), (row) => {
+  return runRead(driver, buildGraphSourcePage(limit, cursor, exactKey), (row) => {
     const { occurredAt } = row;
     return {
       id: (row.id as string | null) ?? '',
@@ -200,26 +234,31 @@ export type NarrativeRow = {
  * cleanup and by any eviction comparison, and reading membership off the edges is exactly how
  * such a record goes missing from the census that is supposed to find it.
  */
-export function buildNarrativePage(limit: number, cursor?: string): GraphStatement {
+export function buildNarrativePage(
+  limit: number,
+  cursor?: string,
+  exactKey?: string,
+): GraphStatement {
   assertPositiveInt('limit', limit);
   const { validUntil } = BITEMPORAL_PROPERTIES;
   const cypher = [
     'MATCH (n:Narrative)',
-    'WHERE $cursor IS NULL OR n.id > $cursor',
+    keyOrCursor('n.id'),
     'WITH n ORDER BY n.id ASC LIMIT $limit',
     `RETURN n.id AS id, n.${MEMORY_PROPERTIES.sessionId} AS sessionId,`,
     `       n.${validUntil} IS NULL AS open, toString(n.${validUntil}) AS validUntil`,
   ].join('\n');
 
-  return { cypher, parameters: { limit: toGraphInteger(limit), cursor: cursor ?? null } };
+  return { cypher, parameters: keyedParameters(limit, cursor, exactKey) };
 }
 
 export async function readNarrativePage(
   driver: Driver,
   limit: number,
   cursor?: string,
+  exactKey?: string,
 ): Promise<readonly NarrativeRow[]> {
-  return runRead(driver, buildNarrativePage(limit, cursor), (row) => {
+  return runRead(driver, buildNarrativePage(limit, cursor, exactKey), (row) => {
     const { validUntil } = row;
     return {
       id: (row.id as string | null) ?? '',

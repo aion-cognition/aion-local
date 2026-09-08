@@ -68,10 +68,11 @@ async function exportedWalk<T>(
   name: string,
   dir: string,
   fetch: (cursor: string | undefined, limit: number) => Promise<readonly T[]>,
+  fetchKey: (key: string) => Promise<readonly T[]>,
   shape: PageShape<T>,
 ): Promise<WalkOutcome<T>> {
   try {
-    const result = await exportCohort({ name, dir, fetch, shape });
+    const result = await exportCohort({ name, dir, fetch, fetchKey, shape });
     return {
       status: 'ok',
       rows: readExportedRows(dir, name, shape),
@@ -95,6 +96,7 @@ export async function walkNarrativeEdges(
     'narrative-edges',
     dir,
     (cursor, limit) => readNarrativeEdgeStatePage(driver, limit, cursor),
+    (key) => readNarrativeEdgeStatePage(driver, 1, undefined, key),
     { key: (row) => row.id, bytes: jsonBytes },
   );
 }
@@ -107,6 +109,7 @@ export async function walkGraphSources(
     'graph-sources',
     dir,
     (cursor, limit) => readGraphSourcePage(driver, limit, cursor),
+    (key) => readGraphSourcePage(driver, 1, undefined, key),
     { key: (row) => row.id, bytes: jsonBytes },
   );
 }
@@ -119,6 +122,7 @@ export async function walkNarratives(
     'narratives',
     dir,
     (cursor, limit) => readNarrativePage(driver, limit, cursor),
+    (key) => readNarrativePage(driver, 1, undefined, key),
     { key: (row) => row.id, bytes: jsonBytes },
   );
 }
