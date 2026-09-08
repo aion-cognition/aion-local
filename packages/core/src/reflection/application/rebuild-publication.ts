@@ -2,14 +2,18 @@ import { reflectionBoundsBreaches } from '@aion/protocol';
 import { z } from 'zod';
 
 import { projectEpisodeInTransaction } from './experience-store.js';
+import { sourcePartsOf } from './source-manifest.js';
 import { PublicationOperation } from '../../infrastructure/publication/operation.js';
 import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
 import type { PublicationContext } from '../../infrastructure/publication/types.js';
 import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
+import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { getExperienceById } from '../../infrastructure/sqlite/experience-archive.js';
 import {
   readSourcePartTurnIds,
+  readSourceParts,
   readSourceRecord,
+  type SourceRecord,
 } from '../../infrastructure/sqlite/source-identity.js';
 import {
   RAW_REBUILD_EFFECT,
@@ -18,7 +22,7 @@ import {
   settleSourceResidency,
   transitionSourceResidency,
 } from '../../infrastructure/sqlite/source-lifecycle.js';
-import { prepareEpisode, type ReflectionContent } from '../domain/content.js';
+import { prepareEpisode, type PreparedEpisode, type ReflectionContent } from '../domain/content.js';
 
 /**
  * Putting an evicted source's raw projection back, under the ids it always had.
@@ -44,9 +48,17 @@ const Data = Payload.extend({
   sessionId: z.string().min(1),
   archiveId: z.string().min(1),
   turnIds: z.array(z.string().min(1)),
+  /** The SELECTED occurrence's own world time, not the canonical raw row's. */
   occurredAt: z.string().min(1),
   payloadJson: z.string().min(1),
   projectionGeneration: z.number().int().positive(),
+  /**
+   * What the recorded proof said about these bytes, checked again before anything is written.
+   * A non-null archive pointer is a claim, not evidence: the row it names can have moved under
+   * it, and reconstructing from bytes that no longer hash to the verified digest would republish
+   * different content under the original ids.
+   */
+  proof: z.enum(['verified', 'content_changed', 'parts_changed', 'incomplete']),
   /**
    * Which new-request bounds the archived payload exceeds. A rebuild reports the pin and still
    * reconstructs: the caps gate new requests, and applying them here would corrupt a record the
@@ -60,6 +72,49 @@ const Result = z.strictObject({
   turnIds: z.array(z.string().min(1)),
   pinnedOversized: z.array(z.string()),
 });
+
+/**
+ * Whether the bytes and the parts still match what the occurrence was verified against.
+ *
+ * Every field of the proof has to be there: an occurrence that never carried one cannot have it
+ * confirmed, and treating absence as agreement is how a rebuild republishes content nobody
+ * verified. The parts are compared on kind, ordinal, hash, role and original id, because those
+ * are what the reconstruction writes back under.
+ */
+function verifyRebuildProof(
+  db: SqliteHandle,
+  record: SourceRecord,
+  archived: ReflectionContent,
+  prepared: PreparedEpisode,
+): z.infer<typeof Data>['proof'] {
+  if (
+    record.verifiedContentDigest === null ||
+    record.identityHash === null ||
+    record.archiveSchemaVersion === null
+  ) {
+    return 'incomplete';
+  }
+  if (prepared.contentHash !== record.verifiedContentDigest) {
+    return 'content_changed';
+  }
+  const recorded = readSourceParts(db, record.sourceId);
+  const expected = sourcePartsOf(prepared, archived, readSourcePartTurnIds(db, record.sourceId));
+  if (recorded.length !== expected.length) {
+    return 'parts_changed';
+  }
+  const held = new Map(recorded.map((part) => [`${part.partKind}:${String(part.ordinal)}`, part]));
+  for (const part of expected) {
+    const known = held.get(`${part.partKind}:${String(part.ordinal)}`);
+    if (
+      known?.contentHash !== part.contentHash ||
+      (known.role ?? undefined) !== part.role ||
+      (part.turnId !== undefined && known.turnId !== part.turnId)
+    ) {
+      return 'parts_changed';
+    }
+  }
+  return 'verified';
+}
 
 type RebuildData = z.infer<typeof Data>;
 
@@ -110,10 +165,14 @@ export const projectionRebuildPublication = new PublicationOperation({
     }
     const archived = archivedContent(row.payload);
     const turnIds = readSourcePartTurnIds(context.db, payload.sourceId);
-    const prepared = prepareEpisode(archived, new Date(row.occurredAt));
-    if (turnIds.length !== prepared.turns.length) {
-      throw new Error(`source ${payload.sourceId} records turn parts the archive does not carry`);
-    }
+    // The occurrence's own recorded world time, not the canonical row's: a replacement sharing a
+    // forgotten predecessor's bytes has its own clock, and reconstructing under the predecessor's
+    // would date it to a conversation it was not part of.
+    const prepared = prepareEpisode(archived, new Date(record.occurredAt));
+    const proof =
+      turnIds.length === prepared.turns.length
+        ? verifyRebuildProof(context.db, record, archived, prepared)
+        : 'parts_changed';
     // The attempt takes the generation, not the outcome: a rebuild that fails leaves its number
     // spent, so a retry writes under one nothing else has used. The number is chosen here and
     // taken in the durable prepare, which is the only place this operation writes.
@@ -124,9 +183,10 @@ export const projectionRebuildPublication = new PublicationOperation({
       sessionId: record.sessionId,
       archiveId: record.canonicalArchiveId,
       turnIds: [...turnIds],
-      occurredAt: row.occurredAt,
+      occurredAt: record.occurredAt,
       payloadJson: JSON.stringify(archived),
       projectionGeneration,
+      proof,
       pinnedOversized: reflectionBoundsBreaches(archived).map((breach) => breach.bound),
     };
     return Promise.resolve({
@@ -154,6 +214,29 @@ export const projectionRebuildPublication = new PublicationOperation({
     });
   },
   async check(context, data) {
+    if (data.proof !== 'verified') {
+      return { status: 'rejected', reason: `rebuild_proof_${data.proof}` } as const;
+    }
+    // Rechecked here and not only at planning: recovery replays this plan, and the bytes it
+    // reconstructs from have to still be the bytes the occurrence was verified against.
+    const record = readSourceRecord(context.db, data.sourceId);
+    const row =
+      record?.canonicalArchiveId == null
+        ? undefined
+        : getExperienceById(context.db, record.canonicalArchiveId);
+    if (record === undefined || row === undefined) {
+      return { status: 'rejected', reason: 'rebuild_proof_incomplete' } as const;
+    }
+    const archived = archivedContent(row.payload);
+    const current = verifyRebuildProof(
+      context.db,
+      record,
+      archived,
+      prepareEpisode(archived, new Date(record.occurredAt)),
+    );
+    if (current !== 'verified') {
+      return { status: 'rejected', reason: `rebuild_proof_${current}` } as const;
+    }
     const residency = readSourceResidency(context.db, data.sourceId);
     // A source with no row of its own never left, so it is resident and there is nothing to
     // put back. Deciding that before the occupant read keeps the refusal honest about which

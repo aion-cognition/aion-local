@@ -2,7 +2,19 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 
 import { projectEpisodeInTransaction } from './experience-store.js';
+import { enqueueSourceWork } from './intake-queue.js';
+import {
+  acceptedTargetsHash,
+  acknowledgeReferenceAcceptance,
+  classifyStatedReferences,
+  discardReferenceAcceptance,
+  prepareReferenceAcceptance,
+  statedReferenceIds,
+  type ReferenceAcceptance,
+  type StatedReferenceInput,
+} from './reference-acceptance.js';
 import { activateSourceManifest, writeSourceManifest } from './source-manifest.js';
+import { presentNodeIds } from '../../infrastructure/graph/projection-presence.js';
 import { PublicationOperation } from '../../infrastructure/publication/operation.js';
 import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
 import type {
@@ -19,11 +31,7 @@ import {
 } from '../../infrastructure/sqlite/experience-archive.js';
 import { markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import { readGeneration } from '../../infrastructure/sqlite/processing-generations.js';
-import {
-  enqueueReflectionJob,
-  findPendingJobForEpisode,
-  REFLECTION_QUEUE_EPISODE_FIELD,
-} from '../../infrastructure/sqlite/reflection-queue.js';
+import { readReferenceDelivery } from '../../infrastructure/sqlite/source-identity.js';
 import { captureOrderValue } from '../../infrastructure/sqlite/source-lifecycle.js';
 import {
   occurrenceCandidates,
@@ -44,20 +52,13 @@ import { hashContent, prepareEpisode, type ReflectionContent } from '../domain/c
  * the two resumes the ids that were already minted. The queue enqueue is an acknowledgment
  * effect, so no worker can claim a job for an episode that does not exist.
  */
-export const INTAKE_JOB_TYPE = 'integrate';
-
-/**
- * The bounded source-index work an acceptance owes. C6 owns the handler, the digest
- * idempotence and the part cursor; the enqueue here is the acceptance effect and nothing more.
- * The row carries the original logical source id, and it never enters the extraction pipeline.
- */
-export const SOURCE_INDEX_JOB_TYPE = 'source_index';
-
 export const INTAKE_EFFECTS = {
   projection: 'graph_projection',
   enqueue: 'reflection_queue_enqueue',
   watermark: 'session_watermark',
   index: 'search_index_enqueue',
+  references: 'reference_batch',
+  links: 'evidence_link_versions',
 } as const;
 
 const Readiness = z.strictObject({
@@ -79,8 +80,29 @@ const Payload = z.strictObject({
   readiness: Readiness.nullable(),
 });
 
+const ReferenceTarget = z.strictObject({
+  id: z.string().min(1),
+  kind: z.enum(['corrects', 'derived_from', 'confirms']),
+  targetClass: z.enum(['source', 'part', 'retained_node', 'unresolved']),
+  confirmation: z
+    .strictObject({
+      by: z.string().min(1),
+      evidence: z.string().min(1),
+      occurredAt: z.string().min(1),
+    })
+    .optional(),
+});
+
 const Data = Payload.extend({
   decision: z.enum(['new', 'reuse', 'pinned']),
+  /**
+   * When this substrate accepted the push, fixed while the guard was held. World time comes off
+   * the experience; every acceptance and readiness clock comes from here, so a backdated
+   * conversation cannot date its own archive row, ingest position or reference receipt.
+   */
+  acceptedAt: z.string().min(1),
+  /** The statements this push carried, classified under the guard. Empty when it carried none. */
+  referenceTargets: z.array(ReferenceTarget),
   /** Why a pinned decision refuses, so the intent says which rule stopped it. */
   pinnedReason: z.enum(['occurrence_ambiguous', 'occurrence_state_uncertain']).nullable(),
   sourceId: z.string(),
@@ -141,20 +163,59 @@ function candidateDigest(db: SqliteHandle, key: OccurrenceKey, ownSourceId: stri
   return hashContent(occurrenceCandidates(db, key).filter((sourceId) => sourceId !== ownSourceId));
 }
 
-function indexWorkKey(sourceId: string, indexPolicy: string): string {
-  return `${SOURCE_INDEX_JOB_TYPE}:${sourceId}:${indexPolicy}`;
+/** The stated block a push carried, in the shape the shared acceptance normalizes to. */
+function statedInput(stated: ReflectionContent['provenance']): StatedReferenceInput {
+  return {
+    supersedes: stated?.supersedes ?? [],
+    derivedFrom: stated?.derived_from ?? [],
+    confirmations: (stated?.confirmations ?? []).map((entry) => ({
+      target: entry.target,
+      by: entry.by,
+      evidence: entry.evidence,
+      occurredAt: entry.occurred_at ?? '',
+    })),
+  };
+}
+
+/** The delivery identity of the statements one acceptance carried. */
+function referenceDeliveryKey(data: IntakeData): string {
+  return `intake:${data.sourceId}:${acceptedTargetsHash(data.referenceTargets)}`;
+}
+
+function referenceAcceptanceOf(data: IntakeData, operationId: string): ReferenceAcceptance {
+  return {
+    sourceId: data.sourceId,
+    targets: data.referenceTargets,
+    deliveryKey: referenceDeliveryKey(data),
+    operationId,
+    acceptedAt: data.acceptedAt,
+  };
 }
 
 /**
- * What acceptance owes once the graph commits. A decision that mints nothing owes nothing: an
- * evicted or resident duplicate is already projected, already queued and already indexed.
+ * What acceptance owes once the graph commits.
+ *
+ * A reused occurrence is already projected, already queued and already indexed, so it owes none
+ * of that. It still owes the statements this push carried: accepting a late reference against a
+ * source that is already here, or already evicted, is the point of the contract.
  */
 function acceptanceEffects(data: IntakeData): PublicationPlan<IntakeData>['effects'] {
-  if (data.decision !== 'new') {
-    return [];
-  }
   const detail = (value: JsonValue): JsonValue => value;
+  const referenceEffects =
+    data.referenceTargets.length === 0
+      ? []
+      : [
+          { kind: INTAKE_EFFECTS.references, detail: detail({ sourceId: data.sourceId }) },
+          {
+            kind: INTAKE_EFFECTS.links,
+            detail: detail({ count: data.referenceTargets.length }),
+          },
+        ];
+  if (data.decision !== 'new') {
+    return data.decision === 'reuse' ? referenceEffects : [];
+  }
   return [
+    ...referenceEffects,
     { kind: INTAKE_EFFECTS.projection, detail: detail({ sourceId: data.sourceId }) },
     { kind: INTAKE_EFFECTS.enqueue, detail: detail({ sourceId: data.sourceId }) },
     { kind: INTAKE_EFFECTS.watermark, detail: detail({ sessionId: data.sessionId }) },
@@ -181,7 +242,7 @@ function decide(
   base: OccurrenceBase,
   resolution: OccurrenceResolution,
   turnCount: number,
-): Omit<IntakeData, 'candidateDigest'> {
+): Omit<IntakeData, 'candidateDigest' | 'acceptedAt' | 'referenceTargets'> {
   if (resolution.kind === 'ambiguous' || resolution.kind === 'uncertain') {
     return {
       ...base,
@@ -228,11 +289,13 @@ export const intakePublication = new PublicationOperation({
     INTAKE_EFFECTS.enqueue,
     INTAKE_EFFECTS.watermark,
     INTAKE_EFFECTS.index,
+    INTAKE_EFFECTS.references,
+    INTAKE_EFFECTS.links,
   ],
   payload: Payload,
   data: Data,
   result: Result,
-  prepare(context, payload) {
+  async prepare(context, payload) {
     const coverage = readCurrentCoverageContract(context.db);
     if (coverage === undefined) {
       throw new Error('intake cannot publish before the coverage registry exists');
@@ -245,11 +308,18 @@ export const intakePublication = new PublicationOperation({
       resolution,
       prepared.turns.length,
     );
+    const stated = statedInput(references(payload));
+    const retained = await presentNodeIds(context.graph, statedReferenceIds(stated));
     const data: IntakeData = {
       ...selected,
+      acceptedAt: context.now.toISOString(),
+      referenceTargets:
+        selected.decision === 'pinned'
+          ? []
+          : classifyStatedReferences(context.db, stated, retained),
       candidateDigest: candidateDigest(context.db, key, selected.sourceId),
     };
-    return Promise.resolve({
+    return {
       data,
       expected: {
         coverageEpoch: coverage.epoch,
@@ -277,7 +347,7 @@ export const intakePublication = new PublicationOperation({
       },
       scopes: [{ kind: 'source', id: data.identityHash, scope: 'sqlite:source_occurrence' }],
       effects: acceptanceEffects(data),
-    });
+    };
   },
   check(context, data) {
     if (data.decision === 'pinned') {
@@ -319,30 +389,54 @@ export const intakePublication = new PublicationOperation({
     return { sourceId: stored.episodeId, created: true, turnIds: [...data.turnIds] };
   },
   prepareSqlite(context: PublicationSqliteContext, data: IntakeData) {
-    if (data.decision !== 'new') {
+    if (data.decision === 'pinned') {
       return undefined;
     }
-    writeSourceManifest(
-      context.db,
-      {
-        sourceId: data.sourceId,
-        sessionId: data.sessionId,
-        identity: data.identity,
-        prepared: prepareEpisode(content(data), new Date(data.occurredAt)),
-        payload: content(data),
-        references: references(data),
-        lane: data.lane ?? undefined,
-        origin: origin(data),
-        pipelineVersion: data.pipelineVersion,
-        operationKey: context.operationId,
-        readiness: data.readiness ?? undefined,
-        now: new Date(data.occurredAt),
-      },
-      data.turnIds,
-    );
+    if (data.decision === 'new') {
+      writeSourceManifest(
+        context.db,
+        {
+          sourceId: data.sourceId,
+          sessionId: data.sessionId,
+          identity: data.identity,
+          prepared: prepareEpisode(content(data), new Date(data.occurredAt)),
+          payload: content(data),
+          references: references(data),
+          lane: data.lane ?? undefined,
+          origin: origin(data),
+          pipelineVersion: data.pipelineVersion,
+          operationKey: context.operationId,
+          readiness: data.readiness ?? undefined,
+          now: new Date(data.acceptedAt),
+        },
+        data.turnIds,
+      );
+      return undefined;
+    }
+    // A reused occurrence rebuilds nothing and reindexes nothing, but the statements this push
+    // carried are new and are accepted against the original source whatever its storage.
+    if (data.referenceTargets.length > 0) {
+      prepareReferenceAcceptance(context.db, referenceAcceptanceOf(data, context.operationId));
+    }
     return undefined;
   },
   acknowledgeSqlite(context, data) {
+    if (data.decision === 'pinned') {
+      return undefined;
+    }
+    if (data.referenceTargets.length > 0) {
+      const acceptance = referenceAcceptanceOf(data, context.operationId);
+      const delivery = readReferenceDelivery(context.db, data.sourceId, acceptance.deliveryKey);
+      if (delivery === undefined) {
+        throw new Error(`intake ${context.operationId} acknowledged unaccepted references`);
+      }
+      acknowledgeReferenceAcceptance(context.db, {
+        ...acceptance,
+        knownFrom: context.knownFrom,
+        observedAckAt: context.observedAckAt,
+        referenceVersion: delivery.referenceVersion,
+      });
+    }
     if (data.decision !== 'new') {
       return undefined;
     }
@@ -358,7 +452,7 @@ export const intakePublication = new PublicationOperation({
       processingGeneration: generation.processingGeneration,
       sessionId: data.sessionId,
       captureOrderValue: captureOrderValue(position?.id ?? 0),
-      now: new Date(data.occurredAt),
+      now: new Date(context.knownFrom),
     });
     enqueueSourceWork(context.db, data, context.operationId);
     return undefined;
@@ -372,48 +466,9 @@ export const intakePublication = new PublicationOperation({
       decision: data.decision,
       candidates: data.pinnedCandidates,
     });
+    if (data.referenceTargets.length > 0) {
+      discardReferenceAcceptance(context.db, referenceAcceptanceOf(data, context.operationId));
+    }
     return undefined;
   },
 });
-
-/**
- * The two queue rows an acceptance owes, both written in the acknowledgment transaction.
- *
- * The integrate job is what the reflection worker runs. The source-index job is C6's and is
- * enqueued in the bulk lane, so it never counts against the depth an interactive caller is told
- * about. Both are looked up before they are written, so a recovery that reaches this step twice
- * finds the row it already wrote.
- */
-function enqueueSourceWork(db: SqliteHandle, data: IntakeData, operationId: string): void {
-  if (findPendingJobForEpisode(db, INTAKE_JOB_TYPE, data.sourceId) === undefined) {
-    enqueueReflectionJob(
-      db,
-      INTAKE_JOB_TYPE,
-      { [REFLECTION_QUEUE_EPISODE_FIELD]: data.sourceId },
-      {
-        lane: data.lane === 'bulk' ? 'bulk' : 'interactive',
-        sessionId: data.sessionId,
-        episodeId: data.sourceId,
-        now: new Date(data.occurredAt),
-      },
-    );
-  }
-  if (findPendingJobForEpisode(db, SOURCE_INDEX_JOB_TYPE, data.sourceId) === undefined) {
-    enqueueReflectionJob(
-      db,
-      SOURCE_INDEX_JOB_TYPE,
-      {
-        [REFLECTION_QUEUE_EPISODE_FIELD]: data.sourceId,
-        index_policy: data.indexPolicy,
-        work_key: indexWorkKey(data.sourceId, data.indexPolicy),
-        operation_id: operationId,
-      },
-      {
-        lane: 'bulk',
-        sessionId: data.sessionId,
-        episodeId: data.sourceId,
-        now: new Date(data.occurredAt),
-      },
-    );
-  }
-}

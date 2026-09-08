@@ -171,3 +171,23 @@ export function listStatedLinks(db: SqliteHandle, fromId: string): readonly Stat
     referenceVersion: row.reference_version,
   }));
 }
+
+/**
+ * The values the FIRST accepted version of a link recorded. A later delivery restating the same
+ * pair adds a version and does not rewrite what the original statement said, so this is the
+ * canonical payload a confirmation is rendered and replayed from.
+ */
+export function readStatedLinkValues(
+  db: SqliteHandle,
+  linkId: string,
+): Record<string, unknown> | undefined {
+  const row = db
+    .prepare(
+      `SELECT recorded_values_json FROM evidence_link_versions
+       WHERE link_id = ? ORDER BY version LIMIT 1`,
+    )
+    .get(linkId) as { recorded_values_json: string } | undefined;
+  return row === undefined
+    ? undefined
+    : (JSON.parse(row.recorded_values_json) as Record<string, unknown>);
+}

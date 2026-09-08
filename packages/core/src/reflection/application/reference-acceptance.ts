@@ -1,0 +1,339 @@
+import { referenceSetHash } from './source-manifest.js';
+import { durableRoleScope, type DurableRole } from '../../evidence/domain/scopes.js';
+import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import {
+  acknowledgeStatedLinkVersions,
+  prepareStatedLinkVersion,
+  readStatedLinkValues,
+  statedLinkId,
+  type StatedLinkKind,
+  type StatedLinkQualifier,
+} from '../../infrastructure/sqlite/evidence-links.js';
+import {
+  acknowledgeScopeAdvance,
+  prepareScopeAdvance,
+  rejectScopeAdvance,
+} from '../../infrastructure/sqlite/evidence-scope.js';
+import {
+  advanceOperationalRevision,
+  readActiveGeneration,
+} from '../../infrastructure/sqlite/processing-generations.js';
+import { classifyReferenceTarget } from '../../infrastructure/sqlite/reference-targets.js';
+import {
+  acceptReferenceBatch,
+  readReferenceDelivery,
+} from '../../infrastructure/sqlite/source-identity.js';
+import { recordEvidenceAcknowledgment } from '../../infrastructure/sqlite/source-lifecycle.js';
+import { appendMemoryConfirmedEvent } from '../../infrastructure/sqlite/usage-events.js';
+import { hashContent } from '../domain/content.js';
+
+/**
+ * Accepting what a caller states about other memories, shared by every writer that accepts one.
+ *
+ * Intake accepts the references that arrive with a push, and the reference operation accepts the
+ * ones stated later; both leave the same records, so both call this. A reference is a statement
+ * about identity, so the durable half never depends on either endpoint being projected: an edge
+ * is the current picture of this chain and not the other way round.
+ */
+export const STATED_REFERENCE_EFFECT = 'stated_references';
+
+/** The incidence role each statement kind is recorded under, from the signed scope registry. */
+const ROLE_OF_KIND: Record<StatedLinkKind, DurableRole> = {
+  corrects: 'stated_correction',
+  derived_from: 'stated_derivation',
+  confirms: 'stated_confirmation',
+};
+
+export type ReferenceTargetPlan = {
+  readonly id: string;
+  readonly kind: StatedLinkKind;
+  readonly targetClass: StatedLinkQualifier;
+  /** Present only on a confirmation, which carries a payload the other kinds do not. */
+  readonly confirmation?: {
+    readonly by: string;
+    readonly evidence: string;
+    readonly occurredAt: string;
+  };
+};
+
+export type ReferenceAcceptance = {
+  readonly sourceId: string;
+  readonly targets: readonly ReferenceTargetPlan[];
+  /** The caller's delivery identity. One delivery has one outcome. */
+  readonly deliveryKey: string;
+  readonly operationId: string;
+  /** When the substrate accepted the statement, which is not when the statement was made. */
+  readonly acceptedAt: string;
+};
+
+/** Every scope one acceptance moves: the statement's own end, and the end it points at. */
+function affectedScopes(
+  acceptance: ReferenceAcceptance,
+): readonly { readonly endpointId: string; readonly relationClass: string }[] {
+  const scopes = new Map<string, { endpointId: string; relationClass: string }>();
+  for (const target of acceptance.targets) {
+    const role = ROLE_OF_KIND[target.kind];
+    for (const entry of [
+      { endpointId: acceptance.sourceId, relationClass: durableRoleScope(role, 'out') },
+      { endpointId: target.id, relationClass: durableRoleScope(role, 'in') },
+    ]) {
+      scopes.set(`${entry.endpointId}\n${entry.relationClass}`, entry);
+    }
+  }
+  return [...scopes.values()];
+}
+
+/** The scope names a plan declares, so the coordinator records what this operation touches. */
+export function referenceScopeNames(
+  acceptance: Pick<ReferenceAcceptance, 'sourceId' | 'targets'>,
+): readonly { readonly kind: 'source' | 'node'; readonly id: string; readonly scope: string }[] {
+  return affectedScopes({ ...acceptance, deliveryKey: '', operationId: '', acceptedAt: '' }).map(
+    (entry) => ({
+      kind: entry.endpointId === acceptance.sourceId ? ('source' as const) : ('node' as const),
+      id: entry.endpointId,
+      scope: entry.relationClass,
+    }),
+  );
+}
+
+/** What a caller stated, in the one shape every writer that accepts references normalizes to. */
+export type StatedReferenceInput = {
+  readonly supersedes: readonly string[];
+  readonly derivedFrom: readonly string[];
+  readonly confirmations: readonly {
+    readonly target: string;
+    readonly by: string;
+    readonly evidence: string;
+    readonly occurredAt: string;
+  }[];
+};
+
+/** Every id a statement names, in the order the versions are recorded. */
+export function statedReferenceIds(input: StatedReferenceInput): readonly string[] {
+  return [
+    ...input.supersedes,
+    ...input.derivedFrom,
+    ...input.confirmations.map((entry) => entry.target),
+  ];
+}
+
+/**
+ * What each stated id turned out to be.
+ *
+ * The durable records answer first, so a target whose raw projection is gone stays a known
+ * source rather than becoming an unknown identity. `retained` is what the graph currently holds,
+ * and it decides only the ids the records do not account for.
+ */
+export function classifyStatedReferences(
+  db: SqliteHandle,
+  input: StatedReferenceInput,
+  retained: ReadonlySet<string>,
+): ReferenceTargetPlan[] {
+  const named: {
+    id: string;
+    kind: StatedLinkKind;
+    confirmation?: ReferenceTargetPlan['confirmation'];
+  }[] = [
+    ...input.supersedes.map((id) => ({ id, kind: 'corrects' as const })),
+    ...input.derivedFrom.map((id) => ({ id, kind: 'derived_from' as const })),
+    ...input.confirmations.map((entry) => ({
+      id: entry.target,
+      kind: 'confirms' as const,
+      confirmation: { by: entry.by, evidence: entry.evidence, occurredAt: entry.occurredAt },
+    })),
+  ];
+  return named.map((entry) => ({
+    id: entry.id,
+    kind: entry.kind,
+    targetClass: classifyReferenceTarget(db, entry.id, retained).targetClass,
+    ...(entry.confirmation === undefined ? {} : { confirmation: entry.confirmation }),
+  }));
+}
+
+/** The hash of the set a delivery accepts, over the exact statements it carries. */
+export function acceptedTargetsHash(targets: readonly ReferenceTargetPlan[]): string {
+  return referenceSetHash({
+    supersedes: targets.filter((t) => t.kind === 'corrects').map((t) => t.id),
+    derived_from: targets.filter((t) => t.kind === 'derived_from').map((t) => t.id),
+    confirmations: targets
+      .filter((t) => t.confirmation !== undefined)
+      .map((t) => ({
+        target: t.id,
+        by: t.confirmation?.by ?? '',
+        evidence: t.confirmation?.evidence ?? '',
+      })),
+  });
+}
+
+/**
+ * The durable half, inside the caller's short prepare transaction.
+ *
+ * The batch, one link version per target, the scope advances the statements move, and the
+ * obligation to settle them. Nothing here consults the graph: a statement about an endpoint the
+ * graph no longer holds is exactly what these records exist to keep.
+ *
+ * Returns the accepted reference version.
+ */
+export function prepareReferenceAcceptance(
+  db: SqliteHandle,
+  acceptance: ReferenceAcceptance,
+): number {
+  const acceptedHash = acceptedTargetsHash(acceptance.targets);
+  const batch = acceptReferenceBatch(db, {
+    sourceId: acceptance.sourceId,
+    acceptedHash,
+    receivedAt: new Date(acceptance.acceptedAt),
+    operationKey: acceptance.deliveryKey,
+    introduced: acceptance.targets.map((target) => target.id),
+  });
+  for (const target of acceptance.targets) {
+    const linkId = statedLinkId(target.kind, target.targetClass, acceptance.sourceId, target.id);
+    prepareStatedLinkVersion(db, {
+      linkId,
+      kind: target.kind,
+      qualifier: target.targetClass,
+      fromId: acceptance.sourceId,
+      toId: target.id,
+      operationId: acceptance.operationId,
+      operationKey: `${acceptance.deliveryKey}:${linkId}`,
+      // Both clock roles: when the statement says it happened, and when this substrate took it.
+      recordedValues: {
+        targetClass: target.targetClass,
+        ...(target.confirmation === undefined
+          ? {}
+          : {
+              by: target.confirmation.by,
+              evidence: target.confirmation.evidence,
+              occurredAt: target.confirmation.occurredAt,
+            }),
+      },
+      temporalProof: { acceptedAt: acceptance.acceptedAt },
+      observedAt: new Date(acceptance.acceptedAt),
+      referenceSourceId: acceptance.sourceId,
+      referenceVersion: batch.referenceVersion,
+    });
+  }
+  for (const scope of affectedScopes(acceptance)) {
+    prepareScopeAdvance(db, {
+      ...scope,
+      operationId: acceptance.operationId,
+      updatedAt: new Date(acceptance.acceptedAt),
+    });
+  }
+  recordEvidenceAcknowledgment(db, {
+    sourceId: acceptance.sourceId,
+    referenceVersion: batch.referenceVersion,
+    effectKind: STATED_REFERENCE_EFFECT,
+    state: 'owed',
+  });
+  return batch.referenceVersion;
+}
+
+export type ReferenceSettlement = ReferenceAcceptance & {
+  readonly knownFrom: string;
+  readonly observedAckAt: string;
+  readonly referenceVersion: number;
+};
+
+/**
+ * The acknowledgment half, inside the caller's short acknowledgment transaction.
+ *
+ * The link versions join the committed view, the scopes publish the numbers they parked, the
+ * source's readiness counter moves because it now owes a settled statement it did not owe
+ * before, and every confirmation appends its event. An append that throws takes the whole
+ * acknowledgment with it and leaves the work owed, which is the only honest outcome: a
+ * settlement recorded over a signal nothing wrote is a signal no later pass looks for.
+ */
+export function acknowledgeReferenceAcceptance(
+  db: SqliteHandle,
+  settlement: ReferenceSettlement,
+): void {
+  const delivery = readReferenceDelivery(db, settlement.sourceId, settlement.deliveryKey);
+  if (delivery?.referenceVersion !== settlement.referenceVersion) {
+    throw new Error(`reference delivery ${settlement.deliveryKey} moved under its acknowledgment`);
+  }
+  acknowledgeStatedLinkVersions(
+    db,
+    settlement.operationId,
+    settlement.knownFrom,
+    settlement.observedAckAt,
+  );
+  for (const scope of affectedScopes(settlement)) {
+    acknowledgeScopeAdvance(db, {
+      ...scope,
+      operationId: settlement.operationId,
+      updatedAt: new Date(settlement.knownFrom),
+    });
+  }
+  const generation = readActiveGeneration(db, settlement.sourceId);
+  if (generation !== undefined) {
+    advanceOperationalRevision(db, settlement.sourceId, generation.processingGeneration);
+  }
+  appendConfirmationEvents(db, settlement);
+  recordEvidenceAcknowledgment(db, {
+    sourceId: settlement.sourceId,
+    referenceVersion: settlement.referenceVersion,
+    effectKind: STATED_REFERENCE_EFFECT,
+    state: 'completed',
+    completedAt: new Date(settlement.observedAckAt),
+  });
+}
+
+/**
+ * One event per confirmation, keyed on the statement rather than the attempt, so a retry or a
+ * raw rebuild of the same source adds nothing. The canonical payload is the one the first
+ * accepted version recorded: a later delivery restating the same pair does not rewrite who
+ * confirmed it or what they cited.
+ */
+function appendConfirmationEvents(db: SqliteHandle, settlement: ReferenceSettlement): void {
+  for (const target of settlement.targets) {
+    if (target.confirmation === undefined) {
+      continue;
+    }
+    const linkId = statedLinkId(target.kind, target.targetClass, settlement.sourceId, target.id);
+    const canonical = readStatedLinkValues(db, linkId) ?? target.confirmation;
+    const by = typeof canonical.by === 'string' ? canonical.by : target.confirmation.by;
+    const evidence =
+      typeof canonical.evidence === 'string' ? canonical.evidence : target.confirmation.evidence;
+    const statedAt =
+      typeof canonical.occurredAt === 'string'
+        ? canonical.occurredAt
+        : target.confirmation.occurredAt;
+    appendMemoryConfirmedEvent(db, {
+      key: confirmationEventKey(settlement.sourceId, target.id, by, evidence),
+      episodeId: settlement.sourceId,
+      memories: [target.id],
+      confirmedBy: by,
+      evidence,
+      occurredAt: new Date(statedAt),
+      recordedAt: new Date(settlement.observedAckAt),
+    });
+  }
+}
+
+/**
+ * The same digest rule the settle path uses, over what makes one confirmation the same statement
+ * as another. Keeping the two in step is what stops a converted writer from doubling the stream.
+ */
+export function confirmationEventKey(
+  episodeId: string,
+  target: string,
+  by: string,
+  evidence: string,
+): string {
+  return `feedback:memory_confirmed:${hashContent({ episodeId, target, by, evidence })}`;
+}
+
+/** Releases the scope numbers a rejected attempt parked. The accepted batch and versions stay. */
+export function discardReferenceAcceptance(
+  db: SqliteHandle,
+  acceptance: ReferenceAcceptance,
+): void {
+  for (const scope of affectedScopes(acceptance)) {
+    rejectScopeAdvance(db, {
+      ...scope,
+      operationId: acceptance.operationId,
+      updatedAt: new Date(acceptance.acceptedAt),
+    });
+  }
+}

@@ -1,25 +1,25 @@
 import { z } from 'zod';
 
-import { referenceSetHash } from './source-manifest.js';
+import {
+  acceptedTargetsHash,
+  acknowledgeReferenceAcceptance,
+  discardReferenceAcceptance,
+  classifyStatedReferences,
+  prepareReferenceAcceptance,
+  referenceScopeNames,
+  statedReferenceIds,
+  type ReferenceAcceptance,
+} from './reference-acceptance.js';
 import { writeClaimProvenanceInTransaction } from '../../infrastructure/graph/claim-provenance-queries.js';
+import { presentNodeIds } from '../../infrastructure/graph/projection-presence.js';
 import { PublicationOperation } from '../../infrastructure/publication/operation.js';
 import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
 import type { JsonValue, PublicationContext } from '../../infrastructure/publication/types.js';
 import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
-import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
-  acknowledgeStatedLinkVersions,
-  prepareStatedLinkVersion,
-  statedLinkId,
-  type StatedLinkKind,
-} from '../../infrastructure/sqlite/evidence-links.js';
-import { classifyReferenceTarget } from '../../infrastructure/sqlite/reference-targets.js';
-import {
-  acceptReferenceBatch,
   readReferenceDelivery,
   readSourceRecord,
 } from '../../infrastructure/sqlite/source-identity.js';
-import { recordEvidenceAcknowledgment } from '../../infrastructure/sqlite/source-lifecycle.js';
 
 /**
  * Stated references as a publication of their own.
@@ -28,19 +28,12 @@ import { recordEvidenceAcknowledgment } from '../../infrastructure/sqlite/source
  * is a caller's assertion about identity, and identity outlives the raw projection. Every
  * accepted reference is recorded against the original source and target ids, including the ones
  * whose graph endpoint is absent, so a reference arriving a year after an eviction still lands.
- * Only the edges whose endpoints the graph actually holds are written, and skipping those
- * writes discharges nothing.
+ * An edge is written only when BOTH ends are projected, and skipping it discharges nothing.
  */
 export const REFERENCE_EFFECTS = {
   accepted: 'reference_batch',
   links: 'evidence_link_versions',
 } as const;
-
-const KIND_OF_FIELD: Record<'supersedes' | 'derived_from' | 'confirmations', StatedLinkKind> = {
-  supersedes: 'corrects',
-  derived_from: 'derived_from',
-  confirmations: 'confirms',
-};
 
 const Confirmation = z.strictObject({
   target: z.string().min(1),
@@ -63,12 +56,13 @@ const Target = z.strictObject({
   id: z.string().min(1),
   kind: z.enum(['corrects', 'derived_from', 'confirms']),
   targetClass: z.enum(['source', 'part', 'retained_node', 'unresolved']),
-  /** True only when the graph holds the endpoint now, which is what an edge needs. */
-  projected: z.boolean(),
+  confirmation: Confirmation.omit({ target: true }).optional(),
 });
 
 const Data = Payload.extend({
   acceptedHash: z.string().min(1),
+  /** The substrate's own acceptance clock, fixed at prepare so a replay keeps it. */
+  acceptedAt: z.string().min(1),
   targets: z.array(Target),
 });
 
@@ -80,74 +74,19 @@ const Result = z.strictObject({
 
 type ReferenceData = z.infer<typeof Data>;
 
-function statedIds(data: z.infer<typeof Payload>): readonly { id: string; kind: StatedLinkKind }[] {
-  return [
-    ...data.supersedes.map((id) => ({ id, kind: KIND_OF_FIELD.supersedes })),
-    ...data.derivedFrom.map((id) => ({ id, kind: KIND_OF_FIELD.derived_from })),
-    ...data.confirmations.map((entry) => ({
-      id: entry.target,
-      kind: KIND_OF_FIELD.confirmations,
-    })),
-  ];
-}
-
-/** Which of the named ids the graph holds right now. Absence is a projection fact, not identity. */
-async function projectedIds(
-  context: PublicationContext,
-  ids: readonly string[],
-): Promise<ReadonlySet<string>> {
-  if (ids.length === 0) {
-    return new Set();
-  }
-  const rows = await context.graph.run(
-    'UNWIND $ids AS id MATCH (n:AionNode { id: id }) RETURN n.id AS id',
-    { ids: [...new Set(ids)] },
-    (row) => row.id as string,
-  );
-  return new Set(rows);
-}
-
 /** Narrows an effect detail to the plan's own value type, which a union of shapes would widen. */
 function json(value: JsonValue): JsonValue {
   return value;
 }
 
-function acceptedSet(data: z.infer<typeof Payload>): Record<string, unknown> {
+function acceptanceOf(data: ReferenceData, operationId: string): ReferenceAcceptance {
   return {
-    supersedes: data.supersedes,
-    derived_from: data.derivedFrom,
-    confirmations: data.confirmations,
+    sourceId: data.sourceId,
+    targets: data.targets,
+    deliveryKey: data.deliveryKey,
+    operationId,
+    acceptedAt: data.acceptedAt,
   };
-}
-
-/**
- * The references this publication owes, recorded before anything is projected. Every target
- * gets a version, whatever it turned out to be: an unresolved id stays durably stated, and a
- * verified source with no projection is recorded against its original identity.
- */
-function recordAcceptedReferences(
-  db: SqliteHandle,
-  data: ReferenceData,
-  operationId: string,
-  referenceVersion: number,
-): void {
-  for (const target of data.targets) {
-    const linkId = statedLinkId(target.kind, target.targetClass, data.sourceId, target.id);
-    prepareStatedLinkVersion(db, {
-      linkId,
-      kind: target.kind,
-      qualifier: target.targetClass,
-      fromId: data.sourceId,
-      toId: target.id,
-      operationId,
-      operationKey: `${data.deliveryKey}:${linkId}`,
-      recordedValues: { targetClass: target.targetClass, projected: target.projected },
-      temporalProof: { observedAt: data.observedAt },
-      observedAt: new Date(data.observedAt),
-      referenceSourceId: data.sourceId,
-      referenceVersion,
-    });
-  }
 }
 
 /** The stated references operation, registered on the coordinator beside intake. */
@@ -162,37 +101,33 @@ export const statedReferencesPublication = new PublicationOperation({
     if (coverage === undefined) {
       throw new Error('references cannot publish before the coverage registry exists');
     }
-    const named = statedIds(payload);
-    const projected = await projectedIds(
-      context,
-      named.map((entry) => entry.id),
-    );
-    const targets = named.map((entry) => {
-      const classified = classifyReferenceTarget(context.db, entry.id, projected);
-      return {
-        id: entry.id,
-        kind: entry.kind,
-        targetClass: classified.targetClass,
-        projected: projected.has(entry.id),
-      };
-    });
+    // A retained interpretation is only knowable from the graph, so presence is asked once here
+    // and used to classify the ids the durable records do not account for.
+    const retained = await presentNodeIds(context.graph, statedReferenceIds(payload));
+    const targets = classifyStatedReferences(context.db, payload, retained);
     const source = readSourceRecord(context.db, payload.sourceId);
+    const data: ReferenceData = {
+      ...payload,
+      acceptedHash: acceptedTargetsHash(targets),
+      acceptedAt: context.now.toISOString(),
+      targets,
+    };
     return {
-      data: { ...payload, acceptedHash: referenceSetHash(acceptedSet(payload)), targets },
+      data,
       expected: {
         coverageEpoch: coverage.epoch,
         evidence: buildEvidenceRevision([
           {
             kind: 'source',
             id: payload.sourceId,
-            scope: 'sqlite:source_records',
+            scope: 'source.references',
             version: source?.verificationStatus ?? 'absent',
           },
         ]),
         sources: [],
         heads: [],
       },
-      scopes: [{ kind: 'source', id: payload.sourceId, scope: 'sqlite:source_references' }],
+      scopes: referenceScopeNames({ sourceId: payload.sourceId, targets }),
       effects: [
         { kind: REFERENCE_EFFECTS.accepted, detail: json({ sourceId: payload.sourceId }) },
         { kind: REFERENCE_EFFECTS.links, detail: json({ count: targets.length }) },
@@ -208,10 +143,21 @@ export const statedReferencesPublication = new PublicationOperation({
     return Promise.resolve({ status: 'valid' } as const);
   },
   async applyGraph(context: PublicationContext, data: ReferenceData) {
-    const held = new Set(data.targets.filter((t) => t.projected).map((t) => t.id));
+    // Presence is read here rather than trusted from the plan: a plan prepared before an
+    // interruption can name an endpoint that has since stopped being projected, and an edge
+    // written against it would fail the whole publication instead of settling the statement.
+    const present = await presentNodeIds(context.graph, [
+      data.sourceId,
+      ...data.targets.map((target) => target.id),
+    ]);
     const unresolved = data.targets.filter((t) => t.targetClass === 'unresolved').length;
-    const projectedEdges = held.size;
-    if (held.size > 0 || unresolved > 0) {
+    // Both ends or no edge. An absent source cannot carry lineage, and rebuilding one to make a
+    // reference writable is exactly what the residency rules forbid.
+    const writable = present.has(data.sourceId)
+      ? data.targets.filter((target) => present.has(target.id)).map((target) => target.id)
+      : [];
+    const held = new Set(writable);
+    if (held.size > 0 || (unresolved > 0 && present.has(data.sourceId))) {
       await writeClaimProvenanceInTransaction(context.graph, {
         episodeId: data.sourceId,
         derivedFrom: data.derivedFrom.filter((id) => held.has(id)),
@@ -234,51 +180,26 @@ export const statedReferencesPublication = new PublicationOperation({
         `reference delivery ${data.deliveryKey} was projected before it was accepted`,
       );
     }
-    return { referenceVersion: accepted.referenceVersion, projectedEdges, unresolved };
+    return { referenceVersion: accepted.referenceVersion, projectedEdges: held.size, unresolved };
   },
   prepareSqlite(context, data) {
-    const batch = acceptReferenceBatch(context.db, {
-      sourceId: data.sourceId,
-      acceptedHash: data.acceptedHash,
-      receivedAt: new Date(data.observedAt),
-      operationKey: data.deliveryKey,
-      introduced: data.targets.map((target) => target.id),
-    });
-    recordAcceptedReferences(context.db, data, context.operationId, batch.referenceVersion);
-    recordEvidenceAcknowledgment(context.db, {
-      sourceId: data.sourceId,
-      referenceVersion: batch.referenceVersion,
-      effectKind: 'stated_references',
-      state: 'owed',
-    });
+    prepareReferenceAcceptance(context.db, acceptanceOf(data, context.operationId));
     return undefined;
   },
   acknowledgeSqlite(context, data, result) {
-    acknowledgeStatedLinkVersions(
-      context.db,
-      context.operationId,
-      context.knownFrom,
-      context.observedAckAt,
-    );
-    // The comparison the completion boundary turns on: the settlement is bound to the version
-    // that was actually accepted, so a reference landing mid-retry is caught by the next pass
-    // rather than discharged by this one.
-    const latest = readReferenceDelivery(context.db, data.sourceId, data.deliveryKey);
-    if (latest?.referenceVersion !== result.referenceVersion) {
-      throw new Error(`reference delivery ${data.deliveryKey} moved under its acknowledgment`);
-    }
-    recordEvidenceAcknowledgment(context.db, {
-      sourceId: data.sourceId,
+    acknowledgeReferenceAcceptance(context.db, {
+      ...acceptanceOf(data, context.operationId),
+      knownFrom: context.knownFrom,
+      observedAckAt: context.observedAckAt,
       referenceVersion: result.referenceVersion,
-      effectKind: 'stated_references',
-      state: 'completed',
-      completedAt: new Date(context.observedAckAt),
     });
     return undefined;
   },
-  discardSqlite() {
+  discardSqlite(context, data) {
     // The accepted batch and its prepared versions stay: a rejected attempt never clears what a
-    // caller stated, and the obligation to settle it moves to whoever publishes next.
+    // caller stated. Only the scope numbers it parked are released, so the published tokens a
+    // reader already holds stay current.
+    discardReferenceAcceptance(context.db, acceptanceOf(data, context.operationId));
     return undefined;
   },
 });
