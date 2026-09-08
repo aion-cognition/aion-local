@@ -83,11 +83,11 @@ function checkpoints(results: readonly CheckpointResult[]): EvidenceCheckpointRe
   };
 }
 
-function ready(sequence: string): CheckpointResult {
+function ready(sequence: string, substrateId = 'substrate-1'): CheckpointResult {
   return {
     status: 'ready',
     checkpoint: {
-      substrateId: 'substrate-1',
+      substrateId,
       protocolVersion: 1,
       sequence,
       operationId: null,
@@ -228,17 +228,7 @@ describe('the evidence resolver', () => {
     const publications = {
       checkpoint: () => {
         calls += 1;
-        return Promise.resolve({
-          status: 'ready' as const,
-          checkpoint: {
-            substrateId: calls === 1 ? 'first-substrate' : 'second-substrate',
-            protocolVersion: 1,
-            sequence: '1',
-            operationId: null,
-            intentDigest: null,
-            resultDigest: null,
-          },
-        });
+        return Promise.resolve(ready('1', calls === 1 ? 'first-substrate' : 'second-substrate'));
       },
     };
     const batch = await resolver({

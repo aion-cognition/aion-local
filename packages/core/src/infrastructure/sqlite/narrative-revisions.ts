@@ -262,6 +262,28 @@ export function publishNarrativeRevision(
 }
 
 /** The published head, or undefined when nothing has published for this family key yet. */
+export type CitedBy = {
+  readonly narrativeNodeId: string;
+  readonly targetKind: string;
+};
+
+/**
+ * The published revisions that cite one target, read from the citation records themselves. A
+ * part is cited under its own address, so two parts of one source stay two citations.
+ */
+export function readCitationsOf(db: SqliteHandle, targetId: string): readonly CitedBy[] {
+  const rows = db
+    .prepare(
+      `SELECT narrative_node_id, target_kind FROM revision_citations
+       WHERE target_id = ? ORDER BY narrative_node_id`,
+    )
+    .all(targetId) as { narrative_node_id: string; target_kind: string }[];
+  return rows.map((row) => ({
+    narrativeNodeId: row.narrative_node_id,
+    targetKind: row.target_kind,
+  }));
+}
+
 export function readPublishedHead(
   db: SqliteHandle,
   family: RevisionFamily,

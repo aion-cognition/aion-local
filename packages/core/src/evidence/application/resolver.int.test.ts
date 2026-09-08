@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { applyMergeWithRecovery } from './merge-recovery.js';
 import { EvidenceResolver } from './resolver.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
+import { fetchClaimProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
 import {
   startRehearsalSubstrate,
@@ -24,6 +25,7 @@ import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import { publicationRecord } from '../../infrastructure/sqlite/publication-coordinator-store.js';
 import { transitionSourceResidency } from '../../infrastructure/sqlite/source-lifecycle.js';
 import { intakePublication } from '../../reflection/application/intake-publication.js';
+import { statedReferencesPublication } from '../../reflection/application/reference-publication.js';
 import type { ReflectionContent } from '../../reflection/domain/content.js';
 import { PIPELINE_VERSION } from '../../reflection/domain/version.js';
 import { SessionManager } from '../../session/session-manager.js';
@@ -117,7 +119,7 @@ beforeAll(async () => {
     driver: substrate.harness.driver,
     db: store.db,
     logger,
-    handlers: [...PUBLICATION_HANDLERS, intakePublication],
+    handlers: [...PUBLICATION_HANDLERS, intakePublication, statedReferencesPublication],
     now: () => NOW,
     boundary: ({ boundary }) => {
       if (boundary === failAt) {
@@ -206,6 +208,7 @@ describe('evidence against the real stores', () => {
       at: NOW,
     });
     establishScope(store.db, claimId, durableRoleScope('extraction', 'out'), NOW);
+    establishScope(store.db, claimId, durableRoleScope('stated_correction', 'in'), NOW);
     commitSourceState(store.db, {
       sourceId,
       stateKind: 'forgotten',
@@ -371,5 +374,64 @@ describe('evidence against the real stores', () => {
     await coordinator.recover();
 
     expect(coordinator.outcomeOf(operationId)?.status).toBe('acknowledged');
+  });
+
+  it('preserves the actual terminal root through a derived source and its relocation', async () => {
+    serial += 1;
+    const marker = String(serial);
+    const parent = await accept(`original-root-${marker}`);
+    const echo = await accept(`derived-echo-${marker}`);
+    const claim = `claim-derived-echo-${marker}`;
+    await coordinator.publish({
+      kind: 'stated_references',
+      operationId: `derive-echo-${marker}`,
+      payload: {
+        sourceId: echo,
+        supersedes: [],
+        derivedFrom: [parent],
+        confirmations: [],
+        deliveryKey: `derive-echo-${marker}`,
+        observedAt: NOW.toISOString(),
+      },
+    });
+    await seedRetainedClaim(substrate.harness.driver, { id: claim, sourceId: echo });
+    commitIncidence(store.db, {
+      sourceId: echo,
+      nodeId: claim,
+      role: 'extraction',
+      operationId: `extract-echo-${marker}`,
+      at: NOW,
+    });
+    establishScope(store.db, claim, durableRoleScope('extraction', 'out'), NOW);
+    for (const sourceId of [echo, parent]) {
+      establishScope(store.db, sourceId, durableRoleScope('stated_derivation', 'out'), NOW);
+    }
+    const graph = await fetchClaimProvenance(substrate.harness.driver, {
+      ids: [claim],
+      maxRoots: 4,
+      mode: {},
+    });
+
+    expect(graph.get(claim)?.roots).toEqual([parent]);
+
+    const reader = resolver({ certified: false });
+    const before = await reader.resolveMetadata([claim], checkedContext(), { maxRoots: 4 });
+
+    expect(before.results.get(JSON.stringify(['id', claim]))?.value?.provenance.roots).toEqual([
+      parent,
+    ]);
+
+    await retireEpisodeProjection(substrate.harness.driver, echo);
+    transitionSourceResidency(store.db, {
+      sourceId: echo,
+      state: 'evicted',
+      operationId: `relocate-echo-${marker}`,
+      transitionedAt: NOW,
+    });
+    const after = await reader.resolveMetadata([claim], checkedContext(), { maxRoots: 4 });
+
+    expect(after.results.get(JSON.stringify(['id', claim]))?.value?.provenance.roots).toEqual([
+      parent,
+    ]);
   });
 });

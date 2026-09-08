@@ -1,6 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 
 import { readRelationScope } from './dependencies.js';
+import { durableLineage, type DurableLineage } from './durable-lineage.js';
 import {
   fetchClaimProvenance,
   type ItemProvenance,
@@ -13,10 +14,6 @@ import {
   type CommittedIncidence,
 } from '../../infrastructure/sqlite/committed-evidence.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import {
-  listStatedLinksTo,
-  readStatedLinkValues,
-} from '../../infrastructure/sqlite/evidence-links.js';
 import { readSourceRecord } from '../../infrastructure/sqlite/source-identity.js';
 import { readSourceResidency } from '../../infrastructure/sqlite/source-lifecycle.js';
 import type { CheckedReadContext } from '../../recall/application/coverage-checker.js';
@@ -57,8 +54,18 @@ export type ItemMetadata = {
    * producer writes the citation records yet, so the honest answer is that the binding is
    * unavailable rather than that there is none.
    */
-  readonly narrativeBinding: 'unavailable';
+  readonly narrativeBinding: NarrativeBinding;
 };
+
+/**
+ * What the citation records say about this item: the published revisions citing it, or that the
+ * records could not answer. Nothing writes them yet, so the second is the usual answer today and
+ * the first becomes possible the moment they exist.
+ */
+export type NarrativeBinding =
+  | { readonly status: 'cited'; readonly revisionIds: readonly string[] }
+  | { readonly status: 'none' }
+  | { readonly status: 'unavailable' };
 
 export type MetadataInput = {
   readonly ids: readonly string[];
@@ -100,6 +107,18 @@ function issueOn(
   return { address, field, reason, required };
 }
 
+/**
+ * What the citation records say. An empty set is only "cited by nothing" where the scope that
+ * would hold the citations has been counted; otherwise nobody has looked.
+ */
+function bindingOf(durable: DurableLineage, proved: boolean): NarrativeBinding {
+  const cited = durable.citedBy ?? [];
+  if (cited.length > 0) {
+    return { status: 'cited', revisionIds: cited };
+  }
+  return proved ? { status: 'none' } : { status: 'unavailable' };
+}
+
 /** A retained node the graph does not hold, read through the records that outlive its projection. */
 function residencyWithoutProjection(db: SqliteHandle, id: string): EvidenceResidency {
   if (readSourceRecord(db, id) === undefined) {
@@ -119,72 +138,27 @@ function sessionsOf(db: SqliteHandle, incidence: readonly CommittedIncidence[]):
   return [...sessions];
 }
 
-type DurableLineage = {
-  readonly roots: readonly string[];
-  readonly correction?: ItemProvenance['claimedCorrection'];
-  readonly confirmation?: ItemProvenance['confirmation'];
-};
-
-function stamp(value: unknown, fallback: string | null): Date | undefined {
-  const text = typeof value === 'string' ? value : (fallback ?? undefined);
-  if (text === undefined) {
-    return undefined;
-  }
-  const parsed = new Date(text);
-  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
-}
+type IncidenceRead =
+  | { readonly status: 'read'; readonly rows: readonly CommittedIncidence[] }
+  | { readonly status: 'unavailable' };
 
 /**
- * What the records alone say about where a node came from and what has been stated about it.
- *
- * This is the half that survives eviction: the extraction incidence names the original sources,
- * and the stated-reference chain names the correction or confirmation somebody made, both under
- * the ids they always had.
+ * The graph's reading and the records' reading, as one answer under the original identities.
+ * The graph's own statement about a retained node is the newer one where it has one; the records
+ * answer where the projection no longer can, and completeness is the conjunction of both.
  */
-function durableLineage(
-  db: SqliteHandle,
-  nodeId: string,
-  rows: readonly CommittedIncidence[],
-  at: Date | undefined,
-): DurableLineage {
-  const visible = listStatedLinksTo(db, nodeId).filter(
-    (link) =>
-      link.knownFrom !== null && (at === undefined || Date.parse(link.knownFrom) <= at.getTime()),
-  );
-  const latest = (kind: string): (typeof visible)[number] | undefined =>
-    [...visible].reverse().find((link) => link.kind === kind);
-  const corrects = latest('corrects');
-  const confirms = latest('confirms');
-  const correctedAt = corrects === undefined ? undefined : stamp(undefined, corrects.knownFrom);
-  const values = confirms === undefined ? undefined : readStatedLinkValues(db, confirms.linkId);
-  const confirmedAt = confirms === undefined ? undefined : stamp(values?.at, confirms.knownFrom);
-  const by = typeof values?.by === 'string' ? values.by : undefined;
-  const evidence = typeof values?.evidence === 'string' ? values.evidence : undefined;
-  return {
-    roots: [...new Set(rows.map((row) => row.sourceId))],
-    ...(corrects?.fromId === undefined || correctedAt === undefined
-      ? {}
-      : { correction: { by: corrects.fromId, at: correctedAt } }),
-    ...(confirms === undefined || by === undefined || confirmedAt === undefined
-      ? {}
-      : { confirmation: { by, at: confirmedAt, evidence: evidence ?? '' } }),
-  };
-}
-
-/** The graph's reading and the records' reading, as one answer under the original identities. */
 function mergeProvenance(
   found: ItemProvenance | undefined,
   durable: DurableLineage,
   maxRoots: number,
   proved: boolean,
 ): ItemProvenance {
-  // The graph's own reading wins where it has one: it is the newer statement about a retained
-  // node. The records answer where the projection no longer can.
   const confirmation = found?.confirmation ?? durable.confirmation;
   const correction = found?.claimedCorrection ?? durable.correction;
   const roots = [...new Set([...(found?.roots ?? []), ...durable.roots])].sort();
-  const lineage = [...new Set([...(found?.lineage ?? []), ...durable.roots])];
-  const complete = (found?.complete ?? true) && proved && roots.length <= maxRoots;
+  const lineage = [...new Set([...(found?.lineage ?? []), ...durable.lineage])];
+  const complete =
+    (found?.complete ?? true) && proved && durable.complete && roots.length <= maxRoots;
   return {
     roots: roots.slice(0, maxRoots),
     lineage,
@@ -194,10 +168,6 @@ function mergeProvenance(
     ...(correction === undefined ? {} : { claimedCorrection: correction }),
   };
 }
-
-type IncidenceRead =
-  | { readonly status: 'read'; readonly rows: readonly CommittedIncidence[] }
-  | { readonly status: 'unavailable' };
 
 function readIncidence(
   db: SqliteHandle,
@@ -376,9 +346,7 @@ function readOne(
     if (overRows) {
       nodeIssues.push(issueOn(address, 'ownership', 'budget_limit', false));
     }
-    // Nothing writes the citation records yet, so the binding is named unavailable rather than
-    // reported as an item no narrative cites.
-    nodeIssues.push(issueOn(address, 'narrative_revision', 'unverified_scope', false));
+
     if (isTimeTravel(input.context.mode)) {
       nodeIssues.push({
         address,
@@ -390,6 +358,12 @@ function readOne(
     }
 
     const durable = durableLineage(deps.db, id, rows, input.context.mode.knownAt);
+    // The citation records answer for themselves. Until a producer writes them the honest answer
+    // is that the binding is unavailable, and it becomes an answer the moment they exist.
+    const binding = bindingOf(durable, scope.status === 'verified');
+    if (binding.status === 'unavailable') {
+      nodeIssues.push(issueOn(address, 'narrative_revision', 'unverified_scope', false));
+    }
     const found = provenance.get(id);
     if (found === undefined && durable.roots.length === 0) {
       const residency = residencyWithoutProjection(deps.db, id);
@@ -410,7 +384,7 @@ function readOne(
       owningSessions: overRows ? [] : sessionsOf(deps.db, owners),
       sources: overRows ? [] : [...new Set(owners.map((row) => row.sourceId))],
       unknownAttribution: !attributionProved || overRows,
-      narrativeBinding: 'unavailable',
+      narrativeBinding: binding,
     };
     if (input.budget.chargeMetadataBytes(utf8Bytes(JSON.stringify(value))) !== undefined) {
       nodeIssues.push(issueOn(address, 'ownership', 'budget_limit', true));
