@@ -68,6 +68,21 @@ describe('one issue to one transport treatment', () => {
     );
   });
 
+  it('keeps a suppression nobody can prove out of that outcome, as a gap with its cause', () => {
+    expect(
+      evidenceTreatment(
+        issue({
+          reason: 'unsupported_history',
+          field: 'eligibility',
+          historyReason: 'unversioned_legacy',
+        }),
+      ),
+    ).toEqual({
+      kind: 'gap',
+      gap: { field: 'eligibility', reason: 'unversioned_legacy' },
+    });
+  });
+
   it('reports certified absence as an outcome, not a gap', () => {
     expect(evidenceTreatment(issue({ reason: 'not_found' }))).toEqual({
       kind: 'result',
@@ -116,6 +131,14 @@ describe('folding a run of issues into the statement', () => {
       { outcome: 'suppressed_source', field: 'eligibility', id: 'source-9' },
       { outcome: 'not_found', field: 'source_content' },
     ]);
+  });
+
+  it('makes a missing required scope partial whatever the caller marked the field', () => {
+    const { coverage } = applyEvidence(SUPPORTED, [
+      issue({ reason: 'required_scope_missing', field: 'link_interval', required: false }),
+    ]);
+
+    expect(coverage.status).toBe('partial');
   });
 
   it('leaves an optional-field gap listed without calling the answer partial', () => {

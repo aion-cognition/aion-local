@@ -143,7 +143,9 @@ export function applyEvidence(
       });
       continue;
     }
-    partial = partial || issue.required;
+    // A missing required scope carries its own requiredness: a partial empty answer that reached
+    // a caller as supported would read as a no-match the substrate stands behind.
+    partial = partial || issue.required || issue.reason === 'required_scope_missing';
     if (gaps.length < COVERAGE_GAP_LIMIT) {
       gaps.push(treatment.gap);
     } else {
