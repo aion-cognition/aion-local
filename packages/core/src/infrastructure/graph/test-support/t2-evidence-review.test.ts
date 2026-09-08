@@ -43,17 +43,21 @@ it('refuses a required decoded artifact omitted from the manifest', () => {
   expect(loadIncidentCapture(dir)).toMatchObject({ status: 'failed' });
 });
 
-it('preserves a verified redacted raw source for statement-scope fixtures', () => {
-  const result = loadIncidentCapture(process.env.AION_CAMPAIGN_INCIDENT_DIR);
-  expect(result.status).toBe('loaded');
-  if (result.status !== 'loaded') {
-    throw new Error('The durable capture is required for this probe');
-  }
-  const fixture = packageIncidentFixture(result.capture, 'incident-snapshot');
-  // The source's three roles and occurrence clocks are in its stored archive payload.
-  // Inspect keys only, without printing that payload into the test log.
-  expect(Object.keys(fixture.archive[1] ?? {})).toContain('payload');
-});
+// The capture lives outside the repository, so this case runs where a run names it.
+it.runIf(process.env.AION_CAMPAIGN_INCIDENT_DIR !== undefined)(
+  'preserves a verified redacted raw source for statement-scope fixtures',
+  () => {
+    const result = loadIncidentCapture(process.env.AION_CAMPAIGN_INCIDENT_DIR);
+    expect(result.status).toBe('loaded');
+    if (result.status !== 'loaded') {
+      throw new Error('The durable capture is required for this probe');
+    }
+    const fixture = packageIncidentFixture(result.capture, 'incident-snapshot');
+    // The source's three roles and occurrence clocks are in its stored archive payload.
+    // Inspect keys only, without printing that payload into the test log.
+    expect(Object.keys(fixture.archive[1] ?? {})).toContain('payload');
+  },
+);
 
 it('does not certify an oversized export before its bytes are saved', () => {
   const shape = {
