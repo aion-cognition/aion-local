@@ -8,7 +8,11 @@ import {
   type JudgeOutcome,
 } from './supersession-judge.js';
 import { RunTally } from './supersession-tally.js';
-import { withheldReason } from '../../../evidence/application/judgment.js';
+import {
+  judgmentEvidenceFor,
+  statementWithContext,
+  type JudgmentEvidenceOutcome,
+} from '../../../evidence/application/judgment.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { describeError, isAbortError } from '../../../infrastructure/errors.js';
 import type { KeyedCloseMode } from '../../../infrastructure/graph/claim-key-queries.js';
@@ -22,6 +26,7 @@ import {
 } from '../../../infrastructure/graph/supersession-queries.js';
 import type { Vector } from '../../../infrastructure/providers/types.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
+import { evidenceMoved } from '../evidence-fence.js';
 
 /**
  * The detection half of supersession. Each fact-bearing node this episode minted is compared against
@@ -255,12 +260,12 @@ export class SupersessionStage implements ReflectionStage {
    * leaves the pair exactly where it was: nothing is closed, nothing is proposed, and the run
    * says how many pairs it withheld.
    */
-  async #withheld(
+  async #evidenceFor(
     ctx: StageContext,
     subject: EpisodeFactNode,
     candidate: ContradictionCandidate,
-  ): Promise<string | undefined> {
-    return withheldReason(ctx.evidence, {
+  ): Promise<JudgmentEvidenceOutcome> {
+    return judgmentEvidenceFor(ctx.evidence, {
       route: 'live_supersession',
       reservedUnits: LIVE_SUPERSESSION_ROUTE_RESERVE,
       use: 'claim_judgment',
@@ -278,23 +283,31 @@ export class SupersessionStage implements ReflectionStage {
     candidate: ContradictionCandidate,
     tally: RunTally,
   ): Promise<ContradictionJudgment | undefined> {
-    const withheld = await this.#withheld(ctx, subject, candidate);
-    if (withheld !== undefined) {
-      tally.recordWithheld();
+    const evidence = await this.#evidenceFor(ctx, subject, candidate);
+    if (evidence.status === 'withheld') {
+      tally.recordWithheld(evidence.withheld.kind);
       ctx.logger.info(
-        { episodeId: ctx.episodeId, subjectId: subject.id, candidateId: candidate.id, withheld },
+        {
+          episodeId: ctx.episodeId,
+          subjectId: subject.id,
+          candidateId: candidate.id,
+          disposition: evidence.withheld.kind,
+          reason: evidence.withheld.reason,
+          addresses: evidence.withheld.addresses,
+        },
         'contradiction judgment withheld for want of required evidence',
       );
       return undefined;
     }
+    const sides = evidence.status === 'ready' ? evidence.sides : undefined;
     tally.recordJudgment();
     const outcome = await judgeContradiction(
       ctx.provider,
       {
         priorLabel: candidate.label,
         currentLabel: subject.label,
-        prior: candidate.text,
-        current: subject.text,
+        prior: statementWithContext(candidate.text, sides?.[0]),
+        current: statementWithContext(subject.text, sides?.[1]),
         ...(candidate.sharedSubject === undefined
           ? {}
           : { sharedSubject: candidate.sharedSubject }),
@@ -307,6 +320,17 @@ export class SupersessionStage implements ReflectionStage {
     );
 
     if (outcome.status === 'judged') {
+      // The evidence the judge answered on has to still hold when the answer is applied. A
+      // correction that arrived while it was answering is new evidence about the same pair.
+      const moved = evidenceMoved(ctx, evidence);
+      if (moved !== undefined) {
+        tally.recordWithheld('retryable');
+        ctx.logger.info(
+          { episodeId: ctx.episodeId, subjectId: subject.id, candidateId: candidate.id, moved },
+          'contradiction judgment dropped because its evidence moved while it was made',
+        );
+        return undefined;
+      }
       return outcome.judgment;
     }
 
@@ -364,6 +388,10 @@ export class SupersessionStage implements ReflectionStage {
       // Named at zero for the same reason the stale count is: a reader can tell "none withheld"
       // from a build that does not measure it.
       supersessionWithheld: tally.withheld,
+      // Blocked work is owed and undecidable until its source returns; retryable work is owed and
+      // decidable once a backfill or a settled publication lands. Naming them apart is what keeps
+      // a run from reading as if it had finished either one.
+      supersessionBlocked: tally.blocked,
     };
 
     if (writeError !== undefined) {
@@ -405,6 +433,9 @@ export class SupersessionStage implements ReflectionStage {
 
     return {
       status: 'ok',
+      // Work nobody could ask about is still owed. The stage's key stays open so the run that
+      // can decide it re-enters the stage, whatever else this run managed to close.
+      ...(tally.withheld > 0 ? { retryable: true } : {}),
       summary:
         `${tally.judgments} contradiction judgment(s) in ${this.#options.mode} mode: ` +
         `${tally.superseded} superseded, ${tally.proposed} proposed for review ` +

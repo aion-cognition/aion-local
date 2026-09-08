@@ -15,6 +15,7 @@ export class RunTally {
   #vetoed = 0;
   #staleTargets = 0;
   #withheld = 0;
+  #blocked = 0;
 
   get superseded(): number {
     return this.#superseded;
@@ -61,6 +62,11 @@ export class RunTally {
     return this.#withheld;
   }
 
+  /** Of those, the ones a proved suppression blocks until the source comes back. */
+  get blocked(): number {
+    return this.#blocked;
+  }
+
   recordJudgment(): void {
     this.#judgments += 1;
   }
@@ -69,8 +75,11 @@ export class RunTally {
     this.#judgeErrors += 1;
   }
 
-  recordWithheld(): void {
+  recordWithheld(disposition: 'blocked' | 'retryable'): void {
     this.#withheld += 1;
+    if (disposition === 'blocked') {
+      this.#blocked += 1;
+    }
   }
 
   recordSupersession(): void {

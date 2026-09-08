@@ -11,6 +11,7 @@ import { openLogger, type Logger } from '../../../infrastructure/logging/logger.
 import { refusingProvider } from '../../../infrastructure/providers/test-support/refusing-provider.fixture.js';
 import type { Provider } from '../../../infrastructure/providers/types.js';
 import { PublicationInvariantError } from '../../../infrastructure/publication/errors.js';
+import { buildEvidenceRevision } from '../../../infrastructure/publication/preconditions.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { isLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
 import { claimDedupPairKey, claimDedupScanKey } from '../../domain/claim-dedup.js';
@@ -246,6 +247,44 @@ describe('claim_dedup when one merge fails', () => {
   });
 });
 
+const MARKER = 'REQUIRED-SOURCE-CONTEXT-COMMIT-0559691';
+
+function assembled(): JudgmentAssembly {
+  const source = {
+    sourceId: 'source',
+    sessionId: 'session',
+    occurredAt: NOW.toISOString(),
+    text: MARKER,
+    sourceText: MARKER,
+    parts: [],
+    decodedRawUtf8Bytes: MARKER.length,
+    rawUtf16CodeUnits: MARKER.length,
+  };
+  return {
+    status: 'assembled',
+    sides: [
+      {
+        nodeId: 'subject-a',
+        statement: 'one',
+        requiredSources: [source],
+        optionalSubjects: [],
+        renderedContext: MARKER,
+        renderedUnits: MARKER.length + 3,
+      },
+      {
+        nodeId: 'neighbor-a',
+        statement: 'two',
+        requiredSources: [source],
+        optionalSubjects: [],
+        renderedContext: MARKER,
+        renderedUnits: MARKER.length + 3,
+      },
+    ],
+    revision: buildEvidenceRevision([]),
+    omitted: [],
+  };
+}
+
 describe('claim_dedup with an evidence seam', () => {
   const abstained: JudgmentAssembly = {
     status: 'abstained',
@@ -266,6 +305,7 @@ describe('claim_dedup with an evidence seam', () => {
     expect(result.itemsProcessed).toBe(0);
     expect(result.itemsAffected).toBe(0);
     expect(result.detail).toContain('3 withheld for want of evidence');
+    expect(result.detail).toContain('3 blocked');
     expect(assemble).toHaveBeenCalledTimes(3);
     expect(isLedgerApplied(db, claimDedupPairKey('subject-a', 'neighbor-a'))).toBe(false);
     expect(isLedgerApplied(db, claimDedupScanKey('subject-a'))).toBe(false);
@@ -275,28 +315,7 @@ describe('claim_dedup with an evidence seam', () => {
     const result = await claimDedupOperation().run(
       ctxFor({
         evidence: {
-          assemble: () =>
-            Promise.resolve({
-              status: 'assembled',
-              sides: [
-                {
-                  nodeId: 'subject-a',
-                  statement: 'one',
-                  requiredSources: [],
-                  optionalSubjects: [],
-                  renderedUnits: 3,
-                },
-                {
-                  nodeId: 'neighbor-a',
-                  statement: 'two',
-                  requiredSources: [],
-                  optionalSubjects: [],
-                  renderedUnits: 3,
-                },
-              ],
-              revision: { contractVersion: 1, dependencies: [], digest: 'digest' },
-              omitted: [],
-            } satisfies JudgmentAssembly),
+          assemble: () => Promise.resolve(assembled()),
           confirm: () => ({ status: 'current' }),
         },
       }),
@@ -305,5 +324,48 @@ describe('claim_dedup with an evidence seam', () => {
     expect(result.itemsProcessed).toBe(3);
     expect(result.itemsAffected).toBe(3);
     expect(result.detail).not.toContain('withheld');
+  });
+
+  it('passes the assembled required source into both real prompt builders', async () => {
+    const prompts: string[] = [];
+    const provider: Provider = {
+      embed: () => Promise.reject(new Error('no embedding')),
+      generate: (request) => {
+        prompts.push(JSON.stringify(request.messages));
+        return Promise.resolve({
+          same: true,
+          rationale: 'same',
+          either_adds_information: false,
+          reason: 'same',
+        });
+      },
+    };
+    await claimDedupOperation().run(
+      ctxFor({
+        provider,
+        evidence: {
+          assemble: () => Promise.resolve(assembled()),
+          confirm: () => ({ status: 'current' }),
+        },
+      }),
+    );
+
+    expect(prompts.length).toBeGreaterThan(0);
+    expect(prompts.every((prompt) => prompt.includes(MARKER))).toBe(true);
+  });
+
+  it('refuses application when the assembled revision became stale', async () => {
+    const confirm = vi.fn(() => ({
+      status: 'stale' as const,
+      changed: [
+        { kind: 'node' as const, id: 'subject-a', scope: 'graph.node_state', version: 'old' },
+      ],
+    }));
+    const result = await claimDedupOperation().run(
+      ctxFor({ evidence: { assemble: () => Promise.resolve(assembled()), confirm } }),
+    );
+
+    expect(confirm).toHaveBeenCalled();
+    expect(result.itemsAffected).toBe(0);
   });
 });

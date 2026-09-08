@@ -1,6 +1,10 @@
 import type { Driver } from 'neo4j-driver';
 
-import { withheldReason } from '../../../evidence/application/judgment.js';
+import {
+  judgmentEvidenceFor,
+  statementWithContext,
+  type JudgmentEvidenceOutcome,
+} from '../../../evidence/application/judgment.js';
 import { applyMergeWithRecovery } from '../../../evidence/application/merge-recovery.js';
 import {
   findRecentCurrentClaims,
@@ -108,8 +112,8 @@ async function requiredEvidence(
   ctx: OperationContext,
   subject: RecentClaim,
   neighbor: { readonly id: string; readonly text: string },
-): Promise<string | undefined> {
-  return withheldReason(ctx.evidence, {
+): Promise<JudgmentEvidenceOutcome> {
+  return judgmentEvidenceFor(ctx.evidence, {
     route: 'claim_dedup',
     reservedUnits: CLAIM_DEDUP_ROUTE_RESERVE,
     use: 'claim_judgment',
@@ -120,16 +124,26 @@ async function requiredEvidence(
   });
 }
 
+/** The pair a judge sees, carrying whatever sources the resolver reserved for each side. */
 function toPair(
   subject: { label: string; text: string },
   candidate: { label: string; text: string },
+  evidence: JudgmentEvidenceOutcome,
 ): ClaimDedupPair {
+  const sides = evidence.status === 'ready' ? evidence.sides : undefined;
   return {
     subjectLabel: subject.label,
-    subject: subject.text,
+    subject: statementWithContext(subject.text, sides?.[0]),
     candidateLabel: candidate.label,
-    candidate: candidate.text,
+    candidate: statementWithContext(candidate.text, sides?.[1]),
   };
+}
+
+/** A receipt says an operation landed. Only its own result says a merge did. */
+function settledMerge(result: unknown): boolean {
+  return typeof result === 'object' && result !== null && 'merged' in result
+    ? result.merged === true
+    : false;
 }
 
 export function claimDedupOperation(): IntrospectionOperation {
@@ -175,6 +189,7 @@ export function claimDedupOperation(): IntrospectionOperation {
       let stale = 0;
       let failed = 0;
       let withheld = 0;
+      let blocked = 0;
       /** Why the run stopped short of its batch, when an uncertain publication stopped it. */
       let halted: string | undefined;
 
@@ -219,17 +234,24 @@ export function claimDedupOperation(): IntrospectionOperation {
         // Asked before anything is paid for. A pair whose required sources are suppressed or
         // cannot be established is left exactly where it was: unstamped, unjudged, and owed.
         const assembled = await requiredEvidence(ctx, subject, neighbor);
-        if (assembled !== undefined) {
+        if (assembled.status === 'withheld') {
           withheld += 1;
+          blocked += assembled.withheld.kind === 'blocked' ? 1 : 0;
           ctx.logger.info(
-            { subjectId: subject.id, candidateId: neighbor.id, reason: assembled },
+            {
+              subjectId: subject.id,
+              candidateId: neighbor.id,
+              disposition: assembled.withheld.kind,
+              reason: assembled.withheld.reason,
+              addresses: assembled.withheld.addresses,
+            },
             'claim dedup withheld a pair its required evidence does not support',
           );
           continue;
         }
         judged += 1;
 
-        const pair = toPair(subject, neighbor);
+        const pair = toPair(subject, neighbor, assembled);
         const detection = await judgeClaimDedup(ctx.provider, pair, callOptions);
         if (detection.status === 'failed') {
           failed += 1;
@@ -278,6 +300,20 @@ export function claimDedupOperation(): IntrospectionOperation {
           continue;
         }
 
+        // The evidence the judge answered on has to still hold when the answer is applied. A
+        // correction that arrived in between is new evidence, and the old answer is not about it.
+        if (assembled.status === 'ready' && ctx.evidence !== undefined) {
+          const check = ctx.evidence.confirm(assembled.revision);
+          if (check.status !== 'current') {
+            stale += 1;
+            ctx.logger.info(
+              { subjectId: subject.id, candidateId: neighbor.id, check: check.status },
+              'claim dedup left a pair whose evidence moved while it was being judged',
+            );
+            continue;
+          }
+        }
+
         const { survivor, loser } = selectClaimDedupSurvivor(
           { id: subject.id, occurredAt: subjectDetail.occurredAt },
           { id: neighbor.id, occurredAt: candidateDetail.occurredAt },
@@ -306,6 +342,14 @@ export function claimDedupOperation(): IntrospectionOperation {
         // The write re-reads currency under its own transaction, which is the reading that
         // decides: a side taken between the read above and the commit is stale, not merged. A
         // settled attempt already committed, and its receipt is what says so.
+        if (applied.status === 'settled' && !settledMerge(applied.result)) {
+          failed += 1;
+          ctx.logger.warn(
+            { subjectId: subject.id, candidateId: neighbor.id, operationId: pairKey },
+            'a settled publication for this pair recorded no merge',
+          );
+          continue;
+        }
         if (applied.status === 'applied' && !applied.value.merged) {
           stale += 1;
           markLedgerApplied(ctx.db, pairKey, { verdict: 'stale' });
@@ -329,7 +373,9 @@ export function claimDedupOperation(): IntrospectionOperation {
         detail:
           `${String(judged)} pair(s) judged: ${String(merged)} merged, ${String(related)} related, ` +
           `${String(vetoed)} vetoed, ${String(stale)} stale, ${String(failed)} failed${
-            withheld === 0 ? '' : `, ${String(withheld)} withheld for want of evidence`
+            withheld === 0
+              ? ''
+              : `, ${String(withheld)} withheld for want of evidence (${String(blocked)} blocked)`
           }${halted === undefined ? '' : `; stopped early on ${halted}`}`,
       };
     },

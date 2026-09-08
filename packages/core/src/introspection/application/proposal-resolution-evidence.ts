@@ -1,6 +1,11 @@
 import type { Driver } from 'neo4j-driver';
 
 import {
+  judgmentEvidenceFor,
+  type JudgmentEvidenceOutcome,
+  type JudgmentSideRequest,
+} from '../../evidence/application/judgment.js';
+import {
   loadEntityDedupDetails,
   type DedupEntityDetail,
 } from '../../infrastructure/graph/entity-dedup-queries.js';
@@ -19,16 +24,19 @@ import {
 import { findClaimSubjects, type ClaimSubject } from '../../infrastructure/graph/subject-family.js';
 import { isFactNodeLabel } from '../../infrastructure/graph/supersession-queries.js';
 import type { EntityMergeProposal } from '../../infrastructure/sqlite/entity-merge-proposals.js';
+import { ENTITY_MERGE_ROUTE_RESERVE } from '../../reflection/application/entity-merge-judge.js';
 import type {
   EntityMergePair,
   EntityMergeSide,
 } from '../../reflection/application/entity-merge-judge.js';
+import { LIVE_SUPERSESSION_ROUTE_RESERVE } from '../../reflection/application/stages/supersession-judge.js';
 import type { ContradictionPair } from '../../reflection/application/stages/supersession-judge.js';
 import {
   describeEntityPairFacts,
   nameFormRelation,
 } from '../../reflection/domain/entity-cascade.js';
 import { parseTypeCounts } from '../../reflection/domain/entity-reconciliation.js';
+import type { OperationContext } from '../domain/operation.js';
 
 /**
  * What `proposal_resolution` puts in front of the judges, which is more than the pass that
@@ -96,6 +104,56 @@ function renderStatement(
     }
   }
   return lines.join('\n');
+}
+
+/**
+ * What a resolution spends on its own prompts and answers before any evidence is rendered. It
+ * runs both judgment shapes, so the reserve is the larger of the two.
+ */
+const RESOLUTION_ROUTE_RESERVE = Math.max(
+  LIVE_SUPERSESSION_ROUTE_RESERVE,
+  ENTITY_MERGE_ROUTE_RESERVE,
+);
+
+/**
+ * Asked before either pass runs, so an abstention or an incomplete assembly costs no model call
+ * and leaves the row open. A pinned row is not a dismissal: the queue keeps it, and an unforget
+ * or a backfill is what makes it decidable.
+ */
+export async function judgmentEvidence(
+  ctx: OperationContext,
+  sides: readonly [JudgmentSideRequest, JudgmentSideRequest],
+  use: 'claim_judgment' | 'entity_judgment',
+): Promise<JudgmentEvidenceOutcome> {
+  return judgmentEvidenceFor(ctx.evidence, {
+    route: 'proposal_resolution',
+    reservedUnits: RESOLUTION_ROUTE_RESERVE,
+    use,
+    sides,
+  });
+}
+
+/**
+ * Whether the evidence a judgment ran on still stands. A correction that arrived while the two
+ * passes were answering is new evidence, and applying the old answer would close a claim on a
+ * reading nobody holds any more.
+ */
+export function evidenceMoved(
+  ctx: OperationContext,
+  evidence: JudgmentEvidenceOutcome,
+): string | undefined {
+  if (evidence.status !== 'ready' || ctx.evidence === undefined) {
+    return undefined;
+  }
+  const check = ctx.evidence.confirm(evidence.revision);
+  return check.status === 'current' ? undefined : check.status;
+}
+
+/** What a row left open because its evidence could not support asking says in the log. */
+export function withheldDetail(outcome: JudgmentEvidenceOutcome): string {
+  return outcome.status === 'withheld'
+    ? `required evidence does not support asking: ${outcome.withheld.kind}, ${outcome.withheld.reason}`
+    : 'required evidence does not support asking';
 }
 
 /** `undefined` when the claim is unreadable, which leaves the row for the staleness backstop. */

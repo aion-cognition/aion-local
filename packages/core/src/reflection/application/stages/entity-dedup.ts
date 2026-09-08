@@ -5,7 +5,11 @@ import {
   nominatePairs,
   type NominatedPair,
 } from './entity-dedup-cascade.js';
-import { withheldReason } from '../../../evidence/application/judgment.js';
+import {
+  judgmentEvidenceFor,
+  statementWithContext,
+  type JudgmentEvidenceOutcome,
+} from '../../../evidence/application/judgment.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { DedupEntityDetail } from '../../../infrastructure/graph/entity-dedup-queries.js';
 import { findEpisodeEntities } from '../../../infrastructure/graph/entity-queries.js';
@@ -23,6 +27,7 @@ import {
   type EntityMergeSide,
 } from '../entity-merge-judge.js';
 import { applyEntityMerge, collectMergeSignals } from '../entity-merge-writer.js';
+import { evidenceMoved } from '../evidence-fence.js';
 
 /**
  * The entity dedup cascade, four tiers deep, run over the entities this episode mentioned.
@@ -91,6 +96,8 @@ type CascadeTally = {
   readonly nominated: number;
   /** Pairs nobody was asked about, because their required evidence did not support asking. */
   readonly withheld: number;
+  /** Of those, the ones a proved suppression blocks until the source comes back. */
+  readonly blocked: number;
 };
 
 const NOTHING_DONE: CascadeTally = {
@@ -100,6 +107,7 @@ const NOTHING_DONE: CascadeTally = {
   judged: 0,
   nominated: 0,
   withheld: 0,
+  blocked: 0,
 };
 
 function addTallies(left: CascadeTally, right: CascadeTally): CascadeTally {
@@ -110,6 +118,23 @@ function addTallies(left: CascadeTally, right: CascadeTally): CascadeTally {
     judged: left.judged + right.judged,
     nominated: left.nominated + right.nominated,
     withheld: left.withheld + right.withheld,
+    blocked: left.blocked + right.blocked,
+  };
+}
+
+/** The pair a judge sees, carrying whatever sources the resolver reserved for each side. */
+function withEvidence(pair: EntityMergePair, evidence: JudgmentEvidenceOutcome): EntityMergePair {
+  if (evidence.status !== 'ready') {
+    return pair;
+  }
+  const [left, right] = evidence.sides;
+  return {
+    ...pair,
+    facts: [
+      ...pair.facts,
+      statementWithContext(`${pair.subject.name} rests on:`, left),
+      statementWithContext(`${pair.candidate.name} rests on:`, right),
+    ],
   };
 }
 
@@ -176,7 +201,13 @@ export class EntityDedupStage implements ReflectionStage {
         // Named at zero so a reader can tell a run that withheld nothing from a build that does
         // not measure it.
         merge_withheld: tally.withheld,
+        // Blocked work is owed and undecidable until its source returns. Naming it apart is what
+        // keeps a run from reading as if it had finished it.
+        merge_blocked: tally.blocked,
       },
+      // A pair nobody could ask about is still owed, so the stage's key stays open for the run
+      // that can decide it.
+      ...(tally.withheld > 0 ? { retryable: true } : {}),
     };
   }
 
@@ -268,12 +299,12 @@ export class EntityDedupStage implements ReflectionStage {
    * counted as judged and before either pass runs, so a withheld pair costs nothing and stays
    * exactly as nominated.
    */
-  async #withheld(
+  async #evidenceFor(
     ctx: StageContext,
     left: DedupEntityDetail,
     right: DedupEntityDetail,
-  ): Promise<string | undefined> {
-    return withheldReason(ctx.evidence, {
+  ): Promise<JudgmentEvidenceOutcome> {
+    return judgmentEvidenceFor(ctx.evidence, {
       route: 'entity_merge',
       reservedUnits: ENTITY_MERGE_ROUTE_RESERVE,
       use: 'entity_judgment',
@@ -300,16 +331,28 @@ export class EntityDedupStage implements ReflectionStage {
       timeoutMs: this.#options.timeoutMs,
       ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
     };
-    const withheld = await this.#withheld(ctx, left, right);
-    if (withheld !== undefined) {
+    const evidence = await this.#evidenceFor(ctx, left, right);
+    if (evidence.status === 'withheld') {
       ctx.logger.info(
-        { leftId: left.id, rightId: right.id, withheld },
+        {
+          leftId: left.id,
+          rightId: right.id,
+          disposition: evidence.withheld.kind,
+          reason: evidence.withheld.reason,
+          addresses: evidence.withheld.addresses,
+        },
         'entity merge judgment withheld for want of required evidence',
       );
-      return { tally: { ...NOTHING_DONE, withheld: 1 } };
+      return {
+        tally: {
+          ...NOTHING_DONE,
+          withheld: 1,
+          blocked: evidence.withheld.kind === 'blocked' ? 1 : 0,
+        },
+      };
     }
 
-    const prompt = buildJudgePair(left, right, pair);
+    const prompt = withEvidence(buildJudgePair(left, right, pair), evidence);
     const asked: CascadeTally = { ...NOTHING_DONE, judged: 1 };
 
     const detect = await judgeEntityMerge(ctx.provider, prompt, options);
@@ -336,6 +379,15 @@ export class EntityDedupStage implements ReflectionStage {
     if (this.#options.mode === 'propose') {
       this.#recordProposal(ctx, left, right, pair);
       return { tally: addTallies(asked, { ...NOTHING_DONE, proposals: 1 }) };
+    }
+
+    const moved = evidenceMoved(ctx, evidence);
+    if (moved !== undefined) {
+      ctx.logger.info(
+        { leftId: left.id, rightId: right.id, moved },
+        'entity merge dropped because its evidence moved while it was judged',
+      );
+      return { tally: addTallies(asked, { ...NOTHING_DONE, withheld: 1 }) };
     }
 
     const merged = await this.#mergeJudged(ctx, cache, left, right, pair, {

@@ -113,6 +113,7 @@ describe('SupersessionStage', () => {
       supersessionProposals: 1,
       supersessionStaleTargets: 0,
       supersessionWithheld: 0,
+      supersessionBlocked: 0,
     });
     expect(bed.graph.closeStatements()).toEqual([]);
     expect(bed.validUntil('decision-old')).toBeUndefined();
@@ -150,6 +151,7 @@ describe('SupersessionStage', () => {
       supersessionProposals: 0,
       supersessionStaleTargets: 0,
       supersessionWithheld: 0,
+      supersessionBlocked: 0,
     });
     expect(bed.validUntil('decision-old')).toBeDefined();
     expect(bed.supersedesEdges()).toEqual([{ sourceId: 'decision-new', targetId: 'decision-old' }]);
@@ -167,6 +169,7 @@ describe('SupersessionStage', () => {
       supersessionProposals: 1,
       supersessionStaleTargets: 0,
       supersessionWithheld: 0,
+      supersessionBlocked: 0,
     });
     expect(bed.validUntil('decision-old')).toBeUndefined();
     expect(bed.supersedesEdges()).toEqual([]);
@@ -196,6 +199,7 @@ describe('SupersessionStage', () => {
       supersessionProposals: 0,
       supersessionStaleTargets: 1,
       supersessionWithheld: 0,
+      supersessionBlocked: 0,
     });
     expect(bed.supersedesEdges()).toEqual([]);
   });
@@ -225,6 +229,7 @@ describe('SupersessionStage', () => {
       supersessionProposals: 0,
       supersessionStaleTargets: 0,
       supersessionWithheld: 0,
+      supersessionBlocked: 0,
     });
     expect(outcome.summary).toContain('1 unanimous and 0 vetoed');
     expect(bed.validUntil('decision-old')).toBeDefined();
@@ -266,6 +271,7 @@ describe('SupersessionStage', () => {
       supersessionProposals: 1,
       supersessionStaleTargets: 0,
       supersessionWithheld: 0,
+      supersessionBlocked: 0,
     });
     expect(outcome.summary).toContain('0 unanimous and 1 vetoed');
     expect(bed.validUntil('decision-old')).toBeUndefined();
@@ -339,6 +345,7 @@ describe('SupersessionStage', () => {
       supersessionProposals: 0,
       supersessionStaleTargets: 0,
       supersessionWithheld: 0,
+      supersessionBlocked: 0,
     });
     expect(bed.validUntil('decision-old')).toBeUndefined();
   });
@@ -360,6 +367,7 @@ describe('SupersessionStage', () => {
       supersessionProposals: 0,
       supersessionStaleTargets: 1,
       supersessionWithheld: 0,
+      supersessionBlocked: 0,
     });
     expect(outcome.summary).toContain('1 with the target already gone');
     expect(bed.supersedesEdges()).toEqual([]);
@@ -381,6 +389,7 @@ describe('SupersessionStage', () => {
       supersessionProposals: 1,
       supersessionStaleTargets: 0,
       supersessionWithheld: 0,
+      supersessionBlocked: 0,
     });
     expect(bed.proposals()[0]?.confidence).toBe(0.5);
   });
@@ -397,6 +406,7 @@ describe('SupersessionStage', () => {
       supersessionProposals: 0,
       supersessionStaleTargets: 0,
       supersessionWithheld: 0,
+      supersessionBlocked: 0,
     });
     expect(bed.validUntil('decision-old')).toBeUndefined();
     expect(bed.proposals()).toEqual([]);
@@ -427,6 +437,7 @@ describe('SupersessionStage', () => {
       supersessionProposals: 0,
       supersessionStaleTargets: 0,
       supersessionWithheld: 0,
+      supersessionBlocked: 0,
     });
   });
 
@@ -686,6 +697,7 @@ describe('SupersessionStage', () => {
       supersessionProposals: 0,
       supersessionStaleTargets: 0,
       supersessionWithheld: 0,
+      supersessionBlocked: 0,
     });
     expect(bed.supersedesEdges()).toEqual(before);
   });
@@ -708,6 +720,7 @@ describe('SupersessionStage', () => {
       supersessionProposals: 0,
       supersessionStaleTargets: 0,
       supersessionWithheld: 0,
+      supersessionBlocked: 0,
     });
     expect(bed.validUntil('decision-old')).toBeUndefined();
     expect(bed.supersedesEdges()).toEqual([]);

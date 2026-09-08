@@ -180,14 +180,18 @@ function seedNearDuplicatePair(): void {
   mention(OTHER_EPISODE_ID, 'weak', 1);
 }
 
-/** A seam that abstains on every pair, which is what a suppressed required source produces. */
+/**
+ * A seam that abstains on every pair, naming a source outside the one being processed. Cancelling
+ * the forgotten source's own work would not answer this: the pair is undecidable because a
+ * different source it rests on is suppressed.
+ */
 function abstaining(): JudgmentEvidence {
   return {
     assemble: () =>
       Promise.resolve({
         status: 'abstained',
         reason: 'required_source_suppressed',
-        addresses: [{ kind: 'id', id: 'episode-1' }],
+        addresses: [{ kind: 'id', id: OTHER_EPISODE_ID }],
         revision: { contractVersion: 1, dependencies: [], digest: 'digest' },
       }),
     confirm: () => ({ status: 'current' }),
@@ -207,8 +211,52 @@ describe('tier 3 with an evidence seam', () => {
       merges: 0,
       merge_judgments: 0,
       merge_withheld: 1,
+      merge_blocked: 1,
     });
+    // The obligation survives the run: a stage that reported plain success would have its ledger
+    // key stamped and the pair would never be looked at again.
+    expect(outcome.retryable === true || outcome.status === 'failed').toBe(true);
     expect(graph.edgesOfType(SUPERSEDES_TYPE)).toEqual([]);
+  });
+
+  it('keeps the work open when only some pairs were withheld', async () => {
+    seedNearDuplicatePair();
+    let asked = 0;
+    const evidence: JudgmentEvidence = {
+      assemble: () => {
+        asked += 1;
+        return Promise.resolve(
+          asked === 1
+            ? ({
+                status: 'abstained',
+                reason: 'required_source_suppressed',
+                addresses: [{ kind: 'id', id: OTHER_EPISODE_ID }],
+                revision: { contractVersion: 1, dependencies: [], digest: 'digest' },
+              } as const)
+            : ({
+                status: 'incomplete',
+                reasons: [
+                  {
+                    address: { kind: 'id', id: OTHER_EPISODE_ID },
+                    field: 'source_content',
+                    reason: 'required_scope_missing',
+                    required: true,
+                  },
+                ],
+                revision: { contractVersion: 1, dependencies: [], digest: 'digest' },
+              } as const),
+        );
+      },
+      confirm: () => ({ status: 'current' }),
+    };
+
+    const outcome = await new EntityDedupStage().run({
+      ...context(unreachableProvider()),
+      evidence,
+    });
+
+    expect(outcome.retryable).toBe(true);
+    expect(outcome.counts?.merge_withheld).toBeGreaterThan(0);
   });
 });
 
