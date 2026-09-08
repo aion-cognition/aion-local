@@ -292,4 +292,127 @@ describe('the frozen migration cohort', () => {
     ]);
     expect(readMigrationProgress(store.db, 'cohort-1', 'after-1')).toBeUndefined();
   });
+
+  it('a source carrying an old clock still lands once in the tail behind the watermark', () => {
+    freeze([]);
+    const watermark = readIntakeWatermark(store.db);
+    insertExperience(
+      store.db,
+      input({
+        episodeId: 'backdated-1',
+        contentHash: 'hash-backdated',
+        occurredAt: '2024-03-01T00:00:00.000Z',
+        archivedAt: '2026-09-08T02:10:00.000Z',
+      }),
+    );
+    recordIngest(store.db, 'backdated-1', NOW);
+
+    expect(listIngestAfter(store.db, watermark, 10).map((row) => row.sourceId)).toEqual([
+      'backdated-1',
+    ]);
+
+    recordMigrationProgress(store.db, {
+      cohortId: 'cohort-1',
+      sourceId: 'backdated-1',
+      status: 'verified',
+      partitionAssignment: 'chunk-tail',
+    });
+    expect(countMigrationProgress(store.db, 'cohort-1')).toEqual({
+      accounted: 0,
+      verified: 1,
+      pinned: 0,
+    });
+  });
+});
+
+describe('running a backfill batch twice', () => {
+  let dir: string;
+  let store: SqliteStore;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'aion-backfill-batch-'));
+    store = new SqliteStore({ filePath: join(dir, 'aion.sqlite') });
+    // Two archive rows for one episode, a second episode, and a member the archive never held.
+    insertExperience(store.db, input({ episodeId: 'episode-1', identity: 'a' }));
+    insertExperience(store.db, input({ episodeId: 'episode-1', identity: 'b' }));
+    insertExperience(store.db, input({ episodeId: 'episode-2', contentHash: 'hash-2' }));
+    const bounds = archiveRowidBounds(store.db);
+    freezeMigrationCohort(store.db, {
+      cohortId: 'cohort-1',
+      cohortDigest: 'digest-1',
+      intakeWatermark: readIntakeWatermark(store.db),
+      archiveRowidLow: bounds.low,
+      archiveRowidHigh: bounds.high,
+      graphCensusDigest: 'census-1',
+      orderingPolicyVersion: 1,
+      createdAt: NOW,
+      members: ['episode-1', 'episode-2', 'graph-only-1'],
+    });
+    recordSourceRecord(store.db, {
+      sourceId: 'graph-only-1',
+      sessionId: 'session-1',
+      verificationStatus: 'pinned',
+      verificationReason: 'the archive holds no row for this episode',
+      occurredAt: '2026-01-01T00:00:00.000Z',
+      createdAt: NOW,
+    });
+  });
+
+  afterEach(() => {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function runBatch(): void {
+    const cohort = readMigrationCohort(store.db, 'cohort-1');
+    if (cohort === undefined) {
+      throw new Error('the cohort was not frozen');
+    }
+    const rows = pageArchiveRows(store.db, {
+      low: cohort.archiveRowidLow,
+      high: cohort.archiveRowidHigh,
+      limit: 100,
+    });
+    for (const group of groupArchiveRowsBySource(rows)) {
+      recordSourceRecord(store.db, deriveSourceRecordInput(group, NOW));
+      recordMigrationProgress(store.db, {
+        cohortId: 'cohort-1',
+        sourceId: group.sourceId,
+        status: group.conflictingAliases ? 'pinned' : 'accounted',
+      });
+    }
+    const last = rows.at(-1);
+    if (last !== undefined) {
+      advanceCohortCursor(store.db, 'cohort-1', last.rowid);
+    }
+  }
+
+  function snapshot(): unknown {
+    return {
+      sources: store.db.prepare('SELECT * FROM source_records ORDER BY source_id').all(),
+      progress: store.db.prepare('SELECT * FROM migration_progress ORDER BY source_id').all(),
+      cohort: store.db.prepare('SELECT * FROM migration_cohorts').all(),
+    };
+  }
+
+  it('changes nothing the second time through', () => {
+    runBatch();
+    const afterFirst = snapshot();
+
+    runBatch();
+
+    expect(snapshot()).toEqual(afterFirst);
+  });
+
+  it('leaves the pinned member the batch never reached exactly as it was', () => {
+    runBatch();
+    runBatch();
+
+    expect(readSourceRecord(store.db, 'graph-only-1')).toMatchObject({
+      verificationStatus: 'pinned',
+      canonicalArchiveId: null,
+      archivedAt: null,
+    });
+    expect(readMigrationProgress(store.db, 'cohort-1', 'graph-only-1')?.status).toBe('accounted');
+  });
 });
