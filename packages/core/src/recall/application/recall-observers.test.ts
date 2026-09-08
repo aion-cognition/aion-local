@@ -182,7 +182,9 @@ describe('recall with a trace observer attached', () => {
     const traces: RecallTrace[] = [];
     await handleRecall(
       deps({
-        onRecalled: (completion) => listened.push(completion.sessionId),
+        onRecalled: (completion) => {
+          listened.push(completion.sessionId);
+        },
         onTrace: (trace) => traces.push(trace),
       }),
       { query: QUERY },
