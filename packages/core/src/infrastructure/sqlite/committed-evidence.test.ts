@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   committedIncidenceForNode,
+  committedIncidenceForNodesAt,
   committedIncidenceForSource,
   committedLinkVersionAt,
   committedLinkVersions,
@@ -174,5 +175,26 @@ describe('the committed evidence view', () => {
     expect(committedSourceStates(store.db, 'source-1')).toMatchObject([
       { stateKind: 'forgotten', knownFrom: NOW.toISOString() },
     ]);
+  });
+
+  it('reads the old incidence version after the current projection advances', () => {
+    prepareVersion(1, 'op-1', '{}');
+    acknowledgeVersion(1, 'op-1', NOW);
+    store.db
+      .prepare(
+        `INSERT INTO source_incidence (source_id, node_id, role, currency, link_id, link_version)
+         VALUES ('source-1', 'node-1', 'extraction', 'open', 'link-1', 1)`,
+      )
+      .run();
+    prepareVersion(2, 'op-2', '{}');
+    acknowledgeVersion(2, 'op-2', LATER);
+    // The projection points at the newest version, which is what a read of "now" answers with.
+    store.db.prepare("UPDATE source_incidence SET link_version = 2 WHERE link_id = 'link-1'").run();
+
+    expect(
+      committedIncidenceForNodesAt(store.db, ['node-1'], NOW, 'extraction').map(
+        (row) => row.sourceId,
+      ),
+    ).toEqual(['source-1']);
   });
 });

@@ -2,7 +2,12 @@ import type { Driver } from 'neo4j-driver';
 
 import { currentOnly, supersedeInTransaction, type SupersedeResult } from './bitemporal.js';
 import { normalizeCognitiveText, TEXT_NORM_PROPERTY } from './cognitive-text.js';
-import { inWriteTransaction, runRead, type GraphTransaction } from './connection.js';
+import {
+  inWriteTransaction,
+  runRead,
+  type GraphStatement,
+  type GraphTransaction,
+} from './connection.js';
 import {
   DESCRIPTION_MENTION_COUNT_PROPERTY,
   DESCRIPTION_RETIRED_AT_PROPERTY,
@@ -11,6 +16,7 @@ import {
 import { ENTITY_MENTION_TYPE } from './entity-queries.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
 import { BASE_NODE_LABEL, EXTRACTION_TYPE } from './labels.js';
+import { readModeFragment, type ReadMode } from './read-modes.js';
 import { ENTITY_NAME_NORM_PROPERTY, ENTITY_NAME_PROPERTY } from './seed-queries.js';
 import { FACT_NODE_LABELS, MIN_SUBJECT_NAME_LENGTH } from './supersession-queries.js';
 import { toGraphDateTime, toGraphInteger, type Row } from './values.js';
@@ -57,6 +63,31 @@ const SUBJECT_PROPAGATION_SIGNALS = ['subject_family'];
  * appears inside the claim's stored fold. The same test the detection leg uses to decide two
  * statements are about one thing, applied to one statement.
  */
+function subjectsOfClaim(mode: ReadMode): GraphStatement {
+  const source = readModeFragment(mode, 'source', 'rmsrc');
+  const entity = readModeFragment(mode, 'e', 'rment');
+  const cypher = [
+    `MATCH (claim:${BASE_NODE_LABEL} { id: $claimId })-[:${EXTRACTION_TYPE}]->(source:Episode)`,
+    `WHERE ${source.where}`,
+    `MATCH (source)-[:${ENTITY_MENTION_TYPE}]->(e:Entity)`,
+    `WHERE ${entity.where}`,
+    `  AND size(e.${ENTITY_NAME_NORM_PROPERTY}) >= $minNameLength`,
+    `  AND claim.${TEXT_NORM_PROPERTY} CONTAINS e.${ENTITY_NAME_NORM_PROPERTY}`,
+    `RETURN DISTINCT e.id AS id, e.${ENTITY_NAME_PROPERTY} AS name,`,
+    `       e.${ENTITY_NAME_NORM_PROPERTY} AS name_norm, e.${MEMORY_PROPERTIES.text} AS text,`,
+    '       source.id AS source_episode_id',
+    'ORDER BY name_norm, id',
+  ].join('\n');
+  return {
+    cypher,
+    parameters: {
+      ...source.parameters,
+      ...entity.parameters,
+      minNameLength: toGraphInteger(MIN_SUBJECT_NAME_LENGTH),
+    },
+  };
+}
+
 const SUBJECTS_OF_CLAIM = [
   `MATCH (claim:${BASE_NODE_LABEL} { id: $claimId })-[:${EXTRACTION_TYPE}]->(source:Episode)`,
   `WHERE ${currentOnly('source')}`,
@@ -94,11 +125,22 @@ function mapSubject(row: Row): ClaimSubject {
 export async function findClaimSubjects(
   driver: Driver,
   claimId: string,
+  mode?: ReadMode,
 ): Promise<readonly ClaimSubject[]> {
+  if (mode === undefined) {
+    return runRead(
+      driver,
+      SUBJECTS_OF_CLAIM,
+      { claimId, minNameLength: toGraphInteger(MIN_SUBJECT_NAME_LENGTH) },
+      mapSubject,
+    );
+  }
+  // A checked read judges the join at its own vantage: the source and the entity have to have
+  // been visible then, which is a different row set from the one visible now.
+  const statement = subjectsOfClaim(mode);
   return runRead(
     driver,
-    SUBJECTS_OF_CLAIM,
-    { claimId, minNameLength: toGraphInteger(MIN_SUBJECT_NAME_LENGTH) },
+    { cypher: statement.cypher, parameters: { ...statement.parameters, claimId } },
     mapSubject,
   );
 }

@@ -124,7 +124,9 @@ export async function readClaimSubjects(
 
     let subjects: readonly ClaimSubject[];
     try {
-      subjects = await findClaimSubjects(deps.driver, claimId);
+      // The join runs at the vantage the request was checked against, so a source or an entity
+      // that was not visible then is not part of the answer now.
+      subjects = await findClaimSubjects(deps.driver, claimId, input.context.mode);
       if (subjects.length === 0) {
         subjects = await subjectsFromRecords(deps, claimId);
       }

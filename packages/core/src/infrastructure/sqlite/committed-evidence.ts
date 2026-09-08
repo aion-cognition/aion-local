@@ -180,9 +180,13 @@ export function committedIncidenceForNodes(
 }
 
 /**
- * The same batch as it stood at a past moment. Incidence is a current projection, so a question
- * about an earlier vantage is answered from the version chain behind it: a row whose owning
- * version was acknowledged later was not something anybody could have read then.
+ * The same batch as it stood at a past moment.
+ *
+ * Incidence is a current projection: its `link_version` pointer says which version is in force
+ * now, and reading that pointer at an earlier vantage answers with today's row or with nothing.
+ * The version chain is what holds the past, so the newest version acknowledged by then is
+ * selected first and the incidence is derived from it. Currency comes from that version's own
+ * recorded values where it stated one, for the same reason.
  */
 export function committedIncidenceForNodesAt(
   db: SqliteHandle,
@@ -196,15 +200,36 @@ export function committedIncidenceForNodesAt(
   }
   const placeholders = unique.map(() => '?').join(', ');
   const roleClause = role === undefined ? '' : 'AND s.role = ?';
+  const moment = at.toISOString();
   const parameters = role === undefined ? unique : [...unique, role];
   const rows = db
     .prepare(
-      `${COMMITTED_INCIDENCE} WHERE s.node_id IN (${placeholders}) ${roleClause}
-         AND v.known_from <= ?
+      `SELECT s.source_id, s.node_id, s.role, s.currency, s.link_id, v.version AS link_version,
+              v.recorded_values_json
+       FROM source_incidence s
+       JOIN evidence_link_versions v ON v.link_id = s.link_id
+       JOIN publication_intents i ON i.operation_id = v.operation_id AND i.state = 'acknowledged'
+       WHERE s.node_id IN (${placeholders}) ${roleClause}
+         AND v.known_from IS NOT NULL AND v.known_from <= ?
+         AND v.version = (
+           SELECT MAX(h.version) FROM evidence_link_versions h
+           JOIN publication_intents hi
+             ON hi.operation_id = h.operation_id AND hi.state = 'acknowledged'
+           WHERE h.link_id = s.link_id AND h.known_from IS NOT NULL AND h.known_from <= ?
+         )
        ORDER BY s.node_id, s.source_id, s.role`,
     )
-    .all(...parameters, at.toISOString()) as IncidenceRowData[];
-  return rows.map(toIncidence);
+    .all(...parameters, moment, moment) as (IncidenceRowData & {
+    recorded_values_json: string;
+  })[];
+  return rows.map((row) => {
+    const stated = JSON.parse(row.recorded_values_json) as { currency?: unknown };
+    return {
+      ...toIncidence(row),
+      currency:
+        stated.currency === 'closed' || stated.currency === 'open' ? stated.currency : row.currency,
+    };
+  });
 }
 
 /**

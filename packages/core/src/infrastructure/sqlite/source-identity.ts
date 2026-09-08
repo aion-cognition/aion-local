@@ -55,6 +55,8 @@ export type SourceRecord = {
   readonly archivedAt: string | null;
   readonly captureOrderValue: string | null;
   readonly captureOrderBasis: string | null;
+  /** When this occurrence was accepted. Its own, even where its bytes are a predecessor's. */
+  readonly createdAt: string;
 };
 
 type SourceRowData = {
@@ -72,6 +74,7 @@ type SourceRowData = {
   archived_at: string | null;
   capture_order_value: string | null;
   capture_order_basis: string | null;
+  created_at: string;
 };
 
 /**
@@ -136,7 +139,7 @@ export function recordSourceRecord(db: SqliteHandle, input: SourceRecordInput): 
 const SELECT_SOURCE_RECORD = `SELECT source_id, session_id, canonical_archive_id,
     archive_aliases_json, archive_schema_version, identity_hash, verified_content_digest,
     verification_policy_version, verification_status, verification_reason, occurred_at,
-    archived_at, capture_order_value, capture_order_basis
+    archived_at, capture_order_value, capture_order_basis, created_at
   FROM source_records`;
 
 function toSourceRecord(row: SourceRowData): SourceRecord {
@@ -156,6 +159,7 @@ function toSourceRecord(row: SourceRowData): SourceRecord {
     archivedAt: row.archived_at,
     captureOrderValue: row.capture_order_value,
     captureOrderBasis: row.capture_order_basis,
+    createdAt: row.created_at,
   };
 }
 

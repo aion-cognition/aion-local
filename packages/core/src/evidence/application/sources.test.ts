@@ -349,6 +349,57 @@ describe('raw source evidence', () => {
     expect(resolution.value?.text).toContain('the runbook was out of date');
   });
 
+  it('does not date a replacement occurrence by its predecessor raw acceptance', () => {
+    const early = new Date('2026-09-08T08:00:00.000Z');
+    const fresh = new Date('2026-09-08T11:00:00.000Z');
+    const shared = { turns: [{ role: 'user', text: 'shared raw bytes' }] };
+    seedSource(store.db, {
+      sourceId: 'first',
+      sessionId: 'session-1',
+      identity: 'repeat-agent',
+      content: shared,
+      turnIds: ['first-turn'],
+      now: early,
+    });
+    commitSourceState(store.db, {
+      sourceId: 'first',
+      stateKind: 'forgotten',
+      operationId: 'forget-first',
+      at: NOW,
+    });
+    seedSource(store.db, {
+      sourceId: 'replacement',
+      sessionId: 'session-1',
+      identity: 'repeat-agent',
+      content: shared,
+      turnIds: ['replacement-turn'],
+      now: fresh,
+    });
+    establishScope(store.db, 'replacement', SOURCE_STATE_SCOPE, fresh);
+    const resolution = resolveSourceEvidence(
+      store.db,
+      idAddress('replacement'),
+      request({ context: checkedContext({ mode: knewAt(NOW), now: fresh }) }),
+    );
+
+    expect(resolution.value).toBeUndefined();
+  });
+
+  it('reports missing availability proof as unknown rather than certified absence', () => {
+    store.db
+      .prepare("UPDATE source_records SET created_at='not-a-time' WHERE source_id='episode-1'")
+      .run();
+    const resolution = resolveSourceEvidence(
+      store.db,
+      idAddress('episode-1'),
+      request({ context: checkedContext({ mode: knewAt(NOW) }) }),
+    );
+
+    expect(resolution.issues).toMatchObject([
+      { field: 'source_clocks', reason: 'unsupported_history', historyReason: 'not_recorded' },
+    ]);
+  });
+
   it('cites the four source scopes it read under', () => {
     const resolution = resolveSourceEvidence(store.db, idAddress('episode-1'), request());
 

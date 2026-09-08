@@ -1,4 +1,5 @@
 import { sourceScopeDependencies } from './dependencies.js';
+import { verifyParts } from './source-parts.js';
 import type { EvidenceDependency } from '../../infrastructure/publication/preconditions.js';
 import { committedSourceStates } from '../../infrastructure/sqlite/committed-evidence.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
@@ -18,10 +19,8 @@ import {
 } from '../../infrastructure/sqlite/source-identity.js';
 import { readSourceResidency } from '../../infrastructure/sqlite/source-lifecycle.js';
 import type { CheckedReadContext } from '../../recall/application/coverage-checker.js';
-import { sourcePartsOf } from '../../reflection/application/source-manifest.js';
 import {
   hashContent,
-  prepareEpisode,
   renderEpisodeText,
   renderToolExecution,
 } from '../../reflection/domain/content.js';
@@ -184,13 +183,15 @@ function eligibilityAt(
 }
 
 /**
- * When the substrate first held this source, which is the earliest vantage a knowledge-time read
- * can see it from. Acceptance is what made it knowable; the occurrence's own world time says when
- * the conversation happened, and the two are not the same question.
+ * When the substrate first held this occurrence, which is the earliest vantage a knowledge-time
+ * read can see it from.
+ *
+ * The occurrence's own acceptance, not its bytes': a source pushed again after a forget shares
+ * the archive row its predecessor wrote, so the archive stamp says when those bytes first
+ * arrived and nothing about when this occurrence did. World time is a third question again.
  */
 function knownFromRecord(record: SourceRecord): number | undefined {
-  const stamp = record.archivedAt ?? record.occurredAt;
-  const parsed = Date.parse(stamp);
+  const parsed = Date.parse(record.createdAt);
   return Number.isNaN(parsed) ? undefined : parsed;
 }
 
@@ -292,77 +293,6 @@ function partEvidence(row: ExperienceArchiveRow, part: SourcePartRecord): Source
   };
 }
 
-/**
- * The recorded parts against the derivation the writer used, whole.
- *
- * Every part the archive holds has to have a row, every row has to name a part the archive holds,
- * and each has to agree on its content, its attribution and its clock. Comparing only the rows
- * that exist proves a subset: a deleted row would leave the source certified on what was left,
- * and a rewritten role or occurrence would pass under an unchanged content hash. Each
- * disagreement is named at its own address, so two parts of one source stay two answers.
- */
-function verifyParts(
-  row: ExperienceArchiveRow,
-  record: SourceRecord,
-  stored: readonly SourcePartRecord[],
-  request: SourceReadRequest,
-): readonly EvidenceIssue[] {
-  const derived = sourcePartsOf(
-    prepareEpisode(row.payload, new Date(record.occurredAt)),
-    row.payload,
-    stored
-      .filter((part) => part.partKind === 'turn')
-      .sort((left, right) => left.ordinal - right.ordinal)
-      .map((part) => part.turnId ?? ''),
-  );
-  const key = (partKind: string, ordinal: number): string => `${partKind}:${String(ordinal)}`;
-  const byKey = new Map(derived.map((part) => [key(part.partKind, part.ordinal), part]));
-  const seen = new Set<string>();
-  const issues: EvidenceIssue[] = [];
-  const mismatch = (partKind: string, ordinal: number): void => {
-    issues.push(
-      issueOn(
-        partAddress(record.sourceId, partKind as SourcePartKind, ordinal),
-        'source_content',
-        'unresolved_mapping',
-        request.required,
-      ),
-    );
-  };
-
-  for (const part of stored) {
-    const identity = key(part.partKind, part.ordinal);
-    const match = byKey.get(identity);
-    if (seen.has(identity)) {
-      mismatch(part.partKind, part.ordinal);
-      continue;
-    }
-    seen.add(identity);
-    if (
-      match?.contentHash !== part.contentHash ||
-      (match.role ?? null) !== part.role ||
-      (match.occurredAt ?? null) !== part.occurredAt
-    ) {
-      mismatch(part.partKind, part.ordinal);
-      continue;
-    }
-    // A turn is the one part kind the projection gave a graph identity. Without the recorded id
-    // the address it was cited under cannot be resolved, so the mapping is not proved whole even
-    // though the bytes behind it still are.
-    if (part.partKind === 'turn' && part.turnId === null) {
-      mismatch(part.partKind, part.ordinal);
-    }
-  }
-  // A part the archive holds and the manifest never recorded is not addressable, and a source
-  // whose parts are incompletely recorded is not one this read can certify.
-  for (const part of derived) {
-    if (!seen.has(key(part.partKind, part.ordinal))) {
-      mismatch(part.partKind, part.ordinal);
-    }
-  }
-  return issues;
-}
-
 function evidenceOf(
   row: ExperienceArchiveRow,
   record: SourceRecord,
@@ -413,11 +343,28 @@ export function resolveSourceEvidence(
   }
   const residency = residencyOf(db, located.sourceId);
   const dependencies = sourceScopeDependencies(db, located.sourceId);
-  // What the substrate did not hold at the requested vantage is a certified absence there, not
-  // content to serve under an earlier date.
   const knownFrom = knownFromRecord(record);
   const { knownAt } = request.context.mode;
-  if (knownAt !== undefined && (knownFrom === undefined || knownFrom > knownAt.getTime())) {
+  if (knownAt !== undefined && knownFrom === undefined) {
+    // An unreadable acceptance clock says nothing about whether the source was there then.
+    // Unknown availability is a limitation, not an absence.
+    return {
+      residency,
+      issues: [
+        {
+          address,
+          field: 'source_clocks',
+          reason: 'unsupported_history',
+          historyReason: 'not_recorded',
+          required: request.required,
+        },
+      ],
+      dependencies,
+    };
+  }
+  // What the substrate did not hold at the requested vantage is a certified absence there, not
+  // content to serve under an earlier date.
+  if (knownAt !== undefined && knownFrom !== undefined && knownFrom > knownAt.getTime()) {
     return {
       residency,
       issues: [issueOn(address, 'source_content', 'not_found', request.required)],
