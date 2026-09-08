@@ -73,9 +73,56 @@ describe('merge apply recovery', () => {
       logger,
     });
 
-    expect(outcome).toEqual({ status: 'settled', operationId: 'pair-d' });
+    expect(outcome).toEqual({
+      status: 'settled',
+      operationId: 'pair-d',
+      result: { merged: true },
+    });
     expect(recover).toHaveBeenCalledTimes(1);
     expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates a pairing invariant raised while reconciling an uncertain commit', async () => {
+    const failure = new PublicationInvariantError('pairing_mismatch');
+
+    await expect(
+      applyMergeWithRecovery({
+        operationId: 'merge',
+        attempt: () => Promise.reject(new PublicationPendingError('merge', new Error('uncertain'))),
+        coordinator: coordinator({
+          hasPending: () => true,
+          recover: () => Promise.reject(failure),
+        }),
+        logger,
+      }),
+    ).rejects.toBe(failure);
+  });
+
+  it('settles on the receipt another actor left behind', async () => {
+    const outcome = await applyMergeWithRecovery({
+      operationId: 'pair-elsewhere',
+      attempt: () =>
+        Promise.reject(new PublicationPendingError('pair-elsewhere', new Error('lost'))),
+      coordinator: coordinator({ outcomeOf: () => acknowledged('pair-elsewhere') }),
+      logger,
+    });
+
+    expect(outcome).toEqual({
+      status: 'settled',
+      operationId: 'pair-elsewhere',
+      result: { merged: true },
+    });
+  });
+
+  it('stops rather than guess at an operation whose outcome it cannot read', async () => {
+    const outcome = await applyMergeWithRecovery({
+      operationId: 'pair-unknown',
+      attempt: () => Promise.reject(new PublicationPendingError('pair-unknown', new Error('lost'))),
+      coordinator: coordinator({}),
+      logger,
+    });
+
+    expect(outcome).toEqual({ status: 'halted', reason: 'uncertain_commit_unresolved' });
   });
 
   it('counts an uncertain commit that never landed as a failed pair', async () => {

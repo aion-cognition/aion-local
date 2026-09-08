@@ -214,6 +214,17 @@ export class PublicationCoordinator {
     return coordinatorControl(this.#options.db).pendingOperationId !== null;
   }
 
+  /**
+   * What the substrate durably records about one operation, without acquiring the guard or
+   * recovering anything. A caller that lost its own commit response needs this to tell an
+   * operation another actor already settled from one that never landed.
+   */
+  outcomeOf(operationId: string): PublicationOutcome | undefined {
+    this.#ready();
+    const record = publicationRecord(this.#options.db, operationId);
+    return record === undefined ? undefined : publicationOutcome(record);
+  }
+
   /** No lock acquisition or recovery: pending publications are disclosed immediately. */
   async checkpoint(): Promise<CheckpointResult> {
     if (!this.#initialized) {

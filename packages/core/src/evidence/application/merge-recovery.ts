@@ -4,7 +4,7 @@ import {
   type PublicationUnavailable,
   publicationFailure,
 } from '../../infrastructure/publication/errors.js';
-import type { PublicationOutcome } from '../../infrastructure/publication/types.js';
+import type { JsonValue, PublicationOutcome } from '../../infrastructure/publication/types.js';
 
 /**
  * What happens to a batch when one merge cannot be applied.
@@ -24,6 +24,12 @@ import type { PublicationOutcome } from '../../infrastructure/publication/types.
 export type MergeCoordinator = {
   hasPending(): boolean;
   recover(): Promise<PublicationOutcome | undefined>;
+  /**
+   * What the substrate durably records about one operation. An empty pending slot proves neither
+   * rollback nor settlement: another actor may have recovered the same operation first, and the
+   * receipt it left is the only thing that says which way it went.
+   */
+  outcomeOf?(operationId: string): PublicationOutcome | undefined;
 };
 
 export type MergeRecoveryInput<T> = {
@@ -36,8 +42,16 @@ export type MergeRecoveryInput<T> = {
 
 export type MergeRecoveryOutcome<T> =
   | { readonly status: 'applied'; readonly value: T }
-  /** An earlier attempt's commit, proved by its receipt. It counts once and is not retried. */
-  | { readonly status: 'settled'; readonly operationId: string }
+  /**
+   * An earlier attempt's commit, proved by its receipt. It counts once and is not retried. The
+   * result the receipt carries travels with it: a receipt says an operation landed, not that a
+   * merge did.
+   */
+  | {
+      readonly status: 'settled';
+      readonly operationId: string;
+      readonly result: JsonValue | undefined;
+    }
   /** Nothing landed. The pair keeps its obligation and the batch goes on. */
   | { readonly status: 'failed'; readonly reason: string }
   /** An uncertain publication the coordinator has not settled. The batch stops here. */
@@ -56,20 +70,45 @@ async function reconcile<T>(
   if (coordinator === undefined) {
     return { status: 'halted', reason: 'uncertain_commit_without_coordinator' };
   }
-  let outcome: PublicationOutcome | undefined;
+  let recovered: PublicationOutcome | undefined;
   try {
-    outcome = await coordinator.recover();
+    recovered = await coordinator.recover();
   } catch (err) {
+    // A protocol or pairing violation raised while recovering says the substrate is not in a
+    // state to write at all. Recording it as an ordinary halt would bury the invariant.
+    if (err instanceof PublicationInvariantError) {
+      throw err;
+    }
     input.logger.warn({ err, operationId: input.operationId }, 'merge recovery could not settle');
     return { status: 'halted', reason: 'recovery_failed' };
   }
-  if (coordinator.hasPending()) {
-    return { status: 'halted', reason: 'publication_still_pending' };
+  const settled = durableOutcome(coordinator, recovered, input.operationId);
+  if (settled?.status === 'acknowledged') {
+    return { status: 'settled', operationId: input.operationId, result: settled.result };
   }
-  if (outcome?.status === 'acknowledged' && outcome.operationId === input.operationId) {
-    return { status: 'settled', operationId: input.operationId };
+  if (settled !== undefined) {
+    return { status: 'failed', reason };
   }
-  return { status: 'failed', reason };
+  // An empty pending slot proves neither rollback nor settlement, so a batch that cannot read
+  // its own operation's outcome stops rather than counting one it cannot see.
+  return coordinator.hasPending()
+    ? { status: 'halted', reason: 'publication_still_pending' }
+    : { status: 'halted', reason: 'uncertain_commit_unresolved' };
+}
+
+/**
+ * What the substrate says about this operation: what this recovery pass returned, or, when
+ * another actor got there first, the receipt it left behind.
+ */
+function durableOutcome(
+  coordinator: MergeCoordinator,
+  recovered: PublicationOutcome | undefined,
+  operationId: string,
+): PublicationOutcome | undefined {
+  if (recovered?.operationId === operationId) {
+    return recovered;
+  }
+  return coordinator.outcomeOf?.(operationId);
 }
 
 /**
