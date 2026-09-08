@@ -75,6 +75,12 @@ export function withCurrency(reference?: Date): ReadMode {
   return reference === undefined ? {} : { reference };
 }
 
+/**
+ * The three below construct an interval and promise nothing about coverage. Whether the
+ * substrate can answer for the moment they name is a separate question, and an application
+ * entry point asks it through the coverage checker before it reads. Calling one of these
+ * directly in such an entry point would skip that question rather than answer it.
+ */
 export function asOf(validAt: Date): ReadMode {
   return { validAt };
 }
