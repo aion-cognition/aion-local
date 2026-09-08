@@ -1,0 +1,164 @@
+import type { Driver } from 'neo4j-driver';
+
+import { readRelationScope } from './dependencies.js';
+import { loadEntityDedupDetails } from '../../infrastructure/graph/entity-dedup-queries.js';
+import { findClaimSubjects, type ClaimSubject } from '../../infrastructure/graph/subject-family.js';
+import type { EvidenceDependency } from '../../infrastructure/publication/preconditions.js';
+import {
+  committedIncidenceForNode,
+  committedIncidenceForSource,
+} from '../../infrastructure/sqlite/committed-evidence.js';
+import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import type { CheckedReadContext } from '../../recall/application/coverage-checker.js';
+import { evidenceRequestKey, idAddress, type EvidenceAddress } from '../domain/address.js';
+import type { RequestBudget } from '../domain/budget.js';
+import { evidenceResult, type EvidenceIssue, type EvidenceResult } from '../domain/result.js';
+import { durableRoleScope } from '../domain/scopes.js';
+
+/**
+ * Which entities a claim names, and how sure the substrate is that the list is whole.
+ *
+ * The graph reaches subjects by walking from the claim through its capture to the entities that
+ * capture mentions, so an evicted capture breaks the walk without any entity having changed.
+ * The durable incidence answers the same question from records that outlive the projection. An
+ * empty answer from either one is only an empty subject list when a census says the scope was
+ * counted: otherwise nobody has looked, which is a different thing to tell a judge.
+ */
+
+export type SubjectInput = {
+  readonly claimIds: readonly string[];
+  readonly context: CheckedReadContext;
+  readonly budget: RequestBudget;
+};
+
+export type SubjectReading = {
+  readonly results: ReadonlyMap<string, EvidenceResult<readonly ClaimSubject[]>>;
+  readonly issues: readonly EvidenceIssue[];
+  readonly dependencies: readonly EvidenceDependency[];
+};
+
+type SubjectDeps = {
+  readonly driver: Driver;
+  readonly db: SqliteHandle;
+};
+
+function issueOn(
+  address: EvidenceAddress,
+  field: EvidenceIssue['field'],
+  reason: Exclude<EvidenceIssue['reason'], 'unsupported_history'>,
+  required: boolean,
+): EvidenceIssue {
+  return { address, field, reason, required };
+}
+
+/** Entities the records say this claim's sources mention, with the source that carries each. */
+function mentionedEntities(
+  db: SqliteHandle,
+  claimId: string,
+): readonly { readonly entityId: string; readonly sourceId: string }[] {
+  const sources = committedIncidenceForNode(db, claimId, 'extraction');
+  return sources.flatMap((source) =>
+    committedIncidenceForSource(db, source.sourceId)
+      .filter((row) => row.role === 'mention')
+      .map((row) => ({ entityId: row.nodeId, sourceId: source.sourceId })),
+  );
+}
+
+async function subjectsFromRecords(
+  deps: SubjectDeps,
+  claimId: string,
+): Promise<readonly ClaimSubject[]> {
+  const mentions = mentionedEntities(deps.db, claimId);
+  if (mentions.length === 0) {
+    return [];
+  }
+  const details = await loadEntityDedupDetails(
+    deps.driver,
+    mentions.map((mention) => mention.entityId),
+  );
+  const byId = new Map(details.map((detail) => [detail.id, detail]));
+  return mentions.flatMap((mention) => {
+    const detail = byId.get(mention.entityId);
+    if (detail === undefined) {
+      return [];
+    }
+    const gloss = detail.description.trim();
+    return [
+      {
+        entityId: detail.id,
+        name: detail.name,
+        nameNorm: detail.nameNorm,
+        sourceEpisodeId: mention.sourceId,
+        ...(gloss.length === 0 ? {} : { gloss }),
+      },
+    ];
+  });
+}
+
+export async function readClaimSubjects(
+  deps: SubjectDeps,
+  input: SubjectInput,
+): Promise<SubjectReading> {
+  const results = new Map<string, EvidenceResult<readonly ClaimSubject[]>>();
+  const issues: EvidenceIssue[] = [];
+  const dependencies: EvidenceDependency[] = [];
+
+  for (const claimId of [...new Set(input.claimIds)]) {
+    const address = idAddress(claimId);
+    if (input.budget.chargeIds(1) !== undefined) {
+      const issue = issueOn(address, 'interpretation_text', 'budget_limit', false);
+      issues.push(issue);
+      results.set(
+        evidenceRequestKey(address),
+        evidenceResult({ address, residency: 'resident', issues: [issue] }),
+      );
+      continue;
+    }
+
+    let subjects: readonly ClaimSubject[];
+    try {
+      subjects = await findClaimSubjects(deps.driver, claimId);
+      if (subjects.length === 0) {
+        subjects = await subjectsFromRecords(deps, claimId);
+      }
+    } catch {
+      const issue = issueOn(address, 'interpretation_text', 'store_unavailable', true);
+      issues.push(issue);
+      results.set(
+        evidenceRequestKey(address),
+        evidenceResult({ address, residency: 'resident', issues: [issue] }),
+      );
+      continue;
+    }
+
+    const claimIssues: EvidenceIssue[] = [];
+    const scope = readRelationScope(deps.db, {
+      kind: 'node',
+      endpointId: claimId,
+      scope: durableRoleScope('mention', 'out'),
+      empty: subjects.length === 0,
+    });
+    if (scope.status === 'verified') {
+      dependencies.push(scope.dependency);
+    } else {
+      // An empty list nobody counted is unknown. Handing a judge an empty subject set on that
+      // reading would let a missing census pass for a claim that names nobody.
+      claimIssues.push(issueOn(address, 'ownership', 'unverified_scope', subjects.length === 0));
+    }
+    if (input.budget.chargeRelationRows(subjects.length) !== undefined) {
+      claimIssues.push(issueOn(address, 'ownership', 'budget_limit', false));
+    }
+    issues.push(...claimIssues);
+    results.set(
+      evidenceRequestKey(address),
+      evidenceResult({
+        address,
+        residency: 'resident',
+        issues: claimIssues,
+        value: subjects,
+      }),
+    );
+  }
+
+  return { results, issues, dependencies };
+}
