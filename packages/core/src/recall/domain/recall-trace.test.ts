@@ -167,3 +167,38 @@ describe('reading emitted against what was offered', () => {
     expect(emittedWithinCandidates(trace)).toBe(false);
   });
 });
+
+describe('the admission record the trace carries', () => {
+  it('keeps the gate decision per candidate, with its evidence', () => {
+    const decided: AdmissionReport = {
+      ...ADMISSION,
+      decisions: [
+        { id: 'a', reason: 'below_floor', measurements: ['vector 0.20'], relevance: 0.2 },
+        { id: 'b', reason: 'unmeasured_arrival', measurements: [], relevance: 0, activation: 0.29 },
+      ],
+      decisionsTruncated: false,
+    };
+    const trace = buildRecallTrace(input({ admission: decided }));
+
+    expect(trace.admission.decisions?.map((decision) => [decision.id, decision.reason])).toEqual([
+      ['a', 'below_floor'],
+      ['b', 'unmeasured_arrival'],
+    ]);
+    expect(trace.admission.decisionsTruncated).toBe(false);
+  });
+
+  it('tells two runs apart when only which candidate met which rule changed', () => {
+    const swap = (first: string, second: string): AdmissionReport => ({
+      ...ADMISSION,
+      decisions: [
+        { id: first, reason: 'below_floor', measurements: ['vector 0.20'], relevance: 0.2 },
+        { id: second, reason: 'unmeasured_arrival', measurements: [], relevance: 0 },
+      ],
+      decisionsTruncated: false,
+    });
+
+    expect(buildRecallTrace(input({ admission: swap('a', 'b') }))).not.toEqual(
+      buildRecallTrace(input({ admission: swap('b', 'a') })),
+    );
+  });
+});

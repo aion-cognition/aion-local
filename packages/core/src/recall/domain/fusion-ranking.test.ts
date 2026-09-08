@@ -204,6 +204,19 @@ describe('near-duplicate crowding cap', () => {
     expect(result.admission.droppedDuplicateContent).toBe(0);
   });
 
+  it('names the members the cap removed, after the gate that had already admitted them', () => {
+    const result = fuse([list('vector', BURST_CLUSTER)], RRF);
+    const decisions = result.admission.decisions ?? [];
+    const capped = decisions.filter((decision) => decision.reason === 'cluster_cap');
+
+    expect(capped).toHaveLength(18);
+    // The gate admitted every one of them first, so each carries the rule that let it in.
+    expect(capped.every((decision) => decision.rule !== undefined)).toBe(true);
+    // Order: every gate decision, then the removals the cap made afterwards.
+    expect(decisions.slice(0, 20).every((decision) => decision.reason === 'admitted')).toBe(true);
+    expect(result.admission.decisionsTruncated).toBe(false);
+  });
+
   it('honors a configured cap other than the default', () => {
     expect(items([list('vector', BURST_CLUSTER)], { ...RRF, clusterCap: 1 })).toHaveLength(1);
     expect(items([list('vector', BURST_CLUSTER)], { ...RRF, clusterCap: 5 })).toHaveLength(5);

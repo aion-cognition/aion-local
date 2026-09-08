@@ -1,8 +1,12 @@
 import type { Rationale } from '@aion/protocol';
 
 import {
+  ADMISSION_DECISION_CAP,
   admissionEvidence,
+  describeMeasurements,
   wasMeasured,
+  type AdmissionDecision,
+  type AdmissionDecisionReason,
   type AdmissionEvidence,
   type AdmissionPolicy,
   type AdmissionReport,
@@ -311,6 +315,7 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
   }
 
   const items: FusedItem[] = [];
+  const decisions: AdmissionDecision[] = [];
   const methodStats = new Map<Rationale['method'], MethodLegStat>();
   let droppedBelowFloor = 0;
   let droppedUnmeasured = 0;
@@ -326,20 +331,42 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
       // neither measures anything against the query. The third is the one worth alarming on:
       // a node the spread reached on its own, whose content vector is still pending, so the
       // traversal leg is contributing reach that no floor can ever judge.
+      const rejected = (reason: AdmissionDecisionReason): void => {
+        decisions.push({
+          id: entry.best.id,
+          reason,
+          measurements: describeMeasurements(entry.evidence),
+          relevance: entry.relevance,
+          ...(entry.activation === undefined ? {} : { activation: entry.activation }),
+        });
+      };
       if (wasMeasured(entry.evidence)) {
         droppedBelowFloor += 1;
+        rejected('below_floor');
         continue;
       }
       droppedUnmeasured += 1;
       if (entry.activation !== undefined) {
         droppedUnmeasuredArrival += 1;
+        rejected('unmeasured_arrival');
+        continue;
       }
+      rejected('unmeasured');
       continue;
     }
     anchored = true;
     if (evidence.rule === 'typed_admission') {
       typedAdmitted += 1;
     }
+    decisions.push({
+      id: entry.best.id,
+      reason: 'admitted',
+      measurements: describeMeasurements(entry.evidence),
+      relevance: entry.relevance,
+      ...(entry.activation === undefined ? {} : { activation: entry.activation }),
+      rule: evidence.rule,
+      score: evidence.score,
+    });
     const superseded = entry.best.currency === 'superseded';
     const ranked =
       entry.score *
@@ -390,6 +417,23 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
   const ordered =
     options.reranker === 'mmr' ? mmrOrder(capped, options.mmrLambda, options.vectors) : capped;
 
+  // The cluster cap runs after the gate, so its removals join the record last, in the order the
+  // ranked list held them.
+  const kept = new Set(capped.map((item) => item.id));
+  for (const item of items) {
+    if (!kept.has(item.id)) {
+      decisions.push({
+        id: item.id,
+        reason: 'cluster_cap',
+        measurements: describeMeasurements(item.evidence ?? []),
+        relevance: item.relevance,
+        ...(item.admittedBy === undefined
+          ? {}
+          : { rule: item.admittedBy.rule, score: item.admittedBy.score }),
+      });
+    }
+  }
+
   return {
     items: ordered,
     admission: {
@@ -405,6 +449,8 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
       droppedNearDuplicate: items.length - capped.length,
       anchored,
       typedAdmitted,
+      decisions: decisions.slice(0, ADMISSION_DECISION_CAP),
+      decisionsTruncated: decisions.length > ADMISSION_DECISION_CAP,
     },
     methodStats: Object.fromEntries(methodStats),
   };

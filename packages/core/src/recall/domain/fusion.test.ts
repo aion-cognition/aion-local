@@ -315,7 +315,8 @@ describe('the admission report', () => {
 
     // The twin says what `kept` says and is admitted beside it: which of the two a reader needs
     // is decided later, by the fold, against standing and the substrate's own key.
-    expect(result.admission).toEqual({
+    const { decisions, decisionsTruncated, ...counters } = result.admission;
+    expect(counters).toEqual({
       policy: CALIBRATED,
       considered: 4,
       admitted: 2,
@@ -327,6 +328,20 @@ describe('the admission report', () => {
       anchored: true,
       typedAdmitted: 0,
     });
+
+    // The same four candidates, said one at a time: the counters cannot name which of them the
+    // floor turned away and which nothing measured at all.
+    expect(decisions?.map((decision) => [decision.id, decision.reason])).toEqual([
+      ['kept', 'admitted'],
+      ['weak', 'below_floor'],
+      ['twin', 'admitted'],
+      ['reached', 'unmeasured_arrival'],
+    ]);
+    expect(decisionsTruncated).toBe(false);
+    expect(decisions?.find((decision) => decision.id === 'reached')?.activation).toBe(0.2);
+    expect(decisions?.find((decision) => decision.id === 'weak')?.measurements).toEqual([
+      'vector 0.30',
+    ]);
   });
 
   it('separates an empty substrate from a floor that rejected everything', () => {

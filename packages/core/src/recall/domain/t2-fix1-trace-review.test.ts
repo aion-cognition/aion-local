@@ -24,6 +24,16 @@ function run(measuredId: string): FusionResult {
   );
 }
 
+/** The counters alone, which is all the report held when this boundary was first measured. */
+function aggregateOf(
+  result: FusionResult,
+): Omit<FusionResult['admission'], 'decisions' | 'decisionsTruncated'> {
+  const counters = { ...result.admission };
+  delete counters.decisions;
+  delete counters.decisionsTruncated;
+  return counters;
+}
+
 function traceOf(result: FusionResult): RecallTrace {
   return buildRecallTrace({
     sessionId: 'reader',
@@ -63,7 +73,9 @@ it('distinguishes which activation arrival was below floor and which was unmeasu
     droppedUnmeasured: 1,
     droppedUnmeasuredArrival: 1,
   });
-  expect(measuredA.admission).toEqual(measuredB.admission);
+  // The premise, unchanged: the aggregate counters cannot tell the two runs apart. Only the
+  // per-candidate record the fix adds is excluded, since that is the thing under test.
+  expect(aggregateOf(measuredA)).toEqual(aggregateOf(measuredB));
   // Only the arrival evidence swaps. A comparison must retain the distinct rejection reasons.
   expect(traceOf(measuredA)).not.toEqual(traceOf(measuredB));
 });

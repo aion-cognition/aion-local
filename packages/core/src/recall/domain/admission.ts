@@ -119,6 +119,12 @@ export type AdmissionReport = {
    * would have refused.
    */
   readonly typedAdmitted: number;
+  /**
+   * What the gate decided per candidate, in the order it decided, cut at
+   * `ADMISSION_DECISION_CAP`. Absent on a report built by hand rather than by the gate.
+   */
+  readonly decisions?: readonly AdmissionDecision[];
+  readonly decisionsTruncated?: boolean;
 };
 
 /**
@@ -167,6 +173,50 @@ function describe(measurement: Measurement): string {
   }
   return `${measurement.method} ${measurement.relevance.toFixed(2)}`;
 }
+
+/** The measurements as a reader of a decision sees them, in the words the pack already uses. */
+export function describeMeasurements(measurements: readonly Measurement[]): readonly string[] {
+  return measurements.map(describe);
+}
+
+export const ADMISSION_DECISIONS = [
+  'admitted',
+  /** Something measured it and the measurement fell short of the floor it was judged against. */
+  'below_floor',
+  /** Nothing measured it against the query, so no floor ever judged it. */
+  'unmeasured',
+  /** Unmeasured and reached by the spread alone, which is the one worth alarming on. */
+  'unmeasured_arrival',
+  /** Admitted, then bumped from a near-identical cluster that had already filled its cap. */
+  'cluster_cap',
+] as const;
+
+export type AdmissionDecisionReason = (typeof ADMISSION_DECISIONS)[number];
+
+/**
+ * What the gate decided about one candidate and the evidence it decided on.
+ *
+ * The counters say how many candidates each rule turned away; they cannot say which candidate
+ * met which rule, and two runs whose arrivals swapped roles produce identical counters. Every
+ * field here is a value the gate already computed, so recording it adds no measurement and no
+ * query.
+ */
+export type AdmissionDecision = {
+  readonly id: string;
+  readonly reason: AdmissionDecisionReason;
+  /** Each measurement the gate weighed, rendered the way a pack renders one. */
+  readonly measurements: readonly string[];
+  /** The strongest measurement the merge held for the candidate, on its own scale. */
+  readonly relevance: number;
+  /** What the spread accumulated for it, absent on a candidate no traversal reached. */
+  readonly activation?: number;
+  /** The rule that let it in, and the score that rule read. Admissions only. */
+  readonly rule?: AdmissionRule;
+  readonly score?: number;
+};
+
+/** Decisions past this are cut from a report. The counters stay whole. */
+export const ADMISSION_DECISION_CAP = 200;
 
 /**
  * Three ways in on measurement alone, and a rank is not one of them:
