@@ -96,6 +96,13 @@ export type CommittedIncidence = {
   readonly currency: 'open' | 'closed';
   readonly linkId: string;
   readonly linkVersion: number;
+  /**
+   * The interval the selected version recorded for itself, on a historical read. Present only
+   * where the version stated one: a reader asking about a past moment needs the end of a link's
+   * own interval, which the current projection cannot supply once a newer version exists.
+   */
+  readonly validUntil?: string;
+  readonly txUntil?: string;
 };
 
 type IncidenceRowData = {
@@ -281,15 +288,32 @@ export function committedIncidenceForSourceAt(
   return rows.map(toHistoricalIncidence);
 }
 
-/** Currency as the version recorded it, falling back to what the projection still says. */
+function statedStamp(value: unknown): string | undefined {
+  return typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? value : undefined;
+}
+
+/**
+ * The state the selected version recorded, and nothing the present row says about now.
+ *
+ * The projection's currency describes the link today. Borrowing it for a past vantage would
+ * report a link that was open then as closed because it is closed now, so a version that stated
+ * no currency is read as open and the row's own value is left where it belongs.
+ */
 function toHistoricalIncidence(
   row: IncidenceRowData & { recorded_values_json: string },
 ): CommittedIncidence {
-  const stated = JSON.parse(row.recorded_values_json) as { currency?: unknown };
+  const stated = JSON.parse(row.recorded_values_json) as {
+    currency?: unknown;
+    valid_until?: unknown;
+    tx_until?: unknown;
+  };
+  const validUntil = statedStamp(stated.valid_until);
+  const txUntil = statedStamp(stated.tx_until);
   return {
     ...toIncidence(row),
-    currency:
-      stated.currency === 'closed' || stated.currency === 'open' ? stated.currency : row.currency,
+    currency: stated.currency === 'closed' ? 'closed' : 'open',
+    ...(validUntil === undefined ? {} : { validUntil }),
+    ...(txUntil === undefined ? {} : { txUntil }),
   };
 }
 

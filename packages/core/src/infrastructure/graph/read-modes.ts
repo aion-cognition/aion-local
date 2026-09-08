@@ -107,7 +107,12 @@ function assertIdentifier(name: string, value: string): void {
 }
 
 /** What a relationship records about its own two clocks: when it was written, and when it left. */
-export const EDGE_PROPERTIES = { createdAt: 'created_at', txUntil: BITEMPORAL_PROPERTIES.txUntil };
+export const EDGE_PROPERTIES = {
+  createdAt: 'created_at',
+  txUntil: BITEMPORAL_PROPERTIES.txUntil,
+  validFrom: BITEMPORAL_PROPERTIES.validFrom,
+  validUntil: BITEMPORAL_PROPERTIES.validUntil,
+};
 
 export type EdgeFragment = {
   readonly where: string;
@@ -115,28 +120,47 @@ export type EdgeFragment = {
 };
 
 /**
- * Whether a traversed relationship was there at the read's own vantage.
+ * Whether a traversed relationship was there at the read's own vantage, on both timelines.
  *
  * Node predicates alone do not answer this: three nodes that all existed in January say nothing
- * about an edge written in September, and a join filtered on the nodes returns it anyway. A
- * knowledge-time read walks only relationships the substrate had recorded by then and had not
- * retracted by then. An edge with no recorded creation time cannot prove it was there, so it is
- * not walked rather than assumed; a default read walks everything, as it always has.
+ * about an edge written in September, and a join filtered on the nodes returns it anyway. Each
+ * axis asks its own question. Knowledge time asks what the substrate had recorded by then and
+ * had not retracted by then, and an edge with no recorded creation time cannot prove it was
+ * there, so it is not walked rather than assumed. World time asks what held then, and a
+ * relationship closed at ten is not part of an eleven o'clock answer whether or not the read
+ * pinned a knowledge vantage as well. A relationship carrying no world-time start is open at the
+ * start, because its beginning is its capture's and inventing one would drop every ordinary edge.
+ *
+ * A default read walks everything, as it always has.
  */
 export function edgeModeFragment(mode: ReadMode, edgeVar: string, prefix = 'rme'): EdgeFragment {
   assertIdentifier('edgeVar', edgeVar);
   assertIdentifier('prefix', prefix);
-  if (mode.knownAt === undefined) {
-    return { where: 'true', parameters: {} };
-  }
-  const knownAtParam = `${prefix}_edge_known_at`;
-  return {
-    where:
+  const predicates: string[] = [];
+  const parameters: Record<string, unknown> = {};
+  if (mode.knownAt !== undefined) {
+    const knownAtParam = `${prefix}_edge_known_at`;
+    parameters[knownAtParam] = toGraphDateTime(mode.knownAt);
+    predicates.push(
       `(${edgeVar}.${EDGE_PROPERTIES.createdAt} IS NOT NULL` +
-      ` AND ${edgeVar}.${EDGE_PROPERTIES.createdAt} <= $${knownAtParam}` +
-      ` AND (${edgeVar}.${EDGE_PROPERTIES.txUntil} IS NULL` +
-      ` OR ${edgeVar}.${EDGE_PROPERTIES.txUntil} > $${knownAtParam}))`,
-    parameters: { [knownAtParam]: toGraphDateTime(mode.knownAt) },
+        ` AND ${edgeVar}.${EDGE_PROPERTIES.createdAt} <= $${knownAtParam}` +
+        ` AND (${edgeVar}.${EDGE_PROPERTIES.txUntil} IS NULL` +
+        ` OR ${edgeVar}.${EDGE_PROPERTIES.txUntil} > $${knownAtParam}))`,
+    );
+  }
+  if (mode.validAt !== undefined) {
+    const validAtParam = `${prefix}_edge_valid_at`;
+    parameters[validAtParam] = toGraphDateTime(mode.validAt);
+    predicates.push(
+      `((${edgeVar}.${EDGE_PROPERTIES.validFrom} IS NULL` +
+        ` OR ${edgeVar}.${EDGE_PROPERTIES.validFrom} <= $${validAtParam})` +
+        ` AND (${edgeVar}.${EDGE_PROPERTIES.validUntil} IS NULL` +
+        ` OR ${edgeVar}.${EDGE_PROPERTIES.validUntil} > $${validAtParam}))`,
+    );
+  }
+  return {
+    where: predicates.length === 0 ? 'true' : predicates.join(' AND '),
+    parameters,
   };
 }
 

@@ -61,6 +61,26 @@ function withoutGloss(subject: ClaimSubject): ClaimSubject {
   return gloss === undefined ? subject : rest;
 }
 
+/** Whether a recorded end had already passed at the vantage, which an absent one never has. */
+function stillOpenAt(stamp: string | undefined, at: Date): boolean {
+  return stamp === undefined || Date.parse(stamp) > at.getTime();
+}
+
+/**
+ * Whether an incidence row was a live link at the vantage it was selected for.
+ *
+ * The archive path answers the same question the graph join does, so it applies the same policy:
+ * a retracted link is not a relationship, and a version that recorded its own close is retracted
+ * from that moment. Handing back a closed row because the graph could no longer be walked would
+ * turn a correct absence into a positive answer.
+ */
+function liveAt(row: CommittedIncidence, at: Date | undefined): boolean {
+  if (row.currency === 'closed') {
+    return false;
+  }
+  return at === undefined || (stillOpenAt(row.validUntil, at) && stillOpenAt(row.txUntil, at));
+}
+
 /**
  * The sources a claim was extracted from, at the vantage the request was checked against. The
  * present rows answer for now; an earlier question is answered from the version chain, because
@@ -71,9 +91,11 @@ function extractionSources(
   claimId: string,
   knownAt: Date | undefined,
 ): readonly CommittedIncidence[] {
-  return knownAt === undefined
-    ? committedIncidenceForNode(db, claimId, 'extraction')
-    : committedIncidenceForNodesAt(db, [claimId], knownAt, 'extraction');
+  const rows =
+    knownAt === undefined
+      ? committedIncidenceForNode(db, claimId, 'extraction')
+      : committedIncidenceForNodesAt(db, [claimId], knownAt, 'extraction');
+  return rows.filter((row) => liveAt(row, knownAt));
 }
 
 /** Entities the records say this claim's sources mention, with the source that carries each. */
@@ -88,7 +110,7 @@ function mentionedEntities(
       ? committedIncidenceForSource(db, source.sourceId)
       : committedIncidenceForSourceAt(db, source.sourceId, knownAt)
     )
-      .filter((row) => row.role === 'mention')
+      .filter((row) => row.role === 'mention' && liveAt(row, knownAt))
       .map((row) => ({ entityId: row.nodeId, sourceId: source.sourceId })),
   );
 }

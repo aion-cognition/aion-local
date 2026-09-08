@@ -4,20 +4,34 @@ import { join } from 'node:path';
 import { beforeAll, afterAll, expect, it } from 'vitest';
 
 import { runGraphMigrations } from './migrations.js';
-import { knewAt } from './read-modes.js';
+import { asOf, knewAt } from './read-modes.js';
 import { findClaimSubjects } from './subject-family.js';
 import {
   startRehearsalSubstrate,
   stopRehearsalSubstrate,
   type RehearsalSubstrate,
 } from './test-support/consolidation-rehearsal.fixture.js';
+import { retireEpisodeProjection } from './test-support/graph-queries.fixture.js';
+import { EvidenceResolver } from '../../evidence/application/resolver.js';
+import {
+  checkedContext,
+  commitIncidence,
+  commitSourceState,
+  establishScope,
+  seedSource,
+} from '../../evidence/test-support/evidence.fixture.js';
 import { SqliteStore } from '../sqlite/database.js';
 
 /**
- * A question the present projection cannot answer: which entities a claim named at a moment
- * before the edge connecting them was written. All three nodes are older than the vantage and the
- * mention is not, so only the relationship's own clock separates the two answers.
+ * What the present projection cannot answer about a subject join: which entities a claim named
+ * before the edge connecting them was written, whether a relationship closed in world time is
+ * still walked, and whether the archive fallback hands back a mention the records retracted.
  */
+
+const EARLY = new Date('2026-09-08T08:00:00.000Z');
+const MID = new Date('2026-09-08T09:00:00.000Z');
+const LATER = new Date('2026-09-08T10:00:00.000Z');
+const AFTER = new Date('2026-09-08T11:00:00.000Z');
 
 let dir: string;
 let store: SqliteStore;
@@ -48,4 +62,91 @@ it('does not traverse a mention created after a historical subject-read vantage'
       knewAt(new Date('2026-09-08T09:00:00Z')),
     ),
   ).toEqual([]);
+});
+
+async function seedGraph(prefix: string) {
+  await substrate.harness.driver.executeQuery(
+    'CREATE (c:AionNode:Memory:Claim {id:$claim,text_norm:$norm + " result",valid_from:datetime($early),tx_from:datetime($early)}) CREATE (s:AionNode:Memory:Episode {id:$source,valid_from:datetime($early),tx_from:datetime($early)}) CREATE (e:AionNode:Memory:Entity {id:$entity,name:$norm,name_norm:$norm,valid_from:datetime($early),tx_from:datetime($early)}) CREATE (c)-[:EXTRACTED_FROM {created_at:datetime($early)}]->(s) CREATE (s)-[:MENTIONS {created_at:datetime($early),valid_until:datetime($later),tx_until:datetime($later)}]->(e)',
+    {
+      claim: `${prefix}-claim`,
+      source: `${prefix}-source`,
+      entity: `${prefix}-entity`,
+      // The uniqueness key on an entity's fold is real, so each case names its own subject
+      // rather than a second node claiming an identity the graph already holds.
+      norm: `${prefix}atlas`,
+      early: EARLY.toISOString(),
+      later: LATER.toISOString(),
+    },
+  );
+}
+it('applies the relationship world-time close on an as_of-only subject read', async () => {
+  await seedGraph('world');
+  expect(await findClaimSubjects(substrate.harness.driver, 'world-claim', asOf(MID))).toHaveLength(
+    1,
+  );
+  expect(await findClaimSubjects(substrate.harness.driver, 'world-claim', asOf(AFTER))).toEqual([]);
+});
+it('does not reintroduce a retracted mention through the historical archive fallback', async () => {
+  await seedGraph('fallback');
+  seedSource(store.db, {
+    sourceId: 'fallback-source',
+    sessionId: 'session',
+    identity: 'review',
+    content: { turns: [{ role: 'user', text: 'Atlas result' }] },
+    turnIds: ['fallback-turn'],
+    now: EARLY,
+  });
+  for (const [node, role] of [
+    ['fallback-claim', 'extraction'],
+    ['fallback-entity', 'mention'],
+  ]) {
+    commitIncidence(store.db, {
+      sourceId: 'fallback-source',
+      nodeId: node!,
+      role: role!,
+      operationId: `incidence-${role}`,
+      at: EARLY,
+    });
+  }
+  establishScope(store.db, 'fallback-claim', 'sqlite:extraction:out', EARLY);
+  establishScope(store.db, 'fallback-source', 'sqlite:mention:out', EARLY);
+  commitSourceState(store.db, {
+    sourceId: 'fallback-source',
+    stateKind: 'unforgotten',
+    operationId: 'retract-mention',
+    at: LATER,
+  });
+  store.db
+    .prepare(
+      "INSERT INTO evidence_link_versions(link_id,version,prev_version,state,recorded_values_json,temporal_proof_json,observed_at,operation_key,operation_id,known_from,observed_ack_at) VALUES (?,2,1,'closed',?,'{}',?,'retract-mention','retract-mention',?,?)",
+    )
+    .run(
+      'fallback-source:fallback-entity:mention',
+      JSON.stringify({
+        currency: 'closed',
+        valid_until: LATER.toISOString(),
+        tx_until: LATER.toISOString(),
+      }),
+      LATER.toISOString(),
+      LATER.toISOString(),
+      LATER.toISOString(),
+    );
+  store.db
+    .prepare("UPDATE source_incidence SET currency='closed',link_version=2 WHERE role='mention'")
+    .run();
+  expect(
+    await findClaimSubjects(substrate.harness.driver, 'fallback-claim', knewAt(AFTER)),
+  ).toEqual([]);
+  await retireEpisodeProjection(substrate.harness.driver, 'fallback-source');
+  const r = new EvidenceResolver({
+    driver: substrate.harness.driver,
+    db: store.db,
+    logger: { warn: () => undefined },
+  });
+  const read = async (at: Date) =>
+    (await r.resolveSubjects(['fallback-claim'], checkedContext({ mode: knewAt(at) }))).results.get(
+      JSON.stringify(['id', 'fallback-claim']),
+    )?.value;
+  expect.soft(await read(MID)).toHaveLength(1);
+  expect.soft(await read(AFTER)).toEqual([]);
 });
