@@ -56,6 +56,10 @@ export class PublicationReadBarrier {
     }
   }
 
+  /**
+   * Validate with graph reads only. The guard transaction always rolls back, including on success;
+   * only the synchronous SQLite completion callback persists effects. Graph writes belong in a publication.
+   */
   async complete<T>(
     checkpoint: PublicationCheckpoint,
     validate: (context: PublicationContext) => Promise<boolean>,

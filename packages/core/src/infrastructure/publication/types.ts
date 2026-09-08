@@ -110,7 +110,10 @@ export type PublicationReceipt = {
   readonly resultDigest: string;
 };
 
-/** A verified read position also represents the empty, pre-publication guard. */
+/**
+ * A verified read position also represents the empty, pre-publication guard.
+ * Read completion persists SQLite effects only; its graph transaction validates reads and always rolls back.
+ */
 export type PublicationCheckpoint = Pick<
   PublicationReceipt,
   'substrateId' | 'protocolVersion' | 'sequence'

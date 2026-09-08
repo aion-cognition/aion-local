@@ -222,7 +222,7 @@ export class PublicationCoordinator {
     return this.#reads.checkpoint();
   }
 
-  /** The coverage checker and effect implementation remain owned by the caller. */
+  /** Caller validation reads the graph; completion persists SQLite effects only, then releases the graph lock by rollback. */
   async completeRead<T>(
     checkpoint: PublicationCheckpoint,
     validate: (context: PublicationContext) => Promise<boolean>,
