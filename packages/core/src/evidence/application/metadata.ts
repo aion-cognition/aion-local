@@ -5,17 +5,23 @@ import {
   fetchClaimProvenance,
   type ItemProvenance,
 } from '../../infrastructure/graph/claim-provenance-queries.js';
+import { isTimeTravel } from '../../infrastructure/graph/read-modes.js';
 import type { EvidenceDependency } from '../../infrastructure/publication/preconditions.js';
 import {
   committedIncidenceForNodes,
+  committedIncidenceForNodesAt,
   type CommittedIncidence,
 } from '../../infrastructure/sqlite/committed-evidence.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import {
+  listStatedLinksTo,
+  readStatedLinkValues,
+} from '../../infrastructure/sqlite/evidence-links.js';
 import { readSourceRecord } from '../../infrastructure/sqlite/source-identity.js';
 import { readSourceResidency } from '../../infrastructure/sqlite/source-lifecycle.js';
 import type { CheckedReadContext } from '../../recall/application/coverage-checker.js';
-import { idAddress, evidenceRequestKey, type EvidenceAddress } from '../domain/address.js';
-import type { RequestBudget } from '../domain/budget.js';
+import { evidenceRequestKey, idAddress, type EvidenceAddress } from '../domain/address.js';
+import { utf8Bytes, type RequestBudget } from '../domain/budget.js';
 import {
   evidenceResult,
   type EvidenceIssue,
@@ -27,6 +33,10 @@ import { durableRoleScope, GRAPH_NODE_SCOPE } from '../domain/scopes.js';
 /**
  * Serving metadata for a batch of candidates: where each one came from, which sessions carry it,
  * and whether the substrate can account for that attribution at all.
+ *
+ * The lineage is the union of what the graph still projects and what the records hold. A source
+ * whose raw projection has left the graph is still the root its claim was extracted from, and an
+ * answer that dropped it would report the eviction as a change in where the claim came from.
  *
  * A known incomplete lineage is not a failure. An item whose stated reference resolved to
  * nothing, or whose ancestry loops, reports itself incomplete and stays a faithful reading of a
@@ -42,6 +52,12 @@ export type ItemMetadata = {
   readonly sources: readonly string[];
   /** True when the incidence behind the attribution has no census to prove it complete. */
   readonly unknownAttribution: boolean;
+  /**
+   * The published narrative revision this item is cited by, when the substrate can say. No
+   * producer writes the citation records yet, so the honest answer is that the binding is
+   * unavailable rather than that there is none.
+   */
+  readonly narrativeBinding: 'unavailable';
 };
 
 export type MetadataInput = {
@@ -91,6 +107,105 @@ function sessionsOf(db: SqliteHandle, incidence: readonly CommittedIncidence[]):
   return [...sessions];
 }
 
+type DurableLineage = {
+  readonly roots: readonly string[];
+  readonly correction?: ItemProvenance['claimedCorrection'];
+  readonly confirmation?: ItemProvenance['confirmation'];
+};
+
+function stamp(value: unknown, fallback: string | null): Date | undefined {
+  const text = typeof value === 'string' ? value : (fallback ?? undefined);
+  if (text === undefined) {
+    return undefined;
+  }
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+}
+
+/**
+ * What the records alone say about where a node came from and what has been stated about it.
+ *
+ * This is the half that survives eviction: the extraction incidence names the original sources,
+ * and the stated-reference chain names the correction or confirmation somebody made, both under
+ * the ids they always had.
+ */
+function durableLineage(
+  db: SqliteHandle,
+  nodeId: string,
+  rows: readonly CommittedIncidence[],
+  at: Date | undefined,
+): DurableLineage {
+  const visible = listStatedLinksTo(db, nodeId).filter(
+    (link) =>
+      link.knownFrom !== null && (at === undefined || Date.parse(link.knownFrom) <= at.getTime()),
+  );
+  const latest = (kind: string): (typeof visible)[number] | undefined =>
+    [...visible].reverse().find((link) => link.kind === kind);
+  const corrects = latest('corrects');
+  const confirms = latest('confirms');
+  const correctedAt = corrects === undefined ? undefined : stamp(undefined, corrects.knownFrom);
+  const values = confirms === undefined ? undefined : readStatedLinkValues(db, confirms.linkId);
+  const confirmedAt = confirms === undefined ? undefined : stamp(values?.at, confirms.knownFrom);
+  const by = typeof values?.by === 'string' ? values.by : undefined;
+  const evidence = typeof values?.evidence === 'string' ? values.evidence : undefined;
+  return {
+    roots: [...new Set(rows.map((row) => row.sourceId))],
+    ...(corrects?.fromId === undefined || correctedAt === undefined
+      ? {}
+      : { correction: { by: corrects.fromId, at: correctedAt } }),
+    ...(confirms === undefined || by === undefined || confirmedAt === undefined
+      ? {}
+      : { confirmation: { by, at: confirmedAt, evidence: evidence ?? '' } }),
+  };
+}
+
+/** The graph's reading and the records' reading, as one answer under the original identities. */
+function mergeProvenance(
+  found: ItemProvenance | undefined,
+  durable: DurableLineage,
+  maxRoots: number,
+  proved: boolean,
+): ItemProvenance {
+  // The graph's own reading wins where it has one: it is the newer statement about a retained
+  // node. The records answer where the projection no longer can.
+  const confirmation = found?.confirmation ?? durable.confirmation;
+  const correction = found?.claimedCorrection ?? durable.correction;
+  const roots = [...new Set([...(found?.roots ?? []), ...durable.roots])].sort();
+  const lineage = [...new Set([...(found?.lineage ?? []), ...durable.roots])];
+  const complete = (found?.complete ?? true) && proved && roots.length <= maxRoots;
+  return {
+    roots: roots.slice(0, maxRoots),
+    lineage,
+    complete,
+    ...(found?.recordedRole === undefined ? {} : { recordedRole: found.recordedRole }),
+    ...(confirmation === undefined ? {} : { confirmation }),
+    ...(correction === undefined ? {} : { claimedCorrection: correction }),
+  };
+}
+
+type IncidenceRead =
+  | { readonly status: 'read'; readonly rows: readonly CommittedIncidence[] }
+  | { readonly status: 'unavailable' };
+
+function readIncidence(
+  db: SqliteHandle,
+  ids: readonly string[],
+  context: CheckedReadContext,
+): IncidenceRead {
+  try {
+    const { knownAt } = context.mode;
+    return {
+      status: 'read',
+      rows:
+        knownAt === undefined
+          ? committedIncidenceForNodes(db, ids)
+          : committedIncidenceForNodesAt(db, ids, knownAt),
+    };
+  } catch {
+    return { status: 'unavailable' };
+  }
+}
+
 export async function readItemMetadata(
   deps: MetadataDeps,
   input: MetadataInput,
@@ -101,18 +216,21 @@ export async function readItemMetadata(
   const issues: EvidenceIssue[] = [];
   const dependencies: EvidenceDependency[] = [];
 
+  function record(
+    address: EvidenceAddress,
+    found: readonly EvidenceIssue[],
+    residency: EvidenceResidency,
+  ): void {
+    issues.push(...found);
+    results.set(evidenceRequestKey(address), evidenceResult({ address, residency, issues: found }));
+  }
+
   for (const id of unique) {
     if (input.budget.chargeIds(1) === undefined) {
       accepted.push(id);
       continue;
     }
-    const address = idAddress(id);
-    const issue = issueOn(address, 'ownership', 'budget_limit', false);
-    issues.push(issue);
-    results.set(
-      evidenceRequestKey(address),
-      evidenceResult({ address, residency: 'resident', issues: [issue] }),
-    );
+    record(idAddress(id), [issueOn(idAddress(id), 'ownership', 'budget_limit', false)], 'resident');
   }
 
   let provenance: ReadonlyMap<string, ItemProvenance>;
@@ -124,28 +242,43 @@ export async function readItemMetadata(
     });
   } catch {
     for (const id of accepted) {
-      const address = idAddress(id);
-      const issue = issueOn(address, 'interpretation_text', 'store_unavailable', true);
-      issues.push(issue);
-      results.set(
-        evidenceRequestKey(address),
-        evidenceResult({ address, residency: 'resident', issues: [issue] }),
+      record(
+        idAddress(id),
+        [issueOn(idAddress(id), 'interpretation_text', 'store_unavailable', true)],
+        'resident',
       );
     }
     return { results, issues, dependencies };
   }
 
-  const incidence = committedIncidenceForNodes(deps.db, accepted);
-  const overRows = input.budget.chargeRelationRows(incidence.length) !== undefined;
+  // The ancestry the walk returned counts against the same allowance the incidence does: a
+  // traversal bounded only by its own hop limit can still hand back more rows than a request
+  // said it would carry.
+  const walked = [...provenance.values()].reduce(
+    (total, item) => total + item.roots.length + (item.lineage?.length ?? 0),
+    0,
+  );
+  const overWalk = input.budget.chargeRelationRows(walked) !== undefined;
+  const incidence = readIncidence(deps.db, accepted, input.context);
+  if (incidence.status === 'unavailable') {
+    for (const id of accepted) {
+      record(
+        idAddress(id),
+        [issueOn(idAddress(id), 'ownership', 'store_unavailable', true)],
+        'resident',
+      );
+    }
+    return { results, issues, dependencies };
+  }
+  const overRows = input.budget.chargeRelationRows(incidence.rows.length) !== undefined;
   const byNode = new Map<string, CommittedIncidence[]>();
-  for (const row of incidence) {
+  for (const row of incidence.rows) {
     byNode.set(row.nodeId, [...(byNode.get(row.nodeId) ?? []), row]);
   }
 
   for (const id of accepted) {
     const address = idAddress(id);
-    const found = provenance.get(id);
-    const rows = byNode.get(id) ?? [];
+    const rows = (byNode.get(id) ?? []).filter((row) => row.role === 'extraction');
     const nodeIssues: EvidenceIssue[] = [];
 
     const scope = readRelationScope(deps.db, {
@@ -170,11 +303,25 @@ export async function readItemMetadata(
     } else {
       nodeIssues.push(issueOn(address, 'interpretation_text', 'unverified_scope', false));
     }
-    if (overRows) {
+    if (overRows || overWalk) {
       nodeIssues.push(issueOn(address, 'ownership', 'budget_limit', false));
     }
+    // Nothing writes the citation records yet, so the binding is named unavailable rather than
+    // reported as an item no narrative cites.
+    nodeIssues.push(issueOn(address, 'narrative_revision', 'unverified_scope', false));
+    if (isTimeTravel(input.context.mode)) {
+      nodeIssues.push({
+        address,
+        field: 'ownership',
+        reason: 'unsupported_history',
+        historyReason: 'not_recorded',
+        required: false,
+      });
+    }
 
-    if (found === undefined) {
+    const durable = durableLineage(deps.db, id, rows, input.context.mode.knownAt);
+    const found = provenance.get(id);
+    if (found === undefined && durable.roots.length === 0) {
       const residency = residencyWithoutProjection(deps.db, id);
       nodeIssues.push(
         issueOn(
@@ -184,28 +331,26 @@ export async function readItemMetadata(
           true,
         ),
       );
-      issues.push(...nodeIssues);
-      results.set(
-        evidenceRequestKey(address),
-        evidenceResult({ address, residency, issues: nodeIssues }),
-      );
+      record(address, nodeIssues, residency);
       continue;
     }
 
+    const value: ItemMetadata = {
+      provenance: mergeProvenance(found, durable, input.maxRoots, scope.status === 'verified'),
+      owningSessions: overRows ? [] : sessionsOf(deps.db, rows),
+      sources: overRows ? [] : durable.roots,
+      unknownAttribution: scope.status !== 'verified' || overRows,
+      narrativeBinding: 'unavailable',
+    };
+    if (input.budget.chargeMetadataBytes(utf8Bytes(JSON.stringify(value))) !== undefined) {
+      nodeIssues.push(issueOn(address, 'ownership', 'budget_limit', true));
+      record(address, nodeIssues, 'resident');
+      continue;
+    }
     issues.push(...nodeIssues);
     results.set(
       evidenceRequestKey(address),
-      evidenceResult({
-        address,
-        residency: 'resident',
-        issues: nodeIssues,
-        value: {
-          provenance: found,
-          owningSessions: overRows ? [] : sessionsOf(deps.db, rows),
-          sources: overRows ? [] : [...new Set(rows.map((row) => row.sourceId))],
-          unknownAttribution: scope.status !== 'verified' || overRows,
-        },
-      }),
+      evidenceResult({ address, residency: 'resident', issues: nodeIssues, value }),
     );
   }
 

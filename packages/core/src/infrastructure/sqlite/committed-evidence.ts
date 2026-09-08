@@ -179,6 +179,34 @@ export function committedIncidenceForNodes(
   return rows.map(toIncidence);
 }
 
+/**
+ * The same batch as it stood at a past moment. Incidence is a current projection, so a question
+ * about an earlier vantage is answered from the version chain behind it: a row whose owning
+ * version was acknowledged later was not something anybody could have read then.
+ */
+export function committedIncidenceForNodesAt(
+  db: SqliteHandle,
+  nodeIds: readonly string[],
+  at: Date,
+  role?: string,
+): readonly CommittedIncidence[] {
+  const unique = [...new Set(nodeIds)];
+  if (unique.length === 0) {
+    return [];
+  }
+  const placeholders = unique.map(() => '?').join(', ');
+  const roleClause = role === undefined ? '' : 'AND s.role = ?';
+  const parameters = role === undefined ? unique : [...unique, role];
+  const rows = db
+    .prepare(
+      `${COMMITTED_INCIDENCE} WHERE s.node_id IN (${placeholders}) ${roleClause}
+         AND v.known_from <= ?
+       ORDER BY s.node_id, s.source_id, s.role`,
+    )
+    .all(...parameters, at.toISOString()) as IncidenceRowData[];
+  return rows.map(toIncidence);
+}
+
 export type CommittedSourceState = {
   readonly sourceId: string;
   readonly version: number;
