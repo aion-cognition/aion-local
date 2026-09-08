@@ -1,0 +1,285 @@
+import type { SqliteHandle } from './database.js';
+
+/**
+ * Writers for the source identity records.
+ *
+ * A source occurrence is keyed on the episode id the archive already carries, and a source
+ * that was forgotten and pushed again gets a second occurrence rather than a rewrite of the
+ * first. The archive proof is all-or-nothing: a row that claims verification carries every
+ * field of it, and a row that cannot claim it says why instead.
+ */
+export type SourceVerificationStatus = 'verified' | 'unresolved' | 'pinned';
+
+/** The complete archive proof. A row is verified only when all of it is present. */
+export type ArchiveProof = {
+  readonly canonicalArchiveId: string;
+  readonly archiveSchemaVersion: number;
+  readonly identityHash: string;
+  readonly verifiedContentDigest: string;
+  readonly verificationPolicyVersion: number;
+  readonly archivedAt: string;
+  /** Other archive rows backing this occurrence. Empty when the canonical row is the only one. */
+  readonly aliasArchiveIds?: readonly string[];
+};
+
+export type SourceRecordInput = {
+  readonly sourceId: string;
+  readonly sessionId: string;
+  readonly verificationStatus: SourceVerificationStatus;
+  /** Required whenever the status is not verified: an unexplained pin is not evidence. */
+  readonly verificationReason?: string;
+  readonly occurredAt: string;
+  readonly createdAt: Date;
+  readonly archive?: ArchiveProof;
+  readonly graphClocksJson?: string;
+  /** The ordering value actually used, and which clock it came from. */
+  readonly captureOrderValue?: string;
+  readonly captureOrderBasis?: 'graph_tx_from' | 'archive_acceptance' | 'pinned';
+  readonly origin?: string;
+};
+
+export type SourceRecord = {
+  readonly sourceId: string;
+  readonly sessionId: string;
+  readonly canonicalArchiveId: string | null;
+  readonly aliasArchiveIds: readonly string[];
+  readonly verificationStatus: SourceVerificationStatus;
+  readonly verificationReason: string | null;
+  readonly occurredAt: string;
+  readonly archivedAt: string | null;
+  readonly captureOrderValue: string | null;
+  readonly captureOrderBasis: string | null;
+};
+
+type SourceRowData = {
+  source_id: string;
+  session_id: string;
+  canonical_archive_id: string | null;
+  archive_aliases_json: string | null;
+  verification_status: SourceVerificationStatus;
+  verification_reason: string | null;
+  occurred_at: string;
+  archived_at: string | null;
+  capture_order_value: string | null;
+  capture_order_basis: string | null;
+};
+
+/**
+ * Writes or refreshes a source occurrence. Keyed on the source id, so re-running a backfill
+ * batch changes nothing it has already written. A verified row replaces a pinned one for the
+ * same occurrence without changing its identity: verification is evidence about the row, not a
+ * different row.
+ */
+export function recordSourceRecord(db: SqliteHandle, input: SourceRecordInput): void {
+  if (input.verificationStatus !== 'verified' && input.verificationReason === undefined) {
+    throw new Error(`source ${input.sourceId} is ${input.verificationStatus} with no reason given`);
+  }
+  if (input.verificationStatus === 'verified' && input.archive === undefined) {
+    throw new Error(`source ${input.sourceId} claims verification with no archive proof`);
+  }
+
+  db.prepare(
+    `INSERT INTO source_records
+       (source_id, session_id, canonical_archive_id, archive_aliases_json, archive_schema_version,
+        identity_hash, verified_content_digest, verification_policy_version, verification_status,
+        verification_reason, occurred_at, archived_at, graph_clocks_json, capture_order_value,
+        capture_order_basis, origin, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (source_id) DO UPDATE SET
+       canonical_archive_id = excluded.canonical_archive_id,
+       archive_aliases_json = excluded.archive_aliases_json,
+       archive_schema_version = excluded.archive_schema_version,
+       identity_hash = excluded.identity_hash,
+       verified_content_digest = excluded.verified_content_digest,
+       verification_policy_version = excluded.verification_policy_version,
+       verification_status = excluded.verification_status,
+       verification_reason = excluded.verification_reason,
+       archived_at = excluded.archived_at,
+       graph_clocks_json = excluded.graph_clocks_json,
+       capture_order_value = excluded.capture_order_value,
+       capture_order_basis = excluded.capture_order_basis`,
+  ).run(
+    input.sourceId,
+    input.sessionId,
+    input.archive?.canonicalArchiveId ?? null,
+    input.archive?.aliasArchiveIds === undefined
+      ? null
+      : JSON.stringify([...input.archive.aliasArchiveIds]),
+    input.archive?.archiveSchemaVersion ?? null,
+    input.archive?.identityHash ?? null,
+    input.archive?.verifiedContentDigest ?? null,
+    input.archive?.verificationPolicyVersion ?? null,
+    input.verificationStatus,
+    input.verificationReason ?? null,
+    input.occurredAt,
+    input.archive?.archivedAt ?? null,
+    input.graphClocksJson ?? null,
+    input.captureOrderValue ?? null,
+    input.captureOrderBasis ?? null,
+    input.origin ?? null,
+    input.createdAt.toISOString(),
+  );
+}
+
+export function readSourceRecord(db: SqliteHandle, sourceId: string): SourceRecord | undefined {
+  const row = db
+    .prepare(
+      `SELECT source_id, session_id, canonical_archive_id, archive_aliases_json,
+              verification_status, verification_reason, occurred_at, archived_at,
+              capture_order_value, capture_order_basis
+       FROM source_records WHERE source_id = ?`,
+    )
+    .get(sourceId) as SourceRowData | undefined;
+  if (row === undefined) {
+    return undefined;
+  }
+  return {
+    sourceId: row.source_id,
+    sessionId: row.session_id,
+    canonicalArchiveId: row.canonical_archive_id,
+    aliasArchiveIds:
+      row.archive_aliases_json === null ? [] : (JSON.parse(row.archive_aliases_json) as string[]),
+    verificationStatus: row.verification_status,
+    verificationReason: row.verification_reason,
+    occurredAt: row.occurred_at,
+    archivedAt: row.archived_at,
+    captureOrderValue: row.capture_order_value,
+    captureOrderBasis: row.capture_order_basis,
+  };
+}
+
+export type SourcePartInput = {
+  readonly partKind: 'turn' | 'observation' | 'tool_execution';
+  readonly ordinal: number;
+  /** The original turn id, for turns. Nothing else has one and nothing invents one. */
+  readonly turnId?: string;
+  /** The role as recorded, or left out. Never inferred from position. */
+  readonly role?: string;
+  readonly contentHash: string;
+  readonly occurredAt?: string;
+  readonly graphClocksJson?: string;
+};
+
+/** The address a citation uses for a part, which keeps two parts of one source distinct. */
+export function sourcePartAddress(sourceId: string, partKind: string, ordinal: number): string {
+  return `part:${sourceId}:${partKind}:${ordinal}`;
+}
+
+/** Writes a source's parts in one transaction. Re-running a batch refreshes the same rows. */
+export function recordSourceParts(
+  db: SqliteHandle,
+  sourceId: string,
+  parts: readonly SourcePartInput[],
+): void {
+  const statement = db.prepare(
+    `INSERT INTO source_parts
+       (source_id, part_kind, ordinal, turn_id, role, content_hash, occurred_at, graph_clocks_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (source_id, part_kind, ordinal) DO UPDATE SET
+       turn_id = excluded.turn_id,
+       role = excluded.role,
+       content_hash = excluded.content_hash,
+       occurred_at = excluded.occurred_at,
+       graph_clocks_json = excluded.graph_clocks_json`,
+  );
+  db.transaction((): void => {
+    for (const part of parts) {
+      statement.run(
+        sourceId,
+        part.partKind,
+        part.ordinal,
+        part.turnId ?? null,
+        part.role ?? null,
+        part.contentHash,
+        part.occurredAt ?? null,
+        part.graphClocksJson ?? null,
+      );
+    }
+  }).immediate();
+}
+
+export type ReferenceBatch = {
+  readonly sourceId: string;
+  /** The canonical hash of the accepted set. A batch repeating the current set adds no version. */
+  readonly acceptedHash: string;
+  readonly receivedAt: Date;
+  readonly operationKey: string;
+  readonly introduced: readonly string[];
+};
+
+export type ReferenceBatchOutcome = {
+  readonly referenceVersion: number;
+  /** False when the batch repeated the accepted set or the operation that produced it. */
+  readonly added: boolean;
+};
+
+/**
+ * Accepts a reference batch as its own version, so the history of what arrived stops being a
+ * merged union nobody can take apart. A batch that repeats the current accepted set is not a
+ * new version, and a retried delivery under the same operation key returns the version it
+ * already produced.
+ */
+export function acceptReferenceBatch(
+  db: SqliteHandle,
+  batch: ReferenceBatch,
+): ReferenceBatchOutcome {
+  return db
+    .transaction((): ReferenceBatchOutcome => {
+      const byOperation = db
+        .prepare(
+          'SELECT reference_version FROM source_reference_batches WHERE source_id = ? AND operation_key = ?',
+        )
+        .get(batch.sourceId, batch.operationKey) as { reference_version: number } | undefined;
+      if (byOperation !== undefined) {
+        return { referenceVersion: byOperation.reference_version, added: false };
+      }
+
+      const latest = db
+        .prepare(
+          `SELECT reference_version, accepted_hash FROM source_reference_batches
+           WHERE source_id = ? ORDER BY reference_version DESC LIMIT 1`,
+        )
+        .get(batch.sourceId) as { reference_version: number; accepted_hash: string } | undefined;
+      if (latest?.accepted_hash === batch.acceptedHash) {
+        return { referenceVersion: latest.reference_version, added: false };
+      }
+
+      const referenceVersion = (latest?.reference_version ?? 0) + 1;
+      db.prepare(
+        `INSERT INTO source_reference_batches
+           (source_id, reference_version, accepted_hash, received_at, operation_key, introduced_json)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run(
+        batch.sourceId,
+        referenceVersion,
+        batch.acceptedHash,
+        batch.receivedAt.toISOString(),
+        batch.operationKey,
+        JSON.stringify([...batch.introduced]),
+      );
+      return { referenceVersion, added: true };
+    })
+    .immediate();
+}
+
+/** The accepted reference versions for a source, oldest first. */
+export function listReferenceBatches(
+  db: SqliteHandle,
+  sourceId: string,
+): readonly { referenceVersion: number; acceptedHash: string; receivedAt: string }[] {
+  const rows = db
+    .prepare(
+      `SELECT reference_version, accepted_hash, received_at FROM source_reference_batches
+       WHERE source_id = ? ORDER BY reference_version`,
+    )
+    .all(sourceId) as {
+    reference_version: number;
+    accepted_hash: string;
+    received_at: string;
+  }[];
+  return rows.map((row) => ({
+    referenceVersion: row.reference_version,
+    acceptedHash: row.accepted_hash,
+    receivedAt: row.received_at,
+  }));
+}
