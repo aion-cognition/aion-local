@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { SqliteHandle } from './database.js';
+import { getLedgerEntry, markLedgerApplied } from './ops-ledger.js';
 
 /**
  * The coverage control record: how far back a reader may claim history reaches.
@@ -108,34 +109,59 @@ function insert(
   };
 }
 
-/** Opens a preparing revision. It answers reads as preparing until an activation follows it. */
+/**
+ * Opens the first revision, and does nothing once one exists. Initialization only: a substrate
+ * that already carries a record, preparing or active, gets that record back. Writing a fresh
+ * preparing revision over an active one would take coverage away from every reader at once,
+ * because the record in force is the highest revision.
+ */
 export function prepareCoverageContract(
   db: SqliteHandle,
   fieldPolicyVersion: number,
 ): CoverageContractRecord {
   return db
-    .transaction((): CoverageContractRecord =>
-      insert(db, {
+    .transaction((): CoverageContractRecord => {
+      const current = readCurrentCoverageContract(db);
+      if (current !== undefined) {
+        return current;
+      }
+      return insert(db, {
         epoch: randomUUID(),
         historySince: null,
         activatedAt: null,
         fieldPolicyVersion,
         state: 'preparing',
-      }),
-    )
+      });
+    })
     .immediate();
 }
 
 export type CoverageActivation = {
-  /** The moment history is claimed from, and the activation time. They are the same moment. */
+  /**
+   * The moment history is claimed from, used only by the first activation. It is the clock the
+   * coordinator settled on, clamped where it had to be, and it is stored as given.
+   */
   readonly activatedAt: Date;
   readonly fieldPolicyVersion: number;
+  /**
+   * The operation this activation belongs to. Given one, repeating the activation returns the
+   * revision it already wrote instead of adding another.
+   */
+  readonly operationId?: string;
 };
 
+function coverageActivationKey(operationId: string): string {
+  return `coverage-activation:${encodeURIComponent(operationId)}`;
+}
+
 /**
- * Activates coverage as a new revision, with the boundary, the activation time and a fresh
- * epoch written together. The epoch changes on every activation, so a reader that cached the
- * preparing record cannot carry its fence across the boundary.
+ * Writes a new active revision. The first one sets the boundary and the activation time from the
+ * supplied clock; every one after it copies both forward unchanged, so a later policy or epoch
+ * change cannot move the moment history is claimed from. A reader fenced on the old epoch is
+ * still told it is out of date, which is what the epoch is for.
+ *
+ * The wire version is untouched by any of this: a revision is a change to what the substrate
+ * covers, not to the shape the answer is spoken in.
  */
 export function activateCoverageContract(
   db: SqliteHandle,
@@ -143,14 +169,36 @@ export function activateCoverageContract(
 ): CoverageContractRecord {
   return db
     .transaction((): CoverageContractRecord => {
-      const at = activation.activatedAt.toISOString();
-      return insert(db, {
+      const { operationId } = activation;
+      if (operationId !== undefined) {
+        const recorded = getLedgerEntry(db, coverageActivationKey(operationId))?.summary as
+          { registryRevision: number } | undefined;
+        const written =
+          recorded === undefined
+            ? undefined
+            : readCoverageContractRevision(db, recorded.registryRevision);
+        if (written !== undefined) {
+          return written;
+        }
+      }
+
+      const current = readCurrentCoverageContract(db);
+      const supplied = activation.activatedAt.toISOString();
+      const historySince = current?.state === 'active' ? current.historySince : supplied;
+      const activatedAt = current?.state === 'active' ? current.activatedAt : supplied;
+      const record = insert(db, {
         epoch: randomUUID(),
-        historySince: at,
-        activatedAt: at,
+        historySince,
+        activatedAt,
         fieldPolicyVersion: activation.fieldPolicyVersion,
         state: 'active',
       });
+      if (operationId !== undefined) {
+        markLedgerApplied(db, coverageActivationKey(operationId), {
+          registryRevision: record.registryRevision,
+        });
+      }
+      return record;
     })
     .immediate();
 }

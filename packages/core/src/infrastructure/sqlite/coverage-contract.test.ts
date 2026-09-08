@@ -86,6 +86,56 @@ describe('the coverage control record', () => {
     expect(coverageEpochIsCurrent(store.db, active.epoch)).toBe(true);
   });
 
+  it('holds the history boundary still when a later policy revision activates', () => {
+    prepareCoverageContract(store.db, 1);
+    const first = activateCoverageContract(store.db, {
+      activatedAt: ACTIVATED_AT,
+      fieldPolicyVersion: 1,
+    });
+    const later = activateCoverageContract(store.db, {
+      activatedAt: new Date('2026-09-08T03:00:00.000Z'),
+      fieldPolicyVersion: 2,
+    });
+
+    expect(later.historySince).toBe(first.historySince);
+    expect(later.activatedAt).toBe(first.activatedAt);
+    expect(later.epoch).not.toBe(first.epoch);
+    expect(later.fieldPolicyVersion).toBe(2);
+  });
+
+  it('leaves an active record alone when initialization is called again', () => {
+    prepareCoverageContract(store.db, 1);
+    const active = activateCoverageContract(store.db, {
+      activatedAt: ACTIVATED_AT,
+      fieldPolicyVersion: 1,
+    });
+
+    expect(prepareCoverageContract(store.db, 1)).toEqual(active);
+    expect(readCurrentCoverageContract(store.db)).toEqual(active);
+    expect(store.db.prepare('SELECT count(*) AS n FROM coverage_contract').get()).toEqual({ n: 2 });
+  });
+
+  it('initialization called twice before activation opens one revision', () => {
+    const first = prepareCoverageContract(store.db, 1);
+
+    expect(prepareCoverageContract(store.db, 2)).toEqual(first);
+    expect(store.db.prepare('SELECT count(*) AS n FROM coverage_contract').get()).toEqual({ n: 1 });
+  });
+
+  it('an activation retried under its own operation returns the revision it wrote', () => {
+    prepareCoverageContract(store.db, 1);
+    const activation = {
+      activatedAt: ACTIVATED_AT,
+      fieldPolicyVersion: 1,
+      operationId: 'activation-op',
+    };
+    const first = activateCoverageContract(store.db, activation);
+
+    expect(activateCoverageContract(store.db, activation)).toEqual(first);
+    expect(readCurrentCoverageContract(store.db)).toEqual(first);
+    expect(store.db.prepare('SELECT count(*) AS n FROM coverage_contract').get()).toEqual({ n: 2 });
+  });
+
   it('gives every activation its own epoch', () => {
     const first = activateCoverageContract(store.db, {
       activatedAt: ACTIVATED_AT,
