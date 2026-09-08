@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { reviewPrompts, seedFactNode, SupersessionTestBed } from './supersession.fixture.js';
 import { SupersessionStage } from './supersession.js';
-import type { JudgmentEvidence } from '../../../evidence/application/judgment.js';
+import type { JudgmentAssembly, JudgmentEvidence } from '../../../evidence/application/judgment.js';
 
 const EPISODE_ID = 'episode-2';
 const PRIOR_EPISODE_ID = 'episode-1';
@@ -56,7 +56,63 @@ afterEach(() => {
   bed.close();
 });
 
+/** A seam that assembles both sides with a marker the prompts must carry. */
+function readyEvidence(): JudgmentEvidence {
+  return {
+    assemble: (pair) =>
+      Promise.resolve({
+        status: 'assembled',
+        sides: [0, 1].map((index) => ({
+          nodeId: pair.sides[index]!.nodeId,
+          statement: pair.sides[index]!.statement,
+          requiredSources: [],
+          optionalSubjects: [],
+          renderedContext: 'REQUIRED-SOURCE-COMMIT-SCOPE',
+          renderedUnits: 32,
+        })) as unknown as JudgmentAssembly extends { sides: infer S } ? S : never,
+        revision: { contractVersion: 1, dependencies: [], digest: 'evidence' },
+        omitted: [],
+      } as JudgmentAssembly),
+    confirm: () => ({ status: 'current' }),
+  };
+}
+
 describe('SupersessionStage with an evidence seam', () => {
+  it('shows the same reserved source context to both live supersession passes', async () => {
+    seedContradictingPair();
+    bed.responses = [{ contradicts: true, confidence: 1 }];
+    bed.reviews = [{ earlier_survives: false, newer_is_well_formed: true }];
+
+    await new SupersessionStage({ mode: 'unanimous' }).run({
+      ...bed.context(EPISODE_ID),
+      evidence: readyEvidence(),
+    });
+
+    expect(bed.requests).toHaveLength(2);
+    expect(
+      bed.requests.every((request) =>
+        JSON.stringify(request).includes('REQUIRED-SOURCE-COMMIT-SCOPE'),
+      ),
+    ).toBe(true);
+  });
+
+  it('rechecks the same revision after the second live supersession pass', async () => {
+    seedContradictingPair();
+    bed.responses = [{ contradicts: true, confidence: 1 }];
+    bed.reviews = [{ earlier_survives: false, newer_is_well_formed: true }];
+    const evidence = readyEvidence();
+    evidence.confirm = () =>
+      bed.requests.length < 2 ? { status: 'current' } : { status: 'stale', changed: [] };
+
+    const outcome = await new SupersessionStage({ mode: 'unanimous' }).run({
+      ...bed.context(EPISODE_ID),
+      evidence,
+    });
+
+    expect(bed.graph.closeStatements()).toEqual([]);
+    expect(outcome.retryable).toBe(true);
+  });
+
   it('asks nobody about a pair whose required source is suppressed', async () => {
     seedContradictingPair();
 

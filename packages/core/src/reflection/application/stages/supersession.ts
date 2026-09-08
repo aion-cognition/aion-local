@@ -26,7 +26,6 @@ import {
 } from '../../../infrastructure/graph/supersession-queries.js';
 import type { Vector } from '../../../infrastructure/providers/types.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
-import { evidenceMoved } from '../evidence-fence.js';
 
 /**
  * The detection half of supersession. Each fact-bearing node this episode minted is compared against
@@ -239,13 +238,30 @@ export class SupersessionStage implements ReflectionStage {
         return undefined;
       }
 
-      const judgment = await this.#judge(ctx, subject, candidate, tally);
+      const evidence = await this.#evidenceFor(ctx, subject, candidate);
+      if (evidence.status === 'withheld') {
+        tally.recordWithheld(evidence.withheld.kind);
+        ctx.logger.info(
+          {
+            episodeId: ctx.episodeId,
+            subjectId: subject.id,
+            candidateId: candidate.id,
+            disposition: evidence.withheld.kind,
+            reason: evidence.withheld.reason,
+            addresses: evidence.withheld.addresses,
+            revision: evidence.withheld.revision.digest,
+          },
+          'contradiction judgment withheld for want of required evidence',
+        );
+        continue;
+      }
+      const judgment = await this.#judge(ctx, subject, candidate, tally, evidence);
       if (!judgment?.contradicts) {
         continue;
       }
 
       try {
-        await this.#apply(ctx, subject, candidate, judgment, tally);
+        await this.#apply(ctx, subject, candidate, judgment, tally, evidence);
       } catch (error) {
         return error;
       }
@@ -253,13 +269,7 @@ export class SupersessionStage implements ReflectionStage {
     return undefined;
   }
 
-  /**
-   * Whether the pair's required evidence supports asking at all.
-   *
-   * Asked before the judgment is counted or paid for. An abstention or an incomplete assembly
-   * leaves the pair exactly where it was: nothing is closed, nothing is proposed, and the run
-   * says how many pairs it withheld.
-   */
+  /** The evidence this pair may be judged on, asked once and used by both passes. */
   async #evidenceFor(
     ctx: StageContext,
     subject: EpisodeFactNode,
@@ -282,23 +292,8 @@ export class SupersessionStage implements ReflectionStage {
     subject: EpisodeFactNode,
     candidate: ContradictionCandidate,
     tally: RunTally,
+    evidence: JudgmentEvidenceOutcome,
   ): Promise<ContradictionJudgment | undefined> {
-    const evidence = await this.#evidenceFor(ctx, subject, candidate);
-    if (evidence.status === 'withheld') {
-      tally.recordWithheld(evidence.withheld.kind);
-      ctx.logger.info(
-        {
-          episodeId: ctx.episodeId,
-          subjectId: subject.id,
-          candidateId: candidate.id,
-          disposition: evidence.withheld.kind,
-          reason: evidence.withheld.reason,
-          addresses: evidence.withheld.addresses,
-        },
-        'contradiction judgment withheld for want of required evidence',
-      );
-      return undefined;
-    }
     const sides = evidence.status === 'ready' ? evidence.sides : undefined;
     tally.recordJudgment();
     const outcome = await judgeContradiction(
@@ -320,17 +315,6 @@ export class SupersessionStage implements ReflectionStage {
     );
 
     if (outcome.status === 'judged') {
-      // The evidence the judge answered on has to still hold when the answer is applied. A
-      // correction that arrived while it was answering is new evidence about the same pair.
-      const moved = evidenceMoved(ctx, evidence);
-      if (moved !== undefined) {
-        tally.recordWithheld('retryable');
-        ctx.logger.info(
-          { episodeId: ctx.episodeId, subjectId: subject.id, candidateId: candidate.id, moved },
-          'contradiction judgment dropped because its evidence moved while it was made',
-        );
-        return undefined;
-      }
       return outcome.judgment;
     }
 
@@ -354,7 +338,9 @@ export class SupersessionStage implements ReflectionStage {
     candidate: ContradictionCandidate,
     judgment: ContradictionJudgment,
     tally: RunTally,
+    evidence: JudgmentEvidenceOutcome,
   ): Promise<void> {
+    const sides = evidence.status === 'ready' ? evidence.sides : undefined;
     const outcome = await applyJudgment(
       ctx,
       {
@@ -362,6 +348,17 @@ export class SupersessionStage implements ReflectionStage {
         candidate,
         confidence: judgment.confidence,
         ...(judgment.rationale === undefined ? {} : { rationale: judgment.rationale }),
+        // The second pass argues the other side of what the first pass was shown, and the write
+        // is fenced on the same revision both of them ran on.
+        ...(sides === undefined
+          ? {}
+          : {
+              context: {
+                prior: statementWithContext(candidate.text, sides[0]),
+                current: statementWithContext(subject.text, sides[1]),
+              },
+            }),
+        ...(evidence.status === 'ready' ? { revision: evidence.revision } : {}),
       },
       // The stage options carry the write policy whole; the judge's search knobs ride along.
       this.#options,

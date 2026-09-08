@@ -190,6 +190,8 @@ export function claimDedupOperation(): IntrospectionOperation {
       let failed = 0;
       let withheld = 0;
       let blocked = 0;
+      /** Pairs whose evidence moved between the answer and the record it would have left. */
+      let moved = 0;
       /** Why the run stopped short of its batch, when an uncertain publication stopped it. */
       let halted: string | undefined;
 
@@ -252,6 +254,24 @@ export function claimDedupOperation(): IntrospectionOperation {
         judged += 1;
 
         const pair = toPair(subject, neighbor, assembled);
+        // Asked once, after the last model answer for this pair and before any record of it.
+        // A dismissal is a decision too: stamping one on evidence that has moved retires a pair
+        // nobody judged on what the substrate now holds.
+        const settled = (): boolean => {
+          if (assembled.status !== 'ready' || ctx.evidence === undefined) {
+            return true;
+          }
+          const check = ctx.evidence.confirm(assembled.revision);
+          if (check.status === 'current') {
+            return true;
+          }
+          moved += 1;
+          ctx.logger.info(
+            { subjectId: subject.id, candidateId: neighbor.id, check: check.status },
+            'claim dedup left a pair whose evidence moved while it was being judged',
+          );
+          return false;
+        };
         const detection = await judgeClaimDedup(ctx.provider, pair, callOptions);
         if (detection.status === 'failed') {
           failed += 1;
@@ -262,6 +282,9 @@ export function claimDedupOperation(): IntrospectionOperation {
           continue;
         }
         if (!detection.judgment.same) {
+          if (!settled()) {
+            continue;
+          }
           related += 1;
           markLedgerApplied(ctx.db, pairKey, {
             verdict: 'related',
@@ -281,6 +304,9 @@ export function claimDedupOperation(): IntrospectionOperation {
           continue;
         }
         if (review.review.outcome === 'vetoed') {
+          if (!settled()) {
+            continue;
+          }
           vetoed += 1;
           markLedgerApplied(ctx.db, pairKey, { verdict: 'vetoed', reason: review.review.reason });
           stampScanned('vetoed');
@@ -290,6 +316,9 @@ export function claimDedupOperation(): IntrospectionOperation {
         // Read immediately before the write: the two model calls above took long enough that a
         // third act (another operation's close, or a person's own correction) could have taken
         // one side's currency in the meantime.
+        if (!settled()) {
+          continue;
+        }
         const details = await loadClaimDedupDetails(ctx.driver, [subject.id, neighbor.id]);
         const subjectDetail = details.find((detail) => detail.id === subject.id);
         const candidateDetail = details.find((detail) => detail.id === neighbor.id);
@@ -298,20 +327,6 @@ export function claimDedupOperation(): IntrospectionOperation {
           markLedgerApplied(ctx.db, pairKey, { verdict: 'stale' });
           stampScanned('stale');
           continue;
-        }
-
-        // The evidence the judge answered on has to still hold when the answer is applied. A
-        // correction that arrived in between is new evidence, and the old answer is not about it.
-        if (assembled.status === 'ready' && ctx.evidence !== undefined) {
-          const check = ctx.evidence.confirm(assembled.revision);
-          if (check.status !== 'current') {
-            stale += 1;
-            ctx.logger.info(
-              { subjectId: subject.id, candidateId: neighbor.id, check: check.status },
-              'claim dedup left a pair whose evidence moved while it was being judged',
-            );
-            continue;
-          }
         }
 
         const { survivor, loser } = selectClaimDedupSurvivor(
@@ -376,7 +391,9 @@ export function claimDedupOperation(): IntrospectionOperation {
             withheld === 0
               ? ''
               : `, ${String(withheld)} withheld for want of evidence (${String(blocked)} blocked)`
-          }${halted === undefined ? '' : `; stopped early on ${halted}`}`,
+          }${moved === 0 ? '' : `, ${String(moved)} left open on moved evidence`}${
+            halted === undefined ? '' : `; stopped early on ${halted}`
+          }`,
       };
     },
   };

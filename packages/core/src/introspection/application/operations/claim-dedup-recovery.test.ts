@@ -354,6 +354,26 @@ describe('claim_dedup with an evidence seam', () => {
     expect(prompts.every((prompt) => prompt.includes(MARKER))).toBe(true);
   });
 
+  it('leaves a negative verdict unstamped when the evidence moved under it', async () => {
+    const provider: Provider = {
+      embed: () => Promise.reject(new Error('no embedding')),
+      generate: () => Promise.resolve({ same: false, rationale: 'different scope' }),
+    };
+    const result = await claimDedupOperation().run(
+      ctxFor({
+        provider,
+        evidence: {
+          assemble: () => Promise.resolve(assembled()),
+          confirm: () => ({ status: 'stale', changed: [] }),
+        },
+      }),
+    );
+
+    expect(result.detail).toContain('left open on moved evidence');
+    expect(isLedgerApplied(db, claimDedupPairKey('subject-a', 'neighbor-a'))).toBe(false);
+    expect(isLedgerApplied(db, claimDedupScanKey('subject-a'))).toBe(false);
+  });
+
   it('refuses application when the assembled revision became stale', async () => {
     const confirm = vi.fn(() => ({
       status: 'stale' as const,

@@ -272,6 +272,13 @@ async function resolveContradiction(
     leaveOpen(ctx, proposal.id, verdict.detail, tally);
     return;
   }
+  // Asked after the last pass and before either terminal record. A dismissal decided on evidence
+  // that has moved retires a row nobody judged on what the substrate now holds.
+  const moved = evidenceMoved(ctx, evidence);
+  if (moved !== undefined) {
+    leaveOpen(ctx, proposal.id, `the evidence moved while it was judged: ${moved}`, tally);
+    return;
+  }
 
   const base = {
     grounds: verdict.grounds,
@@ -290,12 +297,6 @@ async function resolveContradiction(
       { proposalId: proposal.id, grounds: verdict.grounds },
       'proposal resolution dismissed a contradiction',
     );
-    return;
-  }
-
-  const moved = evidenceMoved(ctx, evidence);
-  if (moved !== undefined) {
-    leaveOpen(ctx, proposal.id, `the evidence moved while it was judged: ${moved}`, tally);
     return;
   }
 
@@ -373,6 +374,11 @@ async function resolveMerge(
     leaveOpen(ctx, proposal.id, verdict.detail, tally);
     return;
   }
+  const moved = evidenceMoved(ctx, evidence);
+  if (moved !== undefined) {
+    leaveOpen(ctx, proposal.id, `the evidence moved while it was judged: ${moved}`, tally);
+    return;
+  }
 
   const base = {
     grounds: verdict.grounds,
@@ -393,12 +399,6 @@ async function resolveMerge(
       { proposalId: proposal.id, grounds: verdict.grounds },
       'proposal resolution dismissed a merge',
     );
-    return;
-  }
-
-  const moved = evidenceMoved(ctx, evidence);
-  if (moved !== undefined) {
-    leaveOpen(ctx, proposal.id, `the evidence moved while it was judged: ${moved}`, tally);
     return;
   }
 

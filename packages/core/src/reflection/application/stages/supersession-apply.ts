@@ -14,6 +14,7 @@ import {
   type ContradictionCandidate,
   type EpisodeFactNode,
 } from '../../../infrastructure/graph/supersession-queries.js';
+import type { EvidenceRevision } from '../../../infrastructure/publication/preconditions.js';
 import {
   findSupersessionProposalsForNode,
   recordSupersessionProposal,
@@ -63,6 +64,14 @@ export type JudgedPair = {
   readonly candidate: ContradictionCandidate;
   readonly confidence: number;
   readonly rationale?: string;
+  /**
+   * The statements the first pass was shown, so the second pass argues the other side of the
+   * same evidence. A reviewer given less than the judge it reviews is answering a different
+   * question.
+   */
+  readonly context?: { readonly prior: string; readonly current: string };
+  /** The dependency set both passes ran on, rechecked once more before anything is written. */
+  readonly revision?: EvidenceRevision;
 };
 
 /**
@@ -79,7 +88,14 @@ export type JudgedPair = {
  * `already_decided` is the fourth and writes no counter at all. The pair carries a person's
  * ruling, so the stage leaves it alone, and there is no new judgment to report.
  */
-export type JudgmentOutcome = 'closed' | 'vetoed' | 'stale' | 'proposed' | 'already_decided';
+export type JudgmentOutcome =
+  | 'closed'
+  | 'vetoed'
+  | 'stale'
+  | 'proposed'
+  | 'already_decided'
+  /** The evidence moved between the answer and the write, so the pair goes back to being owed. */
+  | 'withheld';
 
 /** Both passes on one line, so `aion proposals ls` says what the judge wanted and what stopped it. */
 function rationaleFor(pair: JudgedPair, second: string | undefined): string | undefined {
@@ -114,8 +130,8 @@ async function secondPass(
     {
       priorLabel: pair.candidate.label,
       currentLabel: pair.subject.label,
-      prior: pair.candidate.text,
-      current: pair.subject.text,
+      prior: pair.context?.prior ?? pair.candidate.text,
+      current: pair.context?.current ?? pair.subject.text,
       ...(pair.candidate.sharedSubject === undefined
         ? {}
         : { sharedSubject: pair.candidate.sharedSubject }),
@@ -144,6 +160,19 @@ async function secondPass(
   return vetoForUnansweredReview('the second pass returned an answer in an unusable shape');
 }
 
+/**
+ * Whether the evidence both passes ran on still stands, asked after the last model answer and
+ * before anything is written. A correction that arrived while the passes were answering is new
+ * evidence, and the answer they gave is not about it.
+ */
+function evidenceMoved(ctx: StageContext, pair: JudgedPair): string | undefined {
+  if (pair.revision === undefined || ctx.evidence === undefined) {
+    return undefined;
+  }
+  const check = ctx.evidence.confirm(pair.revision);
+  return check.status === 'current' ? undefined : check.status;
+}
+
 /** Whether this exact pair already carries a decision, applied or dismissed. */
 function decidedAlready(ctx: StageContext, pair: JudgedPair): boolean {
   return findSupersessionProposalsForNode(ctx.db, pair.candidate.id).some(
@@ -170,6 +199,22 @@ async function applyUnanimous(
   tally: RunTally,
 ): Promise<JudgmentOutcome> {
   const verdict = await secondPass(ctx, pair, policy);
+  // Asked after the last model answer, before either terminal record. A veto is a decision too,
+  // and one made on evidence that has moved is not this pair's decision.
+  const moved = evidenceMoved(ctx, pair);
+  if (moved !== undefined) {
+    ctx.logger.info(
+      {
+        episodeId: ctx.episodeId,
+        subjectId: pair.subject.id,
+        candidateId: pair.candidate.id,
+        moved,
+      },
+      'contradiction judgment dropped because its evidence moved while it was made',
+    );
+    tally.recordWithheld('retryable');
+    return 'withheld';
+  }
   const second = describeVeto(verdict);
   if (verdict.outcome !== 'unanimous') {
     record(ctx, pair, second);
@@ -226,6 +271,11 @@ export async function applyJudgment(
   }
 
   if (policy.mode === 'auto' && pair.confidence >= policy.autoConfidence) {
+    const moved = evidenceMoved(ctx, pair);
+    if (moved !== undefined) {
+      tally.recordWithheld('retryable');
+      return 'withheld';
+    }
     // The same currency read the unanimous path runs, for the same reason: `supersede`
     // coalesces onto an already-closed node, so without this the legacy path counts a closure
     // that did not happen.
@@ -245,6 +295,11 @@ export async function applyJudgment(
     return 'closed';
   }
 
+  const moved = evidenceMoved(ctx, pair);
+  if (moved !== undefined) {
+    tally.recordWithheld('retryable');
+    return 'withheld';
+  }
   record(ctx, pair, undefined);
   tally.recordProposal(pair.candidate.matchedBy === 'subject');
   return 'proposed';
