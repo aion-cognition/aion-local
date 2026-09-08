@@ -1,8 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   IN_MEMORY_SQLITE,
+  canonicalPath,
   checkRehearsalTarget,
+  dataRootVerdict,
   type SubstrateTarget,
   type TargetDeclaration,
 } from './campaign-isolation.js';
@@ -107,14 +112,14 @@ describe('refusing a rehearsal target', () => {
     ).toMatchObject({ status: 'rejected', reason: 'production_data_root' });
   });
 
-  it('refuses a relative substrate path, which names no root to compare', () => {
+  it('refuses a relative substrate path, whose identity nothing can resolve', () => {
     expect(
       checkRehearsalTarget({
         target: disposable({ sqlitePath: 'aion.sqlite' }),
         production: PRODUCTION,
         declaration: HARNESS,
       }),
-    ).toMatchObject({ status: 'rejected', reason: 'production_data_root' });
+    ).toMatchObject({ status: 'rejected', reason: 'unverified_target' });
   });
 
   it('refuses a clone whose stated endpoint is not the one it connects to', () => {
@@ -169,5 +174,51 @@ describe('refusing a rehearsal target', () => {
         declaration: { kind: 'harness', containerName: '  ', createdByThisRun: true },
       }),
     ).toMatchObject({ status: 'rejected', reason: 'unverified_target' });
+  });
+});
+
+describe('resolving a path to a filesystem identity', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'aion-isolation-paths-'));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('follows a symlink to the directory it actually names', () => {
+    const real = join(dir, 'production');
+    mkdirSync(real);
+    writeFileSync(join(real, 'aion.sqlite'), 'fixture');
+    symlinkSync(real, join(dir, 'alias'));
+
+    expect(canonicalPath(join(dir, 'alias', 'aion.sqlite'))).toBe(
+      canonicalPath(join(real, 'aion.sqlite')),
+    );
+    expect(dataRootVerdict(join(dir, 'alias', 'aion.sqlite'), join(real, 'aion.sqlite'))).toBe(
+      'overlapping',
+    );
+  });
+
+  it('resolves a target that does not exist yet through its existing parent', () => {
+    const real = join(dir, 'production');
+    mkdirSync(real);
+    symlinkSync(real, join(dir, 'alias'));
+
+    expect(canonicalPath(join(dir, 'alias', 'not-created-yet.sqlite'))).toBe(
+      join(canonicalPath(real) ?? '', 'not-created-yet.sqlite'),
+    );
+  });
+
+  it('resolves nothing for a path that names no root', () => {
+    expect(canonicalPath('aion.sqlite')).toBe(undefined);
+    expect(dataRootVerdict('aion.sqlite', '/data/aion.sqlite')).toBe('unresolvable');
+  });
+
+  it('leaves the in-memory substrate as itself', () => {
+    expect(canonicalPath(IN_MEMORY_SQLITE)).toBe(IN_MEMORY_SQLITE);
+    expect(dataRootVerdict(IN_MEMORY_SQLITE, '/data/aion.sqlite')).toBe('distinct');
   });
 });

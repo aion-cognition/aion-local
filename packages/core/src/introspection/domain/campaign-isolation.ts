@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { dirname, isAbsolute, resolve, sep } from 'node:path';
 
 /**
@@ -10,6 +11,11 @@ import { dirname, isAbsolute, resolve, sep } from 'node:path';
  * refused too: an environment variable pointing somewhere is not evidence that the somewhere
  * is disposable, so a caller states what it built and the statement is checked against what it
  * is about to connect to.
+ *
+ * Paths are compared by filesystem identity, not by spelling. A symlink makes two names for one
+ * directory, and a rule that only tidies `..` and `.` reads them as two places; a teardown then
+ * runs against the real volume through the alias. A path whose identity cannot be resolved is
+ * refused rather than assumed distinct.
  */
 
 export type SubstrateTarget = {
@@ -73,34 +79,72 @@ export function normalizeEndpoint(uri: string): string {
 }
 
 /**
- * Overlap in either direction, on canonical paths. A rehearsal file beside the running one is
- * refused, and so is a running file beside a rehearsal directory: both mean a teardown reaches
- * bytes somebody else owns.
+ * The path with every symlink on it resolved.
+ *
+ * A target that does not exist yet still has an existing parent, and that parent is what says
+ * where the file will land, so the walk climbs to the nearest directory the filesystem knows
+ * and rejoins the rest. Undefined when nothing on the path resolves, which is an identity
+ * nobody can vouch for.
  */
-export function sharesDataRoot(target: string, production: string): boolean {
+export function canonicalPath(path: string, resolveLink = realpathSync): string | undefined {
+  if (path === IN_MEMORY_SQLITE) {
+    return path;
+  }
+  if (!isAbsolute(path)) {
+    return undefined;
+  }
+  const absolute = resolve(path);
+  const trailing: string[] = [];
+  let head = absolute;
+  for (;;) {
+    try {
+      return [resolveLink(head), ...trailing].join(sep);
+    } catch {
+      const parent = dirname(head);
+      if (parent === head) {
+        return undefined;
+      }
+      trailing.unshift(head.slice(parent.length + sep.length));
+      head = parent;
+    }
+  }
+}
+
+export type DataRootVerdict = 'distinct' | 'overlapping' | 'unresolvable';
+
+/**
+ * Overlap in either direction, on filesystem identity. A rehearsal file beside the running one
+ * is refused, and so is a running file beside a rehearsal directory: both mean a teardown
+ * reaches bytes somebody else owns.
+ */
+export function dataRootVerdict(
+  target: string,
+  production: string,
+  resolveLink = realpathSync,
+): DataRootVerdict {
   if (target === IN_MEMORY_SQLITE || production === IN_MEMORY_SQLITE) {
-    return false;
+    return 'distinct';
   }
-  if (!isAbsolute(target) || !isAbsolute(production)) {
-    return true;
+  const targetPath = canonicalPath(target, resolveLink);
+  const productionPath = canonicalPath(production, resolveLink);
+  if (targetPath === undefined || productionPath === undefined) {
+    return 'unresolvable';
   }
-  const targetPath = resolve(target);
-  const productionPath = resolve(production);
   if (targetPath === productionPath) {
-    return true;
+    return 'overlapping';
   }
-  return (
-    contains(dirname(productionPath), targetPath) || contains(dirname(targetPath), productionPath)
-  );
+  const overlapping =
+    contains(dirname(productionPath), targetPath) || contains(dirname(targetPath), productionPath);
+  return overlapping ? 'overlapping' : 'distinct';
+}
+
+/** Kept for callers asking the yes-or-no question; an unresolvable identity counts as overlap. */
+export function sharesDataRoot(target: string, production: string): boolean {
+  return dataRootVerdict(target, production) !== 'distinct';
 }
 
 function contains(root: string, path: string): boolean {
   return path === root || path.startsWith(`${root}${sep}`);
-}
-
-/** `:memory:` is not a path and stays itself; everything else is compared canonically. */
-function canonicalPath(path: string): string {
-  return path === IN_MEMORY_SQLITE ? path : resolve(path);
 }
 
 export type RehearsalCheck = {
@@ -126,11 +170,19 @@ export function checkRehearsalTarget(input: RehearsalCheck): IsolationVerdict {
       detail: 'the target resolves to the running graph endpoint',
     };
   }
-  if (sharesDataRoot(target.sqlitePath, production.sqlitePath)) {
+  const roots = dataRootVerdict(target.sqlitePath, production.sqlitePath);
+  if (roots === 'overlapping') {
     return {
       status: 'rejected',
       reason: 'production_data_root',
-      detail: 'the target file sits in the running substrate data directory',
+      detail: 'the target file resolves into the running substrate data directory',
+    };
+  }
+  if (roots === 'unresolvable') {
+    return {
+      status: 'rejected',
+      reason: 'unverified_target',
+      detail: 'the target path resolves to no filesystem identity anything can vouch for',
     };
   }
   if (declaration.kind === 'harness') {
@@ -143,9 +195,11 @@ export function checkRehearsalTarget(input: RehearsalCheck): IsolationVerdict {
     }
     return { status: 'isolated', basis: 'harness_created' };
   }
+  const declaredPath = canonicalPath(declaration.verifiedSqlitePath);
   if (
     normalizeEndpoint(declaration.verifiedGraphUri) !== normalizeEndpoint(target.graphUri) ||
-    canonicalPath(declaration.verifiedSqlitePath) !== canonicalPath(target.sqlitePath)
+    declaredPath === undefined ||
+    declaredPath !== canonicalPath(target.sqlitePath)
   ) {
     return {
       status: 'rejected',
