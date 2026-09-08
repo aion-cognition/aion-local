@@ -189,6 +189,7 @@ it('accepts references on a new source without wedging the acknowledgment slot',
 });
 
 it('accepts every statement kind a new source carries, once', async () => {
+  skipRecovery = false;
   const derived = await acceptSource('kinds-derived');
   const corrected = await acceptSource('kinds-corrected');
   const confirmed = 'claim-kinds';
@@ -240,6 +241,7 @@ it('accepts every statement kind a new source carries, once', async () => {
 });
 
 it('recovers a new source with references that crashed before its acknowledgment', async () => {
+  skipRecovery = false;
   const target = await acceptSource('crash-reference-target');
   let interrupt = true;
   const interrupted = new PublicationCoordinator({

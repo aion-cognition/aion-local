@@ -228,12 +228,17 @@ export function prepareReferenceAcceptance(
       updatedAt: new Date(acceptance.acceptedAt),
     });
   }
-  recordEvidenceAcknowledgment(db, {
-    sourceId: acceptance.sourceId,
-    referenceVersion: batch.referenceVersion,
-    effectKind: STATED_REFERENCE_EFFECT,
-    state: 'owed',
-  });
+  // A batch carrying no statement owes no settlement. Recording one anyway would make every
+  // ordinary acceptance look like it had references outstanding, and a reader counting owed
+  // work cannot tell a real obligation from a placeholder.
+  if (acceptance.targets.length > 0) {
+    recordEvidenceAcknowledgment(db, {
+      sourceId: acceptance.sourceId,
+      referenceVersion: batch.referenceVersion,
+      effectKind: STATED_REFERENCE_EFFECT,
+      state: 'owed',
+    });
+  }
   return batch.referenceVersion;
 }
 
@@ -331,13 +336,15 @@ export function acknowledgeReferenceAcceptance(
     advanceOperationalRevision(db, settlement.sourceId, generation.processingGeneration);
   }
   appendConfirmationEvents(db, settlement);
-  recordEvidenceAcknowledgment(db, {
-    sourceId: settlement.sourceId,
-    referenceVersion: settlement.referenceVersion,
-    effectKind: STATED_REFERENCE_EFFECT,
-    state: 'completed',
-    completedAt: new Date(settlement.observedAckAt),
-  });
+  if (settlement.targets.length > 0) {
+    recordEvidenceAcknowledgment(db, {
+      sourceId: settlement.sourceId,
+      referenceVersion: settlement.referenceVersion,
+      effectKind: STATED_REFERENCE_EFFECT,
+      state: 'completed',
+      completedAt: new Date(settlement.observedAckAt),
+    });
+  }
 }
 
 /**
