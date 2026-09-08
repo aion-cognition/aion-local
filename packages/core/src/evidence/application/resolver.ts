@@ -2,6 +2,7 @@ import type { Driver } from 'neo4j-driver';
 
 import {
   EvidenceDependencies,
+  sourceScopeDependencies,
   verifyEvidenceRevision,
   type RevisionCheck,
 } from './dependencies.js';
@@ -17,11 +18,13 @@ import { readClaimSubjects } from './subjects.js';
 import type { ClaimSubject } from '../../infrastructure/graph/subject-family.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { EvidenceRevision } from '../../infrastructure/publication/preconditions.js';
+import { sameCheckpoint } from '../../infrastructure/publication/protocol.js';
 import type {
   CheckpointResult,
   PublicationCheckpoint,
 } from '../../infrastructure/publication/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { pendingPublicationKind } from '../../infrastructure/sqlite/publication-coordinator-store.js';
 import type { CheckedReadContext } from '../../recall/application/coverage-checker.js';
 import { evidenceRequestKey, type EvidenceAddress } from '../domain/address.js';
 import { EVIDENCE_LIMITS, RequestBudget, type EvidenceLimits } from '../domain/budget.js';
@@ -87,6 +90,8 @@ function uncertifiedIssue(
 export class EvidenceResolver {
   readonly #options: EvidenceResolverOptions;
   readonly #limits: EvidenceLimits;
+  /** What each source's state chain said when its bytes were read, for the recheck to compare. */
+  readonly #stateVersions = new Map<string, string>();
 
   constructor(options: EvidenceResolverOptions) {
     this.#options = options;
@@ -167,6 +172,12 @@ export class EvidenceResolver {
       }
       const resolution = this.#readSource(address, { use, context, budget, required });
       dependencies.addAll(resolution.dependencies);
+      const stateVersion = resolution.dependencies.find(
+        (dependency) => dependency.scope === 'source.state',
+      );
+      if (resolution.value !== undefined && stateVersion !== undefined) {
+        this.#stateVersions.set(resolution.value.sourceId, stateVersion.version);
+      }
       issues.push(...resolution.issues);
       results.set(
         evidenceRequestKey(address),
@@ -182,12 +193,22 @@ export class EvidenceResolver {
     const drift = await this.#recheck(budget, before);
     if (drift !== undefined) {
       for (const [key, result] of results) {
-        // Raw bytes carry their own proof: the archive digest and the recorded mapping are
-        // immutable, so a publication in flight is disclosed against a verified reading rather
-        // than withheld from it. Anything the reading could not verify stays blocked.
+        // Raw bytes carry their own proof, and a pure eviction changes none of it: an archive
+        // digest and a recorded mapping outlive the removal of a projection. That is the whole
+        // exception. A publication of any other kind, a failed certification, or a source whose
+        // own state moved under the read stays blocking, because none of those leave what may
+        // be disclosed about those bytes untouched.
         const verified =
           result.evidence.status === 'complete-for-use' && result.value !== undefined;
-        const issue = uncertifiedIssue(result.address, drift, required && !verified);
+        const evictionOnly =
+          drift === 'pending_publication' &&
+          pendingPublicationKind(this.#options.db) === 'episode_eviction' &&
+          !this.#stateMoved(result, before);
+        const issue = uncertifiedIssue(
+          result.address,
+          drift,
+          required && !(verified && evictionOnly),
+        );
         issues.push(issue);
         results.set(
           key,
@@ -294,6 +315,21 @@ export class EvidenceResolver {
     };
   }
 
+  /**
+   * Whether what the substrate says about this source moved while the read was in flight. Raw
+   * bytes are immutable; what may be disclosed about them is not.
+   */
+  #stateMoved(result: EvidenceResult<SourceEvidence>, before: Certification): boolean {
+    const sourceId = result.value?.sourceId;
+    if (sourceId === undefined || before.status !== 'certified') {
+      return true;
+    }
+    const state = sourceScopeDependencies(this.#options.db, sourceId).find(
+      (dependency) => dependency.scope === 'source.state',
+    );
+    return state?.version !== this.#stateVersions.get(sourceId);
+  }
+
   /** Whether a stored revision still describes the substrate, before a decision is applied. */
   confirm(revision: EvidenceRevision): RevisionCheck {
     return verifyEvidenceRevision(this.#options.db, revision);
@@ -369,7 +405,11 @@ export class EvidenceResolver {
     }
     // A second reading that names no position proves nothing about the first, so the answer is
     // treated as one read under a position that may have moved.
-    return after.checkpoint?.sequence === taken.sequence ? undefined : 'pending_publication';
+    // The whole identity, not the sequence: a receipt from another substrate or another
+    // operation can carry the same number and mean something else entirely.
+    return after.checkpoint !== undefined && sameCheckpoint(after.checkpoint, taken)
+      ? undefined
+      : 'pending_publication';
   }
 }
 

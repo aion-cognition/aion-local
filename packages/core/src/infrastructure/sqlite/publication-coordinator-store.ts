@@ -274,6 +274,22 @@ export function publicationResult(record: PublicationRecord): JsonValue {
   return parseJson(record.resultJson);
 }
 
+/**
+ * What kind of operation currently holds the pending slot, when one does. A reader deciding
+ * whether an immutable raw answer survives a publication in flight needs to know which
+ * publication: a pure eviction touches no semantic state, and nothing else may borrow that.
+ */
+export function pendingPublicationKind(db: SqliteHandle): string | undefined {
+  try {
+    const pending = coordinatorControl(db).pendingOperationId;
+    return pending === null ? undefined : publicationRecord(db, pending)?.kind;
+  } catch {
+    // A substrate with no pairing to read cannot prove which publication is in flight, and a
+    // reader that cannot prove it does not get the exception that depends on it.
+    return undefined;
+  }
+}
+
 export function publicationOutcome(record: PublicationRecord): PublicationOutcome {
   if (record.state === 'deferred' || record.state === 'rejected') {
     return {

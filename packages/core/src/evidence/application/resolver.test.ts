@@ -199,6 +199,72 @@ describe('the evidence resolver', () => {
     expect(batch.issues.map((issue) => issue.reason)).toContain('pending_publication');
   });
 
+  it('does not certify raw disclosure across a newly acknowledged forget', async () => {
+    let calls = 0;
+    const publications = {
+      checkpoint: () => {
+        calls += 1;
+        if (calls === 2) {
+          commitSourceState(store.db, {
+            sourceId: 'episode-1',
+            stateKind: 'forgotten',
+            operationId: 'forget-during-read',
+            at: NOW,
+          });
+        }
+        return Promise.resolve(ready(String(calls)));
+      },
+    };
+    const batch = await resolver({
+      driver: lineageDriver({ unresolved: 0, log: { cyphers: [] } }),
+      publications,
+    }).resolveSources([idAddress('episode-1')], checkedContext(), 'raw_inspection');
+
+    expect(batch.results.get('["id","episode-1"]')?.evidence.status).not.toBe('complete-for-use');
+  });
+
+  it('does not certify the same sequence from a different substrate pairing', async () => {
+    let calls = 0;
+    const publications = {
+      checkpoint: () => {
+        calls += 1;
+        return Promise.resolve({
+          status: 'ready' as const,
+          checkpoint: {
+            substrateId: calls === 1 ? 'first-substrate' : 'second-substrate',
+            protocolVersion: 1,
+            sequence: '1',
+            operationId: null,
+            intentDigest: null,
+            resultDigest: null,
+          },
+        });
+      },
+    };
+    const batch = await resolver({
+      driver: lineageDriver({ unresolved: 0, log: { cyphers: [] } }),
+      publications,
+    }).resolveSources([idAddress('episode-1')], checkedContext(), 'claim_judgment');
+
+    expect(batch.results.get('["id","episode-1"]')?.evidence.status).not.toBe('complete-for-use');
+  });
+
+  it('keeps scope-store failure inside the per-address result contract', async () => {
+    store.db.prepare('ALTER TABLE evidence_scope_versions RENAME TO hidden_scope_versions').run();
+    try {
+      const outcome = await resolver({
+        driver: lineageDriver({ unresolved: 0, log: { cyphers: [] } }),
+      })
+        .resolveMetadata(['claim-1'], checkedContext(), { maxRoots: 4 })
+        .catch((error: unknown) => error);
+
+      expect(outcome).not.toBeInstanceOf(Error);
+      expect(outcome).toHaveProperty('results');
+    } finally {
+      store.db.prepare('ALTER TABLE hidden_scope_versions RENAME TO evidence_scope_versions').run();
+    }
+  });
+
   it('refuses to assemble a judgment it cannot certify against a publication position', async () => {
     const assembly = await resolver({
       driver: lineageDriver({ unresolved: 0, log: { cyphers: [] } }),

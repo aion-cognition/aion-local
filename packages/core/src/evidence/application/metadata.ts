@@ -290,7 +290,47 @@ export async function readItemMetadata(
 
   for (const id of accepted) {
     const address = idAddress(id);
-    const incidenceOf = byNode.get(id) ?? [];
+    try {
+      readOne(deps, input, id, byNode.get(id) ?? [], overRows || overWalk, provenance, {
+        record,
+        results,
+        issues,
+        dependencies,
+      });
+    } catch {
+      // Every store this read consults can be unavailable, and each one answers the same way:
+      // a named result for the address that could not be read, never a rejected batch.
+      record(address, [issueOn(address, 'ownership', 'store_unavailable', true)], 'resident');
+    }
+  }
+
+  return { results, issues, dependencies };
+}
+
+type MetadataSink = {
+  readonly record: (
+    address: EvidenceAddress,
+    found: readonly EvidenceIssue[],
+    residency: EvidenceResidency,
+  ) => void;
+  readonly results: Map<string, EvidenceResult<ItemMetadata>>;
+  readonly issues: EvidenceIssue[];
+  readonly dependencies: EvidenceDependency[];
+};
+
+/** One candidate's metadata, or the reason its stores could not answer for it. */
+function readOne(
+  deps: MetadataDeps,
+  input: MetadataInput,
+  id: string,
+  incidenceOf: readonly CommittedIncidence[],
+  overRows: boolean,
+  provenance: ReadonlyMap<string, ItemProvenance>,
+  sink: MetadataSink,
+): void {
+  const { record, results, issues, dependencies } = sink;
+  {
+    const address = idAddress(id);
     // Witness lineage and ownership are different questions. A claim's roots are the sources it
     // was extracted from; the sessions that carry it are every source that holds it under any of
     // the roles its writers record. Promoting a mentioning source to a root would invent an
@@ -333,7 +373,7 @@ export async function readItemMetadata(
     } else {
       nodeIssues.push(issueOn(address, 'interpretation_text', 'unverified_scope', false));
     }
-    if (overRows || overWalk) {
+    if (overRows) {
       nodeIssues.push(issueOn(address, 'ownership', 'budget_limit', false));
     }
     // Nothing writes the citation records yet, so the binding is named unavailable rather than
@@ -362,7 +402,7 @@ export async function readItemMetadata(
         ),
       );
       record(address, nodeIssues, residency);
-      continue;
+      return;
     }
 
     const value: ItemMetadata = {
@@ -375,7 +415,7 @@ export async function readItemMetadata(
     if (input.budget.chargeMetadataBytes(utf8Bytes(JSON.stringify(value))) !== undefined) {
       nodeIssues.push(issueOn(address, 'ownership', 'budget_limit', true));
       record(address, nodeIssues, 'resident');
-      continue;
+      return;
     }
     issues.push(...nodeIssues);
     results.set(
@@ -383,6 +423,4 @@ export async function readItemMetadata(
       evidenceResult({ address, residency: 'resident', issues: nodeIssues, value }),
     );
   }
-
-  return { results, issues, dependencies };
 }
