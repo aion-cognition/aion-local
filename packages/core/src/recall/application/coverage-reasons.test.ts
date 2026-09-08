@@ -163,6 +163,24 @@ describe('folding a run of issues into the statement', () => {
     expect(coverage.status).toBe('partial');
   });
 
+  it('bounds inherited gap lists as well as appended ones', () => {
+    const base: HistoryCoverage = {
+      contract_version: 1,
+      status: 'partial',
+      limitations: [],
+      gaps: Array.from({ length: 33 }, (_, index) => ({
+        id: `source-${String(index)}`,
+        field: 'source_content' as const,
+        reason: 'unresolved_mapping' as const,
+      })),
+    };
+
+    const result = applyEvidence(base, []).coverage;
+
+    expect.soft(result.gaps).toHaveLength(COVERAGE_GAP_LIMIT);
+    expect.soft(result.limitations).toContain('gap_list_truncated');
+  });
+
   it('never turns a partial statement back into a supported one', () => {
     const preparing: HistoryCoverage = {
       contract_version: 1,
@@ -217,6 +235,38 @@ describe('what a gap points at', () => {
     expect(decodeCoverageGapId(coverageGapId({ kind: 'node', id: 'episode-7' }))).toEqual({
       kind: 'node',
       id: 'episode-7',
+    });
+  });
+
+  it('does not recognize a negative part ordinal as a canonical part address', () => {
+    expect(decodeCoverageGapId('part:source:turn:-1')).toEqual({
+      kind: 'node',
+      id: 'part:source:turn:-1',
+    });
+  });
+
+  it('refuses to encode a negative part ordinal', () => {
+    expect(() =>
+      coverageGapId({ kind: 'part', sourceId: 'source', partKind: 'turn', ordinal: -1 }),
+    ).toThrow();
+  });
+
+  it('refuses to encode components the addressing contract has no room for', () => {
+    expect(() =>
+      coverageGapId({ kind: 'part', sourceId: '', partKind: 'turn', ordinal: 0 }),
+    ).toThrow();
+    expect(() =>
+      coverageGapId({ kind: 'part', sourceId: 'a:b', partKind: 'turn', ordinal: 0 }),
+    ).toThrow();
+    expect(() =>
+      coverageGapId({ kind: 'part', sourceId: 'source', partKind: 'turn', ordinal: 1.5 }),
+    ).toThrow();
+  });
+
+  it('reads a part kind nothing records as a plain id', () => {
+    expect(decodeCoverageGapId('part:source:sidebar:0')).toEqual({
+      kind: 'node',
+      id: 'part:source:sidebar:0',
     });
   });
 

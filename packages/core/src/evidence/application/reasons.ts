@@ -8,12 +8,7 @@ import {
   type EvidenceIssue as CoverageEvidenceIssue,
   type GapTarget,
 } from '../../recall/application/coverage-reasons.js';
-import {
-  idAddress,
-  partAddress,
-  type EvidenceAddress,
-  type SourcePartKind,
-} from '../domain/address.js';
+import { idAddress, partAddress, type EvidenceAddress } from '../domain/address.js';
 import type { EvidenceIssue } from '../domain/result.js';
 
 /**
@@ -46,7 +41,7 @@ export function addressForGapId(id: string): EvidenceAddress {
   const target = decodeCoverageGapId(id);
   return target.kind === 'node'
     ? idAddress(target.id)
-    : partAddress(target.sourceId, target.partKind as SourcePartKind, target.ordinal);
+    : partAddress(target.sourceId, target.partKind, target.ordinal);
 }
 
 export function coverageIssueFor(issue: EvidenceIssue): CoverageEvidenceIssue {

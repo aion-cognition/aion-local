@@ -1,5 +1,6 @@
 import type { CoverageField, CoverageGap, HistoryCoverage, HistoryGapReason } from '@aion/protocol';
 
+import { SOURCE_PART_KINDS, type SourcePartKind } from '../../evidence/domain/address.js';
 import { sourcePartAddress } from '../../infrastructure/sqlite/source-identity.js';
 
 /**
@@ -128,11 +129,13 @@ export function applyEvidence(
   base: HistoryCoverage,
   issues: readonly EvidenceIssue[],
 ): CoverageEvidence {
-  const gaps = [...base.gaps];
+  // The bound covers the list this call returns, inherited entries included. Applying it only to
+  // new issues would let a statement that already carried more than the bound pass through
+  // whole, and an unbounded list is the thing the bound exists to prevent.
+  const candidates = [...base.gaps];
   const outcomes: EvidenceOutcome[] = [];
   const limitations = [...base.limitations];
   let partial = base.status === 'partial';
-  let truncated = false;
   for (const issue of issues) {
     const treatment = evidenceTreatment(issue);
     if (treatment.kind === 'result') {
@@ -146,12 +149,9 @@ export function applyEvidence(
     // A missing required scope carries its own requiredness: a partial empty answer that reached
     // a caller as supported would read as a no-match the substrate stands behind.
     partial = partial || issue.required || issue.reason === 'required_scope_missing';
-    if (gaps.length < COVERAGE_GAP_LIMIT) {
-      gaps.push(treatment.gap);
-    } else {
-      truncated = true;
-    }
+    candidates.push(treatment.gap);
   }
+  const truncated = candidates.length > COVERAGE_GAP_LIMIT;
   if (truncated && !limitations.includes('gap_list_truncated')) {
     limitations.push('gap_list_truncated');
   }
@@ -160,7 +160,7 @@ export function applyEvidence(
       ...base,
       status: partial || truncated ? 'partial' : base.status,
       limitations,
-      gaps,
+      gaps: truncated ? candidates.slice(0, COVERAGE_GAP_LIMIT) : candidates,
     },
     outcomes,
   };
@@ -175,20 +175,44 @@ export type GapTarget =
   | {
       readonly kind: 'part';
       readonly sourceId: string;
-      readonly partKind: string;
+      readonly partKind: SourcePartKind;
       readonly ordinal: number;
     };
 
+/**
+ * One check for both directions. Re-encoding proves a string is spelled consistently, which is
+ * not the same as naming a part the substrate can hold: the addressing contract has a source
+ * identity that survives the encoding, one of the recorded part kinds, and an ordinal that
+ * counts from zero.
+ */
+function addressable(
+  sourceId: string,
+  partKind: string,
+  ordinal: number,
+): partKind is SourcePartKind {
+  return (
+    sourceId !== '' &&
+    !sourceId.includes(':') &&
+    (SOURCE_PART_KINDS as readonly string[]).includes(partKind) &&
+    Number.isSafeInteger(ordinal) &&
+    ordinal >= 0
+  );
+}
+
 export function coverageGapId(target: GapTarget): string {
-  return target.kind === 'node'
-    ? target.id
-    : sourcePartAddress(target.sourceId, target.partKind, target.ordinal);
+  if (target.kind === 'node') {
+    return target.id;
+  }
+  if (!addressable(target.sourceId, target.partKind, target.ordinal)) {
+    throw new Error(`part address outside the addressing contract: ${JSON.stringify(target)}`);
+  }
+  return sourcePartAddress(target.sourceId, target.partKind, target.ordinal);
 }
 
 /**
- * The reverse conversion, validated by re-encoding: an address that does not encode back to
- * itself is not one this substrate produced, and reading it as a part would name a record
- * nobody addressed that way.
+ * The reverse conversion. An address that does not encode back to itself, or that names
+ * components no part can have, is not one this substrate produced, and reading it as a part
+ * would name a record nobody addressed that way. It stays a plain id instead.
  */
 export function decodeCoverageGapId(id: string): GapTarget {
   const [prefix, sourceId, partKind, ordinal] = id.split(':');
@@ -196,7 +220,10 @@ export function decodeCoverageGapId(id: string): GapTarget {
     return { kind: 'node', id };
   }
   const position = Number(ordinal);
-  if (!Number.isInteger(position) || sourcePartAddress(sourceId, partKind, position) !== id) {
+  if (
+    !addressable(sourceId, partKind, position) ||
+    sourcePartAddress(sourceId, partKind, position) !== id
+  ) {
     return { kind: 'node', id };
   }
   return { kind: 'part', sourceId, partKind, ordinal: position };
