@@ -349,7 +349,7 @@ describe('raw source evidence', () => {
     expect(resolution.value?.text).toContain('the runbook was out of date');
   });
 
-  it('does not date a replacement occurrence by its predecessor raw acceptance', () => {
+  it('does not date a replacement occurrence by its canonical predecessors raw acceptance', () => {
     const early = new Date('2026-09-08T08:00:00.000Z');
     const fresh = new Date('2026-09-08T11:00:00.000Z');
     const shared = { turns: [{ role: 'user', text: 'shared raw bytes' }] };
