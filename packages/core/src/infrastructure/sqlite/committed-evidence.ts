@@ -1,4 +1,5 @@
 import type { SqliteHandle } from './database.js';
+import { STATED_LINK_KINDS } from './evidence-links.js';
 
 /**
  * Reads over the committed evidence view.
@@ -180,13 +181,32 @@ export function committedIncidenceForNodes(
 }
 
 /**
+ * The links whose newest version acknowledged by a moment is the one that stood then. The
+ * enumeration is the immutable chain, and the projection row rides along where it still exists.
+ */
+const HISTORICAL_INCIDENCE = `SELECT l.from_id AS source_id, l.to_id AS node_id,
+    COALESCE(s.role, l.kind) AS role, COALESCE(s.currency, 'open') AS currency,
+    l.link_id, v.version AS link_version, v.recorded_values_json
+  FROM evidence_links l
+  JOIN evidence_link_versions v ON v.link_id = l.link_id
+  JOIN publication_intents i ON i.operation_id = v.operation_id AND i.state = 'acknowledged'
+  LEFT JOIN source_incidence s
+    ON s.link_id = l.link_id AND s.source_id = l.from_id AND s.node_id = l.to_id`;
+
+/**
  * The same batch as it stood at a past moment.
  *
  * Incidence is a current projection: its `link_version` pointer says which version is in force
- * now, and reading that pointer at an earlier vantage answers with today's row or with nothing.
- * The version chain is what holds the past, so the newest version acknowledged by then is
- * selected first and the incidence is derived from it. Currency comes from that version's own
- * recorded values where it stated one, for the same reason.
+ * now, and its row can be gone entirely while the link that recorded it is not. The version
+ * chain is what holds the past, so the walk starts from the links and their recorded values,
+ * takes the newest version acknowledged by that moment, and reads the projection only for the
+ * two fields it alone names: the role it was recorded under and the currency it carries now.
+ * With that row gone, the link's own kind is the recorded classification and the values on the
+ * version supply the rest. Enumerating the rows instead would report a retired projection as a
+ * link that was never stated.
+ *
+ * Stated references are the one thing excluded: they are relations between endpoints rather
+ * than incidence, and only their own projection row names the role they are held under.
  */
 export function committedIncidenceForNodesAt(
   db: SqliteHandle,
@@ -199,37 +219,78 @@ export function committedIncidenceForNodesAt(
     return [];
   }
   const placeholders = unique.map(() => '?').join(', ');
-  const roleClause = role === undefined ? '' : 'AND s.role = ?';
+  const kinds = STATED_LINK_KINDS.map(() => '?').join(', ');
+  const roleClause = role === undefined ? '' : 'AND COALESCE(s.role, l.kind) = ?';
   const moment = at.toISOString();
-  const parameters = role === undefined ? unique : [...unique, role];
+  const parameters = [
+    ...unique,
+    ...STATED_LINK_KINDS,
+    ...(role === undefined ? [] : [role]),
+    moment,
+    moment,
+  ];
   const rows = db
     .prepare(
-      `SELECT s.source_id, s.node_id, s.role, s.currency, s.link_id, v.version AS link_version,
-              v.recorded_values_json
-       FROM source_incidence s
-       JOIN evidence_link_versions v ON v.link_id = s.link_id
-       JOIN publication_intents i ON i.operation_id = v.operation_id AND i.state = 'acknowledged'
-       WHERE s.node_id IN (${placeholders}) ${roleClause}
+      `${HISTORICAL_INCIDENCE}
+       WHERE l.to_id IN (${placeholders})
+         AND (s.role IS NOT NULL OR l.kind NOT IN (${kinds})) ${roleClause}
          AND v.known_from IS NOT NULL AND v.known_from <= ?
          AND v.version = (
            SELECT MAX(h.version) FROM evidence_link_versions h
            JOIN publication_intents hi
              ON hi.operation_id = h.operation_id AND hi.state = 'acknowledged'
-           WHERE h.link_id = s.link_id AND h.known_from IS NOT NULL AND h.known_from <= ?
+           WHERE h.link_id = l.link_id AND h.known_from IS NOT NULL AND h.known_from <= ?
          )
-       ORDER BY s.node_id, s.source_id, s.role`,
+       ORDER BY node_id, source_id, role`,
     )
-    .all(...parameters, moment, moment) as (IncidenceRowData & {
+    .all(...parameters) as (IncidenceRowData & {
     recorded_values_json: string;
   })[];
-  return rows.map((row) => {
-    const stated = JSON.parse(row.recorded_values_json) as { currency?: unknown };
-    return {
-      ...toIncidence(row),
-      currency:
-        stated.currency === 'closed' || stated.currency === 'open' ? stated.currency : row.currency,
-    };
-  });
+  return rows.map(toHistoricalIncidence);
+}
+
+/**
+ * The other direction at a past moment: everything one source carried then, read from the same
+ * chain. A subject join that fell back to the records needs it, because the present rows say
+ * what the source carries now and nothing about what it carried at the vantage asked for.
+ */
+export function committedIncidenceForSourceAt(
+  db: SqliteHandle,
+  sourceId: string,
+  at: Date,
+): readonly CommittedIncidence[] {
+  const kinds = STATED_LINK_KINDS.map(() => '?').join(', ');
+  const moment = at.toISOString();
+  const rows = db
+    .prepare(
+      `${HISTORICAL_INCIDENCE}
+       WHERE l.from_id = ?
+         AND (s.role IS NOT NULL OR l.kind NOT IN (${kinds}))
+         AND v.known_from IS NOT NULL AND v.known_from <= ?
+         AND v.version = (
+           SELECT MAX(h.version) FROM evidence_link_versions h
+           JOIN publication_intents hi
+             ON hi.operation_id = h.operation_id AND hi.state = 'acknowledged'
+           WHERE h.link_id = l.link_id AND h.known_from IS NOT NULL AND h.known_from <= ?
+         )
+       ORDER BY node_id, role`,
+    )
+    .all(sourceId, ...STATED_LINK_KINDS, moment, moment) as (IncidenceRowData & {
+    recorded_values_json: string;
+  })[];
+  return rows.map(toHistoricalIncidence);
+}
+
+/** Currency as the version recorded it, falling back to what the projection still says. */
+function toHistoricalIncidence(
+  row: IncidenceRowData & { recorded_values_json: string },
+): CommittedIncidence {
+  const stated = JSON.parse(row.recorded_values_json) as { currency?: unknown };
+  return {
+    ...toIncidence(row),
+    currency:
+      stated.currency === 'closed' || stated.currency === 'open' ? stated.currency : row.currency,
+  };
 }
 
 /**

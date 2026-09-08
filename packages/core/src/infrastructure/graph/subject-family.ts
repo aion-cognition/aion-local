@@ -16,7 +16,7 @@ import {
 import { ENTITY_MENTION_TYPE } from './entity-queries.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
 import { BASE_NODE_LABEL, EXTRACTION_TYPE } from './labels.js';
-import { readModeFragment, type ReadMode } from './read-modes.js';
+import { edgeModeFragment, readModeFragment, type ReadMode } from './read-modes.js';
 import { ENTITY_NAME_NORM_PROPERTY, ENTITY_NAME_PROPERTY } from './seed-queries.js';
 import { FACT_NODE_LABELS, MIN_SUBJECT_NAME_LENGTH } from './supersession-queries.js';
 import { toGraphDateTime, toGraphInteger, type Row } from './values.js';
@@ -66,11 +66,17 @@ const SUBJECT_PROPAGATION_SIGNALS = ['subject_family'];
 function subjectsOfClaim(mode: ReadMode): GraphStatement {
   const source = readModeFragment(mode, 'source', 'rmsrc');
   const entity = readModeFragment(mode, 'e', 'rment');
+  // Both hops carry their own clock. The claim, its capture and the entity can all predate the
+  // vantage while the extraction or the mention was written after it, and a join judged on the
+  // three nodes alone would name a subject nobody had connected yet.
+  const extracted = edgeModeFragment(mode, 'extracted', 'rmext');
+  const mentions = edgeModeFragment(mode, 'mentions', 'rmmen');
   const cypher = [
-    `MATCH (claim:${BASE_NODE_LABEL} { id: $claimId })-[:${EXTRACTION_TYPE}]->(source:Episode)`,
-    `WHERE ${source.where}`,
-    `MATCH (source)-[:${ENTITY_MENTION_TYPE}]->(e:Entity)`,
-    `WHERE ${entity.where}`,
+    `MATCH (claim:${BASE_NODE_LABEL} { id: $claimId })` +
+      `-[extracted:${EXTRACTION_TYPE}]->(source:Episode)`,
+    `WHERE ${source.where} AND ${extracted.where}`,
+    `MATCH (source)-[mentions:${ENTITY_MENTION_TYPE}]->(e:Entity)`,
+    `WHERE ${entity.where} AND ${mentions.where}`,
     `  AND size(e.${ENTITY_NAME_NORM_PROPERTY}) >= $minNameLength`,
     `  AND claim.${TEXT_NORM_PROPERTY} CONTAINS e.${ENTITY_NAME_NORM_PROPERTY}`,
     `RETURN DISTINCT e.id AS id, e.${ENTITY_NAME_PROPERTY} AS name,`,
@@ -83,6 +89,8 @@ function subjectsOfClaim(mode: ReadMode): GraphStatement {
     parameters: {
       ...source.parameters,
       ...entity.parameters,
+      ...extracted.parameters,
+      ...mentions.parameters,
       minNameLength: toGraphInteger(MIN_SUBJECT_NAME_LENGTH),
     },
   };

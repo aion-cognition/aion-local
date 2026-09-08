@@ -7,6 +7,10 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { JudgmentPair } from './judgment.js';
 import { EvidenceResolver } from './resolver.js';
 import type { CheckpointResult } from '../../infrastructure/publication/types.js';
+import {
+  committedIncidenceForNodesAt,
+  committedLinkVersionAt,
+} from '../../infrastructure/sqlite/committed-evidence.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import { recordScopeMirror } from '../../infrastructure/sqlite/evidence-scope.js';
 import { GRAPH_NODE_SCOPE } from '../domain/scopes.js';
@@ -125,4 +129,12 @@ it('includes the judged node state in the revision it confirms', async () => {
     mirroredAt: NOW,
   });
   expect(r.confirm(result.revision).status).not.toBe('current');
+});
+
+it('can derive old incidence from the preserved chain after its current row is removed', () => {
+  expect(committedLinkVersionAt(store.db, 'left:old:extraction', NOW)?.version).toBe(1);
+  store.db.prepare("DELETE FROM source_incidence WHERE source_id='left' AND node_id='old'").run();
+  expect(
+    committedIncidenceForNodesAt(store.db, ['old'], NOW, 'extraction').map((row) => row.sourceId),
+  ).toEqual(['left']);
 });

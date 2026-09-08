@@ -7,7 +7,10 @@ import { findClaimSubjects, type ClaimSubject } from '../../infrastructure/graph
 import type { EvidenceDependency } from '../../infrastructure/publication/preconditions.js';
 import {
   committedIncidenceForNode,
+  committedIncidenceForNodesAt,
   committedIncidenceForSource,
+  committedIncidenceForSourceAt,
+  type CommittedIncidence,
 } from '../../infrastructure/sqlite/committed-evidence.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import type { CheckedReadContext } from '../../recall/application/coverage-checker.js';
@@ -58,14 +61,33 @@ function withoutGloss(subject: ClaimSubject): ClaimSubject {
   return gloss === undefined ? subject : rest;
 }
 
+/**
+ * The sources a claim was extracted from, at the vantage the request was checked against. The
+ * present rows answer for now; an earlier question is answered from the version chain, because
+ * today's projection cannot say which sources carried the claim then.
+ */
+function extractionSources(
+  db: SqliteHandle,
+  claimId: string,
+  knownAt: Date | undefined,
+): readonly CommittedIncidence[] {
+  return knownAt === undefined
+    ? committedIncidenceForNode(db, claimId, 'extraction')
+    : committedIncidenceForNodesAt(db, [claimId], knownAt, 'extraction');
+}
+
 /** Entities the records say this claim's sources mention, with the source that carries each. */
 function mentionedEntities(
   db: SqliteHandle,
   claimId: string,
+  knownAt: Date | undefined,
 ): readonly { readonly entityId: string; readonly sourceId: string }[] {
-  const sources = committedIncidenceForNode(db, claimId, 'extraction');
+  const sources = extractionSources(db, claimId, knownAt);
   return sources.flatMap((source) =>
-    committedIncidenceForSource(db, source.sourceId)
+    (knownAt === undefined
+      ? committedIncidenceForSource(db, source.sourceId)
+      : committedIncidenceForSourceAt(db, source.sourceId, knownAt)
+    )
       .filter((row) => row.role === 'mention')
       .map((row) => ({ entityId: row.nodeId, sourceId: source.sourceId })),
   );
@@ -74,8 +96,9 @@ function mentionedEntities(
 async function subjectsFromRecords(
   deps: SubjectDeps,
   claimId: string,
+  knownAt: Date | undefined,
 ): Promise<readonly ClaimSubject[]> {
-  const mentions = mentionedEntities(deps.db, claimId);
+  const mentions = mentionedEntities(deps.db, claimId, knownAt);
   if (mentions.length === 0) {
     return [];
   }
@@ -128,7 +151,7 @@ export async function readClaimSubjects(
       // that was not visible then is not part of the answer now.
       subjects = await findClaimSubjects(deps.driver, claimId, input.context.mode);
       if (subjects.length === 0) {
-        subjects = await subjectsFromRecords(deps, claimId);
+        subjects = await subjectsFromRecords(deps, claimId, input.context.mode.knownAt);
       }
     } catch {
       const issue = issueOn(address, 'interpretation_text', 'store_unavailable', true);
@@ -144,7 +167,7 @@ export async function readClaimSubjects(
     // The join runs claim to source to entity, so the scopes it rests on are the claim's own
     // extraction and each contributing source's mentions. Asking the claim for a mention scope
     // would make a writer invent a relation it does not own.
-    const sources = committedIncidenceForNode(deps.db, claimId, 'extraction');
+    const sources = extractionSources(deps.db, claimId, input.context.mode.knownAt);
     const consulted = [
       {
         endpointId: claimId,

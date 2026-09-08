@@ -106,6 +106,40 @@ function assertIdentifier(name: string, value: string): void {
   }
 }
 
+/** What a relationship records about its own two clocks: when it was written, and when it left. */
+export const EDGE_PROPERTIES = { createdAt: 'created_at', txUntil: BITEMPORAL_PROPERTIES.txUntil };
+
+export type EdgeFragment = {
+  readonly where: string;
+  readonly parameters: Record<string, unknown>;
+};
+
+/**
+ * Whether a traversed relationship was there at the read's own vantage.
+ *
+ * Node predicates alone do not answer this: three nodes that all existed in January say nothing
+ * about an edge written in September, and a join filtered on the nodes returns it anyway. A
+ * knowledge-time read walks only relationships the substrate had recorded by then and had not
+ * retracted by then. An edge with no recorded creation time cannot prove it was there, so it is
+ * not walked rather than assumed; a default read walks everything, as it always has.
+ */
+export function edgeModeFragment(mode: ReadMode, edgeVar: string, prefix = 'rme'): EdgeFragment {
+  assertIdentifier('edgeVar', edgeVar);
+  assertIdentifier('prefix', prefix);
+  if (mode.knownAt === undefined) {
+    return { where: 'true', parameters: {} };
+  }
+  const knownAtParam = `${prefix}_edge_known_at`;
+  return {
+    where:
+      `(${edgeVar}.${EDGE_PROPERTIES.createdAt} IS NOT NULL` +
+      ` AND ${edgeVar}.${EDGE_PROPERTIES.createdAt} <= $${knownAtParam}` +
+      ` AND (${edgeVar}.${EDGE_PROPERTIES.txUntil} IS NULL` +
+      ` OR ${edgeVar}.${EDGE_PROPERTIES.txUntil} > $${knownAtParam}))`,
+    parameters: { [knownAtParam]: toGraphDateTime(mode.knownAt) },
+  };
+}
+
 /**
  * Composable pieces rather than a finished query: the four seed strategies and the
  * traversal each build their own MATCH and splice the same predicate and annotation in,
