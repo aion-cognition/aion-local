@@ -365,6 +365,27 @@ export function openSqliteHandle(target: SqliteTarget): SqliteHandle {
   throw new Error('unreachable');
 }
 
+/**
+ * A connection that can only read. The open above creates the file, creates the schema and
+ * runs a key migration, so pointing it at a substrate to take a measurement would change the
+ * thing being measured, and pointing it at a path that does not exist would report an empty
+ * substrate rather than a missing one. This one does neither: a missing file throws and the
+ * schema is whatever the file already holds.
+ */
+export function openReadOnlySqliteHandle(target: SqliteTarget): SqliteHandle {
+  const db = new Database(target.filePath, { readonly: true, fileMustExist: true });
+  db.pragma(`busy_timeout = ${String(target.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS)}`);
+  return db;
+}
+
+/** Whether a table this substrate is being read for is actually present. */
+export function sqliteTableExists(db: SqliteHandle, table: string): boolean {
+  const row = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(table);
+  return row !== undefined;
+}
+
 /** Owns the WAL-mode connection lifecycle; schema bootstrap runs idempotently on open. */
 export class SqliteStore {
   readonly db: SqliteHandle;
