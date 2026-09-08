@@ -5,6 +5,7 @@ import {
 } from '../../infrastructure/publication/preconditions.js';
 import { committedSourceStates } from '../../infrastructure/sqlite/committed-evidence.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { listStatedLinks } from '../../infrastructure/sqlite/evidence-links.js';
 import {
   publishedScopeToken,
   readScopeMirror,
@@ -16,6 +17,7 @@ import {
   readSourceParts,
   readSourceRecord,
   type SourcePartRecord,
+  type SourceRecord,
 } from '../../infrastructure/sqlite/source-identity.js';
 import { hashContent } from '../../reflection/domain/content.js';
 import { scopeAuthority } from '../domain/scopes.js';
@@ -24,16 +26,45 @@ import { scopeAuthority } from '../domain/scopes.js';
  * What a read observed, and how a later writer finds out that it changed.
  *
  * A dependency is the whole tuple of record kind, endpoint and scope, and its version comes
- * from the store that owns it. The fixed source scopes are versioned by the durable records
- * themselves, so an empty state chain or an empty reference history is a positive answer. A
- * relation scope is different: an empty relation set is only evidence of emptiness once a
- * census has established it, and a reader never mints that proof by looking.
+ * from the store that owns it. The fixed source scopes are versioned by the records that own
+ * them: the content by the proof behind it, the parts by the mapping a read was taken under, the
+ * state and reference history by what has been committed. A relation scope is different: what it
+ * returns is only a membership once a census has counted it, and a reader never mints that proof
+ * by looking.
  */
 
+/**
+ * The part mapping a read was taken under, original ids included. A changed turn mapping is a
+ * changed answer about which node holds which capture, so it has to move the version even though
+ * the bytes behind it did not.
+ */
 export function partsDigest(parts: readonly SourcePartRecord[]): string {
   return hashContent(
-    parts.map((part) => [part.partKind, part.ordinal, part.contentHash, part.role ?? '']),
+    parts.map((part) => [
+      part.partKind,
+      part.ordinal,
+      part.contentHash,
+      part.role ?? '',
+      part.turnId ?? '',
+      part.occurredAt ?? '',
+    ]),
   );
+}
+
+/**
+ * The proof state behind the content, not only the content. A record that loses verification
+ * still carries the digest it once proved, so a reader fenced on the digest alone would go on
+ * treating an unproved occurrence as the one it read.
+ */
+function contentProofVersion(record: SourceRecord): string {
+  return hashContent([
+    record.verifiedContentDigest ?? '',
+    record.verificationStatus,
+    record.identityHash ?? '',
+    record.canonicalArchiveId ?? '',
+    record.archiveSchemaVersion ?? 0,
+    record.verificationPolicyVersion ?? 0,
+  ]);
 }
 
 /** The four fixed source scopes, versioned from the records that own them. */
@@ -45,15 +76,9 @@ export function sourceScopeDependencies(
   if (record === undefined) {
     return [];
   }
-  const digest = record.verifiedContentDigest;
   const states = committedSourceStates(db, sourceId);
-  const batches = listReferenceBatches(db, sourceId);
   return [
-    // An unverified occurrence cites no content version: there is nothing a later reader could
-    // compare against.
-    ...(digest === null
-      ? []
-      : [{ kind: 'source' as const, id: sourceId, scope: 'source.content', version: digest }]),
+    { kind: 'source', id: sourceId, scope: 'source.content', version: contentProofVersion(record) },
     {
       kind: 'source',
       id: sourceId,
@@ -70,9 +95,24 @@ export function sourceScopeDependencies(
       kind: 'source',
       id: sourceId,
       scope: 'source.references',
-      version: String(batches.at(-1)?.referenceVersion ?? 0),
+      version: referenceStateVersion(db, sourceId),
     },
   ];
+}
+
+/**
+ * What the substrate has accepted and what it has committed, kept apart.
+ *
+ * An accepted batch says a delivery arrived; a committed link version says the evidence entered
+ * the view a reader may cite. Folding the two into one number would let an unacknowledged
+ * delivery pass for settled reference state.
+ */
+function referenceStateVersion(db: SqliteHandle, sourceId: string): string {
+  const accepted = listReferenceBatches(db, sourceId).at(-1)?.referenceVersion ?? 0;
+  const committed = listStatedLinks(db, sourceId)
+    .filter((link) => link.knownFrom !== null)
+    .map((link) => [link.linkId, link.version, link.knownFrom]);
+  return hashContent({ accepted, committed });
 }
 
 export type ScopeReadInput = {
@@ -96,7 +136,10 @@ export type ScopeReading =
  */
 export function readRelationScope(db: SqliteHandle, input: ScopeReadInput): ScopeReading {
   const key = { endpointId: input.endpointId, relationClass: input.scope };
-  if (input.empty && !scopeSupportsVerifiedEmpty(db, key)) {
+  // The census gates every reading of a relation set, not only an empty one. A partially
+  // inventoried scope can hold members nobody has counted, so what it returns is a sample rather
+  // than the membership a judgment is entitled to treat as whole.
+  if (!scopeSupportsVerifiedEmpty(db, key)) {
     return { status: 'unverified' };
   }
   if (scopeAuthority(input.scope) === 'graph') {

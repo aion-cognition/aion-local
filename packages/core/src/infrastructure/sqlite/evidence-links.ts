@@ -137,6 +137,8 @@ export type StatedLinkRow = {
   readonly kind: string;
   readonly qualifier: string;
   readonly toId: string;
+  /** The side that stated it. Present on a read taken from the target's side. */
+  readonly fromId?: string;
   readonly version: number;
   readonly knownFrom: string | null;
   readonly referenceVersion: number | null;
@@ -166,6 +168,43 @@ export function listStatedLinks(db: SqliteHandle, fromId: string): readonly Stat
     kind: row.kind,
     qualifier: row.qualifier,
     toId: row.to_id,
+    version: row.version,
+    knownFrom: row.known_from,
+    referenceVersion: row.reference_version,
+  }));
+}
+
+/**
+ * Every stated reference recorded AT one target, which is how a correction or a confirmation is
+ * found from the side it was made about. The edge in the graph is a projection of these rows, so
+ * this answers after that projection is gone.
+ */
+export function listStatedLinksTo(db: SqliteHandle, toId: string): readonly StatedLinkRow[] {
+  const rows = db
+    .prepare(
+      `SELECT l.link_id, l.kind, l.qualifier, l.to_id, l.from_id, v.version, v.known_from,
+              v.reference_version
+       FROM evidence_links l
+       JOIN evidence_link_versions v ON v.link_id = l.link_id
+       WHERE l.to_id = ?
+       ORDER BY v.known_from, l.kind, l.from_id, v.version`,
+    )
+    .all(toId) as {
+    link_id: string;
+    kind: string;
+    qualifier: string;
+    to_id: string;
+    from_id: string;
+    version: number;
+    known_from: string | null;
+    reference_version: number | null;
+  }[];
+  return rows.map((row) => ({
+    linkId: row.link_id,
+    kind: row.kind,
+    qualifier: row.qualifier,
+    toId: row.to_id,
+    fromId: row.from_id,
     version: row.version,
     knownFrom: row.known_from,
     referenceVersion: row.reference_version,
