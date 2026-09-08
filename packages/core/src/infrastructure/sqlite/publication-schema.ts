@@ -77,6 +77,7 @@ export const PUBLICATION_SCHEMA_STATEMENTS: readonly string[] = [
     detail_json TEXT,
     PRIMARY KEY (operation_id, effect_kind)
   )`,
+  /** Speeds the pending-slot assertion; the guard and control-row compare-and-set enforce it. */
   `CREATE INDEX IF NOT EXISTS publication_intents_pending_idx
     ON publication_intents(operation_id) WHERE state = 'prepared'`,
   /**
