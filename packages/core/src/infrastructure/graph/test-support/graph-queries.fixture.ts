@@ -617,3 +617,41 @@ export async function seedBareEntity(
     () => undefined,
   );
 }
+
+/**
+ * A retained claim carrying the source id its extraction recorded, without the source projection
+ * having to exist. This is the shape a graph holds after an eviction: the interpretation stays,
+ * the raw capture behind it does not.
+ */
+export async function seedRetainedClaim(
+  driver: Driver,
+  input: { readonly id: string; readonly sourceId: string },
+): Promise<void> {
+  await runWrite(
+    driver,
+    {
+      cypher: 'CREATE (n:AionNode:Memory:Claim {id: $id, source_episode_id: $sourceId})',
+      parameters: { id: input.id, sourceId: input.sourceId },
+    },
+    () => undefined,
+  );
+}
+
+/**
+ * Takes a raw projection out of the graph the way an eviction does, reversibly: the node keeps
+ * its row under a retired id so a test can put it back, and no reader can reach it meanwhile.
+ */
+export async function retireEpisodeProjection(driver: Driver, episodeId: string): Promise<void> {
+  await runWrite(
+    driver,
+    {
+      cypher: [
+        'MATCH (n:Episode {id: $id})',
+        'SET n.id = "retired:" + n.id',
+        'REMOVE n:AionNode:Memory:Episode',
+      ].join('\n'),
+      parameters: { id: episodeId },
+    },
+    () => undefined,
+  );
+}

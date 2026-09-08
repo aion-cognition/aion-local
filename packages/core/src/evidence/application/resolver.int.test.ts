@@ -12,11 +12,17 @@ import {
   stopRehearsalSubstrate,
   type RehearsalSubstrate,
 } from '../../infrastructure/graph/test-support/consolidation-rehearsal.fixture.js';
+import {
+  retireEpisodeProjection,
+  seedRetainedClaim,
+} from '../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
 import { PublicationPendingError } from '../../infrastructure/publication/errors.js';
 import { PUBLICATION_HANDLERS } from '../../infrastructure/publication/handlers.js';
 import type { PublicationBoundary } from '../../infrastructure/publication/types.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
+import { publicationRecord } from '../../infrastructure/sqlite/publication-coordinator-store.js';
+import { transitionSourceResidency } from '../../infrastructure/sqlite/source-lifecycle.js';
 import { intakePublication } from '../../reflection/application/intake-publication.js';
 import type { ReflectionContent } from '../../reflection/domain/content.js';
 import { PIPELINE_VERSION } from '../../reflection/domain/version.js';
@@ -269,7 +275,75 @@ describe('evidence against the real stores', () => {
       logger,
     });
 
-    expect(outcome).toEqual({ status: 'settled', operationId });
+    expect(outcome).toMatchObject({ status: 'settled', operationId });
+    // The receipt says an operation landed. Its own result is what says what landed.
+    expect(outcome.status === 'settled' ? outcome.result : undefined).toMatchObject({
+      created: true,
+    });
     expect(coordinator.hasPending()).toBe(false);
+  });
+
+  it('keeps a claim rooted in its durable source after the raw projection leaves the graph', async () => {
+    serial += 1;
+    const marker = `metadata-evicted-${String(serial)}`;
+    const sourceId = await accept(marker);
+    const claimId = `claim-${marker}`;
+    await seedRetainedClaim(substrate.harness.driver, { id: claimId, sourceId });
+    commitIncidence(store.db, {
+      sourceId,
+      nodeId: claimId,
+      role: 'extraction',
+      operationId: `metadata-extraction-${marker}`,
+      at: NOW,
+    });
+    establishScope(store.db, claimId, durableRoleScope('extraction', 'out'), NOW);
+    establishScope(store.db, sourceId, durableRoleScope('stated_derivation', 'out'), NOW);
+    const reader = resolver({ certified: false });
+    const before = await reader.resolveMetadata([claimId], checkedContext(), { maxRoots: 4 });
+
+    expect(before.results.get(JSON.stringify(['id', claimId]))?.value?.provenance.roots).toEqual([
+      sourceId,
+    ]);
+
+    transitionSourceResidency(store.db, {
+      sourceId,
+      state: 'evicted',
+      operationId: `evict-${marker}`,
+      transitionedAt: NOW,
+    });
+    await retireEpisodeProjection(substrate.harness.driver, sourceId);
+    const after = await reader.resolveMetadata([claimId], checkedContext(), { maxRoots: 4 });
+
+    expect(after.results.get(JSON.stringify(['id', claimId]))?.value?.provenance.roots).toEqual([
+      sourceId,
+    ]);
+  });
+
+  it('recognizes its acknowledged operation when another actor recovered it first', async () => {
+    serial += 1;
+    const operationId = `intake-recovered-elsewhere-${String(serial)}`;
+    failAt = 'before_ack';
+    await expect(
+      coordinator.publish({
+        kind: 'intake',
+        operationId,
+        payload: payload(`recovered-elsewhere-${String(serial)}`),
+      }),
+    ).rejects.toThrow();
+    // Another actor gets to the pending publication first, which leaves an empty slot and a
+    // receipt that only the record can report.
+    await coordinator.recover();
+
+    expect(publicationRecord(store.db, operationId)?.state).toBe('acknowledged');
+
+    const outcome = await applyMergeWithRecovery({
+      operationId,
+      attempt: () =>
+        Promise.reject(new PublicationPendingError(operationId, new Error('response lost'))),
+      coordinator,
+      logger,
+    });
+
+    expect(outcome.status).toBe('settled');
   });
 });
