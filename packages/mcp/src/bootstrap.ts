@@ -24,6 +24,7 @@ import {
   PublicationRecoveryLoop,
   PUBLICATION_HANDLERS,
   intakePublication,
+  statedReferencesPublication,
   purgeServedItemsIdleSince,
   queueLagSnapshot,
   readMemberName,
@@ -223,7 +224,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       logger,
       // C7's acceptance operation joins the shared registry here: the coordinator owns the
       // guard and the receipts, and each cut owns the semantics of its own writes.
-      handlers: [...PUBLICATION_HANDLERS, intakePublication],
+      handlers: [...PUBLICATION_HANDLERS, intakePublication, statedReferencesPublication],
       observe: (publication) => {
         logger.info({ publication }, 'publication transaction');
       },

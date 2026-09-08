@@ -7,8 +7,8 @@ import {
   STATED_SOURCE_TYPE,
   UNRESOLVED_REFERENCES_PROPERTY,
 } from './claim-lineage-queries.js';
-import { runRead, runWrite, type GraphStatement } from './connection.js';
-import { upsertEdge } from './edges.js';
+import { runRead, runWrite, type GraphStatement, type GraphTransaction } from './connection.js';
+import { upsertEdge, upsertEdgeInTransaction } from './edges.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
 import { BASE_NODE_LABEL, EXTRACTION_TYPE } from './labels.js';
 import { NARRATIVE_LABEL } from './narrative-queries.js';
@@ -169,6 +169,59 @@ function unresolvedStatement(episodeId: string, unresolved: number): GraphStatem
     ].join('\n'),
     parameters: { episodeId, unresolved: toGraphInteger(unresolved) },
   };
+}
+
+/**
+ * The same edges inside a caller's transaction, for a writer that publishes them under the
+ * publication guard. Only targets the graph actually holds are passed: a reference to an
+ * endpoint that is not projected is durable in the identity records, and writing an edge to a
+ * node that is not there would be a lineage pointer at nothing.
+ */
+export async function writeClaimProvenanceInTransaction(
+  tx: GraphTransaction,
+  input: ClaimProvenanceWrite,
+): Promise<void> {
+  for (const targetId of input.derivedFrom) {
+    await linkStatedInTransaction(tx, STATED_SOURCE_TYPE, input.episodeId, targetId, input.now);
+  }
+  for (const targetId of input.corrects) {
+    await linkStatedInTransaction(tx, CORRECTION_TYPE, input.episodeId, targetId, input.now);
+  }
+  for (const confirmation of input.confirmations) {
+    await linkStatedInTransaction(
+      tx,
+      CONFIRMATION_TYPE,
+      input.episodeId,
+      confirmation.target,
+      input.now,
+    );
+    const statement = confirmationStatement(input.episodeId, confirmation);
+    await tx.run(statement.cypher, statement.parameters, () => undefined);
+  }
+  if (input.unresolved > 0) {
+    const statement = unresolvedStatement(input.episodeId, input.unresolved);
+    await tx.run(statement.cypher, statement.parameters, () => undefined);
+  }
+}
+
+async function linkStatedInTransaction(
+  tx: GraphTransaction,
+  type: RelationshipType,
+  episodeId: string,
+  targetId: string,
+  now: Date,
+): Promise<void> {
+  await upsertEdgeInTransaction(tx, {
+    type,
+    sourceId: episodeId,
+    targetId,
+    strength: 1,
+    confidence: 1,
+    signals: PROVENANCE_SIGNALS,
+    provenance: PROVENANCE_PROVENANCE,
+    count: 0,
+    now,
+  });
 }
 
 async function linkStated(

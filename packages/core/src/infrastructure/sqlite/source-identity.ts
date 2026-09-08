@@ -348,3 +348,21 @@ export function readSourcePartTurnIds(db: SqliteHandle, sourceId: string): reado
     .all(sourceId) as { turn_id: string }[];
   return rows.map((row) => row.turn_id);
 }
+
+/** The version one delivery produced, for a reader that must not re-run the acceptance to learn it. */
+export function readReferenceBatchByOperation(
+  db: SqliteHandle,
+  sourceId: string,
+  operationKey: string,
+): { readonly referenceVersion: number; readonly acceptedHash: string } | undefined {
+  const row = db
+    .prepare(
+      `SELECT reference_version, accepted_hash FROM source_reference_batches
+       WHERE source_id = ? AND operation_key = ?`,
+    )
+    .get(sourceId, operationKey) as
+    { reference_version: number; accepted_hash: string } | undefined;
+  return row === undefined
+    ? undefined
+    : { referenceVersion: row.reference_version, acceptedHash: row.accepted_hash };
+}
