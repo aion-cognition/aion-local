@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import { z } from 'zod';
 
+import { runGraphMigrations } from './migrations.js';
 import {
   startRehearsalSubstrate,
   stopRehearsalSubstrate,
@@ -109,6 +110,7 @@ beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), 'aion-adv-nondet-'));
   substrate = await startRehearsalSubstrate({ sqlitePath: join(dir, 'store.sqlite') });
   store = new SqliteStore({ filePath: substrate.sqlitePath });
+  await runGraphMigrations(substrate.harness.driver, store.db, { embedDimension: 3 });
   coordinator = new PublicationCoordinator({
     driver: substrate.harness.driver,
     db: store.db,

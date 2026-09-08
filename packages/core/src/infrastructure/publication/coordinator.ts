@@ -6,6 +6,7 @@ import {
   PublicationUnavailable,
   publicationFailure,
 } from './errors.js';
+import { initializePublication } from './initialize.js';
 import { canonicalJson, parseJson } from './json.js';
 import { needsGraphCompletion, validatePublicationEffects } from './operation.js';
 import { parseAffectedScopes, parsePublicationPreconditions } from './preconditions.js';
@@ -31,23 +32,11 @@ import {
   type PublicationOutcome,
   type PublicationPlan,
 } from './types.js';
-import {
-  bootstrapPublicationGuard,
-  PUBLICATION_GUARD_CONSTRAINT_STATEMENT,
-} from '../graph/publication-guard.js';
-import {
-  publicationGuardIdentities,
-  readPublicationGuard,
-  writePublicationGuardReceipt,
-} from '../graph/publication-receipt.js';
+import { writePublicationGuardReceipt } from '../graph/publication-receipt.js';
 import type { Logger } from '../logging/logger.js';
-import {
-  prepareCoverageContract,
-  readCurrentCoverageContract,
-} from '../sqlite/coverage-contract.js';
+import { readCurrentCoverageContract } from '../sqlite/coverage-contract.js';
 import type { SqliteHandle } from '../sqlite/database.js';
 import { publicationWrite } from '../sqlite/publication-bounded.js';
-import { readSubstratePairing } from '../sqlite/publication-control.js';
 import {
   acknowledgeCoordinatorRecord,
   coordinatorControl,
@@ -132,36 +121,7 @@ export class PublicationCoordinator {
   /** Bootstrap is additive and never replaces an initialized missing or foreign receipt. */
   async initialize(): Promise<void> {
     this.#outsideSqlite();
-    const { driver, db } = this.#options;
-    const pairing = readSubstratePairing(db);
-    if (
-      pairing?.bootstrapState === 'initialized' &&
-      readCurrentCoverageContract(db) === undefined
-    ) {
-      throw new PublicationInvariantError('coverage_registry_missing');
-    }
-    if (pairing !== undefined && pairing.protocolVersion !== PUBLICATION_PROTOCOL_VERSION) {
-      throw new PublicationInvariantError('publication_protocol_mismatch');
-    }
-    const identities = await publicationGuardIdentities(driver);
-    if (
-      identities.length > 1 ||
-      (identities.length === 1 && identities[0] !== pairing?.substrateId)
-    ) {
-      throw new PublicationInvariantError('publication_foreign_graph_pairing');
-    }
-    publicationWrite(db, () => prepareCoverageContract(db, 1));
-    await driver.executeQuery(PUBLICATION_GUARD_CONSTRAINT_STATEMENT);
-    const initialized = await bootstrapPublicationGuard(driver, db, PUBLICATION_PROTOCOL_VERSION);
-    if (initialized.outcome === 'missing') {
-      throw new PublicationInvariantError('publication_guard_missing');
-    }
-    const finalIdentities = await publicationGuardIdentities(driver);
-    if (finalIdentities.length !== 1 || finalIdentities[0] !== initialized.substrateId) {
-      throw new PublicationInvariantError('publication_foreign_graph_pairing');
-    }
-    const guard = await readPublicationGuard(driver, initialized.substrateId, this.#readTimeoutMs);
-    verifyPublicationState(db, guard);
+    await initializePublication(this.#options.driver, this.#options.db, this.#readTimeoutMs);
     this.#initialized = true;
   }
 

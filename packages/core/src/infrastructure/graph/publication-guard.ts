@@ -1,4 +1,4 @@
-import type { Driver } from 'neo4j-driver';
+import neo4j, { type Driver } from 'neo4j-driver';
 
 import type { SqliteHandle } from '../sqlite/database.js';
 import { beginSubstratePairing, completeSubstratePairing } from '../sqlite/publication-control.js';
@@ -77,4 +77,22 @@ export async function bootstrapPublicationGuard(
   });
   completeSubstratePairing(db, pairing.substrateId);
   return { substrateId: pairing.substrateId, outcome: 'created' };
+}
+
+/** Schema creation belongs to migrations; bootstrap refuses an absent or incompatible constraint. */
+export async function publicationGuardSchemaPresent(driver: Driver): Promise<boolean> {
+  const result = await driver.executeQuery(
+    `SHOW CONSTRAINTS YIELD name, type, labelsOrTypes, properties
+     WHERE name = $name RETURN type, labelsOrTypes, properties`,
+    { name: PUBLICATION_GUARD_CONSTRAINT },
+    { routing: neo4j.routing.READ },
+  );
+  const row = result.records[0];
+  return (
+    result.records.length === 1 &&
+    row !== undefined &&
+    ['UNIQUENESS', 'NODE_PROPERTY_UNIQUENESS'].includes(String(row.get('type'))) &&
+    JSON.stringify(row.get('labelsOrTypes')) === JSON.stringify([PUBLICATION_GUARD_LABEL]) &&
+    JSON.stringify(row.get('properties')) === JSON.stringify([PUBLICATION_GUARD_ID_PROPERTY])
+  );
 }

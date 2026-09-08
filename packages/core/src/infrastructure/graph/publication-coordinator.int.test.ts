@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 
+import { runGraphMigrations } from './migrations.js';
 import {
   startRehearsalSubstrate,
   stopRehearsalSubstrate,
@@ -45,6 +46,7 @@ beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), 'aion-publication-int-'));
   substrate = await startRehearsalSubstrate({ sqlitePath: join(dir, 'store.sqlite') });
   store = new SqliteStore({ filePath: substrate.sqlitePath });
+  await runGraphMigrations(substrate.harness.driver, store.db, { embedDimension: 3 });
   cleanup.store = store;
   coordinator = new PublicationCoordinator({
     driver: substrate.harness.driver,

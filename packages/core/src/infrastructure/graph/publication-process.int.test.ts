@@ -6,6 +6,7 @@ import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeAll, expect, it } from 'vitest';
 
+import { runGraphMigrations } from './migrations.js';
 import {
   startRehearsalSubstrate,
   stopRehearsalSubstrate,
@@ -118,6 +119,7 @@ beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), 'aion-publication-process-'));
   substrate = await startRehearsalSubstrate({ sqlitePath: join(dir, 'shared.sqlite') });
   store = new SqliteStore({ filePath: substrate.sqlitePath });
+  await runGraphMigrations(substrate.harness.driver, store.db, { embedDimension: 3 });
   cleanup.store = store;
   coordinator = new PublicationCoordinator({
     driver: substrate.harness.driver,

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 
+import { runGraphMigrations } from './migrations.js';
 import {
   startRehearsalSubstrate,
   stopRehearsalSubstrate,
@@ -18,8 +19,8 @@ import { PUBLICATION_HANDLERS } from '../publication/handlers.js';
 import type { PublicationBoundary } from '../publication/types.js';
 import { SqliteStore } from '../sqlite/database.js';
 import { getLedgerEntry } from '../sqlite/ops-ledger.js';
-import { listPendingEffects } from '../sqlite/publication-intents.js';
 import { publicationRecord } from '../sqlite/publication-coordinator-store.js';
+import { listPendingEffects } from '../sqlite/publication-intents.js';
 
 const logger = { warn: () => undefined, error: () => undefined };
 
@@ -33,6 +34,7 @@ beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), 'aion-adv-effects-'));
   substrate = await startRehearsalSubstrate({ sqlitePath: join(dir, 'store.sqlite') });
   store = new SqliteStore({ filePath: substrate.sqlitePath });
+  await runGraphMigrations(substrate.harness.driver, store.db, { embedDimension: 3 });
   coordinator = new PublicationCoordinator({
     driver: substrate.harness.driver,
     db: store.db,

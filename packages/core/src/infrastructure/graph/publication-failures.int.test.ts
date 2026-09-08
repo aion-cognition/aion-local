@@ -6,6 +6,7 @@ import { afterAll, beforeAll, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { GraphTransaction } from './connection.js';
+import { runGraphMigrations } from './migrations.js';
 import { lockPublicationGuard } from './publication-receipt.js';
 import {
   startRehearsalSubstrate,
@@ -31,6 +32,7 @@ beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), 'aion-publication-errors-'));
   substrate = await startRehearsalSubstrate({ sqlitePath: join(dir, 'store.sqlite') });
   store = new SqliteStore({ filePath: substrate.sqlitePath });
+  await runGraphMigrations(substrate.harness.driver, store.db, { embedDimension: 3 });
   const handler = new PublicationOperation({
     kind: 'semantic_write',
     effectKinds: [],
