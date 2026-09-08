@@ -116,22 +116,6 @@ describe('rank and confidence', () => {
     expect(pack.rendered_text).toContain('bm25 | confidence 0.62');
     expect(pack.rendered_text).not.toContain('confidence 1.00');
   });
-
-  it('says zero for an item a literal match admitted and no cosine measured', () => {
-    const exact: FusedItem = {
-      ...item('reached'),
-      relevance: 1,
-      measured: 0,
-      rationale: { method: 'bm25', score: 1 },
-    };
-
-    const pack = assemble([exact]);
-
-    expect(pack.episodes?.[0]?.confidence).toBe(0);
-    // Rendered as what it is. "confidence 0.00" beside a verbatim match reads as no answer.
-    expect(pack.rendered_text).toContain('bm25 | exact match');
-    expect(pack.rendered_text).not.toContain('confidence 0.00');
-  });
 });
 
 /**

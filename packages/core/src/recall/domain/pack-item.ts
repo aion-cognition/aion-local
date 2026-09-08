@@ -63,14 +63,14 @@ const RULE_PHRASES: Readonly<Record<AdmissionRule, string>> = {
  * quantity: corroboration admits on two legs agreeing, and a literal match admits on no
  * measurement at all.
  *
- * The fallback is for an item assembled without the gate having run, where zero still means
- * a literal match: printing "confidence 0.00" beside a memory that answered exactly would
- * read as the opposite of what admitted it.
+ * The fallback prints the number alone, for an item no rule judged. A triggered intention is
+ * the one such item the pack serves: it came back because a date passed or its subject was in
+ * play, and it was never measured against the query at all.
  */
 function renderAdmission(item: MemoryPackItem): string {
   const admitted = item.admitted_by;
   if (admitted === undefined) {
-    return item.confidence === 0 ? 'exact match' : `confidence ${item.confidence.toFixed(2)}`;
+    return `confidence ${item.confidence.toFixed(2)}`;
   }
   return `${RULE_PHRASES[admitted.rule]}: ${admitted.evidence.join(' + ')}`;
 }
