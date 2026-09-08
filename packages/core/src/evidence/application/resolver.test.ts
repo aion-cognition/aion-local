@@ -230,6 +230,7 @@ describe('the evidence resolver', () => {
       at: NOW,
     });
     establishScope(store.db, 'claim-1', durableRoleScope('extraction', 'out'), NOW);
+    establishScope(store.db, 'claim-1', durableRoleScope('stated_correction', 'in'), NOW);
     const assembly = await resolver({
       driver: lineageDriver({ unresolved: 0, log: { cyphers: [] } }),
       publications: checkpoints([ready('4'), ready('5')]),

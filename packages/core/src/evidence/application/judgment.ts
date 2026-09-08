@@ -194,9 +194,14 @@ const REQUIRED_ROLES = {
 
 /**
  * Every source occurrence the node's evidence comes from, with the scopes consulted to find
- * them. A folded claim reserves all of them: picking one edge would reserve the wrong witness
- * whenever the fold is what the judgment turns on. An unproved set is not a node without sources,
- * and the scopes it was read under travel with it so a later writer can be fenced on them.
+ * them.
+ *
+ * A folded claim reserves all of them: picking one edge would reserve the wrong witness whenever
+ * the fold is what the judgment turns on. Every role in the family has to be counted, not one of
+ * them: an entity whose mentions are proved and whose participations are not has a membership
+ * nobody has established. The incoming correction scope counts the same way, because what a
+ * correction says about the node decides whether the answer stands, and a scope nobody counted
+ * cannot say that no correction arrived.
  */
 function requiredSourcesOf(
   db: SqliteHandle,
@@ -205,8 +210,12 @@ function requiredSourcesOf(
 ): RequiredSources {
   const dependencies: EvidenceDependency[] = [];
   const sourceIds = new Set<string>();
-  let verified = false;
-  for (const { role, direction } of REQUIRED_ROLES[use]) {
+  const consulted = [
+    ...REQUIRED_ROLES[use],
+    { role: 'stated_correction', direction: 'in' } as const,
+  ];
+  let proved = true;
+  for (const { role, direction } of consulted) {
     const rows = committedIncidenceForNode(db, nodeId, role);
     const scope = readRelationScope(db, {
       kind: 'node',
@@ -216,27 +225,17 @@ function requiredSourcesOf(
     });
     if (scope.status === 'verified') {
       dependencies.push(scope.dependency);
-      if (rows.length > 0) {
-        verified = true;
+    } else {
+      proved = false;
+    }
+    if (role !== 'stated_correction') {
+      for (const row of rows) {
+        sourceIds.add(row.sourceId);
       }
     }
-    for (const row of rows) {
-      sourceIds.add(row.sourceId);
-    }
-  }
-  // What a correction says about this node decides whether the answer still stands, so the scope
-  // it would arrive in is recorded whether or not one has arrived yet.
-  const corrections = readRelationScope(db, {
-    kind: 'node',
-    endpointId: nodeId,
-    scope: durableRoleScope('stated_correction', 'in'),
-    empty: committedIncidenceForNode(db, nodeId, 'stated_correction').length === 0,
-  });
-  if (corrections.status === 'verified') {
-    dependencies.push(corrections.dependency);
   }
   return {
-    status: verified && sourceIds.size > 0 ? 'named' : 'unverified',
+    status: proved && sourceIds.size > 0 ? 'named' : 'unverified',
     sourceIds: [...sourceIds],
     dependencies,
   };

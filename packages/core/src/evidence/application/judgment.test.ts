@@ -73,6 +73,9 @@ describe('judgment evidence assembly', () => {
         at: NOW,
       });
       establishScope(store.db, claim!, durableRoleScope('extraction', 'out'), NOW);
+      // The negative scope a correction would arrive in is counted too: an uncounted one cannot
+      // say that none arrived.
+      establishScope(store.db, claim!, durableRoleScope('stated_correction', 'in'), NOW);
     }
   });
 
@@ -224,9 +227,6 @@ describe('judgment evidence assembly', () => {
   });
 
   it('records incoming correction scopes even when they are empty', async () => {
-    for (const id of ['claim-old', 'claim-new']) {
-      establishScope(store.db, id, durableRoleScope('stated_correction', 'in'), NOW);
-    }
     const assembly = await assembleJudgmentEvidence(deps, pair(), checkedContext());
     if (assembly.status !== 'assembled') {
       throw new Error('fixture did not assemble');
@@ -263,7 +263,14 @@ describe('judgment evidence assembly', () => {
         operationId: `mentions:${id}`,
         at: NOW,
       });
-      establishScope(store.db, id, durableRoleScope('mention', 'in'), NOW);
+      for (const role of ['mention', 'participation', 'stated_correction'] as const) {
+        establishScope(
+          store.db,
+          id,
+          durableRoleScope(role, role === 'stated_correction' ? 'in' : 'in'),
+          NOW,
+        );
+      }
     }
     const result = await assembleJudgmentEvidence(
       deps,
@@ -280,6 +287,47 @@ describe('judgment evidence assembly', () => {
     );
 
     expect(result.status).toBe('assembled');
+  });
+
+  it('does not certify a judgment whose incoming correction census is unknown', async () => {
+    store.db
+      .prepare(
+        "UPDATE evidence_scope_versions SET census_status='unknown' WHERE endpoint_id='claim-old' AND relation_class=?",
+      )
+      .run(durableRoleScope('stated_correction', 'in'));
+
+    expect((await assembleJudgmentEvidence(deps, pair(), checkedContext())).status).toBe(
+      'incomplete',
+    );
+  });
+
+  it('does not certify one entity role while its other required role is uncounted', async () => {
+    for (const id of ['entity-a', 'entity-b']) {
+      commitIncidence(store.db, {
+        sourceId: 'episode-old',
+        nodeId: id,
+        role: 'mention',
+        operationId: `mentions:${id}`,
+        at: NOW,
+      });
+      establishScope(store.db, id, durableRoleScope('mention', 'in'), NOW);
+      establishScope(store.db, id, durableRoleScope('stated_correction', 'in'), NOW);
+    }
+    const result = await assembleJudgmentEvidence(
+      deps,
+      {
+        route: 'entity_merge',
+        reservedUnits: 0,
+        use: 'entity_judgment',
+        sides: [
+          { nodeId: 'entity-a', statement: 'Entity A' },
+          { nodeId: 'entity-b', statement: 'Entity B' },
+        ],
+      },
+      checkedContext(),
+    );
+
+    expect(result.status).toBe('incomplete');
   });
 
   it('does not certify a nonempty extraction set whose census is still incomplete', async () => {
