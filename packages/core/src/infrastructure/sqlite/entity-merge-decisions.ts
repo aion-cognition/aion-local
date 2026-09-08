@@ -222,10 +222,10 @@ export function listEntityMergeDecisions(db: SqliteHandle): EntityMergeDecision[
 }
 
 /**
- * Every decision one entity took part in, from either side. `aion why` asks this of a node it
- * is explaining and an unmerge asks it of a canonical whose absorbed members it is naming, so
- * the member arm walks the stored JSON list rather than making the caller know which side its
- * id landed on.
+ * Every decision one entity took part in, from either side: the member arm walks the stored
+ * JSON list rather than making the caller know which side its id landed on. No production
+ * caller today. The merge suites read it to assert what a run recorded, which is what an
+ * inspection surface asking the same question would need.
  */
 export function findEntityMergeDecisionsForEntity(
   db: SqliteHandle,
