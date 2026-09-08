@@ -13,16 +13,18 @@ import {
 } from './experience-store.js';
 import type { LaneAssigner, LaneDecision } from './lanes.js';
 import { recordRecallFeedback, redactFeedback } from './recall-feedback.js';
+import {
+  activateSourceManifest,
+  writeSourceManifest,
+  type ReadinessInventory,
+} from './source-manifest.js';
 import { redactProvenance, settleStatedReferences } from './stated-references.js';
 import { attachContentVectors } from './vectors.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import {
-  ARCHIVE_SCHEMA_VERSION,
-  insertExperience,
-  mergeExperienceProvenance,
-} from '../../infrastructure/sqlite/experience-archive.js';
+import { mergeExperienceProvenance } from '../../infrastructure/sqlite/experience-archive.js';
+import { readCurrentReadinessPolicy } from '../../infrastructure/sqlite/readiness-policies.js';
 import { countQueueJobs } from '../../infrastructure/sqlite/reflection-queue-admin.js';
 import {
   DEFAULT_REFLECTION_LANE,
@@ -31,6 +33,7 @@ import {
   REFLECTION_QUEUE_EPISODE_FIELD,
   type ReflectionLane,
 } from '../../infrastructure/sqlite/reflection-queue.js';
+import { captureOrderValue } from '../../infrastructure/sqlite/source-lifecycle.js';
 import { redactPayload } from '../../redaction/deep-walk.js';
 import { prepareEpisode, type PreparedEpisode, type ReflectionContent } from '../domain/content.js';
 import { PIPELINE_VERSION } from '../domain/version.js';
@@ -182,6 +185,8 @@ type IntakeArchive = {
   readonly identity: string;
   readonly sessionId: string;
   readonly episodeId: string;
+  /** The turn nodes this call committed, in order, so the parts record the ids the graph holds. */
+  readonly turnIds: readonly string[];
   readonly prepared: PreparedEpisode;
   /** The redacted content, which is what the substrate holds and what a re-derivation must match. */
   readonly payload: ReflectionContent;
@@ -199,9 +204,10 @@ type ArchivedIntake = {
 };
 
 /**
- * The archive row and the queue row as one commit. Both are synchronous better-sqlite3 calls
- * with nothing awaited between them, so the transaction costs nothing and buys the invariant
- * the two rows are worth having together: no job for an experience the archive does not hold.
+ * The archive row, the source's identity records and the queue row as one commit. All of them
+ * are synchronous better-sqlite3 calls with nothing awaited between them, so the transaction
+ * costs nothing and buys the invariant they are worth having together: no job for an experience
+ * the archive does not hold, and no archived source whose identity nothing records.
  *
  * `occurred_at` is the payload's own clock and `archived_at` is the caller's, which is the
  * only wall-clock value on the row. A re-pushed payload conflicts on the idempotency key and
@@ -211,30 +217,59 @@ type ArchivedIntake = {
  * The references land before the job row does, inside the same commit. A worker reads the
  * archive to learn what to attach, so a job published ahead of the merge can be claimed, find
  * nothing to attach, and complete with the update still unmade.
+ *
+ * The identity records are what survive the raw projection, so they are written here rather
+ * than derived later from a graph that may no longer hold the episode. The generation they
+ * allocate is activated in the same commit: this path projects the graph before it reaches
+ * here, so there is no window in which a claimable job outruns its episode.
  */
 function archiveAndQueue(deps: ReflectionIntakeDeps, input: IntakeArchive): ArchivedIntake {
   return deps.db.transaction((): ArchivedIntake => {
-    const archived = insertExperience(deps.db, {
-      schemaVersion: ARCHIVE_SCHEMA_VERSION,
-      pipelineVersion: PIPELINE_VERSION,
-      identity: input.identity,
-      sessionId: input.sessionId,
-      episodeId: input.episodeId,
-      contentHash: input.prepared.contentHash,
-      occurredAt: input.prepared.occurredAt.toISOString(),
-      archivedAt: input.now.toISOString(),
-      lane: input.lane,
-      origin: input.origin,
-      payload: input.payload,
-    });
-    if (!archived && input.references !== undefined) {
+    const manifest = writeSourceManifest(
+      deps.db,
+      {
+        sourceId: input.episodeId,
+        sessionId: input.sessionId,
+        identity: input.identity,
+        prepared: input.prepared,
+        payload: input.payload,
+        references: input.references,
+        lane: input.lane,
+        origin: input.origin,
+        pipelineVersion: PIPELINE_VERSION,
+        operationKey: `intake:${input.episodeId}`,
+        readiness: readinessInventory(deps.db),
+        now: input.now,
+      },
+      input.turnIds,
+    );
+    if (!manifest.archived && input.references !== undefined) {
       mergeExperienceProvenance(deps.db, input.episodeId, input.references);
     }
+    activateSourceManifest(deps.db, {
+      sourceId: input.episodeId,
+      processingGeneration: manifest.processingGeneration,
+      sessionId: input.sessionId,
+      captureOrderValue: captureOrderValue(manifest.ingestPosition),
+      now: input.now,
+    });
     return {
-      archived,
+      archived: manifest.archived,
       job: ensureIntegrateJob(deps, input.episodeId, input.sessionId, input.lane, input.now),
     };
   })();
+}
+
+/**
+ * What the source's generation owes, from the readiness policy in force. A substrate with no
+ * published policy yet leaves this absent, and the manifest records a durable obligation rather
+ * than an inventory of nothing.
+ */
+function readinessInventory(db: SqliteHandle): ReadinessInventory | undefined {
+  const policy = readCurrentReadinessPolicy(db);
+  return policy === undefined
+    ? undefined
+    : { policyRevision: policy.policyRevision, stageNames: policy.stageNames };
 }
 
 /**
@@ -336,6 +371,9 @@ export async function handleReflection(
     identity,
     sessionId,
     episodeId: stored.episodeId,
+    // The episode leads `pending`, so the rest are its turn nodes in the order they were
+    // written. A duplicate push committed nothing, and the parts it names are already recorded.
+    turnIds: stored.pending.slice(1).map((node) => node.id),
     prepared,
     // The references ride along in the archive without ever reaching the hash above: the graph
     // write is best-effort and a graph that was down when the call landed would otherwise take

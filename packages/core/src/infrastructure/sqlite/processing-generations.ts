@@ -75,6 +75,17 @@ export function readGeneration(
   return row === undefined ? undefined : toGeneration(row);
 }
 
+/** Every generation a source has had, oldest first. */
+export function listGenerations(
+  db: SqliteHandle,
+  sourceId: string,
+): readonly ProcessingGeneration[] {
+  const rows = db
+    .prepare(`${SELECT_GENERATION} WHERE source_id = ? ORDER BY processing_generation`)
+    .all(sourceId) as GenerationRowData[];
+  return rows.map(toGeneration);
+}
+
 export type GenerationAllocation = {
   readonly sourceId: string;
   readonly policyRevision: number;
@@ -229,17 +240,11 @@ export function createSourceWork(db: SqliteHandle, work: SourceWorkInput): numbe
 }
 
 /**
- * One obligation on a generation that is not yet live, written the way the stage skeleton is:
- * durable while the generation is allocated, advancing the counter only once the generation is
- * active, and silent about a replaced one.
- *
- * `createSourceWork` above is the steady-state path and requires an active generation, because
- * owing new work to a live generation is what invalidates a readiness proof. A generation still
- * being prepared has no proof to invalidate, and an obligation that could not be written until
- * activation would leave the window this exists to close.
- *
- * Returns the generation's readiness revision, or undefined when the generation is replaced or
- * absent, in which case nothing was written.
+ * One obligation on a generation that is not yet live, written the way the stage skeleton is.
+ * `createSourceWork` above requires an active generation because owing new work to a live one
+ * invalidates a readiness proof; a generation still being prepared has no proof to invalidate,
+ * and waiting for activation would leave the window this exists to close. Returns the readiness
+ * revision, or undefined when the generation is replaced or absent and nothing was written.
  */
 export function prepareGenerationWork(db: SqliteHandle, work: SourceWorkInput): number | undefined {
   return db

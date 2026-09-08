@@ -191,6 +191,30 @@ export function mergeExperienceProvenance(
 }
 
 /**
+ * The archive row holding one payload's raw bytes, found by the key that decides whether a
+ * second write inserts anything.
+ *
+ * A source that was forgotten and pushed again is a new occurrence over the same bytes: the
+ * re-push conflicts on this key and writes no second row, so the replacement's archive proof
+ * points at the row the first acceptance wrote. Reaching that row through the episode id would
+ * find nothing and read as an unarchived source.
+ */
+export function getExperienceByKey(
+  db: SqliteHandle,
+  identity: string,
+  contentHash: string,
+  schemaVersion: number,
+): ExperienceArchiveRow | undefined {
+  const row = db
+    .prepare(
+      'SELECT * FROM experience_archive WHERE idempotency_key = ? ORDER BY rowid ASC LIMIT 1',
+    )
+    .get(experienceArchiveKey(identity, contentHash, schemaVersion)) as
+    ExperienceArchiveRowData | undefined;
+  return row === undefined ? undefined : toExperienceArchiveRow(row);
+}
+
+/**
  * The archive row for one episode, ordered by insertion so a caller reaches the row that
  * first recorded it if more than one archive write ever named the same episode.
  */

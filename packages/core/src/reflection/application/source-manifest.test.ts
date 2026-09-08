@@ -16,6 +16,7 @@ import {
   readIntakeWatermark,
 } from '../../infrastructure/sqlite/migration-cohorts.js';
 import {
+  listGenerations,
   listStageWork,
   readActiveGeneration,
   readGeneration,
@@ -180,6 +181,8 @@ describe('the durable prepare of one acceptance', () => {
     expect(second.ingestPosition).toBe(first.ingestPosition);
     expect(listReferenceBatches(store.db, 'source-1')).toHaveLength(1);
     expect(listIngestAfter(store.db, 0, 10)).toHaveLength(1);
+    expect(second.processingGeneration).toBe(first.processingGeneration);
+    expect(listGenerations(store.db, 'source-1')).toHaveLength(1);
   });
 
   it('gives a forgotten source its own occurrence, generation and reference history', () => {
@@ -193,6 +196,12 @@ describe('the durable prepare of one acceptance', () => {
     expect(replacement.referenceVersion).toBe(1);
     expect(listReferenceBatches(store.db, 'source-1')).toHaveLength(1);
     expect(readGeneration(store.db, 'source-2', 1)).toBeDefined();
+    // The bytes are shared through the occurrence record: the re-push conflicts on the archive
+    // key and writes no second row, so both occurrences verify against the same one.
+    expect(readSourceRecord(store.db, 'source-2')?.canonicalArchiveId).toBe(
+      readSourceRecord(store.db, 'source-1')?.canonicalArchiveId,
+    );
+    expect(readSourceRecord(store.db, 'source-2')?.verificationStatus).toBe('verified');
   });
 });
 

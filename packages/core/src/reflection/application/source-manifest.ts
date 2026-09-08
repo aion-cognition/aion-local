@@ -4,11 +4,13 @@ import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   ARCHIVE_SCHEMA_VERSION,
   experienceArchiveKey,
+  getExperienceByKey,
   insertExperience,
 } from '../../infrastructure/sqlite/experience-archive.js';
 import { recordIngest } from '../../infrastructure/sqlite/migration-cohorts.js';
 import {
   allocateProcessingGeneration,
+  listGenerations,
   prepareInventorySkeleton,
   activateProcessingGeneration,
   prepareGenerationWork,
@@ -159,6 +161,17 @@ export function writeSourceManifest(
     payload: input.payload,
   });
   const ingestPosition = recordIngest(db, input.sourceId, input.now);
+  // The archive row the source is verified against, read back rather than assumed: its id is
+  // the row's own, and a re-push resolves to the row the first acceptance wrote.
+  const row = getExperienceByKey(
+    db,
+    input.identity,
+    input.prepared.contentHash,
+    ARCHIVE_SCHEMA_VERSION,
+  );
+  if (row === undefined) {
+    throw new Error(`source ${input.sourceId} has no archive row to verify against`);
+  }
   recordSourceRecord(db, {
     sourceId: input.sourceId,
     sessionId: input.sessionId,
@@ -166,12 +179,12 @@ export function writeSourceManifest(
     occurredAt: input.prepared.occurredAt.toISOString(),
     createdAt: input.now,
     archive: {
-      canonicalArchiveId: input.sourceId,
-      archiveSchemaVersion: ARCHIVE_SCHEMA_VERSION,
+      canonicalArchiveId: row.id,
+      archiveSchemaVersion: row.schemaVersion,
       identityHash,
-      verifiedContentDigest: input.prepared.contentHash,
+      verifiedContentDigest: row.contentHash,
       verificationPolicyVersion: ARCHIVE_SCHEMA_VERSION,
-      archivedAt: input.now.toISOString(),
+      archivedAt: row.archivedAt,
     },
     captureOrderValue: captureOrderValue(ingestPosition),
     captureOrderBasis: 'archive_acceptance',
@@ -185,12 +198,7 @@ export function writeSourceManifest(
     operationKey: input.operationKey,
     introduced: introducedReferences(input.references),
   });
-  const processingGeneration = allocateProcessingGeneration(db, {
-    sourceId: input.sourceId,
-    policyRevision: input.readiness?.policyRevision ?? 0,
-    inputDigest: input.prepared.contentHash,
-    createdAt: input.now,
-  });
+  const processingGeneration = generationFor(db, input);
   writeInventorySkeleton(db, input, processingGeneration);
   recordEvidenceAcknowledgment(db, {
     sourceId: input.sourceId,
@@ -212,6 +220,27 @@ export function writeSourceManifest(
     referenceVersion: batch.referenceVersion,
     ingestPosition,
   };
+}
+
+/**
+ * The generation this acceptance processes under. A retry resumes the one it already allocated
+ * rather than spending a second number, which is what makes the durable prepare replayable; a
+ * forgotten re-push is a different source and starts at one of its own.
+ */
+function generationFor(db: SqliteHandle, input: SourceManifestInput): number {
+  const held = listGenerations(db, input.sourceId).find(
+    (generation) =>
+      generation.state !== 'replaced' && generation.inputDigest === input.prepared.contentHash,
+  );
+  return (
+    held?.processingGeneration ??
+    allocateProcessingGeneration(db, {
+      sourceId: input.sourceId,
+      policyRevision: input.readiness?.policyRevision ?? 0,
+      inputDigest: input.prepared.contentHash,
+      createdAt: input.now,
+    })
+  );
 }
 
 /**
