@@ -112,32 +112,47 @@ export function allocateProcessingGeneration(
 }
 
 /**
- * Makes an allocated generation the active one, replacing whichever generation held that place.
- * Both writes are one transaction, so the store never sees two active generations and never
- * sees a source with none between them.
+ * Makes an allocated generation the active one, replacing whichever generation held that place,
+ * and publishes the readiness revision for the inventory that becomes live with it. All of it is
+ * one transaction, so the store never sees two active generations, never sees a source with
+ * none between them, and never sees the inventory live at a revision nobody published.
+ *
+ * This is the acknowledgment step of the prepare-then-activate sequence: the rows were written
+ * while the generation was allocated, and nothing could run them until now.
+ *
+ * Returns the published readiness revision.
  */
 export function activateProcessingGeneration(
   db: SqliteHandle,
   sourceId: string,
   processingGeneration: number,
-): void {
-  db.transaction((): void => {
-    db.prepare(
-      `UPDATE source_processing_generations SET state = 'replaced'
-       WHERE source_id = ? AND state = 'active' AND processing_generation != ?`,
-    ).run(sourceId, processingGeneration);
-    const promoted = db
-      .prepare(
-        `UPDATE source_processing_generations SET state = 'active'
-         WHERE source_id = ? AND processing_generation = ? AND state IN ('allocated','active')`,
-      )
-      .run(sourceId, processingGeneration);
-    if (promoted.changes !== 1) {
-      throw new Error(
-        `generation ${processingGeneration} of source ${sourceId} cannot become active`,
-      );
-    }
-  }).immediate();
+): number {
+  return db
+    .transaction((): number => {
+      db.prepare(
+        `UPDATE source_processing_generations SET state = 'replaced'
+         WHERE source_id = ? AND state = 'active' AND processing_generation != ?`,
+      ).run(sourceId, processingGeneration);
+      const promoted = db
+        .prepare(
+          `UPDATE source_processing_generations SET state = 'active'
+           WHERE source_id = ? AND processing_generation = ? AND state IN ('allocated','active')`,
+        )
+        .run(sourceId, processingGeneration);
+      if (promoted.changes !== 1) {
+        throw new Error(
+          `generation ${processingGeneration} of source ${sourceId} cannot become active`,
+        );
+      }
+      const published = advanceOperationalRevision(db, sourceId, processingGeneration);
+      if (published === undefined) {
+        throw new Error(
+          `generation ${processingGeneration} of source ${sourceId} could not publish its readiness revision`,
+        );
+      }
+      return published;
+    })
+    .immediate();
 }
 
 /**
@@ -231,12 +246,17 @@ export type InventorySkeleton = {
 };
 
 /**
- * Writes a row for every stage the generation owes, in one transaction with one counter
- * advance. Stages that already have a row are left alone, so a repeated preparation writes
- * nothing and advances nothing.
+ * Writes a row for every stage the generation owes. An allocated generation is the ordinary
+ * case: the rows are durable before the generation is activated, and nothing runs them until
+ * activation publishes the inventory. A generation that is already active takes new stages the
+ * same way, and those advance the counter, because a stage added after a readiness proof was
+ * made invalidates it.
  *
- * Returns the counter's value after the write, or undefined when the generation is no longer
- * active.
+ * Stages that already have a row are left alone, so a repeated preparation writes nothing and
+ * advances nothing. A replaced generation gets no rows at all: its inventory is over.
+ *
+ * Returns the generation's readiness revision after the write, or undefined when the generation
+ * is replaced or absent.
  */
 export function prepareInventorySkeleton(
   db: SqliteHandle,
@@ -251,18 +271,17 @@ export function prepareInventorySkeleton(
       );
       const missing = skeleton.stageNames.filter((name) => !existing.has(name));
       const current = readGeneration(db, skeleton.sourceId, skeleton.processingGeneration);
-      if (current?.state !== 'active') {
+      if (current === undefined || current.state === 'replaced') {
         return undefined;
       }
       if (missing.length === 0) {
         return current.operationalRevision;
       }
 
-      const advanced = advanceOperationalRevision(
-        db,
-        skeleton.sourceId,
-        skeleton.processingGeneration,
-      );
+      const advanced =
+        current.state === 'active'
+          ? advanceOperationalRevision(db, skeleton.sourceId, skeleton.processingGeneration)
+          : current.operationalRevision;
       const statement = db.prepare(
         `INSERT INTO source_work
            (work_id, source_id, processing_generation, kind, stage_name, work_key, state, due_at)
@@ -349,8 +368,15 @@ export type OutstandingWorkRow = {
 };
 
 /**
- * Outstanding work due by a given moment, in the keyset order the index holds. A runner pages
- * on the last row it saw rather than an offset, so a restart mid-backlog costs nothing.
+ * Work whose generation is active and whose due time has arrived, in the keyset order the index
+ * holds. A runner pages on the last row it saw rather than an offset, so a restart mid-backlog
+ * costs nothing.
+ *
+ * The generation test is part of the WHERE clause rather than a filter over the returned page,
+ * so a source with a large prepared-but-inactive inventory cannot fill the page and starve work
+ * that is actually runnable. Rows belonging to a generation that was replaced stay where they
+ * are and simply stop being nominated: marking them obsolete and settling what they already
+ * produced is a separate obligation, and dropping them from this read does not discharge it.
  */
 export function listOutstandingWork(
   db: SqliteHandle,
@@ -358,17 +384,22 @@ export function listOutstandingWork(
   limit: number,
   cursor?: { dueAt: string; sourceId: string; workId: string },
 ): readonly OutstandingWorkRow[] {
-  const keyset = cursor === undefined ? '' : `AND (due_at, source_id, work_id) > (?, ?, ?)`;
+  const keyset = cursor === undefined ? '' : `AND (w.due_at, w.source_id, w.work_id) > (?, ?, ?)`;
   const parameters =
     cursor === undefined
       ? [dueBy.toISOString(), limit]
       : [dueBy.toISOString(), cursor.dueAt, cursor.sourceId, cursor.workId, limit];
   const rows = db
     .prepare(
-      `SELECT work_id, source_id, processing_generation, kind, stage_name, work_key, state, due_at
-       FROM source_work
-       WHERE state IN ('pending','retryable','transferred') AND due_at <= ? ${keyset}
-       ORDER BY due_at, source_id, work_id
+      `SELECT w.work_id, w.source_id, w.processing_generation, w.kind, w.stage_name, w.work_key,
+              w.state, w.due_at
+       FROM source_work w
+       WHERE w.state IN ('pending','retryable','transferred') AND w.due_at <= ? ${keyset}
+         AND EXISTS (SELECT 1 FROM source_processing_generations g
+                     WHERE g.source_id = w.source_id
+                       AND g.processing_generation = w.processing_generation
+                       AND g.state = 'active')
+       ORDER BY w.due_at, w.source_id, w.work_id
        LIMIT ?`,
     )
     .all(...parameters) as {
