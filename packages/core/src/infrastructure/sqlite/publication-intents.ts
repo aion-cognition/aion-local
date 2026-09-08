@@ -22,7 +22,7 @@ export type PublicationIntent = {
 };
 
 export type PublicationReceipt = {
-  readonly sequence: number;
+  readonly sequence: string;
   readonly operationId: string;
   readonly kind: string;
   readonly state: 'prepared' | 'acknowledged' | 'deferred' | 'rejected';
@@ -36,7 +36,7 @@ export type PublicationReceipt = {
 };
 
 type ReceiptRowData = {
-  sequence: number;
+  sequence: string;
   operation_id: string;
   kind: string;
   state: PublicationReceipt['state'];
@@ -48,7 +48,7 @@ type ReceiptRowData = {
   error: string | null;
 };
 
-const SELECT_RECEIPT = `SELECT sequence, operation_id, kind, state, result_digest, result_json,
+const SELECT_RECEIPT = `SELECT CAST(sequence AS TEXT) AS sequence, operation_id, kind, state, result_digest, result_json,
     known_from, observed_ack_at, clock_clamped, error
   FROM publication_intents WHERE operation_id = ?`;
 
@@ -80,9 +80,9 @@ function toReceipt(row: ReceiptRowData): PublicationReceipt {
  * Preparing the same operation twice returns the sequence it already has: a retry of a prepare
  * is a caller repeating itself.
  */
-export function preparePublicationIntent(db: SqliteHandle, intent: PublicationIntent): number {
+export function preparePublicationIntent(db: SqliteHandle, intent: PublicationIntent): string {
   return db
-    .transaction((): number => {
+    .transaction((): string => {
       const existing = db.prepare(SELECT_RECEIPT).get(intent.operationId) as
         ReceiptRowData | undefined;
       if (existing !== undefined) {
@@ -95,6 +95,7 @@ export function preparePublicationIntent(db: SqliteHandle, intent: PublicationIn
               prepared_actions_json, state, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, 'prepared', ?)`,
         )
+        .safeIntegers(true)
         .run(
           intent.operationId,
           intent.kind,
@@ -105,7 +106,7 @@ export function preparePublicationIntent(db: SqliteHandle, intent: PublicationIn
           intent.preparedActionsJson,
           intent.createdAt.toISOString(),
         );
-      return Number(result.lastInsertRowid);
+      return result.lastInsertRowid.toString();
     })
     .immediate();
 }
@@ -234,7 +235,7 @@ export function isOperationAcknowledged(db: SqliteHandle, operationId: string): 
 export function listAcknowledgedOperations(db: SqliteHandle): readonly PublicationReceipt[] {
   const rows = db
     .prepare(
-      `SELECT sequence, operation_id, kind, state, result_digest, result_json, known_from,
+      `SELECT CAST(sequence AS TEXT) AS sequence, operation_id, kind, state, result_digest, result_json, known_from,
               observed_ack_at, clock_clamped, error
        FROM publication_intents WHERE state = 'acknowledged'
        ORDER BY known_from, sequence`,

@@ -48,9 +48,21 @@ describe('publication intents', () => {
   });
 
   it('allocates a sequence per operation and returns the same one to a repeated prepare', () => {
-    expect(preparePublicationIntent(store.db, intent('op-1'))).toBe(1);
-    expect(preparePublicationIntent(store.db, intent('op-2'))).toBe(2);
-    expect(preparePublicationIntent(store.db, intent('op-1'))).toBe(1);
+    expect(preparePublicationIntent(store.db, intent('op-1'))).toBe('1');
+    expect(preparePublicationIntent(store.db, intent('op-2'))).toBe('2');
+    expect(preparePublicationIntent(store.db, intent('op-1'))).toBe('1');
+  });
+
+  it('allocates and rereads sequences beyond the JavaScript safe integer range', () => {
+    preparePublicationIntent(store.db, intent('seed'));
+    store.db
+      .prepare(
+        "UPDATE sqlite_sequence SET seq = CAST(? AS INTEGER) WHERE name = 'publication_intents'",
+      )
+      .run('9007199254740992');
+    expect(preparePublicationIntent(store.db, intent('unsafe'))).toBe('9007199254740993');
+    expect(preparePublicationIntent(store.db, intent('unsafe'))).toBe('9007199254740993');
+    expect(readPublicationReceipt(store.db, 'unsafe')?.sequence).toBe('9007199254740993');
   });
 
   it('keeps the prepared input when the result arrives', () => {

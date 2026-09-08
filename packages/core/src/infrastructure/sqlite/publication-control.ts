@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { SqliteHandle } from './database.js';
+import { decimalSequence } from '../publication/json.js';
 
 /**
  * The paired substrate's own identity and the durable marker the guard-node creation reads.
@@ -18,7 +19,7 @@ export type SubstratePairing = {
   readonly substrateId: string;
   readonly bootstrapState: 'pairing' | 'initialized';
   readonly protocolVersion: number;
-  readonly lastAckSequence: number;
+  readonly lastAckSequence: string;
   readonly pendingOperationId: string | null;
   readonly lastKnownFrom: string | null;
   readonly activationCapabilityRevision: number;
@@ -28,13 +29,13 @@ type PairingRowData = {
   substrate_id: string;
   bootstrap_state: 'pairing' | 'initialized';
   protocol_version: number;
-  last_ack_sequence: number;
+  last_ack_sequence: string;
   pending_operation_id: string | null;
   last_known_from: string | null;
   activation_capability_revision: number;
 };
 
-const SELECT_PAIRING = `SELECT substrate_id, bootstrap_state, protocol_version, last_ack_sequence,
+const SELECT_PAIRING = `SELECT substrate_id, bootstrap_state, protocol_version, CAST(last_ack_sequence AS TEXT) AS last_ack_sequence,
     pending_operation_id, last_known_from, activation_capability_revision
   FROM publication_control LIMIT 1`;
 
@@ -75,7 +76,7 @@ export function beginSubstratePairing(db: SqliteHandle, protocolVersion: number)
         substrateId,
         bootstrapState: 'pairing',
         protocolVersion,
-        lastAckSequence: 0,
+        lastAckSequence: '0',
         pendingOperationId: null,
         lastKnownFrom: null,
         activationCapabilityRevision: 0,
@@ -104,7 +105,8 @@ export function completeSubstratePairing(db: SqliteHandle, substrateId: string):
  * the cursor is what a recovery reads to find out how far acknowledgment got, and a cursor
  * that can move backwards would hide work that already completed.
  */
-export function advanceAckCursor(db: SqliteHandle, sequence: number, knownFrom: string): boolean {
+export function advanceAckCursor(db: SqliteHandle, sequence: string, knownFrom: string): boolean {
+  decimalSequence(sequence);
   const result = db
     .prepare(
       `UPDATE publication_control SET last_ack_sequence = ?, last_known_from = ?

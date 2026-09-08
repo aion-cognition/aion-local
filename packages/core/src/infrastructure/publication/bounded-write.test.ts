@@ -29,7 +29,7 @@ describe('publication transaction boundaries', () => {
   });
 
   it('refuses a promise-returning effect and rolls its writes back', () => {
-    const db = store.db;
+    const { db } = store;
     let thrown: unknown;
     try {
       publicationWrite(db, () => {
@@ -47,14 +47,14 @@ describe('publication transaction boundaries', () => {
   });
 
   it('refuses entry from an enclosing SQLite transaction', () => {
-    const db = store.db;
+    const { db } = store;
     expect(() => db.transaction(() => publicationWrite(db, () => 1)).immediate()).toThrow(
       /enclosing_sqlite_transaction/,
     );
   });
 
   it('restores busy_timeout on success, on throw and on async refusal', () => {
-    const db = store.db;
+    const { db } = store;
     const before = busy(db);
     expect(before).toBe(5000);
     expect(publicationWrite(db, () => busy(db))).toBe(0);
@@ -70,7 +70,7 @@ describe('publication transaction boundaries', () => {
   });
 
   it('a writer conflict retains its native diagnostic and restores the timeout', () => {
-    const db = store.db;
+    const { db } = store;
     const other = new Database(join(dir, 'probe.sqlite'));
     other.pragma('busy_timeout = 5000');
     try {
@@ -99,8 +99,8 @@ describe('publication transaction boundaries', () => {
   });
 
   it('nested immediate transactions run as savepoints and roll back with the outer', () => {
-    const db = store.db;
-    let innerSequence = 0;
+    const { db } = store;
+    let innerSequence = '';
     expect(() =>
       publicationWrite(db, () => {
         innerSequence = preparePublicationIntent(db, {
@@ -113,7 +113,7 @@ describe('publication transaction boundaries', () => {
           preparedActionsJson: '{"data":{},"effects":[]}',
           createdAt: NOW,
         });
-        expect(innerSequence).toBeGreaterThan(0);
+        expect(BigInt(innerSequence)).toBeGreaterThan(0n);
         expect(
           db.prepare("SELECT 1 FROM publication_intents WHERE operation_id = 'probe-nested'").get(),
         ).toBeDefined();

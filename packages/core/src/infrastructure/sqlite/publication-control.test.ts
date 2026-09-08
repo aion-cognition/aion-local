@@ -85,10 +85,10 @@ describe('substrate pairing', () => {
   it('moves the acknowledgment cursor forward only', () => {
     beginSubstratePairing(store.db, 1);
 
-    expect(advanceAckCursor(store.db, 4, '2026-09-08T02:00:00.000Z')).toBe(true);
-    expect(advanceAckCursor(store.db, 2, '2026-09-08T01:00:00.000Z')).toBe(false);
+    expect(advanceAckCursor(store.db, '4', '2026-09-08T02:00:00.000Z')).toBe(true);
+    expect(advanceAckCursor(store.db, '2', '2026-09-08T01:00:00.000Z')).toBe(false);
     expect(readSubstratePairing(store.db)).toMatchObject({
-      lastAckSequence: 4,
+      lastAckSequence: '4',
       lastKnownFrom: '2026-09-08T02:00:00.000Z',
     });
   });
