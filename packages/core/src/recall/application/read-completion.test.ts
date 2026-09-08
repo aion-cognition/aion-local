@@ -7,6 +7,8 @@ import { checkCoverage, type CheckedRead } from './coverage-checker.js';
 import {
   completeCheckedRead,
   type CheckedReadEffects,
+  type CheckedReadOutcome,
+  type ReadCompletionDeps,
   type ReadCoordinator,
 } from './read-completion.js';
 import { GraphTransaction } from '../../infrastructure/graph/connection.js';
@@ -93,6 +95,10 @@ const coordinator: ReadCoordinator = {
   },
 };
 
+function deps(): ReadCompletionDeps {
+  return { coordinator, db: store.db };
+}
+
 function activate(at: Date = H): void {
   prepareCoverageContract(store.db, 1);
   activateCoverageContract(store.db, { activatedAt: at, fieldPolicyVersion: 1 });
@@ -163,14 +169,14 @@ describe('when the contract still holds', () => {
   it('persists the effects and reports the context the answer was computed under', async () => {
     const request = effects();
 
-    const outcome = await completeCheckedRead(coordinator, request);
+    const outcome = await completeCheckedRead(deps(), request);
 
     expect(outcome).toEqual({ status: 'completed', value: 1, read: request.read });
     expect(getLedgerEntry(store.db, 'read-completed')?.summary).toBe(1);
   });
 
   it('deletes the served rows the caller asked to forget, in the same transaction', async () => {
-    const outcome = await completeCheckedRead(coordinator, effects({ resetDelivery: reset }));
+    const outcome = await completeCheckedRead(deps(), effects({ resetDelivery: reset }));
 
     expect(outcome.status).toBe('completed');
     expect(readServedItems(store.db, SESSION).size).toBe(0);
@@ -184,7 +190,7 @@ describe('when the coverage record changes under the read', () => {
       activateCoverageContract(store.db, { activatedAt: NOW, fieldPolicyVersion: 1 });
     };
 
-    const outcome = await completeCheckedRead(coordinator, effects({ resetDelivery: reset }));
+    const outcome = await completeCheckedRead(deps(), effects({ resetDelivery: reset }));
 
     expect(outcome).toMatchObject({
       status: 'refused',
@@ -205,7 +211,7 @@ describe('when the coverage record changes under the read', () => {
       beforeCompletion = undefined;
     };
 
-    const outcome = await completeCheckedRead(coordinator, effects(), (change) => {
+    const outcome = await completeCheckedRead(deps(), effects(), (change) => {
       expect(change.currentEpoch).not.toBe(change.checkedEpoch);
       return Promise.resolve({ status: 'reconstructed', effects: effects() });
     });
@@ -223,7 +229,7 @@ describe('when the coverage record changes under the read', () => {
       activateCoverageContract(store.db, { activatedAt: NOW, fieldPolicyVersion: 1 });
     };
 
-    const outcome = await completeCheckedRead(coordinator, effects(), () =>
+    const outcome = await completeCheckedRead(deps(), effects(), () =>
       Promise.resolve({ status: 'reconstructed', effects: effects() }),
     );
 
@@ -237,7 +243,7 @@ describe('when the coverage record changes under the read', () => {
       activateCoverageContract(store.db, { activatedAt: NOW, fieldPolicyVersion: 1 });
     };
 
-    const outcome = await completeCheckedRead(coordinator, effects(), () =>
+    const outcome = await completeCheckedRead(deps(), effects(), () =>
       Promise.resolve({ status: 'abandoned' }),
     );
 
@@ -251,7 +257,7 @@ describe('when the coverage record stops being readable', () => {
     beforeCompletion = hideRegistry;
 
     try {
-      const outcome = await completeCheckedRead(coordinator, effects({ resetDelivery: reset }));
+      const outcome = await completeCheckedRead(deps(), effects({ resetDelivery: reset }));
 
       expect(outcome).toMatchObject({
         status: 'refused',
@@ -269,7 +275,7 @@ describe('when the publication boundary will not take the effects', () => {
   it('holds the effects back while a publication is pending, and says so', async () => {
     pending = true;
 
-    const outcome = await completeCheckedRead(coordinator, effects({ resetDelivery: reset }));
+    const outcome = await completeCheckedRead(deps(), effects({ resetDelivery: reset }));
 
     expect(outcome).toEqual({ status: 'retry', reason: 'pending_publication' });
     expect(readServedItems(store.db, SESSION).size).toBe(1);
@@ -279,7 +285,7 @@ describe('when the publication boundary will not take the effects', () => {
   it('holds them back on a stale position rather than persisting under a newer one', async () => {
     position = { ...CHECKPOINT, sequence: '5' };
 
-    const outcome = await completeCheckedRead(coordinator, effects({ resetDelivery: reset }));
+    const outcome = await completeCheckedRead(deps(), effects({ resetDelivery: reset }));
 
     expect(outcome).toEqual({ status: 'retry', reason: 'publication_changed' });
     expect(readServedItems(store.db, SESSION).size).toBe(1);
@@ -288,11 +294,124 @@ describe('when the publication boundary will not take the effects', () => {
 
   it('holds them back when the caller finds its evidence changed under the guard', async () => {
     const outcome = await completeCheckedRead(
-      coordinator,
+      deps(),
       effects({ validate: () => Promise.resolve(false) }),
     );
 
     expect(outcome).toEqual({ status: 'retry', reason: 'evidence_changed' });
     expect(getLedgerEntry(store.db, 'read-completed')).toBeUndefined();
+  });
+
+  it('reads the contract before calling a declined position ordinary degradation', async () => {
+    const request = effects({ resetDelivery: reset });
+    // The publication that moved the position is the activation that moved the contract.
+    position = { ...CHECKPOINT, sequence: '5' };
+    activateCoverageContract(store.db, { activatedAt: NOW, fieldPolicyVersion: 1 });
+
+    const outcome = await completeCheckedRead(deps(), request);
+
+    expect(outcome).toMatchObject({
+      status: 'refused',
+      refusal: { reason: 'coverage_changed', bounds: { coverage_state: 'active' } },
+    });
+    expect(readServedItems(store.db, SESSION).size).toBe(1);
+  });
+
+  it('does not let a pending publication hide a registry it cannot read', async () => {
+    const request = effects({ resetDelivery: reset });
+    pending = true;
+    hideRegistry();
+
+    try {
+      const outcome = await completeCheckedRead(deps(), request);
+
+      expect(outcome).toMatchObject({
+        status: 'refused',
+        refusal: { reason: 'coverage_store_unavailable', bounds: {} },
+      });
+      expect(readServedItems(store.db, SESSION).size).toBe(1);
+    } finally {
+      restoreRegistry();
+    }
+  });
+
+  it('revalidates a coordinated change the coordinator declined the position for', async () => {
+    const request = effects();
+    position = { ...CHECKPOINT, sequence: '5' };
+    activateCoverageContract(store.db, { activatedAt: NOW, fieldPolicyVersion: 1 });
+    let revalidations = 0;
+
+    const outcome = await completeCheckedRead(deps(), request, () => {
+      revalidations += 1;
+      // The rebuild reads the contract in force and takes the position the coordinator moved to.
+      return Promise.resolve({
+        status: 'reconstructed',
+        effects: effects({ checkpoint: position }),
+      });
+    });
+
+    expect(outcome).toMatchObject({ status: 'completed' });
+    expect(revalidations).toBe(1);
+  });
+});
+
+describe('when an effect callback does not finish before it returns', () => {
+  it('does not commit a read whose reset callback returned a promise', async () => {
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let resetFinished: Promise<void> | undefined;
+    // A caller that broke the synchronous contract. The slot says nothing comes back, so the
+    // mistake only becomes visible at the boundary, which is why the cast is the fixture here.
+    const attempt = {
+      ...effects(),
+      resetDelivery: (db: SqliteHandle) => {
+        deleteServedItems(db, SESSION);
+        resetFinished = held;
+        return held;
+      },
+    } as unknown as CheckedReadEffects<number>;
+
+    try {
+      const outcome = await completeCheckedRead(deps(), attempt).catch(
+        (error: unknown) => error as CheckedReadOutcome<number>,
+      );
+
+      expect.soft(outcome).not.toMatchObject({ status: 'completed' });
+      expect.soft(readServedItems(store.db, SESSION).size).toBe(1);
+      expect.soft(getLedgerEntry(store.db, 'read-completed')).toBeUndefined();
+    } finally {
+      release();
+      await resetFinished;
+    }
+  });
+
+  it('refuses an asynchronous persist result even when the result type is unknown', async () => {
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const attempt: CheckedReadEffects<unknown> = {
+      read: checked(),
+      checkpoint: CHECKPOINT,
+      persist: async (db) => {
+        markLedgerApplied(db, 'async-persist', 1);
+        await held;
+        return 1;
+      },
+    };
+
+    try {
+      const outcome = await completeCheckedRead(deps(), attempt).catch(
+        (error: unknown) => error as CheckedReadOutcome<unknown>,
+      );
+
+      expect.soft(outcome).not.toMatchObject({ status: 'completed' });
+      expect.soft(getLedgerEntry(store.db, 'async-persist')).toBeUndefined();
+    } finally {
+      release();
+      await held;
+    }
   });
 });

@@ -109,10 +109,13 @@ export const HistoryCoverageSchema = z.strictObject({
 export type HistoryCoverage = z.infer<typeof HistoryCoverageSchema>;
 
 /**
- * The four ways a request is refused before any work is spent. A request outside the floor is
+ * The four ways a request is refused rather than answered. A request outside the floor is
  * `before_horizon`; knowledge time past the request clock is `future_knowledge`; a coverage
  * record that cannot be read or does not say what it is is `coverage_store_unavailable`; a
  * record that changed under a read in flight is `coverage_changed`.
+ *
+ * The first two are settled before anything is spent. The other two can also arrive at the end
+ * of a read that already did its work, and a refusal never says the work did not happen.
  *
  * A preparing record is not on this list. It is readable and it says what it is, so its
  * requests are answered as labeled partial results rather than refused.

@@ -4,7 +4,12 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { checkCoverage, type CheckedRead } from './coverage-checker.js';
-import { completeCheckedRead, type CheckedReadEffects } from './read-completion.js';
+import {
+  completeCheckedRead,
+  type CheckedReadEffects,
+  type CheckedReadOutcome,
+  type ReadCompletionDeps,
+} from './read-completion.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
 import {
   startRehearsalSubstrate,
@@ -25,8 +30,11 @@ import type {
   PublicationBoundary,
   PublicationCheckpoint,
 } from '../../infrastructure/publication/types.js';
-import { activateCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
-import { SqliteStore } from '../../infrastructure/sqlite/database.js';
+import {
+  activateCoverageContract,
+  readCurrentCoverageContract,
+} from '../../infrastructure/sqlite/coverage-contract.js';
+import { SqliteStore, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { getLedgerEntry, markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import {
   deleteServedItems,
@@ -120,9 +128,36 @@ function persisted(): unknown {
   return getLedgerEntry(store.db, `read-completed:${String(serial)}`)?.summary;
 }
 
+function deps(): ReadCompletionDeps {
+  return { coordinator, db: store.db };
+}
+
+/** The activation the substrate really performs: one publication that moves both stores. */
+async function activateThroughCoordinator(): Promise<void> {
+  store.db.prepare('UPDATE publication_control SET activation_capability_revision = 1').run();
+  await coordinator.publish({
+    kind: 'coverage_activation',
+    operationId: `activation-${String(serial)}`,
+    payload: {
+      expectedEpoch: readCurrentCoverageContract(store.db)?.epoch,
+      capabilityRevision: 1,
+      fieldPolicyVersion: 1,
+    },
+  });
+}
+
+/** Reversibly: the fixture puts the substrate back the way it found it. */
+function hideRegistry(): void {
+  store.db.prepare('ALTER TABLE coverage_contract RENAME TO coverage_contract_hidden').run();
+}
+
+function restoreRegistry(): void {
+  store.db.prepare('ALTER TABLE coverage_contract_hidden RENAME TO coverage_contract').run();
+}
+
 describe('a checked read against both stores', () => {
   it('commits its effects and its staged reset together', async () => {
-    const outcome = await completeCheckedRead(coordinator, effects(checked(), await position()));
+    const outcome = await completeCheckedRead(deps(), effects(checked(), await position()));
 
     expect(outcome.status).toBe('completed');
     expect(persisted()).toBe(completions);
@@ -134,7 +169,7 @@ describe('a checked read against both stores', () => {
     const read = checked();
     expect(await coordinator.publish(request)).toMatchObject({ status: 'acknowledged' });
 
-    const outcome = await completeCheckedRead(coordinator, effects(read, stale));
+    const outcome = await completeCheckedRead(deps(), effects(read, stale));
 
     expect(outcome).toMatchObject({ status: 'retry', reason: 'publication_changed' });
     expect(persisted()).toBeUndefined();
@@ -149,7 +184,7 @@ describe('a checked read against both stores', () => {
     expect(coordinator.hasPending()).toBe(true);
 
     const started = performance.now();
-    const outcome = await completeCheckedRead(coordinator, effects(read, taken));
+    const outcome = await completeCheckedRead(deps(), effects(read, taken));
 
     expect(outcome).toEqual({ status: 'retry', reason: 'pending_publication' });
     expect(performance.now() - started).toBeLessThan(500);
@@ -163,7 +198,7 @@ describe('a checked read against both stores', () => {
     const taken = await position();
     activateCoverageContract(store.db, { activatedAt: NOW, fieldPolicyVersion: 1 });
 
-    const outcome = await completeCheckedRead(coordinator, effects(read, taken));
+    const outcome = await completeCheckedRead(deps(), effects(read, taken));
 
     expect(outcome).toMatchObject({
       status: 'refused',
@@ -178,7 +213,7 @@ describe('a checked read against both stores', () => {
     const taken = await position();
     activateCoverageContract(store.db, { activatedAt: NOW, fieldPolicyVersion: 1 });
 
-    const outcome = await completeCheckedRead(coordinator, effects(read, taken), async () => ({
+    const outcome = await completeCheckedRead(deps(), effects(read, taken), async () => ({
       status: 'reconstructed',
       effects: effects(checked(), await position()),
     }));
@@ -186,5 +221,135 @@ describe('a checked read against both stores', () => {
     expect(outcome.status).toBe('completed');
     expect(persisted()).toBe(completions);
     expect(readServedItems(store.db, SESSION).size).toBe(0);
+  });
+});
+
+describe('when the activation is the publication that moved the position', () => {
+  it('refuses an epoch change that also advances the real publication checkpoint', async () => {
+    const read = checked();
+    const checkpoint = await position();
+    await activateThroughCoordinator();
+
+    const result = await completeCheckedRead(deps(), effects(read, checkpoint));
+
+    expect(result).toMatchObject({
+      status: 'refused',
+      refusal: {
+        reason: 'coverage_changed',
+        bounds: { coverage_state: 'active', history_since: NOW.toISOString() },
+      },
+    });
+    expect(readServedItems(store.db, SESSION).size).toBe(1);
+    expect(persisted()).toBeUndefined();
+  });
+
+  it('revalidates after a coordinated epoch change instead of returning a generic retry', async () => {
+    const read = checked();
+    const checkpoint = await position();
+    await activateThroughCoordinator();
+    let revalidations = 0;
+
+    const result = await completeCheckedRead(deps(), effects(read, checkpoint), async () => {
+      revalidations += 1;
+      return { status: 'reconstructed', effects: effects(checked(), await position()) };
+    });
+
+    expect.soft(result.status).toBe('completed');
+    expect.soft(revalidations).toBe(1);
+  });
+
+  it('does not hide an unreadable registry behind a stale publication checkpoint', async () => {
+    const read = checked();
+    const checkpoint = await position();
+    await coordinator.publish(request);
+    hideRegistry();
+
+    try {
+      expect(await completeCheckedRead(deps(), effects(read, checkpoint))).toMatchObject({
+        status: 'refused',
+        refusal: { reason: 'coverage_store_unavailable', bounds: {} },
+      });
+    } finally {
+      restoreRegistry();
+    }
+  });
+
+  it('does not hide registry failure behind a durable pending publication', async () => {
+    const read = checked();
+    const checkpoint = await position();
+    failAt = 'prepared';
+    await expect(coordinator.publish(request)).rejects.toThrow();
+    hideRegistry();
+
+    try {
+      expect(await completeCheckedRead(deps(), effects(read, checkpoint))).toMatchObject({
+        status: 'refused',
+        refusal: { reason: 'coverage_store_unavailable', bounds: {} },
+      });
+    } finally {
+      restoreRegistry();
+      await coordinator.recover();
+    }
+  }, 25_000);
+});
+
+describe('when an effect callback does not finish before it returns', () => {
+  it('does not commit a read whose reset callback returned a promise', async () => {
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let resetFinished: Promise<void> | undefined;
+    // A caller that broke the synchronous contract. The slot says nothing comes back, so the
+    // mistake only becomes visible at the boundary, which is why the cast is the fixture here.
+    const attempt = {
+      ...effects(checked(), await position()),
+      resetDelivery: (db: SqliteHandle) => {
+        deleteServedItems(db, SESSION);
+        resetFinished = held;
+        return held;
+      },
+    } as unknown as CheckedReadEffects<number>;
+
+    try {
+      const outcome = await completeCheckedRead(deps(), attempt).catch(
+        (error: unknown) => error as CheckedReadOutcome<number>,
+      );
+
+      expect.soft(outcome).not.toMatchObject({ status: 'completed' });
+      expect.soft(readServedItems(store.db, SESSION).size).toBe(1);
+      expect.soft(persisted()).toBeUndefined();
+    } finally {
+      release();
+      await resetFinished;
+    }
+  });
+
+  it('refuses an asynchronous persist result even when the result type is unknown', async () => {
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const attempt: CheckedReadEffects<unknown> = {
+      read: checked(),
+      checkpoint: await position(),
+      persist: async (db) => {
+        markLedgerApplied(db, `async-persist:${String(serial)}`, 1);
+        await held;
+        return 1;
+      },
+    };
+
+    try {
+      const outcome = await completeCheckedRead(deps(), attempt).catch(
+        (error: unknown) => error as CheckedReadOutcome<unknown>,
+      );
+
+      expect.soft(outcome).not.toMatchObject({ status: 'completed' });
+      expect.soft(getLedgerEntry(store.db, `async-persist:${String(serial)}`)).toBeUndefined();
+    } finally {
+      release();
+      await held;
+    }
   });
 });

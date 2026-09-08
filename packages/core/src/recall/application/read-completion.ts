@@ -1,6 +1,12 @@
 import type { CoverageRefusal } from '@aion/protocol';
 
-import { coverageRefusal, readCoverageFence, type CheckedRead } from './coverage-checker.js';
+import {
+  coverageRefusal,
+  readCoverageFence,
+  readCoverageStanding,
+  type CheckedRead,
+} from './coverage-checker.js';
+import { PublicationInvariantError } from '../../infrastructure/publication/errors.js';
 import type {
   ReadCompletion,
   SynchronousResult,
@@ -25,6 +31,16 @@ export type ReadCoordinator = {
   ): Promise<ReadCompletion<T>>;
 };
 
+export type ReadCompletionDeps = {
+  readonly coordinator: ReadCoordinator;
+  /**
+   * The store the coordinator commits through. The boundary reads the coverage record here when
+   * the coordinator declines before the fence can run, which is the only way it can tell an
+   * ordinary publication from the activation that changed the contract.
+   */
+  readonly db: SqliteHandle;
+};
+
 export type CheckedReadEffects<T> = {
   readonly read: CheckedRead;
   /** The position taken before the work started. */
@@ -38,6 +54,9 @@ export type CheckedReadEffects<T> = {
    * an empty served set in memory, and the durable rows go only here, inside the same
    * transaction as the fence. Deleting early would let a read that then refuses take the
    * caller's holdings with it.
+   *
+   * It must finish before it returns. A `void` slot cannot say that in the type, because
+   * TypeScript accepts any returned value where nothing is expected, so the boundary checks it.
    */
   readonly resetDelivery?: (db: SqliteHandle) => void;
   /** Every other successful-read effect, all synchronous: the served pack, the counters. */
@@ -61,7 +80,11 @@ export type ReadRevalidation<T> =
 export type CheckedReadOutcome<T> =
   | { readonly status: 'completed'; readonly value: T; readonly read: CheckedRead }
   | { readonly status: 'refused'; readonly refusal: CoverageRefusal }
-  /** The answer stands; its effects did not persist and the caller may take the position again. */
+  /**
+   * The publication boundary would not take the effects, under a coverage contract that is
+   * readable and unchanged. Nothing persisted, and the position can be taken again. It is not a
+   * statement that the answer computed a moment ago is still the right one.
+   */
   | { readonly status: 'retry'; readonly reason: string };
 
 type Fenced<T> =
@@ -69,11 +92,34 @@ type Fenced<T> =
   | { readonly fence: 'changed'; readonly epoch: string }
   | { readonly fence: 'unreadable' };
 
+type Verdict<T> =
+  | { readonly kind: 'completed'; readonly value: T }
+  | { readonly kind: 'changed'; readonly epoch: string }
+  | { readonly kind: 'unreadable' }
+  | { readonly kind: 'retry'; readonly reason: string };
+
 function alwaysValid(): Promise<boolean> {
   return Promise.resolve(true);
 }
 
+/**
+ * A callback that returns a promise has not finished when the transaction commits, so its
+ * writes would land under a fence nobody checked, or not land at all. Throwing here rolls the
+ * attempt back. It does not stop the callback's own continuation from running later; nothing
+ * in JavaScript can, which is why the contract is that these callbacks are synchronous.
+ */
+function synchronousEffect(reason: string, value: unknown): void {
+  if (
+    value !== null &&
+    (typeof value === 'object' || typeof value === 'function') &&
+    'then' in value
+  ) {
+    throw new PublicationInvariantError(reason);
+  }
+}
+
 function refuse<T>(
+  db: SqliteHandle,
   read: CheckedRead,
   reason: 'coverage_changed' | 'coverage_store_unavailable',
 ): CheckedReadOutcome<T> {
@@ -83,16 +129,23 @@ function refuse<T>(
     ...(coverage.knew_at === undefined ? {} : { knewAt: new Date(coverage.knew_at) }),
     now: context.now,
   };
-  // Bounds are what is known now. A record that cannot be read tells a caller nothing about
-  // the substrate's reach, including what it said a moment ago.
-  const bounds =
-    reason === 'coverage_changed'
-      ? {
-          coverageState: context.coverageState,
-          ...(context.coverageState === 'active' ? { historySince: context.historySince } : {}),
-        }
-      : {};
-  return { status: 'refused', refusal: coverageRefusal(reason, requested, bounds) };
+  // Bounds are what is verified now, not what the read was checked against: a caller told a
+  // contract changed needs the one that replaced it. A record that cannot be read tells a
+  // caller nothing about the substrate's reach, including what it said a moment ago.
+  const standing = readCoverageStanding(db);
+  if (standing === undefined) {
+    return {
+      status: 'refused',
+      refusal: coverageRefusal('coverage_store_unavailable', requested, {}),
+    };
+  }
+  return {
+    status: 'refused',
+    refusal: coverageRefusal(reason, requested, {
+      coverageState: standing.coverageState,
+      ...(standing.historySince === undefined ? {} : { historySince: standing.historySince }),
+    }),
+  };
 }
 
 /**
@@ -115,56 +168,86 @@ async function attempt<T>(
       if (epoch !== effects.read.context.coverageEpoch) {
         return { fence: 'changed', epoch };
       }
-      effects.resetDelivery?.(db);
-      return { fence: 'matched', value: effects.persist(db) };
+      synchronousEffect('async_reset_effect', effects.resetDelivery?.(db));
+      const value = effects.persist(db);
+      synchronousEffect('async_read_effect', value);
+      return { fence: 'matched', value };
     },
   );
+}
+
+/**
+ * What one attempt settled, coverage first.
+ *
+ * A coordinator that declines before the fence runs has not said anything about coverage, and
+ * the publication it declined for may be the activation that changed the contract. Reading the
+ * record here is what keeps a real coordinated activation from arriving as an ordinary
+ * publication retry, and an unreadable registry from hiding behind one.
+ */
+function verdictFor<T>(
+  db: SqliteHandle,
+  effects: CheckedReadEffects<T>,
+  attempted: ReadCompletion<Fenced<T>>,
+): Verdict<T> {
+  if (attempted.status === 'completed') {
+    const fenced = attempted.value;
+    if (fenced.fence === 'matched') {
+      return { kind: 'completed', value: fenced.value };
+    }
+    return fenced.fence === 'changed'
+      ? { kind: 'changed', epoch: fenced.epoch }
+      : { kind: 'unreadable' };
+  }
+  const standing = readCoverageStanding(db);
+  if (standing === undefined) {
+    return { kind: 'unreadable' };
+  }
+  return standing.epoch === effects.read.context.coverageEpoch
+    ? { kind: 'retry', reason: attempted.reason }
+    : { kind: 'changed', epoch: standing.epoch };
 }
 
 /**
  * The single boundary a checked read commits at.
  *
  * Everything a successful read writes goes through here, so there is one place that decides
- * whether the contract the answer was computed under is still the contract in force. A change
- * gets one bounded revalidation, which has to rebuild whatever depended on the old contract;
- * a read that cannot be rebuilt is refused rather than quietly served under the new epoch.
- * Work already spent before a change stays spent, and a refusal at this boundary never claims
- * otherwise.
+ * whether the contract the answer was computed under is still the contract in force. That
+ * decision comes first, on every path: a publication that moved the read's position may be the
+ * activation that moved the contract, and reporting it as ordinary publication degradation
+ * would drop the refusal a caller is owed. A change gets one bounded revalidation, which has to
+ * rebuild whatever depended on the old contract; a result that cannot be rebuilt is refused
+ * rather than quietly served under the new epoch. Work already spent stays spent, and a refusal
+ * here never claims otherwise.
  */
 export async function completeCheckedRead<T>(
-  coordinator: ReadCoordinator,
+  deps: ReadCompletionDeps,
   effects: CheckedReadEffects<T>,
   revalidate?: (change: CoverageChange) => Promise<ReadRevalidation<T>>,
 ): Promise<CheckedReadOutcome<T>> {
-  const first = await attempt(coordinator, effects);
-  if (first.status === 'retry') {
-    return { status: 'retry', reason: first.reason };
+  let current = effects;
+  // At most two passes: the read as computed, then one rebuilt against the contract in force.
+  for (let pass = 0; pass < 2; pass += 1) {
+    const verdict = verdictFor(deps.db, current, await attempt(deps.coordinator, current));
+    if (verdict.kind === 'completed') {
+      return { status: 'completed', value: verdict.value, read: current.read };
+    }
+    if (verdict.kind === 'unreadable') {
+      return refuse(deps.db, current.read, 'coverage_store_unavailable');
+    }
+    if (verdict.kind === 'retry') {
+      return { status: 'retry', reason: verdict.reason };
+    }
+    if (pass === 1 || revalidate === undefined) {
+      break;
+    }
+    const rebuilt = await revalidate({
+      checkedEpoch: current.read.context.coverageEpoch,
+      currentEpoch: verdict.epoch,
+    });
+    if (rebuilt.status === 'abandoned') {
+      break;
+    }
+    current = rebuilt.effects;
   }
-  if (first.value.fence === 'matched') {
-    return { status: 'completed', value: first.value.value, read: effects.read };
-  }
-  if (first.value.fence === 'unreadable') {
-    return refuse(effects.read, 'coverage_store_unavailable');
-  }
-  const rebuilt =
-    revalidate === undefined
-      ? ({ status: 'abandoned' } as const)
-      : await revalidate({
-          checkedEpoch: effects.read.context.coverageEpoch,
-          currentEpoch: first.value.epoch,
-        });
-  if (rebuilt.status === 'abandoned') {
-    return refuse(effects.read, 'coverage_changed');
-  }
-  const second = await attempt(coordinator, rebuilt.effects);
-  if (second.status === 'retry') {
-    return { status: 'retry', reason: second.reason };
-  }
-  if (second.value.fence === 'matched') {
-    return { status: 'completed', value: second.value.value, read: rebuilt.effects.read };
-  }
-  return refuse(
-    rebuilt.effects.read,
-    second.value.fence === 'unreadable' ? 'coverage_store_unavailable' : 'coverage_changed',
-  );
+  return refuse(deps.db, current.read, 'coverage_changed');
 }

@@ -157,9 +157,30 @@ function currentContract(db: SqliteHandle): ServableContract | undefined {
   }
 }
 
+/**
+ * What the substrate covers right now: the epoch a checked read is fenced on, and the bounds a
+ * refusal reports. A reader whose contract moved is told what the contract is now, not what it
+ * was when the read began.
+ */
+export type CoverageStanding = {
+  readonly epoch: string;
+  readonly coverageState: 'preparing' | 'active';
+  readonly historySince?: string;
+};
+
+export function readCoverageStanding(db: SqliteHandle): CoverageStanding | undefined {
+  const contract = currentContract(db);
+  if (contract === undefined) {
+    return undefined;
+  }
+  return contract.state === 'active'
+    ? { epoch: contract.epoch, coverageState: 'active', historySince: contract.historySince }
+    : { epoch: contract.epoch, coverageState: 'preparing' };
+}
+
 /** The epoch in force, for the completion fence. Absent when the record cannot be served. */
 export function readCoverageFence(db: SqliteHandle): string | undefined {
-  return currentContract(db)?.epoch;
+  return readCoverageStanding(db)?.epoch;
 }
 
 export function coverageRefusal(
