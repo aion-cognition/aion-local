@@ -290,4 +290,30 @@ describe('narrative revision retry nomination', () => {
       ).toEqual([`${prefix}b`, `${prefix}a`]);
     },
   );
+
+  it('retry metadata is still there after a close and reopen', () => {
+    const path = join(dir, 'restart.sqlite');
+    const first = new SqliteStore({ filePath: path });
+    allocateNarrativeRevision(first.db, OVERVIEW_REVISION_FAMILY, 'calendar:2026-W36', EARLY);
+    recordRevisionAttemptFailure(first.db, OVERVIEW_REVISION_FAMILY, {
+      familyKey: 'calendar:2026-W36',
+      revisionNo: 1,
+      reason: 'store_unavailable',
+      nextAttemptAt: LATER,
+    });
+    first.close();
+
+    const reopened = new SqliteStore({ filePath: path });
+    try {
+      expect(
+        readNarrativeRevision(reopened.db, OVERVIEW_REVISION_FAMILY, 'calendar:2026-W36', 1),
+      ).toMatchObject({
+        attempts: 1,
+        nextAttemptAt: LATER.toISOString(),
+        lastFailureReason: 'store_unavailable',
+      });
+    } finally {
+      reopened.close();
+    }
+  });
 });

@@ -155,6 +155,34 @@ describe('processing generations', () => {
     expect(store.db.prepare('SELECT count(*) AS n FROM source_work').get()).toEqual({ n: 0 });
   });
 
+  it('leaves the counter where it was when the work row is refused', () => {
+    const generation = activeGeneration();
+    createSourceWork(store.db, {
+      workId: 'work-1',
+      sourceId: 'source-1',
+      processingGeneration: generation,
+      kind: 'settlement',
+      workKey: 'reference:2',
+      dueAt: NOW,
+    });
+
+    // The same obligation under a second work id: the unique key refuses it, and the counter
+    // advance in the same transaction goes back with it.
+    expect(() => {
+      createSourceWork(store.db, {
+        workId: 'work-2',
+        sourceId: 'source-1',
+        processingGeneration: generation,
+        kind: 'settlement',
+        workKey: 'reference:2',
+        dueAt: NOW,
+      });
+    }).toThrow(/UNIQUE/);
+
+    expect(readGeneration(store.db, 'source-1', generation)?.operationalRevision).toBe(1);
+    expect(store.db.prepare('SELECT count(*) AS n FROM source_work').get()).toEqual({ n: 1 });
+  });
+
   it('writes one stage row per required stage and repeats nothing on a second preparation', () => {
     const generation = activeGeneration();
 

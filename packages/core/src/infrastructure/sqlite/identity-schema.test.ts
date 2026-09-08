@@ -201,6 +201,44 @@ describe('the identity schema bootstrap', () => {
     reopened.close();
   });
 
+  it('refuses a negative attempt count and a negative operational revision', () => {
+    const store = open('fresh.sqlite');
+    try {
+      store.db
+        .prepare(
+          `INSERT INTO source_processing_generations
+             (source_id, processing_generation, policy_revision, state, created_at)
+           VALUES ('source-1', 1, 1, 'active', '2026-09-01T00:00:00.000Z')`,
+        )
+        .run();
+      store.db
+        .prepare(
+          `INSERT INTO chunk_revisions (chunk_id, revision_no, node_id, state, allocated_at)
+           VALUES ('chunk-1', 1, 'node-1', 'allocated', '2026-09-01T00:00:00.000Z')`,
+        )
+        .run();
+      store.db
+        .prepare(
+          `INSERT INTO overview_revisions (family_key, revision_no, node_id, state, allocated_at)
+           VALUES ('calendar:2026-W36', 1, 'node-2', 'allocated', '2026-09-01T00:00:00.000Z')`,
+        )
+        .run();
+
+      expect(() =>
+        store.db
+          .prepare('UPDATE source_processing_generations SET operational_revision = -1')
+          .run(),
+      ).toThrow(/CHECK constraint failed/);
+      for (const table of ['chunk_revisions', 'overview_revisions']) {
+        expect(() => store.db.prepare(`UPDATE ${table} SET attempts = -1`).run()).toThrow(
+          /CHECK constraint failed/,
+        );
+      }
+    } finally {
+      store.close();
+    }
+  });
+
   it('rejects a verified source record that carries only part of its archive proof', () => {
     const store = open('fresh.sqlite');
     try {
