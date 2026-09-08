@@ -87,6 +87,9 @@ describe('raw source evidence', () => {
 
     expect(byTuple.value?.parts).toHaveLength(1);
     expect(byTuple.value?.text).toBe('assistant: recorded, 45 seconds');
+    // The exchange the part sits in: a request in one turn, its result in another.
+    expect(byTuple.value?.sourceText).toContain('the migration took 45 seconds');
+    expect(byTuple.value?.sourceText).toContain('recorded, 45 seconds');
     expect(byTurnId.value?.text).toBe(byTuple.value?.text);
     expect(byTurnId.value?.parts[0]?.turnId).toBe('turn-b');
   });

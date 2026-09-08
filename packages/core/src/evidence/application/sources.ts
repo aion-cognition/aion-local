@@ -56,8 +56,14 @@ export type SourceEvidence = {
   readonly sourceId: string;
   readonly sessionId: string;
   readonly occurredAt: string;
-  /** The whole source as it was captured, or the one addressed part when a part was asked for. */
+  /** What was addressed: the whole source, or the one part a tuple named. */
   readonly text: string;
+  /**
+   * The whole source as it was captured, which is the addressed part's own context. A request
+   * lands in one turn and its result in another, so a part read that carried only its own bytes
+   * would hand a caller half of an exchange.
+   */
+  readonly sourceText: string;
   readonly parts: readonly SourcePartEvidence[];
   readonly decodedRawUtf8Bytes: number;
   readonly rawUtf16CodeUnits: number;
@@ -287,12 +293,14 @@ function evidenceOf(
   parts: readonly SourcePartEvidence[],
   whole: boolean,
 ): SourceEvidence {
-  const text = whole ? renderEpisodeText(row.payload) : parts.map((part) => part.text).join('\n');
+  const sourceText = renderEpisodeText(row.payload);
+  const text = whole ? sourceText : parts.map((part) => part.text).join('\n');
   return {
     sourceId: record.sourceId,
     sessionId: record.sessionId,
     occurredAt: record.occurredAt,
     text,
+    sourceText,
     parts,
     decodedRawUtf8Bytes: utf8Bytes(text),
     rawUtf16CodeUnits: utf16CodeUnits(text),
