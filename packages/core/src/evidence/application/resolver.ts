@@ -67,11 +67,21 @@ export type EvidenceBatch<T> = {
 };
 
 type Certification =
+  /** A position was taken, or none was asked for because no coordinator was supplied. */
   | { readonly status: 'certified'; readonly checkpoint?: PublicationCheckpoint }
-  | { readonly status: 'pending'; readonly reason: string };
+  /** No position could be taken. The reason says which, and neither one certifies anything. */
+  | {
+      readonly status: 'uncertified';
+      readonly reason: string;
+      readonly issue: 'pending_publication' | 'budget_limit';
+    };
 
-function pendingIssue(address: EvidenceAddress, required: boolean): EvidenceIssue {
-  return { address, field: 'interpretation_text', reason: 'pending_publication', required };
+function uncertifiedIssue(
+  address: EvidenceAddress,
+  reason: 'pending_publication' | 'budget_limit',
+  required: boolean,
+): EvidenceIssue {
+  return { address, field: 'interpretation_text', reason, required };
 }
 
 export class EvidenceResolver {
@@ -106,7 +116,7 @@ export class EvidenceResolver {
     const issues = [...reading.issues];
     if (drift !== undefined) {
       for (const [key, result] of results) {
-        const issue = pendingIssue(result.address, true);
+        const issue = uncertifiedIssue(result.address, drift, true);
         issues.push(issue);
         results.set(
           key,
@@ -172,7 +182,12 @@ export class EvidenceResolver {
     const drift = await this.#recheck(budget, before);
     if (drift !== undefined) {
       for (const [key, result] of results) {
-        const issue = pendingIssue(result.address, required);
+        // Raw bytes carry their own proof: the archive digest and the recorded mapping are
+        // immutable, so a publication in flight is disclosed against a verified reading rather
+        // than withheld from it. Anything the reading could not verify stays blocked.
+        const verified =
+          result.evidence.status === 'complete-for-use' && result.value !== undefined;
+        const issue = uncertifiedIssue(result.address, drift, required && !verified);
         issues.push(issue);
         results.set(
           key,
@@ -188,23 +203,47 @@ export class EvidenceResolver {
     return { results, issues, revision: dependencies.revision() };
   }
 
+  /**
+   * Which entities each claim names. Certified like every other surface: the subject join reads
+   * retained state, so a position in flight is what says whether the join it walked still holds.
+   */
   async resolveSubjects(
     claimIds: readonly string[],
     context: CheckedReadContext,
     options: { readonly budget?: RequestBudget } = {},
   ): Promise<EvidenceBatch<readonly ClaimSubject[]>> {
     const budget = options.budget ?? this.newBudget();
+    const before = await this.#certify(budget);
     const reading = await readClaimSubjects(
       { driver: this.#options.driver, db: this.#options.db },
       { claimIds, context, budget },
     );
     const dependencies = new EvidenceDependencies();
     dependencies.addAll(reading.dependencies);
-    return {
-      results: reading.results,
-      issues: reading.issues,
-      revision: dependencies.revision(),
-    };
+    const drift = await this.#recheck(budget, before);
+    if (drift === undefined) {
+      return {
+        results: reading.results,
+        issues: reading.issues,
+        revision: dependencies.revision(),
+      };
+    }
+    const results = new Map(reading.results);
+    const issues = [...reading.issues];
+    for (const [key, result] of results) {
+      const issue = uncertifiedIssue(result.address, drift, true);
+      issues.push(issue);
+      results.set(
+        key,
+        evidenceResult({
+          address: result.address,
+          residency: result.residency,
+          issues: [...(readIssues(result) ?? []), issue],
+          ...(result.value === undefined ? {} : { value: result.value }),
+        }),
+      );
+    }
+    return { results, issues, revision: dependencies.revision() };
   }
 
   /**
@@ -220,16 +259,14 @@ export class EvidenceResolver {
     budget: RequestBudget = this.newBudget(),
   ): Promise<JudgmentAssembly> {
     const before = await this.#certify(budget);
-    if (before.status === 'pending' || this.#options.publications === undefined) {
+    if (before.status === 'uncertified' || before.checkpoint === undefined) {
       return {
         status: 'incomplete',
         reasons: pair.sides.map((side) => ({
           address: { kind: 'id' as const, id: side.nodeId },
           field: 'source_content' as const,
           reason:
-            before.status === 'pending'
-              ? ('pending_publication' as const)
-              : ('required_scope_missing' as const),
+            before.status === 'uncertified' ? before.issue : ('required_scope_missing' as const),
           required: true,
         })),
         revision: new EvidenceDependencies().revision(),
@@ -250,7 +287,7 @@ export class EvidenceResolver {
       reasons: pair.sides.map((side) => ({
         address: { kind: 'id' as const, id: side.nodeId },
         field: 'source_content' as const,
-        reason: 'pending_publication' as const,
+        reason: drift,
         required: true,
       })),
       revision: assembly.revision,
@@ -290,34 +327,49 @@ export class EvidenceResolver {
     }
   }
 
-  /** The position the read is judged against, taken once and rechecked once. */
+  /**
+   * The position the read is judged against, taken once and rechecked once.
+   *
+   * An exhausted allowance is not a position. Returning one would let a request that spent its
+   * checkpoint reads certify on nothing, which is the failure a bound exists to prevent.
+   */
   async #certify(budget: RequestBudget): Promise<Certification> {
     const { publications } = this.#options;
-    if (publications === undefined || budget.takeCheckpointAttempt() !== undefined) {
+    if (publications === undefined) {
       return { status: 'certified' };
+    }
+    if (budget.takeCheckpointAttempt() !== undefined) {
+      return {
+        status: 'uncertified',
+        reason: 'checkpoint_budget_exhausted',
+        issue: 'budget_limit',
+      };
     }
     const result = await publications.checkpoint();
     return result.status === 'ready'
       ? { status: 'certified', checkpoint: result.checkpoint }
-      : { status: 'pending', reason: result.reason };
+      : { status: 'uncertified', reason: result.reason, issue: 'pending_publication' };
   }
 
-  /** The reason the view is no longer coherent, or nothing when the position held. */
-  async #recheck(budget: RequestBudget, before: Certification): Promise<string | undefined> {
-    if (before.status === 'pending') {
-      return before.reason;
+  /** What stopped the view being coherent, or nothing when the position held. */
+  async #recheck(
+    budget: RequestBudget,
+    before: Certification,
+  ): Promise<'pending_publication' | 'budget_limit' | undefined> {
+    if (before.status === 'uncertified') {
+      return before.issue;
     }
     const taken = before.checkpoint;
     if (taken === undefined) {
       return undefined;
     }
     const after = await this.#certify(budget);
-    if (after.status === 'pending') {
-      return after.reason;
+    if (after.status === 'uncertified') {
+      return after.issue;
     }
-    return after.checkpoint === undefined || after.checkpoint.sequence === taken.sequence
-      ? undefined
-      : 'publication_changed';
+    // A second reading that names no position proves nothing about the first, so the answer is
+    // treated as one read under a position that may have moved.
+    return after.checkpoint?.sequence === taken.sequence ? undefined : 'pending_publication';
   }
 }
 
