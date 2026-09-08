@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { CurrencySchema, IsoTimestampSchema, SupersededBySchema } from './common.js';
+import { HistoryCoverageSchema } from './history-coverage.js';
 
 /**
  * Every method that can produce a recalled item: four seed strategies, hybrid-search
@@ -427,6 +428,13 @@ export const MemoryPackMetadataSchema = z.strictObject({
    * served in full, because disagreeing is the reason to read the second one. Absent at zero.
    */
   suppressed_duplicates: z.number().int().positive().optional(),
+  /**
+   * How far back the answer is supported and what it could not establish. Present on every
+   * temporal result and on a present result carrying evidence limitations; absent otherwise,
+   * so an ordinary pack says nothing extra. Optional and additive: a pack persisted to
+   * `last_pack` before the field existed still parses.
+   */
+  history_coverage: HistoryCoverageSchema.optional(),
 });
 
 /**
