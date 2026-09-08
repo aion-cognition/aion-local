@@ -12,7 +12,11 @@ const PRODUCTION: SubstrateTarget = {
   sqlitePath: '/data/aion.sqlite',
 };
 
-const HARNESS: TargetDeclaration = { kind: 'harness', containerName: 'aion-test-neo4j-abc' };
+const HARNESS: TargetDeclaration = {
+  kind: 'harness',
+  containerName: 'aion-test-neo4j-abc',
+  createdByThisRun: true,
+};
 
 function disposable(overrides: Partial<SubstrateTarget> = {}): SubstrateTarget {
   return { graphUri: 'bolt://localhost:7999', sqlitePath: IN_MEMORY_SQLITE, ...overrides };
@@ -127,12 +131,42 @@ describe('refusing a rehearsal target', () => {
     ).toMatchObject({ status: 'rejected', reason: 'unverified_target' });
   });
 
+  it('refuses a container this run did not create', () => {
+    expect(
+      checkRehearsalTarget({
+        target: disposable(),
+        production: PRODUCTION,
+        declaration: { kind: 'harness', containerName: 'someone-elses', createdByThisRun: false },
+      }),
+    ).toMatchObject({ status: 'rejected', reason: 'unverified_target' });
+  });
+
+  it('treats a routing-scheme alias of the running endpoint as the running endpoint', () => {
+    expect(
+      checkRehearsalTarget({
+        target: disposable({ graphUri: 'neo4j://localhost:7687' }),
+        production: { graphUri: 'bolt://127.0.0.1:7687', sqlitePath: '/data/aion.sqlite' },
+        declaration: HARNESS,
+      }),
+    ).toMatchObject({ status: 'rejected', reason: 'production_graph_endpoint' });
+  });
+
+  it('refuses a running file that sits inside the rehearsal directory', () => {
+    expect(
+      checkRehearsalTarget({
+        target: disposable({ sqlitePath: '/tmp/clone/aion.sqlite' }),
+        production: { graphUri: 'bolt://neo4j:7687', sqlitePath: '/tmp/clone/nested/live.sqlite' },
+        declaration: HARNESS,
+      }),
+    ).toMatchObject({ status: 'rejected', reason: 'production_data_root' });
+  });
+
   it('refuses a harness declaration that names no container', () => {
     expect(
       checkRehearsalTarget({
         target: disposable(),
         production: PRODUCTION,
-        declaration: { kind: 'harness', containerName: '  ' },
+        declaration: { kind: 'harness', containerName: '  ', createdByThisRun: true },
       }),
     ).toMatchObject({ status: 'rejected', reason: 'unverified_target' });
   });

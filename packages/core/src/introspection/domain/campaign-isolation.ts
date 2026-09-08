@@ -1,4 +1,4 @@
-import { dirname, isAbsolute, normalize, sep } from 'node:path';
+import { dirname, isAbsolute, resolve, sep } from 'node:path';
 
 /**
  * The check a rehearsal runner makes before it loads a fixture, injects a fault, or tears a
@@ -22,9 +22,14 @@ export const IN_MEMORY_SQLITE = ':memory:';
 
 export type TargetDeclaration =
   | {
-      /** A container this run started and will remove. */
+      /**
+       * A container this run started and will remove. The name alone proves nothing: a string
+       * read out of the environment names a container somebody else is using, so the caller
+       * states outright that it created this one.
+       */
       readonly kind: 'harness';
       readonly containerName: string;
+      readonly createdByThisRun: boolean;
     }
   | {
       /** A copy somebody made, whose endpoint and data root the caller states outright. */
@@ -51,40 +56,51 @@ export type IsolationVerdict =
     };
 
 /**
- * Loopback spellings are folded together and the default bolt port is made explicit, so a
- * target written one way and production written another are still recognised as the same
- * server. Folding in the permissive direction on purpose: over-matching refuses a run, and
- * under-matching runs a teardown against the live substrate.
+ * A server is a host and a port. The scheme is a driver setting: `bolt`, `neo4j`, and their
+ * TLS spellings all reach the same server, so a scheme in the comparison would let one alias
+ * pass as a different machine. Loopback spellings fold together and the default bolt port is
+ * made explicit for the same reason. Folding in the permissive direction on purpose:
+ * over-matching refuses a run, and under-matching runs a teardown against the live substrate.
  */
-function normalizeEndpoint(uri: string): string {
+export function normalizeEndpoint(uri: string): string {
   const trimmed = uri.trim().toLowerCase().replace(/\/+$/, '');
-  const match = /^([a-z0-9+.-]+):\/\/([^/?#]+)(.*)$/.exec(trimmed);
-  if (match === null) {
+  const authority = /^(?:[a-z0-9+.-]+:\/\/)?([^/?#]+)/.exec(trimmed)?.[1];
+  if (authority === undefined || authority.length === 0) {
     return trimmed;
   }
-  const [, scheme, authority, rest] = match;
-  if (scheme === undefined || authority === undefined) {
-    return trimmed;
-  }
-  const withPort = authority.includes(':') ? authority : `${authority}:7687`;
-  const host = withPort.replace(/^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0):/, 'localhost:');
-  return `${scheme}://${host}${rest ?? ''}`;
+  const withPort = /:\d+$/.test(authority) ? authority : `${authority}:7687`;
+  return withPort.replace(/^(localhost|127\.0\.0\.1|\[::1\]|::1|0\.0\.0\.0):/, 'localhost:');
 }
 
-function sharesDataRoot(target: string, production: string): boolean {
+/**
+ * Overlap in either direction, on canonical paths. A rehearsal file beside the running one is
+ * refused, and so is a running file beside a rehearsal directory: both mean a teardown reaches
+ * bytes somebody else owns.
+ */
+export function sharesDataRoot(target: string, production: string): boolean {
   if (target === IN_MEMORY_SQLITE || production === IN_MEMORY_SQLITE) {
     return false;
   }
   if (!isAbsolute(target) || !isAbsolute(production)) {
     return true;
   }
-  const targetPath = normalize(target);
-  const productionPath = normalize(production);
+  const targetPath = resolve(target);
+  const productionPath = resolve(production);
   if (targetPath === productionPath) {
     return true;
   }
-  const root = dirname(productionPath);
-  return targetPath === root || targetPath.startsWith(`${root}${sep}`);
+  return (
+    contains(dirname(productionPath), targetPath) || contains(dirname(targetPath), productionPath)
+  );
+}
+
+function contains(root: string, path: string): boolean {
+  return path === root || path.startsWith(`${root}${sep}`);
+}
+
+/** `:memory:` is not a path and stays itself; everything else is compared canonically. */
+function canonicalPath(path: string): string {
+  return path === IN_MEMORY_SQLITE ? path : resolve(path);
 }
 
 export type RehearsalCheck = {
@@ -118,18 +134,18 @@ export function checkRehearsalTarget(input: RehearsalCheck): IsolationVerdict {
     };
   }
   if (declaration.kind === 'harness') {
-    if (declaration.containerName.trim().length === 0) {
+    if (declaration.containerName.trim().length === 0 || !declaration.createdByThisRun) {
       return {
         status: 'rejected',
         reason: 'unverified_target',
-        detail: 'the harness declaration names no container',
+        detail: 'nothing states that this run created the container it is about to use',
       };
     }
     return { status: 'isolated', basis: 'harness_created' };
   }
   if (
     normalizeEndpoint(declaration.verifiedGraphUri) !== normalizeEndpoint(target.graphUri) ||
-    normalize(declaration.verifiedSqlitePath) !== normalize(target.sqlitePath)
+    canonicalPath(declaration.verifiedSqlitePath) !== canonicalPath(target.sqlitePath)
   ) {
     return {
       status: 'rejected',

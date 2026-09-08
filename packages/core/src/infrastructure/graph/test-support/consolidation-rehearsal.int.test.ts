@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   RehearsalTargetRefused,
+  preflightVerdict,
   productionTarget,
   startRehearsalSubstrate,
   stopRehearsalSubstrate,
@@ -11,7 +12,7 @@ import { runRead } from '../connection.js';
 
 /**
  * The admission check against a real container. Its subject is the container the harness
- * actually started and the endpoint it actually answers on, which is the pair the rule
+ * actually created and the endpoint it actually answers on, which is the pair the rule
  * compares.
  */
 
@@ -24,9 +25,10 @@ afterEach(async () => {
 });
 
 describe('admitting a rehearsal substrate', () => {
-  it('hands back a container the harness started, and says why it admitted it', async () => {
+  it('hands back a container this run created, and says why it admitted it', async () => {
     substrate = await startRehearsalSubstrate();
     expect(substrate.verdict).toEqual({ status: 'isolated', basis: 'harness_created' });
+    expect(substrate.harness.shared).toBe(false);
 
     const rows = await runRead(
       substrate.harness.driver,
@@ -37,22 +39,15 @@ describe('admitting a rehearsal substrate', () => {
     expect(rows).toEqual([1]);
   }, 300_000);
 
-  it('refuses and takes the container down when the target is the running endpoint', async () => {
-    const started = await startRehearsalSubstrate();
-    const running = { graphUri: started.harness.uri, sqlitePath: '/data/aion.sqlite' };
-    await stopRehearsalSubstrate(started);
+  it('refuses a rehearsal file in the running data directory before it creates anything', async () => {
+    const production = { graphUri: 'bolt://neo4j:7687', sqlitePath: '/data/aion.sqlite' };
+    expect(preflightVerdict(production, '/data/rehearsal.sqlite', {})).toMatchObject({
+      status: 'rejected',
+      reason: 'production_data_root',
+    });
 
-    await expect(startRehearsalSubstrate({ production: running })).rejects.toBeInstanceOf(
-      RehearsalTargetRefused,
-    );
-  }, 300_000);
-
-  it('refuses a rehearsal file that would sit in the running data directory', async () => {
     await expect(
-      startRehearsalSubstrate({
-        sqlitePath: '/data/rehearsal.sqlite',
-        production: { graphUri: 'bolt://neo4j:7687', sqlitePath: '/data/aion.sqlite' },
-      }),
+      startRehearsalSubstrate({ sqlitePath: '/data/rehearsal.sqlite', production }),
     ).rejects.toBeInstanceOf(RehearsalTargetRefused);
   }, 300_000);
 });
