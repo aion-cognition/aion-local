@@ -218,11 +218,18 @@ export class PublicationCoordinator {
    * What the substrate durably records about one operation, without acquiring the guard or
    * recovering anything. A caller that lost its own commit response needs this to tell an
    * operation another actor already settled from one that never landed.
+   *
+   * A prepared record is a normal state, not a violation: the operation is durable and its
+   * outcome is not decided yet, so it answers nothing. A record that claims acknowledgment
+   * without the clocks that make one is still a loud invariant.
    */
   outcomeOf(operationId: string): PublicationOutcome | undefined {
     this.#ready();
     const record = publicationRecord(this.#options.db, operationId);
-    return record === undefined ? undefined : publicationOutcome(record);
+    if (record === undefined || record.state === 'prepared') {
+      return undefined;
+    }
+    return publicationOutcome(record);
   }
 
   /** No lock acquisition or recovery: pending publications are disclosed immediately. */

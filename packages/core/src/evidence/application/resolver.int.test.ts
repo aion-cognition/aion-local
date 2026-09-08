@@ -346,4 +346,30 @@ describe('evidence against the real stores', () => {
 
     expect(outcome.status).toBe('settled');
   });
+
+  it('reads a valid prepared operation as unsettled rather than a protocol invariant', async () => {
+    serial += 1;
+    const operationId = `valid-prepared-outcome-${String(serial)}`;
+    failAt = 'prepared';
+    await expect(
+      coordinator.publish({ kind: 'intake', operationId, payload: payload(operationId) }),
+    ).rejects.toThrow();
+
+    expect(publicationRecord(store.db, operationId)?.state).toBe('prepared');
+
+    const value = ((): unknown => {
+      try {
+        return coordinator.outcomeOf(operationId);
+      } catch (error) {
+        return error;
+      }
+    })();
+
+    expect(value).toBeUndefined();
+    expect(coordinator.hasPending()).toBe(true);
+
+    await coordinator.recover();
+
+    expect(coordinator.outcomeOf(operationId)?.status).toBe('acknowledged');
+  });
 });

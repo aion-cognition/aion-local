@@ -157,6 +157,26 @@ describe('merge apply recovery', () => {
     });
   });
 
+  it('halts when recovery leaves the original publication deferred and still pending', async () => {
+    const outcome = await applyMergeWithRecovery({
+      operationId: 'merge',
+      attempt: () => Promise.reject(new PublicationPendingError('merge', new Error('lost'))),
+      logger,
+      coordinator: coordinator({
+        hasPending: () => true,
+        recover: () =>
+          Promise.resolve({
+            status: 'deferred',
+            operationId: 'merge',
+            sequence: '1',
+            reason: 'evidence_changed',
+          }),
+      }),
+    });
+
+    expect(outcome.status).toBe('halted');
+  });
+
   it('stops the batch when recovery leaves the coordinator holding the slot', async () => {
     const outcome = await applyMergeWithRecovery({
       operationId: 'pair-g',

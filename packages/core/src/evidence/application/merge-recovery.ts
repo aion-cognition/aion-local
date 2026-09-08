@@ -86,14 +86,18 @@ async function reconcile<T>(
   if (settled?.status === 'acknowledged') {
     return { status: 'settled', operationId: input.operationId, result: settled.result };
   }
+  // A stored outcome is not proof that the coordinator can take another operation. Only a
+  // released slot makes a deferral or a rejection terminal; while the slot is still held the
+  // batch stops rather than carrying on beside a publication nobody has finished.
+  if (coordinator.hasPending()) {
+    return { status: 'halted', reason: 'publication_still_pending' };
+  }
   if (settled !== undefined) {
     return { status: 'failed', reason };
   }
-  // An empty pending slot proves neither rollback nor settlement, so a batch that cannot read
-  // its own operation's outcome stops rather than counting one it cannot see.
-  return coordinator.hasPending()
-    ? { status: 'halted', reason: 'publication_still_pending' }
-    : { status: 'halted', reason: 'uncertain_commit_unresolved' };
+  // An empty slot proves neither rollback nor settlement, so a batch that cannot read its own
+  // operation's outcome stops rather than counting one it cannot see.
+  return { status: 'halted', reason: 'uncertain_commit_unresolved' };
 }
 
 /**
