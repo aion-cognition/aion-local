@@ -3,14 +3,22 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { sourceScopeDependencies, verifyEvidenceRevision } from './dependencies.js';
 import { resolveSourceEvidence, type SourceReadRequest } from './sources.js';
 import { asOf, knewAt } from '../../infrastructure/graph/read-modes.js';
+import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import { transitionSourceResidency } from '../../infrastructure/sqlite/source-lifecycle.js';
 import type { ReflectionContent } from '../../reflection/domain/content.js';
 import { idAddress, partAddress } from '../domain/address.js';
 import { EVIDENCE_LIMITS, RequestBudget } from '../domain/budget.js';
-import { checkedContext, commitSourceState, seedSource } from '../test-support/evidence.fixture.js';
+import { SOURCE_STATE_SCOPE } from '../domain/scopes.js';
+import {
+  checkedContext,
+  commitSourceState,
+  establishScope,
+  seedSource,
+} from '../test-support/evidence.fixture.js';
 
 const NOW = new Date('2026-09-08T10:00:00.000Z');
 const LATER = new Date('2026-09-08T14:00:00.000Z');
@@ -167,6 +175,8 @@ describe('raw source evidence', () => {
       operationId: 'forget-1',
       at: LATER,
     });
+    // The chain is counted up to that vantage, which is what makes its silence there an answer.
+    establishScope(store.db, 'episode-1', SOURCE_STATE_SCOPE, NOW);
     const before = resolveSourceEvidence(
       store.db,
       idAddress('episode-1'),
@@ -175,6 +185,106 @@ describe('raw source evidence', () => {
 
     expect(before.issues).toEqual([]);
     expect(before.value?.text).toContain('the migration took 45 seconds');
+  });
+
+  it('does not read an uncounted silence as a proved absence of suppression', () => {
+    const before = resolveSourceEvidence(
+      store.db,
+      idAddress('episode-1'),
+      request({ context: checkedContext({ mode: knewAt(NOW) }) }),
+    );
+
+    expect(before.issues).toMatchObject([
+      { field: 'eligibility', reason: 'unsupported_history', historyReason: 'not_recorded' },
+    ]);
+  });
+
+  it('does not certify a whole source with a missing recorded part', () => {
+    store.db
+      .prepare(
+        "DELETE FROM source_parts WHERE source_id='episode-1' AND part_kind='turn' AND ordinal=1",
+      )
+      .run();
+
+    expect(
+      resolveSourceEvidence(store.db, idAddress('episode-1'), request()).issues.length,
+    ).toBeGreaterThan(0);
+  });
+
+  it('checks the recorded role against the captured role', () => {
+    store.db
+      .prepare(
+        "UPDATE source_parts SET role='assistant' WHERE source_id='episode-1' AND part_kind='turn' AND ordinal=0",
+      )
+      .run();
+
+    expect(
+      resolveSourceEvidence(store.db, idAddress('episode-1'), request()).issues.length,
+    ).toBeGreaterThan(0);
+  });
+
+  it('checks the recorded occurrence against the captured occurrence', () => {
+    store.db
+      .prepare(
+        "UPDATE source_parts SET occurred_at=? WHERE source_id='episode-1' AND part_kind='turn' AND ordinal=0",
+      )
+      .run(LATER.toISOString());
+
+    expect(
+      resolveSourceEvidence(store.db, idAddress('episode-1'), request()).issues.length,
+    ).toBeGreaterThan(0);
+  });
+
+  it('invalidates a revision when an original turn mapping changes', () => {
+    const revision = buildEvidenceRevision(sourceScopeDependencies(store.db, 'episode-1'));
+    store.db
+      .prepare(
+        "UPDATE source_parts SET turn_id='changed-turn' WHERE source_id='episode-1' AND part_kind='turn' AND ordinal=0",
+      )
+      .run();
+
+    expect(verifyEvidenceRevision(store.db, revision).status).not.toBe('current');
+  });
+
+  it('invalidates a revision when its mapping loses verification', () => {
+    const revision = buildEvidenceRevision(sourceScopeDependencies(store.db, 'episode-1'));
+    store.db
+      .prepare(
+        "UPDATE source_records SET verification_status='pinned', verification_reason='proof lost' WHERE source_id='episode-1'",
+      )
+      .run();
+
+    expect(verifyEvidenceRevision(store.db, revision).status).not.toBe('current');
+  });
+
+  it('does not certify content before the first proved source availability', () => {
+    const result = resolveSourceEvidence(
+      store.db,
+      idAddress('episode-1'),
+      request({
+        context: checkedContext({ mode: knewAt(new Date('2026-09-08T09:00:00.000Z')), now: LATER }),
+      }),
+    );
+
+    expect(result.issues.length).toBeGreaterThan(0);
+  });
+
+  it('does not invent a missing logical clock merely because the projection was rebuilt', () => {
+    transitionSourceResidency(store.db, {
+      sourceId: 'episode-1',
+      state: 'resident',
+      operationId: 'rebuilt',
+      transitionedAt: LATER,
+      rebuildAckAt: LATER,
+    });
+    const result = resolveSourceEvidence(
+      store.db,
+      idAddress('episode-1'),
+      request({ context: checkedContext({ mode: asOf(NOW), now: LATER }) }),
+    );
+
+    expect(result.value?.occurredAt).toBe(NOW.toISOString());
+    expect(result.issues.filter((issue) => issue.reason === 'unsupported_history')).toEqual([]);
   });
 
   it('unsuppresses on the newer statement of the same chain', () => {
@@ -210,26 +320,6 @@ describe('raw source evidence', () => {
 
     expect(resolution.issues.map((issue) => issue.reason)).toEqual(['budget_limit']);
     expect(resolution.value).toBeUndefined();
-  });
-
-  it('names the clock gap on a rebuilt projection without withholding its content', () => {
-    transitionSourceResidency(store.db, {
-      sourceId: 'episode-1',
-      state: 'resident',
-      operationId: 'rebuild-1',
-      transitionedAt: LATER,
-      rebuildAckAt: LATER,
-    });
-    const resolution = resolveSourceEvidence(
-      store.db,
-      idAddress('episode-1'),
-      request({ context: checkedContext({ mode: asOf(NOW) }) }),
-    );
-
-    expect(resolution.issues).toMatchObject([
-      { reason: 'unsupported_history', historyReason: 'not_recorded', required: false },
-    ]);
-    expect(resolution.value?.text).toContain('the migration took 45 seconds');
   });
 
   it('cites the four source scopes it read under', () => {

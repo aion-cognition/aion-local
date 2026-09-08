@@ -1,8 +1,8 @@
 import { sourceScopeDependencies } from './dependencies.js';
-import { isTimeTravel } from '../../infrastructure/graph/read-modes.js';
 import type { EvidenceDependency } from '../../infrastructure/publication/preconditions.js';
 import { committedSourceStates } from '../../infrastructure/sqlite/committed-evidence.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { scopeSupportsVerifiedEmpty } from '../../infrastructure/sqlite/evidence-scope.js';
 import {
   experienceArchiveKey,
   experiencePayloadBytes,
@@ -28,6 +28,7 @@ import {
 import { partAddress, type EvidenceAddress, type SourcePartKind } from '../domain/address.js';
 import { utf16CodeUnits, utf8Bytes, type RequestBudget } from '../domain/budget.js';
 import type { EvidenceIssue, EvidenceResidency, EvidenceUse } from '../domain/result.js';
+import { SOURCE_STATE_SCOPE } from '../domain/scopes.js';
 
 /**
  * Raw source evidence, rebuilt from the archived payload and the recorded part mapping.
@@ -135,34 +136,66 @@ export function locateAddress(db: SqliteHandle, address: EvidenceAddress): Locat
       };
 }
 
+type Eligibility =
+  | { readonly status: 'disclosable' }
+  | { readonly status: 'suppressed' }
+  /** The chain cannot say what was true then, which is a limitation rather than a verdict. */
+  | { readonly status: 'unproved' };
+
 /**
- * Whether the source is suppressed at the moment this read is judged against.
+ * Whether the source may be disclosed at the moment this read is judged against.
  *
  * Forgetting and suppression are separate chains, so the latest statement on each decides its
  * own axis and either one withholds the content. The chain outlives the content it applies to,
  * which is what lets a question about an evicted source still have an answer.
+ *
+ * A knowledge-time question is different from a question about now. The chain is append-only, so
+ * its emptiness settles the present; it settles an earlier vantage only where a census says the
+ * statements up to that vantage were counted. Reading an unbackfilled silence as a proved absence
+ * is how a source that was forgotten then comes back now.
  */
-function suppressedAt(db: SqliteHandle, sourceId: string, context: CheckedReadContext): boolean {
+function eligibilityAt(
+  db: SqliteHandle,
+  sourceId: string,
+  context: CheckedReadContext,
+): Eligibility {
   const { knownAt } = context.mode;
-  const visible = committedSourceStates(db, sourceId).filter(
+  const states = committedSourceStates(db, sourceId);
+  const visible = states.filter(
     (state) => knownAt === undefined || Date.parse(state.knownFrom) <= knownAt.getTime(),
   );
   const latest = (kinds: ReadonlySet<string>): string | undefined =>
     [...visible].reverse().find((state) => kinds.has(state.stateKind))?.stateKind;
-  return (
+  if (
     latest(SUPPRESSION_KINDS.forget) === 'forgotten' ||
     latest(SUPPRESSION_KINDS.suppress) === 'suppressed'
-  );
+  ) {
+    return { status: 'suppressed' };
+  }
+  if (knownAt !== undefined && visible.length === 0) {
+    return scopeSupportsVerifiedEmpty(db, {
+      endpointId: sourceId,
+      relationClass: SOURCE_STATE_SCOPE,
+    })
+      ? { status: 'disclosable' }
+      : { status: 'unproved' };
+  }
+  return { status: 'disclosable' };
+}
+
+/**
+ * When the substrate first held this source, which is the earliest vantage a knowledge-time read
+ * can see it from. Acceptance is what made it knowable; the occurrence's own world time says when
+ * the conversation happened, and the two are not the same question.
+ */
+function knownFromRecord(record: SourceRecord): number | undefined {
+  const stamp = record.archivedAt ?? record.occurredAt;
+  const parsed = Date.parse(stamp);
+  return Number.isNaN(parsed) ? undefined : parsed;
 }
 
 function residencyOf(db: SqliteHandle, sourceId: string): EvidenceResidency {
   return readSourceResidency(db, sourceId)?.state ?? 'resident';
-}
-
-/** A projection rebuilt after eviction carries today's physical clocks, not the original ones. */
-function rebuiltProjection(db: SqliteHandle, sourceId: string): boolean {
-  const residency = readSourceResidency(db, sourceId);
-  return residency !== undefined && residency.rebuildAckAt !== null;
 }
 
 /**
@@ -260,9 +293,13 @@ function partEvidence(row: ExperienceArchiveRow, part: SourcePartRecord): Source
 }
 
 /**
- * The recorded parts, checked against the same derivation the writer used. A part whose hash
- * disagrees, or that the payload no longer holds, is named at its own address: two parts of one
- * source stay two answers.
+ * The recorded parts against the derivation the writer used, whole.
+ *
+ * Every part the archive holds has to have a row, every row has to name a part the archive holds,
+ * and each has to agree on its content, its attribution and its clock. Comparing only the rows
+ * that exist proves a subset: a deleted row would leave the source certified on what was left,
+ * and a rewritten role or occurrence would pass under an unchanged content hash. Each
+ * disagreement is named at its own address, so two parts of one source stay two answers.
  */
 function verifyParts(
   row: ExperienceArchiveRow,
@@ -273,15 +310,47 @@ function verifyParts(
   const derived = sourcePartsOf(
     prepareEpisode(row.payload, new Date(record.occurredAt)),
     row.payload,
-    stored.filter((part) => part.partKind === 'turn').map((part) => part.turnId ?? ''),
+    stored
+      .filter((part) => part.partKind === 'turn')
+      .sort((left, right) => left.ordinal - right.ordinal)
+      .map((part) => part.turnId ?? ''),
   );
-  const byKey = new Map(derived.map((part) => [`${part.partKind}:${String(part.ordinal)}`, part]));
+  const key = (partKind: string, ordinal: number): string => `${partKind}:${String(ordinal)}`;
+  const byKey = new Map(derived.map((part) => [key(part.partKind, part.ordinal), part]));
+  const seen = new Set<string>();
   const issues: EvidenceIssue[] = [];
+  const mismatch = (partKind: string, ordinal: number): void => {
+    issues.push(
+      issueOn(
+        partAddress(record.sourceId, partKind as SourcePartKind, ordinal),
+        'source_content',
+        'unresolved_mapping',
+        request.required,
+      ),
+    );
+  };
+
   for (const part of stored) {
-    const address = partAddress(part.sourceId, part.partKind as SourcePartKind, part.ordinal);
-    const match = byKey.get(`${part.partKind}:${String(part.ordinal)}`);
-    if (match?.contentHash !== part.contentHash) {
-      issues.push(issueOn(address, 'source_content', 'unresolved_mapping', request.required));
+    const identity = key(part.partKind, part.ordinal);
+    const match = byKey.get(identity);
+    if (seen.has(identity)) {
+      mismatch(part.partKind, part.ordinal);
+      continue;
+    }
+    seen.add(identity);
+    if (
+      match?.contentHash !== part.contentHash ||
+      (match.role ?? null) !== part.role ||
+      (match.occurredAt ?? null) !== part.occurredAt
+    ) {
+      mismatch(part.partKind, part.ordinal);
+    }
+  }
+  // A part the archive holds and the manifest never recorded is not addressable, and a source
+  // whose parts are incompletely recorded is not one this read can certify.
+  for (const part of derived) {
+    if (!seen.has(key(part.partKind, part.ordinal))) {
+      mismatch(part.partKind, part.ordinal);
     }
   }
   return issues;
@@ -336,31 +405,52 @@ export function resolveSourceEvidence(
     };
   }
   const residency = residencyOf(db, located.sourceId);
-  if (request.use !== 'search_indexing' && suppressedAt(db, located.sourceId, request.context)) {
+  const dependencies = sourceScopeDependencies(db, located.sourceId);
+  // What the substrate did not hold at the requested vantage is a certified absence there, not
+  // content to serve under an earlier date.
+  const knownFrom = knownFromRecord(record);
+  const { knownAt } = request.context.mode;
+  if (knownAt !== undefined && (knownFrom === undefined || knownFrom > knownAt.getTime())) {
+    return {
+      residency,
+      issues: [issueOn(address, 'source_content', 'not_found', request.required)],
+      dependencies,
+    };
+  }
+  const eligibility =
+    request.use === 'search_indexing'
+      ? ({ status: 'disclosable' } as const)
+      : eligibilityAt(db, located.sourceId, request.context);
+  if (eligibility.status === 'suppressed') {
     return {
       residency,
       issues: [issueOn(address, 'eligibility', 'suppressed_source', request.required)],
-      dependencies: sourceScopeDependencies(db, located.sourceId),
+      dependencies,
+    };
+  }
+  if (eligibility.status === 'unproved') {
+    return {
+      residency,
+      issues: [
+        {
+          address,
+          field: 'eligibility',
+          reason: 'unsupported_history',
+          historyReason: 'not_recorded',
+          required: request.required,
+        },
+      ],
+      dependencies,
     };
   }
 
   const stored = readSourceParts(db, located.sourceId);
-  const dependencies = sourceScopeDependencies(db, located.sourceId);
   const payload = readPayload(db, record, address, request);
   if (payload.status === 'failed') {
     return { residency, issues: [payload.issue], dependencies };
   }
 
   const issues = [...verifyParts(payload.row, record, stored, request)];
-  if (isTimeTravel(request.context.mode) && rebuiltProjection(db, located.sourceId)) {
-    issues.push({
-      address,
-      field: 'source_clocks',
-      reason: 'unsupported_history',
-      historyReason: 'not_recorded',
-      required: false,
-    });
-  }
 
   const selected =
     located.kind === 'source'

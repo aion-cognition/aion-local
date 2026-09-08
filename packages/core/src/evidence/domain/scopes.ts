@@ -21,6 +21,9 @@ export const SOURCE_SCOPES = [
   'source.references',
 ] as const;
 
+/** The chain of statements about a source itself, which a historical question is proved against. */
+export const SOURCE_STATE_SCOPE = 'source.state';
+
 /** Neo4j owns retained interpretation identity, semantic properties, currency and eligibility. */
 export const GRAPH_NODE_SCOPE = 'graph.node_state';
 
