@@ -79,6 +79,18 @@ type MetadataDeps = {
   readonly db: SqliteHandle;
 };
 
+/**
+ * The roles that make a source an owner of a node: the extraction that minted it and the
+ * mentions and participations its writers record about it.
+ */
+const OWNERSHIP_SCOPES = [
+  { role: 'extraction', direction: 'out' },
+  { role: 'mention', direction: 'in' },
+  { role: 'participation', direction: 'in' },
+] as const;
+
+const OWNERSHIP_ROLES = new Set<string>(OWNERSHIP_SCOPES.map((entry) => entry.role));
+
 function issueOn(
   address: EvidenceAddress,
   field: EvidenceIssue['field'],
@@ -278,18 +290,36 @@ export async function readItemMetadata(
 
   for (const id of accepted) {
     const address = idAddress(id);
-    const rows = (byNode.get(id) ?? []).filter((row) => row.role === 'extraction');
+    const incidenceOf = byNode.get(id) ?? [];
+    // Witness lineage and ownership are different questions. A claim's roots are the sources it
+    // was extracted from; the sessions that carry it are every source that holds it under any of
+    // the roles its writers record. Promoting a mentioning source to a root would invent an
+    // independent origin, and filtering ownership to extraction loses the entity's owners.
+    const rows = incidenceOf.filter((row) => row.role === 'extraction');
+    const owners = incidenceOf.filter((row) => OWNERSHIP_ROLES.has(row.role));
     const nodeIssues: EvidenceIssue[] = [];
 
+    let attributionProved = true;
+    for (const { role, direction } of OWNERSHIP_SCOPES) {
+      const scope = readRelationScope(deps.db, {
+        kind: 'node',
+        endpointId: id,
+        scope: durableRoleScope(role, direction),
+        empty: incidenceOf.every((row) => row.role !== role),
+      });
+      if (scope.status === 'verified') {
+        dependencies.push(scope.dependency);
+      } else {
+        attributionProved = false;
+      }
+    }
     const scope = readRelationScope(deps.db, {
       kind: 'node',
       endpointId: id,
       scope: durableRoleScope('extraction', 'out'),
       empty: rows.length === 0,
     });
-    if (scope.status === 'verified') {
-      dependencies.push(scope.dependency);
-    } else {
+    if (!attributionProved) {
       nodeIssues.push(issueOn(address, 'ownership', 'unverified_scope', false));
     }
     const nodeState = readRelationScope(deps.db, {
@@ -337,9 +367,9 @@ export async function readItemMetadata(
 
     const value: ItemMetadata = {
       provenance: mergeProvenance(found, durable, input.maxRoots, scope.status === 'verified'),
-      owningSessions: overRows ? [] : sessionsOf(deps.db, rows),
-      sources: overRows ? [] : durable.roots,
-      unknownAttribution: scope.status !== 'verified' || overRows,
+      owningSessions: overRows ? [] : sessionsOf(deps.db, owners),
+      sources: overRows ? [] : [...new Set(owners.map((row) => row.sourceId))],
+      unknownAttribution: !attributionProved || overRows,
       narrativeBinding: 'unavailable',
     };
     if (input.budget.chargeMetadataBytes(utf8Bytes(JSON.stringify(value))) !== undefined) {

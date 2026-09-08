@@ -345,6 +345,39 @@ describe('the evidence resolver', () => {
     }
   });
 
+  it('uses entity mention incidence for metadata ownership and sources', async () => {
+    commitIncidence(store.db, {
+      sourceId: 'episode-1',
+      nodeId: 'entity',
+      role: 'mention',
+      operationId: 'entity-mention',
+      at: NOW,
+    });
+    for (const role of ['extraction', 'mention', 'participation'] as const) {
+      establishScope(
+        store.db,
+        'entity',
+        durableRoleScope(role, role === 'extraction' ? 'out' : 'in'),
+        NOW,
+      );
+    }
+    const entityGraph = {
+      executeQuery: () =>
+        Promise.resolve({ records: [{ toObject: () => ({ id: 'entity', capture_ids: [] }) }] }),
+    } as unknown as Driver;
+    const result = await resolver({ driver: entityGraph }).resolveMetadata(
+      ['entity'],
+      checkedContext(),
+      { maxRoots: 4 },
+    );
+    const value = result.results.get('["id","entity"]')?.value;
+
+    expect(value?.owningSessions).toEqual(['session-1']);
+    expect(value?.sources).toEqual(['episode-1']);
+    // Ownership is not lineage: a mentioning source is not an independent root.
+    expect(value?.provenance.roots).toEqual([]);
+  });
+
   it('does not include a later owning session in an earlier knowledge view', async () => {
     commitIncidence(store.db, {
       sourceId: 'episode-1',
