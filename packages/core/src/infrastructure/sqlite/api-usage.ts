@@ -51,29 +51,6 @@ export class ApiUsageRecorder {
   };
 }
 
-const TOKEN_COLUMNS = `input_tokens AS inputTokens, output_tokens AS outputTokens,
-  cache_creation_tokens AS cacheCreationTokens, cache_read_tokens AS cacheReadTokens,
-  duration_ms AS durationMs, attempts, usage_error AS usageError`;
-
-/** Ordered by insertion so identical timestamps still identify distinct requests. */
-export function listApiCalls(db: SqliteHandle): (ApiCall & { readonly id: number })[] {
-  const rows = db
-    .prepare(
-      `SELECT id, occurred_at AS occurredAt, model, surface,
-    ${TOKEN_COLUMNS} FROM api_calls ORDER BY id`,
-    )
-    .all() as (Omit<ApiCall, 'occurredAt' | 'usageError'> & {
-    id: number;
-    occurredAt: string;
-    usageError: NonNullable<ApiCall['usageError']> | null;
-  })[];
-  return rows.map(({ usageError, ...row }) => ({
-    ...row,
-    occurredAt: new Date(row.occurredAt),
-    ...(usageError === null ? {} : { usageError }),
-  }));
-}
-
 export type ApiUsageGroup = {
   readonly key: string;
   readonly model: string;

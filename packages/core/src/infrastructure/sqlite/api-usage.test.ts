@@ -1,10 +1,36 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { appendApiCall, ApiUsageRecorder, listApiCalls, summarizeApiCalls } from './api-usage.js';
-import { SqliteStore } from './database.js';
+import { appendApiCall, ApiUsageRecorder, summarizeApiCalls } from './api-usage.js';
+import { SqliteStore, type SqliteHandle } from './database.js';
 import { DEFAULTS } from '../config/defaults.js';
 import { ProviderRouter } from '../providers/role-provider.js';
 import type { ApiCall } from '../providers/types.js';
+
+/**
+ * Nothing in the package reads rows back: cost reporting only ever asks for the aggregate.
+ * These tests are about what one call stored, so they read the rows here instead. Ordered by
+ * insertion so identical timestamps still identify distinct requests.
+ */
+function storedApiCalls(db: SqliteHandle): (ApiCall & { readonly id: number })[] {
+  const rows = db
+    .prepare(
+      `SELECT id, occurred_at AS occurredAt, model, surface,
+    input_tokens AS inputTokens, output_tokens AS outputTokens,
+    cache_creation_tokens AS cacheCreationTokens, cache_read_tokens AS cacheReadTokens,
+    duration_ms AS durationMs, attempts, usage_error AS usageError
+    FROM api_calls ORDER BY id`,
+    )
+    .all() as (Omit<ApiCall, 'occurredAt' | 'usageError'> & {
+    id: number;
+    occurredAt: string;
+    usageError: NonNullable<ApiCall['usageError']> | null;
+  })[];
+  return rows.map(({ usageError, ...row }) => ({
+    ...row,
+    occurredAt: new Date(row.occurredAt),
+    ...(usageError === null ? {} : { usageError }),
+  }));
+}
 
 const CALL: ApiCall = {
   occurredAt: new Date('2026-09-06T10:00:00.000Z'),
@@ -50,7 +76,7 @@ describe('the API call ledger', () => {
       messages: [{ role: 'user', content: 'test' }],
       schema: { type: 'object' },
     });
-    expect(listApiCalls(store.db)).toEqual([
+    expect(storedApiCalls(store.db)).toEqual([
       expect.objectContaining({
         model: DEFAULTS.anthropic.model,
         surface: 'cognitive',
@@ -70,12 +96,12 @@ describe('the API call ledger', () => {
       messages: [{ role: 'user', content: 'test' }],
       schema: { type: 'object' },
     });
-    expect(listApiCalls(store.db)).toHaveLength(1);
+    expect(storedApiCalls(store.db)).toHaveLength(1);
   });
   it('keeps repeated calls as separate rows with all usage fields intact', () => {
     appendApiCall(store.db, CALL);
     appendApiCall(store.db, CALL);
-    expect(listApiCalls(store.db)).toEqual([
+    expect(storedApiCalls(store.db)).toEqual([
       { id: 1, ...CALL },
       { id: 2, ...CALL },
     ]);
@@ -145,7 +171,7 @@ it('records and error-logs invalid usage through the router without leaking resp
       schema: { type: 'object' },
     }),
   ).resolves.toEqual({});
-  expect(listApiCalls(store.db)).toEqual([
+  expect(storedApiCalls(store.db)).toEqual([
     expect.objectContaining({ usageError: 'invalid_usage' }),
   ]);
   expect(error).toHaveBeenCalledExactlyOnceWith(
