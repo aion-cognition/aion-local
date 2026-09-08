@@ -10,6 +10,10 @@ import {
   committedIncidenceForNodesAt,
   committedIncidenceForSource,
   committedIncidenceForSourceAt,
+  countCommittedIncidenceForNode,
+  countCommittedIncidenceForNodeAt,
+  countCommittedIncidenceForSource,
+  countCommittedIncidenceForSourceAt,
   type CommittedIncidence,
 } from '../../infrastructure/sqlite/committed-evidence.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
@@ -76,19 +80,43 @@ function proofOf(row: CommittedIncidence): IntervalProof {
   };
 }
 
-/** What one incidence read decided, and what it could not decide. */
+/** What one incidence read decided, what it could not decide, and what it could not afford. */
 type IncidenceReading = {
   readonly rows: readonly CommittedIncidence[];
   /** Rows the recorded proof could not place on an axis the read pinned. */
   readonly unplaced: readonly IntervalAxis[];
+  /** True when the allowance could not carry the whole recorded population. */
+  readonly trimmed: boolean;
 };
 
 /**
- * The rows a temporal read may use, and the ones it had to withhold without being able to say
- * they were absent. Withholding an unplaceable row is right; reporting the remainder as the whole
- * set is not, so the axes that could not answer travel back with the rows that could.
+ * How much of a recorded population this request may still materialize.
+ *
+ * The count comes first and the rows come second, on the same population at the same vantage. A
+ * bound applied to rows a read already returned has bounded nothing, and proof rows are read
+ * rows: one examined and then excluded cost exactly as much to fetch as one that survived.
  */
-function selectLive(rows: readonly CommittedIncidence[], mode: ReadMode): IncidenceReading {
+function admit(
+  budget: RequestBudget,
+  declared: number,
+): { readonly take: number; readonly trimmed: boolean } {
+  const remaining = budget.limits.relationRows - budget.spent().relation_rows;
+  const take = Math.max(0, Math.min(declared, remaining));
+  if (take > 0) {
+    budget.chargeRelationRows(take);
+  }
+  return { take, trimmed: take < declared };
+}
+
+/**
+ * The rows a temporal read may use, the ones it had to withhold without being able to say they
+ * were absent, and whether the allowance stopped it short of the whole population.
+ */
+function selectLive(
+  rows: readonly CommittedIncidence[],
+  mode: ReadMode,
+  trimmed: boolean,
+): IncidenceReading {
   const live: CommittedIncidence[] = [];
   const unplaced: IntervalAxis[] = [];
   for (const row of rows) {
@@ -99,7 +127,7 @@ function selectLive(rows: readonly CommittedIncidence[], mode: ReadMode): Incide
       unplaced.push(decision.axis);
     }
   }
-  return { rows: live, unplaced };
+  return { rows: live, unplaced, trimmed };
 }
 
 /**
@@ -110,11 +138,33 @@ function selectLive(rows: readonly CommittedIncidence[], mode: ReadMode): Incide
  * the intervals that say so, and a world-only question needs those intervals just as much as a
  * knowledge-time one does.
  */
-function extractionSources(db: SqliteHandle, claimId: string, mode: ReadMode): IncidenceReading {
-  const rows = isTimeTravel(mode)
-    ? committedIncidenceForNodesAt(db, [claimId], mode.knownAt, 'extraction')
-    : committedIncidenceForNode(db, claimId, 'extraction');
-  return selectLive(rows, mode);
+function extractionSources(
+  db: SqliteHandle,
+  claimId: string,
+  mode: ReadMode,
+  budget: RequestBudget,
+): IncidenceReading {
+  const historical = isTimeTravel(mode);
+  const declared = historical
+    ? countCommittedIncidenceForNodeAt(db, claimId, mode.knownAt, 'extraction')
+    : countCommittedIncidenceForNode(db, claimId, 'extraction');
+  const { take, trimmed } = admit(budget, declared);
+  return selectLive(readAdmitted(db, claimId, mode, take), mode, trimmed);
+}
+
+/** The admitted extraction rows, from the population the count was taken over. */
+function readAdmitted(
+  db: SqliteHandle,
+  claimId: string,
+  mode: ReadMode,
+  take: number,
+): readonly CommittedIncidence[] {
+  if (take === 0) {
+    return [];
+  }
+  return isTimeTravel(mode)
+    ? committedIncidenceForNodesAt(db, [claimId], mode.knownAt, 'extraction', take)
+    : committedIncidenceForNode(db, claimId, 'extraction', take);
 }
 
 /** Entities the records say this claim's sources mention, with the source that carries each. */
@@ -122,33 +172,43 @@ function mentionedEntities(
   db: SqliteHandle,
   sources: readonly CommittedIncidence[],
   mode: ReadMode,
+  budget: RequestBudget,
 ): {
   readonly mentions: readonly { readonly entityId: string; readonly sourceId: string }[];
   readonly unplaced: readonly IntervalAxis[];
+  readonly trimmed: boolean;
 } {
   const mentions: { readonly entityId: string; readonly sourceId: string }[] = [];
   const unplaced: IntervalAxis[] = [];
+  let trimmed = false;
+  const historical = isTimeTravel(mode);
   for (const source of sources) {
-    const held = isTimeTravel(mode)
-      ? committedIncidenceForSourceAt(db, source.sourceId, mode.knownAt)
-      : committedIncidenceForSource(db, source.sourceId);
-    const reading = selectLive(
-      held.filter((row) => row.role === 'mention'),
-      mode,
-    );
+    const declared = historical
+      ? countCommittedIncidenceForSourceAt(db, source.sourceId, mode.knownAt, 'mention')
+      : countCommittedIncidenceForSource(db, source.sourceId, 'mention');
+    const admitted = admit(budget, declared);
+    trimmed = trimmed || admitted.trimmed;
+    if (admitted.take === 0) {
+      continue;
+    }
+    const held = historical
+      ? committedIncidenceForSourceAt(db, source.sourceId, mode.knownAt, {
+          role: 'mention',
+          limit: admitted.take,
+        })
+      : committedIncidenceForSource(db, source.sourceId, {
+          role: 'mention',
+          limit: admitted.take,
+        });
+    const reading = selectLive(held, mode, false);
     unplaced.push(...reading.unplaced);
     for (const row of reading.rows) {
       mentions.push({ entityId: row.nodeId, sourceId: source.sourceId });
     }
   }
-  return { mentions, unplaced };
+  return { mentions, unplaced, trimmed };
 }
 
-/**
- * The entities behind an already-read mention set. Materialization only: the reading that decided
- * which mentions there are, and what could not be decided about them, happened before this and is
- * not repeated here.
- */
 async function materializeSubjects(
   deps: SubjectDeps,
   mentions: readonly { readonly entityId: string; readonly sourceId: string }[],
@@ -207,10 +267,12 @@ export async function readClaimSubjects(
     let reading: IncidenceReading;
     let subjects: readonly ClaimSubject[];
     const unplaced: IntervalAxis[] = [];
+    let trimmed = false;
     try {
-      reading = extractionSources(deps.db, claimId, input.context.mode);
-      const mentioned = mentionedEntities(deps.db, reading.rows, input.context.mode);
+      reading = extractionSources(deps.db, claimId, input.context.mode, input.budget);
+      const mentioned = mentionedEntities(deps.db, reading.rows, input.context.mode, input.budget);
       unplaced.push(...reading.unplaced, ...mentioned.unplaced);
+      trimmed = reading.trimmed || mentioned.trimmed ? true : trimmed;
       // The join runs at the vantage the request was checked against, so a source or an entity
       // that was not visible then is not part of the answer now.
       subjects = await findClaimSubjects(deps.driver, claimId, input.context.mode);
@@ -269,6 +331,11 @@ export async function readClaimSubjects(
         historyReason: 'not_recorded',
         required: true,
       });
+    }
+    // A population the allowance cut short is not the population the question asked about, so the
+    // remainder is not certified: the address stays, its verified rows stay, and the gap is named.
+    if (trimmed) {
+      claimIssues.push(issueOn(address, 'ownership', 'budget_limit', true));
     }
     if (input.budget.chargeRelationRows(subjects.length) !== undefined) {
       claimIssues.push(issueOn(address, 'ownership', 'budget_limit', false));

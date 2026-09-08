@@ -123,6 +123,15 @@ const COMMITTED_INCIDENCE = `SELECT s.source_id, s.node_id, s.role, s.currency, 
   JOIN evidence_link_versions v ON v.link_id = s.link_id AND v.version = s.link_version
   JOIN publication_intents i ON i.operation_id = v.operation_id AND i.state = 'acknowledged'`;
 
+/**
+ * The bound a caller has already charged for, spliced into the read itself. A number that arrives
+ * after the rows do has bounded nothing, so every population this module returns can be asked for
+ * no more than its reader was admitted to carry.
+ */
+function limitClause(limit: number | undefined): string {
+  return limit === undefined ? '' : `LIMIT ${String(Math.max(0, Math.trunc(limit)))}`;
+}
+
 function toIncidence(row: IncidenceRowData): CommittedIncidence {
   return {
     sourceId: row.source_id,
@@ -134,15 +143,43 @@ function toIncidence(row: IncidenceRowData): CommittedIncidence {
   };
 }
 
-/** Everything the committed view says one source currently touches. */
+/**
+ * Everything the committed view says one source currently touches, narrowed to one role and to
+ * the rows the caller has already charged for. The role belongs in the query rather than in a
+ * filter after it: a reader bounded on relation rows must not materialize the rows it is about
+ * to discard.
+ */
 export function committedIncidenceForSource(
   db: SqliteHandle,
   sourceId: string,
+  options: { readonly role?: string; readonly limit?: number } = {},
 ): readonly CommittedIncidence[] {
+  const roleClause = options.role === undefined ? '' : 'AND s.role = ?';
   const rows = db
-    .prepare(`${COMMITTED_INCIDENCE} WHERE s.source_id = ? ORDER BY s.node_id, s.role`)
-    .all(sourceId) as IncidenceRowData[];
+    .prepare(
+      `${COMMITTED_INCIDENCE} WHERE s.source_id = ? ${roleClause}
+       ORDER BY s.node_id, s.role ${limitClause(options.limit)}`,
+    )
+    .all(sourceId, ...(options.role === undefined ? [] : [options.role])) as IncidenceRowData[];
   return rows.map(toIncidence);
+}
+
+/** How many rows that read would return, asked before it is paid for. */
+export function countCommittedIncidenceForSource(
+  db: SqliteHandle,
+  sourceId: string,
+  role: string,
+): number {
+  const row = db
+    .prepare(
+      `SELECT count(*) AS n
+       FROM source_incidence s
+       JOIN evidence_link_versions v ON v.link_id = s.link_id AND v.version = s.link_version
+       JOIN publication_intents i ON i.operation_id = v.operation_id AND i.state = 'acknowledged'
+       WHERE s.source_id = ? AND s.role = ?`,
+    )
+    .get(sourceId, role) as { n: number };
+  return row.n;
 }
 
 /**
@@ -154,12 +191,14 @@ export function committedIncidenceForNode(
   db: SqliteHandle,
   nodeId: string,
   role?: string,
+  limit?: number,
 ): readonly CommittedIncidence[] {
   const roleClause = role === undefined ? '' : 'AND s.role = ?';
   const parameters = role === undefined ? [nodeId] : [nodeId, role];
   const rows = db
     .prepare(
-      `${COMMITTED_INCIDENCE} WHERE s.node_id = ? ${roleClause} ORDER BY s.source_id, s.role`,
+      `${COMMITTED_INCIDENCE} WHERE s.node_id = ? ${roleClause}
+       ORDER BY s.source_id, s.role ${limitClause(limit)}`,
     )
     .all(...parameters) as IncidenceRowData[];
   return rows.map(toIncidence);
@@ -253,6 +292,7 @@ export function committedIncidenceForNodesAt(
   nodeIds: readonly string[],
   at: Date | undefined,
   role?: string,
+  limit?: number,
 ): readonly CommittedIncidence[] {
   const unique = [...new Set(nodeIds)];
   if (unique.length === 0) {
@@ -268,7 +308,7 @@ export function committedIncidenceForNodesAt(
        WHERE l.to_id IN (${placeholders})
          AND (s.role IS NOT NULL OR l.kind NOT IN (${kinds})) ${roleClause}
          ${known.clause}
-       ORDER BY node_id, source_id, role`,
+       ORDER BY node_id, source_id, role ${limitClause(limit)}`,
     )
     .all(
       ...unique,
@@ -317,21 +357,49 @@ export function committedIncidenceForSourceAt(
   db: SqliteHandle,
   sourceId: string,
   at: Date | undefined,
+  options: { readonly role?: string; readonly limit?: number } = {},
 ): readonly CommittedIncidence[] {
   const kinds = STATED_LINK_KINDS.map(() => '?').join(', ');
   const known = knownBy(at);
+  const roleClause = options.role === undefined ? '' : 'AND COALESCE(s.role, l.kind) = ?';
   const rows = db
     .prepare(
       `${HISTORICAL_INCIDENCE}
        WHERE l.from_id = ?
-         AND (s.role IS NOT NULL OR l.kind NOT IN (${kinds}))
+         AND (s.role IS NOT NULL OR l.kind NOT IN (${kinds})) ${roleClause}
          ${known.clause}
-       ORDER BY node_id, role`,
+       ORDER BY node_id, role ${limitClause(options.limit)}`,
     )
-    .all(sourceId, ...STATED_LINK_KINDS, ...known.parameters) as (IncidenceRowData & {
+    .all(
+      sourceId,
+      ...STATED_LINK_KINDS,
+      ...(options.role === undefined ? [] : [options.role]),
+      ...known.parameters,
+    ) as (IncidenceRowData & {
     recorded_values_json: string;
   })[];
   return rows.map(toHistoricalIncidence);
+}
+
+/** The same population's size at the same vantage, asked before any of it is materialized. */
+export function countCommittedIncidenceForSourceAt(
+  db: SqliteHandle,
+  sourceId: string,
+  at: Date | undefined,
+  role: string,
+): number {
+  const kinds = STATED_LINK_KINDS.map(() => '?').join(', ');
+  const known = knownBy(at);
+  const row = db
+    .prepare(
+      `SELECT count(*) AS n FROM (${HISTORICAL_INCIDENCE}
+       WHERE l.from_id = ?
+         AND (s.role IS NOT NULL OR l.kind NOT IN (${kinds}))
+         AND COALESCE(s.role, l.kind) = ?
+         ${known.clause})`,
+    )
+    .get(sourceId, ...STATED_LINK_KINDS, role, ...known.parameters) as { n: number };
+  return row.n;
 }
 
 function statedStamp(value: unknown): string | undefined {
@@ -388,53 +456,4 @@ export function countCommittedIncidenceForNode(
     )
     .get(nodeId, role) as { n: number };
   return row.n;
-}
-
-export type CommittedSourceState = {
-  readonly sourceId: string;
-  readonly version: number;
-  readonly stateKind: string;
-  readonly operationId: string;
-  readonly knownFrom: string;
-  readonly observedAt: string;
-  readonly detailJson: string | null;
-};
-
-type SourceStateRowData = {
-  source_id: string;
-  version: number;
-  state_kind: string;
-  operation_id: string;
-  known_from: string;
-  observed_at: string;
-  detail_json: string | null;
-};
-
-/**
- * A source's committed forget and suppression history, oldest first. It survives the content
- * it applies to, so a question about a source whose parts are gone still has an answer.
- */
-export function committedSourceStates(
-  db: SqliteHandle,
-  sourceId: string,
-): readonly CommittedSourceState[] {
-  const rows = db
-    .prepare(
-      `SELECT s.source_id, s.version, s.state_kind, s.operation_id, s.known_from, s.observed_at,
-              s.detail_json
-       FROM source_state_versions s
-       JOIN publication_intents i ON i.operation_id = s.operation_id AND i.state = 'acknowledged'
-       WHERE s.source_id = ? AND s.known_from IS NOT NULL
-       ORDER BY s.version`,
-    )
-    .all(sourceId) as SourceStateRowData[];
-  return rows.map((row) => ({
-    sourceId: row.source_id,
-    version: row.version,
-    stateKind: row.state_kind,
-    operationId: row.operation_id,
-    knownFrom: row.known_from,
-    observedAt: row.observed_at,
-    detailJson: row.detail_json,
-  }));
 }

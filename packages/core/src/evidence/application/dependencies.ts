@@ -3,7 +3,6 @@ import {
   type EvidenceDependency,
   type EvidenceRevision,
 } from '../../infrastructure/publication/preconditions.js';
-import { committedSourceStates } from '../../infrastructure/sqlite/committed-evidence.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { listStatedLinks } from '../../infrastructure/sqlite/evidence-links.js';
 import {
@@ -19,6 +18,7 @@ import {
   type SourcePartRecord,
   type SourceRecord,
 } from '../../infrastructure/sqlite/source-identity.js';
+import { committedSourceStates } from '../../infrastructure/sqlite/source-states.js';
 import { hashContent } from '../../reflection/domain/content.js';
 import { scopeAuthority } from '../domain/scopes.js';
 

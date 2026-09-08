@@ -1,7 +1,6 @@
 import { sourceScopeDependencies } from './dependencies.js';
 import { verifyParts } from './source-parts.js';
 import type { EvidenceDependency } from '../../infrastructure/publication/preconditions.js';
-import { committedSourceStates } from '../../infrastructure/sqlite/committed-evidence.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { scopeSupportsVerifiedEmpty } from '../../infrastructure/sqlite/evidence-scope.js';
 import {
@@ -18,6 +17,7 @@ import {
   type SourceRecord,
 } from '../../infrastructure/sqlite/source-identity.js';
 import { readSourceResidency } from '../../infrastructure/sqlite/source-lifecycle.js';
+import { committedSourceStates } from '../../infrastructure/sqlite/source-states.js';
 import type { CheckedReadContext } from '../../recall/application/coverage-checker.js';
 import {
   hashContent,

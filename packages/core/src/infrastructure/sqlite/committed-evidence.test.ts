@@ -9,7 +9,6 @@ import {
   committedIncidenceForSource,
   committedLinkVersionAt,
   committedLinkVersions,
-  committedSourceStates,
 } from './committed-evidence.js';
 import { SqliteStore } from './database.js';
 import {
@@ -18,6 +17,7 @@ import {
   settleUnacknowledgedIntent,
   type PublicationIntent,
 } from './publication-intents.js';
+import { committedSourceStates } from './source-states.js';
 
 const EARLY = new Date('2026-09-08T01:00:00.000Z');
 const NOW = new Date('2026-09-08T02:00:00.000Z');
