@@ -102,6 +102,19 @@ function parse(field: 'as_of' | 'knew_at', value: string | undefined): Date | un
   return parsed;
 }
 
+/**
+ * A stored moment, read under the same grammar as a request. A boundary the reader cannot parse
+ * is worse than a missing one: comparisons against it silently answer false, so a request before
+ * the horizon would be served rather than refused.
+ */
+function instant(value: string): number | undefined {
+  if (!IsoTimestampSchema.safeParse(value).success) {
+    return undefined;
+  }
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? undefined : parsed;
+}
+
 function servable(record: CoverageContractRecord | undefined): ServableContract | undefined {
   if (
     record === undefined ||
@@ -116,9 +129,19 @@ function servable(record: CoverageContractRecord | undefined): ServableContract 
       ? { state: 'preparing', epoch: record.epoch }
       : undefined;
   }
-  return record.historySince !== null && record.activatedAt !== null
-    ? { state: 'active', epoch: record.epoch, historySince: record.historySince }
-    : undefined;
+  const { historySince, activatedAt } = record;
+  if (historySince === null || activatedAt === null) {
+    return undefined;
+  }
+  const since = instant(historySince);
+  const activated = instant(activatedAt);
+  // The boundary is the activation moment and stays there: a record whose two moments disagree
+  // is one where nobody can say which is the floor. The activation clock may sit later than a
+  // reader's own clock, which is the clamp doing its job and not a corrupt record.
+  if (since === undefined || activated === undefined || since !== activated) {
+    return undefined;
+  }
+  return { state: 'active', epoch: record.epoch, historySince };
 }
 
 /**

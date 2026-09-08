@@ -109,13 +109,61 @@ describe('with a record that does not say what it is', () => {
 
   it('refuses when the table itself cannot be read', () => {
     activate();
-    store.db.prepare('DROP TABLE coverage_contract').run();
+    store.db.prepare('ALTER TABLE coverage_contract RENAME TO coverage_contract_hidden').run();
 
-    expect(check({})).toMatchObject({
+    try {
+      expect(check({})).toMatchObject({
+        status: 'refused',
+        refusal: { reason: 'coverage_store_unavailable' },
+      });
+      expect(readCoverageFence(store.db)).toBeUndefined();
+    } finally {
+      store.db.prepare('ALTER TABLE coverage_contract_hidden RENAME TO coverage_contract').run();
+    }
+  });
+
+  it.each(['history_since', 'activated_at'])(
+    'refuses malformed %s in an otherwise readable active registry',
+    (field) => {
+      activate();
+      store.db
+        .prepare(`UPDATE coverage_contract SET ${field} = 'not-a-time' WHERE state = 'active'`)
+        .run();
+
+      expect.soft(check({})).toMatchObject({
+        status: 'refused',
+        refusal: { reason: 'coverage_store_unavailable' },
+      });
+      expect.soft(check({ knewAt: '2026-09-08T01:00:00.000Z' })).toMatchObject({
+        status: 'refused',
+        refusal: { reason: 'coverage_store_unavailable' },
+      });
+      expect.soft(readCoverageFence(store.db)).toBeUndefined();
+    },
+  );
+
+  it('refuses active timestamps that disagree about the fixed initial horizon', () => {
+    activate();
+    store.db
+      .prepare(
+        "UPDATE coverage_contract SET history_since = '2020-01-01T00:00:00.000Z' WHERE state = 'active'",
+      )
+      .run();
+
+    expect(check({ knewAt: '2021-01-01T00:00:00.000Z' })).toMatchObject({
       status: 'refused',
       refusal: { reason: 'coverage_store_unavailable' },
     });
-    expect(readCoverageFence(store.db)).toBeUndefined();
+  });
+
+  it('serves an activation clock that sits later than the reader own clock', () => {
+    prepareCoverageContract(store.db, 1);
+    activateCoverageContract(store.db, {
+      activatedAt: new Date('2026-09-08T09:00:00.000Z'),
+      fieldPolicyVersion: 1,
+    });
+
+    expect(check({})).toMatchObject({ status: 'checked' });
   });
 });
 

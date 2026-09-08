@@ -128,6 +128,20 @@ function reset(db: SqliteHandle): void {
   deleteServedItems(db, SESSION);
 }
 
+/** Reversibly, because the fixture has to put the substrate back the way it found it. */
+function hideRegistry(): void {
+  store.db.prepare('ALTER TABLE coverage_contract RENAME TO coverage_contract_hidden').run();
+}
+
+function restoreRegistry(): void {
+  const hidden = store.db
+    .prepare("SELECT name FROM sqlite_master WHERE name = 'coverage_contract_hidden'")
+    .get();
+  if (hidden !== undefined) {
+    store.db.prepare('ALTER TABLE coverage_contract_hidden RENAME TO coverage_contract').run();
+  }
+}
+
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'aion-read-completion-'));
   store = new SqliteStore({ filePath: join(dir, 'aion.sqlite') });
@@ -234,18 +248,20 @@ describe('when the coverage record changes under the read', () => {
 
 describe('when the coverage record stops being readable', () => {
   it('refuses with no bounds, since nothing can say what the substrate reaches', async () => {
-    beforeCompletion = () => {
-      store.db.prepare('DROP TABLE coverage_contract').run();
-    };
+    beforeCompletion = hideRegistry;
 
-    const outcome = await completeCheckedRead(coordinator, effects({ resetDelivery: reset }));
+    try {
+      const outcome = await completeCheckedRead(coordinator, effects({ resetDelivery: reset }));
 
-    expect(outcome).toMatchObject({
-      status: 'refused',
-      refusal: { reason: 'coverage_store_unavailable', bounds: {} },
-    });
-    expect(readServedItems(store.db, SESSION).size).toBe(1);
-    expect(getLedgerEntry(store.db, 'read-completed')).toBeUndefined();
+      expect(outcome).toMatchObject({
+        status: 'refused',
+        refusal: { reason: 'coverage_store_unavailable', bounds: {} },
+      });
+      expect(readServedItems(store.db, SESSION).size).toBe(1);
+      expect(getLedgerEntry(store.db, 'read-completed')).toBeUndefined();
+    } finally {
+      restoreRegistry();
+    }
   });
 });
 
