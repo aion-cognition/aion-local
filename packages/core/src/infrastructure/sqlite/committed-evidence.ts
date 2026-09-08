@@ -97,11 +97,15 @@ export type CommittedIncidence = {
   readonly linkId: string;
   readonly linkVersion: number;
   /**
-   * The interval the selected version recorded for itself, on a historical read. Present only
-   * where the version stated one: a reader asking about a past moment needs the end of a link's
-   * own interval, which the current projection cannot supply once a newer version exists.
+   * The interval the selected version recorded for itself, on a historical read. Each bound is
+   * present only where the version stated one: a reader asking about a past moment needs both
+   * ends of a link's own interval on both clocks, and the current projection supplies none of
+   * them once a newer version exists. A bound that is absent here was never recorded, which is a
+   * different answer from one that is open, and only the reader's evaluator may decide which.
    */
+  readonly validFrom?: string;
   readonly validUntil?: string;
+  readonly txFrom?: string;
   readonly txUntil?: string;
 };
 
@@ -346,16 +350,21 @@ function toHistoricalIncidence(
 ): CommittedIncidence {
   const stated = JSON.parse(row.recorded_values_json) as {
     currency?: unknown;
+    valid_from?: unknown;
     valid_until?: unknown;
+    tx_from?: unknown;
     tx_until?: unknown;
   };
-  const validUntil = statedStamp(stated.valid_until);
-  const txUntil = statedStamp(stated.tx_until);
+  const bounds = {
+    validFrom: statedStamp(stated.valid_from),
+    validUntil: statedStamp(stated.valid_until),
+    txFrom: statedStamp(stated.tx_from),
+    txUntil: statedStamp(stated.tx_until),
+  };
   return {
     ...toIncidence(row),
     currency: stated.currency === 'closed' ? 'closed' : 'open',
-    ...(validUntil === undefined ? {} : { validUntil }),
-    ...(txUntil === undefined ? {} : { txUntil }),
+    ...Object.fromEntries(Object.entries(bounds).filter(([, value]) => value !== undefined)),
   };
 }
 

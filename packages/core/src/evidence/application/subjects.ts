@@ -16,6 +16,7 @@ import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import type { CheckedReadContext } from '../../recall/application/coverage-checker.js';
 import { evidenceRequestKey, idAddress, type EvidenceAddress } from '../domain/address.js';
 import type { RequestBudget } from '../domain/budget.js';
+import { evaluateInterval, type IntervalAxis, type IntervalProof } from '../domain/interval.js';
 import { evidenceResult, type EvidenceIssue, type EvidenceResult } from '../domain/result.js';
 import { durableRoleScope } from '../domain/scopes.js';
 
@@ -61,41 +62,44 @@ function withoutGloss(subject: ClaimSubject): ClaimSubject {
   return gloss === undefined ? subject : rest;
 }
 
-/** Whether a recorded end had already passed at a vantage, which an absent one never has. */
-function endsAfter(stamp: string | undefined, at: Date): boolean {
-  return stamp === undefined || Date.parse(stamp) > at.getTime();
+/**
+ * One incidence row's interval, as the records stated it. Built here and nowhere else, so every
+ * temporal decision this path makes goes through the one evaluator in the domain.
+ */
+function proofOf(row: CommittedIncidence): IntervalProof {
+  return {
+    closed: row.currency === 'closed',
+    ...(row.validFrom === undefined ? {} : { validFrom: row.validFrom }),
+    ...(row.validUntil === undefined ? {} : { validUntil: row.validUntil }),
+    ...(row.txFrom === undefined ? {} : { txFrom: row.txFrom }),
+    ...(row.txUntil === undefined ? {} : { txUntil: row.txUntil }),
+  };
 }
 
+/** What one incidence read decided, and what it could not decide. */
+type IncidenceReading = {
+  readonly rows: readonly CommittedIncidence[];
+  /** Rows the recorded proof could not place on an axis the read pinned. */
+  readonly unplaced: readonly IntervalAxis[];
+};
+
 /**
- * Whether an incidence row was a live link at the vantage it was selected for.
- *
- * The archive path answers the same question the graph join does, so it applies the same policy,
- * and that policy has two clocks. World time asks whether the relationship still held then, which
- * only its recorded world end can answer; knowledge time asks whether the substrate still stated
- * it then, which only its recorded retraction can answer. Comparing either end against the other
- * axis reports a relationship that ended in one timeline as absent from the other.
- *
- * The currency flag is a statement about now, so a pinned read does not consult it. Where a
- * pinned axis has no recorded end on a row the records call closed, the close cannot be placed on
- * that axis and the row is left out rather than assumed open. An unpinned read is a question
- * about now, and there the flag is exactly the answer.
+ * The rows a temporal read may use, and the ones it had to withhold without being able to say
+ * they were absent. Withholding an unplaceable row is right; reporting the remainder as the whole
+ * set is not, so the axes that could not answer travel back with the rows that could.
  */
-function liveAt(row: CommittedIncidence, mode: ReadMode): boolean {
-  const { validAt, knownAt } = mode;
-  if (validAt === undefined && knownAt === undefined) {
-    return row.currency !== 'closed';
+function selectLive(rows: readonly CommittedIncidence[], mode: ReadMode): IncidenceReading {
+  const live: CommittedIncidence[] = [];
+  const unplaced: IntervalAxis[] = [];
+  for (const row of rows) {
+    const decision = evaluateInterval(proofOf(row), mode);
+    if (decision.status === 'visible') {
+      live.push(row);
+    } else if (decision.status === 'unknown') {
+      unplaced.push(decision.axis);
+    }
   }
-  const placed =
-    row.currency !== 'closed' ||
-    (validAt !== undefined && row.validUntil !== undefined) ||
-    (knownAt !== undefined && row.txUntil !== undefined);
-  if (!placed) {
-    return false;
-  }
-  return (
-    (validAt === undefined || endsAfter(row.validUntil, validAt)) &&
-    (knownAt === undefined || endsAfter(row.txUntil, knownAt))
-  );
+  return { rows: live, unplaced };
 }
 
 /**
@@ -106,64 +110,76 @@ function liveAt(row: CommittedIncidence, mode: ReadMode): boolean {
  * the intervals that say so, and a world-only question needs those intervals just as much as a
  * knowledge-time one does.
  */
-function extractionSources(
-  db: SqliteHandle,
-  claimId: string,
-  mode: ReadMode,
-): readonly CommittedIncidence[] {
+function extractionSources(db: SqliteHandle, claimId: string, mode: ReadMode): IncidenceReading {
   const rows = isTimeTravel(mode)
     ? committedIncidenceForNodesAt(db, [claimId], mode.knownAt, 'extraction')
     : committedIncidenceForNode(db, claimId, 'extraction');
-  return rows.filter((row) => liveAt(row, mode));
+  return selectLive(rows, mode);
 }
 
 /** Entities the records say this claim's sources mention, with the source that carries each. */
 function mentionedEntities(
   db: SqliteHandle,
-  claimId: string,
+  sources: readonly CommittedIncidence[],
   mode: ReadMode,
-): readonly { readonly entityId: string; readonly sourceId: string }[] {
-  const sources = extractionSources(db, claimId, mode);
-  return sources.flatMap((source) =>
-    (isTimeTravel(mode)
+): {
+  readonly mentions: readonly { readonly entityId: string; readonly sourceId: string }[];
+  readonly unplaced: readonly IntervalAxis[];
+} {
+  const mentions: { readonly entityId: string; readonly sourceId: string }[] = [];
+  const unplaced: IntervalAxis[] = [];
+  for (const source of sources) {
+    const held = isTimeTravel(mode)
       ? committedIncidenceForSourceAt(db, source.sourceId, mode.knownAt)
-      : committedIncidenceForSource(db, source.sourceId)
-    )
-      .filter((row) => row.role === 'mention' && liveAt(row, mode))
-      .map((row) => ({ entityId: row.nodeId, sourceId: source.sourceId })),
-  );
+      : committedIncidenceForSource(db, source.sourceId);
+    const reading = selectLive(
+      held.filter((row) => row.role === 'mention'),
+      mode,
+    );
+    unplaced.push(...reading.unplaced);
+    for (const row of reading.rows) {
+      mentions.push({ entityId: row.nodeId, sourceId: source.sourceId });
+    }
+  }
+  return { mentions, unplaced };
 }
 
 async function subjectsFromRecords(
   deps: SubjectDeps,
-  claimId: string,
+  sources: readonly CommittedIncidence[],
   mode: ReadMode,
-): Promise<readonly ClaimSubject[]> {
-  const mentions = mentionedEntities(deps.db, claimId, mode);
+): Promise<{
+  readonly subjects: readonly ClaimSubject[];
+  readonly unplaced: readonly IntervalAxis[];
+}> {
+  const { mentions, unplaced } = mentionedEntities(deps.db, sources, mode);
   if (mentions.length === 0) {
-    return [];
+    return { subjects: [], unplaced };
   }
   const details = await loadEntityDedupDetails(
     deps.driver,
     mentions.map((mention) => mention.entityId),
   );
   const byId = new Map(details.map((detail) => [detail.id, detail]));
-  return mentions.flatMap((mention) => {
-    const detail = byId.get(mention.entityId);
-    if (detail === undefined) {
-      return [];
-    }
-    const gloss = detail.description.trim();
-    return [
-      {
-        entityId: detail.id,
-        name: detail.name,
-        nameNorm: detail.nameNorm,
-        sourceEpisodeId: mention.sourceId,
-        ...(gloss.length === 0 ? {} : { gloss }),
-      },
-    ];
-  });
+  return {
+    unplaced,
+    subjects: mentions.flatMap((mention) => {
+      const detail = byId.get(mention.entityId);
+      if (detail === undefined) {
+        return [];
+      }
+      const gloss = detail.description.trim();
+      return [
+        {
+          entityId: detail.id,
+          name: detail.name,
+          nameNorm: detail.nameNorm,
+          sourceEpisodeId: mention.sourceId,
+          ...(gloss.length === 0 ? {} : { gloss }),
+        },
+      ];
+    }),
+  };
 }
 
 export async function readClaimSubjects(
@@ -186,13 +202,21 @@ export async function readClaimSubjects(
       continue;
     }
 
+    // The incidence this claim rests on is read once: the scope check and the archive fallback
+    // are two questions about the same rows, and reading them twice would let the two disagree.
+    let reading: IncidenceReading;
     let subjects: readonly ClaimSubject[];
+    const unplaced: IntervalAxis[] = [];
     try {
+      reading = extractionSources(deps.db, claimId, input.context.mode);
+      unplaced.push(...reading.unplaced);
       // The join runs at the vantage the request was checked against, so a source or an entity
       // that was not visible then is not part of the answer now.
       subjects = await findClaimSubjects(deps.driver, claimId, input.context.mode);
       if (subjects.length === 0) {
-        subjects = await subjectsFromRecords(deps, claimId, input.context.mode);
+        const fallback = await subjectsFromRecords(deps, reading.rows, input.context.mode);
+        ({ subjects } = fallback);
+        unplaced.push(...fallback.unplaced);
       }
     } catch {
       const issue = issueOn(address, 'interpretation_text', 'store_unavailable', true);
@@ -208,7 +232,7 @@ export async function readClaimSubjects(
     // The join runs claim to source to entity, so the scopes it rests on are the claim's own
     // extraction and each contributing source's mentions. Asking the claim for a mention scope
     // would make a writer invent a relation it does not own.
-    const sources = extractionSources(deps.db, claimId, input.context.mode);
+    const { rows: sources } = reading;
     const consulted = [
       {
         endpointId: claimId,
@@ -234,6 +258,18 @@ export async function readClaimSubjects(
       // An empty list nobody counted is unknown. Handing a judge an empty subject set on that
       // reading would let a missing census pass for a claim that names nobody.
       claimIssues.push(issueOn(address, 'ownership', 'unverified_scope', subjects.length === 0));
+    }
+    // A census proves how many relations there are, never what their missing dates were. A row
+    // the recorded proof could not place is withheld from the answer and named here, so nothing
+    // reports the remainder as the whole set for the moment asked about.
+    for (const axis of new Set(unplaced)) {
+      claimIssues.push({
+        address,
+        field: axis === 'world' ? 'link_interval' : 'reference_history',
+        reason: 'unsupported_history',
+        historyReason: 'not_recorded',
+        required: true,
+      });
     }
     if (input.budget.chargeRelationRows(subjects.length) !== undefined) {
       claimIssues.push(issueOn(address, 'ownership', 'budget_limit', false));

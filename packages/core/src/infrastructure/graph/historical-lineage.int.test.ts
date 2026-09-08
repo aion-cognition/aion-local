@@ -268,3 +268,61 @@ it('keeps world-time and knowledge-time bounds independent after relocation', as
   const result = await resolver.resolveSubjects(['independent-claim'], checkedContext({ mode }));
   expect(result.results.get(JSON.stringify(['id', 'independent-claim']))?.value).toHaveLength(1);
 });
+
+it('honors a recorded world-time start after the source projection leaves the graph', async () => {
+  await seedGraph('starts');
+  await substrate.harness.driver.executeQuery(
+    'MATCH (s:Episode {id:$source})-[r:MENTIONS]->() SET r.valid_from=datetime($start) REMOVE r.tx_until, r.valid_until',
+    { source: 'starts-source', start: LATER.toISOString() },
+  );
+  seedSource(store.db, {
+    sourceId: 'starts-source',
+    sessionId: 'session',
+    identity: 'review',
+    content: { turns: [{ role: 'user', text: 'Atlas result' }] },
+    turnIds: ['starts-turn'],
+    now: EARLY,
+  });
+  for (const [nodeId, role] of [
+    ['starts-claim', 'extraction'],
+    ['starts-entity', 'mention'],
+  ] as const) {
+    commitIncidence(store.db, {
+      sourceId: 'starts-source',
+      nodeId,
+      role,
+      operationId: role,
+      at: EARLY,
+    });
+  }
+  store.db.prepare('UPDATE evidence_link_versions SET recorded_values_json=? WHERE link_id=?').run(
+    JSON.stringify({
+      currency: 'open',
+      valid_from: LATER.toISOString(),
+      created_at: EARLY.toISOString(),
+    }),
+    'starts-source:starts-entity:mention',
+  );
+  establishScope(store.db, 'starts-claim', 'sqlite:extraction:out', EARLY);
+  establishScope(store.db, 'starts-source', 'sqlite:mention:out', EARLY);
+  expect(await findClaimSubjects(substrate.harness.driver, 'starts-claim', asOf(MID))).toEqual([]);
+  expect(
+    await findClaimSubjects(substrate.harness.driver, 'starts-claim', asOf(AFTER)),
+  ).toHaveLength(1);
+  await retireEpisodeProjection(substrate.harness.driver, 'starts-source');
+  const resolver = new EvidenceResolver({
+    db: store.db,
+    driver: substrate.harness.driver,
+    logger: { warn: () => undefined },
+  });
+  const before = await resolver.resolveSubjects(
+    ['starts-claim'],
+    checkedContext({ mode: asOf(MID) }),
+  );
+  const after = await resolver.resolveSubjects(
+    ['starts-claim'],
+    checkedContext({ mode: asOf(AFTER) }),
+  );
+  expect.soft(before.results.get('["id","starts-claim"]')?.value).toEqual([]);
+  expect.soft(after.results.get('["id","starts-claim"]')?.value).toHaveLength(1);
+});
