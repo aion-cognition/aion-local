@@ -4,9 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { verifyEvidenceRevision } from './dependencies.js';
 import { assembleJudgmentEvidence, type JudgmentPair } from './judgment.js';
+import { EvidenceResolver } from './resolver.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import type { ReflectionContent } from '../../reflection/domain/content.js';
+import { RequestBudget } from '../domain/budget.js';
 import { durableRoleScope } from '../domain/scopes.js';
 import {
   checkedContext,
@@ -191,5 +194,100 @@ describe('judgment evidence assembly', () => {
     expect(
       assembly.status === 'incomplete' ? assembly.reasons.map((reason) => reason.reason) : [],
     ).toEqual(['budget_limit', 'budget_limit']);
+  });
+
+  it('keeps the extraction membership dependency in the assembled revision', async () => {
+    const assembly = await assembleJudgmentEvidence(deps, pair(), checkedContext());
+    if (assembly.status !== 'assembled') {
+      throw new Error('fixture did not assemble');
+    }
+    seedSource(store.db, {
+      sourceId: 'added-source',
+      sessionId: 'session-1',
+      identity: 'agent-1',
+      content: content('another witness'),
+      now: NOW,
+    });
+    commitIncidence(store.db, {
+      sourceId: 'added-source',
+      nodeId: 'claim-old',
+      role: 'extraction',
+      operationId: 'extract-added',
+      at: NOW,
+    });
+    establishScope(store.db, 'claim-old', durableRoleScope('extraction', 'out'), NOW);
+
+    expect(verifyEvidenceRevision(store.db, assembly.revision).status).toBe('stale');
+  });
+
+  it('records incoming correction scopes even when they are empty', async () => {
+    for (const id of ['claim-old', 'claim-new']) {
+      establishScope(store.db, id, durableRoleScope('stated_correction', 'in'), NOW);
+    }
+    const assembly = await assembleJudgmentEvidence(deps, pair(), checkedContext());
+    if (assembly.status !== 'assembled') {
+      throw new Error('fixture did not assemble');
+    }
+    establishScope(store.db, 'claim-old', durableRoleScope('stated_correction', 'in'), NOW);
+
+    expect(verifyEvidenceRevision(store.db, assembly.revision).status).toBe('stale');
+  });
+
+  it('does not certify a judgment when the shared checkpoint budget is exhausted', async () => {
+    const budget = new RequestBudget();
+    budget.takeCheckpointAttempt();
+    budget.takeCheckpointAttempt();
+    const reader = new EvidenceResolver({
+      ...deps,
+      logger: { warn: () => undefined },
+      publications: {
+        checkpoint: () =>
+          Promise.resolve({ status: 'unavailable' as const, reason: 'pending_publication' }),
+      },
+    });
+
+    expect((await reader.assembleJudgment(pair(), checkedContext(), budget)).status).toBe(
+      'incomplete',
+    );
+  });
+
+  it('does not require entity sources to have claim extraction roles', async () => {
+    for (const id of ['entity-a', 'entity-b']) {
+      commitIncidence(store.db, {
+        sourceId: 'episode-old',
+        nodeId: id,
+        role: 'mention',
+        operationId: `mentions:${id}`,
+        at: NOW,
+      });
+      establishScope(store.db, id, durableRoleScope('mention', 'in'), NOW);
+    }
+    const result = await assembleJudgmentEvidence(
+      deps,
+      {
+        route: 'entity_merge',
+        reservedUnits: 0,
+        use: 'entity_judgment',
+        sides: [
+          { nodeId: 'entity-a', statement: 'Entity A' },
+          { nodeId: 'entity-b', statement: 'Entity B' },
+        ],
+      },
+      checkedContext(),
+    );
+
+    expect(result.status).toBe('assembled');
+  });
+
+  it('does not certify a nonempty extraction set whose census is still incomplete', async () => {
+    store.db
+      .prepare(
+        "UPDATE evidence_scope_versions SET census_status='unbackfilled' WHERE endpoint_id='claim-old' AND relation_class=?",
+      )
+      .run(durableRoleScope('extraction', 'out'));
+
+    expect((await assembleJudgmentEvidence(deps, pair(), checkedContext())).status).toBe(
+      'incomplete',
+    );
   });
 });

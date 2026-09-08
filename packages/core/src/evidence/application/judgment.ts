@@ -4,7 +4,10 @@ import { EvidenceDependencies, readRelationScope, type RevisionCheck } from './d
 import { resolveSourceEvidence, type SourceEvidence } from './sources.js';
 import { readClaimSubjects } from './subjects.js';
 import type { ClaimSubject } from '../../infrastructure/graph/subject-family.js';
-import type { EvidenceRevision } from '../../infrastructure/publication/preconditions.js';
+import type {
+  EvidenceDependency,
+  EvidenceRevision,
+} from '../../infrastructure/publication/preconditions.js';
 import { committedIncidenceForNode } from '../../infrastructure/sqlite/committed-evidence.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import type { CheckedReadContext } from '../../recall/application/coverage-checker.js';
@@ -12,11 +15,12 @@ import { idAddress, type EvidenceAddress } from '../domain/address.js';
 import {
   renderableUnits,
   utf16CodeUnits,
+  RENDERED_SIDE_OVERHEAD,
   RequestBudget,
   type JudgeRoute,
 } from '../domain/budget.js';
 import type { EvidenceIssue, EvidenceUse } from '../domain/result.js';
-import { durableRoleScope } from '../domain/scopes.js';
+import { durableRoleScope, type DurableRole, type ScopeDirection } from '../domain/scopes.js';
 
 /**
  * The evidence a destructive judgment is allowed to run on, assembled before any model is asked.
@@ -51,6 +55,8 @@ export type JudgmentSide = {
   readonly statement: string;
   readonly requiredSources: readonly SourceEvidence[];
   readonly optionalSubjects: readonly ClaimSubject[];
+  /** The evidence block the judge is shown, which is the text admitted against the allowance. */
+  readonly renderedContext: string;
   readonly renderedUnits: number;
 };
 
@@ -80,26 +86,76 @@ export type JudgmentDeps = {
 };
 
 /**
- * Why a judgment path may not ask about this pair, or nothing when it may.
+ * What a withheld judgment leaves behind.
  *
- * One helper for every route, so an abstention and an incomplete assembly stop a judgment the
- * same way wherever it runs. A path composed without the seam judges on its own reads, which is
- * what it did before one existed.
+ * A proved suppression is blocked: nobody can decide it until the source comes back, and the
+ * obligation is held rather than retried on a cadence. Incomplete evidence is retryable: a
+ * backfill or a settled publication makes the same pair decidable. Both carry the addresses and
+ * the dependency revision, because a durable block that cannot name its evidence is not one.
  */
-export async function withheldReason(
+export type WithheldJudgment = {
+  readonly kind: 'blocked' | 'retryable';
+  readonly reason: string;
+  readonly addresses: readonly EvidenceAddress[];
+  readonly revision: EvidenceRevision;
+};
+
+export type JudgmentEvidenceOutcome =
+  /** No seam was composed, so the path reads for itself, as it did before one existed. */
+  | { readonly status: 'unchecked' }
+  | {
+      readonly status: 'ready';
+      readonly sides: readonly [JudgmentSide, JudgmentSide];
+      readonly revision: EvidenceRevision;
+    }
+  | { readonly status: 'withheld'; readonly withheld: WithheldJudgment };
+
+/**
+ * The one gate every judgment path asks, so an abstention and an incomplete assembly stop a
+ * judgment the same way wherever it runs, and a successful assembly reaches the prompt.
+ */
+export async function judgmentEvidenceFor(
   evidence: JudgmentEvidence | undefined,
   pair: JudgmentPair,
-): Promise<string | undefined> {
+): Promise<JudgmentEvidenceOutcome> {
   if (evidence === undefined) {
-    return undefined;
+    return { status: 'unchecked' };
   }
   const assembly = await evidence.assemble(pair);
   if (assembly.status === 'assembled') {
-    return undefined;
+    return { status: 'ready', sides: assembly.sides, revision: assembly.revision };
   }
-  return assembly.status === 'abstained'
-    ? assembly.reason
-    : assembly.reasons.map((reason) => reason.reason).join(', ');
+  if (assembly.status === 'abstained') {
+    return {
+      status: 'withheld',
+      withheld: {
+        kind: 'blocked',
+        reason: assembly.reason,
+        addresses: assembly.addresses,
+        revision: assembly.revision,
+      },
+    };
+  }
+  return {
+    status: 'withheld',
+    withheld: {
+      kind: 'retryable',
+      reason: assembly.reasons.map((reason) => reason.reason).join(', '),
+      addresses: assembly.reasons.map((reason) => reason.address),
+      revision: assembly.revision,
+    },
+  };
+}
+
+/**
+ * The statement a judge is shown: what the caller stated, and under it the sources the substrate
+ * reserved for it. The evidence a judgment ran on has to be the evidence it was submitted.
+ */
+export function statementWithContext(statement: string, side: JudgmentSide | undefined): string {
+  if (side === undefined || side.renderedContext.length === 0) {
+    return statement;
+  }
+  return `${statement}\n\nEvidence, as captured:\n${side.renderedContext}`;
 }
 
 /**
@@ -112,53 +168,105 @@ export type JudgmentEvidence = {
   confirm(revision: EvidenceRevision): RevisionCheck;
 };
 
-type RequiredSources =
-  | { readonly status: 'named'; readonly sourceIds: readonly string[] }
-  | { readonly status: 'unverified' };
-
-/**
- * Every source occurrence the claim was extracted from. A folded claim reserves all of them:
- * picking one edge would reserve the wrong witness whenever the fold is what the judgment turns
- * on. An unproved empty set is not a claim without sources.
- */
-function requiredSourcesOf(db: SqliteHandle, nodeId: string): RequiredSources {
-  const rows = committedIncidenceForNode(db, nodeId, 'extraction');
-  const scope = readRelationScope(db, {
-    kind: 'node',
-    endpointId: nodeId,
-    scope: durableRoleScope('extraction', 'out'),
-    empty: rows.length === 0,
-  });
-  if (scope.status !== 'verified' || rows.length === 0) {
-    return { status: 'unverified' };
-  }
-  return { status: 'named', sourceIds: [...new Set(rows.map((row) => row.sourceId))] };
-}
-
-type SideReading = {
-  readonly side?: JudgmentSide;
-  readonly issues: readonly EvidenceIssue[];
-  readonly suppressed: readonly EvidenceAddress[];
-  readonly omitted: readonly EvidenceIssue[];
+type RequiredSources = {
+  readonly status: 'named' | 'unverified';
+  readonly sourceIds: readonly string[];
+  readonly dependencies: readonly EvidenceDependency[];
 };
 
-async function readSide(
+/**
+ * Which incidence carries a node's own sources, by the family it belongs to.
+ *
+ * A claim reaches its sources through the extraction that minted it. An entity reaches them
+ * through the mentions and participations its writers actually record; demanding an extraction
+ * role of an entity would make a resolver ask writers to invent a relation nobody owns.
+ */
+const REQUIRED_ROLES = {
+  claim_judgment: [{ role: 'extraction', direction: 'out' }],
+  entity_judgment: [
+    { role: 'mention', direction: 'in' },
+    { role: 'participation', direction: 'in' },
+  ],
+} as const satisfies Record<
+  JudgmentPair['use'],
+  readonly { readonly role: DurableRole; readonly direction: ScopeDirection }[]
+>;
+
+/**
+ * Every source occurrence the node's evidence comes from, with the scopes consulted to find
+ * them. A folded claim reserves all of them: picking one edge would reserve the wrong witness
+ * whenever the fold is what the judgment turns on. An unproved set is not a node without sources,
+ * and the scopes it was read under travel with it so a later writer can be fenced on them.
+ */
+function requiredSourcesOf(
+  db: SqliteHandle,
+  nodeId: string,
+  use: JudgmentPair['use'],
+): RequiredSources {
+  const dependencies: EvidenceDependency[] = [];
+  const sourceIds = new Set<string>();
+  let verified = false;
+  for (const { role, direction } of REQUIRED_ROLES[use]) {
+    const rows = committedIncidenceForNode(db, nodeId, role);
+    const scope = readRelationScope(db, {
+      kind: 'node',
+      endpointId: nodeId,
+      scope: durableRoleScope(role, direction),
+      empty: rows.length === 0,
+    });
+    if (scope.status === 'verified') {
+      dependencies.push(scope.dependency);
+      if (rows.length > 0) {
+        verified = true;
+      }
+    }
+    for (const row of rows) {
+      sourceIds.add(row.sourceId);
+    }
+  }
+  // What a correction says about this node decides whether the answer still stands, so the scope
+  // it would arrive in is recorded whether or not one has arrived yet.
+  const corrections = readRelationScope(db, {
+    kind: 'node',
+    endpointId: nodeId,
+    scope: durableRoleScope('stated_correction', 'in'),
+    empty: committedIncidenceForNode(db, nodeId, 'stated_correction').length === 0,
+  });
+  if (corrections.status === 'verified') {
+    dependencies.push(corrections.dependency);
+  }
+  return {
+    status: verified && sourceIds.size > 0 ? 'named' : 'unverified',
+    sourceIds: [...sourceIds],
+    dependencies,
+  };
+}
+
+type RequiredReading = {
+  readonly sources: readonly SourceEvidence[];
+  readonly issues: readonly EvidenceIssue[];
+  readonly suppressed: readonly EvidenceAddress[];
+};
+
+/** One side's required sources, read before anything optional is looked at. */
+function readRequired(
   deps: JudgmentDeps,
   request: JudgmentSideRequest,
   pair: JudgmentPair,
   context: CheckedReadContext,
   budget: RequestBudget,
   dependencies: EvidenceDependencies,
-): Promise<SideReading> {
+): RequiredReading {
   const address = idAddress(request.nodeId);
-  const required = requiredSourcesOf(deps.db, request.nodeId);
+  const required = requiredSourcesOf(deps.db, request.nodeId, pair.use);
+  dependencies.addAll(required.dependencies);
   if (required.status === 'unverified') {
     return {
+      sources: [],
       issues: [
         { address, field: 'source_content', reason: 'required_scope_missing', required: true },
       ],
       suppressed: [],
-      omitted: [],
     };
   }
 
@@ -166,6 +274,15 @@ async function readSide(
   const issues: EvidenceIssue[] = [];
   const suppressed: EvidenceAddress[] = [];
   for (const sourceId of required.sourceIds) {
+    if (budget.chargeIds(1) !== undefined) {
+      issues.push({
+        address: idAddress(sourceId),
+        field: 'source_content',
+        reason: 'budget_limit',
+        required: true,
+      });
+      continue;
+    }
     const resolution = resolveSourceEvidence(deps.db, idAddress(sourceId), {
       use: pair.use,
       context,
@@ -176,13 +293,13 @@ async function readSide(
     for (const issue of resolution.issues) {
       if (issue.reason === 'suppressed_source') {
         suppressed.push(issue.address);
-      } else {
+      } else if (issue.required) {
         issues.push(issue);
       }
     }
     if (resolution.value !== undefined) {
       sources.push(resolution.value);
-    } else if (resolution.issues.length === 0) {
+    } else if (issues.length === 0 && suppressed.length === 0) {
       issues.push({
         address: idAddress(sourceId),
         field: 'source_content',
@@ -191,33 +308,42 @@ async function readSide(
       });
     }
   }
+  return { sources, issues, suppressed };
+}
 
-  if (suppressed.length > 0 || issues.length > 0) {
-    return { issues, suppressed, omitted: [] };
+/**
+ * The evidence block a judge is actually shown, built here rather than in each adapter so the
+ * text admitted against the allowance is the text submitted.
+ */
+function renderContext(
+  sources: readonly SourceEvidence[],
+  subjects: readonly ClaimSubject[],
+): string {
+  const lines = sources.map(
+    (source) => `source ${source.sourceId}, as captured:\n${source.sourceText}`,
+  );
+  for (const subject of subjects) {
+    if (subject.gloss !== undefined) {
+      lines.push(`names ${subject.name}, currently described as: ${subject.gloss}`);
+    }
   }
+  return lines.join('\n\n');
+}
 
-  const subjects = await readClaimSubjects(deps, {
-    claimIds: [request.nodeId],
-    context,
-    budget,
-  });
-  dependencies.addAll(subjects.dependencies);
-  const optional = subjects.results.values().next().value?.value ?? [];
+function sideOf(
+  request: JudgmentSideRequest,
+  sources: readonly SourceEvidence[],
+  subjects: readonly ClaimSubject[],
+): JudgmentSide {
+  const renderedContext = renderContext(sources, subjects);
   return {
-    side: {
-      nodeId: request.nodeId,
-      statement: request.statement,
-      requiredSources: sources,
-      optionalSubjects: optional,
-      renderedUnits:
-        utf16CodeUnits(request.statement) +
-        sources.reduce((total, source) => total + source.rawUtf16CodeUnits, 0),
-    },
-    issues: [],
-    suppressed: [],
-    // Subject glosses are context. A gap in them is disclosed and never lowers what the required
-    // units say, which is the whole difference between omitting context and missing evidence.
-    omitted: subjects.issues.map((issue) => ({ ...issue, required: false })),
+    nodeId: request.nodeId,
+    statement: request.statement,
+    requiredSources: sources,
+    optionalSubjects: subjects,
+    renderedContext,
+    renderedUnits:
+      utf16CodeUnits(request.statement) + utf16CodeUnits(renderedContext) + RENDERED_SIDE_OVERHEAD,
   };
 }
 
@@ -235,57 +361,90 @@ export async function assembleJudgmentEvidence(
   budget: RequestBudget = new RequestBudget(),
 ): Promise<JudgmentAssembly> {
   const dependencies = new EvidenceDependencies();
-  const first = await readSide(deps, pair.sides[0], pair, context, budget, dependencies);
-  const second = await readSide(deps, pair.sides[1], pair, context, budget, dependencies);
-  const readings = [first, second];
-  const revision = dependencies.revision();
-  const suppressed = readings.flatMap((reading) => reading.suppressed);
+  // Both sides' required units are reserved before either side's optional context is read, so a
+  // gloss on the first side cannot spend the allowance the second side's own source needs.
+  const required = pair.sides.map((side) =>
+    readRequired(deps, side, pair, context, budget, dependencies),
+  );
+  const suppressed = required.flatMap((reading) => reading.suppressed);
   if (suppressed.length > 0) {
     return {
       status: 'abstained',
       reason: 'required_source_suppressed',
       addresses: suppressed,
-      revision,
+      revision: dependencies.revision(),
     };
   }
-  const issues = readings.flatMap((reading) => reading.issues);
-  if (issues.length > 0) {
-    return { status: 'incomplete', reasons: issues, revision };
+  const blocking = required.flatMap((reading) => reading.issues);
+  if (blocking.length > 0) {
+    return { status: 'incomplete', reasons: blocking, revision: dependencies.revision() };
   }
 
-  if (first.side === undefined || second.side === undefined) {
+  const allowance = renderableUnits({ route: pair.route, reservedUnits: pair.reservedUnits });
+  const bare = pair.sides.map((side, index) => sideOf(side, required[index]?.sources ?? [], []));
+  const requiredUnits = bare.reduce((total, side) => total + side.renderedUnits, 0);
+  if (requiredUnits > allowance) {
     return {
       status: 'incomplete',
-      reasons: [
-        {
-          address: idAddress(pair.sides[0].nodeId),
-          field: 'source_content',
-          reason: 'required_scope_missing',
-          required: true,
-        },
-      ],
-      revision,
-    };
-  }
-
-  const sides: readonly [JudgmentSide, JudgmentSide] = [first.side, second.side];
-  const rendered = sides[0].renderedUnits + sides[1].renderedUnits;
-  if (rendered > renderableUnits({ route: pair.route, reservedUnits: pair.reservedUnits })) {
-    return {
-      status: 'incomplete',
-      reasons: sides.map((side) => ({
+      reasons: pair.sides.map((side) => ({
         address: idAddress(side.nodeId),
         field: 'source_content' as const,
         reason: 'budget_limit' as const,
         required: true,
       })),
-      revision,
+      revision: dependencies.revision(),
+    };
+  }
+
+  // Whatever the required units left over, and no more. An omitted gloss is disclosed; it never
+  // lowers what the required units say.
+  const omitted: EvidenceIssue[] = [];
+  const sides: JudgmentSide[] = [];
+  let spent = requiredUnits;
+  for (const [index, side] of pair.sides.entries()) {
+    const sources = required[index]?.sources ?? [];
+    const subjects = await readClaimSubjects(deps, {
+      claimIds: [side.nodeId],
+      context,
+      budget,
+    });
+    dependencies.addAll(subjects.dependencies);
+    omitted.push(...subjects.issues.map((issue) => ({ ...issue, required: false })));
+    const optional = subjects.results.values().next().value?.value ?? [];
+    const withContext = sideOf(side, sources, optional);
+    const bareSide = bare[index] ?? withContext;
+    const added = withContext.renderedUnits - bareSide.renderedUnits;
+    if (spent + added > allowance) {
+      omitted.push({
+        address: idAddress(side.nodeId),
+        field: 'interpretation_text',
+        reason: 'budget_limit',
+        required: false,
+      });
+      sides.push(bareSide);
+      continue;
+    }
+    spent += added;
+    sides.push(withContext);
+  }
+
+  const [first, second] = sides;
+  if (first === undefined || second === undefined) {
+    return {
+      status: 'incomplete',
+      reasons: pair.sides.map((side) => ({
+        address: idAddress(side.nodeId),
+        field: 'source_content' as const,
+        reason: 'required_scope_missing' as const,
+        required: true,
+      })),
+      revision: dependencies.revision(),
     };
   }
   return {
     status: 'assembled',
-    sides,
-    revision,
-    omitted: readings.flatMap((reading) => reading.omitted),
+    sides: [first, second],
+    revision: dependencies.revision(),
+    omitted,
   };
 }

@@ -2,6 +2,7 @@ import type { Driver } from 'neo4j-driver';
 
 import { readRelationScope } from './dependencies.js';
 import { loadEntityDedupDetails } from '../../infrastructure/graph/entity-dedup-queries.js';
+import { isTimeTravel } from '../../infrastructure/graph/read-modes.js';
 import { findClaimSubjects, type ClaimSubject } from '../../infrastructure/graph/subject-family.js';
 import type { EvidenceDependency } from '../../infrastructure/publication/preconditions.js';
 import {
@@ -49,6 +50,12 @@ function issueOn(
   required: boolean,
 ): EvidenceIssue {
   return { address, field, reason, required };
+}
+
+/** The same subject without the description, which is a present value and not a historical one. */
+function withoutGloss(subject: ClaimSubject): ClaimSubject {
+  const { gloss, ...rest } = subject;
+  return gloss === undefined ? subject : rest;
 }
 
 /** Entities the records say this claim's sources mention, with the source that carries each. */
@@ -132,21 +139,52 @@ export async function readClaimSubjects(
     }
 
     const claimIssues: EvidenceIssue[] = [];
-    const scope = readRelationScope(deps.db, {
-      kind: 'node',
-      endpointId: claimId,
-      scope: durableRoleScope('mention', 'out'),
-      empty: subjects.length === 0,
-    });
-    if (scope.status === 'verified') {
-      dependencies.push(scope.dependency);
-    } else {
+    // The join runs claim to source to entity, so the scopes it rests on are the claim's own
+    // extraction and each contributing source's mentions. Asking the claim for a mention scope
+    // would make a writer invent a relation it does not own.
+    const sources = committedIncidenceForNode(deps.db, claimId, 'extraction');
+    const consulted = [
+      {
+        endpointId: claimId,
+        scope: durableRoleScope('extraction', 'out'),
+        empty: sources.length === 0,
+      },
+      ...sources.map((row) => ({
+        endpointId: row.sourceId,
+        scope: durableRoleScope('mention', 'out'),
+        empty: false,
+      })),
+    ];
+    let proved = consulted.length > 0;
+    for (const entry of consulted) {
+      const scope = readRelationScope(deps.db, { kind: 'node', ...entry });
+      if (scope.status === 'verified') {
+        dependencies.push(scope.dependency);
+      } else {
+        proved = false;
+      }
+    }
+    if (!proved) {
       // An empty list nobody counted is unknown. Handing a judge an empty subject set on that
       // reading would let a missing census pass for a claim that names nobody.
       claimIssues.push(issueOn(address, 'ownership', 'unverified_scope', subjects.length === 0));
     }
     if (input.budget.chargeRelationRows(subjects.length) !== undefined) {
       claimIssues.push(issueOn(address, 'ownership', 'budget_limit', false));
+    }
+    // A description is the entity's current text, and the records keep no history of it. A
+    // question about an earlier vantage is answered without it rather than with today's words
+    // under an old date.
+    const historical = isTimeTravel(input.context.mode);
+    const disclosed = historical ? subjects.map(withoutGloss) : subjects;
+    if (historical && subjects.some((subject) => subject.gloss !== undefined)) {
+      claimIssues.push({
+        address,
+        field: 'interpretation_text',
+        reason: 'unsupported_history',
+        historyReason: 'not_recorded',
+        required: false,
+      });
     }
     issues.push(...claimIssues);
     results.set(
@@ -155,7 +193,7 @@ export async function readClaimSubjects(
         address,
         residency: 'resident',
         issues: claimIssues,
-        value: subjects,
+        value: disclosed,
       }),
     );
   }

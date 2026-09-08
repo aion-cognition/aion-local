@@ -154,6 +154,12 @@ export const JUDGE_ROUTE_ALLOWANCE: Readonly<Record<JudgeRoute, number>> = {
  */
 export const JUDGE_OUTPUT_RESERVE = 512;
 
+/**
+ * What one side costs beyond the text itself: the labels, separators and escaping a message
+ * carries. Counted so admission measures the message rather than the payload inside it.
+ */
+export const RENDERED_SIDE_OVERHEAD = 64;
+
 export type RouteAllowance = {
   readonly route: JudgeRoute;
   /** The prompt and output units this route reserves before any evidence is rendered. */
