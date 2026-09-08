@@ -323,3 +323,57 @@ export function listIngestAfter(
     .all(watermark, limit) as { id: number; source_id: string }[];
   return rows.map((row) => ({ id: row.id, sourceId: row.source_id }));
 }
+
+/** Every frozen cohort, oldest first, which is the order a consumer walks them in. */
+export function listMigrationCohorts(db: SqliteHandle): readonly string[] {
+  const rows = db
+    .prepare('SELECT cohort_id FROM migration_cohorts ORDER BY created_at, cohort_id')
+    .all() as { cohort_id: string }[];
+  return rows.map((row) => row.cohort_id);
+}
+
+/**
+ * Cohort members a live enumeration cannot reach, oldest first by source id.
+ *
+ * The live order is the ingest log, and a legacy source frozen into a cohort never went through
+ * it: it was already there when the cohort was taken. Selecting on the log alone therefore
+ * skips exactly the population the migration exists for, so the frozen membership is its own
+ * cursor. Source id orders it because the cohort's membership is fixed at the freeze and a
+ * source's id does not move.
+ */
+export function listCohortSourcesAfter(
+  db: SqliteHandle,
+  cohortId: string,
+  afterSourceId: string,
+  limit: number,
+  filter: { readonly sourceId?: string; readonly sessionId?: string } = {},
+): readonly { readonly sourceId: string; readonly canonicalArchiveId: string | null }[] {
+  const clauses: string[] = [];
+  const parameters: unknown[] = [cohortId, afterSourceId];
+  if (filter.sourceId !== undefined) {
+    clauses.push('AND r.source_id = ?');
+    parameters.push(filter.sourceId);
+  }
+  if (filter.sessionId !== undefined) {
+    clauses.push('AND r.session_id = ?');
+    parameters.push(filter.sessionId);
+  }
+  const rows = db
+    .prepare(
+      `SELECT r.source_id, r.canonical_archive_id
+       FROM migration_progress m
+       JOIN source_records r ON r.source_id = m.source_id
+       WHERE m.cohort_id = ? AND m.source_id > ? ${clauses.join(' ')}
+         AND NOT EXISTS (SELECT 1 FROM ingest_log i WHERE i.source_id = m.source_id)
+       ORDER BY m.source_id
+       LIMIT ?`,
+    )
+    .all(...parameters, limit) as {
+    source_id: string;
+    canonical_archive_id: string | null;
+  }[];
+  return rows.map((row) => ({
+    sourceId: row.source_id,
+    canonicalArchiveId: row.canonical_archive_id,
+  }));
+}

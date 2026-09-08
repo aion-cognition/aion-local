@@ -203,11 +203,15 @@ function renderLs(substrate: Substrate, flags: ReplayFlags): number {
   return 0;
 }
 
-/** Where a pass stopped, in the terms the pass was walking. */
+/** Where a pass stopped, in the terms of whichever population it was walking. */
 function renderCursor(cursor: ReplayCursor): string {
-  return cursor.kind === 'ingest'
-    ? `ingest ${String(cursor.position)}`
-    : `${cursor.occurredAt} / ${cursor.id}`;
+  if (cursor.kind === 'ingest') {
+    return `ingest ${String(cursor.position)}`;
+  }
+  if (cursor.kind === 'cohort') {
+    return `cohort ${cursor.cohortId} / ${cursor.sourceId}`;
+  }
+  return `${cursor.occurredAt} / ${cursor.id}`;
 }
 
 function renderProgress(progress: ReplayProgress, write: Writer): void {
@@ -223,6 +227,7 @@ function renderReport(report: ReplayReport, write: Writer): void {
   write(`skipped     ${String(report.skipped)}`);
   write(`unavailable ${String(report.unavailable)}`);
   write(`evicted     ${String(report.skippedEvicted)}`);
+  write(`cohort      ${String(report.cohortMembers)}`);
   write(`unrecorded  ${String(report.unrecorded)}`);
   write(`failed      ${String(report.failed)}`);
   if (report.aborted) {
@@ -234,6 +239,20 @@ function renderReport(report: ReplayReport, write: Writer): void {
   }
 }
 
+/**
+ * The cursor in the envelope's own spelling. The discriminant says which population it names;
+ * the archive keys keep the `occurred_at` they have always been read under.
+ */
+function cursorJson(cursor: ReplayCursor): Record<string, unknown> {
+  if (cursor.kind === 'ingest') {
+    return { kind: cursor.kind, position: cursor.position };
+  }
+  if (cursor.kind === 'cohort') {
+    return { kind: cursor.kind, cohort_id: cursor.cohortId, source_id: cursor.sourceId };
+  }
+  return { kind: cursor.kind, occurred_at: cursor.occurredAt, id: cursor.id };
+}
+
 function toJson(report: ReplayReport): unknown {
   return {
     pipeline_version: PIPELINE_VERSION,
@@ -242,10 +261,11 @@ function toJson(report: ReplayReport): unknown {
     skipped: report.skipped,
     unavailable: report.unavailable,
     skipped_evicted: report.skippedEvicted,
+    cohort_members: report.cohortMembers,
     unrecorded: report.unrecorded,
     failed: report.failed,
     aborted: report.aborted,
-    cursor: report.cursor === undefined ? null : { ...report.cursor },
+    cursor: report.cursor === undefined ? null : cursorJson(report.cursor),
   };
 }
 

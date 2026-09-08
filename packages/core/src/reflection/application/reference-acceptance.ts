@@ -5,6 +5,7 @@ import { presentNodeIds } from '../../infrastructure/graph/projection-presence.j
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   acknowledgeStatedLinkVersions,
+  listStatedLinks,
   prepareStatedLinkVersion,
   readStatedLinkValues,
   statedLinkId,
@@ -396,4 +397,48 @@ export function discardReferenceAcceptance(
       updatedAt: new Date(acceptance.acceptedAt),
     });
   }
+}
+
+/**
+ * What THIS occurrence has stated, from the versions its own acceptances recorded.
+ *
+ * A replacement shares its forgotten predecessor's raw bytes, so the canonical archive row
+ * carries the predecessor's statements. Re-stating those from the replacement would assert,
+ * under a different occurrence, something nobody said about it. The durable records are keyed
+ * on the source, so they answer this without the raw row being involved at all.
+ *
+ * Only committed versions are returned: a statement still awaiting its acknowledgment has not
+ * been accepted yet, and replaying it would publish a decision its publication may still refuse.
+ */
+export function acceptedReferencesOf(
+  db: SqliteHandle,
+  sourceId: string,
+): StatedReferenceInput | undefined {
+  const links = listStatedLinks(db, sourceId).filter((link) => link.knownFrom !== null);
+  if (links.length === 0) {
+    return undefined;
+  }
+  const supersedes = new Set<string>();
+  const derivedFrom = new Set<string>();
+  const confirmations = new Map<string, StatedReferenceInput['confirmations'][number]>();
+  for (const link of links) {
+    if (link.kind === 'corrects') {
+      supersedes.add(link.toId);
+    } else if (link.kind === 'derived_from') {
+      derivedFrom.add(link.toId);
+    } else if (!confirmations.has(link.toId)) {
+      const values = readStatedLinkValues(db, link.linkId) ?? {};
+      confirmations.set(link.toId, {
+        target: link.toId,
+        by: typeof values.by === 'string' ? values.by : '',
+        evidence: typeof values.evidence === 'string' ? values.evidence : '',
+        occurredAt: typeof values.occurredAt === 'string' ? values.occurredAt : '',
+      });
+    }
+  }
+  return {
+    supersedes: [...supersedes],
+    derivedFrom: [...derivedFrom],
+    confirmations: [...confirmations.values()],
+  };
 }
