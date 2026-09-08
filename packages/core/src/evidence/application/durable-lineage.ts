@@ -1,14 +1,14 @@
 import { readRelationScope } from './dependencies.js';
-import { MAX_LINEAGE_HOPS } from '../../infrastructure/graph/claim-lineage-queries.js';
+import { walkLineage } from './lineage-walk.js';
+import type { EvidenceDependency } from '../../infrastructure/publication/preconditions.js';
 import type { CommittedIncidence } from '../../infrastructure/sqlite/committed-evidence.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
-  listStatedLinks,
   listStatedLinksTo,
   readStatedLinkValues,
 } from '../../infrastructure/sqlite/evidence-links.js';
 import { readCitationsOf } from '../../infrastructure/sqlite/narrative-revisions.js';
-import { durableRoleScope } from '../domain/scopes.js';
+import { NARRATIVE_SCOPES } from '../domain/scopes.js';
 
 /**
  * What the records alone say about where a node came from and what has been stated about it.
@@ -30,12 +30,15 @@ export type DurableLineage = {
   readonly complete: boolean;
   readonly correction?: StatedCorrection;
   readonly confirmation?: StatedConfirmation;
-  /** The published revisions citing this node, or nothing when the records cannot say. */
-  readonly citedBy?: readonly string[];
+  /** The published revisions citing this node at the vantage asked for. */
+  readonly citedBy: readonly string[];
+  /** Whether the citation scope has been counted, which is what makes an empty set an answer. */
+  readonly citationsProved: boolean;
+  /** Every scope this reading consulted, for the revision a writer fences on. */
+  readonly dependencies: readonly EvidenceDependency[];
 };
 
-/** The kind a derivation is recorded under, and the endpoints it may name. */
-const DERIVATION = 'derived_from';
+const CITATION_SCOPE = NARRATIVE_SCOPES[0];
 
 function visibleAt(knownFrom: string | null, at: Date | undefined): boolean {
   return knownFrom !== null && (at === undefined || Date.parse(knownFrom) <= at.getTime());
@@ -50,59 +53,32 @@ function stamp(value: unknown, fallback: string | null): Date | undefined {
   return Number.isNaN(parsed.getTime()) ? undefined : parsed;
 }
 
-type Walk = {
-  readonly roots: readonly string[];
-  readonly lineage: readonly string[];
-  readonly complete: boolean;
-};
-
-/** The bounded parent walk over the stated-derivation records, from one node's own sources. */
-function walkParents(db: SqliteHandle, sourceIds: readonly string[], at: Date | undefined): Walk {
-  const roots = new Set<string>();
-  const lineage = new Set<string>(sourceIds);
-  let complete = true;
-  let frontier = [...new Set(sourceIds)];
-  const seen = new Set<string>(frontier);
-
-  for (let hop = 0; hop <= MAX_LINEAGE_HOPS && frontier.length > 0; hop += 1) {
-    const next: string[] = [];
-    for (const sourceId of frontier) {
-      const parents = listStatedLinks(db, sourceId)
-        .filter((link) => link.kind === DERIVATION && visibleAt(link.knownFrom, at))
-        .map((link) => link.toId);
-      const scope = readRelationScope(db, {
-        kind: 'source',
-        endpointId: sourceId,
-        scope: durableRoleScope('stated_derivation', 'out'),
-        empty: parents.length === 0,
-      });
-      if (scope.status !== 'verified') {
-        // Nobody counted what this source states it came from, so its silence is not an end.
-        complete = false;
-        continue;
-      }
-      if (parents.length === 0) {
-        roots.add(sourceId);
-        continue;
-      }
-      for (const parent of parents) {
-        lineage.add(parent);
-        if (seen.has(parent)) {
-          // A branch back onto its own path never ends, so it names no root and the answer is
-          // reported short.
-          complete = false;
-          continue;
-        }
-        seen.add(parent);
-        next.push(parent);
-      }
-    }
-    frontier = next;
-    if (frontier.length > 0 && hop === MAX_LINEAGE_HOPS) {
-      complete = false;
-    }
+/**
+ * The citation set at this vantage, and whether anyone has counted the scope that holds it.
+ *
+ * The proof is the citation scope's own. Borrowing the extraction census would answer "nothing
+ * cites this" from a count of something else entirely.
+ */
+function citationsOf(
+  db: SqliteHandle,
+  nodeId: string,
+  at: Date | undefined,
+  dependencies: EvidenceDependency[],
+): { readonly ids: readonly string[]; readonly proved: boolean } {
+  const cited = readCitationsOf(db, nodeId, at);
+  const scope = readRelationScope(db, {
+    kind: 'node',
+    endpointId: nodeId,
+    scope: CITATION_SCOPE,
+    empty: cited.length === 0,
+  });
+  if (scope.status === 'verified') {
+    dependencies.push(scope.dependency);
   }
-  return { roots: [...roots].sort(), lineage: [...lineage], complete };
+  return {
+    ids: cited.map((citation) => citation.narrativeNodeId),
+    proved: scope.status === 'verified',
+  };
 }
 
 export function durableLineage(
@@ -111,11 +87,12 @@ export function durableLineage(
   rows: readonly CommittedIncidence[],
   at: Date | undefined,
 ): DurableLineage {
-  const walk = walkParents(
+  const walk = walkLineage(
     db,
     rows.map((row) => row.sourceId),
     at,
   );
+  const dependencies = [...walk.dependencies];
   const stated = listStatedLinksTo(db, nodeId).filter((link) => visibleAt(link.knownFrom, at));
   const latest = (kind: string): (typeof stated)[number] | undefined =>
     [...stated].reverse().find((link) => link.kind === kind);
@@ -129,12 +106,14 @@ export function durableLineage(
     confirms === undefined ? undefined : stamp(values?.occurredAt, confirms.knownFrom);
   const by = typeof values?.by === 'string' ? values.by : undefined;
   const evidence = typeof values?.evidence === 'string' ? values.evidence : undefined;
-  const citations = readCitationsOf(db, nodeId).map((citation) => citation.narrativeNodeId);
+  const citations = citationsOf(db, nodeId, at, dependencies);
   return {
     roots: walk.roots,
     lineage: walk.lineage,
     complete: walk.complete,
-    citedBy: citations,
+    citedBy: citations.ids,
+    citationsProved: citations.proved,
+    dependencies,
     ...(corrects?.fromId === undefined || correctedAt === undefined
       ? {}
       : { correction: { by: corrects.fromId, at: correctedAt } }),

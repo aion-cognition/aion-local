@@ -434,4 +434,65 @@ describe('evidence against the real stores', () => {
       parent,
     ]);
   });
+
+  it('walks through a retained parent after the raw source projection is absent', async () => {
+    serial += 1;
+    const marker = String(serial);
+    const root = await accept(`mixed-root-${marker}`);
+    const origin = await accept(`mixed-origin-${marker}`);
+    const parentNode = `mixed-parent-${marker}`;
+    const childNode = `mixed-child-${marker}`;
+    await seedRetainedClaim(substrate.harness.driver, { id: parentNode, sourceId: root });
+    await seedRetainedClaim(substrate.harness.driver, { id: childNode, sourceId: origin });
+    for (const [sourceId, nodeId] of [
+      [root, parentNode],
+      [origin, childNode],
+    ]) {
+      commitIncidence(store.db, {
+        sourceId: sourceId!,
+        nodeId: nodeId!,
+        role: 'extraction',
+        operationId: `extract-${nodeId!}`,
+        at: NOW,
+      });
+      establishScope(store.db, nodeId!, durableRoleScope('extraction', 'out'), NOW);
+    }
+    // The derivation names the retained claim, not its capture: this is the step a source-only
+    // walk cannot cross.
+    await coordinator.publish({
+      kind: 'stated_references',
+      operationId: `mixed-derive-${marker}`,
+      payload: {
+        sourceId: origin,
+        supersedes: [],
+        derivedFrom: [parentNode],
+        confirmations: [],
+        deliveryKey: `mixed-derive-${marker}`,
+        observedAt: NOW.toISOString(),
+      },
+    });
+    for (const id of [root, origin]) {
+      establishScope(store.db, id, durableRoleScope('stated_derivation', 'out'), NOW);
+    }
+    expect(
+      (
+        await fetchClaimProvenance(substrate.harness.driver, {
+          ids: [childNode],
+          maxRoots: 4,
+          mode: {},
+        })
+      ).get(childNode)?.roots,
+    ).toEqual([root]);
+
+    await retireEpisodeProjection(substrate.harness.driver, origin);
+    const result = await resolver({ certified: false }).resolveMetadata(
+      [childNode],
+      checkedContext(),
+      { maxRoots: 4 },
+    );
+
+    expect(result.results.get(JSON.stringify(['id', childNode]))?.value?.provenance.roots).toEqual([
+      root,
+    ]);
+  });
 });

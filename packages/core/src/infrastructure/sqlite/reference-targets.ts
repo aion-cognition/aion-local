@@ -55,6 +55,15 @@ function partTarget(db: SqliteHandle, id: string): ReferenceTarget | undefined {
 }
 
 /**
+ * The source a part belongs to, for a walk that reached the part rather than the capture. A
+ * citation names a turn under its own address, and the chain continues through the source that
+ * holds it.
+ */
+export function partOwnerSource(db: SqliteHandle, id: string): string | undefined {
+  return partTarget(db, id)?.sourceId;
+}
+
+/**
  * Classifies one stated target against the durable records. The graph is asked only about ids
  * these records do not account for, which is what keeps an evicted source from reading as an
  * unknown identity.

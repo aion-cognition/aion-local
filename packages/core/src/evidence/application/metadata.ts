@@ -108,15 +108,16 @@ function issueOn(
 }
 
 /**
- * What the citation records say. An empty set is only "cited by nothing" where the scope that
- * would hold the citations has been counted; otherwise nobody has looked.
+ * What the citation records say. An empty set is only "cited by nothing" where the citation
+ * scope itself has been counted; otherwise nobody has looked, and a count of some other scope
+ * answers a different question.
  */
-function bindingOf(durable: DurableLineage, proved: boolean): NarrativeBinding {
-  const cited = durable.citedBy ?? [];
+function bindingOf(durable: DurableLineage): NarrativeBinding {
+  const cited = durable.citedBy;
   if (cited.length > 0) {
     return { status: 'cited', revisionIds: cited };
   }
-  return proved ? { status: 'none' } : { status: 'unavailable' };
+  return durable.citationsProved ? { status: 'none' } : { status: 'unavailable' };
 }
 
 /** A retained node the graph does not hold, read through the records that outlive its projection. */
@@ -358,9 +359,12 @@ function readOne(
     }
 
     const durable = durableLineage(deps.db, id, rows, input.context.mode.knownAt);
+    // Every scope the walk consulted travels with the answer, so a writer fencing on this
+    // revision fences on the parents and citations the roots were derived through.
+    dependencies.push(...durable.dependencies);
     // The citation records answer for themselves. Until a producer writes them the honest answer
     // is that the binding is unavailable, and it becomes an answer the moment they exist.
-    const binding = bindingOf(durable, scope.status === 'verified');
+    const binding = bindingOf(durable);
     if (binding.status === 'unavailable') {
       nodeIssues.push(issueOn(address, 'narrative_revision', 'unverified_scope', false));
     }

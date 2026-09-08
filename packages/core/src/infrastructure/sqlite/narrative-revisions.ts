@@ -268,20 +268,75 @@ export type CitedBy = {
 };
 
 /**
+ * The revisions of both families that have published, with the moment each entered the view. A
+ * citation belongs to its revision, so this is what decides whether a citation is readable at a
+ * given vantage: a revision published at eleven is not an answer to a question asked at half ten.
+ */
+const PUBLISHED_REVISIONS = `SELECT node_id, known_from FROM chunk_revisions
+    WHERE state = 'published' AND known_from IS NOT NULL
+  UNION ALL
+  SELECT node_id, known_from FROM overview_revisions
+    WHERE state = 'published' AND known_from IS NOT NULL`;
+
+/**
  * The published revisions that cite one target, read from the citation records themselves. A
  * part is cited under its own address, so two parts of one source stay two citations.
+ *
+ * `at` is the knowledge vantage the question was asked from. Without it the answer is what is
+ * published now; with it, only what had published by then.
  */
-export function readCitationsOf(db: SqliteHandle, targetId: string): readonly CitedBy[] {
+export function readCitationsOf(db: SqliteHandle, targetId: string, at?: Date): readonly CitedBy[] {
+  const clause = at === undefined ? '' : 'AND p.known_from <= ?';
+  const parameters = at === undefined ? [targetId] : [targetId, at.toISOString()];
   const rows = db
     .prepare(
-      `SELECT narrative_node_id, target_kind FROM revision_citations
-       WHERE target_id = ? ORDER BY narrative_node_id`,
+      `SELECT c.narrative_node_id, c.target_kind FROM revision_citations c
+       JOIN (${PUBLISHED_REVISIONS}) p ON p.node_id = c.narrative_node_id
+       WHERE c.target_id = ? ${clause}
+       ORDER BY c.narrative_node_id`,
     )
-    .all(targetId) as { narrative_node_id: string; target_kind: string }[];
+    .all(...parameters) as { narrative_node_id: string; target_kind: string }[];
   return rows.map((row) => ({
     narrativeNodeId: row.narrative_node_id,
     targetKind: row.target_kind,
   }));
+}
+
+/** What one published revision cites, which is the outbound half a lineage walk crosses. */
+export type Citation = {
+  readonly targetId: string;
+  readonly targetKind: string;
+};
+
+/**
+ * The targets one narrative revision cites at a vantage. A revision is a witness's own step in a
+ * chain: what it rests on is what it named, and the walk crosses it the way it crosses a source.
+ */
+export function readCitationsFrom(
+  db: SqliteHandle,
+  narrativeNodeId: string,
+  at?: Date,
+): readonly Citation[] {
+  const clause = at === undefined ? '' : 'AND p.known_from <= ?';
+  const parameters = at === undefined ? [narrativeNodeId] : [narrativeNodeId, at.toISOString()];
+  const rows = db
+    .prepare(
+      `SELECT c.target_id, c.target_kind FROM revision_citations c
+       JOIN (${PUBLISHED_REVISIONS}) p ON p.node_id = c.narrative_node_id
+       WHERE c.narrative_node_id = ? ${clause}
+       ORDER BY c.target_kind, c.target_id`,
+    )
+    .all(...parameters) as { target_id: string; target_kind: string }[];
+  return rows.map((row) => ({ targetId: row.target_id, targetKind: row.target_kind }));
+}
+
+/** Whether an id names a narrative revision at all, which decides if it has citations to cross. */
+export function isNarrativeRevisionNode(db: SqliteHandle, nodeId: string): boolean {
+  return (
+    db
+      .prepare(`SELECT 1 AS found FROM (${PUBLISHED_REVISIONS}) p WHERE p.node_id = ? LIMIT 1`)
+      .get(nodeId) !== undefined
+  );
 }
 
 export function readPublishedHead(

@@ -4,15 +4,24 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
+import { durableLineage } from './durable-lineage.js';
 import type { JudgmentPair } from './judgment.js';
 import { EvidenceResolver } from './resolver.js';
+import { knewAt } from '../../infrastructure/graph/read-modes.js';
 import type { CheckpointResult } from '../../infrastructure/publication/types.js';
 import {
+  committedIncidenceForNode,
   committedIncidenceForNodesAt,
   committedLinkVersionAt,
 } from '../../infrastructure/sqlite/committed-evidence.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
+import * as links from '../../infrastructure/sqlite/evidence-links.js';
 import { recordScopeMirror } from '../../infrastructure/sqlite/evidence-scope.js';
+import {
+  allocateNarrativeRevision,
+  OVERVIEW_REVISION_FAMILY,
+  publishNarrativeRevision,
+} from '../../infrastructure/sqlite/narrative-revisions.js';
 import * as publicationStore from '../../infrastructure/sqlite/publication-coordinator-store.js';
 import { idAddress } from '../domain/address.js';
 import { GRAPH_NODE_SCOPE } from '../domain/scopes.js';
@@ -72,6 +81,39 @@ function source(id: string): void {
   });
   establishScope(store.db, id, 'sqlite:stated_derivation:out', NOW);
   establishScope(store.db, id, 'source.state', NOW);
+}
+
+function derive(from: string, to: string, operationId: string): void {
+  store.db
+    .transaction(() => {
+      commitSourceState(store.db, {
+        sourceId: from,
+        stateKind: 'unforgotten',
+        operationId,
+        at: NOW,
+      });
+      links.prepareStatedLinkVersion(store.db, {
+        linkId: links.statedLinkId('derived_from', 'source', from, to),
+        kind: 'derived_from',
+        qualifier: 'source',
+        fromId: from,
+        toId: to,
+        operationId,
+        operationKey: operationId,
+        recordedValues: {},
+        temporalProof: {},
+        observedAt: NOW,
+        referenceSourceId: from,
+        referenceVersion: 1,
+      });
+      links.acknowledgeStatedLinkVersions(
+        store.db,
+        operationId,
+        NOW.toISOString(),
+        NOW.toISOString(),
+      );
+    })
+    .immediate();
 }
 
 beforeEach(() => {
@@ -195,5 +237,69 @@ it('does not borrow the raw exception after mapping verification was withdrawn',
   const result = await r.resolveSources([idAddress('left')], checkedContext(), 'raw_inspection');
   expect(result.results.get(JSON.stringify(['id', 'left']))?.evidence.status).not.toBe(
     'complete-for-use',
+  );
+});
+
+it('treats shared-parent convergence as complete rather than a cycle', () => {
+  derive('left', 'root', 'left-parent');
+  derive('right', 'root', 'right-parent');
+  commitIncidence(store.db, {
+    sourceId: 'right',
+    nodeId: 'old',
+    role: 'extraction',
+    operationId: 'right-origin',
+    at: NOW,
+  });
+  const result = durableLineage(
+    store.db,
+    'old',
+    committedIncidenceForNode(store.db, 'old', 'extraction'),
+    undefined,
+  );
+  expect.soft(result.roots).toEqual(['root']);
+  expect.soft(result.complete).toBe(true);
+});
+
+it('does not borrow extraction census as proof of an empty citation set', async () => {
+  const batch = await resolver().resolveMetadata(['old'], checkedContext(), { maxRoots: 4 });
+  expect(batch.results.get(JSON.stringify(['id', 'old']))?.value?.narrativeBinding).toEqual({
+    status: 'unavailable',
+  });
+});
+
+it('does not expose a later published citation at an earlier knowledge vantage', async () => {
+  const later = new Date('2026-09-08T11:00:00.000Z');
+  const allocated = allocateNarrativeRevision(store.db, OVERVIEW_REVISION_FAMILY, 'week', NOW);
+  store.db
+    .transaction(() => {
+      commitSourceState(store.db, {
+        sourceId: 'left',
+        stateKind: 'unforgotten',
+        operationId: 'publish-overview',
+        at: later,
+      });
+      publishNarrativeRevision(store.db, OVERVIEW_REVISION_FAMILY, {
+        familyKey: 'week',
+        revisionNo: allocated.revisionNo,
+        operationId: 'publish-overview',
+        evidenceRevisionJson: '{}',
+        knownFrom: later.toISOString(),
+        observedAckAt: later.toISOString(),
+        publishedAt: later,
+      });
+      store.db
+        .prepare(
+          'INSERT INTO revision_citations(narrative_node_id,target_id,target_kind) VALUES (?,?,?)',
+        )
+        .run(allocated.nodeId, 'old', 'retained_node');
+    })
+    .immediate();
+  const batch = await resolver().resolveMetadata(
+    ['old'],
+    checkedContext({ mode: knewAt(new Date('2026-09-08T10:30:00.000Z')) }),
+    { maxRoots: 4 },
+  );
+  expect(batch.results.get(JSON.stringify(['id', 'old']))?.value?.narrativeBinding.status).not.toBe(
+    'cited',
   );
 });
