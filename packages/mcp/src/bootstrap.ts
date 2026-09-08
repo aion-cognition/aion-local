@@ -20,6 +20,9 @@ import {
   plasticityCounters,
   probeRecall,
   ProviderRouter,
+  PublicationCoordinator,
+  PublicationRecoveryLoop,
+  PUBLICATION_HANDLERS,
   purgeServedItemsIdleSince,
   queueLagSnapshot,
   readMemberName,
@@ -167,6 +170,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
   let service: AionMcpService | undefined;
   let idleSessions: SessionIdleSweeper | undefined;
   let narratives: SessionNarrativeCloser | undefined;
+  let publicationRecovery: PublicationRecoveryLoop | undefined;
 
   /**
    * The same order `close` below uses, so a failure partway through startup tears down
@@ -195,6 +199,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
     if (worker !== undefined) {
       await worker.stop();
     }
+    await publicationRecovery?.stop();
     await connection.close();
     store.close();
   };
@@ -211,6 +216,21 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
     const { driver } = connection;
     const memberName = (await readMemberName(driver)) ?? fallbackMemberName(env);
     const backbone = await bootstrapBackbone(driver, { memberName });
+    const publications = new PublicationCoordinator({
+      driver,
+      db: store.db,
+      logger,
+      handlers: PUBLICATION_HANDLERS,
+      observe: (publication) => {
+        logger.info({ publication }, 'publication transaction');
+      },
+    });
+    await publications.initialize();
+    publicationRecovery = new PublicationRecoveryLoop(publications, logger, {
+      retryBaseMs: config.operational.workerRetryBaseMs,
+      retryCapMs: config.operational.workerRetryCapMs,
+    });
+    publicationRecovery.start();
     const sessions = new SessionManager(driver, {
       memberId: backbone.member.id,
       workspaceId: backbone.workspace.id,

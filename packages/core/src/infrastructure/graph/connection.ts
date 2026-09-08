@@ -143,9 +143,9 @@ export async function runWriteWithCounters<T>(
 
 /** The one statement runner inside a managed transaction; rows come back coerced exactly as they do outside one. */
 export class GraphTransaction {
-  readonly #tx: ManagedTransaction;
+  readonly #tx: Pick<ManagedTransaction, 'run'>;
 
-  constructor(tx: ManagedTransaction) {
+  constructor(tx: Pick<ManagedTransaction, 'run'>) {
     this.#tx = tx;
   }
 

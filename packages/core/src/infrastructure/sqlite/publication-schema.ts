@@ -77,6 +77,8 @@ export const PUBLICATION_SCHEMA_STATEMENTS: readonly string[] = [
     detail_json TEXT,
     PRIMARY KEY (operation_id, effect_kind)
   )`,
+  `CREATE INDEX IF NOT EXISTS publication_intents_pending_idx
+    ON publication_intents(operation_id) WHERE state = 'prepared'`,
   /**
    * Where a source's storage sits. `projection_generation` advances on every transition
    * attempt, not on every success, so a generation number is never reused by a retry of the

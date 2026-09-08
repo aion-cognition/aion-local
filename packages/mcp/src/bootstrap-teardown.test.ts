@@ -27,6 +27,19 @@ vi.mock('@aion/core', async (importOriginal) => {
       calls.push('store.close');
     }
   }
+  class FakePublicationCoordinator {
+    async initialize(): Promise<void> {
+      calls.push('publications.initialize');
+    }
+  }
+  class FakePublicationRecovery {
+    start(): void {
+      calls.push('publicationRecovery.start');
+    }
+    async stop(): Promise<void> {
+      calls.push('publicationRecovery.stop');
+    }
+  }
   // eslint-disable-next-line @typescript-eslint/no-extraneous-class -- constructed structurally, mirroring the real class this stands in for.
   class FakeSessionManager {}
   class FakeProviderRouter {
@@ -96,6 +109,8 @@ vi.mock('@aion/core', async (importOriginal) => {
     }),
     GraphConnection: FakeGraphConnection,
     SqliteStore: FakeSqliteStore,
+    PublicationCoordinator: FakePublicationCoordinator,
+    PublicationRecoveryLoop: FakePublicationRecovery,
     SessionManager: FakeSessionManager,
     ProviderRouter: FakeProviderRouter,
     RecallSideEffects: FakeRecallSideEffects,
@@ -145,6 +160,8 @@ describe('bootstrapService failing partway through construction', () => {
     // The fake pipeline has no stages, so `worker.start` is never called (only logged as
     // idle); `worker.stop` still runs in teardown, since the worker was still constructed.
     expect(calls).toEqual([
+      'publications.initialize',
+      'publicationRecovery.start',
       'idleNarratives.start',
       'introspector.start',
       'introspector.stop',
@@ -152,6 +169,7 @@ describe('bootstrapService failing partway through construction', () => {
       'sideEffects.whenIdle',
       'idleNarratives.stop',
       'worker.stop',
+      'publicationRecovery.stop',
       'connection.close',
       'store.close',
     ]);

@@ -4,6 +4,7 @@ import { INTEGRATE_JOB_TYPE } from './intake.js';
 import type { ReflectionRun, ReflectionRunOptions } from './orchestrator.js';
 import { settleAndComplete } from './stated-references.js';
 import { attachContentVectors, findPendingVectorNodes } from './vectors.js';
+import { backoffDelayMs } from '../../infrastructure/backoff.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { errorMessage } from '../../infrastructure/errors.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
@@ -93,11 +94,7 @@ type HeldRetry = {
   readonly reason: string;
 };
 
-/** Doubling from `baseMs` on the failure just recorded, never past `capMs`. */
-export function backoffDelayMs(attempts: number, baseMs: number, capMs: number): number {
-  const exponent = Math.max(0, attempts - 1);
-  return Math.min(baseMs * 2 ** exponent, capMs);
-}
+export { backoffDelayMs } from '../../infrastructure/backoff.js';
 
 /**
  * What actually went wrong, in the one field an operator reads: the queue row's `last_error`.

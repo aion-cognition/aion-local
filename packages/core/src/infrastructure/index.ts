@@ -15,6 +15,10 @@ export { halfWindowIntervalMs, MIN_SWEEP_INTERVAL_MS, SweepTimer } from './sweep
 export { DEFAULT_SQLITE_PATH, SqliteStore, openSqliteHandle } from './sqlite/database.js';
 export type { SqliteHandle } from './sqlite/database.js';
 
+export { PublicationCoordinator } from './publication/coordinator.js';
+export { PublicationRecoveryLoop } from './publication/recovery.js';
+export { PUBLICATION_HANDLERS } from './publication/handlers.js';
+
 export {
   countExperiencesByVersion,
   experienceArchiveSpan,
