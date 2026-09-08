@@ -1,10 +1,18 @@
+import type { Driver } from 'neo4j-driver';
 import { describe, expect, it } from 'vitest';
 
-import { resolvedView, type EvidenceReading } from './resolved-view.js';
+import {
+  readEvidence,
+  resolvedView,
+  type EvidenceReadDeps,
+  type EvidenceReading,
+} from './resolved-view.js';
 import type { ItemMetadata } from '../../evidence/application/metadata.js';
+import type { EvidenceResolver } from '../../evidence/application/resolver.js';
 import { idAddress } from '../../evidence/domain/address.js';
 import type { OwnershipSummary } from '../../evidence/domain/ownership.js';
 import { evidenceResult, type EvidenceResult } from '../../evidence/domain/result.js';
+import { checkedContext } from '../../evidence/test-support/evidence.fixture.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 import type { ItemOrigin } from '../../infrastructure/graph/origin-queries.js';
 import { ownershipOf } from '../domain/resolved-view.js';
@@ -156,5 +164,77 @@ describe('the view the pack own late reads produce', () => {
     const built = view(stage(new Map([['c1', PROVENANCE]]), new Map()));
 
     expect([...built.degraded]).toEqual([]);
+  });
+});
+
+/**
+ * Which reads one attempt issues. A time-traveled read neither discounts nor subtracts the
+ * asker's own record, so it asks nobody whose memory this is; it still reads the evidence behind
+ * every candidate, because honesty about what the substrate holds is not one of the exemptions.
+ */
+describe('the reads one attempt issues', () => {
+  function recording(log: string[]): Driver {
+    return {
+      executeQuery: (cypher: string) => {
+        log.push(cypher);
+        return Promise.resolve({ records: [] });
+      },
+    } as unknown as Driver;
+  }
+
+  function deps(driver: Driver): EvidenceReadDeps {
+    return {
+      driver,
+      db: {} as never,
+      provider: {} as never,
+      config: {} as never,
+      logger: { warn: () => undefined } as never,
+    };
+  }
+
+  it('reads the evidence but asks nothing about ownership where it may not subtract', async () => {
+    const log: string[] = [];
+    await readEvidence(deps(recording(log)), {
+      ids: ['c1'],
+      sessionId: 'session-a',
+      mode: {},
+      attribute: false,
+    });
+
+    expect(log.some((cypher) => cypher.includes('capture_ids'))).toBe(true);
+    expect(log.some((cypher) => cypher.includes(' AS own,'))).toBe(false);
+  });
+
+  it('asks about ownership where the read does subtract', async () => {
+    const log: string[] = [];
+    await readEvidence(deps(recording(log)), {
+      ids: ['c1'],
+      sessionId: 'session-a',
+      mode: {},
+      attribute: true,
+    });
+
+    expect(log.some((cypher) => cypher.includes(' AS own,'))).toBe(true);
+  });
+
+  /** With a checked context and a resolver in hand the pack takes no late read of its own. */
+  it('goes through the resolver when an entry point checked coverage', async () => {
+    const log: string[] = [];
+    const resolver = {
+      resolveMetadata: () => Promise.resolve({ results: new Map(), issues: [], revision: {} }),
+    } as unknown as EvidenceResolver;
+    const reading = await readEvidence(
+      { ...deps(recording(log)), resolver },
+      {
+        ids: ['c1'],
+        sessionId: 'session-a',
+        mode: {},
+        attribute: true,
+        context: checkedContext(),
+      },
+    );
+
+    expect(reading.kind).toBe('resolved');
+    expect(log).toEqual([]);
   });
 });
