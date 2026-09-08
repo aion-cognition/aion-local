@@ -1,4 +1,5 @@
 import type { SqliteHandle } from './database.js';
+import { getLedgerEntry, markLedgerApplied } from './ops-ledger.js';
 
 /**
  * Writers for the source identity records.
@@ -214,10 +215,37 @@ export type ReferenceBatchOutcome = {
 };
 
 /**
+ * A delivery that allocated no version leaves no row to recognise it by, so its result is bound
+ * to its operation key in the operations ledger instead. Without that binding the same delivery
+ * retried after a later set had been accepted would compare against the newer hash, disagree,
+ * and allocate a version for references it never introduced.
+ */
+type ReferenceDeliveryReceipt = {
+  readonly referenceVersion: number;
+  readonly acceptedHash: string;
+};
+
+function referenceDeliveryKey(sourceId: string, operationKey: string): string {
+  return `reference-delivery:${encodeURIComponent(sourceId)}:${encodeURIComponent(operationKey)}`;
+}
+
+function readReferenceDeliveryReceipt(
+  db: SqliteHandle,
+  sourceId: string,
+  operationKey: string,
+): ReferenceDeliveryReceipt | undefined {
+  const entry = getLedgerEntry(db, referenceDeliveryKey(sourceId, operationKey));
+  return entry?.summary as ReferenceDeliveryReceipt | undefined;
+}
+
+/**
  * Accepts a reference batch as its own version, so the history of what arrived stops being a
  * merged union nobody can take apart. A batch that repeats the current accepted set is not a
- * new version, and a retried delivery under the same operation key returns the version it
- * already produced.
+ * new version, and a retried delivery under the same operation key returns the result it
+ * produced the first time, whichever of those two it was.
+ *
+ * The same operation key carrying a different accepted set is refused: one delivery has one
+ * outcome, and letting a key stand for two of them would make the recorded result unreadable.
  */
 export function acceptReferenceBatch(
   db: SqliteHandle,
@@ -227,11 +255,28 @@ export function acceptReferenceBatch(
     .transaction((): ReferenceBatchOutcome => {
       const byOperation = db
         .prepare(
-          'SELECT reference_version FROM source_reference_batches WHERE source_id = ? AND operation_key = ?',
+          `SELECT reference_version, accepted_hash FROM source_reference_batches
+           WHERE source_id = ? AND operation_key = ?`,
         )
-        .get(batch.sourceId, batch.operationKey) as { reference_version: number } | undefined;
+        .get(batch.sourceId, batch.operationKey) as
+        { reference_version: number; accepted_hash: string } | undefined;
       if (byOperation !== undefined) {
+        if (byOperation.accepted_hash !== batch.acceptedHash) {
+          throw new Error(
+            `operation ${batch.operationKey} on source ${batch.sourceId} already accepted a different set`,
+          );
+        }
         return { referenceVersion: byOperation.reference_version, added: false };
+      }
+
+      const receipt = readReferenceDeliveryReceipt(db, batch.sourceId, batch.operationKey);
+      if (receipt !== undefined) {
+        if (receipt.acceptedHash !== batch.acceptedHash) {
+          throw new Error(
+            `operation ${batch.operationKey} on source ${batch.sourceId} already accepted a different set`,
+          );
+        }
+        return { referenceVersion: receipt.referenceVersion, added: false };
       }
 
       const latest = db
@@ -241,6 +286,10 @@ export function acceptReferenceBatch(
         )
         .get(batch.sourceId) as { reference_version: number; accepted_hash: string } | undefined;
       if (latest?.accepted_hash === batch.acceptedHash) {
+        markLedgerApplied(db, referenceDeliveryKey(batch.sourceId, batch.operationKey), {
+          referenceVersion: latest.reference_version,
+          acceptedHash: batch.acceptedHash,
+        } satisfies ReferenceDeliveryReceipt);
         return { referenceVersion: latest.reference_version, added: false };
       }
 

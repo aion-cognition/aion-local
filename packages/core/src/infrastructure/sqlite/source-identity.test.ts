@@ -207,6 +207,89 @@ describe('reference batches', () => {
     expect(retried).toEqual({ referenceVersion: first.referenceVersion, added: false });
   });
 
+  it('a no-change delivery retried after a later set still returns its original result', () => {
+    const path = join(dir, 'deliveries.sqlite');
+    const first = new SqliteStore({ filePath: path });
+    const noChange = {
+      sourceId: 'source-1',
+      acceptedHash: 'set-a',
+      receivedAt: NOW,
+      operationKey: 'duplicate',
+      introduced: [],
+    };
+
+    acceptReferenceBatch(first.db, {
+      sourceId: 'source-1',
+      acceptedHash: 'set-a',
+      receivedAt: NOW,
+      operationKey: 'op-a',
+      introduced: ['ref-a'],
+    });
+    const original = acceptReferenceBatch(first.db, noChange);
+    acceptReferenceBatch(first.db, {
+      sourceId: 'source-1',
+      acceptedHash: 'set-ab',
+      receivedAt: LATER,
+      operationKey: 'op-ab',
+      introduced: ['ref-b'],
+    });
+    expect(original).toEqual({ referenceVersion: 1, added: false });
+    first.close();
+
+    const reopened = new SqliteStore({ filePath: path });
+    try {
+      expect(acceptReferenceBatch(reopened.db, noChange)).toEqual(original);
+
+      const history = listReferenceBatches(reopened.db, 'source-1');
+      expect(history).toHaveLength(2);
+      expect(history.at(-1)?.acceptedHash).toBe('set-ab');
+      expect(
+        reopened.db.prepare('SELECT count(*) AS n FROM source_reference_batches').get(),
+      ).toEqual({ n: 2 });
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it('refuses one operation key standing for two different accepted sets', () => {
+    acceptReferenceBatch(store.db, {
+      sourceId: 'source-1',
+      acceptedHash: 'set-a',
+      receivedAt: NOW,
+      operationKey: 'op-a',
+      introduced: ['ref-a'],
+    });
+
+    expect(() => {
+      acceptReferenceBatch(store.db, {
+        sourceId: 'source-1',
+        acceptedHash: 'set-other',
+        receivedAt: LATER,
+        operationKey: 'op-a',
+        introduced: ['ref-x'],
+      });
+    }).toThrow(/already accepted a different set/);
+
+    // The same refusal covers a delivery whose recorded result allocated no version.
+    acceptReferenceBatch(store.db, {
+      sourceId: 'source-1',
+      acceptedHash: 'set-a',
+      receivedAt: NOW,
+      operationKey: 'op-repeat',
+      introduced: [],
+    });
+    expect(() => {
+      acceptReferenceBatch(store.db, {
+        sourceId: 'source-1',
+        acceptedHash: 'set-other',
+        receivedAt: LATER,
+        operationKey: 'op-repeat',
+        introduced: [],
+      });
+    }).toThrow(/already accepted a different set/);
+    expect(listReferenceBatches(store.db, 'source-1')).toHaveLength(1);
+  });
+
   it('gives a changed set its own version and keeps what came before', () => {
     acceptReferenceBatch(store.db, {
       sourceId: 'source-1',
