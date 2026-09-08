@@ -153,6 +153,32 @@ export function committedIncidenceForNode(
   return rows.map(toIncidence);
 }
 
+/**
+ * The same question for a batch of nodes. A serving read asks it once for every candidate it
+ * holds rather than once per candidate, so the cost of the answer follows the batch rather than
+ * the fan-out.
+ */
+export function committedIncidenceForNodes(
+  db: SqliteHandle,
+  nodeIds: readonly string[],
+  role?: string,
+): readonly CommittedIncidence[] {
+  const unique = [...new Set(nodeIds)];
+  if (unique.length === 0) {
+    return [];
+  }
+  const placeholders = unique.map(() => '?').join(', ');
+  const roleClause = role === undefined ? '' : 'AND s.role = ?';
+  const parameters = role === undefined ? unique : [...unique, role];
+  const rows = db
+    .prepare(
+      `${COMMITTED_INCIDENCE} WHERE s.node_id IN (${placeholders}) ${roleClause}
+       ORDER BY s.node_id, s.source_id, s.role`,
+    )
+    .all(...parameters) as IncidenceRowData[];
+  return rows.map(toIncidence);
+}
+
 export type CommittedSourceState = {
   readonly sourceId: string;
   readonly version: number;

@@ -201,6 +201,18 @@ export function getExperienceById(
 }
 
 /**
+ * How large one archived payload is, before anything decodes it. A reader with a byte budget
+ * charges this rather than the size of what it has already parsed, which is the difference
+ * between refusing an oversized payload and holding it in memory to find out it was oversized.
+ */
+export function experiencePayloadBytes(db: SqliteHandle, archiveId: string): number | undefined {
+  const row = db
+    .prepare('SELECT length(payload_json) AS bytes FROM experience_archive WHERE id = ?')
+    .get(archiveId) as { bytes: number } | undefined;
+  return row?.bytes;
+}
+
+/**
  * The archive row holding one payload's raw bytes, found by the key that decides whether a
  * second write inserts anything.
  *

@@ -244,6 +244,30 @@ export type ScopeMirror = ScopeKey & {
  * counter in its own transaction, so a mismatch here proves this copy is stale and a match
  * proves nothing: the publication checkpoint is what certifies a read.
  */
+export type ScopeMirrorRow = {
+  readonly mirroredRevision: number;
+  readonly operationId: string;
+  readonly mirroredAt: string;
+};
+
+/** The last recorded reading of a graph-owned counter, or nothing when none was ever taken. */
+export function readScopeMirror(db: SqliteHandle, key: ScopeKey): ScopeMirrorRow | undefined {
+  const row = db
+    .prepare(
+      `SELECT mirrored_revision, operation_id, mirrored_at FROM evidence_scope_mirrors
+       WHERE endpoint_id = ? AND relation_class = ?`,
+    )
+    .get(key.endpointId, key.relationClass) as
+    { mirrored_revision: number; operation_id: string; mirrored_at: string } | undefined;
+  return row === undefined
+    ? undefined
+    : {
+        mirroredRevision: row.mirrored_revision,
+        operationId: row.operation_id,
+        mirroredAt: row.mirrored_at,
+      };
+}
+
 export function recordScopeMirror(db: SqliteHandle, mirror: ScopeMirror): void {
   db.prepare(
     `INSERT INTO evidence_scope_mirrors

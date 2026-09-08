@@ -44,6 +44,11 @@ export type SourceRecord = {
   readonly sessionId: string;
   readonly canonicalArchiveId: string | null;
   readonly aliasArchiveIds: readonly string[];
+  readonly archiveSchemaVersion: number | null;
+  /** The archive key the occurrence was verified under, which a reader recomputes to check it. */
+  readonly identityHash: string | null;
+  readonly verifiedContentDigest: string | null;
+  readonly verificationPolicyVersion: number | null;
   readonly verificationStatus: SourceVerificationStatus;
   readonly verificationReason: string | null;
   readonly occurredAt: string;
@@ -57,6 +62,10 @@ type SourceRowData = {
   session_id: string;
   canonical_archive_id: string | null;
   archive_aliases_json: string | null;
+  archive_schema_version: number | null;
+  identity_hash: string | null;
+  verified_content_digest: string | null;
+  verification_policy_version: number | null;
   verification_status: SourceVerificationStatus;
   verification_reason: string | null;
   occurred_at: string;
@@ -122,24 +131,23 @@ export function recordSourceRecord(db: SqliteHandle, input: SourceRecordInput): 
   );
 }
 
-export function readSourceRecord(db: SqliteHandle, sourceId: string): SourceRecord | undefined {
-  const row = db
-    .prepare(
-      `SELECT source_id, session_id, canonical_archive_id, archive_aliases_json,
-              verification_status, verification_reason, occurred_at, archived_at,
-              capture_order_value, capture_order_basis
-       FROM source_records WHERE source_id = ?`,
-    )
-    .get(sourceId) as SourceRowData | undefined;
-  if (row === undefined) {
-    return undefined;
-  }
+const SELECT_SOURCE_RECORD = `SELECT source_id, session_id, canonical_archive_id,
+    archive_aliases_json, archive_schema_version, identity_hash, verified_content_digest,
+    verification_policy_version, verification_status, verification_reason, occurred_at,
+    archived_at, capture_order_value, capture_order_basis
+  FROM source_records`;
+
+function toSourceRecord(row: SourceRowData): SourceRecord {
   return {
     sourceId: row.source_id,
     sessionId: row.session_id,
     canonicalArchiveId: row.canonical_archive_id,
     aliasArchiveIds:
       row.archive_aliases_json === null ? [] : (JSON.parse(row.archive_aliases_json) as string[]),
+    archiveSchemaVersion: row.archive_schema_version,
+    identityHash: row.identity_hash,
+    verifiedContentDigest: row.verified_content_digest,
+    verificationPolicyVersion: row.verification_policy_version,
     verificationStatus: row.verification_status,
     verificationReason: row.verification_reason,
     occurredAt: row.occurred_at,
@@ -147,6 +155,12 @@ export function readSourceRecord(db: SqliteHandle, sourceId: string): SourceReco
     captureOrderValue: row.capture_order_value,
     captureOrderBasis: row.capture_order_basis,
   };
+}
+
+export function readSourceRecord(db: SqliteHandle, sourceId: string): SourceRecord | undefined {
+  const row = db.prepare(`${SELECT_SOURCE_RECORD} WHERE source_id = ?`).get(sourceId) as
+    SourceRowData | undefined;
+  return row === undefined ? undefined : toSourceRecord(row);
 }
 
 export type SourcePartInput = {
@@ -197,6 +211,60 @@ export function recordSourceParts(
       );
     }
   }).immediate();
+}
+
+export type SourcePartRecord = {
+  readonly sourceId: string;
+  readonly partKind: string;
+  readonly ordinal: number;
+  readonly turnId: string | null;
+  readonly role: string | null;
+  readonly contentHash: string;
+  readonly occurredAt: string | null;
+};
+
+type SourcePartRowData = {
+  source_id: string;
+  part_kind: string;
+  ordinal: number;
+  turn_id: string | null;
+  role: string | null;
+  content_hash: string;
+  occurred_at: string | null;
+};
+
+const SELECT_SOURCE_PARTS = `SELECT source_id, part_kind, ordinal, turn_id, role, content_hash,
+    occurred_at
+  FROM source_parts`;
+
+function toSourcePart(row: SourcePartRowData): SourcePartRecord {
+  return {
+    sourceId: row.source_id,
+    partKind: row.part_kind,
+    ordinal: row.ordinal,
+    turnId: row.turn_id,
+    role: row.role,
+    contentHash: row.content_hash,
+    occurredAt: row.occurred_at,
+  };
+}
+
+/** One source's recorded parts, in the order a reconstruction has to preserve. */
+export function readSourceParts(db: SqliteHandle, sourceId: string): readonly SourcePartRecord[] {
+  const rows = db
+    .prepare(`${SELECT_SOURCE_PARTS} WHERE source_id = ? ORDER BY part_kind, ordinal`)
+    .all(sourceId) as SourcePartRowData[];
+  return rows.map(toSourcePart);
+}
+
+/** The part an original turn id addresses, for a caller holding a graph id rather than a tuple. */
+export function findSourcePartByTurnId(
+  db: SqliteHandle,
+  turnId: string,
+): SourcePartRecord | undefined {
+  const row = db.prepare(`${SELECT_SOURCE_PARTS} WHERE turn_id = ?`).get(turnId) as
+    SourcePartRowData | undefined;
+  return row === undefined ? undefined : toSourcePart(row);
 }
 
 export type ReferenceBatch = {

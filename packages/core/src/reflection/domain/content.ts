@@ -72,7 +72,7 @@ function renderValue(value: unknown): string {
 }
 
 /** What the agent did not capture is left out, not rendered as an empty line or "undefined". */
-function renderToolExecution(execution: ToolExecution): string[] {
+export function renderToolExecution(execution: ToolExecution): string[] {
   const duration =
     execution.duration_ms === undefined ? '' : `, ${String(execution.duration_ms)}ms`;
   const lines = [`tool ${execution.tool} [${execution.status}${duration}]`];
