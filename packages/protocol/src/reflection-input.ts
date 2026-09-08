@@ -168,10 +168,26 @@ export const RecallFeedbackSchema = z.strictObject({
 
 export type RecallFeedback = z.infer<typeof RecallFeedbackSchema>;
 
+/**
+ * What one request may carry. Measured against the retained corpus before these numbers were
+ * accepted: the largest record was 89207 bytes and nothing exceeded any count, so a caller
+ * hitting one of these is pushing a shape the substrate has never seen rather than an ordinary
+ * conversation.
+ *
+ * They bound a NEW request and nothing else. An archived payload above any of them stays fully
+ * decodable everywhere it is read back, because rejecting it there would corrupt a record the
+ * substrate already accepted. `reflectionBoundsBreaches` is how an operation reports such a
+ * source pinned instead of failing it.
+ */
+export const MAX_REFLECTION_TURNS = 200;
+export const MAX_REFLECTION_TOOL_EXECUTIONS = 64;
+export const MAX_REFLECTION_OBSERVATIONS = 64;
+export const MAX_REFLECTION_REQUEST_BYTES = 512 * 1024;
+
 const ReflectionPayloadSchema = z.strictObject({
-  turns: z.array(ReflectionTurnSchema).optional(),
-  tool_executions: z.array(ToolExecutionSchema).optional(),
-  observations: z.array(ObservationSchema).optional(),
+  turns: z.array(ReflectionTurnSchema).max(MAX_REFLECTION_TURNS).optional(),
+  tool_executions: z.array(ToolExecutionSchema).max(MAX_REFLECTION_TOOL_EXECUTIONS).optional(),
+  observations: z.array(ObservationSchema).max(MAX_REFLECTION_OBSERVATIONS).optional(),
   summary: z.string().min(1).optional(),
   session_id: z.string().min(1).optional(),
   lane: ReflectionLaneSchema.optional(),
@@ -180,9 +196,55 @@ const ReflectionPayloadSchema = z.strictObject({
   feedback: RecallFeedbackSchema.optional(),
 });
 
+export type ReflectionBoundKind = 'turns' | 'tool_executions' | 'observations' | 'bytes';
+
+export type ReflectionBoundsBreach = {
+  readonly bound: ReflectionBoundKind;
+  readonly limit: number;
+  readonly actual: number;
+};
+
+/** UTF-8 length of the serialized value, which is what the byte bound is spoken in. */
+export function reflectionRequestBytes(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).length;
+}
+
+/**
+ * Which bounds a payload exceeds, in the order they are declared. Empty for anything a new
+ * request may carry. Callers reading archived content use this to say what a source is pinned
+ * on; nothing here rejects, truncates, or rewrites the value it was handed.
+ */
+export function reflectionBoundsBreaches(value: unknown): readonly ReflectionBoundsBreach[] {
+  const payload = (typeof value === 'object' && value !== null ? value : {}) as {
+    turns?: unknown;
+    tool_executions?: unknown;
+    observations?: unknown;
+  };
+  const counted: readonly (readonly [ReflectionBoundKind, number, unknown])[] = [
+    ['turns', MAX_REFLECTION_TURNS, payload.turns],
+    ['tool_executions', MAX_REFLECTION_TOOL_EXECUTIONS, payload.tool_executions],
+    ['observations', MAX_REFLECTION_OBSERVATIONS, payload.observations],
+  ];
+  const breaches: ReflectionBoundsBreach[] = [];
+  for (const [bound, limit, entries] of counted) {
+    if (Array.isArray(entries) && entries.length > limit) {
+      breaches.push({ bound, limit, actual: entries.length });
+    }
+  }
+  const bytes = reflectionRequestBytes(value);
+  if (bytes > MAX_REFLECTION_REQUEST_BYTES) {
+    breaches.push({ bound: 'bytes', limit: MAX_REFLECTION_REQUEST_BYTES, actual: bytes });
+  }
+  return breaches;
+}
+
 /**
  * At least one of `turns`, `tool_executions`, or `observations` must carry an entry.
  * A payload of only `summary` and `session_id` is not experience to store.
+ *
+ * The byte bound is checked on the parsed value rather than the raw request text, so a caller
+ * cannot buy room with whitespace. Both refinements run before intake writes anything, and a
+ * rejected request leaves the substrate exactly as it was: there is no truncation anywhere.
  */
 export const ReflectionInputSchema = ReflectionPayloadSchema.refine(
   (payload) =>
@@ -190,6 +252,8 @@ export const ReflectionInputSchema = ReflectionPayloadSchema.refine(
     (payload.tool_executions?.length ?? 0) > 0 ||
     (payload.observations?.length ?? 0) > 0,
   { message: 'reflection requires at least one of: turns, tool_executions, observations' },
-);
+).refine((payload) => reflectionRequestBytes(payload) <= MAX_REFLECTION_REQUEST_BYTES, {
+  message: `reflection request exceeds ${String(MAX_REFLECTION_REQUEST_BYTES)} serialized bytes`,
+});
 
 export type ReflectionInput = z.infer<typeof ReflectionInputSchema>;

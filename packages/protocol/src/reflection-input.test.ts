@@ -1,6 +1,28 @@
 import { describe, expect, it } from 'vitest';
 
-import { ReflectionInputSchema } from './reflection-input.js';
+import {
+  MAX_REFLECTION_OBSERVATIONS,
+  MAX_REFLECTION_REQUEST_BYTES,
+  MAX_REFLECTION_TOOL_EXECUTIONS,
+  MAX_REFLECTION_TURNS,
+  ReflectionInputSchema,
+  reflectionBoundsBreaches,
+} from './reflection-input.js';
+
+function turns(count: number): { role: string; text: string }[] {
+  return Array.from({ length: count }, (_unused, index) => ({
+    role: 'user',
+    text: `turn ${String(index)}`,
+  }));
+}
+
+function observations(count: number): string[] {
+  return Array.from({ length: count }, (_unused, index) => `observation ${String(index)}`);
+}
+
+function toolExecutions(count: number): { tool: string; status: string }[] {
+  return Array.from({ length: count }, () => ({ tool: 'bash', status: 'ok' }));
+}
 
 describe('ReflectionInputSchema valid fixtures', () => {
   it('parses turns alone', () => {
@@ -183,5 +205,62 @@ describe('ReflectionInputSchema invalid shapes', () => {
       extra: true,
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe('new-request bounds', () => {
+  it('accepts a request at every count bound', () => {
+    const input = {
+      turns: turns(MAX_REFLECTION_TURNS),
+      tool_executions: toolExecutions(MAX_REFLECTION_TOOL_EXECUTIONS),
+      observations: observations(MAX_REFLECTION_OBSERVATIONS),
+    };
+    expect(ReflectionInputSchema.parse(input)).toEqual(input);
+  });
+
+  it('rejects one turn past the bound', () => {
+    const result = ReflectionInputSchema.safeParse({ turns: turns(MAX_REFLECTION_TURNS + 1) });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects one tool execution past the bound', () => {
+    const result = ReflectionInputSchema.safeParse({
+      tool_executions: toolExecutions(MAX_REFLECTION_TOOL_EXECUTIONS + 1),
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects one observation past the bound', () => {
+    const result = ReflectionInputSchema.safeParse({
+      observations: observations(MAX_REFLECTION_OBSERVATIONS + 1),
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a payload past the byte bound and truncates nothing', () => {
+    const oversized = { observations: ['x'.repeat(MAX_REFLECTION_REQUEST_BYTES)] };
+    const result = ReflectionInputSchema.safeParse(oversized);
+    expect(result.success).toBe(false);
+    expect(oversized.observations[0]).toHaveLength(MAX_REFLECTION_REQUEST_BYTES);
+  });
+
+  it('names every bound an archived payload exceeds without altering it', () => {
+    const legacy = {
+      turns: turns(MAX_REFLECTION_TURNS + 5),
+      observations: observations(MAX_REFLECTION_OBSERVATIONS + 1),
+    };
+    expect(reflectionBoundsBreaches(legacy)).toEqual([
+      { bound: 'turns', limit: MAX_REFLECTION_TURNS, actual: MAX_REFLECTION_TURNS + 5 },
+      {
+        bound: 'observations',
+        limit: MAX_REFLECTION_OBSERVATIONS,
+        actual: MAX_REFLECTION_OBSERVATIONS + 1,
+      },
+    ]);
+    expect(legacy.turns).toHaveLength(MAX_REFLECTION_TURNS + 5);
+  });
+
+  it('reports nothing for a payload inside every bound', () => {
+    expect(reflectionBoundsBreaches({ observations: ['a decision'] })).toEqual([]);
   });
 });
