@@ -102,3 +102,92 @@ export function resolveSourceOccurrence(
 export function heldSourceId(resolution: OccurrenceResolution): string | undefined {
   return resolution.kind === 'held' ? resolution.sourceId : undefined;
 }
+
+/**
+ * One logical occurrence in the live ingest order, with the raw row its bytes live in.
+ *
+ * A consumer walking sources reads this rather than the archive: a replacement occurrence shares
+ * its forgotten predecessor's canonical row, so enumerating archive rows visits the predecessor
+ * and never the source that is actually here.
+ */
+export type SourceOccurrence = {
+  readonly sourceId: string;
+  readonly sessionId: string;
+  readonly ingestPosition: number;
+  readonly canonicalArchiveId: string | null;
+  /** The occurrence's own world time, which a replacement does not share with its predecessor. */
+  readonly occurredAt: string;
+};
+
+export type OccurrenceFilter = {
+  readonly sourceId?: string;
+  readonly sessionId?: string;
+  /** Selects occurrences whose raw row was written under some other pipeline version. */
+  readonly excludePipelineVersion?: string;
+};
+
+/**
+ * A page of occurrences after `position`, oldest first by ingest order.
+ *
+ * The ingest position is the cursor because it is handed out once and never reused, so a page
+ * boundary cannot be crossed twice and a backdated arrival cannot slip behind a mark an earlier
+ * pass already passed. World time cannot do that: an experience from 2020 accepted today sorts
+ * before rows a previous pass has already walked.
+ */
+export function listSourceOccurrencesAfter(
+  db: SqliteHandle,
+  position: number,
+  limit: number,
+  filter: OccurrenceFilter = {},
+): readonly SourceOccurrence[] {
+  const clauses: string[] = [];
+  const parameters: unknown[] = [position];
+  if (filter.sourceId !== undefined) {
+    clauses.push('AND r.source_id = ?');
+    parameters.push(filter.sourceId);
+  }
+  if (filter.sessionId !== undefined) {
+    clauses.push('AND r.session_id = ?');
+    parameters.push(filter.sessionId);
+  }
+  if (filter.excludePipelineVersion !== undefined) {
+    clauses.push('AND (a.pipeline_version IS NULL OR a.pipeline_version <> ?)');
+    parameters.push(filter.excludePipelineVersion);
+  }
+  const rows = db
+    .prepare(
+      `SELECT r.source_id, r.session_id, i.id AS ingest_position, r.canonical_archive_id,
+              r.occurred_at
+       FROM source_records r
+       JOIN ingest_log i ON i.source_id = r.source_id
+       LEFT JOIN experience_archive a ON a.id = r.canonical_archive_id
+       WHERE i.id > ? ${clauses.join(' ')}
+       ORDER BY i.id
+       LIMIT ?`,
+    )
+    .all(...parameters, limit) as {
+    source_id: string;
+    session_id: string;
+    ingest_position: number;
+    canonical_archive_id: string | null;
+    occurred_at: string;
+  }[];
+  return rows.map((row) => ({
+    sourceId: row.source_id,
+    sessionId: row.session_id,
+    ingestPosition: row.ingest_position,
+    canonicalArchiveId: row.canonical_archive_id,
+    occurredAt: row.occurred_at,
+  }));
+}
+
+/** Whether any archive row still has no occurrence record, which is what the fallback is for. */
+export function unrecordedArchiveRows(db: SqliteHandle): number {
+  const row = db
+    .prepare(
+      `SELECT count(*) AS n FROM experience_archive a
+       WHERE NOT EXISTS (SELECT 1 FROM source_records r WHERE r.source_id = a.episode_id)`,
+    )
+    .get() as { n: number };
+  return row.n;
+}

@@ -17,6 +17,7 @@ import {
   SessionManager,
   type Config,
   type ReplayDeps,
+  type ReplayCursor,
   type ReplayProgress,
   type ReplayReport,
   type ReplaySelection,
@@ -202,10 +203,17 @@ function renderLs(substrate: Substrate, flags: ReplayFlags): number {
   return 0;
 }
 
+/** Where a pass stopped, in the terms the pass was walking. */
+function renderCursor(cursor: ReplayCursor): string {
+  return cursor.kind === 'ingest'
+    ? `ingest ${String(cursor.position)}`
+    : `${cursor.occurredAt} / ${cursor.id}`;
+}
+
 function renderProgress(progress: ReplayProgress, write: Writer): void {
   write(
     `replayed ${String(progress.replayed)}, skipped ${String(progress.skipped)}, ` +
-      `at ${progress.cursor.occurredAt}`,
+      `at ${renderCursor(progress.cursor)}`,
   );
 }
 
@@ -215,12 +223,13 @@ function renderReport(report: ReplayReport, write: Writer): void {
   write(`skipped     ${String(report.skipped)}`);
   write(`unavailable ${String(report.unavailable)}`);
   write(`evicted     ${String(report.skippedEvicted)}`);
+  write(`unrecorded  ${String(report.unrecorded)}`);
   write(`failed      ${String(report.failed)}`);
   if (report.aborted) {
     write(
       report.cursor === undefined
         ? 'aborted before the first batch; nothing was replayed'
-        : `aborted at ${report.cursor.occurredAt} / ${report.cursor.id}`,
+        : `aborted at ${renderCursor(report.cursor)}`,
     );
   }
 }
@@ -233,12 +242,10 @@ function toJson(report: ReplayReport): unknown {
     skipped: report.skipped,
     unavailable: report.unavailable,
     skipped_evicted: report.skippedEvicted,
+    unrecorded: report.unrecorded,
     failed: report.failed,
     aborted: report.aborted,
-    cursor:
-      report.cursor === undefined
-        ? null
-        : { occurred_at: report.cursor.occurredAt, id: report.cursor.id },
+    cursor: report.cursor === undefined ? null : { ...report.cursor },
   };
 }
 

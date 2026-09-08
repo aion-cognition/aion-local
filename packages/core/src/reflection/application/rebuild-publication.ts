@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { projectEpisodeInTransaction } from './experience-store.js';
 import { sourcePartsOf } from './source-manifest.js';
+import { presentNodeIds } from '../../infrastructure/graph/projection-presence.js';
 import { PublicationOperation } from '../../infrastructure/publication/operation.js';
 import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
 import type { PublicationContext } from '../../infrastructure/publication/types.js';
@@ -132,18 +133,6 @@ function archivedContent(payload: ReflectionContent): ReflectionContent {
   return rest;
 }
 
-/** Ids the graph already holds. An evicted source has none, so any hit is an occupant. */
-async function occupants(
-  context: PublicationContext,
-  ids: readonly string[],
-): Promise<readonly string[]> {
-  return context.graph.run(
-    'UNWIND $ids AS id MATCH (n:AionNode { id: id }) RETURN n.id AS id',
-    { ids: [...ids] },
-    (row) => row.id as string,
-  );
-}
-
 export const projectionRebuildPublication = new PublicationOperation({
   kind: 'projection_rebuild',
   effectKinds: [REBUILD_EFFECT],
@@ -252,8 +241,9 @@ export const projectionRebuildPublication = new PublicationOperation({
     if (!owns) {
       return { status: 'deferred', reason: 'rebuild_superseded' } as const;
     }
-    const occupied = await occupants(context, [data.sourceId, ...data.turnIds]);
-    if (occupied.length > 0) {
+    // An evicted source holds none of its ids, so anything present is somebody else's node.
+    const occupied = await presentNodeIds(context.graph, [data.sourceId, ...data.turnIds]);
+    if (occupied.size > 0) {
       return { status: 'rejected', reason: 'original_ids_occupied' } as const;
     }
     return { status: 'valid' } as const;

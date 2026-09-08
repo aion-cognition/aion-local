@@ -13,6 +13,7 @@ import type { Logger } from '../../infrastructure/logging/logger.js';
 import { abortRequested } from '../../infrastructure/providers/deadline-signal.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
+  getExperienceById,
   listExperiencesAfter,
   type ExperienceArchiveCursor,
   type ExperienceArchiveFilter,
@@ -23,6 +24,12 @@ import {
   readSourceRecord,
 } from '../../infrastructure/sqlite/source-identity.js';
 import { sourceResidencyState } from '../../infrastructure/sqlite/source-lifecycle.js';
+import {
+  listSourceOccurrencesAfter,
+  unrecordedArchiveRows,
+  type OccurrenceFilter,
+  type SourceOccurrence,
+} from '../../infrastructure/sqlite/source-occurrence.js';
 import { prepareEpisode, type PreparedEpisode } from '../domain/content.js';
 import { PIPELINE_VERSION } from '../domain/version.js';
 
@@ -99,43 +106,75 @@ export type ReplayCounts = {
   readonly failed: number;
 };
 
+/**
+ * Where a pass stopped.
+ *
+ * The live enumeration walks occurrences in ingest order, and its position is a number handed
+ * out once and never reused: a backdated arrival cannot slip behind a mark an earlier pass
+ * already passed, which world time allows. The archive keyset is the explicit fallback for rows
+ * no occurrence record accounts for yet, and it says so by its kind.
+ */
+export type ReplayCursor =
+  | { readonly kind: 'ingest'; readonly position: number }
+  | ({ readonly kind: 'archive' } & ExperienceArchiveCursor);
+
 export type ReplayProgress = ReplayCounts & {
   readonly scanned: number;
-  readonly cursor: ExperienceArchiveCursor;
+  readonly cursor: ReplayCursor;
 };
 
 export type ReplayReport = ReplayCounts & {
   readonly scanned: number;
   /** Where the run stopped, so an aborted pass resumes instead of starting over. */
-  readonly cursor: ExperienceArchiveCursor | undefined;
+  readonly cursor: ReplayCursor | undefined;
+  /** Archive rows no occurrence record accounts for, which the fallback pass visited. */
+  readonly unrecorded: number;
   readonly aborted: boolean;
 };
 
-type Tally = {
-  scanned: number;
-  replayed: number;
-  skipped: number;
-  unavailable: number;
-  skippedEvicted: number;
-  failed: number;
-};
-
-function filterOf(selection: ReplaySelection, pipelineVersion: string): ExperienceArchiveFilter {
-  return {
-    ...(selection.stale === true ? { excludePipelineVersion: pipelineVersion } : {}),
-    ...(selection.episodeId === undefined ? {} : { episodeId: selection.episodeId }),
-    ...(selection.sessionId === undefined ? {} : { sessionId: selection.sessionId }),
+/**
+ * What a pass has seen so far, and where it stopped.
+ *
+ * A pass hands this to each phase rather than each phase returning a partial tally to merge: two
+ * phases walk one run, and a caller's row limit and abort signal are answered against the whole
+ * of it, not against whichever phase happens to be running.
+ */
+class ReplayPass {
+  scanned = 0;
+  aborted = false;
+  cursor: ReplayCursor | undefined;
+  readonly #counts: Record<keyof ReplayCounts, number> = {
+    replayed: 0,
+    skipped: 0,
+    unavailable: 0,
+    skippedEvicted: 0,
+    failed: 0,
   };
-}
 
-function countsOf(tally: Tally): ReplayCounts {
-  return {
-    replayed: tally.replayed,
-    skipped: tally.skipped,
-    unavailable: tally.unavailable,
-    skippedEvicted: tally.skippedEvicted,
-    failed: tally.failed,
-  };
+  record(outcome: keyof ReplayCounts, cursor: ReplayCursor): void {
+    this.#counts[outcome] += 1;
+    this.scanned += 1;
+    this.cursor = cursor;
+  }
+
+  counts(): ReplayCounts {
+    return { ...this.#counts };
+  }
+
+  /** How many rows the next batch may take, or zero once the caller's row limit is spent. */
+  batchSize(options: ReplayOptions): number {
+    const remaining =
+      options.limit === undefined ? options.batchSize : options.limit - this.scanned;
+    return Math.min(options.batchSize, remaining);
+  }
+
+  /** True when the caller has stopped asking, which is checked per row rather than per batch. */
+  stopped(signal: AbortSignal | undefined): boolean {
+    if (abortRequested(signal)) {
+      this.aborted = true;
+    }
+    return this.aborted;
+  }
 }
 
 /**
@@ -151,6 +190,7 @@ function countsOf(tally: Tally): ReplayCounts {
 async function replayRow(
   deps: ReplayDeps,
   row: ExperienceArchiveRow,
+  sourceId: string,
   pipelineVersion: string,
   now: Date,
 ): Promise<ReflectionRun> {
@@ -160,8 +200,11 @@ async function replayRow(
   // intake whose graph write failed, and every write behind it is idempotent, so a row whose
   // references already landed is a no-op.
   const { provenance, ...content } = row.payload;
-  const prepared = prepareEpisode(content, new Date(row.occurredAt));
-  const stored = await projectRow(deps, row, prepared, now);
+  // The occurrence's own recorded world time, when it has one: a replacement sharing a forgotten
+  // predecessor's bytes has its own clock, and the raw row carries the predecessor's.
+  const record = readSourceRecord(deps.db, sourceId);
+  const prepared = prepareEpisode(content, new Date(record?.occurredAt ?? row.occurredAt));
+  const stored = await projectRow(deps, row, sourceId, prepared, now);
   await attachProvenance(deps, stored.episodeId, provenance, now);
   return deps.runner.run(stored.episodeId, { now, pipelineVersion });
 }
@@ -177,17 +220,18 @@ async function replayRow(
 async function projectRow(
   deps: ReplayDeps,
   row: ExperienceArchiveRow,
+  sourceId: string,
   prepared: PreparedEpisode,
   now: Date,
 ): Promise<StoredEpisode> {
-  const record = readSourceRecord(deps.db, row.episodeId);
+  const record = readSourceRecord(deps.db, sourceId);
   if (record === undefined) {
     return (await storeExperience(deps, prepared, row.identity, now, row.origin)).stored;
   }
-  const turnIds = readSourcePartTurnIds(deps.db, row.episodeId);
+  const turnIds = readSourcePartTurnIds(deps.db, sourceId);
   if (turnIds.length !== prepared.turns.length) {
     throw new Error(
-      `source ${row.episodeId} records ${String(turnIds.length)} turn parts for ${String(prepared.turns.length)} archived turns`,
+      `source ${sourceId} records ${String(turnIds.length)} turn parts for ${String(prepared.turns.length)} archived turns`,
     );
   }
   await deps.sessions.ensureSession({
@@ -201,7 +245,7 @@ async function projectRow(
       sessionId: record.sessionId,
       origin: row.origin,
       now,
-      identity: { episodeId: row.episodeId, turnIds },
+      identity: { episodeId: sourceId, turnIds },
     }),
   );
 }
@@ -214,18 +258,19 @@ async function projectRow(
 async function rowOutcome(
   deps: ReplayDeps,
   row: ExperienceArchiveRow,
+  sourceId: string,
   pipelineVersion: string,
   now: Date,
 ): Promise<keyof ReplayCounts> {
-  if (sourceResidencyState(deps.db, row.episodeId) === 'evicted') {
+  if (sourceResidencyState(deps.db, sourceId) === 'evicted') {
     deps.logger.info(
-      { archiveId: row.id, episodeId: row.episodeId },
+      { archiveId: row.id, episodeId: sourceId },
       'replay skipped an evicted source; its projection returns through rebuild, not through replay',
     );
     return 'skippedEvicted';
   }
   try {
-    const run = await replayRow(deps, row, pipelineVersion, now);
+    const run = await replayRow(deps, row, sourceId, pipelineVersion, now);
     if (run.status === 'already_applied') {
       return 'skipped';
     }
@@ -238,7 +283,7 @@ async function rowOutcome(
       throw err;
     }
     deps.logger.error(
-      { err: errorMessage(err), archiveId: row.id, episodeId: row.episodeId },
+      { err: errorMessage(err), archiveId: row.id, episodeId: sourceId },
       'replay of an archived experience failed; continuing with the rest',
     );
     return 'failed';
@@ -246,67 +291,168 @@ async function rowOutcome(
 }
 
 /**
- * Oldest first, by the `(occurred_at, id)` keyset the archive indexes on. Ordering that way
- * puts the experiences nothing else will ever pick up at the front, and the cursor survives an
- * abort because a replay writes nothing to the table it is reading.
+ * Every selected occurrence, then the archive rows no occurrence record accounts for yet.
+ *
+ * The first pass is the one that matters: occurrences are what a caller selects and what
+ * residency, clocks and part identity are recorded against, and a replacement sharing a
+ * forgotten predecessor's canonical row is only reachable this way. Walking archive rows would
+ * visit the predecessor's bytes once and never the source that is actually here.
+ *
+ * The second pass is an explicit fallback for a substrate whose records have not been
+ * backfilled. It is reported separately rather than folded in, so a run cannot look complete on
+ * the strength of rows nothing has classified.
  */
 export async function replayExperiences(
   deps: ReplayDeps,
   options: ReplayOptions,
 ): Promise<ReplayReport> {
-  const pipelineVersion = options.pipelineVersion ?? PIPELINE_VERSION;
-  const clock = options.clock ?? ((): Date => new Date());
-  const filter = filterOf(options.selection ?? {}, pipelineVersion);
-  const tally: Tally = {
-    scanned: 0,
-    replayed: 0,
-    skipped: 0,
-    unavailable: 0,
-    skippedEvicted: 0,
-    failed: 0,
+  const pass: PassOptions = {
+    pipelineVersion: options.pipelineVersion ?? PIPELINE_VERSION,
+    clock: options.clock ?? ((): Date => new Date()),
+    selection: options.selection ?? {},
   };
-  let cursor: ExperienceArchiveCursor | undefined;
-  let aborted = false;
+  const state = new ReplayPass();
 
-  for (;;) {
-    if (abortRequested(options.signal)) {
-      aborted = true;
-      break;
-    }
-    const remaining =
-      options.limit === undefined ? options.batchSize : options.limit - tally.scanned;
-    const size = Math.min(options.batchSize, remaining);
-    if (size <= 0) {
-      break;
-    }
-
-    const rows = listExperiencesAfter(deps.db, cursor, size, filter);
-    if (rows.length === 0) {
-      break;
-    }
-    for (const row of rows) {
-      // Checked per row, not per batch: a row is a full orchestrator run, so waiting out the
-      // batch would spend minutes on work the caller has already stopped asking for. The
-      // cursor stays at the last completed row, which is where the next pass resumes.
-      if (abortRequested(options.signal)) {
-        aborted = true;
-        break;
-      }
-      tally[await rowOutcome(deps, row, pipelineVersion, clock())] += 1;
-      tally.scanned += 1;
-      cursor = { occurredAt: row.occurredAt, id: row.id };
-    }
-    if (cursor !== undefined) {
-      options.onBatch?.({ ...countsOf(tally), scanned: tally.scanned, cursor });
-    }
-    if (aborted) {
-      break;
-    }
+  await walkOccurrences(deps, options, pass, state);
+  const unrecorded = unrecordedArchiveRows(deps.db);
+  if (!state.aborted && unrecorded > 0) {
+    await walkUnrecorded(deps, options, pass, state);
   }
 
   deps.logger.info(
-    { ...countsOf(tally), scanned: tally.scanned, pipelineVersion, aborted },
+    {
+      ...state.counts(),
+      scanned: state.scanned,
+      pipelineVersion: pass.pipelineVersion,
+      unrecorded,
+      aborted: state.aborted,
+    },
     'replay finished',
   );
-  return { ...countsOf(tally), scanned: tally.scanned, cursor, aborted };
+  return {
+    ...state.counts(),
+    scanned: state.scanned,
+    cursor: state.cursor,
+    unrecorded,
+    aborted: state.aborted,
+  };
+}
+
+type PassOptions = {
+  readonly pipelineVersion: string;
+  readonly clock: () => Date;
+  readonly selection: ReplaySelection;
+};
+
+function report(state: ReplayPass, options: ReplayOptions): void {
+  if (state.cursor !== undefined) {
+    options.onBatch?.({ ...state.counts(), scanned: state.scanned, cursor: state.cursor });
+  }
+}
+
+async function walkOccurrences(
+  deps: ReplayDeps,
+  options: ReplayOptions,
+  pass: PassOptions,
+  state: ReplayPass,
+): Promise<void> {
+  const filter: OccurrenceFilter = {
+    ...(pass.selection.stale === true ? { excludePipelineVersion: pass.pipelineVersion } : {}),
+    ...(pass.selection.episodeId === undefined ? {} : { sourceId: pass.selection.episodeId }),
+    ...(pass.selection.sessionId === undefined ? {} : { sessionId: pass.selection.sessionId }),
+  };
+  let position = 0;
+  for (;;) {
+    const size = state.batchSize(options);
+    if (state.stopped(options.signal) || size <= 0) {
+      return;
+    }
+    const page = listSourceOccurrencesAfter(deps.db, position, size, filter);
+    if (page.length === 0) {
+      return;
+    }
+    for (const occurrence of page) {
+      if (state.stopped(options.signal)) {
+        break;
+      }
+      const row =
+        occurrence.canonicalArchiveId === null
+          ? undefined
+          : getExperienceById(deps.db, occurrence.canonicalArchiveId);
+      const outcome = await occurrenceOutcome(deps, occurrence, row, pass);
+      position = occurrence.ingestPosition;
+      state.record(outcome, { kind: 'ingest', position });
+    }
+    report(state, options);
+    if (state.aborted) {
+      return;
+    }
+  }
+}
+
+/**
+ * An occurrence whose canonical row is missing cannot be re-derived from anything, so it counts
+ * as unavailable rather than failed: nothing is wrong with the pass, and the raw bytes are what
+ * is absent.
+ */
+async function occurrenceOutcome(
+  deps: ReplayDeps,
+  occurrence: SourceOccurrence,
+  row: ExperienceArchiveRow | undefined,
+  pass: PassOptions,
+): Promise<keyof ReplayCounts> {
+  if (row === undefined) {
+    deps.logger.warn(
+      { episodeId: occurrence.sourceId },
+      'replay skipped an occurrence whose canonical archive row is missing',
+    );
+    return 'unavailable';
+  }
+  return rowOutcome(deps, row, occurrence.sourceId, pass.pipelineVersion, pass.clock());
+}
+
+/** The pre-backfill tail: archive rows no occurrence record names, by the old archive keyset. */
+async function walkUnrecorded(
+  deps: ReplayDeps,
+  options: ReplayOptions,
+  pass: PassOptions,
+  state: ReplayPass,
+): Promise<void> {
+  const filter: ExperienceArchiveFilter = {
+    ...(pass.selection.stale === true ? { excludePipelineVersion: pass.pipelineVersion } : {}),
+    ...(pass.selection.episodeId === undefined ? {} : { episodeId: pass.selection.episodeId }),
+    ...(pass.selection.sessionId === undefined ? {} : { sessionId: pass.selection.sessionId }),
+  };
+  let cursor: ExperienceArchiveCursor | undefined;
+  for (;;) {
+    const size = state.batchSize(options);
+    if (state.stopped(options.signal) || size <= 0) {
+      return;
+    }
+    const rows = listExperiencesAfter(deps.db, cursor, size, filter);
+    if (rows.length === 0) {
+      return;
+    }
+    for (const row of rows) {
+      if (state.stopped(options.signal)) {
+        break;
+      }
+      cursor = { occurredAt: row.occurredAt, id: row.id };
+      // Already visited as an occurrence; walking it again would run the same source twice.
+      if (readSourceRecord(deps.db, row.episodeId) === undefined) {
+        const outcome = await rowOutcome(
+          deps,
+          row,
+          row.episodeId,
+          pass.pipelineVersion,
+          pass.clock(),
+        );
+        state.record(outcome, { kind: 'archive', ...cursor });
+      }
+    }
+    report(state, options);
+    if (state.aborted) {
+      return;
+    }
+  }
 }

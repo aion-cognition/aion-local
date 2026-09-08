@@ -54,6 +54,7 @@ export {
 
 export { replayExperiences } from './application/replay.js';
 export type {
+  ReplayCursor,
   ReplayDeps,
   ReplayProgress,
   ReplayReport,

@@ -1,160 +1,59 @@
-import type { Driver } from 'neo4j-driver';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ReflectionNotStoredError } from './errors.js';
-import type { ReflectionRun, ReflectionRunOptions, ReflectionRunStatus } from './orchestrator.js';
-import { replayExperiences, type ReplayDeps, type ReplayProgress } from './replay.js';
+import {
+  replayExperiences,
+  type ReplayCursor,
+  type ReplayDeps,
+  type ReplayProgress,
+} from './replay.js';
 import { BITEMPORAL_PROPERTIES } from '../../infrastructure/graph/bitemporal.js';
 import { fromGraphDateTime } from '../../infrastructure/graph/values.js';
-import { openLogger } from '../../infrastructure/logging/logger.js';
-import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import {
   ARCHIVE_SCHEMA_VERSION,
   insertExperience,
 } from '../../infrastructure/sqlite/experience-archive.js';
-import {
-  acceptReferenceBatch,
-  listReferenceBatches,
-  recordSourceParts,
-  recordSourceRecord,
-} from '../../infrastructure/sqlite/source-identity.js';
-import {
-  listEvidenceAcknowledgments,
-  recordEvidenceAcknowledgment,
-  SEMANTIC_PROCESSING_EFFECT,
-  transitionSourceResidency,
-} from '../../infrastructure/sqlite/source-lifecycle.js';
-import { SessionManager } from '../../session/session-manager.js';
-import type { ReflectionContent } from '../domain/content.js';
 import { PIPELINE_VERSION } from '../domain/version.js';
-import { FakeGraph } from '../test-support/fake-graph.fixture.js';
+import {
+  archiveAllExperiences,
+  archiveExperience,
+  closeReplaySubstrate,
+  contentFor,
+  openReplaySubstrate,
+  replayDeps,
+  unavailableDriver,
+  ARCHIVED_AT,
+  OCCURRED,
+  WALL_NOW,
+  type ReplaySubstrate,
+  type RunCall,
+} from '../test-support/replay-substrate.fixture.js';
 
-const MEMBER_ID = 'member-1';
-const WORKSPACE_ID = 'workspace-1';
-const IDENTITY = 'replay-session';
-const ARCHIVED_AT = '2026-09-01T12:00:00.000Z';
-/** The moment the replay itself happens, months after the newest experience it puts back. */
-const WALL_NOW = new Date('2026-09-01T17:45:00.000Z');
-
-/** Five experiences, a day apart, archived out of order so ordering is the runner's doing. */
-const OCCURRED = [
-  '2026-01-01T08:00:00.000Z',
-  '2026-01-02T08:00:00.000Z',
-  '2026-01-03T08:00:00.000Z',
-  '2026-01-04T08:00:00.000Z',
-  '2026-01-05T08:00:00.000Z',
-] as const;
-
-type RunCall = {
-  readonly episodeId: string;
-  readonly options: ReflectionRunOptions;
-};
-
-/** What the fake runner does on one call: answer with a status, or throw the way a stage can. */
-type RunAnswer = ReflectionRunStatus | 'throws';
-
-let graph: FakeGraph;
-let store: SqliteStore;
-let dataDir: string;
-let deps: ReplayDeps;
+let substrate: ReplaySubstrate;
 let calls: RunCall[];
-/** Answers in call order; the runner completes once the list runs out. */
-let answers: RunAnswer[];
-
-function contentFor(index: number): ReflectionContent {
-  return {
-    turns: [
-      {
-        role: 'user',
-        text: `why did we pick option ${String(index)}`,
-        occurred_at: OCCURRED[index],
-      },
-    ],
-    summary: `option ${String(index)}`,
-  };
-}
-
-function archive(index: number, pipelineVersion: string = PIPELINE_VERSION): void {
-  const inserted = insertExperience(store.db, {
-    schemaVersion: ARCHIVE_SCHEMA_VERSION,
-    pipelineVersion,
-    identity: IDENTITY,
-    sessionId: IDENTITY,
-    episodeId: `archived-episode-${String(index)}`,
-    contentHash: `hash-${String(index)}`,
-    occurredAt: OCCURRED[index] ?? ARCHIVED_AT,
-    archivedAt: ARCHIVED_AT,
-    payload: contentFor(index),
-  });
-  expect(inserted).toBe(true);
-}
-
-function archiveAll(): void {
-  // Reverse insertion order, so a runner that read rows by rowid would fail the ordering test.
-  for (const index of [4, 2, 0, 3, 1]) {
-    archive(index);
-  }
-}
-
-function summaryOf(episodeId: string, status: ReflectionRunStatus): ReflectionRun {
-  return {
-    episodeId,
-    status,
-    applied: status === 'completed',
-    summary: { episodeId, durationMs: 0, counts: {}, stages: [], skippedStages: [] },
-  };
-}
 
 beforeEach(() => {
-  graph = new FakeGraph();
-  graph.seedNode(MEMBER_ID, ['Member', 'Entity', 'AionNode']);
-  graph.seedNode(WORKSPACE_ID, ['Workspace', 'Entity', 'AionNode']);
-  dataDir = mkdtempSync(join(tmpdir(), 'aion-replay-'));
-  store = new SqliteStore({ filePath: join(dataDir, 'aion.sqlite') });
-  calls = [];
-  answers = [];
-  deps = depsOn(graph.driver);
+  substrate = openReplaySubstrate();
+  ({ calls } = substrate);
 });
-
-function depsOn(driver: Driver): ReplayDeps {
-  return {
-    driver,
-    sessions: new SessionManager(driver, { memberId: MEMBER_ID, workspaceId: WORKSPACE_ID }),
-    db: store.db,
-    logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
-    runner: {
-      run: (episodeId, options) => {
-        calls.push({ episodeId, options });
-        const answer = answers.shift() ?? 'completed';
-        if (answer === 'throws') {
-          return Promise.reject(new Error('the stage exploded'));
-        }
-        return Promise.resolve(summaryOf(episodeId, answer));
-      },
-    },
-  };
-}
-
-/** A driver whose every call fails the way an unreachable server does, code and all. */
-function unavailableDriver(): Driver {
-  const fail = (): never => {
-    const err = new Error('connection refused') as Error & { code: string };
-    err.code = 'ServiceUnavailable';
-    throw err;
-  };
-  return { executeQuery: fail, session: fail } as unknown as Driver;
-}
 
 afterEach(() => {
-  store.close();
-  rmSync(dataDir, { recursive: true, force: true });
+  closeReplaySubstrate(substrate);
 });
 
+/**
+ * The archive keyset a pass stopped on. These rows carry no occurrence record, so the fallback
+ * pass is the one that walks them, and asserting the kind is what says so.
+ */
+function archiveCursor(cursor: ReplayCursor | undefined): { occurredAt: string; id: string } {
+  if (cursor?.kind !== 'archive') {
+    throw new Error(`expected an archive cursor, got ${String(cursor?.kind)}`);
+  }
+  return { occurredAt: cursor.occurredAt, id: cursor.id };
+}
+
 function stampOf(episodeId: string, property: string): string {
-  const stamp = fromGraphDateTime(graph.nodes.get(episodeId)?.properties[property]);
+  const stamp = fromGraphDateTime(substrate.graph.nodes.get(episodeId)?.properties[property]);
   return stamp?.toISOString() ?? 'missing';
 }
 
@@ -173,15 +72,15 @@ function txClocks(): string[] {
 
 /** The clock each run was handed, which stamps its writes and ages its locks. */
 function runClocks(): string[] {
-  return calls.map((call) => (call.options.now ?? new Date(0)).toISOString());
+  return calls.map((call) => call.options.now?.toISOString() ?? 'missing');
 }
 
 describe('replaying the whole archive', () => {
   it('visits every row once, oldest first, across three batches of two', async () => {
-    archiveAll();
+    archiveAllExperiences(substrate);
     const batches: ReplayProgress[] = [];
 
-    const report = await replayExperiences(deps, {
+    const report = await replayExperiences(substrate.deps, {
       batchSize: 2,
       onBatch: (progress) => batches.push(progress),
     });
@@ -191,19 +90,19 @@ describe('replaying the whole archive', () => {
     expect(new Set(calls.map((call) => call.episodeId)).size).toBe(5);
     expect(worldClocks()).toEqual([...OCCURRED]);
     expect(batches.map((batch) => batch.scanned)).toEqual([2, 4, 5]);
-    expect(batches.map((batch) => batch.cursor.occurredAt)).toEqual([
+    expect(batches.map((batch) => archiveCursor(batch.cursor).occurredAt)).toEqual([
       OCCURRED[1],
       OCCURRED[3],
       OCCURRED[4],
     ]);
-    expect(report.cursor?.occurredAt).toBe(OCCURRED[4]);
+    expect(archiveCursor(report.cursor).occurredAt).toBe(OCCURRED[4]);
     expect(report.aborted).toBe(false);
   });
 
   it('dates each experience to when it happened and each write to the replay', async () => {
-    archiveAll();
+    archiveAllExperiences(substrate);
 
-    await replayExperiences(deps, { batchSize: 10, clock: () => WALL_NOW });
+    await replayExperiences(substrate.deps, { batchSize: 10, clock: () => WALL_NOW });
 
     // World time is the archived row's: a re-derived episode is dated to the conversation.
     expect(worldClocks()).toEqual([...OCCURRED]);
@@ -218,24 +117,24 @@ describe('replaying the whole archive', () => {
   });
 
   it('gates every run on the version it was asked for', async () => {
-    archiveAll();
+    archiveAllExperiences(substrate);
 
-    await replayExperiences(deps, { batchSize: 10, pipelineVersion: 'v2' });
+    await replayExperiences(substrate.deps, { batchSize: 10, pipelineVersion: 'v2' });
 
     expect(calls.map((call) => call.options.pipelineVersion)).toEqual(Array(5).fill('v2'));
   });
 
   it('stops after the row limit even when more pages are waiting', async () => {
-    archiveAll();
+    archiveAllExperiences(substrate);
 
-    const report = await replayExperiences(deps, { batchSize: 2, limit: 3 });
+    const report = await replayExperiences(substrate.deps, { batchSize: 2, limit: 3 });
 
     expect(report.scanned).toBe(3);
     expect(worldClocks()).toEqual([OCCURRED[0], OCCURRED[1], OCCURRED[2]]);
   });
 
   it('reports nothing scanned against an empty archive', async () => {
-    const report = await replayExperiences(deps, { batchSize: 2 });
+    const report = await replayExperiences(substrate.deps, { batchSize: 2 });
 
     expect(report).toEqual({
       scanned: 0,
@@ -243,6 +142,7 @@ describe('replaying the whole archive', () => {
       skipped: 0,
       unavailable: 0,
       skippedEvicted: 0,
+      unrecorded: 0,
       failed: 0,
       cursor: undefined,
       aborted: false,
@@ -253,20 +153,23 @@ describe('replaying the whole archive', () => {
 
 describe('selecting which archived rows replay', () => {
   it('takes only the rows another pipeline version wrote', async () => {
-    archive(0, 'v0');
-    archive(1);
-    archive(2, 'v0');
+    archiveExperience(substrate, 0, 'v0');
+    archiveExperience(substrate, 1);
+    archiveExperience(substrate, 2, 'v0');
 
-    const report = await replayExperiences(deps, { batchSize: 10, selection: { stale: true } });
+    const report = await replayExperiences(substrate.deps, {
+      batchSize: 10,
+      selection: { stale: true },
+    });
 
     expect(report.scanned).toBe(2);
     expect(worldClocks()).toEqual([OCCURRED[0], OCCURRED[2]]);
   });
 
   it('takes one archived episode by id', async () => {
-    archiveAll();
+    archiveAllExperiences(substrate);
 
-    const report = await replayExperiences(deps, {
+    const report = await replayExperiences(substrate.deps, {
       batchSize: 10,
       selection: { episodeId: 'archived-episode-3' },
     });
@@ -276,8 +179,8 @@ describe('selecting which archived rows replay', () => {
   });
 
   it('takes one session and leaves the rest of the archive alone', async () => {
-    archiveAll();
-    insertExperience(store.db, {
+    archiveAllExperiences(substrate);
+    insertExperience(substrate.store.db, {
       schemaVersion: ARCHIVE_SCHEMA_VERSION,
       pipelineVersion: PIPELINE_VERSION,
       identity: 'other-session',
@@ -289,7 +192,7 @@ describe('selecting which archived rows replay', () => {
       payload: contentFor(0),
     });
 
-    const report = await replayExperiences(deps, {
+    const report = await replayExperiences(substrate.deps, {
       batchSize: 10,
       selection: { sessionId: 'other-session' },
     });
@@ -301,10 +204,15 @@ describe('selecting which archived rows replay', () => {
 
 describe('what a replay counts', () => {
   it('counts a row the ledger already closed as skipped rather than replayed', async () => {
-    archiveAll();
-    answers = ['already_applied', 'already_applied', 'already_applied', 'already_applied'];
+    archiveAllExperiences(substrate);
+    substrate.answers.push(
+      'already_applied',
+      'already_applied',
+      'already_applied',
+      'already_applied',
+    );
 
-    const report = await replayExperiences(deps, { batchSize: 10 });
+    const report = await replayExperiences(substrate.deps, { batchSize: 10 });
 
     expect({ replayed: report.replayed, skipped: report.skipped }).toEqual({
       replayed: 1,
@@ -313,10 +221,10 @@ describe('what a replay counts', () => {
   });
 
   it('counts an episode the graph cannot read back apart from a real replay', async () => {
-    archiveAll();
-    answers = ['episode_unavailable'];
+    archiveAllExperiences(substrate);
+    substrate.answers.push('episode_unavailable');
 
-    const report = await replayExperiences(deps, { batchSize: 10 });
+    const report = await replayExperiences(substrate.deps, { batchSize: 10 });
 
     expect({ replayed: report.replayed, unavailable: report.unavailable }).toEqual({
       replayed: 4,
@@ -325,10 +233,10 @@ describe('what a replay counts', () => {
   });
 
   it('counts a row whose run throws and keeps going through the rest', async () => {
-    archiveAll();
-    answers = ['completed', 'completed', 'throws'];
+    archiveAllExperiences(substrate);
+    substrate.answers.push('completed', 'completed', 'throws');
 
-    const report = await replayExperiences(deps, { batchSize: 2 });
+    const report = await replayExperiences(substrate.deps, { batchSize: 2 });
 
     expect({ scanned: report.scanned, replayed: report.replayed, failed: report.failed }).toEqual({
       scanned: 5,
@@ -339,10 +247,19 @@ describe('what a replay counts', () => {
   });
 
   it('stops the whole pass when the graph will not take a write', async () => {
-    archiveAll();
+    archiveAllExperiences(substrate);
 
     await expect(
-      replayExperiences(depsOn(unavailableDriver()), { batchSize: 10 }),
+      replayExperiences(
+        replayDeps(
+          unavailableDriver(),
+          substrate.store,
+          substrate.dataDir,
+          calls,
+          substrate.answers,
+        ),
+        { batchSize: 10 },
+      ),
     ).rejects.toBeInstanceOf(ReflectionNotStoredError);
     expect(calls).toEqual([]);
   });
@@ -350,10 +267,10 @@ describe('what a replay counts', () => {
 
 describe('aborting a replay', () => {
   it('stops between batches and reports the cursor it reached', async () => {
-    archiveAll();
+    archiveAllExperiences(substrate);
     const controller = new AbortController();
 
-    const report = await replayExperiences(deps, {
+    const report = await replayExperiences(substrate.deps, {
       batchSize: 2,
       signal: controller.signal,
       onBatch: () => {
@@ -363,20 +280,20 @@ describe('aborting a replay', () => {
 
     expect(report.aborted).toBe(true);
     expect(report.scanned).toBe(2);
-    expect(report.cursor?.occurredAt).toBe(OCCURRED[1]);
-    expect(report.cursor?.id).toEqual(expect.any(String));
+    expect(archiveCursor(report.cursor).occurredAt).toBe(OCCURRED[1]);
+    expect(archiveCursor(report.cursor).id).toEqual(expect.any(String));
     expect(calls).toHaveLength(2);
   });
 
   it('stops inside the batch, without running the rows behind the one that aborted it', async () => {
-    archiveAll();
+    archiveAllExperiences(substrate);
     const controller = new AbortController();
     const aborting: ReplayDeps = {
-      ...deps,
+      ...substrate.deps,
       runner: {
         run: async (episodeId, options) => {
           controller.abort();
-          return deps.runner.run(episodeId, options);
+          return substrate.deps.runner.run(episodeId, options);
         },
       },
     };
@@ -388,14 +305,14 @@ describe('aborting a replay', () => {
 
     expect(report.aborted).toBe(true);
     expect(report.scanned).toBe(1);
-    expect(report.cursor?.occurredAt).toBe(OCCURRED[0]);
+    expect(archiveCursor(report.cursor).occurredAt).toBe(OCCURRED[0]);
     expect(calls).toHaveLength(1);
   });
 
   it('replays nothing when the signal is already aborted', async () => {
-    archiveAll();
+    archiveAllExperiences(substrate);
 
-    const report = await replayExperiences(deps, {
+    const report = await replayExperiences(substrate.deps, {
       batchSize: 2,
       signal: AbortSignal.abort(),
     });
@@ -405,113 +322,6 @@ describe('aborting a replay', () => {
       scanned: 0,
       cursor: undefined,
     });
-    expect(calls).toEqual([]);
-  });
-});
-
-describe('replay and residency', () => {
-  function recordIdentity(index: number, turnIds: readonly string[]): string {
-    const sourceId = `archived-episode-${String(index)}`;
-    recordSourceRecord(store.db, {
-      sourceId,
-      sessionId: IDENTITY,
-      verificationStatus: 'verified',
-      occurredAt: OCCURRED[index] ?? ARCHIVED_AT,
-      createdAt: WALL_NOW,
-      archive: {
-        canonicalArchiveId: `archive-${String(index)}`,
-        archiveSchemaVersion: ARCHIVE_SCHEMA_VERSION,
-        identityHash: `identity-${String(index)}`,
-        verifiedContentDigest: `hash-${String(index)}`,
-        verificationPolicyVersion: 1,
-        archivedAt: ARCHIVED_AT,
-      },
-    });
-    recordSourceParts(
-      store.db,
-      sourceId,
-      turnIds.map((turnId, ordinal) => ({
-        partKind: 'turn' as const,
-        ordinal,
-        turnId,
-        contentHash: `turn-${String(ordinal)}`,
-      })),
-    );
-    return sourceId;
-  }
-
-  it('skips an evicted source and names the path its projection comes back through', async () => {
-    archive(0);
-    const sourceId = recordIdentity(0, ['turn-a']);
-    transitionSourceResidency(store.db, {
-      sourceId,
-      state: 'evicted',
-      operationId: 'operation-evict',
-      transitionedAt: WALL_NOW,
-    });
-
-    const report = await replayExperiences(deps, { batchSize: 2, clock: () => WALL_NOW });
-
-    expect(report).toMatchObject({ scanned: 1, replayed: 0, skippedEvicted: 1, failed: 0 });
-    expect(calls).toEqual([]);
-    expect(graph.statements).toHaveLength(0);
-  });
-
-  it('leaves what an evicted source owes exactly where the skip found it', async () => {
-    archive(0);
-    const sourceId = recordIdentity(0, ['turn-a']);
-    acceptReferenceBatch(store.db, {
-      sourceId,
-      acceptedHash: 'accepted-1',
-      receivedAt: WALL_NOW,
-      operationKey: 'delivery-1',
-      introduced: ['node-1'],
-    });
-    recordEvidenceAcknowledgment(store.db, {
-      sourceId,
-      referenceVersion: 1,
-      effectKind: SEMANTIC_PROCESSING_EFFECT,
-      state: 'owed',
-    });
-    transitionSourceResidency(store.db, {
-      sourceId,
-      state: 'evicted',
-      operationId: 'operation-evict',
-      transitionedAt: WALL_NOW,
-    });
-
-    await replayExperiences(deps, { batchSize: 2, clock: () => WALL_NOW });
-
-    expect(listEvidenceAcknowledgments(store.db, sourceId)).toEqual([
-      {
-        sourceId,
-        referenceVersion: 1,
-        effectKind: SEMANTIC_PROCESSING_EFFECT,
-        state: 'owed',
-        completedAt: null,
-      },
-    ]);
-    expect(listReferenceBatches(store.db, sourceId)).toHaveLength(1);
-  });
-
-  it('projects a resident source under the ids its records already carry', async () => {
-    archive(0);
-    const sourceId = recordIdentity(0, ['turn-a']);
-
-    const report = await replayExperiences(deps, { batchSize: 2, clock: () => WALL_NOW });
-
-    expect(report).toMatchObject({ scanned: 1, replayed: 1, skippedEvicted: 0 });
-    expect(calls.map((call) => call.episodeId)).toEqual([sourceId]);
-    expect(graph.nodesWithLabel('Turn').map((node) => node.id)).toEqual(['turn-a']);
-  });
-
-  it('refuses a source whose recorded parts disagree with the archived turns', async () => {
-    archive(0);
-    recordIdentity(0, ['turn-a', 'turn-b']);
-
-    const report = await replayExperiences(deps, { batchSize: 2, clock: () => WALL_NOW });
-
-    expect(report).toMatchObject({ scanned: 1, replayed: 0, failed: 1 });
     expect(calls).toEqual([]);
   });
 });

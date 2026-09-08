@@ -305,6 +305,13 @@ export function recordIngest(db: SqliteHandle, sourceId: string, recordedAt: Dat
     .immediate();
 }
 
+/** Where one source sits in the live ingest order, or nothing when it has not been recorded. */
+export function readIngestPosition(db: SqliteHandle, sourceId: string): number | undefined {
+  const row = db.prepare('SELECT id FROM ingest_log WHERE source_id = ?').get(sourceId) as
+    { id: number } | undefined;
+  return row?.id;
+}
+
 /** Sources that arrived after the freeze: the tail the final reconciliation pass walks. */
 export function listIngestAfter(
   db: SqliteHandle,

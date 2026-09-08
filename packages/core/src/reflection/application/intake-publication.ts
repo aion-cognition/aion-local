@@ -29,6 +29,7 @@ import {
   ARCHIVE_SCHEMA_VERSION,
   experienceArchiveKey,
 } from '../../infrastructure/sqlite/experience-archive.js';
+import { readIngestPosition } from '../../infrastructure/sqlite/migration-cohorts.js';
 import { markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import { readGeneration } from '../../infrastructure/sqlite/processing-generations.js';
 import { readReferenceDelivery } from '../../infrastructure/sqlite/source-identity.js';
@@ -444,14 +445,12 @@ export const intakePublication = new PublicationOperation({
     if (generation === undefined) {
       throw new Error(`intake ${context.operationId} acknowledged with no prepared generation`);
     }
-    const position = context.db
-      .prepare('SELECT id FROM ingest_log WHERE source_id = ?')
-      .get(data.sourceId) as { id: number } | undefined;
+    const position = readIngestPosition(context.db, data.sourceId);
     activateSourceManifest(context.db, {
       sourceId: data.sourceId,
       processingGeneration: generation.processingGeneration,
       sessionId: data.sessionId,
-      captureOrderValue: captureOrderValue(position?.id ?? 0),
+      captureOrderValue: captureOrderValue(position ?? 0),
       now: new Date(context.knownFrom),
     });
     enqueueSourceWork(context.db, data, context.operationId);
