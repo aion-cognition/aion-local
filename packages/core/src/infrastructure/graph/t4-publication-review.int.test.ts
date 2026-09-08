@@ -28,6 +28,7 @@ import { readActiveGeneration } from '../sqlite/processing-generations.js';
 import { listReferenceBatches, readSourceRecord } from '../sqlite/source-identity.js';
 import {
   isSourceForgotten,
+  listEvidenceAcknowledgments,
   recordSourceStateVersion,
   transitionSourceResidency,
 } from '../sqlite/source-lifecycle.js';
@@ -396,4 +397,94 @@ it('answers a second identical reference delivery from its no-change receipt', a
     .catch((err: unknown) => err);
   expect.soft(unrelated).toMatchObject({ status: 'acknowledged' });
   expect(listReferenceBatches(store.db, source)).toHaveLength(2);
+});
+
+it('keeps the first accepted confirmation payload and appends no second event on a retry', async () => {
+  const marker = `confirmation-retry-${String(serial)}`;
+  const source = await acceptSource(marker);
+  const target = `claim-${marker}`;
+  await substrate.harness.driver.executeQuery('CREATE (:AionNode:Memory:Claim {id:$id})', {
+    id: target,
+  });
+  const confirmation = {
+    target,
+    by: 'reviewer',
+    evidence: 'checked the original receipt',
+    occurredAt: '2020-01-01T00:00:00.000Z',
+  };
+  const request = {
+    kind: 'stated_references' as const,
+    operationId: marker,
+    payload: { ...statePayload(source, marker, {}), confirmations: [confirmation] },
+  };
+
+  const first = await coordinator.publish(request);
+  const events = (): number =>
+    (
+      store.db
+        .prepare("SELECT count(*) AS n FROM usage_events WHERE kind = 'memory_confirmed'")
+        .get() as { n: number }
+    ).n;
+  const after = events();
+
+  expect(await coordinator.publish(request)).toEqual(first);
+  expect(events()).toBe(after);
+  const values = store.db
+    .prepare(
+      `SELECT v.recorded_values_json FROM evidence_links l
+       JOIN evidence_link_versions v ON v.link_id = l.link_id
+       WHERE l.from_id = ? AND l.to_id = ? ORDER BY v.version LIMIT 1`,
+    )
+    .get(source, target) as { recorded_values_json: string };
+  expect(JSON.parse(values.recorded_values_json)).toMatchObject({
+    by: confirmation.by,
+    evidence: confirmation.evidence,
+    occurredAt: confirmation.occurredAt,
+  });
+});
+
+it('leaves the settlement owed when the confirmation event cannot be appended', async () => {
+  const marker = `confirmation-failure-${String(serial)}`;
+  const source = await acceptSource(marker);
+  const target = `claim-${marker}`;
+  await substrate.harness.driver.executeQuery('CREATE (:AionNode:Memory:Claim {id:$id})', {
+    id: target,
+  });
+  const request = {
+    kind: 'stated_references' as const,
+    operationId: marker,
+    payload: {
+      ...statePayload(source, marker, {}),
+      confirmations: [
+        {
+          target,
+          by: 'reviewer',
+          evidence: 'checked the original receipt',
+          occurredAt: '2020-01-01T00:00:00.000Z',
+        },
+      ],
+    },
+  };
+
+  // A reversible rename, so the append fails against a real store and nothing is dropped.
+  store.db.exec('ALTER TABLE usage_events RENAME TO usage_events_withheld');
+  try {
+    await expect(coordinator.publish(request)).rejects.toThrow();
+    expect(
+      listEvidenceAcknowledgments(store.db, source).filter(
+        (entry) => entry.effectKind === 'stated_references',
+      ),
+    ).toMatchObject([{ state: 'owed' }]);
+  } finally {
+    store.db.exec('ALTER TABLE usage_events_withheld RENAME TO usage_events');
+  }
+
+  // The obligation survived the failure, so recovery finishes it rather than losing it.
+  const recovered = await coordinator.recover();
+  expect(recovered).toMatchObject({ status: 'acknowledged' });
+  expect(
+    listEvidenceAcknowledgments(store.db, source).filter(
+      (entry) => entry.effectKind === 'stated_references',
+    ),
+  ).toMatchObject([{ state: 'completed' }]);
 });
