@@ -6,7 +6,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SqliteStore } from './database.js';
 import { recordSourceRecord } from './source-identity.js';
 import {
+  acknowledgeSourceStateVersions,
+  hasPendingSourceState,
   isSourceForgotten,
+  listSourceStateVersions,
   readSourceResidency,
   recordSourceStateVersion,
   sourceResidencyState,
@@ -87,6 +90,7 @@ describe('occurrence resolution', () => {
       stateKind: 'forgotten',
       operationId: 'operation-forget',
       observedAt: NOW,
+      knownFrom: NOW,
     });
 
     expect(resolveSourceOccurrence(store.db, KEY)).toEqual({
@@ -103,12 +107,14 @@ describe('occurrence resolution', () => {
       stateKind: 'forgotten',
       operationId: 'operation-forget',
       observedAt: NOW,
+      knownFrom: NOW,
     });
     recordSourceStateVersion(store.db, {
       sourceId: 'source-1',
       stateKind: 'unforgotten',
       operationId: 'operation-unforget',
       observedAt: NOW,
+      knownFrom: NOW,
     });
 
     expect(isSourceForgotten(store.db, 'source-1')).toBe(false);
@@ -133,12 +139,59 @@ describe('occurrence resolution', () => {
       stateKind: 'forgotten',
       operationId: 'operation-forget',
       observedAt: NOW,
+      knownFrom: NOW,
     });
 
     expect(resolveSourceOccurrence(store.db, KEY)).toEqual({
       kind: 'held',
       sourceId: 'source-2',
       residency: 'resident',
+    });
+  });
+
+  it('leaves an unacknowledged forget outside the committed answer', () => {
+    seedOccurrence('source-1');
+    recordSourceStateVersion(store.db, {
+      sourceId: 'source-1',
+      stateKind: 'forgotten',
+      operationId: 'operation-in-flight',
+      observedAt: NOW,
+    });
+
+    expect(isSourceForgotten(store.db, 'source-1')).toBe(false);
+    expect(hasPendingSourceState(store.db, 'source-1')).toBe(true);
+    expect(listSourceStateVersions(store.db, 'source-1')).toHaveLength(1);
+  });
+
+  it('discloses the uncertainty rather than minting against a statement in flight', () => {
+    seedOccurrence('source-1');
+    recordSourceStateVersion(store.db, {
+      sourceId: 'source-1',
+      stateKind: 'forgotten',
+      operationId: 'operation-in-flight',
+      observedAt: NOW,
+    });
+
+    expect(resolveSourceOccurrence(store.db, KEY)).toEqual({
+      kind: 'uncertain',
+      sourceIds: ['source-1'],
+    });
+  });
+
+  it('takes the forget once its publication acknowledges it', () => {
+    seedOccurrence('source-1');
+    recordSourceStateVersion(store.db, {
+      sourceId: 'source-1',
+      stateKind: 'forgotten',
+      operationId: 'operation-forget',
+      observedAt: NOW,
+    });
+    acknowledgeSourceStateVersions(store.db, 'operation-forget', NOW.toISOString());
+
+    expect(hasPendingSourceState(store.db, 'source-1')).toBe(false);
+    expect(resolveSourceOccurrence(store.db, KEY)).toEqual({
+      kind: 'forgotten',
+      priorSourceIds: ['source-1'],
     });
   });
 

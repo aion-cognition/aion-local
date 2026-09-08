@@ -417,12 +417,19 @@ export function readSourcePartTurnIds(db: SqliteHandle, sourceId: string): reado
   return rows.map((row) => row.turn_id);
 }
 
-/** The version one delivery produced, for a reader that must not re-run the acceptance to learn it. */
-export function readReferenceBatchByOperation(
+/**
+ * What one delivery produced, for a reader that must not re-run the acceptance to learn it.
+ *
+ * A delivery that allocated no version leaves no row to recognise it by, so its outcome lives in
+ * the operations ledger instead. Reading only the batch table would call such a delivery
+ * unaccepted, and a caller treating that as a failure wedges the pending slot for every other
+ * publication. Both places are consulted here, and neither allocates anything.
+ */
+export function readReferenceDelivery(
   db: SqliteHandle,
   sourceId: string,
   operationKey: string,
-): { readonly referenceVersion: number; readonly acceptedHash: string } | undefined {
+): ReferenceDeliveryReceipt | undefined {
   const row = db
     .prepare(
       `SELECT reference_version, accepted_hash FROM source_reference_batches
@@ -430,7 +437,8 @@ export function readReferenceBatchByOperation(
     )
     .get(sourceId, operationKey) as
     { reference_version: number; accepted_hash: string } | undefined;
-  return row === undefined
-    ? undefined
-    : { referenceVersion: row.reference_version, acceptedHash: row.accepted_hash };
+  if (row !== undefined) {
+    return { referenceVersion: row.reference_version, acceptedHash: row.accepted_hash };
+  }
+  return readReferenceDeliveryReceipt(db, sourceId, operationKey);
 }

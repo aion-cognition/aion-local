@@ -1,5 +1,9 @@
 import type { SqliteHandle } from './database.js';
-import { isSourceForgotten, sourceResidencyState } from './source-lifecycle.js';
+import {
+  hasPendingSourceState,
+  isSourceForgotten,
+  sourceResidencyState,
+} from './source-lifecycle.js';
 
 /**
  * Which source an accepted payload belongs to, decided from the durable records rather than
@@ -35,6 +39,12 @@ export type OccurrenceResolution =
     }
   /** Every occurrence under this key was forgotten, so the push is a new occurrence. */
   | { readonly kind: 'forgotten'; readonly priorSourceIds: readonly string[] }
+  /**
+   * A statement about one of these occurrences is prepared and not yet acknowledged, so the
+   * answer is about to move. Disclosed rather than guessed: treating a pending forget as
+   * committed would mint a replacement for a source that is still there.
+   */
+  | { readonly kind: 'uncertain'; readonly sourceIds: readonly string[] }
   /** More than one live occurrence claims the key. Pinned; nothing is minted or selected. */
   | { readonly kind: 'ambiguous'; readonly sourceIds: readonly string[] };
 
@@ -72,6 +82,10 @@ export function resolveSourceOccurrence(
   const candidates = occurrenceCandidates(db, key);
   if (candidates.length === 0) {
     return { kind: 'absent' };
+  }
+  const pending = candidates.filter((sourceId) => hasPendingSourceState(db, sourceId));
+  if (pending.length > 0) {
+    return { kind: 'uncertain', sourceIds: pending };
   }
   const live = candidates.filter((sourceId) => !isSourceForgotten(db, sourceId));
   if (live.length === 0) {

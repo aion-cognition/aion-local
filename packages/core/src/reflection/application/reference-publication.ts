@@ -16,7 +16,7 @@ import {
 import { classifyReferenceTarget } from '../../infrastructure/sqlite/reference-targets.js';
 import {
   acceptReferenceBatch,
-  readReferenceBatchByOperation,
+  readReferenceDelivery,
   readSourceRecord,
 } from '../../infrastructure/sqlite/source-identity.js';
 import { recordEvidenceAcknowledgment } from '../../infrastructure/sqlite/source-lifecycle.js';
@@ -228,7 +228,7 @@ export const statedReferencesPublication = new PublicationOperation({
         now: context.now,
       });
     }
-    const accepted = readReferenceBatchByOperation(context.db, data.sourceId, data.deliveryKey);
+    const accepted = readReferenceDelivery(context.db, data.sourceId, data.deliveryKey);
     if (accepted === undefined) {
       throw new Error(
         `reference delivery ${data.deliveryKey} was projected before it was accepted`,
@@ -263,7 +263,7 @@ export const statedReferencesPublication = new PublicationOperation({
     // The comparison the completion boundary turns on: the settlement is bound to the version
     // that was actually accepted, so a reference landing mid-retry is caught by the next pass
     // rather than discharged by this one.
-    const latest = readReferenceBatchByOperation(context.db, data.sourceId, data.deliveryKey);
+    const latest = readReferenceDelivery(context.db, data.sourceId, data.deliveryKey);
     if (latest?.referenceVersion !== result.referenceVersion) {
       throw new Error(`reference delivery ${data.deliveryKey} moved under its acknowledgment`);
     }

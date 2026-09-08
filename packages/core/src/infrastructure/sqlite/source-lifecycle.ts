@@ -239,19 +239,53 @@ export function listSourceStateVersions(
 }
 
 /**
- * Whether the newest forget statement on a source still stands. Read off the latest statement of
- * either kind rather than off a flag, so an unforget is a statement in the same chain instead of
- * an erasure of the one before it.
+ * Whether the newest ACKNOWLEDGED forget statement on a source still stands.
+ *
+ * Read off the latest statement of either kind rather than off a flag, so an unforget is a
+ * statement in the same chain instead of an erasure of the one before it. Versions with no
+ * `known_from` are outside this answer: they are durable and invisible at the same time, and a
+ * prepared write that its publication later rejects would otherwise have decided that the
+ * source was gone. `listSourceStateVersions` still shows them.
  */
 export function isSourceForgotten(db: SqliteHandle, sourceId: string): boolean {
   const row = db
     .prepare(
       `SELECT state_kind FROM source_state_versions
-       WHERE source_id = ? AND state_kind IN ('forgotten','unforgotten')
+       WHERE source_id = ? AND state_kind IN ('forgotten','unforgotten') AND known_from IS NOT NULL
        ORDER BY version DESC LIMIT 1`,
     )
     .get(sourceId) as { state_kind: SourceStateKind } | undefined;
   return row?.state_kind === 'forgotten';
+}
+
+/**
+ * Whether a statement about this source is prepared and not yet acknowledged. A caller whose
+ * decision turns on the source's state cannot make it while one is outstanding: the answer is
+ * about to move and nothing here can say which way.
+ */
+export function hasPendingSourceState(db: SqliteHandle, sourceId: string): boolean {
+  return (
+    db
+      .prepare(
+        `SELECT 1 FROM source_state_versions
+         WHERE source_id = ? AND known_from IS NULL LIMIT 1`,
+      )
+      .get(sourceId) !== undefined
+  );
+}
+
+/** Promotes every state version one publication prepared into the committed view. */
+export function acknowledgeSourceStateVersions(
+  db: SqliteHandle,
+  operationId: string,
+  knownFrom: string,
+): number {
+  return db
+    .prepare(
+      `UPDATE source_state_versions SET known_from = ?
+       WHERE operation_id = ? AND known_from IS NULL`,
+    )
+    .run(knownFrom, operationId).changes;
 }
 
 /**

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SqliteStore } from './database.js';
 import {
   acceptReferenceBatch,
+  readReferenceDelivery,
   listReferenceBatches,
   readSourceRecord,
   recordSourceParts,
@@ -205,6 +206,35 @@ describe('reference batches', () => {
     });
 
     expect(retried).toEqual({ referenceVersion: first.referenceVersion, added: false });
+  });
+
+  it('reads back a no-change delivery through the receipt that bound it', () => {
+    acceptReferenceBatch(store.db, {
+      sourceId: 'source-1',
+      acceptedHash: 'set-a',
+      receivedAt: NOW,
+      operationKey: 'op-a',
+      introduced: ['ref-a'],
+    });
+    const noChange = acceptReferenceBatch(store.db, {
+      sourceId: 'source-1',
+      acceptedHash: 'set-a',
+      receivedAt: LATER,
+      operationKey: 'op-duplicate',
+      introduced: [],
+    });
+
+    expect(noChange.added).toBe(false);
+    expect(readReferenceDelivery(store.db, 'source-1', 'op-duplicate')).toEqual({
+      referenceVersion: noChange.referenceVersion,
+      acceptedHash: 'set-a',
+    });
+    expect(readReferenceDelivery(store.db, 'source-1', 'op-a')).toEqual({
+      referenceVersion: 1,
+      acceptedHash: 'set-a',
+    });
+    expect(readReferenceDelivery(store.db, 'source-1', 'never-delivered')).toBeUndefined();
+    expect(listReferenceBatches(store.db, 'source-1')).toHaveLength(1);
   });
 
   it('a no-change delivery retried after a later set still returns its original result', () => {

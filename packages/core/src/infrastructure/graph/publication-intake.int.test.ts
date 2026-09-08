@@ -241,6 +241,7 @@ it('mints a new occurrence for a push that arrives after its predecessor was for
     stateKind: 'forgotten',
     operationId: 'operation-forget',
     observedAt: NOW,
+    knownFrom: NOW,
   });
 
   const second = await coordinator.publish({

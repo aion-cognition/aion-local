@@ -81,6 +81,8 @@ const Payload = z.strictObject({
 
 const Data = Payload.extend({
   decision: z.enum(['new', 'reuse', 'pinned']),
+  /** Why a pinned decision refuses, so the intent says which rule stopped it. */
+  pinnedReason: z.enum(['occurrence_ambiguous', 'occurrence_state_uncertain']).nullable(),
   sourceId: z.string(),
   turnIds: z.array(z.string().min(1)),
   contentHash: z.string().min(1),
@@ -172,17 +174,20 @@ type OccurrenceBase = IntakePayload & {
  * The authoritative selection, as a plan. A held occurrence answers with its original id
  * whatever its storage, a forgotten one mints a replacement, and an ambiguous key mints nothing
  * at all: two live occurrences of one payload is a question the records cannot answer, and
- * picking one would record a decision nobody made.
+ * picking one would record a decision nobody made. An occurrence with a statement still in
+ * flight is the same refusal for the same reason: the answer is about to move.
  */
 function decide(
   base: OccurrenceBase,
   resolution: OccurrenceResolution,
   turnCount: number,
 ): Omit<IntakeData, 'candidateDigest'> {
-  if (resolution.kind === 'ambiguous') {
+  if (resolution.kind === 'ambiguous' || resolution.kind === 'uncertain') {
     return {
       ...base,
       decision: 'pinned',
+      pinnedReason:
+        resolution.kind === 'ambiguous' ? 'occurrence_ambiguous' : 'occurrence_state_uncertain',
       sourceId: '',
       turnIds: [],
       residency: 'absent',
@@ -193,6 +198,7 @@ function decide(
     return {
       ...base,
       decision: 'reuse',
+      pinnedReason: null,
       sourceId: resolution.sourceId,
       turnIds: [],
       residency: resolution.residency,
@@ -202,6 +208,7 @@ function decide(
   return {
     ...base,
     decision: 'new',
+    pinnedReason: null,
     sourceId: randomUUID(),
     turnIds: Array.from({ length: turnCount }, () => randomUUID()),
     residency: 'absent',
@@ -274,7 +281,10 @@ export const intakePublication = new PublicationOperation({
   },
   check(context, data) {
     if (data.decision === 'pinned') {
-      return Promise.resolve({ status: 'rejected', reason: 'occurrence_ambiguous' } as const);
+      return Promise.resolve({
+        status: 'rejected',
+        reason: data.pinnedReason ?? 'occurrence_ambiguous',
+      } as const);
     }
     const key = { identityHash: data.identityHash, sessionId: data.sessionId };
     if (candidateDigest(context.db, key, data.sourceId) !== data.candidateDigest) {
