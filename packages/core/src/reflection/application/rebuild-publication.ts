@@ -59,7 +59,7 @@ const Data = Payload.extend({
    * it, and reconstructing from bytes that no longer hash to the verified digest would republish
    * different content under the original ids.
    */
-  proof: z.enum(['verified', 'content_changed', 'parts_changed', 'incomplete']),
+  proof: z.enum(['verified', 'content_changed', 'parts_changed', 'incomplete', 'unverified']),
   /**
    * Which new-request bounds the archived payload exceeds. A rebuild reports the pin and still
    * reconstructs: the caps gate new requests, and applying them here would corrupt a record the
@@ -77,8 +77,14 @@ const Result = z.strictObject({
 /**
  * Whether the bytes and the parts still match what the occurrence was verified against.
  *
- * Every field of the proof has to be there: an occurrence that never carried one cannot have it
- * confirmed, and treating absence as agreement is how a rebuild republishes content nobody
+ * The record has to CLAIM verification before anything is compared. Re-reading bytes that still
+ * hash correctly says the bytes did not move; it says nothing about a mapping somebody withdrew,
+ * and persisted residency needs a verified record rather than an unresolved or pinned one.
+ * Re-establishing a withdrawn mapping is its own operation with its own proof, not a side effect
+ * of putting a projection back.
+ *
+ * Every field of the proof has to be there too: an occurrence that never carried one cannot have
+ * it confirmed, and treating absence as agreement is how a rebuild republishes content nobody
  * verified. The parts are compared on kind, ordinal, hash, role and original id, because those
  * are what the reconstruction writes back under.
  */
@@ -88,6 +94,9 @@ function verifyRebuildProof(
   archived: ReflectionContent,
   prepared: PreparedEpisode,
 ): z.infer<typeof Data>['proof'] {
+  if (record.verificationStatus !== 'verified') {
+    return 'unverified';
+  }
   if (
     record.verifiedContentDigest === null ||
     record.identityHash === null ||

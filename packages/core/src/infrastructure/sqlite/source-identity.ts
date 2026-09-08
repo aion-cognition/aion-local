@@ -185,10 +185,15 @@ export function sourcePartAddress(sourceId: string, partKind: string, ordinal: n
 /**
  * Writes a source's parts in one transaction. Re-running a batch refreshes the same rows.
  *
- * An absent field never erases a known one. A duplicate push writes no graph nodes and so has
- * no Turn ids to supply; overwriting the recorded ids with null would break every original-ID
- * lookup the records exist for, and leave replay and rebuild failing their own part checks
- * against a source still marked verified. A caller that means to change an id supplies it.
+ * What a part already records wins over what a repeat supplies.
+ *
+ * A duplicate push writes no graph nodes, so it has no Turn ids at all; and a payload whose
+ * turns carry no time of their own is prepared against the push's own clock, so a repeat
+ * supplies a DIFFERENT fallback world time for the same turn. Both would overwrite the original
+ * occurrence's proof with an artefact of when the duplicate happened to arrive. A receipt time
+ * is not world time, and the first record of a part is the one every later reader resolves
+ * against, so identity and clock proof are preserved together. Only the content hash refreshes,
+ * because that is what a verifier compares the bytes against.
  */
 export function recordSourceParts(
   db: SqliteHandle,
@@ -200,11 +205,11 @@ export function recordSourceParts(
        (source_id, part_kind, ordinal, turn_id, role, content_hash, occurred_at, graph_clocks_json)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (source_id, part_kind, ordinal) DO UPDATE SET
-       turn_id = COALESCE(excluded.turn_id, turn_id),
-       role = COALESCE(excluded.role, role),
+       turn_id = COALESCE(turn_id, excluded.turn_id),
+       role = COALESCE(role, excluded.role),
        content_hash = excluded.content_hash,
-       occurred_at = COALESCE(excluded.occurred_at, occurred_at),
-       graph_clocks_json = COALESCE(excluded.graph_clocks_json, graph_clocks_json)`,
+       occurred_at = COALESCE(occurred_at, excluded.occurred_at),
+       graph_clocks_json = COALESCE(graph_clocks_json, excluded.graph_clocks_json)`,
   );
   db.transaction((): void => {
     for (const part of parts) {

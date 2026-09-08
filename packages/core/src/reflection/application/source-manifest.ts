@@ -1,5 +1,10 @@
 import type { ReflectionOrigin, ReflectionProvenance } from '@aion/protocol';
 
+import {
+  prepareReferenceAcceptance,
+  referenceSetHash,
+  type ReferenceTargetPlan,
+} from './reference-acceptance.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   ARCHIVE_SCHEMA_VERSION,
@@ -63,6 +68,21 @@ export type SourceManifestInput = {
   readonly origin: ReflectionOrigin | undefined;
   readonly pipelineVersion: string;
   readonly operationKey: string;
+  /**
+   * The statements this acceptance carried, already classified.
+   *
+   * A caller that supplies one owns the whole reference contract: the batch, its link versions
+   * and its scope effects are prepared here under this key, and the acknowledgment looks the
+   * delivery up under the same one. Keying the batch here and the acknowledgment somewhere else
+   * is what left a committed graph write with no prepared effects to acknowledge.
+   *
+   * The M1 archive-compatibility path supplies none and keeps the merged-archive convention.
+   */
+  readonly referenceDelivery?: {
+    readonly key: string;
+    readonly targets: readonly ReferenceTargetPlan[];
+    readonly operationId: string;
+  };
   readonly readiness: ReadinessInventory | undefined;
   readonly now: Date;
 };
@@ -113,11 +133,6 @@ export function sourcePartsOf(
     ...(entry.occurred_at === undefined ? {} : { occurredAt: entry.occurred_at }),
   }));
   return [...turns, ...observations, ...executions];
-}
-
-/** The canonical hash of an accepted reference set, so a batch repeating it adds no version. */
-export function referenceSetHash(references: ReflectionProvenance | undefined): string {
-  return hashContent(references ?? {});
 }
 
 function introducedReferences(references: ReflectionProvenance | undefined): readonly string[] {
@@ -216,30 +231,18 @@ export function writeSourceManifest(
     ...(input.origin === undefined ? {} : { origin: input.origin.channel }),
   });
   recordSourceParts(db, input.sourceId, sourcePartsOf(input.prepared, input.payload, turnIds));
-  // The delivery is identified by the SET it accepted, not by the occurrence. Keying on the
-  // occurrence alone made every later push of the same experience reuse the first delivery's
-  // key, so a genuinely new reference arrived under a key already bound to a different set and
-  // was refused. The set's own hash keeps a real retry idempotent and lets an addition through.
-  const accepted = acceptedReferenceSet(db, input.sourceId, input.references);
-  const acceptedHash = referenceSetHash(accepted);
-  const batch = acceptReferenceBatch(db, {
-    sourceId: input.sourceId,
-    acceptedHash,
-    receivedAt: input.now,
-    operationKey: `${input.operationKey}:${acceptedHash}`,
-    introduced: introducedReferences(accepted),
-  });
+  const referenceVersion = acceptReferences(db, input);
   const processingGeneration = generationFor(db, input);
   writeInventorySkeleton(db, input, processingGeneration);
   recordEvidenceAcknowledgment(db, {
     sourceId: input.sourceId,
-    referenceVersion: batch.referenceVersion,
+    referenceVersion,
     effectKind: SEMANTIC_PROCESSING_EFFECT,
     state: 'owed',
   });
   recordEvidenceAcknowledgment(db, {
     sourceId: input.sourceId,
-    referenceVersion: batch.referenceVersion,
+    referenceVersion,
     effectKind: SOURCE_INDEX_EFFECT,
     state: 'owed',
   });
@@ -248,9 +251,39 @@ export function writeSourceManifest(
     archived,
     identityHash,
     processingGeneration,
-    referenceVersion: batch.referenceVersion,
+    referenceVersion,
     ingestPosition,
   };
+}
+
+/**
+ * The acceptance's first reference batch, through whichever contract the caller owns.
+ *
+ * A caller supplying a classified delivery gets the shared acceptance: one batch, its link
+ * versions and its scope effects, all keyed on the delivery it will acknowledge. The M1 path
+ * supplies none and keeps the merged-archive convention, where the delivery is identified by the
+ * SET it accepted so a real retry stays idempotent and an addition becomes the next version.
+ */
+function acceptReferences(db: SqliteHandle, input: SourceManifestInput): number {
+  const delivery = input.referenceDelivery;
+  if (delivery !== undefined) {
+    return prepareReferenceAcceptance(db, {
+      sourceId: input.sourceId,
+      targets: delivery.targets,
+      deliveryKey: delivery.key,
+      operationId: delivery.operationId,
+      acceptedAt: input.now.toISOString(),
+    });
+  }
+  const accepted = acceptedReferenceSet(db, input.sourceId, input.references);
+  const acceptedHash = referenceSetHash(accepted);
+  return acceptReferenceBatch(db, {
+    sourceId: input.sourceId,
+    acceptedHash,
+    receivedAt: input.now,
+    operationKey: `${input.operationKey}:${acceptedHash}`,
+    introduced: introducedReferences(accepted),
+  }).referenceVersion;
 }
 
 /**

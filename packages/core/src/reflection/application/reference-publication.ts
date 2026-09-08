@@ -6,11 +6,11 @@ import {
   discardReferenceAcceptance,
   classifyStatedReferences,
   prepareReferenceAcceptance,
+  projectAcceptedReferences,
   referenceScopeNames,
   statedReferenceIds,
   type ReferenceAcceptance,
 } from './reference-acceptance.js';
-import { writeClaimProvenanceInTransaction } from '../../infrastructure/graph/claim-provenance-queries.js';
 import { presentNodeIds } from '../../infrastructure/graph/projection-presence.js';
 import { PublicationOperation } from '../../infrastructure/publication/operation.js';
 import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
@@ -143,44 +143,19 @@ export const statedReferencesPublication = new PublicationOperation({
     return Promise.resolve({ status: 'valid' } as const);
   },
   async applyGraph(context: PublicationContext, data: ReferenceData) {
-    // Presence is read here rather than trusted from the plan: a plan prepared before an
-    // interruption can name an endpoint that has since stopped being projected, and an edge
-    // written against it would fail the whole publication instead of settling the statement.
-    const present = await presentNodeIds(context.graph, [
+    const projected = await projectAcceptedReferences(
+      context.graph,
       data.sourceId,
-      ...data.targets.map((target) => target.id),
-    ]);
-    const unresolved = data.targets.filter((t) => t.targetClass === 'unresolved').length;
-    // Both ends or no edge. An absent source cannot carry lineage, and rebuilding one to make a
-    // reference writable is exactly what the residency rules forbid.
-    const writable = present.has(data.sourceId)
-      ? data.targets.filter((target) => present.has(target.id)).map((target) => target.id)
-      : [];
-    const held = new Set(writable);
-    if (held.size > 0 || (unresolved > 0 && present.has(data.sourceId))) {
-      await writeClaimProvenanceInTransaction(context.graph, {
-        episodeId: data.sourceId,
-        derivedFrom: data.derivedFrom.filter((id) => held.has(id)),
-        corrects: data.supersedes.filter((id) => held.has(id)),
-        confirmations: data.confirmations
-          .filter((entry) => held.has(entry.target))
-          .map((entry) => ({
-            target: entry.target,
-            by: entry.by,
-            evidence: entry.evidence,
-            at: new Date(entry.occurredAt),
-          })),
-        unresolved,
-        now: context.now,
-      });
-    }
+      data.targets,
+      context.now,
+    );
     const accepted = readReferenceDelivery(context.db, data.sourceId, data.deliveryKey);
     if (accepted === undefined) {
       throw new Error(
         `reference delivery ${data.deliveryKey} was projected before it was accepted`,
       );
     }
-    return { referenceVersion: accepted.referenceVersion, projectedEdges: held.size, unresolved };
+    return { referenceVersion: accepted.referenceVersion, ...projected };
   },
   prepareSqlite(context, data) {
     prepareReferenceAcceptance(context.db, acceptanceOf(data, context.operationId));

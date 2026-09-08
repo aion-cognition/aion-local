@@ -9,6 +9,7 @@ import {
   classifyStatedReferences,
   discardReferenceAcceptance,
   prepareReferenceAcceptance,
+  projectAcceptedReferences,
   statedReferenceIds,
   type ReferenceAcceptance,
   type StatedReferenceInput,
@@ -203,14 +204,18 @@ function referenceAcceptanceOf(data: IntakeData, operationId: string): Reference
 function acceptanceEffects(data: IntakeData): PublicationPlan<IntakeData>['effects'] {
   const detail = (value: JsonValue): JsonValue => value;
   const referenceEffects =
-    data.referenceTargets.length === 0
+    data.decision === 'pinned'
       ? []
       : [
           { kind: INTAKE_EFFECTS.references, detail: detail({ sourceId: data.sourceId }) },
-          {
-            kind: INTAKE_EFFECTS.links,
-            detail: detail({ count: data.referenceTargets.length }),
-          },
+          ...(data.referenceTargets.length === 0
+            ? []
+            : [
+                {
+                  kind: INTAKE_EFFECTS.links,
+                  detail: detail({ count: data.referenceTargets.length }),
+                },
+              ]),
         ];
   if (data.decision !== 'new') {
     return data.decision === 'reuse' ? referenceEffects : [];
@@ -375,9 +380,20 @@ export const intakePublication = new PublicationOperation({
     return Promise.resolve({ status: 'valid' } as const);
   },
   async applyGraph(context: PublicationContext, data: IntakeData) {
+    if (data.decision === 'pinned') {
+      return { sourceId: data.sourceId, created: false, turnIds: [] };
+    }
     if (data.decision !== 'new') {
       // An evicted duplicate answers with the original id: nothing here rebuilds a projection
-      // to satisfy a lookup, which is the rehydration the residency rules forbid.
+      // to satisfy a lookup, which is the rehydration the residency rules forbid. Its statements
+      // still project, because a settlement reported without its edges is a settlement of
+      // nothing when both endpoints are right here.
+      await projectAcceptedReferences(
+        context.graph,
+        data.sourceId,
+        data.referenceTargets,
+        context.now,
+      );
       return { sourceId: data.sourceId, created: false, turnIds: [] };
     }
     const stored = await projectEpisodeInTransaction(context.graph, {
@@ -387,6 +403,13 @@ export const intakePublication = new PublicationOperation({
       now: context.now,
       identity: { episodeId: data.sourceId, turnIds: data.turnIds },
     });
+    // After the episode exists, so a statement it carried has an end to hang on.
+    await projectAcceptedReferences(
+      context.graph,
+      data.sourceId,
+      data.referenceTargets,
+      context.now,
+    );
     return { sourceId: stored.episodeId, created: true, turnIds: [...data.turnIds] };
   },
   prepareSqlite(context: PublicationSqliteContext, data: IntakeData) {
@@ -407,6 +430,11 @@ export const intakePublication = new PublicationOperation({
           origin: origin(data),
           pipelineVersion: data.pipelineVersion,
           operationKey: context.operationId,
+          referenceDelivery: {
+            key: referenceDeliveryKey(data),
+            targets: data.referenceTargets,
+            operationId: context.operationId,
+          },
           readiness: data.readiness ?? undefined,
           now: new Date(data.acceptedAt),
         },
@@ -415,29 +443,26 @@ export const intakePublication = new PublicationOperation({
       return undefined;
     }
     // A reused occurrence rebuilds nothing and reindexes nothing, but the statements this push
-    // carried are new and are accepted against the original source whatever its storage.
-    if (data.referenceTargets.length > 0) {
-      prepareReferenceAcceptance(context.db, referenceAcceptanceOf(data, context.operationId));
-    }
+    // carried are new and are accepted against the original source whatever its storage. The
+    // same delivery key the new path prepares under, so one acknowledgment answers for both.
+    prepareReferenceAcceptance(context.db, referenceAcceptanceOf(data, context.operationId));
     return undefined;
   },
   acknowledgeSqlite(context, data) {
     if (data.decision === 'pinned') {
       return undefined;
     }
-    if (data.referenceTargets.length > 0) {
-      const acceptance = referenceAcceptanceOf(data, context.operationId);
-      const delivery = readReferenceDelivery(context.db, data.sourceId, acceptance.deliveryKey);
-      if (delivery === undefined) {
-        throw new Error(`intake ${context.operationId} acknowledged unaccepted references`);
-      }
-      acknowledgeReferenceAcceptance(context.db, {
-        ...acceptance,
-        knownFrom: context.knownFrom,
-        observedAckAt: context.observedAckAt,
-        referenceVersion: delivery.referenceVersion,
-      });
+    const acceptance = referenceAcceptanceOf(data, context.operationId);
+    const delivery = readReferenceDelivery(context.db, data.sourceId, acceptance.deliveryKey);
+    if (delivery === undefined) {
+      throw new Error(`intake ${context.operationId} acknowledged unaccepted references`);
     }
+    acknowledgeReferenceAcceptance(context.db, {
+      ...acceptance,
+      knownFrom: context.knownFrom,
+      observedAckAt: context.observedAckAt,
+      referenceVersion: delivery.referenceVersion,
+    });
     if (data.decision !== 'new') {
       return undefined;
     }
@@ -465,9 +490,7 @@ export const intakePublication = new PublicationOperation({
       decision: data.decision,
       candidates: data.pinnedCandidates,
     });
-    if (data.referenceTargets.length > 0) {
-      discardReferenceAcceptance(context.db, referenceAcceptanceOf(data, context.operationId));
-    }
+    discardReferenceAcceptance(context.db, referenceAcceptanceOf(data, context.operationId));
     return undefined;
   },
 });
