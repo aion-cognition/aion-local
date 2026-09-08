@@ -17,6 +17,10 @@ import {
   READINESS_SCHEMA_STATEMENTS,
 } from './readiness-schema.js';
 import { backfillReflectionQueueEpisodeIds } from './reflection-queue.js';
+import {
+  SOURCE_SEARCH_INDEX_STATEMENTS,
+  SOURCE_SEARCH_SCHEMA_STATEMENTS,
+} from './source-search-schema.js';
 
 /** Name for the config registry, which is the only place the variable is read. */
 export const SQLITE_PATH_ENV_VAR = 'AION_SQLITE_PATH';
@@ -258,6 +262,9 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   ...NARRATIVE_SCHEMA_STATEMENTS,
   ...PUBLICATION_SCHEMA_STATEMENTS,
   ...READINESS_SCHEMA_STATEMENTS,
+  // The search projection's ordinary tables only. Its virtual table needs a capability this
+  // binary may not have, and a failure creating it here would close every other door too.
+  ...SOURCE_SEARCH_SCHEMA_STATEMENTS,
 ];
 
 /**
@@ -302,6 +309,7 @@ const INDEX_STATEMENTS: readonly string[] = [
   ...IDENTITY_INDEX_STATEMENTS,
   ...NARRATIVE_INDEX_STATEMENTS,
   ...READINESS_INDEX_STATEMENTS,
+  ...SOURCE_SEARCH_INDEX_STATEMENTS,
 ];
 
 /** Applied in order on every open of every existing substrate. */
