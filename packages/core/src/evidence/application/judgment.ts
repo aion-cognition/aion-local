@@ -80,6 +80,29 @@ export type JudgmentDeps = {
 };
 
 /**
+ * Why a judgment path may not ask about this pair, or nothing when it may.
+ *
+ * One helper for every route, so an abstention and an incomplete assembly stop a judgment the
+ * same way wherever it runs. A path composed without the seam judges on its own reads, which is
+ * what it did before one existed.
+ */
+export async function withheldReason(
+  evidence: JudgmentEvidence | undefined,
+  pair: JudgmentPair,
+): Promise<string | undefined> {
+  if (evidence === undefined) {
+    return undefined;
+  }
+  const assembly = await evidence.assemble(pair);
+  if (assembly.status === 'assembled') {
+    return undefined;
+  }
+  return assembly.status === 'abstained'
+    ? assembly.reason
+    : assembly.reasons.map((reason) => reason.reason).join(', ');
+}
+
+/**
  * The seam a judgment path holds. It carries the checked context it was built with, so a stage
  * never constructs a temporal vantage of its own to read evidence under.
  */

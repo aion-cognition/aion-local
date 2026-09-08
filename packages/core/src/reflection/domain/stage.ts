@@ -1,5 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 
+import type { JudgmentEvidence } from '../../evidence/application/judgment.js';
 import type { EpisodeContext } from '../../infrastructure/graph/episode-context.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
@@ -63,6 +64,13 @@ export type StageContext = {
   readonly occurredAt: Date;
   /** The pipeline version this run's ledger keys are forked under. */
   readonly pipelineVersion: string;
+  /**
+   * The evidence a destructive judgment runs on, bound to the context whoever checked coverage
+   * built. A stage that judges asks it before it spends a model call. Absent where the pipeline
+   * was composed outside a checked entry point, which leaves those stages judging on their own
+   * reads, as they did before this seam existed.
+   */
+  readonly evidence?: JudgmentEvidence;
   /**
    * The caller's shutdown signal, composed under every model call's own deadline through
    * `deadlineFor`. Without it a stop waits out the full stage timeout on a call it already

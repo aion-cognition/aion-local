@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { JUDGE_OUTPUT_RESERVE } from '../../../evidence/domain/budget.js';
 import { deadlineFor } from '../../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../../infrastructure/providers/types.js';
 import { promptMode } from '../../../prompts/index.js';
@@ -17,6 +18,14 @@ import { KEYED as JUDGE_KEYED, LOCAL as JUDGE_LOCAL } from '../../../prompts/sup
  * the gate that closes a fact, and `supersession-review.ts` names the same value for pass two.
  */
 const JUDGE_TEMPERATURE = 0;
+
+/**
+ * What this route spends before any evidence is rendered: its longest system prompt, plus the
+ * room its answer needs. Both prompt routes are measured, since either one may be the text the
+ * shipped provider sends.
+ */
+export const LIVE_SUPERSESSION_ROUTE_RESERVE =
+  Math.max(JUDGE_KEYED.length, JUDGE_LOCAL.length) + JUDGE_OUTPUT_RESERVE;
 
 const JUDGMENT_JSON_SCHEMA: JsonSchema = {
   type: 'object',

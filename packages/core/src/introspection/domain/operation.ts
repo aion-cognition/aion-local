@@ -3,6 +3,8 @@ import type { Driver } from 'neo4j-driver';
 
 import type { OperationBucket } from './buckets.js';
 import type { CriticalCondition, HealthSnapshot } from './health.js';
+import type { JudgmentEvidence } from '../../evidence/application/judgment.js';
+import type { MergeCoordinator } from '../../evidence/application/merge-recovery.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
@@ -68,6 +70,17 @@ export type OperationContext = {
    * ask and declines the run over, the same as `intake` above.
    */
   readonly recallProbe?: RecallProbe;
+  /**
+   * The evidence a destructive judgment runs on, bound to the context whoever checked coverage
+   * built. An operation that judges asks it before it spends a model call; where it is absent the
+   * operation is composed outside a checked entry point and judges on what its own reads found.
+   */
+  readonly evidence?: JudgmentEvidence;
+  /**
+   * The publication position an uncertain apply is reconciled against. Without it an apply whose
+   * commit nobody observed stops the batch rather than guessing which way it went.
+   */
+  readonly publications?: MergeCoordinator;
   /** The same reading the decision was made from. An operation must not observe again. */
   readonly health: HealthSnapshot;
   readonly now: Date;

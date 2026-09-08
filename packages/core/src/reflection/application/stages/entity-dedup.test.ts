@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { DedupFakeGraph } from './entity-dedup.fixture.js';
 import { EntityDedupStage } from './entity-dedup.js';
+import type { JudgmentEvidence } from '../../../evidence/application/judgment.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { ACCESS_COUNT_PROPERTY } from '../../../infrastructure/graph/access-tracking.js';
 import { BITEMPORAL_PROPERTIES } from '../../../infrastructure/graph/bitemporal.js';
@@ -178,6 +179,38 @@ function seedNearDuplicatePair(): void {
   mention(THIRD_EPISODE_ID, 'strong', 1);
   mention(OTHER_EPISODE_ID, 'weak', 1);
 }
+
+/** A seam that abstains on every pair, which is what a suppressed required source produces. */
+function abstaining(): JudgmentEvidence {
+  return {
+    assemble: () =>
+      Promise.resolve({
+        status: 'abstained',
+        reason: 'required_source_suppressed',
+        addresses: [{ kind: 'id', id: 'episode-1' }],
+        revision: { contractVersion: 1, dependencies: [], digest: 'digest' },
+      }),
+    confirm: () => ({ status: 'current' }),
+  };
+}
+
+describe('tier 3 with an evidence seam', () => {
+  it('asks nobody about a pair whose required source is suppressed', async () => {
+    seedNearDuplicatePair();
+
+    const outcome = await new EntityDedupStage().run({
+      ...context(unreachableProvider()),
+      evidence: abstaining(),
+    });
+
+    expect(outcome.counts).toMatchObject({
+      merges: 0,
+      merge_judgments: 0,
+      merge_withheld: 1,
+    });
+    expect(graph.edgesOfType(SUPERSEDES_TYPE)).toEqual([]);
+  });
+});
 
 describe('tier 3, the two-pass judge', () => {
   it('merges a near-duplicate into the more-mentioned identity and closes the loser', async () => {

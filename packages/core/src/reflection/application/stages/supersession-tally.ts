@@ -14,6 +14,7 @@ export class RunTally {
   #unanimous = 0;
   #vetoed = 0;
   #staleTargets = 0;
+  #withheld = 0;
 
   get superseded(): number {
     return this.#superseded;
@@ -55,12 +56,21 @@ export class RunTally {
     return this.#judgeErrors;
   }
 
+  /** Pairs nobody was asked about, because their required evidence did not support asking. */
+  get withheld(): number {
+    return this.#withheld;
+  }
+
   recordJudgment(): void {
     this.#judgments += 1;
   }
 
   recordJudgeError(): void {
     this.#judgeErrors += 1;
+  }
+
+  recordWithheld(): void {
+    this.#withheld += 1;
   }
 
   recordSupersession(): void {

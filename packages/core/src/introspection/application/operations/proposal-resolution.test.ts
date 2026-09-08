@@ -9,6 +9,7 @@ import {
   proposalResolutionRelevance,
   resolutionLedgerKey,
 } from './proposal-resolution.js';
+import type { JudgmentEvidence } from '../../../evidence/application/judgment.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
@@ -436,6 +437,38 @@ describe('proposal_resolution on a contradiction the passes split on', () => {
     expect(getLedgerEntry(db, resolutionLedgerKey('supersession', id))?.summary).toMatchObject({
       verdict: 'dismissed',
     });
+  });
+});
+
+/** A seam that abstains on every pair, which is what a suppressed required source produces. */
+function abstaining(): JudgmentEvidence {
+  return {
+    assemble: () =>
+      Promise.resolve({
+        status: 'abstained',
+        reason: 'required_source_suppressed',
+        addresses: [{ kind: 'id', id: 'episode-1' }],
+        revision: { contractVersion: 1, dependencies: [], digest: 'digest' },
+      }),
+    confirm: () => ({ status: 'current' }),
+  };
+}
+
+describe('proposal_resolution with an evidence seam', () => {
+  it('leaves a row open without a model call when its required source is suppressed', async () => {
+    const id = seedContradiction();
+
+    const result = await proposalResolutionOperation().run(
+      ctxFor(DEFAULTS, {
+        driver: fakeDriver(PAIR),
+        provider: refusingProvider,
+        evidence: abstaining(),
+      }),
+    );
+
+    expect(result.itemsAffected).toBe(0);
+    expect(getSupersessionProposal(db, id)?.resolvedAt).toBeNull();
+    expect(getLedgerEntry(db, resolutionLedgerKey('supersession', id))).toBeUndefined();
   });
 });
 

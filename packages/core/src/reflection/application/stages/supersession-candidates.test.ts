@@ -164,6 +164,7 @@ describe('SupersessionStage candidate generation', () => {
       supersessions: 0,
       supersessionProposals: 0,
       supersessionStaleTargets: 0,
+      supersessionWithheld: 0,
     });
   });
 });
@@ -290,6 +291,7 @@ describe('SupersessionStage contradiction battery', () => {
       supersessions: 0,
       supersessionProposals: 4,
       supersessionStaleTargets: 0,
+      supersessionWithheld: 0,
     });
 
     const pairs = bed.proposals().map((row) => [row.oldId, row.newId]);

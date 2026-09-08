@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { reviewPrompts, seedFactNode, SupersessionTestBed } from './supersession.fixture.js';
 import { SupersessionStage } from './supersession.js';
+import type { JudgmentEvidence } from '../../../evidence/application/judgment.js';
 
 const EPISODE_ID = 'episode-2';
 const PRIOR_EPISODE_ID = 'episode-1';
@@ -33,12 +34,43 @@ function seedContradictingPair(): void {
   });
 }
 
+/** A seam that abstains on every pair, which is what a suppressed required source produces. */
+function abstaining(): JudgmentEvidence {
+  return {
+    assemble: () =>
+      Promise.resolve({
+        status: 'abstained',
+        reason: 'required_source_suppressed',
+        addresses: [{ kind: 'id', id: 'episode-1' }],
+        revision: { contractVersion: 1, dependencies: [], digest: 'digest' },
+      }),
+    confirm: () => ({ status: 'current' }),
+  };
+}
+
 beforeEach(() => {
   bed.open();
 });
 
 afterEach(() => {
   bed.close();
+});
+
+describe('SupersessionStage with an evidence seam', () => {
+  it('asks nobody about a pair whose required source is suppressed', async () => {
+    seedContradictingPair();
+
+    const outcome = await new SupersessionStage({ mode: 'unanimous' }).run({
+      ...bed.context(EPISODE_ID),
+      evidence: abstaining(),
+    });
+
+    expect(bed.requests).toHaveLength(0);
+    expect(outcome.status).toBe('skipped');
+    expect(outcome.summary).toContain('withheld for want of required evidence');
+    expect(outcome.counts?.supersessionWithheld).toBe(1);
+    expect(bed.graph.closeStatements()).toEqual([]);
+  });
 });
 
 describe('SupersessionStage', () => {
@@ -80,6 +112,7 @@ describe('SupersessionStage', () => {
       supersessions: 0,
       supersessionProposals: 1,
       supersessionStaleTargets: 0,
+      supersessionWithheld: 0,
     });
     expect(bed.graph.closeStatements()).toEqual([]);
     expect(bed.validUntil('decision-old')).toBeUndefined();
@@ -116,6 +149,7 @@ describe('SupersessionStage', () => {
       supersessions: 1,
       supersessionProposals: 0,
       supersessionStaleTargets: 0,
+      supersessionWithheld: 0,
     });
     expect(bed.validUntil('decision-old')).toBeDefined();
     expect(bed.supersedesEdges()).toEqual([{ sourceId: 'decision-new', targetId: 'decision-old' }]);
@@ -132,6 +166,7 @@ describe('SupersessionStage', () => {
       supersessions: 0,
       supersessionProposals: 1,
       supersessionStaleTargets: 0,
+      supersessionWithheld: 0,
     });
     expect(bed.validUntil('decision-old')).toBeUndefined();
     expect(bed.supersedesEdges()).toEqual([]);
@@ -160,6 +195,7 @@ describe('SupersessionStage', () => {
       supersessions: 0,
       supersessionProposals: 0,
       supersessionStaleTargets: 1,
+      supersessionWithheld: 0,
     });
     expect(bed.supersedesEdges()).toEqual([]);
   });
@@ -188,6 +224,7 @@ describe('SupersessionStage', () => {
       supersessions: 1,
       supersessionProposals: 0,
       supersessionStaleTargets: 0,
+      supersessionWithheld: 0,
     });
     expect(outcome.summary).toContain('1 unanimous and 0 vetoed');
     expect(bed.validUntil('decision-old')).toBeDefined();
@@ -228,6 +265,7 @@ describe('SupersessionStage', () => {
       supersessions: 0,
       supersessionProposals: 1,
       supersessionStaleTargets: 0,
+      supersessionWithheld: 0,
     });
     expect(outcome.summary).toContain('0 unanimous and 1 vetoed');
     expect(bed.validUntil('decision-old')).toBeUndefined();
@@ -300,6 +338,7 @@ describe('SupersessionStage', () => {
       supersessions: 0,
       supersessionProposals: 0,
       supersessionStaleTargets: 0,
+      supersessionWithheld: 0,
     });
     expect(bed.validUntil('decision-old')).toBeUndefined();
   });
@@ -320,6 +359,7 @@ describe('SupersessionStage', () => {
       supersessions: 0,
       supersessionProposals: 0,
       supersessionStaleTargets: 1,
+      supersessionWithheld: 0,
     });
     expect(outcome.summary).toContain('1 with the target already gone');
     expect(bed.supersedesEdges()).toEqual([]);
@@ -340,6 +380,7 @@ describe('SupersessionStage', () => {
       supersessions: 0,
       supersessionProposals: 1,
       supersessionStaleTargets: 0,
+      supersessionWithheld: 0,
     });
     expect(bed.proposals()[0]?.confidence).toBe(0.5);
   });
@@ -355,6 +396,7 @@ describe('SupersessionStage', () => {
       supersessions: 0,
       supersessionProposals: 0,
       supersessionStaleTargets: 0,
+      supersessionWithheld: 0,
     });
     expect(bed.validUntil('decision-old')).toBeUndefined();
     expect(bed.proposals()).toEqual([]);
@@ -384,6 +426,7 @@ describe('SupersessionStage', () => {
       supersessions: 0,
       supersessionProposals: 0,
       supersessionStaleTargets: 0,
+      supersessionWithheld: 0,
     });
   });
 
@@ -642,6 +685,7 @@ describe('SupersessionStage', () => {
       supersessions: 0,
       supersessionProposals: 0,
       supersessionStaleTargets: 0,
+      supersessionWithheld: 0,
     });
     expect(bed.supersedesEdges()).toEqual(before);
   });
@@ -663,6 +707,7 @@ describe('SupersessionStage', () => {
       supersessions: 0,
       supersessionProposals: 0,
       supersessionStaleTargets: 0,
+      supersessionWithheld: 0,
     });
     expect(bed.validUntil('decision-old')).toBeUndefined();
     expect(bed.supersedesEdges()).toEqual([]);

@@ -1,3 +1,7 @@
+import {
+  withheldReason,
+  type JudgmentSideRequest,
+} from '../../../evidence/application/judgment.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import {
@@ -12,6 +16,7 @@ import {
   type SupersessionProposal,
 } from '../../../infrastructure/sqlite/supersession-proposals.js';
 import {
+  ENTITY_MERGE_ROUTE_RESERVE,
   judgeEntityMerge,
   reviewEntityMerge,
   type EntityMergePair,
@@ -23,6 +28,7 @@ import {
 } from '../../../reflection/application/proposals.js';
 import {
   judgeContradiction,
+  LIVE_SUPERSESSION_ROUTE_RESERVE,
   type ContradictionPair,
 } from '../../../reflection/application/stages/supersession-judge.js';
 import {
@@ -60,6 +66,15 @@ import {
  */
 
 export const PROPOSAL_RESOLUTION_OPERATION = 'proposal_resolution';
+
+/**
+ * What a resolution spends on its own prompts and answers before any evidence is rendered. It
+ * runs both judgment shapes, so the reserve is the larger of the two.
+ */
+const RESOLUTION_ROUTE_RESERVE = Math.max(
+  LIVE_SUPERSESSION_ROUTE_RESERVE,
+  ENTITY_MERGE_ROUTE_RESERVE,
+);
 
 /** Permanent, keyed by table and id: one decision per row, and the record stands alone. */
 export const RESOLUTION_LEDGER_PREFIX = 'introspection:resolution:';
@@ -231,6 +246,24 @@ function leaveOpen(
   );
 }
 
+/**
+ * Asked before either pass runs, so an abstention or an incomplete assembly costs no model call
+ * and leaves the row open. A pinned row is not a dismissal: the queue keeps it, and an unforget
+ * or a backfill is what makes it decidable.
+ */
+async function withheldEvidence(
+  ctx: OperationContext,
+  sides: readonly [JudgmentSideRequest, JudgmentSideRequest],
+  use: 'claim_judgment' | 'entity_judgment',
+): Promise<string | undefined> {
+  return withheldReason(ctx.evidence, {
+    route: 'proposal_resolution',
+    reservedUnits: RESOLUTION_ROUTE_RESERVE,
+    use,
+    sides,
+  });
+}
+
 async function resolveContradiction(
   ctx: OperationContext,
   proposal: SupersessionProposal,
@@ -241,6 +274,18 @@ async function resolveContradiction(
   const current = await readClaimEvidence(ctx.driver, proposal.newId, ctx.now);
   if (prior === undefined || current === undefined) {
     leaveOpen(ctx, proposal.id, 'a side of the pair is no longer readable', tally);
+    return;
+  }
+  const withheld = await withheldEvidence(
+    ctx,
+    [
+      { nodeId: proposal.oldId, statement: prior.statement },
+      { nodeId: proposal.newId, statement: current.statement },
+    ],
+    'claim_judgment',
+  );
+  if (withheld !== undefined) {
+    leaveOpen(ctx, proposal.id, `required evidence does not support asking: ${withheld}`, tally);
     return;
   }
 
@@ -316,6 +361,18 @@ async function resolveMerge(
   const pair = await readMergeEvidence(ctx.driver, proposal);
   if (pair === undefined) {
     leaveOpen(ctx, proposal.id, 'a side of the pair has lost currency', tally);
+    return;
+  }
+  const withheld = await withheldEvidence(
+    ctx,
+    [
+      { nodeId: proposal.leftId, statement: pair.subject.name },
+      { nodeId: proposal.rightId, statement: pair.candidate.name },
+    ],
+    'entity_judgment',
+  );
+  if (withheld !== undefined) {
+    leaveOpen(ctx, proposal.id, `required evidence does not support asking: ${withheld}`, tally);
     return;
   }
 

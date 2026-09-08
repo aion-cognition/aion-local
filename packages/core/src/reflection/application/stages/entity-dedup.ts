@@ -5,6 +5,7 @@ import {
   nominatePairs,
   type NominatedPair,
 } from './entity-dedup-cascade.js';
+import { withheldReason } from '../../../evidence/application/judgment.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { DedupEntityDetail } from '../../../infrastructure/graph/entity-dedup-queries.js';
 import { findEpisodeEntities } from '../../../infrastructure/graph/entity-queries.js';
@@ -15,6 +16,7 @@ import { selectCanonical } from '../../domain/entity-merge.js';
 import { parseTypeCounts } from '../../domain/entity-reconciliation.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
 import {
+  ENTITY_MERGE_ROUTE_RESERVE,
   judgeEntityMerge,
   reviewEntityMerge,
   type EntityMergePair,
@@ -87,6 +89,8 @@ type CascadeTally = {
   readonly judged: number;
   /** Pairs tier 1 put forward, which is what `judged` has to be read against. */
   readonly nominated: number;
+  /** Pairs nobody was asked about, because their required evidence did not support asking. */
+  readonly withheld: number;
 };
 
 const NOTHING_DONE: CascadeTally = {
@@ -95,6 +99,7 @@ const NOTHING_DONE: CascadeTally = {
   proposals: 0,
   judged: 0,
   nominated: 0,
+  withheld: 0,
 };
 
 function addTallies(left: CascadeTally, right: CascadeTally): CascadeTally {
@@ -104,6 +109,7 @@ function addTallies(left: CascadeTally, right: CascadeTally): CascadeTally {
     proposals: left.proposals + right.proposals,
     judged: left.judged + right.judged,
     nominated: left.nominated + right.nominated,
+    withheld: left.withheld + right.withheld,
   };
 }
 
@@ -167,6 +173,9 @@ export class EntityDedupStage implements ReflectionStage {
         merge_proposals: tally.proposals,
         merge_judgments: tally.judged,
         merge_nominations: tally.nominated,
+        // Named at zero so a reader can tell a run that withheld nothing from a build that does
+        // not measure it.
+        merge_withheld: tally.withheld,
       },
     };
   }
@@ -254,6 +263,27 @@ export class EntityDedupStage implements ReflectionStage {
     return tally;
   }
 
+  /**
+   * Whether this pair's required evidence supports asking at all. Asked before the pair is
+   * counted as judged and before either pass runs, so a withheld pair costs nothing and stays
+   * exactly as nominated.
+   */
+  async #withheld(
+    ctx: StageContext,
+    left: DedupEntityDetail,
+    right: DedupEntityDetail,
+  ): Promise<string | undefined> {
+    return withheldReason(ctx.evidence, {
+      route: 'entity_merge',
+      reservedUnits: ENTITY_MERGE_ROUTE_RESERVE,
+      use: 'entity_judgment',
+      sides: [
+        { nodeId: left.id, statement: left.name },
+        { nodeId: right.id, statement: right.name },
+      ],
+    });
+  }
+
   async #judgePair(
     ctx: StageContext,
     cache: EntityDetailCache,
@@ -270,6 +300,15 @@ export class EntityDedupStage implements ReflectionStage {
       timeoutMs: this.#options.timeoutMs,
       ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
     };
+    const withheld = await this.#withheld(ctx, left, right);
+    if (withheld !== undefined) {
+      ctx.logger.info(
+        { leftId: left.id, rightId: right.id, withheld },
+        'entity merge judgment withheld for want of required evidence',
+      );
+      return { tally: { ...NOTHING_DONE, withheld: 1 } };
+    }
+
     const prompt = buildJudgePair(left, right, pair);
     const asked: CascadeTally = { ...NOTHING_DONE, judged: 1 };
 

@@ -148,6 +148,12 @@ export const JUDGE_ROUTE_ALLOWANCE: Readonly<Record<JudgeRoute, number>> = {
   entity_merge: 16384,
 };
 
+/**
+ * Units held back for one judge's answer. The evidence may not spend them: an assembled input
+ * that fills the envelope leaves the answer nowhere to go.
+ */
+export const JUDGE_OUTPUT_RESERVE = 512;
+
 export type RouteAllowance = {
   readonly route: JudgeRoute;
   /** The prompt and output units this route reserves before any evidence is rendered. */

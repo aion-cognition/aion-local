@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { JUDGE_OUTPUT_RESERVE } from '../../evidence/domain/budget.js';
 import { errorMessage } from '../../infrastructure/errors.js';
 import { deadlineFor } from '../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../infrastructure/providers/types.js';
@@ -59,6 +60,13 @@ export type EntityMergeCallOptions = {
  * and a sampled pass makes that gate answer differently on the same pair.
  */
 const JUDGE_TEMPERATURE = 0;
+
+/**
+ * What this route spends before any evidence is rendered: the longer of its two system prompts,
+ * plus the room its answer needs.
+ */
+export const ENTITY_MERGE_ROUTE_RESERVE =
+  Math.max(DETECT_SYSTEM_PROMPT.length, REVIEW_SYSTEM_PROMPT.length) + JUDGE_OUTPUT_RESERVE;
 
 const NO_REASON_GIVEN = 'the reviewer gave no reason';
 

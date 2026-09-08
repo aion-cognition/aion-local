@@ -1,5 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 
+import type { JudgmentEvidence } from '../../evidence/application/judgment.js';
 import { errorMessage, roundMs } from '../../infrastructure/errors.js';
 import { loadEpisodeContext } from '../../infrastructure/graph/episode-context.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
@@ -48,6 +49,8 @@ export type ReflectionOrchestratorDeps = {
   readonly db: SqliteHandle;
   readonly provider: Provider;
   readonly logger: Logger;
+  /** Handed to every stage unchanged. The orchestrator checks no coverage of its own. */
+  readonly evidence?: JudgmentEvidence;
 };
 
 export type ReflectionRunOptions = {
@@ -120,6 +123,7 @@ export class ReflectionOrchestrator {
       // time of what it was derived from rather than the moment the run happened.
       occurredAt: episode.occurredAt ?? now,
       pipelineVersion,
+      ...(this.#deps.evidence === undefined ? {} : { evidence: this.#deps.evidence }),
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     };
 

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { JUDGE_OUTPUT_RESERVE } from '../../evidence/domain/budget.js';
 import { errorMessage } from '../../infrastructure/errors.js';
 import { deadlineFor } from '../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../infrastructure/providers/types.js';
@@ -40,6 +41,14 @@ export type ClaimDedupCallOptions = {
  * differently on the same pair from one tick to the next.
  */
 const JUDGE_TEMPERATURE = 0;
+
+/**
+ * What this route spends before any evidence is rendered: the longer of its two system prompts,
+ * plus the room its answer needs. Measured from the prompts themselves, so a prompt that grows
+ * takes the room out of the evidence rather than out of the answer.
+ */
+export const CLAIM_DEDUP_ROUTE_RESERVE =
+  Math.max(DETECT_SYSTEM_PROMPT.length, REVIEW_SYSTEM_PROMPT.length) + JUDGE_OUTPUT_RESERVE;
 
 const NO_REASON_GIVEN = 'the judge gave no reason';
 

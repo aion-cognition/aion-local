@@ -1,12 +1,14 @@
 import { applyJudgment, type SupersessionMode } from './supersession-apply.js';
 import {
   judgeContradiction,
+  LIVE_SUPERSESSION_ROUTE_RESERVE,
   type ContradictionJudgment,
   type ContradictionPair,
   type JudgeContradictionOptions,
   type JudgeOutcome,
 } from './supersession-judge.js';
 import { RunTally } from './supersession-tally.js';
+import { withheldReason } from '../../../evidence/application/judgment.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { describeError, isAbortError } from '../../../infrastructure/errors.js';
 import type { KeyedCloseMode } from '../../../infrastructure/graph/claim-key-queries.js';
@@ -246,6 +248,29 @@ export class SupersessionStage implements ReflectionStage {
     return undefined;
   }
 
+  /**
+   * Whether the pair's required evidence supports asking at all.
+   *
+   * Asked before the judgment is counted or paid for. An abstention or an incomplete assembly
+   * leaves the pair exactly where it was: nothing is closed, nothing is proposed, and the run
+   * says how many pairs it withheld.
+   */
+  async #withheld(
+    ctx: StageContext,
+    subject: EpisodeFactNode,
+    candidate: ContradictionCandidate,
+  ): Promise<string | undefined> {
+    return withheldReason(ctx.evidence, {
+      route: 'live_supersession',
+      reservedUnits: LIVE_SUPERSESSION_ROUTE_RESERVE,
+      use: 'claim_judgment',
+      sides: [
+        { nodeId: candidate.id, statement: candidate.text },
+        { nodeId: subject.id, statement: subject.text },
+      ],
+    });
+  }
+
   /** A judgment that fails is counted and skipped: one unusable answer does not fail the stage. */
   async #judge(
     ctx: StageContext,
@@ -253,6 +278,15 @@ export class SupersessionStage implements ReflectionStage {
     candidate: ContradictionCandidate,
     tally: RunTally,
   ): Promise<ContradictionJudgment | undefined> {
+    const withheld = await this.#withheld(ctx, subject, candidate);
+    if (withheld !== undefined) {
+      tally.recordWithheld();
+      ctx.logger.info(
+        { episodeId: ctx.episodeId, subjectId: subject.id, candidateId: candidate.id, withheld },
+        'contradiction judgment withheld for want of required evidence',
+      );
+      return undefined;
+    }
     tally.recordJudgment();
     const outcome = await judgeContradiction(
       ctx.provider,
@@ -327,6 +361,9 @@ export class SupersessionStage implements ReflectionStage {
       // Named even at zero, so a reader of one run's counts can tell "none went stale" from
       // "this build does not measure that".
       supersessionStaleTargets: tally.staleTargets,
+      // Named at zero for the same reason the stale count is: a reader can tell "none withheld"
+      // from a build that does not measure it.
+      supersessionWithheld: tally.withheld,
     };
 
     if (writeError !== undefined) {
@@ -334,6 +371,15 @@ export class SupersessionStage implements ReflectionStage {
         status: 'failed',
         summary: `supersession recorded ${tally.superseded} closure(s) before a write failed: ${describeError(writeError)}`,
         counts,
+      };
+    }
+
+    if (tally.judgments === 0 && tally.withheld > 0) {
+      return {
+        status: 'skipped',
+        summary: `${tally.withheld} pair(s) withheld for want of required evidence`,
+        counts,
+        retryable: true,
       };
     }
 
@@ -362,7 +408,8 @@ export class SupersessionStage implements ReflectionStage {
       summary:
         `${tally.judgments} contradiction judgment(s) in ${this.#options.mode} mode: ` +
         `${tally.superseded} superseded, ${tally.proposed} proposed for review ` +
-        `(${tally.proposedBySubject} by shared subject)${review}${stale}`,
+        `(${tally.proposedBySubject} by shared subject)` +
+        `${tally.withheld === 0 ? '' : `, ${tally.withheld} withheld`}${review}${stale}`,
       counts,
     };
   }

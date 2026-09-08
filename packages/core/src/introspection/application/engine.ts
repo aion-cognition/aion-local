@@ -8,6 +8,8 @@ import {
   type ResolvedRun,
 } from './operation-scoring.js';
 import { consultTier3 } from './tier3-consult.js';
+import type { JudgmentEvidence } from '../../evidence/application/judgment.js';
+import type { MergeCoordinator } from '../../evidence/application/merge-recovery.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { errorMessage } from '../../infrastructure/errors.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
@@ -70,6 +72,14 @@ export type IntrospectorDeps = {
    * one, so it cannot assemble one that writes.
    */
   readonly recallProbe?: RecallProbe;
+  /**
+   * The evidence seam a judging operation asks before it spends a model call, built by whoever
+   * checked coverage. Handed on unchanged, like the two above: the loop checks no coverage of
+   * its own, so it cannot hand an operation a vantage nobody established.
+   */
+  readonly evidence?: JudgmentEvidence;
+  /** The coordinator an uncertain apply reconciles through before the batch counts anything. */
+  readonly publications?: MergeCoordinator;
   /**
    * The registered catalog, in order. Order decides nothing on its own: selection is by tier
    * and urgency, and ties break on waiting time and then on name.
@@ -399,6 +409,8 @@ export class Introspector {
         provider: this.#deps.provider,
         ...(this.#deps.intake === undefined ? {} : { intake: this.#deps.intake }),
         ...(this.#deps.recallProbe === undefined ? {} : { recallProbe: this.#deps.recallProbe }),
+        ...(this.#deps.evidence === undefined ? {} : { evidence: this.#deps.evidence }),
+        ...(this.#deps.publications === undefined ? {} : { publications: this.#deps.publications }),
         health,
         now,
         signal: this.#abort.signal,
