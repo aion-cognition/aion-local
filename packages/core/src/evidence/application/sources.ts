@@ -135,7 +135,7 @@ export function locateAddress(db: SqliteHandle, address: EvidenceAddress): Locat
       };
 }
 
-type Eligibility =
+export type Eligibility =
   | { readonly status: 'disclosable' }
   | { readonly status: 'suppressed' }
   /** The chain cannot say what was true then, which is a limitation rather than a verdict. */
@@ -153,7 +153,7 @@ type Eligibility =
  * statements up to that vantage were counted. Reading an unbackfilled silence as a proved absence
  * is how a source that was forgotten then comes back now.
  */
-function eligibilityAt(
+export function eligibilityAt(
   db: SqliteHandle,
   sourceId: string,
   context: CheckedReadContext,

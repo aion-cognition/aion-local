@@ -36,6 +36,7 @@ import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite
 import { SessionManager } from '../../session/session-manager.js';
 import { foldableClaims } from '../domain/pack-duplicates.js';
 import { assemble, item } from '../domain/test-support/pack.fixture.js';
+import { viewOf } from '../domain/test-support/resolved-view.fixture.js';
 
 /**
  * Which pairs of a pack's candidates the substrate calls one claim recorded twice. What the
@@ -342,7 +343,7 @@ describe('a contradictory pair beside a third record of the same sentence', () =
     ];
     const pack = assemble(items, {
       provenance,
-      foldable: foldableClaims({ items, pairs, provenance, relatedClaims: new Map() }),
+      foldable: foldableClaims({ items, pairs, view: viewOf({ provenance }) }),
     });
 
     expect(pack.facts?.map((entry) => entry.id)).toEqual(['clash-c', 'clash-a', 'clash-b']);

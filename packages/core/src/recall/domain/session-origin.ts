@@ -1,8 +1,8 @@
 import type { RelatedClaim } from '@aion/protocol';
 
 import type { FusedItem } from './fusion.js';
+import { ownershipOf, type ResolvedEvidenceView } from './resolved-view.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
-import type { ItemOrigin } from '../../infrastructure/graph/origin-queries.js';
 
 /**
  * The other serving-layer subtraction, and the one `session-dedup.ts` cannot make. A turn is
@@ -24,19 +24,12 @@ import type { ItemOrigin } from '../../infrastructure/graph/origin-queries.js';
 export type OwnSessionInput = {
   readonly items: readonly FusedItem[];
   /**
-   * What the origin read resolved, by item id. An id with no entry is an item whose provenance
-   * nothing answered for, and it serves: withholding a memory on a failed lookup is the one
-   * error this subtraction must not make.
+   * The one reading this attempt took. An item with an unknown verdict serves: withholding a
+   * memory the substrate cannot attribute is the one error this subtraction must not make, and
+   * that covers a failed lookup, an uncounted scope and a contribution with no session behind it
+   * alike.
    */
-  readonly origins: ReadonlyMap<string, ItemOrigin>;
-  /** The current claim beside a raw turn, keyed as the pack would annotate it. */
-  readonly relatedClaims: ReadonlyMap<string, RelatedClaim>;
-  /**
-   * What the substrate holds about each candidate (`claim-provenance-queries.ts`), the same read
-   * the pack renders standing from. An id with no entry is one this run established nothing for,
-   * and it serves for the same reason an unresolved origin does.
-   */
-  readonly provenance: ReadonlyMap<string, ItemProvenance>;
+  readonly view: ResolvedEvidenceView;
 };
 
 /**
@@ -82,26 +75,24 @@ function newSinceCapture(
  * An item some other session also produced is a shared memory rather than an echo, and an entity
  * is shared by construction as soon as a second session mentions it.
  *
- * `origins` empty is the whole exemption: a time-traveled read, a disabled knob and a failed
- * lookup all arrive here with nothing to match against, so none of them can suppress anything.
+ * An empty ownership map is the whole exemption: a time-traveled read, a disabled knob and a
+ * failed lookup all arrive here with no verdict to match against, so none of them can suppress
+ * anything.
  */
 export function suppressedOwnSession(input: OwnSessionInput): ReadonlySet<string> {
   const suppressed = new Set<string>();
-  if (input.origins.size === 0) {
-    return suppressed;
-  }
+  const { view } = input;
   for (const item of input.items) {
-    const origin = input.origins.get(item.id);
-    if (origin === undefined || !origin.own || origin.other) {
+    if (ownershipOf(view, item.id) !== 'own_only') {
       continue;
     }
-    const record = input.provenance.get(item.id);
+    const record = view.provenance.get(item.id);
     // A read that did not answer for this item cannot say whether anybody put evidence beside it,
     // and asserting the session already knows what nobody could read is the worse mistake.
     if (record === undefined) {
       continue;
     }
-    if (newSinceCapture(item, input.relatedClaims, record)) {
+    if (newSinceCapture(item, view.relatedClaims, record)) {
       continue;
     }
     suppressed.add(item.id);

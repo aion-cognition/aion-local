@@ -1,6 +1,7 @@
 import type { RelatedClaim } from '@aion/protocol';
 
 import type { FusedItem } from './fusion.js';
+import type { ResolvedEvidenceView } from './resolved-view.js';
 import { standingFor } from './standing.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 import type { RestatedClaimPair } from '../../infrastructure/graph/near-duplicate-queries.js';
@@ -35,13 +36,12 @@ export type FoldableClaimsInput = {
   /** Same key, same fold, no recorded disagreement (`near-duplicate-queries.ts`). */
   readonly pairs: readonly RestatedClaimPair[];
   /**
-   * Standing and stated corrections, by node id. The read fails soft to an empty map, and an id
-   * with no entry is one this run could not establish either for, so it is left alone: a
-   * successful read answers for every candidate it was asked about.
+   * The attempt's one reading. An id with no provenance entry is one this run could not
+   * establish standing for, so it is left alone: a successful read answers for every candidate
+   * it was asked about, and folding on absent evidence prints the weaker of two statements as
+   * though it were the stronger.
    */
-  readonly provenance: ReadonlyMap<string, ItemProvenance>;
-  /** The current claim in a raw turn's family, keyed as the pack annotates it. */
-  readonly relatedClaims: ReadonlyMap<string, RelatedClaim>;
+  readonly view: ResolvedEvidenceView;
 };
 
 /**
@@ -107,13 +107,13 @@ export function foldableClaims(
     if (left === undefined || right === undefined) {
       continue;
     }
-    if (contested(left, input.provenance, input.relatedClaims)) {
+    if (contested(left, input.view.provenance, input.view.relatedClaims)) {
       continue;
     }
-    if (contested(right, input.provenance, input.relatedClaims)) {
+    if (contested(right, input.view.provenance, input.view.relatedClaims)) {
       continue;
     }
-    if (!comparable(left, right, input.provenance)) {
+    if (!comparable(left, right, input.view.provenance)) {
       continue;
     }
     for (const [id, other] of [

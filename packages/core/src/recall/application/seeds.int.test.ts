@@ -10,6 +10,10 @@ import type { Config } from '../../infrastructure/config/schema.js';
 import { bootstrapBackbone, SUBSTRATE_NAME } from '../../infrastructure/graph/backbone.js';
 import { supersede, writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
+import {
+  orderedPublicationSequence,
+  OWNERSHIP_PROPERTIES,
+} from '../../infrastructure/graph/ownership-summary-queries.js';
 import { asOf, withCurrency } from '../../infrastructure/graph/read-modes.js';
 import { recencySeeds } from '../../infrastructure/graph/recency-queries.js';
 import {
@@ -51,6 +55,24 @@ let substrateId: string;
 
 const ASKING_SESSION = 'session-asking';
 const OTHER_SESSION = 'session-other';
+const SUBSTRATE = 'substrate-under-test';
+const SUMMARY_SEQUENCE = '3';
+const ACKNOWLEDGED_SEQUENCE = '7';
+
+/**
+ * The stored ownership projection, as a publication acknowledged before this read leaves it. A
+ * node without one is a node the pre-limit ordering knows nothing about.
+ */
+function ownershipSummary(sessions: readonly string[]): Record<string, unknown> {
+  return {
+    [OWNERSHIP_PROPERTIES.sessions]: [...sessions],
+    [OWNERSHIP_PROPERTIES.unknownAttribution]: false,
+    [OWNERSHIP_PROPERTIES.census]: true,
+    [OWNERSHIP_PROPERTIES.version]: `version-of-${sessions.join('+')}`,
+    [OWNERSHIP_PROPERTIES.sequence]: orderedPublicationSequence(SUMMARY_SEQUENCE),
+    [OWNERSHIP_PROPERTIES.substrate]: SUBSTRATE,
+  };
+}
 
 const ids = {
   claimPath: '',
@@ -152,13 +174,13 @@ beforeAll(async () => {
   ids.otherRecent = await writeEpisode(
     'another session wrote down the pool lease',
     VECTORS.otherRecent,
-    { session_id: OTHER_SESSION },
+    { session_id: OTHER_SESSION, ...ownershipSummary([OTHER_SESSION]) },
     BETWEEN,
   );
   ids.ownRecent = await writeEpisode(
     'this session wrote down the pool lease',
     VECTORS.ownRecent,
-    { session_id: ASKING_SESSION },
+    { session_id: ASKING_SESSION, ...ownershipSummary([ASKING_SESSION]) },
     SUPERSEDED_AT,
   );
 
@@ -259,14 +281,18 @@ describe('per-strategy hits', () => {
       await recencySeeds(harness.driver, {
         limit: 50,
         mode: withCurrency(),
-        sessionId: ASKING_SESSION,
+        ownership: {
+          sessionId: ASKING_SESSION,
+          substrateId: SUBSTRATE,
+          acknowledgedSequence: ACKNOWLEDGED_SEQUENCE,
+        },
       }),
     );
 
     expect(plain.indexOf(ids.ownRecent)).toBeLessThan(plain.indexOf(ids.otherRecent));
     expect(asked.indexOf(ids.ownRecent)).toBeGreaterThan(asked.indexOf(ids.otherRecent));
-    // Behind the nodes carrying no session at all as well: provenance nothing can attribute is
-    // provenance the asker has no claim on.
+    // Behind the nodes carrying no summary at all as well: ownership nothing can account for is
+    // ownership the asker has no claim on.
     expect(asked.indexOf(ids.ownRecent)).toBeGreaterThan(asked.indexOf(ids.claimPath));
   });
 

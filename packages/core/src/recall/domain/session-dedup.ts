@@ -2,6 +2,7 @@ import type { MemoryPack, RelatedClaim } from '@aion/protocol';
 import { packBuckets } from '@aion/protocol';
 
 import type { FusedItem } from './fusion.js';
+import type { ResolvedEvidenceView } from './resolved-view.js';
 import { standingFor } from './standing.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 import type { ServedItem } from '../../infrastructure/sqlite/served-items.js';
@@ -79,18 +80,23 @@ export function servedFingerprint(
 export function suppressedRepeats(
   items: readonly FusedItem[],
   served: ReadonlyMap<string, string>,
-  provenance?: ReadonlyMap<string, ItemProvenance>,
-  relatedClaims?: ReadonlyMap<string, RelatedClaim>,
+  view: ResolvedEvidenceView,
 ): ReadonlySet<string> {
   const suppressed = new Set<string>();
   if (served.size === 0) {
     return suppressed;
   }
   for (const item of items) {
+    // An item whose evidence this attempt could not read is served with its gap disclosed. The
+    // fingerprint computed from a degraded reading would say the memory is unchanged, and a
+    // caller told that would never be shown the change it is waiting for.
+    if (view.degraded.has(item.id)) {
+      continue;
+    }
     const fingerprint = servedFingerprint(
       item,
-      provenance?.get(item.id),
-      relatedClaims?.get(item.id),
+      view.provenance.get(item.id),
+      view.relatedClaims.get(item.id),
     );
     if (served.get(item.id) === fingerprint) {
       suppressed.add(item.id);
@@ -133,22 +139,33 @@ export function sessionHoldings(
   return new Set([...suppressed, ...emittedPackIds(pack)]);
 }
 
-/** One fingerprint per holding, which is what the next recall in this session matches against. */
+/**
+ * One fingerprint per holding, which is what the next recall in this session matches against.
+ *
+ * A holding whose evidence this attempt could not read gets no record. Its stored row stands
+ * exactly as the last healthy read left it, so recovery compares the newly certified fingerprint
+ * against what the session was actually told rather than against a reading of an outage. The
+ * price is a repeat while the outage lasts, which is the honest cost of holding no separate
+ * record of what a degraded read delivered.
+ */
 export function servedRecords(
   holdings: ReadonlySet<string>,
   candidates: ReadonlyMap<string, FusedItem>,
-  provenance?: ReadonlyMap<string, ItemProvenance>,
-  relatedClaims?: ReadonlyMap<string, RelatedClaim>,
+  view: ResolvedEvidenceView,
 ): readonly ServedItem[] {
   const records: ServedItem[] = [];
   for (const id of holdings) {
     const candidate = candidates.get(id);
-    if (candidate === undefined) {
+    if (candidate === undefined || view.degraded.has(id)) {
       continue;
     }
     records.push({
       itemId: id,
-      fingerprint: servedFingerprint(candidate, provenance?.get(id), relatedClaims?.get(id)),
+      fingerprint: servedFingerprint(
+        candidate,
+        view.provenance.get(id),
+        view.relatedClaims.get(id),
+      ),
     });
   }
   return records;

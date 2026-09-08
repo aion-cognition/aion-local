@@ -5,10 +5,12 @@ import type { FusedItem } from './fusion.js';
 import {
   emittedPackIds,
   servedFingerprint,
+  servedRecords,
   sessionHoldings,
   suppressedRepeats,
 } from './session-dedup.js';
 import { assemble } from './test-support/pack.fixture.js';
+import { viewOf } from './test-support/resolved-view.fixture.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 
 type ItemOverrides = {
@@ -72,7 +74,9 @@ describe('the served fingerprint', () => {
     const current = item('c1');
 
     expect(servedFingerprint(item('c1', { expired: true }))).not.toBe(servedFingerprint(current));
-    expect([...suppressedRepeats([item('c1', { expired: true })], served(current))]).toEqual([]);
+    expect([
+      ...suppressedRepeats([item('c1', { expired: true })], served(current), viewOf()),
+    ]).toEqual([]);
   });
 
   it("moves when the node's own stated reason changes", () => {
@@ -97,24 +101,26 @@ describe('suppressing what a session already holds', () => {
   it('suppresses an item served earlier that says the same thing now', () => {
     const stored = item('e1');
 
-    expect([...suppressedRepeats([stored], served(stored))]).toEqual(['e1']);
+    expect([...suppressedRepeats([stored], served(stored), viewOf())]).toEqual(['e1']);
   });
 
   it('serves an item this session has never seen', () => {
-    expect([...suppressedRepeats([item('e2')], served(item('e1')))]).toEqual([]);
+    expect([...suppressedRepeats([item('e2')], served(item('e1')), viewOf())]).toEqual([]);
   });
 
   it('serves a changed item again in full rather than treating it as known', () => {
     const first = item('e1', { content: 'polling was too slow' });
     const regrown = item('e1', { content: 'polling was too slow, so ingestion moved to webhooks' });
 
-    expect([...suppressedRepeats([regrown], served(first))]).toEqual([]);
+    expect([...suppressedRepeats([regrown], served(first), viewOf())]).toEqual([]);
   });
 
   it('serves a memory again once it has been superseded', () => {
     const current = item('e1');
 
-    expect([...suppressedRepeats([item('e1', { superseded: true })], served(current))]).toEqual([]);
+    expect([
+      ...suppressedRepeats([item('e1', { superseded: true })], served(current), viewOf()),
+    ]).toEqual([]);
   });
 
   it('cuts only the repeats out of a mixed set', () => {
@@ -124,6 +130,7 @@ describe('suppressing what a session already holds', () => {
     const suppressed = suppressedRepeats(
       [known, item('e2', { content: 'rewritten since' }), item('e3')],
       served(known, changed),
+      viewOf(),
     );
 
     expect([...suppressed]).toEqual(['e1']);
@@ -134,7 +141,7 @@ describe('suppressing what a session already holds', () => {
    * over an empty record, so neither can subtract anything from the pack.
    */
   it('suppresses nothing when the session has no record to match against', () => {
-    expect([...suppressedRepeats([item('e1'), item('e2')], new Map())]).toEqual([]);
+    expect([...suppressedRepeats([item('e1'), item('e2')], new Map(), viewOf())]).toEqual([]);
   });
 });
 
@@ -222,7 +229,7 @@ describe('a memory whose standing moved', () => {
       ...suppressedRepeats(
         [stored],
         new Map([['c1', servedFingerprint(stored, UNCONFIRMED)]]),
-        new Map([['c1', CONFIRMED]]),
+        viewOf({ provenance: new Map([['c1', CONFIRMED]]) }),
       ),
     ]).toEqual([]);
   });
@@ -252,7 +259,7 @@ describe('a memory whose standing moved', () => {
       ...suppressedRepeats(
         [stored],
         new Map([['c1', servedFingerprint(stored, UNCONFIRMED)]]),
-        new Map([['c1', UNCONFIRMED]]),
+        viewOf({ provenance: new Map([['c1', UNCONFIRMED]]) }),
       ),
     ]).toEqual(['c1']);
   });
@@ -279,8 +286,7 @@ describe('a memory whose related claim moved', () => {
       ...suppressedRepeats(
         [turn],
         new Map([['t1', servedFingerprint(turn)]]),
-        undefined,
-        claims(OLD_CLAIM),
+        viewOf({ relatedClaims: claims(OLD_CLAIM) }),
       ),
     ]).toEqual([]);
   });
@@ -295,8 +301,7 @@ describe('a memory whose related claim moved', () => {
       ...suppressedRepeats(
         [turn],
         new Map([['t1', servedFingerprint(turn, undefined, OLD_CLAIM)]]),
-        undefined,
-        claims(NEW_CLAIM),
+        viewOf({ relatedClaims: claims(NEW_CLAIM) }),
       ),
     ]).toEqual([]);
   });
@@ -318,12 +323,7 @@ describe('a memory whose related claim moved', () => {
 
     expect(servedFingerprint(turn, undefined, undefined)).toBe(servedFingerprint(turn));
     expect([
-      ...suppressedRepeats(
-        [turn],
-        new Map([['t1', servedFingerprint(turn)]]),
-        undefined,
-        new Map(),
-      ),
+      ...suppressedRepeats([turn], new Map([['t1', servedFingerprint(turn)]]), viewOf()),
     ]).toEqual(['t1']);
   });
 
@@ -334,8 +334,7 @@ describe('a memory whose related claim moved', () => {
       ...suppressedRepeats(
         [turn],
         new Map([['t1', servedFingerprint(turn, undefined, OLD_CLAIM)]]),
-        undefined,
-        claims(OLD_CLAIM),
+        viewOf({ relatedClaims: claims(OLD_CLAIM) }),
       ),
     ]).toEqual(['t1']);
   });
@@ -344,5 +343,99 @@ describe('a memory whose related claim moved', () => {
     expect(servedFingerprint(item('t1', { rank: 0.4, measured: 0.62 }), undefined, OLD_CLAIM)).toBe(
       servedFingerprint(item('t1', { rank: 0.9, measured: 0.91 }), undefined, OLD_CLAIM),
     );
+  });
+});
+
+/**
+ * What a read serves during an outage, and what it may say about it afterwards.
+ *
+ * The substrate holds no record of what a degraded read delivered, by choice, so the honest
+ * policy is that repeats happen while the outage lasts and no stored fingerprint moves. Recovery
+ * then compares a newly certified fingerprint against what the session was actually told.
+ */
+describe('a reading the stores could not answer for', () => {
+  const HEALTHY: ItemProvenance = { roots: ['ep-1'], complete: true };
+
+  it('serves an item whose evidence this attempt could not read', () => {
+    const stored = item('c1');
+    const holdings = new Map([['c1', servedFingerprint(stored, HEALTHY)]]);
+
+    expect([...suppressedRepeats([stored], holdings, viewOf({ degraded: ['c1'] }))]).toEqual([]);
+  });
+
+  it('records no fingerprint for a degraded holding, so the healthy one stands', () => {
+    const stored = item('c1');
+    const records = servedRecords(
+      new Set(['c1', 'c2']),
+      new Map([
+        ['c1', stored],
+        ['c2', item('c2')],
+      ]),
+      viewOf({ provenance: new Map([['c2', HEALTHY]]), degraded: ['c1'] }),
+    );
+
+    expect(records.map((entry) => entry.itemId)).toEqual(['c2']);
+  });
+
+  /**
+   * Two degraded reads in a row leave the stored row exactly where the healthy read left it, and
+   * both serve. That is the repeat the policy accepts rather than a claim about what changed.
+   */
+  it('leaves the stored row untouched across repeated degraded reads', () => {
+    const stored = item('c1');
+    const healthy = servedFingerprint(stored, HEALTHY);
+    const holdings = new Map([['c1', healthy]]);
+    const outage = viewOf({ degraded: ['c1'] });
+
+    for (const attempt of [1, 2]) {
+      expect([...suppressedRepeats([stored], holdings, outage)]).toEqual([]);
+      expect(servedRecords(new Set(['c1']), new Map([['c1', stored]]), outage)).toEqual([]);
+      expect(attempt).toBeGreaterThan(0);
+    }
+    expect(holdings.get('c1')).toBe(healthy);
+  });
+
+  it('suppresses on recovery when the certified evidence says nothing moved', () => {
+    const stored = item('c1');
+    const holdings = new Map([['c1', servedFingerprint(stored, HEALTHY)]]);
+    const recovered = viewOf({ provenance: new Map([['c1', HEALTHY]]) });
+
+    expect([...suppressedRepeats([stored], holdings, recovered)]).toEqual(['c1']);
+  });
+
+  it('serves on recovery when the certified evidence moved', () => {
+    const stored = item('c1');
+    const holdings = new Map([['c1', servedFingerprint(stored, HEALTHY)]]);
+    const changed: ItemProvenance = {
+      ...HEALTHY,
+      claimedCorrection: { by: 'ep-9', at: new Date('2026-09-02T08:00:00.000Z') },
+    };
+
+    expect([
+      ...suppressedRepeats([stored], holdings, viewOf({ provenance: new Map([['c1', changed]]) })),
+    ]).toEqual([]);
+  });
+
+  /**
+   * A stated reference that resolved to nothing is known semantic metadata rather than a store
+   * that could not be read, so it fingerprints normally and the change reaches the session.
+   */
+  it('treats a certified incomplete lineage as evidence rather than as an outage', () => {
+    const stored = item('c1');
+    const holdings = new Map([['c1', servedFingerprint(stored, HEALTHY)]]);
+    const short: ItemProvenance = { roots: ['ep-1'], complete: false };
+
+    expect([
+      ...suppressedRepeats([stored], holdings, viewOf({ provenance: new Map([['c1', short]]) })),
+    ]).toEqual([]);
+    expect(
+      servedRecords(
+        new Set(['c1']),
+        new Map([['c1', stored]]),
+        viewOf({
+          provenance: new Map([['c1', short]]),
+        }),
+      ),
+    ).toEqual([{ itemId: 'c1', fingerprint: servedFingerprint(stored, short) }]);
   });
 });

@@ -2,23 +2,21 @@ import type { Driver } from 'neo4j-driver';
 
 import { readRelationScope } from './dependencies.js';
 import { durableLineage, type DurableLineage } from './durable-lineage.js';
+import { ownershipIncidence, ownershipSummaryFor } from './ownership.js';
 import {
   fetchClaimProvenance,
   type ItemProvenance,
 } from '../../infrastructure/graph/claim-provenance-queries.js';
 import { isTimeTravel } from '../../infrastructure/graph/read-modes.js';
 import type { EvidenceDependency } from '../../infrastructure/publication/preconditions.js';
-import {
-  committedIncidenceForNodes,
-  committedIncidenceForNodesAt,
-  type CommittedIncidence,
-} from '../../infrastructure/sqlite/committed-evidence.js';
+import type { CommittedIncidence } from '../../infrastructure/sqlite/committed-evidence.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { readSourceRecord } from '../../infrastructure/sqlite/source-identity.js';
 import { readSourceResidency } from '../../infrastructure/sqlite/source-lifecycle.js';
 import type { CheckedReadContext } from '../../recall/application/coverage-checker.js';
 import { evidenceRequestKey, idAddress, type EvidenceAddress } from '../domain/address.js';
 import { utf8Bytes, type RequestBudget } from '../domain/budget.js';
+import { OWNERSHIP_SCOPES, type OwnershipSummary } from '../domain/ownership.js';
 import {
   evidenceResult,
   type EvidenceIssue,
@@ -49,6 +47,8 @@ export type ItemMetadata = {
   readonly sources: readonly string[];
   /** True when the incidence behind the attribution has no census to prove it complete. */
   readonly unknownAttribution: boolean;
+  /** The caller-independent summary the serving layer derives its own/other verdict from. */
+  readonly ownership: OwnershipSummary;
   /**
    * The published narrative revision this item is cited by, when the substrate can say. No
    * producer writes the citation records yet, so the honest answer is that the binding is
@@ -86,16 +86,6 @@ type MetadataDeps = {
   readonly db: SqliteHandle;
 };
 
-/**
- * The roles that make a source an owner of a node: the extraction that minted it and the
- * mentions and participations its writers record about it.
- */
-const OWNERSHIP_SCOPES = [
-  { role: 'extraction', direction: 'out' },
-  { role: 'mention', direction: 'in' },
-  { role: 'participation', direction: 'in' },
-] as const;
-
 const OWNERSHIP_ROLES = new Set<string>(OWNERSHIP_SCOPES.map((entry) => entry.role));
 
 function issueOn(
@@ -126,17 +116,6 @@ function residencyWithoutProjection(db: SqliteHandle, id: string): EvidenceResid
     return 'unknown-mapping';
   }
   return readSourceResidency(db, id)?.state ?? 'resident';
-}
-
-function sessionsOf(db: SqliteHandle, incidence: readonly CommittedIncidence[]): readonly string[] {
-  const sessions = new Set<string>();
-  for (const row of incidence) {
-    const record = readSourceRecord(db, row.sourceId);
-    if (record !== undefined) {
-      sessions.add(record.sessionId);
-    }
-  }
-  return [...sessions];
 }
 
 type IncidenceRead =
@@ -176,14 +155,7 @@ function readIncidence(
   context: CheckedReadContext,
 ): IncidenceRead {
   try {
-    const { knownAt } = context.mode;
-    return {
-      status: 'read',
-      rows:
-        knownAt === undefined
-          ? committedIncidenceForNodes(db, ids)
-          : committedIncidenceForNodesAt(db, ids, knownAt),
-    };
+    return { status: 'read', rows: ownershipIncidence(db, ids, context) };
   } catch {
     return { status: 'unavailable' };
   }
@@ -383,11 +355,20 @@ function readOne(
       return;
     }
 
+    // One derivation for the stored projection and for this answer, so what a nomination reads
+    // off a node and what a serving read decides cannot disagree about whose memory it is.
+    const derived = ownershipSummaryFor(deps.db, id, incidenceOf, input.context, {
+      censusEstablished: attributionProved,
+    });
+    const ownership: OwnershipSummary = overRows
+      ? { sessions: [], unknownAttribution: true, censusEstablished: attributionProved }
+      : derived;
     const value: ItemMetadata = {
       provenance: mergeProvenance(found, durable, input.maxRoots, scope.status === 'verified'),
-      owningSessions: overRows ? [] : sessionsOf(deps.db, owners),
+      owningSessions: ownership.sessions,
       sources: overRows ? [] : [...new Set(owners.map((row) => row.sourceId))],
-      unknownAttribution: !attributionProved || overRows,
+      unknownAttribution: ownership.unknownAttribution || !attributionProved,
+      ownership,
       narrativeBinding: binding,
     };
     if (input.budget.chargeMetadataBytes(utf8Bytes(JSON.stringify(value))) !== undefined) {

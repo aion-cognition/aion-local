@@ -5,6 +5,7 @@ import { foldableClaims } from './pack-duplicates.js';
 import { emittedPackIds } from './session-dedup.js';
 import { candidate, ids, items, list } from './test-support/fusion.fixture.js';
 import { assemble, CAPS, item } from './test-support/pack.fixture.js';
+import { viewOf } from './test-support/resolved-view.fixture.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 
 /**
@@ -153,8 +154,7 @@ describe('two ids that carry one sentence', () => {
     const foldable = foldableClaims({
       items: [first, corrected],
       pairs: [{ left: first.id, right: corrected.id }],
-      provenance,
-      relatedClaims: NO_CLAIMS,
+      view: viewOf({ provenance, relatedClaims: NO_CLAIMS }),
     });
 
     // The eligibility policy already refuses this pair, which is what makes an earlier text-only
@@ -194,8 +194,7 @@ describe('two ids that carry one sentence', () => {
     const foldable = foldableClaims({
       items: [first, second],
       pairs: [{ left: first.id, right: second.id }],
-      provenance,
-      relatedClaims: NO_CLAIMS,
+      view: viewOf({ provenance, relatedClaims: NO_CLAIMS }),
     });
 
     const pack = assemble([first, second], { provenance, foldable });
@@ -213,8 +212,7 @@ describe('two ids that carry one sentence', () => {
     const foldable = foldableClaims({
       items: [first, second],
       pairs: [{ left: first.id, right: second.id }],
-      provenance,
-      relatedClaims: NO_CLAIMS,
+      view: viewOf({ provenance, relatedClaims: NO_CLAIMS }),
     });
 
     expect(foldable.size).toBe(0);

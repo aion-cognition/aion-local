@@ -3,8 +3,9 @@ import { describe, expect, it } from 'vitest';
 
 import type { FusedItem } from './fusion.js';
 import { suppressedOwnSession } from './session-origin.js';
+import { viewOf } from './test-support/resolved-view.fixture.js';
+import type { OwnershipVerdict } from '../../evidence/domain/ownership.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
-import type { ItemOrigin } from '../../infrastructure/graph/origin-queries.js';
 
 type ItemOverrides = {
   readonly labels?: readonly string[];
@@ -37,12 +38,14 @@ function item(id: string, overrides: ItemOverrides = {}): FusedItem {
   };
 }
 
-const OWN: ItemOrigin = { own: true, other: false };
-const SHARED: ItemOrigin = { own: true, other: true };
-const THEIRS: ItemOrigin = { own: false, other: true };
-const UNATTRIBUTED: ItemOrigin = { own: false, other: false };
+const OWN: OwnershipVerdict = 'own_only';
+const SHARED: OwnershipVerdict = 'shared';
+const THEIRS: OwnershipVerdict = 'shared';
+const UNATTRIBUTED: OwnershipVerdict = 'unknown';
 
-function origins(entries: Readonly<Record<string, ItemOrigin>>): ReadonlyMap<string, ItemOrigin> {
+function origins(
+  entries: Readonly<Record<string, OwnershipVerdict>>,
+): ReadonlyMap<string, OwnershipVerdict> {
   return new Map(Object.entries(entries));
 }
 
@@ -55,11 +58,12 @@ function answered(items: readonly FusedItem[]): ReadonlyMap<string, ItemProvenan
 
 function suppress(
   items: readonly FusedItem[],
-  resolved: ReadonlyMap<string, ItemOrigin>,
+  resolved: ReadonlyMap<string, OwnershipVerdict>,
   relatedClaims: ReadonlyMap<string, RelatedClaim> = NO_CLAIMS,
   provenance: ReadonlyMap<string, ItemProvenance> = answered(items),
 ): readonly string[] {
-  return [...suppressedOwnSession({ items, origins: resolved, relatedClaims, provenance })];
+  const view = viewOf({ ownership: resolved, relatedClaims, provenance });
+  return [...suppressedOwnSession({ items, view })];
 }
 
 describe('memories a session made out of its own turns', () => {

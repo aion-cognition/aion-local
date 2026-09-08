@@ -3,7 +3,7 @@ import type { Driver } from 'neo4j-driver';
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { runRead } from './connection.js';
 import { MEMORY_LABEL } from './labels.js';
-import { originPredicates } from './origin-queries.js';
+import { orderedPublicationSequence, ownOnlyDiscount } from './ownership-summary-queries.js';
 import { readModeFragment, type ReadMode } from './read-modes.js';
 import {
   candidateProjection,
@@ -21,15 +21,27 @@ import { toGraphInteger } from './values.js';
  * ordering.
  */
 
+/**
+ * The asking session and the bound its summaries are trusted up to. The caller reads the bound
+ * from the publication control record before nomination runs; an absent one leaves every
+ * candidate on the recency tiers alone.
+ */
+export type RecencyOwnership = {
+  readonly sessionId: string;
+  readonly substrateId: string;
+  /** The last acknowledged publication sequence, as decimal text. */
+  readonly acknowledgedSequence: string;
+};
+
 export type RecencySeedInput = {
   readonly limit: number;
   readonly mode: ReadMode;
   /**
-   * The asking session, when the caller wants its own record ranked last. Absent leaves the
-   * ordering on the two recency tiers alone, which is what a historical read and a caller
-   * inspecting its own session both want.
+   * The asking session and its trust bound, when the caller wants its own record ranked last.
+   * Absent leaves the ordering on the two recency tiers alone, which is what a historical read
+   * and a caller inspecting its own session both want.
    */
-  readonly sessionId?: string;
+  readonly ownership?: RecencyOwnership;
 };
 
 /**
@@ -38,23 +50,22 @@ export type RecencySeedInput = {
  * the leg reads the whole budget and a conversation long enough fills it with its own turns and
  * the claims extracted from them, leaving the spread nothing else to start from.
  *
- * A node with no attributable provenance counts as another session's, the same way the origin
- * subtraction counts it: withholding a memory the asker never saw costs the answer.
+ * A node whose ownership summary is missing, unproved, uncounted or written by another substrate
+ * takes no discount at all. Preserving an extra candidate costs the ordering; discounting one on
+ * an unproved reading costs the answer a memory, and post-query certification cannot recover a
+ * candidate the limit already dropped.
  *
  * The predicate runs over the scan rather than over the page, because the sort is what it is
- * for. That makes an already scan-bound strategy heavier by two existence checks per entity;
- * the checks are guarded by the label test, so every other node type pays for the property
- * comparison alone.
+ * for. It reads properties off the node, so an already scan-bound strategy pays property
+ * comparisons rather than the two existence checks a graph traversal needed.
  */
-function ownershipTier(sessionId: string | undefined): readonly string[] {
-  if (sessionId === undefined) {
+function ownershipTier(ownership: RecencyOwnership | undefined): readonly string[] {
+  if (ownership === undefined) {
     return [];
   }
-  const origin = originPredicates('n', '$sessionId');
   return [
-    `WITH n, ${origin.own} AS own,`,
-    `        ${origin.other} AS other`,
-    'ORDER BY CASE WHEN own AND NOT other THEN 1 ELSE 0 END,',
+    `WITH n, ${ownOnlyDiscount('n')} AS own_only`,
+    'ORDER BY CASE WHEN own_only THEN 1 ELSE 0 END,',
   ];
 }
 
@@ -75,7 +86,7 @@ export async function recencySeeds(
   input: RecencySeedInput,
 ): Promise<SeedCandidate[]> {
   const fragment = readModeFragment(input.mode, 'n');
-  const ownership = ownershipTier(input.sessionId);
+  const ownership = ownershipTier(input.ownership);
   const cypher = [
     `MATCH (n:${MEMORY_LABEL})`,
     `WHERE ${fragment.where}`,
@@ -93,7 +104,15 @@ export async function recencySeeds(
     {
       ...fragment.parameters,
       limit: toGraphInteger(input.limit),
-      ...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
+      ...(input.ownership === undefined
+        ? {}
+        : {
+            ownSessionId: input.ownership.sessionId,
+            ownSubstrateId: input.ownership.substrateId,
+            ownAcknowledgedSequence: orderedPublicationSequence(
+              input.ownership.acknowledgedSequence,
+            ),
+          }),
     },
     mapCandidate,
   );

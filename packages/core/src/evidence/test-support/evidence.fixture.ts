@@ -93,6 +93,8 @@ export function commitIncidence(
     readonly role: string;
     readonly operationId: string;
     readonly at: Date;
+    /** A closed row records an incidence the writers have since retired. */
+    readonly currency?: 'open' | 'closed';
   },
 ): void {
   const linkId = `${input.sourceId}:${input.nodeId}:${input.role}`;
@@ -116,9 +118,9 @@ export function commitIncidence(
   );
   db.prepare(
     `INSERT INTO source_incidence (source_id, node_id, role, currency, link_id, link_version)
-     VALUES (?, ?, ?, 'open', ?, 1)
+     VALUES (?, ?, ?, ?, ?, 1)
      ON CONFLICT (source_id, node_id, role) DO NOTHING`,
-  ).run(input.sourceId, input.nodeId, input.role, linkId);
+  ).run(input.sourceId, input.nodeId, input.role, input.currency ?? 'open', linkId);
   acknowledge(db, input.operationId, input.at);
 }
 

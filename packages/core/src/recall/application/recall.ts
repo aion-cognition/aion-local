@@ -7,57 +7,45 @@ import {
 import type { Driver } from 'neo4j-driver';
 
 import { arrivalIds, buildRankedLists, firstPassIds, toActivationSeed } from './candidates.js';
+import type { CheckedRead } from './coverage-checker.js';
 import { extractCues, type CueCache, type CueExtractionResult } from './cues.js';
 import { triggeredIntentions } from './intentions.js';
 import { readModeFor } from './read-mode.js';
 import { emitRecallTrace, notifyRecalled, type RecallListener } from './recall-observers.js';
 import { activationBudget, admissionFor, capsFor, truncationFor } from './recall-policy.js';
+import { readEvidence, resolvedView } from './resolved-view.js';
 import { resonate, type ResonanceResult } from './resonance.js';
 import { selectSeeds } from './seeds.js';
+import { servingEffects, withCoverage } from './serving-effects.js';
 import {
-  claimProvenance,
   embedCues,
   hydrate,
-  itemOrigins,
   measureArrivals,
   mmrVectors,
   pendingEnrichment,
   relatedClaims,
   restatedClaimPairs,
 } from './stage-reads.js';
-import { recordTypedAdmissions } from './typed-admission-ledger.js';
+import { ownershipNominationHint } from '../../evidence/application/ownership.js';
+import type { EvidenceResolver } from '../../evidence/application/resolver.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { roundMs } from '../../infrastructure/errors.js';
 import { adjacencyFetchFor } from '../../infrastructure/graph/adjacency.js';
-import type { ItemOrigin } from '../../infrastructure/graph/origin-queries.js';
 import { isTimeTravel } from '../../infrastructure/graph/read-modes.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { saveLastPack } from '../../infrastructure/sqlite/last-pack.js';
-import { recordPackMethodMetrics } from '../../infrastructure/sqlite/method-counters.js';
-import { recordRecallOutcome } from '../../infrastructure/sqlite/recall-cadence.js';
-import { recordCueOutcome } from '../../infrastructure/sqlite/recall-samples.js';
-import {
-  deleteServedItems,
-  readServedItems,
-  recordServedItems,
-} from '../../infrastructure/sqlite/served-items.js';
+import { readServedItems } from '../../infrastructure/sqlite/served-items.js';
 import { redactPayload } from '../../redaction/deep-walk.js';
 import type { SessionManager } from '../../session/session-manager.js';
 import { spreadActivation, type ActivationRun } from '../domain/activation.js';
 import { labelBoosts, queryCueTexts, queryRestatements } from '../domain/facts.js';
-import { fuse, withSoleMethod, type FusedItem, type FusionResult } from '../domain/fusion.js';
+import { fuse, type FusedItem, type FusionResult } from '../domain/fusion.js';
 import type { PackDecision } from '../domain/pack-decisions.js';
 import { foldableClaims } from '../domain/pack-duplicates.js';
-import { assemblePack, packMethods } from '../domain/pack.js';
+import { assemblePack } from '../domain/pack.js';
 import type { RecallTraceObserver } from '../domain/recall-trace.js';
-import {
-  emittedPackIds,
-  servedRecords,
-  sessionHoldings,
-  suppressedRepeats,
-} from '../domain/session-dedup.js';
+import { emittedPackIds, suppressedRepeats } from '../domain/session-dedup.js';
 import { suppressedOwnSession } from '../domain/session-origin.js';
 
 /**
@@ -80,6 +68,12 @@ export type RecallDeps = {
   readonly config: Config;
   /** Constructed once per process and threaded through, like `SessionManager`. */
   readonly cueCache: CueCache;
+  /**
+   * The certified evidence surface, supplied by an entry point that also checked coverage. With
+   * both the pack reads its provenance and ownership through the resolver; with neither it reads
+   * them off the graph, which is what it did before the resolver existed.
+   */
+  readonly resolver?: EvidenceResolver;
   readonly logger: Logger;
   readonly onRecalled?: RecallListener;
   /**
@@ -94,10 +88,9 @@ export type RecallOptions = {
   /** The transport's session identity. `session_id` in the payload overrides it. */
   readonly identity: string;
   readonly now?: Date;
+  /** The coverage decision this request was checked under, when an entry point took one. */
+  readonly checked?: CheckedRead;
 };
-
-/** What a disabled knob and a time-traveled read both hand the origin subtraction. */
-const NO_ORIGINS: ReadonlyMap<string, ItemOrigin> = new Map();
 
 const NO_ACTIVATION: ActivationRun = {
   activated: [],
@@ -140,12 +133,12 @@ export async function handleRecall(
   // A compaction summarizes the caller's own transcript, and nothing here can tell which of
   // what it served survived that summary. Leaving the served-items ledger untouched risks
   // withholding text the caller no longer holds. The caller names the epoch itself; recall
-  // has no other way to learn one happened. Scoped to this session only, and applied before
-  // the dedup read below runs, so this one call sees a session that has been served nothing
-  // yet.
-  if (payload.reset_delivery_suppression === true) {
-    deleteServedItems(deps.db, sessionId);
-  }
+  // has no other way to learn one happened.
+  //
+  // Staged rather than done here. The run computes against an empty served set in memory and the
+  // durable rows go only at the successful-read boundary, so a read that then refuses does not
+  // take the caller's holdings with it.
+  const resetDelivery = payload.reset_delivery_suppression === true;
 
   // Fired here rather than awaited here: it depends only on `sessionId` and `mode`, so
   // starting it now lets it run alongside every stage below instead of adding its own
@@ -185,10 +178,19 @@ export async function handleRecall(
   // what the substrate held, so it neither discounts nor subtracts the asker's own record.
   const ownFilter = deps.config.recall.ownSessionFilter && !isTimeTravel(mode);
 
+  // The bound the pre-limit ordering trusts a stored ownership summary up to, read before
+  // nomination runs. It takes no guard, recovers no receipt and waits for nothing: an absent or
+  // stale bound costs the ordering its discount and never costs an answer a memory.
+  const hint = ownFilter ? ownershipNominationHint(deps.db) : undefined;
+
   const selection = await timed(() =>
     selectSeeds(
       { driver: deps.driver, config: deps.config, logger: deps.logger },
-      { cues: embedded.value.cues, mode, ...(ownFilter ? { sessionId } : {}) },
+      {
+        cues: embedded.value.cues,
+        mode,
+        ...(hint === undefined ? {} : { ownership: { ...hint, sessionId } }),
+      },
     ),
   );
   const { seeds } = selection.value;
@@ -287,12 +289,21 @@ export async function handleRecall(
   // pack holding no raw turn issues no claim query at all. None of the three needs another's
   // answer, so they cost one round trip rather than three.
   const ranked = [...candidates.values()];
-  const [claims, origins, provenance, restated] = await Promise.all([
+  const ids = [...candidates.keys()];
+  const [claims, reading, restated] = await Promise.all([
     relatedClaims(deps, ranked, mode),
-    ownFilter ? itemOrigins(deps, [...candidates.keys()], sessionId, mode) : NO_ORIGINS,
-    claimProvenance(deps, [...candidates.keys()], mode),
-    restatedClaimPairs(deps, [...candidates.keys()], mode),
+    readEvidence(deps, {
+      ids,
+      sessionId,
+      mode,
+      attribute: ownFilter,
+      ...(options.checked === undefined ? {} : { context: options.checked.context }),
+    }),
+    restatedClaimPairs(deps, ids, mode),
   ]);
+  // One view per attempt. Suppression, the fold, rendering and the holdings record all read it,
+  // so nothing below can decide from a reading a later stage contradicts.
+  const view = resolvedView({ reading, relatedClaims: claims, sessionId, attribute: ownFilter });
 
   const timings: StageTimingsMs = {
     cues: cues.ms,
@@ -311,29 +322,22 @@ export async function handleRecall(
   // Origin decides first, and what it withholds leaves no served row: the session never read
   // those items, so a later recall must be free to offer them the moment they stop being its own
   // record. Dedup then judges what is left.
-  const suppressedOwn = suppressedOwnSession({
-    items: ranked,
-    origins,
-    relatedClaims: claims,
-    provenance,
-  });
+  const suppressedOwn = suppressedOwnSession({ items: ranked, view });
+  // A staged reset computes against an empty served set: the durable rows are still there, and
+  // this call has to answer as though the session had been served nothing.
+  const served =
+    dedup && !resetDelivery ? readServedItems(deps.db, sessionId) : new Map<string, string>();
   const suppressed = dedup
     ? suppressedRepeats(
         ranked.filter((item) => !suppressedOwn.has(item.id)),
-        readServedItems(deps.db, sessionId),
-        provenance,
-        claims,
+        served,
+        view,
       )
     : new Set<string>();
   // The third subtraction is only made eligible here. Assembly decides it, because an item the
   // other two already cut, or one the budget turns away, is not a copy anybody read and so
   // cannot stand in for another.
-  const foldable = foldableClaims({
-    items: ranked,
-    pairs: restated,
-    provenance,
-    relatedClaims: claims,
-  });
+  const foldable = foldableClaims({ items: ranked, pairs: restated, view });
 
   const truncated = truncationFor(activation.value.termination);
   // Recorded where assembly decides, and only when somebody is watching: a fold, a bucket cap
@@ -363,51 +367,50 @@ export async function handleRecall(
     entityGlossCap: deps.config.recall.entityGlossCap,
     resonant: resonance.value.items,
     intentions: intentions.items,
-    ...(claims.size === 0 ? {} : { relatedClaims: claims }),
-    ...(provenance.size === 0 ? {} : { provenance }),
+    ...(view.relatedClaims.size === 0 ? {} : { relatedClaims: view.relatedClaims }),
+    ...(view.provenance.size === 0 ? {} : { provenance: view.provenance }),
     historical: isTimeTravel(mode),
     suppressed,
     suppressedOwn,
     foldable,
   });
 
+  // What the answer covers, attached to the pack the caller receives rather than to the one
+  // assembly measured: coverage moves no bucket and costs no token budget.
+  const answer =
+    options.checked === undefined ? pack : withCoverage(pack, options.checked.coverage, view);
   const emitted = emittedPackIds(pack);
 
-  saveLastPack(deps.db, sessionId, pack, now.toISOString(), {
-    ...(payload.as_of === undefined ? {} : { asOf: payload.as_of }),
-    ...(payload.knew_at === undefined ? {} : { knewAt: payload.knew_at }),
-  });
-  recordTypedAdmissions(deps.db, sessionId, now, mode, fusion.value.items, admissionPolicy);
-  // A time-traveled read records nothing: it never suppresses, so recording what it served
-  // would make a historical inspection decide what the present-day pack may repeat.
-  if (dedup) {
-    recordServedItems(
-      deps.db,
-      sessionId,
-      servedRecords(sessionHoldings(pack, suppressed), candidates, provenance, claims),
-      now.toISOString(),
-    );
-  }
-  // The cue stage is 60-95% of recall wall time and the first thing contention takes; a
-  // degraded pack is otherwise indistinguishable from a healthy one at the item count.
-  recordCueOutcome(deps.db, cues.value.degradation !== undefined);
-  // Read off the assembled pack, not the stages that fed it: a bucket cap or the token budget can
-  // still drop what fusion admitted, and crediting a dropped item's method would lie about the
-  // spirit metric. The leg stats widen that to every contributing method, not just the one the
-  // rationale names; resonance is folded in as a sole find, since it skips fusion's merge.
-  recordPackMethodMetrics(
-    deps.db,
-    packMethods(pack),
-    withSoleMethod(fusion.value.methodStats, 'resonance', resonance.value.items.length),
-  );
-  // Cadence's raw material: calls per session and the empty-pack rate, from a lifetime
-  // total rather than the degraded-rate window above, which trims to the last 500.
-  recordRecallOutcome(deps.db, {
+  // Every successful-read write in one place and one transaction, reset first. The boundary that
+  // checks the coverage contract takes exactly these two callbacks; until an entry point supplies
+  // one they run here, which is where they ran before.
+  const effects = servingEffects({
+    sessionId,
+    now,
+    mode,
+    pack: answer,
+    temporal: {
+      ...(payload.as_of === undefined ? {} : { asOf: payload.as_of }),
+      ...(payload.knew_at === undefined ? {} : { knewAt: payload.knew_at }),
+    },
+    admission: { policy: admissionPolicy, items: fusion.value.items },
+    candidates,
+    view,
+    suppressed,
+    dedup,
+    cueDegraded: cues.value.degradation !== undefined,
+    methodStats: fusion.value.methodStats,
+    resonantCount: resonance.value.items.length,
     empty:
       fusion.value.items.length === 0 &&
       resonance.value.items.length === 0 &&
       intentions.items.length === 0,
+    resetDelivery,
   });
+  deps.db.transaction(() => {
+    effects.resetDelivery?.(deps.db);
+    effects.persist(deps.db);
+  })();
 
   deps.logger.info(
     {
@@ -473,10 +476,10 @@ export async function handleRecall(
     retrieved,
     emitted,
     admission: fusion.value.admission,
-    pack,
+    pack: answer,
     now,
     mode,
   });
 
-  return pack;
+  return answer;
 }

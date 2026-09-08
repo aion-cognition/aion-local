@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { FusedItem } from './fusion.js';
 import { foldableClaims } from './pack-duplicates.js';
 import { assemble, item } from './test-support/pack.fixture.js';
+import { viewOf } from './test-support/resolved-view.fixture.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 import type { RestatedClaimPair } from '../../infrastructure/graph/near-duplicate-queries.js';
 
@@ -37,8 +38,10 @@ function foldable(
   return foldableClaims({
     items,
     pairs: overrides.pairs ?? pairOf(items),
-    provenance: overrides.provenance ?? read(...items.map((entry) => entry.id)),
-    relatedClaims: overrides.relatedClaims ?? NO_CLAIMS,
+    view: viewOf({
+      provenance: overrides.provenance ?? read(...items.map((entry) => entry.id)),
+      relatedClaims: overrides.relatedClaims ?? NO_CLAIMS,
+    }),
   });
 }
 

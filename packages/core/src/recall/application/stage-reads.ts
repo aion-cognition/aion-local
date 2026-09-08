@@ -212,6 +212,18 @@ export async function relatedClaims(
   }
 }
 
+/** What the provenance read returned, and whether it returned anything at all. */
+export type ProvenanceReading = {
+  readonly records: ReadonlyMap<string, ItemProvenance>;
+  readonly requested: readonly string[];
+  /**
+   * The read itself failed. The empty map that follows is an outage rather than a substrate
+   * holding no source records, and only a caller told which can keep a stored fingerprint from
+   * being overwritten by it.
+   */
+  readonly unavailable: boolean;
+};
+
 /**
  * The source record behind every candidate: what it descends from, what somebody stated
  * corrects it, and who confirmed it with evidence naming them.
@@ -224,19 +236,20 @@ export async function claimProvenance(
   deps: StageReadDeps,
   ids: readonly string[],
   mode: ReadMode,
-): Promise<ReadonlyMap<string, ItemProvenance>> {
+): Promise<ProvenanceReading> {
   if (ids.length === 0) {
-    return new Map();
+    return { records: new Map(), requested: [], unavailable: false };
   }
   try {
-    return await fetchClaimProvenance(deps.driver, {
+    const records = await fetchClaimProvenance(deps.driver, {
       ids,
       maxRoots: MAX_DERIVATION_ROOTS,
       mode,
     });
+    return { records, requested: ids, unavailable: false };
   } catch (err) {
     deps.logger.warn({ err }, 'provenance lookup failed; the pack carries no source records');
-    return new Map();
+    return { records: new Map(), requested: ids, unavailable: true };
   }
 }
 
