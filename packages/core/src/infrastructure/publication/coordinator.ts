@@ -50,6 +50,7 @@ import { readSubstratePairing } from '../sqlite/publication-control.js';
 import {
   acknowledgeCoordinatorRecord,
   coordinatorControl,
+  clearUncommittedPublicationResult,
   discardCoordinatorRecord,
   prepareCoordinatorRecord,
   publicationBindingDigest,
@@ -311,6 +312,9 @@ export class PublicationCoordinator {
       });
       return publicationOutcome(discarded);
     }
+    publicationWrite(this.#options.db, () => {
+      clearUncommittedPublicationResult(this.#options.db, record, lock.receipt.sequence);
+    });
     return this.#apply(lock, record, handler, plan);
   }
 

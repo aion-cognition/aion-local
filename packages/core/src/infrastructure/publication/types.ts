@@ -64,6 +64,11 @@ export type PublicationHandler = {
   prepare(context: PublicationContext, payload: JsonValue): Promise<PublicationPlan>;
   /** Recheck semantic dependencies, source generations and actual published heads. */
   check(context: PublicationContext, plan: PublicationPlan): Promise<PublicationCheck>;
+  /**
+   * Replay only after the locked receipt proves the preceding attempt uncommitted and check
+   * still passes. Mutations must stay within this graph transaction and preserve the prepared
+   * identities. Returned observations may differ on replay; a committed receipt's result is final.
+   */
   applyGraph(context: PublicationContext, plan: PublicationPlan): Promise<JsonValue>;
   prepareSqlite(context: PublicationSqliteContext, plan: PublicationPlan): unknown;
   acknowledgeSqlite(

@@ -219,6 +219,31 @@ export function prepareCoordinatorRecord(
   return record;
 }
 
+/** Only a locked, verified predecessor receipt proves that this journal has no committed owner. */
+export function clearUncommittedPublicationResult(
+  db: SqliteHandle,
+  record: PublicationRecord,
+  guardSequence: string,
+): void {
+  const control = coordinatorControl(db);
+  if (
+    control.lastAckSequence !== guardSequence ||
+    control.pendingOperationId !== record.operationId ||
+    decimalSequence(guardSequence) >= decimalSequence(record.sequence)
+  ) {
+    throw new PublicationInvariantError('publication_result_not_discardable', record.operationId);
+  }
+  const changed = db
+    .prepare(
+      `UPDATE publication_intents SET result_json = NULL, result_digest = NULL
+     WHERE operation_id = ? AND state = 'prepared'`,
+    )
+    .run(record.operationId).changes;
+  if (changed !== 1) {
+    throw new PublicationInvariantError('publication_not_prepared', record.operationId);
+  }
+}
+
 /** Saved while the graph transaction is still open, so a committed receipt has recoverable output. */
 export function savePublicationResult(
   db: SqliteHandle,
