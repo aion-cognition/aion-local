@@ -73,8 +73,10 @@ it('recovers a page committed before progress without publishing duplicate membe
     join(dir, 'members', 'page-00000.json'),
     JSON.stringify({
       cursor: null,
+      next: 'a',
       bytes: 10,
       keys: ['a'],
+      oversized: [],
       rows: [row],
     }),
   );
