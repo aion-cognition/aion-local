@@ -3,9 +3,6 @@ import { randomUUID } from 'node:crypto';
 import type { SqliteHandle } from './database.js';
 import type { ReflectionJob } from './reflection-queue.js';
 
-/** A crashed or hung claimant's job becomes reclaimable after this long with no completion. */
-export const DEFAULT_STALE_CLAIM_TIMEOUT_MS = 5 * 60 * 1000;
-
 type ReflectionJobRow = {
   id: string;
   job_type: string;
@@ -149,10 +146,14 @@ export class ReflectionQueueClaimant {
  * `exceptClaimant` is for a live caller sweeping on a timer rather than at startup: it is
  * still holding claims of its own, for a run in flight or a retry parked on a backoff, and
  * taking those back from itself would run the same episode twice concurrently.
+ *
+ * `timeoutMs` is required: the window is an operator knob
+ * (`AION_WORKER_STALE_CLAIM_TIMEOUT_MS`), and a default here would be a second declaration of
+ * it that the service never reads and nothing keeps in step.
  */
 export function reclaimStaleReflectionJobs(
   db: SqliteHandle,
-  timeoutMs: number = DEFAULT_STALE_CLAIM_TIMEOUT_MS,
+  timeoutMs: number,
   now: Date = new Date(),
   exceptClaimant?: string,
 ): number {

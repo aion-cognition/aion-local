@@ -3,13 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import {
-  DEFAULT_STALE_CLAIM_TIMEOUT_MS,
-  ReflectionQueueClaimant,
-  reclaimStaleReflectionJobs,
-} from './claim.js';
+import { ReflectionQueueClaimant, reclaimStaleReflectionJobs } from './claim.js';
 import { SqliteStore } from './database.js';
 import { enqueueReflectionJob, getReflectionJob } from './reflection-queue.js';
+
+/** Any window will do: these tests move the clock across it rather than waiting one out. */
+const STALE_TIMEOUT_MS = 5 * 60 * 1000;
 
 describe('reflection job claiming', () => {
   let dir: string;
@@ -134,12 +133,8 @@ describe('reflection job claiming', () => {
     const claimant = new ReflectionQueueClaimant();
     claimant.claimNext(store.db);
 
-    const farFuture = new Date(Date.now() + DEFAULT_STALE_CLAIM_TIMEOUT_MS + 1000);
-    const reclaimedCount = reclaimStaleReflectionJobs(
-      store.db,
-      DEFAULT_STALE_CLAIM_TIMEOUT_MS,
-      farFuture,
-    );
+    const farFuture = new Date(Date.now() + STALE_TIMEOUT_MS + 1000);
+    const reclaimedCount = reclaimStaleReflectionJobs(store.db, STALE_TIMEOUT_MS, farFuture);
 
     expect(reclaimedCount).toBe(1);
     const job = getReflectionJob(store.db, id);
@@ -154,11 +149,7 @@ describe('reflection job claiming', () => {
     const claimant = new ReflectionQueueClaimant();
     claimant.claimNext(store.db);
 
-    const reclaimedCount = reclaimStaleReflectionJobs(
-      store.db,
-      DEFAULT_STALE_CLAIM_TIMEOUT_MS,
-      new Date(),
-    );
+    const reclaimedCount = reclaimStaleReflectionJobs(store.db, STALE_TIMEOUT_MS, new Date());
 
     expect(reclaimedCount).toBe(0);
     expect(getReflectionJob(store.db, id)?.claimedBy).toBe(claimant.id);
@@ -166,8 +157,6 @@ describe('reflection job claiming', () => {
 
   it('leaves an unclaimed job alone', () => {
     enqueueReflectionJob(store.db, 'integrate', {});
-    expect(reclaimStaleReflectionJobs(store.db, DEFAULT_STALE_CLAIM_TIMEOUT_MS, new Date())).toBe(
-      0,
-    );
+    expect(reclaimStaleReflectionJobs(store.db, STALE_TIMEOUT_MS, new Date())).toBe(0);
   });
 });
