@@ -223,9 +223,10 @@ are shared with the workstream that owns each area (`floors.fixtures.ts`,
   test:integration` runs both projects; a bare `--project integration` filter skips them.
 - A rehearsal that loads fixtures, injects faults, or tears a store down starts from
   `startRehearsalSubstrate()` (`test-support/consolidation-rehearsal.fixture.ts`) rather than
-  from the harness directly. It refuses a target that resolves to the running endpoint or
-  shares its data directory, and it takes the container down on refusal, before the caller
-  ever holds a driver.
+  from the harness directly. It refuses before anything connects when the environment offers
+  the running endpoint as a test target, then creates a container of its own through
+  `startDedicatedNeo4jHarness()`, because clearing a leased container is itself a write to a
+  store nobody there owns. A refused target is taken down before the caller holds a driver.
 
 ## Measuring the substrate
 
@@ -234,10 +235,24 @@ baseline beside each other. Every read is a read: graph queries route READ, the 
 opens through `openReadOnlySqliteHandle` (which refuses a path holding no substrate and creates
 no schema), and the output never goes back into either store.
 
-Take the SQLite figures from a copy rather than the running file when the service is up, and
-pass `--sqlite <path> --sqlite-source copy_of_live` so the manifest records what was read.
-A copy taken while writers are running is bounded by its window, which is what
-`observationKind` says; it is not a snapshot of the two stores together.
+Take the SQLite figures from a snapshot rather than the running file when the service is up.
+SQLite's backup API is the supported consistent read: it copies through a reader holding its
+own transaction, where copying the database, its log and its index as three files mixes three
+moments. From the host that means a throwaway container with the data volume mounted read-only:
+
+```
+docker run --rm -v aion_aion-data:/data:ro -v <out>:/out -w /app --entrypoint node \
+  aion-local:latest -e "new (require('better-sqlite3'))('/data/aion.sqlite', \
+  { readonly: true, fileMustExist: true }).backup('/out/live-snapshot.sqlite')"
+```
+
+Then pass `--sqlite <snapshot> --sqlite-source backup_api` with
+`--sqlite-acquired-from`/`--sqlite-acquired-until`, so the manifest records that acquisition
+apart from its own graph-read window. The two stores are still read at different moments, which
+is what `observationKind` says; a checkpoint across both is a later obligation.
+
+Each run writes under its own identity and refuses a path a run already took. Two runs claiming
+one immutable record leave nothing able to say which membership a comparison was made against.
 
 Numbers come back through a gauge that carries the population it was counted over, or an
 `unavailable` with the reason. A group whose schema is not installed reports every observation
