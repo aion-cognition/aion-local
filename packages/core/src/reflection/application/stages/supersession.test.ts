@@ -127,6 +127,22 @@ describe('SupersessionStage with an evidence seam', () => {
     expect(outcome.counts?.supersessionWithheld).toBe(1);
     expect(bed.graph.closeStatements()).toEqual([]);
   });
+
+  it('does not complete supersession on a negative result whose evidence moved', async () => {
+    seedContradictingPair();
+    bed.responses = [{ contradicts: false, confidence: 0 }];
+    const evidence = readyEvidence();
+    evidence.confirm = () => ({ status: 'stale', changed: [] });
+
+    const outcome = await new SupersessionStage({ mode: 'unanimous' }).run({
+      ...bed.context(EPISODE_ID),
+      evidence,
+    });
+
+    expect.soft(bed.requests).toHaveLength(1);
+    expect.soft(outcome.retryable).toBe(true);
+    expect.soft(outcome.withheldWork?.length).toBeGreaterThan(0);
+  });
 });
 
 describe('SupersessionStage', () => {

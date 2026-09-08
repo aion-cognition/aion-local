@@ -21,6 +21,7 @@ import {
   resolveSupersessionProposal,
 } from '../../../infrastructure/sqlite/supersession-proposals.js';
 import type { StageContext } from '../../domain/stage.js';
+import { movedWork } from '../evidence-fence.js';
 import {
   applySupersessionProposal,
   UNANIMOUS_APPLY_METHOD,
@@ -173,6 +174,14 @@ function evidenceMoved(ctx: StageContext, pair: JudgedPair): string | undefined 
   return check.status === 'current' ? undefined : check.status;
 }
 
+/** The pair the moved reading left owed, recorded as work rather than as a counter. */
+function retainMoved(pair: JudgedPair, tally: RunTally, moved: string): void {
+  tally.recordWithheld(
+    'retryable',
+    movedWork([pair.candidate.id, pair.subject.id], pair.revision, moved),
+  );
+}
+
 /** Whether this exact pair already carries a decision, applied or dismissed. */
 function decidedAlready(ctx: StageContext, pair: JudgedPair): boolean {
   return findSupersessionProposalsForNode(ctx.db, pair.candidate.id).some(
@@ -212,7 +221,7 @@ async function applyUnanimous(
       },
       'contradiction judgment dropped because its evidence moved while it was made',
     );
-    tally.recordWithheld('retryable');
+    retainMoved(pair, tally, moved);
     return 'withheld';
   }
   const second = describeVeto(verdict);
@@ -273,7 +282,7 @@ export async function applyJudgment(
   if (policy.mode === 'auto' && pair.confidence >= policy.autoConfidence) {
     const moved = evidenceMoved(ctx, pair);
     if (moved !== undefined) {
-      tally.recordWithheld('retryable');
+      retainMoved(pair, tally, moved);
       return 'withheld';
     }
     // The same currency read the unanimous path runs, for the same reason: `supersede`
@@ -297,7 +306,7 @@ export async function applyJudgment(
 
   const moved = evidenceMoved(ctx, pair);
   if (moved !== undefined) {
-    tally.recordWithheld('retryable');
+    retainMoved(pair, tally, moved);
     return 'withheld';
   }
   record(ctx, pair, undefined);

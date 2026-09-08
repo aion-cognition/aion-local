@@ -27,6 +27,7 @@ import {
 } from '../../../infrastructure/graph/supersession-queries.js';
 import type { Vector } from '../../../infrastructure/providers/types.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
+import { evidenceMoved, movedWork } from '../evidence-fence.js';
 
 /**
  * The detection half of supersession. Each fact-bearing node this episode minted is compared against
@@ -260,7 +261,11 @@ export class SupersessionStage implements ReflectionStage {
         continue;
       }
       const judgment = await this.#judge(ctx, subject, candidate, tally, evidence);
-      if (!judgment?.contradicts) {
+      if (judgment === undefined) {
+        continue;
+      }
+      if (!judgment.contradicts) {
+        this.#closeNegative(ctx, subject, candidate, tally, evidence);
         continue;
       }
 
@@ -271,6 +276,35 @@ export class SupersessionStage implements ReflectionStage {
       }
     }
     return undefined;
+  }
+
+  /**
+   * A negative answer settles the pair for this run, so it is fenced like the affirmative one.
+   * The provider was asked, so this is a judgment rather than a skipped nomination, and one made
+   * on a reading that has since moved leaves the pair owed instead of quietly finished.
+   */
+  #closeNegative(
+    ctx: StageContext,
+    subject: EpisodeFactNode,
+    candidate: ContradictionCandidate,
+    tally: RunTally,
+    evidence: JudgmentEvidenceOutcome,
+  ): void {
+    const moved = evidenceMoved(ctx, evidence);
+    if (moved === undefined) {
+      return;
+    }
+    const nodeIds = [candidate.id, subject.id];
+    const work = movedWork(
+      nodeIds,
+      evidence.status === 'ready' ? evidence.revision : undefined,
+      moved,
+    );
+    ctx.logger.info(
+      { episodeId: ctx.episodeId, subjectId: subject.id, candidateId: candidate.id, moved },
+      'contradiction judgment found no contradiction on evidence that has since moved',
+    );
+    tally.recordWithheld('retryable', work);
   }
 
   /** The evidence this pair may be judged on, asked once and used by both passes. */

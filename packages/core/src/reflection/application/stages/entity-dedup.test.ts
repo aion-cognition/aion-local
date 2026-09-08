@@ -198,6 +198,34 @@ function abstaining(): JudgmentEvidence {
   };
 }
 
+/** A seam that assembles both sides, so a test can move what it assembled underneath a judge. */
+function assembled(): JudgmentEvidence {
+  return {
+    assemble: async (pair) => ({
+      status: 'assembled',
+      sides: [
+        {
+          ...pair.sides[0],
+          requiredSources: [],
+          optionalSubjects: [],
+          renderedContext: 'source context',
+          renderedUnits: 20,
+        },
+        {
+          ...pair.sides[1],
+          requiredSources: [],
+          optionalSubjects: [],
+          renderedContext: 'source context',
+          renderedUnits: 20,
+        },
+      ],
+      revision: { contractVersion: 1, dependencies: [], digest: 'read' },
+      omitted: [],
+    }),
+    confirm: () => ({ status: 'current' }),
+  };
+}
+
 describe('tier 3 with an evidence seam', () => {
   it('asks nobody about a pair whose required source is suppressed', async () => {
     seedNearDuplicatePair();
@@ -268,6 +296,19 @@ describe('tier 3 with an evidence seam', () => {
     expect(outcome.retryable).toBe(true);
     expect(outcome.counts?.merge_withheld).toBeGreaterThan(0);
     expect(outcome.withheldWork?.map((work) => work.disposition)).toContain('blocked');
+  });
+
+  it('does not complete the entity stage on a negative decision whose evidence moved', async () => {
+    seedNearDuplicatePair();
+    const judge = refusingJudge();
+    const evidence = assembled();
+    evidence.confirm = () => ({ status: 'stale', changed: [] });
+
+    const outcome = await new EntityDedupStage().run({ ...context(judge), evidence });
+
+    expect.soft(judge.calls).toHaveLength(1);
+    expect.soft(outcome.retryable).toBe(true);
+    expect.soft(outcome.withheldWork?.length).toBeGreaterThan(0);
   });
 });
 

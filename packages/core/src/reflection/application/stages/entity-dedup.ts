@@ -5,10 +5,10 @@ import {
   nominatePairs,
   type NominatedPair,
 } from './entity-dedup-cascade.js';
+import { buildJudgePair, withEvidence } from './entity-dedup-prompt.js';
 import { addTallies, NOTHING_DONE, type CascadeTally } from './entity-dedup-tally.js';
 import {
   judgmentEvidenceFor,
-  statementWithContext,
   withheldWorkFor,
   type JudgmentEvidenceOutcome,
   type WithheldWork,
@@ -18,19 +18,15 @@ import type { DedupEntityDetail } from '../../../infrastructure/graph/entity-ded
 import { findEpisodeEntities } from '../../../infrastructure/graph/entity-queries.js';
 import type { EntityMergeJudgeVerdicts } from '../../../infrastructure/sqlite/entity-merge-decisions.js';
 import { recordEntityMergeProposal } from '../../../infrastructure/sqlite/entity-merge-proposals.js';
-import { describeEntityPairFacts, nameFormRelation } from '../../domain/entity-cascade.js';
 import { selectCanonical } from '../../domain/entity-merge.js';
-import { parseTypeCounts } from '../../domain/entity-reconciliation.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
 import {
   ENTITY_MERGE_ROUTE_RESERVE,
   judgeEntityMerge,
   reviewEntityMerge,
-  type EntityMergePair,
-  type EntityMergeSide,
 } from '../entity-merge-judge.js';
 import { applyEntityMerge, collectMergeSignals } from '../entity-merge-writer.js';
-import { evidenceMoved } from '../evidence-fence.js';
+import { evidenceMoved, movedWork } from '../evidence-fence.js';
 
 /**
  * The entity dedup cascade, four tiers deep, run over the entities this episode mentioned.
@@ -88,23 +84,6 @@ export type EntityDedupStageOptions = {
 };
 
 const DEFAULT_MAX_JUDGMENTS = 8;
-
-/** What one run of the cascade did, summed across its tiers. */
-/** The pair a judge sees, carrying whatever sources the resolver reserved for each side. */
-function withEvidence(pair: EntityMergePair, evidence: JudgmentEvidenceOutcome): EntityMergePair {
-  if (evidence.status !== 'ready') {
-    return pair;
-  }
-  const [left, right] = evidence.sides;
-  return {
-    ...pair,
-    facts: [
-      ...pair.facts,
-      statementWithContext(`${pair.subject.name} rests on:`, left),
-      statementWithContext(`${pair.candidate.name} rests on:`, right),
-    ],
-  };
-}
 
 /** What one judged pair came to, before it is folded into the run's tally. */
 type PairOutcome = { readonly tally: CascadeTally; readonly work?: WithheldWork };
@@ -338,31 +317,28 @@ export class EntityDedupStage implements ReflectionStage {
       );
       return { tally: asked };
     }
+    // A refusal settles the pair as much as a merge does, so it is fenced the same way.
     if (!detect.judgment.same) {
-      return { tally: asked };
+      return this.#withheldIfMoved(ctx, [left.id, right.id], evidence, asked) ?? { tally: asked };
     }
 
     const review = await reviewEntityMerge(ctx.provider, prompt, options);
     // An unanswered second pass is a split, not a pass: a merge the substrate cannot defend is
     // a merge it does not make, and the pair goes to the residue lane rather than through.
-    if (review.status === 'failed' || !review.review.same) {
-      this.#recordProposal(ctx, left, right, pair);
-      return { tally: addTallies(asked, { ...NOTHING_DONE, proposals: 1 }) };
-    }
     // The kill switch stops the write and nothing else. Both passes still run, so a deployment
     // holding the tier back keeps the queue it would have merged and the reasons behind it.
-    if (this.#options.mode === 'propose') {
+    if (review.status === 'failed' || !review.review.same || this.#options.mode === 'propose') {
+      const withheld = this.#withheldIfMoved(ctx, [left.id, right.id], evidence, asked);
+      if (withheld !== undefined) {
+        return withheld;
+      }
       this.#recordProposal(ctx, left, right, pair);
       return { tally: addTallies(asked, { ...NOTHING_DONE, proposals: 1 }) };
     }
 
-    const moved = evidenceMoved(ctx, evidence);
-    if (moved !== undefined) {
-      ctx.logger.info(
-        { leftId: left.id, rightId: right.id, moved },
-        'entity merge dropped because its evidence moved while it was judged',
-      );
-      return { tally: addTallies(asked, { ...NOTHING_DONE, withheld: 1 }) };
+    const merging = this.#withheldIfMoved(ctx, [left.id, right.id], evidence, asked);
+    if (merging !== undefined) {
+      return merging;
     }
 
     const merged = await this.#mergeJudged(ctx, cache, left, right, pair, {
@@ -371,6 +347,32 @@ export class EntityDedupStage implements ReflectionStage {
     });
     return {
       tally: addTallies(asked, merged ? { ...NOTHING_DONE, merges: 1, groups: 1 } : NOTHING_DONE),
+    };
+  }
+
+  /**
+   * A decision this pair's evidence no longer supports. The provider was asked, so the pair is
+   * counted as judged; what it decided is not recorded, and the pair stays owed with the reading
+   * it was decided on.
+   */
+  #withheldIfMoved(
+    ctx: StageContext,
+    ids: readonly [string, string],
+    evidence: JudgmentEvidenceOutcome,
+    asked: CascadeTally,
+  ): PairOutcome | undefined {
+    const moved = evidenceMoved(ctx, evidence);
+    if (moved === undefined) {
+      return undefined;
+    }
+    ctx.logger.info(
+      { leftId: ids[0], rightId: ids[1], moved },
+      'entity merge dropped because its evidence moved while it was judged',
+    );
+    const work = movedWork(ids, evidence.status === 'ready' ? evidence.revision : undefined, moved);
+    return {
+      tally: addTallies(asked, { ...NOTHING_DONE, withheld: 1 }),
+      ...(work === undefined ? {} : { work }),
     };
   }
 
@@ -440,34 +442,4 @@ export class EntityDedupStage implements ReflectionStage {
       createdAt: ctx.now.toISOString(),
     });
   }
-}
-
-function toJudgeSide(detail: DedupEntityDetail): EntityMergeSide {
-  const description = detail.description.trim();
-  return {
-    name: detail.name,
-    aliases: detail.aliases,
-    type: detail.type,
-    typeCounts: parseTypeCounts(detail.typeCounts),
-    ...(description.length === 0 ? {} : { description }),
-  };
-}
-
-function buildJudgePair(
-  left: DedupEntityDetail,
-  right: DedupEntityDetail,
-  pair: NominatedPair,
-): EntityMergePair {
-  return {
-    subject: toJudgeSide(left),
-    candidate: toJudgeSide(right),
-    facts: describeEntityPairFacts({
-      leftName: left.name,
-      rightName: right.name,
-      relation: nameFormRelation(left.name, right.name),
-      leftMentionCount: left.mentionCount,
-      rightMentionCount: right.mentionCount,
-      ...(pair.signals === undefined ? {} : { signals: pair.signals }),
-    }),
-  };
 }
