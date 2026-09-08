@@ -18,9 +18,11 @@ import {
   type SupersessionProposal,
 } from '../../../infrastructure/sqlite/supersession-proposals.js';
 import {
+  ENTITY_MERGE_OVER_ALLOWANCE,
   judgeEntityMerge,
   reviewEntityMerge,
   type EntityMergePair,
+  type OverAllowance,
 } from '../../../reflection/application/entity-merge-judge.js';
 import { applyEntityMergeProposal } from '../../../reflection/application/entity-merge-review.js';
 import {
@@ -160,15 +162,30 @@ async function decideContradiction(
   return { decision: holds ? 'apply' : 'dismiss', grounds };
 }
 
+/** Why a pass gave no verdict: it could not be submitted at all, or it answered unusably. */
+function describeUnanswered(
+  outcome: { readonly status: 'failed'; readonly detail: string } | OverAllowance,
+): string {
+  return outcome.status === 'over-allowance'
+    ? `${ENTITY_MERGE_OVER_ALLOWANCE} at ${String(outcome.units)} units`
+    : outcome.detail;
+}
+
 async function decideMerge(ctx: OperationContext, pair: EntityMergePair): Promise<Verdict> {
   const options = judgeOptions(ctx);
   const first = await judgeEntityMerge(ctx.provider, pair, options);
   if (first.status !== 'judged') {
-    return { decision: 'unanswered', detail: `the first pass failed: ${first.detail}` };
+    return {
+      decision: 'unanswered',
+      detail: `the first pass failed: ${describeUnanswered(first)}`,
+    };
   }
   const second = await reviewEntityMerge(ctx.provider, pair, options);
   if (second.status !== 'reviewed') {
-    return { decision: 'unanswered', detail: `the second pass failed: ${second.detail}` };
+    return {
+      decision: 'unanswered',
+      detail: `the second pass failed: ${describeUnanswered(second)}`,
+    };
   }
   const grounds =
     `first pass: ${first.judgment.same ? 'one referent' : 'two referents'} ` +

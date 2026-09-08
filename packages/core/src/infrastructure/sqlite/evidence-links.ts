@@ -175,6 +175,71 @@ export function listStatedLinks(db: SqliteHandle, fromId: string): readonly Stat
 }
 
 /**
+ * How many stated references of one kind a source recorded, without materializing them. A reader
+ * with an allowance charges what a read will cost before it pays it, and only a count can say.
+ */
+export function countStatedLinksOfKind(db: SqliteHandle, fromId: string, kind: string): number {
+  const row = db
+    .prepare(
+      `SELECT count(*) AS n
+       FROM evidence_links l
+       JOIN evidence_link_versions v ON v.link_id = l.link_id
+       WHERE l.from_id = ? AND l.kind = ?`,
+    )
+    .get(fromId, kind) as { n: number };
+  return row.n;
+}
+
+/** The same rows, of one kind and no more of them than the caller charged for. */
+export function listStatedLinksOfKind(
+  db: SqliteHandle,
+  fromId: string,
+  kind: string,
+  limit: number,
+): readonly StatedLinkRow[] {
+  const rows = db
+    .prepare(
+      `SELECT l.link_id, l.kind, l.qualifier, l.to_id, v.version, v.known_from, v.reference_version
+       FROM evidence_links l
+       JOIN evidence_link_versions v ON v.link_id = l.link_id
+       WHERE l.from_id = ? AND l.kind = ?
+       ORDER BY v.reference_version, l.to_id, v.version
+       LIMIT ?`,
+    )
+    .all(fromId, kind, limit) as {
+    link_id: string;
+    kind: string;
+    qualifier: string;
+    to_id: string;
+    version: number;
+    known_from: string | null;
+    reference_version: number | null;
+  }[];
+  return rows.map((row) => ({
+    linkId: row.link_id,
+    kind: row.kind,
+    qualifier: row.qualifier,
+    toId: row.to_id,
+    version: row.version,
+    knownFrom: row.known_from,
+    referenceVersion: row.reference_version,
+  }));
+}
+
+/** How many stated references name one target, charged before the rows behind them are read. */
+export function countStatedLinksTo(db: SqliteHandle, toId: string): number {
+  const row = db
+    .prepare(
+      `SELECT count(*) AS n
+       FROM evidence_links l
+       JOIN evidence_link_versions v ON v.link_id = l.link_id
+       WHERE l.to_id = ?`,
+    )
+    .get(toId) as { n: number };
+  return row.n;
+}
+
+/**
  * Every stated reference recorded AT one target, which is how a correction or a confirmation is
  * found from the side it was made about. The edge in the graph is a projection of these rows, so
  * this answers after that projection is gone.

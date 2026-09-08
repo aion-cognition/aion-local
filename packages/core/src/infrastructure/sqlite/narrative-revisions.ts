@@ -330,6 +330,20 @@ export function readCitationsFrom(
   return rows.map((row) => ({ targetId: row.target_id, targetKind: row.target_kind }));
 }
 
+/** How many targets a revision cites, charged before the rows are read. */
+export function countCitationsFrom(db: SqliteHandle, narrativeNodeId: string, at?: Date): number {
+  const clause = at === undefined ? '' : 'AND p.known_from <= ?';
+  const parameters = at === undefined ? [narrativeNodeId] : [narrativeNodeId, at.toISOString()];
+  const row = db
+    .prepare(
+      `SELECT count(*) AS n FROM revision_citations c
+       JOIN (${PUBLISHED_REVISIONS}) p ON p.node_id = c.narrative_node_id
+       WHERE c.narrative_node_id = ? ${clause}`,
+    )
+    .get(...parameters) as { n: number };
+  return row.n;
+}
+
 /** Whether an id names a narrative revision at all, which decides if it has citations to cross. */
 export function isNarrativeRevisionNode(db: SqliteHandle, nodeId: string): boolean {
   return (

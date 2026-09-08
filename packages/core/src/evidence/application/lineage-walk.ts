@@ -4,14 +4,20 @@ import type { EvidenceDependency } from '../../infrastructure/publication/precon
 import {
   committedIncidenceForNode,
   committedIncidenceForNodesAt,
+  countCommittedIncidenceForNode,
 } from '../../infrastructure/sqlite/committed-evidence.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { listStatedLinks } from '../../infrastructure/sqlite/evidence-links.js';
 import {
+  countStatedLinksOfKind,
+  listStatedLinksOfKind,
+} from '../../infrastructure/sqlite/evidence-links.js';
+import {
+  countCitationsFrom,
   isNarrativeRevisionNode,
   readCitationsFrom,
 } from '../../infrastructure/sqlite/narrative-revisions.js';
 import { partOwnerSource } from '../../infrastructure/sqlite/reference-targets.js';
+import type { RequestBudget } from '../domain/budget.js';
 import { durableRoleScope, NARRATIVE_SCOPES } from '../domain/scopes.js';
 
 /**
@@ -27,6 +33,10 @@ import { durableRoleScope, NARRATIVE_SCOPES } from '../domain/scopes.js';
  * only thing that never ends is a branch that reaches an id already on its own path back. One
  * shared set cannot tell the two apart, so the path is what detects the loop and a separate
  * record of what has already been expanded is what keeps the walk from redoing work.
+ *
+ * The hop bound is not a bound on the work. Four hops of unbounded fan-out is unbounded, so every
+ * frontier read is charged from a count against the request's own remaining allowance before its
+ * rows exist, and a frontier the request cannot afford ends the branch short and says so.
  */
 
 const DERIVATION = 'derived_from';
@@ -62,15 +72,29 @@ function stepOf(qualifier: string, id: string): Step | undefined {
 class Frontier {
   readonly #db: SqliteHandle;
   readonly #at: Date | undefined;
+  readonly #budget: RequestBudget | undefined;
   readonly roots = new Set<string>();
   readonly lineage = new Set<string>();
   readonly dependencies: EvidenceDependency[] = [];
   readonly #expanded = new Set<string>();
   complete = true;
 
-  constructor(db: SqliteHandle, at: Date | undefined) {
+  constructor(db: SqliteHandle, at: Date | undefined, budget: RequestBudget | undefined) {
     this.#db = db;
     this.#at = at;
+    this.#budget = budget;
+  }
+
+  /**
+   * Charges what a frontier read is about to cost. A charge that does not fit spends nothing and
+   * ends the branch: a bound applied to rows a read already returned has not bounded the read.
+   */
+  #afford(rows: number): boolean {
+    if (this.#budget?.chargeRelationRows(rows) === undefined) {
+      return true;
+    }
+    this.complete = false;
+    return false;
   }
 
   /** Records one scope reading; an uncounted scope ends that branch short rather than silently. */
@@ -86,8 +110,12 @@ class Frontier {
 
   /** A raw source: its stated parents, or the end of the chain where it states none. */
   #fromSource(id: string): readonly Step[] {
-    const stated = listStatedLinks(this.#db, id).filter(
-      (link) => link.kind === DERIVATION && visibleAt(link.knownFrom, this.#at),
+    const declared = countStatedLinksOfKind(this.#db, id, DERIVATION);
+    if (!this.#afford(declared)) {
+      return [];
+    }
+    const stated = listStatedLinksOfKind(this.#db, id, DERIVATION, declared).filter((link) =>
+      visibleAt(link.knownFrom, this.#at),
     );
     if (
       !this.#counted(
@@ -117,6 +145,9 @@ class Frontier {
 
   /** A retained interpretation: the captures it was extracted from, and what it cites. */
   #fromRetained(id: string): readonly Step[] {
+    if (!this.#afford(countCommittedIncidenceForNode(this.#db, id, 'extraction'))) {
+      return [];
+    }
     const rows =
       this.#at === undefined
         ? committedIncidenceForNode(this.#db, id, 'extraction')
@@ -138,6 +169,9 @@ class Frontier {
 
   /** A published revision: the targets it cited, which is its own step in the chain. */
   #fromNarrative(id: string): readonly Step[] {
+    if (!this.#afford(countCitationsFrom(this.#db, id, this.#at))) {
+      return [];
+    }
     const citations = readCitationsFrom(this.#db, id, this.#at);
     if (!this.#counted('node', id, CITATION_SCOPE, citations.length === 0)) {
       return [];
@@ -207,8 +241,9 @@ export function walkLineage(
   db: SqliteHandle,
   sourceIds: readonly string[],
   at: Date | undefined,
+  budget?: RequestBudget,
 ): Walk {
-  const frontier = new Frontier(db, at);
+  const frontier = new Frontier(db, at, budget);
   for (const id of new Set(sourceIds)) {
     frontier.walk({ id, kind: 'source' }, new Set(), 0);
   }

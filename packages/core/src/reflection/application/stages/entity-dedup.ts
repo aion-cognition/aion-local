@@ -13,6 +13,7 @@ import {
   type JudgmentEvidenceOutcome,
   type WithheldWork,
 } from '../../../evidence/application/judgment.js';
+import { idAddress } from '../../../evidence/domain/address.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { DedupEntityDetail } from '../../../infrastructure/graph/entity-dedup-queries.js';
 import { findEpisodeEntities } from '../../../infrastructure/graph/entity-queries.js';
@@ -21,6 +22,7 @@ import { recordEntityMergeProposal } from '../../../infrastructure/sqlite/entity
 import { selectCanonical } from '../../domain/entity-merge.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
 import {
+  ENTITY_MERGE_OVER_ALLOWANCE,
   ENTITY_MERGE_ROUTE_RESERVE,
   judgeEntityMerge,
   reviewEntityMerge,
@@ -310,6 +312,9 @@ export class EntityDedupStage implements ReflectionStage {
     const asked: CascadeTally = { ...NOTHING_DONE, judged: 1 };
 
     const detect = await judgeEntityMerge(ctx.provider, prompt, options);
+    if (detect.status === 'over-allowance') {
+      return this.#overAllowance(ctx, [left.id, right.id], evidence, detect.units);
+    }
     if (detect.status === 'failed') {
       ctx.logger.warn(
         { leftId: left.id, rightId: right.id, detail: detect.detail },
@@ -323,6 +328,9 @@ export class EntityDedupStage implements ReflectionStage {
     }
 
     const review = await reviewEntityMerge(ctx.provider, prompt, options);
+    if (review.status === 'over-allowance') {
+      return this.#overAllowance(ctx, [left.id, right.id], evidence, review.units);
+    }
     // An unanswered second pass is a split, not a pass: a merge the substrate cannot defend is
     // a merge it does not make, and the pair goes to the residue lane rather than through.
     // The kill switch stops the write and nothing else. Both passes still run, so a deployment
@@ -347,6 +355,38 @@ export class EntityDedupStage implements ReflectionStage {
     });
     return {
       tally: addTallies(asked, merged ? { ...NOTHING_DONE, merges: 1, groups: 1 } : NOTHING_DONE),
+    };
+  }
+
+  /**
+   * The pair whose own rendered messages exceed what the route may spend. Nothing was asked and
+   * nothing decided, so this is required evidence the substrate could not submit rather than a
+   * judgment: it counts as withheld work carrying the pair and its reading, never as a judged
+   * pair or a proposal a person is expected to look at.
+   */
+  #overAllowance(
+    ctx: StageContext,
+    ids: readonly [string, string],
+    evidence: JudgmentEvidenceOutcome,
+    units: number,
+  ): PairOutcome {
+    ctx.logger.info(
+      { leftId: ids[0], rightId: ids[1], units },
+      'entity merge withheld because its rendered input exceeds the route allowance',
+    );
+    const revision = evidence.status === 'ready' ? evidence.revision : undefined;
+    const tally: CascadeTally = { ...NOTHING_DONE, withheld: 1 };
+    if (revision === undefined) {
+      return { tally };
+    }
+    return {
+      tally,
+      work: withheldWorkFor(ids, {
+        kind: 'retryable',
+        reason: ENTITY_MERGE_OVER_ALLOWANCE,
+        addresses: ids.map((id) => idAddress(id)),
+        revision,
+      }),
     };
   }
 

@@ -157,26 +157,38 @@ const ReviewSchema = z.object({
   reason: z.string().optional(),
 });
 
-/** `failed` covers a call that threw, timed out, or answered in a shape the schema refuses. */
+/**
+ * `failed` covers a call that threw, timed out, or answered in a shape the schema refuses.
+ *
+ * `over-allowance` is not one of those. Nothing was asked and nothing answered: the messages this
+ * pass assembled do not fit what the route may spend, which is required evidence the substrate
+ * could not submit. A caller that folded it into `failed` would count an unasked pair as an
+ * unusable answer and let the stage close on it.
+ */
+export type OverAllowance = { readonly status: 'over-allowance'; readonly units: number };
+
 export type EntityMergeJudgeOutcome =
   | { readonly status: 'judged'; readonly judgment: EntityMergeJudgePass }
-  | { readonly status: 'failed'; readonly detail: string };
+  | { readonly status: 'failed'; readonly detail: string }
+  | OverAllowance;
 
 export type EntityMergeReviewOutcome =
   | { readonly status: 'reviewed'; readonly review: EntityMergeJudgePass }
-  | { readonly status: 'failed'; readonly detail: string };
+  | { readonly status: 'failed'; readonly detail: string }
+  | OverAllowance;
 
 async function ask(
   provider: Pick<Provider, 'generate'>,
   messages: ChatMessage[],
   schema: JsonSchema,
   options: EntityMergeCallOptions,
-): Promise<{ readonly raw: unknown } | { readonly detail: string }> {
+): Promise<{ readonly raw: unknown } | { readonly detail: string } | OverAllowance> {
   // What this pass is about to send, measured as it will be sent. The pair's variable fields —
   // aliases, type counts, descriptions and the facts the caller appended — are inside these
   // messages, so the bound covers them rather than a constant standing in for them.
-  if (admitRenderedInput('entity_merge', messages).status === 'over') {
-    return { detail: ENTITY_MERGE_OVER_ALLOWANCE };
+  const admission = admitRenderedInput('entity_merge', messages);
+  if (admission.status === 'over') {
+    return { status: 'over-allowance', units: admission.units };
   }
   const deadline = deadlineFor(options.timeoutMs, options.signal);
   if (deadline.signal.aborted) {
@@ -220,6 +232,9 @@ export async function judgeEntityMerge(
     DETECT_JSON_SCHEMA,
     options,
   );
+  if ('status' in answer) {
+    return answer;
+  }
   if ('detail' in answer) {
     return { status: 'failed', detail: answer.detail };
   }
@@ -253,6 +268,9 @@ export async function reviewEntityMerge(
     REVIEW_JSON_SCHEMA,
     options,
   );
+  if ('status' in answer) {
+    return answer;
+  }
   if ('detail' in answer) {
     return { status: 'failed', detail: answer.detail };
   }

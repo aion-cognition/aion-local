@@ -298,6 +298,21 @@ describe('tier 3 with an evidence seam', () => {
     expect(outcome.withheldWork?.map((work) => work.disposition)).toContain('blocked');
   });
 
+  it('retains entity work when final rendered admission prevents the judge call', async () => {
+    seedNearDuplicatePair();
+    graph.nodes.get('strong')!.properties[MEMORY_PROPERTIES.text] = 'x'.repeat(20000);
+    const judge = scriptedJudge();
+
+    const outcome = await new EntityDedupStage().run({ ...context(judge), evidence: assembled() });
+
+    expect.soft(judge.calls).toHaveLength(0);
+    expect.soft(outcome.retryable).toBe(true);
+    expect.soft(outcome.withheldWork?.length).toBeGreaterThan(0);
+    // Nothing was asked, so nothing was judged and no proposal was queued for a person.
+    expect.soft(outcome.counts?.merge_judgments).toBe(0);
+    expect.soft(outcome.counts?.merge_proposals).toBe(0);
+  });
+
   it('does not complete the entity stage on a negative decision whose evidence moved', async () => {
     seedNearDuplicatePair();
     const judge = refusingJudge();

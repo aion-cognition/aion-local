@@ -358,7 +358,7 @@ function readOne(
       });
     }
 
-    const durable = durableLineage(deps.db, id, rows, input.context.mode.knownAt);
+    const durable = durableLineage(deps.db, id, rows, input.context.mode.knownAt, input.budget);
     // Every scope the walk consulted travels with the answer, so a writer fencing on this
     // revision fences on the parents and citations the roots were derived through.
     dependencies.push(...durable.dependencies);

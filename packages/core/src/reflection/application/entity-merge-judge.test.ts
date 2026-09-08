@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   describeEntityMergePair,
-  ENTITY_MERGE_OVER_ALLOWANCE,
   judgeEntityMerge,
   reviewEntityMerge,
   type EntityMergePair,
@@ -226,8 +225,16 @@ describe('what an entity merge pass is allowed to submit', () => {
     const detect = await judgeEntityMerge(provider, oversized, { model: 'm', timeoutMs: 1_000 });
     const review = await reviewEntityMerge(provider, oversized, { model: 'm', timeoutMs: 1_000 });
 
-    expect(detect).toEqual({ status: 'failed', detail: ENTITY_MERGE_OVER_ALLOWANCE });
-    expect(review).toEqual({ status: 'failed', detail: ENTITY_MERGE_OVER_ALLOWANCE });
+    // Not an unusable answer: nothing was submitted, so the caller keeps the pair owed rather
+    // than counting a judgment nobody made.
+    expect(detect.status).toBe('over-allowance');
+    expect(review.status).toBe('over-allowance');
+    expect(detect.status === 'over-allowance' ? detect.units : 0).toBeGreaterThan(
+      JUDGE_ROUTE_ALLOWANCE.entity_merge,
+    );
+    expect(review.status === 'over-allowance' ? review.units : 0).toBeGreaterThan(
+      JUDGE_ROUTE_ALLOWANCE.entity_merge,
+    );
     expect(calls).toEqual([]);
   });
 });

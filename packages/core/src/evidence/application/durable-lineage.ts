@@ -4,10 +4,12 @@ import type { EvidenceDependency } from '../../infrastructure/publication/precon
 import type { CommittedIncidence } from '../../infrastructure/sqlite/committed-evidence.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
+  countStatedLinksTo,
   listStatedLinksTo,
   readStatedLinkValues,
 } from '../../infrastructure/sqlite/evidence-links.js';
 import { readCitationsOf } from '../../infrastructure/sqlite/narrative-revisions.js';
+import type { RequestBudget } from '../domain/budget.js';
 import { NARRATIVE_SCOPES } from '../domain/scopes.js';
 
 /**
@@ -86,14 +88,21 @@ export function durableLineage(
   nodeId: string,
   rows: readonly CommittedIncidence[],
   at: Date | undefined,
+  budget?: RequestBudget,
 ): DurableLineage {
   const walk = walkLineage(
     db,
     rows.map((row) => row.sourceId),
     at,
+    budget,
   );
   const dependencies = [...walk.dependencies];
-  const stated = listStatedLinksTo(db, nodeId).filter((link) => visibleAt(link.knownFrom, at));
+  // What has been stated about this node is charged the same way its ancestry is.
+  const declared = countStatedLinksTo(db, nodeId);
+  const affordable = budget?.chargeRelationRows(declared) === undefined;
+  const stated = affordable
+    ? listStatedLinksTo(db, nodeId).filter((link) => visibleAt(link.knownFrom, at))
+    : [];
   const latest = (kind: string): (typeof stated)[number] | undefined =>
     [...stated].reverse().find((link) => link.kind === kind);
   const corrects = latest('corrects');
@@ -110,7 +119,7 @@ export function durableLineage(
   return {
     roots: walk.roots,
     lineage: walk.lineage,
-    complete: walk.complete,
+    complete: walk.complete && affordable,
     citedBy: citations.ids,
     citationsProved: citations.proved,
     dependencies,

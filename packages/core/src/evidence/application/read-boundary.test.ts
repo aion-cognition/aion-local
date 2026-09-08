@@ -24,6 +24,7 @@ import {
 } from '../../infrastructure/sqlite/narrative-revisions.js';
 import * as publicationStore from '../../infrastructure/sqlite/publication-coordinator-store.js';
 import { idAddress } from '../domain/address.js';
+import { EVIDENCE_LIMITS, RequestBudget } from '../domain/budget.js';
 import { GRAPH_NODE_SCOPE } from '../domain/scopes.js';
 import {
   checkedContext,
@@ -302,4 +303,23 @@ it('does not expose a later published citation at an earlier knowledge vantage',
   expect(batch.results.get(JSON.stringify(['id', 'old']))?.value?.narrativeBinding.status).not.toBe(
     'cited',
   );
+});
+
+it('does not materialize a parent fanout beyond the remaining relation budget', async () => {
+  for (let i = 0; i < 5; i++) {
+    source(`parent-${String(i)}`);
+    derive('left', `parent-${String(i)}`, `parent-link-${String(i)}`);
+  }
+  const original = links.listStatedLinks;
+  let returned = 0;
+  vi.spyOn(links, 'listStatedLinks').mockImplementation((db, id) => {
+    const rows = original(db, id);
+    returned += rows.length;
+    return rows;
+  });
+  await resolver().resolveMetadata(['old'], checkedContext(), {
+    maxRoots: 10,
+    budget: new RequestBudget({ ...EVIDENCE_LIMITS, relationRows: 2 }),
+  });
+  expect(returned).toBeLessThanOrEqual(2);
 });
