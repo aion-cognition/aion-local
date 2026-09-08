@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { JUDGE_OUTPUT_RESERVE } from '../../evidence/domain/budget.js';
+import { admitRenderedInput, JUDGE_OUTPUT_RESERVE } from '../../evidence/domain/budget.js';
 import { errorMessage } from '../../infrastructure/errors.js';
 import { deadlineFor } from '../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../infrastructure/providers/types.js';
@@ -47,6 +47,9 @@ const JUDGE_TEMPERATURE = 0;
  * plus the room its answer needs. Measured from the prompts themselves, so a prompt that grows
  * takes the room out of the evidence rather than out of the answer.
  */
+/** What this pass may not send. The messages themselves are what the bound is measured on. */
+export const CLAIM_DEDUP_OVER_ALLOWANCE = 'the submitted input exceeds this route allowance';
+
 export const CLAIM_DEDUP_ROUTE_RESERVE =
   Math.max(DETECT_SYSTEM_PROMPT.length, REVIEW_SYSTEM_PROMPT.length) + JUDGE_OUTPUT_RESERVE;
 
@@ -131,6 +134,10 @@ export async function judgeClaimDedup(
   pair: ClaimDedupPair,
   options: ClaimDedupCallOptions,
 ): Promise<ClaimDedupJudgeOutcome> {
+  const messages = buildDetectMessages(pair);
+  if (admitRenderedInput('claim_dedup', messages).status === 'over') {
+    return { status: 'failed', detail: CLAIM_DEDUP_OVER_ALLOWANCE };
+  }
   const deadline = deadlineFor(options.timeoutMs, options.signal);
   if (deadline.signal.aborted) {
     deadline.clear();
@@ -141,7 +148,7 @@ export async function judgeClaimDedup(
     raw = await provider.generate({
       surface: 'claim_dedup_judge',
       model: options.model,
-      messages: buildDetectMessages(pair),
+      messages,
       schema: DETECT_JSON_SCHEMA,
       temperature: JUDGE_TEMPERATURE,
       // A two-statement comparison is not helped by reasoning, and the tick pays for it twice
@@ -179,6 +186,10 @@ export async function reviewClaimDedup(
   pair: ClaimDedupPair,
   options: ClaimDedupCallOptions,
 ): Promise<ClaimDedupReviewOutcome> {
+  const messages = buildReviewMessages(pair);
+  if (admitRenderedInput('claim_dedup', messages).status === 'over') {
+    return { status: 'failed', detail: CLAIM_DEDUP_OVER_ALLOWANCE };
+  }
   const deadline = deadlineFor(options.timeoutMs, options.signal);
   if (deadline.signal.aborted) {
     deadline.clear();
@@ -189,7 +200,7 @@ export async function reviewClaimDedup(
     raw = await provider.generate({
       surface: 'claim_dedup_review',
       model: options.model,
-      messages: buildReviewMessages(pair),
+      messages,
       schema: REVIEW_JSON_SCHEMA,
       temperature: JUDGE_TEMPERATURE,
       think: false,

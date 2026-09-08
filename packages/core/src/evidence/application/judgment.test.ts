@@ -9,7 +9,7 @@ import { assembleJudgmentEvidence, type JudgmentPair } from './judgment.js';
 import { EvidenceResolver } from './resolver.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import type { ReflectionContent } from '../../reflection/domain/content.js';
-import { RequestBudget } from '../domain/budget.js';
+import { EVIDENCE_LIMITS, RequestBudget } from '../domain/budget.js';
 import { durableRoleScope } from '../domain/scopes.js';
 import {
   checkedContext,
@@ -287,6 +287,20 @@ describe('judgment evidence assembly', () => {
     );
 
     expect(result.status).toBe('assembled');
+  });
+
+  it('charges required-origin relations against the shared relation budget', async () => {
+    const result = await assembleJudgmentEvidence(
+      deps,
+      pair(),
+      checkedContext(),
+      new RequestBudget({ ...EVIDENCE_LIMITS, relationRows: 0 }),
+    );
+
+    expect(result.status).toBe('incomplete');
+    expect(
+      result.status === 'incomplete' ? result.reasons.map((reason) => reason.reason) : [],
+    ).toContain('budget_limit');
   });
 
   it('does not certify a judgment whose incoming correction census is unknown', async () => {

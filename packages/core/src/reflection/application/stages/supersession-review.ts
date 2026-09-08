@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { OVER_ALLOWANCE } from './supersession-judge.js';
+import { admitRenderedInput } from '../../../evidence/domain/budget.js';
 import { deadlineFor } from '../../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../../infrastructure/providers/types.js';
 import { promptMode } from '../../../prompts/index.js';
@@ -127,13 +129,17 @@ export async function reviewContradiction(
   options: ReviewContradictionOptions,
 ): Promise<ReviewOutcome> {
   const systemPrompt = promptMode(provider) === 'keyed' ? REVIEW_KEYED : REVIEW_LOCAL;
+  const messages = buildReviewMessages(pair, systemPrompt);
+  if (admitRenderedInput('live_supersession', messages).status === 'over') {
+    return { status: 'failed', error: new Error(OVER_ALLOWANCE) };
+  }
   const deadline = deadlineFor(options.timeoutMs, options.signal);
   let raw: unknown;
   try {
     raw = await provider.generate({
       surface: options.surface ?? 'supersession_review',
       model: options.model,
-      messages: buildReviewMessages(pair, systemPrompt),
+      messages,
       schema: REVIEW_JSON_SCHEMA,
       temperature: REVIEW_TEMPERATURE,
       // Matches the first pass: reasoning buys nothing on a two-statement judgment and doubles

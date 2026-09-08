@@ -160,6 +160,24 @@ export const JUDGE_OUTPUT_RESERVE = 512;
  */
 export const RENDERED_SIDE_OVERHEAD = 64;
 
+/**
+ * Whether the messages a route is about to send fit what it may spend.
+ *
+ * The object admitted is the object submitted: every message, system prompt included, counted as
+ * it will be serialized. A reserve measured from a constant says what the prompt costs; it does
+ * not say what the caller assembled around it, and only this count does.
+ */
+export function admitRenderedInput(
+  route: JudgeRoute,
+  messages: readonly { readonly content: string }[],
+): { readonly status: 'admitted' } | { readonly status: 'over'; readonly units: number } {
+  const units = messages.reduce(
+    (total, message) => total + utf16CodeUnits(message.content) + RENDERED_SIDE_OVERHEAD,
+    0,
+  );
+  return units <= JUDGE_ROUTE_ALLOWANCE[route] ? { status: 'admitted' } : { status: 'over', units };
+}
+
 export type RouteAllowance = {
   readonly route: JudgeRoute;
   /** The prompt and output units this route reserves before any evidence is rendered. */

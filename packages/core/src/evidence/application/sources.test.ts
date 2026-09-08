@@ -324,7 +324,9 @@ describe('raw source evidence', () => {
 
   it('does not certify a full mapping after its original turn id is lost', () => {
     store.db
-      .prepare("UPDATE source_parts SET turn_id=NULL WHERE source_id='episode-1' AND part_kind='turn'")
+      .prepare(
+        "UPDATE source_parts SET turn_id=NULL WHERE source_id='episode-1' AND part_kind='turn'",
+      )
       .run();
     const resolution = resolveSourceEvidence(
       store.db,

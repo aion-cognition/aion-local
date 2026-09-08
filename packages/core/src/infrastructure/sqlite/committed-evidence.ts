@@ -207,6 +207,28 @@ export function committedIncidenceForNodesAt(
   return rows.map(toIncidence);
 }
 
+/**
+ * How many committed rows one node's role holds, without materializing them. A reader with a
+ * bound charges what a read will cost before it pays it, which a count can answer and a page of
+ * rows cannot.
+ */
+export function countCommittedIncidenceForNode(
+  db: SqliteHandle,
+  nodeId: string,
+  role: string,
+): number {
+  const row = db
+    .prepare(
+      `SELECT count(*) AS n
+       FROM source_incidence s
+       JOIN evidence_link_versions v ON v.link_id = s.link_id AND v.version = s.link_version
+       JOIN publication_intents i ON i.operation_id = v.operation_id AND i.state = 'acknowledged'
+       WHERE s.node_id = ? AND s.role = ?`,
+    )
+    .get(nodeId, role) as { n: number };
+  return row.n;
+}
+
 export type CommittedSourceState = {
   readonly sourceId: string;
   readonly version: number;

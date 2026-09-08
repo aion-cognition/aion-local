@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { JUDGE_OUTPUT_RESERVE } from '../../../evidence/domain/budget.js';
+import { admitRenderedInput, JUDGE_OUTPUT_RESERVE } from '../../../evidence/domain/budget.js';
 import { deadlineFor } from '../../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../../infrastructure/providers/types.js';
 import { promptMode } from '../../../prompts/index.js';
@@ -24,6 +24,9 @@ const JUDGE_TEMPERATURE = 0;
  * room its answer needs. Both prompt routes are measured, since either one may be the text the
  * shipped provider sends.
  */
+/** What a pass says when its own submitted messages do not fit the route allowance. */
+export const OVER_ALLOWANCE = 'the submitted input exceeds this route allowance';
+
 export const LIVE_SUPERSESSION_ROUTE_RESERVE =
   Math.max(JUDGE_KEYED.length, JUDGE_LOCAL.length) + JUDGE_OUTPUT_RESERVE;
 
@@ -120,20 +123,26 @@ export async function judgeContradiction(
   options: JudgeContradictionOptions,
 ): Promise<JudgeOutcome> {
   const systemPrompt = promptMode(provider) === 'keyed' ? JUDGE_KEYED : JUDGE_LOCAL;
+  const messages = buildMessages(
+    pair.priorLabel,
+    pair.currentLabel,
+    pair.prior,
+    pair.current,
+    pair.sharedSubject,
+    systemPrompt,
+  );
+  // What this pass is about to send, measured as it will be sent. A pair that does not fit is
+  // not asked about, because a clipped prompt answers a different question.
+  if (admitRenderedInput('live_supersession', messages).status === 'over') {
+    return { status: 'failed', error: new Error(OVER_ALLOWANCE) };
+  }
   const deadline = deadlineFor(options.timeoutMs, options.signal);
   let raw: unknown;
   try {
     raw = await provider.generate({
       surface: options.surface ?? 'supersession_judge',
       model: options.model,
-      messages: buildMessages(
-        pair.priorLabel,
-        pair.currentLabel,
-        pair.prior,
-        pair.current,
-        pair.sharedSubject,
-        systemPrompt,
-      ),
+      messages,
       schema: JUDGMENT_JSON_SCHEMA,
       temperature: JUDGE_TEMPERATURE,
       // Reasoning buys nothing on a two-statement judgment and costs the budget (mirrors

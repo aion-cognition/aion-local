@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import {
   describeEntityMergePair,
+  ENTITY_MERGE_OVER_ALLOWANCE,
   judgeEntityMerge,
   reviewEntityMerge,
   type EntityMergePair,
 } from './entity-merge-judge.js';
+import { JUDGE_ROUTE_ALLOWANCE } from '../../evidence/domain/budget.js';
 import type { StructuredRequest } from '../../infrastructure/providers/types.js';
 
 const OPTIONS = { model: 'reflect-model', timeoutMs: 1_000 };
@@ -196,5 +198,36 @@ describe('reviewEntityMerge', () => {
       status: 'failed',
       detail: 'the reviewer answered in a shape the schema refuses',
     });
+  });
+});
+
+describe('what an entity merge pass is allowed to submit', () => {
+  const oversized: EntityMergePair = {
+    subject: { name: 'Aion', aliases: [], type: 'project', typeCounts: {} },
+    candidate: {
+      name: 'Aion Project',
+      aliases: [],
+      type: 'project',
+      typeCounts: {},
+      description: 'y'.repeat(JUDGE_ROUTE_ALLOWANCE.entity_merge),
+    },
+    facts: [],
+  };
+
+  it('asks nothing when the variable fields push the message past the allowance', async () => {
+    const calls: unknown[] = [];
+    const provider = {
+      generate: (request: unknown): Promise<unknown> => {
+        calls.push(request);
+        return Promise.resolve({ same: true });
+      },
+    };
+
+    const detect = await judgeEntityMerge(provider, oversized, { model: 'm', timeoutMs: 1_000 });
+    const review = await reviewEntityMerge(provider, oversized, { model: 'm', timeoutMs: 1_000 });
+
+    expect(detect).toEqual({ status: 'failed', detail: ENTITY_MERGE_OVER_ALLOWANCE });
+    expect(review).toEqual({ status: 'failed', detail: ENTITY_MERGE_OVER_ALLOWANCE });
+    expect(calls).toEqual([]);
   });
 });

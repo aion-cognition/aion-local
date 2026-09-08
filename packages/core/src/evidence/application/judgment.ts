@@ -8,7 +8,10 @@ import type {
   EvidenceDependency,
   EvidenceRevision,
 } from '../../infrastructure/publication/preconditions.js';
-import { committedIncidenceForNode } from '../../infrastructure/sqlite/committed-evidence.js';
+import {
+  committedIncidenceForNode,
+  countCommittedIncidenceForNode,
+} from '../../infrastructure/sqlite/committed-evidence.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import type { CheckedReadContext } from '../../recall/application/coverage-checker.js';
 import { idAddress, type EvidenceAddress } from '../domain/address.js';
@@ -170,6 +173,8 @@ export type JudgmentEvidence = {
 
 type RequiredSources = {
   readonly status: 'named' | 'unverified';
+  /** Why the set is unproved: nobody counted it, or this request cannot afford to read it. */
+  readonly reason: 'required_scope_missing' | 'budget_limit';
   readonly sourceIds: readonly string[];
   readonly dependencies: readonly EvidenceDependency[];
 };
@@ -207,6 +212,7 @@ function requiredSourcesOf(
   db: SqliteHandle,
   nodeId: string,
   use: JudgmentPair['use'],
+  budget: RequestBudget,
 ): RequiredSources {
   const dependencies: EvidenceDependency[] = [];
   const sourceIds = new Set<string>();
@@ -215,7 +221,14 @@ function requiredSourcesOf(
     { role: 'stated_correction', direction: 'in' } as const,
   ];
   let proved = true;
+  let overBudget = false;
   for (const { role, direction } of consulted) {
+    // Charged from a count, before the rows are materialized: a bound that is applied to what a
+    // read already returned has not bounded the read.
+    if (budget.chargeRelationRows(countCommittedIncidenceForNode(db, nodeId, role)) !== undefined) {
+      overBudget = true;
+      break;
+    }
     const rows = committedIncidenceForNode(db, nodeId, role);
     const scope = readRelationScope(db, {
       kind: 'node',
@@ -235,7 +248,8 @@ function requiredSourcesOf(
     }
   }
   return {
-    status: proved && sourceIds.size > 0 ? 'named' : 'unverified',
+    status: proved && !overBudget && sourceIds.size > 0 ? 'named' : 'unverified',
+    reason: overBudget ? 'budget_limit' : 'required_scope_missing',
     sourceIds: [...sourceIds],
     dependencies,
   };
@@ -257,14 +271,12 @@ function readRequired(
   dependencies: EvidenceDependencies,
 ): RequiredReading {
   const address = idAddress(request.nodeId);
-  const required = requiredSourcesOf(deps.db, request.nodeId, pair.use);
+  const required = requiredSourcesOf(deps.db, request.nodeId, pair.use, budget);
   dependencies.addAll(required.dependencies);
   if (required.status === 'unverified') {
     return {
       sources: [],
-      issues: [
-        { address, field: 'source_content', reason: 'required_scope_missing', required: true },
-      ],
+      issues: [{ address, field: 'source_content', reason: required.reason, required: true }],
       suppressed: [],
     };
   }

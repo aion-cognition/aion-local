@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { JUDGE_OUTPUT_RESERVE } from '../../evidence/domain/budget.js';
+import { admitRenderedInput, JUDGE_OUTPUT_RESERVE } from '../../evidence/domain/budget.js';
 import { errorMessage } from '../../infrastructure/errors.js';
 import { deadlineFor } from '../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../infrastructure/providers/types.js';
@@ -65,6 +65,9 @@ const JUDGE_TEMPERATURE = 0;
  * What this route spends before any evidence is rendered: the longer of its two system prompts,
  * plus the room its answer needs.
  */
+/** What a pass says when its own submitted messages do not fit the route allowance. */
+export const ENTITY_MERGE_OVER_ALLOWANCE = 'the submitted input exceeds this route allowance';
+
 export const ENTITY_MERGE_ROUTE_RESERVE =
   Math.max(DETECT_SYSTEM_PROMPT.length, REVIEW_SYSTEM_PROMPT.length) + JUDGE_OUTPUT_RESERVE;
 
@@ -169,6 +172,12 @@ async function ask(
   schema: JsonSchema,
   options: EntityMergeCallOptions,
 ): Promise<{ readonly raw: unknown } | { readonly detail: string }> {
+  // What this pass is about to send, measured as it will be sent. The pair's variable fields —
+  // aliases, type counts, descriptions and the facts the caller appended — are inside these
+  // messages, so the bound covers them rather than a constant standing in for them.
+  if (admitRenderedInput('entity_merge', messages).status === 'over') {
+    return { detail: ENTITY_MERGE_OVER_ALLOWANCE };
+  }
   const deadline = deadlineFor(options.timeoutMs, options.signal);
   if (deadline.signal.aborted) {
     deadline.clear();
