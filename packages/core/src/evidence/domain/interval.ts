@@ -53,20 +53,31 @@ function endedBy(stamp: string | undefined, at: Date): boolean {
   return stamp !== undefined && Date.parse(stamp) <= at.getTime();
 }
 
-/** Whether a pinned axis has a recorded end, which is what places a close on that timeline. */
-function placedOn(proof: IntervalProof, vantage: IntervalVantage): boolean {
-  return (
-    (vantage.validAt !== undefined && proof.validUntil !== undefined) ||
-    (vantage.knownAt !== undefined && proof.txUntil !== undefined)
-  );
+/**
+ * The pinned axis a closed relation cannot be placed on, if there is one.
+ *
+ * Each axis carries its own end and answers for itself. A relation whose world end is recorded
+ * and whose retraction is not has been placed on one timeline and not the other, and the axis
+ * with the end says nothing about the axis without it: a read that pinned both asked two
+ * questions and can only answer one. World time is reported first where both are missing, so the
+ * gap a caller sees is deterministic.
+ */
+function unplacedAxis(proof: IntervalProof, vantage: IntervalVantage): IntervalAxis | undefined {
+  if (vantage.validAt !== undefined && proof.validUntil === undefined) {
+    return 'world';
+  }
+  if (vantage.knownAt !== undefined && proof.txUntil === undefined) {
+    return 'knowledge';
+  }
+  return undefined;
 }
 
 /**
  * The one evaluator every temporal read path shares.
  *
  * Exclusion is decided first: a recorded bound that puts the relation outside the moment settles
- * it, whatever else is missing. Only then does an unplaceable close become unknown, and only on an
- * axis the read actually pinned.
+ * it, whatever else is missing, because a relation proved outside needs no second proof. Only then
+ * is each pinned axis asked, on its own, whether a recorded close can be placed on it.
  */
 export function evaluateInterval(proof: IntervalProof, vantage: IntervalVantage): IntervalDecision {
   const { validAt, knownAt } = vantage;
@@ -85,10 +96,12 @@ export function evaluateInterval(proof: IntervalProof, vantage: IntervalVantage)
   ) {
     return { status: 'excluded' };
   }
-  if (proof.closed && !placedOn(proof, vantage)) {
-    // The records say this ended and never say when. On a pinned axis that is not an answer:
-    // withholding the row is right, and calling the resulting set complete is not.
-    return { status: 'unknown', axis: validAt === undefined ? 'knowledge' : 'world' };
+  const unplaced = proof.closed ? unplacedAxis(proof, vantage) : undefined;
+  if (unplaced !== undefined) {
+    // The records say this ended and never say when, on this clock. Withholding the row is right,
+    // and calling the resulting set complete is not. An end on the other clock does not help: it
+    // answers a question this axis did not ask.
+    return { status: 'unknown', axis: unplaced };
   }
   return { status: 'visible' };
 }

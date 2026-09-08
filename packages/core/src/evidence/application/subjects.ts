@@ -144,42 +144,39 @@ function mentionedEntities(
   return { mentions, unplaced };
 }
 
-async function subjectsFromRecords(
+/**
+ * The entities behind an already-read mention set. Materialization only: the reading that decided
+ * which mentions there are, and what could not be decided about them, happened before this and is
+ * not repeated here.
+ */
+async function materializeSubjects(
   deps: SubjectDeps,
-  sources: readonly CommittedIncidence[],
-  mode: ReadMode,
-): Promise<{
-  readonly subjects: readonly ClaimSubject[];
-  readonly unplaced: readonly IntervalAxis[];
-}> {
-  const { mentions, unplaced } = mentionedEntities(deps.db, sources, mode);
+  mentions: readonly { readonly entityId: string; readonly sourceId: string }[],
+): Promise<readonly ClaimSubject[]> {
   if (mentions.length === 0) {
-    return { subjects: [], unplaced };
+    return [];
   }
   const details = await loadEntityDedupDetails(
     deps.driver,
     mentions.map((mention) => mention.entityId),
   );
   const byId = new Map(details.map((detail) => [detail.id, detail]));
-  return {
-    unplaced,
-    subjects: mentions.flatMap((mention) => {
-      const detail = byId.get(mention.entityId);
-      if (detail === undefined) {
-        return [];
-      }
-      const gloss = detail.description.trim();
-      return [
-        {
-          entityId: detail.id,
-          name: detail.name,
-          nameNorm: detail.nameNorm,
-          sourceEpisodeId: mention.sourceId,
-          ...(gloss.length === 0 ? {} : { gloss }),
-        },
-      ];
-    }),
-  };
+  return mentions.flatMap((mention) => {
+    const detail = byId.get(mention.entityId);
+    if (detail === undefined) {
+      return [];
+    }
+    const gloss = detail.description.trim();
+    return [
+      {
+        entityId: detail.id,
+        name: detail.name,
+        nameNorm: detail.nameNorm,
+        sourceEpisodeId: mention.sourceId,
+        ...(gloss.length === 0 ? {} : { gloss }),
+      },
+    ];
+  });
 }
 
 export async function readClaimSubjects(
@@ -202,21 +199,23 @@ export async function readClaimSubjects(
       continue;
     }
 
-    // The incidence this claim rests on is read once: the scope check and the archive fallback
-    // are two questions about the same rows, and reading them twice would let the two disagree.
+    // The durable incidence this claim rests on is read once and read on every path. The scope
+    // check, the completeness proof and the archive fallback are three questions about the same
+    // rows, and a graph answer is not a certificate over them: one resident origin returning a
+    // subject says nothing about what a second origin's records could not place. Reading them
+    // only when the join came back empty is how that second origin stayed hidden.
     let reading: IncidenceReading;
     let subjects: readonly ClaimSubject[];
     const unplaced: IntervalAxis[] = [];
     try {
       reading = extractionSources(deps.db, claimId, input.context.mode);
-      unplaced.push(...reading.unplaced);
+      const mentioned = mentionedEntities(deps.db, reading.rows, input.context.mode);
+      unplaced.push(...reading.unplaced, ...mentioned.unplaced);
       // The join runs at the vantage the request was checked against, so a source or an entity
       // that was not visible then is not part of the answer now.
       subjects = await findClaimSubjects(deps.driver, claimId, input.context.mode);
       if (subjects.length === 0) {
-        const fallback = await subjectsFromRecords(deps, reading.rows, input.context.mode);
-        ({ subjects } = fallback);
-        unplaced.push(...fallback.unplaced);
+        subjects = await materializeSubjects(deps, mentioned.mentions);
       }
     } catch {
       const issue = issueOn(address, 'interpretation_text', 'store_unavailable', true);

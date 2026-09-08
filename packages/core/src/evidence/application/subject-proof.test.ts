@@ -6,6 +6,7 @@ import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 
 import { readClaimSubjects } from './subjects.js';
 import { asOf } from '../../infrastructure/graph/read-modes.js';
+import * as subjectGraph from '../../infrastructure/graph/subject-family.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import { EVIDENCE_LIMITS, RequestBudget } from '../domain/budget.js';
 import {
@@ -43,6 +44,7 @@ beforeEach(() => {
   establishScope(store.db, 'source', 'sqlite:mention:out', CAPTURE);
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   store.close();
   rmSync(dir, { recursive: true, force: true });
 });
@@ -85,4 +87,50 @@ it('certifies exclusion when recorded proof places the world-time close before t
     value: [],
     evidence: { status: 'complete-for-use' },
   });
+});
+
+it('discloses uncertain durable mentions even when a resident source supplies a subject', async () => {
+  recordedClose({});
+  seedSource(store.db, {
+    sourceId: 'resident-source',
+    sessionId: 'session',
+    identity: 'review',
+    content: { turns: [{ role: 'user', text: 'Atlas Theta result' }] },
+    turnIds: ['resident-turn'],
+    now: CAPTURE,
+  });
+  for (const [nodeId, role] of [
+    ['claim', 'extraction'],
+    ['resident-entity', 'mention'],
+  ] as const) {
+    commitIncidence(store.db, {
+      sourceId: 'resident-source',
+      nodeId,
+      role,
+      operationId: `resident-${role}`,
+      at: CAPTURE,
+    });
+  }
+  establishScope(store.db, 'resident-source', 'sqlite:mention:out', CAPTURE);
+  const knownSubject = {
+    entityId: 'resident-entity',
+    name: 'Atlas',
+    nameNorm: 'atlas',
+    sourceEpisodeId: 'resident-source',
+  };
+  // Only the resident source can contribute a row to the graph join.
+  vi.spyOn(subjectGraph, 'findClaimSubjects').mockResolvedValue([knownSubject]);
+  const result = await readClaimSubjects(
+    { db: store.db, driver },
+    {
+      claimIds: ['claim'],
+      context: checkedContext({ mode: asOf(QUESTION) }),
+      budget: new RequestBudget(EVIDENCE_LIMITS),
+    },
+  );
+  expect.soft(result.results.get('["id","claim"]')?.value).toEqual([knownSubject]);
+  expect.soft(result.results.get('["id","claim"]')?.evidence.status).toBe('incomplete');
+  expect
+    .soft(result.issues.some((issue) => issue.required && issue.field === 'link_interval'))
+    .toBe(true);
 });
