@@ -1,10 +1,11 @@
 import neo4j from 'neo4j-driver';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { collectBaseline, METRIC_VERSION } from './baseline.js';
 import { buildCampaignManifest, type BuildProvenance, type SqliteAcquisition } from './manifest.js';
+import { writeOnce } from './outputs.js';
 import { loadConfig } from '../../../infrastructure/config/load-config.js';
 import { NEO4J_DEFAULT_USER } from '../../../infrastructure/graph/provision.js';
 import {
@@ -74,14 +75,6 @@ function parseArgs(argv: readonly string[]): Args {
     ...(acquiredFrom === undefined ? {} : { acquiredFrom }),
     ...(acquiredUntil === undefined ? {} : { acquiredUntil }),
   };
-}
-
-/** Refuses rather than replaces: an output already there belongs to a run that already ran. */
-function writeOnce(path: string, value: unknown): void {
-  if (existsSync(path)) {
-    throw new Error(`${path} already exists; each run writes under its own identity`);
-  }
-  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function fileDigest(path: string): string | undefined {
