@@ -99,3 +99,38 @@ describe('verifying preserved artifacts', () => {
     expect(outcome.status).toBe('verified');
   });
 });
+
+describe('covering what the caller is going to read', () => {
+  it('refuses a manifest that leaves a required artifact out', () => {
+    const outcome = verifyPreservedArtifacts(
+      MANIFEST,
+      [observed()],
+      ['targets.json', 'round-9.json'],
+    );
+    expect(outcome).toMatchObject({
+      status: 'failed',
+      reason: 'required_artifact_unlisted',
+      artifact: 'round-9.json',
+    });
+  });
+
+  it('refuses a manifest that names one artifact twice', () => {
+    const outcome = verifyPreservedArtifacts(`${ALPHA}  targets.json\n${BETA}  targets.json`, [
+      observed(),
+    ]);
+    expect(outcome).toMatchObject({
+      status: 'failed',
+      reason: 'duplicate_manifest_entry',
+      artifact: 'targets.json',
+    });
+  });
+
+  it('verifies when every required artifact is covered', () => {
+    const outcome = verifyPreservedArtifacts(
+      MANIFEST,
+      [observed(), observed({ name: 'provenance.json', sha256: BETA })],
+      ['targets.json', 'provenance.json'],
+    );
+    expect(outcome.status).toBe('verified');
+  });
+});

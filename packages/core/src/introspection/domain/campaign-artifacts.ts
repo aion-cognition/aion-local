@@ -24,6 +24,8 @@ export type ObservedArtifact = {
 
 export const PACKAGING_FAILURE_REASONS = [
   'manifest_unreadable',
+  'duplicate_manifest_entry',
+  'required_artifact_unlisted',
   'artifact_missing',
   'digest_mismatch',
 ] as const;
@@ -88,10 +90,15 @@ export function parseChecksumManifest(text: string): readonly ArtifactDigest[] |
  * Verifies observed bytes against the manifest, in manifest order, and stops at the first
  * artifact that fails. Extra observed files are not an error: the manifest states what the
  * capture covers, and a directory can hold notes beside it.
+ *
+ * `required` names the artifacts the caller is going to read. A manifest that leaves one of
+ * them out covers less than the caller is about to use, and a checked subset reported as a
+ * verified capture is the failure this argument exists to stop.
  */
 export function verifyPreservedArtifacts(
   manifestText: string,
   observed: readonly ObservedArtifact[],
+  required: readonly string[] = [],
 ): PackagingOutcome {
   const expected = parseChecksumManifest(manifestText);
   if (expected === undefined) {
@@ -101,6 +108,29 @@ export function verifyPreservedArtifacts(
       artifact: 'SHA256SUMS',
       detail: 'no line of the manifest parses as a sha256 and a file name',
     };
+  }
+
+  const listed = new Set<string>();
+  for (const entry of expected) {
+    if (listed.has(entry.name)) {
+      return {
+        status: 'failed',
+        reason: 'duplicate_manifest_entry',
+        artifact: entry.name,
+        detail: 'the manifest names it twice, so which digest covers it is undecided',
+      };
+    }
+    listed.add(entry.name);
+  }
+  for (const name of required) {
+    if (!listed.has(name)) {
+      return {
+        status: 'failed',
+        reason: 'required_artifact_unlisted',
+        artifact: name,
+        detail: 'the caller reads it and the manifest does not cover it',
+      };
+    }
   }
 
   const byName = new Map(observed.map((artifact) => [artifact.name, artifact]));

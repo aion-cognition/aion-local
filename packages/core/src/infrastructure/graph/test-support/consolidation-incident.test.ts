@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   INCIDENT_DIR_ENV,
+  independentReaderSession,
   loadIncidentCapture,
   packageIncidentFixture,
   type IncidentCapture,
@@ -78,6 +79,9 @@ const PROVENANCE = {
       id: 'cc70a054-e667-4dd9-84a3-5be6f73dcda7',
       old_id: OLD_CLAIM,
       new_id: NEW_CLAIM,
+      rationale: 'the focused test count changed',
+      confidence: 0.92,
+      episode_id: '908450e4-9ffd-42f6-98e1-218004d8cc4c',
       created_at: '2026-09-07T05:11:00.000Z',
       resolved_at: '2026-09-07T15:23:41.211Z',
     },
@@ -91,13 +95,15 @@ function write(name: string, body: string): string {
   return createHash('sha256').update(Buffer.from(body)).digest('hex');
 }
 
+/** The whole preserved set, since the loader verifies every artifact the capture is made of. */
 function seedCapture(overrides: { manifest?: string } = {}): void {
-  const targetsDigest = write('targets.json', JSON.stringify(TARGETS));
-  const provenanceDigest = write('provenance.json', JSON.stringify(PROVENANCE));
-  writeFileSync(
-    join(dir, 'SHA256SUMS'),
-    overrides.manifest ?? `${targetsDigest}  targets.json\n${provenanceDigest}  provenance.json\n`,
-  );
+  const lines = [
+    `${write('targets.json', JSON.stringify(TARGETS))}  targets.json`,
+    `${write('provenance.json', JSON.stringify(PROVENANCE))}  provenance.json`,
+    `${write('round-9-astra-recall.json', '{"round":9}')}  round-9-astra-recall.json`,
+    `${write('round-9-astra-trace.md', '# trace\n')}  round-9-astra-trace.md`,
+  ];
+  writeFileSync(join(dir, 'SHA256SUMS'), overrides.manifest ?? `${lines.join('\n')}\n`);
 }
 
 function loaded(): IncidentCapture {
@@ -125,6 +131,8 @@ describe('verifying the capture before anything is built from it', () => {
     expect(capture.artifacts.map((artifact) => artifact.name)).toEqual([
       'targets.json',
       'provenance.json',
+      'round-9-astra-recall.json',
+      'round-9-astra-trace.md',
     ]);
   });
 
@@ -160,11 +168,23 @@ describe('verifying the capture before anything is built from it', () => {
     expect(loadIncidentCapture('  ')).toMatchObject({ status: 'not_configured' });
   });
 
-  it('carries no raw payload out of the capture, only its size', () => {
+  it('carries the stored payload and its size, decoded from the bytes that were verified', () => {
     seedCapture();
     const capture = loaded();
     expect(capture.archive[0]?.payloadBytes).toBe(32);
-    expect(JSON.stringify(capture.archive)).not.toContain('the old run');
+    expect(capture.archive[0]?.payload.observations).toEqual(['the old run']);
+  });
+
+  it('refuses a manifest that leaves a preserved artifact uncovered', () => {
+    seedCapture();
+    const onlyTargets = `${createHash('sha256')
+      .update(Buffer.from(JSON.stringify(TARGETS)))
+      .digest('hex')}  targets.json\n`;
+    writeFileSync(join(dir, 'SHA256SUMS'), onlyTargets);
+    expect(loadIncidentCapture(dir)).toMatchObject({
+      status: 'failed',
+      reason: 'required_artifact_unlisted',
+    });
   });
 });
 
@@ -175,8 +195,19 @@ describe('the observed snapshot variant', () => {
     expect(fixture.claims[0]?.validUntil).toBe(CLOSED_AT);
     expect(fixture.lineage).toHaveLength(1);
     expect(fixture.proposals).toHaveLength(1);
-    expect(fixture.manifest.deltas).toEqual([]);
+    expect(fixture.proposals[0]?.rationale).toBe('the focused test count changed');
+    // The only differences it declares are the vectors held back from every variant; no stamp,
+    // edge or proposal is excluded.
+    expect([...new Set(fixture.manifest.deltas.map((delta) => delta.reason))]).toEqual([
+      'stored content and context vectors are held back from every variant',
+    ]);
     expect(manifestIsComplete(fixture.manifest)).toBe(true);
+  });
+
+  it('keeps the ordered turns with their roles and clocks', () => {
+    seedCapture();
+    const fixture = packageIncidentFixture(loaded(), 'incident-snapshot');
+    expect(fixture.archive[0]?.payload.observations).toEqual(['the old run']);
   });
 
   it('names the fields the capture could not recover instead of filling them', () => {
@@ -209,11 +240,16 @@ describe('the before-judgment variant', () => {
     expect(fixture.claims.every((claim) => claim.validUntil === null)).toBe(true);
     expect(fixture.lineage).toEqual([]);
     expect(fixture.proposals).toEqual([]);
-    expect(fixture.manifest.deltas.map((delta) => delta.kind).sort()).toEqual([
+    expect([...new Set(fixture.manifest.deltas.map((delta) => delta.kind))].sort()).toEqual([
       'excluded_edge',
       'excluded_proposal',
       'excluded_stamp',
     ]);
+    // The stamp deltas name both clocks the rewind clears, not only the world-time one.
+    const stamps = fixture.manifest.deltas.filter((delta) => delta.subject === OLD_CLAIM);
+    expect(stamps.some((delta) => delta.reason.includes('valid_until'))).toBe(true);
+    expect(stamps.some((delta) => delta.reason.includes('tx_until'))).toBe(true);
+    expect(fixture.claims.every((claim) => claim.txUntil === null)).toBe(true);
     expect(manifestIsComplete(fixture.manifest)).toBe(true);
   });
 
@@ -265,3 +301,62 @@ describe.runIf(process.env[INCIDENT_DIR_ENV] !== undefined)('the preserved captu
     expect(isolated.claims.every((claim) => claim.validUntil === null)).toBe(true);
   });
 });
+
+/**
+ * What a consumer reads off the packaged fixture: the parts of the NEW source, the scope each
+ * result was reported against, and whether the reader asking is a different reader.
+ */
+describe.runIf(process.env[INCIDENT_DIR_ENV] !== undefined)(
+  'the packaged incident evidence',
+  () => {
+    function fixture(): ReturnType<typeof packageIncidentFixture> {
+      const outcome = loadIncidentCapture();
+      if (outcome.status !== 'loaded') {
+        throw new Error(`capture did not load: ${outcome.status}`);
+      }
+      return packageIncidentFixture(outcome.capture, 'incident-snapshot');
+    }
+
+    it('keeps the three ordered turns of the newer source with their roles and clocks', () => {
+      const turns = fixture().archive[1]?.payload.turns ?? [];
+      expect(turns).toHaveLength(3);
+      expect(turns.map((turn) => turn.role)).toEqual(['user', 'assistant', 'assistant']);
+      expect(turns.map((turn) => turn.occurred_at)).toEqual([
+        '2026-09-07T05:08:55.648Z',
+        '2026-09-07T05:08:59.391Z',
+        '2026-09-07T05:10:44.399Z',
+      ]);
+    });
+
+    it('carries both commit scopes the two results were reported against', () => {
+      const packaged = fixture();
+      const older = JSON.stringify(packaged.archive[0]?.payload);
+      const newer = JSON.stringify(packaged.archive[1]?.payload);
+      expect(older).toContain('105d3a2e54d704d4a1585c9e9dd7a75aa776365a');
+      expect(newer).toContain('0559691');
+    });
+
+    it('keeps the judgment rationale and the extraction-edge clock beside the claims', () => {
+      const packaged = fixture();
+      expect(packaged.proposals[0]?.rationale).not.toBe(null);
+      expect(packaged.sources.every((source) => source.edgeCreatedAt !== null)).toBe(true);
+    });
+
+    it('admits a reader whose resolved session is none of the source sessions', () => {
+      const outcome = loadIncidentCapture();
+      if (outcome.status !== 'loaded') {
+        throw new Error(`capture did not load: ${outcome.status}`);
+      }
+      const sessions = { sessionIdFor: (identity: string) => identity };
+      expect(independentReaderSession(sessions, 'reader-asking-fresh', outcome.capture)).toEqual({
+        status: 'independent',
+        sessionId: 'reader-asking-fresh',
+      });
+      const source = outcome.capture.sources[0]?.sessionId ?? '';
+      expect(independentReaderSession(sessions, source, outcome.capture)).toEqual({
+        status: 'rejected',
+        reason: 'resolves_to_source_session',
+      });
+    });
+  },
+);

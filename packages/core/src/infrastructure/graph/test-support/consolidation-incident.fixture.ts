@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import {
@@ -13,6 +13,7 @@ import type {
   UnknownField,
   VariantDelta,
 } from '../../../introspection/domain/campaign-fixture-manifest.js';
+import type { ReflectionContent } from '../../../reflection/domain/content.js';
 
 /**
  * Loads the preserved capture of a false supersession and packages it as two named fixtures.
@@ -30,6 +31,18 @@ export const INCIDENT_DIR_ENV = 'AION_CAMPAIGN_INCIDENT_DIR';
 
 const MANIFEST_FILE = 'SHA256SUMS';
 
+/**
+ * Every artifact this loader reads or the capture preserves. Verification covers the whole set,
+ * not only the names a supplied manifest happens to list: a manifest naming one file would
+ * otherwise let the others through unchecked, and the decode reads two of them.
+ */
+export const REQUIRED_ARTIFACTS: readonly string[] = [
+  'targets.json',
+  'provenance.json',
+  'round-9-astra-recall.json',
+  'round-9-astra-trace.md',
+];
+
 /** Loading failures a caller can tell apart, over and above the packaging failures. */
 export type IncidentLoadOutcome =
   | { readonly status: 'loaded'; readonly capture: IncidentCapture }
@@ -41,6 +54,13 @@ export type CapturedClaim = {
   readonly id: string;
   readonly labels: readonly string[];
   readonly text: string;
+  readonly textNorm: string | null;
+  /** What the claim is about, which is what a statement-scope case has to compare. */
+  readonly subjectId: string | null;
+  readonly aspect: string | null;
+  readonly sourceEpisodeId: string | null;
+  readonly sessionId: string | null;
+  readonly extractionMethod: string | null;
   readonly occurredAt: string | null;
   readonly txFrom: string | null;
   readonly txUntil: string | null;
@@ -53,6 +73,11 @@ export type CapturedSource = {
   readonly episodeId: string;
   readonly sessionId: string;
   readonly text: string;
+  readonly summary: string | null;
+  /** When the substrate started holding the source. */
+  readonly txFrom: string | null;
+  /** When the extraction edge from source to claim was written. */
+  readonly edgeCreatedAt: string | null;
 };
 
 export type CapturedLineageEdge = {
@@ -72,12 +97,24 @@ export type CapturedArchiveRow = {
   readonly occurredAt: string;
   readonly archivedAt: string;
   readonly payloadBytes: number;
+  /**
+   * The stored payload as the substrate holds it, redaction included, decoded from the same
+   * bytes the digest covered. The ordered turns with their roles and clocks live here and
+   * nowhere else: rendered episode text flattens them, and a case about which turn said what
+   * cannot be built from the flattened form. It is read at run time from the preserved capture
+   * and never written into the repository.
+   */
+  readonly payload: ReflectionContent;
 };
 
 export type CapturedProposal = {
   readonly id: string;
   readonly oldId: string;
   readonly newId: string;
+  readonly episodeId: string | null;
+  readonly confidence: number | null;
+  /** What the judgment said, which is the evidence a false closure is read against. */
+  readonly rationale: string | null;
   readonly createdAt: string | null;
   readonly resolvedAt: string | null;
 };
@@ -121,6 +158,12 @@ function readClaims(value: unknown): readonly CapturedClaim[] {
     id: asString(entry.id),
     labels: asStringList(entry.labels),
     text: asString(entry.text),
+    textNorm: asNullableString(entry.textNorm),
+    subjectId: asNullableString(entry.subjectId),
+    aspect: asNullableString(entry.aspect),
+    sourceEpisodeId: asNullableString(entry.sourceEpisodeId),
+    sessionId: asNullableString(entry.sessionId),
+    extractionMethod: asNullableString(entry.extractionMethod),
     occurredAt: asNullableString(entry.occurredAt),
     txFrom: asNullableString(entry.txFrom),
     txUntil: asNullableString(entry.txUntil),
@@ -138,6 +181,9 @@ function readSources(value: unknown): readonly CapturedSource[] {
     episodeId: asString(entry.episodeId),
     sessionId: asString(entry.sessionId),
     text: asString(entry.text),
+    summary: asNullableString(entry.summary),
+    txFrom: asNullableString(entry.txFrom),
+    edgeCreatedAt: asNullableString(entry.edgeCreatedAt),
   }));
 }
 
@@ -166,9 +212,8 @@ function readArchive(value: unknown): readonly CapturedArchiveRow[] {
     episodeId: asString(entry.episode_id),
     occurredAt: asString(entry.occurred_at),
     archivedAt: asString(entry.archived_at),
-    // The stored payload's size rather than the payload: a fixture that copies raw text out of
-    // a capture into the repository publishes it a second time.
     payloadBytes: Buffer.byteLength(asString(entry.payload_json), 'utf8'),
+    payload: JSON.parse(asString(entry.payload_json) || '{}') as ReflectionContent,
   }));
 }
 
@@ -180,24 +225,36 @@ function readProposals(value: unknown): readonly CapturedProposal[] {
     id: asString(entry.id),
     oldId: asString(entry.old_id),
     newId: asString(entry.new_id),
+    episodeId: asNullableString(entry.episode_id),
+    confidence: typeof entry.confidence === 'number' ? entry.confidence : null,
+    rationale: asNullableString(entry.rationale),
     createdAt: asNullableString(entry.created_at),
     resolvedAt: asNullableString(entry.resolved_at),
   }));
 }
 
-function observeArtifacts(dir: string, names: readonly string[]): readonly ObservedArtifact[] {
+/**
+ * Reads every required file once and keeps the bytes. Hashing one read and decoding another
+ * would verify bytes nobody parsed, so the buffer that passed the digest is the buffer the
+ * decode sees.
+ */
+function readArtifacts(dir: string): {
+  readonly observed: readonly ObservedArtifact[];
+  readonly buffers: ReadonlyMap<string, Buffer>;
+} {
   const observed: ObservedArtifact[] = [];
-  for (const name of names) {
-    const path = join(dir, name);
+  const buffers = new Map<string, Buffer>();
+  for (const name of REQUIRED_ARTIFACTS) {
     try {
-      const bytes = readFileSync(path);
-      observed.push({ name, sha256: sha256(bytes), bytes: statSync(path).size });
+      const bytes = readFileSync(join(dir, name));
+      buffers.set(name, bytes);
+      observed.push({ name, sha256: sha256(bytes), bytes: bytes.byteLength });
     } catch {
       // Left out of the observed set on purpose: the manifest comparison is what reports it
       // missing, and it reports it by name.
     }
   }
-  return observed;
+  return { observed, buffers };
 }
 
 /**
@@ -220,12 +277,8 @@ export function loadIncidentCapture(dir = process.env[INCIDENT_DIR_ENV]): Incide
     return { status: 'unreadable', artifact: MANIFEST_FILE, detail: String(err) };
   }
 
-  const names = manifestText
-    .split('\n')
-    .map((line) => /^[0-9a-fA-F]{64}\s+\*?(.+)$/.exec(line.trim())?.[1]?.trim())
-    .filter((name): name is string => name !== undefined);
-
-  const outcome = verifyPreservedArtifacts(manifestText, observeArtifacts(dir, names));
+  const { observed, buffers } = readArtifacts(dir);
+  const outcome = verifyPreservedArtifacts(manifestText, observed, REQUIRED_ARTIFACTS);
   if (outcome.status === 'failed') {
     return outcome;
   }
@@ -233,11 +286,11 @@ export function loadIncidentCapture(dir = process.env[INCIDENT_DIR_ENV]): Incide
   let targets: Record<string, unknown>;
   let provenance: Record<string, unknown>;
   try {
-    targets = JSON.parse(readFileSync(join(dir, 'targets.json'), 'utf8')) as Record<
+    targets = JSON.parse(buffers.get('targets.json')?.toString('utf8') ?? '') as Record<
       string,
       unknown
     >;
-    provenance = JSON.parse(readFileSync(join(dir, 'provenance.json'), 'utf8')) as Record<
+    provenance = JSON.parse(buffers.get('provenance.json')?.toString('utf8') ?? '') as Record<
       string,
       unknown
     >;
@@ -281,11 +334,35 @@ function firstClosure(capture: IncidentCapture): string | undefined {
   return stamps[0];
 }
 
+/** Every scalar the capture left null, named rather than defaulted, plus the fields it never held. */
 function unknownFieldsOf(capture: IncidentCapture): readonly UnknownField[] {
   const unknown: UnknownField[] = [];
+  const claimFields = [
+    ['occurredAt', 'occurred_at'],
+    ['textNorm', 'text_norm'],
+    ['subjectId', 'subject_id'],
+    ['aspect', 'aspect'],
+    ['sourceEpisodeId', 'source_episode_id'],
+    ['sessionId', 'session_id'],
+    ['extractionMethod', 'extraction_method'],
+    ['txFrom', 'tx_from'],
+  ] as const;
   for (const claim of capture.claims) {
-    if (claim.occurredAt === null) {
-      unknown.push({ subject: claim.id, field: 'occurred_at' });
+    for (const [key, field] of claimFields) {
+      if (claim[key] === null) {
+        unknown.push({ subject: claim.id, field });
+      }
+    }
+  }
+  for (const source of capture.sources) {
+    if (source.summary === null) {
+      unknown.push({ subject: source.episodeId, field: 'summary' });
+    }
+    if (source.txFrom === null) {
+      unknown.push({ subject: source.episodeId, field: 'tx_from' });
+    }
+    if (source.edgeCreatedAt === null) {
+      unknown.push({ subject: source.episodeId, field: 'extraction_edge_created_at' });
     }
   }
   for (const edge of capture.lineage) {
@@ -298,11 +375,34 @@ function unknownFieldsOf(capture: IncidentCapture): readonly UnknownField[] {
   for (const row of capture.archive) {
     unknown.push({ subject: row.id, field: 'schema_version' });
     unknown.push({ subject: row.id, field: 'content_hash' });
+    for (const [index, turn] of (row.payload.turns ?? []).entries()) {
+      unknown.push({ subject: `${row.episodeId}#${String(index)}`, field: 'turn_id' });
+      if (turn.occurred_at === undefined) {
+        unknown.push({ subject: `${row.episodeId}#${String(index)}`, field: 'turn_occurred_at' });
+      }
+    }
   }
   for (const proposal of capture.proposals) {
     unknown.push({ subject: proposal.id, field: 'submitted_prompt' });
+    if (proposal.rationale === null) {
+      unknown.push({ subject: proposal.id, field: 'rationale' });
+    }
   }
   return unknown;
+}
+
+/**
+ * Held back from every variant, so no field leaves the capture without a line saying so. The
+ * stored vectors are floats taken over text the fixture already carries; a case about them
+ * re-embeds rather than replays, and carrying two 1024-float arrays per node would make the
+ * fixture unreadable.
+ */
+function sharedExclusions(capture: IncidentCapture): readonly VariantDelta[] {
+  return capture.claims.map((claim) => ({
+    kind: 'excluded_stamp' as const,
+    subject: claim.id,
+    reason: 'stored content and context vectors are held back from every variant',
+  }));
 }
 
 function originalIds(capture: IncidentCapture): Readonly<Record<string, string>> {
@@ -360,7 +460,7 @@ export function packageIncidentFixture(
         ...base,
         variant,
         classification: 'the observed false supersession, closures and proposal included',
-        deltas: [],
+        deltas: sharedExclusions(capture),
         expectedAssertions: [
           'the erroneous closure survives a migration until a correction operation changes it',
           'both recorded closures of the same claim are preserved',
@@ -371,7 +471,7 @@ export function packageIncidentFixture(
   }
 
   const closure = firstClosure(capture);
-  const deltas: VariantDelta[] = [];
+  const deltas: VariantDelta[] = [...sharedExclusions(capture)];
   for (const edge of capture.lineage) {
     deltas.push({
       kind: 'excluded_edge',
@@ -385,6 +485,13 @@ export function packageIncidentFixture(
         kind: 'excluded_stamp',
         subject: claim.id,
         reason: `valid_until ${claim.validUntil} was written at the closure this variant rewinds past`,
+      });
+    }
+    if (claim.txUntil !== null) {
+      deltas.push({
+        kind: 'excluded_stamp',
+        subject: claim.id,
+        reason: `tx_until ${claim.txUntil} was written at the same closure`,
       });
     }
   }
@@ -415,4 +522,31 @@ export function packageIncidentFixture(
       ],
     },
   };
+}
+
+export type IndependentReader =
+  | { readonly status: 'independent'; readonly sessionId: string }
+  | { readonly status: 'rejected'; readonly reason: 'resolves_to_source_session' };
+
+/**
+ * Whether a reader asking about this incident is a different reader from the ones that wrote
+ * it. Resolution goes through the session manager rather than through the identity string,
+ * because an alias that resolves to a source session is that session asking about itself, and
+ * a recall measured that way is measuring a session reading its own record.
+ */
+export function independentReaderSession(
+  sessions: { sessionIdFor: (identity: string) => string },
+  identity: string,
+  capture: IncidentCapture,
+): IndependentReader {
+  const sessionId = sessions.sessionIdFor(identity);
+  const sources = new Set([
+    ...capture.sources.map((source) => source.sessionId),
+    ...capture.archive.map((row) => row.sessionId),
+    ...capture.archive.map((row) => row.identity),
+  ]);
+  if (sources.has(sessionId)) {
+    return { status: 'rejected', reason: 'resolves_to_source_session' };
+  }
+  return { status: 'independent', sessionId };
 }
