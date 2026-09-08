@@ -221,6 +221,28 @@ are shared with the workstream that owns each area (`floors.fixtures.ts`,
   daemon's resident-model list, which the whole machine shares: a concurrent file generating
   against the same model would reload it mid-eviction and fail the poll. `npm run
   test:integration` runs both projects; a bare `--project integration` filter skips them.
+- A rehearsal that loads fixtures, injects faults, or tears a store down starts from
+  `startRehearsalSubstrate()` (`test-support/consolidation-rehearsal.fixture.ts`) rather than
+  from the harness directly. It refuses a target that resolves to the running endpoint or
+  shares its data directory, and it takes the container down on refusal, before the caller
+  ever holds a driver.
+
+## Measuring the substrate
+
+`npm run campaign:baseline <output directory>` reads both stores and writes a manifest and a
+baseline beside each other. Every read is a read: graph queries route READ, the substrate file
+opens through `openReadOnlySqliteHandle` (which refuses a path holding no substrate and creates
+no schema), and the output never goes back into either store.
+
+Take the SQLite figures from a copy rather than the running file when the service is up, and
+pass `--sqlite <path> --sqlite-source copy_of_live` so the manifest records what was read.
+A copy taken while writers are running is bounded by its window, which is what
+`observationKind` says; it is not a snapshot of the two stores together.
+
+Numbers come back through a gauge that carries the population it was counted over, or an
+`unavailable` with the reason. A group whose schema is not installed reports every observation
+it owes as unavailable rather than as an empty backlog, which is the difference between no work
+to do and no collector.
 
 ## Test generation routing
 
