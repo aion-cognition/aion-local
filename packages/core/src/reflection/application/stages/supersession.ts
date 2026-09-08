@@ -11,6 +11,7 @@ import { RunTally } from './supersession-tally.js';
 import {
   judgmentEvidenceFor,
   statementWithContext,
+  withheldWorkFor,
   type JudgmentEvidenceOutcome,
 } from '../../../evidence/application/judgment.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
@@ -240,7 +241,10 @@ export class SupersessionStage implements ReflectionStage {
 
       const evidence = await this.#evidenceFor(ctx, subject, candidate);
       if (evidence.status === 'withheld') {
-        tally.recordWithheld(evidence.withheld.kind);
+        tally.recordWithheld(
+          evidence.withheld.kind,
+          withheldWorkFor([candidate.id, subject.id], evidence.withheld),
+        );
         ctx.logger.info(
           {
             episodeId: ctx.episodeId,
@@ -405,6 +409,7 @@ export class SupersessionStage implements ReflectionStage {
         summary: `${tally.withheld} pair(s) withheld for want of required evidence`,
         counts,
         retryable: true,
+        ...(tally.work.length === 0 ? {} : { withheldWork: tally.work }),
       };
     }
 
@@ -431,8 +436,10 @@ export class SupersessionStage implements ReflectionStage {
     return {
       status: 'ok',
       // Work nobody could ask about is still owed. The stage's key stays open so the run that
-      // can decide it re-enters the stage, whatever else this run managed to close.
+      // can decide it re-enters the stage, whatever else this run managed to close, and what it
+      // is owed travels with the result rather than as a number.
       ...(tally.withheld > 0 ? { retryable: true } : {}),
+      ...(tally.work.length === 0 ? {} : { withheldWork: tally.work }),
       summary:
         `${tally.judgments} contradiction judgment(s) in ${this.#options.mode} mode: ` +
         `${tally.superseded} superseded, ${tally.proposed} proposed for review ` +

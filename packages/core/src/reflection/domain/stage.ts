@@ -1,6 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 
-import type { JudgmentEvidence } from '../../evidence/application/judgment.js';
+import type { JudgmentEvidence, WithheldWork } from '../../evidence/application/judgment.js';
 import type { EpisodeContext } from '../../infrastructure/graph/episode-context.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
@@ -38,6 +38,12 @@ export type StageOutcome = {
    * too. Absent means the stage decided for itself and a retry would decide the same.
    */
   readonly retryable?: boolean;
+  /**
+   * Judgments nobody could ask about, with what they were about and the evidence they were
+   * judged against. The key stays open either way, because the work is owed either way; the
+   * disposition is what says whether running it again could decide it.
+   */
+  readonly withheldWork?: readonly WithheldWork[];
 };
 
 /**

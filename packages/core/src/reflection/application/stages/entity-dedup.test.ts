@@ -216,6 +216,16 @@ describe('tier 3 with an evidence seam', () => {
     // The obligation survives the run: a stage that reported plain success would have its ledger
     // key stamped and the pair would never be looked at again.
     expect(outcome.retryable === true || outcome.status === 'failed').toBe(true);
+    // And it survives as work, not as a number: what was owed, why, and against what evidence.
+    expect(outcome.withheldWork).toMatchObject([
+      {
+        disposition: 'blocked',
+        reason: 'required_source_suppressed',
+        addresses: [{ kind: 'id', id: OTHER_EPISODE_ID }],
+        revision: { digest: 'digest' },
+      },
+    ]);
+    expect(outcome.withheldWork?.[0]?.nodeIds).toContain('strong');
     expect(graph.edgesOfType(SUPERSEDES_TYPE)).toEqual([]);
   });
 
@@ -257,6 +267,7 @@ describe('tier 3 with an evidence seam', () => {
 
     expect(outcome.retryable).toBe(true);
     expect(outcome.counts?.merge_withheld).toBeGreaterThan(0);
+    expect(outcome.withheldWork?.map((work) => work.disposition)).toContain('blocked');
   });
 });
 

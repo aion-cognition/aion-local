@@ -1,4 +1,9 @@
-import { statementWithContext } from '../../../evidence/application/judgment.js';
+import { ResolutionTally } from './proposal-resolution-tally.js';
+import {
+  statementWithContext,
+  withheldWorkFor,
+  type WithheldWork,
+} from '../../../evidence/application/judgment.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import {
@@ -174,46 +179,6 @@ async function decideMerge(ctx: OperationContext, pair: EntityMergePair): Promis
   return { decision: holds ? 'apply' : 'dismiss', grounds };
 }
 
-/**
- * One run's counters, mutated through methods rather than field writes: the tally is threaded
- * by reference through the two resolvers below, and a plain object's fields being written from
- * outside the type that owns them is what `no-param-reassign` catches.
- */
-class ResolutionTally {
-  #applied = 0;
-  #dismissed = 0;
-  #open = 0;
-
-  get applied(): number {
-    return this.#applied;
-  }
-
-  get dismissed(): number {
-    return this.#dismissed;
-  }
-
-  /** Rows this run read and could not decide. Neither a verdict nor a failure of the run. */
-  get open(): number {
-    return this.#open;
-  }
-
-  get decided(): number {
-    return this.#applied + this.#dismissed;
-  }
-
-  recordApplied(): void {
-    this.#applied += 1;
-  }
-
-  recordDismissed(): void {
-    this.#dismissed += 1;
-  }
-
-  recordOpen(): void {
-    this.#open += 1;
-  }
-}
-
 type Dismiss = (
   table: ResolutionProposalTable,
   id: string,
@@ -227,8 +192,9 @@ function leaveOpen(
   id: string,
   reason: string,
   tally: ResolutionTally,
+  work?: WithheldWork,
 ): void {
-  tally.recordOpen();
+  tally.recordOpen(work);
   ctx.logger.info(
     { proposalId: id, reason },
     'proposal resolution left a row open for the next run',
@@ -256,7 +222,13 @@ async function resolveContradiction(
     'claim_judgment',
   );
   if (evidence.status === 'withheld') {
-    leaveOpen(ctx, proposal.id, withheldDetail(evidence), tally);
+    leaveOpen(
+      ctx,
+      proposal.id,
+      withheldDetail(evidence),
+      tally,
+      withheldWorkFor([proposal.oldId, proposal.newId], evidence.withheld),
+    );
     return;
   }
 
@@ -357,7 +329,13 @@ async function resolveMerge(
     'entity_judgment',
   );
   if (evidence.status === 'withheld') {
-    leaveOpen(ctx, proposal.id, withheldDetail(evidence), tally);
+    leaveOpen(
+      ctx,
+      proposal.id,
+      withheldDetail(evidence),
+      tally,
+      withheldWorkFor([proposal.leftId, proposal.rightId], evidence.withheld),
+    );
     return;
   }
 
@@ -480,6 +458,7 @@ export function proposalResolutionOperation(): IntrospectionOperation {
         status: tally.decided === 0 ? 'noop' : 'applied',
         itemsProcessed: seen,
         itemsAffected: tally.decided,
+        ...(tally.owed.length === 0 ? {} : { withheldWork: tally.owed }),
         detail:
           `${String(tally.applied)} applied and ${String(tally.dismissed)} dismissed of ` +
           `${String(seen)} open proposal(s) read; ${String(tally.open)} left open for the next run`,

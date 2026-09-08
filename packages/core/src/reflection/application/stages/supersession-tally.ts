@@ -1,3 +1,5 @@
+import type { WithheldWork } from '../../../evidence/application/judgment.js';
+
 /**
  * The supersession stage's per-run counters, split out once `supersession.ts` alone passed
  * the repo's line cap. Mutated through mutator methods rather than field writes: it is
@@ -16,6 +18,7 @@ export class RunTally {
   #staleTargets = 0;
   #withheld = 0;
   #blocked = 0;
+  readonly #work: WithheldWork[] = [];
 
   get superseded(): number {
     return this.#superseded;
@@ -75,10 +78,18 @@ export class RunTally {
     this.#judgeErrors += 1;
   }
 
-  recordWithheld(disposition: 'blocked' | 'retryable'): void {
+  /** What one withheld pair leaves owed, kept whole rather than reduced to a counter. */
+  get work(): readonly WithheldWork[] {
+    return this.#work;
+  }
+
+  recordWithheld(disposition: 'blocked' | 'retryable', work?: WithheldWork): void {
     this.#withheld += 1;
     if (disposition === 'blocked') {
       this.#blocked += 1;
+    }
+    if (work !== undefined) {
+      this.#work.push(work);
     }
   }
 

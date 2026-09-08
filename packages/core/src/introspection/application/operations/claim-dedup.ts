@@ -3,7 +3,9 @@ import type { Driver } from 'neo4j-driver';
 import {
   judgmentEvidenceFor,
   statementWithContext,
+  withheldWorkFor,
   type JudgmentEvidenceOutcome,
+  type WithheldWork,
 } from '../../../evidence/application/judgment.js';
 import { applyMergeWithRecovery } from '../../../evidence/application/merge-recovery.js';
 import {
@@ -192,6 +194,7 @@ export function claimDedupOperation(): IntrospectionOperation {
       let blocked = 0;
       /** Pairs whose evidence moved between the answer and the record it would have left. */
       let moved = 0;
+      const owed: WithheldWork[] = [];
       /** Why the run stopped short of its batch, when an uncertain publication stopped it. */
       let halted: string | undefined;
 
@@ -239,6 +242,7 @@ export function claimDedupOperation(): IntrospectionOperation {
         if (assembled.status === 'withheld') {
           withheld += 1;
           blocked += assembled.withheld.kind === 'blocked' ? 1 : 0;
+          owed.push(withheldWorkFor([subject.id, neighbor.id], assembled.withheld));
           ctx.logger.info(
             {
               subjectId: subject.id,
@@ -385,6 +389,7 @@ export function claimDedupOperation(): IntrospectionOperation {
         status: merged === 0 ? 'noop' : 'applied',
         itemsProcessed: judged,
         itemsAffected: merged,
+        ...(owed.length === 0 ? {} : { withheldWork: owed }),
         detail:
           `${String(judged)} pair(s) judged: ${String(merged)} merged, ${String(related)} related, ` +
           `${String(vetoed)} vetoed, ${String(stale)} stale, ${String(failed)} failed${

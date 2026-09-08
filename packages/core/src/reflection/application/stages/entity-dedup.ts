@@ -5,10 +5,13 @@ import {
   nominatePairs,
   type NominatedPair,
 } from './entity-dedup-cascade.js';
+import { addTallies, NOTHING_DONE, type CascadeTally } from './entity-dedup-tally.js';
 import {
   judgmentEvidenceFor,
   statementWithContext,
+  withheldWorkFor,
   type JudgmentEvidenceOutcome,
+  type WithheldWork,
 } from '../../../evidence/application/judgment.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { DedupEntityDetail } from '../../../infrastructure/graph/entity-dedup-queries.js';
@@ -87,41 +90,6 @@ export type EntityDedupStageOptions = {
 const DEFAULT_MAX_JUDGMENTS = 8;
 
 /** What one run of the cascade did, summed across its tiers. */
-type CascadeTally = {
-  readonly merges: number;
-  readonly groups: number;
-  readonly proposals: number;
-  readonly judged: number;
-  /** Pairs tier 1 put forward, which is what `judged` has to be read against. */
-  readonly nominated: number;
-  /** Pairs nobody was asked about, because their required evidence did not support asking. */
-  readonly withheld: number;
-  /** Of those, the ones a proved suppression blocks until the source comes back. */
-  readonly blocked: number;
-};
-
-const NOTHING_DONE: CascadeTally = {
-  merges: 0,
-  groups: 0,
-  proposals: 0,
-  judged: 0,
-  nominated: 0,
-  withheld: 0,
-  blocked: 0,
-};
-
-function addTallies(left: CascadeTally, right: CascadeTally): CascadeTally {
-  return {
-    merges: left.merges + right.merges,
-    groups: left.groups + right.groups,
-    proposals: left.proposals + right.proposals,
-    judged: left.judged + right.judged,
-    nominated: left.nominated + right.nominated,
-    withheld: left.withheld + right.withheld,
-    blocked: left.blocked + right.blocked,
-  };
-}
-
 /** The pair a judge sees, carrying whatever sources the resolver reserved for each side. */
 function withEvidence(pair: EntityMergePair, evidence: JudgmentEvidenceOutcome): EntityMergePair {
   if (evidence.status !== 'ready') {
@@ -139,7 +107,7 @@ function withEvidence(pair: EntityMergePair, evidence: JudgmentEvidenceOutcome):
 }
 
 /** What one judged pair came to, before it is folded into the run's tally. */
-type PairOutcome = { readonly tally: CascadeTally };
+type PairOutcome = { readonly tally: CascadeTally; readonly work?: WithheldWork };
 
 export class EntityDedupStage implements ReflectionStage {
   readonly name = ENTITY_DEDUP_STAGE_NAME;
@@ -181,8 +149,9 @@ export class EntityDedupStage implements ReflectionStage {
     const cache = new EntityDetailCache(ctx.driver);
     await cache.require(subjectIds);
 
+    const owed: WithheldWork[] = [];
     const tier0 = await this.#runTier0(ctx, cache, subjectIds);
-    const judged = await this.#runJudgedTiers(ctx, cache, subjectIds);
+    const judged = await this.#runJudgedTiers(ctx, cache, subjectIds, owed);
     const tally = addTallies(tier0, judged);
 
     return {
@@ -206,8 +175,9 @@ export class EntityDedupStage implements ReflectionStage {
         merge_blocked: tally.blocked,
       },
       // A pair nobody could ask about is still owed, so the stage's key stays open for the run
-      // that can decide it.
+      // that can decide it, and what it is owed travels with the result rather than as a number.
       ...(tally.withheld > 0 ? { retryable: true } : {}),
+      ...(owed.length === 0 ? {} : { withheldWork: owed }),
     };
   }
 
@@ -256,6 +226,7 @@ export class EntityDedupStage implements ReflectionStage {
     ctx: StageContext,
     cache: EntityDetailCache,
     subjectIds: readonly string[],
+    owed: WithheldWork[],
   ): Promise<CascadeTally> {
     const live = subjectIds.filter((id) => cache.isCurrent(id));
     if (live.length === 0) {
@@ -290,6 +261,9 @@ export class EntityDedupStage implements ReflectionStage {
       }
       const outcome = await this.#judgePair(ctx, cache, pair);
       tally = addTallies(tally, outcome.tally);
+      if (outcome.work !== undefined) {
+        owed.push(outcome.work);
+      }
     }
     return tally;
   }
@@ -349,6 +323,7 @@ export class EntityDedupStage implements ReflectionStage {
           withheld: 1,
           blocked: evidence.withheld.kind === 'blocked' ? 1 : 0,
         },
+        work: withheldWorkFor([left.id, right.id], evidence.withheld),
       };
     }
 

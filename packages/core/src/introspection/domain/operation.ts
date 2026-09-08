@@ -3,7 +3,7 @@ import type { Driver } from 'neo4j-driver';
 
 import type { OperationBucket } from './buckets.js';
 import type { CriticalCondition, HealthSnapshot } from './health.js';
-import type { JudgmentEvidence } from '../../evidence/application/judgment.js';
+import type { JudgmentEvidence, WithheldWork } from '../../evidence/application/judgment.js';
 import type { MergeCoordinator } from '../../evidence/application/merge-recovery.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
@@ -97,6 +97,11 @@ export type OperationOutcome = {
   readonly itemsAffected: number;
   /** One plain line for the ledger summary and the log. No node text, no secrets. */
   readonly detail?: string;
+  /**
+   * Judgments nobody could ask about, with what they were about and the evidence they were
+   * judged against. A counter cannot say which pair is owed or what would make it decidable.
+   */
+  readonly withheldWork?: readonly WithheldWork[];
 };
 
 export type IntrospectionOperation = {

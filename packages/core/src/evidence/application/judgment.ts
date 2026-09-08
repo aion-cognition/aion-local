@@ -103,6 +103,35 @@ export type WithheldJudgment = {
   readonly revision: EvidenceRevision;
 };
 
+/**
+ * One outstanding judgment, in the shape a work owner can act on.
+ *
+ * A counter says how many pairs were withheld; it does not say which, why, or against what
+ * evidence, and none of those can be recovered from a number. Blocked work needs the addresses
+ * an unforget would revalidate it from; retryable work needs the revision a backfill would move.
+ */
+export type WithheldWork = {
+  readonly nodeIds: readonly string[];
+  readonly disposition: 'blocked' | 'retryable';
+  readonly reason: string;
+  readonly addresses: readonly EvidenceAddress[];
+  readonly revision: EvidenceRevision;
+};
+
+/** The work one withheld pair leaves behind, named by the nodes it was about. */
+export function withheldWorkFor(
+  nodeIds: readonly string[],
+  withheld: WithheldJudgment,
+): WithheldWork {
+  return {
+    nodeIds: [...nodeIds],
+    disposition: withheld.kind,
+    reason: withheld.reason,
+    addresses: withheld.addresses,
+    revision: withheld.revision,
+  };
+}
+
 export type JudgmentEvidenceOutcome =
   /** No seam was composed, so the path reads for itself, as it did before one existed. */
   | { readonly status: 'unchecked' }

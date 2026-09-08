@@ -307,6 +307,14 @@ describe('claim_dedup with an evidence seam', () => {
     expect(result.detail).toContain('3 withheld for want of evidence');
     expect(result.detail).toContain('3 blocked');
     expect(assemble).toHaveBeenCalledTimes(3);
+    // The disposition survives the gate: a consumer sees what is owed, why, and against what.
+    expect(result.withheldWork).toHaveLength(3);
+    expect(result.withheldWork?.[0]).toMatchObject({
+      disposition: 'blocked',
+      reason: 'required_source_suppressed',
+      addresses: [{ kind: 'id', id: 'episode-1' }],
+      revision: { digest: 'digest' },
+    });
     expect(isLedgerApplied(db, claimDedupPairKey('subject-a', 'neighbor-a'))).toBe(false);
     expect(isLedgerApplied(db, claimDedupScanKey('subject-a'))).toBe(false);
   });
