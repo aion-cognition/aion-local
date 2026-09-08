@@ -162,7 +162,7 @@ describe('opening a substrate to measure it', () => {
     store.close();
     const reader = openReadOnlySqliteHandle({ filePath: path });
     try {
-      expect(sqliteTableExists(reader, 'source_records')).toBe(false);
+      expect(sqliteTableExists(reader, 'no_such_table')).toBe(false);
     } finally {
       reader.close();
     }

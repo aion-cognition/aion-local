@@ -2,7 +2,20 @@ import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
+import type { ColumnAddition } from './column-additions.js';
+import { IDENTITY_INDEX_STATEMENTS, IDENTITY_SCHEMA_STATEMENTS } from './identity-schema.js';
 import { migrateUnversionedLedgerKeys } from './ledger-version-migration.js';
+import {
+  NARRATIVE_COLUMN_ADDITIONS,
+  NARRATIVE_INDEX_STATEMENTS,
+  NARRATIVE_SCHEMA_STATEMENTS,
+} from './narrative-schema.js';
+import { PUBLICATION_SCHEMA_STATEMENTS } from './publication-schema.js';
+import {
+  READINESS_COLUMN_ADDITIONS,
+  READINESS_INDEX_STATEMENTS,
+  READINESS_SCHEMA_STATEMENTS,
+} from './readiness-schema.js';
 
 /** Name for the config registry, which is the only place the variable is read. */
 export const SQLITE_PATH_ENV_VAR = 'AION_SQLITE_PATH';
@@ -51,6 +64,11 @@ const SCHEMA_STATEMENTS: readonly string[] = [
    * (see reflection-queue.ts). It cannot be computed at claim time: a window function over the
    * unclaimed rows renumbers every group as rows leave, which collapses the interleave back
    * into first-in-first-out after the first claim.
+   *
+   * `episode_id` stores the payload's own episode beside the payload instead of reading it
+   * back out. The pending-job lookup runs on every intake, and reading it from JSON made that
+   * lookup a scan of the whole queue. Rows written before the column exists hold null, so the
+   * lookup keeps its old path until they are backfilled.
    */
   `CREATE TABLE IF NOT EXISTS reflection_queue (
     id TEXT PRIMARY KEY,
@@ -63,7 +81,8 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     last_error TEXT,
     lane TEXT NOT NULL DEFAULT 'interactive',
     session_id TEXT,
-    lane_seq INTEGER NOT NULL DEFAULT 0
+    lane_seq INTEGER NOT NULL DEFAULT 0,
+    episode_id TEXT
   )`,
   /**
    * `burst_id` names the set of rows one producer wrote in one go. Two producers stamping the
@@ -234,6 +253,10 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     occurred_at TEXT NOT NULL,
     recorded_at TEXT NOT NULL
   )`,
+  ...IDENTITY_SCHEMA_STATEMENTS,
+  ...NARRATIVE_SCHEMA_STATEMENTS,
+  ...PUBLICATION_SCHEMA_STATEMENTS,
+  ...READINESS_SCHEMA_STATEMENTS,
 ];
 
 /**
@@ -271,20 +294,16 @@ const INDEX_STATEMENTS: readonly string[] = [
   // aborted pass resumes where it stopped instead of re-applying the steps it already made.
   `CREATE INDEX IF NOT EXISTS usage_events_replay_idx
      ON usage_events (occurred_at, id)`,
+  // The pending-job lookup's seek. Partial, because a row with no stored episode is one the
+  // backfill has not reached and the old payload lookup still answers for it.
+  `CREATE INDEX IF NOT EXISTS reflection_queue_episode_idx
+     ON reflection_queue (episode_id, job_type) WHERE episode_id IS NOT NULL`,
+  ...IDENTITY_INDEX_STATEMENTS,
+  ...NARRATIVE_INDEX_STATEMENTS,
+  ...READINESS_INDEX_STATEMENTS,
 ];
 
-type ColumnAddition = {
-  readonly table: string;
-  readonly column: string;
-  readonly definition: string;
-};
-
-/**
- * Columns added to a table that already shipped. SQLite has no `ADD COLUMN IF NOT EXISTS`,
- * and a second ALTER raises "duplicate column name", so the shape is read first: this runs
- * on every open of every existing substrate. The literals match the CREATE above, which is
- * what makes a fresh file and a retrofitted one the same table.
- */
+/** Applied in order on every open of every existing substrate. */
 const COLUMN_ADDITIONS: readonly ColumnAddition[] = [
   { table: 'api_calls', column: 'usage_error', definition: 'TEXT' },
   { table: 'reflection_queue', column: 'lane', definition: "TEXT NOT NULL DEFAULT 'interactive'" },
@@ -298,6 +317,9 @@ const COLUMN_ADDITIONS: readonly ColumnAddition[] = [
     column: 'similarity_source',
     definition: "TEXT NOT NULL DEFAULT 'name_cosine'",
   },
+  { table: 'reflection_queue', column: 'episode_id', definition: 'TEXT' },
+  ...NARRATIVE_COLUMN_ADDITIONS,
+  ...READINESS_COLUMN_ADDITIONS,
 ];
 
 function tableColumns(db: SqliteHandle, table: string): ReadonlySet<string> {
