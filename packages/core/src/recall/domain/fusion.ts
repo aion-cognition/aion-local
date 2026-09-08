@@ -3,7 +3,6 @@ import type { Rationale } from '@aion/protocol';
 import {
   ADMISSION_DECISION_CAP,
   admissionEvidence,
-  describeMeasurements,
   wasMeasured,
   type AdmissionDecision,
   type AdmissionDecisionReason,
@@ -335,7 +334,7 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
         decisions.push({
           id: entry.best.id,
           reason,
-          measurements: describeMeasurements(entry.evidence),
+          measurements: [...entry.evidence],
           relevance: entry.relevance,
           ...(entry.activation === undefined ? {} : { activation: entry.activation }),
         });
@@ -358,20 +357,22 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
     if (evidence.rule === 'typed_admission') {
       typedAdmitted += 1;
     }
-    decisions.push({
-      id: entry.best.id,
-      reason: 'admitted',
-      measurements: describeMeasurements(entry.evidence),
-      relevance: entry.relevance,
-      ...(entry.activation === undefined ? {} : { activation: entry.activation }),
-      rule: evidence.rule,
-      score: evidence.score,
-    });
     const superseded = entry.best.currency === 'superseded';
     const ranked =
       entry.score *
       boostFor(entry.best.labels, options.labelBoosts) *
       mentionSalience(entry.best.mentionCount);
+    const fusedScore = superseded ? ranked * SUPERSEDED_RANK_WEIGHT : ranked;
+    decisions.push({
+      id: entry.best.id,
+      reason: 'admitted',
+      measurements: [...entry.evidence],
+      relevance: entry.relevance,
+      ...(entry.activation === undefined ? {} : { activation: entry.activation }),
+      rule: evidence.rule,
+      score: evidence.score,
+      fusedScore,
+    });
     items.push({
       ...entry.best,
       relevance: entry.relevance,
@@ -386,7 +387,7 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
       // The merged typed evidence, for the same reason: the ledger writer downstream reads this
       // off the item rather than re-deriving it from the rationale string.
       ...(entry.typedEvidence === undefined ? {} : { typedEvidence: entry.typedEvidence }),
-      score: superseded ? ranked * SUPERSEDED_RANK_WEIGHT : ranked,
+      score: fusedScore,
     });
 
     // A find two or more methods both made is shared for every one of them, not credited to
@@ -425,8 +426,9 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
       decisions.push({
         id: item.id,
         reason: 'cluster_cap',
-        measurements: describeMeasurements(item.evidence ?? []),
+        measurements: [...(item.evidence ?? [])],
         relevance: item.relevance,
+        fusedScore: item.score,
         ...(item.admittedBy === undefined
           ? {}
           : { rule: item.admittedBy.rule, score: item.admittedBy.score }),

@@ -173,7 +173,12 @@ describe('the admission record the trace carries', () => {
     const decided: AdmissionReport = {
       ...ADMISSION,
       decisions: [
-        { id: 'a', reason: 'below_floor', measurements: ['vector 0.20'], relevance: 0.2 },
+        {
+          id: 'a',
+          reason: 'below_floor',
+          measurements: [{ method: 'vector', relevance: 0.2 }],
+          relevance: 0.2,
+        },
         { id: 'b', reason: 'unmeasured_arrival', measurements: [], relevance: 0, activation: 0.29 },
       ],
       decisionsTruncated: false,
@@ -191,7 +196,12 @@ describe('the admission record the trace carries', () => {
     const swap = (first: string, second: string): AdmissionReport => ({
       ...ADMISSION,
       decisions: [
-        { id: first, reason: 'below_floor', measurements: ['vector 0.20'], relevance: 0.2 },
+        {
+          id: first,
+          reason: 'below_floor',
+          measurements: [{ method: 'vector', relevance: 0.2 }],
+          relevance: 0.2,
+        },
         { id: second, reason: 'unmeasured_arrival', measurements: [], relevance: 0 },
       ],
       decisionsTruncated: false,

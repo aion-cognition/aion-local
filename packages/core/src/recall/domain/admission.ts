@@ -204,15 +204,29 @@ export type AdmissionDecisionReason = (typeof ADMISSION_DECISIONS)[number];
 export type AdmissionDecision = {
   readonly id: string;
   readonly reason: AdmissionDecisionReason;
-  /** Each measurement the gate weighed, rendered the way a pack renders one. */
-  readonly measurements: readonly string[];
-  /** The strongest measurement the merge held for the candidate, on its own scale. */
+  /**
+   * Every measurement the gate weighed, with its method and its own number, exactly as the
+   * merge held them. Two decimal places is a rendering: two arrivals measured at 0.591 and
+   * 0.594 print the same and are not the same reading, and a comparison built on the printed
+   * form cannot tell them apart.
+   */
+  readonly measurements: readonly Measurement[];
+  /**
+   * The merged relevance the gate carried for the candidate. It is zero on an arrival nothing
+   * scored against the query, which is why the measurements above are the evidence and this is
+   * only the summary the merge held.
+   */
   readonly relevance: number;
   /** What the spread accumulated for it, absent on a candidate no traversal reached. */
   readonly activation?: number;
   /** The rule that let it in, and the score that rule read. Admissions only. */
   readonly rule?: AdmissionRule;
   readonly score?: number;
+  /**
+   * The ranked score fusion gave the item, which is what decides its place in the pack. It is
+   * a different number from the cosine that admitted it, and neither stands in for the other.
+   */
+  readonly fusedScore?: number;
 };
 
 /** Decisions past this are cut from a report. The counters stay whole. */

@@ -339,9 +339,15 @@ describe('the admission report', () => {
     ]);
     expect(decisionsTruncated).toBe(false);
     expect(decisions?.find((decision) => decision.id === 'reached')?.activation).toBe(0.2);
+    // The numbers the gate weighed, not their rendering: two readings a hundredth apart print
+    // the same and are not the same evidence.
     expect(decisions?.find((decision) => decision.id === 'weak')?.measurements).toEqual([
-      'vector 0.30',
+      { method: 'vector', relevance: 0.3 },
     ]);
+    // The ranked score is fusion's own number, kept apart from the cosine that admitted it.
+    const kept = decisions?.find((decision) => decision.id === 'kept');
+    expect(kept?.fusedScore).toBe(result.items.find((item) => item.id === 'kept')?.score);
+    expect(kept?.fusedScore).not.toBe(kept?.score);
   });
 
   it('separates an empty substrate from a floor that rejected everything', () => {
