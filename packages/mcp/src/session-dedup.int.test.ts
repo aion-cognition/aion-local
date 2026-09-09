@@ -38,6 +38,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { refusingArchiveBackend } from './archive-backend.fixture.js';
 import { waitFor } from './gate/gate-substrate.fixture.js';
 import { MCP_PATH } from './http.js';
 import { AionMcpService } from './service.js';
@@ -399,6 +400,7 @@ describe('the record does not outlive the session', () => {
     const backend: ToolBackend = {
       recall: (args, identity) => handleRecall(deps, args, { identity }),
       reflection: () => Promise.reject(new Error('not used by this suite')),
+      ...refusingArchiveBackend(),
     };
     // The composition the service boots with: a close drops the session record, and the sweep
     // purges what belongs to sessions no close will ever name.

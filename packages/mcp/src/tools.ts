@@ -4,8 +4,14 @@ import {
   RecallInputSchema,
   ReflectionInputSchema,
   ReflectionOutputSchema,
+  SourceInputSchema,
+  SourceOutputSchema,
+  SourceSearchInputSchema,
+  SourceSearchOutputSchema,
   type RecallOutput,
   type ReflectionOutput,
+  type SourceOutput,
+  type SourceSearchOutput,
 } from '@aion/protocol';
 import {
   ErrorCode,
@@ -24,10 +30,16 @@ import {
   REFLECTION_DESCRIPTION,
   REFLECTION_TITLE,
   REFLECTION_TOOL_NAME,
+  SOURCE_DESCRIPTION,
+  SOURCE_SEARCH_DESCRIPTION,
+  SOURCE_SEARCH_TITLE,
+  SOURCE_SEARCH_TOOL_NAME,
+  SOURCE_TITLE,
+  SOURCE_TOOL_NAME,
 } from './descriptions.js';
 
 /**
- * The two tools this service exposes. The wire schemas are the ones the handlers themselves
+ * The four tools this service exposes. The wire schemas are the ones the handlers themselves
  * parse (`@aion/protocol`), converted to JSON Schema rather than restated, so a client sees
  * exactly the contract the handler enforces and the two cannot drift.
  */
@@ -84,6 +96,38 @@ export const TOOL_DEFINITIONS: readonly Tool[] = [
     },
     _meta: { ...VERSION_META },
   },
+  {
+    name: SOURCE_SEARCH_TOOL_NAME,
+    title: SOURCE_SEARCH_TITLE,
+    description: SOURCE_SEARCH_DESCRIPTION,
+    inputSchema: jsonSchemaFor(SourceSearchInputSchema, 'input'),
+    outputSchema: jsonSchemaFor(SourceSearchOutputSchema, 'output'),
+    annotations: {
+      title: SOURCE_SEARCH_TITLE,
+      // An explicit read: it creates no session, stamps no access, reinforces nothing and
+      // queues nothing. The index behind it is maintained by its own handler.
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    _meta: { ...VERSION_META },
+  },
+  {
+    name: SOURCE_TOOL_NAME,
+    title: SOURCE_TITLE,
+    description: SOURCE_DESCRIPTION,
+    inputSchema: jsonSchemaFor(SourceInputSchema, 'input'),
+    outputSchema: jsonSchemaFor(SourceOutputSchema, 'output'),
+    annotations: {
+      title: SOURCE_TITLE,
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    _meta: { ...VERSION_META },
+  },
 ];
 
 /**
@@ -94,6 +138,8 @@ export const TOOL_DEFINITIONS: readonly Tool[] = [
 export type ToolBackend = {
   readonly recall: (args: unknown, identity: string) => Promise<RecallOutput>;
   readonly reflection: (args: unknown, identity: string) => Promise<ReflectionOutput>;
+  readonly sourceSearch: (args: unknown) => Promise<{ output: SourceSearchOutput; text: string }>;
+  readonly source: (args: unknown) => Promise<{ output: SourceOutput; text: string }>;
 };
 
 /**
@@ -111,6 +157,9 @@ function ackText(output: ReflectionOutput): string {
   const jobs = output.pending_ahead === 1 ? 'job' : 'jobs';
   return `${base} ${String(output.pending_ahead)} interactive ${jobs} ahead of it.`;
 }
+
+/** The tools this service answers for, read off the definitions so the two cannot drift. */
+const TOOL_NAMES = new Set(TOOL_DEFINITIONS.map((tool) => tool.name));
 
 /**
  * A payload rejected by the handler's own `parse` is the caller's error and comes back as
@@ -149,7 +198,7 @@ export async function callTool(
   args: unknown,
   identity: string,
 ): Promise<CallToolResult> {
-  if (name !== RECALL_TOOL_NAME && name !== REFLECTION_TOOL_NAME) {
+  if (!TOOL_NAMES.has(name)) {
     throw new McpError(ErrorCode.MethodNotFound, `unknown tool: ${name}`);
   }
 
@@ -160,6 +209,19 @@ export async function callTool(
         content: [{ type: 'text', text: pack.rendered_text }],
         structuredContent: pack,
       };
+    }
+
+    // A refusal and an unavailable capability carry matching text and structured output, so a
+    // client that renders only the block is told the search could not run rather than that
+    // nothing matched.
+    if (name === SOURCE_SEARCH_TOOL_NAME) {
+      const found = await backend.sourceSearch(args);
+      return { content: [{ type: 'text', text: found.text }], structuredContent: found.output };
+    }
+
+    if (name === SOURCE_TOOL_NAME) {
+      const read = await backend.source(args);
+      return { content: [{ type: 'text', text: read.text }], structuredContent: read.output };
     }
 
     const stored = await backend.reflection(args, identity);

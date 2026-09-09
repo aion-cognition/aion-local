@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { refusingArchiveBackend } from './archive-backend.fixture.js';
 import { MCP_PATH } from './http.js';
 import { AionMcpService } from './service.js';
 import type { ToolBackend } from './tools.js';
@@ -42,6 +43,7 @@ const backend: ToolBackend = {
   recall: () => Promise.resolve(emptyPack()),
   reflection: () =>
     Promise.resolve({ episode_id: 'episode-1', queued: true, lane: 'interactive' } as const),
+  ...refusingArchiveBackend(),
 };
 
 let dir: string;

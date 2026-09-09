@@ -1,5 +1,6 @@
 import {
   countQueueJobs,
+  drainSourceIndexQueue,
   countQueueJobsByLane,
   dropUnclaimedJobs,
   isReflectionLane,
@@ -7,6 +8,7 @@ import {
   promoteJobs,
   reconcileEnrichment,
   REFLECTION_LANES,
+  sourceReadDeps,
   type ReflectionJob,
   type ReflectionLane,
   type ReflectionQueueFilter,
@@ -28,7 +30,7 @@ import { withSubstrate, type Substrate } from './substrate.js';
  * memory gets thrown away.
  */
 
-const SUBCOMMANDS = ['ls', 'drop', 'promote', 'reconcile'] as const;
+const SUBCOMMANDS = ['ls', 'drop', 'promote', 'reconcile', 'index'] as const;
 
 type Subcommand = (typeof SUBCOMMANDS)[number];
 
@@ -37,7 +39,7 @@ const DEFAULT_LIST_LIMIT = 50;
 const SPEC: ArgSpec<Subcommand> = {
   command: 'queue',
   usage:
-    'aion queue [ls | drop | promote | reconcile] [--session <id>] [--lane <lane>] ' +
+    'aion queue [ls | drop | promote | reconcile | index] [--session <id>] [--lane <lane>] ' +
     '[--limit <n>] [--re-enqueue] [--yes]',
   subcommands: SUBCOMMANDS,
   options: [
@@ -226,6 +228,33 @@ async function runReconcile(substrate: Substrate, flags: QueueFlags): Promise<nu
   return 0;
 }
 
+/**
+ * Runs the archive-index rows intake wrote. The reflection worker narrows its claim to the
+ * jobs it can run, so these sit until something asks for them, and this is that something
+ * until a scheduled driver owns it. A job it cannot finish goes back to the queue with the
+ * reason on the row.
+ */
+async function runIndex(substrate: Substrate, flags: QueueFlags): Promise<number> {
+  const { write } = substrate;
+  const deps = sourceReadDeps({
+    driver: substrate.connection().driver,
+    db: substrate.db(),
+    logger: substrate.logger(),
+  });
+  const drain = await drainSourceIndexQueue(deps, {
+    ...(flags.limit === undefined ? {} : { maxJobs: flags.limit }),
+  });
+  substrate.logger().info({ drain }, 'source index queue drained');
+  write(`claimed     ${String(drain.claimed)}`);
+  write(`completed   ${String(drain.completed)}`);
+  write(`documents   ${String(drain.documents)}`);
+  write(`deferred    ${String(drain.deferred)}`);
+  if (drain.deferred > 0) {
+    write('deferred rows keep their obligation; `aion queue ls` shows the reason on each');
+  }
+  return 0;
+}
+
 export function runQueue(
   argv: readonly string[] = [],
   write: Writer = stdoutWriter,
@@ -238,6 +267,9 @@ export function runQueue(
     run: async (substrate, flags) => {
       if (flags.subcommand === 'reconcile') {
         return await runReconcile(substrate, flags);
+      }
+      if (flags.subcommand === 'index') {
+        return await runIndex(substrate, flags);
       }
       if (flags.subcommand === 'drop') {
         return await runDrop(substrate, flags);

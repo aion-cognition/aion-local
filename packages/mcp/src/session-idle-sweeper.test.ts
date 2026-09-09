@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { refusingArchiveBackend } from './archive-backend.fixture.js';
 import { AionMcpService } from './service.js';
 import {
   MIN_SESSION_IDLE_SWEEP_INTERVAL_MS,
@@ -24,6 +25,7 @@ const IDLE_MS = 30 * 60 * 1000;
 const backend: ToolBackend = {
   recall: () => Promise.reject(new Error('not used by this suite')),
   reflection: () => Promise.reject(new Error('not used by this suite')),
+  ...refusingArchiveBackend(),
 };
 
 let dir: string;

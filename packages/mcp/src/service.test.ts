@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { refusingArchiveBackend } from './archive-backend.fixture.js';
 import { USAGE_PROTOCOL } from './descriptions.js';
 import { HEALTH_PATH, MCP_PATH } from './http.js';
 import { AionMcpService } from './service.js';
@@ -59,6 +60,7 @@ const backend: ToolBackend = {
     calls.push({ tool: 'reflection', identity });
     return Promise.resolve({ episode_id: 'episode-1', queued: true, lane: 'interactive' } as const);
   },
+  ...refusingArchiveBackend(),
 };
 
 let dir: string;
@@ -97,11 +99,16 @@ afterAll(async () => {
 });
 
 describe('tool discovery', () => {
-  it('lists both tools with their when-to-invoke descriptions', async () => {
+  it('lists every tool with its when-to-invoke description', async () => {
     const client = await connect();
     try {
       const listed = await client.listTools();
-      expect(listed.tools.map((tool) => tool.name).sort()).toEqual(['recall', 'reflection']);
+      expect(listed.tools.map((tool) => tool.name).sort()).toEqual([
+        'recall',
+        'reflection',
+        'source',
+        'source_search',
+      ]);
       expect(listed.tools[0]?.description ?? '').toContain('Call recall:');
     } finally {
       await client.close();

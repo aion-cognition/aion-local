@@ -36,6 +36,21 @@ export { introspectionOperations } from './application/catalog.js';
 export { probeRecall } from './application/operations/recall-probe.js';
 
 /**
+ * Archive discovery and inspection: the two explicit reads, the handler that keeps the index
+ * they read behind, and the one crossing to the shape both transports send.
+ */
+export { runSourceSearch } from './application/source-search.js';
+export { runSourceInspection } from './application/source-inspect.js';
+export { drainSourceIndexQueue } from './application/source-index-queue.js';
+export {
+  searchOutputFor,
+  searchText,
+  sourceOutputFor,
+  sourceReadDeps,
+  sourceText,
+} from './application/source-wire.js';
+
+/**
  * The repair the loop never selects. A person names the merge to reverse; `unmerge.ts` says why
  * it has no measurable trigger.
  */

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { refusingArchiveBackend } from './archive-backend.fixture.js';
 import { HEALTH_PATH } from './http.js';
 import { AionMcpService } from './service.js';
 import type { ToolBackend } from './tools.js';
@@ -16,6 +17,7 @@ import type { ToolBackend } from './tools.js';
 const backend: ToolBackend = {
   recall: () => Promise.reject(new Error('not exercised in this file')),
   reflection: () => Promise.reject(new Error('not exercised in this file')),
+  ...refusingArchiveBackend(),
 };
 
 let dir: string;

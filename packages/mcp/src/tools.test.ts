@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
+import { refusingArchiveBackend } from './archive-backend.fixture.js';
 import { DESCRIPTIONS_VERSION, DESCRIPTIONS_VERSION_META_KEY } from './descriptions.js';
 import { callTool, TOOL_DEFINITIONS, type ToolBackend } from './tools.js';
 
@@ -65,6 +66,7 @@ function backendReturning(): ToolBackend {
     recall: () => Promise.resolve(pack()),
     reflection: () =>
       Promise.resolve({ episode_id: 'episode-1', queued: true, lane: 'interactive' } as const),
+    ...refusingArchiveBackend(),
   };
 }
 
@@ -72,6 +74,7 @@ function backendThrowing(err: Error): ToolBackend {
   return {
     recall: () => Promise.reject(err),
     reflection: () => Promise.reject(err),
+    ...refusingArchiveBackend(),
   };
 }
 
@@ -90,8 +93,13 @@ afterAll(() => {
 });
 
 describe('tool definitions', () => {
-  it('registers recall and reflection, each stamped with the description version', () => {
-    expect(TOOL_DEFINITIONS.map((tool) => tool.name)).toEqual(['recall', 'reflection']);
+  it('registers every tool, each stamped with the description version', () => {
+    expect(TOOL_DEFINITIONS.map((tool) => tool.name)).toEqual([
+      'recall',
+      'reflection',
+      'source_search',
+      'source',
+    ]);
     for (const tool of TOOL_DEFINITIONS) {
       expect(tool._meta?.[DESCRIPTIONS_VERSION_META_KEY]).toBe(DESCRIPTIONS_VERSION);
       expect(tool.description ?? '').not.toBe('');
@@ -190,6 +198,7 @@ describe('reflection results', () => {
           lane: 'interactive',
           pending_ahead: 3,
         } as const),
+      ...refusingArchiveBackend(),
     };
 
     const result = await callTool(
@@ -218,6 +227,7 @@ describe('reflection results', () => {
           lane: 'interactive',
           pending_ahead: 0,
         } as const),
+      ...refusingArchiveBackend(),
     };
 
     const result = await callTool(

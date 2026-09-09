@@ -170,6 +170,10 @@ beforeAll(async () => {
   const backend: ToolBackend = {
     recall: (args, identity) => handleRecall(deps, args, { identity }),
     reflection: () => Promise.reject(new Error('not used by this suite')),
+    // The archive tools are not this file's subject; they refuse rather than answer, so a
+    // case that reached them would fail rather than pass on a fixture.
+    sourceSearch: () => Promise.reject(new Error('not used by this suite')),
+    source: () => Promise.reject(new Error('not used by this suite')),
   };
   service = new AionMcpService({ backend, logger, host: '127.0.0.1', port: 0 });
   const port = await service.listen();

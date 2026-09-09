@@ -51,6 +51,7 @@ import {
 } from '@aion/core';
 import { userInfo } from 'node:os';
 
+import { archiveToolBackend } from './archive-tools.js';
 import { bindHost, runningInContainer } from './http.js';
 import { AionMcpService } from './service.js';
 import { SessionIdleSweeper } from './session-idle-sweeper.js';
@@ -403,6 +404,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
     const backend: ToolBackend = {
       recall: (args, identity) => handleRecall(recall, args, { identity }),
       reflection: (args, identity) => handleReflection(intake, args, { identity }),
+      ...archiveToolBackend({ driver, db: store.db, logger }),
     };
 
     service = new AionMcpService({

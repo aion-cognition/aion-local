@@ -9,6 +9,8 @@ import { runProposals } from './proposals.js';
 import { runQueue } from './queue.js';
 import { runReplayCommand } from './replay.js';
 import { runSearch } from './search.js';
+import { runSourceSearchCommand } from './source-search.js';
+import { runSourceCommand } from './source.js';
 import { runStats } from './stats.js';
 import { runStatus } from './status.js';
 import { runTimelineCommand } from './timeline.js';
@@ -49,7 +51,7 @@ const commands: Record<string, Command> = {
     run: (argv) => runLast(argv),
   },
   queue: {
-    summary: 'inspect the reflection queue: ls | drop | promote | reconcile',
+    summary: 'inspect the reflection queue: ls | drop | promote | reconcile | index',
     run: (argv) => runQueue(argv),
   },
   replay: {
@@ -83,6 +85,14 @@ const commands: Record<string, Command> = {
   search: {
     summary: 'direct hybrid search through the seed layer, bypassing pack assembly',
     run: (argv) => runSearch(argv),
+  },
+  'source-search': {
+    summary: 'literal text against the captured archive, with what the index could not cover',
+    run: (argv) => runSourceSearchCommand(argv),
+  },
+  source: {
+    summary: 'the captured parts behind one source id, turn id, or part address',
+    run: (argv) => runSourceCommand(argv),
   },
   forget: {
     summary: 'bitemporal close of a node by id or query: nothing is deleted',

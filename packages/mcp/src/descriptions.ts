@@ -6,16 +6,20 @@
  *
  * Bump `DESCRIPTIONS_VERSION` on every edit to any string in this file.
  */
-export const DESCRIPTIONS_VERSION = 3;
+export const DESCRIPTIONS_VERSION = 4;
 
 /** The `_meta` key the version is published under, so a cadence report can group by it. */
 export const DESCRIPTIONS_VERSION_META_KEY = 'aion/descriptions_version';
 
 export const RECALL_TOOL_NAME = 'recall';
 export const REFLECTION_TOOL_NAME = 'reflection';
+export const SOURCE_SEARCH_TOOL_NAME = 'source_search';
+export const SOURCE_TOOL_NAME = 'source';
 
 export const RECALL_TITLE = 'Recall memory';
 export const REFLECTION_TITLE = 'Store experience';
+export const SOURCE_SEARCH_TITLE = 'Search captured sources';
+export const SOURCE_TITLE = 'Read a captured source';
 
 export const RECALL_DESCRIPTION = [
   'Search persistent memory of earlier sessions and return what bears on the work at hand:',
@@ -64,6 +68,32 @@ export const REFLECTION_DESCRIPTION = [
   'Intake returns as soon as the experience is durable; extraction runs afterward, so the call is fast',
   'and never blocks the work it describes. Credentials are redacted before anything is stored, and',
   'sending the same payload twice returns the original episode rather than storing it again.',
+].join('\n');
+
+export const SOURCE_SEARCH_DESCRIPTION = [
+  'Find a literal phrase in the raw conversations this substrate captured, whether or not',
+  'anything was ever extracted from them. This is a tool for looking something up, not a',
+  'replacement for recall: recall is what grounds you in what came before, and this is what you',
+  'reach for when you need the exact words.',
+  '',
+  'Call source_search when you know roughly what was said and need the passage itself: an exact',
+  'command, an error string, a phrase from an earlier conversation. Terms are matched literally',
+  'and combined; wrap words in double quotes to require them as a phrase.',
+  '',
+  'Every answer says what the index could not cover. `corpus.truncated_documents` counts parts',
+  'whose stored text is a prefix, so a phrase past that prefix is absent from the index while',
+  'the source itself still holds it; read the whole part with the `source` tool. An empty result',
+  'is not proof the phrase was never said. Use `as_of` to ask about what was true at a past date',
+  'and `knew_at` to ask what memory held then.',
+].join('\n');
+
+export const SOURCE_DESCRIPTION = [
+  'Read the captured parts behind one source: pass a source id, an original turn id, or a part',
+  'address. Ids that came back from recall or from source_search resolve here even after the',
+  'graph projection behind them is gone.',
+  '',
+  'Long sources come back over pages. A page is never the whole source: when `continuation` is',
+  'present, more parts follow, and a judgment that needs all of it has to read all of it.',
 ].join('\n');
 
 /**

@@ -35,6 +35,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { refusingArchiveBackend } from './archive-backend.fixture.js';
 import { MCP_PATH } from './http.js';
 import { AionMcpService } from './service.js';
 import { SessionIdleSweeper } from './session-idle-sweeper.js';
@@ -135,6 +136,7 @@ beforeAll(async () => {
   const backend: ToolBackend = {
     recall: (args, identity) => handleRecall(recall, args, { identity }),
     reflection: (args, identity) => handleReflection(intake, args, { identity }),
+    ...refusingArchiveBackend(),
   };
 
   service = new AionMcpService({
