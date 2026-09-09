@@ -21,6 +21,10 @@ import type { PublicationBoundary } from '../publication/types.js';
 import { SqliteStore } from '../sqlite/database.js';
 import { ARCHIVE_SCHEMA_VERSION, experienceArchiveKey } from '../sqlite/experience-archive.js';
 import { readActiveGeneration, readGeneration } from '../sqlite/processing-generations.js';
+import {
+  acknowledgePublicationIntent,
+  preparePublicationIntent,
+} from '../sqlite/publication-intents.js';
 import { listReflectionJobs } from '../sqlite/reflection-queue.js';
 import { listReferenceBatches } from '../sqlite/source-identity.js';
 import {
@@ -239,9 +243,27 @@ it('mints a new occurrence for a push that arrives after its predecessor was for
   recordSourceStateVersion(store.db, {
     sourceId: original?.sourceId ?? '',
     stateKind: 'forgotten',
-    operationId: 'operation-forget',
+    operationId: `forget-${marker}`,
     observedAt: NOW,
     knownFrom: NOW,
+  });
+  // The statement counts once its own publication is acknowledged, which is what a committed
+  // read asks for: a timestamp on the row is not an acknowledgment.
+  preparePublicationIntent(store.db, {
+    operationId: `forget-${marker}`,
+    kind: 'source_suppression',
+    payloadDigest: `digest-${marker}`,
+    payloadJson: '{}',
+    affectedScopesJson: '[]',
+    expectedJson: '{}',
+    preparedActionsJson: '[]',
+    createdAt: NOW,
+  });
+  acknowledgePublicationIntent(store.db, {
+    operationId: `forget-${marker}`,
+    resultDigest: `result-${marker}`,
+    resultJson: '{}',
+    observedAckAt: NOW,
   });
 
   const second = await coordinator.publish({

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { orphanCleanupOperation, orphanCleanupRelevance } from './orphan-cleanup.js';
+import { establishNodeSupportScopes } from '../../../evidence/test-support/evidence.fixture.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import {
@@ -31,26 +32,30 @@ import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
 
 /**
- * Five orphans, one per case the operation distinguishes:
+ * Four orphans, one per case the operation distinguishes:
  *
- * - an episode whose session holds a second episode, so it has a sibling to reach
  * - a decision extracted from an episode that mentions an entity, so it has an entity to reach
- * - the insight that marks the first episode enriched, which reaches nothing and is too new
- * - an ancient insight with no edges at all: no candidate, and old enough to give up on
- * - a recent insight with no edges: the same case without the age
+ * - the insight that marks an episode enriched, which reaches nothing
+ * - an insight with no edges at all whose support census has been established
+ * - an insight with no edges whose support nobody has counted
  *
- * Beside them sits an episode reflection has not processed. It has only its session link, so
- * the old count read it as fragmentation; it is waiting on enrichment rather than broken, and
- * neither the count nor the sweep may touch it.
+ * The episodes beside them are raw containers and are out of the population entirely: an episode
+ * is what a source IS rather than an interpretation drawn from one, it hangs off the backbone by
+ * construction, and the archive and the durable records are what account for it.
  *
- * The mentioning episode and the mentioned entity are not orphans themselves. A mention is an
- * association, and a node that carries one is already attached to the layer activation
- * traverses, which is what the orphan count is about.
+ * The mentioned entity is not an orphan either. A mention is an association, and a node that
+ * carries one is already attached to the layer activation traverses.
+ *
+ * The clock the forget measures is the qualification's, not the node's age: what the operation
+ * suppresses is a node the records have certified unsupported CONTINUOUSLY, so the run that
+ * first certifies one forgets nothing and a later run over an unchanged reading does.
  */
 
 const EMBED_DIMENSION = 8;
 const NOW = new Date('2026-08-29T14:00:00.000Z');
 const LONG_AGO = new Date('2026-01-01T00:00:00.000Z');
+/** A month past the first certification, which is what the qualification window measures. */
+const MATURE = new Date('2026-10-05T14:00:00.000Z');
 
 let harness: Neo4jHarness;
 let db: SqliteHandle;
@@ -210,45 +215,66 @@ afterAll(async () => {
 });
 
 describe('orphan cleanup', () => {
-  it('stays at zero relevance until the snapshot actually meets the orphan condition', () => {
-    const quiet = healthFixture({
-      graph: { ...healthFixture().graph, nodes: 100, orphanShare: 0.05 },
-    });
-    expect(orphanCleanupRelevance(quiet)).toBe(0);
-
+  it('scores on demand a run could act on rather than on the share of the graph', () => {
+    // A fragmented substrate with nothing actionable is worth no run at all: the share moves
+    // with the shape of the graph and says nothing about whether there is work.
     const fragmented = healthFixture({
-      graph: { ...healthFixture().graph, nodes: 100, orphanShare: 0.4 },
+      graph: { ...healthFixture().graph, nodes: 100, orphanShare: 0.4, orphanActionable: 0 },
     });
-    expect(orphanCleanupRelevance(fragmented)).toBeCloseTo(0.4);
+    expect(orphanCleanupRelevance(fragmented)).toBe(0);
+
+    const owed = healthFixture({
+      graph: {
+        ...healthFixture().graph,
+        nodes: 100,
+        orphanShare: 0.05,
+        orphanActionable: 2,
+        orphanCleanupBatch: 5,
+      },
+    });
+    expect(orphanCleanupRelevance(owed)).toBeCloseTo(0.4);
   });
 
-  it('leaves an episode waiting on enrichment out of the count and out of the sweep', async () => {
+  it('leaves a raw container out of the count and out of the sweep', async () => {
     const before = await countOrphanNodes(harness.driver);
-    expect(before.orphans).toBe(5);
-    expect(await orphanIds()).not.toContain('episode-unenriched-alone');
+    expect(before.orphans).toBe(4);
+    const ids = await orphanIds();
+    expect(ids).not.toContain('episode-unenriched-alone');
+    expect(ids).not.toContain('episode-with-sibling');
   });
 
-  it('relinks what it can reach and forgets only what has waited long enough', async () => {
+  it('holds every node while nothing has counted the scopes its support would be in', async () => {
     const outcome = await orphanCleanupOperation().run(context());
 
-    expect(outcome.status).toBe('applied');
-    expect(outcome.itemsProcessed).toBe(5);
-    // Two relinked, one forgotten, two left alone because they are too new to give up on.
-    expect(outcome.itemsAffected).toBe(3);
+    expect(outcome.status).toBe('noop');
+    expect(outcome.itemsAffected).toBe(0);
+    expect(await forgottenAt('insight-ancient-alone')).toBeUndefined();
+  });
 
+  it('relinks what it can reach and forgets only what has been certified all along', async () => {
+    // Two of the four have their support counted. The other two stay unknown, and unknown
+    // support authorizes nothing: not a forget, and not a guessed edge either.
+    for (const nodeId of ['decision-orphan', 'insight-ancient-alone']) {
+      establishNodeSupportScopes(db, nodeId, NOW);
+    }
+
+    // The first run certifies and starts the window. Nothing is mature yet, so the only thing
+    // it can act on is the relink.
+    const first = await orphanCleanupOperation().run(context());
+    expect(first.status).toBe('applied');
     expect(
       await relationshipTypesBetween(harness.driver, 'decision-orphan', 'entity-postgres'),
     ).toContain('RELATED_TO');
-    expect(
-      await relationshipTypesBetween(harness.driver, 'episode-with-sibling', 'episode-sibling'),
-    ).toContain('RELATED_TO');
-    expect(await forgottenAt('insight-ancient-alone')).toBeInstanceOf(Date);
-    expect(await forgottenAt('insight-recent-alone')).toBeUndefined();
-    // The unenriched episode is older than the forget threshold and was still not touched.
-    expect(await forgottenAt('episode-unenriched-alone')).toBeUndefined();
+    expect(await forgottenAt('insight-ancient-alone')).toBeUndefined();
 
-    const after = await countOrphanNodes(harness.driver);
-    expect(after.orphans).toBeLessThan(5);
+    // A month later the same reading still holds, which is what the window measures.
+    const outcome = await orphanCleanupOperation().run(context(MATURE));
+
+    expect(outcome.status).toBe('applied');
+    expect(await forgottenAt('insight-ancient-alone')).toBeInstanceOf(Date);
+    // Uncounted support, so the run leaves it exactly where it is however old it gets.
+    expect(await forgottenAt('insight-recent-alone')).toBeUndefined();
+    expect(await forgottenAt('episode-unenriched-alone')).toBeUndefined();
   });
 
   it('does not forget a node that stopped being an orphan since the scan read it', async () => {
@@ -279,8 +305,8 @@ describe('orphan cleanup', () => {
     expect(await forgottenAt('insight-ancient-rescued')).toBeUndefined();
   });
 
-  it('finds nothing left to repair on a second run over the same substrate', async () => {
-    const outcome = await orphanCleanupOperation().run(context());
+  it('finds nothing left to repair on a later run over the same substrate', async () => {
+    const outcome = await orphanCleanupOperation().run(context(MATURE));
 
     expect(outcome.status).toBe('noop');
     expect(outcome.itemsAffected).toBe(0);

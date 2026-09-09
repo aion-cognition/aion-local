@@ -21,6 +21,10 @@ import {
 } from './test-support/consolidation-rehearsal.fixture.js';
 import { replayExperiences } from '../../reflection/application/replay.js';
 import { openLogger } from '../logging/logger.js';
+import {
+  acknowledgePublicationIntent,
+  preparePublicationIntent,
+} from '../sqlite/publication-intents.js';
 import { recordSourceStateVersion } from '../sqlite/source-lifecycle.js';
 
 const NOW = new Date('2026-09-08T06:00:00.000Z');
@@ -109,6 +113,24 @@ async function reintroduced(
     operationId: `forget-${marker}`,
     observedAt: NOW,
     knownFrom: NOW,
+  });
+  // The statement counts once its own publication is acknowledged, which is what the committed
+  // read asks for: a timestamp on the row is not an acknowledgment.
+  preparePublicationIntent(store.db, {
+    operationId: `forget-${marker}`,
+    kind: 'source_suppression',
+    payloadDigest: `digest-${marker}`,
+    payloadJson: '{}',
+    affectedScopesJson: '[]',
+    expectedJson: '{}',
+    preparedActionsJson: '[]',
+    createdAt: NOW,
+  });
+  acknowledgePublicationIntent(store.db, {
+    operationId: `forget-${marker}`,
+    resultDigest: `result-${marker}`,
+    resultJson: '{}',
+    observedAckAt: NOW,
   });
   const at = new Date(NOW.getTime() + 60000).toISOString();
   const outcome = await coordinator.publish({

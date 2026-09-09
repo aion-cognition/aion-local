@@ -3,7 +3,8 @@ import type { Driver } from 'neo4j-driver';
 import { BITEMPORAL_PROPERTIES, currentOnly } from './bitemporal.js';
 import { readFirst } from './connection.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from './episodes.js';
-import { BACKBONE_TYPES, EXTRACTION_TYPE, MEMORY_LABEL } from './labels.js';
+import { BACKBONE_TYPES, MEMORY_LABEL } from './labels.js';
+import { STRUCTURAL_PROPERTY } from './seed-queries.js';
 import { toGraphInteger } from './values.js';
 
 /**
@@ -68,13 +69,18 @@ export type OrphanCounts = {
 };
 
 /**
- * An episode nothing has been extracted from is waiting on reflection, not fragmented. It has
- * only its backbone edges because the stage that gives it associations has not run yet, and
- * counting it here made a growing enrichment backlog read as a structural emergency: the
- * repair would then write a heuristic edge onto it, drop it out of the count, and leave it
- * exactly as unenriched as before. The backlog has its own metric, and its own operation.
+ * A raw container is out of the count, whatever its edges.
+ *
+ * An Episode and a Turn are what a source IS rather than an interpretation drawn from one. They
+ * hang off the backbone by construction, so counting them reported the shape of the substrate as
+ * fragmentation: an episode waiting on reflection read as a structural emergency, and a repair
+ * would have written a heuristic edge onto it and left it exactly as unenriched as before. The
+ * archive and the durable records are what account for a raw container.
+ *
+ * It is the same exclusion the repair scan applies, so the diagnostic and the sweep are about
+ * one population.
  */
-const AWAITING_ENRICHMENT = `n:Episode AND NOT EXISTS { MATCH ()-[:${EXTRACTION_TYPE}]->(n) }`;
+const RAW_CONTAINER = 'n:Episode OR n:Turn';
 
 /**
  * The edge has to be open in world time, the same predicate the traversal applies: an edge
@@ -84,7 +90,8 @@ const AWAITING_ENRICHMENT = `n:Episode AND NOT EXISTS { MATCH ()-[:${EXTRACTION_
 const COUNT_ORPHANS = [
   `MATCH (n:${MEMORY_LABEL})`,
   `WHERE ${currentOnly('n')}`,
-  `  AND NOT (${AWAITING_ENRICHMENT})`,
+  `  AND NOT (${RAW_CONTAINER})`,
+  `  AND coalesce(n.${STRUCTURAL_PROPERTY}, false) = false`,
   'WITH n LIMIT $limit',
   'OPTIONAL MATCH (n)-[r]-()',
   `  WHERE NOT type(r) IN [${BACKBONE_TYPES}]`,
