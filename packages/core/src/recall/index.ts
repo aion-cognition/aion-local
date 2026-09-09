@@ -41,8 +41,10 @@ export {
 export {
   checkCoverage,
   CoverageRequestError,
+  readCoverageFence,
   type CheckedRead,
 } from './application/coverage-checker.js';
+export { refuseCheckedRead } from './application/read-completion.js';
 export { coverageLines, refusalLines } from './application/coverage-text.js';
 
 export { RecallSideEffects } from './application/side-effects.js';

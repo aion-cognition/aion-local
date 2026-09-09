@@ -84,6 +84,8 @@ function stubSubstrate(): Substrate {
     write: noop,
     logger: () => ({ debug: noop, info: noop, warn: noop, error: noop }),
     connection: () => ({ driver: {} }) as unknown as GraphConnection,
+    // The search command asks for the graph itself now, after it has decided coverage.
+    requireGraph: () => Promise.resolve({ driver: {} } as unknown as GraphConnection),
     db: () => db,
   } as unknown as Substrate;
 }

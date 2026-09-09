@@ -4,7 +4,9 @@ import {
   CoverageRequestError,
   embedQueryPrefix,
   OllamaProvider,
+  readCoverageFence,
   refusalLines,
+  refuseCheckedRead,
   selectSeeds,
   type CheckedRead,
   type Seed,
@@ -122,6 +124,29 @@ export function searchCoverage(
     : { status: 'checked', read: { context: checked.context, coverage: checked.coverage } };
 }
 
+/**
+ * The same completion policy a checked recall commits under, for a read with nothing to commit.
+ *
+ * A search writes nothing, so it has no effects to hold back; what it owes is the same refusal:
+ * an epoch that moved is `coverage_changed` against the bounds now verified, and a registry that
+ * stopped being readable is `coverage_store_unavailable` with no bounds at all. The refusal is
+ * built by the shared helper rather than assembled here, so both surfaces refuse in one voice.
+ */
+export function searchCompletion(db: SqliteHandle, read: CheckedRead): SearchCoverage {
+  const fence = readCoverageFence(db);
+  if (fence === read.context.coverageEpoch) {
+    return { status: 'checked', read };
+  }
+  const refused = refuseCheckedRead(
+    db,
+    read,
+    fence === undefined ? 'coverage_store_unavailable' : 'coverage_changed',
+  );
+  return refused.status === 'refused'
+    ? { status: 'refused', refusal: refused.refusal }
+    : { status: 'checked', read };
+}
+
 /** The best of a seed's own strategies: what a reader reads as "how this was found." */
 function methodOf(seed: Seed): string {
   return seed.provenance[0]?.strategy ?? '-';
@@ -218,12 +243,14 @@ export function runSearch(
     argv,
     write,
     parse: parseSearchFlags,
-    needsGraph: 'search',
+    // The graph requirement is asked inside the command, after coverage: a request the substrate
+    // will not answer is refused from the registry alone, and a reader whose Neo4j is down is
+    // owed that refusal rather than a connection error about a search that was never going to run.
     run: async (substrate, flags) => {
       const { config } = substrate;
       const logger = substrate.logger();
-      // Before the embedding call, so a refused search spends nothing and reads nothing.
-      // The same knob the tool reads, so the command line binds the mode recall would bind.
+      // Before the graph check and before the embedding call, so a refused search spends nothing
+      // and reads nothing. The same knob the tool reads, so this binds the mode recall binds.
       const coverage = searchCoverage(
         substrate.db(),
         flags,
@@ -233,6 +260,9 @@ export function runSearch(
       if (coverage.status === 'refused') {
         writeSearchAnswer(coverage, [], flags.json, write);
         logger.info({ reason: coverage.refusal.reason }, 'search refused');
+        return 1;
+      }
+      if ((await substrate.requireGraph('search')) === undefined) {
         return 1;
       }
       const provider = new OllamaProvider({
@@ -256,6 +286,17 @@ export function runSearch(
         { cues: [cue], mode: coverage.read.context.mode },
       );
 
+      // The contract is checked again before a result is printed. Embedding and seed selection
+      // are awaits, and a contract that moved across them makes this answer one the substrate no
+      // longer stands behind: printing it under the statement taken beforehand would describe
+      // coverage that is not in force, and printing it under the new one would relabel a stale
+      // reading. Neither is on offer, so the completion refuses and the reader asks again.
+      const completed = searchCompletion(substrate.db(), coverage.read);
+      if (completed.status === 'refused') {
+        writeSearchAnswer(completed, [], flags.json, write);
+        logger.info({ reason: completed.refusal.reason }, 'search refused at completion');
+        return 1;
+      }
       writeSearchAnswer(coverage, selection.seeds, flags.json, write);
       logger.info({ query: flags.query, results: selection.seeds.length }, 'search served');
       return 0;
