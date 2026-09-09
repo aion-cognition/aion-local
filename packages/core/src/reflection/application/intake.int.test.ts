@@ -40,6 +40,7 @@ import {
 } from '../../infrastructure/sqlite/reflection-queue.js';
 import { SessionManager } from '../../session/session-manager.js';
 import { PIPELINE_VERSION } from '../domain/version.js';
+import { directIntakePublisher } from '../test-support/direct-intake.fixture.js';
 
 const EMBED_DIMENSION = DEFAULTS.models.embedDimension;
 const SESSION_IDENTITY = 'mcp-transport-session-1';
@@ -119,6 +120,7 @@ beforeAll(async () => {
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+    publications: directIntakePublisher(harness.driver, db),
     acceptHookCapture: true,
   };
 

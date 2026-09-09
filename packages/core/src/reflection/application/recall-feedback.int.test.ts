@@ -23,6 +23,7 @@ import {
   type UsageEventRow,
 } from '../../infrastructure/sqlite/usage-events.js';
 import { SessionManager } from '../../session/session-manager.js';
+import { directIntakePublisher } from '../test-support/direct-intake.fixture.js';
 
 /**
  * What a caller says about memories it was served, through the real reflection call: the report
@@ -64,6 +65,7 @@ async function push(payload: ReflectionInput, now: Date, identity = SESSION): Pr
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
       lanes: new LaneAssigner(DEFAULTS.lanes),
       workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+      publications: directIntakePublisher(harness.driver, db),
       acceptHookCapture: true,
     },
     payload,

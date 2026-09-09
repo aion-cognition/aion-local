@@ -14,6 +14,7 @@ import { ReflectionQueueClaimant } from '../../infrastructure/sqlite/claim.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { listReflectionJobs } from '../../infrastructure/sqlite/reflection-queue.js';
 import { SessionManager } from '../../session/session-manager.js';
+import { directIntakePublisher } from '../test-support/direct-intake.fixture.js';
 import { FakeGraph } from '../test-support/fake-graph.fixture.js';
 
 const MEMBER_ID = 'member-1';
@@ -88,6 +89,7 @@ beforeEach(() => {
     entropyThreshold: 4.5,
     lanes: new LaneAssigner(LANE_LIMITS),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+    publications: directIntakePublisher(graph.driver, db),
     acceptHookCapture: true,
   };
 });
@@ -103,6 +105,11 @@ afterEach(() => {
  * Validation, redaction, storage and lanes are `intake.test.ts`.
  */
 
+/** The integrate rows alone: an acceptance also enqueues the source-index work it owes. */
+function integrateJobs(handle: SqliteHandle): ReturnType<typeof listReflectionJobs> {
+  return listReflectionJobs(handle).filter((job) => job.jobType === 'integrate');
+}
+
 describe('reflection intake dedupe', () => {
   it('returns the original episode id for the same payload in the same session', async () => {
     const first = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
@@ -113,7 +120,7 @@ describe('reflection intake dedupe', () => {
     expect(second.episode_id).toBe(first.episode_id);
     expect(second.queued).toBe(true);
     expect(graph.nodes.size).toBe(nodesAfterFirst);
-    expect(listReflectionJobs(db)).toHaveLength(1);
+    expect(integrateJobs(db)).toHaveLength(1);
     expect(enqueuedJobIds).toHaveLength(1);
     expect(embed).toHaveBeenCalledTimes(1);
   });
@@ -127,7 +134,7 @@ describe('reflection intake dedupe', () => {
     expect(graph.locked).toEqual([MEMBER_ID, 'session-a']);
   });
 
-  it('queues the episode again when its job row is gone but the episode is not', async () => {
+  it('queues nothing again for a payload whose work a worker already finished', async () => {
     const first = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
 
     // The job ran to completion, which discards the row. The episode is still the record.
@@ -137,9 +144,12 @@ describe('reflection intake dedupe', () => {
 
     const second = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
 
+    // The same occurrence, already projected and already processed. Re-queueing it would spend
+    // the pipeline on work that is done; what a re-push still owes is its statements, which the
+    // acceptance takes whatever the queue holds.
     expect(second.episode_id).toBe(first.episode_id);
-    expect(listReflectionJobs(db)).toHaveLength(1);
-    expect(enqueuedJobIds).toHaveLength(2);
+    expect(integrateJobs(db)).toHaveLength(0);
+    expect(enqueuedJobIds).toHaveLength(1);
   });
 
   it('stores the same payload again when it arrives in a different session', async () => {
@@ -147,7 +157,7 @@ describe('reflection intake dedupe', () => {
     const second = await handleReflection(deps, PAYLOAD, { identity: 'session-b' });
 
     expect(second.episode_id).not.toBe(first.episode_id);
-    expect(listReflectionJobs(db)).toHaveLength(2);
+    expect(integrateJobs(db)).toHaveLength(2);
   });
 
   it('stores a new episode when any content field changes', async () => {
@@ -167,7 +177,7 @@ describe('reflection intake store-before-embed order', () => {
     let jobsAtEmbedTime = -1;
     let episodesAtEmbedTime = -1;
     embed.mockImplementationOnce((texts: readonly string[]) => {
-      jobsAtEmbedTime = listReflectionJobs(db).length;
+      jobsAtEmbedTime = integrateJobs(db).length;
       episodesAtEmbedTime = graph.nodesWithLabel('Episode').length;
       return Promise.resolve(fakeVectors(texts));
     });
@@ -236,7 +246,7 @@ describe('reflection intake when a dependency is down', () => {
     expect(episode?.properties.content_vec).toBeUndefined();
     expect(graph.nodesWithLabel('Turn')).toHaveLength(2);
     expect(graph.edgesOfType('PARTICIPATES_IN')).toHaveLength(3);
-    expect(listReflectionJobs(db)).toHaveLength(1);
+    expect(integrateJobs(db)).toHaveLength(1);
     expect(enqueuedJobIds).toHaveLength(1);
   });
 
@@ -268,7 +278,7 @@ describe('reflection intake when a dependency is down', () => {
     expect(error).toBeInstanceOf(ReflectionNotStoredError);
     expect((error as ReflectionNotStoredError).stage).toBe('graph');
     expect((error as Error).message).toContain('nothing was queued');
-    expect(listReflectionJobs(db)).toEqual([]);
+    expect(integrateJobs(db)).toEqual([]);
   });
 
   it('names the graph when the connection pool timed out rather than refusing', async () => {

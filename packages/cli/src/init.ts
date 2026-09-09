@@ -277,7 +277,7 @@ async function recordInit(
   memberName: string,
   profile: InitProfile,
 ): Promise<void> {
-  const deps = lifecycleIntakeDeps(target);
+  const deps = await lifecycleIntakeDeps(target);
   if (target.created) {
     await recordLifecycleEvent(deps, {
       event: 'substrate_initialized',

@@ -17,6 +17,7 @@ import { ContextVectorStage } from '../../reflection/application/stages/context-
 import { EntityExtractionStage } from '../../reflection/application/stages/entities.js';
 import { EntityDedupStage } from '../../reflection/application/stages/entity-dedup.js';
 import { SemanticRelationshipStage } from '../../reflection/application/stages/semantic-relationships.js';
+import { directIntakePublisher } from '../../reflection/test-support/direct-intake.fixture.js';
 import { SessionManager } from '../../session/session-manager.js';
 import { DEFAULTS } from '../config/defaults.js';
 import type { Config } from '../config/schema.js';
@@ -107,6 +108,7 @@ beforeAll(async () => {
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+    publications: directIntakePublisher(harness.driver, db),
     acceptHookCapture: true,
   };
 

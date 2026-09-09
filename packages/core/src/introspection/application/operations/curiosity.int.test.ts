@@ -38,6 +38,7 @@ import {
   CLAIM_SUBJECT_PROPERTY,
 } from '../../../reflection/domain/claim-key.js';
 import { foldName } from '../../../reflection/domain/name-fold.js';
+import { directIntakePublisher } from '../../../reflection/test-support/direct-intake.fixture.js';
 import { SessionManager } from '../../../session/session-manager.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
@@ -203,6 +204,7 @@ beforeAll(async () => {
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+    publications: directIntakePublisher(harness.driver, db),
     acceptHookCapture: true,
   };
 

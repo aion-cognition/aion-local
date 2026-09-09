@@ -25,6 +25,7 @@ import {
   readSessionRemainder,
 } from '../../infrastructure/sqlite/source-lifecycle.js';
 import { SessionManager } from '../../session/session-manager.js';
+import { directIntakePublisher } from '../test-support/direct-intake.fixture.js';
 import { FakeGraph } from '../test-support/fake-graph.fixture.js';
 
 const MEMBER_ID = 'member-1';
@@ -77,6 +78,7 @@ beforeEach(() => {
     entropyThreshold: 4.5,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+    publications: directIntakePublisher(graph.driver, db),
     acceptHookCapture: true,
   };
 });
@@ -85,6 +87,11 @@ afterEach(() => {
   db.close();
   rmSync(dataDir, { recursive: true, force: true });
 });
+
+/** The integrate rows alone: an acceptance also enqueues the source-index work it owes. */
+function integrateJobs(handle: SqliteHandle): ReturnType<typeof listReflectionJobs> {
+  return listReflectionJobs(handle).filter((job) => job.jobType === 'integrate');
+}
 
 describe('what an accepted push leaves in the identity records', () => {
   it('records the source, its parts, its ingest position and its first reference batch', async () => {
@@ -157,13 +164,13 @@ describe('what an accepted push leaves in the identity records', () => {
     expect(readIntakeWatermark(db)).toBe(1);
     expect(listReferenceBatches(db, first.episode_id)).toHaveLength(1);
     expect(readActiveGeneration(db, first.episode_id)?.processingGeneration).toBe(1);
-    expect(listReflectionJobs(db)).toHaveLength(1);
+    expect(integrateJobs(db)).toHaveLength(1);
   });
 
   it('stores the episode on the queue row rather than only in its payload', async () => {
     const result = await handleReflection(deps, PAYLOAD, { identity: 'session-a', now: NOW });
 
-    expect(listReflectionJobs(db).map((job) => job.episodeId)).toEqual([result.episode_id]);
+    expect(integrateJobs(db).map((job) => job.episodeId)).toEqual([result.episode_id]);
   });
 });
 
@@ -178,7 +185,7 @@ describe('a request past its bounds', () => {
     ).rejects.toThrow();
 
     expect(graph.statements).toHaveLength(0);
-    expect(listReflectionJobs(db)).toHaveLength(0);
+    expect(integrateJobs(db)).toHaveLength(0);
     expect(readIntakeWatermark(db)).toBe(0);
     expect((db.prepare('SELECT count(*) AS n FROM source_records').get() as { n: number }).n).toBe(
       0,

@@ -1,7 +1,10 @@
 import {
   ApiUsageRecorder,
+  intakePublication,
   LaneAssigner,
   ProviderRouter,
+  PublicationCoordinator,
+  PUBLICATION_HANDLERS,
   SessionManager,
   type Config,
   type GraphConnection,
@@ -29,10 +32,24 @@ export type LifecycleTarget = {
  *
  * The lane assigner is fresh because its counters measure an arrival rate and a single push has
  * none. Nothing is lost: a lifecycle event asks for the bulk lane outright.
+ *
+ * The coordinator is built and initialized here for the same reason the service builds one: an
+ * acceptance reaches either store only through a publication, and a command that recorded its
+ * event any other way would be the one writer outside the protocol. Initialization runs after
+ * the graph migrations the command already applied, since it checks the guard constraint one of
+ * them declares and refuses to create it.
  */
-export function lifecycleIntakeDeps(target: LifecycleTarget): ReflectionIntakeDeps {
+export async function lifecycleIntakeDeps(target: LifecycleTarget): Promise<ReflectionIntakeDeps> {
   const { driver } = target.connection;
+  const publications = new PublicationCoordinator({
+    driver,
+    db: target.db,
+    logger: target.logger,
+    handlers: [...PUBLICATION_HANDLERS, intakePublication],
+  });
+  await publications.initialize();
   return {
+    publications,
     driver,
     db: target.db,
     sessions: new SessionManager(driver, {

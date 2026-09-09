@@ -24,6 +24,7 @@ import { LaneAssigner } from '../../reflection/application/lanes.js';
 import type { ReflectionRun } from '../../reflection/application/orchestrator.js';
 import { settleStatedReferences } from '../../reflection/application/stated-references.js';
 import { ReflectionWorker } from '../../reflection/application/worker.js';
+import { directIntakePublisher } from '../../reflection/test-support/direct-intake.fixture.js';
 
 /**
  * A reference the substrate accepted has to survive the graph refusing it, the archive already
@@ -208,6 +209,7 @@ describe('a reference that arrives while its job is being handled', () => {
             entropyThreshold: DEFAULTS.redaction.entropyThreshold,
             lanes: new LaneAssigner(DEFAULTS.lanes),
             workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+            publications: directIntakePublisher(substrate.driver, db),
             acceptHookCapture: true,
             onJobEnqueued: () => {
               worker.wake();
@@ -288,6 +290,7 @@ describe('a reference that arrives while its job is being handled', () => {
             entropyThreshold: DEFAULTS.redaction.entropyThreshold,
             lanes: new LaneAssigner(DEFAULTS.lanes),
             workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+            publications: directIntakePublisher(substrate.driver, db),
             acceptHookCapture: true,
             onJobEnqueued: () => {
               worker.wake();
@@ -407,6 +410,7 @@ describe('a reference that arrives while its job is being handled', () => {
           entropyThreshold: DEFAULTS.redaction.entropyThreshold,
           lanes: new LaneAssigner(DEFAULTS.lanes),
           workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+          publications: directIntakePublisher(substrate.driver, db),
           acceptHookCapture: true,
           onJobEnqueued: () => {
             worker.wake();

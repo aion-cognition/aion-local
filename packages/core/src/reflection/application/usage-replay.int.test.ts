@@ -44,6 +44,7 @@ import { handleRecall, type RecallDeps } from '../../recall/application/recall.j
 import { RecallSideEffects } from '../../recall/application/side-effects.js';
 import { waitFor } from '../../recall/application/test-support/wait-for.fixture.js';
 import { SessionManager } from '../../session/session-manager.js';
+import { directIntakePublisher } from '../test-support/direct-intake.fixture.js';
 
 /**
  * The claim this file exists for: salience survives a rebuild. A graph rebuilt from the
@@ -153,6 +154,7 @@ async function push(observation: string, now: Date): Promise<string> {
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
       lanes: new LaneAssigner(DEFAULTS.lanes),
       workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+      publications: directIntakePublisher(harness.driver, db),
       acceptHookCapture: true,
     },
     { observations: [observation] },

@@ -10,6 +10,7 @@ import { openLogger } from '../../infrastructure/logging/logger.js';
 import type { Vector } from '../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { SessionManager } from '../../session/session-manager.js';
+import { directIntakePublisher } from '../test-support/direct-intake.fixture.js';
 import { FakeGraph } from '../test-support/fake-graph.fixture.js';
 
 const MEMBER_ID = 'member-1';
@@ -54,6 +55,7 @@ beforeEach(() => {
     entropyThreshold: 4.5,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+    publications: directIntakePublisher(graph.driver, db),
     acceptHookCapture: true,
   };
 });

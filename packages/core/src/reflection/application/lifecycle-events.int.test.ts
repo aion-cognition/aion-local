@@ -32,6 +32,7 @@ import { CueCache } from '../../recall/application/cues.js';
 import { handleRecall, type RecallDeps } from '../../recall/application/recall.js';
 import { waitFor } from '../../recall/application/test-support/wait-for.fixture.js';
 import { SessionManager } from '../../session/session-manager.js';
+import { directIntakePublisher } from '../test-support/direct-intake.fixture.js';
 
 // The seeded graph has no entity named after the substrate, so the skip branch never fires here.
 function requireSubstrate(backbone: Awaited<ReturnType<typeof bootstrapBackbone>>) {
@@ -106,6 +107,7 @@ beforeAll(async () => {
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+    publications: directIntakePublisher(harness.driver, db),
     acceptHookCapture: true,
   };
 

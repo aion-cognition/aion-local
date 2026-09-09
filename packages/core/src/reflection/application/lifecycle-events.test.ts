@@ -15,6 +15,7 @@ import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite
 import { listExperiencesAfter } from '../../infrastructure/sqlite/experience-archive.js';
 import { listReflectionJobs } from '../../infrastructure/sqlite/reflection-queue.js';
 import { SessionManager } from '../../session/session-manager.js';
+import { directIntakePublisher } from '../test-support/direct-intake.fixture.js';
 import { FakeGraph } from '../test-support/fake-graph.fixture.js';
 
 const MEMBER_ID = 'member-1';
@@ -56,6 +57,7 @@ beforeEach(() => {
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+    publications: directIntakePublisher(graph.driver, db),
     acceptHookCapture: true,
   };
 });
@@ -97,9 +99,10 @@ describe('recording a lifecycle event', () => {
   it('queues the episode behind live turns rather than beside them', async () => {
     await recordLifecycleEvent(deps, { event: 'replay_completed', text: 'replay completed' });
 
+    // The integrate job and the source-index work the acceptance owes, both in the bulk lane.
     const jobs = listReflectionJobs(db);
-    expect(jobs).toHaveLength(1);
-    expect(jobs[0]?.lane).toBe('bulk');
+    expect(jobs.map((job) => job.jobType).sort()).toEqual(['integrate', 'source_index']);
+    expect(jobs.every((job) => job.lane === 'bulk')).toBe(true);
   });
 
   it('hangs the system session off the substrate instead of the member', async () => {

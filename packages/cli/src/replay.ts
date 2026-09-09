@@ -451,7 +451,7 @@ async function runReplay(substrate: Substrate, flags: ReplayFlags): Promise<numb
   // every row is the ordinary no-op. Only a pass that actually replayed is worth remembering.
   if (report.replayed > 0) {
     await recordLifecycleEvent(
-      lifecycleIntakeDeps({
+      await lifecycleIntakeDeps({
         connection,
         db,
         config,

@@ -179,8 +179,30 @@ export class FakeGraph {
     if (cypher.includes('MATCH (n:Substrate)')) {
       return toResult(this.#substrateId());
     }
+    if (cypher.includes('UNWIND $ids AS id') && cypher.includes('MATCH (n:AionNode { id: id })')) {
+      return toResult(this.#presentNodeIds(parameters));
+    }
+    if (cypher.includes('SET n.provenance_unresolved = $unresolved')) {
+      return toResult(this.#stampUnresolvedProvenance(parameters));
+    }
 
     throw new Error(`FakeGraph has no model for this statement:\n${cypher}`);
+  }
+
+  /** How many statements the acceptance could not resolve, stamped on the episode it came with. */
+  #stampUnresolvedProvenance(parameters: Record<string, unknown>): Row[] {
+    const node = this.nodes.get(parameters.episodeId as string);
+    if (node === undefined) {
+      return [];
+    }
+    node.properties.provenance_unresolved = parameters.unresolved;
+    return [{ id: node.id }];
+  }
+
+  /** Which of the named ids the substrate holds, as the acceptance asks before it classifies. */
+  #presentNodeIds(parameters: Record<string, unknown>): Row[] {
+    const ids = (parameters.ids as string[] | undefined) ?? [];
+    return ids.filter((id) => this.nodes.has(id)).map((id) => ({ id }));
   }
 
   #mergeNode(label: string, cypher: string, parameters: Record<string, unknown>): unknown {

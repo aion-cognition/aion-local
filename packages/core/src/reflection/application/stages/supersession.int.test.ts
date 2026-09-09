@@ -27,6 +27,7 @@ import { PIPELINE_VERSION } from '../../domain/version.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../intake.js';
 import { LaneAssigner } from '../lanes.js';
 import { SupersessionStage } from './supersession.js';
+import { directIntakePublisher } from '../../test-support/direct-intake.fixture.js';
 
 /**
  * The contradiction battery against a live judge: one blatant reversal that must
@@ -168,6 +169,7 @@ beforeAll(async () => {
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+    publications: directIntakePublisher(harness.driver, db),
     acceptHookCapture: true,
   };
 

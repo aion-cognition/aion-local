@@ -29,6 +29,7 @@ import {
   type Neo4jHarness,
 } from '@aion/core/infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { testGenerationProvider } from '@aion/core/infrastructure/providers/test-support/generation-provider.js';
+import { directIntakePublisher } from '@aion/core/reflection/test-support/direct-intake.fixture.js';
 import type { MemoryPack, MemoryPackItem, ReflectionOutput } from '@aion/protocol';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -196,6 +197,7 @@ export class GateSubstrate {
       // rate backstop untestable here and the starvation battery covering the flag path only.
       lanes: this.#lanes,
       workerMaxAttempts: this.config.operational.workerMaxAttempts,
+      publications: directIntakePublisher(this.driver, this.db),
       acceptHookCapture: true,
     };
   }

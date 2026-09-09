@@ -30,6 +30,7 @@ import type {
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { handleReflection } from '../../../reflection/application/intake.js';
 import { LaneAssigner } from '../../../reflection/application/lanes.js';
+import { directIntakePublisher } from '../../../reflection/test-support/direct-intake.fixture.js';
 import { SessionManager } from '../../../session/session-manager.js';
 import { CueCache } from '../cues.js';
 import { handleRecall, type RecallDeps } from '../recall.js';
@@ -259,6 +260,7 @@ export class ClaimProvenanceSubstrate {
         entropyThreshold: DEFAULTS.redaction.entropyThreshold,
         lanes: new LaneAssigner(DEFAULTS.lanes),
         workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+        publications: directIntakePublisher(this.driver, this.db),
         acceptHookCapture: true,
       },
       { observations: [observation], ...(provenance === undefined ? {} : { provenance }) },

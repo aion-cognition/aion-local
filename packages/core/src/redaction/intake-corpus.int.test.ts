@@ -21,6 +21,7 @@ import { handleReflection, type ReflectionIntakeDeps } from '../reflection/appli
 import { LaneAssigner } from '../reflection/application/lanes.js';
 import { SessionManager } from '../session/session-manager.js';
 import { LEAKED_SHAPES, SURVIVING_TEXT } from './test-support/leaked-shapes.fixture.js';
+import { directIntakePublisher } from '../reflection/test-support/direct-intake.fixture.js';
 
 /**
  * Redaction is verified where it has to hold: on what Neo4j and the queue actually hold
@@ -58,6 +59,7 @@ beforeAll(async () => {
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+    publications: directIntakePublisher(harness.driver, db),
     acceptHookCapture: true,
   };
 

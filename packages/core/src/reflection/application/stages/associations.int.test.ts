@@ -31,6 +31,7 @@ import { cliqueDiscount } from '../../../plasticity/domain/reinforcement.js';
 import { SessionManager } from '../../../session/session-manager.js';
 import type { StageContext, StageOutcome } from '../../domain/stage.js';
 import { PIPELINE_VERSION } from '../../domain/version.js';
+import { directIntakePublisher } from '../../test-support/direct-intake.fixture.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../intake.js';
 import { LaneAssigner } from '../lanes.js';
 
@@ -150,6 +151,7 @@ beforeAll(async () => {
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+    publications: directIntakePublisher(harness.driver, db),
     acceptHookCapture: true,
   };
 }, 300_000);

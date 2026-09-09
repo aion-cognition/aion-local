@@ -11,6 +11,11 @@
  */
 const CAUSE_TEXT = {
   graph: 'the graph is unavailable',
+  /** Two live occurrences share this payload, or one is mid-transition. Picking one would
+   * record a decision nobody made, so the acceptance refuses instead. */
+  occurrence: 'the substrate cannot say which occurrence this is',
+  /** The write could not be serialized against the publications already in flight. */
+  publication: 'the acceptance could not be published',
 } as const;
 
 export type ReflectionFailureStage = keyof typeof CAUSE_TEXT;

@@ -53,6 +53,7 @@ import { testGenerationProvider } from '../../infrastructure/providers/test-supp
 import type { Provider } from '../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { SessionManager } from '../../session/session-manager.js';
+import { directIntakePublisher } from '../test-support/direct-intake.fixture.js';
 
 // The structural describes (versioning, provenance edges, idle-sweep bookkeeping) prove
 // Cypher and orchestration, not prose quality, and the suite must never depend on model
@@ -318,6 +319,7 @@ beforeAll(async () => {
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+    publications: directIntakePublisher(harness.driver, db),
     acceptHookCapture: true,
   };
   deps = { driver: harness.driver, provider: provider(), logger };

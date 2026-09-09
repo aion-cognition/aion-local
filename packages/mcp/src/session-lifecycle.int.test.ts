@@ -28,6 +28,7 @@ import {
   stopNeo4jHarness,
   type Neo4jHarness,
 } from '@aion/core/infrastructure/graph/test-support/neo4j-harness.fixture.js';
+import { directIntakePublisher } from '@aion/core/reflection/test-support/direct-intake.fixture.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -116,6 +117,7 @@ beforeAll(async () => {
     entropyThreshold: config.redaction.entropyThreshold,
     lanes: new LaneAssigner(config.lanes),
     workerMaxAttempts: config.operational.workerMaxAttempts,
+    publications: directIntakePublisher(harness.driver, db),
     acceptHookCapture: true,
   };
   const recall: RecallDeps = {

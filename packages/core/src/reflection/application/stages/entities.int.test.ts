@@ -31,6 +31,7 @@ import { PIPELINE_VERSION } from '../../domain/version.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../intake.js';
 import { LaneAssigner } from '../lanes.js';
 import { EntityExtractionStage } from './entities.js';
+import { directIntakePublisher } from '../../test-support/direct-intake.fixture.js';
 
 const MEMBER_NAME = 'Ryan Huber';
 const NOW = new Date('2026-08-28T12:00:00.000Z');
@@ -161,6 +162,7 @@ beforeAll(async () => {
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+    publications: directIntakePublisher(harness.driver, db),
     acceptHookCapture: true,
   };
 

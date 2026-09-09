@@ -23,6 +23,7 @@ import {
 } from '../../infrastructure/sqlite/reflection-queue.js';
 import { SessionManager } from '../../session/session-manager.js';
 import { PIPELINE_VERSION } from '../domain/version.js';
+import { directIntakePublisher } from '../test-support/direct-intake.fixture.js';
 import { FakeGraph } from '../test-support/fake-graph.fixture.js';
 
 const MEMBER_ID = 'member-1';
@@ -78,6 +79,8 @@ const DATED_PAYLOAD = {
 const PAYLOAD_CLOCK = '2026-03-01T10:00:00.000Z';
 const INTAKE_CLOCK = new Date('2026-08-14T09:30:00Z');
 const LATER_INTAKE_CLOCK = new Date('2026-08-15T11:45:00Z');
+/** When the substrate accepted the push, which is the acceptance's own clock and not the caller's. */
+const ACCEPTED_AT = new Date('2026-08-20T00:00:00.000Z');
 
 /** The repo's `max-lines` ceiling, asserted here so a module outgrows it in a test, not a lint run. */
 const MAX_MODULE_LINES = 500;
@@ -121,6 +124,7 @@ beforeEach(() => {
     entropyThreshold: 4.5,
     lanes: new LaneAssigner(LANE_LIMITS),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+    publications: directIntakePublisher(graph.driver, db, () => ACCEPTED_AT),
     acceptHookCapture: true,
   };
 });
@@ -356,12 +360,14 @@ describe('reflection intake storage', () => {
   it('enqueues exactly one integrate job carrying the episode id and wakes the worker once', async () => {
     const result = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
 
+    // Two rows: the integrate job the worker runs, and the bounded source-index work the
+    // acceptance owes, which is enqueued in the bulk lane and never enters the pipeline.
     const jobs = listReflectionJobs(db);
-    expect(jobs).toHaveLength(1);
-    expect(jobs[0]?.jobType).toBe(INTEGRATE_JOB_TYPE);
-    expect(jobs[0]?.payload).toEqual({ episode_id: result.episode_id });
+    expect(jobs.map((job) => job.jobType).sort()).toEqual(['integrate', 'source_index']);
+    const integrate = jobs.find((job) => job.jobType === INTEGRATE_JOB_TYPE);
+    expect(integrate?.payload).toEqual({ episode_id: result.episode_id });
 
-    expect(enqueuedJobIds).toEqual([jobs[0]?.id]);
+    expect(enqueuedJobIds).toEqual([integrate?.id]);
   });
 
   it('never calls the generation path', async () => {
@@ -398,7 +404,7 @@ describe('reflection intake lanes', () => {
     const result = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
 
     expect(result.lane).toBe('interactive');
-    expect(listReflectionJobs(db)[0]).toMatchObject({
+    expect(integrateJobs(db)[0]).toMatchObject({
       lane: 'interactive',
       sessionId: 'session-a',
     });
@@ -412,7 +418,7 @@ describe('reflection intake lanes', () => {
     );
 
     expect(result.lane).toBe('bulk');
-    expect(listReflectionJobs(db)[0]?.lane).toBe('bulk');
+    expect(integrateJobs(db)[0]?.lane).toBe('bulk');
   });
 
   // The flag can only ever cost a caller priority. Taking `interactive` at face value would
@@ -463,7 +469,7 @@ describe('reflection intake lanes', () => {
     );
 
     expect(bulk.episode_id).toBe(interactive.episode_id);
-    expect(listReflectionJobs(db)).toHaveLength(1);
+    expect(integrateJobs(db)).toHaveLength(1);
   });
 
   // Origin is provenance about the call, not about what happened. In the content hash it
@@ -477,7 +483,7 @@ describe('reflection intake lanes', () => {
     );
 
     expect(withOrigin.episode_id).toBe(bare.episode_id);
-    expect(listReflectionJobs(db)).toHaveLength(1);
+    expect(integrateJobs(db)).toHaveLength(1);
   });
 
   // A caller that asked for the bulk lane got what it asked for. Warning on it read the same
@@ -524,8 +530,8 @@ describe('reflection intake pending_ahead', () => {
     const result = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
 
     expect(result.pending_ahead).toBe(3);
-    // The count excludes this call's own row: four jobs now queued, three were ahead of it.
-    expect(listReflectionJobs(db)).toHaveLength(4);
+    // The count excludes this call's own row: four integrate jobs now queued, three were ahead.
+    expect(integrateJobs(db)).toHaveLength(4);
   });
 
   it('leaves the caller out of its own figure on a duplicate push', async () => {
@@ -538,7 +544,7 @@ describe('reflection intake pending_ahead', () => {
     const second = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
 
     expect(second.pending_ahead).toBe(1);
-    expect(listReflectionJobs(db)).toHaveLength(2);
+    expect(integrateJobs(db)).toHaveLength(2);
   });
 
   it('ignores unclaimed bulk rows: only the interactive lane can be ahead of a caller', async () => {
@@ -574,6 +580,11 @@ function unavailableDriver(): Driver {
   return { executeQuery: fail, session: fail } as unknown as Driver;
 }
 
+/** The integrate rows alone: an acceptance also enqueues the source-index work it owes. */
+function integrateJobs(handle: SqliteHandle): ReturnType<typeof listReflectionJobs> {
+  return listReflectionJobs(handle).filter((job) => job.jobType === INTEGRATE_JOB_TYPE);
+}
+
 describe('reflection intake archive', () => {
   it('archives one row at the payload clock, stamped with the archive moment', async () => {
     const result = await handleReflection(deps, DATED_PAYLOAD, {
@@ -590,8 +601,11 @@ describe('reflection intake archive', () => {
       sessionId: 'session-a',
       episodeId: result.episode_id,
       occurredAt: PAYLOAD_CLOCK,
-      archivedAt: INTAKE_CLOCK.toISOString(),
-      lane: undefined,
+      // The moment the substrate accepted the push, taken while the acceptance was held, not
+      // the caller's clock: a backdated conversation cannot date its own archive row.
+      archivedAt: ACCEPTED_AT.toISOString(),
+      // The lane the acceptance ran in, which is what a replay re-enqueues on.
+      lane: 'interactive',
       origin: undefined,
     });
     expect(rows[0]?.contentHash).toBe(graph.nodes.get(result.episode_id)?.properties.content_hash);

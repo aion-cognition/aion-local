@@ -331,6 +331,8 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       driver,
       db: store.db,
       sessions,
+      // The one path an accepted payload reaches either store by.
+      publications,
       // Intake only embeds, so the role it borrows changes nothing about where its calls go.
       provider: reflectProvider,
       onJobEnqueued: () => {

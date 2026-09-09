@@ -35,6 +35,7 @@ import { LaneAssigner } from '../../reflection/application/lanes.js';
 import { orchestratorLedgerKey } from '../../reflection/application/orchestrator.js';
 import { foldName } from '../../reflection/domain/name-fold.js';
 import { PIPELINE_VERSION } from '../../reflection/domain/version.js';
+import { directIntakePublisher } from '../../reflection/test-support/direct-intake.fixture.js';
 import { SessionManager } from '../../session/session-manager.js';
 
 // The seeded graph has no entity named after the substrate, so the skip branch never fires here.
@@ -133,6 +134,7 @@ async function push(
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
       lanes: new LaneAssigner(DEFAULTS.lanes),
       workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+      publications: directIntakePublisher(harness.driver, db),
       acceptHookCapture: true,
     },
     { observations: [observation] },

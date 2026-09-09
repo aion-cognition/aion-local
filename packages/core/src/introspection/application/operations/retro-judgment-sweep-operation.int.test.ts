@@ -32,6 +32,7 @@ import { LaneAssigner } from '../../../reflection/application/lanes.js';
 import { SUPERSESSION_STAGE_NAME } from '../../../reflection/application/stages/supersession.js';
 import { stageLedgerKey } from '../../../reflection/domain/stage.js';
 import { PIPELINE_VERSION } from '../../../reflection/domain/version.js';
+import { directIntakePublisher } from '../../../reflection/test-support/direct-intake.fixture.js';
 import { SessionManager } from '../../../session/session-manager.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
@@ -94,6 +95,7 @@ beforeAll(async () => {
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+    publications: directIntakePublisher(harness.driver, db),
     acceptHookCapture: true,
   };
 

@@ -38,6 +38,7 @@ import {
   type Neo4jHarness,
 } from '@aion/core/infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { testGenerationProvider } from '@aion/core/infrastructure/providers/test-support/generation-provider.js';
+import { directIntakePublisher } from '@aion/core/reflection/test-support/direct-intake.fixture.js';
 import type { MemoryPack } from '@aion/protocol';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -131,6 +132,7 @@ function intakeDeps(deps: {
     entropyThreshold: config.redaction.entropyThreshold,
     lanes: new LaneAssigner(config.lanes),
     workerMaxAttempts: config.operational.workerMaxAttempts,
+    publications: directIntakePublisher(harness.driver, db),
     acceptHookCapture: true,
   };
 }

@@ -24,6 +24,7 @@ import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite
 import { getLedgerEntry } from '../../infrastructure/sqlite/ops-ledger.js';
 import { handleReflection } from '../../reflection/application/intake.js';
 import { LaneAssigner } from '../../reflection/application/lanes.js';
+import { directIntakePublisher } from '../../reflection/test-support/direct-intake.fixture.js';
 import { SessionManager } from '../../session/session-manager.js';
 
 /**
@@ -140,6 +141,7 @@ async function push(observation: string, identity: string, now: Date): Promise<s
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
       lanes: new LaneAssigner(DEFAULTS.lanes),
       workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+      publications: directIntakePublisher(harness.driver, db),
       acceptHookCapture: true,
     },
     { observations: [observation] },

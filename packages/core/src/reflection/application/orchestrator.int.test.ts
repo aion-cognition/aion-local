@@ -30,6 +30,7 @@ import { SessionManager } from '../../session/session-manager.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../domain/stage.js';
 import { stageLedgerKey } from '../domain/stage.js';
 import { PIPELINE_VERSION } from '../domain/version.js';
+import { directIntakePublisher } from '../test-support/direct-intake.fixture.js';
 
 const SESSION_IDENTITY = 'mcp-transport-session-orchestrator';
 
@@ -177,6 +178,7 @@ beforeAll(async () => {
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+    publications: directIntakePublisher(harness.driver, db),
     acceptHookCapture: true,
   };
 

@@ -33,6 +33,7 @@ import {
 import { SessionManager } from '../../session/session-manager.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../domain/stage.js';
 import { PIPELINE_VERSION } from '../domain/version.js';
+import { directIntakePublisher } from '../test-support/direct-intake.fixture.js';
 
 /**
  * The worker against the real substrate: a signal starts a job with nothing polling for it,
@@ -235,6 +236,7 @@ beforeAll(async () => {
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+    publications: directIntakePublisher(harness.driver, db),
     acceptHookCapture: true,
   };
   deadOllama = {
