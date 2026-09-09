@@ -129,9 +129,7 @@ export { bootstrapBackbone, readMemberName } from './graph/backbone.js';
 
 export { ensureGraphSession } from './graph/sessions.js';
 
-export { asOf, bitemporalAt, knewAt, withCurrency } from './graph/read-modes.js';
-
-export type { ReadMode } from './graph/read-modes.js';
+export { asOf, knewAt, withCurrency } from './graph/read-modes.js';
 
 export { loadEpisodeContext } from './graph/episode-context.js';
 

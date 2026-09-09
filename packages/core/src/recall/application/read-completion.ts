@@ -118,7 +118,12 @@ function synchronousEffect(reason: string, value: unknown): void {
   }
 }
 
-function refuse<T>(
+/**
+ * The one refusal a checked read is answered with, wherever it is decided. An entry point that
+ * serves without this boundary — a read whose effects nobody would take — still owes the same
+ * answer when the record moved or stopped being readable, and it owes it in the same words.
+ */
+export function refuseCheckedRead<T>(
   db: SqliteHandle,
   read: CheckedRead,
   reason: 'coverage_changed' | 'coverage_store_unavailable',
@@ -146,6 +151,44 @@ function refuse<T>(
       ...(standing.historySince === undefined ? {} : { historySince: standing.historySince }),
     }),
   };
+}
+
+/**
+ * What a declined coordinator settles, read off the record rather than off the decline. Shared
+ * by the two ways a position can be missing: never taken, or taken and no longer honoured.
+ */
+function declined<T>(db: SqliteHandle, read: CheckedRead, reason: string): Verdict<T> {
+  const standing = readCoverageStanding(db);
+  if (standing === undefined) {
+    return { kind: 'unreadable' };
+  }
+  return standing.epoch === read.context.coverageEpoch
+    ? { kind: 'retry', reason }
+    : { kind: 'changed', epoch: standing.epoch };
+}
+
+/**
+ * What a read that could take no position at all settles as, once its work is done.
+ *
+ * The coordinator declined before this read began, so no fence ever ran, and the same coverage
+ * precedence applies: the publication it declined for may be the activation that moved the
+ * contract, and an unreadable registry may not hide behind a pending publication. Only a
+ * readable, unchanged record leaves it an ordinary publication degradation.
+ */
+export function withoutPosition<T>(
+  db: SqliteHandle,
+  read: CheckedRead,
+  reason: string,
+): CheckedReadOutcome<T> {
+  const verdict = declined<T>(db, read, reason);
+  if (verdict.kind === 'retry') {
+    return { status: 'retry', reason: verdict.reason };
+  }
+  return refuseCheckedRead(
+    db,
+    read,
+    verdict.kind === 'unreadable' ? 'coverage_store_unavailable' : 'coverage_changed',
+  );
 }
 
 /**
@@ -198,13 +241,7 @@ function verdictFor<T>(
       ? { kind: 'changed', epoch: fenced.epoch }
       : { kind: 'unreadable' };
   }
-  const standing = readCoverageStanding(db);
-  if (standing === undefined) {
-    return { kind: 'unreadable' };
-  }
-  return standing.epoch === effects.read.context.coverageEpoch
-    ? { kind: 'retry', reason: attempted.reason }
-    : { kind: 'changed', epoch: standing.epoch };
+  return declined(db, effects.read, attempted.reason);
 }
 
 /**
@@ -232,7 +269,7 @@ export async function completeCheckedRead<T>(
       return { status: 'completed', value: verdict.value, read: current.read };
     }
     if (verdict.kind === 'unreadable') {
-      return refuse(deps.db, current.read, 'coverage_store_unavailable');
+      return refuseCheckedRead(deps.db, current.read, 'coverage_store_unavailable');
     }
     if (verdict.kind === 'retry') {
       return { status: 'retry', reason: verdict.reason };
@@ -249,5 +286,5 @@ export async function completeCheckedRead<T>(
     }
     current = rebuilt.effects;
   }
-  return refuse(deps.db, current.read, 'coverage_changed');
+  return refuseCheckedRead(deps.db, current.read, 'coverage_changed');
 }

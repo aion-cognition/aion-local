@@ -54,6 +54,33 @@ export type ServingEffects = {
   readonly persist: (db: SqliteHandle) => void;
 };
 
+/**
+ * Where a checked read's writes go: the completion boundary the entry point holds, which commits
+ * them under the same fence it checks the coverage contract at. It answers whether the caller
+ * receives this pack, so a refused completion stamps no access and reinforces nothing.
+ */
+export type RecallCommit = (effects: ServingEffects) => Promise<'served' | 'withheld'>;
+
+/**
+ * The writes, at whichever boundary owns them. Reset first either way: a caller that asked to
+ * forget its holdings must not have the new record written over the old one. Without a boundary
+ * they commit here in one transaction, which is where they committed before one existed.
+ */
+export async function commitServingEffects(
+  db: SqliteHandle,
+  effects: ServingEffects,
+  commit: RecallCommit | undefined,
+): Promise<'served' | 'withheld'> {
+  if (commit !== undefined) {
+    return commit(effects);
+  }
+  db.transaction(() => {
+    effects.resetDelivery?.(db);
+    effects.persist(db);
+  })();
+  return 'served';
+}
+
 export function servingEffects(input: ServingEffectsInput): ServingEffects {
   const persist = (db: SqliteHandle): void => {
     saveLastPack(db, input.sessionId, input.pack, input.now.toISOString(), {

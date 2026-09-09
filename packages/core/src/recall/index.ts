@@ -31,4 +31,18 @@ export { RESONANCE_PATH } from './domain/resonance.js';
 export { handleRecall } from './application/recall.js';
 export type { RecallCompletion, RecallDeps } from './application/recall.js';
 
+export {
+  checkedRecallDeps,
+  recallResultFor,
+  recallText,
+  runCheckedRecall,
+} from './application/checked-recall.js';
+
+export {
+  checkCoverage,
+  CoverageRequestError,
+  type CheckedRead,
+} from './application/coverage-checker.js';
+export { coverageLines, refusalLines } from './application/coverage-text.js';
+
 export { RecallSideEffects } from './application/side-effects.js';

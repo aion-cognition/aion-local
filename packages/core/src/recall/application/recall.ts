@@ -16,7 +16,12 @@ import { activationBudget, admissionFor, capsFor, truncationFor } from './recall
 import { readEvidence, resolvedView } from './resolved-view.js';
 import { resonate, type ResonanceResult } from './resonance.js';
 import { selectSeeds } from './seeds.js';
-import { servingEffects, withCoverage } from './serving-effects.js';
+import {
+  commitServingEffects,
+  servingEffects,
+  withCoverage,
+  type RecallCommit,
+} from './serving-effects.js';
 import {
   embedCues,
   hydrate,
@@ -90,6 +95,7 @@ export type RecallOptions = {
   readonly now?: Date;
   /** The coverage decision this request was checked under, when an entry point took one. */
   readonly checked?: CheckedRead;
+  readonly commit?: RecallCommit;
 };
 
 const NO_ACTIVATION: ActivationRun = {
@@ -118,12 +124,17 @@ export async function handleRecall(
   input: unknown,
   options: RecallOptions,
 ): Promise<RecallOutput> {
-  const now = options.now ?? new Date();
   const payload = RecallInputSchema.parse(input);
-  const mode = readModeFor(payload, {
-    now,
-    expiryAnnotation: deps.config.temporal.expiryAnnotation,
-  });
+  // One reading, not two. A checked read was judged against a clock and a mode the checker
+  // already pinned, and re-deriving either here would let the answer be computed under a
+  // vantage point the coverage decision never saw.
+  const now = options.checked?.context.now ?? options.now ?? new Date();
+  const mode =
+    options.checked?.context.mode ??
+    readModeFor(payload, {
+      now,
+      expiryAnnotation: deps.config.temporal.expiryAnnotation,
+    });
 
   // Resolved, not created. Recall produces no content, so a read-only session mints no
   // Session node, no INITIATED_BY, no WITHIN_WORKSPACE and no link in the FOLLOWS chain;
@@ -407,10 +418,7 @@ export async function handleRecall(
       intentions.items.length === 0,
     resetDelivery,
   });
-  deps.db.transaction(() => {
-    effects.resetDelivery?.(deps.db);
-    effects.persist(deps.db);
-  })();
+  const disposition = await commitServingEffects(deps.db, effects, options.commit);
 
   deps.logger.info(
     {
@@ -447,7 +455,7 @@ export async function handleRecall(
       tokenEstimate: pack.metadata.token_estimate,
       timings,
     },
-    'recall served',
+    disposition === 'served' ? 'recall served' : 'recall withheld',
   );
 
   const retrieved = [...candidates.keys()];
@@ -469,17 +477,21 @@ export async function handleRecall(
     emitted,
   });
 
-  notifyRecalled(deps.onRecalled, deps.logger, {
-    sessionId,
-    seeds,
-    activated: activation.value.activated,
-    retrieved,
-    emitted,
-    admission: fusion.value.admission,
-    pack: answer,
-    now,
-    mode,
-  });
+  // Nothing the caller never received is reinforced, stamped or counted as exposure. The
+  // boundary is what knows: a refused completion means this answer was not handed over.
+  if (disposition === 'served') {
+    notifyRecalled(deps.onRecalled, deps.logger, {
+      sessionId,
+      seeds,
+      activated: activation.value.activated,
+      retrieved,
+      emitted,
+      admission: fusion.value.admission,
+      pack: answer,
+      now,
+      mode,
+    });
+  }
 
   return answer;
 }
