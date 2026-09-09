@@ -124,6 +124,17 @@ export type StatedReferenceInput = {
     readonly evidence: string;
     /** Absent when the caller stated none; the acceptance clock stands in for it. */
     readonly occurredAt?: string;
+    /**
+     * The moment an EARLIER acceptance of this same statement already resolved.
+     *
+     * Only a writer replaying a statement the substrate has already accepted may supply this,
+     * and what it is for is the edge: a repair that reused the ordinary fallback would date the
+     * confirmation to itself while the durable record and the usage event kept the original
+     * moment, so the graph and the stream would disagree about one confirmation. It is not a
+     * caller's claim and never becomes one: the stated time stays absent when the caller stated
+     * none.
+     */
+    readonly resolvedOccurredAt?: string;
   }[];
 };
 
@@ -162,7 +173,9 @@ export function classifyStatedReferences(
       confirmation: {
         by: entry.by,
         evidence: entry.evidence,
-        occurredAt: entry.occurredAt ?? acceptedAt,
+        // The caller's claim first, then a moment an earlier acceptance already resolved, and
+        // only then this acceptance's own clock. The stated time is set by the caller alone.
+        occurredAt: entry.occurredAt ?? entry.resolvedOccurredAt ?? acceptedAt,
         ...(entry.occurredAt === undefined ? {} : { statedOccurredAt: entry.occurredAt }),
       },
     })),

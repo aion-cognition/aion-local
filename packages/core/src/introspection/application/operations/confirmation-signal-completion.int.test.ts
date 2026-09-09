@@ -10,6 +10,7 @@ import {
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../../infrastructure/graph/backbone.js';
 import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
+import { fetchClaimProvenance } from '../../../infrastructure/graph/claim-provenance-queries.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import {
   startRehearsalSubstrate,
@@ -270,6 +271,55 @@ it('adds nothing on a later run and leaves the operation with nothing owed', asy
   });
   expect(confirmations()).toHaveLength(1);
   expect(signalState()).toBe('completed');
+});
+
+/**
+ * The control for the moment the repair carries. A caller that DID state when it confirmed
+ * something must have that time on the edge and in the event alike, and the repair publishing the
+ * statement later must not overwrite it with its own clock either.
+ */
+it('keeps a caller-stated confirmation time on both the edge and the event', async () => {
+  const target = 'confirmation-repair-stated-target';
+  const stated = new Date('2026-07-04T12:00:00.000Z');
+  clock = ACCEPTED_AT;
+  const accepted = await handleReflection(
+    intake,
+    {
+      observations: ['confirmed a memory and said when'],
+      provenance: {
+        confirmations: [
+          { target, by: CONFIRMER, evidence: EVIDENCE, occurred_at: stated.toISOString() },
+        ],
+      },
+    },
+    { identity: 'confirmation-repair-stated-session', now: ACCEPTED_AT },
+  );
+  const statedSourceId = accepted.episode_id;
+
+  clock = new Date(REPAIRED_AT.getTime() + 60_000);
+  await writeStampedNode(substrate.harness.driver, {
+    label: 'Insight',
+    id: target,
+    now: clock,
+    occurredAt: clock,
+    properties: { text: 'the memory the stated confirmation was about' },
+  });
+  const settling = newCoordinator();
+  await settling.initialize();
+  await confirmationSignalCompletionOperation().run(context(settling));
+
+  const event = listUsageEventsAfter(store.db, undefined, 100)
+    .filter((row) => row.kind === 'memory_confirmed')
+    .find((row) => (row.payload as { episodeId: string }).episodeId === statedSourceId);
+  expect(event?.occurredAt).toBe(stated.toISOString());
+  const provenance = await fetchClaimProvenance(substrate.harness.driver, {
+    ids: [target],
+    maxRoots: 4,
+    mode: { reference: clock },
+  });
+  // One confirmation, one moment: the one the caller stated, on the edge and in the stream.
+  expect(provenance.get(target)?.confirmation?.at.toISOString()).toBe(stated.toISOString());
+  expect(provenance.get(target)?.confirmation?.at.toISOString()).not.toBe(clock.toISOString());
 });
 
 it('declines rather than settling outside the guard when no publisher is composed', async () => {

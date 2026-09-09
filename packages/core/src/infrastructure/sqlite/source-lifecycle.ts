@@ -365,27 +365,44 @@ export function recordEvidenceAcknowledgment(db: SqliteHandle, input: Acknowledg
   );
 }
 
+/** Where an owed-acknowledgment page left off: the last row's key, in the order below. */
+export type OwedSignalCursor = {
+  readonly sourceId: string;
+  readonly referenceVersion: number;
+};
+
 /**
- * The oldest still-owed acknowledgments of one effect kind, across every source, bounded.
+ * Still-owed acknowledgments of one effect kind, across every source, bounded and resumable.
  *
- * An obligation nobody reads is an obligation nobody discharges. This is the read a completion
- * owner takes to find the work it exists to finish, ordered so a run always starts at the oldest
- * and a backlog drains rather than starving its own tail.
+ * The order is source id then reference version, which is a stable enumeration order and NOT an
+ * age order: a source id is a minted identifier, not a clock. What the order has to be is total
+ * and repeatable, so a caller paging on the last row it saw visits every owed key rather than the
+ * same first page forever. An obligation nobody reads is an obligation nobody discharges, and one
+ * permanently stuck page in front of the rest is the same thing.
+ *
+ * `after` selects strictly past that key. Reading past a row changes nothing about it: an
+ * obligation is discharged by its own settlement and never by a page moving on.
  */
 export function listOwedEvidenceAcknowledgments(
   db: SqliteHandle,
   effectKind: string,
   limit: number,
+  after?: OwedSignalCursor,
 ): readonly EvidenceAcknowledgment[] {
+  const keyset = after === undefined ? '' : 'AND (source_id, reference_version) > (?, ?)';
+  const parameters =
+    after === undefined
+      ? [effectKind, limit]
+      : [effectKind, after.sourceId, after.referenceVersion, limit];
   const rows = db
     .prepare(
       `SELECT source_id, reference_version, effect_kind, state, completed_at
        FROM evidence_acknowledgments
-       WHERE effect_kind = ? AND state = 'owed'
+       WHERE effect_kind = ? AND state = 'owed' ${keyset}
        ORDER BY source_id, reference_version
        LIMIT ?`,
     )
-    .all(effectKind, limit) as {
+    .all(...parameters) as {
     source_id: string;
     reference_version: number;
     effect_kind: string;

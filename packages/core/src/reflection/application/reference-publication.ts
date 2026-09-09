@@ -41,6 +41,11 @@ const Confirmation = z.strictObject({
   evidence: z.string().min(1),
   /** Optional: a caller may confirm something without saying when it did so. */
   occurredAt: z.string().min(1).optional(),
+  /**
+   * The moment an earlier acceptance of this statement resolved, for a writer replaying one the
+   * substrate already holds. It decides the edge's clock and never becomes a stated time.
+   */
+  resolvedOccurredAt: z.string().min(1).optional(),
 });
 
 const Payload = z.strictObject({

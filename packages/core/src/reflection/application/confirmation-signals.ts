@@ -6,8 +6,10 @@ import {
 } from '../../infrastructure/sqlite/evidence-links.js';
 import { classifyReferenceTarget } from '../../infrastructure/sqlite/reference-targets.js';
 import {
+  listEvidenceAcknowledgments,
   listOwedEvidenceAcknowledgments,
   recordEvidenceAcknowledgment,
+  type OwedSignalCursor,
 } from '../../infrastructure/sqlite/source-lifecycle.js';
 import { appendMemoryConfirmedEvent } from '../../infrastructure/sqlite/usage-events.js';
 import { hashContent } from '../domain/content.js';
@@ -169,50 +171,80 @@ export function settleConfirmationSignals(
   }
 }
 
-/** One owed key and the statements it is still waiting on, for the owner that finishes them. */
+/** One statement an owed key covers, as its first accepted version recorded it. */
+export type CoveredConfirmation = {
+  readonly targetId: string;
+  readonly by: string;
+  readonly evidence: string;
+  /** The moment that acceptance resolved. Never invented here and never re-resolved. */
+  readonly occurredAt: string;
+  /** Present only where the caller stated a moment, so a repair never invents a claim. */
+  readonly statedOccurredAt?: string;
+  /** Whether anything accounts for the target now. It changes between passes; the set does not. */
+  readonly resolved: boolean;
+};
+
+/** One owed key and every statement it answers for, for the owner that finishes them. */
 export type OwedConfirmationSignal = {
   readonly sourceId: string;
   readonly referenceVersion: number;
-  readonly pending: readonly {
-    readonly targetId: string;
-    readonly by: string;
-    readonly evidence: string;
-    /** Present only where the caller stated a moment, so a repair never invents a claim. */
-    readonly statedOccurredAt?: string;
-  }[];
+  /**
+   * EVERY confirmation this key covers, resolved or not.
+   *
+   * The whole set travels, because a delivery is identified by the set it accepts: publishing the
+   * currently-unresolved subset under a key fixed per obligation means the second pass offers a
+   * smaller set under the same key, and one delivery cannot stand for two outcomes. Which of them
+   * resolves is a separate question, answered under the guard on every pass.
+   */
+  readonly covered: readonly CoveredConfirmation[];
 };
 
 /**
- * The confirmation signals the records still owe, oldest first and bounded.
+ * The confirmation signals the records still owe, bounded.
  *
  * This is what makes the obligation more than a row nobody reads: a completion owner takes this,
- * asks the graph about the ids under its own guard, and publishes the answer. A key whose
- * statements have all resolved is returned with an empty `pending` list, because the settle it
- * never received is the only thing left between it and completion.
+ * asks the graph about the ids under its own guard, and publishes the answer.
+ *
+ * The order is the store's, which is source id then reference version. Source ids are minted
+ * identifiers and not a clock, so this is a stable enumeration order and not an age order, and
+ * `after` is what carries a pass forward through it.
  */
 export function owedConfirmationSignals(
   db: SqliteHandle,
   limit: number,
+  after?: OwedSignalCursor,
 ): readonly OwedConfirmationSignal[] {
   const owed: OwedConfirmationSignal[] = [];
-  for (const row of listOwedEvidenceAcknowledgments(db, CONFIRMATION_SIGNAL_EFFECT, limit)) {
+  for (const row of listOwedEvidenceAcknowledgments(db, CONFIRMATION_SIGNAL_EFFECT, limit, after)) {
     const covered = coveredByKey(db, row.sourceId).get(row.referenceVersion) ?? [];
     owed.push({
       sourceId: row.sourceId,
       referenceVersion: row.referenceVersion,
-      pending: covered
-        .filter((confirmation) => !confirmation.resolved)
-        .map((confirmation) => ({
-          targetId: confirmation.targetId,
-          by: confirmation.by,
-          evidence: confirmation.evidence,
-          ...(confirmation.statedOccurredAt === undefined
-            ? {}
-            : { statedOccurredAt: confirmation.statedOccurredAt }),
-        })),
+      covered: covered.map((confirmation) => ({
+        targetId: confirmation.targetId,
+        by: confirmation.by,
+        evidence: confirmation.evidence,
+        occurredAt: confirmation.occurredAt,
+        ...(confirmation.statedOccurredAt === undefined
+          ? {}
+          : { statedOccurredAt: confirmation.statedOccurredAt }),
+        resolved: confirmation.resolved,
+      })),
     });
   }
   return owed;
+}
+
+/** Whether this key's every covered statement now has its event, read from the records. */
+export function confirmationSignalState(
+  db: SqliteHandle,
+  sourceId: string,
+  referenceVersion: number,
+): string | undefined {
+  return listEvidenceAcknowledgments(db, sourceId).find(
+    (row) =>
+      row.effectKind === CONFIRMATION_SIGNAL_EFFECT && row.referenceVersion === referenceVersion,
+  )?.state;
 }
 
 /**
