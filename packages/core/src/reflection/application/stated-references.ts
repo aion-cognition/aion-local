@@ -158,6 +158,19 @@ function versionOf(references: ReflectionProvenance): string {
   return hashContent(references);
 }
 
+/** One comparable value for what an archive row states, so a later pass can tell it moved. */
+export function statedReferenceVersion(references: ReflectionProvenance): string {
+  return versionOf(references);
+}
+
+/** What the substrate last managed to write for this episode's stated references, if anything. */
+export function acknowledgedStatedReferenceVersion(
+  db: SqliteHandle,
+  episodeId: string,
+): string | undefined {
+  return acknowledgedVersion(db, episodeId);
+}
+
 function acknowledgedVersion(db: SqliteHandle, episodeId: string): string | undefined {
   const summary = getLedgerEntry(db, statedReferenceKey(episodeId))?.summary;
   if (typeof summary !== 'object' || summary === null) {

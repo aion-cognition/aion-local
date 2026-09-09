@@ -225,6 +225,32 @@ export function findPendingJobForEpisode(
   return findPendingReflectionJob(db, jobType, REFLECTION_QUEUE_EPISODE_FIELD, episodeId);
 }
 
+/**
+ * Removes the queue row a settlement closes, bound to the source it settles for.
+ *
+ * The source binding is what makes it replay-safe and recoverable by anyone: a settlement is
+ * about one source, so a row whose id it names but whose episode it does not cannot be the row
+ * it finished, and a recovery running from another process needs no memory of the claim. The
+ * claimant's own `complete` is scoped to its id and cannot do either.
+ *
+ * Returns whether a row went. Nothing gone is the ordinary replay: the acknowledgment already
+ * ran, or the row was reclaimed and completed elsewhere.
+ */
+export function completeReflectionJobForSource(
+  db: SqliteHandle,
+  jobId: string,
+  episodeId: string,
+): boolean {
+  const result = db
+    .prepare(
+      `DELETE FROM reflection_queue
+       WHERE id = ?
+         AND (episode_id = ? OR json_extract(payload_json, '$.${REFLECTION_QUEUE_EPISODE_FIELD}') = ?)`,
+    )
+    .run(jobId, episodeId, episodeId);
+  return result.changes > 0;
+}
+
 export function getReflectionJob(db: SqliteHandle, id: string): ReflectionJob | undefined {
   const row = db.prepare('SELECT * FROM reflection_queue WHERE id = ?').get(id) as
     ReflectionJobRow | undefined;

@@ -371,9 +371,13 @@ export class ReflectionWorker {
     this.#succeed(job, episodeId, run);
   }
 
+  /**
+   * What is left after the acknowledgment landed. The queue row is not here: the completion
+   * deletes it inside the same transaction as the settlement, so a process that dies between
+   * the commit and this line leaves nothing half done for the next recovery to guess at.
+   */
   #succeed(job: ReflectionJob, episodeId: string, run: ReflectionRun): void {
     this.#consecutiveFailures = 0;
-    this.#claimant.complete(this.#deps.db, job.id);
     // Only a run that actually enriched something is the freshness pin's "intake to
     // enriched": `already_applied` and `episode_unavailable` measured nothing new, and
     // recording them would understate the lag the p95 exists to catch.

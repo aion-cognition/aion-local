@@ -13,6 +13,7 @@ import {
 } from './legacy-backfill.js';
 import { legacyMaterializationPublication } from './legacy-materialization.js';
 import { publishPipelineReadinessPolicy } from './readiness.js';
+import { statedReferenceKey, statedReferenceVersion } from './stated-references.js';
 import { certifyNodeSupport } from '../../evidence/application/node-support.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
@@ -37,14 +38,23 @@ import type { PublicationBoundary } from '../../infrastructure/publication/types
 import { countCommittedIncidenceForNode } from '../../infrastructure/sqlite/committed-evidence.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import { readScopeVersion } from '../../infrastructure/sqlite/evidence-scope.js';
+import {
+  getExperienceByEpisode,
+  mergeExperienceProvenance,
+} from '../../infrastructure/sqlite/experience-archive.js';
 import { archiveRowidBounds } from '../../infrastructure/sqlite/legacy-archive-scan.js';
 import {
   freezeMigrationCohort,
   readIntakeWatermark,
   readMigrationProgress,
 } from '../../infrastructure/sqlite/migration-cohorts.js';
+import { getLedgerEntry } from '../../infrastructure/sqlite/ops-ledger.js';
 import { listReflectionJobs } from '../../infrastructure/sqlite/reflection-queue.js';
-import { readSourceParts, readSourceRecord } from '../../infrastructure/sqlite/source-identity.js';
+import {
+  listReferenceBatches,
+  readSourceParts,
+  readSourceRecord,
+} from '../../infrastructure/sqlite/source-identity.js';
 import { SessionManager } from '../../session/session-manager.js';
 
 /**
@@ -145,6 +155,10 @@ beforeAll(async () => {
   }
   forgetDurableRecords(alpha);
   forgetDurableRecords(beta);
+  // Archive rows as they were written before statements moved out of the payload. A graph walk
+  // cannot find what these state: the edge was never written, and the payload is the only witness.
+  mergeExperienceProvenance(store.db, alpha, { derived_from: ['legacy-stated-target'] });
+  mergeExperienceProvenance(store.db, beta, { derived_from: ['legacy-stated-target'] });
   store.db.prepare('DELETE FROM reflection_queue').run();
 
   await seedLegacyMention(substrate.harness.driver, {
@@ -250,6 +264,26 @@ it('walks the cohort: verified against both stores, pinned where the proof canno
   expect(jobs.every((job) => job.jobType === 'source_index')).toBe(true);
   expect(report.indexEnqueued).toBe(3);
 }, 120_000);
+
+it('accepts what a legacy archive payload states, and records the repair only where it landed', () => {
+  const [alpha, beta] = accepted;
+  const stated = getExperienceByEpisode(store.db, alpha!)?.payload.provenance;
+  if (stated === undefined) {
+    throw new Error('the legacy corpus needs an archive row carrying stated references');
+  }
+
+  // The proved source: a second batch beside the empty one its acceptance recorded, and the
+  // marker naming the exact payload the acceptance covered.
+  expect(listReferenceBatches(store.db, alpha!).length).toBe(2);
+  expect(getLedgerEntry(store.db, statedReferenceKey(alpha!))?.summary).toMatchObject({
+    version: statedReferenceVersion(stated),
+  });
+
+  // The pinned source: nothing accepted and no marker, so the statements stay owed to whichever
+  // pass can prove the source.
+  expect(listReferenceBatches(store.db, beta!).length).toBe(1);
+  expect(getLedgerEntry(store.db, statedReferenceKey(beta!))).toBeUndefined();
+});
 
 it('counts nothing until the cohort has accounted, then answers support instead of unknown', async () => {
   const deps = { driver: substrate.harness.driver, db: store.db, publications: coordinator };

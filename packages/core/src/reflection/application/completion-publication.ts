@@ -7,15 +7,15 @@ import type { JsonValue, PublicationContext } from '../../infrastructure/publica
 import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { getExperienceByEpisode } from '../../infrastructure/sqlite/experience-archive.js';
-import { markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import { readActiveGeneration } from '../../infrastructure/sqlite/processing-generations.js';
+import { completeReflectionJobForSource } from '../../infrastructure/sqlite/reflection-queue.js';
 import { listReferenceBatches } from '../../infrastructure/sqlite/source-identity.js';
 import {
   recordEvidenceAcknowledgment,
   SEMANTIC_PROCESSING_EFFECT,
 } from '../../infrastructure/sqlite/source-lifecycle.js';
 import { hashContent } from '../domain/content.js';
-import type { ReflectionSummary, StageRecord } from '../domain/stage.js';
+import { stageSettlementOf, type ReflectionSummary, type StageRecord } from '../domain/stage.js';
 
 /**
  * A finished reflection run, as a publication.
@@ -86,6 +86,8 @@ const Data = Payload;
 
 const Result = z.strictObject({
   settledStages: z.array(z.string()),
+  /** The queue row the acknowledgment closes, empty where the run carried none. */
+  completedJobId: z.string(),
 });
 
 type CompletionData = z.infer<typeof Data>;
@@ -102,6 +104,9 @@ function json(value: JsonValue): JsonValue {
  * and leaves none in the archive payload, so this is empty for everything accepted since. It is
  * still read and still compared, because a legacy row written before that split does carry them
  * and a completion must not settle over one that moved.
+ *
+ * Comparing it settles nothing about those statements. A legacy payload's statements are owed
+ * until the guarded legacy producer accepts them, and it is what records that they landed.
  */
 function referencesDigest(db: PublicationContext['db'], sourceId: string): string {
   const references = getExperienceByEpisode(db, sourceId)?.payload.provenance;
@@ -152,11 +157,6 @@ export function completionStages(summary: ReflectionSummary): readonly z.infer<t
   }));
 }
 
-/** Where a source's attached reference version is recorded, so a later pass can tell it moved. */
-export function completionLedgerKey(sourceId: string): string {
-  return `stated-references:${sourceId}`;
-}
-
 export const reflectionCompletionPublication = new PublicationOperation({
   kind: 'reflection_completion',
   effectKinds: [COMPLETION_EFFECTS.settlement, COMPLETION_EFFECTS.queue],
@@ -194,9 +194,13 @@ export const reflectionCompletionPublication = new PublicationOperation({
         heads: [],
       },
       scopes: [{ kind: 'source', id: payload.sourceId, scope: 'source.references' }],
+      // The queue effect is declared only where there is a row to complete. A replay carries no
+      // job id, and an effect nothing performs is a claim the receipt cannot support.
       effects: [
         { kind: COMPLETION_EFFECTS.settlement, detail: json({ sourceId: payload.sourceId }) },
-        { kind: COMPLETION_EFFECTS.queue, detail: json({ jobId: payload.jobId }) },
+        ...(payload.jobId === ''
+          ? []
+          : [{ kind: COMPLETION_EFFECTS.queue, detail: json({ jobId: payload.jobId }) }]),
       ],
     });
   },
@@ -218,11 +222,19 @@ export const reflectionCompletionPublication = new PublicationOperation({
     }
     return Promise.resolve({ status: 'valid' } as const);
   },
-  applyGraph(_context: PublicationContext, _data: CompletionData) {
+  applyGraph(_context: PublicationContext, data: CompletionData) {
     // A completion writes no graph. It takes the guard so the comparison below is fenced: a
     // reference accepted while this attempt is held cannot land between the check and the
     // acknowledgment, which is exactly the window a completion outside the protocol left open.
-    return Promise.resolve({ settledStages: [] });
+    //
+    // The result names what the acknowledgment settles: the stages the run declared a typed
+    // disposition for, and the queue row it closes.
+    return Promise.resolve({
+      settledStages: data.stages
+        .filter((stage) => stageSettlementOf(stage) !== undefined)
+        .map((stage) => stage.name),
+      completedJobId: data.jobId,
+    });
   },
   prepareSqlite() {
     return undefined;
@@ -243,10 +255,11 @@ export const reflectionCompletionPublication = new PublicationOperation({
       },
       new Date(context.knownFrom),
     );
-    if (data.referencesDigest !== '') {
-      markLedgerApplied(context.db, completionLedgerKey(data.sourceId), {
-        version: data.referencesDigest,
-      });
+    // The queue row goes here rather than back in the worker, so the effect the handler
+    // declares is the effect the acknowledgment performs and a recovery finishes the job
+    // without the run that claimed it.
+    if (data.jobId !== '') {
+      completeReflectionJobForSource(context.db, data.jobId, data.sourceId);
     }
     recordEvidenceAcknowledgment(context.db, {
       sourceId: data.sourceId,

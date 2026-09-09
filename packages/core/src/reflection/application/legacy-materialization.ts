@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { projectLegacyOwnership } from './legacy-ownership.js';
 import {
   acknowledgeCensusSeal,
   acknowledgeMaterialization,
@@ -13,31 +14,32 @@ import {
   unaccountedCohortMembers,
 } from './legacy-records.js';
 import {
+  acknowledgeLegacyStatements,
+  discardLegacyStatements,
+  legacyStatementScopes,
+  LegacyStatementsSchema,
+  planLegacyStatements,
+  prepareLegacyStatements,
+  type LegacyStatementPass,
+} from './legacy-statements.js';
+import {
   applySourceVerification,
   planSourceVerification,
   VerificationSchema,
   type VerificationPlan,
 } from './legacy-verification.js';
-import {
-  ownershipCensusEstablished,
-  ownershipIncidence,
-  ownershipSummaryFor,
-} from '../../evidence/application/ownership.js';
-import { ownershipEvidenceVersion } from '../../evidence/domain/ownership.js';
+import { ownershipCensusEstablished } from '../../evidence/application/ownership.js';
 import type { GraphTransaction } from '../../infrastructure/graph/connection.js';
 import {
   readLegacyIncidentRelations,
   readLegacyRawNodes,
 } from '../../infrastructure/graph/legacy-evidence-queries.js';
-import { projectOwnershipSummary } from '../../infrastructure/graph/ownership-summary-queries.js';
 import { PublicationOperation } from '../../infrastructure/publication/operation.js';
 import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
-import type { PublicationContext } from '../../infrastructure/publication/types.js';
+import type { JsonValue, PublicationContext } from '../../infrastructure/publication/types.js';
 import type { CommittedIncidence } from '../../infrastructure/sqlite/committed-evidence.js';
 import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { readSubstratePairing } from '../../infrastructure/sqlite/publication-control.js';
-import { checkPresentCoverage } from '../../recall/application/coverage-checker.js';
 import {
   classifyLegacyRelations,
   planNodes,
@@ -66,6 +68,7 @@ import {
 export const LEGACY_EFFECTS = {
   records: 'legacy_evidence_records',
   census: 'legacy_scope_census',
+  statements: 'legacy_archive_statements',
 } as const;
 
 const SourcePayload = z.strictObject({
@@ -114,6 +117,12 @@ const SourceData = SourcePayload.extend({
   links: z.array(Link),
   scopes: z.array(Scope),
   nodes: z.array(z.string()),
+  /**
+   * What the archive row states in its own payload, when the substrate has not accepted it yet.
+   * Absent where the row carries none or the version already landed. A graph walk cannot find
+   * these: a statement whose edge was never written survives only in the payload.
+   */
+  statements: LegacyStatementsSchema.optional(),
   observedAt: z.string().min(1),
 });
 const CensusData = CensusPayload.extend({
@@ -157,6 +166,10 @@ const EMPTY: Omit<LegacyResult, 'mode' | 'reason'> = {
   verified: false,
 };
 
+function detail(value: JsonValue): JsonValue {
+  return value;
+}
+
 /** The plan's own rows, in the shape ownership judges. They are durable and not yet committed. */
 function plannedIncidence(data: SourcePlanData): readonly CommittedIncidence[] {
   return data.links
@@ -171,50 +184,14 @@ function plannedIncidence(data: SourcePlanData): readonly CommittedIncidence[] {
     }));
 }
 
-/**
- * Writes one node's ownership summary as it will stand once this operation lands.
- *
- * The committed view cannot see a row this operation prepared, so the summary is derived from
- * both. `censusEstablished` is what the scopes will say after the acknowledgment: a source pass
- * establishes nothing and reports what the seal has already counted, and the seal reports the
- * count it is about to make.
- */
-async function project(
-  context: PublicationContext,
-  nodeId: string,
-  rows: readonly CommittedIncidence[],
-  censusEstablished: boolean,
-): Promise<boolean> {
-  const pairing = readSubstratePairing(context.db);
-  if (pairing === undefined || context.sequence === null) {
-    throw new Error('the ownership projection needs a paired substrate and a sequence');
-  }
-  const check = checkPresentCoverage(context.db, context.now);
-  if (check.status !== 'checked') {
-    throw new Error(`the ownership projection cannot read under ${check.refusal.reason}`);
-  }
-  const committed = ownershipIncidence(context.db, [nodeId], check.context);
-  const merged = [...committed];
-  for (const row of rows) {
-    if (row.nodeId !== nodeId) {
-      continue;
-    }
-    if (!merged.some((held) => held.sourceId === row.sourceId && held.role === row.role)) {
-      merged.push(row);
-    }
-  }
-  const summary = ownershipSummaryFor(context.db, nodeId, merged, check.context, {
-    censusEstablished,
-  });
-  return projectOwnershipSummary(context.graph, {
-    nodeId,
-    sessions: summary.sessions,
-    unknownAttribution: summary.unknownAttribution,
-    censusEstablished: summary.censusEstablished,
-    evidenceVersion: ownershipEvidenceVersion(summary),
-    sequence: context.sequence,
-    substrateId: pairing.substrateId,
-  });
+/** What each phase needs to prepare, acknowledge or discard the archive statements. */
+function statementPass(data: SourcePlanData, operationId: string): LegacyStatementPass {
+  return {
+    sourceId: data.sourceId,
+    operationId,
+    acceptedAt: data.observedAt,
+    statements: data.statements,
+  };
 }
 
 type Admission = {
@@ -281,7 +258,7 @@ async function admit(
 
 export const legacyMaterializationPublication = new PublicationOperation({
   kind: 'legacy_materialization',
-  effectKinds: [LEGACY_EFFECTS.records, LEGACY_EFFECTS.census],
+  effectKinds: [LEGACY_EFFECTS.records, LEGACY_EFFECTS.census, LEGACY_EFFECTS.statements],
   payload: Payload,
   data: Data,
   result: Result,
@@ -323,6 +300,11 @@ export const legacyMaterializationPublication = new PublicationOperation({
     }
     const admission = await admit(context.graph, context.db, payload, context.now);
     const links = [...admission.links];
+    // Only for a source this pass admits. A pinned source proved nothing, and accepting what its
+    // payload states would record statements against a source whose archive proof failed.
+    const statements = admission.admitted
+      ? await planLegacyStatements(context.graph, context.db, payload.sourceId, observedAt)
+      : undefined;
     const data: SourcePlanData = {
       ...payload,
       gate: admission.admitted ? 'admitted' : 'pinned',
@@ -332,17 +314,31 @@ export const legacyMaterializationPublication = new PublicationOperation({
       links,
       scopes: [...planScopes(payload.sourceId, links)],
       nodes: [...planNodes(links)],
+      ...(statements === undefined ? {} : { statements }),
       observedAt,
     };
     return {
       data,
       expected,
-      scopes: data.scopes.map((scope) => ({
-        kind: 'relation_scope' as const,
-        id: scope.endpointId,
-        scope: scope.relationClass,
-      })),
-      effects: [{ kind: LEGACY_EFFECTS.records, detail: { links: links.length } }],
+      scopes: [
+        ...data.scopes.map((scope) => ({
+          kind: 'relation_scope' as const,
+          id: scope.endpointId,
+          scope: scope.relationClass,
+        })),
+        ...legacyStatementScopes(payload.sourceId, statements),
+      ],
+      effects: [
+        { kind: LEGACY_EFFECTS.records, detail: detail({ links: links.length }) },
+        ...(statements === undefined
+          ? []
+          : [
+              {
+                kind: LEGACY_EFFECTS.statements,
+                detail: detail({ targets: statements.targets.length }),
+              },
+            ]),
+      ],
     };
   },
   check(context, data) {
@@ -367,7 +363,10 @@ export const legacyMaterializationPublication = new PublicationOperation({
     if (data.mode === 'census') {
       let projected = 0;
       for (const endpoint of data.endpoints) {
-        if (endpoint.node && (await project(context, endpoint.endpointId, [], true))) {
+        if (
+          endpoint.node &&
+          (await projectLegacyOwnership(context, endpoint.endpointId, [], true))
+        ) {
           projected += 1;
         }
       }
@@ -394,7 +393,7 @@ export const legacyMaterializationPublication = new PublicationOperation({
     let projected = 0;
     for (const nodeId of data.nodes) {
       const established = ownershipCensusEstablished(context.db, nodeId);
-      if (await project(context, nodeId, rows, established)) {
+      if (await projectLegacyOwnership(context, nodeId, rows, established)) {
         projected += 1;
       }
     }
@@ -430,6 +429,7 @@ export const legacyMaterializationPublication = new PublicationOperation({
       scopes: data.scopes,
       observedAt: new Date(data.observedAt),
     });
+    prepareLegacyStatements(context.db, statementPass(data, context.operationId));
     return undefined;
   },
   acknowledgeSqlite(context, data) {
@@ -462,6 +462,7 @@ export const legacyMaterializationPublication = new PublicationOperation({
       context.knownFrom,
       context.observedAckAt,
     );
+    acknowledgeLegacyStatements(context.db, statementPass(data, context.operationId), context);
     return undefined;
   },
   discardSqlite(context, data) {
@@ -481,6 +482,7 @@ export const legacyMaterializationPublication = new PublicationOperation({
       scopes: data.scopes,
       observedAt: new Date(data.observedAt),
     });
+    discardLegacyStatements(context.db, statementPass(data, context.operationId));
     return undefined;
   },
 });
