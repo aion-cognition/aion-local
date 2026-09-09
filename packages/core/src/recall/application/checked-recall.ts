@@ -6,7 +6,6 @@ import {
 } from '@aion/protocol';
 
 import { checkCoverage, type CheckedRead } from './coverage-checker.js';
-import { applyEvidence } from './coverage-reasons.js';
 import { refusalLines } from './coverage-text.js';
 import {
   completeCheckedRead,
@@ -15,7 +14,7 @@ import {
   type ReadCoordinator,
 } from './read-completion.js';
 import { handleRecall, type RecallDeps } from './recall.js';
-import type { ServingEffects } from './serving-effects.js';
+import type { CommitDisposition, ServingEffects } from './serving-effects.js';
 import { EvidenceResolver } from '../../evidence/application/resolver.js';
 
 /**
@@ -67,23 +66,6 @@ export type CheckedRecallOutcome =
     }
   | { readonly status: 'coverage_refusal'; readonly refusal: CoverageRefusal };
 
-/**
- * A read whose effects nobody would take is still an answer, and this is how it says what it
- * could not settle. The field follows the resolver's own word for an uncertified reading
- * (`evidence/application/resolver.ts`), and a caller that asked to forget its holdings gets a
- * required gap: the instruction it sent did not happen, which is not a footnote.
- */
-function degradedPack(pack: MemoryPack, resetRequested: boolean): MemoryPack {
-  const base = pack.metadata.history_coverage;
-  if (base === undefined) {
-    return pack;
-  }
-  const { coverage } = applyEvidence(base, [
-    { reason: 'pending_publication', field: 'interpretation_text', required: resetRequested },
-  ]);
-  return { ...pack, metadata: { ...pack.metadata, history_coverage: coverage } };
-}
-
 export async function runCheckedRecall(
   deps: CheckedRecallDeps,
   input: unknown,
@@ -108,7 +90,7 @@ export async function runCheckedRecall(
   // moved under this read from one that did not.
   const position = await deps.coordinator.checkpoint();
   let settled: CheckedReadOutcome<unknown> | undefined;
-  const commit = async (effects: ServingEffects): Promise<'served' | 'withheld'> => {
+  const commit = async (effects: ServingEffects): Promise<CommitDisposition> => {
     settled =
       position.status === 'ready'
         ? await completeCheckedRead<unknown>(
@@ -123,7 +105,12 @@ export async function runCheckedRecall(
             },
           )
         : withoutPosition<unknown>(deps.db, read, position.reason);
-    return settled.status === 'refused' ? 'withheld' : 'served';
+    if (settled.status === 'refused') {
+      return 'withheld';
+    }
+    // The pipeline attaches the disclosure, because it holds the one statement the answer
+    // carries and this boundary has no second place to put it.
+    return settled.status === 'completed' ? 'served' : 'degraded';
   };
 
   const pack = await handleRecall(deps, payload, {
@@ -146,11 +133,7 @@ export async function runCheckedRecall(
     { reason: outcome.reason, sessionId: payload.session_id ?? options.identity },
     'recall served without recording its effects',
   );
-  return {
-    status: 'pack',
-    pack: degradedPack(pack, payload.reset_delivery_suppression === true),
-    effects: 'withheld',
-  };
+  return { status: 'pack', pack, effects: 'withheld' };
 }
 
 /**

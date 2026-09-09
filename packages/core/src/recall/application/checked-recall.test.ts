@@ -264,6 +264,46 @@ describe('a served request', () => {
   });
 });
 
+/**
+ * F11 D6: the text says what the JSON says. A caller reading only the block is the one who
+ * would otherwise take a partial answer for a complete one, so every limitation and gap the
+ * metadata carries is in the words too, and an ordinary answer stays ordinary.
+ */
+describe('what the rendered text says', () => {
+  function renderedOf(outcome: Awaited<ReturnType<typeof recall>>): string {
+    if (outcome.status !== 'pack') {
+      throw new Error('this case serves an answer');
+    }
+    return outcome.pack.rendered_text;
+  }
+
+  it('says nothing extra on an ordinary present answer', async () => {
+    activate();
+
+    expect(renderedOf(await recall())).not.toContain('history:');
+  });
+
+  it('names the preparing contract in the words the metadata uses', async () => {
+    expect(renderedOf(await recall())).toContain('coverage_contract_not_active');
+  });
+
+  it('states the boundary and the request on a temporal answer', async () => {
+    activate();
+
+    const text = renderedOf(await recall({ knew_at: '2026-09-08T06:00:00.000Z' }));
+
+    expect(text).toContain('covered since 2026-09-08T02:00:00.000Z');
+    expect(text).toContain('knew_at 2026-09-08T06:00:00.000Z');
+  });
+
+  it('names the publication it could not record behind', async () => {
+    activate();
+    position = { status: 'unavailable', reason: 'pending_publication' };
+
+    expect(renderedOf(await recall())).toContain('pending_publication');
+  });
+});
+
 describe('a temporal read that succeeds', () => {
   it('keeps its artifact and its exemptions', async () => {
     activate();

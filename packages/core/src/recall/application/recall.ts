@@ -18,6 +18,7 @@ import { resonate, type ResonanceResult } from './resonance.js';
 import { selectSeeds } from './seeds.js';
 import {
   commitServingEffects,
+  pendingPublicationIssue,
   servingEffects,
   withCoverage,
   type RecallCommit,
@@ -125,16 +126,12 @@ export async function handleRecall(
   options: RecallOptions,
 ): Promise<RecallOutput> {
   const payload = RecallInputSchema.parse(input);
-  // One reading, not two. A checked read was judged against a clock and a mode the checker
-  // already pinned, and re-deriving either here would let the answer be computed under a
-  // vantage point the coverage decision never saw.
+  // One reading, not two: a checked read carries the clock and the mode the checker pinned, and
+  // re-deriving either here would answer from a vantage point the coverage decision never saw.
   const now = options.checked?.context.now ?? options.now ?? new Date();
   const mode =
     options.checked?.context.mode ??
-    readModeFor(payload, {
-      now,
-      expiryAnnotation: deps.config.temporal.expiryAnnotation,
-    });
+    readModeFor(payload, { now, expiryAnnotation: deps.config.temporal.expiryAnnotation });
 
   // Resolved, not created. Recall produces no content, so a read-only session mints no
   // Session node, no INITIATED_BY, no WITHIN_WORKSPACE and no link in the FOLLOWS chain;
@@ -388,18 +385,17 @@ export async function handleRecall(
 
   // What the answer covers, attached to the pack the caller receives rather than to the one
   // assembly measured: coverage moves no bucket and costs no token budget.
-  const answer =
-    options.checked === undefined ? pack : withCoverage(pack, options.checked.coverage, view);
+  const { checked } = options;
+  const stated = checked === undefined ? pack : withCoverage(pack, checked.coverage, view);
   const emitted = emittedPackIds(pack);
 
-  // Every successful-read write in one place and one transaction, reset first. The boundary that
-  // checks the coverage contract takes exactly these two callbacks; until an entry point supplies
-  // one they run here, which is where they ran before.
+  // Every successful-read write in one place, reset first, shaped for the boundary that checks
+  // the coverage contract in the same transaction it commits them.
   const effects = servingEffects({
     sessionId,
     now,
     mode,
-    pack: answer,
+    pack: stated,
     temporal: {
       ...(payload.as_of === undefined ? {} : { asOf: payload.as_of }),
       ...(payload.knew_at === undefined ? {} : { knewAt: payload.knew_at }),
@@ -419,6 +415,12 @@ export async function handleRecall(
     resetDelivery,
   });
   const disposition = await commitServingEffects(deps.db, effects, options.commit);
+  // An answer the boundary would not record says so in the statement it carries: nothing was
+  // written, so the pack is the only place left to say it.
+  const answer =
+    disposition === 'degraded' && checked !== undefined
+      ? withCoverage(pack, checked.coverage, view, [pendingPublicationIssue(resetDelivery)])
+      : stated;
 
   deps.logger.info(
     {
@@ -455,7 +457,7 @@ export async function handleRecall(
       tokenEstimate: pack.metadata.token_estimate,
       timings,
     },
-    disposition === 'served' ? 'recall served' : 'recall withheld',
+    disposition === 'withheld' ? 'recall withheld' : 'recall served',
   );
 
   const retrieved = [...candidates.keys()];
@@ -477,9 +479,8 @@ export async function handleRecall(
     emitted,
   });
 
-  // Nothing the caller never received is reinforced, stamped or counted as exposure. The
-  // boundary is what knows: a refused completion means this answer was not handed over.
-  if (disposition === 'served') {
+  // A refused completion means the caller received nothing, so nothing is stamped or reinforced.
+  if (disposition !== 'withheld') {
     notifyRecalled(deps.onRecalled, deps.logger, {
       sessionId,
       seeds,

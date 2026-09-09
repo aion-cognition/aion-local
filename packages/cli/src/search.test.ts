@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   parseSearchFlags,
   renderSearchResults,
+  runSearch,
   searchCoverage,
   searchEnvelope,
   writeSearchAnswer,
@@ -150,6 +151,17 @@ describe('coverage at the search command', () => {
   function flagsFor(argv: readonly string[]): SearchFlags {
     return parseSearchFlags(argv);
   }
+
+  /** The break is documented where whoever types the command will read it. */
+  it('says in its own usage that --json is an envelope now', async () => {
+    const { lines, write } = collector();
+
+    const exit = await runSearch(['--help'], write);
+
+    expect(exit).toBe(0);
+    expect(lines.join('\n')).toContain('schema_version');
+    expect(lines.join('\n')).toContain('not a bare array');
+  });
 
   it('rejects the forms the old parser silently accepted', () => {
     // `new Date` read every one of these; the protocol grammar reads none of them, so the two
