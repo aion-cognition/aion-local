@@ -178,6 +178,10 @@ function edgesStatement(
   page: { readonly limit: number; readonly after?: NodeEdgeCursor },
 ): GraphStatement {
   const fragment = readModeFragment(mode, 'm');
+  // The node asked about is subject to the same visibility as the node at the other end. A
+  // forgotten node is absent from every other read; disclosing its relationships because the
+  // neighbour is still current would answer, from the side, a question the substrate refused.
+  const anchor = readModeFragment(mode, 'n', 'rman');
   // The relationship carries its own visibility, not just the node at the other end. An edge
   // written after the vantage is not one the answer may walk, and an endpoint that was visible
   // then says nothing about when the edge to it appeared.
@@ -189,7 +193,7 @@ function edgesStatement(
         ' OR (m.id = $afterOther AND elementId(r) > $afterEdge))))';
   const cypher = [
     `MATCH (n:${BASE_NODE_LABEL} { id: $id })-[r]-(m:${BASE_NODE_LABEL})`,
-    `WHERE m.id <> $id AND ${fragment.where} AND ${edge.where}${keyset}`,
+    `WHERE m.id <> $id AND ${anchor.where} AND ${fragment.where} AND ${edge.where}${keyset}`,
     'RETURN type(r) AS type,',
     '       startNode(r).id = $id AS outgoing,',
     '       m.id AS other_id,',
@@ -211,6 +215,7 @@ function edgesStatement(
     cypher,
     parameters: {
       ...fragment.parameters,
+      ...anchor.parameters,
       ...edge.parameters,
       id,
       topK: toGraphInteger(page.limit),
@@ -281,7 +286,10 @@ export async function fetchNodeEdges(
     readonly after?: NodeEdgeCursor;
   } = {},
 ): Promise<NodeEdgePage> {
-  const limit = options.limit ?? NODE_EDGE_PAGE_SIZE;
+  // The page size is a bound, not a suggestion. A caller asking for more gets the bound and an
+  // honest continuation, because the alternative is a helper whose cost is set by whoever calls
+  // it and a `complete` flag that means nothing.
+  const limit = Math.max(1, Math.min(options.limit ?? NODE_EDGE_PAGE_SIZE, NODE_EDGE_PAGE_SIZE));
   const statement = edgesStatement(id, options.mode ?? withCurrency(), {
     limit,
     ...(options.after === undefined ? {} : { after: options.after }),
