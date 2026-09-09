@@ -164,6 +164,83 @@ describe('buildEpisodeTimeline over injected rows', () => {
     ).toEqual(['entities', 'associations']);
   });
 
+  it('orders publications by knowledge time and keeps the sequence exact', () => {
+    // Above Number.MAX_SAFE_INTEGER on purpose: the store hands the sequence over as a string
+    // and it has to survive the whole way to the rendered event without becoming a double.
+    const huge = '9007199254740993';
+    const events = buildEpisodeTimeline({
+      ...baseInput(),
+      publications: [
+        {
+          sequence: huge,
+          operationId: 'later',
+          kind: 'stated_references',
+          state: 'acknowledged',
+          knownFrom: '2026-01-01T00:09:00.000Z',
+          observedAckAt: '2026-01-01T00:08:30.000Z',
+          clockClamped: false,
+          createdAt: '2026-01-01T00:08:00.000Z',
+        },
+        {
+          sequence: '7',
+          operationId: 'earlier',
+          kind: 'intake',
+          state: 'acknowledged',
+          knownFrom: '2026-01-01T00:03:00.000Z',
+          observedAckAt: '2026-01-01T00:03:00.000Z',
+          clockClamped: false,
+          createdAt: '2026-01-01T00:02:00.000Z',
+        },
+      ],
+    });
+    const published = events.filter((event) => event.kind === 'published');
+
+    expect(published.map((event) => event.detail.operation_id)).toEqual(['earlier', 'later']);
+    expect(published[1]?.detail.sequence).toBe(huge);
+    expect(String(published[1]?.detail.sequence)).not.toBe(String(Number(huge)));
+    expect(published[1]?.at.toISOString()).toBe('2026-01-01T00:09:00.000Z');
+  });
+
+  it('shows a clamped publication with both clocks, and holds input apart from evidence', () => {
+    const events = buildEpisodeTimeline({
+      ...baseInput(),
+      publications: [
+        {
+          sequence: '11',
+          operationId: 'clamped',
+          kind: 'stated_references',
+          state: 'acknowledged',
+          // The knowledge clock was held back to a predecessor's, so it sits after the moment
+          // the acknowledgment was observed. Reporting one number would hide exactly that.
+          knownFrom: '2026-01-01T00:09:00.000Z',
+          observedAckAt: '2026-01-01T00:05:00.000Z',
+          clockClamped: true,
+          createdAt: '2026-01-01T00:04:00.000Z',
+        },
+        {
+          sequence: '12',
+          operationId: 'not-yet',
+          kind: 'stated_references',
+          state: 'prepared',
+          clockClamped: false,
+          createdAt: '2026-01-01T00:06:30.000Z',
+        },
+      ],
+    });
+    const clamped = events.find((event) => event.detail.operation_id === 'clamped');
+    const prepared = events.find((event) => event.detail.operation_id === 'not-yet');
+
+    expect(clamped?.kind).toBe('published');
+    expect(clamped?.detail.known_from).toBe('2026-01-01T00:09:00.000Z');
+    expect(clamped?.detail.observed_ack_at).toBe('2026-01-01T00:05:00.000Z');
+    expect(clamped?.detail.clock_clamped).toBe(true);
+    // Input, not evidence: nothing has published it, so it carries no knowledge time and is
+    // placed by the only clock it has.
+    expect(prepared?.kind).toBe('prepared');
+    expect(prepared?.detail.known_from).toBeUndefined();
+    expect(prepared?.at.toISOString()).toBe('2026-01-01T00:06:30.000Z');
+  });
+
   it('produces nothing for a source that never existed rather than throwing', () => {
     const input: EpisodeTimelineInput = {
       episodeId: EPISODE_ID,

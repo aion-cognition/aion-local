@@ -22,6 +22,8 @@ export type TimelineEventKind =
   | 'occurred'
   | 'accepted'
   | 'referenced'
+  | 'prepared'
+  | 'published'
   | 'archived'
   | 'stored'
   | 'enqueued'
@@ -69,6 +71,31 @@ export type TimelineOccurrenceInput = {
   readonly verificationStatus: string;
 };
 
+/**
+ * One publication this occurrence's records name.
+ *
+ * `sequence` is a string and stays one all the way to the rendered output: the substrate mints
+ * it as a SQLite integer that can exceed what a double represents exactly, and reading it
+ * through a number would quietly change the value a reader is trying to match.
+ *
+ * The two clocks are separate because they answer different questions. `knownFrom` is when the
+ * substrate says the publication became visible, clamped where it had to be; `observedAckAt` is
+ * when it observed the acknowledgment. Collapsing them hides exactly the clamp that
+ * `clockClamped` exists to disclose.
+ */
+export type TimelinePublicationInput = {
+  readonly sequence: string;
+  readonly operationId: string;
+  readonly kind: string;
+  readonly state: string;
+  /** Absent on anything not acknowledged, which is what makes it input rather than evidence. */
+  readonly knownFrom?: string;
+  readonly observedAckAt?: string;
+  readonly clockClamped: boolean;
+  /** When the intent was written. The only clock a prepared row has of its own. */
+  readonly createdAt: string;
+};
+
 /** One accepted reference batch, which is a statement this occurrence made about other memories. */
 export type TimelineReferenceInput = {
   readonly version: number;
@@ -82,6 +109,7 @@ export type EpisodeTimelineInput = {
   /** C1's record for this occurrence. Absent for a legacy capture that has none. */
   readonly occurrence?: TimelineOccurrenceInput;
   readonly references?: readonly TimelineReferenceInput[];
+  readonly publications?: readonly TimelinePublicationInput[];
   /** The episode node's own `occurred_at`, read independently of the archive for the cross-check. */
   readonly episodeOccurredAt: Date | undefined;
   readonly episodeValidFrom: Date | undefined;
@@ -98,6 +126,8 @@ export type EpisodeTimelineInput = {
 const KIND_ORDER: readonly TimelineEventKind[] = [
   'occurred',
   'accepted',
+  'prepared',
+  'published',
   'referenced',
   'archived',
   'stored',
@@ -158,6 +188,41 @@ function acceptedEvent(input: EpisodeTimelineInput): TimelineEvent | undefined {
       shared_archive: occurrence.sharedArchive,
     },
   };
+}
+
+/**
+ * The publication history, one event each, with acknowledged evidence kept apart from input
+ * that has not been acknowledged.
+ *
+ * An acknowledged publication sorts on its knowledge clock and carries the observed
+ * acknowledgment beside it. A prepared or rejected intent has no knowledge clock at all, so it
+ * sorts on when it was written and is rendered as input: giving it a knowledge time would
+ * report something nobody has published as published, and nothing here invents a stamp a
+ * legacy row never carried.
+ */
+function publicationEvents(input: EpisodeTimelineInput): readonly TimelineEvent[] {
+  return (input.publications ?? []).map((publication) => {
+    const acknowledged =
+      publication.state === 'acknowledged' && publication.knownFrom !== undefined;
+    return {
+      kind: acknowledged ? ('published' as const) : ('prepared' as const),
+      at: new Date(acknowledged ? (publication.knownFrom ?? '') : publication.createdAt),
+      clock: 'tx' as const,
+      summary: acknowledged
+        ? `${publication.kind} published at sequence ${publication.sequence}`
+        : `${publication.kind} ${publication.state}, not published`,
+      detail: {
+        sequence: publication.sequence,
+        operation_id: publication.operationId,
+        publication_kind: publication.kind,
+        state: publication.state,
+        known_from: publication.knownFrom,
+        observed_ack_at: publication.observedAckAt,
+        clock_clamped: publication.clockClamped,
+        created_at: publication.createdAt,
+      },
+    };
+  });
 }
 
 /** What this occurrence stated about other memories, one event per accepted batch. */
@@ -362,6 +427,7 @@ export function buildEpisodeTimeline(input: EpisodeTimelineInput): readonly Time
     events.push(accepted);
   }
   events.push(...referenceEvents(input));
+  events.push(...publicationEvents(input));
   const archived = archivedEvent(input);
   if (archived !== undefined) {
     events.push(archived);

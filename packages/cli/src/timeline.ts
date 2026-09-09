@@ -12,6 +12,7 @@ import {
   loadEpisodeContext,
   orchestratorLedgerKey,
   listReferenceBatches,
+  listSourcePublications,
   PIPELINE_VERSION,
   readSourceRecord,
   refusalLines,
@@ -160,12 +161,25 @@ async function hydrateTimeline(
     receivedAt: new Date(batch.receivedAt),
     acceptedHash: batch.acceptedHash,
   }));
+  // The publication half of the same history. `sequence` stays the string the store hands over;
+  // it is minted as a SQLite integer that can be larger than a double holds exactly.
+  const publications = listSourcePublications(db, episodeId).map((receipt) => ({
+    sequence: receipt.sequence,
+    operationId: receipt.operationId,
+    kind: receipt.kind,
+    state: receipt.state,
+    ...(receipt.knownFrom === null ? {} : { knownFrom: receipt.knownFrom }),
+    ...(receipt.observedAckAt === null ? {} : { observedAckAt: receipt.observedAckAt }),
+    clockClamped: receipt.clockClamped,
+    createdAt: receipt.createdAt,
+  }));
 
   return buildEpisodeTimeline({
     episodeId,
     archive,
     ...(occurrence === undefined ? {} : { occurrence }),
     references,
+    publications,
     episodeOccurredAt: episodeContext?.occurredAt,
     episodeValidFrom: provenance?.validFrom,
     episodeTxFrom: provenance?.txFrom,

@@ -221,6 +221,46 @@ export function readPublicationReceipt(
   return row === undefined ? undefined : toReceipt(row);
 }
 
+/**
+ * The publications one source's own durable records name, newest evidence last.
+ *
+ * A source is tied to a publication by the rows that publication wrote about it: the stated
+ * links whose origin it is, and the statements made about its own state. `created_at` rides
+ * along so a prepared intent can be placed without inventing a clock it never had — an
+ * unacknowledged row has no knowledge time by construction, and giving it one would report an
+ * input as published evidence.
+ *
+ * Ordered the way visibility is: the knowledge clock first, then the sequence. A prepared row
+ * sorts on its own creation, after everything acknowledged before it.
+ */
+export function listSourcePublications(
+  db: SqliteHandle,
+  sourceId: string,
+): readonly SourcePublication[] {
+  const rows = db
+    .prepare(
+      `SELECT CAST(p.sequence AS TEXT) AS sequence, p.operation_id, p.kind, p.state,
+              p.result_digest, p.result_json, p.known_from, p.observed_ack_at, p.clock_clamped,
+              p.error, p.created_at
+       FROM publication_intents p
+       WHERE p.operation_id IN (
+         SELECT v.operation_id FROM evidence_link_versions v
+           JOIN evidence_links l ON l.link_id = v.link_id
+          WHERE l.from_id = ? AND v.operation_id IS NOT NULL
+         UNION
+         SELECT s.operation_id FROM source_state_versions s WHERE s.source_id = ?
+       )
+       ORDER BY COALESCE(p.known_from, p.created_at), p.sequence`,
+    )
+    .all(sourceId, sourceId) as (ReceiptRowData & { created_at: string })[];
+  return rows.map((row) => ({ ...toReceipt(row), createdAt: row.created_at }));
+}
+
+/** A receipt with the moment its intent was written, which is all a prepared row can be placed by. */
+export type SourcePublication = PublicationIntentReceipt & {
+  readonly createdAt: string;
+};
+
 /** The committed-view predicate: a semantic row counts once its owning operation is acknowledged. */
 export function isOperationAcknowledged(db: SqliteHandle, operationId: string): boolean {
   const row = db
