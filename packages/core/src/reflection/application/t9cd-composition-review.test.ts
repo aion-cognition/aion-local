@@ -31,7 +31,20 @@ it('lets a proved judgment reach assembly with the production composition', asyn
     omitted: [],
   } as unknown as judgment.JudgmentAssembly;
   const assemble = vi.spyOn(judgment, 'assembleJudgmentEvidence').mockResolvedValue(resolved);
-  const resolver = new EvidenceResolver({ driver, db: store.db, logger });
+  const checkpoint = {
+    substrateId: 'test',
+    protocolVersion: 1 as const,
+    sequence: '0',
+    operationId: null,
+    intentDigest: null,
+    resultDigest: null,
+  };
+  const resolver = new EvidenceResolver({
+    driver,
+    db: store.db,
+    logger,
+    publications: { checkpoint: async () => ({ status: 'ready', checkpoint }) },
+  });
   const seam = new CoveredJudgmentEvidence({ db: store.db, resolver, now: () => NOW });
   const pair: judgment.JudgmentPair = {
     route: 'live_supersession',
@@ -41,14 +54,6 @@ it('lets a proved judgment reach assembly with the production composition', asyn
       { nodeId: 'a', statement: 'a' },
       { nodeId: 'b', statement: 'b' },
     ],
-  };
-  const checkpoint = {
-    substrateId: 'test',
-    protocolVersion: 1 as const,
-    sequence: '0',
-    operationId: null,
-    intentDigest: null,
-    resultDigest: null,
   };
   const certified = new CoveredJudgmentEvidence({
     db: store.db,

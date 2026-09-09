@@ -16,8 +16,8 @@ import { drainSourceIndexQueue } from '../../introspection/application/source-in
  * Three things make it a scheduler rather than a call. A wakeup that arrives while a drain is
  * running is REMEMBERED, because that drain has already claimed its rows and will never see the
  * one that just landed. Each pass claims a bounded page rather than the whole pending population.
- * And a pass that left work deferred asks again on a backoff, because a released row with nothing
- * scheduled behind it waits for the next restart.
+ * And a pass that left work deferred asks again on a BACKOFF rather than immediately: retrying
+ * released work is not the same event as new work arriving, and only the second earns a wakeup.
  */
 export type SourceIndexDrainDeps = {
   readonly db: SqliteHandle;
@@ -82,8 +82,12 @@ export class SourceIndexDrainer {
     try {
       const drain = await drainSourceIndexQueue(this.#deps, { maxJobs: this.#maxJobs });
       this.#documents += drain.documents;
-      // A page that filled its bound has more behind it, and a deferral is work still owed.
-      if (drain.claimed >= this.#maxJobs) {
+      // A page that filled its bound has more behind it — but only when this one finished
+      // something. A full page whose rows all went back to the queue is the SAME work waiting on
+      // its backoff, and taking it again straight away is a spin that reclaims its own releases,
+      // delays every job behind it and holds up shutdown. Continuation is for progress; released
+      // work waits for the timer below.
+      if (drain.claimed >= this.#maxJobs && drain.completed > 0) {
         this.#pending = true;
       }
       this.#deferrals = drain.deferred > 0 ? this.#deferrals + 1 : 0;
