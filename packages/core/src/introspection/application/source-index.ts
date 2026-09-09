@@ -5,10 +5,12 @@ import type { SourcePartEvidence } from '../../evidence/application/sources.js';
 import { idAddress } from '../../evidence/domain/address.js';
 import type { EvidenceIssue } from '../../evidence/domain/result.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
+import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   ensureSearchProjection,
   type SearchUnavailableCause,
 } from '../../infrastructure/sqlite/fts-capability.js';
+import { readSourceParts } from '../../infrastructure/sqlite/source-identity.js';
 import {
   listEvidenceAcknowledgments,
   recordEvidenceAcknowledgment,
@@ -96,9 +98,30 @@ export function utf8Prefix(
   return { body: encoded.subarray(0, end).toString('utf8'), bytes: end, truncated: true };
 }
 
-/** What a stored document is compared against, so an unchanged part is never rewritten. */
-function bodyDigest(body: string): string {
-  return createHash('sha256').update(body).digest('hex');
+/**
+ * What a stored document is compared against, so an unchanged part is never rewritten, and what
+ * the coverage predicate reads to decide the document was derived from verified content.
+ *
+ * A complete document carries C1's own recorded hash for the part. That is the identity the
+ * store can check without re-reading the archive, and it is what makes a document whose bytes
+ * were replaced fail coverage however well-formed its own checksum is. A truncated document
+ * never carries it: it holds a prefix, so claiming the part's content identity would be a
+ * claim to hold the whole of it.
+ */
+function documentDigest(recordedHash: string, truncated: boolean): string {
+  return truncated
+    ? `prefix:${createHash('sha256').update(recordedHash).digest('hex')}`
+    : recordedHash;
+}
+
+/** C1's recorded hash for each part, keyed the way a document addresses it. */
+function recordedHashes(db: SqliteHandle, sourceId: string): ReadonlyMap<string, string> {
+  return new Map(
+    readSourceParts(db, sourceId).map((part) => [
+      `${part.partKind}:${String(part.ordinal)}`,
+      part.contentHash,
+    ]),
+  );
 }
 
 /**
@@ -161,10 +184,18 @@ function indexBatch(
   from: number,
 ): { readonly tally: BatchTally; readonly stoppedAt: number } {
   const tally: BatchTally = { documents: 0, replaced: 0, truncated: 0, indexedBytes: 0 };
+  const hashes = recordedHashes(deps.db, sourceId);
   let index = from;
   while (index < parts.length && tally.documents < INDEX_BATCH_PARTS) {
     const part = parts[index];
     if (part === undefined) {
+      break;
+    }
+    const recorded = hashes.get(`${part.partKind}:${String(part.ordinal)}`);
+    if (recorded === undefined) {
+      // The resolver verified this part against the records, so a part with no recorded hash
+      // is a disagreement between two readings of the same source. Indexing it would write a
+      // document nothing can certify; leaving it stops the pass with the work still owed.
       break;
     }
     const prefix = utf8Prefix(part.text, INDEX_MAX_PART_BYTES);
@@ -175,7 +206,7 @@ function indexBatch(
       sourceId,
       partKind: part.partKind,
       partOrdinal: part.ordinal,
-      contentDigest: bodyDigest(prefix.body),
+      contentDigest: documentDigest(recorded, prefix.truncated),
       body: prefix.body,
       truncated: prefix.truncated,
       indexedBytes: prefix.bytes,

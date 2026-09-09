@@ -171,7 +171,10 @@ describe('search projection store', () => {
     recordSourceParts(store.db, 'source-3', [
       { partKind: 'turn', ordinal: 0, contentHash: 'part-0' },
     ]);
-    writeSearchDocument(store.db, document({ sourceId: 'source-3', partOrdinal: 0 }));
+    writeSearchDocument(
+      store.db,
+      document({ sourceId: 'source-3', partOrdinal: 0, contentDigest: 'part-0' }),
+    );
     expect(searchIndexPin(store.db, 'source-3')).toEqual({ pinned: false });
 
     store.db
@@ -222,7 +225,7 @@ describe('search projection store', () => {
         reason: 'unindexed_parts',
         parts: 2,
       });
-      writeSearchDocument(store.db, document({ partOrdinal: 0 }));
+      writeSearchDocument(store.db, document({ partOrdinal: 0, contentDigest: 'part-0' }));
       expect(searchIndexPin(store.db, 'source-1')).toMatchObject({
         pinned: true,
         reason: 'unindexed_parts',
@@ -231,15 +234,20 @@ describe('search projection store', () => {
     });
 
     it('pins a source holding a truncated document and releases it on a complete reindex', () => {
-      writeSearchDocument(store.db, document({ partOrdinal: 0, truncated: true }));
-      writeSearchDocument(store.db, document({ partOrdinal: 1, contentDigest: 'digest-b' }));
+      // A truncated document never carries the part's content identity: it holds a prefix, so
+      // claiming that hash would be a claim to hold the whole part.
+      writeSearchDocument(
+        store.db,
+        document({ partOrdinal: 0, contentDigest: 'prefix:part-0', truncated: true }),
+      );
+      writeSearchDocument(store.db, document({ partOrdinal: 1, contentDigest: 'part-1' }));
       expect(searchIndexPin(store.db, 'source-1')).toMatchObject({
         pinned: true,
         reason: 'truncated_parts',
       });
       writeSearchDocument(
         store.db,
-        document({ partOrdinal: 0, contentDigest: 'digest-c', truncated: false }),
+        document({ partOrdinal: 0, contentDigest: 'part-0', truncated: false }),
       );
       expect(searchIndexPin(store.db, 'source-1')).toEqual({ pinned: false });
     });

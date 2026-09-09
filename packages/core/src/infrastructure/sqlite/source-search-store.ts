@@ -1,4 +1,5 @@
 import type { SqliteHandle } from './database.js';
+import { searchProjectionExists } from './fts-capability.js';
 import { INDEX_POLICY_VERSION, SOURCE_SEARCH_FTS_TABLE } from './source-search-schema.js';
 
 /**
@@ -281,6 +282,23 @@ export function nominateDocuments(
   return rows.map(toDocument);
 }
 
+/**
+ * The one predicate that says a recorded part is actually searchable, shared by the corpus
+ * disclosure, the eviction pin and — through the pin — the index effect's completion.
+ *
+ * Three conditions, and metadata satisfies only the first. The address and policy say a row
+ * exists for this part; `content_digest = p.content_hash` says the row was derived from the
+ * content C1 verified for it, which a caller-supplied digest over different bytes cannot fake;
+ * and the FTS join says the searchable document those bytes were written into is still there.
+ * A row whose text was replaced, or whose searchable half was removed, satisfies the first and
+ * fails the rest, which is exactly the difference between metadata and coverage.
+ */
+const COVERED_PART_JOIN = `JOIN source_search_documents d
+              ON d.source_id = p.source_id AND d.part_kind = p.part_kind
+             AND d.part_ordinal = p.ordinal AND d.index_policy_version = ?
+             AND d.truncated = 0 AND d.content_digest = p.content_hash
+            JOIN source_search_fts f ON f.rowid = d.id`;
+
 export type CorpusCoverage = {
   readonly documents: number;
   /** Documents holding a prefix of their part, so a phrase past that prefix cannot be found. */
@@ -301,17 +319,30 @@ export type CorpusCoverage = {
  * unindexed, and equal cardinalities prove nothing about which parts are actually there.
  */
 export function corpusCoverage(db: SqliteHandle): CorpusCoverage {
+  // Without the projection nothing is searchable, and the join below has no table to read.
+  if (!searchProjectionExists(db)) {
+    const totals = db
+      .prepare(
+        `SELECT
+           (SELECT count(*) FROM source_search_documents) AS documents,
+           (SELECT count(*) FROM source_search_documents WHERE truncated = 1) AS truncated,
+           (SELECT count(*) FROM source_parts) AS recorded`,
+      )
+      .get() as { documents: number; truncated: number; recorded: number };
+    return {
+      documents: totals.documents,
+      truncatedDocuments: totals.truncated,
+      recordedParts: totals.recorded,
+      coveredParts: 0,
+    };
+  }
   const row = db
     .prepare(
       `SELECT
          (SELECT count(*) FROM source_search_documents) AS documents,
          (SELECT count(*) FROM source_search_documents WHERE truncated = 1) AS truncated,
          (SELECT count(*) FROM source_parts) AS recorded,
-         (SELECT count(*) FROM source_parts p
-            JOIN source_search_documents d
-              ON d.source_id = p.source_id AND d.part_kind = p.part_kind
-             AND d.part_ordinal = p.ordinal AND d.index_policy_version = ?
-             AND d.truncated = 0) AS covered`,
+         (SELECT count(*) FROM source_parts p ${COVERED_PART_JOIN}) AS covered`,
     )
     .get(INDEX_POLICY_VERSION) as {
     documents: number;
@@ -350,30 +381,33 @@ export type SearchIndexPin =
  * only complete copy either way.
  */
 export function searchIndexPin(db: SqliteHandle, sourceId: string): SearchIndexPin {
+  const recorded = db
+    .prepare('SELECT count(*) AS n FROM source_parts WHERE source_id = ?')
+    .get(sourceId) as { n: number };
+  if (!searchProjectionExists(db)) {
+    return recorded.n > 0
+      ? { pinned: true, reason: 'unindexed_parts', parts: recorded.n }
+      : { pinned: false };
+  }
   const row = db
     .prepare(
       `SELECT
-         (SELECT count(*) FROM source_parts WHERE source_id = ?) AS recorded,
-         (SELECT count(*) FROM source_parts p
-            JOIN source_search_documents d
-              ON d.source_id = p.source_id AND d.part_kind = p.part_kind
-             AND d.part_ordinal = p.ordinal AND d.index_policy_version = ?
-          WHERE p.source_id = ? AND d.truncated = 0) AS covered,
+         (SELECT count(*) FROM source_parts p ${COVERED_PART_JOIN}
+          WHERE p.source_id = ?) AS covered,
          (SELECT count(*) FROM source_parts p
             JOIN source_search_documents d
               ON d.source_id = p.source_id AND d.part_kind = p.part_kind
              AND d.part_ordinal = p.ordinal AND d.index_policy_version = ?
           WHERE p.source_id = ? AND d.truncated = 1) AS truncated`,
     )
-    .get(sourceId, INDEX_POLICY_VERSION, sourceId, INDEX_POLICY_VERSION, sourceId) as {
-    recorded: number;
+    .get(INDEX_POLICY_VERSION, sourceId, INDEX_POLICY_VERSION, sourceId) as {
     covered: number;
     truncated: number;
   };
   if (row.truncated > 0) {
     return { pinned: true, reason: 'truncated_parts', parts: row.truncated };
   }
-  const missing = row.recorded - row.covered;
+  const missing = recorded.n - row.covered;
   return missing > 0
     ? { pinned: true, reason: 'unindexed_parts', parts: missing }
     : { pinned: false };
