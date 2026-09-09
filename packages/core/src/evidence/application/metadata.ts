@@ -2,7 +2,7 @@ import type { Driver } from 'neo4j-driver';
 
 import { readRelationScope } from './dependencies.js';
 import { durableLineage, type DurableLineage } from './durable-lineage.js';
-import { ownershipIncidence, ownershipSummaryFor } from './ownership.js';
+import { ownershipIncidence, readOwnership } from './ownership.js';
 import {
   fetchClaimProvenance,
   type ItemProvenance,
@@ -250,6 +250,40 @@ export async function readItemMetadata(
   return { results, issues, dependencies };
 }
 
+/**
+ * The ownership derivation with its consulted scopes and its unplaced axes folded into the
+ * answer. The state chains behind an attribution decide the verdict, so a revision that omitted
+ * them would go on standing after a forget changed the set.
+ */
+function readInto(
+  db: SqliteHandle,
+  id: string,
+  rows: readonly CommittedIncidence[],
+  context: CheckedReadContext,
+  censusEstablished: boolean,
+  sink: {
+    readonly address: EvidenceAddress;
+    readonly issues: EvidenceIssue[];
+    readonly dependencies: EvidenceDependency[];
+  },
+): OwnershipSummary {
+  const reading = readOwnership(db, id, rows, context, { censusEstablished });
+  sink.dependencies.push(...reading.dependencies);
+  // A census proves how many relations there are, never what their missing dates were. A row the
+  // recorded proof could not place is withheld and named here, so nothing reports the remainder
+  // as the whole set for the moment asked about.
+  for (const axis of new Set(reading.unplaced)) {
+    sink.issues.push({
+      address: sink.address,
+      field: axis === 'world' ? 'link_interval' : 'reference_history',
+      reason: 'unsupported_history',
+      historyReason: 'not_recorded',
+      required: false,
+    });
+  }
+  return reading.summary;
+}
+
 type MetadataSink = {
   readonly record: (
     address: EvidenceAddress,
@@ -357,12 +391,16 @@ function readOne(
 
     // One derivation for the stored projection and for this answer, so what a nomination reads
     // off a node and what a serving read decides cannot disagree about whose memory it is.
-    const derived = ownershipSummaryFor(deps.db, id, incidenceOf, input.context, {
-      censusEstablished: attributionProved,
-    });
+    //
+    // A population the allowance already rejected is not derived at all. Reading each owner's
+    // records and then discarding the answer spends the substrate on a set nobody may use.
     const ownership: OwnershipSummary = overRows
       ? { sessions: [], unknownAttribution: true, censusEstablished: attributionProved }
-      : derived;
+      : readInto(deps.db, id, incidenceOf, input.context, attributionProved, {
+          address,
+          issues: nodeIssues,
+          dependencies,
+        });
     const value: ItemMetadata = {
       provenance: mergeProvenance(found, durable, input.maxRoots, scope.status === 'verified'),
       owningSessions: ownership.sessions,

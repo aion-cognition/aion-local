@@ -51,9 +51,10 @@ export type RecencySeedInput = {
  * the claims extracted from them, leaving the spread nothing else to start from.
  *
  * A node whose ownership summary is missing, unproved, uncounted or written by another substrate
- * takes no discount at all. Preserving an extra candidate costs the ordering; discounting one on
- * an unproved reading costs the answer a memory, and post-query certification cannot recover a
- * candidate the limit already dropped.
+ * takes no discount at all. Neither direction is free under a finite limit: a preserved own-only
+ * candidate can crowd another out, and a candidate discounted on an unproved reading is gone
+ * before anything can certify it. The second is the one nothing downstream can undo, so an
+ * unproved summary preserves.
  *
  * The predicate runs over the scan rather than over the page, because the sort is what it is
  * for. It reads properties off the node, so an already scan-bound strategy pays property

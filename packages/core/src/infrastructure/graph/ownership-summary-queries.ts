@@ -13,8 +13,8 @@ import { decimalSequence } from '../publication/json.js';
  * the substrate identity below let a plain Cypher ordering detect.
  *
  * This is an ordering hint and never a checkpoint. A seed query takes no guard, recovers no
- * receipt and waits for nothing; an unproved summary costs the ranking its discount and never
- * costs an answer a memory.
+ * receipt and waits for nothing, and an unproved summary loses its discount rather than acting
+ * on a value nobody has proved.
  */
 
 export const OWNERSHIP_PROPERTIES = {
@@ -107,9 +107,9 @@ const OWNERSHIP_PARAMETERS = {
  *
  * Everything else is unknown ownership and takes no discount. That covers a missing summary, one
  * written above the acknowledged bound, one carrying an unattributable contribution, one whose
- * scopes were never counted, and one a different restored substrate wrote. The failure this
- * shape avoids is the only one that loses an answer: an unproved own-only value discounting a
- * shared memory out of the limit before anything can certify it.
+ * scopes were never counted, and one a different restored substrate wrote. The failure this shape
+ * avoids is the one nothing downstream can undo: an unproved own-only value discounting a shared
+ * memory out of the limit before anything can certify it.
  */
 export function ownOnlyDiscount(nodeVar: string): string {
   const { sessionId, substrateId, acknowledged } = OWNERSHIP_PARAMETERS;

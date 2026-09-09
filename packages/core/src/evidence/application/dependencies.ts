@@ -67,6 +67,31 @@ function contentProofVersion(record: SourceRecord): string {
   ]);
 }
 
+/**
+ * The state chain's own version, which is what a reader that consulted suppression fences on.
+ * A reader that decided whether a source may be quoted has read this chain, and an answer that
+ * travels without it goes on standing after the statement that changed it.
+ */
+export function sourceStateDependency(db: SqliteHandle, sourceId: string): EvidenceDependency {
+  const states = committedSourceStates(db, sourceId);
+  return {
+    kind: 'source',
+    id: sourceId,
+    scope: 'source.state',
+    version: String(states.at(-1)?.version ?? 0),
+  };
+}
+
+/** The recorded part mapping, which a read that resolved a part to its source consulted. */
+export function sourcePartsDependency(db: SqliteHandle, sourceId: string): EvidenceDependency {
+  return {
+    kind: 'source',
+    id: sourceId,
+    scope: 'source.parts',
+    version: partsDigest(readSourceParts(db, sourceId)),
+  };
+}
+
 /** The four fixed source scopes, versioned from the records that own them. */
 export function sourceScopeDependencies(
   db: SqliteHandle,
@@ -76,21 +101,10 @@ export function sourceScopeDependencies(
   if (record === undefined) {
     return [];
   }
-  const states = committedSourceStates(db, sourceId);
   return [
     { kind: 'source', id: sourceId, scope: 'source.content', version: contentProofVersion(record) },
-    {
-      kind: 'source',
-      id: sourceId,
-      scope: 'source.parts',
-      version: partsDigest(readSourceParts(db, sourceId)),
-    },
-    {
-      kind: 'source',
-      id: sourceId,
-      scope: 'source.state',
-      version: String(states.at(-1)?.version ?? 0),
-    },
+    sourcePartsDependency(db, sourceId),
+    sourceStateDependency(db, sourceId),
     {
       kind: 'source',
       id: sourceId,
