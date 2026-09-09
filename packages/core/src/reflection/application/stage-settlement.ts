@@ -1,3 +1,4 @@
+import { admitsTransfer } from './readiness.js';
 import type { WithheldWork } from '../../evidence/application/judgment.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
@@ -24,6 +25,7 @@ import {
 import {
   ContinuationEffectSchema,
   TransferContinuationSchema,
+  TransferEvidenceSchema,
 } from '../domain/continuation-schema.js';
 import { evaluateProcessingReadiness } from '../domain/readiness.js';
 import {
@@ -174,7 +176,10 @@ export function recordStageSettlements(
       row,
     ]),
   );
-  applyForgetDisposition(db, sourceId, generation.processingGeneration, now, close, detail);
+  applyForgetDisposition(db, sourceId, generation.processingGeneration, now, close, {
+    detail,
+    requiredStages,
+  });
 
   const readiness = evaluateProcessingReadiness({
     sourceId,
@@ -239,7 +244,10 @@ function applyForgetDisposition(
   processingGeneration: number,
   now: Date,
   close: (stageName: string, settlement: StageSettlement) => void,
-  detail: ReadonlyMap<string, StageWorkDetail>,
+  work: {
+    readonly detail: ReadonlyMap<string, StageWorkDetail>;
+    readonly requiredStages: readonly string[] | undefined;
+  },
 ): void {
   if (hasPendingSourceState(db, sourceId)) {
     return;
@@ -250,11 +258,12 @@ function applyForgetDisposition(
     if (row.kind !== 'stage' || stageName === null || row.state === 'obsolete') {
       continue;
     }
-    // The effect decides, not the container. A row that owes consistency work on RETAINED
-    // endpoints is about nodes that outlive this source: forgetting the source does not make
-    // their neighbourhood correct, and closing it here would leave those endpoints holding a
-    // reading nobody will recompute.
-    if (retainedEndpointWork(detail.get(stageName))) {
+    // The effect decides, not the container, and it is classified positively. A row the accepted
+    // policy required is a pass about this source. A row that owes consistency work on RETAINED
+    // endpoints, or one no policy accounts for, is not classified as this source's: forgetting
+    // the source does not make another node's neighbourhood correct, and closing it here would
+    // leave those endpoints holding a reading nobody will recompute.
+    if (!forgetDisposesOf(stageName, work.requiredStages, work.detail.get(stageName))) {
       continue;
     }
     if (forget !== undefined && row.state !== 'completed') {
@@ -289,26 +298,55 @@ function retainedEndpointWork(row: StageWorkDetail | undefined): boolean {
 }
 
 /**
- * Whether a transferred stage names a transfer this policy admits, with everything a runner needs
- * to pick it up.
+ * Whether a forget disposes of this row, classified positively from the accepted policy.
  *
- * A state alone is not a transfer. The runner has to be one the accepted policy lists, the
- * capability revision says which contract it was handed to, the evidence says what it was
- * measured against, and the addresses and identity are what let somebody run it exactly once.
- * Anything short of that is a row somebody moved, and the inventory does not account for it.
+ * A pass the source's own policy required is a pass about that source: forgetting the source
+ * leaves it nothing to act on. Anything else is unclassified — a row some other pass added, or
+ * one carrying a declared retained-endpoint effect — and unclassified is not a licence to close
+ * it. Absence of a classification is not proof that work about other nodes vanished with this
+ * source, so the row stays owed and somebody can decide it.
+ */
+function forgetDisposesOf(
+  stageName: string,
+  requiredStages: readonly string[] | undefined,
+  row: StageWorkDetail | undefined,
+): boolean {
+  if (retainedEndpointWork(row)) {
+    return false;
+  }
+  return requiredStages?.includes(stageName) === true;
+}
+
+/**
+ * Whether a transferred stage names a transfer this build and this policy admit, with everything
+ * a runner needs to pick it up.
+ *
+ * A state alone is not a transfer, and neither is a set of non-null columns. The evidence has to
+ * be a revision whose digest follows from its own dependencies, the addresses have to name
+ * something, the identity has to be there, and the runner has to be one both the accepted policy
+ * lists and this build registers, at the revision it registers it under. Anything short of that
+ * is a row somebody moved, and the inventory does not account for it.
  */
 function transferAccounted(
   row: StageWorkDetail | undefined,
   capabilities: readonly string[] | undefined,
 ): boolean {
-  if (row === undefined || capabilities === undefined || row.continuationJson == null) {
+  if (row?.continuationJson == null || row.capabilityRevision === null) {
     return false;
   }
-  if (row.capabilityRevision === null || row.inputRevisionJson === null) {
+  if (!TransferEvidenceSchema.safeParse(parseJson(row.inputRevisionJson ?? 'null')).success) {
     return false;
   }
   const parsed = TransferContinuationSchema.safeParse(parseJson(row.continuationJson));
-  return parsed.success && capabilities.includes(parsed.data.runner);
+  if (!parsed.success) {
+    return false;
+  }
+  return admitsTransfer({
+    runner: parsed.data.runner,
+    runnerRevision: parsed.data.runnerRevision,
+    capabilityRevision: row.capabilityRevision,
+    policyCapabilities: capabilities,
+  });
 }
 
 function parseJson(text: string): unknown {

@@ -29,13 +29,43 @@ import { PIPELINE_VERSION } from '../domain/version.js';
  * raw projection is gone. Only the paths that read that way are listed; an obligation naming
  * anything else pins its source instead of transferring.
  */
-export const TRANSFER_CAPABILITIES: readonly string[] = [
-  'entity-dedup',
-  'supersession',
-  'proposal_resolution',
-  'reinforcement',
-  'context-vectors',
-];
+/**
+ * Each runner beside the contract revision this build admits it at.
+ *
+ * A transferred row names the runner it was handed to and the revision of the contract it was
+ * handed under. Both are checked against this table rather than against each other: a runner
+ * revision and a capability revision are different axes, and two integers being equal proves
+ * nothing about whether the receiving side can run the work.
+ */
+export const TRANSFER_CAPABILITY_REVISIONS: Readonly<Record<string, number>> = {
+  'entity-dedup': 1,
+  supersession: 1,
+  proposal_resolution: 1,
+  reinforcement: 1,
+  'context-vectors': 1,
+};
+
+export const TRANSFER_CAPABILITIES: readonly string[] = Object.keys(TRANSFER_CAPABILITY_REVISIONS);
+
+/**
+ * Whether this build, under the source's accepted policy, admits the transfer a row describes.
+ *
+ * The policy has to list the runner, this build has to register it, and both the revision the
+ * row was handed under and the one the continuation names have to be the registered one. A row
+ * naming a revision nobody registered is a row nothing can pick up.
+ */
+export function admitsTransfer(input: {
+  readonly runner: string;
+  readonly runnerRevision: number;
+  readonly capabilityRevision: number;
+  readonly policyCapabilities: readonly string[] | undefined;
+}): boolean {
+  const registered = TRANSFER_CAPABILITY_REVISIONS[input.runner];
+  if (registered === undefined || input.policyCapabilities?.includes(input.runner) !== true) {
+    return false;
+  }
+  return input.runnerRevision === registered && input.capabilityRevision === registered;
+}
 
 /**
  * The contract this build's pipeline implies: the stages, in order, AND what each one runs on.

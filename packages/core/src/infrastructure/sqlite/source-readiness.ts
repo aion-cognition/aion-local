@@ -170,17 +170,20 @@ export type SessionObligationCensus =
 const OUTSTANDING_STATES = `('pending','retryable','transferred','pinned','dead_letter')`;
 
 /**
- * How many of the policy's required stages this generation has no row for.
+ * How many of the policy's required stages this generation cannot account for.
  *
- * By NAME, one required identity at a time. A count of stage rows compared with the length of the
- * policy's list says nothing about whether the rows are the required ones: an extra or obsolete
- * row fills the missing slot arithmetically and the source reads as accounted while the pass it
- * owes has no row at all.
+ * By NAME and by accounting STATE, one required identity at a time. A count of rows compared with
+ * the length of the policy's list says nothing about whether the rows are the required ones, and
+ * a row's presence says nothing about whether it accounts for anything: an obsolete execution row
+ * is neither a typed outcome nor an obligation somebody still owes, and a required identity
+ * standing on one is a pass nothing will ever run and nothing has recorded.
  */
 const MISSING_REQUIRED_STAGES = `(SELECT count(*) FROM json_each(p.stages_json) req
    WHERE NOT EXISTS (SELECT 1 FROM source_work sw
      WHERE sw.source_id = g.source_id AND sw.processing_generation = g.processing_generation
-       AND sw.kind = 'stage' AND sw.stage_name = req.value))`;
+       AND sw.kind = 'stage' AND sw.stage_name = req.value
+       AND (sw.state IN ${OUTSTANDING_STATES}
+            OR (sw.state = 'completed' AND sw.outcome_json IS NOT NULL))))`;
 
 /**
  * What one session's sources still owe, in one indexed read.

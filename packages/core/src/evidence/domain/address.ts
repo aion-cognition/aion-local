@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 /**
  * How a caller names the evidence it wants.
  *
@@ -8,6 +10,20 @@
  */
 
 export const SOURCE_PART_KINDS = ['turn', 'observation', 'tool_execution'] as const;
+
+/**
+ * The wire and storage shape of an address, for a reader validating one somebody else wrote.
+ * A row that carries an address list and names nothing in it addresses nothing.
+ */
+export const EvidenceAddressSchema = z.union([
+  z.strictObject({ kind: z.literal('id'), id: z.string().min(1) }),
+  z.strictObject({
+    kind: z.literal('part'),
+    sourceId: z.string().min(1),
+    partKind: z.enum(SOURCE_PART_KINDS),
+    ordinal: z.number().int().nonnegative(),
+  }),
+]);
 
 export type SourcePartKind = (typeof SOURCE_PART_KINDS)[number];
 
