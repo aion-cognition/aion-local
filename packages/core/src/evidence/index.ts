@@ -7,3 +7,6 @@
  */
 
 export { EvidenceResolver } from './application/resolver.js';
+
+/** The seam the maintenance loop and the reflection pipeline judge through. */
+export { CoveredJudgmentEvidence } from './application/covered-judgment.js';

@@ -32,6 +32,22 @@ export type MergeCoordinator = {
   outcomeOf?(operationId: string): PublicationOutcome | undefined;
 };
 
+/**
+ * The coordinator a merge actually writes through.
+ *
+ * A merge that wrote to the graph directly could not tell a lost commit response from a commit
+ * that never happened, which is the case the recovery above exists for. Publishing is what
+ * produces the receipt that answers it, so an operation composed without a publisher declines
+ * the merge rather than writing outside the protocol to keep its batch moving.
+ */
+export type MergePublisher = MergeCoordinator & {
+  publish(request: {
+    readonly kind: 'semantic_write';
+    readonly operationId: string;
+    readonly payload: unknown;
+  }): Promise<PublicationOutcome>;
+};
+
 export type MergeRecoveryInput<T> = {
   /** The pair's stable identity, which is what a receipt is matched against. */
   readonly operationId: string;

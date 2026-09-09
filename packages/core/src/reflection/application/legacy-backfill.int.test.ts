@@ -25,6 +25,7 @@ import {
 } from '../../infrastructure/graph/test-support/consolidation-rehearsal.fixture.js';
 import { nodeProperties } from '../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
+  driftEpisodeDigest,
   seedGraphOnlyEpisode,
   seedLegacyEdge,
   seedLegacyMention,
@@ -284,6 +285,40 @@ it('counts nothing until the cohort has accounted, then answers support instead 
   const properties = await nodeProperties(substrate.harness.driver, 'entity-sync');
   expect(properties[OWNERSHIP_PROPERTIES.census]).toBe(true);
   expect(properties[OWNERSHIP_PROPERTIES.sessions]).toEqual([SESSION]);
+}, 120_000);
+
+it('re-verifies under the guard, and pins a source whose projection has drifted', async () => {
+  const deps = { driver: substrate.harness.driver, db: store.db, publications: coordinator };
+  const [alpha] = accepted;
+  expect(readSourceRecord(store.db, alpha!)?.verificationStatus).toBe('verified');
+
+  // The graph now disagrees with the bytes the archive holds. Nothing about the record changed;
+  // what changed is whether it can still be proved.
+  await driftEpisodeDigest(substrate.harness.driver, alpha!, 'a-digest-nobody-archived');
+  const bounds = archiveRowidBounds(store.db);
+  freezeMigrationCohort(store.db, {
+    cohortId: 'cohort-drift',
+    cohortDigest: 'drift',
+    intakeWatermark: readIntakeWatermark(store.db),
+    archiveRowidLow: bounds.low,
+    archiveRowidHigh: bounds.high,
+    graphCensusDigest: 'drift',
+    orderingPolicyVersion: 1,
+    createdAt: NOW,
+    members: [alpha!],
+  });
+
+  const report = await runLegacyBackfillBatch(deps, {
+    cohortId: 'cohort-drift',
+    now: NOW,
+    reverify: true,
+  });
+
+  expect(report.pinned).toBe(1);
+  expect(readSourceRecord(store.db, alpha!)).toMatchObject({
+    verificationStatus: 'pinned',
+    verificationReason: 'the archived digest disagrees with the graph projection',
+  });
 }, 120_000);
 
 it('resumes an interrupted materialization instead of leaving half of one behind', async () => {

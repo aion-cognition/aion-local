@@ -2,25 +2,12 @@ import type { Driver } from 'neo4j-driver';
 import { randomUUID } from 'node:crypto';
 
 import { enqueueLegacyIndexWork } from './intake-queue.js';
-import { sourcePartsOf } from './source-manifest.js';
-import {
-  findLegacyRawNodes,
-  pageLegacyEpisodeCensus,
-  type LegacyRawNodes,
-} from '../../infrastructure/graph/legacy-evidence-queries.js';
+import { pageLegacyEpisodeCensus } from '../../infrastructure/graph/legacy-evidence-queries.js';
 import type { PublicationOutcome } from '../../infrastructure/publication/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
-  ARCHIVE_SCHEMA_VERSION,
-  getExperienceById,
-} from '../../infrastructure/sqlite/experience-archive.js';
-import {
   archiveRowidBounds,
-  groupArchiveRowsBySource,
   pageArchiveRows,
-  pageArchiveRowsForEpisode,
-  verifiedSourceRecordInput,
-  type ArchiveSourceGroup,
 } from '../../infrastructure/sqlite/legacy-archive-scan.js';
 import {
   countMigrationProgress,
@@ -31,12 +18,8 @@ import {
   recordMigrationProgress,
   type MigrationStatus,
 } from '../../infrastructure/sqlite/migration-cohorts.js';
-import {
-  recordSourceParts,
-  recordSourceRecord,
-  readSourceRecord,
-} from '../../infrastructure/sqlite/source-identity.js';
-import { hashContent, prepareEpisode } from '../domain/content.js';
+import { readSourceRecord } from '../../infrastructure/sqlite/source-identity.js';
+import { hashContent } from '../domain/content.js';
 
 /**
  * The resumable migration job: freeze a legacy cohort, walk it, and seal what it counted.
@@ -173,6 +156,12 @@ export type BackfillBatchRequest = {
   readonly limit?: number;
   readonly relationLimit?: number;
   readonly indexPolicy?: string;
+  /**
+   * Re-prove members that already read verified. The ordinary walk does not: it leaves a live
+   * acceptance's record alone. A rebuild pass does, because what it needs to know is whether the
+   * proof still holds.
+   */
+  readonly reverify?: boolean;
 };
 
 export type MemberOutcome = {
@@ -190,92 +179,6 @@ export type BackfillBatchReport = {
   readonly outcomes: readonly MemberOutcome[];
   readonly remaining: number;
 };
-
-type Verdict = {
-  readonly status: MigrationStatus;
-  readonly reason: string;
-};
-
-/**
- * What the archive and the graph together say about one member.
- *
- * A source the live intake already verified is left alone: its record was written by the writer
- * that accepted it, under proof this walk cannot improve on, and rewriting it from the archive
- * would replace an acceptance clock with a migration's own. Every other case is decided against
- * both stores, and a disagreement pins rather than picking a side.
- */
-function verifyMember(
-  db: SqliteHandle,
-  sourceId: string,
-  group: ArchiveSourceGroup | undefined,
-  raw: LegacyRawNodes | undefined,
-  now: Date,
-): Verdict {
-  const held = readSourceRecord(db, sourceId);
-  if (held?.verificationStatus === 'verified') {
-    return { status: 'verified', reason: 'the live acceptance already proved this source' };
-  }
-  const pin = (reason: string): Verdict => {
-    recordSourceRecord(db, {
-      sourceId,
-      sessionId: group?.sessionId ?? raw?.sessionId ?? held?.sessionId ?? sourceId,
-      verificationStatus: 'pinned',
-      verificationReason: reason,
-      occurredAt: group?.occurredAt ?? held?.occurredAt ?? now.toISOString(),
-      createdAt: now,
-      ...(group === undefined
-        ? { captureOrderBasis: 'pinned' as const }
-        : {
-            captureOrderValue: group.archivedAt,
-            captureOrderBasis: 'archive_acceptance' as const,
-          }),
-    });
-    return { status: 'pinned', reason };
-  };
-  if (group === undefined) {
-    return pin('the archive holds no row for this source inside the frozen bounds');
-  }
-  if (group.conflictingAliases) {
-    return pin('archive rows for this episode disagree about its content');
-  }
-  if (raw === undefined) {
-    return pin('the graph holds no projection of this source');
-  }
-  if (raw.contentHash === undefined || raw.contentHash !== group.contentHash) {
-    return pin('the archived digest disagrees with the graph projection');
-  }
-  const experience = getExperienceById(db, group.canonicalArchiveId);
-  if (experience === undefined) {
-    return pin('the canonical archive row could not be read back');
-  }
-  // The parts come from the payload, because that is where they all are. Only turns have a graph
-  // node; an observation and a tool execution have a logical address and nothing else, and a walk
-  // that recorded only what the graph shows would leave those parts uncitable forever.
-  const prepared = prepareEpisode(experience.payload, new Date(group.occurredAt));
-  const mismatch = prepared.turns.findIndex(
-    (turn, index) => raw.turns[index]?.contentHash !== turn.contentHash,
-  );
-  if (mismatch >= 0) {
-    return pin(`graph turn ${String(mismatch)} does not carry the archived turn's digest`);
-  }
-  recordSourceRecord(
-    db,
-    verifiedSourceRecordInput(group, {
-      verificationPolicyVersion: ARCHIVE_SCHEMA_VERSION,
-      createdAt: now,
-    }),
-  );
-  recordSourceParts(
-    db,
-    sourceId,
-    sourcePartsOf(
-      prepared,
-      experience.payload,
-      raw.turns.map((turn) => turn.turnId),
-    ),
-  );
-  return { status: 'verified', reason: 'the archived digest matches the graph projection' };
-}
 
 /**
  * One bounded batch of the walk.
@@ -303,21 +206,48 @@ export async function runLegacyBackfillBatch(
   const outcomes: MemberOutcome[] = [];
   let indexEnqueued = 0;
   for (const sourceId of members) {
-    const group = groupArchiveRowsBySource(
-      pageArchiveRowsForEpisode(deps.db, sourceId, bounds),
-    ).find((entry) => entry.sourceId === sourceId);
-    const raw = await findLegacyRawNodes(deps.driver, sourceId);
-    const verdict = verifyMember(deps.db, sourceId, group, raw, request.now);
-    let settled = verdict;
-    let published: MemberOutcome['published'] = 'skipped';
-    if (verdict.status === 'verified') {
+    // One publication proves the source and materializes what it proved. The verdict is taken
+    // under the guard, so nothing outside it decides what a source's records say.
+    const outcome = await deps.publications.publish({
+      kind: 'legacy_materialization',
+      operationId: `legacy-materialization:${request.cohortId}:${sourceId}`,
+      payload: {
+        mode: 'source',
+        cohortId: request.cohortId,
+        sourceId,
+        relationLimit: request.relationLimit ?? DEFAULT_RELATION_LIMIT,
+        archiveRowidLow: bounds.low,
+        archiveRowidHigh: bounds.high,
+        reverify: request.reverify === true,
+      },
+    });
+    const published = outcome.status;
+    // A member whose publication did not land stays accounted. Marking it walked on a
+    // publication the coordinator deferred would take it out of the population the census seal
+    // waits on, and the seal would then count a scope whose rows were never written.
+    if (outcome.status !== 'acknowledged') {
+      outcomes.push({ sourceId, status: 'accounted', reason: outcome.reason, published });
+      continue;
+    }
+    const result = outcome.result as { pinned?: boolean; verified?: boolean; reason?: string };
+    // The producer's two gates are different failures. An unverified source has no proof at all;
+    // a verified one can still hold an incident relationship nobody can classify, and then its
+    // evidence is not materialized. Either way the cohort records a pin, which is what keeps the
+    // source out of every eligible-for-removal population.
+    const status: MigrationStatus =
+      result.verified === true && result.pinned !== true ? 'verified' : 'pinned';
+    const reason = result.reason ?? 'the producer recorded no reason';
+    // Index work follows the RAW proof, not the relationship one. A source whose parts are
+    // provable can be searched whatever its edges turned out to be, and a pinned source is held
+    // against removal anyway; withholding its index would only make it unfindable as well.
+    if (result.verified === true) {
       const record = readSourceRecord(deps.db, sourceId);
       if (
         enqueueLegacyIndexWork(
           deps.db,
           {
             sourceId,
-            sessionId: record?.sessionId ?? raw?.sessionId ?? sourceId,
+            sessionId: record?.sessionId ?? sourceId,
             lane: 'bulk',
             indexPolicy: request.indexPolicy ?? 'legacy_v1',
             acceptedAt: request.now.toISOString(),
@@ -327,44 +257,11 @@ export async function runLegacyBackfillBatch(
       ) {
         indexEnqueued += 1;
       }
-      const outcome = await deps.publications.publish({
-        kind: 'legacy_materialization',
-        operationId: `legacy-materialization:${request.cohortId}:${sourceId}`,
-        payload: {
-          mode: 'source',
-          cohortId: request.cohortId,
-          sourceId,
-          relationLimit: request.relationLimit ?? DEFAULT_RELATION_LIMIT,
-        },
-      });
-      published = outcome.status;
-      // The producer's own gate. A source whose archive proof holds can still have an incident
-      // relationship nobody can classify, and that is a different failure from an unverified
-      // row: the source stays, its evidence is not materialized, and the cohort records the
-      // reason. Pinning it here is what keeps it out of every eligible-for-removal population.
-      if (outcome.status === 'acknowledged') {
-        const result = outcome.result as { pinned?: boolean; reason?: string };
-        if (result.pinned === true) {
-          settled = {
-            status: 'pinned',
-            reason: result.reason ?? 'the producer could not prove it',
-          };
-        }
-      }
     }
-    // A member whose evidence did not land stays accounted. Marking it walked on a publication
-    // the coordinator deferred would take it out of the population the census seal waits on, and
-    // the seal would then count a scope whose rows were never written.
-    if (published !== 'deferred' && published !== 'rejected') {
-      recordMigrationProgress(deps.db, {
-        cohortId: request.cohortId,
-        sourceId,
-        status: settled.status,
-        reason: settled.reason,
-      });
-    }
-    outcomes.push({ sourceId, status: settled.status, reason: settled.reason, published });
+    recordMigrationProgress(deps.db, { cohortId: request.cohortId, sourceId, status, reason });
+    outcomes.push({ sourceId, status, reason, published });
   }
+
   const counts = countMigrationProgress(deps.db, request.cohortId);
   return {
     walked: members.length,

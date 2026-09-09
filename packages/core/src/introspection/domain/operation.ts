@@ -4,7 +4,7 @@ import type { Driver } from 'neo4j-driver';
 import type { OperationBucket } from './buckets.js';
 import type { CriticalCondition, HealthSnapshot } from './health.js';
 import type { JudgmentEvidence, WithheldWork } from '../../evidence/application/judgment.js';
-import type { MergeCoordinator } from '../../evidence/application/merge-recovery.js';
+import type { MergePublisher } from '../../evidence/application/merge-recovery.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
@@ -77,10 +77,11 @@ export type OperationContext = {
    */
   readonly evidence?: JudgmentEvidence;
   /**
-   * The publication position an uncertain apply is reconciled against. Without it an apply whose
-   * commit nobody observed stops the batch rather than guessing which way it went.
+   * Where a destructive apply publishes, and the position an uncertain one is reconciled
+   * against. Without it an operation that merges declines rather than writing outside the
+   * protocol, because a bare write's lost commit response cannot be told from no commit at all.
    */
-  readonly publications?: MergeCoordinator;
+  readonly publications?: MergePublisher;
   /** The same reading the decision was made from. An operation must not observe again. */
   readonly health: HealthSnapshot;
   readonly now: Date;

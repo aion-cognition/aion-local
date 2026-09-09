@@ -14,6 +14,7 @@ import { PublicationInvariantError } from '../../../infrastructure/publication/e
 import { buildEvidenceRevision } from '../../../infrastructure/publication/preconditions.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { isLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
+import { directMergePublisher } from '../../../reflection/test-support/direct-intake.fixture.js';
 import { claimDedupPairKey, claimDedupScanKey } from '../../domain/claim-dedup.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
@@ -184,8 +185,12 @@ beforeEach(() => {
 });
 
 function ctxFor(overrides: Partial<OperationContext>): OperationContext {
+  // The publisher is built over whichever driver the case supplies, because the merge now runs
+  // inside a publication: a fixture holding a second driver would inject its failure into a
+  // transaction nobody opened.
+  const driver = overrides.driver ?? fakeDriver({});
   return {
-    driver: fakeDriver({}),
+    driver,
     db,
     config: DEFAULTS,
     logger,
@@ -193,6 +198,7 @@ function ctxFor(overrides: Partial<OperationContext>): OperationContext {
     health: healthFixture(),
     now: NOW,
     signal: new AbortController().signal,
+    publications: directMergePublisher(driver, db, () => NOW),
     ...overrides,
   };
 }
@@ -237,7 +243,11 @@ describe('claim_dedup when one merge fails', () => {
   it('stops the batch while a publication the coordinator holds is unsettled', async () => {
     const result = await claimDedupOperation().run(
       ctxFor({
-        publications: { hasPending: () => true, recover: () => Promise.resolve(undefined) },
+        publications: {
+          ...directMergePublisher(fakeDriver({}), db, () => NOW),
+          hasPending: () => true,
+          recover: () => Promise.resolve(undefined),
+        },
       }),
     );
 

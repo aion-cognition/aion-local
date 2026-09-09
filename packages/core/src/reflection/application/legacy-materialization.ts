@@ -13,6 +13,12 @@ import {
   unaccountedCohortMembers,
 } from './legacy-records.js';
 import {
+  applySourceVerification,
+  planSourceVerification,
+  VerificationSchema,
+  type VerificationPlan,
+} from './legacy-verification.js';
+import {
   ownershipCensusEstablished,
   ownershipIncidence,
   ownershipSummaryFor,
@@ -31,7 +37,6 @@ import type { CommittedIncidence } from '../../infrastructure/sqlite/committed-e
 import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { readSubstratePairing } from '../../infrastructure/sqlite/publication-control.js';
-import { readSourceRecord } from '../../infrastructure/sqlite/source-identity.js';
 import { checkPresentCoverage } from '../../recall/application/coverage-checker.js';
 import {
   classifyLegacyRelations,
@@ -69,6 +74,11 @@ const SourcePayload = z.strictObject({
   sourceId: z.string().min(1),
   /** Charged before the walk. A page that fills it cannot certify anything. */
   relationLimit: z.number().int().positive(),
+  /** The frozen archive bounds the verification is proved against. */
+  archiveRowidLow: z.number().int().nonnegative(),
+  archiveRowidHigh: z.number().int().nonnegative(),
+  /** Re-prove a source that already reads verified, which is what a rebuild rests on. */
+  reverify: z.boolean(),
 });
 const CensusPayload = z.strictObject({
   mode: z.literal('census'),
@@ -99,6 +109,8 @@ const Scope = z.strictObject({
 const SourceData = SourcePayload.extend({
   gate: z.enum(['admitted', 'pinned']),
   reason: z.string(),
+  /** The guarded re-verification's verdict, taken under this operation's own guard. */
+  verification: VerificationSchema,
   links: z.array(Link),
   scopes: z.array(Scope),
   nodes: z.array(z.string()),
@@ -125,6 +137,8 @@ const Result = z.strictObject({
   /** The last endpoint a seal page counted, so the next page starts past it and always moves. */
   cursor: z.string(),
   pinned: z.boolean(),
+  /** What the re-verification proved about the source, for the walk that records progress. */
+  verified: z.boolean(),
   reason: z.string(),
 });
 
@@ -140,6 +154,7 @@ const EMPTY: Omit<LegacyResult, 'mode' | 'reason'> = {
   established: 0,
   cursor: '',
   pinned: false,
+  verified: false,
 };
 
 /** The plan's own rows, in the shape ownership judges. They are durable and not yet committed. */
@@ -206,23 +221,39 @@ type Admission = {
   readonly admitted: boolean;
   readonly reason: string;
   readonly links: readonly MaterializedLink[];
+  readonly verification: VerificationPlan;
 };
 
-/** What the enumeration and the records together admit. Anything short of all of it pins. */
+/**
+ * What the enumeration and the records together admit. Anything short of all of it pins.
+ *
+ * The re-verification happens HERE, inside the operation that holds the guard, and its verdict
+ * travels in the plan. A source proved by a pass whose graph read was taken somewhere else is a
+ * source proved against a substrate that could have moved since.
+ */
 async function admit(
   graph: GraphTransaction,
   db: SqliteHandle,
   payload: z.infer<typeof SourcePayload>,
+  now: Date,
 ): Promise<Admission> {
-  const pinned = (reason: string): Admission => ({ admitted: false, reason, links: [] });
-  const record = readSourceRecord(db, payload.sourceId);
-  if (record === undefined) {
-    return pinned('no source record accounts for this source');
-  }
-  if (record.verificationStatus !== 'verified') {
-    return pinned(`source verification is ${record.verificationStatus}`);
-  }
   const raw = await readLegacyRawNodes(graph, payload.sourceId);
+  const verification = planSourceVerification(db, {
+    sourceId: payload.sourceId,
+    bounds: { low: payload.archiveRowidLow, high: payload.archiveRowidHigh },
+    raw,
+    now,
+    reverify: payload.reverify,
+  });
+  const pinned = (reason: string): Admission => ({
+    admitted: false,
+    reason,
+    links: [],
+    verification,
+  });
+  if (verification.status !== 'verified') {
+    return pinned(verification.reason);
+  }
   if (raw === undefined) {
     return pinned('the graph holds no projection of this source');
   }
@@ -244,6 +275,7 @@ async function admit(
     admitted: true,
     reason: 'every incident relationship is classified',
     links: plan.links,
+    verification,
   };
 }
 
@@ -289,12 +321,14 @@ export const legacyMaterializationPublication = new PublicationOperation({
         effects: [{ kind: LEGACY_EFFECTS.census, detail: { endpoints: endpoints.length } }],
       };
     }
-    const admission = await admit(context.graph, context.db, payload);
+    const admission = await admit(context.graph, context.db, payload, context.now);
     const links = [...admission.links];
     const data: SourcePlanData = {
       ...payload,
       gate: admission.admitted ? 'admitted' : 'pinned',
       reason: admission.reason,
+      // Parsed rather than spread: the plan carried into the intent is the validated shape.
+      verification: VerificationSchema.parse(admission.verification),
       links,
       scopes: [...planScopes(payload.sourceId, links)],
       nodes: [...planNodes(links)],
@@ -322,8 +356,10 @@ export const legacyMaterializationPublication = new PublicationOperation({
           : ({ status: 'deferred', reason: 'cohort_not_fully_accounted' } as const),
       );
     }
-    if (readSourceRecord(context.db, data.sourceId) === undefined) {
-      return Promise.resolve({ status: 'rejected', reason: 'source_unknown' } as const);
+    // The record may not exist yet: this operation is what writes it. What is refused is a plan
+    // whose verdict names a different source than the payload does.
+    if (data.verification.sourceId !== data.sourceId) {
+      return Promise.resolve({ status: 'rejected', reason: 'verification_names_another_source' });
     }
     return Promise.resolve({ status: 'valid' } as const);
   },
@@ -346,7 +382,13 @@ export const legacyMaterializationPublication = new PublicationOperation({
       };
     }
     if (data.gate === 'pinned') {
-      return { ...EMPTY, mode: 'source', pinned: true, reason: data.reason };
+      return {
+        ...EMPTY,
+        mode: 'source',
+        pinned: true,
+        verified: data.verification.status === 'verified',
+        reason: data.reason,
+      };
     }
     const rows = plannedIncidence(data);
     let projected = 0;
@@ -361,7 +403,10 @@ export const legacyMaterializationPublication = new PublicationOperation({
       mode: 'source',
       materialized: data.links.length,
       projected,
-      reason: data.reason,
+      verified: true,
+      // What the pass concluded about the SOURCE. The classification reason only decides
+      // anything when it pins, and then it is the reason the pin carries.
+      reason: data.verification.reason,
     };
   },
   prepareSqlite(context, data) {
@@ -400,6 +445,9 @@ export const legacyMaterializationPublication = new PublicationOperation({
       );
       return undefined;
     }
+    // The verdict is written here, in the transaction that acknowledges the operation that took
+    // it. A pinned source gets its reason recorded and nothing else.
+    applySourceVerification(context.db, data.verification);
     if (data.gate === 'pinned') {
       return undefined;
     }

@@ -106,3 +106,23 @@ export async function seedGraphOnlyEpisode(
     () => undefined,
   );
 }
+
+/**
+ * Moves an episode's stored digest, the way a projection that drifted from its archived bytes
+ * would read. Reversible: the node keeps every other property and the old digest is the caller's
+ * to put back.
+ */
+export async function driftEpisodeDigest(
+  driver: Driver,
+  episodeId: string,
+  digest: string,
+): Promise<void> {
+  await runWrite(
+    driver,
+    {
+      cypher: 'MATCH (e:Episode { id: $id }) SET e.content_hash = $digest',
+      parameters: { id: episodeId, digest },
+    },
+    () => undefined,
+  );
+}

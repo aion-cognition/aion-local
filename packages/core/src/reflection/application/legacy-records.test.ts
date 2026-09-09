@@ -15,6 +15,7 @@ import {
   unaccountedCohortMembers,
   type PlannedLink,
 } from './legacy-records.js';
+import { readRelationScope } from '../../evidence/application/dependencies.js';
 import { certifyNodeSupport } from '../../evidence/application/node-support.js';
 import { committedIncidenceForNode } from '../../infrastructure/sqlite/committed-evidence.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
@@ -320,6 +321,9 @@ describe('the census seal', () => {
       'sqlite:mention:in',
       'sqlite:participation:in',
       'sqlite:source_coverage:in',
+      'sqlite:stated_confirmation:in',
+      'sqlite:stated_correction:in',
+      'sqlite:stated_derivation:in',
     ]);
   });
 
@@ -364,6 +368,27 @@ describe('the census seal', () => {
       readScopeVersion(store.db, { endpointId: SOURCE, relationClass: 'sqlite:mention:out' })
         ?.censusStatus,
     ).toBe('unknown');
+  });
+
+  it('counts the corrections that never arrived, so a decision about the node can be checked', () => {
+    // Before the seal the scope is unverified, and a judgment resting on "nothing corrects this"
+    // pins rather than deciding. Nothing has counted, so an empty read is silence.
+    const scope = { kind: 'node' as const, endpointId: NODE, scope: 'sqlite:stated_correction:in' };
+    expect(readRelationScope(store.db, { ...scope, empty: true }).status).toBe('unverified');
+
+    const endpoints = [{ endpointId: NODE, scopes: [...endpointCensusScopes(store.db, NODE)] }];
+    prepareCensusSeal(store.db, { operationId: 'seal', endpoints, observedAt: NOW });
+    acknowledgeCensusSeal(
+      store.db,
+      { operationId: 'seal', endpoints, observedAt: NOW },
+      NOW.toISOString(),
+    );
+
+    const reading = readRelationScope(store.db, { ...scope, empty: true });
+    expect(reading.status).toBe('verified');
+    expect(reading.status === 'verified' && reading.dependency.scope).toBe(
+      'sqlite:stated_correction:in',
+    );
   });
 
   it('drops a counted endpoint out of the page the next seal reads', () => {

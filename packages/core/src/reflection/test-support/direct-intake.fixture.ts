@@ -1,6 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 import { randomUUID } from 'node:crypto';
 
+import type { MergePublisher } from '../../evidence/application/merge-recovery.js';
 import { GraphTransaction } from '../../infrastructure/graph/connection.js';
 import type {
   PublicationOutcome,
@@ -10,6 +11,7 @@ import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { reflectionCompletionPublication } from '../application/completion-publication.js';
 import { intakePublication } from '../application/intake-publication.js';
 import type { IntakePublisher } from '../application/intake-transport.js';
+import { claimMergePublication } from '../application/merge-publication.js';
 import type { CompletionPublisher } from '../application/worker.js';
 
 /**
@@ -34,6 +36,23 @@ export function directIntakePublisher(
   return directPublisher(intakePublication, driver, db, clock);
 }
 
+/**
+ * The same, for a claim merge. The batch's recovery branch is the subject of its own cases, so
+ * this publisher holds no pending slot and recovers nothing: what it supplies is the operation.
+ */
+export function directMergePublisher(
+  driver: Driver,
+  db: SqliteHandle,
+  clock: () => Date = () => new Date(),
+): MergePublisher {
+  const publisher = directPublisher(claimMergePublication, driver, db, clock);
+  return {
+    publish: (request): Promise<PublicationOutcome> => publisher.publish(request),
+    hasPending: (): boolean => false,
+    recover: (): Promise<PublicationOutcome | undefined> => Promise.resolve(undefined),
+  };
+}
+
 /** The same, for the settlement a finished reflection run publishes. */
 export function directCompletionPublisher(
   driver: Driver,
@@ -43,12 +62,19 @@ export function directCompletionPublisher(
   return directPublisher(reflectionCompletionPublication, driver, db, clock);
 }
 
+type DirectPublisher = {
+  publish(request: {
+    readonly operationId: string;
+    readonly payload: unknown;
+  }): Promise<PublicationOutcome>;
+};
+
 function directPublisher(
   operation: PublicationHandler,
   driver: Driver,
   db: SqliteHandle,
   clock: () => Date,
-): IntakePublisher & CompletionPublisher {
+): IntakePublisher & CompletionPublisher & DirectPublisher {
   // The coverage registry is what an acceptance checks its epoch against, and coordinator
   // initialization is what mints it on a real substrate. A test substrate takes the preparing
   // record, which is the state a real one is in before coverage is activated.

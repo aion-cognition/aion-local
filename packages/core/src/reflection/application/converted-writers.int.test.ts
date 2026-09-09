@@ -25,6 +25,7 @@ import { PublicationCoordinator } from '../../infrastructure/publication/coordin
 import { PUBLICATION_HANDLERS } from '../../infrastructure/publication/handlers.js';
 import type { PublicationBoundary } from '../../infrastructure/publication/types.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
+import { readScopeVersion } from '../../infrastructure/sqlite/evidence-scope.js';
 import { readActiveGeneration } from '../../infrastructure/sqlite/processing-generations.js';
 import { listReflectionJobs } from '../../infrastructure/sqlite/reflection-queue.js';
 import { readSourceRecord } from '../../infrastructure/sqlite/source-identity.js';
@@ -248,6 +249,30 @@ it('settles a finished run through the coordinator and clears its queue row', as
     'accepted_pass_applied',
   ]);
   expect(readActiveGeneration(store.db, accepted.episode_id)?.inventoryComplete).toBe(true);
+});
+
+it('advances the scopes a stated reference names, through the acceptance that carried it', async () => {
+  const marker = `stated-${String(serial)}`;
+  const first = await handleReflection(intake, payload(`${marker}-target`), {
+    identity: `session-${marker}`,
+    now: NOW,
+  });
+  const scope = { endpointId: first.episode_id, relationClass: 'sqlite:stated_correction:in' };
+  // Nobody has stated anything about it, so the counter does not exist. An absent scope has no
+  // token on purpose: minting one would turn "nobody has looked" into a claim.
+  expect(readScopeVersion(store.db, scope)).toBeUndefined();
+
+  await handleReflection(
+    intake,
+    { ...payload(marker), provenance: { supersedes: [first.episode_id] } },
+    { identity: `session-${marker}`, now: NOW },
+  );
+
+  const advanced = readScopeVersion(store.db, scope);
+  expect(advanced?.publishedRevision).toBe(1);
+  expect(advanced?.pendingOperationId).toBeNull();
+  // Advanced, and still uncounted: an acceptance states one thing and counts no population.
+  expect(advanced?.censusStatus).toBe('unknown');
 });
 
 it('drains the source-index rows nothing else claims, and settles their obligation', async () => {

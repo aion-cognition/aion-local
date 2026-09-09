@@ -24,6 +24,7 @@ import {
   PublicationCoordinator,
   PublicationRecoveryLoop,
   INSTALLED_PUBLICATION_HANDLERS,
+  CoveredJudgmentEvidence,
   EvidenceResolver,
   purgeServedItemsIdleSince,
   queueLagSnapshot,
@@ -296,6 +297,9 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
     // One resolver for the process: the covered recall path and the worker's index drain read
     // the same stores through the same budgets.
     const resolver = new EvidenceResolver({ driver, db: store.db, logger });
+    // The seam a judging path asks before it spends a model call. It checks coverage per pair,
+    // because a vantage pinned here would judge for the life of the process.
+    const judgmentEvidence = new CoveredJudgmentEvidence({ db: store.db, resolver });
     const covered = checkedRecallDeps({ ...recall, coordinator: publications, resolver });
     const stages = reflectionStages(config);
     // Ahead of anything that can accept a source. A source accepted with no published policy
@@ -309,15 +313,15 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
         driver,
         db: store.db,
         provider: reflectProvider,
+        // A destructive stage judgment runs on certified evidence or abstains.
         runner: new ReflectionOrchestrator(
-          { driver, db: store.db, provider: reflectProvider, logger },
+          { driver, db: store.db, provider: reflectProvider, logger, evidence: judgmentEvidence },
           stages,
         ),
         logger,
         // Where a finished run settles what it owed. There is no second way to complete a job.
         publications,
-        // The same resolver the covered recall path holds. One per process: a second would read
-        // the same stores through a second set of caches and answer the same question twice.
+        // The process's one resolver, shared with the covered recall path.
         resolver,
       },
       workerOptions(config),
@@ -404,6 +408,8 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
         // The position an uncertain apply reconciles against. The same coordinator the writers
         // publish through, so a receipt one of them left behind is the receipt this reads.
         publications,
+        // The same seam the pipeline judges through: one reading of the records, not two.
+        evidence: judgmentEvidence,
         operations: maintenanceOperations,
       },
       {

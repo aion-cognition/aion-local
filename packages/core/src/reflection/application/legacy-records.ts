@@ -33,12 +33,25 @@ import {
  */
 
 /**
- * The roles a source can stand behind a retained node in, which is what support is read from.
+ * The roles a node's census has to account for.
+ *
+ * The four support roles, because that is what a repair sweep reads before it suppresses a node.
+ * The three stated roles too, because a correction, a confirmation or a derivation arriving at a
+ * node is what invalidates a decision made about it, and a scope nobody counted cannot say that
+ * none arrived: the judgment pins forever on a claim that has never been corrected.
  *
  * Each is counted at the direction the scope registry puts it under, not at a uniform `in`. A
  * census filed under a direction nothing reads is a census nobody can see.
  */
-const SUPPORT_ROLES = ['extraction', 'mention', 'participation', 'source_coverage'] as const;
+const NODE_ROLES = [
+  'extraction',
+  'mention',
+  'participation',
+  'source_coverage',
+  'stated_correction',
+  'stated_confirmation',
+  'stated_derivation',
+] as const;
 
 /**
  * A link as the stored plan carries it. The scope role is decided when the plan is made and read
@@ -222,7 +235,7 @@ export function endpointCensusScopes(db: SqliteHandle, endpointId: string): read
       .filter((scope) => isRegisteredScope(scope) && scopeAuthority(scope) === 'sqlite'),
   );
   if (isNodeEndpoint(db, endpointId)) {
-    for (const role of SUPPORT_ROLES) {
+    for (const role of NODE_ROLES) {
       scopes.add(durableRoleScope(role, nodeScopeDirection(role)));
     }
     scopes.add(NARRATIVE_SCOPES[0]);

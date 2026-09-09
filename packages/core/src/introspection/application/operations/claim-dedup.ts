@@ -7,14 +7,18 @@ import {
   type JudgmentEvidenceOutcome,
   type WithheldWork,
 } from '../../../evidence/application/judgment.js';
-import { applyMergeWithRecovery } from '../../../evidence/application/merge-recovery.js';
+import {
+  applyMergeWithRecovery,
+  type MergePublisher,
+} from '../../../evidence/application/merge-recovery.js';
 import {
   findRecentCurrentClaims,
   loadClaimDedupDetails,
-  mergeClaimPair,
+  type MergeClaimPairResult,
   type RecentClaim,
 } from '../../../infrastructure/graph/claim-dedup-queries.js';
 import { findContradictionCandidates } from '../../../infrastructure/graph/supersession-queries.js';
+import { PublicationUnavailable } from '../../../infrastructure/publication/errors.js';
 import {
   isLedgerApplied,
   listLedgerKeys,
@@ -139,6 +143,32 @@ function toPair(
     candidateLabel: candidate.label,
     candidate: statementWithContext(candidate.text, sides?.[1]),
   };
+}
+
+/**
+ * Publishes one pair's merge and answers with what the write found.
+ *
+ * A publication that did not acknowledge is one failed pair: nothing is stamped and the pair
+ * stays owed. A retryable outcome the coordinator could not settle reaches the recovery above as
+ * the typed error it is, which is what makes the uncertain-commit branch reachable at all.
+ */
+async function publishClaimMerge(
+  publisher: MergePublisher,
+  operationId: string,
+  survivorId: string,
+  loserId: string,
+  now: Date,
+): Promise<MergeClaimPairResult> {
+  const outcome = await publisher.publish({
+    kind: 'semantic_write',
+    operationId,
+    payload: { survivorId, loserId, now: now.toISOString() },
+  });
+  if (outcome.status !== 'acknowledged') {
+    throw new PublicationUnavailable(outcome.reason, operationId);
+  }
+  const result = outcome.result as Partial<MergeClaimPairResult>;
+  return { merged: result.merged === true, episodesFolded: result.episodesFolded ?? 0 };
 }
 
 /** A receipt says an operation landed. Only its own result says a merge did. */
@@ -337,17 +367,23 @@ export function claimDedupOperation(): IntrospectionOperation {
           { id: subject.id, occurredAt: subjectDetail.occurredAt },
           { id: neighbor.id, occurredAt: candidateDetail.occurredAt },
         );
+        // A merge is a publication. Without a publisher the pair is left owed rather than
+        // written through a path whose lost commit response nobody could resolve.
+        const publisher = ctx.publications;
+        if (publisher === undefined) {
+          failed += 1;
+          ctx.logger.warn(
+            { subjectId: subject.id, candidateId: neighbor.id },
+            'claim dedup has no publisher to merge through; the pair stays owed',
+          );
+          continue;
+        }
         // One failure here is one failed pair. Nothing is stamped, so the pair and its subject
         // are both still owed, and the pairs this run already merged keep their tally.
         const applied = await applyMergeWithRecovery({
           operationId: pairKey,
-          attempt: () =>
-            mergeClaimPair(ctx.driver, {
-              survivorId: survivor.id,
-              loserId: loser.id,
-              now: ctx.now,
-            }),
-          ...(ctx.publications === undefined ? {} : { coordinator: ctx.publications }),
+          attempt: () => publishClaimMerge(publisher, pairKey, survivor.id, loser.id, ctx.now),
+          coordinator: publisher,
           logger: ctx.logger,
         });
         if (applied.status === 'failed' || applied.status === 'halted') {

@@ -1,7 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 
 import { BITEMPORAL_PROPERTIES, currentOnly, supersedeInTransaction } from './bitemporal.js';
-import { inWriteTransaction, runRead } from './connection.js';
+import { inWriteTransaction, runRead, type GraphTransaction } from './connection.js';
 import { upsertEdgeInTransaction } from './edges.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
 import { BASE_NODE_LABEL, EXTRACTION_TYPE } from './labels.js';
@@ -171,7 +171,19 @@ export async function mergeClaimPair(
   driver: Driver,
   input: MergeClaimPairInput,
 ): Promise<MergeClaimPairResult> {
-  return inWriteTransaction(driver, async (tx) => {
+  return inWriteTransaction(driver, (tx) => mergeClaimPairInTransaction(tx, input));
+}
+
+/**
+ * The same merge inside a caller's transaction, which is where the converted writer runs it: a
+ * publication holds the guard for the whole operation, and a second transaction opened underneath
+ * it would commit outside the receipt that is supposed to say whether it landed.
+ */
+export async function mergeClaimPairInTransaction(
+  tx: GraphTransaction,
+  input: MergeClaimPairInput,
+): Promise<MergeClaimPairResult> {
+  {
     const current = await tx.run(
       CURRENT_CLAIM_IDS,
       { ids: [input.survivorId, input.loserId] },
@@ -205,5 +217,5 @@ export async function mergeClaimPair(
     });
 
     return { merged: true, episodesFolded: episodes.length };
-  });
+  }
 }

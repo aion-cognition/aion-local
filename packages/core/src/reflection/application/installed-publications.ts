@@ -1,6 +1,7 @@
 import { reflectionCompletionPublication } from './completion-publication.js';
 import { intakePublication } from './intake-publication.js';
 import { legacyMaterializationPublication } from './legacy-materialization.js';
+import { claimMergePublication } from './merge-publication.js';
 import { projectionRebuildPublication } from './rebuild-publication.js';
 import { statedReferencesPublication } from './reference-publication.js';
 import { PUBLICATION_HANDLERS } from '../../infrastructure/publication/handlers.js';
@@ -25,4 +26,5 @@ export const INSTALLED_PUBLICATION_HANDLERS: readonly PublicationHandler[] = [
   projectionRebuildPublication,
   reflectionCompletionPublication,
   legacyMaterializationPublication,
+  claimMergePublication,
 ];
