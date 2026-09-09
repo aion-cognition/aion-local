@@ -2,10 +2,10 @@ import {
   acceptsHookCapture,
   ApiUsageRecorder,
   bootstrapBackbone,
+  checkedRecallDeps,
   CueCache,
   deleteServedItems,
   GraphConnection,
-  handleRecall,
   handleReflection,
   IdleNarrativeSweeper,
   Introspector,
@@ -28,6 +28,7 @@ import {
   statedReferencesPublication,
   purgeServedItemsIdleSince,
   queueLagSnapshot,
+  recallResultFor,
   readMemberName,
   RecallSideEffects,
   reconcileResidentModels,
@@ -36,6 +37,7 @@ import {
   ReflectionOrchestrator,
   reflectionStages,
   ReflectionWorker,
+  runCheckedRecall,
   routingSummary,
   SessionManager,
   SessionNarrativeCloser,
@@ -297,6 +299,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       logger,
       onRecalled: sideEffects.onRecalled,
     };
+    const covered = checkedRecallDeps({ ...recall, coordinator: publications });
     const stages = reflectionStages(config);
     worker = new ReflectionWorker(
       {
@@ -402,7 +405,10 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
     introspector.start();
 
     const backend: ToolBackend = {
-      recall: (args, identity) => handleRecall(recall, args, { identity }),
+      // The one covered recall entry point: coverage is decided before anything is spent, and
+      // what a successful read writes commits at the publication boundary this coordinator owns.
+      recall: async (args, identity) =>
+        recallResultFor(await runCheckedRecall(covered, args, { identity })),
       reflection: (args, identity) => handleReflection(intake, args, { identity }),
       ...archiveToolBackend({ driver, db: store.db, logger }),
     };

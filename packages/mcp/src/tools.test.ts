@@ -7,7 +7,15 @@ import {
   type Logger,
 } from '@aion/core';
 import { admittedAll } from '@aion/core/recall/domain/test-support/admission.fixture.js';
-import { MemoryPackSchema, type Cue, type MemoryPack, type StageTimingsMs } from '@aion/protocol';
+import {
+  MemoryPackSchema,
+  RecallRefusalSchema,
+  type CoverageRefusal,
+  type Cue,
+  type MemoryPack,
+  type RecallRefusal,
+  type StageTimingsMs,
+} from '@aion/protocol';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -151,6 +159,17 @@ describe('tool definitions', () => {
   });
 });
 
+const REFUSAL: CoverageRefusal = {
+  contract_version: 1,
+  reason: 'before_horizon',
+  requested: { knew_at: '2026-01-01T00:00:00.000Z', now: '2026-09-08T12:00:00.000Z' },
+  bounds: { history_since: '2026-09-08T02:00:00.000Z', coverage_state: 'active' },
+};
+
+function refused(): RecallRefusal {
+  return { status: 'coverage_refusal', coverage_refusal: REFUSAL };
+}
+
 describe('recall results', () => {
   it('returns the rendered block as text and the pack as structured content', async () => {
     const result = await callTool(
@@ -163,6 +182,45 @@ describe('recall results', () => {
 
     expect(result.content).toEqual([{ type: 'text', text: pack().rendered_text }]);
     expect(MemoryPackSchema.safeParse(result.structuredContent).success).toBe(true);
+  });
+
+  /**
+   * A refusal is its own branch, on both halves of the answer. A client that renders only the
+   * text block is told the request was refused rather than that nothing was found, and one that
+   * parses `structuredContent` branches on `status` instead of hitting an unparseable pack.
+   */
+  it('returns a refusal as its own branch, in the text and in the structure', async () => {
+    const backend: ToolBackend = {
+      ...backendReturning(),
+      recall: () => Promise.resolve(refused()),
+    };
+
+    const result = await callTool(backend, logger, 'recall', { query: 'q' }, 'session-a');
+
+    expect(result.structuredContent).toEqual(refused());
+    expect(RecallRefusalSchema.safeParse(result.structuredContent).success).toBe(true);
+    expect(MemoryPackSchema.safeParse(result.structuredContent).success).toBe(false);
+    const { text } = result.content[0] as { text: string };
+    expect(text).toContain('before_horizon');
+    expect(text).toContain('2026-09-08T02:00:00.000Z');
+    expect(result.isError).toBeUndefined();
+  });
+
+  it('publishes both branches, with the successful one exactly as it was advertised before', () => {
+    const validator = new AjvJsonSchemaValidator();
+    const advertised = (TOOL_DEFINITIONS[0]?.outputSchema ?? {}) as Record<string, unknown>;
+    const compiled = validator.getValidator(advertised);
+
+    expect(compiled(pack()).valid).toBe(true);
+    expect(compiled(refused()).valid).toBe(true);
+    expect(advertised.type).toBe('object');
+    const branches = advertised.anyOf as readonly unknown[];
+    const packSchema = z.toJSONSchema(MemoryPackSchema, { io: 'output' }) as Record<
+      string,
+      unknown
+    >;
+    delete packSchema.$schema;
+    expect(branches[0]).toEqual(packSchema);
   });
 });
 

@@ -1,14 +1,15 @@
-import { ReflectionNotStoredError, type Logger } from '@aion/core';
+import { recallText, ReflectionNotStoredError, type Logger } from '@aion/core';
 import {
   MemoryPackSchema,
   RecallInputSchema,
+  RecallRefusalSchema,
   ReflectionInputSchema,
   ReflectionOutputSchema,
   SourceInputSchema,
   SourceOutputSchema,
   SourceSearchInputSchema,
   SourceSearchOutputSchema,
-  type RecallOutput,
+  type RecallResult,
   type ReflectionOutput,
   type SourceOutput,
   type SourceSearchOutput,
@@ -61,6 +62,18 @@ function jsonSchemaFor(schema: z.ZodType, io: 'input' | 'output'): JsonObjectSch
   return converted as JsonObjectSchema;
 }
 
+/**
+ * A result with two shapes, published as one object schema.
+ *
+ * A tool's output schema is a JSON Schema object, and a bare union converts to an `anyOf`
+ * fragment with no `type` at all, which is not that. The branches are converted exactly as they
+ * would be alone, so the successful shape a client compiles today is byte-for-byte the one it
+ * compiles now, with a second permitted shape beside it.
+ */
+function jsonSchemaForEither(branches: readonly z.ZodType[]): JsonObjectSchema {
+  return { type: 'object', anyOf: branches.map((branch) => jsonSchemaFor(branch, 'output')) };
+}
+
 const VERSION_META = { [DESCRIPTIONS_VERSION_META_KEY]: DESCRIPTIONS_VERSION } as const;
 
 export const TOOL_DEFINITIONS: readonly Tool[] = [
@@ -69,7 +82,7 @@ export const TOOL_DEFINITIONS: readonly Tool[] = [
     title: RECALL_TITLE,
     description: RECALL_DESCRIPTION,
     inputSchema: jsonSchemaFor(RecallInputSchema, 'input'),
-    outputSchema: jsonSchemaFor(MemoryPackSchema, 'output'),
+    outputSchema: jsonSchemaForEither([MemoryPackSchema, RecallRefusalSchema]),
     annotations: {
       title: RECALL_TITLE,
       // Recall writes access metadata and reinforcement signals, so it is not read-only,
@@ -136,7 +149,7 @@ export const TOOL_DEFINITIONS: readonly Tool[] = [
  * whatever they need to observe.
  */
 export type ToolBackend = {
-  readonly recall: (args: unknown, identity: string) => Promise<RecallOutput>;
+  readonly recall: (args: unknown, identity: string) => Promise<RecallResult>;
   readonly reflection: (args: unknown, identity: string) => Promise<ReflectionOutput>;
   readonly sourceSearch: (args: unknown) => Promise<{ output: SourceSearchOutput; text: string }>;
   readonly source: (args: unknown) => Promise<{ output: SourceOutput; text: string }>;
@@ -203,11 +216,14 @@ export async function callTool(
   }
 
   try {
+    // A refusal is handled here deliberately rather than falling out as an internal error or a
+    // pack with nothing in it: the request was not answered, and an empty pack says the
+    // substrate looked and found nothing. Both branches carry matching text and structure.
     if (name === RECALL_TOOL_NAME) {
-      const pack = await backend.recall(args, identity);
+      const result = await backend.recall(args, identity);
       return {
-        content: [{ type: 'text', text: pack.rendered_text }],
-        structuredContent: pack,
+        content: [{ type: 'text', text: recallText(result) }],
+        structuredContent: result,
       };
     }
 
