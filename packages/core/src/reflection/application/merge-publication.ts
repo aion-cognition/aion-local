@@ -76,6 +76,15 @@ const Payload = z.strictObject({
    * would compare the substrate with itself and call every stale decision current.
    */
   judged: Revision.optional(),
+  /**
+   * The coverage contract that judgment was made under, carried for the same reason.
+   *
+   * The dependency set says what the decision read; this says what it was allowed to read. An
+   * activation between the judgment and this write replaces the contract without touching a single
+   * dependency, so a write that sampled the epoch here would fence against the very change it is
+   * supposed to notice.
+   */
+  coverageEpoch: z.string().min(1).optional(),
 });
 
 const Carried = z.strictObject({
@@ -246,7 +255,10 @@ export const claimMergePublication = new PublicationOperation({
     return Promise.resolve({
       data,
       expected: {
-        coverageEpoch: coverage.epoch,
+        // The judgment's own epoch where it named one. The coordinator fences the write against
+        // the contract now in force, which only means anything if what it compares is the contract
+        // the decision was taken under.
+        coverageEpoch: payload.coverageEpoch ?? coverage.epoch,
         evidence: buildEvidenceRevision(payload.judged?.dependencies ?? []),
         sources: [],
         heads: [],
@@ -269,6 +281,14 @@ export const claimMergePublication = new PublicationOperation({
       return Promise.resolve({
         status: 'rejected',
         reason: 'merge_without_judged_evidence',
+      } as const);
+    }
+    // Half a binding is not one. A decision that names what it read but not what it was allowed to
+    // read leaves the epoch to be sampled here, which is the comparison that never fails.
+    if (data.coverageEpoch === undefined) {
+      return Promise.resolve({
+        status: 'rejected',
+        reason: 'merge_without_coverage_binding',
       } as const);
     }
     // Under the guard, against the evidence the judge actually decided on. Currency alone cannot

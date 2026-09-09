@@ -9,7 +9,10 @@ import { seedSource, commitSourceState } from '../../evidence/test-support/evide
 import type { GraphTransaction } from '../../infrastructure/graph/connection.js';
 import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
 import type { PublicationContext } from '../../infrastructure/publication/types.js';
-import { prepareCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
+import {
+  prepareCoverageContract,
+  readCurrentCoverageContract,
+} from '../../infrastructure/sqlite/coverage-contract.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 
 it('rejects an explicitly supplied merge evidence revision after its source changes', async () => {
@@ -39,6 +42,7 @@ it('rejects an explicitly supplied merge evidence revision after its source chan
       loserId: 'loser',
       now: now.toISOString(),
       judged: revision,
+      coverageEpoch: readCurrentCoverageContract(store.db)?.epoch,
     });
     expect((await claimMergePublication.check(context, plan)).status).toBe('valid');
     commitSourceState(store.db, {

@@ -14,6 +14,7 @@ import { refusingProvider } from '../../../infrastructure/providers/test-support
 import type { Provider } from '../../../infrastructure/providers/types.js';
 import { PublicationInvariantError } from '../../../infrastructure/publication/errors.js';
 import { buildEvidenceRevision } from '../../../infrastructure/publication/preconditions.js';
+import { readCurrentCoverageContract } from '../../../infrastructure/sqlite/coverage-contract.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { isLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
 import { directMergePublisher } from '../../../reflection/test-support/direct-intake.fixture.js';
@@ -311,6 +312,9 @@ function assembled(): JudgmentAssembly {
       },
     ],
     revision: judgedRevision(),
+    // The contract the judgment was made under. The merge refuses a decision that names what it
+    // read without naming what it was allowed to read.
+    coverageEpoch: readCurrentCoverageContract(db)?.epoch,
     omitted: [],
   };
 }

@@ -158,14 +158,19 @@ async function publishClaimMerge(
   operationId: string,
   survivorId: string,
   loserId: string,
-  judged: EvidenceRevision | undefined,
+  decision: { readonly judged: EvidenceRevision; readonly coverageEpoch: string },
 ): Promise<MergeClaimPairResult> {
   const outcome = await publisher.publish({
     kind: 'semantic_write',
     operationId,
     // No clock: the substrate's acceptance clock stamps the write. A payload carrying this
     // tick's wall clock under a stable pair identity is identity reuse on the next tick.
-    payload: { survivorId, loserId, ...(judged === undefined ? {} : { judged }) },
+    payload: {
+      survivorId,
+      loserId,
+      judged: decision.judged,
+      coverageEpoch: decision.coverageEpoch,
+    },
   });
   if (outcome.status !== 'acknowledged') {
     throw new PublicationUnavailable(outcome.reason, operationId);
@@ -394,7 +399,8 @@ export function claimDedupOperation(): IntrospectionOperation {
           ctx.evidence !== undefined && assembled.status === 'ready'
             ? assembled.revision
             : undefined;
-        if (decided === undefined) {
+        const coverageEpoch = assembled.status === 'ready' ? assembled.coverageEpoch : undefined;
+        if (decided === undefined || coverageEpoch === undefined) {
           failed += 1;
           ctx.logger.warn(
             { subjectId: subject.id, candidateId: neighbor.id },
@@ -406,7 +412,10 @@ export function claimDedupOperation(): IntrospectionOperation {
         const applied = await applyMergeWithRecovery({
           operationId: mergeOperationId,
           attempt: () =>
-            publishClaimMerge(publisher, mergeOperationId, survivor.id, loser.id, decided),
+            publishClaimMerge(publisher, mergeOperationId, survivor.id, loser.id, {
+              judged: decided,
+              coverageEpoch,
+            }),
           coordinator: publisher,
           logger: ctx.logger,
         });

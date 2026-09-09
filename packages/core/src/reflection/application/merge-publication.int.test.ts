@@ -19,6 +19,7 @@ import { PUBLICATION_HANDLERS } from '../../infrastructure/publication/handlers.
 import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
 import type { PublicationBoundary } from '../../infrastructure/publication/types.js';
 import { committedIncidenceForNode } from '../../infrastructure/sqlite/committed-evidence.js';
+import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import { evidenceLinkId } from '../../infrastructure/sqlite/evidence-links.js';
 import {
@@ -107,6 +108,11 @@ function mention(sourceId: string, nodeId: string, operationId: string): void {
  * refused without proof a later reader can re-verify; every case that expects a merge to land
  * supplies real source-state proof rather than an absent one the guard cannot check.
  */
+/** The contract the decision was made under, which the guard now requires beside the binding. */
+function epoch(): string | undefined {
+  return readCurrentCoverageContract(store.db)?.epoch;
+}
+
 function judged(sourceId: string) {
   seedSource(store.db, {
     sourceId,
@@ -166,6 +172,7 @@ it('carries the absorbed claim’s evidence to the survivor and retires its own 
       loserId: loser,
       now: NOW.toISOString(),
       judged: judged('episode-1'),
+      coverageEpoch: epoch(),
     },
   });
 
@@ -198,6 +205,7 @@ it('recovers a merge interrupted between the graph write and the acknowledgment'
         loserId: loser,
         now: NOW.toISOString(),
         judged: judged('episode-2'),
+        coverageEpoch: epoch(),
       },
     }),
   ).rejects.toThrow();

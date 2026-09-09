@@ -63,6 +63,15 @@ export type JudgmentAssembly =
       readonly revision: EvidenceRevision;
       /** Optional context left out, disclosed without lowering what the required units say. */
       readonly omitted: readonly EvidenceIssue[];
+      /**
+       * The coverage contract in force when this judgment was assembled.
+       *
+       * It travels with the decision because it is part of what the decision was made under: a
+       * write that re-read the epoch at publication time would compare the substrate with itself
+       * and call a judgment taken under a contract that has since been replaced current. A seam
+       * that does not check coverage names none.
+       */
+      readonly coverageEpoch?: string;
     }
   | {
       readonly status: 'abstained';
@@ -132,6 +141,8 @@ export type JudgmentEvidenceOutcome =
       readonly status: 'ready';
       readonly sides: readonly [JudgmentSide, JudgmentSide];
       readonly revision: EvidenceRevision;
+      /** The coverage contract the assembly was made under, where the seam checked one. */
+      readonly coverageEpoch?: string;
     }
   | { readonly status: 'withheld'; readonly withheld: WithheldJudgment };
 
@@ -148,7 +159,12 @@ export async function judgmentEvidenceFor(
   }
   const assembly = await evidence.assemble(pair);
   if (assembly.status === 'assembled') {
-    return { status: 'ready', sides: assembly.sides, revision: assembly.revision };
+    return {
+      status: 'ready',
+      sides: assembly.sides,
+      revision: assembly.revision,
+      ...(assembly.coverageEpoch === undefined ? {} : { coverageEpoch: assembly.coverageEpoch }),
+    };
   }
   if (assembly.status === 'abstained') {
     return {

@@ -21,6 +21,7 @@ import { PUBLICATION_HANDLERS } from '../../infrastructure/publication/handlers.
 import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
 import type { PublicationBoundary } from '../../infrastructure/publication/types.js';
 import { committedIncidenceForNode } from '../../infrastructure/sqlite/committed-evidence.js';
+import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import { evidenceLinkId } from '../../infrastructure/sqlite/evidence-links.js';
 import {
@@ -176,6 +177,7 @@ async function merge(survivor: string, loser: string, sourceId: string) {
       loserId: loser,
       now: NOW.toISOString(),
       judged: judged(sourceId),
+      coverageEpoch: readCurrentCoverageContract(store.db)?.epoch,
     },
   });
 }
@@ -208,7 +210,12 @@ it('does not revive declined materialization in a later successful merge', async
   const outcome = await coordinator.publish({
     kind: 'semantic_write',
     operationId: `merge-after-decline-${String(serial)}`,
-    payload: { survivorId: survivor, loserId: loser, judged: judged(first) },
+    payload: {
+      survivorId: survivor,
+      loserId: loser,
+      judged: judged(first),
+      coverageEpoch: readCurrentCoverageContract(store.db)?.epoch,
+    },
   });
   expect(outcome.status === 'acknowledged' && outcome.result).toMatchObject({ merged: true });
   expect(committedIncidenceForNode(store.db, survivor).map((r) => r.sourceId)).toContain(second);

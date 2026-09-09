@@ -51,7 +51,13 @@ export class CoveredJudgmentEvidence implements JudgmentEvidence {
         revision: emptyRevision(),
       };
     }
-    return this.#resolver.assembleJudgment(pair, check.context);
+    const assembly = await this.#resolver.assembleJudgment(pair, check.context);
+    // The vantage the judgment was made under travels with it. Everything downstream re-reads the
+    // substrate to decide whether the decision still holds, and the one thing it cannot re-read is
+    // what the decision was taken under.
+    return assembly.status === 'assembled'
+      ? { ...assembly, coverageEpoch: check.context.coverageEpoch }
+      : assembly;
   }
 
   confirm(revision: EvidenceRevision): RevisionCheck {

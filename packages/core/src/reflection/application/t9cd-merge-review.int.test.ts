@@ -38,6 +38,7 @@ import {
   committedIncidenceForNodesAt,
   committedIncidenceForNode,
 } from '../../infrastructure/sqlite/committed-evidence.js';
+import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import { evidenceLinkId } from '../../infrastructure/sqlite/evidence-links.js';
 import { readSubstratePairing } from '../../infrastructure/sqlite/publication-control.js';
@@ -188,6 +189,8 @@ async function merge(survivor: string, loser: string) {
       // What the decision was taken on. A merge destroys one of its two claims, and the writer
       // refuses one it cannot re-verify: an empty dependency set proves nothing about either.
       judged: buildEvidenceRevision([sourceStateDependency(store.db, `first-${serial}`)]),
+      // What the decision was allowed to read, beside what it read.
+      coverageEpoch: readCurrentCoverageContract(store.db)?.epoch,
     },
   });
 }
