@@ -300,7 +300,7 @@ const DECLARED_EFFECTS: Readonly<Record<string, StageEffect>> = {
 };
 
 /**
- * What each stage the contract lists does, from C8 section 2's stage table.
+ * What each stage the accepted contract lists does with the source it runs on.
  *
  * Extraction, the bounded nomination passes and the relation passes are generative use of the
  * source. The stages that are absent are absent on purpose: a reinforcement flush and a context
