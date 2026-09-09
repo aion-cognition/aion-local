@@ -29,6 +29,13 @@ export const SUPERSEDED_GENERATION = 'superseded_generation';
  */
 export const DUPLICATE_ON_REPLACEMENT = 'duplicate_obligation_on_replacement';
 
+/**
+ * The reason a carried obligation is pinned instead of closed: it and the replacement's own row
+ * under the same key have each got somewhere, and nothing here can prove the two are the same
+ * work. A pin keeps the evidence and the source resident until somebody decides.
+ */
+export const CONFLICTING_PROGRESS_ON_REPLACEMENT = 'conflicting_progress_on_replacement';
+
 export type GenerationReplacement = {
   readonly sourceId: string;
   /** The generation being made active. It must already be allocated with its inventory written. */
@@ -44,7 +51,19 @@ export type ReplacementOutcome = {
   readonly carried: number;
 };
 
-type CarryRow = { work_id: string; kind: string; work_key: string };
+type CarryRow = {
+  work_id: string;
+  kind: string;
+  work_key: string;
+  input_revision_json: string | null;
+  continuation_json: string | null;
+  attempts: number;
+};
+
+/** Whether a row has got anywhere: evidence it was measured against, a cursor, or an attempt. */
+function carriesProgress(row: CarryRow): boolean {
+  return row.input_revision_json !== null || row.continuation_json !== null || row.attempts > 0;
+}
 
 /**
  * Activates the replacement and settles the generation it displaced, in one transaction.
@@ -101,12 +120,24 @@ export function replaceProcessingGeneration(
     .immediate();
 }
 
+const CARRYABLE_STATES = `('pending','retryable','transferred','pinned','dead_letter')`;
+const WORK_COLUMNS = 'work_id, kind, work_key, input_revision_json, continuation_json, attempts';
+
 /**
  * Moves every obligation that is not an execution attempt onto the replacement.
  *
- * A row whose identity the replacement already holds is closed rather than moved: the obligation
- * is owed once and the replacement's own row is the one runners will find. Moving it would
- * collide with that row, and dropping it silently would lose the record that it existed.
+ * A key held on both sides is not proof that the two rows are the same work. The old row may
+ * carry the evidence it was measured against and the cursor it reached; the replacement's is
+ * usually a skeleton the preparation just wrote. The one that has got somewhere is canonical, so
+ * a collision is decided on progress rather than on which generation the row happens to sit in:
+ *
+ * - the replacement's row has got nowhere: the original is rebound with its work id, evidence and
+ *   continuation intact, and the untouched preparation is retired to make room for it. Nothing is
+ *   lost, because a prepared row nobody ran is a statement that work is owed and the surviving
+ *   row says the same thing with a history attached.
+ * - the original has got nowhere: it is closed as a duplicate, which is what it is.
+ * - both have: nothing here can prove them equivalent, so the original is PINNED with its
+ *   evidence rather than closed, and the source stays resident until somebody decides.
  */
 function carryObligations(
   db: SqliteHandle,
@@ -115,27 +146,39 @@ function carryObligations(
 ): number {
   const rows = db
     .prepare(
-      `SELECT work_id, kind, work_key FROM source_work
+      `SELECT ${WORK_COLUMNS} FROM source_work
        WHERE source_id = ? AND processing_generation = ? AND kind != 'stage'
-         AND state IN ('pending','retryable','transferred','pinned','dead_letter')`,
+         AND state IN ${CARRYABLE_STATES}`,
     )
     .all(replacement.sourceId, replacedGeneration) as CarryRow[];
   const held = db.prepare(
-    `SELECT 1 FROM source_work
+    `SELECT ${WORK_COLUMNS} FROM source_work
      WHERE source_id = ? AND processing_generation = ? AND kind = ? AND work_key = ?`,
   );
   const move = db.prepare('UPDATE source_work SET processing_generation = ? WHERE work_id = ?');
-  const close = db.prepare(
-    `UPDATE source_work SET state = 'obsolete', reason = ? WHERE work_id = ?`,
-  );
+  const settle = db.prepare('UPDATE source_work SET state = ?, reason = ? WHERE work_id = ?');
+  const retire = db.prepare('DELETE FROM source_work WHERE work_id = ?');
   let carried = 0;
   for (const row of rows) {
-    const collides =
-      held.get(replacement.sourceId, replacement.replacementGeneration, row.kind, row.work_key) !==
-      undefined;
-    if (collides) {
-      close.run(DUPLICATE_ON_REPLACEMENT, row.work_id);
-      continue;
+    const existing = held.get(
+      replacement.sourceId,
+      replacement.replacementGeneration,
+      row.kind,
+      row.work_key,
+    ) as CarryRow | undefined;
+    if (existing !== undefined) {
+      if (!carriesProgress(row)) {
+        settle.run('obsolete', DUPLICATE_ON_REPLACEMENT, row.work_id);
+        continue;
+      }
+      if (carriesProgress(existing)) {
+        settle.run('pinned', CONFLICTING_PROGRESS_ON_REPLACEMENT, row.work_id);
+        continue;
+      }
+      // The key is unique per generation, so the preparation has to go before the original can
+      // take its place. It carried no evidence, no cursor and no attempt: there is nothing in it
+      // to keep.
+      retire.run(existing.work_id);
     }
     move.run(replacement.replacementGeneration, row.work_id);
     carried += 1;

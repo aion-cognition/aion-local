@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { SqliteStore } from './database.js';
 import {
+  CONFLICTING_PROGRESS_ON_REPLACEMENT,
   DUPLICATE_ON_REPLACEMENT,
   markInventoryComplete,
   replaceProcessingGeneration,
@@ -128,6 +129,51 @@ describe('generation replacement', () => {
       (row) => row.workId === 'settlement:new',
     );
     expect(held).toMatchObject({ state: 'pending' });
+  });
+
+  it('rebinds the carried obligation when the replacement holds only a fresh preparation', () => {
+    const first = prepared();
+    activateProcessingGeneration(store.db, SOURCE, first);
+    settlement(first, 'reference:1', 'settlement:old');
+    store.db
+      .prepare('UPDATE source_work SET continuation_json = ? WHERE work_id = ?')
+      .run('{"after":"pair-12"}', 'settlement:old');
+    const second = prepared();
+    settlement(second, 'reference:1', 'settlement:new');
+
+    const outcome = replaceProcessingGeneration(store.db, {
+      sourceId: SOURCE,
+      replacementGeneration: second,
+    });
+
+    expect(outcome.carried).toBe(1);
+    expect(
+      readGenerationWork(store.db, SOURCE, second).filter((row) => row.kind === 'settlement'),
+    ).toMatchObject([{ workId: 'settlement:old', state: 'pending' }]);
+  });
+
+  it('pins the carried obligation when both rows under one key have got somewhere', () => {
+    const first = prepared();
+    activateProcessingGeneration(store.db, SOURCE, first);
+    settlement(first, 'reference:1', 'settlement:old');
+    const second = prepared();
+    settlement(second, 'reference:1', 'settlement:new');
+    store.db
+      .prepare('UPDATE source_work SET continuation_json = ? WHERE work_id IN (?, ?)')
+      .run('{"after":"pair-12"}', 'settlement:old', 'settlement:new');
+
+    const outcome = replaceProcessingGeneration(store.db, {
+      sourceId: SOURCE,
+      replacementGeneration: second,
+    });
+
+    expect(outcome.carried).toBe(0);
+    expect(
+      readGenerationWork(store.db, SOURCE, first).find((row) => row.workId === 'settlement:old'),
+    ).toMatchObject({ state: 'pinned', reason: CONFLICTING_PROGRESS_ON_REPLACEMENT });
+    expect(
+      readGenerationWork(store.db, SOURCE, second).find((row) => row.workId === 'settlement:new'),
+    ).toMatchObject({ state: 'pending' });
   });
 
   it('refuses an old generation completion after the replacement takes over', () => {
