@@ -5,6 +5,7 @@ import { GRAPH_NODE_SCOPE } from '../../../evidence/domain/scopes.js';
 import { upsertEdgeInTransaction } from '../../../infrastructure/graph/edges.js';
 import {
   forgetOrphanNodeInTransaction,
+  nodeAssociationHistoryInTransaction,
   type RelinkKind,
 } from '../../../infrastructure/graph/topology-queries.js';
 import { PublicationOperation } from '../../../infrastructure/publication/operation.js';
@@ -127,13 +128,16 @@ function relinkStands(context: PublicationContext, data: z.infer<typeof RelinkPa
  * Whether the qualification the census recorded still holds, derived again from the records.
  *
  * Everything the window rested on: the policy it ran under, the support reading, the proposals
- * holding the node up, and the recorded dependency set. Unavailable proof holds the candidate,
- * which is the only honest answer when a suppression cannot be taken back.
+ * holding the node up, the node's own state, and the association history behind the disconnection
+ * the census read. The whole dependency set, because a window is a claim about an interval and
+ * checking the present tense of one dependency certifies nothing about the rest of it.
+ * Unavailable proof holds the candidate, which is the only honest answer when a suppression
+ * cannot be taken back.
  */
-function qualificationStands(
+async function qualificationStands(
   context: PublicationContext,
   data: SuppressionData,
-): string | undefined {
+): Promise<string | undefined> {
   const observation = readOrphanObservation(context.db, data.nodeId);
   if (observation?.disposition !== 'unsupported') {
     return 'qualification_absent';
@@ -154,10 +158,18 @@ function qualificationStands(
   if (pending > 0) {
     return 'judgment_pending';
   }
+  // Read under the guard, from the graph that owns it. A node the transaction cannot find has no
+  // history to compare, and a suppression has no reopen path to correct that with later.
+  const associations = (
+    await nodeAssociationHistoryInTransaction(context.graph, [data.nodeId])
+  ).get(data.nodeId);
+  if (associations === undefined) {
+    return 'association_history_unknown';
+  }
   if (
     !qualificationHolds(
       observation.evidenceRevision,
-      qualificationEvidence(context.db, data.nodeId, reading.evidenceRevision, pending),
+      qualificationEvidence(context.db, data.nodeId, reading.evidenceRevision, associations),
     )
   ) {
     return 'evidence_moved';
@@ -225,20 +237,16 @@ export const orphanSuppressionPublication = new PublicationOperation({
       effects: [{ kind: ORPHAN_SUPPRESSION_EFFECT, detail: { nodeId: payload.nodeId } }],
     });
   },
-  check(context, data) {
+  async check(context, data) {
     if (isRelink(data)) {
-      return Promise.resolve(
-        relinkStands(context, data)
-          ? ({ status: 'valid' } as const)
-          : ({ status: 'deferred', reason: 'relink_proof_moved' } as const),
-      );
-    }
-    const moved = qualificationStands(context, data);
-    return Promise.resolve(
-      moved === undefined
+      return relinkStands(context, data)
         ? ({ status: 'valid' } as const)
-        : ({ status: 'deferred', reason: moved } as const),
-    );
+        : ({ status: 'deferred', reason: 'relink_proof_moved' } as const);
+    }
+    const moved = await qualificationStands(context, data);
+    return moved === undefined
+      ? ({ status: 'valid' } as const)
+      : ({ status: 'deferred', reason: moved } as const);
   },
   async applyGraph(context: PublicationContext, data: RepairData) {
     if (isRelink(data)) {

@@ -21,6 +21,11 @@ beforeEach(() => {
   nodes = [{ id: 'node', txFrom: NOW }];
   vi.spyOn(topology, 'findOrphanNodes').mockImplementation(async () => nodes);
   vi.spyOn(topology, 'findOrphanRelinkTargets').mockResolvedValue([]);
+  // The graph this fixture models holds loose nodes and no association at all, ever; the census
+  // now asks for that history rather than inferring it from the absence of an open edge.
+  vi.spyOn(topology, 'nodeAssociationHistory').mockImplementation(
+    async (_driver, ids) => new Map(ids.map((id) => [id, topology.NO_ASSOCIATION_HISTORY])),
+  );
   establishNodeSupportScopes(store.db, 'node', NOW);
 });
 afterEach(() => {

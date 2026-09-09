@@ -1,4 +1,5 @@
 import type { Driver } from 'neo4j-driver';
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
 import { certifyNodeSupport } from '../../evidence/application/node-support.js';
@@ -6,6 +7,7 @@ import { GRAPH_NODE_SCOPE } from '../../evidence/domain/scopes.js';
 import {
   findOrphanNodes,
   findOrphanRelinkTargets,
+  nodeAssociationHistory,
   type OrphanNode,
   type OrphanPosition,
   type OrphanRelinkTarget,
@@ -126,6 +128,27 @@ function writePosition(db: SqliteHandle, position: OrphanPosition | undefined): 
  */
 const NOMINATION_WINDOW = 10;
 
+/** What a reader records where a history it needs cannot be read at all. */
+export const UNKNOWN_HISTORY = 'unknown';
+
+/**
+ * Why this node cannot be qualified at all, or nothing when every history it rests on reads.
+ *
+ * Both answers are about intervals rather than about the present: a node with no mirrored state,
+ * and a node whose associations nobody can read, are both nodes whose last months are unaccounted
+ * for. Unknown here can neither start a window nor preserve one, because the alternative is a
+ * suppression with no reopen path resting on an interval nobody observed.
+ */
+function missingHistory(state: string, associations: string | undefined): string | undefined {
+  if (state === 'absent') {
+    return 'no mirrored node state to qualify against';
+  }
+  if (associations === undefined) {
+    return 'no association history to qualify against';
+  }
+  return undefined;
+}
+
 /** How many unresolved proposals hold this node up, which is a dependency of the qualification. */
 export function pendingProposals(db: SqliteHandle, nodeId: string): number {
   const merges = findEntityMergeProposalsForNode(db, nodeId).filter(
@@ -188,6 +211,14 @@ export async function readOrphanCensus(
     ).map((target) => [target.orphanId, target]),
   );
 
+  // The association history of the whole page in one read, because what an open-edge reading
+  // cannot see is exactly what the window has to survive: an association that arrived and left
+  // between two observations.
+  const history = await nodeAssociationHistory(
+    deps.driver,
+    disconnected.map((orphan) => orphan.id),
+  );
+
   const entries: OrphanCensusEntry[] = [];
   let unsupportedYoung = 0;
   let unknownSupport = 0;
@@ -199,14 +230,20 @@ export async function readOrphanCensus(
     // have been superseded, reopened or rewritten inside the window, and a qualification taken
     // over that interval would be a certification of an interval nobody observed.
     const state = nodeStateToken(deps.db, orphan.id);
-    const support = state === 'absent' ? 'unknown' : reading.support;
-    const reason =
-      state === 'absent' ? 'no mirrored node state to qualify against' : reading.reason;
+    const associations = history.get(orphan.id);
+    const missing = missingHistory(state, associations);
+    const support = missing === undefined ? reading.support : 'unknown';
+    const reason = missing ?? reading.reason;
     const target = certifiedRelinkTarget(deps.db, orphan.id, targets.get(orphan.id));
     const observation = recordOrphanQualification(deps.db, {
       nodeId: orphan.id,
       evidenceRevision: {
-        ...qualificationEvidence(deps.db, orphan.id, reading.evidenceRevision, pending),
+        ...qualificationEvidence(
+          deps.db,
+          orphan.id,
+          reading.evidenceRevision,
+          associations ?? UNKNOWN_HISTORY,
+        ),
         'graph:disconnected_since': orphan.txFrom?.toISOString() ?? 'unknown',
       },
       policyRevision: options.policyRevision,
@@ -284,23 +321,50 @@ function currentSourcesBehind(db: SqliteHandle, nodeId: string): readonly string
 }
 
 /**
- * Every dependency a qualification rests on that the records can re-derive: the support scopes
- * the reading rested on, and the proposals holding the node up.
+ * Every proposal that has ever named this node, whether or not one is open now.
  *
- * Positive and negative both, so a proposal arriving is as much a reset as a scope moving. The
- * physical disconnection reading is recorded beside these but is not here: the write re-derives
- * that one from the graph in its own statement, which is stronger than comparing a value read
- * before the batch.
+ * A count of the open ones is not a version. A proposal that opens and closes between two
+ * observations restores the count it started at, and the interval it ran in is one where somebody
+ * was deciding whether this node survives at all. The token is derived from the durable rows and
+ * the stamps their own writers set, so an open, a close and a second proposal each move it.
+ */
+export function proposalHistoryToken(db: SqliteHandle, nodeId: string): string {
+  const rows = [
+    ...findEntityMergeProposalsForNode(db, nodeId),
+    ...findSupersessionProposalsForNode(db, nodeId),
+  ].map((proposal) => `${proposal.id}:${proposal.createdAt}:${proposal.resolvedAt ?? 'open'}`);
+  if (rows.length === 0) {
+    return 'none';
+  }
+  const digest = createHash('sha256')
+    .update(JSON.stringify([...rows].sort()))
+    .digest('hex');
+  return `${String(rows.length)}@${digest}`;
+}
+
+/**
+ * Every dependency a qualification rests on that the records can re-derive: the support scopes
+ * the reading rested on, the proposal history, the node's own state and the association history.
+ *
+ * Versions rather than counts, and negative reads as much as positive ones. A window is a claim
+ * about an INTERVAL, so what it rests on has to move whenever anything inside that interval
+ * moved: a proposal that opened and closed, or an association that arrived and left, leaves the
+ * counts exactly where they were and the history somewhere else.
+ *
+ * The physical disconnection reading is recorded beside these but is not here: the write
+ * re-derives that one from the graph in its own statement, which is stronger than comparing a
+ * value read before the batch.
  */
 export function qualificationEvidence(
   db: SqliteHandle,
   nodeId: string,
   supportRevision: Readonly<Record<string, string>>,
-  pendingProposalCount: number,
+  associationHistory: string,
 ): Readonly<Record<string, string>> {
   return {
     ...supportRevision,
-    'proposals:pending': String(pendingProposalCount),
+    'proposals:history': proposalHistoryToken(db, nodeId),
+    'associations:history': associationHistory,
     [GRAPH_NODE_SCOPE]: nodeStateToken(db, nodeId),
   };
 }

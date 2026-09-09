@@ -171,6 +171,72 @@ export async function forgetOrphanNodeInTransaction(
   return rows.length > 0;
 }
 
+/**
+ * What has happened to a node's associations, whichever of them are open now.
+ *
+ * The population is defined by the absence of an OPEN association, and a reading of the open
+ * ones cannot tell a node nothing ever reached from a node an association reached and left: both
+ * read empty. The token carries how many association rows the node has at all and the latest
+ * stamp any of them took, so an edge arriving, closing or reopening moves it and a window taken
+ * across that interval is void. Backbone types are excluded for the same reason the orphan test
+ * excludes them: they are the wiring, not an association.
+ *
+ * Absent from the answer means the graph does not hold the node, which is not a history: a caller
+ * that cannot read this leaves the qualification unknown rather than certifying an interval
+ * nobody observed.
+ */
+const NODE_ASSOCIATION_HISTORY = [
+  'UNWIND $ids AS nodeId',
+  `MATCH (n:${BASE_NODE_LABEL} { id: nodeId })`,
+  'OPTIONAL MATCH (n)-[r]-()',
+  `  WHERE NOT type(r) IN [${BACKBONE_TYPES}]`,
+  'WITH nodeId, count(r) AS relations,',
+  `     max(toString(coalesce(r.${BITEMPORAL_PROPERTIES.txUntil}, r.updated_at, r.created_at)))`,
+  '       AS lastChange',
+  'RETURN nodeId AS id, relations, lastChange',
+].join('\n');
+
+/** One node's association history, by id. A node the graph does not hold has no entry. */
+export type AssociationHistory = ReadonlyMap<string, string>;
+
+/**
+ * The comparable form of one reading: how many association rows, and the latest stamp any of
+ * them carries. One producer, so the census and the guard compare the same shape.
+ */
+export function associationHistoryToken(relations: unknown, lastChange: unknown): string {
+  return `${String(relations)}@${typeof lastChange === 'string' ? lastChange : 'none'}`;
+}
+
+/** What a node no association has ever touched reads as. */
+export const NO_ASSOCIATION_HISTORY = associationHistoryToken(0, undefined);
+
+function mapHistoryRow(row: Row): readonly [string, string] {
+  return [row.id as string, associationHistoryToken(row.relations, row.lastChange)];
+}
+
+export async function nodeAssociationHistory(
+  driver: Driver,
+  ids: readonly string[],
+): Promise<AssociationHistory> {
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) {
+    return new Map();
+  }
+  return new Map(await runRead(driver, NODE_ASSOCIATION_HISTORY, { ids: unique }, mapHistoryRow));
+}
+
+/** The same reading inside the guard's transaction, where a repair re-derives what it acts on. */
+export async function nodeAssociationHistoryInTransaction(
+  tx: GraphTransaction,
+  ids: readonly string[],
+): Promise<AssociationHistory> {
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) {
+    return new Map();
+  }
+  return new Map(await tx.run(NODE_ASSOCIATION_HISTORY, { ids: unique }, mapHistoryRow));
+}
+
 /** Which rule found the target, carried onto the repair edge so the relink says why it exists. */
 export type RelinkKind = 'shared_entity' | 'same_container';
 
