@@ -134,6 +134,25 @@ async function readFollowsTarget(
  * either both point at the same prior session, forking the chain, or point at each other,
  * cycling it. This is the ordinary regime, not an edge case: one service multiplexes many
  * agent sessions, and each new connection creates its session on its first call.
+ *
+ * The order this transaction actually takes its locks, which is not the order the calls
+ * read as. A relationship write locks each endpoint's relationship group and then the
+ * endpoint node itself, so an edge upsert is where a node is first reached unless something
+ * took it bare beforehand:
+ *
+ * 1. the new Session node, written here and held from that write on;
+ * 2. the Member, reached by the INITIATED_BY upsert, group first and node second;
+ * 3. the Workspace, reached the same way by the WITHIN_WORKSPACE upsert;
+ * 4. the explicit Member lock, which finds both already held and reorders nothing. It stays
+ *    because it names the node the tail read is serialized on; whether the upsert alone is
+ *    enough is a separate question this does not open;
+ * 5. the prior Session, locked bare below, before the FOLLOWS upsert reaches it.
+ *
+ * Step 5 is the one order that matters against a peer. Intake locks the Session node bare and
+ * merges PARTICIPATES_IN onto it afterwards, so without the bare lock here the two writers
+ * reach the same Session's node and relationship-group locks in opposite orders and one of
+ * them is killed to break the cycle. With it, both reach the node lock first and the second
+ * one waits.
  */
 export async function ensureGraphSession(
   driver: Driver,
@@ -195,6 +214,10 @@ export async function ensureGraphSession(
     });
 
     if (priorSessionId !== undefined) {
+      // Bare, before the upsert that would otherwise reach this node group-first. The read
+      // above just matched it, so an id that names nothing here is the same missing endpoint
+      // the upsert itself would refuse.
+      await lockNodeInTransaction(tx, priorSessionId, now);
       await upsertEdgeInTransaction(tx, {
         type: 'FOLLOWS',
         sourceId: node.id,
