@@ -7,6 +7,7 @@ import {
   findOrphanNodes,
   findOrphanRelinkTargets,
   nodeAssociationHistory,
+  type AssociationHistory,
   type OrphanNode,
   type OrphanPosition,
   type OrphanRelinkTarget,
@@ -148,6 +149,39 @@ function missingHistory(state: string, associations: string | undefined): string
   return undefined;
 }
 
+/**
+ * Why a node the graph could not answer for holds no window, kept apart from the node the graph
+ * answered for and does not hold: one is an outage, the other is a node that is not there.
+ */
+const UNREADABLE_ASSOCIATION_HISTORY = 'the association history could not be read';
+
+/**
+ * Ends the qualification of every node this page was about, because their histories could not be
+ * read.
+ *
+ * A window is a claim that a node was continuously certified across an interval. An interval the
+ * required history was unreadable through is not certified, and leaving the old window standing
+ * would carry the node over the outage and suppress it afterwards on months nobody observed. The
+ * store is still there to record the loss, so it records it: the disposition goes to unknown and
+ * the clock starts again when a reading returns.
+ */
+function breakQualifications(
+  db: SqliteHandle,
+  page: readonly OrphanNode[],
+  options: OrphanCensusOptions,
+): void {
+  for (const orphan of page) {
+    recordOrphanQualification(db, {
+      nodeId: orphan.id,
+      evidenceRevision: { 'associations:history': UNKNOWN_HISTORY },
+      policyRevision: options.policyRevision,
+      disposition: 'unknown',
+      reason: UNREADABLE_ASSOCIATION_HISTORY,
+      now: options.now,
+    });
+  }
+}
+
 /** What the proposal records say about one node: what holds it up now, and what has moved. */
 export type ProposalStanding = {
   /** Unresolved rows, which are what protects the node from a repair right now. */
@@ -230,10 +264,20 @@ export async function readOrphanCensus(
   // The association history of the whole page in one read, because what an open-edge reading
   // cannot see is exactly what the window has to survive: an association that arrived and left
   // between two observations.
-  const history = await nodeAssociationHistory(
-    deps.driver,
-    disconnected.map((orphan) => orphan.id),
-  );
+  //
+  // A read that fails takes the windows with it. The error still travels to the caller, who owns
+  // what to do about an unavailable graph; what cannot travel with it is a qualification that
+  // goes on ageing across an interval nothing certified.
+  let history: AssociationHistory;
+  try {
+    history = await nodeAssociationHistory(
+      deps.driver,
+      disconnected.map((orphan) => orphan.id),
+    );
+  } catch (error) {
+    breakQualifications(deps.db, disconnected, options);
+    throw error;
+  }
 
   const entries: OrphanCensusEntry[] = [];
   let unsupportedYoung = 0;
