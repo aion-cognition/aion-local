@@ -4,7 +4,10 @@ import {
   type DurableRole,
   type ScopeDirection,
 } from '../../evidence/domain/scopes.js';
-import type { LegacyRelation } from '../../infrastructure/graph/legacy-evidence-queries.js';
+import type {
+  EndpointContribution,
+  LegacyRelation,
+} from '../../infrastructure/graph/legacy-evidence-queries.js';
 import { evidenceLinkId, type StatedLinkKind } from '../../infrastructure/sqlite/evidence-links.js';
 
 /**
@@ -293,6 +296,95 @@ export function planScopes(
   return [...scopes.values()].sort((a, b) =>
     `${a.endpointId}\n${a.relationClass}` < `${b.endpointId}\n${b.relationClass}` ? -1 : 1,
   );
+}
+
+/** The durable role each recorded link kind stands for, read off the classification table itself. */
+function kindRoles(): ReadonlyMap<string, DurableRole> {
+  const roles = new Map<string, DurableRole>([[INTERNAL_ROLE, INTERNAL_ROLE]]);
+  for (const sides of Object.values(RULES)) {
+    for (const rule of Object.values(sides)) {
+      roles.set(rule.record === 'stated' ? rule.kind : rule.role, rule.role);
+    }
+  }
+  return roles;
+}
+
+const KIND_ROLES = kindRoles();
+
+/**
+ * The role a stored link's kind names, or nothing for a kind this vocabulary never wrote.
+ *
+ * A stated link records the statement's own kind — `corrects` — while its scope is filed under the
+ * role — `stated_correction`. Reading the scope off the kind string would file half the vocabulary
+ * under counters nothing reads.
+ */
+export function roleOfLinkKind(kind: string): DurableRole | undefined {
+  return KIND_ROLES.get(kind);
+}
+
+/** Which sources stand behind each scope on one endpoint, and which nothing classified. */
+export type EndpointPopulation = {
+  /** Scope name to the sources whose relationships land in it, sorted. */
+  readonly scopes: ReadonlyMap<string, readonly string[]>;
+  /** Relationships no rule classifies. They enter no counted population and pin their own source. */
+  readonly unclassified: readonly LegacyPin[];
+};
+
+/**
+ * What one endpoint's census is a statement about: every source the graph shows contributing to
+ * each of its scopes.
+ *
+ * Each relationship is classified from ITS OWN source's side, by the same closed table the walk
+ * used, so a census counts the population under exactly the rule that materialized it. An edge
+ * whose other end belongs to no source contributes to no source population, and an edge no rule
+ * names contributes to nothing at all: it is held by the pin on the source that wrote it, not by a
+ * count filed under a role somebody guessed.
+ */
+export function endpointPopulation(input: {
+  readonly endpointId: string;
+  readonly contributions: readonly EndpointContribution[];
+}): EndpointPopulation {
+  const scopes = new Map<string, Set<string>>();
+  const unclassified: LegacyPin[] = [];
+  for (const row of input.contributions) {
+    if (row.sourceId === undefined) {
+      continue;
+    }
+    const relation: LegacyRelation = {
+      relationId: row.relationId,
+      type: row.type,
+      fromId: row.endpointAtStart ? input.endpointId : row.otherId,
+      toId: row.endpointAtStart ? row.otherId : input.endpointId,
+      fromLabels: row.endpointAtStart ? row.endpointLabels : row.otherLabels,
+      toLabels: row.endpointAtStart ? row.otherLabels : row.endpointLabels,
+    };
+    // The endpoint joins the source's raw set only when it is that source's own node. Adding it
+    // unconditionally would read a correction pointing at another source's episode as this
+    // source's internal ordering.
+    const raw = new Set([row.sourceId, row.otherId]);
+    if (row.endpointSourceId === row.sourceId) {
+      raw.add(input.endpointId);
+    }
+    const plan = classifyLegacyRelations({
+      sourceId: row.sourceId,
+      rawIds: [...raw],
+      relations: [relation],
+    });
+    unclassified.push(...plan.pins);
+    for (const entry of plan.links) {
+      if (entry.toId !== input.endpointId) {
+        continue;
+      }
+      const scope = durableRoleScope(entry.scopeRole, nodeScopeDirection(entry.scopeRole));
+      const held = scopes.get(scope) ?? new Set<string>();
+      held.add(row.sourceId);
+      scopes.set(scope, held);
+    }
+  }
+  return {
+    scopes: new Map([...scopes].map(([scope, sources]) => [scope, [...sources].sort()])),
+    unclassified,
+  };
 }
 
 /** The retained endpoints a plan records incidence against, which is what ownership is projected for. */

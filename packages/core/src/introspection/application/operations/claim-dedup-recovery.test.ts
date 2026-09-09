@@ -5,7 +5,9 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { claimDedupOperation } from './claim-dedup.js';
+import { sourceStateDependency } from '../../../evidence/application/dependencies.js';
 import type { JudgmentAssembly } from '../../../evidence/application/judgment.js';
+import { seedSource } from '../../../evidence/test-support/evidence.fixture.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import { refusingProvider } from '../../../infrastructure/providers/test-support/refusing-provider.fixture.js';
@@ -173,7 +175,21 @@ beforeAll(() => {
   dir = mkdtempSync(join(tmpdir(), 'aion-dedup-recovery-'));
   db = openSqliteHandle({ filePath: join(dir, 'aion.sqlite') });
   logger = openLogger({ filePath: join(dir, 'aion.jsonl'), level: 'error' });
+  // The merge is a destructive write and refuses a binding it cannot re-verify, so the seam these
+  // cases run through has to name a source that exists rather than an empty dependency set.
+  seedSource(db, {
+    sourceId: 'source',
+    sessionId: 'session',
+    identity: 'review',
+    content: { observations: ['evidence'] },
+    now: NOW,
+  });
 });
+
+/** The binding every case here decides on, which the guard re-verifies against this store. */
+function judgedRevision() {
+  return buildEvidenceRevision([sourceStateDependency(db, 'source')]);
+}
 
 afterAll(() => {
   db.close();
@@ -199,6 +215,10 @@ function ctxFor(overrides: Partial<OperationContext>): OperationContext {
     now: NOW,
     signal: new AbortController().signal,
     publications: directMergePublisher(driver, db, () => NOW),
+    evidence: {
+      assemble: () => Promise.resolve(assembled()),
+      confirm: () => ({ status: 'current' }),
+    },
     ...overrides,
   };
 }
@@ -290,7 +310,7 @@ function assembled(): JudgmentAssembly {
         renderedUnits: MARKER.length + 3,
       },
     ],
-    revision: buildEvidenceRevision([]),
+    revision: judgedRevision(),
     omitted: [],
   };
 }

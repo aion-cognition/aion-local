@@ -20,10 +20,8 @@ import {
   type SourcePartInput,
   type SourceRecordInput,
 } from '../../infrastructure/sqlite/source-identity.js';
-import {
-  isSourceForgotten,
-  recordSourceStateVersion,
-} from '../../infrastructure/sqlite/source-lifecycle.js';
+import { recordSourceStateVersion } from '../../infrastructure/sqlite/source-lifecycle.js';
+import { committedSourceStates } from '../../infrastructure/sqlite/source-states.js';
 import { prepareEpisode, type PreparedEpisode, type ReflectionContent } from '../domain/content.js';
 
 const ArchiveProof = z.strictObject({
@@ -289,10 +287,22 @@ function rawProofGap(
       .filter((part) => part.partKind === 'turn' && part.turnId !== null)
       .map((part) => [part.ordinal, part.turnId]),
   );
+  // Keyed on the sequence each turn recorded, never on where it appeared in the returned array.
+  // Matching by position would compare the reader's own ordering against itself and call a turn
+  // whose recorded place disagrees with the archive proved.
+  const projection = new Map(raw.turns.map((turn) => [turn.ordinal, turn]));
   for (const [ordinal, turn] of prepared.turns.entries()) {
-    const projected = raw.turns[ordinal];
-    if (projected?.contentHash !== turn.contentHash) {
+    const projected = projection.get(ordinal);
+    if (projected === undefined) {
+      return `the graph records no turn at ordinal ${String(ordinal)}`;
+    }
+    if (projected.contentHash !== turn.contentHash) {
       return `graph turn ${String(ordinal)} does not carry the archived turn's digest`;
+    }
+    // The bytes, not the digest column. A projection edited in place keeps the hash it was
+    // written with, so the only thing that proves the text is the text.
+    if (projected.text !== undefined && projected.text !== turn.text) {
+      return `graph turn ${String(ordinal)} does not carry the archived turn's text`;
     }
     if (projected.role !== turn.role) {
       return `graph turn ${String(ordinal)} is recorded as ${projected.role ?? 'no role'} where the archive says ${turn.role}`;
@@ -305,6 +315,26 @@ function rawProofGap(
     }
   }
   return undefined;
+}
+
+/** The two families a suppression statement belongs to, closing and reversing. */
+const SUPPRESSION_STATES: readonly string[] = [
+  'forgotten',
+  'unforgotten',
+  'suppressed',
+  'unsuppressed',
+];
+
+/**
+ * Whether anybody has already stated something about this source's suppression.
+ *
+ * Not "is it forgotten now": a chain that says forgotten and then unforgotten is a chain, and a
+ * baseline may only be imported where there is none.
+ */
+function hasCommittedSuppressionHistory(db: SqliteHandle, sourceId: string): boolean {
+  return committedSourceStates(db, sourceId).some((state) =>
+    SUPPRESSION_STATES.includes(state.stateKind),
+  );
 }
 
 /** Applies a plan. Only ever called from inside a publication's acknowledgment transaction. */
@@ -320,10 +350,16 @@ export function applySourceVerification(
 ): void {
   // The suppression travels first and whatever else does: a source whose content could not be
   // proved is still a source somebody forgot, and its statement is not the content's to lose.
+  //
+  // It travels ONLY into an uncovered chain. A source that already carries committed forget
+  // statements has a history somebody wrote deliberately, and appending an imported observation to
+  // it makes that old observation the newest operative instruction — which is how a modern
+  // unforget gets undone by a migration reading a stamp the graph never cleared. Where the two
+  // disagree the durable chain wins and the disagreement stays visible on the record.
   if (
     binding !== undefined &&
     plan.forgottenAt !== undefined &&
-    !isSourceForgotten(db, plan.sourceId)
+    !hasCommittedSuppressionHistory(db, plan.sourceId)
   ) {
     recordSourceStateVersion(db, {
       sourceId: plan.sourceId,

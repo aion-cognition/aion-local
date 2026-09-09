@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
 
 import { claimMergePublication } from './merge-publication.js';
+import { sourceStateDependency } from '../../evidence/application/dependencies.js';
 import { ownershipIncidence, ownershipSummaryFor } from '../../evidence/application/ownership.js';
 import { OWNERSHIP_SCOPES } from '../../evidence/domain/ownership.js';
 import { durableRoleScope } from '../../evidence/domain/scopes.js';
@@ -31,6 +32,7 @@ import {
 import { openLogger } from '../../infrastructure/logging/logger.js';
 import { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
 import { PUBLICATION_HANDLERS } from '../../infrastructure/publication/handlers.js';
+import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
 import type { PublicationBoundary } from '../../infrastructure/publication/types.js';
 import {
   committedIncidenceForNodesAt,
@@ -179,7 +181,14 @@ async function merge(survivor: string, loser: string) {
   return coordinator.publish({
     kind: 'semantic_write',
     operationId: `merge-${serial}`,
-    payload: { survivorId: survivor, loserId: loser, now: NOW.toISOString() },
+    payload: {
+      survivorId: survivor,
+      loserId: loser,
+      now: NOW.toISOString(),
+      // What the decision was taken on. A merge destroys one of its two claims, and the writer
+      // refuses one it cannot re-verify: an empty dependency set proves nothing about either.
+      judged: buildEvidenceRevision([sourceStateDependency(store.db, `first-${serial}`)]),
+    },
   });
 }
 it('leaves durable evidence unchanged when the graph declines the merge', async () => {

@@ -23,9 +23,15 @@ import { fromGraphDateTime, toGraphInteger } from './values.js';
 
 export type LegacyTurn = {
   readonly turnId: string;
+  /**
+   * The turn's own recorded sequence, not its position in whatever order a read returned. A
+   * position is something the reader made up; the sequence is what the writer wrote down.
+   */
   readonly ordinal: number;
   readonly role?: string;
   readonly contentHash?: string;
+  /** The raw bytes, which is what a proof compares. A digest column is a value somebody wrote. */
+  readonly text?: string;
   readonly occurredAt?: string;
 };
 
@@ -55,6 +61,8 @@ const RAW_NODES = [
   '       [x IN collect({',
   '         id: t.id,',
   `         role: t.${MEMORY_PROPERTIES.role},`,
+  `         sequence: t.${MEMORY_PROPERTIES.sequence},`,
+  `         text: t.${MEMORY_PROPERTIES.text},`,
   `         content_hash: t.${MEMORY_PROPERTIES.contentHash},`,
   `         occurred_at: t.${BITEMPORAL_PROPERTIES.occurredAt}`,
   '       }) WHERE x.id IS NOT NULL] AS turns',
@@ -78,6 +86,8 @@ export async function readLegacyRawNodes(
 type TurnRowData = {
   id: string;
   role: string | null;
+  sequence: unknown;
+  text: string | null;
   content_hash: string | null;
   occurred_at: unknown;
 };
@@ -91,10 +101,14 @@ function toRawNodes(row: Record<string, unknown>): LegacyRawNodes {
     ...(sessionId === undefined ? {} : { sessionId }),
     ...(contentHash === undefined ? {} : { contentHash }),
     ...(forgottenAt === undefined ? {} : { forgottenAt }),
-    turns: (row.turns as TurnRowData[]).map((turn, ordinal) => ({
+    turns: (row.turns as TurnRowData[]).map((turn, position) => ({
       turnId: turn.id,
-      ordinal,
+      // The recorded sequence where the node carries one. A turn with none has no proved place,
+      // and its position in this array is the reader's ordering rather than the writer's: it is
+      // returned as `-1` so the proof pins on missing evidence instead of inventing an ordinal.
+      ordinal: sequenceOf(turn.sequence, position),
       ...(turn.role === null ? {} : { role: turn.role }),
+      ...(turn.text === null ? {} : { text: turn.text }),
       ...(turn.content_hash === null ? {} : { contentHash: turn.content_hash }),
       ...(stamp(turn.occurred_at) === undefined ? {} : { occurredAt: stamp(turn.occurred_at) }),
     })),
@@ -191,6 +205,25 @@ const INCIDENT_RELATIONS = [
   'LIMIT $limit',
 ].join('\n');
 
+/**
+ * The sequence a turn node records, as a number. A node with no readable sequence gets `-1`: an
+ * ordinal nobody wrote down is missing proof, and a reader that filled it from the array position
+ * would be checking its own ordering against itself.
+ */
+function sequenceOf(value: unknown, position: number): number {
+  if (typeof value === 'number' && Number.isInteger(value)) {
+    return value;
+  }
+  if (typeof value === 'bigint') {
+    return Number(value);
+  }
+  if (typeof value === 'object' && value !== null && 'toNumber' in value) {
+    const asNumber = (value as { toNumber: () => number }).toNumber();
+    return Number.isInteger(asNumber) ? asNumber : position;
+  }
+  return -1;
+}
+
 function stamp(value: unknown): string | undefined {
   return fromGraphDateTime(value)?.toISOString();
 }
@@ -251,4 +284,75 @@ export async function readLegacyIncidentRelations(
     }),
   );
   return { relations: rows.slice(0, limit), complete: rows.length <= limit };
+}
+
+export type EndpointContribution = {
+  readonly relationId: string;
+  readonly type: string;
+  /** Whether the endpoint is the relationship's start node, which is what classification keys on. */
+  readonly endpointAtStart: boolean;
+  readonly otherId: string;
+  readonly otherLabels: readonly string[];
+  readonly endpointLabels: readonly string[];
+  /** The legacy source the other end belongs to, absent where it belongs to none. */
+  readonly sourceId?: string;
+  /** The source the ENDPOINT belongs to, which is what makes an edge internal rather than crossing. */
+  readonly endpointSourceId?: string;
+};
+
+export type EndpointContributions = {
+  readonly contributions: readonly EndpointContribution[];
+  /** False when the bound cut the walk: a population read in part proves nothing about the whole. */
+  readonly complete: boolean;
+};
+
+const ENDPOINT_CONTRIBUTIONS = [
+  `MATCH (n:${BASE_NODE_LABEL} { id: $endpointId })-[r]-(other:${BASE_NODE_LABEL})`,
+  // Only a Turn is owned by something else. Resolving an owner for any node would attribute an
+  // entity's own participation edge to whichever episode it participates in, which is a source
+  // nobody's evidence came from.
+  `OPTIONAL MATCH (other)-[:${CONTAINMENT_TYPE}]->(owner:Episode) WHERE 'Turn' IN labels(other)`,
+  `OPTIONAL MATCH (n)-[:${CONTAINMENT_TYPE}]->(host:Episode) WHERE 'Turn' IN labels(n)`,
+  'WITH DISTINCT r, n, other, owner, host',
+  'RETURN coalesce(r.id, elementId(r)) AS relation_id, type(r) AS type,',
+  '       startNode(r).id = $endpointId AS endpoint_at_start,',
+  '       other.id AS other_id, labels(other) AS other_labels, labels(n) AS endpoint_labels,',
+  "       CASE WHEN 'Episode' IN labels(other) THEN other.id ELSE owner.id END AS source_id,",
+  "       CASE WHEN 'Episode' IN labels(n) THEN n.id ELSE host.id END AS endpoint_source_id",
+  'ORDER BY relation_id LIMIT $limit',
+].join('\n');
+
+/**
+ * Every relationship the graph holds against one endpoint, with the source each one came from.
+ *
+ * This is the population a census over that endpoint is a statement about. A cohort that walked
+ * one of three contributing sources has proved one third of it, and certifying the endpoint on
+ * that reading turns two sources nobody looked at into a counted absence. The answer is taken from
+ * the GRAPH rather than from the records this migration wrote: the records are what the count is
+ * about, so asking them whether they are complete would ask the question of itself.
+ */
+export async function readEndpointContributions(
+  tx: GraphTransaction,
+  endpointId: string,
+  limit: number,
+): Promise<EndpointContributions> {
+  const rows = await tx.run(
+    ENDPOINT_CONTRIBUTIONS,
+    { endpointId, limit: toGraphInteger(limit + 1) },
+    (row): EndpointContribution => {
+      const sourceId = (row.source_id as string | null) ?? undefined;
+      const endpointSourceId = (row.endpoint_source_id as string | null) ?? undefined;
+      return {
+        relationId: row.relation_id as string,
+        type: row.type as string,
+        endpointAtStart: row.endpoint_at_start === true,
+        otherId: row.other_id as string,
+        otherLabels: row.other_labels as string[],
+        endpointLabels: row.endpoint_labels as string[],
+        ...(sourceId === undefined ? {} : { sourceId }),
+        ...(endpointSourceId === undefined ? {} : { endpointSourceId }),
+      };
+    },
+  );
+  return { contributions: rows.slice(0, limit), complete: rows.length <= limit };
 }

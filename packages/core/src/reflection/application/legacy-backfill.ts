@@ -2,6 +2,7 @@ import type { Driver } from 'neo4j-driver';
 import { randomUUID } from 'node:crypto';
 
 import { enqueueLegacyIndexWork } from './intake-queue.js';
+import { planMemberAttempt } from './legacy-attempts.js';
 import { pageLegacyEpisodeCensus } from '../../infrastructure/graph/legacy-evidence-queries.js';
 import type { PublicationOutcome } from '../../infrastructure/publication/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
@@ -13,12 +14,13 @@ import {
   countMigrationProgress,
   freezeMigrationCohort,
   listAccountedCohortMembers,
+  listRepairableCohortMembers,
   readIntakeWatermark,
   readMigrationCohort,
+  readMigrationProgress,
   recordMigrationProgress,
   type MigrationStatus,
 } from '../../infrastructure/sqlite/migration-cohorts.js';
-import { publicationRecord } from '../../infrastructure/sqlite/publication-coordinator-store.js';
 import { readSourceRecord } from '../../infrastructure/sqlite/source-identity.js';
 import { hashContent } from '../domain/content.js';
 
@@ -66,8 +68,6 @@ export type CohortFreezeReport = {
 };
 
 const DEFAULT_PAGE = 200;
-/** A member nobody can repair in this many passes needs a person, not another identity. */
-const MAX_REPAIR_ATTEMPTS = 64;
 const DEFAULT_RELATION_LIMIT = 500;
 
 /** Every episode the archive names inside the frozen bounds, walked in bounded pages. */
@@ -169,25 +169,6 @@ export async function freezeLegacyCohort(
   };
 }
 
-/**
- * The identity of this walk of one member.
- *
- * Stable while an attempt is unfinished, so a crash retry finds the record it already wrote and
- * the receipt that says what happened to it. A member walked again AFTER its attempt was
- * acknowledged is a second attempt on different proof — a repaired pin, or a re-verification —
- * and it takes an identity of its own rather than being handed the old attempt's saved verdict.
- */
-function attemptId(db: SqliteHandle, cohortId: string, sourceId: string): string {
-  const base = `legacy-materialization:${cohortId}:${sourceId}`;
-  for (let attempt = 1; attempt <= MAX_REPAIR_ATTEMPTS; attempt += 1) {
-    const id = attempt === 1 ? base : `${base}#${String(attempt)}`;
-    if (publicationRecord(db, id)?.state !== 'acknowledged') {
-      return id;
-    }
-  }
-  throw new Error(`source ${sourceId} exhausted its repair attempts in cohort ${cohortId}`);
-}
-
 /** Frozen members the archive names inside the cohort's own bounds. */
 function archiveBackedMembers(db: SqliteHandle, cohortId: string): number {
   const row = db
@@ -252,20 +233,21 @@ export async function runLegacyBackfillBatch(
     throw new Error(`cohort ${request.cohortId} was never frozen`);
   }
   const bounds = { low: cohort.archiveRowidLow, high: cohort.archiveRowidHigh };
-  const members = listAccountedCohortMembers(
-    deps.db,
-    request.cohortId,
-    '',
-    request.limit ?? DEFAULT_PAGE,
-  );
+  // A repair pass selects the pinned members too. A pin is a walk that could not prove something,
+  // and an explicit re-verification is the request to try it again on better evidence — if the
+  // selection stayed on the unreached members, the only way back into the population would be
+  // editing the progress table by hand.
+  const members = (
+    request.reverify === true ? listRepairableCohortMembers : listAccountedCohortMembers
+  )(deps.db, request.cohortId, '', request.limit ?? DEFAULT_PAGE);
   const outcomes: MemberOutcome[] = [];
   let indexEnqueued = 0;
   for (const sourceId of members) {
-    // One publication proves the source and materializes what it proved. The verdict is taken
-    // under the guard, so nothing outside it decides what a source's records say.
-    const outcome = await deps.publications.publish({
-      kind: 'legacy_materialization',
-      operationId: attemptId(deps.db, request.cohortId, sourceId),
+    const attempt = planMemberAttempt(deps.db, {
+      cohortId: request.cohortId,
+      sourceId,
+      status: readMigrationProgress(deps.db, request.cohortId, sourceId)?.status,
+      reverify: request.reverify === true,
       payload: {
         mode: 'source',
         cohortId: request.cohortId,
@@ -276,6 +258,33 @@ export async function runLegacyBackfillBatch(
         reverify: request.reverify === true,
       },
     });
+    // Out of identities. The member takes a durable pin with the reason rather than aborting the
+    // batch: it stays resident, it stays out of every seal, and the next person can see why.
+    if (attempt.exhausted !== undefined || attempt.operationId === undefined) {
+      const reason = attempt.exhausted ?? 'no walk identity was available';
+      recordMigrationProgress(deps.db, {
+        cohortId: request.cohortId,
+        sourceId,
+        status: 'pinned',
+        reason,
+      });
+      outcomes.push({ sourceId, status: 'pinned', reason, published: 'skipped' });
+      continue;
+    }
+    // One publication proves the source and materializes what it proved. The verdict is taken
+    // under the guard, so nothing outside it decides what a source's records say.
+    const outcome =
+      attempt.receipt === undefined
+        ? await deps.publications.publish({
+            kind: 'legacy_materialization',
+            operationId: attempt.operationId,
+            payload: attempt.payload,
+          })
+        : ({ status: 'acknowledged', reason: attempt.receipt.reason, result: attempt.receipt } as {
+            status: PublicationOutcome['status'];
+            reason: string;
+            result: unknown;
+          });
     const published = outcome.status;
     // A member whose publication did not land stays accounted. Marking it walked on a
     // publication the coordinator deferred would take it out of the population the census seal
@@ -343,9 +352,14 @@ export type CensusSealReport = {
  */
 export async function sealLegacyCohortCensus(
   deps: LegacyBackfillDeps,
-  request: { readonly cohortId: string; readonly endpointLimit?: number },
+  request: {
+    readonly cohortId: string;
+    readonly endpointLimit?: number;
+    readonly relationLimit?: number;
+  },
 ): Promise<CensusSealReport> {
   const endpointLimit = request.endpointLimit ?? DEFAULT_PAGE;
+  const relationLimit = request.relationLimit ?? DEFAULT_RELATION_LIMIT;
   let pages = 0;
   let endpoints = 0;
   let after = '';
@@ -353,7 +367,13 @@ export async function sealLegacyCohortCensus(
     const outcome = await deps.publications.publish({
       kind: 'legacy_materialization',
       operationId: `legacy-census:${request.cohortId}:${randomUUID()}`,
-      payload: { mode: 'census', cohortId: request.cohortId, endpointLimit, after },
+      payload: {
+        mode: 'census',
+        cohortId: request.cohortId,
+        endpointLimit,
+        after,
+        relationLimit,
+      },
     });
     if (outcome.status !== 'acknowledged') {
       return { pages, endpoints, deferred: outcome.reason };
@@ -362,9 +382,11 @@ export async function sealLegacyCohortCensus(
     const established = result.established ?? 0;
     pages += 1;
     endpoints += established;
-    // The cursor is what makes the loop terminate: an endpoint whose scopes nobody can seal
-    // stays uncounted, and paging from zero every time would hand it back forever.
-    if (established === 0 || result.cursor === undefined || result.cursor <= after) {
+    // The cursor is what makes the loop terminate, and it moves over every endpoint the page
+    // LOOKED AT. An endpoint whose population this cohort cannot prove seals nothing and stays
+    // uncounted for whoever covers it later; stopping on it would leave every endpoint behind it
+    // unsealed, and paging from zero would hand it back forever.
+    if (result.cursor === undefined || result.cursor <= after) {
       return { pages, endpoints };
     }
     after = result.cursor;

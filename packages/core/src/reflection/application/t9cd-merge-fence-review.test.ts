@@ -31,13 +31,15 @@ it('rejects an explicitly supplied merge evidence revision after its source chan
       graph: {} as GraphTransaction,
       now,
     };
-    const prepared = await claimMergePublication.prepare(context, {
+    // The binding travels in the payload: the guard re-verifies what the judge decided on, and a
+    // merge that carries none is refused before any of this.
+    const revision = buildEvidenceRevision([sourceStateDependency(store.db, 'source')]);
+    const plan = await claimMergePublication.prepare(context, {
       survivorId: 'survivor',
       loserId: 'loser',
       now: now.toISOString(),
+      judged: revision,
     });
-    const revision = buildEvidenceRevision([sourceStateDependency(store.db, 'source')]);
-    const plan = { ...prepared, expected: { ...prepared.expected, evidence: revision } };
     expect((await claimMergePublication.check(context, plan)).status).toBe('valid');
     commitSourceState(store.db, {
       sourceId: 'source',

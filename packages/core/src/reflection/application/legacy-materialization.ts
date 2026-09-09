@@ -1,16 +1,13 @@
 import { z } from 'zod';
 
 import { admit } from './legacy-admission.js';
+import { planCensusPage } from './legacy-census.js';
 import { projectLegacyOwnership } from './legacy-ownership.js';
 import {
   acknowledgeCensusSeal,
   acknowledgeMaterialization,
-  censusCoverage,
   discardCensusSeal,
   discardMaterialization,
-  endpointCensusScopes,
-  isNodeEndpoint,
-  pageUncountedEndpoints,
   prepareCensusSeal,
   prepareMaterialization,
   unaccountedCohortMembers,
@@ -71,8 +68,10 @@ const CensusPayload = z.strictObject({
   mode: z.literal('census'),
   cohortId: z.string().min(1),
   endpointLimit: z.number().int().positive(),
-  /** The keyset cursor: the last endpoint the previous seal page counted. */
+  /** The keyset cursor: the last endpoint the previous seal page looked at. */
   after: z.string(),
+  /** The bound on each endpoint's contribution walk. One that fills it proves no population. */
+  relationLimit: z.number().int().positive(),
 });
 const Payload = z.discriminatedUnion('mode', [SourcePayload, CensusPayload]);
 
@@ -116,8 +115,17 @@ const CensusData = CensusPayload.extend({
       endpointId: z.string().min(1),
       scopes: z.array(z.string().min(1)),
       node: z.boolean(),
+      /** Who was walked to prove each scope, stored with that scope when it is established. */
+      proof: z.array(
+        z.strictObject({
+          scope: z.string().min(1),
+          contributors: z.array(z.string().min(1)),
+        }),
+      ),
     }),
   ),
+  /** The last endpoint the page looked at, sealed or not, so the next page always moves past it. */
+  cursor: z.string(),
   /**
    * The frozen cohort this count was taken over, stored with every scope it establishes. Absent
    * when no such cohort exists, which is what the check defers on.
@@ -214,39 +222,36 @@ export const legacyMaterializationPublication = new PublicationOperation({
       heads: [],
     };
     if (payload.mode === 'census') {
-      // Bound to the frozen record, not to a cohort id somebody typed. A cohort nobody froze
-      // enumerates nothing here and is refused by the check below.
-      const proof = censusCoverage(context.db, payload.cohortId);
-      const endpoints =
-        proof === undefined
-          ? []
-          : pageUncountedEndpoints(
-              context.db,
-              payload.cohortId,
-              payload.after,
-              payload.endpointLimit,
-            ).map((endpointId) => ({
-              endpointId,
-              scopes: [...endpointCensusScopes(context.db, endpointId)],
-              node: isNodeEndpoint(context.db, endpointId),
-            }));
+      // Bound to the frozen record, not to a cohort id somebody typed, and proved scope by scope
+      // against the population the graph shows. A cohort nobody froze enumerates nothing here and
+      // is refused by the check below.
+      const page = await planCensusPage(context, payload);
       const data: CensusPlanData = {
         ...payload,
-        endpoints,
-        ...(proof === undefined ? {} : { coverage: proof }),
+        endpoints: page.endpoints.map((endpoint) => ({
+          endpointId: endpoint.endpointId,
+          scopes: [...endpoint.scopes],
+          node: endpoint.node,
+          proof: endpoint.proof.map((entry) => ({
+            scope: entry.scope,
+            contributors: [...entry.contributors],
+          })),
+        })),
+        cursor: page.cursor,
+        ...(page.coverage === undefined ? {} : { coverage: page.coverage }),
         observedAt,
       };
       return {
         data,
         expected,
-        scopes: endpoints.flatMap((endpoint) =>
+        scopes: data.endpoints.flatMap((endpoint) =>
           endpoint.scopes.map((scope) => ({
             kind: 'relation_scope' as const,
             id: endpoint.endpointId,
             scope,
           })),
         ),
-        effects: [{ kind: LEGACY_EFFECTS.census, detail: { endpoints: endpoints.length } }],
+        effects: [{ kind: LEGACY_EFFECTS.census, detail: { endpoints: data.endpoints.length } }],
       };
     }
     const admission = await admit(context.graph, context.db, payload, context.now);
@@ -324,13 +329,12 @@ export const legacyMaterializationPublication = new PublicationOperation({
           projected += 1;
         }
       }
-      const last = data.endpoints[data.endpoints.length - 1];
       return {
         ...EMPTY,
         mode: 'census',
         projected,
         established: data.endpoints.length,
-        cursor: last?.endpointId ?? data.after,
+        cursor: data.cursor,
         reason: 'every page of the cohort has accounted',
       };
     }

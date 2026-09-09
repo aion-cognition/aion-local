@@ -386,15 +386,23 @@ export function claimDedupOperation(): IntrospectionOperation {
         // The decision's own identity: the pair, and the proof it was decided on. A crash retry
         // of the same decision reuses it and finds its receipt; a decision taken on evidence that
         // moved is a different decision and gets an identity of its own.
-        // Only a binding the caller actually confirmed travels. A composition holding no
-        // evidence seam confirmed nothing, and refusing the write on a revision nobody checked
-        // would be stricter at the guard than the decision that reached it was.
+        // Only a binding the caller actually confirmed travels, and a merge without one is not
+        // published at all. A composition holding no evidence seam confirmed nothing, so there is
+        // no decision to name at the guard — the pair stays owed and unstamped rather than being
+        // destroyed on proof nobody can produce.
         const decided =
           ctx.evidence !== undefined && assembled.status === 'ready'
             ? assembled.revision
             : undefined;
-        const mergeOperationId =
-          decided === undefined ? pairKey : `${pairKey}:${decided.digest.slice(0, 16)}`;
+        if (decided === undefined) {
+          failed += 1;
+          ctx.logger.warn(
+            { subjectId: subject.id, candidateId: neighbor.id },
+            'claim dedup composed no judged evidence for this pair; the pair stays owed',
+          );
+          continue;
+        }
+        const mergeOperationId = `${pairKey}:${decided.digest.slice(0, 16)}`;
         const applied = await applyMergeWithRecovery({
           operationId: mergeOperationId,
           attempt: () =>

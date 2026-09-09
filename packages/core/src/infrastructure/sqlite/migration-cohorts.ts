@@ -285,6 +285,31 @@ export function listAccountedCohortMembers(
   return rows.map((row) => row.source_id);
 }
 
+/**
+ * The members an explicit repair pass walks: the unreached ones AND the pinned ones.
+ *
+ * A pin is the record of a walk that could not prove something — a bound that ran out, a digest
+ * that had drifted, an edge nobody could classify. Repairing the evidence and asking for a
+ * re-verification has to be able to select those members again, or the only way back into the
+ * population is editing the progress table by hand. Verified members stay out: re-proving them is
+ * the rebuild pass's job, and it names them itself.
+ */
+export function listRepairableCohortMembers(
+  db: SqliteHandle,
+  cohortId: string,
+  afterSourceId: string,
+  limit: number,
+): readonly string[] {
+  const rows = db
+    .prepare(
+      `SELECT source_id FROM migration_progress
+       WHERE cohort_id = ? AND status IN ('accounted', 'pinned') AND source_id > ?
+       ORDER BY source_id LIMIT ?`,
+    )
+    .all(cohortId, afterSourceId, limit) as { source_id: string }[];
+  return rows.map((row) => row.source_id);
+}
+
 /** How many members sit at each status, which is what a batch reports when it finishes. */
 export function countMigrationProgress(
   db: SqliteHandle,

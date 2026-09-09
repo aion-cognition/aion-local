@@ -1,5 +1,9 @@
 import { NODE_SUPPORT_ROLE_SCOPES } from '../../evidence/application/node-support.js';
-import { isRegisteredScope, scopeAuthority } from '../../evidence/domain/scopes.js';
+import {
+  durableRoleScope,
+  nodeScopeDirection,
+  type ScopeDirection,
+} from '../../evidence/domain/scopes.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   acknowledgeStatedLinkVersions,
@@ -15,7 +19,11 @@ import {
   readMigrationCohort,
 } from '../../infrastructure/sqlite/migration-cohorts.js';
 import { commitSourceIncidence } from '../../infrastructure/sqlite/source-incidence.js';
-import type { MaterializedLink, ScopeAdvanceKey } from '../domain/legacy-materialization.js';
+import {
+  roleOfLinkKind,
+  type MaterializedLink,
+  type ScopeAdvanceKey,
+} from '../domain/legacy-materialization.js';
 
 /**
  * The durable half of the guarded legacy materialization, and the census seal that follows it.
@@ -60,15 +68,21 @@ function operationKey(operationId: string, linkId: string): string {
   return `legacy:${operationId}:${linkId}`;
 }
 
-/** The version this operation holds for a link, for a projection written at acknowledgment. */
-function linkVersionOf(db: SqliteHandle, linkId: string, operationId: string): number {
+/**
+ * The version this operation appended to a link, or nothing when it appended none.
+ *
+ * Nothing is the answer for a link a newer acknowledged version already covers: the prepare
+ * preserved it and wrote no row. Reading that absence as version 1 is how a survivor sitting at
+ * version 2 gets its projection walked back to a baseline this pass never wrote.
+ */
+function linkVersionOf(db: SqliteHandle, linkId: string, operationId: string): number | undefined {
   const row = db
     .prepare(
       `SELECT MAX(version) AS n FROM evidence_link_versions
        WHERE link_id = ? AND operation_id = ?`,
     )
     .get(linkId, operationId) as { n: number | null };
-  return row.n ?? 1;
+  return row.n ?? undefined;
 }
 
 /**
@@ -147,12 +161,18 @@ export function acknowledgeMaterialization(
     if (!entry.incident) {
       continue;
     }
+    const linkVersion = linkVersionOf(db, entry.linkId, write.operationId);
+    // A preserved link keeps the projection it already has. This pass wrote no version for it, so
+    // it has nothing to point the row at, and pointing it anywhere would move a record backwards.
+    if (linkVersion === undefined) {
+      continue;
+    }
     commitSourceIncidence(db, {
       sourceId: entry.fromId,
       nodeId: entry.toId,
       role: entry.kind,
       linkId: entry.linkId,
-      linkVersion: linkVersionOf(db, entry.linkId, write.operationId),
+      linkVersion,
       currency: entry.closed ? 'closed' : 'open',
       clocks: entry.clocks,
     });
@@ -246,32 +266,41 @@ export function isNodeEndpoint(db: SqliteHandle, endpointId: string): boolean {
 }
 
 /**
- * Every scope the seal counts for one endpoint.
+ * The scopes a seal may CONSIDER for one endpoint: the ones this migration's own records place on
+ * it, plus — for a node endpoint — the incidence roles a repair sweep reads.
  *
- * The scopes it already carries, plus — for a node endpoint — the incidence roles a repair sweep
- * reads, at each role's REGISTERED direction. A role with no row at all is exactly where a missing
- * count hides: leaving it out would establish three of four censuses and let the fourth keep the
- * whole support answer unknown forever. The pass enumerated each source's complete incident set,
- * so once the cohort is walked with nothing pinned, a role with no row on a touched node is a
- * counted zero.
+ * Derived from the link rows the walk wrote, never from the scope table. A scope row is a counter
+ * somebody moved, and whoever moved it may have enumerated nothing: adopting the rows an endpoint
+ * happens to carry is how a population this pass never looked at ends up counted under a seal that
+ * only walked source relationships. The citation scope is the case that proved it — C2 owns the
+ * revision records, and nothing here has read them.
  *
- * Graph-authority scopes are never touched here. Their counter lives in the other store, and this
- * side holds only a mirror of what it said at some moment.
+ * A role with no row at all is still considered, because that is exactly where a missing count
+ * hides: leaving it out would establish three of four censuses and let the fourth keep the whole
+ * support answer unknown forever. Whether the absence is a proved zero is decided by the coverage
+ * proof over the endpoint's graph population, not here.
+ *
+ * Graph-authority scopes are never touched. Their counter lives in the other store, and this side
+ * holds only a mirror of what it said at some moment.
  */
 export function endpointCensusScopes(db: SqliteHandle, endpointId: string): readonly string[] {
   const rows = db
-    .prepare('SELECT relation_class FROM evidence_scope_versions WHERE endpoint_id = ?')
-    .all(endpointId) as { relation_class: string }[];
-  const scopes = new Set(
-    rows
-      .map((row) => row.relation_class)
-      .filter((scope) => isRegisteredScope(scope) && scopeAuthority(scope) === 'sqlite'),
-  );
+    .prepare(
+      `SELECT kind, from_id AS from_id FROM evidence_links
+       WHERE record_source = 'legacy_materialization' AND (from_id = ? OR to_id = ?)`,
+    )
+    .all(endpointId, endpointId) as { kind: string; from_id: string }[];
+  const scopes = new Set<string>();
+  for (const row of rows) {
+    const role = roleOfLinkKind(row.kind);
+    if (role === undefined) {
+      continue;
+    }
+    const node = nodeScopeDirection(role);
+    const source: ScopeDirection = node === 'in' ? 'out' : 'in';
+    scopes.add(durableRoleScope(role, row.from_id === endpointId ? source : node));
+  }
   if (isNodeEndpoint(db, endpointId)) {
-    // The role scopes a repair sweep reads, taken from the reader itself so a census is never
-    // filed under a scope that reader does not ask for. The citation scope is NOT among them:
-    // this pass walked source relationships, not the revision records, and counting a population
-    // it never looked at is the substitution the whole cut exists to prevent.
     for (const scope of NODE_SUPPORT_ROLE_SCOPES) {
       scopes.add(scope);
     }
@@ -314,11 +343,23 @@ export function censusCoverage(db: SqliteHandle, cohortId: string): CensusCovera
   };
 }
 
+/** What proved ONE scope's population: the sources behind it, or the source it belongs to. */
+export type ScopeProof = {
+  readonly scope: string;
+  readonly contributors: readonly string[];
+};
+
 export type CensusWrite = {
   readonly operationId: string;
   readonly endpoints: readonly {
     readonly endpointId: string;
     readonly scopes: readonly string[];
+    /**
+     * Per scope, who was walked to prove it. Stored with THAT scope and no other: a cohort digest
+     * says a migration finished, which is not the same claim as this population being accounted
+     * for, and one endpoint's scopes are proved by different sets of sources.
+     */
+    readonly proof?: readonly ScopeProof[];
   }[];
   readonly observedAt: Date;
   /** What the count rests on, stored with it. A label is not proof that anything was walked. */
@@ -350,13 +391,18 @@ export function acknowledgeCensusSeal(
   let established = 0;
   for (const endpoint of write.endpoints) {
     for (const relationClass of endpoint.scopes) {
+      const proof = endpoint.proof?.find((entry) => entry.scope === relationClass);
       const published = acknowledgeScopeAdvance(db, {
         endpointId: endpoint.endpointId,
         relationClass,
         operationId: write.operationId,
         updatedAt: new Date(knownFrom),
         censusStatus: 'established',
-        coverageJson: JSON.stringify({ ...write.coverage, scope: relationClass }),
+        coverageJson: JSON.stringify({
+          ...write.coverage,
+          scope: relationClass,
+          ...(proof === undefined ? {} : { contributors: proof.contributors }),
+        }),
       });
       if (published !== undefined) {
         established += 1;

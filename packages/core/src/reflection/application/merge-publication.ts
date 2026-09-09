@@ -178,6 +178,9 @@ function loserIncidence(db: SqliteHandle, loserId: string): readonly z.infer<typ
         ...(row.validUntil === undefined ? {} : { valid_until: row.validUntil }),
         ...(row.txFrom === undefined ? {} : { tx_from: row.txFrom }),
         ...(row.txUntil === undefined ? {} : { tx_until: row.txUntil }),
+        // The absorbed row's own last-written clock. A reader that decides on recency reads it,
+        // and a survivor holding the evidence without it answers that question from nothing.
+        ...(row.updatedAt === undefined ? {} : { updated_at: row.updatedAt }),
       },
     }));
 }
@@ -256,7 +259,18 @@ export const claimMergePublication = new PublicationOperation({
       effects: [{ kind: MERGE_EFFECT, detail: { survivor: payload.survivorId } }],
     });
   },
-  check(context, _data, expected) {
+  check(context, data, expected) {
+    // A merge destroys one of the two claims it is about. The judgment that chose between them is
+    // what makes that safe, and its binding is the only record of what that judgment read: with no
+    // binding there is nothing to re-verify, and an empty dependency set verifies as current
+    // against any substrate at all — which is a guard that passes precisely when it has nothing to
+    // check. The pair keeps its owed work and waits for a decision somebody can point at.
+    if (data.judged === undefined || data.judged.dependencies.length === 0) {
+      return Promise.resolve({
+        status: 'rejected',
+        reason: 'merge_without_judged_evidence',
+      } as const);
+    }
     // Under the guard, against the evidence the judge actually decided on. Currency alone cannot
     // see a correction, a confirmation or a changed required source arriving while both claims
     // stayed current, and that is exactly the window between the last model answer and this write.

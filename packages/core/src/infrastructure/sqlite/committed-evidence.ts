@@ -140,6 +140,12 @@ export type CommittedIncidence = {
   readonly validUntil?: string;
   readonly txFrom?: string;
   readonly txUntil?: string;
+  /**
+   * When the relationship this version records was last written, as it recorded it. A strict
+   * recency reader asks for exactly this, and a carried row that dropped it would date the
+   * evidence to whatever moved it.
+   */
+  readonly updatedAt?: string;
 };
 
 type IncidenceRowData = {
@@ -455,12 +461,14 @@ function toHistoricalIncidence(
     valid_until?: unknown;
     tx_from?: unknown;
     tx_until?: unknown;
+    updated_at?: unknown;
   };
   const bounds = {
     validFrom: statedStamp(stated.valid_from),
     validUntil: statedStamp(stated.valid_until),
     txFrom: statedStamp(stated.tx_from),
     txUntil: statedStamp(stated.tx_until),
+    updatedAt: statedStamp(stated.updated_at),
   };
   return {
     ...toIncidence(row),
