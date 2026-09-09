@@ -200,13 +200,25 @@ export function statementWithContext(statement: string, side: JudgmentSide | und
 }
 
 /**
+ * What a decision was taken under, handed back to the seam that issued it.
+ *
+ * A seam re-reading the substrate for itself would compare the substrate with itself and call
+ * every decision current. The binding is the caller's record of the vantage the judge was
+ * actually given, and it is the only thing that can be compared against what is in force now.
+ */
+export type JudgmentBinding = {
+  /** The coverage contract the assembly named, where the seam checked one. */
+  readonly coverageEpoch?: string;
+};
+
+/**
  * The seam a judgment path holds. It carries the checked context it was built with, so a stage
  * never constructs a temporal vantage of its own to read evidence under.
  */
 export type JudgmentEvidence = {
   assemble(pair: JudgmentPair): Promise<JudgmentAssembly>;
   /** Whether the evidence a returned judgment was made on still stands, before it is applied. */
-  confirm(revision: EvidenceRevision): RevisionCheck;
+  confirm(revision: EvidenceRevision, binding?: JudgmentBinding): RevisionCheck;
 };
 
 /**

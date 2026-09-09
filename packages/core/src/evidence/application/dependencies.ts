@@ -218,7 +218,13 @@ export type RevisionCheck =
   | { readonly status: 'current' }
   | { readonly status: 'stale'; readonly changed: readonly EvidenceDependency[] }
   /** A scope whose current version cannot be established. Neither current nor proved changed. */
-  | { readonly status: 'unverifiable'; readonly unknown: readonly EvidenceDependency[] };
+  | { readonly status: 'unverifiable'; readonly unknown: readonly EvidenceDependency[] }
+  /**
+   * The coverage contract a decision was taken under is no longer the one in force, or the
+   * decision names none. Every dependency it read can be untouched and this still holds: what
+   * moved is what the judge was allowed to see, which no dependency version records.
+   */
+  | { readonly status: 'uncovered'; readonly reason: 'epoch_changed' | 'binding_absent' };
 
 function currentVersion(db: SqliteHandle, dependency: EvidenceDependency): string | undefined {
   if (dependency.scope.startsWith('source.')) {

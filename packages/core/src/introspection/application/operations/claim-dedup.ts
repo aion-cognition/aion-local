@@ -303,7 +303,17 @@ export function claimDedupOperation(): IntrospectionOperation {
           if (assembled.status !== 'ready' || ctx.evidence === undefined) {
             return true;
           }
-          const check = ctx.evidence.confirm(assembled.revision);
+          // The vantage travels with the evidence to every terminal record this pair can leave,
+          // not only to the merge. A negative verdict stamped under a contract that has since
+          // been replaced is permanent: the pair reads as settled and never reaches a judge under
+          // the contract now in force. A decision naming no vantage at all is refused the same
+          // way the merge writer refuses one.
+          const check =
+            assembled.coverageEpoch === undefined
+              ? ({ status: 'uncovered', reason: 'binding_absent' } as const)
+              : ctx.evidence.confirm(assembled.revision, {
+                  coverageEpoch: assembled.coverageEpoch,
+                });
           if (check.status === 'current') {
             return true;
           }

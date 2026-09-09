@@ -1,10 +1,16 @@
 import type { RevisionCheck } from './dependencies.js';
-import type { JudgmentAssembly, JudgmentEvidence, JudgmentPair } from './judgment.js';
+import type {
+  JudgmentAssembly,
+  JudgmentBinding,
+  JudgmentEvidence,
+  JudgmentPair,
+} from './judgment.js';
 import type { EvidenceResolver } from './resolver.js';
 import {
   buildEvidenceRevision,
   type EvidenceRevision,
 } from '../../infrastructure/publication/preconditions.js';
+import { coverageEpochIsCurrent } from '../../infrastructure/sqlite/coverage-contract.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { checkPresentCoverage } from '../../recall/application/coverage-checker.js';
 import { idAddress } from '../domain/address.js';
@@ -60,7 +66,21 @@ export class CoveredJudgmentEvidence implements JudgmentEvidence {
       : assembly;
   }
 
-  confirm(revision: EvidenceRevision): RevisionCheck {
+  /**
+   * Whether the decision still stands: the evidence it read, and the vantage it read it under.
+   *
+   * This seam checks coverage per pair, so every assembly it returned names the contract that was
+   * in force when the judge was asked. A caller that hands that binding back gets it compared
+   * against the contract standing now; sampling the current epoch here instead would compare the
+   * substrate with itself and call a judgment taken under a replaced contract current.
+   */
+  confirm(revision: EvidenceRevision, binding?: JudgmentBinding): RevisionCheck {
+    if (
+      binding?.coverageEpoch !== undefined &&
+      !coverageEpochIsCurrent(this.#db, binding.coverageEpoch)
+    ) {
+      return { status: 'uncovered', reason: 'epoch_changed' };
+    }
     return this.#resolver.confirm(revision);
   }
 }
