@@ -1,6 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
+import { CONFIRMATION_PROPERTIES } from './claim-provenance-queries.js';
 import { runRead, type GraphTransaction } from './connection.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from './episodes.js';
 import { BASE_NODE_LABEL } from './labels.js';
@@ -33,6 +34,12 @@ export type LegacyRawNodes = {
   /** The session the episode is owned by, as the graph records it. Absent when it has none. */
   readonly sessionId?: string;
   readonly contentHash?: string;
+  /**
+   * When the source was forgotten, where it was. A suppression is a statement about the source
+   * that outlives its content, and a migration that read only the content would carry the bytes
+   * across and leave the statement behind — which is a forgotten memory answering again.
+   */
+  readonly forgottenAt?: string;
   /** The original turns, in the order their recorded sequence puts them. */
   readonly turns: readonly LegacyTurn[];
 };
@@ -44,6 +51,7 @@ const RAW_NODES = [
   `WITH e, s, t ORDER BY t.${MEMORY_PROPERTIES.sequence}, t.id`,
   `RETURN e.id AS episode_id, s.id AS session_id,`,
   `       e.${MEMORY_PROPERTIES.contentHash} AS content_hash,`,
+  `       e.${BITEMPORAL_PROPERTIES.forgottenAt} AS forgotten_at,`,
   '       [x IN collect({',
   '         id: t.id,',
   `         role: t.${MEMORY_PROPERTIES.role},`,
@@ -77,10 +85,12 @@ type TurnRowData = {
 function toRawNodes(row: Record<string, unknown>): LegacyRawNodes {
   const sessionId = (row.session_id as string | null) ?? undefined;
   const contentHash = (row.content_hash as string | null) ?? undefined;
+  const forgottenAt = stamp(row.forgotten_at);
   return {
     sourceId: row.episode_id as string,
     ...(sessionId === undefined ? {} : { sessionId }),
     ...(contentHash === undefined ? {} : { contentHash }),
+    ...(forgottenAt === undefined ? {} : { forgottenAt }),
     turns: (row.turns as TurnRowData[]).map((turn, ordinal) => ({
       turnId: turn.id,
       ordinal,
@@ -144,6 +154,12 @@ export type LegacyRelation = {
    * day the migration ran.
    */
   readonly updatedAt?: string;
+  /**
+   * The values the relationship itself carries beyond its clocks: who confirmed it and on what.
+   * A record holding the type and a few timestamps is not the statement somebody made. Absent
+   * where the relationship states nothing beyond its type.
+   */
+  readonly recorded?: Readonly<Record<string, string>>;
 };
 
 export type LegacyRelationPage = {
@@ -165,13 +181,30 @@ const INCIDENT_RELATIONS = [
   `       r.${BITEMPORAL_PROPERTIES.validUntil} AS valid_until,`,
   `       r.${BITEMPORAL_PROPERTIES.txFrom} AS tx_from,`,
   `       r.${BITEMPORAL_PROPERTIES.txUntil} AS tx_until,`,
-  '       r.updated_at AS updated_at',
+  '       r.updated_at AS updated_at,',
+  `       r.${CONFIRMATION_PROPERTIES.by} AS confirmed_by,`,
+  `       r.${CONFIRMATION_PROPERTIES.at} AS confirmed_at,`,
+  `       r.${CONFIRMATION_PROPERTIES.evidence} AS confirmation_evidence,`,
+  '       r.rationale AS rationale,',
+  '       r.created_at AS created_at',
   'ORDER BY relation_id',
   'LIMIT $limit',
 ].join('\n');
 
 function stamp(value: unknown): string | undefined {
   return fromGraphDateTime(value)?.toISOString();
+}
+
+/** One recorded text value under the name the graph stores it as, or nothing when it is absent. */
+function text(row: Record<string, unknown>, column: string, key: string): Record<string, string> {
+  const value = row[column];
+  return typeof value === 'string' && value !== '' ? { [key]: value } : {};
+}
+
+/** The same for a recorded clock, in the ISO form every durable record carries. */
+function clock(row: Record<string, unknown>, column: string, key: string): Record<string, string> {
+  const value = stamp(row[column]);
+  return value === undefined ? {} : { [key]: value };
 }
 
 /**
@@ -208,6 +241,13 @@ export async function readLegacyIncidentRelations(
       ...(stamp(row.tx_from) === undefined ? {} : { txFrom: stamp(row.tx_from) }),
       ...(stamp(row.tx_until) === undefined ? {} : { txUntil: stamp(row.tx_until) }),
       ...(stamp(row.updated_at) === undefined ? {} : { updatedAt: stamp(row.updated_at) }),
+      recorded: {
+        ...text(row, 'confirmed_by', CONFIRMATION_PROPERTIES.by),
+        ...text(row, 'confirmation_evidence', CONFIRMATION_PROPERTIES.evidence),
+        ...text(row, 'rationale', 'rationale'),
+        ...clock(row, 'confirmed_at', CONFIRMATION_PROPERTIES.at),
+        ...clock(row, 'created_at', 'created_at'),
+      },
     }),
   );
   return { relations: rows.slice(0, limit), complete: rows.length <= limit };

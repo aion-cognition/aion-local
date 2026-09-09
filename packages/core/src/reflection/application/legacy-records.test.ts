@@ -34,6 +34,8 @@ import {
 } from '../../infrastructure/sqlite/publication-intents.js';
 
 const NOW = new Date('2026-09-09T02:00:00.000Z');
+/** What a seal records beside every scope it counts: the cohort it walked and its bounds. */
+const PROOF = { cohortId: 'cohort-1', members: 1, verified: 1 };
 const SOURCE = 'episode-1';
 const NODE = 'entity-1';
 
@@ -51,6 +53,7 @@ function link(overrides: Partial<PlannedLink> = {}): PlannedLink {
     incident: true,
     closed: false,
     clocks: {},
+    recorded: {},
     ...overrides,
   };
 }
@@ -339,10 +342,15 @@ describe('the census seal', () => {
     expect(certifyNodeSupport(store.db, 'entity-empty').support).toBe('unknown');
 
     const endpoints = [{ endpointId: NODE, scopes: [...endpointCensusScopes(store.db, NODE)] }];
-    prepareCensusSeal(store.db, { operationId: 'seal', endpoints, observedAt: NOW });
+    prepareCensusSeal(store.db, {
+      operationId: 'seal',
+      endpoints,
+      coverage: PROOF,
+      observedAt: NOW,
+    });
     const established = acknowledgeCensusSeal(
       store.db,
-      { operationId: 'seal', endpoints, observedAt: NOW },
+      { operationId: 'seal', endpoints, coverage: PROOF, observedAt: NOW },
       NOW.toISOString(),
     );
 
@@ -358,10 +366,15 @@ describe('the census seal', () => {
     // A set filed under scopes the reader does not ask for would leave the answer unknown while
     // looking established, and a repair would hold that node forever.
     const endpoints = [{ endpointId: 'entity-empty', scopes: [...NODE_SUPPORT_SCOPES] }];
-    prepareCensusSeal(store.db, { operationId: 'seal-empty', endpoints, observedAt: NOW });
+    prepareCensusSeal(store.db, {
+      operationId: 'seal-empty',
+      endpoints,
+      coverage: PROOF,
+      observedAt: NOW,
+    });
     acknowledgeCensusSeal(
       store.db,
-      { operationId: 'seal-empty', endpoints, observedAt: NOW },
+      { operationId: 'seal-empty', endpoints, coverage: PROOF, observedAt: NOW },
       NOW.toISOString(),
     );
 
@@ -373,10 +386,15 @@ describe('the census seal', () => {
 
   it('leaves every counted scope established and every uncounted one alone', () => {
     const endpoints = [{ endpointId: NODE, scopes: [...endpointCensusScopes(store.db, NODE)] }];
-    prepareCensusSeal(store.db, { operationId: 'seal', endpoints, observedAt: NOW });
+    prepareCensusSeal(store.db, {
+      operationId: 'seal',
+      endpoints,
+      coverage: PROOF,
+      observedAt: NOW,
+    });
     acknowledgeCensusSeal(
       store.db,
-      { operationId: 'seal', endpoints, observedAt: NOW },
+      { operationId: 'seal', endpoints, coverage: PROOF, observedAt: NOW },
       NOW.toISOString(),
     );
 
@@ -399,10 +417,15 @@ describe('the census seal', () => {
     expect(readRelationScope(store.db, { ...scope, empty: true }).status).toBe('unverified');
 
     const endpoints = [{ endpointId: NODE, scopes: [...endpointCensusScopes(store.db, NODE)] }];
-    prepareCensusSeal(store.db, { operationId: 'seal', endpoints, observedAt: NOW });
+    prepareCensusSeal(store.db, {
+      operationId: 'seal',
+      endpoints,
+      coverage: PROOF,
+      observedAt: NOW,
+    });
     acknowledgeCensusSeal(
       store.db,
-      { operationId: 'seal', endpoints, observedAt: NOW },
+      { operationId: 'seal', endpoints, coverage: PROOF, observedAt: NOW },
       NOW.toISOString(),
     );
 
@@ -414,16 +437,33 @@ describe('the census seal', () => {
   });
 
   it('drops a counted endpoint out of the page the next seal reads', () => {
-    expect(pageUncountedEndpoints(store.db, '', 10)).toContain(NODE);
+    // The page is the cohort's own materialization, so the cohort has to name this source.
+    freezeMigrationCohort(store.db, {
+      cohortId: 'cohort-1',
+      cohortDigest: 'digest',
+      intakeWatermark: 0,
+      archiveRowidLow: 0,
+      archiveRowidHigh: 0,
+      graphCensusDigest: 'graph',
+      orderingPolicyVersion: 1,
+      createdAt: NOW,
+      members: [SOURCE],
+    });
+    expect(pageUncountedEndpoints(store.db, 'cohort-1', '', 10)).toContain(NODE);
 
     const endpoints = [{ endpointId: NODE, scopes: [...endpointCensusScopes(store.db, NODE)] }];
-    prepareCensusSeal(store.db, { operationId: 'seal', endpoints, observedAt: NOW });
+    prepareCensusSeal(store.db, {
+      operationId: 'seal',
+      endpoints,
+      coverage: PROOF,
+      observedAt: NOW,
+    });
     acknowledgeCensusSeal(
       store.db,
-      { operationId: 'seal', endpoints, observedAt: NOW },
+      { operationId: 'seal', endpoints, coverage: PROOF, observedAt: NOW },
       NOW.toISOString(),
     );
 
-    expect(pageUncountedEndpoints(store.db, '', 10)).not.toContain(NODE);
+    expect(pageUncountedEndpoints(store.db, 'cohort-1', '', 10)).not.toContain(NODE);
   });
 });

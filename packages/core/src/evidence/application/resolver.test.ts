@@ -256,9 +256,13 @@ describe('the evidence resolver', () => {
     }
   });
 
-  it('refuses to assemble a judgment it cannot certify against a publication position', async () => {
+  it('refuses to assemble a judgment whose reader cannot take a position', async () => {
     const assembly = await resolver({
       driver: lineageDriver({ unresolved: 0, log: { cyphers: [] } }),
+      // A composition that judges holds a reader. What is refused here is a reader that could
+      // not take its position, which is the race the certification exists to detect; a
+      // composition holding NO reader is a composition defect and not a per-call refusal.
+      publications: checkpoints([{ status: 'unavailable', reason: 'pending_publication' }]),
     }).assembleJudgment(
       {
         route: 'claim_dedup',
@@ -275,7 +279,7 @@ describe('the evidence resolver', () => {
     expect(assembly.status).toBe('incomplete');
     expect(
       assembly.status === 'incomplete' ? assembly.reasons.map((reason) => reason.reason) : [],
-    ).toEqual(['required_scope_missing', 'required_scope_missing']);
+    ).toEqual(['pending_publication', 'pending_publication']);
   });
 
   it('refuses a judgment whose position moved while its evidence was read', async () => {

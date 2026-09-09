@@ -115,6 +115,57 @@ export function pageArchiveRowsForEpisode(
   return rows.map(toScanRow);
 }
 
+/**
+ * Every archive row that backs one source: the ones its own episode id names, and the canonical
+ * row its record already points at.
+ *
+ * A later occurrence of the same bytes has no archive row of its own — the archive is keyed on the
+ * content, so the first occurrence's row is the one both records were verified against. Looking
+ * only by episode id would report that occurrence as unarchived and pin a source whose canonical
+ * mapping is written down.
+ */
+export function archiveGroupFor(
+  db: SqliteHandle,
+  sourceId: string,
+  canonicalArchiveId: string | null,
+  bounds: { readonly low: number; readonly high: number },
+): ArchiveSourceGroup | undefined {
+  const rows = [...pageArchiveRowsForEpisode(db, sourceId, bounds)];
+  if (canonicalArchiveId !== null && !rows.some((row) => row.archiveId === canonicalArchiveId)) {
+    const named = db
+      .prepare(
+        `SELECT rowid, id, session_id, episode_id, content_hash, idempotency_key, schema_version,
+                occurred_at, archived_at
+         FROM experience_archive
+         WHERE id = ? AND rowid >= ? AND rowid <= ?`,
+      )
+      .get(canonicalArchiveId, bounds.low, bounds.high) as ArchiveRowData | undefined;
+    if (named !== undefined) {
+      rows.push(toScanRow(named));
+    }
+  }
+  if (rows.length === 0) {
+    return undefined;
+  }
+  const canonical = rows.reduce(earlier);
+  return {
+    // The source being verified, not whichever occurrence happened to write the archive row.
+    sourceId,
+    sessionId: canonical.sessionId,
+    canonicalArchiveId: canonical.archiveId,
+    aliasArchiveIds: rows
+      .filter((row) => row.archiveId !== canonical.archiveId)
+      .map((row) => row.archiveId)
+      .sort(),
+    contentHash: canonical.contentHash,
+    identityHash: canonical.identityHash,
+    schemaVersion: canonical.schemaVersion,
+    occurredAt: canonical.occurredAt,
+    archivedAt: canonical.archivedAt,
+    conflictingAliases: rows.some((row) => row.contentHash !== canonical.contentHash),
+  };
+}
+
 export type ArchiveSourceGroup = {
   readonly sourceId: string;
   readonly sessionId: string;

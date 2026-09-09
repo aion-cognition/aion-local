@@ -18,6 +18,7 @@ import {
   recordMigrationProgress,
   type MigrationStatus,
 } from '../../infrastructure/sqlite/migration-cohorts.js';
+import { publicationRecord } from '../../infrastructure/sqlite/publication-coordinator-store.js';
 import { readSourceRecord } from '../../infrastructure/sqlite/source-identity.js';
 import { hashContent } from '../domain/content.js';
 
@@ -65,6 +66,8 @@ export type CohortFreezeReport = {
 };
 
 const DEFAULT_PAGE = 200;
+/** A member nobody can repair in this many passes needs a person, not another identity. */
+const MAX_REPAIR_ATTEMPTS = 64;
 const DEFAULT_RELATION_LIMIT = 500;
 
 /** Every episode the archive names inside the frozen bounds, walked in bounded pages. */
@@ -121,6 +124,22 @@ export async function freezeLegacyCohort(
   deps: LegacyBackfillDeps,
   request: CohortFreezeRequest,
 ): Promise<CohortFreezeReport> {
+  // A frozen cohort is frozen. Re-enumerating under its id would count a population its bounds
+  // and its digest do not describe, and a restart after any intake would then be refused for
+  // disagreeing with the record it is trying to resume.
+  const frozen = readMigrationCohort(deps.db, request.cohortId);
+  if (frozen !== undefined) {
+    const counts = countMigrationProgress(deps.db, request.cohortId);
+    const members = counts.accounted + counts.verified + counts.pinned;
+    return {
+      cohortId: frozen.cohortId,
+      members,
+      written: 0,
+      archiveBacked: archiveBackedMembers(deps.db, request.cohortId),
+      graphOnly: members - archiveBackedMembers(deps.db, request.cohortId),
+      intakeWatermark: frozen.intakeWatermark,
+    };
+  }
   const pageLimit = request.pageLimit ?? DEFAULT_PAGE;
   const bounds = archiveRowidBounds(deps.db);
   const intakeWatermark = readIntakeWatermark(deps.db);
@@ -148,6 +167,42 @@ export async function freezeLegacyCohort(
     graphOnly: members.filter((member) => !archiveBacked.has(member)).length,
     intakeWatermark,
   };
+}
+
+/**
+ * The identity of this walk of one member.
+ *
+ * Stable while an attempt is unfinished, so a crash retry finds the record it already wrote and
+ * the receipt that says what happened to it. A member walked again AFTER its attempt was
+ * acknowledged is a second attempt on different proof — a repaired pin, or a re-verification —
+ * and it takes an identity of its own rather than being handed the old attempt's saved verdict.
+ */
+function attemptId(db: SqliteHandle, cohortId: string, sourceId: string): string {
+  const base = `legacy-materialization:${cohortId}:${sourceId}`;
+  for (let attempt = 1; attempt <= MAX_REPAIR_ATTEMPTS; attempt += 1) {
+    const id = attempt === 1 ? base : `${base}#${String(attempt)}`;
+    if (publicationRecord(db, id)?.state !== 'acknowledged') {
+      return id;
+    }
+  }
+  throw new Error(`source ${sourceId} exhausted its repair attempts in cohort ${cohortId}`);
+}
+
+/** Frozen members the archive names inside the cohort's own bounds. */
+function archiveBackedMembers(db: SqliteHandle, cohortId: string): number {
+  const row = db
+    .prepare(
+      `SELECT count(*) AS n FROM migration_progress m
+       JOIN migration_cohorts c ON c.cohort_id = m.cohort_id
+       WHERE m.cohort_id = ?
+         AND EXISTS (
+           SELECT 1 FROM experience_archive a
+           WHERE a.episode_id = m.source_id
+             AND a.rowid >= c.archive_rowid_low AND a.rowid <= c.archive_rowid_high
+         )`,
+    )
+    .get(cohortId) as { n: number };
+  return row.n;
 }
 
 export type BackfillBatchRequest = {
@@ -210,7 +265,7 @@ export async function runLegacyBackfillBatch(
     // under the guard, so nothing outside it decides what a source's records say.
     const outcome = await deps.publications.publish({
       kind: 'legacy_materialization',
-      operationId: `legacy-materialization:${request.cohortId}:${sourceId}`,
+      operationId: attemptId(deps.db, request.cohortId, sourceId),
       payload: {
         mode: 'source',
         cohortId: request.cohortId,

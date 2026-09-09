@@ -59,8 +59,12 @@ export type EvidenceResolverOptions = {
   readonly logger: Pick<Logger, 'warn'>;
   readonly limits?: EvidenceLimits;
   /**
-   * The publication position a read is certified against. Without it a read still answers, and
-   * a judgment does not: an uncertified judgment is exactly the write that races a publication.
+   * The publication position a read is certified against.
+   *
+   * Every composition that judges supplies one: an uncertified judgment is exactly the write that
+   * races a publication, and the reader is what detects the race. It stays optional in the type
+   * because read-only compositions legitimately hold none; a composition that judges without one
+   * takes no position at all, which is a composition defect rather than a per-call refusal.
    */
   readonly publications?: EvidenceCheckpointReader;
 };
@@ -300,14 +304,19 @@ export class EvidenceResolver {
     budget: RequestBudget = this.newBudget(),
   ): Promise<JudgmentAssembly> {
     const before = await this.#certify(budget);
-    if (before.status === 'uncertified' || before.checkpoint === undefined) {
+    // A reader that could not take its position refuses, with the reason it gave. A resolver
+    // composed with NO reader is a different thing: it has taken no position because the
+    // composition declared it holds none, and refusing it here made every judgment in such a
+    // composition fail forever with a reason nothing could act on. That requirement belongs where
+    // it can be met, so the composition supplies the reader and this path reports what the reader
+    // said.
+    if (before.status === 'uncertified') {
       return {
         status: 'incomplete',
         reasons: pair.sides.map((side) => ({
           address: { kind: 'id' as const, id: side.nodeId },
           field: 'source_content' as const,
-          reason:
-            before.status === 'uncertified' ? before.issue : ('required_scope_missing' as const),
+          reason: before.issue,
           required: true,
         })),
         revision: new EvidenceDependencies().revision(),

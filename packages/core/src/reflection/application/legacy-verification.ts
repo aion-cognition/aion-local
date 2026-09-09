@@ -8,19 +8,23 @@ import {
   getExperienceById,
 } from '../../infrastructure/sqlite/experience-archive.js';
 import {
-  groupArchiveRowsBySource,
-  pageArchiveRowsForEpisode,
+  archiveGroupFor,
   verifiedSourceRecordInput,
   type ArchiveSourceGroup,
 } from '../../infrastructure/sqlite/legacy-archive-scan.js';
 import {
+  readSourceParts,
   readSourceRecord,
   recordSourceParts,
   recordSourceRecord,
   type SourcePartInput,
   type SourceRecordInput,
 } from '../../infrastructure/sqlite/source-identity.js';
-import { prepareEpisode } from '../domain/content.js';
+import {
+  isSourceForgotten,
+  recordSourceStateVersion,
+} from '../../infrastructure/sqlite/source-lifecycle.js';
+import { prepareEpisode, type PreparedEpisode, type ReflectionContent } from '../domain/content.js';
 
 const ArchiveProof = z.strictObject({
   canonicalArchiveId: z.string().min(1),
@@ -63,6 +67,7 @@ export const VerificationSchema = z.strictObject({
   reason: z.string(),
   record: SourceRecordPlanned.optional(),
   parts: z.array(PartPlanned).optional(),
+  forgottenAt: z.string().min(1).optional(),
 });
 /**
  * Whether a source's raw projection is still what its records say it is.
@@ -88,6 +93,13 @@ export type VerificationPlan = {
   /** The record the acknowledgment writes, or nothing when the held record already stands. */
   readonly record?: SourceRecordPlan;
   readonly parts?: readonly SourcePartInput[];
+  /**
+   * When the graph recorded this source as forgotten. A suppression is a statement about the
+   * source that outlives its content: migrating the bytes and leaving it behind is a forgotten
+   * memory answering again, so the acknowledgment writes it as the durable state it should
+   * always have been.
+   */
+  readonly forgottenAt?: string;
 };
 
 export type VerificationInput = {
@@ -159,9 +171,9 @@ export function planSourceVerification(
       reason: 'the live acceptance already proved this source',
     };
   }
-  const group = groupArchiveRowsBySource(
-    pageArchiveRowsForEpisode(db, input.sourceId, input.bounds),
-  ).find((entry) => entry.sourceId === input.sourceId);
+  // Resolved through the canonical mapping the record already carries, so a later occurrence of
+  // the same bytes is proved against the row both occurrences were verified against.
+  const group = archiveGroupFor(db, input.sourceId, held?.canonicalArchiveId ?? null, input.bounds);
   if (group === undefined) {
     return pinned(
       input,
@@ -197,22 +209,22 @@ export function planSourceVerification(
   // The parts come from the payload, because that is where they all are. Only turns have a graph
   // node; an observation and a tool execution have a logical address and nothing else, and a pass
   // that recorded only what the graph shows would leave those parts uncitable forever.
-  const prepared = prepareEpisode(experience.payload, new Date(group.occurredAt));
-  const mismatch = prepared.turns.findIndex(
-    (turn, index) => raw.turns[index]?.contentHash !== turn.contentHash,
+  // Hashed with the statements stripped, the way the acceptance hashed it. A legacy row's
+  // provenance was merged into the stored payload after its digest was taken, so recomputing
+  // over the whole row would pin every source that ever carried a reference.
+  const prepared = prepareEpisode(
+    withoutStatements(experience.payload),
+    new Date(group.occurredAt),
   );
-  if (mismatch >= 0) {
-    return pinned(
-      input,
-      group,
-      heldFields,
-      `graph turn ${String(mismatch)} does not carry the archived turn's digest`,
-    );
+  const gap = rawProofGap(db, input.sourceId, group, raw, prepared);
+  if (gap !== undefined) {
+    return pinned(input, group, heldFields, gap);
   }
   return {
     sourceId: input.sourceId,
     status: 'verified',
     reason: 'the archived digest matches the graph projection',
+    ...(raw.forgottenAt === undefined ? {} : { forgottenAt: raw.forgottenAt }),
     record: {
       ...verifiedSourceRecordInput(group, {
         verificationPolicyVersion: ARCHIVE_SCHEMA_VERSION,
@@ -222,14 +234,106 @@ export function planSourceVerification(
     },
     parts: sourcePartsOf(
       prepared,
-      experience.payload,
+      withoutStatements(experience.payload),
       raw.turns.map((turn) => turn.turnId),
     ),
   };
 }
 
+/**
+ * The content as it was hashed: without the statements a later merge folded into the row.
+ *
+ * Identity is the experience, and a caller's assertions about other memories are not part of it.
+ * Intake hashes the content before the statements are recorded, and the archive row keeps that
+ * digest, so a proof that hashed the row as it stands now would disagree with every row anybody
+ * ever stated a reference on.
+ */
+function withoutStatements(content: ReflectionContent): ReflectionContent {
+  if (!('provenance' in content)) {
+    return content;
+  }
+  const { provenance, ...rest } = content;
+  void provenance;
+  return rest;
+}
+
+/**
+ * What the bounded raw identity does not prove, or nothing when all of it holds.
+ *
+ * Every check here is one a comparison of stored digests cannot make. A digest column is a value
+ * somebody wrote; the proof is the payload recomputed, the parts counted, the roles and the
+ * sequence compared, and the original ids the records already hold left where they are.
+ */
+function rawProofGap(
+  db: SqliteHandle,
+  sourceId: string,
+  group: ArchiveSourceGroup,
+  raw: LegacyRawNodes,
+  prepared: PreparedEpisode,
+): string | undefined {
+  // Recomputed, never read off the column: an archive row edited in place keeps its old digest.
+  if (prepared.contentHash !== group.contentHash) {
+    return 'the archived payload does not hash to the digest its row records';
+  }
+  if (raw.contentHash !== group.contentHash) {
+    return 'the archived digest disagrees with the graph projection';
+  }
+  if (raw.sessionId !== group.sessionId) {
+    return `the graph places this source in session ${raw.sessionId ?? 'none'}, the archive in ${group.sessionId}`;
+  }
+  if (raw.turns.length !== prepared.turns.length) {
+    return `the graph holds ${String(raw.turns.length)} turns where the archive holds ${String(prepared.turns.length)}`;
+  }
+  const recorded = new Map(
+    readSourceParts(db, sourceId)
+      .filter((part) => part.partKind === 'turn' && part.turnId !== null)
+      .map((part) => [part.ordinal, part.turnId]),
+  );
+  for (const [ordinal, turn] of prepared.turns.entries()) {
+    const projected = raw.turns[ordinal];
+    if (projected?.contentHash !== turn.contentHash) {
+      return `graph turn ${String(ordinal)} does not carry the archived turn's digest`;
+    }
+    if (projected.role !== turn.role) {
+      return `graph turn ${String(ordinal)} is recorded as ${projected.role ?? 'no role'} where the archive says ${turn.role}`;
+    }
+    // The original id is the one every later reader resolves against. A projection under a
+    // different name is a different node, however faithful its text.
+    const held = recorded.get(ordinal);
+    if (held !== undefined && held !== projected.turnId) {
+      return `graph turn ${String(ordinal)} is ${projected.turnId}, where the records hold ${held}`;
+    }
+  }
+  return undefined;
+}
+
 /** Applies a plan. Only ever called from inside a publication's acknowledgment transaction. */
-export function applySourceVerification(db: SqliteHandle, plan: VerificationPlan): void {
+export function applySourceVerification(
+  db: SqliteHandle,
+  plan: VerificationPlan,
+  /**
+   * The publication whose acknowledgment this write belongs to. A statement about a source joins
+   * the committed view through its operation, so a caller outside one records the records and not
+   * the statement: there is no operation for it to be committed under.
+   */
+  binding?: { readonly operationId: string; readonly knownFrom: Date },
+): void {
+  // The suppression travels first and whatever else does: a source whose content could not be
+  // proved is still a source somebody forgot, and its statement is not the content's to lose.
+  if (
+    binding !== undefined &&
+    plan.forgottenAt !== undefined &&
+    !isSourceForgotten(db, plan.sourceId)
+  ) {
+    recordSourceStateVersion(db, {
+      sourceId: plan.sourceId,
+      stateKind: 'forgotten',
+      operationId: binding.operationId,
+      observedAt: new Date(plan.forgottenAt),
+      knownFrom: binding.knownFrom,
+      detail: { basis: 'legacy_graph_suppression', forgotten_at: plan.forgottenAt },
+    });
+  }
   if (plan.record === undefined) {
     return;
   }

@@ -71,31 +71,39 @@ const RULES: Readonly<Record<string, Partial<Record<RawSide, RelationRule>>>> = 
     start: { record: 'incidence', role: 'session_ownership', otherLabel: 'Session' },
     end: { record: 'incidence', role: 'participation', otherNotLabels: RAW_LABELS },
   },
+  // A statement may name another source or one of its parts. That is what the signed target
+  // taxonomy provides `source` and `part` qualifiers for, so the endpoint is classified rather
+  // than excluded: refusing every raw target would pin a correction the vocabulary describes.
   CORRECTS: {
-    start: {
-      record: 'stated',
-      kind: 'corrects',
-      role: 'stated_correction',
-      otherNotLabels: RAW_LABELS,
-    },
+    start: { record: 'stated', kind: 'corrects', role: 'stated_correction' },
   },
   EVIDENCES: {
-    start: {
-      record: 'stated',
-      kind: 'confirms',
-      role: 'stated_confirmation',
-      otherNotLabels: RAW_LABELS,
-    },
+    start: { record: 'stated', kind: 'confirms', role: 'stated_confirmation' },
   },
   DERIVES_FROM: {
-    start: {
-      record: 'stated',
-      kind: 'derived_from',
-      role: 'stated_derivation',
-      otherNotLabels: RAW_LABELS,
-    },
+    start: { record: 'stated', kind: 'derived_from', role: 'stated_derivation' },
   },
 };
+
+/**
+ * The only relationship types that mean "this is the source's own internal order".
+ *
+ * Membership of the raw set is not a classification. An unknown type between two owned nodes is
+ * a relationship somebody wrote deliberately, and reading it as disposable ordering would erase
+ * whatever it actually said.
+ */
+const INTERNAL_TYPES: readonly string[] = [CONTAINMENT, 'FOLLOWS'];
+
+/**
+ * What the target is, from the labels it carries. The qualifier disambiguates a pair of endpoints
+ * two categories could share, and it is drawn from the signed closed set.
+ */
+function qualifierOf(labels: readonly string[]): 'source' | 'part' | 'retained_node' {
+  if (labels.includes('Episode')) {
+    return 'source';
+  }
+  return labels.includes('Turn') ? 'part' : 'retained_node';
+}
 
 /** Whether the other endpoint is what the rule says it must be. */
 function endpointMatches(rule: RelationRule, otherLabels: readonly string[]): boolean {
@@ -123,6 +131,8 @@ export type MaterializedLink = {
   readonly incident: boolean;
   readonly closed: boolean;
   readonly clocks: Readonly<Record<string, string>>;
+  /** What the relationship itself said, carried across without becoming a new observation. */
+  readonly recorded: Readonly<Record<string, string>>;
 };
 
 export type LegacyPin = {
@@ -162,7 +172,7 @@ function link(
   relation: LegacyRelation,
   rule: RelationRule,
   otherId: string,
-  qualifier: 'part' | 'retained_node',
+  qualifier: 'source' | 'part' | 'retained_node',
 ): MaterializedLink {
   const kind = rule.record === 'stated' ? rule.kind : rule.role;
   return {
@@ -177,6 +187,7 @@ function link(
     incident: rule.record === 'incidence',
     closed: isClosed(relation),
     clocks: clocksOf(relation),
+    recorded: relation.recorded ?? {},
   };
 }
 
@@ -197,21 +208,47 @@ export function classifyLegacyRelations(input: {
   const raw = new Set(input.rawIds);
   const links = new Map<string, MaterializedLink>();
   const pins: LegacyPin[] = [];
+  const pin = (relation: LegacyRelation, reason: string): void => {
+    pins.push({ relationId: relation.relationId, relationType: relation.type, reason });
+  };
+  /**
+   * One logical link, one original relationship. Two relationships that normalize onto the same
+   * link are an unrepresentable collision: keeping the last witness would silently drop the
+   * other's identity and clocks, so the source pins and nobody guesses which one it was.
+   */
+  const record = (relation: LegacyRelation, entry: MaterializedLink): void => {
+    const held = links.get(entry.linkId);
+    if (held !== undefined && held.relationId !== entry.relationId) {
+      pin(
+        relation,
+        `relationship ${entry.relationId} and ${held.relationId} both normalize onto link ${entry.linkId}`,
+      );
+      return;
+    }
+    links.set(entry.linkId, entry);
+  };
   for (const relation of input.relations) {
     const fromRaw = raw.has(relation.fromId);
     const toRaw = raw.has(relation.toId);
     if (fromRaw && toRaw) {
-      // The source's own shape. The link names the member end, so an episode's turns stay
-      // addressable through the same records as everything else it carries.
+      // The source's own shape, and only for the types that mean one. The link names the member
+      // end, so an episode's turns stay addressable through the same records as everything else.
+      if (!INTERNAL_TYPES.includes(relation.type)) {
+        pin(relation, `${relation.type} between two of the source's own raw nodes is not ordering`);
+        continue;
+      }
       const memberId = relation.fromId === input.sourceId ? relation.toId : relation.fromId;
-      const internal = link(
-        input.sourceId,
+      const memberLabels = relation.fromId === memberId ? relation.fromLabels : relation.toLabels;
+      record(
         relation,
-        { record: 'incidence', role: INTERNAL_ROLE },
-        memberId,
-        'part',
+        link(
+          input.sourceId,
+          relation,
+          { record: 'incidence', role: INTERNAL_ROLE },
+          memberId,
+          qualifierOf(memberLabels),
+        ),
       );
-      links.set(internal.linkId, internal);
       continue;
     }
     const side: RawSide = fromRaw ? 'start' : 'end';
@@ -219,15 +256,13 @@ export function classifyLegacyRelations(input: {
     const otherLabels = fromRaw ? relation.toLabels : relation.fromLabels;
     const rule = RULES[relation.type]?.[side];
     if (rule === undefined || !endpointMatches(rule, otherLabels)) {
-      pins.push({
-        relationId: relation.relationId,
-        relationType: relation.type,
-        reason: `no classification for ${relation.type} with the source at the ${side} and the other end labelled ${otherLabels.join('+')}`,
-      });
+      pin(
+        relation,
+        `no classification for ${relation.type} with the source at the ${side} and the other end labelled ${otherLabels.join('+')}`,
+      );
       continue;
     }
-    const classified = link(input.sourceId, relation, rule, otherId, 'retained_node');
-    links.set(classified.linkId, classified);
+    record(relation, link(input.sourceId, relation, rule, otherId, qualifierOf(otherLabels)));
   }
   return {
     links: [...links.values()].sort((a, b) => (a.linkId < b.linkId ? -1 : 1)),

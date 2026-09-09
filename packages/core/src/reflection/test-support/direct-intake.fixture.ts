@@ -79,6 +79,7 @@ function directPublisher(
   // initialization is what mints it on a real substrate. A test substrate takes the preparing
   // record, which is the state a real one is in before coverage is activated.
   ensureCoverageRegistry(db);
+  ensurePairing(db);
   return {
     async publish(request): Promise<PublicationOutcome> {
       const now = clock();
@@ -138,6 +139,23 @@ function directPublisher(
       }
     },
   };
+}
+
+/**
+ * The pairing a real substrate takes at coordinator initialization. An operation that projects a
+ * trust hint needs the substrate identity the hint is read back against, and a fixture without
+ * one would make that operation fail for a reason the substrate it stands in for does not have.
+ */
+function ensurePairing(db: SqliteHandle): void {
+  const held = db.prepare('SELECT 1 FROM publication_control LIMIT 1').get();
+  if (held !== undefined) {
+    return;
+  }
+  db.prepare(
+    `INSERT INTO publication_control
+       (substrate_id, bootstrap_state, protocol_version, last_ack_sequence)
+     VALUES (?, 'initialized', 1, 0)`,
+  ).run(randomUUID());
 }
 
 function ensureCoverageRegistry(db: SqliteHandle): void {

@@ -10,7 +10,10 @@ import {
   prepareScopeAdvance,
   rejectScopeAdvance,
 } from '../../infrastructure/sqlite/evidence-scope.js';
-import { countMigrationProgress } from '../../infrastructure/sqlite/migration-cohorts.js';
+import {
+  countMigrationProgress,
+  readMigrationCohort,
+} from '../../infrastructure/sqlite/migration-cohorts.js';
 import { commitSourceIncidence } from '../../infrastructure/sqlite/source-incidence.js';
 import type { MaterializedLink, ScopeAdvanceKey } from '../domain/legacy-materialization.js';
 
@@ -36,6 +39,15 @@ export type MaterializationWrite = {
   readonly links: readonly PlannedLink[];
   readonly scopes: readonly ScopeAdvanceKey[];
   readonly observedAt: Date;
+  /**
+   * Whether to write the incidence projection now.
+   *
+   * The committed incidence view joins through the OPERATION's state, not through the version's
+   * clock, so a projection written at prepare becomes visible the moment the operation is
+   * acknowledged — including when that operation acknowledged a graph write it did not make. A
+   * caller whose graph phase can decline projects in its acknowledgment instead.
+   */
+  readonly project?: boolean;
 };
 
 export type MaterializationCounts = {
@@ -46,6 +58,17 @@ export type MaterializationCounts = {
 
 function operationKey(operationId: string, linkId: string): string {
   return `legacy:${operationId}:${linkId}`;
+}
+
+/** The version this operation holds for a link, for a projection written at acknowledgment. */
+function linkVersionOf(db: SqliteHandle, linkId: string, operationId: string): number {
+  const row = db
+    .prepare(
+      `SELECT MAX(version) AS n FROM evidence_link_versions
+       WHERE link_id = ? AND operation_id = ?`,
+    )
+    .get(linkId, operationId) as { n: number | null };
+  return row.n ?? 1;
 }
 
 /**
@@ -76,6 +99,9 @@ export function prepareMaterialization(
         currency: entry.closed ? 'closed' : 'open',
         relation_type: entry.relationType,
         ...entry.clocks,
+        // What the relationship stated, preserved as it was. Carrying it credits no new
+        // confirmation: the version records what somebody once wrote, not that they wrote it now.
+        ...entry.recorded,
       },
       temporalProof: { basis: 'legacy_relationship_clocks', ...entry.clocks },
       observedAt: write.observedAt,
@@ -85,7 +111,7 @@ export function prepareMaterialization(
       continue;
     }
     recorded += 1;
-    if (entry.incident) {
+    if (entry.incident && write.project !== false) {
       commitSourceIncidence(db, {
         sourceId: entry.fromId,
         nodeId: entry.toId,
@@ -113,10 +139,24 @@ export function prepareMaterialization(
  */
 export function acknowledgeMaterialization(
   db: SqliteHandle,
-  write: Omit<MaterializationWrite, 'links'>,
+  write: Omit<MaterializationWrite, 'links'> & { readonly links?: readonly PlannedLink[] },
   knownFrom: string,
   observedAckAt: string,
 ): void {
+  for (const entry of write.links ?? []) {
+    if (!entry.incident) {
+      continue;
+    }
+    commitSourceIncidence(db, {
+      sourceId: entry.fromId,
+      nodeId: entry.toId,
+      role: entry.kind,
+      linkId: entry.linkId,
+      linkVersion: linkVersionOf(db, entry.linkId, write.operationId),
+      currency: entry.closed ? 'closed' : 'open',
+      clocks: entry.clocks,
+    });
+  }
   acknowledgeStatedLinkVersions(db, write.operationId, knownFrom, observedAckAt);
   for (const scope of write.scopes) {
     acknowledgeScopeAdvance(db, {
@@ -141,30 +181,52 @@ export function discardMaterialization(
   }
 }
 
-/** Members the walk has not reached. While this is above zero no census may be established. */
+/**
+ * Members whose evidence this cohort has not materialized: the ones nobody has walked, and the
+ * ones the walk pinned.
+ *
+ * A pin is not a finished member. Its relationships were not materialized, so nobody knows which
+ * endpoints it contributes to, and certifying any endpoint while one exists would turn an
+ * unmaterialized contribution into a negative read about somebody else's node.
+ */
 export function unaccountedCohortMembers(db: SqliteHandle, cohortId: string): number {
-  return countMigrationProgress(db, cohortId).accounted;
+  const counts = countMigrationProgress(db, cohortId);
+  return counts.accounted + counts.pinned;
 }
 
 /**
- * The endpoints the seal still owes a census, oldest first by id.
+ * The endpoints THIS COHORT walked and still owes a census, oldest first by id.
  *
- * The population is the scope table itself: every endpoint this migration moved a counter for and
- * has not yet counted. Paging on the endpoint keeps the seal bounded and restartable, and an
- * endpoint whose scopes are all established drops out of the page on the next call.
+ * The population is the cohort's own materialization: the links its members wrote, and the two
+ * ends of each. A sweep over the whole scope table would count endpoints this cohort never
+ * looked at, including ones some other writer advanced and nobody enumerated — registering a
+ * scope name is not a census of it.
  */
 export function pageUncountedEndpoints(
   db: SqliteHandle,
+  cohortId: string,
   after: string,
   limit: number,
 ): readonly string[] {
   const rows = db
     .prepare(
-      `SELECT DISTINCT endpoint_id FROM evidence_scope_versions
-       WHERE census_status <> 'established' AND endpoint_id > ?
-       ORDER BY endpoint_id LIMIT ?`,
+      `SELECT e.endpoint_id AS endpoint_id FROM (
+         SELECT l.from_id AS endpoint_id FROM evidence_links l
+         JOIN migration_progress m ON m.source_id = l.from_id AND m.cohort_id = ?
+         WHERE l.record_source = 'legacy_materialization'
+         UNION
+         SELECT l.to_id AS endpoint_id FROM evidence_links l
+         JOIN migration_progress m ON m.source_id = l.from_id AND m.cohort_id = ?
+         WHERE l.record_source = 'legacy_materialization'
+       ) e
+       WHERE e.endpoint_id > ?
+         AND EXISTS (
+           SELECT 1 FROM evidence_scope_versions v
+           WHERE v.endpoint_id = e.endpoint_id AND v.census_status <> 'established'
+         )
+       ORDER BY e.endpoint_id LIMIT ?`,
     )
-    .all(after, limit) as { endpoint_id: string }[];
+    .all(cohortId, cohortId, after, limit) as { endpoint_id: string }[];
   return rows.map((row) => row.endpoint_id);
 }
 
@@ -215,6 +277,41 @@ export function endpointCensusScopes(db: SqliteHandle, endpointId: string): read
   return [...scopes].sort();
 }
 
+export type CensusCoverage = {
+  readonly cohortId: string;
+  readonly cohortDigest: string;
+  readonly graphCensusDigest: string;
+  readonly intakeWatermark: number;
+  readonly archiveRowidLow: number;
+  readonly archiveRowidHigh: number;
+  readonly members: number;
+  readonly verified: number;
+};
+
+/**
+ * What a seal over this cohort rests on: the frozen record itself, and how much of it was proved.
+ *
+ * Nothing for a cohort nobody froze: a count with no enumeration behind it has no bounds to
+ * record and no membership to have accounted for, and the seal defers on the absence.
+ */
+export function censusCoverage(db: SqliteHandle, cohortId: string): CensusCoverage | undefined {
+  const cohort = readMigrationCohort(db, cohortId);
+  if (cohort === undefined) {
+    return undefined;
+  }
+  const counts = countMigrationProgress(db, cohortId);
+  return {
+    cohortId: cohort.cohortId,
+    cohortDigest: cohort.cohortDigest,
+    graphCensusDigest: cohort.graphCensusDigest,
+    intakeWatermark: cohort.intakeWatermark,
+    archiveRowidLow: cohort.archiveRowidLow,
+    archiveRowidHigh: cohort.archiveRowidHigh,
+    members: counts.accounted + counts.verified + counts.pinned,
+    verified: counts.verified,
+  };
+}
+
 export type CensusWrite = {
   readonly operationId: string;
   readonly endpoints: readonly {
@@ -222,6 +319,8 @@ export type CensusWrite = {
     readonly scopes: readonly string[];
   }[];
   readonly observedAt: Date;
+  /** What the count rests on, stored with it. A label is not proof that anything was walked. */
+  readonly coverage: Readonly<Record<string, unknown>>;
 };
 
 export function prepareCensusSeal(db: SqliteHandle, write: CensusWrite): number {
@@ -255,7 +354,7 @@ export function acknowledgeCensusSeal(
         operationId: write.operationId,
         updatedAt: new Date(knownFrom),
         censusStatus: 'established',
-        coverageJson: JSON.stringify({ basis: 'legacy_cohort_seal' }),
+        coverageJson: JSON.stringify({ ...write.coverage, scope: relationClass }),
       });
       if (published !== undefined) {
         established += 1;

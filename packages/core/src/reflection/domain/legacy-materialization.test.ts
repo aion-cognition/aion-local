@@ -14,6 +14,7 @@ function relation(overrides: Partial<LegacyRelation> = {}): LegacyRelation {
     toId: 'entity-1',
     fromLabels: ['AionNode', 'Episode'],
     toLabels: ['AionNode', 'Entity'],
+    recorded: {},
     ...overrides,
   };
 }

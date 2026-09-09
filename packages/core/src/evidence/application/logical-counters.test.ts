@@ -203,12 +203,15 @@ describe('the logical counter populations', () => {
     expect(countRecordedMentionSources(store.db, NODE)).toMatchObject({ count: 2 });
   });
 
-  it('keeps a retired mention out of the current count and in the recorded one', () => {
+  it('keeps a retired mention in the seed population and out of the decay one', () => {
     establish(NODE, 'mention');
-    incidence({ sourceId: 'source-1', currency: 'closed' });
+    incidence({ sourceId: 'source-1', currency: 'closed', updatedAt: '2025-05-01T00:00:00.000Z' });
 
-    expect(countCurrentMentionSources(store.db, NODE)).toMatchObject({ count: 0 });
+    // Edge currency is identifier decay's filter, not the seed population's. A source whose
+    // mention edge was retired is still a source occurrence that mentions the entity.
+    expect(countCurrentMentionSources(store.db, NODE)).toMatchObject({ count: 1 });
     expect(countRecordedMentionSources(store.db, NODE)).toMatchObject({ count: 1 });
+    expect(openMentionRecency(store.db, NODE)).toMatchObject({ sources: 0 });
   });
 
   it('counts a role at the scope the registry keys it under', () => {

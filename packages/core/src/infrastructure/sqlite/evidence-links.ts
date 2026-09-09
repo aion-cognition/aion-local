@@ -244,6 +244,66 @@ export function prepareMaterializedLinkVersion(
     .immediate();
 }
 
+/**
+ * Appends a version that retires a link, rather than editing the row that projects it.
+ *
+ * A merge absorbs a claim, and the absorbed claim's mentions stop standing. Setting `closed` on
+ * the current projection alone says so only about now: a question about last week walks the
+ * version chain, finds the newest acknowledged version still open, and answers that the mention
+ * stands. The retirement is therefore a version of its own, and it is the newest one.
+ */
+export function prepareRetirementVersion(
+  db: SqliteHandle,
+  input: {
+    readonly linkId: string;
+    readonly operationId: string;
+    readonly operationKey: string;
+    readonly recordedValues: Record<string, unknown>;
+    readonly temporalProof: Record<string, unknown>;
+    readonly observedAt: Date;
+  },
+): number | undefined {
+  return db
+    .transaction((): number | undefined => {
+      const held = db
+        .prepare(
+          'SELECT version FROM evidence_link_versions WHERE link_id = ? AND operation_key = ?',
+        )
+        .get(input.linkId, input.operationKey) as { version: number } | undefined;
+      if (held !== undefined) {
+        return held.version;
+      }
+      const high = db
+        .prepare(
+          'SELECT COALESCE(MAX(version), 0) AS n FROM evidence_link_versions WHERE link_id = ?',
+        )
+        .get(input.linkId) as { n: number };
+      if (high.n === 0) {
+        // Nothing to retire. A link with no version was never stated, and inventing a closing
+        // version for it would record that something stopped which never started.
+        return undefined;
+      }
+      const version = high.n + 1;
+      db.prepare(
+        `INSERT INTO evidence_link_versions
+           (link_id, version, prev_version, state, recorded_values_json, temporal_proof_json,
+            observed_at, operation_key, operation_id)
+         VALUES (?, ?, ?, 'retired', ?, ?, ?, ?, ?)`,
+      ).run(
+        input.linkId,
+        version,
+        high.n,
+        JSON.stringify(input.recordedValues),
+        JSON.stringify(input.temporalProof),
+        input.observedAt.toISOString(),
+        input.operationKey,
+        input.operationId,
+      );
+      return version;
+    })
+    .immediate();
+}
+
 export type StatedLinkRow = {
   readonly linkId: string;
   readonly kind: string;

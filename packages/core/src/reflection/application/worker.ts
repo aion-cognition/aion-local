@@ -244,6 +244,9 @@ export class ReflectionWorker {
       this.#deps.logger.error({ err }, 'reflection worker could not sweep stale claims');
       return;
     }
+    // The idle cadence, whatever the sweep found. A released index row has nothing else that
+    // would ask for it again, so the reaper is where it gets asked.
+    this.#index.pump();
     if (reclaimed === 0) {
       return;
     }

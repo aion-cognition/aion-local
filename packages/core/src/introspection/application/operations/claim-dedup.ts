@@ -19,6 +19,7 @@ import {
 } from '../../../infrastructure/graph/claim-dedup-queries.js';
 import { findContradictionCandidates } from '../../../infrastructure/graph/supersession-queries.js';
 import { PublicationUnavailable } from '../../../infrastructure/publication/errors.js';
+import type { EvidenceRevision } from '../../../infrastructure/publication/preconditions.js';
 import {
   isLedgerApplied,
   listLedgerKeys,
@@ -157,12 +158,14 @@ async function publishClaimMerge(
   operationId: string,
   survivorId: string,
   loserId: string,
-  now: Date,
+  judged: EvidenceRevision | undefined,
 ): Promise<MergeClaimPairResult> {
   const outcome = await publisher.publish({
     kind: 'semantic_write',
     operationId,
-    payload: { survivorId, loserId, now: now.toISOString() },
+    // No clock: the substrate's acceptance clock stamps the write. A payload carrying this
+    // tick's wall clock under a stable pair identity is identity reuse on the next tick.
+    payload: { survivorId, loserId, ...(judged === undefined ? {} : { judged }) },
   });
   if (outcome.status !== 'acknowledged') {
     throw new PublicationUnavailable(outcome.reason, operationId);
@@ -380,9 +383,22 @@ export function claimDedupOperation(): IntrospectionOperation {
         }
         // One failure here is one failed pair. Nothing is stamped, so the pair and its subject
         // are both still owed, and the pairs this run already merged keep their tally.
+        // The decision's own identity: the pair, and the proof it was decided on. A crash retry
+        // of the same decision reuses it and finds its receipt; a decision taken on evidence that
+        // moved is a different decision and gets an identity of its own.
+        // Only a binding the caller actually confirmed travels. A composition holding no
+        // evidence seam confirmed nothing, and refusing the write on a revision nobody checked
+        // would be stricter at the guard than the decision that reached it was.
+        const decided =
+          ctx.evidence !== undefined && assembled.status === 'ready'
+            ? assembled.revision
+            : undefined;
+        const mergeOperationId =
+          decided === undefined ? pairKey : `${pairKey}:${decided.digest.slice(0, 16)}`;
         const applied = await applyMergeWithRecovery({
-          operationId: pairKey,
-          attempt: () => publishClaimMerge(publisher, pairKey, survivor.id, loser.id, ctx.now),
+          operationId: mergeOperationId,
+          attempt: () =>
+            publishClaimMerge(publisher, mergeOperationId, survivor.id, loser.id, decided),
           coordinator: publisher,
           logger: ctx.logger,
         });
@@ -400,7 +416,7 @@ export function claimDedupOperation(): IntrospectionOperation {
         if (applied.status === 'settled' && !settledMerge(applied.result)) {
           failed += 1;
           ctx.logger.warn(
-            { subjectId: subject.id, candidateId: neighbor.id, operationId: pairKey },
+            { subjectId: subject.id, candidateId: neighbor.id, operationId: mergeOperationId },
             'a settled publication for this pair recorded no merge',
           );
           continue;

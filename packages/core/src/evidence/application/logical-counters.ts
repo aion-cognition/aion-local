@@ -33,24 +33,35 @@ export type LogicalCount =
   | { readonly status: 'unavailable'; readonly reason: string };
 
 /**
- * A source is logically current when nothing committed has forgotten or suppressed it.
+ * The newest committed state of ONE family, and whether it is the closing one.
  *
- * `NOT EXISTS` over the newest committed state rather than a scalar comparison: a source with no
+ * Forget and suppression are separate chains with separate reversals. Reading the newest event
+ * across both would let an unsuppress cancel an independent forget, which is a source coming back
+ * because somebody undid a different statement about it.
+ *
+ * `NOT EXISTS` over the newest row of the family rather than a scalar comparison: a source with no
  * state row has no newest state, and comparing that absent value would make the whole predicate
  * null and quietly drop every source that was never forgotten.
  */
-const CURRENT_SOURCE = `NOT EXISTS (
-    SELECT 1 FROM source_state_versions v2
-    JOIN publication_intents i2 ON i2.operation_id = v2.operation_id AND i2.state = 'acknowledged'
-    WHERE v2.source_id = s.source_id AND v2.known_from IS NOT NULL
-      AND v2.state_kind IN ('forgotten', 'suppressed')
-      AND v2.version = (
-        SELECT MAX(v3.version) FROM source_state_versions v3
-        JOIN publication_intents i3
-          ON i3.operation_id = v3.operation_id AND i3.state = 'acknowledged'
-        WHERE v3.source_id = v2.source_id AND v3.known_from IS NOT NULL
+function familyIsOpen(closing: string, opening: string): string {
+  return `NOT EXISTS (
+    SELECT 1 FROM source_state_versions f
+    JOIN publication_intents fi ON fi.operation_id = f.operation_id AND fi.state = 'acknowledged'
+    WHERE f.source_id = s.source_id AND f.known_from IS NOT NULL
+      AND f.state_kind = '${closing}'
+      AND f.version = (
+        SELECT MAX(g.version) FROM source_state_versions g
+        JOIN publication_intents gi
+          ON gi.operation_id = g.operation_id AND gi.state = 'acknowledged'
+        WHERE g.source_id = f.source_id AND g.known_from IS NOT NULL
+          AND g.state_kind IN ('${closing}', '${opening}')
       )
   )`;
+}
+
+/** A source is logically current when neither of its two state chains is closed. */
+const CURRENT_SOURCE = `${familyIsOpen('forgotten', 'unforgotten')}
+    AND ${familyIsOpen('suppressed', 'unsuppressed')}`;
 
 const COMMITTED_ROWS = `FROM source_incidence s
   JOIN evidence_link_versions v ON v.link_id = s.link_id AND v.version = s.link_version
@@ -79,7 +90,11 @@ function unavailable(nodeId: string, role: DurableRole): LogicalCount {
 
 /**
  * Seed mention_count and canonical entity selection: distinct logically current source
- * occurrences that mention the node, counted once whatever the direction or the alias.
+ * OCCURRENCES that mention the node, counted once whatever the direction or the alias.
+ *
+ * The filter is the source's currency and nothing else. A retired mention edge is still a source
+ * occurrence that mentions the entity, and adding an edge-currency filter here would answer a
+ * different question than the one seed selection asks.
  */
 export function countCurrentMentionSources(db: SqliteHandle, nodeId: string): LogicalCount {
   const token = gate(db, nodeId, 'mention');
@@ -89,7 +104,7 @@ export function countCurrentMentionSources(db: SqliteHandle, nodeId: string): Lo
   const row = db
     .prepare(
       `SELECT count(DISTINCT s.source_id) AS n ${COMMITTED_ROWS}
-       WHERE s.node_id = ? AND s.role = 'mention' AND s.currency = 'open' AND ${CURRENT_SOURCE}`,
+       WHERE s.node_id = ? AND s.role = 'mention' AND ${CURRENT_SOURCE}`,
     )
     .get(nodeId) as { n: number };
   return { status: 'counted', count: row.n, token };
@@ -115,22 +130,30 @@ export function countRecordedMentionSources(db: SqliteHandle, nodeId: string): L
   return { status: 'counted', count: row.n, token };
 }
 
-/** The generic role count for the subject-family, co-extraction and ownership joins. */
+/**
+ * The generic role count for the subject-family, co-extraction and ownership joins: the FULL
+ * directed role-qualified set. A caller whose own population is narrower names its edge currency;
+ * imposing one here would answer every consumer's question with one consumer's filter.
+ */
 export function countRoleIncidence(
   db: SqliteHandle,
   nodeId: string,
   role: DurableRole,
+  options: { readonly currency?: 'open' | 'closed' } = {},
 ): LogicalCount {
   const token = gate(db, nodeId, role);
   if (token === undefined) {
     return unavailable(nodeId, role);
   }
+  const currency = options.currency === undefined ? '' : 'AND s.currency = ?';
   const row = db
     .prepare(
       `SELECT count(DISTINCT s.source_id) AS n ${COMMITTED_ROWS}
-       WHERE s.node_id = ? AND s.role = ? AND s.currency = 'open'`,
+       WHERE s.node_id = ? AND s.role = ? ${currency}`,
     )
-    .get(nodeId, role) as { n: number };
+    .get(nodeId, role, ...(options.currency === undefined ? [] : [options.currency])) as {
+    n: number;
+  };
   return { status: 'counted', count: row.n, token };
 }
 
@@ -151,15 +174,25 @@ export type PairOverlapReading =
 
 type DatedSource = { readonly sourceId: string; readonly occurredAt: number | undefined };
 
-function mentionSources(db: SqliteHandle, nodeId: string): readonly DatedSource[] {
+/** The bound a pair read is charged before it is paid, so neither side is materialized whole. */
+export const PAIR_OVERLAP_LIMIT = 4096;
+
+/**
+ * One side's source set, ordered by the date the gap is measured on so the merge below is linear.
+ * One more row than the bound is read, which is what lets an over-bound population be reported as
+ * unavailable rather than as an exact count over part of it.
+ */
+function mentionSources(db: SqliteHandle, nodeId: string, limit: number): readonly DatedSource[] {
   const rows = db
     .prepare(
       `SELECT DISTINCT s.source_id AS source_id, r.occurred_at AS occurred_at
        ${COMMITTED_ROWS}
        LEFT JOIN source_records r ON r.source_id = s.source_id
-       WHERE s.node_id = ? AND s.role = 'mention' AND s.currency = 'open' AND ${CURRENT_SOURCE}`,
+       WHERE s.node_id = ? AND s.role = 'mention' AND ${CURRENT_SOURCE}
+       ORDER BY r.occurred_at, s.source_id
+       LIMIT ?`,
     )
-    .all(nodeId) as { source_id: string; occurred_at: string | null }[];
+    .all(nodeId, limit + 1) as { source_id: string; occurred_at: string | null }[];
   return rows.map((row) => {
     const parsed = row.occurred_at === null ? Number.NaN : Date.parse(row.occurred_at);
     return {
@@ -167,6 +200,33 @@ function mentionSources(db: SqliteHandle, nodeId: string): readonly DatedSource[
       occurredAt: Number.isNaN(parsed) ? undefined : parsed,
     };
   });
+}
+
+/**
+ * The smallest distance between two ordered date sets, walked once from both ends.
+ *
+ * The cross product would compare every pair to find one answer; the sets arrive ordered, so the
+ * pointer that is behind is the only one that can improve the gap.
+ */
+function smallestGap(left: readonly number[], right: readonly number[]): number | undefined {
+  let best: number | undefined;
+  let a = 0;
+  let b = 0;
+  while (a < left.length && b < right.length) {
+    const one = left[a];
+    const other = right[b];
+    if (one === undefined || other === undefined) {
+      break;
+    }
+    const gap = Math.abs(one - other);
+    best = best === undefined ? gap : Math.min(best, gap);
+    if (one <= other) {
+      a += 1;
+    } else {
+      b += 1;
+    }
+  }
+  return best;
 }
 
 /**
@@ -182,28 +242,31 @@ export function entityPairSourceOverlap(
   db: SqliteHandle,
   leftId: string,
   rightId: string,
+  limit: number = PAIR_OVERLAP_LIMIT,
 ): PairOverlapReading {
   for (const nodeId of [leftId, rightId]) {
     if (gate(db, nodeId, 'mention') === undefined) {
       return { status: 'unavailable', reason: uncountedReason(nodeId, 'mention') };
     }
   }
-  const left = mentionSources(db, leftId);
-  const right = mentionSources(db, rightId);
+  const left = mentionSources(db, leftId, limit);
+  const right = mentionSources(db, rightId, limit);
+  for (const [nodeId, side] of [
+    [leftId, left],
+    [rightId, right],
+  ] as const) {
+    if (side.length > limit) {
+      // An incomplete required statistic is unavailable, not a partial count called exact.
+      return { status: 'unavailable', reason: `${nodeId} holds more mentions than the bound` };
+    }
+  }
   const rightIds = new Set(right.map((entry) => entry.sourceId));
   const intersection = left.filter((entry) => rightIds.has(entry.sourceId)).length;
   const union = new Set([...left, ...right].map((entry) => entry.sourceId)).size;
   const undated = [...left, ...right].filter((entry) => entry.occurredAt === undefined).length;
-  let minimumGapMs: number | undefined;
-  for (const one of left) {
-    for (const other of right) {
-      if (one.occurredAt === undefined || other.occurredAt === undefined) {
-        continue;
-      }
-      const gap = Math.abs(one.occurredAt - other.occurredAt);
-      minimumGapMs = minimumGapMs === undefined ? gap : Math.min(minimumGapMs, gap);
-    }
-  }
+  const dated = (side: readonly DatedSource[]): readonly number[] =>
+    side.map((entry) => entry.occurredAt).filter((value): value is number => value !== undefined);
+  const minimumGapMs = smallestGap(dated(left), dated(right));
   return {
     status: 'counted',
     left: left.length,
@@ -234,9 +297,14 @@ export type MentionRecencyReading =
  * Identifier decay's population: distinct occurrences holding an OPEN mention, and the newest
  * clock those mentions recorded for themselves.
  *
- * The clock comes off the recorded values, never off the acknowledgment. A backfill acknowledges
- * every legacy mention on the day it runs, and reading that as the mention's own age would make
- * the whole corpus look freshly mentioned and defer every close by the full decay window.
+ * This path's filter is the EDGE's currency and nothing else. A forgotten source's open mention is
+ * still an open mention, and dropping it would age an identifier on a silence that is really a
+ * suppression somebody else applied.
+ *
+ * The clock is the mention's own `updated_at` and no substitute. A backfill acknowledges every
+ * legacy mention on the day it runs, and a world start says when the relationship began rather
+ * than when it was last touched: reading either as the last mention would age the whole corpus
+ * wrongly, in opposite directions. Missing proof stays missing.
  */
 export function openMentionRecency(db: SqliteHandle, nodeId: string): MentionRecencyReading {
   const token = gate(db, nodeId, 'mention');
@@ -246,10 +314,9 @@ export function openMentionRecency(db: SqliteHandle, nodeId: string): MentionRec
   const rows = db
     .prepare(
       `SELECT s.source_id AS source_id,
-              COALESCE(json_extract(v.recorded_values_json, '$.updated_at'),
-                       json_extract(v.recorded_values_json, '$.valid_from')) AS recorded_at
+              json_extract(v.recorded_values_json, '$.updated_at') AS recorded_at
        ${COMMITTED_ROWS}
-       WHERE s.node_id = ? AND s.role = 'mention' AND s.currency = 'open' AND ${CURRENT_SOURCE}`,
+       WHERE s.node_id = ? AND s.role = 'mention' AND s.currency = 'open'`,
     )
     .all(nodeId) as { source_id: string; recorded_at: string | null }[];
   const sources = new Set(rows.map((row) => row.source_id)).size;

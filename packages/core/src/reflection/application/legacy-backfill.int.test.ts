@@ -285,31 +285,63 @@ it('accepts what a legacy archive payload states, and records the repair only wh
   expect(getLedgerEntry(store.db, statedReferenceKey(beta!))).toBeUndefined();
 });
 
-it('counts nothing until the cohort has accounted, then answers support instead of unknown', async () => {
+it('counts nothing while a member is owed or pinned, then answers support instead of unknown', async () => {
   const deps = { driver: substrate.harness.driver, db: store.db, publications: coordinator };
+  const [alpha] = accepted;
 
   // Before the seal the counters have moved and nothing is counted, so support stays unknown for
-  // a node nothing stands behind.
+  // a node nothing has proved anything about.
   expect(
     readScopeVersion(store.db, { endpointId: 'entity-sync', relationClass: 'sqlite:mention:in' })
       ?.censusStatus,
   ).toBe('unknown');
 
+  // A cohort with a member nobody has walked cannot count anything.
   const held = await freezeLegacyCohort(deps, { cohortId: 'cohort-open', now: NOW });
   expect(held.members).toBeGreaterThan(0);
-  const refused = await sealLegacyCohortCensus(deps, { cohortId: 'cohort-open' });
-  expect(refused.deferred).toBe('cohort_not_fully_accounted');
+  expect((await sealLegacyCohortCensus(deps, { cohortId: 'cohort-open' })).deferred).toBe(
+    'cohort_not_fully_accounted',
+  );
+
+  // Neither can the walked one, while two of its members are pinned: an unmaterialized
+  // contribution must never become a negative read about somebody else's node.
+  expect((await sealLegacyCohortCensus(deps, { cohortId: 'cohort-1' })).deferred).toBe(
+    'cohort_not_fully_accounted',
+  );
   expect(
     readScopeVersion(store.db, { endpointId: 'entity-sync', relationClass: 'sqlite:mention:in' })
       ?.censusStatus,
   ).toBe('unknown');
 
-  const sealed = await sealLegacyCohortCensus(deps, { cohortId: 'cohort-1' });
+  // A cohort every member of which was proved and materialized may count what it walked.
+  const bounds = archiveRowidBounds(store.db);
+  freezeMigrationCohort(store.db, {
+    cohortId: 'cohort-clean',
+    cohortDigest: 'clean',
+    intakeWatermark: readIntakeWatermark(store.db),
+    archiveRowidLow: bounds.low,
+    archiveRowidHigh: bounds.high,
+    graphCensusDigest: 'clean',
+    orderingPolicyVersion: 1,
+    createdAt: NOW,
+    members: [alpha!],
+  });
+  expect((await runLegacyBackfillBatch(deps, { cohortId: 'cohort-clean', now: NOW })).pinned).toBe(
+    0,
+  );
+
+  const sealed = await sealLegacyCohortCensus(deps, { cohortId: 'cohort-clean' });
   expect(sealed.endpoints).toBeGreaterThan(0);
-  expect(
-    readScopeVersion(store.db, { endpointId: 'entity-sync', relationClass: 'sqlite:mention:in' })
-      ?.censusStatus,
-  ).toBe('established');
+  const counted = readScopeVersion(store.db, {
+    endpointId: 'entity-sync',
+    relationClass: 'sqlite:mention:in',
+  });
+  expect(counted?.censusStatus).toBe('established');
+  // The count says what it rests on, not that a seal happened.
+  expect(JSON.parse(counted?.coverageJson ?? '{}')).toMatchObject({
+    cohortId: 'cohort-clean',
+    scope: 'sqlite:mention:in',
+  });
 
   const support = certifyNodeSupport(store.db, 'entity-sync');
   expect(support.support).toBe('supported');

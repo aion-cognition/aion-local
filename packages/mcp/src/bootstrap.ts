@@ -296,7 +296,9 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
     };
     // One resolver for the process: the covered recall path and the worker's index drain read
     // the same stores through the same budgets.
-    const resolver = new EvidenceResolver({ driver, db: store.db, logger });
+    // The coordinator is the certification surface. A judgment assembled without one takes no
+    // publication position at all, so a write it leads to lands on evidence nobody could certify.
+    const resolver = new EvidenceResolver({ driver, db: store.db, logger, publications });
     // The seam a judging path asks before it spends a model call. It checks coverage per pair,
     // because a vantage pinned here would judge for the life of the process.
     const judgmentEvidence = new CoveredJudgmentEvidence({ db: store.db, resolver });
