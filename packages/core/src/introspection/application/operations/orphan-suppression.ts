@@ -111,11 +111,12 @@ export function orphanRelinkOperationId(orphanId: string, targetId: string, at: 
 /**
  * Whether the pair the census certified still certifies, derived again under the guard.
  *
- * Both halves of the claim, because a repair edge asserts both: that these two nodes are still
- * there to be related, and that a committed source still stands behind each of them. Between the
- * nomination and the write a source can close its incidence on either end, and either endpoint
- * can be forgotten or closed outright. An edge onto a node the substrate has stopped holding is
- * a relation to nothing, and a guarded write is where that gets caught rather than afterwards.
+ * Both halves of the claim, because a repair edge asserts both: that these two nodes are eligible
+ * retained interpretations still there to be related, and that a committed source still stands
+ * behind each of them. Between the nomination and the write a source can close its incidence on
+ * either end, and either endpoint can be forgotten or closed outright. The eligibility is checked
+ * here rather than trusted from the plan, because a stale plan and a caller supplying its own
+ * pair both reach this line: a raw container is not a repair subject wherever the pair came from.
  */
 async function relinkStands(
   context: PublicationContext,
@@ -126,7 +127,7 @@ async function relinkStands(
     data.targetId,
   ]);
   if (!current.has(data.orphanId) || !current.has(data.targetId)) {
-    return 'relink_endpoint_not_current';
+    return 'relink_endpoint_not_eligible';
   }
   return certifiedRelinkTarget(context.db, data.orphanId, {
     orphanId: data.orphanId,

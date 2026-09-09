@@ -44,6 +44,22 @@ export const MEMORY_LABEL = 'Memory';
 /** Spelled out because a `MATCH (n:${ENTITY_LABEL})` needs the literal, not the type. */
 export const ENTITY_LABEL: NodeLabel = 'Entity';
 
+/**
+ * What a source IS, as opposed to an interpretation drawn from one.
+ *
+ * These carry `Memory` like every other content-bearing node, because one vector index covers
+ * them all, so `Memory` answers "is this content" and never "is this retained interpretation". A
+ * predicate about retained nodes has to say so itself, which is what the fragment below is for:
+ * a repair that reached a raw container would state a relation to the record its own evidence
+ * points at.
+ */
+export const RAW_CONTAINER_LABELS: readonly NodeLabel[] = ['Episode', 'Turn'];
+
+/** `NOT n:Episode AND NOT n:Turn`, written once so no predicate can drift from the others. */
+export function notRawContainer(variable: string): string {
+  return RAW_CONTAINER_LABELS.map((label) => `NOT ${variable}:${label}`).join(' AND ');
+}
+
 export const NODE_LABELS: readonly NodeLabel[] = [
   'Session',
   'Episode',

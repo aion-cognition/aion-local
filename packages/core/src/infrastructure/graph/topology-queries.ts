@@ -3,7 +3,7 @@ import type { Driver } from 'neo4j-driver';
 import { BITEMPORAL_PROPERTIES, currentOnly } from './bitemporal.js';
 import { runRead, runWrite, type GraphTransaction } from './connection.js';
 import { ENTITY_MENTION_TYPE } from './entity-queries.js';
-import { BACKBONE_TYPES, BASE_NODE_LABEL, MEMORY_LABEL } from './labels.js';
+import { BACKBONE_TYPES, BASE_NODE_LABEL, MEMORY_LABEL, notRawContainer } from './labels.js';
 import { STRUCTURAL_PROPERTY } from './seed-queries.js';
 import { toGraphDateTime, toGraphInteger, type Row } from './values.js';
 
@@ -39,7 +39,7 @@ const ORPHAN_PREDICATE = [
   // interpretation drawn from one: they hang off the wiring by construction, a relink onto one
   // reconnects nothing anybody reads, and forgetting one suppresses the record the durable
   // evidence points at. The archive and the records are what account for a raw container.
-  `  AND NOT n:Episode AND NOT n:Turn`,
+  `  AND ${notRawContainer('n')}`,
   // Only an OPEN association counts as reaching this node. A closed edge is a relationship that
   // was ended, and treating it as connectivity leaves a node permanently out of the population
   // on the strength of a link nothing traverses.
@@ -255,6 +255,10 @@ const CURRENT_RETAINED_NODES = [
   `MATCH (n:${MEMORY_LABEL} { id: id })`,
   `WHERE ${currentOnly('n')}`,
   `  AND coalesce(n.${STRUCTURAL_PROPERTY}, false) = false`,
+  // `Memory` is carried by raw containers too, so the label alone would let a Turn through here
+  // however the pair reached this point. Nomination excludes them and so does this: a stale plan
+  // and a caller that supplies its own pair both arrive at the same predicate.
+  `  AND ${notRawContainer('n')}`,
   'RETURN n.id AS id',
 ].join('\n');
 
@@ -306,6 +310,9 @@ const FIND_ORPHAN_RELINK_TARGETS = [
   `  WHERE type(b2) IN [${BACKBONE_TYPES}] AND type(b3) IN [${BACKBONE_TYPES}]`,
   `    AND ${currentOnly('sibling')}`,
   `    AND coalesce(sibling.${STRUCTURAL_PROPERTY}, false) = false`,
+  // The sibling under a shared container is where a raw one turns up: an episode's own turns sit
+  // exactly there, and they carry `Memory` like everything else content-bearing.
+  `    AND ${notRawContainer('sibling')}`,
   '    AND sibling.id <> orphanId',
   'WITH orphanId, sharedId, sibling ORDER BY sibling.id',
   'WITH orphanId, sharedId, collect(sibling.id)[0] AS siblingId',
