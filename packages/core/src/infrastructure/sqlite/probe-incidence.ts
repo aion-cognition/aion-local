@@ -1,3 +1,4 @@
+import { committedIncidenceForSourceAt } from './committed-evidence.js';
 import type { SqliteHandle } from './database.js';
 import { readCitationsOf } from './narrative-citations.js';
 import { OWNERSHIP_SCOPES } from '../../evidence/domain/ownership.js';
@@ -127,25 +128,21 @@ export function relatedIncidenceNodes(
   candidateIds: readonly string[],
   at?: Date,
 ): readonly string[] {
-  const unique = [...new Set(candidateIds)];
-  if (unique.length === 0) {
+  const unique = new Set(candidateIds);
+  if (unique.size === 0) {
     return [];
   }
-  const placeholders = unique.map(() => '?').join(', ');
-  const roles = RELATED_ROLES.map(() => '?').join(', ');
-  const rows = db
-    .prepare(
-      `SELECT DISTINCT s.node_id
-       FROM source_incidence s
-       JOIN evidence_link_versions v ON v.link_id = s.link_id AND v.version = s.link_version
-       JOIN publication_intents i ON i.operation_id = v.operation_id AND i.state = 'acknowledged'
-       WHERE s.source_id = ? AND s.role IN (${roles}) AND s.node_id IN (${placeholders})`,
-    )
-    .all(sourceId, ...RELATED_ROLES, ...unique) as { node_id: string }[];
-  const related = new Set(rows.map((row) => row.node_id));
-  const candidates = new Set(unique);
+  const related = new Set<string>();
+  // The historical reader, not the current projection. `source_incidence` says who owns a node
+  // now; a question about an earlier vantage is answered from the link's own acknowledged
+  // version chain, so a mention accepted after the scoring moment does not earn credit for it.
+  for (const incidence of committedIncidenceForSourceAt(db, sourceId, at)) {
+    if (RELATED_ROLES.includes(incidence.role) && unique.has(incidence.nodeId)) {
+      related.add(incidence.nodeId);
+    }
+  }
   for (const cited of readCitationsOf(db, sourceId, at)) {
-    if (candidates.has(cited.narrativeNodeId)) {
+    if (unique.has(cited.narrativeNodeId)) {
       related.add(cited.narrativeNodeId);
     }
   }
