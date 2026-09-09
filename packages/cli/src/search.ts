@@ -1,15 +1,17 @@
 import {
-  asOf,
-  bitemporalAt,
+  checkCoverage,
+  coverageLines,
+  CoverageRequestError,
   embedQueryPrefix,
-  knewAt,
   OllamaProvider,
+  refusalLines,
   selectSeeds,
-  withCurrency,
-  type ReadMode,
+  type CheckedRead,
   type Seed,
   type SeedCue,
+  type SqliteHandle,
 } from '@aion/core';
+import { IsoTimestampSchema, type CoverageEnvelope, type CoverageRefusal } from '@aion/protocol';
 
 import { CliUsageError, parseArgs, type ArgSpec } from './args.js';
 import { preview } from './format.js';
@@ -20,14 +22,22 @@ import { withSubstrate } from './substrate.js';
  * The seed layer with nothing built on top of it: no cue-model expansion, no traversal, no
  * resonance, no pack assembly. The query embeds once and rides the same four strategies and
  * budget curve `recall` uses (`selectSeeds`), which is what makes this a debugging window on
- * the real thing rather than a second search implementation. `--as-of`/`--knew-at` bind the
- * same bitemporal read mode `recall` does, so a time-travel search sees exactly what a
- * time-travel recall would have found.
+ * the real thing rather than a second search implementation. `--as-of`/`--knew-at` go through
+ * the same coverage checker and bind the same read mode `recall` does, so a time-travel search
+ * sees exactly what a time-travel recall would have found and is refused where recall is.
  */
+
+/**
+ * The break this command's `--json` makes, said where whoever types it will read it. A coverage
+ * statement cannot be attached to a bare array, and dropping it would let a partial answer print
+ * as a complete one; `schema_version` is how a consumer tells the two apart.
+ */
+const JSON_ENVELOPE_NOTE =
+  '--json prints {"schema_version":1,"results":[…]} with the coverage statement beside the results, not a bare array';
 
 const SPEC: ArgSpec = {
   command: 'search',
-  usage: 'aion search <query> [--as-of <ts>] [--knew-at <ts>] [--json]',
+  usage: `aion search <query> [--as-of <ts>] [--knew-at <ts>] [--json]\n  ${JSON_ENVELOPE_NOTE}`,
   options: [
     { flag: '--as-of', takesValue: true },
     { flag: '--knew-at', takesValue: true },
@@ -38,21 +48,26 @@ const SPEC: ArgSpec = {
 
 export type SearchFlags = {
   readonly query: string;
-  readonly asOf?: Date;
-  readonly knewAt?: Date;
+  /** As typed. The grammar accepted it; the checker is what turns it into an instant. */
+  readonly asOf?: string;
+  readonly knewAt?: string;
   readonly json: boolean;
 };
 
-function timestampOf(values: ReadonlyMap<string, string>, option: string): Date | undefined {
+/**
+ * The protocol's own grammar, so a date this command accepts is one the tool accepts and lands
+ * on the same instant. What it rejects is a usage error: the substrate has said nothing about
+ * its reach yet, and an unparseable date asks no question coverage can answer.
+ */
+function timestampOf(values: ReadonlyMap<string, string>, option: string): string | undefined {
   const value = values.get(option);
   if (value === undefined) {
     return undefined;
   }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
+  if (!IsoTimestampSchema.safeParse(value).success) {
     throw new CliUsageError(`${option} got '${value}', expected an ISO timestamp`);
   }
-  return parsed;
+  return value;
 }
 
 export function parseSearchFlags(argv: readonly string[]): SearchFlags {
@@ -72,17 +87,34 @@ export function parseSearchFlags(argv: readonly string[]): SearchFlags {
   };
 }
 
-function readModeFor(flags: SearchFlags): ReadMode {
-  if (flags.asOf !== undefined && flags.knewAt !== undefined) {
-    return bitemporalAt(flags.asOf, flags.knewAt);
+export type SearchCoverage =
+  | { readonly status: 'checked'; readonly read: CheckedRead }
+  | { readonly status: 'refused'; readonly refusal: CoverageRefusal };
+
+/**
+ * The one coverage decision, taken before the query is embedded. A refused search calls no
+ * model and reads no graph, which is the whole reason it comes first.
+ */
+export function searchCoverage(db: SqliteHandle, flags: SearchFlags, now: Date): SearchCoverage {
+  let checked;
+  try {
+    checked = checkCoverage(db, {
+      ...(flags.asOf === undefined ? {} : { asOf: flags.asOf }),
+      ...(flags.knewAt === undefined ? {} : { knewAt: flags.knewAt }),
+      now,
+      expiryAnnotation: true,
+    });
+  } catch (err) {
+    // The flags already passed this grammar; a rejection here means the two disagree, and a
+    // disagreement about what a date means is a usage error rather than a coverage answer.
+    if (err instanceof CoverageRequestError) {
+      throw new CliUsageError(err.message);
+    }
+    throw err;
   }
-  if (flags.asOf !== undefined) {
-    return asOf(flags.asOf);
-  }
-  if (flags.knewAt !== undefined) {
-    return knewAt(flags.knewAt);
-  }
-  return withCurrency();
+  return checked.status === 'refused'
+    ? { status: 'refused', refusal: checked.refusal }
+    : { status: 'checked', read: { context: checked.context, coverage: checked.coverage } };
 }
 
 /** The best of a seed's own strategies: what a reader reads as "how this was found." */
@@ -112,8 +144,10 @@ export function renderSearchResults(seeds: readonly Seed[], write: Writer): void
   }
 }
 
-function toJson(seeds: readonly Seed[]): unknown {
-  return seeds.map((seed) => ({
+type SeedJson = ReturnType<typeof seedJson>;
+
+function seedJson(seed: Seed): Record<string, unknown> {
+  return {
     id: seed.id,
     labels: seed.labels,
     content: seed.content,
@@ -125,7 +159,49 @@ function toJson(seeds: readonly Seed[]): unknown {
     ...(seed.supersededBy === undefined
       ? {}
       : { superseded_by: { id: seed.supersededBy.id, at: seed.supersededBy.at.toISOString() } }),
-  }));
+  };
+}
+
+/**
+ * The versioned envelope, always. The results ride inside it beside what the answer covers, and
+ * a refusal rides in it with no results at all: a refused search made no answer, and an empty
+ * array is one.
+ */
+export function searchEnvelope(
+  outcome: SearchCoverage,
+  seeds: readonly Seed[],
+): CoverageEnvelope<SeedJson> {
+  if (outcome.status === 'refused') {
+    return { schema_version: 1, results: [], coverage_refusal: outcome.refusal };
+  }
+  return { schema_version: 1, results: seeds.map(seedJson), coverage: outcome.read.coverage };
+}
+
+/**
+ * Both shapes from one place, so what the text says and what the JSON carries cannot drift: a
+ * coverage line dropped from the printed answer is how a reader comes to believe it covers more
+ * than it does, and a refusal printed as "no matches" is the same mistake with worse manners.
+ */
+export function writeSearchAnswer(
+  outcome: SearchCoverage,
+  seeds: readonly Seed[],
+  json: boolean,
+  write: Writer,
+): void {
+  if (json) {
+    write(JSON.stringify(searchEnvelope(outcome, seeds)));
+    return;
+  }
+  if (outcome.status === 'refused') {
+    for (const line of refusalLines(outcome.refusal)) {
+      write(line);
+    }
+    return;
+  }
+  for (const line of coverageLines(outcome.read.coverage)) {
+    write(line);
+  }
+  renderSearchResults(seeds, write);
 }
 
 export function runSearch(
@@ -141,6 +217,13 @@ export function runSearch(
     run: async (substrate, flags) => {
       const { config } = substrate;
       const logger = substrate.logger();
+      // Before the embedding call, so a refused search spends nothing and reads nothing.
+      const coverage = searchCoverage(substrate.db(), flags, new Date());
+      if (coverage.status === 'refused') {
+        writeSearchAnswer(coverage, [], flags.json, write);
+        logger.info({ reason: coverage.refusal.reason }, 'search refused');
+        return 1;
+      }
       const provider = new OllamaProvider({
         baseUrl: config.ollama.url,
         embedModel: config.models.embed,
@@ -159,14 +242,10 @@ export function runSearch(
       const cue: SeedCue = { text: flags.query, source: 'raw_query', weight: 3, vector };
       const selection = await selectSeeds(
         { driver: substrate.connection().driver, config, logger },
-        { cues: [cue], mode: readModeFor(flags) },
+        { cues: [cue], mode: coverage.read.context.mode },
       );
 
-      if (flags.json) {
-        write(JSON.stringify(toJson(selection.seeds)));
-      } else {
-        renderSearchResults(selection.seeds, write);
-      }
+      writeSearchAnswer(coverage, selection.seeds, flags.json, write);
       logger.info({ query: flags.query, results: selection.seeds.length }, 'search served');
       return 0;
     },

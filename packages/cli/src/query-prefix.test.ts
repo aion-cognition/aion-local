@@ -1,8 +1,15 @@
-import { DEFAULTS, type Config, type GraphConnection, type SeedCue } from '@aion/core';
+import {
+  DEFAULTS,
+  openSqliteHandle,
+  type Config,
+  type GraphConnection,
+  type SeedCue,
+} from '@aion/core';
 import {
   embedQueryPrefix,
   QUERY_PREFIX_SEAM_MODEL,
 } from '@aion/core/infrastructure/providers/embed-models.js';
+import { prepareCoverageContract } from '@aion/core/infrastructure/sqlite/coverage-contract.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { buildDoctorChecks } from './doctor.js';
@@ -68,12 +75,16 @@ function stubSubstrate(): Substrate {
   const noop = (): void => {
     // A command under test prints and logs; neither is what these pin.
   };
+  // A readable coverage record, because every covered command now decides coverage before it
+  // embeds anything: without one the search refuses and never reaches the seam under test.
+  const db = openSqliteHandle({ filePath: ':memory:' });
+  prepareCoverageContract(db, 1);
   return {
     config: seamConfig(),
     write: noop,
     logger: () => ({ debug: noop, info: noop, warn: noop, error: noop }),
     connection: () => ({ driver: {} }) as unknown as GraphConnection,
-    db: () => ({}),
+    db: () => db,
   } as unknown as Substrate;
 }
 
