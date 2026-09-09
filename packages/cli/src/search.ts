@@ -95,14 +95,19 @@ export type SearchCoverage =
  * The one coverage decision, taken before the query is embedded. A refused search calls no
  * model and reads no graph, which is the whole reason it comes first.
  */
-export function searchCoverage(db: SqliteHandle, flags: SearchFlags, now: Date): SearchCoverage {
+export function searchCoverage(
+  db: SqliteHandle,
+  flags: SearchFlags,
+  now: Date,
+  expiryAnnotation = true,
+): SearchCoverage {
   let checked;
   try {
     checked = checkCoverage(db, {
       ...(flags.asOf === undefined ? {} : { asOf: flags.asOf }),
       ...(flags.knewAt === undefined ? {} : { knewAt: flags.knewAt }),
       now,
-      expiryAnnotation: true,
+      expiryAnnotation,
     });
   } catch (err) {
     // The flags already passed this grammar; a rejection here means the two disagree, and a
@@ -218,7 +223,13 @@ export function runSearch(
       const { config } = substrate;
       const logger = substrate.logger();
       // Before the embedding call, so a refused search spends nothing and reads nothing.
-      const coverage = searchCoverage(substrate.db(), flags, new Date());
+      // The same knob the tool reads, so the command line binds the mode recall would bind.
+      const coverage = searchCoverage(
+        substrate.db(),
+        flags,
+        new Date(),
+        config.temporal.expiryAnnotation,
+      );
       if (coverage.status === 'refused') {
         writeSearchAnswer(coverage, [], flags.json, write);
         logger.info({ reason: coverage.refusal.reason }, 'search refused');
