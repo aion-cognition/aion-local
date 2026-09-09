@@ -1,14 +1,19 @@
 import type { Driver } from 'neo4j-driver';
+import { z } from 'zod';
 
 import { certifyNodeSupport } from '../../evidence/application/node-support.js';
+import { GRAPH_NODE_SCOPE } from '../../evidence/domain/scopes.js';
 import {
   findOrphanNodes,
   findOrphanRelinkTargets,
   type OrphanNode,
   type OrphanRelinkTarget,
 } from '../../infrastructure/graph/topology-queries.js';
+import { committedIncidenceForNode } from '../../infrastructure/sqlite/committed-evidence.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { findEntityMergeProposalsForNode } from '../../infrastructure/sqlite/entity-merge-proposals.js';
+import { readScopeMirror } from '../../infrastructure/sqlite/evidence-scope.js';
+import { getLedgerEntry, markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import {
   clearQualificationsOutside,
   lastExaminedAt,
@@ -61,10 +66,13 @@ export type OrphanCensus = {
   /** Nothing has counted the scopes that would carry their support. */
   readonly unknownSupport: number;
   /**
-   * Whether the read saw the whole disconnected population. False means the counts describe a
-   * bounded window, and a caller cannot read them as global demand.
+   * Whether the graph's enumeration ran out before the window did.
+   *
+   * It describes the ENUMERATION and nothing else. Every candidate it returned was listed; only
+   * the page inside it was evaluated, so this cannot certify a global zero and a caller must not
+   * read it as one.
    */
-  readonly pageComplete: boolean;
+  readonly enumerationComplete: boolean;
   readonly entries: readonly OrphanCensusEntry[];
 };
 
@@ -73,17 +81,31 @@ const EMPTY: OrphanCensus = {
   actionable: 0,
   unsupportedYoung: 0,
   unknownSupport: 0,
-  pageComplete: true,
+  enumerationComplete: true,
   entries: [],
 };
+
+/** Where the next read starts, so a bounded window advances instead of repeating its front. */
+const POSITION_KEY = 'orphan-census:position';
+
+const PositionSchema = z.object({ skip: z.number().int().nonnegative() });
+
+function readPosition(db: SqliteHandle): number {
+  const parsed = PositionSchema.safeParse(getLedgerEntry(db, POSITION_KEY)?.summary);
+  return parsed.success ? parsed.data.skip : 0;
+}
+
+function writePosition(db: SqliteHandle, skip: number): void {
+  markLedgerApplied(db, POSITION_KEY, { skip });
+}
 
 /**
  * How many candidates one read enumerates for every node it will examine.
  *
  * The graph orders oldest first, so a bound taken at the limit hands back the same held node
- * forever and a later actionable one is never reached. Reading a window and choosing within it
- * on how long ago each node was last examined is what keeps the front of the queue from being a
- * permanent one.
+ * forever. Choosing within a window on how long ago each node was last examined rotates the front
+ * of that window; the persisted position below is what moves the window itself, so a population
+ * larger than one window is still reached. A bigger window would only move the wall.
  */
 const NOMINATION_WINDOW = 10;
 
@@ -111,15 +133,23 @@ export async function readOrphanCensus(
   options: OrphanCensusOptions,
 ): Promise<OrphanCensus> {
   const window = options.limit * NOMINATION_WINDOW;
-  const candidates = await findOrphanNodes(deps.driver, window);
-  const pageComplete = candidates.length < window;
-  if (pageComplete) {
+  // The read resumes where the last one stopped. The enumeration is ordered and bounded, so the
+  // position is how far into that order this read starts; without it the same front page comes
+  // back forever and a population larger than one window is never examined.
+  const skip = readPosition(deps.db);
+  const enumerated = await findOrphanNodes(deps.driver, skip + window);
+  const enumerationComplete = enumerated.length < skip + window;
+  const candidates = enumerated.slice(skip);
+  // Back to the front once the enumeration ran out, so the walk cycles rather than running off
+  // the end of a population that is shorter than the position it reached.
+  writePosition(deps.db, enumerationComplete || candidates.length === 0 ? 0 : skip + window);
+  if (enumerationComplete) {
     // The whole population was read, so a node that carries a qualification and is not in it has
     // left the population. Its window is void: the node was connected, or supported, or gone for
     // some part of the interval, and none of that is continuous certification.
     clearQualificationsOutside(
       deps.db,
-      candidates.map((orphan) => orphan.id),
+      enumerated.map((orphan) => orphan.id),
     );
   }
   if (candidates.length === 0) {
@@ -141,36 +171,49 @@ export async function readOrphanCensus(
   for (const orphan of disconnected) {
     const reading = certifyNodeSupport(deps.db, orphan.id);
     const pending = pendingProposals(deps.db, orphan.id);
+    // The node's own semantic state is a graph fact, and the mirror is the only record of what
+    // the graph said and when. Without one there is no reading to qualify against: the node may
+    // have been superseded, reopened or rewritten inside the window, and a qualification taken
+    // over that interval would be a certification of an interval nobody observed.
+    const state = readScopeMirror(deps.db, {
+      endpointId: orphan.id,
+      relationClass: GRAPH_NODE_SCOPE,
+    });
+    const support = state === undefined ? 'unknown' : reading.support;
+    const reason =
+      state === undefined ? 'no mirrored node state to qualify against' : reading.reason;
+    const target = certifiedRelinkTarget(deps.db, orphan.id, targets.get(orphan.id));
     const observation = recordOrphanQualification(deps.db, {
       nodeId: orphan.id,
       evidenceRevision: {
         ...qualificationEvidence(reading.evidenceRevision, pending),
+        [GRAPH_NODE_SCOPE]:
+          state === undefined ? 'absent' : `${String(state.mirroredRevision)}@${state.mirroredAt}`,
         'graph:disconnected_since': orphan.txFrom?.toISOString() ?? 'unknown',
       },
       policyRevision: options.policyRevision,
-      disposition: reading.support,
-      reason: reading.reason,
+      disposition: support,
+      reason,
       now: options.now,
     });
     const candidate: OrphanCandidate = {
       nodeId: orphan.id,
-      support: reading.support,
-      relinkTarget: targets.get(orphan.id)?.targetId,
+      support,
+      relinkTarget: target?.targetId,
       protectedByPendingWork: pending > 0,
-      qualifiedSince:
-        reading.support === 'unsupported' ? new Date(observation.firstVerifiedAt) : undefined,
+      qualifiedSince: support === 'unsupported' ? new Date(observation.firstVerifiedAt) : undefined,
     };
     const decision = decideOrphan(candidate, {
       now: options.now,
       forgetAfterDays: options.forgetAfterDays,
     });
-    if (reading.support === 'unknown') {
+    if (support === 'unknown') {
       unknownSupport += 1;
     }
-    if (reading.support === 'unsupported' && decision.action === 'hold') {
+    if (support === 'unsupported' && decision.action === 'hold') {
       unsupportedYoung += 1;
     }
-    entries.push({ nodeId: orphan.id, decision, relinkTarget: targets.get(orphan.id) });
+    entries.push({ nodeId: orphan.id, decision, relinkTarget: target });
   }
 
   return {
@@ -178,9 +221,36 @@ export async function readOrphanCensus(
     actionable: entries.filter((entry) => entry.decision.actionable).length,
     unsupportedYoung,
     unknownSupport,
-    pageComplete,
+    enumerationComplete,
     entries,
   };
+}
+
+/**
+ * The target a repair may reach for, or nothing.
+ *
+ * The two-hop graph rules find a candidate; they do not prove one. What certifies the pair is the
+ * records, at the same vantage the orphan's own support was read at: some committed source stands
+ * behind BOTH ends, which is the shared-source rule stated logically instead of walked. A target
+ * nothing accounts for is a guess, and a guessed edge made out of the same silence a forget would
+ * have been made out of is still a claim: the node is preserved and the edge withheld.
+ */
+function certifiedRelinkTarget(
+  db: SqliteHandle,
+  orphanId: string,
+  target: OrphanRelinkTarget | undefined,
+): OrphanRelinkTarget | undefined {
+  if (target === undefined) {
+    return undefined;
+  }
+  const behindOrphan = new Set(committedIncidenceForNode(db, orphanId).map((row) => row.sourceId));
+  if (behindOrphan.size === 0) {
+    return undefined;
+  }
+  const shared = committedIncidenceForNode(db, target.targetId).some((row) =>
+    behindOrphan.has(row.sourceId),
+  );
+  return shared ? target : undefined;
 }
 
 /**

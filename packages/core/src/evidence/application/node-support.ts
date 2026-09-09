@@ -1,5 +1,9 @@
-import { countCommittedIncidenceForNode } from '../../infrastructure/sqlite/committed-evidence.js';
+import {
+  countCommittedIncidenceForNode,
+  countCommittedStatedLinksTo,
+} from '../../infrastructure/sqlite/committed-evidence.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { STATED_LINK_KINDS } from '../../infrastructure/sqlite/evidence-links.js';
 import {
   publishedScopeToken,
   scopeSupportsVerifiedEmpty,
@@ -47,6 +51,14 @@ export const SUPPORT_ROLES: readonly DurableRole[] = [
  * census established under a scope this reader does not ask for leaves the answer unknown while
  * looking established.
  */
+/**
+ * The statement kinds a stated link may carry. They are the wire spelling of the three stated
+ * roles above: the acceptance writer records `confirms`, `corrects` and `derived_from`, and the
+ * scope registry files their censuses under `stated_confirmation`, `stated_correction` and
+ * `stated_derivation`.
+ */
+export const STATED_SUPPORT_KINDS: readonly string[] = [...STATED_LINK_KINDS];
+
 export const NODE_SUPPORT_SCOPES: readonly string[] = [
   ...SUPPORT_ROLES.map((role) => nodeRoleScope(role)),
   NARRATIVE_SCOPES[0],
@@ -95,6 +107,13 @@ export function certifyNodeSupport(db: SqliteHandle, nodeId: string): NodeSuppor
     if (countCommittedIncidenceForNode(db, nodeId, role) > 0) {
       return { support: 'supported', reason: `committed ${role} incidence`, evidenceRevision };
     }
+  }
+  // The stated population, read where the acceptance writer actually records it. A confirmation,
+  // a correction or a derivation lands as a link version chain rather than an incidence row, and
+  // a reading that asked only the incidence table would call a node nobody has counted anything
+  // about the same as a node somebody has just confirmed.
+  if (countCommittedStatedLinksTo(db, nodeId, STATED_SUPPORT_KINDS) > 0) {
+    return { support: 'supported', reason: 'a committed statement names it', evidenceRevision };
   }
   if (readCitationsOf(db, nodeId).length > 0) {
     return { support: 'supported', reason: 'cited by a narrative revision', evidenceRevision };

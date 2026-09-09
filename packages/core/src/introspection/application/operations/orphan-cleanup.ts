@@ -1,9 +1,5 @@
-import { certifyNodeSupport } from '../../../evidence/application/node-support.js';
 import { upsertEdge } from '../../../infrastructure/graph/edges.js';
-import {
-  forgetOrphanNode,
-  type OrphanRelinkTarget,
-} from '../../../infrastructure/graph/topology-queries.js';
+import type { OrphanRelinkTarget } from '../../../infrastructure/graph/topology-queries.js';
 import { readOrphanObservation } from '../../../infrastructure/sqlite/orphan-observations.js';
 import { readCurrentReadinessPolicy } from '../../../infrastructure/sqlite/readiness-policies.js';
 import type { HealthSnapshot } from '../../domain/health.js';
@@ -14,13 +10,8 @@ import type {
   OperationOutcome,
 } from '../../domain/operation.js';
 import { orphanRepairRelevance } from '../../domain/orphan-policy.js';
-import {
-  pendingProposals,
-  qualificationEvidence,
-  qualificationHolds,
-  readOrphanCensus,
-  type OrphanCensusEntry,
-} from '../orphan-census.js';
+import { readOrphanCensus, type OrphanCensusEntry } from '../orphan-census.js';
+import { orphanSuppressionOperationId } from './orphan-suppression.js';
 
 /**
  * Orphan repair: relink what can be reconnected cheaply, suppress what the records certify
@@ -89,37 +80,40 @@ async function relink(ctx: OperationContext, target: OrphanRelinkTarget): Promis
  * no reopen path. The graph write carries the disconnection test with it for the same reason.
  */
 async function forget(ctx: OperationContext, entry: OrphanCensusEntry): Promise<boolean> {
+  if (ctx.topology === undefined) {
+    // No guard to publish under. A suppression has no reopen path, so the run declines rather
+    // than writing a permanent decision through a path whose lost commit response nobody could
+    // resolve; the qualification stays and the next composed run decides.
+    return false;
+  }
   const observation = readOrphanObservation(ctx.db, entry.nodeId);
   if (observation?.disposition !== 'unsupported') {
-    return false;
-  }
-  // The qualification is only as good as what it rested on, so the whole predicate is derived
-  // again here rather than the row being read back on its own word: the support reading, the
-  // proposals holding the node up, and the policy the window ran under. Anything that moved
-  // between the census and this write voids the window, and a suppression has no reopen path.
-  if (observation.policyRevision !== (readCurrentReadinessPolicy(ctx.db)?.policyRevision ?? 0)) {
-    return false;
-  }
-  const reading = certifyNodeSupport(ctx.db, entry.nodeId);
-  const pending = pendingProposals(ctx.db, entry.nodeId);
-  if (reading.support !== 'unsupported' || pending > 0) {
-    return false;
-  }
-  if (
-    !qualificationHolds(
-      observation.evidenceRevision,
-      qualificationEvidence(reading.evidenceRevision, pending),
-    )
-  ) {
     return false;
   }
   const forgetBefore = new Date(
     ctx.now.getTime() - ctx.config.maintenance.orphanForgetAfterDays * DAY_MS,
   );
-  if (new Date(observation.firstVerifiedAt).getTime() > forgetBefore.getTime()) {
+  // The whole predicate is re-derived under the guard, not here: the support reading, the
+  // proposals, the policy the window ran under and every scope version it named. This publishes
+  // the decision and the write together, so an evidence, proposal or state change landing between
+  // the census and the suppression defers the operation instead of being written over.
+  const outcome = await ctx.topology.publish({
+    kind: 'topology_update',
+    operationId: orphanSuppressionOperationId(entry.nodeId, ctx.now),
+    payload: {
+      nodeId: entry.nodeId,
+      policyRevision: observation.policyRevision,
+      forgetBefore: forgetBefore.toISOString(),
+    },
+  });
+  if (outcome.status !== 'acknowledged') {
+    ctx.logger.info(
+      { node: entry.nodeId, status: outcome.status, reason: outcome.reason },
+      'orphan suppression refused under the guard',
+    );
     return false;
   }
-  return forgetOrphanNode(ctx.driver, { id: entry.nodeId, forgetBefore, now: ctx.now });
+  return (outcome.result as { suppressed?: boolean }).suppressed === true;
 }
 
 async function runOrphanCleanup(ctx: OperationContext): Promise<OperationOutcome> {

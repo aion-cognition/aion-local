@@ -1,7 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 
 import { BITEMPORAL_PROPERTIES, currentOnly } from './bitemporal.js';
-import { runRead, runWrite } from './connection.js';
+import { runRead, runWrite, type GraphTransaction } from './connection.js';
 import { ENTITY_MENTION_TYPE } from './entity-queries.js';
 import { BACKBONE_TYPES, BASE_NODE_LABEL, MEMORY_LABEL } from './labels.js';
 import { STRUCTURAL_PROPERTY } from './seed-queries.js';
@@ -97,21 +97,41 @@ const FORGET_ORPHAN_NODE = [
   'RETURN n.id AS id',
 ].join('\n');
 
+export type OrphanForget = {
+  readonly id: string;
+  readonly forgetBefore: Date;
+  readonly now: Date;
+};
+
+function forgetParameters(input: OrphanForget): Record<string, unknown> {
+  return {
+    id: input.id,
+    forgetBefore: toGraphDateTime(input.forgetBefore),
+    now: toGraphDateTime(input.now),
+  };
+}
+
 /** True when this call is what suppressed the node; false when it was no longer eligible. */
-export async function forgetOrphanNode(
-  driver: Driver,
-  input: { readonly id: string; readonly forgetBefore: Date; readonly now: Date },
-): Promise<boolean> {
+export async function forgetOrphanNode(driver: Driver, input: OrphanForget): Promise<boolean> {
   const rows = await runWrite(
     driver,
     FORGET_ORPHAN_NODE,
-    {
-      id: input.id,
-      forgetBefore: toGraphDateTime(input.forgetBefore),
-      now: toGraphDateTime(input.now),
-    },
+    forgetParameters(input),
     (row) => row.id as string,
   );
+  return rows.length > 0;
+}
+
+/**
+ * The same suppression inside a caller's transaction, which is where the guarded writer runs it.
+ * A publication holds the guard for the whole operation, and a second transaction opened
+ * underneath it would commit outside the receipt that is supposed to say whether it landed.
+ */
+export async function forgetOrphanNodeInTransaction(
+  tx: GraphTransaction,
+  input: OrphanForget,
+): Promise<boolean> {
+  const rows = await tx.run(FORGET_ORPHAN_NODE, forgetParameters(input), (row) => row.id as string);
   return rows.length > 0;
 }
 

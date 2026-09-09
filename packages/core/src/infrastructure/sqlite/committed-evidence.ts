@@ -59,6 +59,39 @@ function toLinkVersion(row: LinkVersionRowData): CommittedLinkVersion {
   };
 }
 
+/**
+ * The sources that currently state something ABOUT this node, by role.
+ *
+ * A statement is a source standing behind a node just as much as an incidence row is: somebody
+ * corrected it, confirmed it or derived from it, and the record of that is the link chain rather
+ * than the incidence table. Committed means the same thing here as everywhere else, and the
+ * newest version of each link decides: a retired statement holds nothing up.
+ */
+export function countCommittedStatedLinksTo(
+  db: SqliteHandle,
+  nodeId: string,
+  kinds: readonly string[],
+): number {
+  if (kinds.length === 0) {
+    return 0;
+  }
+  const placeholders = new Array(kinds.length).fill('?').join(', ');
+  const row = db
+    .prepare(
+      `SELECT count(*) AS n FROM evidence_links l
+       JOIN evidence_link_versions v ON v.link_id = l.link_id
+       JOIN publication_intents i ON i.operation_id = v.operation_id AND i.state = 'acknowledged'
+       WHERE l.to_id = ? AND l.kind IN (${placeholders}) AND v.known_from IS NOT NULL
+         AND v.state != 'retired'
+         AND v.version = (SELECT MAX(v2.version) FROM evidence_link_versions v2
+                          JOIN publication_intents i2
+                            ON i2.operation_id = v2.operation_id AND i2.state = 'acknowledged'
+                          WHERE v2.link_id = l.link_id AND v2.known_from IS NOT NULL)`,
+    )
+    .get(nodeId, ...kinds) as { n: number };
+  return row.n;
+}
+
 /** One link's committed chain, oldest first. */
 export function committedLinkVersions(
   db: SqliteHandle,

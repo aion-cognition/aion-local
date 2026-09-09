@@ -4,7 +4,14 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { orphanCleanupOperation, orphanCleanupRelevance } from './orphan-cleanup.js';
-import { establishNodeSupportScopes } from '../../../evidence/test-support/evidence.fixture.js';
+import { orphanSuppressionOperationId } from './orphan-suppression.js';
+import { durableRoleScope } from '../../../evidence/domain/scopes.js';
+import {
+  commitIncidence,
+  establishNodeState,
+  establishNodeSupportScopes,
+  establishScope,
+} from '../../../evidence/test-support/evidence.fixture.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import {
@@ -27,9 +34,12 @@ import {
 } from '../../../infrastructure/graph/topology-queries.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import { refusingProvider } from '../../../infrastructure/providers/test-support/refusing-provider.fixture.js';
+import { PublicationCoordinator } from '../../../infrastructure/publication/coordinator.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import { INSTALLED_PUBLICATION_HANDLERS } from '../../../reflection/application/installed-publications.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
+import { readOrphanCensus } from '../orphan-census.js';
 
 /**
  * Four orphans, one per case the operation distinguishes:
@@ -52,6 +62,7 @@ import { healthFixture } from '../../domain/test-support/health.fixture.js';
  */
 
 const EMBED_DIMENSION = 8;
+const DAY_MS = 24 * 60 * 60 * 1000;
 const NOW = new Date('2026-08-29T14:00:00.000Z');
 const LONG_AGO = new Date('2026-01-01T00:00:00.000Z');
 /** A month past the first certification, which is what the qualification window measures. */
@@ -61,6 +72,7 @@ let harness: Neo4jHarness;
 let db: SqliteHandle;
 let logger: Logger;
 let dataDir: string;
+let coordinator: PublicationCoordinator;
 
 const config: Config = DEFAULTS;
 
@@ -72,9 +84,36 @@ function context(now: Date = NOW): OperationContext {
     logger,
     provider: refusingProvider,
     health: healthFixture(),
+    // A suppression is decided and written under one guard. Without it the operation declines,
+    // which is a case of its own below.
+    topology: coordinator,
     now,
     signal: new AbortController().signal,
   };
+}
+
+/**
+ * The logical evidence a repair reads: one source standing behind both ends of the pair.
+ *
+ * The two-hop graph rules find a candidate; the records are what certify one. Seeding the edge
+ * alone would prove the rule against the reading it is supposed to replace.
+ */
+function commitSharedSource(sourceId: string, nodeIds: readonly string[], at: Date): void {
+  for (const nodeId of nodeIds) {
+    commitIncidence(db, {
+      sourceId,
+      nodeId,
+      role: 'mention',
+      operationId: `incidence:${sourceId}:${nodeId}`,
+      at,
+    });
+  }
+}
+
+/** A node the records have counted and nothing stands behind, with its graph state mirrored. */
+function certifyEmpty(nodeId: string, at: Date): void {
+  establishNodeSupportScopes(db, nodeId, at);
+  establishNodeState(db, nodeId, { revision: 1, at });
 }
 
 async function seedSession(id: string, now: Date): Promise<void> {
@@ -201,11 +240,20 @@ beforeAll(async () => {
 
   await seedLooseInsight('insight-ancient-alone', LONG_AGO);
   await seedLooseInsight('insight-recent-alone', NOW);
+  await seedLooseInsight('insight-race', LONG_AGO);
 
   // Stored months ago and never enriched. Nothing was extracted from it, so it has only its
   // session link, and it belongs to the enrichment backlog rather than to this sweep.
   await seedSession('lonely-old-session', LONG_AGO);
   await seedEpisode('episode-unenriched-alone', 'lonely-old-session', LONG_AGO);
+
+  coordinator = new PublicationCoordinator({
+    driver: harness.driver,
+    db,
+    logger,
+    handlers: [...INSTALLED_PUBLICATION_HANDLERS],
+  });
+  await coordinator.initialize();
 }, 300_000);
 
 afterAll(async () => {
@@ -237,7 +285,7 @@ describe('orphan cleanup', () => {
 
   it('leaves a raw container out of the count and out of the sweep', async () => {
     const before = await countOrphanNodes(harness.driver);
-    expect(before.orphans).toBe(4);
+    expect(before.orphans).toBe(5);
     const ids = await orphanIds();
     expect(ids).not.toContain('episode-unenriched-alone');
     expect(ids).not.toContain('episode-with-sibling');
@@ -252,11 +300,13 @@ describe('orphan cleanup', () => {
   });
 
   it('relinks what it can reach and forgets only what has been certified all along', async () => {
-    // Two of the four have their support counted. The other two stay unknown, and unknown
-    // support authorizes nothing: not a forget, and not a guessed edge either.
-    for (const nodeId of ['decision-orphan', 'insight-ancient-alone']) {
-      establishNodeSupportScopes(db, nodeId, NOW);
-    }
+    // Two of the five have their support counted. The others stay unknown, and unknown support
+    // authorizes nothing: not a forget, and not a guessed edge either.
+    certifyEmpty('insight-ancient-alone', NOW);
+    establishNodeState(db, 'decision-orphan', { revision: 1, at: NOW });
+    // The relink's own proof: a source the records say stands behind both ends of the pair. The
+    // two-hop walk found the candidate; this is what certifies it.
+    commitSharedSource('prov-source', ['decision-orphan', 'entity-postgres'], NOW);
 
     // The first run certifies and starts the window. Nothing is mature yet, so the only thing
     // it can act on is the relink.
@@ -275,6 +325,46 @@ describe('orphan cleanup', () => {
     // Uncounted support, so the run leaves it exactly where it is however old it gets.
     expect(await forgottenAt('insight-recent-alone')).toBeUndefined();
     expect(await forgottenAt('episode-unenriched-alone')).toBeUndefined();
+  });
+
+  it('declines the suppression outright when no guard is composed to publish it under', async () => {
+    certifyEmpty('insight-declined', MATURE);
+    const unguarded: OperationContext = { ...context(MATURE), topology: undefined };
+
+    const outcome = await orphanCleanupOperation().run(unguarded);
+
+    expect(outcome.itemsAffected).toBe(0);
+    expect(await forgottenAt('insight-race')).toBeUndefined();
+  });
+
+  it('refuses a suppression whose evidence moved after the qualification was taken', async () => {
+    certifyEmpty('insight-race', NOW);
+    // The census qualifies it against what the records said then.
+    await readOrphanCensus(
+      { driver: harness.driver, db },
+      {
+        limit: 50,
+        now: NOW,
+        forgetAfterDays: config.maintenance.orphanForgetAfterDays,
+        policyRevision: 0,
+      },
+    );
+    // Then one of the scopes it rested on moves, which is exactly the window the guard fences:
+    // rechecking a graph disconnection predicate would not see this at all.
+    establishScope(db, 'insight-race', durableRoleScope('mention', 'in'), MATURE);
+
+    const outcome = await coordinator.publish({
+      kind: 'topology_update',
+      operationId: orphanSuppressionOperationId('insight-race', MATURE),
+      payload: {
+        nodeId: 'insight-race',
+        policyRevision: 0,
+        forgetBefore: new Date(MATURE.getTime() - DAY_MS).toISOString(),
+      },
+    });
+
+    expect(outcome).toMatchObject({ status: 'deferred', reason: 'evidence_moved' });
+    expect(await forgottenAt('insight-race')).toBeUndefined();
   });
 
   it('does not forget a node that stopped being an orphan since the scan read it', async () => {

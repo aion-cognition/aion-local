@@ -7,6 +7,7 @@ import { readOrphanCensus } from './orphan-census.js';
 import { certifyNodeSupport } from '../../evidence/application/node-support.js';
 import {
   commitIncidence,
+  establishNodeState,
   establishNodeSupportScopes,
 } from '../../evidence/test-support/evidence.fixture.js';
 import * as topology from '../../infrastructure/graph/topology-queries.js';
@@ -35,6 +36,7 @@ beforeEach(() => {
   vi.spyOn(topology, 'findOrphanNodes').mockImplementation(async () => nodes);
   vi.spyOn(topology, 'findOrphanRelinkTargets').mockResolvedValue([]);
   establishNodeSupportScopes(store.db, 'node', NOW);
+  establishNodeState(store.db, 'node', { revision: 1, at: NOW });
 });
 afterEach(() => {
   vi.restoreAllMocks();

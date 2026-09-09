@@ -7,6 +7,7 @@ import {
   resolvePendingMeasures,
   type ResolvedRun,
 } from './operation-scoring.js';
+import type { TopologyPublisher } from './operations/orphan-suppression.js';
 import { consultTier3 } from './tier3-consult.js';
 import type { JudgmentEvidence } from '../../evidence/application/judgment.js';
 import type { MergePublisher } from '../../evidence/application/merge-recovery.js';
@@ -80,6 +81,8 @@ export type IntrospectorDeps = {
   readonly evidence?: JudgmentEvidence;
   /** The coordinator an uncertain apply reconciles through before the batch counts anything. */
   readonly publications?: MergePublisher;
+  /** The coordinator a suppression publishes under. Absent, the operation declines the write. */
+  readonly topology?: TopologyPublisher;
   /**
    * The registered catalog, in order. Order decides nothing on its own: selection is by tier
    * and urgency, and ties break on waiting time and then on name.
@@ -411,6 +414,7 @@ export class Introspector {
         ...(this.#deps.recallProbe === undefined ? {} : { recallProbe: this.#deps.recallProbe }),
         ...(this.#deps.evidence === undefined ? {} : { evidence: this.#deps.evidence }),
         ...(this.#deps.publications === undefined ? {} : { publications: this.#deps.publications }),
+        ...(this.#deps.topology === undefined ? {} : { topology: this.#deps.topology }),
         health,
         now,
         signal: this.#abort.signal,

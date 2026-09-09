@@ -10,6 +10,7 @@ import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import type { ReflectionIntakeDeps } from '../../reflection/application/intake.js';
+import type { TopologyPublisher } from '../application/operations/orphan-suppression.js';
 
 /**
  * The contract every maintenance operation implements. It is deliberately small: a name, the
@@ -82,6 +83,11 @@ export type OperationContext = {
    * protocol, because a bare write's lost commit response cannot be told from no commit at all.
    */
   readonly publications?: MergePublisher;
+  /**
+   * Where a suppression publishes. A forget has no reopen path, so an operation composed without
+   * one declines rather than writing a permanent decision outside the guard that fences it.
+   */
+  readonly topology?: TopologyPublisher;
   /** The same reading the decision was made from. An operation must not observe again. */
   readonly health: HealthSnapshot;
   readonly now: Date;
