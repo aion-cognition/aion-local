@@ -308,6 +308,34 @@ export function endpointCensusScopes(db: SqliteHandle, endpointId: string): read
   return [...scopes].sort();
 }
 
+/**
+ * Which of these links the committed records actually hold.
+ *
+ * A census is a statement about the RECORDS, and what makes it true of the graph is every current
+ * relationship having a record. Membership does not establish that: a source proved months ago is
+ * still verified today, and the mention it acquired since was never materialized by anybody. So
+ * the proof is per relationship, and it joins through the operation's own acknowledgment — a
+ * prepared version is durable and invisible, and counting it would certify a write nobody
+ * committed.
+ */
+export function materializedLinks(
+  db: SqliteHandle,
+  linkIds: readonly string[],
+): ReadonlySet<string> {
+  if (linkIds.length === 0) {
+    return new Set();
+  }
+  const placeholders = linkIds.map(() => '?').join(', ');
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT v.link_id AS link_id FROM evidence_link_versions v
+       JOIN publication_intents i ON i.operation_id = v.operation_id AND i.state = 'acknowledged'
+       WHERE v.link_id IN (${placeholders}) AND v.known_from IS NOT NULL`,
+    )
+    .all(...linkIds) as { link_id: string }[];
+  return new Set(rows.map((row) => row.link_id));
+}
+
 export type CensusCoverage = {
   readonly cohortId: string;
   readonly cohortDigest: string;

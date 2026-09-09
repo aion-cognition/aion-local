@@ -119,6 +119,11 @@ function endpointMatches(rule: RelationRule, otherLabels: readonly string[]): bo
 /** A relationship whose two ends are both this source's own raw nodes: its internal order. */
 const INTERNAL_ROLE: DurableRole = 'raw_order';
 
+/** Whether these labels are a source's own raw node rather than a retained interpretation. */
+function isRawNode(labels: readonly string[]): boolean {
+  return RAW_LABELS.some((label) => labels.includes(label));
+}
+
 export type MaterializedLink = {
   readonly linkId: string;
   /** The link's recorded classification, which the incidence role must equal. */
@@ -322,32 +327,69 @@ export function roleOfLinkKind(kind: string): DurableRole | undefined {
   return KIND_ROLES.get(kind);
 }
 
+/** What one scope on an endpoint is a statement about. */
+export type ScopePopulation = {
+  /** The sources whose relationships land in this scope, sorted. */
+  readonly sources: readonly string[];
+  /** The link each of those relationships would have been recorded as. */
+  readonly links: readonly string[];
+  /**
+   * False when some contributor's own source could not be named.
+   *
+   * A raw node belonging to no source still contributes a relationship somebody wrote. Nobody can
+   * say whose it is, and a count that quietly leaves it out is a count with a hole in it — so the
+   * uncertainty stays attached to the scope that relationship lands in, and that scope alone.
+   */
+  readonly attributed: boolean;
+};
+
 /** Which sources stand behind each scope on one endpoint, and which nothing classified. */
 export type EndpointPopulation = {
-  /** Scope name to the sources whose relationships land in it, sorted. */
-  readonly scopes: ReadonlyMap<string, readonly string[]>;
+  readonly scopes: ReadonlyMap<string, ScopePopulation>;
   /** Relationships no rule classifies. They enter no counted population and pin their own source. */
   readonly unclassified: readonly LegacyPin[];
 };
 
+type Collected = { sources: Set<string>; links: Set<string>; attributed: boolean };
+
+/** Which of the link's two scopes this endpoint sits at, or nothing when it is neither end. */
+function endpointScopeOf(entry: MaterializedLink, endpointId: string): string | undefined {
+  const node = nodeScopeDirection(entry.scopeRole);
+  if (entry.toId === endpointId) {
+    return durableRoleScope(entry.scopeRole, node);
+  }
+  const source: ScopeDirection = node === 'in' ? 'out' : 'in';
+  return entry.fromId === endpointId ? durableRoleScope(entry.scopeRole, source) : undefined;
+}
+
 /**
- * What one endpoint's census is a statement about: every source the graph shows contributing to
- * each of its scopes.
+ * What one endpoint's census is a statement about: every relationship the graph currently shows
+ * landing in each of its scopes, with the source behind it and the link it would be recorded as.
  *
  * Each relationship is classified from ITS OWN source's side, by the same closed table the walk
- * used, so a census counts the population under exactly the rule that materialized it. An edge
- * whose other end belongs to no source contributes to no source population, and an edge no rule
- * names contributes to nothing at all: it is held by the pin on the source that wrote it, not by a
- * count filed under a role somebody guessed.
+ * used, so a census counts the population under exactly the rule that materialized it. The source
+ * is whichever end owns one — the other end's, or the endpoint's own when the endpoint is a
+ * source's raw node. Where neither end names a source and the contributor is a raw node, the
+ * relationship is still classified, under the raw node standing for itself, so the scope it lands
+ * in is known even though its attribution is not.
+ *
+ * An edge no rule names contributes to nothing at all: it is held by the pin on the source that
+ * wrote it, not by a count filed under a role somebody guessed. An edge between two retained nodes
+ * belongs to the graph's own relationship families and is not a source occurrence.
  */
 export function endpointPopulation(input: {
   readonly endpointId: string;
   readonly contributions: readonly EndpointContribution[];
 }): EndpointPopulation {
-  const scopes = new Map<string, Set<string>>();
+  const scopes = new Map<string, Collected>();
   const unclassified: LegacyPin[] = [];
   for (const row of input.contributions) {
-    if (row.sourceId === undefined) {
+    const owner = row.sourceId ?? row.endpointSourceId;
+    const attributed = row.sourceId !== undefined || row.endpointSourceId !== undefined;
+    // A raw node with no owner stands in for itself, which is enough to classify the edge and
+    // therefore to know which scope the missing attribution belongs to.
+    const sourceId = owner ?? (isRawNode(row.otherLabels) ? row.otherId : undefined);
+    if (sourceId === undefined) {
       continue;
     }
     const relation: LegacyRelation = {
@@ -361,28 +403,38 @@ export function endpointPopulation(input: {
     // The endpoint joins the source's raw set only when it is that source's own node. Adding it
     // unconditionally would read a correction pointing at another source's episode as this
     // source's internal ordering.
-    const raw = new Set([row.sourceId, row.otherId]);
-    if (row.endpointSourceId === row.sourceId) {
+    const raw = new Set([sourceId, row.otherId]);
+    if (row.endpointSourceId === sourceId) {
       raw.add(input.endpointId);
     }
-    const plan = classifyLegacyRelations({
-      sourceId: row.sourceId,
-      rawIds: [...raw],
-      relations: [relation],
-    });
+    const plan = classifyLegacyRelations({ sourceId, rawIds: [...raw], relations: [relation] });
     unclassified.push(...plan.pins);
     for (const entry of plan.links) {
-      if (entry.toId !== input.endpointId) {
+      const scope = endpointScopeOf(entry, input.endpointId);
+      if (scope === undefined) {
         continue;
       }
-      const scope = durableRoleScope(entry.scopeRole, nodeScopeDirection(entry.scopeRole));
-      const held = scopes.get(scope) ?? new Set<string>();
-      held.add(row.sourceId);
+      const held = scopes.get(scope) ?? { sources: new Set(), links: new Set(), attributed: true };
+      if (attributed) {
+        held.sources.add(sourceId);
+        held.links.add(entry.linkId);
+      } else {
+        held.attributed = false;
+      }
       scopes.set(scope, held);
     }
   }
   return {
-    scopes: new Map([...scopes].map(([scope, sources]) => [scope, [...sources].sort()])),
+    scopes: new Map(
+      [...scopes].map(([scope, held]) => [
+        scope,
+        {
+          sources: [...held.sources].sort(),
+          links: [...held.links].sort(),
+          attributed: held.attributed,
+        },
+      ]),
+    ),
     unclassified,
   };
 }

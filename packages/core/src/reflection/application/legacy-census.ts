@@ -2,15 +2,11 @@ import {
   censusCoverage,
   endpointCensusScopes,
   isNodeEndpoint,
+  materializedLinks,
   pageUncountedEndpoints,
   type CensusCoverage,
   type ScopeProof,
 } from './legacy-records.js';
-import {
-  durableRoleScope,
-  nodeScopeDirection,
-  DURABLE_ROLES,
-} from '../../evidence/domain/scopes.js';
 import type { GraphTransaction } from '../../infrastructure/graph/connection.js';
 import { readEndpointContributions } from '../../infrastructure/graph/legacy-evidence-queries.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
@@ -21,18 +17,16 @@ import { endpointPopulation } from '../domain/legacy-materialization.js';
  * What one page of the census seal may establish, and what proves each scope of it.
  *
  * A cohort finishing is not a census. The seal's claim is per scope: "this is the whole population
- * behind this counter", and the only thing that supports it is having walked that population. So
- * every candidate scope on every nominated endpoint is checked against the graph's own view of who
- * contributes to it, and a scope with one contributor this cohort did not verify is left uncounted
- * — the endpoint stays nominated for whoever covers it later, and the seal moves on.
+ * behind this counter", and what supports it is every relationship the graph currently shows in
+ * that scope having an acknowledged record, written by a source this cohort proved. So each
+ * candidate scope is checked against the graph's own view of what contributes to it, and a scope
+ * holding one relationship nobody materialized — or one whose source nobody can name — is left
+ * uncounted. The endpoint stays nominated for whoever covers it later, and the seal moves on.
+ *
+ * A verified member is not the unit of proof. A source proved months ago is still verified today,
+ * and the mention it acquired since is not in anybody's records: status answers a question about
+ * the walk, and the census asks one about the relationships.
  */
-
-/** The scope names filed at the SOURCE's end of a role, which its own walk proves. */
-const SOURCE_SIDE_SCOPES = new Set<string>(
-  DURABLE_ROLES.map((role) =>
-    durableRoleScope(role, nodeScopeDirection(role) === 'in' ? 'out' : 'in'),
-  ),
-);
 
 export type CensusEndpoint = {
   readonly endpointId: string;
@@ -93,12 +87,22 @@ async function proveEndpoint(
     return { endpointId, scopes: [], node, proof: [] };
   }
   const population = endpointPopulation({ endpointId, contributions: walk.contributions });
+  const recorded = materializedLinks(
+    context.db,
+    [...population.scopes.values()].flatMap((held) => [...held.links]),
+  );
   const scopes: string[] = [];
   const proof: ScopeProof[] = [];
   for (const scope of endpointCensusScopes(context.db, endpointId)) {
-    const contributors = SOURCE_SIDE_SCOPES.has(scope)
-      ? [endpointId]
-      : (population.scopes.get(scope) ?? []);
+    const held = population.scopes.get(scope);
+    // No contribution at all, over a walk that finished: a proved zero.
+    const contributors = held?.sources ?? [];
+    if (held !== undefined && !held.attributed) {
+      continue;
+    }
+    if (held !== undefined && !held.links.every((linkId) => recorded.has(linkId))) {
+      continue;
+    }
     if (!contributors.every((sourceId) => verifiedMember(context.db, request.cohortId, sourceId))) {
       continue;
     }
