@@ -237,6 +237,34 @@ export async function nodeAssociationHistoryInTransaction(
   return new Map(await tx.run(NODE_ASSOCIATION_HISTORY, { ids: unique }, mapHistoryRow));
 }
 
+/**
+ * Which of these ids the graph currently holds as eligible retained nodes.
+ *
+ * Content-bearing, current and not structural: the eligibility the population is defined by,
+ * asked about named nodes instead of about the whole graph. A repair edge is a present-tense
+ * claim, so the endpoints it names have to be present tense too. A node forgotten or closed
+ * since the nomination is not one of them, and an edge onto it states a relation to something
+ * the substrate has stopped holding.
+ */
+const CURRENT_RETAINED_NODES = [
+  'UNWIND $ids AS id',
+  `MATCH (n:${MEMORY_LABEL} { id: id })`,
+  `WHERE ${currentOnly('n')}`,
+  `  AND coalesce(n.${STRUCTURAL_PROPERTY}, false) = false`,
+  'RETURN n.id AS id',
+].join('\n');
+
+export async function currentRetainedNodesInTransaction(
+  tx: GraphTransaction,
+  ids: readonly string[],
+): Promise<ReadonlySet<string>> {
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) {
+    return new Set();
+  }
+  return new Set(await tx.run(CURRENT_RETAINED_NODES, { ids: unique }, (row) => row.id as string));
+}
+
 /** Which rule found the target, carried onto the repair edge so the relink says why it exists. */
 export type RelinkKind = 'shared_entity' | 'same_container';
 

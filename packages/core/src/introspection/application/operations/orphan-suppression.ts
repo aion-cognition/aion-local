@@ -4,6 +4,7 @@ import { certifyNodeSupport } from '../../../evidence/application/node-support.j
 import { GRAPH_NODE_SCOPE } from '../../../evidence/domain/scopes.js';
 import { upsertEdgeInTransaction } from '../../../infrastructure/graph/edges.js';
 import {
+  currentRetainedNodesInTransaction,
   forgetOrphanNodeInTransaction,
   nodeAssociationHistoryInTransaction,
   type RelinkKind,
@@ -109,19 +110,30 @@ export function orphanRelinkOperationId(orphanId: string, targetId: string, at: 
 /**
  * Whether the pair the census certified still certifies, derived again under the guard.
  *
- * The certification is a present-tense claim about two nodes, and a repair edge is a
- * present-tense write. Between the read and the write a source can close its incidence on either
- * end, and an edge written out of a relationship somebody ended is exactly what the proof is
- * supposed to prevent.
+ * Both halves of the claim, because a repair edge asserts both: that these two nodes are still
+ * there to be related, and that a committed source still stands behind each of them. Between the
+ * nomination and the write a source can close its incidence on either end, and either endpoint
+ * can be forgotten or closed outright. An edge onto a node the substrate has stopped holding is
+ * a relation to nothing, and a guarded write is where that gets caught rather than afterwards.
  */
-function relinkStands(context: PublicationContext, data: z.infer<typeof RelinkPayload>): boolean {
-  return (
-    certifiedRelinkTarget(context.db, data.orphanId, {
-      orphanId: data.orphanId,
-      targetId: data.targetId,
-      kind: data.relinkKind,
-    }) !== undefined
-  );
+async function relinkStands(
+  context: PublicationContext,
+  data: z.infer<typeof RelinkPayload>,
+): Promise<string | undefined> {
+  const current = await currentRetainedNodesInTransaction(context.graph, [
+    data.orphanId,
+    data.targetId,
+  ]);
+  if (!current.has(data.orphanId) || !current.has(data.targetId)) {
+    return 'relink_endpoint_not_current';
+  }
+  return certifiedRelinkTarget(context.db, data.orphanId, {
+    orphanId: data.orphanId,
+    targetId: data.targetId,
+    kind: data.relinkKind,
+  }) === undefined
+    ? 'relink_proof_moved'
+    : undefined;
 }
 
 /**
@@ -239,9 +251,10 @@ export const orphanSuppressionPublication = new PublicationOperation({
   },
   async check(context, data) {
     if (isRelink(data)) {
-      return relinkStands(context, data)
+      const withdrawn = await relinkStands(context, data);
+      return withdrawn === undefined
         ? ({ status: 'valid' } as const)
-        : ({ status: 'deferred', reason: 'relink_proof_moved' } as const);
+        : ({ status: 'deferred', reason: withdrawn } as const);
     }
     const moved = await qualificationStands(context, data);
     return moved === undefined
