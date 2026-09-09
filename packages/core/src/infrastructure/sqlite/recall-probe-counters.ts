@@ -101,3 +101,120 @@ export function recallProbeCounters(db: SqliteHandle): RecallProbeCounters {
   const hits = readCount(db, PROBE_HITS_KEY);
   return { samples, hits, hitRate: rate(hits, samples), served: servedReading(db) };
 }
+
+/**
+ * The second-generation reading, kept under keys of its own.
+ *
+ * The old structural hit rate counted "the pack held the episode, something extracted from it,
+ * or a narrative over it" against a denominator that dropped whatever the graph no longer
+ * projected. This one counts different things over a different population, and mixing the two
+ * would produce a rate whose denominator changed underneath it. The old totals stay where they
+ * are, unread by anything new, until a declared replacement scalar has been validated.
+ */
+const V2 = 'recall_probe:v2:';
+
+const V2_TRIALS_KEY = `${V2}trials`;
+const V2_RESOLVABLE_KEY = `${V2}source_resolvable`;
+const V2_RELATED_KEY = `${V2}source_related_retrieval`;
+const V2_UNAVAILABLE_KEY = `${V2}unavailable`;
+const V2_INELIGIBLE_KEY = `${V2}ineligible`;
+const V2_SERVED_ITEMS_KEY = `${V2}served_items`;
+const V2_SERVED_REFERENCED_KEY = `${V2}served_referenced`;
+const V2_SERVED_UNVERSIONED_KEY = `${V2}served_unversioned`;
+const V2_SERVED_MEASURED_AT_KEY = `${V2}served_measured_at`;
+
+export type ProbeTrialOutcome = {
+  /** The sampled raw record could be inspected with verified identity and evidence. */
+  readonly resolvable: boolean;
+  /** An emitted item has a recorded source relationship to the sample. Not an answer. */
+  readonly relatedRetrieval: boolean;
+};
+
+export type ServedReferenceInputV2 = {
+  readonly items: number;
+  readonly referenced: number;
+  /** Items whose incidence carries no acknowledged clock, so after-serve is unknowable. */
+  readonly unversioned: number;
+  readonly measuredAt: string;
+};
+
+export type RecallProbeReadingV2 = {
+  readonly trials: number;
+  readonly sourceResolvable: number;
+  readonly sourceRelatedRetrieval: number;
+  /** Trials the probe could not ask at all. Not misses, and never counted as any. */
+  readonly unavailable: number;
+  /** Samples the declared maturity policy excluded. Not misses either. */
+  readonly ineligible: number;
+  readonly served:
+    | {
+        readonly items: number;
+        readonly referenced: number;
+        readonly unversioned: number;
+        readonly measuredAt: string;
+      }
+    | undefined;
+};
+
+/**
+ * One scored trial. The two outcomes are counted apart because they answer different questions,
+ * and neither of them is `answer_quality`: whether the prose answered is measured by a
+ * source-specific fixture or a declared evaluation, never inferred from a structural hit.
+ */
+export function recordProbeTrialV2(db: SqliteHandle, outcome: ProbeTrialOutcome): void {
+  db.transaction(() => {
+    setMeta(db, V2_TRIALS_KEY, String(readCount(db, V2_TRIALS_KEY) + 1));
+    if (outcome.resolvable) {
+      setMeta(db, V2_RESOLVABLE_KEY, String(readCount(db, V2_RESOLVABLE_KEY) + 1));
+    }
+    if (outcome.relatedRetrieval) {
+      setMeta(db, V2_RELATED_KEY, String(readCount(db, V2_RELATED_KEY) + 1));
+    }
+  }).immediate();
+}
+
+/** A trial nobody could run, and a sample the policy excluded. Kept apart from each other. */
+export function recordProbeUnavailable(db: SqliteHandle): void {
+  setMeta(db, V2_UNAVAILABLE_KEY, String(readCount(db, V2_UNAVAILABLE_KEY) + 1));
+}
+
+export function recordProbeIneligible(db: SqliteHandle): void {
+  setMeta(db, V2_INELIGIBLE_KEY, String(readCount(db, V2_INELIGIBLE_KEY) + 1));
+}
+
+export function recordServedReferenceReadingV2(
+  db: SqliteHandle,
+  reading: ServedReferenceInputV2,
+): void {
+  db.transaction(() => {
+    setMeta(db, V2_SERVED_ITEMS_KEY, String(Math.max(0, reading.items)));
+    setMeta(db, V2_SERVED_REFERENCED_KEY, String(Math.max(0, reading.referenced)));
+    setMeta(db, V2_SERVED_UNVERSIONED_KEY, String(Math.max(0, reading.unversioned)));
+    setMeta(db, V2_SERVED_MEASURED_AT_KEY, reading.measuredAt);
+  }).immediate();
+}
+
+/**
+ * The raw tallies, and no rate. A single number over a population that changed is what the
+ * versioning exists to prevent; whoever compares these compares counts and the evidence behind
+ * them.
+ */
+export function recallProbeReadingV2(db: SqliteHandle): RecallProbeReadingV2 {
+  const measuredAt = getMeta(db, V2_SERVED_MEASURED_AT_KEY);
+  return {
+    trials: readCount(db, V2_TRIALS_KEY),
+    sourceResolvable: readCount(db, V2_RESOLVABLE_KEY),
+    sourceRelatedRetrieval: readCount(db, V2_RELATED_KEY),
+    unavailable: readCount(db, V2_UNAVAILABLE_KEY),
+    ineligible: readCount(db, V2_INELIGIBLE_KEY),
+    served:
+      measuredAt === undefined
+        ? undefined
+        : {
+            items: readCount(db, V2_SERVED_ITEMS_KEY),
+            referenced: readCount(db, V2_SERVED_REFERENCED_KEY),
+            unversioned: readCount(db, V2_SERVED_UNVERSIONED_KEY),
+            measuredAt,
+          },
+  };
+}

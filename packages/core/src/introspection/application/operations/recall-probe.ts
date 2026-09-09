@@ -1,21 +1,26 @@
 import { packBuckets, type MemoryPack } from '@aion/protocol';
 
-import {
-  countServedReferences,
-  findPackCoverage,
-} from '../../../infrastructure/graph/recall-probe-queries.js';
+import { idAddress } from '../../../evidence/domain/address.js';
 import { openSqliteHandle } from '../../../infrastructure/sqlite/database.js';
-import { sampleExperiencesBefore } from '../../../infrastructure/sqlite/experience-archive.js';
 import { markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
 import {
-  recordRecallProbeTrial,
-  recordServedReferenceReading,
-  type ServedReferenceInput,
+  relatedIncidenceNodes,
+  sampleSourcesAcceptedBefore,
+  readSourceReadiness,
+  servedReferenceOutcome,
+  type AcceptedSourceSample,
+} from '../../../infrastructure/sqlite/probe-incidence.js';
+import {
+  recordProbeIneligible,
+  recordProbeTrialV2,
+  recordProbeUnavailable,
+  recordServedReferenceReadingV2,
+  type ServedReferenceInputV2,
 } from '../../../infrastructure/sqlite/recall-probe-counters.js';
 import { listServedItemsBefore } from '../../../infrastructure/sqlite/served-items.js';
+import { checkCoverage } from '../../../recall/application/coverage-checker.js';
 import { CueCache } from '../../../recall/application/cues.js';
 import { handleRecall, type RecallDeps } from '../../../recall/application/recall.js';
-import type { ReflectionContent } from '../../../reflection/domain/content.js';
 import { bucketStamp } from '../../domain/buckets.js';
 import type {
   IntrospectionOperation,
@@ -23,12 +28,25 @@ import type {
   OperationOutcome,
   RecallProbe,
 } from '../../domain/operation.js';
+import {
+  PROBE_ACCEPTANCE_AGE_MS,
+  sampleEligibility,
+  type SampleIneligibleReason,
+} from '../../domain/probe-sample.js';
+import { sourceReadDeps } from '../source-wire.js';
 
 /**
- * The one sense that measures the whole loop from the inside. It takes experiences the substrate
- * was told about more than a day ago, asks for each of them back in the words they arrived in,
- * and scores whether the pack answered. Beside it, from the same run, the other half of the same
- * question: of what recall handed out, how much the conversation afterward actually used.
+ * The one sense that measures the whole loop from the inside. It takes sources the substrate
+ * accepted more than a day ago and has finished processing, asks for each of them back in the
+ * words they arrived in, and records two separate things: whether the raw record can still be
+ * inspected, and whether the pack held anything the records say came from it. Beside them, from
+ * the same run, the other half of the same question: of what recall handed out, how much the
+ * conversation afterward actually came back to.
+ *
+ * What it does not measure is whether the answer was good. A chunk covering a hundred sources
+ * and citing one has a recorded relationship to all hundred and answered for none of them, so
+ * `answer_quality` is left to source-specific fixtures and declared evaluations rather than
+ * inferred from a structural hit.
  *
  * A probe must teach the substrate nothing, or the next run scores what the last one taught it.
  * Isolation is by construction rather than by a flag, and `probeRecall` below is the whole
@@ -42,6 +60,8 @@ import type {
  *   The probe hands recall a throwaway in-memory store, so those writes land there and are
  *   dropped when the run ends. The substrate's own store sees only what this operation writes:
  *   the probe counters and one ledger row.
+ * - The source reads go through the evidence resolver against the real records, read-only, with
+ *   no publication position taken and nothing stamped.
  * - Session dedup and the own-session filter are off in the probe's config, so no serve is
  *   recorded and the pack is scored on everything retrieval found rather than on what a
  *   conversation had already seen.
@@ -58,7 +78,7 @@ export const RECALL_PROBE_OPERATION = 'recall_probe';
 
 export const RECALL_PROBE_LEDGER_PREFIX = 'recall_probe:';
 
-/** One row per day the probe ran, holding which experiences it asked about and what came back. */
+/** One row per day the probe ran, holding which sources it asked about and what came back. */
 export function recallProbeLedgerKey(stamp: string): string {
   return `${RECALL_PROBE_LEDGER_PREFIX}${stamp}`;
 }
@@ -77,11 +97,9 @@ export const RECALL_PROBE_IDENTITY = 'aion-recall-probe';
  */
 export const RECALL_PROBE_STANDING_RELEVANCE = 0.1;
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 /**
- * How much of an experience becomes the query. Long enough to carry what the experience was
- * about, short enough that the cue model reads a question rather than a transcript.
+ * How much of a source becomes the query. Long enough to carry what it was about, short enough
+ * that the cue model reads a question rather than a transcript.
  */
 const QUERY_MAX_CHARS = 400;
 
@@ -93,18 +111,46 @@ const QUERY_MAX_CHARS = 400;
 const SERVED_ITEM_CAP = 500;
 
 /**
- * The experience in its own words, which is the query. The archive text is asked back verbatim
- * rather than drafted into a question: a model rewriting the query would measure the rewrite as
- * much as the retrieval, and there is nothing to learn from a question the substrate composed
- * about text it is holding.
+ * The source in its own words, which is the query. The raw text is asked back verbatim rather
+ * than drafted into a question: a model rewriting the query would measure the rewrite as much as
+ * the retrieval, and there is nothing to learn from a question the substrate composed about text
+ * it is holding.
  *
- * An episode of tool exhaust alone has no such words and is skipped rather than queried on a
- * tool name.
+ * A capture of tool exhaust alone has no such words and is skipped rather than queried on a tool
+ * name. Observations come first, since a distilled line is what a member would ask back.
  */
-export function probeQuery(payload: ReflectionContent): string | undefined {
-  const observation = payload.observations?.find((text) => text.trim().length > 0);
-  const turn = payload.turns?.find((entry) => entry.text.trim().length > 0);
-  const text = (observation ?? turn?.text)?.trim();
+export type ProbeQueryPart = {
+  readonly partKind: string;
+  readonly role?: string;
+  readonly text: string;
+};
+
+/**
+ * The reconstruction prefixes a part with the position it was captured under, which is context
+ * for a reader and noise in a query. Stripping it here keeps the question the words the member
+ * actually wrote.
+ */
+function spokenText(part: ProbeQueryPart): string {
+  const prefix = part.partKind === 'observation' ? 'observation' : part.role;
+  const marker = prefix === undefined ? undefined : `${prefix}: `;
+  const text =
+    marker !== undefined && part.text.startsWith(marker)
+      ? part.text.slice(marker.length)
+      : part.text;
+  return text.trim();
+}
+
+export function probeQueryFromParts(parts: readonly ProbeQueryPart[]): string | undefined {
+  const spoken = (kind: string): string | undefined => {
+    for (const part of parts) {
+      const text = part.partKind === kind ? spokenText(part) : '';
+      if (text.length > 0) {
+        return text;
+      }
+    }
+    return undefined;
+  };
+  const text = spoken('observation') ?? spoken('turn');
   if (text === undefined || text.length === 0) {
     return undefined;
   }
@@ -150,65 +196,129 @@ function noop(detail: string): OperationOutcome {
 }
 
 type ProbeTrial = {
-  readonly episodeId: string;
-  readonly hit: boolean;
+  readonly sourceId: string;
+  /** The sampled raw record can be inspected with verified identity and evidence. */
+  readonly resolvable: boolean;
+  /** An emitted item has a recorded source relationship to the sample. */
+  readonly relatedRetrieval: boolean;
+};
+
+/** Why one sample produced no trial, kept as its own answer rather than folded into a miss. */
+type SkipReason = SampleIneligibleReason | 'no_words';
+
+type SampleOutcome =
+  | { readonly kind: 'trial'; readonly trial: ProbeTrial }
+  | { readonly kind: 'unavailable' }
+  | { readonly kind: 'ineligible'; readonly reason: SkipReason };
+
+type Tally = {
+  readonly trials: readonly ProbeTrial[];
+  readonly unavailable: number;
+  readonly ineligible: Readonly<Partial<Record<SkipReason, number>>>;
 };
 
 /**
- * One question and its verdict. A hit is any of the three ways a pack answers for an experience:
- * the episode itself, something extraction pulled out of it, or the narrative that compressed it.
- *
- * A recall that threw is not a miss and is not counted. The probe measures retrieval, and an
- * embedder that is down would otherwise read as the substrate forgetting.
+ * The served-then-referenced reading, over the same cutoff the samples use. Three outcomes and
+ * not two: an item nothing points at is a measured absence, and an item whose incidence carries
+ * no acknowledged clock is a question the records cannot answer. Reporting the second as the
+ * first would credit a backfill's discovery to the conversation.
  */
+function measureServedReferences(ctx: OperationContext, before: string): ServedReferenceInputV2 {
+  const served = listServedItemsBefore(ctx.db, before, SERVED_ITEM_CAP);
+  let referenced = 0;
+  let unversioned = 0;
+  for (const row of served) {
+    const outcome = servedReferenceOutcome(ctx.db, row.itemId, row.firstServedAt);
+    if (outcome === 'referenced_after') {
+      referenced += 1;
+    } else if (outcome === 'unversioned') {
+      unversioned += 1;
+    }
+  }
+  return {
+    items: served.length,
+    referenced,
+    unversioned,
+    measuredAt: ctx.now.toISOString(),
+  };
+}
+
+function detailFor(sampled: number, tally: Tally, served: ServedReferenceInputV2): string {
+  const resolvable = tally.trials.filter((trial) => trial.resolvable).length;
+  const related = tally.trials.filter((trial) => trial.relatedRetrieval).length;
+  const skipped = Object.values(tally.ineligible).reduce((sum, value) => sum + value, 0);
+  return (
+    `asked back ${String(tally.trials.length)} of ${String(sampled)} sampled source(s); ` +
+    `${String(resolvable)} resolvable, ${String(related)} with a recorded source relationship; ` +
+    `${String(skipped)} ineligible, ${String(tally.unavailable)} unavailable; ` +
+    `${String(served.referenced)} of ${String(served.items)} served item(s) referenced since, ` +
+    `${String(served.unversioned)} undatable`
+  );
+}
+
+/** One question, its verdict, and nothing inferred from either. */
 async function probeOnce(
   ctx: OperationContext,
   probe: RecallProbe,
-  episodeId: string,
+  sourceId: string,
   query: string,
-): Promise<ProbeTrial | undefined> {
+): Promise<{ readonly relatedRetrieval: boolean } | undefined> {
   let pack: MemoryPack;
   try {
     pack = await probe({ query, identity: RECALL_PROBE_IDENTITY, now: ctx.now });
   } catch (err) {
-    ctx.logger.warn({ err, episodeId }, 'recall probe could not ask; leaving the sample unscored');
+    ctx.logger.warn({ err, sourceId }, 'recall probe could not ask; leaving the sample unscored');
     return undefined;
   }
   const buckets = packBuckets(pack);
   const candidateIds = Object.values(buckets).flatMap((items) => items.map((item) => item.id));
-  const covering = await findPackCoverage(ctx.driver, { episodeId, candidateIds });
-  return { episodeId, hit: covering.length > 0 };
+  return { relatedRetrieval: relatedIncidenceNodes(ctx.db, sourceId, candidateIds).length > 0 };
 }
 
-/**
- * The served-then-referenced reading, over the same cutoff the samples use. It is a rate over
- * rows that are still on file, so it says how much of what a running conversation was handed
- * came back into the conversation, and it reads as nothing at all on a substrate whose sessions
- * have all closed.
- */
-async function measureServedReferences(
+async function scoreSample(
   ctx: OperationContext,
-  before: string,
-): Promise<ServedReferenceInput> {
-  const served = listServedItemsBefore(ctx.db, before, SERVED_ITEM_CAP);
-  const referenced = await countServedReferences(
-    ctx.driver,
-    served.map((row) => ({ itemId: row.itemId, firstServedAt: new Date(row.firstServedAt) })),
+  probe: RecallProbe,
+  sample: AcceptedSourceSample,
+): Promise<SampleOutcome> {
+  const eligibility = sampleEligibility(
+    sample,
+    readSourceReadiness(ctx.db, sample.sourceId),
+    ctx.now,
   );
-  return { items: served.length, referenced, measuredAt: ctx.now.toISOString() };
-}
-
-function detailFor(
-  sampled: number,
-  trials: readonly ProbeTrial[],
-  served: ServedReferenceInput,
-): string {
-  const hits = trials.filter((trial) => trial.hit).length;
-  return (
-    `asked back ${String(trials.length)} of ${String(sampled)} sampled experience(s), ` +
-    `${String(hits)} recalled; ${String(served.referenced)} of ${String(served.items)} ` +
-    'served item(s) referenced since'
+  if (eligibility.status === 'ineligible') {
+    recordProbeIneligible(ctx.db);
+    return { kind: 'ineligible', reason: eligibility.reason };
+  }
+  const checked = checkCoverage(ctx.db, { now: ctx.now, expiryAnnotation: true });
+  if (checked.status === 'refused') {
+    recordProbeUnavailable(ctx.db);
+    return { kind: 'unavailable' };
+  }
+  const reads = sourceReadDeps({ driver: ctx.driver, db: ctx.db, logger: ctx.logger });
+  const batch = await reads.resolver.resolveSources(
+    [idAddress(sample.sourceId)],
+    checked.context,
+    'raw_inspection',
   );
+  const result = [...batch.results.values()][0];
+  const resolvable = result?.evidence.status === 'complete-for-use' && result.value !== undefined;
+  const query = result?.value === undefined ? undefined : probeQueryFromParts(result.value.parts);
+  if (query === undefined) {
+    recordProbeIneligible(ctx.db);
+    return { kind: 'ineligible', reason: 'no_words' };
+  }
+  const asked = await probeOnce(ctx, probe, sample.sourceId, query);
+  if (asked === undefined) {
+    recordProbeUnavailable(ctx.db);
+    return { kind: 'unavailable' };
+  }
+  const trial: ProbeTrial = {
+    sourceId: sample.sourceId,
+    resolvable,
+    relatedRetrieval: asked.relatedRetrieval,
+  };
+  recordProbeTrialV2(ctx.db, trial);
+  return { kind: 'trial', trial };
 }
 
 async function runRecallProbe(ctx: OperationContext): Promise<OperationOutcome> {
@@ -220,44 +330,55 @@ async function runRecallProbe(ctx: OperationContext): Promise<OperationOutcome> 
     return noop('recall probe has no isolated recall to ask through; nothing asked');
   }
 
-  // A day, so the sample is past every lane's enrichment backlog: an experience that is still
-  // being enriched would be scored on a pipeline that has not finished with it.
-  const before = new Date(ctx.now.getTime() - DAY_MS).toISOString();
-  const sampled = sampleExperiencesBefore(ctx.db, before, ctx.config.maintenance.recallProbeSample);
+  // Acceptance, not world time: a source is mature when the substrate has held it long enough
+  // for its pipeline to have finished with it, which is a fact about this substrate.
+  const before = new Date(ctx.now.getTime() - PROBE_ACCEPTANCE_AGE_MS).toISOString();
+  const sampled = sampleSourcesAcceptedBefore(
+    ctx.db,
+    before,
+    ctx.config.maintenance.recallProbeSample,
+  );
 
   const trials: ProbeTrial[] = [];
-  for (const row of sampled) {
+  const ineligible: Partial<Record<SkipReason, number>> = {};
+  let unavailable = 0;
+  for (const sample of sampled) {
     if (ctx.signal.aborted) {
       break;
     }
-    const query = probeQuery(row.payload);
-    if (query === undefined) {
-      continue;
+    const outcome = await scoreSample(ctx, recallProbe, sample);
+    if (outcome.kind === 'trial') {
+      trials.push(outcome.trial);
+    } else if (outcome.kind === 'unavailable') {
+      unavailable += 1;
+    } else {
+      ineligible[outcome.reason] = (ineligible[outcome.reason] ?? 0) + 1;
     }
-    const trial = await probeOnce(ctx, recallProbe, row.episodeId, query);
-    if (trial === undefined) {
-      continue;
-    }
-    trials.push(trial);
-    recordRecallProbeTrial(ctx.db, { hit: trial.hit });
   }
+  const tally: Tally = { trials, unavailable, ineligible };
 
-  const served = await measureServedReferences(ctx, before);
-  recordServedReferenceReading(ctx.db, served);
+  const served = measureServedReferences(ctx, before);
+  recordServedReferenceReadingV2(ctx.db, served);
   markLedgerApplied(ctx.db, recallProbeLedgerKey(bucketStamp('day', ctx.now)), {
     probedAt: ctx.now.toISOString(),
     // Ids only. What a probe asked is stored text, and the ledger is not where it goes.
-    episodes: trials.map((trial) => ({ id: trial.episodeId, hit: trial.hit })),
+    sources: tally.trials.map((trial) => ({
+      id: trial.sourceId,
+      resolvable: trial.resolvable,
+      relatedRetrieval: trial.relatedRetrieval,
+    })),
+    ineligible: tally.ineligible,
+    unavailable: tally.unavailable,
     served,
   });
 
   return {
-    status: trials.length === 0 ? 'noop' : 'applied',
+    status: tally.trials.length === 0 ? 'noop' : 'applied',
     itemsProcessed: sampled.length,
-    // Measurements taken rather than anything changed: this operation's whole output is the two
-    // numbers, and a run that scored nothing has done nothing.
-    itemsAffected: trials.length,
-    detail: detailFor(sampled.length, trials, served),
+    // Measurements taken rather than anything changed: this operation's whole output is the
+    // tallies, and a run that scored nothing has done nothing.
+    itemsAffected: tally.trials.length,
+    detail: detailFor(sampled.length, tally, served),
   };
 }
 

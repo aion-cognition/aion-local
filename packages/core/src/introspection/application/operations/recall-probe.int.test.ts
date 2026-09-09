@@ -9,6 +9,7 @@ import {
   recallProbeOperation,
   RECALL_PROBE_IDENTITY,
 } from './recall-probe.js';
+import { commitIncidence } from '../../../evidence/test-support/evidence.fixture.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import { bootstrapBackbone } from '../../../infrastructure/graph/backbone.js';
@@ -25,12 +26,20 @@ import {
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import type { Provider, Vector } from '../../../infrastructure/providers/types.js';
+import {
+  activateCoverageContract,
+  prepareCoverageContract,
+} from '../../../infrastructure/sqlite/coverage-contract.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { getLastPack } from '../../../infrastructure/sqlite/last-pack.js';
 import { packMethodCounters } from '../../../infrastructure/sqlite/method-counters.js';
 import { getLedgerEntry } from '../../../infrastructure/sqlite/ops-ledger.js';
+import {
+  listOutstandingWork,
+  completeSourceWork,
+} from '../../../infrastructure/sqlite/processing-generations.js';
 import { recallCadenceCounters } from '../../../infrastructure/sqlite/recall-cadence.js';
-import { recallProbeCounters } from '../../../infrastructure/sqlite/recall-probe-counters.js';
+import { recallProbeReadingV2 } from '../../../infrastructure/sqlite/recall-probe-counters.js';
 import { countReinforcementSignals } from '../../../infrastructure/sqlite/reinforcement-queue.js';
 import { readServedItems, recordServedItems } from '../../../infrastructure/sqlite/served-items.js';
 import { countUsageEvents } from '../../../infrastructure/sqlite/usage-events.js';
@@ -54,6 +63,7 @@ import { healthFixture } from '../../domain/test-support/health.fixture.js';
  */
 
 const EMBED_DIMENSION = 8;
+const HORIZON = new Date('2026-09-01T00:00:00.000Z');
 const STORED_AT = new Date('2026-09-03T10:00:00.000Z');
 const YESTERDAY_AT = new Date('2026-09-04T18:00:00.000Z');
 const PROBED_AT = new Date('2026-09-05T12:00:00.000Z');
@@ -153,6 +163,11 @@ beforeAll(async () => {
   db = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
   logger = openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' });
   await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
+  // Every covered read runs the coverage check first, the probe's source reads included. A
+  // substrate whose control record cannot be read has answers that are all suspect, and the
+  // probe reports that as an unavailable trial rather than as a miss.
+  prepareCoverageContract(db, 1);
+  activateCoverageContract(db, { activatedAt: HORIZON, fieldPolicyVersion: 1 });
 
   const backbone = await bootstrapBackbone(harness.driver, { memberName: 'Test User' });
   sessions = new SessionManager(harness.driver, {
@@ -175,6 +190,30 @@ beforeAll(async () => {
 
   storedEpisodeId = await push(STORED_OBSERVATION, STORED_AT);
   await push(FRESH_OBSERVATION, PROBED_AT);
+
+  // The pass this substrate owes the stored source, finished. No readiness policy is published
+  // yet, so an acceptance leaves an inventory obligation behind; the sampler reads that as an
+  // unfinished pass and would score nothing, which is the fail-closed direction it is meant to
+  // take. Finishing the work here is what makes the source one the probe may judge.
+  for (const work of listOutstandingWork(db, PROBED_AT, 100)) {
+    if (work.sourceId === storedEpisodeId) {
+      completeSourceWork(
+        db,
+        work.workId,
+        { outcome: 'complete', reason: 'test fixture' },
+        STORED_AT,
+      );
+    }
+  }
+  // The extraction incidence the reflection worker records, which this file does not run. It is
+  // what makes an emitted item one the records say the sampled source stands behind.
+  commitIncidence(db, {
+    sourceId: storedEpisodeId,
+    nodeId: storedEpisodeId,
+    role: 'extraction',
+    operationId: 'extract-stored',
+    at: STORED_AT,
+  });
 
   // Two entities and an episode from yesterday that names one of them: the shape the
   // served-then-referenced reading measures.
@@ -200,6 +239,16 @@ beforeAll(async () => {
     now: YESTERDAY_AT,
     confidence: 1,
     provenance: ['test-seed'],
+  });
+  // The durable half of that mention. The served reading is answered from the records now, so
+  // an acknowledged incidence carrying a clock is what credits a later reference; the graph
+  // edge beside it is what recall traverses.
+  commitIncidence(db, {
+    sourceId: 'episode-mentioning',
+    nodeId: REFERENCED_ENTITY,
+    role: 'mention',
+    operationId: 'mention-later',
+    at: YESTERDAY_AT,
   });
   recordServedItems(
     db,
@@ -244,35 +293,44 @@ describe('the recall self-probe against a live substrate', () => {
     expect(countUsageEvents(db)).toBeGreaterThan(0);
   }, 120_000);
 
-  it('asks back what it was told and records the hit', async () => {
+  it('asks back what it was told and keeps the two outcomes apart', async () => {
     const outcome = await recallProbeOperation().run(context());
 
     expect(outcome.status).toBe('applied');
-    // One of the two archived experiences is a day old; the other was pushed today.
+    // One source was accepted more than a day ago; the other arrived today. Acceptance is what
+    // decides that, not the world date either of them carries.
     expect(outcome.itemsProcessed).toBe(1);
     expect(outcome.itemsAffected).toBe(1);
 
-    const counters = recallProbeCounters(db);
-    expect(counters.samples).toBe(1);
-    expect(counters.hits).toBe(1);
-    expect(counters.hitRate).toBe(1);
+    const reading = recallProbeReadingV2(db);
+    expect(reading.trials).toBe(1);
+    expect(reading.sourceResolvable).toBe(1);
+    expect(reading.sourceRelatedRetrieval).toBe(1);
+    expect(reading.unavailable).toBe(0);
   }, 120_000);
 
-  it('reads how much of what was served came back into the conversation', () => {
-    const { served } = recallProbeCounters(db);
+  it('reads how much of what was served came back, and what it cannot date', () => {
+    const { served } = recallProbeReadingV2(db);
 
     expect(served?.items).toBe(2);
     expect(served?.referenced).toBe(1);
+    expect(served?.unversioned).toBe(0);
     expect(served?.measuredAt).toBe(PROBED_AT.toISOString());
   });
 
   it('records the run with the ids it asked about and nothing they said', () => {
     const entry = getLedgerEntry(db, recallProbeLedgerKey('2026-09-05'));
     const summary = entry?.summary as {
-      readonly episodes: readonly { readonly id: string; readonly hit: boolean }[];
+      readonly sources: readonly {
+        readonly id: string;
+        readonly resolvable: boolean;
+        readonly relatedRetrieval: boolean;
+      }[];
     };
 
-    expect(summary.episodes).toEqual([{ id: storedEpisodeId, hit: true }]);
+    expect(summary.sources).toEqual([
+      { id: storedEpisodeId, resolvable: true, relatedRetrieval: true },
+    ]);
     expect(JSON.stringify(summary)).not.toContain(STORED_OBSERVATION);
   });
 

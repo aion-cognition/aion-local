@@ -2,7 +2,7 @@ import type { Driver } from 'neo4j-driver';
 import { describe, expect, it } from 'vitest';
 
 import {
-  probeQuery,
+  probeQueryFromParts,
   recallProbeLedgerKey,
   recallProbeOperation,
   RECALL_PROBE_IDENTITY,
@@ -97,39 +97,43 @@ describe('recallProbeOperation', () => {
 });
 
 describe('the probe query', () => {
-  it('asks in the experience own words rather than composing a question', () => {
-    expect(probeQuery({ observations: ['the WAL retry loop was the bug'] })).toBe(
-      'the WAL retry loop was the bug',
-    );
+  it('asks in the source own words rather than composing a question', () => {
+    expect(
+      probeQueryFromParts([
+        { partKind: 'observation', text: 'observation: the WAL retry loop was the bug' },
+      ]),
+    ).toBe('the WAL retry loop was the bug');
   });
 
   it('falls back to the first turn that said anything', () => {
     expect(
-      probeQuery({
-        turns: [
-          { role: 'system', text: '   ' },
-          { role: 'user', text: 'where did we land on the retry loop' },
-        ],
-      }),
+      probeQueryFromParts([
+        { partKind: 'turn', role: 'system', text: 'system:    ' },
+        { partKind: 'turn', role: 'user', text: 'user: where did we land on the retry loop' },
+      ]),
     ).toBe('where did we land on the retry loop');
   });
 
   it('prefers an observation over a turn, since it is the distilled line', () => {
     expect(
-      probeQuery({
-        observations: ['the retry loop is fixed'],
-        turns: [{ role: 'user', text: 'what about the retry loop' }],
-      }),
+      probeQueryFromParts([
+        { partKind: 'turn', role: 'user', text: 'user: what about the retry loop' },
+        { partKind: 'observation', text: 'observation: the retry loop is fixed' },
+      ]),
     ).toBe('the retry loop is fixed');
   });
 
-  it('clips a long experience to a query rather than sending a transcript', () => {
-    const query = probeQuery({ observations: ['x'.repeat(900)] });
+  it('clips a long source to a query rather than sending a transcript', () => {
+    const query = probeQueryFromParts([
+      { partKind: 'observation', text: `observation: ${'x'.repeat(900)}` },
+    ]);
 
     expect(query).toHaveLength(400);
   });
 
-  it('skips an episode of tool exhaust, which carries no words to ask back', () => {
-    expect(probeQuery({ tool_executions: [{ tool: 'Bash', status: 'ok' }] })).toBeUndefined();
+  it('skips a capture of tool exhaust, which carries no words to ask back', () => {
+    expect(
+      probeQueryFromParts([{ partKind: 'tool_execution', text: 'Bash\nstatus: ok' }]),
+    ).toBeUndefined();
   });
 });
