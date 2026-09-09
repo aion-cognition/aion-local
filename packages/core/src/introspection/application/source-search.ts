@@ -165,6 +165,24 @@ function boundedIssue(address: EvidenceAddress | undefined, sourceId: string): E
   };
 }
 
+/**
+ * Whether the request's own allowance, rather than the substrate, is what stopped this reading.
+ *
+ * A suppressed source, an unresolved mapping and a store outage are answers about the document;
+ * an exhausted budget is an answer about the request. Only the second one is worth resuming,
+ * and telling them apart is what keeps a large source from disappearing from every page.
+ *
+ * The batch's issue list is what says so, not the result state: a subread this page did not
+ * require reports its exhaustion as an optional issue, so the result still reads
+ * complete-for-use while carrying no value at all.
+ */
+function deferredByBudget(
+  result: EvidenceResult<SourceEvidence> | undefined,
+  issues: readonly EvidenceIssue[],
+): boolean {
+  return result?.value === undefined && issues.some((issue) => issue.reason === 'budget_limit');
+}
+
 type PageAssembly = {
   readonly hits: readonly SourceSearchHit[];
   readonly issues: readonly EvidenceIssue[];
@@ -210,12 +228,26 @@ async function assemblePage(
       required: false,
       budget,
     });
+    const result = [...batch.results.values()][0];
+    // An allowance that ran out is not an answer about this document. Advancing the cursor
+    // past it would drop it from every page a caller could ever ask for, so the page stops
+    // here instead and the continuation resumes on it with a fresh allowance.
+    const deferred = deferredByBudget(result, batch.issues);
+    if (deferred && examined > 0) {
+      bounded = true;
+      break;
+    }
     examined += 1;
     lastExamined = document.id;
-    const result = [...batch.results.values()][0];
     issues.push(...batch.issues);
     if (result?.value === undefined) {
       withheld += 1;
+      // A whole allowance that cannot carry one document is a bound on the document, not on
+      // the page: no later page could read it either, so it is disclosed and stepped over.
+      if (deferred) {
+        bounded = true;
+        break;
+      }
       continue;
     }
     const part = partOf(result.value, document);
