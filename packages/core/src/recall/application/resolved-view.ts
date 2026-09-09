@@ -10,7 +10,12 @@ import {
 import type { ItemMetadata } from '../../evidence/application/metadata.js';
 import type { EvidenceResolver } from '../../evidence/application/resolver.js';
 import { ownershipVerdict, type OwnershipVerdict } from '../../evidence/domain/ownership.js';
-import { isCertifiedReading, type EvidenceResult } from '../../evidence/domain/result.js';
+import {
+  isCertifiedReading,
+  isUncertifiedIssue,
+  type EvidenceIssue,
+  type EvidenceResult,
+} from '../../evidence/domain/result.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 import type { ItemOrigin } from '../../infrastructure/graph/origin-queries.js';
 import type { ReadMode } from '../../infrastructure/graph/read-modes.js';
@@ -97,6 +102,7 @@ type Folded = {
 
 function foldResolved(
   results: ReadonlyMap<string, EvidenceResult<ItemMetadata>>,
+  issues: readonly EvidenceIssue[],
   input: { readonly sessionId: string; readonly attribute: boolean },
 ): Folded {
   const provenance = new Map<string, ItemProvenance>();
@@ -121,6 +127,15 @@ function foldResolved(
       ownership.set(id, ownershipVerdict(result.value.ownership, input.sessionId));
     }
   }
+  // The batch names every issue the run raised, optional ones included, and a complete-for-use
+  // result carries none of its own. An allowance that ran out on a field this request did not
+  // require still read less of the substrate than the answer describes, so the reading it
+  // produced may be served with its gap and may not be stored as what the memory says.
+  for (const issue of issues) {
+    if (issue.address.kind === 'id' && isUncertifiedIssue(issue)) {
+      degraded.add(issue.address.id);
+    }
+  }
   return { provenance, ownership, degraded };
 }
 
@@ -135,7 +150,7 @@ export type ResolvedViewInput = {
 export function resolvedView(input: ResolvedViewInput): ResolvedEvidenceView {
   const { reading } = input;
   if (reading.kind === 'resolved') {
-    const folded = foldResolved(reading.results, input);
+    const folded = foldResolved(reading.results, reading.issues, input);
     return {
       provenance: folded.provenance,
       relatedClaims: input.relatedClaims,

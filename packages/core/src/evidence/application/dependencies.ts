@@ -20,7 +20,7 @@ import {
 } from '../../infrastructure/sqlite/source-identity.js';
 import { committedSourceStates } from '../../infrastructure/sqlite/source-states.js';
 import { hashContent } from '../../reflection/domain/content.js';
-import { scopeAuthority } from '../domain/scopes.js';
+import { scopeAuthority, SOURCE_STATE_SCOPE } from '../domain/scopes.js';
 
 /**
  * What a read observed, and how a later writer finds out that it changed.
@@ -68,17 +68,25 @@ function contentProofVersion(record: SourceRecord): string {
 }
 
 /**
- * The state chain's own version, which is what a reader that consulted suppression fences on.
- * A reader that decided whether a source may be quoted has read this chain, and an answer that
- * travels without it goes on standing after the statement that changed it.
+ * What a reader that consulted suppression fences on: the state chain, and the census that says
+ * whether the chain's silence means anything.
+ *
+ * Both are read to decide whether a source may be quoted at a past vantage, so both belong in the
+ * one token. A version taken from the chain alone goes on calling itself current after a backfill
+ * establishes the census and turns an unprovable silence into a proved absence, which is a
+ * different answer about the same source.
  */
 export function sourceStateDependency(db: SqliteHandle, sourceId: string): EvidenceDependency {
-  const states = committedSourceStates(db, sourceId);
+  const key = { endpointId: sourceId, relationClass: SOURCE_STATE_SCOPE };
   return {
     kind: 'source',
     id: sourceId,
-    scope: 'source.state',
-    version: String(states.at(-1)?.version ?? 0),
+    scope: SOURCE_STATE_SCOPE,
+    version: hashContent({
+      chain: committedSourceStates(db, sourceId).at(-1)?.version ?? 0,
+      counted: scopeSupportsVerifiedEmpty(db, key),
+      census: publishedScopeToken(db, key) ?? '',
+    }),
   };
 }
 

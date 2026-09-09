@@ -115,12 +115,28 @@ const RETRYABLE_REASONS = new Set(['store_unavailable', 'pending_publication']);
 const UNCERTIFIED_REASONS = new Set(['store_unavailable', 'pending_publication', 'budget_limit']);
 
 /**
+ * Whether this issue says the reading's inputs could not be obtained.
+ *
+ * Requiredness answers a different question. It says what this request needed, which decides
+ * whether the result is complete for its use and whether the gap makes the statement partial. An
+ * exhausted allowance says the read did not finish whatever the caller needed from it, so an
+ * optional field's gap is still no licence to store a value derived from it.
+ */
+export function isUncertifiedIssue(issue: EvidenceIssue): boolean {
+  return UNCERTIFIED_REASONS.has(issue.reason);
+}
+
+/**
  * Whether a consumer may treat this result's value as the substrate's current answer.
  *
  * The one certainty question every serving consumer asks, so suppression, folding and the stored
  * fingerprint cannot disagree about which readings are safe to act on. A settled observation of
  * incomplete ancestry is certified and carries its own gap; a reading whose inputs could not be
  * obtained is not, whether or not a provisional value came back with it.
+ *
+ * A complete-for-use state carries no issue list, so an optional gap on such a result is named on
+ * the batch instead. A caller holding both asks this and reads that list; neither alone is the
+ * whole answer.
  */
 export function isCertifiedReading(result: EvidenceResult<unknown>): boolean {
   if (result.value === undefined) {
@@ -129,9 +145,7 @@ export function isCertifiedReading(result: EvidenceResult<unknown>): boolean {
   if (result.evidence.status === 'complete-for-use') {
     return true;
   }
-  return !result.evidence.reasons.some(
-    (issue) => isRequiredIssue(issue) && UNCERTIFIED_REASONS.has(issue.reason),
-  );
+  return !result.evidence.reasons.some(isUncertifiedIssue);
 }
 
 /** A required-field issue, which is the only kind that decides the evidence value. */
