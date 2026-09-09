@@ -27,6 +27,12 @@ import {
  * already proved. Which attempt the row accounts for is the durable association `walked_by` holds,
  * and it is the only thing that separates recovering a lost reply from asking for a new
  * verification — through the caller's arguments the two are identical.
+ *
+ * A row from before that association was recorded has no such answer, and a status is not one: an
+ * old verdict and an accounting for a newer publication whose reply was lost are the same label.
+ * Such a row is bound to its walk first, and only where a single outstanding acknowledgment
+ * reports exactly the verdict and reason the row holds; anything else is recovered instead, so no
+ * further identity is spent while an unaccounted receipt is on the books.
  */
 
 /** A member nobody can repair in this many walks needs a person, not another identity. */
@@ -46,24 +52,50 @@ export type MemberAttempt = {
   readonly payload?: unknown;
   /** An acknowledged receipt to finalize progress from instead of walking again. */
   readonly receipt?: AttemptReceipt;
+  /**
+   * The walk a row predating the association is to be bound to, recorded BEFORE the new
+   * publication goes out. Without that write first, the reply this attempt is waiting for and the
+   * verdict the row already carries are the same unanswerable question on the next pass.
+   */
+  readonly associate?: string;
   /** Why no walk is possible. The caller records a durable pin rather than throwing the batch away. */
   readonly exhausted?: string;
 };
 
 /**
- * Whether this member's row already accounts for that attempt.
+ * The status a walk records from its receipt.
  *
- * The recorded association answers it outright. A row written before the association existed has
- * no answer of its own, and then its status stands in: a member still waiting to be walked has
- * accounted for nothing, and one carrying a verdict has accounted for whatever produced it.
+ * The producer's two gates are different failures: a source with no proof at all and a proved one
+ * whose relationships cannot be represented both pin, and only a source that cleared both
+ * verifies. The batch records from this, so a receipt read back later derives the same verdict.
  */
-function accountedFor(
-  input: { readonly walkedBy?: string | undefined; readonly status: MigrationStatus | undefined },
-  operationId: string,
-): boolean {
-  return input.walkedBy === undefined
-    ? input.status !== undefined && input.status !== 'accounted'
-    : input.walkedBy === operationId;
+export function receiptStatus(receipt: {
+  readonly pinned: boolean;
+  readonly verified: boolean;
+}): MigrationStatus {
+  return receipt.verified && !receipt.pinned ? 'verified' : 'pinned';
+}
+
+/** What the member's row currently says, and which walk it says it. */
+type MemberRow = {
+  readonly walkedBy?: string | undefined;
+  readonly status?: MigrationStatus | undefined;
+  readonly reason?: string | undefined;
+};
+
+/**
+ * Whether the row's own verdict was recorded from this receipt.
+ *
+ * A status alone proves nothing — every walk of a pinned member reports `pinned` — so the reason
+ * the producer gave is checked with it. That is the whole of what the row durably holds about its
+ * walk, and a receipt that does not answer for both is not the one the row came from.
+ */
+function reports(receipt: AttemptReceipt, row: MemberRow): boolean {
+  return (
+    row.status !== undefined &&
+    receiptStatus(receipt) === row.status &&
+    receipt.reason === row.reason
+  );
 }
 
 function receiptOf(record: PublicationRecord): AttemptReceipt {
@@ -79,14 +111,51 @@ function receiptOf(record: PublicationRecord): AttemptReceipt {
   };
 }
 
+/**
+ * The walk that follows the acknowledgments nothing has superseded.
+ *
+ * With an association recorded, the row answers for itself. Without one the row predates the
+ * association and answers nothing on its own, so exactly one outstanding acknowledgment that
+ * reports the verdict the row carries is that row's walk: it is bound to the row first, and the
+ * new attempt goes out under an identity of its own. Every other shape leaves at least one
+ * acknowledgment nobody has accounted for, and that receipt is recovered rather than published
+ * over — a second walk cannot prove what the first one already proved, only spend an identity
+ * looking as though it might have.
+ */
+function walkAfter(
+  input: MemberRow & { readonly payload: unknown },
+  next: { readonly operationId: string; readonly outstanding: readonly PublicationRecord[] },
+): MemberAttempt {
+  const latest = next.outstanding.at(-1);
+  if (latest === undefined) {
+    return { operationId: next.operationId, payload: input.payload };
+  }
+  if (input.walkedBy !== undefined) {
+    return input.walkedBy === latest.operationId
+      ? { operationId: next.operationId, payload: input.payload }
+      : { operationId: latest.operationId, receipt: receiptOf(latest) };
+  }
+  const single = next.outstanding.length === 1 ? latest : undefined;
+  return single !== undefined && reports(receiptOf(single), input)
+    ? { associate: single.operationId, operationId: next.operationId, payload: input.payload }
+    : { operationId: latest.operationId, receipt: receiptOf(latest) };
+}
+
 export function planMemberAttempt(
   db: SqliteHandle,
   input: {
     readonly cohortId: string;
     readonly sourceId: string;
     readonly payload: unknown;
-    /** What the cohort currently records about the member, or nothing where it records none. */
-    readonly status: MigrationStatus | undefined;
+    /**
+     * What the cohort currently records about the member. It is never read as an accounting: a
+     * verdict names no operation, and treating one as an attempt identity is how a lost reply
+     * becomes a third publication. It is read only to recognise which acknowledgment a row
+     * predating the association was written from.
+     */
+    readonly status?: MigrationStatus | undefined;
+    /** The reason recorded with that status, which is the rest of what the row holds about it. */
+    readonly reason?: string | undefined;
     /** The walk that status came from, where the row records one. */
     readonly walkedBy?: string | undefined;
     /**
@@ -99,21 +168,19 @@ export function planMemberAttempt(
   },
 ): MemberAttempt {
   const base = `legacy-materialization:${input.cohortId}:${input.sourceId}`;
-  let acknowledged: PublicationRecord | undefined;
+  /** The acknowledged walks, in identity order, that no later verdict has superseded. */
+  let outstanding: readonly PublicationRecord[] = [];
   for (let attempt = 1; attempt <= MAX_REPAIR_ATTEMPTS; attempt += 1) {
     const operationId = attempt === 1 ? base : `${base}#${String(attempt)}`;
     const record = publicationRecord(db, operationId);
     if (record === undefined) {
-      if (acknowledged !== undefined && !accountedFor(input, acknowledged.operationId)) {
-        return { operationId: acknowledged.operationId, receipt: receiptOf(acknowledged) };
-      }
-      return { operationId, payload: input.payload };
+      return walkAfter(input, { operationId, outstanding });
     }
     if (record.state === 'prepared') {
       return { operationId, payload: JSON.parse(record.payloadJson) };
     }
     // A verdict that has already come and gone supersedes anything before it.
-    acknowledged = record.state === 'acknowledged' ? record : undefined;
+    outstanding = record.state === 'acknowledged' ? [...outstanding, record] : [];
   }
   return {
     exhausted: `source ${input.sourceId} exhausted its repair attempts in cohort ${input.cohortId}`,

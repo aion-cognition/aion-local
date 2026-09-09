@@ -2,7 +2,7 @@ import type { Driver } from 'neo4j-driver';
 import { randomUUID } from 'node:crypto';
 
 import { enqueueLegacyIndexWork } from './intake-queue.js';
-import { planMemberAttempt } from './legacy-attempts.js';
+import { planMemberAttempt, receiptStatus } from './legacy-attempts.js';
 import { pageLegacyEpisodeCensus } from '../../infrastructure/graph/legacy-evidence-queries.js';
 import type { PublicationOutcome } from '../../infrastructure/publication/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
@@ -248,6 +248,9 @@ export async function runLegacyBackfillBatch(
       cohortId: request.cohortId,
       sourceId,
       status: progress?.status,
+      ...(progress?.reason === null || progress?.reason === undefined
+        ? {}
+        : { reason: progress.reason }),
       ...(progress?.walkedBy === null || progress?.walkedBy === undefined
         ? {}
         : { walkedBy: progress.walkedBy }),
@@ -274,6 +277,18 @@ export async function runLegacyBackfillBatch(
       });
       outcomes.push({ sourceId, status: 'pinned', reason, published: 'skipped' });
       continue;
+    }
+    // A row predating the walk association is bound to the walk it came from before anything new
+    // is published under a fresh identity. Written first and on its own: after the publication,
+    // a crash would leave two acknowledgments and no way to say which one this row answers for.
+    if (attempt.associate !== undefined && progress !== undefined) {
+      recordMigrationProgress(deps.db, {
+        cohortId: request.cohortId,
+        sourceId,
+        status: progress.status,
+        ...(progress.reason === null ? {} : { reason: progress.reason }),
+        walkedBy: attempt.associate,
+      });
     }
     // One publication proves the source and materializes what it proved. The verdict is taken
     // under the guard, so nothing outside it decides what a source's records say.
@@ -302,8 +317,10 @@ export async function runLegacyBackfillBatch(
     // a verified one can still hold an incident relationship nobody can classify, and then its
     // evidence is not materialized. Either way the cohort records a pin, which is what keeps the
     // source out of every eligible-for-removal population.
-    const status: MigrationStatus =
-      result.verified === true && result.pinned !== true ? 'verified' : 'pinned';
+    const status = receiptStatus({
+      pinned: result.pinned === true,
+      verified: result.verified === true,
+    });
     const reason = result.reason ?? 'the producer recorded no reason';
     // Index work follows the RAW proof, not the relationship one. A source whose parts are
     // provable can be searched whatever its edges turned out to be, and a pinned source is held
