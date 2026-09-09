@@ -127,37 +127,58 @@ export function settleConfirmationSignals(
   db: SqliteHandle,
   settlement: ConfirmationSettlement,
 ): void {
-  for (const confirmation of statedConfirmations(db, settlement.sourceId)) {
-    const owed = {
-      sourceId: settlement.sourceId,
-      referenceVersion: confirmation.referenceVersion,
-      effectKind: CONFIRMATION_SIGNAL_EFFECT,
-    };
-    if (!confirmation.resolved) {
-      recordEvidenceAcknowledgment(db, { ...owed, state: 'owed' });
-      continue;
+  for (const [referenceVersion, covered] of coveredByKey(db, settlement.sourceId)) {
+    // Every event this key owes that can be written now. The append comes first and the discharge
+    // second: a throw here takes the whole acknowledgment, and a signal recorded as delivered
+    // over a row nothing wrote is a signal no later settlement looks for again.
+    for (const confirmation of covered) {
+      if (!confirmation.resolved) {
+        continue;
+      }
+      appendMemoryConfirmedEvent(db, {
+        key: confirmationEventKey(
+          settlement.sourceId,
+          confirmation.targetId,
+          confirmation.by,
+          confirmation.evidence,
+        ),
+        episodeId: settlement.sourceId,
+        memories: [confirmation.targetId],
+        confirmedBy: confirmation.by,
+        evidence: confirmation.evidence,
+        occurredAt: new Date(confirmation.occurredAt),
+        recordedAt: new Date(settlement.observedAckAt),
+      });
     }
-    // The append comes first and the discharge second: a throw here takes the whole
-    // acknowledgment, and a signal recorded as delivered over a row nothing wrote is a signal no
-    // later settlement looks for again.
-    appendMemoryConfirmedEvent(db, {
-      key: confirmationEventKey(
-        settlement.sourceId,
-        confirmation.targetId,
-        confirmation.by,
-        confirmation.evidence,
-      ),
-      episodeId: settlement.sourceId,
-      memories: [confirmation.targetId],
-      confirmedBy: confirmation.by,
-      evidence: confirmation.evidence,
-      occurredAt: new Date(confirmation.occurredAt),
-      recordedAt: new Date(settlement.observedAckAt),
-    });
+    const settled = covered.every((confirmation) => confirmation.resolved);
     recordEvidenceAcknowledgment(db, {
-      ...owed,
-      state: 'completed',
-      completedAt: new Date(settlement.observedAckAt),
+      sourceId: settlement.sourceId,
+      referenceVersion,
+      effectKind: CONFIRMATION_SIGNAL_EFFECT,
+      ...(settled
+        ? { state: 'completed' as const, completedAt: new Date(settlement.observedAckAt) }
+        : { state: 'owed' as const }),
     });
   }
+}
+
+/**
+ * The confirmations each acknowledgment key answers for.
+ *
+ * The key is the source, the reference version and the effect kind, so it covers every
+ * confirmation that version introduced. Discharging it per target completed the whole version on
+ * the first resolved one, and `recordEvidenceAcknowledgment` will not take a completed row back
+ * to owed, so the remaining targets' events were owed by nothing.
+ */
+function coveredByKey(
+  db: SqliteHandle,
+  sourceId: string,
+): ReadonlyMap<number, readonly StatedConfirmation[]> {
+  const byKey = new Map<number, StatedConfirmation[]>();
+  for (const confirmation of statedConfirmations(db, sourceId)) {
+    const held = byKey.get(confirmation.referenceVersion) ?? [];
+    held.push(confirmation);
+    byKey.set(confirmation.referenceVersion, held);
+  }
+  return byKey;
 }
