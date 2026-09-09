@@ -15,6 +15,7 @@ import {
   type NodeProvenance,
   type SupersessionProposal,
 } from '@aion/core';
+import { MAX_DERIVATION_ROOTS } from '@aion/protocol';
 
 import { CliUsageError, parseArgs, type ArgSpec } from './args.js';
 import { short } from './format.js';
@@ -47,6 +48,16 @@ export function parseWhyFlags(argv: readonly string[]): WhyFlags {
   }
   return { nodeId };
 }
+
+/**
+ * One durable reading of a node, named from the surface that produces it. The evidence layer
+ * publishes no barrel, and a command reaching around one to name a type would be the first
+ * consumer to do it; the shape is the resolver's own either way.
+ */
+type SourceReads = ReturnType<typeof sourceReadDeps>;
+type DurableReading = NonNullable<
+  ReturnType<Awaited<ReturnType<SourceReads['resolver']['resolveMetadata']>>['results']['get']>
+>;
 
 function iso(value: Date | undefined): string | undefined {
   return value?.toISOString();
@@ -199,6 +210,65 @@ export function renderProvenance(
   }
 }
 
+type DurableMetadata = NonNullable<DurableReading['value']>;
+
+/**
+ * What the citation records say. "Unavailable" is its own answer: no producer writes these
+ * records yet, so reporting none would say the substrate looked and found nothing.
+ */
+function citationLine(binding: DurableMetadata['narrativeBinding']): string {
+  if (binding.status === 'cited') {
+    return binding.revisionIds.join(', ');
+  }
+  return binding.status === 'none' ? 'none' : 'the citation records could not answer';
+}
+
+/**
+ * What the durable records say about a node the graph still holds.
+ *
+ * The block above it reads the projection: labels, stamps, and the edges that happen to be
+ * resident. That is where a claim's origin is easiest to see and the first thing an eviction
+ * takes away, so a node whose extraction edge is gone reads as having no origin at all. The
+ * records answer the same questions from what was written down — which sources carry it, which
+ * roots its ancestry ends at, which sessions it belongs to, which published revisions cite it —
+ * and they say how well each of those is proved, which the graph never does.
+ */
+function renderDurableEvidence(result: DurableReading, write: Writer): void {
+  write('durable evidence');
+  const { evidence } = result;
+  const why =
+    evidence.status === 'complete-for-use'
+      ? ''
+      : `: ${evidence.reasons.map((issue) => `${issue.field} ${issue.reason}`).join(', ')}`;
+  write(`  proof            ${evidence.status}${why}`);
+  write(`  residency        ${result.residency}`);
+  const metadata = result.value;
+  if (metadata === undefined) {
+    // An incomplete result may still carry a value; this one carried none, and inventing an
+    // empty ancestry from that would report absence where the answer is that nobody looked.
+    write('  records          nothing readable for this id');
+    write('');
+    return;
+  }
+  const { provenance, ownership, narrativeBinding } = metadata;
+  write(
+    `  source records   ${metadata.sources.length === 0 ? 'none recorded' : metadata.sources.join(', ')}`,
+  );
+  write(
+    `  durable roots    ${provenance.roots.length === 0 ? 'none' : provenance.roots.join(', ')}`,
+  );
+  const ancestry = provenance.lineage ?? [];
+  const walk = provenance.complete ? 'walked to its ends' : 'cut short of them';
+  write(`  ancestry         ${String(ancestry.length)} recorded, ${walk}`);
+  write(
+    `  ownership        sessions=${ownership.sessions.length === 0 ? 'none' : ownership.sessions.join(', ')}` +
+      ` census=${ownership.censusEstablished ? 'established' : 'absent'}` +
+      ` attribution=${ownership.unknownAttribution ? 'incomplete' : 'complete'}`,
+  );
+  write(`  citations        ${citationLine(narrativeBinding)}`);
+  write('');
+}
+
 /**
  * What the substrate can say about an id whose graph node is not there.
  *
@@ -260,8 +330,26 @@ export function runWhy(
       const page = await fetchNodeEdges(driver, flags.nodeId);
       const supersessions = findSupersessionProposalsForNode(substrate.db(), flags.nodeId);
       const merges = findEntityMergeProposalsForNode(substrate.db(), flags.nodeId);
+      // Read under the context the coverage decision above produced, like every other checked
+      // read: a resolver handed a bare mode has no epoch to answer under.
+      const reads = sourceReadDeps({
+        driver,
+        db: substrate.db(),
+        logger: substrate.logger(),
+      });
+      const batch = await reads.resolver.resolveMetadata([flags.nodeId], checked.context, {
+        maxRoots: MAX_DERIVATION_ROOTS,
+      });
 
       renderProvenance(provenance, page, supersessions, merges, write);
+      // Keyed by request rather than by id, so the reading is found by the address it answers
+      // for. One id was asked about, and this is the result that carries it.
+      const durable = [...batch.results.values()].find(
+        (result) => result.address.kind === 'id' && result.address.id === flags.nodeId,
+      );
+      if (durable !== undefined) {
+        renderDurableEvidence(durable, write);
+      }
       substrate
         .logger()
         .info(
