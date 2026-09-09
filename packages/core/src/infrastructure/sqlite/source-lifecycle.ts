@@ -248,14 +248,34 @@ export function listSourceStateVersions(
  * source was gone. `listSourceStateVersions` still shows them.
  */
 export function isSourceForgotten(db: SqliteHandle, sourceId: string): boolean {
+  return committedForget(db, sourceId) !== undefined;
+}
+
+/** The statement a forget disposition rests on, so a row can record which one closed it. */
+export type CommittedForget = {
+  readonly version: number;
+  readonly knownFrom: string;
+};
+
+/**
+ * The newest acknowledged forget statement on a source, when that is what still stands.
+ *
+ * One reader for every caller that turns on whether a source is gone, so the predicate cannot
+ * drift between the census that counts and the settlement that closes rows against it.
+ */
+export function committedForget(db: SqliteHandle, sourceId: string): CommittedForget | undefined {
   const row = db
     .prepare(
-      `SELECT state_kind FROM source_state_versions
+      `SELECT state_kind, version, known_from FROM source_state_versions
        WHERE source_id = ? AND state_kind IN ('forgotten','unforgotten') AND known_from IS NOT NULL
        ORDER BY version DESC LIMIT 1`,
     )
-    .get(sourceId) as { state_kind: SourceStateKind } | undefined;
-  return row?.state_kind === 'forgotten';
+    .get(sourceId) as
+    { state_kind: SourceStateKind; version: number; known_from: string } | undefined;
+  if (row?.state_kind !== 'forgotten') {
+    return undefined;
+  }
+  return { version: row.version, knownFrom: row.known_from };
 }
 
 /**

@@ -1,10 +1,18 @@
+import type { WithheldWork } from '../../evidence/application/judgment.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { markInventoryComplete } from '../../infrastructure/sqlite/generation-lifecycle.js';
+import {
+  markInventoryComplete,
+  reopenSourceWork,
+} from '../../infrastructure/sqlite/generation-lifecycle.js';
 import {
   completeSourceWork,
   readActiveGeneration,
   stageWorkId,
 } from '../../infrastructure/sqlite/processing-generations.js';
+import {
+  committedForget,
+  hasPendingSourceState,
+} from '../../infrastructure/sqlite/source-lifecycle.js';
 import {
   readGenerationWork,
   readPolicyStages,
@@ -98,14 +106,15 @@ export function recordStageSettlements(
       close(record.name, settlement);
       continue;
     }
-    if (record.settledOnUpstream !== undefined) {
+    const remainder = record.withheldWork ?? [];
+    if (record.settledOnUpstream !== undefined && remainder.length === 0) {
       deferred.push({ name: record.name, settlement: record.settledOnUpstream });
       continue;
     }
     // A ledger skip means an earlier run already decided this stage; its row was settled then
     // or is owed for a reason that run recorded, and this run has nothing to add.
     if (record.summary !== STAGE_ALREADY_APPLIED_SUMMARY) {
-      recordOwedReason(db, row.workId, `${record.status}: ${record.summary}`);
+      recordOwedReason(db, row.workId, `${record.status}: ${record.summary}`, remainder);
       owed.push(record.name);
     }
   }
@@ -113,25 +122,32 @@ export function recordStageSettlements(
   // The second pass, taken against the rows as they now stand rather than against this run's
   // records: a predecessor settled by an earlier attempt counts, and one this run left owed
   // means the empty reading was a stage waiting rather than a stage with nothing to do.
+  //
+  // It runs in the policy's order and adds each close to the set, because a chain of proved-empty
+  // stages settles from the front: the second one's predecessor is the first one, and reading a
+  // set taken before the pass would leave it owed for a stage that has since closed.
   if (deferred.length > 0) {
     const closed = new Set(
       readGenerationWork(db, sourceId, generation.processingGeneration)
         .filter((row) => row.kind === 'stage' && row.state === 'completed')
         .map((row) => row.stageName ?? ''),
     );
-    for (const entry of deferred) {
+    for (const entry of inPolicyOrder(requiredStages, deferred)) {
       const row = held.get(entry.name);
       if (row === undefined) {
         continue;
       }
       if (upstreamSettled(requiredStages, entry.name, closed)) {
         close(entry.name, entry.settlement);
+        closed.add(entry.name);
         continue;
       }
       recordOwedReason(db, row.workId, `waiting on an earlier stage: ${entry.settlement.reason}`);
       owed.push(entry.name);
     }
   }
+
+  applyForgetDisposition(db, sourceId, generation.processingGeneration, now, close);
 
   const readiness = evaluateProcessingReadiness({
     sourceId,
@@ -159,6 +175,61 @@ export function recordStageSettlements(
   return { settled, owed, unrecorded, inventoryComplete: accounted };
 }
 
+/** The deferred entries in the order the policy runs them, so a chain settles from the front. */
+function inPolicyOrder<T extends { readonly name: string }>(
+  requiredStages: readonly string[] | undefined,
+  entries: readonly T[],
+): readonly T[] {
+  if (requiredStages === undefined) {
+    return entries;
+  }
+  return [...entries].sort(
+    (a, b) => requiredStages.indexOf(a.name) - requiredStages.indexOf(b.name),
+  );
+}
+
+/**
+ * The signed forget disposition, applied to what the run left owed.
+ *
+ * A forgotten source's generative passes have nothing left to act on, so their rows close as not
+ * applicable with the acknowledged statement as proof. Settlement and indexing obligations are
+ * untouched: those are owed whatever became of the content. It is reversible in the same place,
+ * because an unforget withdraws the statement the disposition rested on and the rows it closed
+ * are owed again.
+ *
+ * A statement prepared and not yet acknowledged decides nothing either way. The answer is about
+ * to move and nothing here can say which way.
+ */
+function applyForgetDisposition(
+  db: SqliteHandle,
+  sourceId: string,
+  processingGeneration: number,
+  now: Date,
+  close: (stageName: string, settlement: StageSettlement) => void,
+): void {
+  if (hasPendingSourceState(db, sourceId)) {
+    return;
+  }
+  const forget = committedForget(db, sourceId);
+  for (const row of readGenerationWork(db, sourceId, processingGeneration)) {
+    const { stageName } = row;
+    if (row.kind !== 'stage' || stageName === null || row.state === 'obsolete') {
+      continue;
+    }
+    if (forget !== undefined && row.state !== 'completed') {
+      close(stageName, {
+        disposition: 'not_applicable',
+        reason: 'source_forgotten',
+        proof: { stateVersion: forget.version, knownFrom: forget.knownFrom },
+      });
+      continue;
+    }
+    if (forget === undefined && row.outcome?.reason === 'source_forgotten') {
+      reopenSourceWork(db, row.workId, 'the forget this row rested on was withdrawn', now);
+    }
+  }
+}
+
 /**
  * Whether every stage the policy runs ahead of this one has settled.
  *
@@ -181,10 +252,28 @@ function upstreamSettled(
   return requiredStages.slice(0, position).every((name) => closed.has(name));
 }
 
-/** Why a required stage is still owed, recorded on its row without changing its state. */
-function recordOwedReason(db: SqliteHandle, workId: string, reason: string): void {
+/**
+ * Why a required stage is still owed, recorded on its row without changing its state.
+ *
+ * A remainder is recorded with it, whole: the pairs the pass could not decide, the addresses a
+ * rebuild reads them back through, and the evidence each abstention rested on. Without that the
+ * row says work is owed and nothing says which work.
+ */
+function recordOwedReason(
+  db: SqliteHandle,
+  workId: string,
+  reason: string,
+  remainder: readonly WithheldWork[] = [],
+): void {
   db.prepare(
     `UPDATE source_work SET reason = ?, attempts = attempts + 1
      WHERE work_id = ? AND state IN ('pending','retryable')`,
   ).run(reason.slice(0, 500), workId);
+  if (remainder.length === 0) {
+    return;
+  }
+  db.prepare(
+    `UPDATE source_work SET continuation_json = ?
+     WHERE work_id = ? AND state IN ('pending','retryable')`,
+  ).run(JSON.stringify({ withheldWork: remainder }), workId);
 }

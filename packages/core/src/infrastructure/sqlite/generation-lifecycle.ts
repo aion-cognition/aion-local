@@ -181,3 +181,42 @@ export function markInventoryComplete(
     })
     .immediate();
 }
+
+/**
+ * Puts a completed row back to owed, and advances the counter with it.
+ *
+ * A disposition that rested on a statement about the source stops holding when that statement is
+ * withdrawn: an unforgotten source owes again exactly what its forget closed. The outcome is
+ * cleared rather than kept beside a pending state, because a row carrying both says two things.
+ * Returns the counter's new value, or undefined when the generation is no longer active.
+ */
+export function reopenSourceWork(
+  db: SqliteHandle,
+  workId: string,
+  reason: string,
+  dueAt: Date,
+): number | undefined {
+  return db
+    .transaction((): number | undefined => {
+      const row = db
+        .prepare(
+          'SELECT source_id, processing_generation, state FROM source_work WHERE work_id = ?',
+        )
+        .get(workId) as
+        { source_id: string; processing_generation: number; state: string } | undefined;
+      if (row?.state !== 'completed') {
+        return undefined;
+      }
+      const advanced = advanceOperationalRevision(db, row.source_id, row.processing_generation);
+      if (advanced === undefined) {
+        return undefined;
+      }
+      db.prepare(
+        `UPDATE source_work
+         SET state = 'pending', outcome_json = NULL, completed_at = NULL, reason = ?, due_at = ?
+         WHERE work_id = ?`,
+      ).run(reason.slice(0, 500), dueAt.toISOString(), workId);
+      return advanced;
+    })
+    .immediate();
+}

@@ -69,6 +69,17 @@ export type StageOutcome = {
  * says nothing here. Prose in `summary` is not a typed reason, and reading a disposition out of
  * one is how an unprocessed source passes for a finished one.
  */
+export const STAGE_SETTLEMENT_REASONS = [
+  'accepted_pass_applied',
+  'below_minimum_input',
+  'disabled_by_policy',
+  'proved_empty_input',
+  'pass_produced_nothing',
+  'effects_already_recorded',
+  'dispatch_acknowledged',
+  'source_forgotten',
+] as const;
+
 export type StageSettlementReason =
   /** The accepted pass ran and its effects were written. This is what an `ok` status means. */
   | 'accepted_pass_applied'
@@ -83,7 +94,15 @@ export type StageSettlementReason =
   /** An earlier run already created this stage's durable effects. */
   | 'effects_already_recorded'
   /** The pass is a dispatch and the receiving side acknowledged it. */
-  | 'dispatch_acknowledged';
+  | 'dispatch_acknowledged'
+  /**
+   * The source was forgotten, so its generative passes have nothing left to act on.
+   *
+   * It carries the acknowledged source-state version it rests on. The disposition is reversible
+   * the way the statement is: an unforget re-owes exactly the rows this closed, which is why the
+   * proof names the version rather than recording that a forget happened at some point.
+   */
+  | 'source_forgotten';
 
 export type StageSettlement = {
   readonly disposition: 'complete' | 'not_applicable';
@@ -176,6 +195,11 @@ export function stageLedgerKey(
   return `reflection:stage:${pipelineVersion}:${stageName}:${episodeId}`;
 }
 
+/** Whether the pass left named work behind, whatever it managed to write. */
+export function hasRemainder(outcome: StageOutcome): boolean {
+  return outcome.retryable === true || (outcome.withheldWork ?? []).length > 0;
+}
+
 /**
  * What one run settles about a stage's obligation, or nothing when it settles nothing.
  *
@@ -183,8 +207,15 @@ export function stageLedgerKey(
  * settles the obligation whether or not it declared a reason of its own. Everything else needs
  * the stage to have declared one: a failure, a skip for want of input, and a bounded scan that
  * ended are all work still owed, and the prose in `summary` is not evidence about which.
+ *
+ * A pass that succeeded and still named a remainder settles nothing either. The effects it wrote
+ * are durable and stay written; the obligation is what the row holds, and the row still owes the
+ * pairs the pass could not decide. The entity-dedup route produces exactly that combination.
  */
 export function stageSettlementOf(outcome: StageOutcome): StageSettlement | undefined {
+  if (hasRemainder(outcome)) {
+    return undefined;
+  }
   if (outcome.settled !== undefined) {
     return outcome.settled;
   }

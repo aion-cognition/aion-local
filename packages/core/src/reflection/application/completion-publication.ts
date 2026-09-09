@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { recordStageSettlements } from './stage-settlement.js';
+import { SOURCE_PART_KINDS } from '../../evidence/domain/address.js';
 import { PublicationOperation } from '../../infrastructure/publication/operation.js';
 import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
 import type { JsonValue, PublicationContext } from '../../infrastructure/publication/types.js';
@@ -15,7 +16,12 @@ import {
   SEMANTIC_PROCESSING_EFFECT,
 } from '../../infrastructure/sqlite/source-lifecycle.js';
 import { hashContent } from '../domain/content.js';
-import { stageSettlementOf, type ReflectionSummary, type StageRecord } from '../domain/stage.js';
+import {
+  stageSettlementOf,
+  STAGE_SETTLEMENT_REASONS,
+  type ReflectionSummary,
+  type StageRecord,
+} from '../domain/stage.js';
 
 /**
  * A finished reflection run, as a publication.
@@ -38,22 +44,53 @@ export const COMPLETION_EFFECTS = {
 
 const Settlement = z.strictObject({
   disposition: z.enum(['complete', 'not_applicable']),
-  reason: z.enum([
-    'accepted_pass_applied',
-    'below_minimum_input',
-    'disabled_by_policy',
-    'proved_empty_input',
-    'pass_produced_nothing',
-    'effects_already_recorded',
-    'dispatch_acknowledged',
-  ]),
+  reason: z.enum(STAGE_SETTLEMENT_REASONS),
   proof: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+});
+
+const Dependency = z.strictObject({
+  kind: z.enum(['source', 'node', 'relation_scope']),
+  id: z.string().min(1),
+  scope: z.string().min(1),
+  version: z.string().min(1),
+});
+
+/**
+ * A judgment the pass could not decide, with what it was about and what it was judged against.
+ *
+ * It travels whole. The nodes name the pair, the addresses name the parts a rebuild would read
+ * it back through, and the revision is the evidence the abstention rests on; a completion that
+ * carried only a count would close the row over work nobody can find again.
+ */
+const Withheld = z.strictObject({
+  nodeIds: z.array(z.string().min(1)),
+  disposition: z.enum(['blocked', 'retryable']),
+  reason: z.string(),
+  addresses: z.array(
+    z.union([
+      z.strictObject({ kind: z.literal('id'), id: z.string().min(1) }),
+      z.strictObject({
+        kind: z.literal('part'),
+        sourceId: z.string().min(1),
+        partKind: z.enum(SOURCE_PART_KINDS),
+        ordinal: z.number().int().nonnegative(),
+      }),
+    ]),
+  ),
+  revision: z.strictObject({
+    contractVersion: z.literal(1),
+    dependencies: z.array(Dependency),
+    digest: z.string(),
+  }),
 });
 
 const Stage = z.strictObject({
   name: z.string().min(1),
   status: z.enum(['ok', 'failed', 'skipped']),
   summary: z.string(),
+  /** The pass asked to be re-entered. It settles nothing whatever else it wrote. */
+  retryable: z.boolean().optional(),
+  withheldWork: z.array(Withheld).optional(),
   settled: Settlement.optional(),
   settledOnUpstream: Settlement.optional(),
 });
@@ -144,12 +181,24 @@ export function completionBinding(db: SqliteHandle, sourceId: string): Completio
   };
 }
 
-/** The run summary a completion carries, narrowed to what the plan records. */
-export function completionStages(summary: ReflectionSummary): readonly z.infer<typeof Stage>[] {
+/** One stage's line in a completion payload: what it did, and what it left owed. */
+export type CompletionStage = Pick<StageRecord, 'name' | 'status' | 'summary'> &
+  Partial<Pick<StageRecord, 'retryable' | 'withheldWork' | 'settled' | 'settledOnUpstream'>>;
+
+/**
+ * The run summary a completion carries, narrowed to what the plan records.
+ *
+ * The remainder travels with it. A pass that named withheld pairs or asked to be re-entered
+ * leaves work the row owes, and a payload that dropped either would close the row over a
+ * judgment nobody could ask about again.
+ */
+export function completionStages(summary: ReflectionSummary): readonly CompletionStage[] {
   return summary.stages.map((stage: StageRecord) => ({
     name: stage.name,
     status: stage.status,
     summary: stage.summary,
+    ...(stage.retryable === undefined ? {} : { retryable: stage.retryable }),
+    ...(stage.withheldWork === undefined ? {} : { withheldWork: stage.withheldWork }),
     ...(stage.settled === undefined ? {} : { settled: stage.settled }),
     ...(stage.settledOnUpstream === undefined
       ? {}

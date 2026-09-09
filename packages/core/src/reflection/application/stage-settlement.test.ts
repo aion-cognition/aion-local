@@ -12,6 +12,7 @@ import {
   readGeneration,
 } from '../../infrastructure/sqlite/processing-generations.js';
 import { publishReadinessPolicy } from '../../infrastructure/sqlite/readiness-policies.js';
+import { recordSourceStateVersion } from '../../infrastructure/sqlite/source-lifecycle.js';
 import { readGenerationWork } from '../../infrastructure/sqlite/source-readiness.js';
 import {
   STAGE_ALREADY_APPLIED_SUMMARY,
@@ -202,6 +203,81 @@ describe('stage settlement', () => {
     );
     expect(full.inventoryComplete).toBe(true);
     expect(readGeneration(store.db, SOURCE, 1)?.inventoryComplete).toBe(true);
+  });
+
+  it('closes a forgotten source stage rows as not applicable, naming the statement', () => {
+    recordSourceStateVersion(store.db, {
+      sourceId: SOURCE,
+      stateKind: 'forgotten',
+      operationId: 'forget-1',
+      knownFrom: NOW,
+      observedAt: NOW,
+    });
+
+    recordStageSettlements(store.db, SOURCE, summary([]), NOW);
+
+    for (const name of STAGES) {
+      expect(stateOf(name)).toMatchObject({ state: 'completed', outcome: 'source_forgotten' });
+    }
+    expect(
+      readGenerationWork(store.db, SOURCE, 1).find((row) => row.stageName === 'entities')?.outcome
+        ?.proof,
+    ).toMatchObject({ stateVersion: 1 });
+  });
+
+  it('owes those rows again once the forget they rested on is withdrawn', () => {
+    recordSourceStateVersion(store.db, {
+      sourceId: SOURCE,
+      stateKind: 'forgotten',
+      operationId: 'forget-1',
+      knownFrom: NOW,
+      observedAt: NOW,
+    });
+    recordStageSettlements(store.db, SOURCE, summary([]), NOW);
+    recordSourceStateVersion(store.db, {
+      sourceId: SOURCE,
+      stateKind: 'unforgotten',
+      operationId: 'unforget-1',
+      knownFrom: NOW,
+      observedAt: NOW,
+    });
+
+    recordStageSettlements(store.db, SOURCE, summary([]), NOW);
+
+    expect(readGenerationWork(store.db, SOURCE, 1).map((row) => row.state)).toEqual([
+      'pending',
+      'pending',
+      'pending',
+    ]);
+  });
+
+  it('leaves a pass this run closed alone when the source is forgotten', () => {
+    recordStageSettlements(store.db, SOURCE, summary([record('entities')]), NOW);
+    recordSourceStateVersion(store.db, {
+      sourceId: SOURCE,
+      stateKind: 'forgotten',
+      operationId: 'forget-1',
+      knownFrom: NOW,
+      observedAt: NOW,
+    });
+
+    recordStageSettlements(store.db, SOURCE, summary([]), NOW);
+
+    expect(stateOf('entities')).toMatchObject({ outcome: 'accepted_pass_applied' });
+    expect(stateOf('cognitive')).toMatchObject({ outcome: 'source_forgotten' });
+  });
+
+  it('decides nothing while a statement about the source is unacknowledged', () => {
+    recordSourceStateVersion(store.db, {
+      sourceId: SOURCE,
+      stateKind: 'forgotten',
+      operationId: 'forget-1',
+      observedAt: NOW,
+    });
+
+    recordStageSettlements(store.db, SOURCE, summary([]), NOW);
+
+    expect(stateOf('entities')).toMatchObject({ state: 'pending' });
   });
 
   it('records nothing for a source with no active generation', () => {
