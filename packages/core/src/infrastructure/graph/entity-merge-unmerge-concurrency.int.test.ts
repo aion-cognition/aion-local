@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, expect, it } from 'vitest';
 
 import { MERGE_PROVENANCE_PROPERTY, redirectAndAbsorb } from './entity-merge-queries.js';
+import { readManagedWriteObservations } from './managed-write-observations.js';
 import {
   errorChain,
   mentionsDeadlock,
@@ -190,3 +191,28 @@ it('keeps both records when a merge and an unmerge write the same canonical at o
   expect(absorbed?.unmerged_at).toBeUndefined();
   expect(await wasSplit(family)).toBe(true);
 }, 300_000);
+
+/**
+ * The counter reads over every arm above, and it is read against the watched driver's own
+ * record: the failures the proxy saw inside a transaction body and the failures the counter
+ * counted are the same population, so a disagreement means one of the two missed a cycle.
+ * A deadlock-free arm is what the corrected acquisition order claims, and this is where that
+ * claim is a count rather than an inference from what the callers answered. Seeding runs on
+ * the unwatched driver, which is a separate accumulation, so nothing here counts it.
+ */
+it('counts the callbacks the watched writers ran, and agrees with what their bodies raised', () => {
+  const observed = readManagedWriteObservations(probe.watched);
+
+  expect(observed.logicalOperations).toBeGreaterThan(0);
+  expect(observed.callerFulfilments + observed.callerRejections).toBe(observed.logicalOperations);
+  expect(observed.callbackFailures).toBe(probe.failures.length);
+  expect(observed.replaysByClass.deadlock).toBe(0);
+  expect(observed.observerFailures).toBe(0);
+  console.log(
+    `MANAGED WRITE operations=${observed.logicalOperations} attempts=${observed.callbackAttempts} ` +
+      `replays=${observed.callbackReplays} deadlock=${observed.replaysByClass.deadlock} ` +
+      `other_transient=${observed.replaysByClass.other_transient} ` +
+      `outside_callback=${observed.replaysByClass.outside_callback} ` +
+      `failures=${observed.callbackFailures} codes=${JSON.stringify(observed.failuresByCode)}`,
+  );
+});

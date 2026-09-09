@@ -1,5 +1,6 @@
 import neo4j, { type Driver, type ManagedTransaction } from 'neo4j-driver';
 
+import { ManagedWriteCall } from './managed-write-observations.js';
 import { NEO4J_DEFAULT_USER, type Neo4jEndpoint } from './provision.js';
 import { coerceRow, type Row, type RowMapper } from './values.js';
 
@@ -181,14 +182,27 @@ export class GraphTransaction {
  * Session creation and reflection intake use it for the same reason, and additionally for
  * isolation: both derive a write from a read, so both take a node lock inside the
  * transaction to keep a peer from landing between the two (`locks.ts`).
+ *
+ * `executeWrite` replays the body on a transient failure and tells the caller nothing about
+ * it, so each invocation is counted on the way through
+ * (`managed-write-observations.ts`). The counting changes no outcome: the body's result and
+ * its error both pass back untouched, and the retry budget is the driver's as before.
  */
 export async function inWriteTransaction<T>(
   driver: Driver,
   work: (tx: GraphTransaction) => Promise<T>,
 ): Promise<T> {
   const session = driver.session();
+  const call = new ManagedWriteCall(driver);
   try {
-    return await session.executeWrite((tx) => work(new GraphTransaction(tx)));
+    const result = await session.executeWrite((tx) =>
+      call.attempt(() => work(new GraphTransaction(tx))),
+    );
+    call.settled('fulfilled');
+    return result;
+  } catch (err) {
+    call.settled('rejected');
+    throw err;
   } finally {
     await session.close();
   }

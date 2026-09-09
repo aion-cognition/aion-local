@@ -4,6 +4,7 @@ import {
   type GaugeStamp,
   type GaugeUnavailableReason,
 } from './campaign-gauges.js';
+import { MANAGED_WRITE_OBSERVATIONS } from './managed-write-gauges.js';
 
 /**
  * The six groups a campaign report covers and the observations each one owes. The table is
@@ -98,6 +99,9 @@ export const GAUGE_OBSERVATIONS: Readonly<Record<GaugeGroup, readonly string[]>>
     'api_call_census',
     'cost_by_surface',
     'unmeasured_pagecache_disk',
+    // The driver's managed write retry, counted from callback invocations in the process that
+    // ran them. A collector outside that process reports them uncollected rather than zero.
+    ...MANAGED_WRITE_OBSERVATIONS,
   ],
 };
 
