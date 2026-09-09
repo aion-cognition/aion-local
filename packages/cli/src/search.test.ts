@@ -230,6 +230,25 @@ describe('coverage at the search command', () => {
     expect(lines.join('\n')).toContain('no coverage boundary yet');
   });
 
+  it('calls a temporal answer partial while the contract is preparing, in both shapes', () => {
+    const outcome = searchCoverage(db, flagsFor(['q', '--knew-at', '2026-09-07']), NOW);
+    const json = collector();
+    const text = collector();
+
+    writeSearchAnswer(outcome, [], true, json.write);
+    writeSearchAnswer(outcome, [], false, text.write);
+
+    expect(JSON.parse(json.lines[0] ?? '')).toMatchObject({
+      results: [],
+      coverage: { status: 'partial', limitations: ['coverage_contract_not_active'] },
+    });
+    // Partial with nothing found is not the same answer as a supported no-match, and the text
+    // says which one it is before it says the search matched nothing.
+    expect(text.lines.join('\n')).toContain('history: partial');
+    expect(text.lines.join('\n')).toContain('coverage_contract_not_active');
+    expect(text.lines.join('\n')).toContain('no matches');
+  });
+
   it('refuses a present search when the registry cannot be read', () => {
     db.prepare('ALTER TABLE coverage_contract RENAME TO coverage_contract_hidden').run();
 

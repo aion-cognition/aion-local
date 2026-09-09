@@ -344,6 +344,26 @@ describe('a contract that moves under the read', () => {
     expect(embedCalls).toBeGreaterThan(0);
   });
 
+  /**
+   * F11-A16's last leg: activation is an epoch change like any other, so a read that began
+   * under the preparing record revalidates at the boundary rather than being served under the
+   * contract that replaced it.
+   */
+  it('refuses a read that began while the contract was still preparing', async () => {
+    atBoundary = () => {
+      activate();
+    };
+
+    expect(await recall({ knew_at: '2026-09-08T06:00:00.000Z' })).toMatchObject({
+      status: 'coverage_refusal',
+      refusal: {
+        reason: 'coverage_changed',
+        bounds: { coverage_state: 'active', history_since: ACTIVATED_AT.toISOString() },
+      },
+    });
+    expect(getLastPack(store.db, IDENTITY)).toBeUndefined();
+  });
+
   it('refuses when the registry stops being readable under the read', async () => {
     activate();
     atBoundary = hideRegistry;
