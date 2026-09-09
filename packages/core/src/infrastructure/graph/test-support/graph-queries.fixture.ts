@@ -3,7 +3,7 @@ import neo4j, { type Driver } from 'neo4j-driver';
 import type { Vector } from '../../providers/types.js';
 import { ACCESS_COUNT_PROPERTY } from '../access-tracking.js';
 import { CO_OCCURS_TYPE, SIMILAR_TYPE } from '../association-queries.js';
-import { BITEMPORAL_PROPERTIES } from '../bitemporal.js';
+import { BITEMPORAL_PROPERTIES, closeRelationshipFragment } from '../bitemporal.js';
 import { readFirst, runRead, runWrite } from '../connection.js';
 import { CONTEXT_VECTOR_PROPERTY } from '../context-vector-queries.js';
 import { DECAYED_AT_PROPERTY } from '../edge-weights.js';
@@ -501,13 +501,16 @@ export async function closeEdge(
   targetId: string,
   at: Date,
 ): Promise<void> {
+  // Through the production close fragment, so a fixture's closed edge carries the lifecycle
+  // counter a real close writes; a fixture that only stamped it would be proving less than the
+  // substrate holds.
   await runWrite(
     driver,
     [
       `MATCH ({ id: $sourceId })-[r:${type}]->({ id: $targetId })`,
-      `SET r.${BITEMPORAL_PROPERTIES.validUntil} = $at, r.${BITEMPORAL_PROPERTIES.txUntil} = $at`,
+      `SET ${closeRelationshipFragment('r')}`,
     ].join('\n'),
-    { sourceId, targetId, at: toGraphDateTime(at) },
+    { sourceId, targetId, validUntil: toGraphDateTime(at), txUntil: toGraphDateTime(at) },
     () => undefined,
   );
 }

@@ -35,6 +35,12 @@ export type SupersessionProposal = {
   createdAt: string;
   /** Null while the proposal is still open; a timestamp once a person has dealt with it. */
   resolvedAt: string | null;
+  /**
+   * How many lifecycle transitions this row has been through, advanced by the writer that makes
+   * each one. A caller supplies the clock, so a resolve, a reopen and a second resolve under one
+   * value leave both stamps where they started; this says the row moved twice.
+   */
+  lifecycleRev: number;
 };
 
 type SupersessionProposalRow = {
@@ -46,6 +52,7 @@ type SupersessionProposalRow = {
   episode_id: string;
   created_at: string;
   resolved_at: string | null;
+  lifecycle_rev: number;
 };
 
 export type SupersessionProposalInput = {
@@ -68,6 +75,7 @@ function toSupersessionProposal(row: SupersessionProposalRow): SupersessionPropo
     episodeId: row.episode_id,
     createdAt: row.created_at,
     resolvedAt: row.resolved_at,
+    lifecycleRev: row.lifecycle_rev,
   };
 }
 
@@ -90,8 +98,9 @@ export function recordSupersessionProposal(
   const row = db
     .prepare(
       `INSERT INTO supersession_proposals
-         (id, old_id, new_id, confidence, rationale, episode_id, created_at, resolved_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+         (id, old_id, new_id, confidence, rationale, episode_id, created_at, resolved_at,
+          lifecycle_rev)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 1)
        ON CONFLICT(old_id, new_id) DO UPDATE SET
          confidence = excluded.confidence,
          rationale = excluded.rationale,

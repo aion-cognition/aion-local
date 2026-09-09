@@ -27,7 +27,8 @@ import {
 import { readCurrentReadinessPolicy } from '../../../infrastructure/sqlite/readiness-policies.js';
 import {
   certifiedRelinkTarget,
-  pendingProposals,
+  proposalHistoryToken,
+  proposalStanding,
   qualificationEvidence,
   qualificationHolds,
 } from '../orphan-census.js';
@@ -163,11 +164,11 @@ async function qualificationStands(
     return 'policy_revision_moved';
   }
   const reading = certifyNodeSupport(context.db, data.nodeId);
-  const pending = pendingProposals(context.db, data.nodeId);
+  const standing = proposalStanding(context.db, data.nodeId);
   if (reading.support !== 'unsupported') {
     return 'support_moved';
   }
-  if (pending > 0) {
+  if (standing.pending > 0) {
     return 'judgment_pending';
   }
   // Read under the guard, from the graph that owns it. A node the transaction cannot find has no
@@ -181,7 +182,10 @@ async function qualificationStands(
   if (
     !qualificationHolds(
       observation.evidenceRevision,
-      qualificationEvidence(context.db, data.nodeId, reading.evidenceRevision, associations),
+      qualificationEvidence(context.db, data.nodeId, reading.evidenceRevision, {
+        proposals: proposalHistoryToken(standing),
+        associations,
+      }),
     )
   ) {
     return 'evidence_moved';

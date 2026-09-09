@@ -118,6 +118,7 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     episode_id TEXT NOT NULL,
     created_at TEXT NOT NULL,
     resolved_at TEXT,
+    lifecycle_rev INTEGER NOT NULL DEFAULT 0,
     UNIQUE (old_id, new_id)
   )`,
   `CREATE TABLE IF NOT EXISTS meta (
@@ -174,6 +175,7 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     episode_id TEXT NOT NULL,
     created_at TEXT NOT NULL,
     resolved_at TEXT,
+    lifecycle_rev INTEGER NOT NULL DEFAULT 0,
     UNIQUE (left_id, right_id)
   )`,
   /**
@@ -328,6 +330,19 @@ const COLUMN_ADDITIONS: readonly ColumnAddition[] = [
   },
   { table: 'reflection_queue', column: 'episode_id', definition: 'TEXT' },
   { table: 'migration_progress', column: 'walked_by', definition: 'TEXT' },
+  // A row that predates the counter reads as zero and takes its first number on its next
+  // transition. That number is a change from what a window recorded, which is the honest answer:
+  // nobody can say what the row's lifecycle did before anything counted it.
+  {
+    table: 'supersession_proposals',
+    column: 'lifecycle_rev',
+    definition: 'INTEGER NOT NULL DEFAULT 0',
+  },
+  {
+    table: 'entity_merge_proposals',
+    column: 'lifecycle_rev',
+    definition: 'INTEGER NOT NULL DEFAULT 0',
+  },
   ...NARRATIVE_COLUMN_ADDITIONS,
   ...READINESS_COLUMN_ADDITIONS,
 ];

@@ -1,7 +1,12 @@
 import neo4j, { type Driver } from 'neo4j-driver';
 
 import { CO_OCCURS_TYPE } from './association-queries.js';
-import { BITEMPORAL_PROPERTIES, CLOSURE_PROVENANCE_PROPERTY, closeFragment } from './bitemporal.js';
+import {
+  BITEMPORAL_PROPERTIES,
+  CLOSURE_PROVENANCE_PROPERTY,
+  closeFragment,
+  closeRelationshipFragment,
+} from './bitemporal.js';
 import { runRead, runWrite, type GraphStatement } from './connection.js';
 import { ENTITY_MENTION_TYPE, ENTITY_TYPE_PROPERTY } from './entity-queries.js';
 import { GraphWriteError } from './errors.js';
@@ -221,11 +226,11 @@ export function buildCloseStatement(
     'WITH n',
     `OPTIONAL MATCH (:Episode)-[m:${ENTITY_MENTION_TYPE}]->(n)`,
     `WHERE m.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
-    `SET ${closeFragment('m')}`,
+    `SET ${closeRelationshipFragment('m')}`,
     'WITH n, count(m) AS mentions_closed',
     `OPTIONAL MATCH (n)-[c:${CO_OCCURS_TYPE}]-(:${ENTITY_LABEL})`,
     `WHERE c.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
-    `SET ${closeFragment('c')}`,
+    `SET ${closeRelationshipFragment('c')}`,
     'RETURN n.id AS id, mentions_closed, count(c) AS co_occurs_closed',
   ].join('\n');
   return {

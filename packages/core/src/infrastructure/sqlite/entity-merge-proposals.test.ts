@@ -57,6 +57,7 @@ describe('entity merge proposal accessors', () => {
       episodeId: 'episode-2',
       createdAt: '2026-08-28T09:00:00.000Z',
       resolvedAt: null,
+      lifecycleRev: 1,
     });
   });
 

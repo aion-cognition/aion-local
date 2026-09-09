@@ -1,5 +1,4 @@
 import type { Driver } from 'neo4j-driver';
-import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
 import { certifyNodeSupport } from '../../evidence/application/node-support.js';
@@ -149,15 +148,32 @@ function missingHistory(state: string, associations: string | undefined): string
   return undefined;
 }
 
-/** How many unresolved proposals hold this node up, which is a dependency of the qualification. */
-export function pendingProposals(db: SqliteHandle, nodeId: string): number {
-  const merges = findEntityMergeProposalsForNode(db, nodeId).filter(
-    (proposal) => proposal.resolvedAt === null,
-  );
-  const supersessions = findSupersessionProposalsForNode(db, nodeId).filter(
-    (proposal) => proposal.resolvedAt === null,
-  );
-  return merges.length + supersessions.length;
+/** What the proposal records say about one node: what holds it up now, and what has moved. */
+export type ProposalStanding = {
+  /** Unresolved rows, which are what protects the node from a repair right now. */
+  readonly pending: number;
+  /** Rows naming it at all, resolved ones included. */
+  readonly rows: number;
+  /** Lifecycle transitions those rows have been through, summed. */
+  readonly revisions: number;
+};
+
+/**
+ * Both readings from one pass over the rows that name this node.
+ *
+ * The protection and the history are two questions about the same records, and asking them
+ * separately read the same rows twice per node per page.
+ */
+export function proposalStanding(db: SqliteHandle, nodeId: string): ProposalStanding {
+  const rows = [
+    ...findEntityMergeProposalsForNode(db, nodeId),
+    ...findSupersessionProposalsForNode(db, nodeId),
+  ];
+  return {
+    pending: rows.filter((proposal) => proposal.resolvedAt === null).length,
+    rows: rows.length,
+    revisions: rows.reduce((total, proposal) => total + proposal.lifecycleRev, 0),
+  };
 }
 
 /**
@@ -224,7 +240,7 @@ export async function readOrphanCensus(
   let unknownSupport = 0;
   for (const orphan of disconnected) {
     const reading = certifyNodeSupport(deps.db, orphan.id);
-    const pending = pendingProposals(deps.db, orphan.id);
+    const standing = proposalStanding(deps.db, orphan.id);
     // The node's own semantic state is a graph fact, and the mirror is the only record of what
     // the graph said and when. Without one there is no reading to qualify against: the node may
     // have been superseded, reopened or rewritten inside the window, and a qualification taken
@@ -238,12 +254,10 @@ export async function readOrphanCensus(
     const observation = recordOrphanQualification(deps.db, {
       nodeId: orphan.id,
       evidenceRevision: {
-        ...qualificationEvidence(
-          deps.db,
-          orphan.id,
-          reading.evidenceRevision,
-          associations ?? UNKNOWN_HISTORY,
-        ),
+        ...qualificationEvidence(deps.db, orphan.id, reading.evidenceRevision, {
+          proposals: proposalHistoryToken(standing),
+          associations: associations ?? UNKNOWN_HISTORY,
+        }),
         'graph:disconnected_since': orphan.txFrom?.toISOString() ?? 'unknown',
       },
       policyRevision: options.policyRevision,
@@ -255,7 +269,7 @@ export async function readOrphanCensus(
       nodeId: orphan.id,
       support,
       relinkTarget: target?.targetId,
-      protectedByPendingWork: pending > 0,
+      protectedByPendingWork: standing.pending > 0,
       qualifiedSince: support === 'unsupported' ? new Date(observation.firstVerifiedAt) : undefined,
     };
     const decision = decideOrphan(candidate, {
@@ -323,23 +337,17 @@ function currentSourcesBehind(db: SqliteHandle, nodeId: string): readonly string
 /**
  * Every proposal that has ever named this node, whether or not one is open now.
  *
- * A count of the open ones is not a version. A proposal that opens and closes between two
- * observations restores the count it started at, and the interval it ran in is one where somebody
- * was deciding whether this node survives at all. The token is derived from the durable rows and
- * the stamps their own writers set, so an open, a close and a second proposal each move it.
+ * A count of the open ones is not a version, and neither are the stamps: a proposal that resolves,
+ * reopens and resolves again under one supplied clock puts both the count and every timestamp back
+ * where they started, and the interval it ran in is one where somebody was deciding whether this
+ * node survives at all. What the token carries is the rows and the lifecycle counters their own
+ * writers advance in the transaction that moves them, so each of those transitions moves it.
  */
-export function proposalHistoryToken(db: SqliteHandle, nodeId: string): string {
-  const rows = [
-    ...findEntityMergeProposalsForNode(db, nodeId),
-    ...findSupersessionProposalsForNode(db, nodeId),
-  ].map((proposal) => `${proposal.id}:${proposal.createdAt}:${proposal.resolvedAt ?? 'open'}`);
-  if (rows.length === 0) {
+export function proposalHistoryToken(standing: ProposalStanding): string {
+  if (standing.rows === 0) {
     return 'none';
   }
-  const digest = createHash('sha256')
-    .update(JSON.stringify([...rows].sort()))
-    .digest('hex');
-  return `${String(rows.length)}@${digest}`;
+  return `${String(standing.rows)}@${String(standing.revisions)}`;
 }
 
 /**
@@ -359,12 +367,12 @@ export function qualificationEvidence(
   db: SqliteHandle,
   nodeId: string,
   supportRevision: Readonly<Record<string, string>>,
-  associationHistory: string,
+  history: { readonly proposals: string; readonly associations: string },
 ): Readonly<Record<string, string>> {
   return {
     ...supportRevision,
-    'proposals:history': proposalHistoryToken(db, nodeId),
-    'associations:history': associationHistory,
+    'proposals:history': history.proposals,
+    'associations:history': history.associations,
     [GRAPH_NODE_SCOPE]: nodeStateToken(db, nodeId),
   };
 }

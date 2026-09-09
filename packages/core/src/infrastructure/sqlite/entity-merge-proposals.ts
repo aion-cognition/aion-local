@@ -44,6 +44,12 @@ export type EntityMergeProposal = {
   createdAt: string;
   /** Null while the proposal is still open; a timestamp once a person has dealt with it. */
   resolvedAt: string | null;
+  /**
+   * How many lifecycle transitions this row has been through, advanced by the writer that makes
+   * each one. A caller supplies the clock, so a resolve, a reopen and a second resolve under one
+   * value leave both stamps where they started; this says the row moved twice.
+   */
+  lifecycleRev: number;
 };
 
 type EntityMergeProposalRow = {
@@ -59,6 +65,7 @@ type EntityMergeProposalRow = {
   episode_id: string;
   created_at: string;
   resolved_at: string | null;
+  lifecycle_rev: number;
 };
 
 export type EntityMergeProposalSide = {
@@ -90,6 +97,7 @@ function toEntityMergeProposal(row: EntityMergeProposalRow): EntityMergeProposal
     episodeId: row.episode_id,
     createdAt: row.created_at,
     resolvedAt: row.resolved_at,
+    lifecycleRev: row.lifecycle_rev,
   };
 }
 
@@ -123,8 +131,8 @@ export function recordEntityMergeProposal(
     .prepare(
       `INSERT INTO entity_merge_proposals
          (id, left_id, left_name, left_type, right_id, right_name, right_type,
-          similarity, similarity_source, episode_id, created_at, resolved_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+          similarity, similarity_source, episode_id, created_at, resolved_at, lifecycle_rev)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1)
        ON CONFLICT(left_id, right_id) DO UPDATE SET
          left_name = excluded.left_name,
          left_type = excluded.left_type,

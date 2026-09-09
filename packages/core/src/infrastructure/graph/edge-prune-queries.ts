@@ -1,7 +1,7 @@
 import neo4j, { type Driver } from 'neo4j-driver';
 
 import { CO_OCCURS_TYPE, SIMILAR_TYPE } from './association-queries.js';
-import { BITEMPORAL_PROPERTIES, closeFragment } from './bitemporal.js';
+import { BITEMPORAL_PROPERTIES, closeRelationshipFragment } from './bitemporal.js';
 import { readFirst, runWrite, type GraphStatement } from './connection.js';
 import { assertPositiveInt, assertProportion } from './errors.js';
 import { BASE_NODE_LABEL } from './labels.js';
@@ -88,7 +88,7 @@ export function buildEdgePruneClose(input: EdgePruneInput): GraphStatement {
     `  AND ${source.where} AND ${target.where}`,
     'WITH r ORDER BY r.updated_at ASC, r.id ASC',
     'LIMIT $batchSize',
-    `SET ${closeFragment('r')}`,
+    `SET ${closeRelationshipFragment('r')}`,
     'RETURN r.id AS id, type(r) AS type, startNode(r).id AS sourceId, endNode(r).id AS targetId',
   ].join('\n');
 

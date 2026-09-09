@@ -176,10 +176,14 @@ export async function forgetOrphanNodeInTransaction(
  *
  * The population is defined by the absence of an OPEN association, and a reading of the open
  * ones cannot tell a node nothing ever reached from a node an association reached and left: both
- * read empty. The token carries how many association rows the node has at all and the latest
- * stamp any of them took, so an edge arriving, closing or reopening moves it and a window taken
- * across that interval is void. Backbone types are excluded for the same reason the orphan test
- * excludes them: they are the wiring, not an association.
+ * read empty. So the token carries how many association rows the node has at all, and the sum of
+ * the lifecycle counters those rows' own writers advance. Backbone types are excluded for the
+ * same reason the orphan test excludes them: they are the wiring, not an association.
+ *
+ * Counters rather than stamps, because a stamp is not an identity. The clock is supplied by the
+ * caller, so an edge that reopens and closes again under one value leaves every timestamp on the
+ * row exactly where it was; the counter went up twice. The sum only moves forward while a row
+ * survives, so equal readings mean no transition rather than none that changed the clock.
  *
  * Absent from the answer means the graph does not hold the node, which is not a history: a caller
  * that cannot read this leaves the qualification unknown rather than certifying an interval
@@ -191,27 +195,27 @@ const NODE_ASSOCIATION_HISTORY = [
   'OPTIONAL MATCH (n)-[r]-()',
   `  WHERE NOT type(r) IN [${BACKBONE_TYPES}]`,
   'WITH nodeId, count(r) AS relations,',
-  `     max(toString(coalesce(r.${BITEMPORAL_PROPERTIES.txUntil}, r.updated_at, r.created_at)))`,
-  '       AS lastChange',
-  'RETURN nodeId AS id, relations, lastChange',
+  `     sum(coalesce(r.${BITEMPORAL_PROPERTIES.lifecycleRevision}, 0)) AS revisions`,
+  'RETURN nodeId AS id, relations, revisions',
 ].join('\n');
 
 /** One node's association history, by id. A node the graph does not hold has no entry. */
 export type AssociationHistory = ReadonlyMap<string, string>;
 
 /**
- * The comparable form of one reading: how many association rows, and the latest stamp any of
- * them carries. One producer, so the census and the guard compare the same shape.
+ * The comparable form of one reading: how many association rows, and how many lifecycle
+ * transitions they have been through. One producer, so the census and the guard compare the same
+ * shape.
  */
-export function associationHistoryToken(relations: unknown, lastChange: unknown): string {
-  return `${String(relations)}@${typeof lastChange === 'string' ? lastChange : 'none'}`;
+export function associationHistoryToken(relations: unknown, revisions: unknown): string {
+  return `${String(relations)}@${String(revisions)}`;
 }
 
 /** What a node no association has ever touched reads as. */
-export const NO_ASSOCIATION_HISTORY = associationHistoryToken(0, undefined);
+export const NO_ASSOCIATION_HISTORY = associationHistoryToken(0, 0);
 
 function mapHistoryRow(row: Row): readonly [string, string] {
-  return [row.id as string, associationHistoryToken(row.relations, row.lastChange)];
+  return [row.id as string, associationHistoryToken(row.relations, row.revisions)];
 }
 
 export async function nodeAssociationHistory(

@@ -1,6 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 
-import { BITEMPORAL_PROPERTIES, closeFragment } from './bitemporal.js';
+import { BITEMPORAL_PROPERTIES, closeRelationshipFragment } from './bitemporal.js';
 import { readFirst, runWrite, type GraphStatement, type GraphTransaction } from './connection.js';
 import { assertPositiveInt } from './errors.js';
 import { BASE_NODE_LABEL } from './labels.js';
@@ -50,7 +50,7 @@ export type NarrativeEdgeCloseInput = {
 };
 
 /**
- * `valid_until IS NULL` selects only what is still open, and `closeFragment`'s `coalesce` keeps
+ * `valid_until IS NULL` selects only what is still open, and `closeRelationshipFragment`'s `coalesce` keeps
  * the first close's stamps, so running this twice over the same narratives writes nothing the
  * second time. That is what makes an interrupted supersession recoverable: the retry closes the
  * edges the first attempt missed and leaves the rest exactly as it found them.
@@ -60,7 +60,7 @@ export function buildNarrativeEdgeClose(input: NarrativeEdgeCloseInput): GraphSt
     'UNWIND $narrativeIds AS narrativeId',
     `MATCH (:${BASE_NODE_LABEL})-[r:${SUMMARIZED_BY_TYPE}]->(:Narrative { id: narrativeId })`,
     `WHERE r.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
-    `SET ${closeFragment('r')}`,
+    `SET ${closeRelationshipFragment('r')}`,
     CLOSED_EDGE_RETURN,
   ].join('\n');
 

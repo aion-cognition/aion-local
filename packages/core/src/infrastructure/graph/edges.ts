@@ -1,7 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 import { randomUUID } from 'node:crypto';
 
-import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
+import { advanceLifecycleRevision, BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { type GraphStatement, type GraphTransaction, runWrite } from './connection.js';
 import { assertProportion, GraphNodeNotFoundError, GraphWriteError } from './errors.js';
 import { BASE_NODE_LABEL } from './labels.js';
@@ -140,6 +140,7 @@ export function buildEdgeUpsert(input: EdgeUpsert): GraphStatement {
     'r.id = $id',
     'r.created_at = $now',
     'r.updated_at = $now',
+    `r.${BITEMPORAL_PROPERTIES.lifecycleRevision} = 1`,
     `r.strength = ${strength.onCreate}`,
     'r.confidence = $confidence',
     'r.signals = $signals',
@@ -150,6 +151,10 @@ export function buildEdgeUpsert(input: EdgeUpsert): GraphStatement {
 
   const onMatch = [
     'r.updated_at = $now',
+    // Before the stamps below clear, because the reopen is what this counts and the test reads
+    // the same property that clause is about to move. A restatement of an open edge is not a
+    // transition and leaves the number where it is.
+    advanceLifecycleRevision('r', reopenCondition),
     // A reopen resets strength through the create expression instead of moving the match
     // expression's own remnant: the edge was closed because that remnant sat at the floor with
     // nothing to show for it, so restarting it under the match rule would leave it there again.

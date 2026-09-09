@@ -1,6 +1,6 @@
 import neo4j, { type Driver } from 'neo4j-driver';
 
-import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
+import { advanceLifecycleRevision, BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { readFirst, runWrite, type GraphStatement } from './connection.js';
 import { assertPositiveInt, assertProportion, GraphWriteError } from './errors.js';
 import { BASE_NODE_LABEL } from './labels.js';
@@ -85,6 +85,9 @@ export function buildEdgeWeightReinforcement(input: ReinforceEdgeWeightsInput): 
     'SET r.strength = CASE WHEN raw < $weightFloor THEN $weightFloor',
     '                      WHEN raw > 1.0 THEN 1.0',
     '                      ELSE raw END,',
+    // Ahead of the stamps this counts, for the reason `edges.ts` states: the test reads what
+    // the clauses below are about to clear.
+    `    ${advanceLifecycleRevision('r', reopenCondition)},`,
     `    r.${BITEMPORAL_PROPERTIES.validUntil} = CASE WHEN ${reopenCondition} THEN null`,
     `                          ELSE r.${BITEMPORAL_PROPERTIES.validUntil} END,`,
     `    r.${BITEMPORAL_PROPERTIES.txUntil} = CASE WHEN ${reopenCondition} THEN null`,

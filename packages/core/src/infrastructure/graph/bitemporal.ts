@@ -33,6 +33,16 @@ export const BITEMPORAL_PROPERTIES = {
    * survives an explicit forget.
    */
   forgottenAt: 'forgotten_at',
+  /**
+   * How many lifecycle transitions this row has been through, advanced by the writer that
+   * performs each one.
+   *
+   * A reader that needs to know whether a row's lifecycle MOVED cannot ask its timestamps: a
+   * caller supplies the clock, so a reopen and a reclose under the same value put every stamp
+   * back where it was and the row reads as though nothing happened. The counter only goes
+   * forward, so the two states are different whatever the clocks say.
+   */
+  lifecycleRevision: 'lifecycle_rev',
 } as const;
 
 /** A node is current when open in both world time and system time: neither superseded nor forgotten. */
@@ -240,6 +250,34 @@ export function closeFragment(variable: string): string {
     `${variable}.${BITEMPORAL_PROPERTIES.validUntil} = coalesce(${variable}.${BITEMPORAL_PROPERTIES.validUntil}, $validUntil)`,
     `${variable}.${BITEMPORAL_PROPERTIES.txUntil} = coalesce(${variable}.${BITEMPORAL_PROPERTIES.txUntil}, $txUntil)`,
   ].join(',\n    ');
+}
+
+/**
+ * The counter a lifecycle transition advances, in the statement that performs the transition.
+ *
+ * `when` is the writer's own test for "this row is actually moving", so a repeated close and a
+ * restatement of an open row leave the number alone: a version that advanced on a no-op would
+ * void every window that rests on it. It is written before the stamps it counts, because a SET
+ * that had already moved them would be testing its own write.
+ */
+export function advanceLifecycleRevision(variable: string, when: string): string {
+  const property = `${variable}.${BITEMPORAL_PROPERTIES.lifecycleRevision}`;
+  return `${property} = CASE WHEN ${when} THEN coalesce(${property}, 0) + 1 ELSE ${property} END`;
+}
+
+/**
+ * The close a RELATIONSHIP takes: the two stamps, and the counter that says the row moved.
+ *
+ * Relationships carry it and nodes do not, because the reader is the association history a
+ * qualification window rests on. A close that only wrote stamps could be undone and redone under
+ * one supplied clock and leave that history reading exactly as it did before.
+ */
+export function closeRelationshipFragment(variable: string): string {
+  const open = [
+    `${variable}.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
+    `${variable}.${BITEMPORAL_PROPERTIES.txUntil} IS NULL`,
+  ].join(' OR ');
+  return [advanceLifecycleRevision(variable, open), closeFragment(variable)].join(',\n    ');
 }
 
 const CLOSE_SUPERSEDED_NODE = [

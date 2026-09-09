@@ -130,6 +130,7 @@ const SUPERSESSION_PROPOSAL: SupersessionProposal = {
   episodeId: 'episode-2',
   createdAt: '2026-06-05T00:00:00.000Z',
   resolvedAt: null,
+  lifecycleRev: 1,
 };
 
 const ENTITY_MERGE_PROPOSAL: EntityMergeProposal = {
@@ -145,6 +146,7 @@ const ENTITY_MERGE_PROPOSAL: EntityMergeProposal = {
   episodeId: 'episode-3',
   createdAt: '2026-06-05T00:00:00.000Z',
   resolvedAt: null,
+  lifecycleRev: 1,
 };
 
 describe('renderProvenance', () => {

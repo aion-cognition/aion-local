@@ -106,7 +106,13 @@ export function findProposalsForNode<TRow, TProposal>(
   return rows.map(spec.mapRow);
 }
 
-/** The `resolved_at IS NULL` guard is what makes a second resolve report false, not true. */
+/**
+ * The `resolved_at IS NULL` guard is what makes a second resolve report false, not true.
+ *
+ * The lifecycle counter moves in the same statement, so the transition is durable exactly when
+ * the resolution is. A caller supplies `resolvedAt`, so the stamp alone cannot say a row was
+ * resolved twice with one clock; the number can.
+ */
 export function resolveProposal<TRow, TProposal>(
   db: SqliteHandle,
   spec: ProposalTableSpec<TRow, TProposal>,
@@ -114,7 +120,10 @@ export function resolveProposal<TRow, TProposal>(
   resolvedAt: string,
 ): boolean {
   const result = db
-    .prepare(`UPDATE ${spec.table} SET resolved_at = ? WHERE id = ? AND resolved_at IS NULL`)
+    .prepare(
+      `UPDATE ${spec.table} SET resolved_at = ?, lifecycle_rev = lifecycle_rev + 1
+       WHERE id = ? AND resolved_at IS NULL`,
+    )
     .run(resolvedAt, id);
   return result.changes > 0;
 }
@@ -126,7 +135,10 @@ export function reopenProposal<TRow, TProposal>(
   id: string,
 ): boolean {
   const result = db
-    .prepare(`UPDATE ${spec.table} SET resolved_at = NULL WHERE id = ? AND resolved_at IS NOT NULL`)
+    .prepare(
+      `UPDATE ${spec.table} SET resolved_at = NULL, lifecycle_rev = lifecycle_rev + 1
+       WHERE id = ? AND resolved_at IS NOT NULL`,
+    )
     .run(id);
   return result.changes > 0;
 }
