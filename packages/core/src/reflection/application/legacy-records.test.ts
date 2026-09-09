@@ -322,7 +322,6 @@ describe('the census seal', () => {
     // Each at the direction the registry puts it under. Extraction is the claim's own, so it is
     // counted at `out` on the node; `subjects.ts` and OWNERSHIP_SCOPES read it there.
     expect([...scopes].sort()).toEqual([
-      'sqlite.revision_citations',
       'sqlite:extraction:out',
       'sqlite:mention:in',
       'sqlite:participation:in',
@@ -331,6 +330,9 @@ describe('the census seal', () => {
       'sqlite:stated_correction:in',
       'sqlite:stated_derivation:in',
     ]);
+    // Not the narrative citation scope. This pass walked source relationships, not the revision
+    // records, so it counts what it looked at and leaves that one to whoever owns it.
+    expect(scopes).not.toContain('sqlite.revision_citations');
   });
 
   it('counts only what a source endpoint actually carries', () => {

@@ -1,4 +1,4 @@
-import { NODE_SUPPORT_SCOPES } from '../../evidence/application/node-support.js';
+import { NODE_SUPPORT_ROLE_SCOPES } from '../../evidence/application/node-support.js';
 import { isRegisteredScope, scopeAuthority } from '../../evidence/domain/scopes.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
@@ -248,12 +248,12 @@ export function isNodeEndpoint(db: SqliteHandle, endpointId: string): boolean {
 /**
  * Every scope the seal counts for one endpoint.
  *
- * The scopes it already carries, plus — for a node endpoint — the full support set at each role's
- * REGISTERED direction and the narrative citation scope. A role with no row at all is exactly
- * where a missing count hides: leaving it out would establish three of four censuses and let the
- * fourth keep the whole support answer unknown forever. The pass enumerated each source's complete
- * incident set, so once the cohort is walked a role with no row on a touched node is a counted
- * zero.
+ * The scopes it already carries, plus — for a node endpoint — the incidence roles a repair sweep
+ * reads, at each role's REGISTERED direction. A role with no row at all is exactly where a missing
+ * count hides: leaving it out would establish three of four censuses and let the fourth keep the
+ * whole support answer unknown forever. The pass enumerated each source's complete incident set,
+ * so once the cohort is walked with nothing pinned, a role with no row on a touched node is a
+ * counted zero.
  *
  * Graph-authority scopes are never touched here. Their counter lives in the other store, and this
  * side holds only a mirror of what it said at some moment.
@@ -268,9 +268,11 @@ export function endpointCensusScopes(db: SqliteHandle, endpointId: string): read
       .filter((scope) => isRegisteredScope(scope) && scopeAuthority(scope) === 'sqlite'),
   );
   if (isNodeEndpoint(db, endpointId)) {
-    // Exactly the scopes a repair sweep reads before it suppresses a node, taken from the reader
-    // itself: a census filed under a scope that reader does not ask for is one nobody can see.
-    for (const scope of NODE_SUPPORT_SCOPES) {
+    // The role scopes a repair sweep reads, taken from the reader itself so a census is never
+    // filed under a scope that reader does not ask for. The citation scope is NOT among them:
+    // this pass walked source relationships, not the revision records, and counting a population
+    // it never looked at is the substitution the whole cut exists to prevent.
+    for (const scope of NODE_SUPPORT_ROLE_SCOPES) {
       scopes.add(scope);
     }
   }

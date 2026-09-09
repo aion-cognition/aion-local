@@ -52,6 +52,18 @@ export const NODE_SUPPORT_SCOPES: readonly string[] = [
   NARRATIVE_SCOPES[0],
 ];
 
+/**
+ * The subset a source-side census may count: the incidence roles, and not the citation scope.
+ *
+ * The citation population is the revision records C2 owns. A pass that walks source relationships
+ * has not looked at them and cannot prove a legacy graph citation is represented among them, so it
+ * counts what it walked and leaves that scope unknown — which keeps the support answer unknown
+ * too, honestly, until whoever owns those records counts them.
+ */
+export const NODE_SUPPORT_ROLE_SCOPES: readonly string[] = SUPPORT_ROLES.map((role) =>
+  nodeRoleScope(role),
+);
+
 export type NodeSupportReading = {
   readonly support: NodeSupport;
   /** Why, in one phrase, so a blocked repair can say what it is waiting for. */
