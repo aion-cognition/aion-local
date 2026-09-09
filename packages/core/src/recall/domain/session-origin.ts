@@ -1,7 +1,7 @@
 import type { RelatedClaim } from '@aion/protocol';
 
 import type { FusedItem } from './fusion.js';
-import { ownershipOf, type ResolvedEvidenceView } from './resolved-view.js';
+import { certifiedIn, ownershipOf, type ResolvedEvidenceView } from './resolved-view.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 
 /**
@@ -83,7 +83,10 @@ export function suppressedOwnSession(input: OwnSessionInput): ReadonlySet<string
   const suppressed = new Set<string>();
   const { view } = input;
   for (const item of input.items) {
-    if (ownershipOf(view, item.id) !== 'own_only') {
+    // A reading the attempt could not certify withholds nothing. `ownershipOf` already answers
+    // unknown for one, and the check stays here too because the evidence beside the item, not
+    // only its ownership, is what says whether the session has already read everything about it.
+    if (!certifiedIn(view, item.id) || ownershipOf(view, item.id) !== 'own_only') {
       continue;
     }
     const record = view.provenance.get(item.id);

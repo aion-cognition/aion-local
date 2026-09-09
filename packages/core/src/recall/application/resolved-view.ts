@@ -10,7 +10,7 @@ import {
 import type { ItemMetadata } from '../../evidence/application/metadata.js';
 import type { EvidenceResolver } from '../../evidence/application/resolver.js';
 import { ownershipVerdict, type OwnershipVerdict } from '../../evidence/domain/ownership.js';
-import type { EvidenceResult } from '../../evidence/domain/result.js';
+import { isCertifiedReading, type EvidenceResult } from '../../evidence/domain/result.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 import type { ItemOrigin } from '../../infrastructure/graph/origin-queries.js';
 import type { ReadMode } from '../../infrastructure/graph/read-modes.js';
@@ -107,9 +107,10 @@ function foldResolved(
       continue;
     }
     const { id } = result.address;
-    // A store the read could not reach is the one thing that may not overwrite healthy stored
-    // metadata. A certified incomplete lineage is a settled answer and fingerprints normally.
-    if (result.evidence.status === 'unavailable-retryable') {
+    // The one certainty question, asked in the resolver's own words. A reading whose inputs could
+    // not be obtained may not overwrite healthy stored metadata and may not authorize a
+    // subtraction, whether or not a provisional value came back with it.
+    if (!isCertifiedReading(result)) {
       degraded.add(id);
     }
     if (result.value === undefined) {
@@ -154,7 +155,7 @@ export function resolvedView(input: ResolvedViewInput): ResolvedEvidenceView {
     relatedClaims: input.relatedClaims,
     ownership,
     // A provenance read that failed says nothing about any candidate, so no stored fingerprint
-    // may be rewritten from it.
+    // may be rewritten from it and no subtraction may rest on it.
     degraded: reading.provenance.unavailable
       ? new Set(reading.provenance.requested)
       : new Set<string>(),

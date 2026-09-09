@@ -23,16 +23,32 @@ export type ResolvedEvidenceView = {
   /** Absent for an id nothing answered about, which reads as unknown ownership. */
   readonly ownership: ReadonlyMap<string, OwnershipVerdict>;
   /**
-   * Ids whose evidence this attempt could not read. A healthy stored fingerprint outlives a
-   * transient outage: overwriting one with a degraded reading would suppress the memory on the
-   * next recall as though the substrate had said it was unchanged.
+   * Ids whose semantic inputs this attempt could not obtain or certify: a store it could not
+   * reach, a publication position that moved under it, an allowance that ran out, or no value at
+   * all. One set for every consumer, because suppression, folding and the stored fingerprint must
+   * not disagree about which readings are safe to act on.
+   *
+   * A settled observation is not in it. An ancestry the walk reported short is what the substrate
+   * holds, so it fingerprints and folds like any other answer.
    */
   readonly degraded: ReadonlySet<string>;
   /** Every issue the reading named, required and optional alike, for the coverage statement. */
   readonly issues: readonly EvidenceIssue[];
 };
 
-/** The verdict for one item. An id nothing answered about is unknown rather than either answer. */
+/**
+ * The verdict for one item. An id nothing answered about is unknown rather than either answer,
+ * and so is one whose reading this attempt could not certify: an uncertified own-only value is
+ * exactly the reading that must not withhold a memory.
+ */
 export function ownershipOf(view: ResolvedEvidenceView, id: string): OwnershipVerdict {
+  if (view.degraded.has(id)) {
+    return 'unknown';
+  }
   return view.ownership.get(id) ?? 'unknown';
+}
+
+/** Whether a stage may act on this item's semantic reading at all. */
+export function certifiedIn(view: ResolvedEvidenceView, id: string): boolean {
+  return !view.degraded.has(id);
 }

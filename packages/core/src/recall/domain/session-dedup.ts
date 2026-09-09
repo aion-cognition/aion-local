@@ -2,7 +2,7 @@ import type { MemoryPack, RelatedClaim } from '@aion/protocol';
 import { packBuckets } from '@aion/protocol';
 
 import type { FusedItem } from './fusion.js';
-import type { ResolvedEvidenceView } from './resolved-view.js';
+import { certifiedIn, type ResolvedEvidenceView } from './resolved-view.js';
 import { standingFor } from './standing.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 import type { ServedItem } from '../../infrastructure/sqlite/served-items.js';
@@ -87,10 +87,10 @@ export function suppressedRepeats(
     return suppressed;
   }
   for (const item of items) {
-    // An item whose evidence this attempt could not read is served with its gap disclosed. The
-    // fingerprint computed from a degraded reading would say the memory is unchanged, and a
+    // An item whose reading this attempt could not certify is served with its gap disclosed. The
+    // fingerprint computed from an uncertified reading would say the memory is unchanged, and a
     // caller told that would never be shown the change it is waiting for.
-    if (view.degraded.has(item.id)) {
+    if (!certifiedIn(view, item.id)) {
       continue;
     }
     const fingerprint = servedFingerprint(
@@ -142,11 +142,11 @@ export function sessionHoldings(
 /**
  * One fingerprint per holding, which is what the next recall in this session matches against.
  *
- * A holding whose evidence this attempt could not read gets no record. Its stored row stands
+ * A holding whose reading this attempt could not certify gets no record. Its stored row stands
  * exactly as the last healthy read left it, so recovery compares the newly certified fingerprint
- * against what the session was actually told rather than against a reading of an outage. The
- * price is a repeat while the outage lasts, which is the honest cost of holding no separate
- * record of what a degraded read delivered.
+ * against what the session was actually told rather than against a reading nobody could stand
+ * behind. The price is a repeat while the uncertainty lasts, which is the honest cost of holding
+ * no separate record of what such a read delivered.
  */
 export function servedRecords(
   holdings: ReadonlySet<string>,
@@ -156,7 +156,7 @@ export function servedRecords(
   const records: ServedItem[] = [];
   for (const id of holdings) {
     const candidate = candidates.get(id);
-    if (candidate === undefined || view.degraded.has(id)) {
+    if (candidate === undefined || !certifiedIn(view, id)) {
       continue;
     }
     records.push({

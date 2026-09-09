@@ -1,7 +1,7 @@
 import type { RelatedClaim } from '@aion/protocol';
 
 import type { FusedItem } from './fusion.js';
-import type { ResolvedEvidenceView } from './resolved-view.js';
+import { certifiedIn, type ResolvedEvidenceView } from './resolved-view.js';
 import { standingFor } from './standing.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 import type { RestatedClaimPair } from '../../infrastructure/graph/near-duplicate-queries.js';
@@ -27,8 +27,9 @@ import type { RestatedClaimPair } from '../../infrastructure/graph/near-duplicat
  * stored text fold, and the gates below add the reasons a reader still needs both. Standing and
  * currency have to agree, so a quotation is never folded into an inference and a superseded
  * claim never into a current one. Anything a correction touches stays served, because
- * disagreeing is the reason to read the second one. And nothing is folded on absent evidence:
- * a provenance lookup that did not answer for both sides withholds nothing at all.
+ * disagreeing is the reason to read the second one. And nothing is folded on absent or
+ * uncertified evidence: a lookup that did not answer for both sides, or a reading whose inputs
+ * the attempt could not obtain, withholds nothing at all.
  */
 
 export type FoldableClaimsInput = {
@@ -105,6 +106,12 @@ export function foldableClaims(
     const left = byId.get(pair.left);
     const right = byId.get(pair.right);
     if (left === undefined || right === undefined) {
+      continue;
+    }
+    // Nothing is folded on a reading the attempt could not certify. A provisional record that
+    // came back beside an unreachable store cannot say the two are the same sentence, and the
+    // one this pack withheld is the one nobody reads.
+    if (!certifiedIn(input.view, left.id) || !certifiedIn(input.view, right.id)) {
       continue;
     }
     if (contested(left, input.view.provenance, input.view.relatedClaims)) {

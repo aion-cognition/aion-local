@@ -71,7 +71,7 @@ describe('the view a certified read produces', () => {
    * A store the read could not reach may not overwrite healthy stored metadata. A certified
    * incomplete lineage is a settled answer, so it is not degraded and fingerprints normally.
    */
-  it('marks only what a store outage cost it', () => {
+  it('marks only the reading whose inputs it could not obtain', () => {
     const outage = evidenceResult<ItemMetadata>({
       address: idAddress('c3'),
       residency: 'resident',

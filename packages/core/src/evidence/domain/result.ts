@@ -106,6 +106,34 @@ export type EvidenceResult<T> = {
 
 const RETRYABLE_REASONS = new Set(['store_unavailable', 'pending_publication']);
 
+/**
+ * Reasons that say the request could not obtain or certify the field, rather than reporting what
+ * the substrate holds. A bounded walk, a proved absence and a loop are answers a reader may act
+ * on; a store it could not reach, a position that moved under it and an exhausted allowance are
+ * not, because none of them says what the value is now.
+ */
+const UNCERTIFIED_REASONS = new Set(['store_unavailable', 'pending_publication', 'budget_limit']);
+
+/**
+ * Whether a consumer may treat this result's value as the substrate's current answer.
+ *
+ * The one certainty question every serving consumer asks, so suppression, folding and the stored
+ * fingerprint cannot disagree about which readings are safe to act on. A settled observation of
+ * incomplete ancestry is certified and carries its own gap; a reading whose inputs could not be
+ * obtained is not, whether or not a provisional value came back with it.
+ */
+export function isCertifiedReading(result: EvidenceResult<unknown>): boolean {
+  if (result.value === undefined) {
+    return false;
+  }
+  if (result.evidence.status === 'complete-for-use') {
+    return true;
+  }
+  return !result.evidence.reasons.some(
+    (issue) => isRequiredIssue(issue) && UNCERTIFIED_REASONS.has(issue.reason),
+  );
+}
+
 /** A required-field issue, which is the only kind that decides the evidence value. */
 export function isRequiredIssue(issue: EvidenceIssue): boolean {
   return issue.required || issue.reason === 'required_scope_missing';
