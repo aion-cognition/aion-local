@@ -1,5 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 
+import { decideRecord, type DecisionDeps, type DecisionTally } from './claim-dedup-record.js';
 import {
   judgmentEvidenceFor,
   statementWithContext,
@@ -235,6 +236,19 @@ export function claimDedupOperation(): IntrospectionOperation {
       const owed: WithheldWork[] = [];
       /** Why the run stopped short of its batch, when an uncertain publication stopped it. */
       let halted: string | undefined;
+      const recordDeps: DecisionDeps = {
+        db: ctx.db,
+        logger: ctx.logger,
+        ...(ctx.evidence === undefined ? {} : { evidence: ctx.evidence }),
+      };
+      const tally: DecisionTally = {
+        open: () => {
+          moved += 1;
+        },
+        failed: () => {
+          failed += 1;
+        },
+      };
 
       for (const subject of recent) {
         if (ctx.signal.aborted || judged >= batch) {
@@ -296,34 +310,18 @@ export function claimDedupOperation(): IntrospectionOperation {
         judged += 1;
 
         const pair = toPair(subject, neighbor, assembled);
-        // Asked once, after the last model answer for this pair and before any record of it.
-        // A dismissal is a decision too: stamping one on evidence that has moved retires a pair
-        // nobody judged on what the substrate now holds.
-        const settled = (): boolean => {
-          if (assembled.status !== 'ready' || ctx.evidence === undefined) {
-            return true;
-          }
-          // The vantage travels with the evidence to every terminal record this pair can leave,
-          // not only to the merge. A negative verdict stamped under a contract that has since
-          // been replaced is permanent: the pair reads as settled and never reaches a judge under
-          // the contract now in force. A decision naming no vantage at all is refused the same
-          // way the merge writer refuses one.
-          const check =
-            assembled.coverageEpoch === undefined
-              ? ({ status: 'uncovered', reason: 'binding_absent' } as const)
-              : ctx.evidence.confirm(assembled.revision, {
-                  coverageEpoch: assembled.coverageEpoch,
-                });
-          if (check.status === 'current') {
-            return true;
-          }
-          moved += 1;
-          ctx.logger.info(
-            { subjectId: subject.id, candidateId: neighbor.id, check: check.status },
-            'claim dedup left a pair whose evidence moved while it was being judged',
-          );
-          return false;
-        };
+        // Every terminal record this pair can leave is decided and written here, at one boundary.
+        // The merge path keeps its own: the publication it goes through re-checks the same
+        // binding under the coordinator's guard, so `settled` ahead of it is the cheap refusal
+        // rather than the boundary itself.
+        const decision = decideRecord(
+          recordDeps,
+          { subjectId: subject.id, candidateId: neighbor.id, pairKey, assembled },
+          tally,
+        );
+        const settled = (): boolean => decision.settled();
+        const record = (verdict: string, summary: object): boolean =>
+          decision.record(verdict, summary);
         const detection = await judgeClaimDedup(ctx.provider, pair, callOptions);
         if (detection.status === 'failed') {
           failed += 1;
@@ -334,15 +332,9 @@ export function claimDedupOperation(): IntrospectionOperation {
           continue;
         }
         if (!detection.judgment.same) {
-          if (!settled()) {
-            continue;
+          if (record('related', { rationale: detection.judgment.rationale })) {
+            related += 1;
           }
-          related += 1;
-          markLedgerApplied(ctx.db, pairKey, {
-            verdict: 'related',
-            rationale: detection.judgment.rationale,
-          });
-          stampScanned('related');
           continue;
         }
 
@@ -356,12 +348,9 @@ export function claimDedupOperation(): IntrospectionOperation {
           continue;
         }
         if (review.review.outcome === 'vetoed') {
-          if (!settled()) {
-            continue;
+          if (record('vetoed', { reason: review.review.reason })) {
+            vetoed += 1;
           }
-          vetoed += 1;
-          markLedgerApplied(ctx.db, pairKey, { verdict: 'vetoed', reason: review.review.reason });
-          stampScanned('vetoed');
           continue;
         }
 
@@ -375,9 +364,9 @@ export function claimDedupOperation(): IntrospectionOperation {
         const subjectDetail = details.find((detail) => detail.id === subject.id);
         const candidateDetail = details.find((detail) => detail.id === neighbor.id);
         if (subjectDetail?.current !== true || candidateDetail?.current !== true) {
-          stale += 1;
-          markLedgerApplied(ctx.db, pairKey, { verdict: 'stale' });
-          stampScanned('stale');
+          if (record('stale', {})) {
+            stale += 1;
+          }
           continue;
         }
 
@@ -449,19 +438,18 @@ export function claimDedupOperation(): IntrospectionOperation {
           continue;
         }
         if (applied.status === 'applied' && !applied.value.merged) {
-          stale += 1;
-          markLedgerApplied(ctx.db, pairKey, { verdict: 'stale' });
-          stampScanned('stale');
+          if (record('stale', {})) {
+            stale += 1;
+          }
           continue;
         }
         takenLosers.add(loser.id);
         merged += 1;
-        stampScanned('merged');
-        markLedgerApplied(ctx.db, pairKey, {
-          verdict: 'merged',
-          survivorId: survivor.id,
-          loserId: loser.id,
-        });
+        // The receipt of a merge that already committed. Its boundary was the publication itself,
+        // fenced on this same binding under the coordinator's guard, so nothing is re-checked
+        // here: the loser is folded, and withholding the stamp would only offer the pair to a
+        // judge again with one side gone.
+        decision.receipt('merged', { survivorId: survivor.id, loserId: loser.id });
       }
 
       return {

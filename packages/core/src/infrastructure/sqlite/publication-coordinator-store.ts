@@ -62,6 +62,20 @@ const RECORD_COLUMNS = `CAST(sequence AS TEXT) AS sequence, operation_id AS oper
   result_digest AS resultDigest, known_from AS knownFrom, observed_ack_at AS observedAckAt,
   clock_clamped AS clockClamped, error`;
 
+/**
+ * Whether a publication is in flight, asked by a reader that only needs to stand aside.
+ *
+ * `coordinatorControl` refuses an unpaired store outright, which is the right answer for the
+ * protocol itself and the wrong one for a caller whose whole question is "may I write now": a
+ * store with no pairing has no publication in flight either, and it says so rather than throwing.
+ */
+export function publicationInFlight(db: SqliteHandle): boolean {
+  const rows = db
+    .prepare('SELECT pending_operation_id AS pendingOperationId FROM publication_control LIMIT 2')
+    .all() as { pendingOperationId: string | null }[];
+  return rows.length === 1 && rows[0]?.pendingOperationId !== null;
+}
+
 /** Decimal text avoids rounding SQLite's 64-bit publication ordering through a JS number. */
 export function coordinatorControl(db: SqliteHandle): CoordinatorControl {
   const rows = db
