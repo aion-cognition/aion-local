@@ -17,7 +17,9 @@ export const READINESS_SCHEMA_STATEMENTS: readonly string[] = [
     contract_digest TEXT NOT NULL,
     pipeline_version TEXT NOT NULL,
     stages_json TEXT NOT NULL,
+    stage_options_json TEXT,
     transfer_capabilities_json TEXT NOT NULL,
+    selection_seq INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
   )`,
   /**
@@ -96,6 +98,19 @@ export const READINESS_COLUMN_ADDITIONS: readonly ColumnAddition[] = [
     table: 'source_processing_generations',
     column: 'operational_revision',
     definition: 'INTEGER NOT NULL DEFAULT 0 CHECK (operational_revision >= 0)',
+  },
+  // What each stage runs on, beside the names. Two contracts with the same stage list and
+  // different options are two contracts: a source measured under one was not measured under the
+  // other. Nullable, because a row written before this column existed recorded no options and
+  // saying it recorded empty ones would be a claim about a build nobody can read back.
+  { table: 'readiness_policies', column: 'stage_options_json', definition: 'TEXT' },
+  // Which definition is current, kept apart from which is newest. A definition is immutable, so
+  // publishing an earlier contract again cannot be expressed by allocating a higher revision:
+  // selection is its own monotonic number.
+  {
+    table: 'readiness_policies',
+    column: 'selection_seq',
+    definition: 'INTEGER NOT NULL DEFAULT 0',
   },
 ];
 

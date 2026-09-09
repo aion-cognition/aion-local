@@ -156,6 +156,14 @@ export type StageContext = {
  */
 export type ReflectionStage = {
   readonly name: string;
+  /**
+   * The options this instance actually runs on, which are part of what readiness requires.
+   *
+   * Absent means the stage takes none. A stage that takes options and does not answer would
+   * publish a contract naming its pass without saying what the pass was, and two builds that
+   * required different things of a source would record the same requirement.
+   */
+  describe?(): Readonly<Record<string, unknown>>;
   run(ctx: StageContext): Promise<StageOutcome>;
 };
 

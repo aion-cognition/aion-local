@@ -306,6 +306,16 @@ export class SessionNarrativeStage implements ReflectionStage {
     this.#options = options;
   }
 
+  /**
+   * What this instance runs on. The run's own clock and shutdown signal are the orchestrator's
+   * and are not part of what readiness requires, so they are not here to be recorded.
+   */
+  describe(): Omit<SessionNarrativeOptions, 'signal'> {
+    const options: SessionNarrativeOptions & { signal?: AbortSignal } = { ...this.#options };
+    delete options.signal;
+    return options;
+  }
+
   async run(ctx: StageContext): Promise<StageOutcome> {
     const deps: NarrativeDeps = {
       driver: ctx.driver,

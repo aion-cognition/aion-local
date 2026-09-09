@@ -37,10 +37,19 @@ export const TRANSFER_CAPABILITIES: readonly string[] = [
   'context-vectors',
 ];
 
+/**
+ * The contract this build's pipeline implies: the stages, in order, AND what each one runs on.
+ *
+ * The options come from the constructed stages rather than from the config, so the contract is
+ * about the pass a source will actually get. A build that raised a stage's minimum input
+ * requires something different of a source than the build before it, and a contract naming only
+ * the stages would call those two passes the same.
+ */
 export function readinessContractOf(stages: readonly ReflectionStage[]): ReadinessContract {
   return {
     pipelineVersion: PIPELINE_VERSION,
     stageNames: stages.map((stage) => stage.name),
+    stageOptions: Object.fromEntries(stages.map((stage) => [stage.name, stage.describe?.() ?? {}])),
     transferCapabilities: TRANSFER_CAPABILITIES,
   };
 }

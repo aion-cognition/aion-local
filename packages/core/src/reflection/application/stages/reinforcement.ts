@@ -51,6 +51,11 @@ export class ReinforcementEnqueueStage implements ReflectionStage {
     this.#reinforcementQueueCap = options.reinforcementQueueCap ?? DEFAULT_REINFORCEMENT_QUEUE_CAP;
   }
 
+  /** What this instance runs on, resolved. Constructor defaults are options like any other. */
+  describe(): Required<ReinforcementEnqueueStageOptions> {
+    return { reinforcementQueueCap: this.#reinforcementQueueCap };
+  }
+
   async run(ctx: StageContext): Promise<StageOutcome> {
     const key = coExtractionLedgerKey(ctx.pipelineVersion, ctx.episodeId);
     if (isLedgerApplied(ctx.db, key)) {

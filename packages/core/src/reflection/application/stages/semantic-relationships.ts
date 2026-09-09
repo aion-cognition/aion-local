@@ -224,6 +224,15 @@ export class SemanticRelationshipStage implements ReflectionStage {
     this.#maxRelationships = options.maxRelationships ?? DEFAULTS.reflection.maxRelationships;
   }
 
+  /** What this instance runs on, resolved. Constructor defaults are options like any other. */
+  describe(): Required<SemanticRelationshipStageOptions> {
+    return {
+      model: this.#model,
+      timeoutMs: this.#timeoutMs,
+      maxRelationships: this.#maxRelationships,
+    };
+  }
+
   async run(ctx: StageContext): Promise<StageOutcome> {
     const text = ctx.episode.text.trim();
     if (text.length === 0) {
