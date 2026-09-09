@@ -3,6 +3,10 @@ import {
   fetchNodeProvenance,
   findEntityMergeProposalsForNode,
   findSupersessionProposalsForNode,
+  runSourceInspection,
+  sourceOutputFor,
+  sourceReadDeps,
+  sourceText,
   type EntityMergeProposal,
   type NodeEdge,
   type NodeEdgePage,
@@ -12,8 +16,8 @@ import {
 
 import { CliUsageError, parseArgs, type ArgSpec } from './args.js';
 import { short } from './format.js';
-import { stderrWriter, stdoutWriter, type Writer } from './output.js';
-import { withSubstrate } from './substrate.js';
+import { stdoutWriter, type Writer } from './output.js';
+import { withSubstrate, type Substrate } from './substrate.js';
 
 /**
  * `aion why <node_id>`: everything the substrate can say about how one node came to be and
@@ -193,6 +197,37 @@ export function renderProvenance(
   }
 }
 
+/**
+ * What the substrate can say about an id whose graph node is not there.
+ *
+ * Absence from the graph is residency information and nothing more. The records still know
+ * whether the id names a source this substrate accepted, whether its raw evidence is intact,
+ * and whether the requested mode withholds it, so the answer says which of those it is. What
+ * it no longer says is that a historical query might bring the projection back: a deleted
+ * projection is not recoverable by asking about an earlier moment, and sending a reader to try
+ * is worse than telling them nothing.
+ */
+async function renderAbsentNode(
+  substrate: Substrate,
+  nodeId: string,
+  write: Writer,
+): Promise<number> {
+  const deps = sourceReadDeps({
+    driver: substrate.connection().driver,
+    db: substrate.db(),
+    logger: substrate.logger(),
+  });
+  const outcome = sourceOutputFor(await runSourceInspection(deps, { id: nodeId, limit: 1 }));
+  write(`no graph node for '${nodeId}'`);
+  write(sourceText(outcome));
+  if (outcome.status === 'source') {
+    write('');
+    write(`the captured source is intact; \`aion source ${nodeId}\` reads all of it`);
+    return 0;
+  }
+  return 1;
+}
+
 export function runWhy(
   argv: readonly string[] = [],
   write: Writer = stdoutWriter,
@@ -207,11 +242,7 @@ export function runWhy(
       const { driver } = substrate.connection();
       const provenance = await fetchNodeProvenance(driver, flags.nodeId);
       if (provenance === undefined) {
-        stderrWriter(
-          `no node found for '${flags.nodeId}' (it may not exist, or may be forgotten; ` +
-            '`aion search --knew-at <ts>` can look before a forget)',
-        );
-        return 1;
+        return await renderAbsentNode(substrate, flags.nodeId, write);
       }
 
       const page = await fetchNodeEdges(driver, flags.nodeId);
