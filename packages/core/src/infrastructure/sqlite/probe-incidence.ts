@@ -158,6 +158,51 @@ export type ServedReferenceOutcome =
   | 'none';
 
 /**
+ * The basis a version declares for the clocks it carries. A materialization says so, and says
+ * it because the moment it was written is not the moment the relationship it preserves happened.
+ */
+const MIGRATION_BASIS = 'legacy_relationship_clocks';
+
+/**
+ * When the reference this version records actually happened, read from the proof basis the
+ * version itself declares.
+ *
+ * An ordinary acceptance is its own event: the substrate observed the reference as it arrived,
+ * so `observed_at` is the reference's time. A materialization is not: it observed a *record* of
+ * something older, preserved that relationship's own clocks beside its declared basis, and
+ * stamped `observed_at` with the migration. Reading the migration's stamp as the reference time
+ * is how discovering an old edge becomes the member using a memory again.
+ *
+ * Nothing here falls back across clocks. A materialization whose preserved clocks say nothing
+ * usable leaves the timing unproved, because a knowledge or acknowledgment stamp is an answer
+ * to a different question and substituting one for the other is the error itself.
+ */
+function referenceTimeOf(
+  observedAt: string,
+  temporalProofJson: string,
+): { readonly at: string } | { readonly at: undefined } {
+  let proof: Record<string, unknown>;
+  try {
+    proof = JSON.parse(temporalProofJson) as Record<string, unknown>;
+  } catch {
+    return { at: undefined };
+  }
+  if (proof.basis !== MIGRATION_BASIS) {
+    return { at: observedAt };
+  }
+  const original = proof.valid_from ?? proof.tx_from ?? proof.occurred_at;
+  return typeof original === 'string' ? { at: original } : { at: undefined };
+}
+
+type ReferenceVersionRow = {
+  observed_at: string;
+  temporal_proof_json: string;
+  known_from: string | null;
+  state: string;
+  recorded_values_json: string;
+};
+
+/**
  * Whether the conversation came back to a served memory.
  *
  * The credit needs an accepted reference, not merely a later row. A version that closes,
@@ -165,11 +210,10 @@ export type ServedReferenceOutcome =
  * mention it edits happened before the serve, and counting the edit would report a tidy-up as
  * the member using the memory again.
  *
- * The clock is the reference's own recorded observation rather than the moment the substrate
- * learned of it. `known_from` still has to be there — an unacknowledged version is not in the
- * committed view at all — but a backfill that discovers an old edge today has discovered an old
- * edge, and dating it to the discovery is how "we found this afterwards" turns into "the member
- * used this afterwards".
+ * `known_from` still has to be there — an unacknowledged version is not in the committed view
+ * at all — but it is not the clock the comparison uses. That clock comes from the version's own
+ * declared proof basis, so a backfill that discovers an old edge today has discovered an old
+ * edge and a genuine later acceptance is still credited for happening later.
  */
 export function servedReferenceOutcome(
   db: SqliteHandle,
@@ -177,23 +221,34 @@ export function servedReferenceOutcome(
   firstServedAt: string,
 ): ServedReferenceOutcome {
   const roles = RELATED_ROLES.map(() => '?').join(', ');
-  const later = db
+  const rows = db
     .prepare(
-      `SELECT count(*) AS n
+      `SELECT v.observed_at, v.temporal_proof_json, v.known_from, v.state, v.recorded_values_json
        FROM source_incidence s
        JOIN evidence_link_versions v ON v.link_id = s.link_id
        JOIN publication_intents i ON i.operation_id = v.operation_id AND i.state = 'acknowledged'
-       WHERE s.node_id = ? AND s.role IN (${roles})
-         AND v.known_from IS NOT NULL
-         AND v.observed_at > ?
-         AND v.state != 'closed'
-         AND COALESCE(json_extract(v.recorded_values_json, '$.currency'), 'open') != 'closed'`,
+       WHERE s.node_id = ? AND s.role IN (${roles}) AND v.known_from IS NOT NULL`,
     )
-    .get(itemId, ...RELATED_ROLES, firstServedAt) as { n: number };
-  if (later.n > 0) {
-    return 'referenced_after';
+    .all(itemId, ...RELATED_ROLES) as ReferenceVersionRow[];
+
+  let unproved = false;
+  for (const row of rows) {
+    if (row.state === 'closed' || closedCurrency(row.recorded_values_json)) {
+      continue;
+    }
+    const reference = referenceTimeOf(row.observed_at, row.temporal_proof_json);
+    if (reference.at === undefined) {
+      unproved = true;
+      continue;
+    }
+    if (reference.at > firstServedAt) {
+      return 'referenced_after';
+    }
   }
-  const any = db
+  if (unproved) {
+    return 'unversioned';
+  }
+  const untimed = db
     .prepare(
       `SELECT count(*) AS n
        FROM source_incidence s
@@ -201,5 +256,14 @@ export function servedReferenceOutcome(
        WHERE s.node_id = ? AND v.known_from IS NULL`,
     )
     .get(itemId) as { n: number };
-  return any.n > 0 ? 'unversioned' : 'none';
+  return untimed.n > 0 ? 'unversioned' : 'none';
+}
+
+/** Whether the version's recorded values say the relationship it describes is closed. */
+function closedCurrency(recordedValuesJson: string): boolean {
+  try {
+    return (JSON.parse(recordedValuesJson) as { currency?: unknown }).currency === 'closed';
+  } catch {
+    return false;
+  }
 }
