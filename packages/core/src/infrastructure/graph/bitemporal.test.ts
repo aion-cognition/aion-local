@@ -5,6 +5,7 @@ import {
   BITEMPORAL_PROPERTIES,
   buildStampedNodeWrite,
   closeFragment,
+  closeRelationshipFragment,
   stampNew,
 } from './bitemporal.js';
 import { BASE_NODE_LABEL, NODE_LABELS, resolveLabels } from './labels.js';
@@ -136,5 +137,17 @@ describe('closeFragment', () => {
     expect(fragment).toContain(
       `old.${BITEMPORAL_PROPERTIES.txUntil} = coalesce(old.${BITEMPORAL_PROPERTIES.txUntil}, $txUntil)`,
     );
+  });
+});
+
+describe('closeRelationshipFragment', () => {
+  it('counts the transition before the stamps it counts, and only from an open row', () => {
+    const fragment = closeRelationshipFragment('r');
+    const counter = fragment.indexOf(BITEMPORAL_PROPERTIES.lifecycleRevision);
+    // Order is the whole point: a counter written after the close would test the stamps that
+    // close had just set and never advance.
+    expect.soft(counter).toBeLessThan(fragment.indexOf('= coalesce(r.valid_until'));
+    expect.soft(fragment).toContain('CASE WHEN r.valid_until IS NULL OR r.tx_until IS NULL THEN');
+    expect(fragment).toContain(`coalesce(r.${BITEMPORAL_PROPERTIES.lifecycleRevision}, 0) + 1`);
   });
 });
