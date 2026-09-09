@@ -1,6 +1,6 @@
 import type { CoverageRefusal, HistoryCoverage } from '@aion/protocol';
 
-import { coverageMoved, stillDisclosable } from './source-completion.js';
+import { completionEligibility, coverageMoved } from './source-completion.js';
 import { statedCoverage } from '../../evidence/application/reasons.js';
 import type { EvidenceResolver } from '../../evidence/application/resolver.js';
 import type { SourceEvidence, SourcePartEvidence } from '../../evidence/application/sources.js';
@@ -386,13 +386,27 @@ export async function runSourceSearch(
   // A statement accepted while the page was being assembled withholds its source here, not on
   // the next request. A hit resolved before that statement is stale text, and disclosing it
   // would make the answer depend on where in the page the source happened to sit.
-  const disclosable = page.hits.filter((hit) =>
-    stillDisclosable(deps.db, hit.sourceId, checked.context),
-  );
-  const withdrawn = page.hits.length - disclosable.length;
+  //
+  // Withholding is not one thing. Proved suppression is the substrate answering and lowers no
+  // coverage; a census that can no longer prove the vantage, or a proof store that cannot be
+  // read, leaves the page unable to say what it did not show, and each says so in its own words.
+  const disclosable: SourceSearchHit[] = [];
+  const withheldAtCompletion: EvidenceIssue[] = [];
+  let withdrawn = 0;
+  for (const hit of page.hits) {
+    const eligibility = completionEligibility(deps.db, hit.sourceId, checked.context);
+    if (eligibility.status === 'disclosable') {
+      disclosable.push(hit);
+      continue;
+    }
+    withdrawn += 1;
+    if (eligibility.status !== 'suppressed') {
+      withheldAtCompletion.push(eligibility.issue);
+    }
+  }
 
   const corpusReading = corpusCoverage(deps.db);
-  const issues = [...page.issues];
+  const issues = [...page.issues, ...withheldAtCompletion];
   // A suffix past the index cap, a part nothing has indexed yet, and a pass that stopped early
   // are all incomplete corpus coverage, and every one of them is disclosed on a search that
   // matched nothing at all: without this an empty page reads as a settled absence.

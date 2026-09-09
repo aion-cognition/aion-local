@@ -1,6 +1,6 @@
 import type { CoverageRefusal, HistoryCoverage } from '@aion/protocol';
 
-import { coverageMoved, stillDisclosable } from './source-completion.js';
+import { completionEligibility, coverageMoved } from './source-completion.js';
 import type { SourceSearchDeps } from './source-search.js';
 import { statedCoverage } from '../../evidence/application/reasons.js';
 import type { SourceEvidence, SourcePartEvidence } from '../../evidence/application/sources.js';
@@ -11,7 +11,11 @@ import {
   type EvidenceAddress,
   type SourcePartKind,
 } from '../../evidence/domain/address.js';
-import type { EvidenceIssue, EvidenceResult } from '../../evidence/domain/result.js';
+import {
+  classifyEvidence,
+  type EvidenceIssue,
+  type EvidenceResult,
+} from '../../evidence/domain/result.js';
 import { checkCoverage, CoverageRequestError } from '../../recall/application/coverage-checker.js';
 import { requestedLimit, SOURCE_SEARCH_LIMITS, SourceQueryError } from '../domain/source-search.js';
 
@@ -301,14 +305,22 @@ export async function runSourceInspection(
       coverage,
     };
   }
-  // A statement accepted while the parts were being read withholds them here too.
-  if (!stillDisclosable(deps.db, result.value.sourceId, checked.context)) {
+  // A statement accepted while the parts were being read withholds them here too, and so does
+  // a census that stopped being able to prove the question. The three answers stay apart: only
+  // proved suppression is the substrate saying so, and only it keeps the statement gap-free.
+  const eligibility = completionEligibility(deps.db, result.value.sourceId, checked.context);
+  if (eligibility.status !== 'disclosable') {
+    const issues =
+      eligibility.status === 'suppressed'
+        ? [...batch.issues]
+        : [...batch.issues, eligibility.issue];
+    const reasons = eligibility.status === 'suppressed' ? [] : [eligibility.issue];
     return {
       status: 'unavailable',
       residency: result.residency,
-      evidence: 'not-found-in-coverage',
-      reasons: reasonsOf(result),
-      coverage,
+      evidence: classifyEvidence(reasons).status,
+      reasons: [...reasonsOf(result), ...reasons],
+      coverage: statedCoverage(checked.coverage, issues).coverage,
     };
   }
   const { page, next } = pageFrom(result.value.parts, position, limit);

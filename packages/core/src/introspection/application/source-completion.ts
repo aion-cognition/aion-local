@@ -1,6 +1,8 @@
 import type { CoverageRefusal } from '@aion/protocol';
 
 import { eligibilityAt } from '../../evidence/application/sources.js';
+import { idAddress } from '../../evidence/domain/address.js';
+import type { EvidenceIssue } from '../../evidence/domain/result.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   coverageRefusal,
@@ -63,14 +65,56 @@ export function coverageMoved(
 }
 
 /**
- * The evidence half, for the sources a page is about to disclose. It asks C4's own eligibility
- * helper rather than a second reading of the state chain, so a statement accepted while the
- * page was being built withholds its source here exactly as it would on the next request.
+ * The evidence half, for the sources a page is about to disclose.
+ *
+ * C4 answers three ways and all three survive the crossing. Proved suppression is the substrate
+ * answering, so it withholds and claims no history failure. An unproved eligibility is not an
+ * answer at all: nobody counted the statements up to the requested vantage, and reporting that
+ * silence as a clean absence tells a caller the substrate looked and found nothing. A proof
+ * store that cannot be read is a third thing again, repaired by retrying rather than by
+ * backfilling a census.
+ *
+ * Collapsing them to a boolean is what made all three read as absence. The issue each carries
+ * is the resolver's own, in its own vocabulary, so the statement a caller receives says the
+ * same thing here as it would have said had the census been unknown when the read began.
  */
-export function stillDisclosable(
+export type CompletionEligibility =
+  | { readonly status: 'disclosable' }
+  /** Proved withheld at this vantage. An answer, so it lowers no coverage. */
+  | { readonly status: 'suppressed' }
+  /** Nobody counted far enough back to say. Carries the signed uncertainty reason. */
+  | { readonly status: 'unproved'; readonly issue: EvidenceIssue }
+  /** The chain could not be read at all, which retrying repairs. */
+  | { readonly status: 'unavailable'; readonly issue: EvidenceIssue };
+
+export function completionEligibility(
   db: SqliteHandle,
   sourceId: string,
   context: CheckedReadContext,
-): boolean {
-  return eligibilityAt(db, sourceId, context).status === 'disclosable';
+): CompletionEligibility {
+  const address = idAddress(sourceId);
+  let eligibility;
+  try {
+    eligibility = eligibilityAt(db, sourceId, context);
+  } catch {
+    return {
+      status: 'unavailable',
+      issue: { address, field: 'eligibility', reason: 'store_unavailable', required: true },
+    };
+  }
+  if (eligibility.status === 'disclosable' || eligibility.status === 'suppressed') {
+    return { status: eligibility.status };
+  }
+  return {
+    status: 'unproved',
+    // The same shape C4 emits from its own unproved branch: an eligibility field, a proved
+    // cause, and nothing invented about why the record is silent.
+    issue: {
+      address,
+      field: 'eligibility',
+      reason: 'unsupported_history',
+      historyReason: 'not_recorded',
+      required: true,
+    },
+  };
 }
