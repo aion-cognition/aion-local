@@ -24,6 +24,7 @@ import {
   PublicationCoordinator,
   PublicationRecoveryLoop,
   INSTALLED_PUBLICATION_HANDLERS,
+  EvidenceResolver,
   purgeServedItemsIdleSince,
   queueLagSnapshot,
   recallResultFor,
@@ -292,7 +293,10 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       logger,
       onRecalled: sideEffects.onRecalled,
     };
-    const covered = checkedRecallDeps({ ...recall, coordinator: publications });
+    // One resolver for the process: the covered recall path and the worker's index drain read
+    // the same stores through the same budgets.
+    const resolver = new EvidenceResolver({ driver, db: store.db, logger });
+    const covered = checkedRecallDeps({ ...recall, coordinator: publications, resolver });
     const stages = reflectionStages(config);
     // Ahead of anything that can accept a source. A source accepted with no published policy
     // records a durable inventory obligation instead of the stages it owes, and clearing that
@@ -312,6 +316,9 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
         logger,
         // Where a finished run settles what it owed. There is no second way to complete a job.
         publications,
+        // The same resolver the covered recall path holds. One per process: a second would read
+        // the same stores through a second set of caches and answer the same question twice.
+        resolver,
       },
       workerOptions(config),
     );

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { INTEGRATE_JOB_TYPE } from './intake.js';
 import type { ReflectionRun, ReflectionRunOptions } from './orchestrator.js';
 import { backoffDelayMs, ReflectionWorker, type ReflectionWorkerOptions } from './worker.js';
+import { EvidenceResolver } from '../../evidence/application/resolver.js';
 import { MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider, Vector } from '../../infrastructure/providers/types.js';
@@ -105,6 +106,11 @@ function build(runner: StubRunner, options: ReflectionWorkerOptions = {}): Refle
       runner,
       logger,
       publications: directCompletionPublisher(graph.driver, store.db),
+      resolver: new EvidenceResolver({
+        driver: graph.driver,
+        db: store.db,
+        logger: { warn: () => undefined },
+      }),
     },
     options,
   );
@@ -289,7 +295,7 @@ describe('startup drain', () => {
     const runner = new StubRunner();
     const drain = await build(runner).start();
 
-    expect(drain).toEqual({ reclaimed: 1, vectored: 1, ran: 1 });
+    expect(drain).toEqual({ reclaimed: 1, vectored: 1, ran: 1, indexed: 0 });
     expect(provider.embedded).toEqual([['an episode the outage left unvectorized']]);
     expect(graph.nodes.get('mem-pending')?.properties[MEMORY_PROPERTIES.contentVector]).toEqual([
       0, 0.5, 0.25,
@@ -331,7 +337,7 @@ describe('startup drain', () => {
 
     const drain = await build(runner).start();
 
-    expect(drain).toEqual({ reclaimed: 0, vectored: 0, ran: 0 });
+    expect(drain).toEqual({ reclaimed: 0, vectored: 0, ran: 0, indexed: 0 });
     expect(getReflectionJob(store.db, held)?.claimedBy).toBe('live-process');
   });
 });

@@ -40,11 +40,17 @@ export type CheckedRecallDeps = RecallDeps & {
  * constructs a second one. One resolver for the process, like the archive reads' own.
  */
 export function checkedRecallDeps(
-  deps: RecallDeps & { readonly coordinator: ReadCoordinator },
+  deps: RecallDeps & {
+    readonly coordinator: ReadCoordinator;
+    /** The process's resolver, where the composition already holds one. */
+    readonly resolver?: EvidenceResolver;
+  },
 ): CheckedRecallDeps {
   return {
     ...deps,
-    resolver: new EvidenceResolver({ driver: deps.driver, db: deps.db, logger: deps.logger }),
+    resolver:
+      deps.resolver ??
+      new EvidenceResolver({ driver: deps.driver, db: deps.db, logger: deps.logger }),
   };
 }
 

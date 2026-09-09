@@ -31,6 +31,7 @@ import {
   type RecallDeps,
   type ReflectionIntakeDeps,
   type SqliteHandle,
+  EvidenceResolver,
 } from '@aion/core';
 import {
   startNeo4jHarness,
@@ -205,6 +206,11 @@ beforeAll(async () => {
       runner: orchestrator(),
       logger,
       publications: directCompletionPublisher(harness.driver, db),
+      resolver: new EvidenceResolver({
+        driver: harness.driver,
+        db,
+        logger: { warn: () => undefined },
+      }),
     },
     workerOptions(config),
   );
@@ -380,6 +386,11 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)(
           runner: orchestrator(),
           logger,
           publications: directCompletionPublisher(harness.driver, db),
+          resolver: new EvidenceResolver({
+            driver: harness.driver,
+            db,
+            logger: { warn: () => undefined },
+          }),
         },
         workerOptions(config),
       );

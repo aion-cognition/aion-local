@@ -22,6 +22,7 @@ import {
   type RecallDeps,
   type ReflectionIntakeDeps,
   type SqliteHandle,
+  EvidenceResolver,
 } from '@aion/core';
 import {
   startNeo4jHarness,
@@ -222,6 +223,11 @@ export class GateSubstrate {
         runner: this.orchestrator(),
         logger: this.logger,
         publications: directCompletionPublisher(this.driver, this.db),
+        resolver: new EvidenceResolver({
+          driver: this.driver,
+          db: this.db,
+          logger: { warn: () => undefined },
+        }),
       },
       workerOptions(this.config),
     );

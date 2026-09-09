@@ -8,6 +8,7 @@ import {
   ROOT_ID,
   SEEDED_AT,
 } from './test-support/claim-provenance.fixture.js';
+import { EvidenceResolver } from '../../evidence/application/resolver.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import * as claimQueries from '../../infrastructure/graph/claim-provenance-queries.js';
 import { fetchClaimProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
@@ -197,6 +198,11 @@ describe('a reference that arrives while its job is being handled', () => {
         logger,
         runner,
         publications: directCompletionPublisher(substrate.driver, db),
+        resolver: new EvidenceResolver({
+          driver: substrate.driver,
+          db,
+          logger: { warn: () => undefined },
+        }),
       },
       {
         clock: () => SEEDED_AT,
@@ -285,6 +291,11 @@ describe('a reference that arrives while its job is being handled', () => {
         logger,
         runner,
         publications: directCompletionPublisher(substrate.driver, db),
+        resolver: new EvidenceResolver({
+          driver: substrate.driver,
+          db,
+          logger: { warn: () => undefined },
+        }),
       },
       {
         clock: () => SEEDED_AT,
@@ -388,6 +399,11 @@ describe('a reference that arrives while its job is being handled', () => {
         logger,
         runner,
         publications: directCompletionPublisher(substrate.driver, db),
+        resolver: new EvidenceResolver({
+          driver: substrate.driver,
+          db,
+          logger: { warn: () => undefined },
+        }),
       },
       {
         clock: () => SEEDED_AT,

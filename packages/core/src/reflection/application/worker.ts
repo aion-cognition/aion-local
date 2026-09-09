@@ -1,9 +1,12 @@
 import type { Driver } from 'neo4j-driver';
 
 import { completionStages } from './completion-publication.js';
+import { SourceIndexDrainer } from './index-drain.js';
 import { INTEGRATE_JOB_TYPE } from './intake.js';
 import type { ReflectionRun, ReflectionRunOptions } from './orchestrator.js';
 import { drainPendingVectors } from './vectors.js';
+import { describeFailedRun, episodeIdOf } from './worker-diagnostics.js';
+import type { EvidenceResolver } from '../../evidence/application/resolver.js';
 import { backoffDelayMs } from '../../infrastructure/backoff.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { errorMessage } from '../../infrastructure/errors.js';
@@ -56,6 +59,12 @@ export type ReflectionWorkerDeps = {
   readonly logger: Logger;
   /** Where a finished run settles what it owed. There is no second way to complete a job. */
   readonly publications: CompletionPublisher;
+  /**
+   * What the source-index drain reads a source through. Required: a composition without one
+   * would leave the `source_index` rows an acceptance writes unclaimed forever, and every
+   * source behind them eviction-pinned. A worker that cannot index says so at compile time.
+   */
+  readonly resolver: EvidenceResolver;
 };
 
 /** The one thing the worker asks of the coordinator: publish this run's settlement. */
@@ -91,9 +100,11 @@ export type ReflectionDrain = {
   readonly vectored: number;
   /** Jobs this drain ran, whatever each of them made of its episode. */
   readonly ran: number;
+  /** Search documents the index drain wrote for the sources whose rows it claimed. */
+  readonly indexed: number;
 };
 
-const EMPTY_DRAIN: ReflectionDrain = { reclaimed: 0, vectored: 0, ran: 0 };
+const EMPTY_DRAIN: ReflectionDrain = { reclaimed: 0, vectored: 0, ran: 0, indexed: 0 };
 
 /**
  * A second, well under the minutes-scale floor the idle sweeps use. This one reaps another
@@ -107,37 +118,10 @@ type HeldRetry = {
 };
 
 export { backoffDelayMs } from '../../infrastructure/backoff.js';
-
-/**
- * What actually went wrong, in the one field an operator reads: the queue row's `last_error`.
- * The old message claimed nothing enriched, which was false the first time it was measured,
- * with eight of nine stages applied and one timed out, and is further from true now that
- * the ledger is per stage, since a retry re-enters only what failed and every other stage is
- * already applied before the run starts.
- */
-export function describeFailedRun(episodeId: string, run: ReflectionRun): string {
-  const failed = run.summary.stages.filter((stage) => stage.status === 'failed');
-  if (failed.length === 0) {
-    return `no stage enriched ${episodeId}`;
-  }
-  const named = failed.map((stage) => `${stage.name}: ${stage.error ?? stage.summary}`).join('; ');
-  const skipped = run.summary.skippedStages;
-  const context = skipped.length === 0 ? '' : ` (${String(skipped.length)} stages already applied)`;
-  return `${String(failed.length)} stage(s) failed for ${episodeId}${context}: ${named}`;
-}
+export { describeFailedRun } from './worker-diagnostics.js';
 
 /** Claiming another kind of source work would spend its attempts failing it here. */
 const RUNNABLE_JOB_TYPES: readonly string[] = [INTEGRATE_JOB_TYPE];
-
-/** Intake writes `{ episode_id }` and nothing else enqueues an integrate job. */
-function episodeIdOf(job: ReflectionJob): string | undefined {
-  const payload = job.payload as { episode_id?: unknown } | null | undefined;
-  const episodeId = payload?.episode_id;
-  if (typeof episodeId === 'string' && episodeId !== '') {
-    return episodeId;
-  }
-  return undefined;
-}
 
 export class ReflectionWorker {
   readonly #deps: ReflectionWorkerDeps;
@@ -154,6 +138,7 @@ export class ReflectionWorker {
 
   /** Runs in flight. Its size is the pool occupancy the claim loop reads. */
   readonly #running = new Set<Promise<void>>();
+  readonly #index: SourceIndexDrainer;
   /** Jobs whose claim this instance holds through a backoff delay, keyed by job id. */
   readonly #retries = new Map<string, HeldRetry>();
   #cooldown: NodeJS.Timeout | undefined;
@@ -175,6 +160,12 @@ export class ReflectionWorker {
     this.#breakerCooldownMs = options.breakerCooldownMs ?? DEFAULT_BREAKER_COOLDOWN_MS;
     this.#vectorBatchSize = options.vectorBatchSize ?? DEFAULT_VECTOR_BATCH_SIZE;
     this.#clock = options.clock ?? ((): Date => new Date());
+    this.#index = new SourceIndexDrainer({
+      db: deps.db,
+      resolver: deps.resolver,
+      logger: deps.logger,
+      now: this.#clock,
+    });
   }
 
   /** The claimant id this instance stamps, which is what makes its own claims recoverable. */
@@ -226,16 +217,20 @@ export class ReflectionWorker {
     }
     this.#started = true;
     this.#stopped = false;
+    this.#index.resume();
     const reclaimed = reclaimStaleReflectionJobs(this.#deps.db, this.#staleTimeoutMs);
     this.#startReaper();
     const vectored = await drainPendingVectors(this.#deps, this.#vectorBatchSize);
     const ran = await this.#drainQueue();
+    // After the pipeline, not before it: an acceptance writes both rows, and indexing a source
+    // whose projection this drain is about to rebuild would index the old parts.
+    const indexed = await this.#index.settle();
 
     this.#deps.logger.info(
-      { reclaimed, vectored, ran, claimantId: this.#claimant.id },
+      { reclaimed, vectored, ran, indexed, claimantId: this.#claimant.id },
       'reflection worker drained and listening',
     );
-    return { reclaimed, vectored, ran };
+    return { reclaimed, vectored, ran, indexed };
   }
 
   /**
@@ -246,6 +241,7 @@ export class ReflectionWorker {
    */
   async stop(): Promise<void> {
     this.#stopped = true;
+    this.#index.stop();
     if (this.#cooldown !== undefined) {
       clearTimeout(this.#cooldown);
       this.#cooldown = undefined;
@@ -314,8 +310,8 @@ export class ReflectionWorker {
 
   /** Resolves when nothing is running. Rows waiting on a backoff are not runs. */
   async whenIdle(): Promise<void> {
-    while (this.#running.size > 0) {
-      await Promise.allSettled([...this.#running]);
+    while (this.#running.size > 0 || this.#index.inFlight().length > 0) {
+      await Promise.allSettled([...this.#running, ...this.#index.inFlight()]);
     }
   }
 
@@ -337,6 +333,8 @@ export class ReflectionWorker {
         return;
       }
       if (job === undefined) {
+        // The queue ran dry, which is the moment the index rows can have the process.
+        this.#index.pump();
         return;
       }
       this.#launch(job);

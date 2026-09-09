@@ -8,6 +8,7 @@ import { LaneAssigner } from './lanes.js';
 import { ReflectionOrchestrator } from './orchestrator.js';
 import { reconcileEnrichment } from './reconcile.js';
 import { ReflectionWorker } from './worker.js';
+import { EvidenceResolver } from '../../evidence/application/resolver.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
@@ -70,6 +71,11 @@ function buildWorker(stage: ReflectionStage): ReflectionWorker {
     runner,
     logger,
     publications: directCompletionPublisher(harness.driver, db),
+    resolver: new EvidenceResolver({
+      driver: harness.driver,
+      db,
+      logger: { warn: () => undefined },
+    }),
   });
   return worker;
 }

@@ -7,6 +7,7 @@
  * uses relative paths, and `package.json` publishes the `./*` subpath.
  */
 
+export * from './evidence/index.js';
 export * from './infrastructure/index.js';
 export * from './introspection/index.js';
 export * from './plasticity/index.js';

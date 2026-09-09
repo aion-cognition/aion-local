@@ -10,6 +10,7 @@ import { LaneAssigner } from './lanes.js';
 import type { ReflectionRun } from './orchestrator.js';
 import { publishPipelineReadinessPolicy } from './readiness.js';
 import { ReflectionWorker } from './worker.js';
+import { EvidenceResolver } from '../../evidence/application/resolver.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
@@ -27,6 +28,10 @@ import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import { readActiveGeneration } from '../../infrastructure/sqlite/processing-generations.js';
 import { listReflectionJobs } from '../../infrastructure/sqlite/reflection-queue.js';
 import { readSourceRecord } from '../../infrastructure/sqlite/source-identity.js';
+import {
+  listEvidenceAcknowledgments,
+  SOURCE_INDEX_EFFECT,
+} from '../../infrastructure/sqlite/source-lifecycle.js';
 import { readGenerationWork } from '../../infrastructure/sqlite/source-readiness.js';
 import { SessionManager } from '../../session/session-manager.js';
 
@@ -83,6 +88,12 @@ function payload(marker: string): Record<string, unknown> {
 function integrateJobs(episodeId: string): number {
   return listReflectionJobs(store.db).filter(
     (job) => job.jobType === 'integrate' && job.episodeId === episodeId,
+  ).length;
+}
+
+function indexJobs(episodeId: string): number {
+  return listReflectionJobs(store.db).filter(
+    (job) => job.jobType === 'source_index' && job.episodeId === episodeId,
   ).length;
 }
 
@@ -212,6 +223,11 @@ it('settles a finished run through the coordinator and clears its queue row', as
       runner: new StubRunner(),
       logger: intake.logger,
       publications: coordinator,
+      resolver: new EvidenceResolver({
+        driver: substrate.harness.driver,
+        db: store.db,
+        logger: intake.logger,
+      }),
     },
     { workerCount: 1 },
   );
@@ -234,6 +250,48 @@ it('settles a finished run through the coordinator and clears its queue row', as
   expect(readActiveGeneration(store.db, accepted.episode_id)?.inventoryComplete).toBe(true);
 });
 
+it('drains the source-index rows nothing else claims, and settles their obligation', async () => {
+  const marker = `index-${String(serial)}`;
+  const accepted = await handleReflection(intake, payload(marker), {
+    identity: `session-${marker}`,
+    now: NOW,
+  });
+  // Two rows per acceptance, and the pipeline's claim filter can only run one of them.
+  expect(indexJobs(accepted.episode_id)).toBe(1);
+
+  const worker = new ReflectionWorker(
+    {
+      driver: substrate.harness.driver,
+      db: store.db,
+      provider: intake.provider,
+      runner: new StubRunner(),
+      logger: intake.logger,
+      publications: coordinator,
+      resolver: new EvidenceResolver({
+        driver: substrate.harness.driver,
+        db: store.db,
+        logger: intake.logger,
+      }),
+    },
+    { workerCount: 1 },
+  );
+  let drain;
+  try {
+    drain = await worker.start();
+    await worker.whenIdle();
+  } finally {
+    await worker.stop();
+  }
+
+  expect(drain.indexed).toBeGreaterThan(0);
+  expect(indexJobs(accepted.episode_id)).toBe(0);
+  // The obligation the acceptance recorded is settled, which is what a removal decision reads.
+  const settled = listEvidenceAcknowledgments(store.db, accepted.episode_id).find(
+    (entry) => entry.effectKind === SOURCE_INDEX_EFFECT,
+  );
+  expect(settled?.state).toBe('completed');
+});
+
 it('leaves a run claimable when its completion is interrupted before the acknowledgment', async () => {
   const marker = `settle-crash-${String(serial)}`;
   const accepted = await handleReflection(intake, payload(marker), {
@@ -250,6 +308,11 @@ it('leaves a run claimable when its completion is interrupted before the acknowl
       runner: new StubRunner(),
       logger: intake.logger,
       publications: coordinator,
+      resolver: new EvidenceResolver({
+        driver: substrate.harness.driver,
+        db: store.db,
+        logger: intake.logger,
+      }),
     },
     { workerCount: 1, retryBaseMs: 60_000 },
   );

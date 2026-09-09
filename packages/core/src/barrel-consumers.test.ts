@@ -117,6 +117,7 @@ describe('every layer barrel symbol has a consumer outside core', () => {
 
   it('reads a barrel for every layer the entrypoint fans out to', () => {
     expect(barrels.map((barrel) => barrel.layer)).toEqual([
+      'evidence',
       'infrastructure',
       'introspection',
       'plasticity',

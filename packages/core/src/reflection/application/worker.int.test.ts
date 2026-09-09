@@ -8,6 +8,7 @@ import { LaneAssigner } from './lanes.js';
 import { orchestratorLedgerKey, ReflectionOrchestrator } from './orchestrator.js';
 import { findPendingVectorNodes } from './vectors.js';
 import { ReflectionWorker, type ReflectionWorkerOptions } from './worker.js';
+import { EvidenceResolver } from '../../evidence/application/resolver.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
@@ -206,6 +207,11 @@ function buildWorker(
       runner,
       logger,
       publications: directCompletionPublisher(harness.driver, db),
+      resolver: new EvidenceResolver({
+        driver: harness.driver,
+        db,
+        logger: { warn: () => undefined },
+      }),
     },
     options,
   );
@@ -276,7 +282,7 @@ describe('a reflection signalled while the worker is listening', () => {
     const stored = await handleReflection(live, SIGNAL_PAYLOAD, { identity: SIGNAL_IDENTITY });
     await started.whenIdle();
 
-    expect(drain).toEqual({ reclaimed: 0, vectored: 0, ran: 0 });
+    expect(drain).toEqual({ reclaimed: 0, vectored: 0, ran: 0, indexed: 0 });
     expect(stage.episodes).toEqual([stored.episode_id]);
     expect(listReflectionJobs(db)).toEqual([]);
 
