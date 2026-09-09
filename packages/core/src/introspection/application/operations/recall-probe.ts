@@ -6,7 +6,6 @@ import { markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js'
 import {
   relatedIncidenceNodes,
   sampleSourcesAcceptedBefore,
-  readSourceReadiness,
   servedReferenceOutcome,
   type AcceptedSourceSample,
 } from '../../../infrastructure/sqlite/probe-incidence.js';
@@ -21,6 +20,7 @@ import { listServedItemsBefore } from '../../../infrastructure/sqlite/served-ite
 import { checkCoverage } from '../../../recall/application/coverage-checker.js';
 import { CueCache } from '../../../recall/application/cues.js';
 import { handleRecall, type RecallDeps } from '../../../recall/application/recall.js';
+import { processingReadinessOf } from '../../../reflection/application/readiness.js';
 import { bucketStamp } from '../../domain/buckets.js';
 import type {
   IntrospectionOperation,
@@ -280,13 +280,21 @@ async function scoreSample(
   probe: RecallProbe,
   sample: AcceptedSourceSample,
 ): Promise<SampleOutcome> {
+  // Readiness is read against the stage set this source's own accepted policy required, which is
+  // the only reading that can tell an inventory nobody wrote from one that owes nothing.
   const eligibility = sampleEligibility(
     sample,
-    readSourceReadiness(ctx.db, sample.sourceId),
+    processingReadinessOf(ctx.db, sample.sourceId),
     ctx.now,
   );
   if (eligibility.status === 'ineligible') {
     recordProbeIneligible(ctx.db);
+    if (eligibility.detail !== undefined && eligibility.detail.length > 0) {
+      ctx.logger.debug(
+        { sourceId: sample.sourceId, reason: eligibility.reason, records: eligibility.detail },
+        'recall probe skipped a sample its records cannot account for',
+      );
+    }
     return { kind: 'ineligible', reason: eligibility.reason };
   }
   const checked = checkCoverage(ctx.db, { now: ctx.now, expiryAnnotation: true });

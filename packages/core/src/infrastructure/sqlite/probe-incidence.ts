@@ -58,50 +58,6 @@ export function sampleSourcesAcceptedBefore(
   }));
 }
 
-export type SourceReadiness = {
-  /** Absent when nothing has allocated and activated a generation for this source. */
-  readonly generation: number | undefined;
-  /** Work rows the active generation still owes, of every kind. */
-  readonly outstanding: number;
-  /** Stage rows whose outcome does not say complete or proved not applicable. */
-  readonly unfinishedStages: number;
-};
-
-/**
- * What C8's records say about whether this source's required processing pass is done.
- *
- * Row presence is not the test: a completed stage carries a typed outcome, so a row with none
- * says nothing about whether its stage happened. An obligation of any other kind is outstanding
- * too, which is what keeps a source whose inventory is still pending out of the sample rather
- * than counted as ready by an empty stage list.
- */
-export function readSourceReadiness(db: SqliteHandle, sourceId: string): SourceReadiness {
-  const active = db
-    .prepare(
-      `SELECT processing_generation FROM source_processing_generations
-       WHERE source_id = ? AND state = 'active'`,
-    )
-    .get(sourceId) as { processing_generation: number } | undefined;
-  if (active === undefined) {
-    return { generation: undefined, outstanding: 0, unfinishedStages: 0 };
-  }
-  const counts = db
-    .prepare(
-      `SELECT
-         COALESCE(sum(CASE WHEN state IN ('pending','retryable','transferred','pinned')
-                           THEN 1 ELSE 0 END), 0) AS outstanding,
-         COALESCE(sum(CASE WHEN kind = 'stage' AND (state != 'completed' OR outcome_json IS NULL)
-                           THEN 1 ELSE 0 END), 0) AS unfinished
-       FROM source_work WHERE source_id = ? AND processing_generation = ?`,
-    )
-    .get(sourceId, active.processing_generation) as { outstanding: number; unfinished: number };
-  return {
-    generation: active.processing_generation,
-    outstanding: counts.outstanding,
-    unfinishedStages: counts.unfinished,
-  };
-}
-
 /**
  * The roles that make a source stand behind a node.
  *

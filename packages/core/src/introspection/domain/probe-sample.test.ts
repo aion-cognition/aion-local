@@ -1,10 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { PROBE_ACCEPTANCE_AGE_MS, sampleEligibility } from './probe-sample.js';
-import type {
-  AcceptedSourceSample,
-  SourceReadiness,
-} from '../../infrastructure/sqlite/probe-incidence.js';
+import type { AcceptedSourceSample } from '../../infrastructure/sqlite/probe-incidence.js';
+import type { ProcessingReadiness } from '../../reflection/domain/readiness.js';
 
 const NOW = new Date('2026-09-08T12:00:00.000Z');
 
@@ -20,7 +18,22 @@ function sample(overrides: Partial<AcceptedSourceSample> = {}): AcceptedSourceSa
   };
 }
 
-const READY: SourceReadiness = { generation: 3, outstanding: 0, unfinishedStages: 0 };
+function readiness(overrides: Partial<ProcessingReadiness> = {}): ProcessingReadiness {
+  return {
+    sourceId: 'source-1',
+    processingGeneration: 3,
+    policyRevision: 1,
+    inputDigest: 'digest',
+    operationalRevision: 4,
+    stages: [{ stageName: 'one', disposition: 'complete', reason: 'accepted_pass_applied' }],
+    outstandingWorkIds: [],
+    completeness: 'complete',
+    reasons: [],
+    ...overrides,
+  };
+}
+
+const READY = readiness();
 
 describe('probe sample eligibility', () => {
   it('accepts a mature source whose required pass is finished', () => {
@@ -60,25 +73,56 @@ describe('probe sample eligibility', () => {
   });
 
   it('will not score a source nothing has processed', () => {
-    const none: SourceReadiness = { generation: undefined, outstanding: 0, unfinishedStages: 0 };
+    const none = readiness({
+      processingGeneration: undefined,
+      policyRevision: undefined,
+      inputDigest: undefined,
+      operationalRevision: undefined,
+      stages: [],
+      completeness: 'unknown',
+      reasons: ['no active processing generation'],
+    });
 
     expect(sampleEligibility(sample(), none, NOW)).toEqual({
       status: 'ineligible',
       reason: 'no_active_generation',
+      detail: ['no active processing generation'],
     });
   });
 
   it('will not score a source with work still owed, of any kind', () => {
-    const owed: SourceReadiness = { generation: 3, outstanding: 1, unfinishedStages: 0 };
-    const unfinished: SourceReadiness = { generation: 3, outstanding: 0, unfinishedStages: 1 };
+    const owed = readiness({
+      completeness: 'incomplete',
+      outstandingWorkIds: ['stage:one'],
+      reasons: ['stage:stage:one is pending'],
+    });
 
     expect(sampleEligibility(sample(), owed, NOW)).toEqual({
       status: 'ineligible',
       reason: 'processing_incomplete',
+      detail: ['stage:stage:one is pending'],
     });
-    expect(sampleEligibility(sample(), unfinished, NOW)).toEqual({
+  });
+
+  /**
+   * The reading the row-counting predicate could not make. A generation exists and a stage its
+   * accepted policy required has no row at all, so the records cannot say what the pass was. That
+   * is a different skip from work known to be owed, and reporting it as finished is what let an
+   * unprocessed source into the sample.
+   */
+  it('will not score a source whose required stage has no row to read', () => {
+    const unproved = readiness({
+      stages: [
+        { stageName: 'two', disposition: 'unrecorded', reason: 'no row for a required stage' },
+      ],
+      completeness: 'unknown',
+      reasons: ['required stage two has no row'],
+    });
+
+    expect(sampleEligibility(sample(), unproved, NOW)).toEqual({
       status: 'ineligible',
-      reason: 'processing_incomplete',
+      reason: 'processing_unproved',
+      detail: ['required stage two has no row'],
     });
   });
 });

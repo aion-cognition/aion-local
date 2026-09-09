@@ -6,11 +6,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SqliteStore } from './database.js';
 import {
   relatedIncidenceNodes,
-  readSourceReadiness,
   sampleSourcesAcceptedBefore,
   servedReferenceOutcome,
 } from './probe-incidence.js';
-import { activateProcessingGeneration } from './processing-generations.js';
 import { transitionSourceResidency } from './source-lifecycle.js';
 import { commitIncidence, seedSource } from '../../evidence/test-support/evidence.fixture.js';
 import type { ReflectionContent } from '../../reflection/domain/content.js';
@@ -61,31 +59,6 @@ describe('probe reads over the records', () => {
 
   it('excludes a source accepted after the cut', () => {
     expect(sampleSourcesAcceptedBefore(store.db, ACCEPTED.toISOString(), 10)).toEqual([]);
-  });
-
-  it('reads no readiness from a generation the acknowledgment never activated', () => {
-    // A prepared acceptance allocates its generation and stops; activation is the
-    // acknowledgment's. Reading an allocated generation as an active one would score a source
-    // whose acceptance never landed.
-    expect(readSourceReadiness(store.db, 'source-1').generation).toBeUndefined();
-  });
-
-  it('reads readiness off the generation the acknowledgment activated', () => {
-    activateProcessingGeneration(store.db, 'source-1', 1);
-    const readiness = readSourceReadiness(store.db, 'source-1');
-
-    expect(readiness.generation).toBe(1);
-    // The acceptance records an inventory obligation while no readiness policy exists, and an
-    // outstanding obligation of any kind is what keeps the source out of the sample.
-    expect(readiness.outstanding).toBeGreaterThan(0);
-  });
-
-  it('reports no generation for a source nothing has processed', () => {
-    expect(readSourceReadiness(store.db, 'nobody')).toEqual({
-      generation: undefined,
-      outstanding: 0,
-      unfinishedStages: 0,
-    });
   });
 
   it('names the emitted items the records say the source stands behind', () => {
