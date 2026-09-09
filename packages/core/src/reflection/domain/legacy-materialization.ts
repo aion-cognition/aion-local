@@ -341,6 +341,15 @@ export type ScopePopulation = {
    * uncertainty stays attached to the scope that relationship lands in, and that scope alone.
    */
   readonly attributed: boolean;
+  /**
+   * False when two different original relationships normalize onto one link.
+   *
+   * The records hold one version per logical link, so the second relationship has no
+   * representation of its own: an older tuple would stand as proof that a later edge was recorded.
+   * The materializer pins exactly this set rather than dropping an identity, and a scope holding
+   * it is not a population anybody can prove either.
+   */
+  readonly represented: boolean;
 };
 
 /** Which sources stand behind each scope on one endpoint, and which nothing classified. */
@@ -350,7 +359,13 @@ export type EndpointPopulation = {
   readonly unclassified: readonly LegacyPin[];
 };
 
-type Collected = { sources: Set<string>; links: Set<string>; attributed: boolean };
+/** `links` holds the ORIGINAL relationship behind each link, which is what a collision is read off. */
+type Collected = {
+  sources: Set<string>;
+  links: Map<string, string>;
+  attributed: boolean;
+  represented: boolean;
+};
 
 /** Which of the link's two scopes this endpoint sits at, or nothing when it is neither end. */
 function endpointScopeOf(entry: MaterializedLink, endpointId: string): string | undefined {
@@ -414,10 +429,23 @@ export function endpointPopulation(input: {
       if (scope === undefined) {
         continue;
       }
-      const held = scopes.get(scope) ?? { sources: new Set(), links: new Set(), attributed: true };
+      const held = scopes.get(scope) ?? {
+        sources: new Set<string>(),
+        links: new Map<string, string>(),
+        attributed: true,
+        represented: true,
+      };
       if (attributed) {
         held.sources.add(sourceId);
-        held.links.add(entry.linkId);
+        // Each relationship is classified on its own, so the batch rule that pins a collision
+        // never sees the pair. The witness already filed under this link is what sees it here:
+        // a second, different original relationship on the same link is one the records cannot
+        // hold, and matching the link would certify a write that never named it.
+        const witness = held.links.get(entry.linkId);
+        if (witness !== undefined && witness !== entry.relationId) {
+          held.represented = false;
+        }
+        held.links.set(entry.linkId, entry.relationId);
       } else {
         held.attributed = false;
       }
@@ -430,8 +458,9 @@ export function endpointPopulation(input: {
         scope,
         {
           sources: [...held.sources].sort(),
-          links: [...held.links].sort(),
+          links: [...held.links.keys()].sort(),
           attributed: held.attributed,
+          represented: held.represented,
         },
       ]),
     ),

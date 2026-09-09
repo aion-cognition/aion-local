@@ -26,6 +26,11 @@ import { endpointPopulation } from '../domain/legacy-materialization.js';
  * A verified member is not the unit of proof. A source proved months ago is still verified today,
  * and the mention it acquired since is not in anybody's records: status answers a question about
  * the walk, and the census asks one about the relationships.
+ *
+ * Nor is a logical link. Two original relationships can normalize onto one, and the records hold a
+ * single version per link, so the match one of them finds says nothing about the other. A scope
+ * carrying such a pair is the same unrepresentable set the materializer pins, and it is left
+ * uncounted rather than sealed on an older tuple.
  */
 
 export type CensusEndpoint = {
@@ -98,6 +103,12 @@ async function proveEndpoint(
     // No contribution at all, over a walk that finished: a proved zero.
     const contributors = held?.sources ?? [];
     if (held !== undefined && !held.attributed) {
+      continue;
+    }
+    // One recorded link is proof for one original relationship, and only its own. Where two of
+    // them normalize onto the same link the records can hold at most one, so the link a match
+    // finds may be the older tuple standing in for an edge nobody materialized.
+    if (held !== undefined && !held.represented) {
       continue;
     }
     if (held !== undefined && !held.links.every((linkId) => recorded.has(linkId))) {
