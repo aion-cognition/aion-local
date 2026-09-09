@@ -6,7 +6,14 @@ import { loadEpisodeContext } from '../../infrastructure/graph/episode-context.j
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { isLedgerApplied, markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
+import {
+  getLedgerEntry,
+  isLedgerApplied,
+  markLedgerApplied,
+} from '../../infrastructure/sqlite/ops-ledger.js';
+import { readActiveGeneration } from '../../infrastructure/sqlite/processing-generations.js';
+import { readGenerationWork } from '../../infrastructure/sqlite/source-readiness.js';
+import { RunLedgerEntrySchema, StageLedgerEntrySchema } from '../domain/stage-schema.js';
 import {
   shouldMarkApplied,
   stageAlreadyAppliedRecord,
@@ -69,6 +76,55 @@ function elapsed(started: number): number {
 }
 
 /**
+ * The stage outcomes a run's ledger entry holds, or nothing when it holds none this reader can
+ * validate. An entry written before the typed fields existed, or one whose shape has drifted,
+ * says nothing: reading a disposition out of an unvalidated summary is how prose becomes proof.
+ */
+function recoveredRunStages(db: SqliteHandle, key: string): readonly StageRecord[] | undefined {
+  const entry = getLedgerEntry(db, key);
+  if (entry === undefined) {
+    return undefined;
+  }
+  const parsed = RunLedgerEntrySchema.safeParse(entry.summary);
+  return parsed.success
+    ? parsed.data.stages.map((stage) => ({ ...stage, durationMs: 0 }))
+    : undefined;
+}
+
+/** The same, for one stage's own key. */
+function recoveredStage(db: SqliteHandle, key: string): StageRecord | undefined {
+  const entry = getLedgerEntry(db, key);
+  if (entry === undefined) {
+    return undefined;
+  }
+  const parsed = StageLedgerEntrySchema.safeParse(entry.summary);
+  return parsed.success ? { name: '', ...parsed.data, durationMs: 0 } : undefined;
+}
+
+/**
+ * Whether what the key recorded answers for everything the source still owes.
+ *
+ * Owed work governs execution, not the key. A stage the policy required and the recorded run
+ * never names is a pass nobody ran, so the pipeline is entered again and the per-stage keys keep
+ * whatever the earlier attempt already wrote. A source with no active generation owes nothing
+ * this can measure, and the key stands.
+ */
+function coversOwedWork(
+  db: SqliteHandle,
+  sourceId: string,
+  recovered: readonly StageRecord[] | undefined,
+): boolean {
+  const generation = readActiveGeneration(db, sourceId);
+  if (generation === undefined) {
+    return true;
+  }
+  const named = new Set((recovered ?? []).map((stage) => stage.name));
+  return readGenerationWork(db, sourceId, generation.processingGeneration)
+    .filter((row) => row.kind === 'stage' && row.state !== 'completed' && row.state !== 'obsolete')
+    .every((row) => named.has(row.stageName ?? ''));
+}
+
+/**
  * The run-level gate comes first so a re-enqueued job costs one SQLite read; the episode
  * loads once and every stage shares it; each stage is isolated, so a failed extraction does
  * not cost the run its deduplication; the run-level ledger is marked last, with the
@@ -99,9 +155,21 @@ export class ReflectionOrchestrator {
     const pipelineVersion = options.pipelineVersion ?? PIPELINE_VERSION;
     const key = orchestratorLedgerKey(pipelineVersion, episodeId);
 
-    if (isLedgerApplied(this.#deps.db, key)) {
+    // A run whose key landed and whose completion did not is the crash this recovers. The key's
+    // own entry holds what the earlier attempt recorded, so its typed outcomes answer for the
+    // rows that are still owed rather than being lost with the attempt that took them.
+    const recovered = recoveredRunStages(this.#deps.db, key);
+    if (
+      isLedgerApplied(this.#deps.db, key) &&
+      coversOwedWork(this.#deps.db, episodeId, recovered)
+    ) {
       this.#deps.logger.debug({ episodeId }, 'reflection already applied');
-      return this.#empty(episodeId, 'already_applied', elapsed(started));
+      return {
+        episodeId,
+        status: 'already_applied',
+        applied: false,
+        summary: summarizeRun(episodeId, elapsed(started), recovered ?? []),
+      };
     }
 
     const now = options.now ?? new Date();
@@ -170,11 +238,26 @@ export class ReflectionOrchestrator {
   async #runOrSkip(stage: ReflectionStage, context: StageContext): Promise<StageRecord> {
     const key = stageLedgerKey(context.pipelineVersion, stage.name, context.episodeId);
     if (isLedgerApplied(this.#deps.db, key)) {
-      return stageAlreadyAppliedRecord(stage.name);
+      const held = recoveredStage(this.#deps.db, key);
+      return stageAlreadyAppliedRecord(stage.name, {
+        ...(held?.settled === undefined ? {} : { settled: held.settled }),
+        ...(held?.settledOnUpstream === undefined
+          ? {}
+          : { settledOnUpstream: held.settledOnUpstream }),
+      });
     }
     const record = await this.#runStage(stage, context);
     if (record.status !== 'failed' && record.retryable !== true) {
-      markLedgerApplied(this.#deps.db, key, { status: record.status, summary: record.summary });
+      // The disposition goes into the entry, not only the prose. A retry that finds this key set
+      // reads back what the pass settled; an entry holding a sentence can only say it happened.
+      markLedgerApplied(this.#deps.db, key, {
+        status: record.status,
+        summary: record.summary,
+        ...(record.settled === undefined ? {} : { settled: record.settled }),
+        ...(record.settledOnUpstream === undefined
+          ? {}
+          : { settledOnUpstream: record.settledOnUpstream }),
+      });
     }
     return record;
   }

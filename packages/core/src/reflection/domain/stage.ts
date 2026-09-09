@@ -228,9 +228,28 @@ export function stageSettlementOf(outcome: StageOutcome): StageSettlement | unde
 /** The `summary` a skipped-by-ledger stage records, distinct from a stage's own business-logic skip. */
 export const STAGE_ALREADY_APPLIED_SUMMARY = 'already applied on an earlier attempt';
 
-/** The record the orchestrator produces for a stage it did not enter because its ledger key was already set. */
-export function stageAlreadyAppliedRecord(name: string): StageRecord {
-  return { name, status: 'skipped', summary: STAGE_ALREADY_APPLIED_SUMMARY, durationMs: 0 };
+/**
+ * The record the orchestrator produces for a stage it did not enter because its ledger key was
+ * already set.
+ *
+ * The earlier attempt's disposition travels with it when the entry carries one. Without that the
+ * retry that follows a crash between the stage and its settlement reports a skip nobody can act
+ * on, and the row stays owed for a pass that already ran.
+ */
+export function stageAlreadyAppliedRecord(
+  name: string,
+  recovered: Pick<StageOutcome, 'settled' | 'settledOnUpstream'> = {},
+): StageRecord {
+  return {
+    name,
+    status: 'skipped',
+    summary: STAGE_ALREADY_APPLIED_SUMMARY,
+    durationMs: 0,
+    ...(recovered.settled === undefined ? {} : { settled: recovered.settled }),
+    ...(recovered.settledOnUpstream === undefined
+      ? {}
+      : { settledOnUpstream: recovered.settledOnUpstream }),
+  };
 }
 
 function isStageAlreadyApplied(record: StageRecord): boolean {
@@ -262,9 +281,26 @@ export function mergeStageCounts(stages: readonly StageRecord[]): StageCounts {
  *
  * A run with no stages at all stays retryable too: an unconfigured pipeline has enriched
  * nothing, and marking it would gate the episode out of the pipeline that follows.
+ *
+ * A pass that named a remainder and declared no disposition for it keeps the key open for the
+ * same reason a failure does: the work is owed, and a closed run key is what would stop the
+ * retry from entering the stage that owes it. A remainder beside a declared disposition does
+ * not, because the stage has said what the run settles and what it waits on.
  */
 export function shouldMarkApplied(stages: readonly StageRecord[]): boolean {
-  return stages.length > 0 && stages.every((stage) => stage.status !== 'failed');
+  return (
+    stages.length > 0 &&
+    stages.every(
+      (stage) =>
+        stage.status !== 'failed' &&
+        !(hasRemainder(stage) && declaredDisposition(stage) === undefined),
+    )
+  );
+}
+
+/** What the stage said about its obligation, either outright or once its predecessors close. */
+function declaredDisposition(outcome: StageOutcome): StageSettlement | undefined {
+  return outcome.settled ?? outcome.settledOnUpstream;
 }
 
 export function summarizeRun(

@@ -8,6 +8,7 @@ import {
   stopRehearsalSubstrate,
   type RehearsalSubstrate,
 } from './test-support/consolidation-rehearsal.fixture.js';
+import { clearGraphNodes } from './test-support/neo4j-harness.fixture.js';
 import { findOrphanNodes } from './topology-queries.js';
 import { certifyNodeSupport } from '../../evidence/application/node-support.js';
 import { durableRoleScope, NARRATIVE_SCOPES } from '../../evidence/domain/scopes.js';
@@ -27,7 +28,7 @@ beforeAll(async () => {
   store = new SqliteStore({ filePath: sub.sqlitePath });
 }, 120000);
 beforeEach(async () => {
-  await sub.harness.driver.executeQuery('MATCH (n) DETACH DELETE n');
+  await clearGraphNodes(sub.harness.driver);
   store.db.prepare('DELETE FROM orphan_observations').run();
 });
 afterAll(async () => {

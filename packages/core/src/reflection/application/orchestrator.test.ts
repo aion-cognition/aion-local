@@ -199,7 +199,12 @@ describe('ReflectionOrchestrator', () => {
     expect(first.status).toBe('completed');
     expect(second.status).toBe('already_applied');
     expect(second.applied).toBe(false);
-    expect(second.summary.stages).toEqual([]);
+    // The skipped run answers with what the key recorded rather than with nothing: those are
+    // the outcomes the settlement needs when the first run's completion never landed. Timings
+    // and counts belong to the run that took them and do not travel.
+    expect(second.summary.stages).toEqual([
+      { name: 'entities', status: 'ok', summary: 'extracted 2 entities', durationMs: 0 },
+    ]);
     expect(second.summary.counts).toEqual({});
     expect(entered).toEqual(['entities']);
     // The gate costs one SQLite read: the skipped run never reaches the graph.

@@ -67,9 +67,11 @@ async function schemaObjectNames(driver: Driver, cypher: string): Promise<readon
  *
  * This is the only Cypher deletion in the workspace, and the repo-wide no-hard-delete scan
  * exempts this file by name. Clearing a test database is not a product write path: no product
- * code can reach this function, and correcting a real fact still supersedes it.
+ * code can reach this function, and correcting a real fact still supersedes it. A file that
+ * needs the nodes gone between its own cases calls `clearGraphNodes` rather than writing a
+ * second deletion of its own, which is what keeps the exemption list at one entry.
  */
-async function resetDatabase(driver: Driver): Promise<void> {
+export async function clearGraphNodes(driver: Driver): Promise<void> {
   let deleted: number;
   do {
     const result = await driver.executeQuery(
@@ -77,6 +79,10 @@ async function resetDatabase(driver: Driver): Promise<void> {
     );
     deleted = result.summary.counters.updates().nodesDeleted;
   } while (deleted > 0);
+}
+
+async function resetDatabase(driver: Driver): Promise<void> {
+  await clearGraphNodes(driver);
 
   // Constraints first: dropping a constraint drops the index backing it, so the index pass
   // that follows has only the standalone ones left to look at.

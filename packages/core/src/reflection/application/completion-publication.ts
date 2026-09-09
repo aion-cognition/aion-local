@@ -1,7 +1,6 @@
 import { z } from 'zod';
 
 import { recordStageSettlements } from './stage-settlement.js';
-import { SOURCE_PART_KINDS } from '../../evidence/domain/address.js';
 import { PublicationOperation } from '../../infrastructure/publication/operation.js';
 import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
 import type { JsonValue, PublicationContext } from '../../infrastructure/publication/types.js';
@@ -16,12 +15,8 @@ import {
   SEMANTIC_PROCESSING_EFFECT,
 } from '../../infrastructure/sqlite/source-lifecycle.js';
 import { hashContent } from '../domain/content.js';
-import {
-  stageSettlementOf,
-  STAGE_SETTLEMENT_REASONS,
-  type ReflectionSummary,
-  type StageRecord,
-} from '../domain/stage.js';
+import { StageReportSchema } from '../domain/stage-schema.js';
+import { stageSettlementOf, type ReflectionSummary, type StageRecord } from '../domain/stage.js';
 
 /**
  * A finished reflection run, as a publication.
@@ -42,64 +37,11 @@ export const COMPLETION_EFFECTS = {
   queue: 'reflection_queue_completion',
 } as const;
 
-const Settlement = z.strictObject({
-  disposition: z.enum(['complete', 'not_applicable']),
-  reason: z.enum(STAGE_SETTLEMENT_REASONS),
-  proof: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
-});
-
-const Dependency = z.strictObject({
-  kind: z.enum(['source', 'node', 'relation_scope']),
-  id: z.string().min(1),
-  scope: z.string().min(1),
-  version: z.string().min(1),
-});
-
-/**
- * A judgment the pass could not decide, with what it was about and what it was judged against.
- *
- * It travels whole. The nodes name the pair, the addresses name the parts a rebuild would read
- * it back through, and the revision is the evidence the abstention rests on; a completion that
- * carried only a count would close the row over work nobody can find again.
- */
-const Withheld = z.strictObject({
-  nodeIds: z.array(z.string().min(1)),
-  disposition: z.enum(['blocked', 'retryable']),
-  reason: z.string(),
-  addresses: z.array(
-    z.union([
-      z.strictObject({ kind: z.literal('id'), id: z.string().min(1) }),
-      z.strictObject({
-        kind: z.literal('part'),
-        sourceId: z.string().min(1),
-        partKind: z.enum(SOURCE_PART_KINDS),
-        ordinal: z.number().int().nonnegative(),
-      }),
-    ]),
-  ),
-  revision: z.strictObject({
-    contractVersion: z.literal(1),
-    dependencies: z.array(Dependency),
-    digest: z.string(),
-  }),
-});
-
-const Stage = z.strictObject({
-  name: z.string().min(1),
-  status: z.enum(['ok', 'failed', 'skipped']),
-  summary: z.string(),
-  /** The pass asked to be re-entered. It settles nothing whatever else it wrote. */
-  retryable: z.boolean().optional(),
-  withheldWork: z.array(Withheld).optional(),
-  settled: Settlement.optional(),
-  settledOnUpstream: Settlement.optional(),
-});
-
 const Payload = z.strictObject({
   sourceId: z.string().min(1),
   /** The queue row this completion closes. Empty where the run had none, which a replay does. */
   jobId: z.string(),
-  stages: z.array(Stage),
+  stages: z.array(StageReportSchema),
   /**
    * The generation the run's obligations belong to, read before the run started. Zero where the
    * source had none: a legacy row the identity census has not reached still owes its queue row a
