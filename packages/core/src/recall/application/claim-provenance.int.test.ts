@@ -11,6 +11,7 @@ import {
   OLD_CLAIM_ID,
   RECALLED_AT,
   ROOT_ID,
+  SEEDED_AT,
   TURN_ID,
 } from './test-support/claim-provenance.fixture.js';
 import { fetchNodeProvenance } from '../../infrastructure/graph/node-provenance.js';
@@ -77,8 +78,10 @@ describe('what the substrate can say about who stands behind a line', () => {
     expect(alpha?.standing?.attribution).toBe('attributed');
     expect(alpha?.standing?.confirmed?.by).toBe(CONFIRMER);
     expect(alpha?.standing?.confirmed?.evidence).toBe(CONFIRMATION_EVIDENCE);
+    // The caller stated no moment, so the confirmation carries the clock the push was accepted
+    // under rather than one the substrate invented for it later.
     expect(pack.rendered_text).toContain(
-      `confirmed by ${CONFIRMER} at 2026-06-01T09:00:00.000Z, evidence: ${CONFIRMATION_EVIDENCE}`,
+      `confirmed by ${CONFIRMER} at ${SEEDED_AT.toISOString()}, evidence: ${CONFIRMATION_EVIDENCE}`,
     );
   });
 });

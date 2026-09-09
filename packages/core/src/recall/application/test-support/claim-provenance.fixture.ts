@@ -260,7 +260,11 @@ export class ClaimProvenanceSubstrate {
         entropyThreshold: DEFAULTS.redaction.entropyThreshold,
         lanes: new LaneAssigner(DEFAULTS.lanes),
         workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
-        publications: directIntakePublisher(this.driver, this.db),
+        // The acceptance clock is the caller's, not the wall clock. Every historical read here
+        // pins a moment in the seeded window, and a source accepted at the real current time is
+        // outside all of them: the knowledge-time reads would answer empty and a confirmation
+        // that stated no moment would be dated to the run rather than to the push.
+        publications: directIntakePublisher(this.driver, this.db, () => now),
         acceptHookCapture: true,
       },
       { observations: [observation], ...(provenance === undefined ? {} : { provenance }) },

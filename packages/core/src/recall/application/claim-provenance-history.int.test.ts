@@ -122,6 +122,8 @@ describe('lineage the substrate did not hold at the pinned moment', () => {
       maxRoots: 3,
       mode: withCurrency(RECALLED_AT),
     });
+    // The retry was accepted four days later and states the same confirmation. The first record
+    // stands, so the moment on the edge is the first acceptance's and not the retry's.
     expect(rows.get('review-retry-target')?.confirmation?.at).toEqual(SEEDED_AT);
   });
 

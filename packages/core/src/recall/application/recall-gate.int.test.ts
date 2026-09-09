@@ -118,7 +118,9 @@ async function push(input: PushInput): Promise<string> {
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
       lanes: new LaneAssigner(DEFAULTS.lanes),
       workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
-      publications: directIntakePublisher(harness.driver, db),
+      // Accepted at the moment the push names. A `knew_at` read rewinds what the substrate knew,
+      // and a source accepted at the real current time was known at no moment this file pins.
+      publications: directIntakePublisher(harness.driver, db, () => input.now),
       acceptHookCapture: true,
     },
     {
