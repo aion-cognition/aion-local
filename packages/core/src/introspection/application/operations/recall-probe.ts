@@ -204,7 +204,7 @@ type ProbeTrial = {
 };
 
 /** Why one sample produced no trial, kept as its own answer rather than folded into a miss. */
-type SkipReason = SampleIneligibleReason | 'no_words';
+type SkipReason = SampleIneligibleReason | 'no_words' | 'source_withheld';
 
 type SampleOutcome =
   | { readonly kind: 'trial'; readonly trial: ProbeTrial }
@@ -302,7 +302,24 @@ async function scoreSample(
   );
   const result = [...batch.results.values()][0];
   const resolvable = result?.evidence.status === 'complete-for-use' && result.value !== undefined;
-  const query = result?.value === undefined ? undefined : probeQueryFromParts(result.value.parts);
+  // Whether the source could be read at all is settled before anything is asked of its text.
+  // A source whose archive cannot be reached has not told the probe that it holds no words,
+  // and recording it as a wordless sample would report an outage as a property of the corpus.
+  if (result?.value === undefined) {
+    if (result?.evidence.status === 'not-found-in-coverage') {
+      // The substrate answered: the source is withheld or certified absent at this vantage.
+      // That is a sample the policy excludes, not a store this run could not reach.
+      recordProbeIneligible(ctx.db);
+      return { kind: 'ineligible', reason: 'source_withheld' };
+    }
+    ctx.logger.warn(
+      { sourceId: sample.sourceId },
+      'recall probe could not read the sampled source; leaving it unscored',
+    );
+    recordProbeUnavailable(ctx.db);
+    return { kind: 'unavailable' };
+  }
+  const query = probeQueryFromParts(result.value.parts);
   if (query === undefined) {
     recordProbeIneligible(ctx.db);
     return { kind: 'ineligible', reason: 'no_words' };
