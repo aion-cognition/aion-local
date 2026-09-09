@@ -5,7 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { handleReflection, type ReflectionIntakeDeps } from './intake.js';
 import { LaneAssigner } from './lanes.js';
-import { orchestratorLedgerKey, ReflectionOrchestrator } from './orchestrator.js';
+import { orchestratorLedgerKey, ReflectionOrchestrator, runBindingOf } from './orchestrator.js';
 import { CognitiveExtractionStage } from './stages/cognitive.js';
 import { EntityExtractionStage } from './stages/entities.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
@@ -258,6 +258,9 @@ describe('reflection orchestrator against a live graph', () => {
       }),
     ];
 
+    // Read where the run reads it, before the run: the digests are of the work as it stood when
+    // the run started, and a stage that settles its own row moves them.
+    const binding = runBindingOf(db, enrichEpisodeId);
     const first = await orchestrator(pipeline).run(enrichEpisodeId);
 
     expect(entered).toEqual(['entities', 'cognitive', 'associations']);
@@ -267,7 +270,13 @@ describe('reflection orchestrator against a live graph', () => {
     expect(contexts[0]?.episode.turns).toHaveLength(2);
 
     const recorded = getLedgerEntry(db, orchestratorLedgerKey(PIPELINE_VERSION, enrichEpisodeId));
-    expect(recorded?.summary).toEqual(JSON.parse(JSON.stringify(first.summary)));
+    // The entry is the run's summary and the binding it was recorded under. The caller's summary
+    // reports the run; the binding says which obligations the entry answers for, which is what a
+    // later recovery reads to decide the entry still applies.
+    expect(recorded?.summary).toEqual({
+      ...JSON.parse(JSON.stringify(first.summary)),
+      binding: JSON.parse(JSON.stringify(binding)),
+    });
 
     entered = [];
     const second = await orchestrator(pipeline).run(enrichEpisodeId);

@@ -30,6 +30,12 @@ import {
   type PackMethod,
 } from '../../infrastructure/sqlite/method-counters.js';
 import { markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
+import {
+  completeSourceWork,
+  readActiveGeneration,
+  stageWorkId,
+} from '../../infrastructure/sqlite/processing-generations.js';
+import { publishReadinessPolicy } from '../../infrastructure/sqlite/readiness-policies.js';
 import { handleReflection } from '../../reflection/application/intake.js';
 import { LaneAssigner } from '../../reflection/application/lanes.js';
 import { orchestratorLedgerKey } from '../../reflection/application/orchestrator.js';
@@ -47,6 +53,8 @@ function requireSubstrate(backbone: Awaited<ReturnType<typeof bootstrapBackbone>
 }
 
 const EMBED_DIMENSION = 8;
+/** The stage list this file's sources are accepted under. No pass runs them here. */
+const REQUIRED_STAGES = ['entities', 'associations'];
 const WRITE_SESSION = 'recall-int-write-session';
 const READ_SESSION = 'recall-int-read-session';
 
@@ -149,6 +157,16 @@ beforeAll(async () => {
   db = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
   logger = openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'debug' });
   await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
+
+  // Startup publishes the readiness contract before anything can be accepted, and intake writes
+  // each source's inventory from it. A source accepted with none records an inventory obligation
+  // instead, and a session holding one cannot be counted at all — so the pack below would report
+  // no pending count rather than the wrong one.
+  publishReadinessPolicy(
+    db,
+    { pipelineVersion: PIPELINE_VERSION, stageNames: REQUIRED_STAGES, transferCapabilities: [] },
+    new Date('2026-01-01T00:00:00.000Z'),
+  );
 
   const backbone = await bootstrapBackbone(harness.driver, { memberName: 'Ryan Huber' });
   substrateId = requireSubstrate(backbone).id;
@@ -336,13 +354,29 @@ describe('pending_enrichment metadata', () => {
   const PENDING_SESSION = 'recall-int-pending-session';
   const PENDING_AT = new Date('2026-06-03T09:00:00.000Z');
 
-  it("counts the calling session's own episodes with no orchestrator ledger key", async () => {
+  /** Settles every stage the policy requires of one source, the way a finished pass leaves it. */
+  function settle(sourceId: string): void {
+    const generation = readActiveGeneration(db, sourceId)?.processingGeneration ?? 0;
+    for (const name of REQUIRED_STAGES) {
+      completeSourceWork(
+        db,
+        stageWorkId(sourceId, generation, name),
+        { outcome: 'complete', reason: 'accepted_pass_applied' },
+        PENDING_AT,
+      );
+    }
+  }
+
+  it("counts the calling session's own sources that still owe stage work", async () => {
     await push('first pending observation', PENDING_AT, PENDING_SESSION);
     const second = await push('second pending observation', PENDING_AT, PENDING_SESSION);
     await push('third pending observation', PENDING_AT, PENDING_SESSION);
 
-    // Only `second` is marked enriched; the orchestrator never runs in this file, so the
-    // other two stay open the way a fresh episode always does before the worker reaches it.
+    // Only `second` has its pass accounted for; the orchestrator never runs in this file, so the
+    // other two stay open the way a fresh source always does before the worker reaches it. The
+    // orchestrator's own ledger key is stamped beside it because a recovery still reads it, but
+    // the count is over the work records — the key alone says nothing about what is owed.
+    settle(second);
     markLedgerApplied(db, orchestratorLedgerKey(PIPELINE_VERSION, second));
 
     const pack = await handleRecall(
@@ -357,9 +391,10 @@ describe('pending_enrichment metadata', () => {
     expect(pack.metadata.pending_enrichment).toBe(2);
   });
 
-  it("omits pending_enrichment once every one of the session's episodes is enriched", async () => {
+  it("omits pending_enrichment once every one of the session's sources is accounted for", async () => {
     const session = 'recall-int-fully-enriched-session';
     const episodeId = await push('a fully enriched observation', PENDING_AT, session);
+    settle(episodeId);
     markLedgerApplied(db, orchestratorLedgerKey(PIPELINE_VERSION, episodeId));
 
     const pack = await handleRecall(

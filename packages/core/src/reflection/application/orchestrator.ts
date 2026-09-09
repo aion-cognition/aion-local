@@ -86,7 +86,7 @@ function elapsed(started: number): number {
 }
 
 /** What this run's outcomes are about: the generation it started under, and what that owed. */
-function runBindingOf(db: SqliteHandle, sourceId: string): StageBinding {
+export function runBindingOf(db: SqliteHandle, sourceId: string): StageBinding {
   const generation = readActiveGeneration(db, sourceId);
   return {
     processingGeneration: generation?.processingGeneration ?? 0,
