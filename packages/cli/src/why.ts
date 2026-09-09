@@ -1,8 +1,10 @@
 import {
+  checkCoverage,
   fetchNodeEdges,
   fetchNodeProvenance,
   findEntityMergeProposalsForNode,
   findSupersessionProposalsForNode,
+  refusalLines,
   runSourceInspection,
   sourceOutputFor,
   sourceReadDeps,
@@ -16,7 +18,7 @@ import {
 
 import { CliUsageError, parseArgs, type ArgSpec } from './args.js';
 import { short } from './format.js';
-import { stdoutWriter, type Writer } from './output.js';
+import { stderrWriter, stdoutWriter, type Writer } from './output.js';
 import { withSubstrate, type Substrate } from './substrate.js';
 
 /**
@@ -239,6 +241,16 @@ export function runWhy(
     parse: parseWhyFlags,
     needsGraph: 'why',
     run: async (substrate, flags) => {
+      // Before any graph read. `why` answers about history, so the record that says how much
+      // history the substrate covers decides whether it may answer at all; reading the graph
+      // first and refusing afterwards would spend the read and refuse anyway.
+      const checked = checkCoverage(substrate.db(), { now: new Date(), expiryAnnotation: true });
+      if (checked.status === 'refused') {
+        for (const line of refusalLines(checked.refusal)) {
+          stderrWriter(line);
+        }
+        return 1;
+      }
       const { driver } = substrate.connection();
       const provenance = await fetchNodeProvenance(driver, flags.nodeId);
       if (provenance === undefined) {

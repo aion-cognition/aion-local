@@ -1,16 +1,22 @@
 import {
   buildEpisodeTimeline,
+  checkCoverage,
   fetchNodeEdges,
   fetchNodeProvenance,
   findPendingReflectionJob,
   getExperienceByEpisode,
+  getExperienceById,
   getLedgerEntry,
   INTEGRATE_JOB_TYPE,
   listSessionEpisodeIds,
   loadEpisodeContext,
   orchestratorLedgerKey,
   PIPELINE_VERSION,
+  readSourceRecord,
+  refusalLines,
   stageLedgerKey,
+  type ExperienceArchiveRow,
+  type SqliteHandle,
   type TimelineEvent,
 } from '@aion/core';
 import { reflectionStages } from '@aion/mcp';
@@ -68,6 +74,26 @@ export function parseTimelineFlags(argv: readonly string[]): TimelineFlags {
  * under, so an episode enriched before a pipeline bump keeps reading as enriched. Returns
  * undefined only when every source came back empty, which is what an unknown id looks like.
  */
+/**
+ * The archive row this occurrence's own records point at.
+ *
+ * An occurrence is not its archive row. A source pushed again after a forget is a new
+ * occurrence over bytes an earlier one already stored, so looking the archive up by episode id
+ * finds nothing for it and reports a source the substrate is holding as absent. C1's canonical
+ * mapping is what says which row belongs to this occurrence; the episode lookup stays as the
+ * answer for a legacy capture that has no identity record yet.
+ */
+function canonicalArchiveRow(
+  db: SqliteHandle,
+  episodeId: string,
+): ExperienceArchiveRow | undefined {
+  const record = readSourceRecord(db, episodeId);
+  const canonical = record?.canonicalArchiveId;
+  return canonical === null || canonical === undefined
+    ? getExperienceByEpisode(db, episodeId)
+    : getExperienceById(db, canonical);
+}
+
 async function hydrateTimeline(
   substrate: Substrate,
   episodeId: string,
@@ -75,14 +101,17 @@ async function hydrateTimeline(
   const db = substrate.db();
   const { driver } = substrate.connection();
 
-  const archive = getExperienceByEpisode(db, episodeId);
+  const archive = canonicalArchiveRow(db, episodeId);
   const [episodeContext, provenance, edges] = await Promise.all([
     loadEpisodeContext(driver, episodeId),
     fetchNodeProvenance(driver, episodeId),
     fetchNodeEdges(driver, episodeId),
   ]);
 
-  if (archive === undefined && episodeContext === undefined && provenance === undefined) {
+  // A source the records know is a source this command answers for, whether or not the graph
+  // still projects it and whether or not it owns an archive row of its own.
+  const known = readSourceRecord(db, episodeId) !== undefined;
+  if (archive === undefined && episodeContext === undefined && provenance === undefined && !known) {
     return undefined;
   }
 
@@ -202,6 +231,16 @@ export function runTimelineCommand(
     parse: parseTimelineFlags,
     needsGraph: 'timeline',
     run: async (substrate, flags) => {
+      // The coverage decision comes before any read, as it does on every covered entry point.
+      // A substrate whose control record cannot be read is one whose answers are all suspect,
+      // and a timeline assembled anyway would be a claim about history nobody can stand behind.
+      const checked = checkCoverage(substrate.db(), { now: new Date(), expiryAnnotation: true });
+      if (checked.status === 'refused') {
+        for (const line of refusalLines(checked.refusal)) {
+          stderrWriter(line);
+        }
+        return 1;
+      }
       if (flags.target === 'session') {
         return await runSession(substrate, flags.sessionId, flags.json);
       }

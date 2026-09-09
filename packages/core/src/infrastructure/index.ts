@@ -22,7 +22,12 @@ export {
   countExperiencesByVersion,
   experienceArchiveSpan,
   getExperienceByEpisode,
+  getExperienceById,
 } from './sqlite/experience-archive.js';
+export type { ExperienceArchiveRow } from './sqlite/experience-archive.js';
+
+/** C1's canonical mapping, for a reader that must find an occurrence's own archive row. */
+export { readSourceRecord } from './sqlite/source-identity.js';
 
 export { countUsageEvents } from './sqlite/usage-events.js';
 
