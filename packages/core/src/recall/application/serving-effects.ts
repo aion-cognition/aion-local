@@ -166,10 +166,11 @@ function worthSaying(coverage: HistoryCoverage): boolean {
  * suppression and certified absence are answers the substrate stands behind and leave it
  * supported.
  *
- * Folded in after assembly rather than inside it, so it moves no bucket and costs no token
- * budget: what the pack covers must not depend on how much of it fit. It does reach the rendered
- * text, in the same words the metadata carries, because a caller who reads only the block is
- * exactly the one who would otherwise take a partial answer for a complete one.
+ * Folded in after assembly rather than inside it, so it moves no bucket: what the pack covers
+ * must not depend on how much of it fit. It does reach the rendered text, in the same words the
+ * metadata carries, because a caller who reads only the block is exactly the one who would
+ * otherwise take a partial answer for a complete one. `token_estimate` stays the estimate
+ * assembly made and does not count these lines.
  */
 export function withCoverage(
   pack: MemoryPack,

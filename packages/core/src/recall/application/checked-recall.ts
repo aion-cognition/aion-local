@@ -61,9 +61,13 @@ export type CheckedRecallOptions = {
 };
 
 /**
- * What the caller receives. `withheld` says the answer was served but nothing about it was
- * recorded: no served rows, no last pack, no counters, and no requested delivery reset. The
- * pack says so too, in its coverage statement, so a caller reading only the answer learns it.
+ * What the caller receives.
+ *
+ * `withheld` says this boundary's own writes did not land: no served rows, no last pack, no
+ * counters, and no requested delivery reset. It is not a claim that the read left no trace at
+ * all — the delivered-pack listener still records exposure and reinforcement for an answer the
+ * caller actually received, which is its own contract. The pack says what was not settled in
+ * its coverage statement, so a caller reading only the answer learns it.
  */
 export type CheckedRecallOutcome =
   | {
