@@ -10,6 +10,7 @@ import {
   isOperationAcknowledged,
   listAcknowledgedOperations,
   listPendingEffects,
+  listSourcePublications,
   preparePublicationIntent,
   readPublicationReceipt,
   recordPendingEffect,
@@ -204,5 +205,51 @@ describe('publication intents', () => {
     expect(completeEffect(store.db, 'op-1', 'queue_enqueue', NOW)).toBe(true);
     expect(completeEffect(store.db, 'op-1', 'queue_enqueue', NOW)).toBe(false);
     expect(listPendingEffects(store.db, 'op-1')).toEqual(['reference_settlement']);
+  });
+
+  it('gives a source the publication whose effect names it, with no link or state row', () => {
+    preparePublicationIntent(store.db, intent('capture'));
+    recordPendingEffect(store.db, {
+      operationId: 'capture',
+      effectKind: 'reference_batch',
+      detailJson: '{"sourceId":"source-1"}',
+    });
+    acknowledgePublicationIntent(store.db, {
+      operationId: 'capture',
+      resultDigest: 'digest',
+      resultJson: '{"sourceId":"source-1","created":true}',
+      observedAckAt: NOW,
+    });
+
+    expect(listSourcePublications(store.db, 'source-1')).toMatchObject([
+      {
+        operationId: 'capture',
+        kind: 'intake',
+        state: 'acknowledged',
+        sequence: '1',
+        knownFrom: NOW.toISOString(),
+        observedAckAt: NOW.toISOString(),
+      },
+    ]);
+  });
+
+  it('leaves out an operation that names the id under another key or names another source', () => {
+    preparePublicationIntent(store.db, intent('merge', 'family_cutover'));
+    // The id is right there in the effect, under a key that means something else.
+    recordPendingEffect(store.db, {
+      operationId: 'merge',
+      effectKind: 'entity_merge',
+      detailJson: '{"survivor":"source-1"}',
+    });
+    preparePublicationIntent(store.db, intent('neighbour'));
+    recordPendingEffect(store.db, {
+      operationId: 'neighbour',
+      effectKind: 'reference_batch',
+      detailJson: '{"sourceId":"source-2"}',
+    });
+    preparePublicationIntent(store.db, intent('untyped'));
+    recordPendingEffect(store.db, { operationId: 'untyped', effectKind: 'session_watermark' });
+
+    expect(listSourcePublications(store.db, 'source-1')).toEqual([]);
   });
 });

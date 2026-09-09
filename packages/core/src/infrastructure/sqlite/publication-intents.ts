@@ -224,11 +224,17 @@ export function readPublicationReceipt(
 /**
  * The publications one source's own durable records name, newest evidence last.
  *
- * A source is tied to a publication by the rows that publication wrote about it: the stated
- * links whose origin it is, and the statements made about its own state. `created_at` rides
- * along so a prepared intent can be placed without inventing a clock it never had — an
- * unacknowledged row has no knowledge time by construction, and giving it one would report an
- * input as published evidence.
+ * Three bindings reach them, and each one is a record a writer made about this source rather
+ * than text that happens to mention it: the stated links whose origin it is, the statements
+ * made about its own state, and the effect an operation declared against it by id. The third
+ * is what an ordinary capture leaves behind. A push that stated no references writes neither a
+ * link version nor a state statement, and its acceptance still names the source it elected, so
+ * without that binding a source's own arrival is missing from its history. An effect naming
+ * something else, a survivor or a node, binds nothing here.
+ *
+ * `created_at` rides along so a prepared intent can be placed without inventing a clock it
+ * never had: an unacknowledged row has no knowledge time by construction, and giving it one
+ * would report an input as published evidence.
  *
  * Ordered the way visibility is: the knowledge clock first, then the sequence. A prepared row
  * sorts on its own creation, after everything acknowledged before it.
@@ -249,10 +255,13 @@ export function listSourcePublications(
           WHERE l.from_id = ? AND v.operation_id IS NOT NULL
          UNION
          SELECT s.operation_id FROM source_state_versions s WHERE s.source_id = ?
+         UNION
+         SELECT e.operation_id FROM publication_effects e
+          WHERE json_extract(e.detail_json, '$.sourceId') = ?
        )
        ORDER BY COALESCE(p.known_from, p.created_at), p.sequence`,
     )
-    .all(sourceId, sourceId) as (ReceiptRowData & { created_at: string })[];
+    .all(sourceId, sourceId, sourceId) as (ReceiptRowData & { created_at: string })[];
   return rows.map((row) => ({ ...toReceipt(row), createdAt: row.created_at }));
 }
 
@@ -287,6 +296,10 @@ export function listAcknowledgedOperations(db: SqliteHandle): readonly Publicati
 export type PublicationEffect = {
   readonly operationId: string;
   readonly effectKind: string;
+  /**
+   * The typed binding this effect declares. A `sourceId` key here is what ties the operation to
+   * that source's publication history, so an effect about a source names it under that key.
+   */
   readonly detailJson?: string;
 };
 
