@@ -129,6 +129,11 @@ export class SupersessionStage implements ReflectionStage {
         status: 'skipped',
         summary: 'episode has no fact-bearing nodes to check',
         retryable: true,
+        settledOnUpstream: {
+          disposition: 'not_applicable',
+          reason: 'proved_empty_input',
+          proof: { factNodes: 0 },
+        },
       };
     }
 

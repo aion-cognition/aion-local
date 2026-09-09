@@ -112,7 +112,15 @@ describe('CognitiveExtractionStage', () => {
       ),
     );
 
-    expect(outcome).toEqual({ status: 'skipped', summary: 'episode has no text to extract from' });
+    expect(outcome).toEqual({
+      status: 'skipped',
+      summary: 'episode has no text to extract from',
+      settled: {
+        disposition: 'not_applicable',
+        reason: 'below_minimum_input',
+        proof: { textChars: 0 },
+      },
+    });
     expect(graph.nodesWithLabel('Goal')).toHaveLength(0);
   });
 
@@ -123,6 +131,11 @@ describe('CognitiveExtractionStage', () => {
     expect(outcome).toEqual({
       status: 'skipped',
       summary: 'no cognitive structure found in the episode',
+      settled: {
+        disposition: 'complete',
+        reason: 'pass_produced_nothing',
+        proof: { dropped: 0 },
+      },
     });
   });
 

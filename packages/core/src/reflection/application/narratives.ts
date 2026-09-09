@@ -326,7 +326,21 @@ export class SessionNarrativeStage implements ReflectionStage {
     if (result.status === 'created') {
       return { status: 'ok', summary: result.summary, counts: { narratives: 1 } };
     }
-    return { status: result.status === 'failed' ? 'failed' : 'skipped', summary: result.summary };
+    if (result.status === 'failed') {
+      return { status: 'failed', summary: result.summary };
+    }
+    // What this stage owes one source is the dispatch, and a session that has not reached a
+    // boundary has taken it. Whether a narrative covers that source is a separate question with
+    // its own record: no session-wide stage outcome answers it.
+    return {
+      status: 'skipped',
+      summary: result.summary,
+      settled: {
+        disposition: 'complete',
+        reason: 'dispatch_acknowledged',
+        proof: { sessionId: result.sessionId, episodes: result.episodes },
+      },
+    };
   }
 }
 

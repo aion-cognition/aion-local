@@ -74,8 +74,10 @@ export type AssemblePackInput = {
   readonly timings: StageTimingsMs;
   /** Every rung of the degradation ladder that fired; absent on a normal recall. */
   readonly degraded?: readonly Degradation[];
-  /** The calling session's own episodes with no orchestrator ledger key yet. */
+  /** The calling session's own sources that still owe required processing work. */
   readonly pendingEnrichment?: number;
+  /** Why that count is absent, when nothing could count it. */
+  readonly obligationCensusGap?: string;
   /** Set when spreading activation stopped on its budget rather than converging. */
   readonly truncated?: PackTruncation;
   /**
@@ -425,23 +427,6 @@ function render(
 }
 
 /**
- * The producing method of every item the pack holds, read off the assembled pack rather than
- * off the stages that fed it. Assembly drops items on bucket caps, the budget, the restatement
- * filter, the gloss cap and duplicate keys, and resonance offers up to `resonantLimit` where
- * the pack serves `maxResonant`: counting the stage output credits a mechanism for items no
- * agent ever saw, which is what the spirit metric exists not to do.
- */
-export function packMethods(pack: MemoryPack): readonly string[] {
-  const methods: string[] = [];
-  for (const bucket of PACK_BUCKETS) {
-    for (const item of pack[bucket] ?? []) {
-      methods.push(item.rationale.method);
-    }
-  }
-  return methods;
-}
-
-/**
  * The pack is parsed against its own schema on the way out. Its invariants (a present bucket
  * is never empty, an item always carries content and a rationale) are this module's to hold,
  * so a violation is a defect here and failing loudly beats handing an agent a pack the
@@ -456,6 +441,9 @@ export function assemblePack(input: AssemblePackInput): MemoryPack {
     ...(input.pendingEnrichment === undefined
       ? {}
       : { pendingEnrichment: input.pendingEnrichment }),
+    ...(input.obligationCensusGap === undefined
+      ? {}
+      : { obligationCensusGap: input.obligationCensusGap }),
     repeats,
     own,
   };

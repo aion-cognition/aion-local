@@ -87,6 +87,11 @@ describe('SemanticRelationshipStage', () => {
     expect(outcome).toEqual({
       status: 'skipped',
       summary: 'episode has no text to infer relationships from',
+      settled: {
+        disposition: 'not_applicable',
+        reason: 'below_minimum_input',
+        proof: { textChars: 0 },
+      },
     });
   });
 
@@ -102,6 +107,11 @@ describe('SemanticRelationshipStage', () => {
       status: 'skipped',
       summary: 'fewer than two entities or cognitive nodes to relate',
       retryable: true,
+      settledOnUpstream: {
+        disposition: 'not_applicable',
+        reason: 'proved_empty_input',
+        proof: { candidates: 1 },
+      },
     });
   });
 
@@ -120,6 +130,11 @@ describe('SemanticRelationshipStage', () => {
       status: 'skipped',
       summary: 'fewer than two entities or cognitive nodes to relate',
       retryable: true,
+      settledOnUpstream: {
+        disposition: 'not_applicable',
+        reason: 'proved_empty_input',
+        proof: { candidates: 1 },
+      },
     });
   });
 

@@ -19,6 +19,7 @@ import {
   openLogger,
   plasticityCounters,
   probeRecall,
+  publishPipelineReadinessPolicy,
   ProviderRouter,
   PublicationCoordinator,
   PublicationRecoveryLoop,
@@ -301,6 +302,12 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
     };
     const covered = checkedRecallDeps({ ...recall, coordinator: publications });
     const stages = reflectionStages(config);
+    // Ahead of anything that can accept a source. A source accepted with no published policy
+    // records a durable inventory obligation instead of the stages it owes, and clearing that
+    // afterwards costs more than publishing the contract now. Republishing the same contract
+    // takes no new revision, so a restart does not move what a source in flight is measured
+    // against.
+    const readinessPolicyRevision = publishPipelineReadinessPolicy(store.db, stages, new Date());
     worker = new ReflectionWorker(
       {
         driver,
@@ -450,6 +457,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
         models: config.models,
         routing: routingSummary(router.routing),
         stages: stages.map((stage) => stage.name),
+        readinessPolicyRevision,
         narrativeSweepMs: idleNarratives.intervalMs,
         sessionIdleSweepMs: idleSessions.intervalMs,
         maintenanceTickMs: introspector.tickMs,

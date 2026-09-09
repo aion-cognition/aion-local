@@ -69,6 +69,11 @@ export class AssociationInferenceStage implements ReflectionStage {
         status: 'skipped',
         summary: 'no entities mentioned in the episode',
         retryable: true,
+        settledOnUpstream: {
+          disposition: 'not_applicable',
+          reason: 'proved_empty_input',
+          proof: { mentionedEntities: 0 },
+        },
       };
     }
     const entityIds = entities.rows.map((entity) => entity.id);

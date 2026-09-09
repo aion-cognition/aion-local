@@ -5,7 +5,8 @@ import type { FusedItem } from './fusion.js';
 import { triggeredIntentionItem, type IntentionTriggerKind } from './intention-triggers.js';
 import { bucketFor } from './pack-buckets.js';
 import { MAX_WHY_CHARS } from './pack-item.js';
-import { CHARS_PER_TOKEN, estimateTokens, packMethods } from './pack.js';
+import { packMethods } from './pack-methods.js';
+import { CHARS_PER_TOKEN, estimateTokens } from './pack.js';
 import { assemble, CAPS, CUES, item, TIMINGS } from './test-support/pack.fixture.js';
 
 describe('bucket routing', () => {

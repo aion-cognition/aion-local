@@ -61,11 +61,12 @@ const DISCOVERY_SIGNAL = 'structural_discovery';
 const DISCOVERY_PROVENANCE = 'introspection';
 
 /**
- * There is no gauge for how many identities the graph has left under-connected, so this stands
- * on the one reading that moves with disconnection (the share of memories carrying no
- * association at all) over a standing floor, the way community refresh reaches its threshold on
- * waiting time. The floor is what stops a graph whose orphans have all been relinked from
- * reading as a graph with nothing left to join.
+ * There is no gauge for how many identities the graph has left under-connected, so this stands on
+ * a standing floor, the way community refresh reaches its threshold on waiting time.
+ *
+ * The disconnection share used to be added to it. It is out: the same reading now scores the
+ * repair operation, and one number driving two operations makes a disconnected substrate ask for
+ * both at once when only one of them can act on it.
  */
 export const STRUCTURAL_DISCOVERY_RELEVANCE = 0.15;
 
@@ -78,7 +79,7 @@ export function structuralDiscoveryRelevance(health: HealthSnapshot): number {
   if (health.graph.nodes < CRITICAL_MIN_POPULATION) {
     return 0;
   }
-  return Math.min(1, STRUCTURAL_DISCOVERY_RELEVANCE + health.graph.orphanShare);
+  return STRUCTURAL_DISCOVERY_RELEVANCE;
 }
 
 function noop(detail: string, itemsProcessed = 0): OperationOutcome {

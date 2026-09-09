@@ -1,6 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 
 import {
+  findPendingVectorNodes,
   writeContentVectors,
   type ContentVectorEntry,
   type PendingVectorNode,
@@ -52,4 +53,38 @@ export async function attachContentVectors(
   }
   const vectors = await provider.embed(nodes.map((node) => node.text));
   return writeContentVectors(driver, pair(nodes, vectors));
+}
+
+export type PendingVectorDrainDeps = {
+  readonly driver: Driver;
+  readonly provider: Provider;
+  readonly logger: { warn: (fields: Record<string, unknown>, message: string) => void };
+};
+
+/**
+ * What an inference outage left behind, oldest first. A batch that comes back short of what was
+ * asked for, or that writes fewer vectors than it read, is the end of the drain: the rest is
+ * still pending and the next start or the `vector_backfill` operation takes it.
+ */
+export async function drainPendingVectors(
+  deps: PendingVectorDrainDeps,
+  batchSize: number,
+): Promise<number> {
+  let attached = 0;
+  try {
+    for (;;) {
+      const batch = await findPendingVectorNodes(deps.driver, batchSize);
+      if (batch.length === 0) {
+        return attached;
+      }
+      const written = await attachContentVectors(deps.driver, deps.provider, batch);
+      attached += written.length;
+      if (written.length < batch.length || batch.length < batchSize) {
+        return attached;
+      }
+    }
+  } catch (err) {
+    deps.logger.warn({ err, attached }, 'pending content vectors deferred; the drain continues');
+    return attached;
+  }
 }

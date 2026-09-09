@@ -123,6 +123,11 @@ export class EntityDedupStage implements ReflectionStage {
         status: 'skipped',
         summary: 'episode mentions no entities to deduplicate',
         retryable: true,
+        settledOnUpstream: {
+          disposition: 'not_applicable',
+          reason: 'proved_empty_input',
+          proof: { mentionedEntities: 0 },
+        },
       };
     }
 

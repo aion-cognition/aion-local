@@ -120,6 +120,7 @@ vi.mock('@aion/core', async (importOriginal) => {
     SessionNarrativeCloser: FakeSessionNarrativeCloser,
     Introspector: FakeIntrospector,
     reflectionStages: () => [],
+    publishPipelineReadinessPolicy: () => 1,
     introspectionOperations: () => [],
     unbackedPins: () => [],
     routingSummary: () => 'fake routing',

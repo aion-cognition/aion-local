@@ -124,11 +124,27 @@ export class EntityExtractionStage implements ReflectionStage {
   async run(ctx: StageContext): Promise<StageOutcome> {
     const body = ctx.episode.text.trim();
     if (body.length === 0) {
-      return { status: 'skipped', summary: 'episode carries no text to extract from' };
+      return {
+        status: 'skipped',
+        summary: 'episode carries no text to extract from',
+        settled: {
+          disposition: 'not_applicable',
+          reason: 'below_minimum_input',
+          proof: { textChars: 0 },
+        },
+      };
     }
     const declined = generationSkipReason(ctx.episode, this.#options.minExtractionChars);
     if (declined !== undefined) {
-      return { status: 'skipped', summary: declined };
+      return {
+        status: 'skipped',
+        summary: declined,
+        settled: {
+          disposition: 'not_applicable',
+          reason: 'below_minimum_input',
+          proof: { minExtractionChars: this.#options.minExtractionChars, textChars: body.length },
+        },
+      };
     }
 
     const extraction = await this.#extract(ctx, body);

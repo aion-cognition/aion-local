@@ -54,7 +54,15 @@ export class ReinforcementEnqueueStage implements ReflectionStage {
   async run(ctx: StageContext): Promise<StageOutcome> {
     const key = coExtractionLedgerKey(ctx.pipelineVersion, ctx.episodeId);
     if (isLedgerApplied(ctx.db, key)) {
-      return { status: 'skipped', summary: 'co-extraction signals already enqueued' };
+      return {
+        status: 'skipped',
+        summary: 'co-extraction signals already enqueued',
+        settled: {
+          disposition: 'complete',
+          reason: 'effects_already_recorded',
+          proof: { ledgerKey: key },
+        },
+      };
     }
 
     const nodeIds = await findCoExtractedNodeIds(ctx.driver, ctx.episodeId, ctx.now);
@@ -64,6 +72,11 @@ export class ReinforcementEnqueueStage implements ReflectionStage {
         status: 'skipped',
         summary: 'no entities or cognitive nodes extracted',
         retryable: true,
+        settledOnUpstream: {
+          disposition: 'not_applicable',
+          reason: 'proved_empty_input',
+          proof: { coExtractedNodes: 0 },
+        },
       };
     }
 

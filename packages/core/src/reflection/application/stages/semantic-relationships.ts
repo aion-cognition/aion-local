@@ -227,7 +227,15 @@ export class SemanticRelationshipStage implements ReflectionStage {
   async run(ctx: StageContext): Promise<StageOutcome> {
     const text = ctx.episode.text.trim();
     if (text.length === 0) {
-      return { status: 'skipped', summary: 'episode has no text to infer relationships from' };
+      return {
+        status: 'skipped',
+        summary: 'episode has no text to infer relationships from',
+        settled: {
+          disposition: 'not_applicable',
+          reason: 'below_minimum_input',
+          proof: { textChars: 0 },
+        },
+      };
     }
 
     const [entities, cognitive] = await Promise.all([
@@ -240,6 +248,11 @@ export class SemanticRelationshipStage implements ReflectionStage {
         status: 'skipped',
         summary: 'fewer than two entities or cognitive nodes to relate',
         retryable: true,
+        settledOnUpstream: {
+          disposition: 'not_applicable',
+          reason: 'proved_empty_input',
+          proof: { candidates: candidates.length },
+        },
       };
     }
 

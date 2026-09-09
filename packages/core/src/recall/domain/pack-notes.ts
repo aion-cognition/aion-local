@@ -23,6 +23,12 @@ export type HonestyInput = {
   readonly degraded?: readonly Degradation[];
   readonly truncated?: PackTruncation;
   readonly pendingEnrichment?: number;
+  /**
+   * Why the obligation count is absent, when it is absent because nothing could count it. An
+   * omitted field alone reads the same as a healthy session with nothing pending, so the reason
+   * is said out loud instead.
+   */
+  readonly obligationCensusGap?: string;
   readonly repeats: number;
   readonly own: number;
   readonly duplicates: number;
@@ -53,6 +59,9 @@ export function honestyNote(input: HonestyInput): string | undefined {
   const pending = input.pendingEnrichment ?? 0;
   if (pending > 0) {
     clauses.push(`${plural(pending, 'recent episode')} not yet enriched`);
+  }
+  if (input.obligationCensusGap !== undefined) {
+    clauses.push(`unenriched-episode count unavailable (${input.obligationCensusGap})`);
   }
   if (input.repeats > 0) {
     clauses.push(`${plural(input.repeats, 'item')} already served this session, unchanged`);

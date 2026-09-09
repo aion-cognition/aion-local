@@ -79,11 +79,13 @@ describe('criticalConditions', () => {
     expect(criticalConditions(real)).toEqual(['vector_parity']);
   });
 
-  it('reports an orphan explosion above the share', () => {
+  it('reports nothing critical for a fragmented graph, which is a diagnostic', () => {
     const health = healthFixture({
       graph: { ...NEUTRAL_GRAPH_HEALTH, nodes: POPULATION, orphanShare: 0.6 },
     });
-    expect(criticalConditions(health)).toEqual(['orphan_share']);
+    // Disconnection says activation cannot cross to those nodes. It does not say the records
+    // hold nothing up, so it preempts nothing and the repair is scored on its own demand.
+    expect(criticalConditions(health)).toEqual([]);
   });
 
   it('reports a single missing backbone link', () => {
@@ -258,7 +260,7 @@ describe('decide', () => {
       graph: {
         ...NEUTRAL_GRAPH_HEALTH,
         nodes: POPULATION,
-        orphanShare: 0.6,
+        episodesWithoutSession: 3,
         vectorExpected: POPULATION,
         vectorPresent: 10,
         vectorParity: 0.1,
@@ -268,21 +270,25 @@ describe('decide', () => {
       baseInput({
         health,
         candidates: [
-          candidate({ name: 'orphan_cleanup', answers: 'orphan_share', relevance: 0.6 }),
+          candidate({ name: 'backbone_repair', answers: 'missing_backbone_links', relevance: 0.6 }),
         ],
       }),
     );
-    expect(decision).toMatchObject({ kind: 'selected', tier: 1, reason: 'critical: orphan_share' });
+    expect(decision).toMatchObject({
+      kind: 'selected',
+      tier: 1,
+      reason: 'critical: missing_backbone_links',
+    });
   });
 
   it('stops preempting once an emergency has run its grace out without moving its metric', () => {
     const graph = {
       ...NEUTRAL_GRAPH_HEALTH,
       nodes: POPULATION,
-      orphanShare: 0.6,
+      episodesWithoutSession: 3,
     };
     const candidates = [
-      candidate({ name: 'orphan_cleanup', answers: 'orphan_share', relevance: 0.6 }),
+      candidate({ name: 'backbone_repair', answers: 'missing_backbone_links', relevance: 0.6 }),
       candidate({ name: 'routine', relevance: 0.5 }),
     ];
 
@@ -293,7 +299,7 @@ describe('decide', () => {
           graph,
           effectiveness: [
             stats({
-              name: 'orphan_cleanup',
+              name: 'backbone_repair',
               runs: CRITICAL_PREEMPTION_GRACE_RUNS - 1,
               effectiveness: 0,
             }),
@@ -302,7 +308,7 @@ describe('decide', () => {
         candidates,
       }),
     );
-    expect(trying).toMatchObject({ kind: 'selected', name: 'orphan_cleanup', tier: 1 });
+    expect(trying).toMatchObject({ kind: 'selected', name: 'backbone_repair', tier: 1 });
 
     // Past it, with nothing to show for the runs, the catalog gets its turn back.
     const spent = decide(
@@ -311,7 +317,7 @@ describe('decide', () => {
           graph,
           effectiveness: [
             stats({
-              name: 'orphan_cleanup',
+              name: 'backbone_repair',
               runs: CRITICAL_PREEMPTION_GRACE_RUNS,
               effectiveness: 0,
             }),
@@ -330,19 +336,19 @@ describe('decide', () => {
           graph: {
             ...NEUTRAL_GRAPH_HEALTH,
             nodes: POPULATION,
-            orphanShare: 0.6,
+            episodesWithoutSession: 3,
           },
           effectiveness: [
-            stats({ name: 'orphan_cleanup', runs: 40, improved: 40, effectiveness: 1 }),
+            stats({ name: 'backbone_repair', runs: 40, improved: 40, effectiveness: 1 }),
           ],
         }),
         candidates: [
-          candidate({ name: 'orphan_cleanup', answers: 'orphan_share', relevance: 0.6 }),
+          candidate({ name: 'backbone_repair', answers: 'missing_backbone_links', relevance: 0.6 }),
           candidate({ name: 'routine', relevance: 1 }),
         ],
       }),
     );
-    expect(decision).toMatchObject({ kind: 'selected', name: 'orphan_cleanup', tier: 1 });
+    expect(decision).toMatchObject({ kind: 'selected', name: 'backbone_repair', tier: 1 });
   });
 
   it('keeps preempting past the grace when no metric ever scored the emergency', () => {
@@ -352,11 +358,11 @@ describe('decide', () => {
           graph: {
             ...NEUTRAL_GRAPH_HEALTH,
             nodes: POPULATION,
-            orphanShare: 0.6,
+            episodesWithoutSession: 3,
           },
           effectiveness: [
             stats({
-              name: 'orphan_cleanup',
+              name: 'backbone_repair',
               runs: CRITICAL_PREEMPTION_GRACE_RUNS * 4,
               improved: 0,
               effectiveness: undefined,
@@ -364,12 +370,12 @@ describe('decide', () => {
           ],
         }),
         candidates: [
-          candidate({ name: 'orphan_cleanup', answers: 'orphan_share', relevance: 0.6 }),
+          candidate({ name: 'backbone_repair', answers: 'missing_backbone_links', relevance: 0.6 }),
           candidate({ name: 'routine', relevance: 1 }),
         ],
       }),
     );
-    expect(decision).toMatchObject({ kind: 'selected', name: 'orphan_cleanup', tier: 1 });
+    expect(decision).toMatchObject({ kind: 'selected', name: 'backbone_repair', tier: 1 });
   });
 
   it('leaves a routine operation under the threshold alone', () => {

@@ -1,5 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 
+import { readOrphanCensus } from './orphan-census.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { countEdgesByFloorBand } from '../../infrastructure/graph/edge-prune-queries.js';
 import { countDecayableEdges } from '../../infrastructure/graph/edge-weights.js';
@@ -21,6 +22,7 @@ import {
   listOperationStats,
   meanOperationDurationMs,
 } from '../../infrastructure/sqlite/introspection-counters.js';
+import { readCurrentReadinessPolicy } from '../../infrastructure/sqlite/readiness-policies.js';
 import { listOpenSupersessionProposalCreatedAt } from '../../infrastructure/sqlite/supersession-proposals.js';
 import { plasticityCounters } from '../../plasticity/application/metrics.js';
 import { scanRedactionResidue } from '../../redaction/residue.js';
@@ -113,26 +115,41 @@ async function collect<T>(
 }
 
 async function readGraph(
-  driver: Driver,
+  deps: ObserveDeps,
   scanLimit: number,
   weightFloor: number,
+  now: Date,
 ): Promise<GraphStructureHealth> {
-  const [counts, parity, orphans, missing, stale, decayableEdges, floorBands] = await Promise.all([
-    countGraphElements(driver),
-    countVectorParity(driver, scanLimit),
-    countOrphanNodes(driver, scanLimit),
-    countEpisodesWithoutSession(driver, scanLimit),
-    findStaleNarratives(driver, NARRATIVE_GROUNDING, scanLimit),
-    countDecayableEdges(driver),
-    countEdgesByFloorBand(driver, weightFloor),
-  ]);
+  const { driver } = deps;
+  const [counts, parity, orphans, missing, stale, decayableEdges, floorBands, orphanRepair] =
+    await Promise.all([
+      countGraphElements(driver),
+      countVectorParity(driver, scanLimit),
+      countOrphanNodes(driver, scanLimit),
+      countEpisodesWithoutSession(driver, scanLimit),
+      findStaleNarratives(driver, NARRATIVE_GROUNDING, scanLimit),
+      countDecayableEdges(driver),
+      countEdgesByFloorBand(driver, weightFloor),
+      readOrphanCensus(deps, {
+        limit: deps.config.maintenance.orphanCleanupBatch,
+        now,
+        forgetAfterDays: deps.config.maintenance.orphanForgetAfterDays,
+        policyRevision: readCurrentReadinessPolicy(deps.db)?.policyRevision ?? 0,
+      }),
+    ]);
   return {
     nodes: counts.nodes,
     relationships: counts.relationships,
     vectorExpected: parity.expected,
     vectorPresent: parity.vectored,
     vectorParity: parityRatio(parity.vectored, parity.expected),
+    // A diagnostic, not a repair incentive: it says activation cannot cross to these nodes,
+    // which is true of an archive-supported memory whose containers were evicted as well as of
+    // a node nothing holds up. What a repair is scored on is the demand below.
     orphanShare: share(orphans.orphans, orphans.nodes),
+    orphanActionable: orphanRepair.actionable,
+    orphanUnknownSupport: orphanRepair.unknownSupport,
+    orphanCleanupBatch: deps.config.maintenance.orphanCleanupBatch,
     episodesWithoutSession: missing,
     staleNarratives: stale.length,
     decayableEdges,
@@ -313,7 +330,7 @@ export async function observeHealth(
     effectiveness,
   ] = await Promise.all([
     collect(HEALTH_COLLECTORS.graph, deps.logger, degraded, NEUTRAL_GRAPH_HEALTH, () =>
-      readGraph(deps.driver, scanLimit, deps.config.hebbian.weightFloor),
+      readGraph(deps, scanLimit, deps.config.hebbian.weightFloor, now),
     ),
     collect(HEALTH_COLLECTORS.queue, deps.logger, degraded, NEUTRAL_QUEUE_HEALTH, () =>
       Promise.resolve(readQueue(deps.db, deps.config, now)),

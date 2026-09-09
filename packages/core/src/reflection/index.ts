@@ -34,6 +34,8 @@ export type { ApplyEntityMergeProposalResult } from './application/entity-merge-
 export { stageLedgerKey } from './domain/stage.js';
 export type { ReflectionStage } from './domain/stage.js';
 
+export { publishPipelineReadinessPolicy } from './application/readiness.js';
+
 export { PIPELINE_VERSION } from './domain/version.js';
 
 export { ReflectionOrchestrator, orchestratorLedgerKey } from './application/orchestrator.js';

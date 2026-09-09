@@ -23,8 +23,18 @@ export type GraphStructureHealth = {
   readonly vectorPresent: number;
   /** Present over expected. 1 when nothing is expected, since an empty substrate is not behind. */
   readonly vectorParity: number;
-  /** Orphans over content-bearing nodes. 0 on an empty substrate. */
+  /**
+   * Orphans over content-bearing nodes, as a diagnostic. Physical disconnection says spreading
+   * activation cannot reach a node through associations; it does not say the records hold
+   * nothing up, so nothing is repaired or suppressed on this reading alone.
+   */
   readonly orphanShare: number;
+  /** Disconnected nodes a repair run could act on now: due relinks and mature qualified forgets. */
+  readonly orphanActionable: number;
+  /** Disconnected nodes whose support nothing has counted, which authorizes no repair at all. */
+  readonly orphanUnknownSupport: number;
+  /** The batch bound the count above was taken under, which is what a demand score divides by. */
+  readonly orphanCleanupBatch: number;
   /** Episodes with no `PARTICIPATES_IN` edge to a session: the missing-backbone condition. */
   readonly episodesWithoutSession: number;
   /** Standing narratives written under an older grounding revision. */
@@ -180,6 +190,9 @@ export const NEUTRAL_GRAPH_HEALTH: GraphStructureHealth = {
   vectorPresent: 0,
   vectorParity: 1,
   orphanShare: 0,
+  orphanActionable: 0,
+  orphanUnknownSupport: 0,
+  orphanCleanupBatch: 0,
   episodesWithoutSession: 0,
   staleNarratives: 0,
   decayableEdges: 0,
@@ -255,16 +268,13 @@ export function neutralSnapshot(cycle: number, observedAt: string): HealthSnapsh
 /** Below this, a significant share of the substrate is invisible to vector search. */
 export const CRITICAL_VECTOR_PARITY = 0.8;
 
-/** Above this, the graph has fragmented into pieces spreading activation cannot cross. */
-export const CRITICAL_ORPHAN_SHARE = 0.3;
-
 /**
  * Neither share means anything on a substrate this small: one unvectorized node out of five is
  * a parity of 0.8, and the reflection worker's own pending-vector drain is already on it.
  */
 export const CRITICAL_MIN_POPULATION = 20;
 
-export type CriticalCondition = 'vector_parity' | 'orphan_share' | 'missing_backbone_links';
+export type CriticalCondition = 'vector_parity' | 'missing_backbone_links';
 
 /**
  * The tier-1 conditions this snapshot meets. An operation names the one condition it repairs
@@ -285,12 +295,6 @@ export function criticalConditions(health: HealthSnapshot): readonly CriticalCon
     health.graph.vectorParity < CRITICAL_VECTOR_PARITY
   ) {
     conditions.push('vector_parity');
-  }
-  if (
-    health.graph.nodes >= CRITICAL_MIN_POPULATION &&
-    health.graph.orphanShare > CRITICAL_ORPHAN_SHARE
-  ) {
-    conditions.push('orphan_share');
   }
   return conditions;
 }

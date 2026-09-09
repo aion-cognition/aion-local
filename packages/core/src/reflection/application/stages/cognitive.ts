@@ -219,11 +219,27 @@ export class CognitiveExtractionStage implements ReflectionStage {
   async run(ctx: StageContext): Promise<StageOutcome> {
     const text = ctx.episode.text.trim();
     if (text.length === 0) {
-      return { status: 'skipped', summary: 'episode has no text to extract from' };
+      return {
+        status: 'skipped',
+        summary: 'episode has no text to extract from',
+        settled: {
+          disposition: 'not_applicable',
+          reason: 'below_minimum_input',
+          proof: { textChars: 0 },
+        },
+      };
     }
     const declined = generationSkipReason(ctx.episode, this.#options.minExtractionChars);
     if (declined !== undefined) {
-      return { status: 'skipped', summary: declined };
+      return {
+        status: 'skipped',
+        summary: declined,
+        settled: {
+          disposition: 'not_applicable',
+          reason: 'below_minimum_input',
+          proof: { minExtractionChars: this.#options.minExtractionChars, textChars: text.length },
+        },
+      };
     }
 
     const deadline = deadlineFor(this.#options.timeoutMs, ctx.signal);
@@ -274,7 +290,17 @@ export class CognitiveExtractionStage implements ReflectionStage {
           summary: `cognitive extraction returned ${usable.dropped} node(s), none of them a described type`,
         };
       }
-      return { status: 'skipped', summary: 'no cognitive structure found in the episode' };
+      return {
+        status: 'skipped',
+        summary: 'no cognitive structure found in the episode',
+        // The accepted pass ran to its end on readable text and described nothing. That settles
+        // this source's obligation; it is not a claim that the episode holds no structure.
+        settled: {
+          disposition: 'complete',
+          reason: 'pass_produced_nothing',
+          proof: { dropped: usable.dropped },
+        },
+      };
     }
 
     const summary = ctx.episode.summary?.trim();

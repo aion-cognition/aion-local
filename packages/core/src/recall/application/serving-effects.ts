@@ -14,7 +14,7 @@ import { deleteServedItems, recordServedItems } from '../../infrastructure/sqlit
 import type { AdmissionPolicy } from '../domain/admission.js';
 import type { FusedItem, MethodLegStats } from '../domain/fusion.js';
 import { withSoleMethod } from '../domain/fusion.js';
-import { packMethods } from '../domain/pack.js';
+import { packMethods } from '../domain/pack-methods.js';
 import type { ResolvedEvidenceView } from '../domain/resolved-view.js';
 import { servedRecords, sessionHoldings } from '../domain/session-dedup.js';
 

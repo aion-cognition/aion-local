@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { SqliteHandle } from './database.js';
 
 /**
@@ -56,4 +58,64 @@ export function recordReadinessPolicy(db: SqliteHandle, policy: ReadinessPolicyI
     JSON.stringify([...policy.transferCapabilities]),
     policy.createdAt.toISOString(),
   );
+}
+
+export type ReadinessContract = {
+  readonly pipelineVersion: string;
+  /** Every stage the pass requires, in the order the production pipeline runs them. */
+  readonly stageNames: readonly string[];
+  /** Runners a transferred obligation may name. An unlisted runner pins its source. */
+  readonly transferCapabilities: readonly string[];
+};
+
+/** What the revision is keyed on. Two publications of the same contract are one revision. */
+export function readinessContractDigest(contract: ReadinessContract): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify([
+        contract.pipelineVersion,
+        [...contract.stageNames],
+        [...contract.transferCapabilities].slice().sort(),
+      ]),
+    )
+    .digest('hex');
+}
+
+/**
+ * Publishes what readiness requires, and returns the revision in force afterwards.
+ *
+ * A contract already published takes no new revision, so restarting the service does not spend a
+ * number or move what a source in flight is measured against. A changed contract takes the next
+ * one and leaves every earlier revision exactly as it was: a source keeps the policy revision it
+ * was accepted under, and a pipeline that gained a stage does not reopen a pass that finished.
+ */
+export function publishReadinessPolicy(
+  db: SqliteHandle,
+  contract: ReadinessContract,
+  createdAt: Date,
+): number {
+  const contractDigest = readinessContractDigest(contract);
+  return db
+    .transaction((): number => {
+      const held = db
+        .prepare('SELECT policy_revision FROM readiness_policies WHERE contract_digest = ?')
+        .get(contractDigest) as { policy_revision: number } | undefined;
+      if (held !== undefined) {
+        return held.policy_revision;
+      }
+      const high = db
+        .prepare('SELECT COALESCE(MAX(policy_revision), 0) AS n FROM readiness_policies')
+        .get() as { n: number };
+      const policyRevision = high.n + 1;
+      recordReadinessPolicy(db, {
+        policyRevision,
+        contractDigest,
+        pipelineVersion: contract.pipelineVersion,
+        stageNames: contract.stageNames,
+        transferCapabilities: contract.transferCapabilities,
+        createdAt,
+      });
+      return policyRevision;
+    })
+    .immediate();
 }

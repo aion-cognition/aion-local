@@ -1,25 +1,34 @@
 import { upsertEdge } from '../../../infrastructure/graph/edges.js';
 import {
-  findOrphanNodes,
-  findOrphanRelinkTargets,
   forgetOrphanNode,
   type OrphanRelinkTarget,
 } from '../../../infrastructure/graph/topology-queries.js';
-import { criticalConditions, type HealthSnapshot } from '../../domain/health.js';
+import { readOrphanObservation } from '../../../infrastructure/sqlite/orphan-observations.js';
+import { readCurrentReadinessPolicy } from '../../../infrastructure/sqlite/readiness-policies.js';
+import type { HealthSnapshot } from '../../domain/health.js';
+import { HEALTH_COLLECTORS } from '../../domain/health.js';
 import type {
   IntrospectionOperation,
   OperationContext,
   OperationOutcome,
 } from '../../domain/operation.js';
+import { orphanRepairRelevance } from '../../domain/orphan-policy.js';
+import { readOrphanCensus, type OrphanCensusEntry } from '../orphan-census.js';
 
 /**
- * Orphan cleanup: relink what can be reconnected cheaply, forget what has been disconnected
- * long enough to say it is not coming back, and leave everything else alone.
+ * Orphan repair: relink what can be reconnected cheaply, suppress what the records certify
+ * nothing holds up and that has been that way long enough to say it is not coming back, and
+ * leave everything else alone.
  *
- * It answers the orphan condition, so its relevance is zero unless the snapshot actually meets
- * it. It reads that condition from `criticalConditions` rather than comparing against the
- * threshold itself, which is what stops the rule that selects the operation and the rule the
- * operation repairs from drifting apart.
+ * It is scored on demand rather than on the share of the graph that is disconnected. The share
+ * moves with the substrate's shape and says nothing about whether a run has work: an
+ * archive-supported memory whose raw containers were evicted is disconnected and is exactly the
+ * memory the substrate exists to keep. What decides a repair is support, and support nobody has
+ * counted decides nothing.
+ *
+ * The operation declares no metric. The old ratio measured the disconnection share, which this
+ * population change makes a different number about a different thing, so its effectiveness is
+ * unmeasured until a replacement has been validated against the new demand.
  */
 
 export const ORPHAN_CLEANUP_OPERATION = 'orphan_cleanup';
@@ -43,10 +52,10 @@ const RELINK_RATIONALE: Readonly<Record<OrphanRelinkTarget['kind'], string>> = {
 };
 
 export function orphanCleanupRelevance(health: HealthSnapshot): number {
-  if (!criticalConditions(health).includes('orphan_share')) {
+  if (health.degraded.includes(HEALTH_COLLECTORS.graph)) {
     return 0;
   }
-  return Math.min(1, health.graph.orphanShare);
+  return orphanRepairRelevance(health.graph.orphanActionable, health.graph.orphanCleanupBatch);
 }
 
 async function relink(ctx: OperationContext, target: OrphanRelinkTarget): Promise<void> {
@@ -65,46 +74,56 @@ async function relink(ctx: OperationContext, target: OrphanRelinkTarget): Promis
   });
 }
 
-async function runOrphanCleanup(ctx: OperationContext): Promise<OperationOutcome> {
-  const orphans = await findOrphanNodes(ctx.driver, ctx.config.maintenance.orphanCleanupBatch);
-  if (orphans.length === 0) {
-    return { status: 'noop', itemsProcessed: 0, itemsAffected: 0, detail: 'no orphan in scope' };
+/**
+ * The forget, taken only against a qualification the records still hold.
+ *
+ * The census decided this node was mature; this reads the qualification back before writing,
+ * because a scope that moved between the two readings restarts the clock and a suppression has
+ * no reopen path. The graph write carries the disconnection test with it for the same reason.
+ */
+async function forget(ctx: OperationContext, entry: OrphanCensusEntry): Promise<boolean> {
+  const observation = readOrphanObservation(ctx.db, entry.nodeId);
+  if (observation?.disposition !== 'unsupported') {
+    return false;
   }
-
-  const targets = new Map(
-    (
-      await findOrphanRelinkTargets(
-        ctx.driver,
-        orphans.map((orphan) => orphan.id),
-      )
-    ).map((target) => [target.orphanId, target]),
-  );
   const forgetBefore = new Date(
     ctx.now.getTime() - ctx.config.maintenance.orphanForgetAfterDays * DAY_MS,
   );
+  if (new Date(observation.firstVerifiedAt).getTime() > forgetBefore.getTime()) {
+    return false;
+  }
+  return forgetOrphanNode(ctx.driver, { id: entry.nodeId, forgetBefore, now: ctx.now });
+}
+
+async function runOrphanCleanup(ctx: OperationContext): Promise<OperationOutcome> {
+  const census = await readOrphanCensus(
+    { driver: ctx.driver, db: ctx.db },
+    {
+      limit: ctx.config.maintenance.orphanCleanupBatch,
+      now: ctx.now,
+      forgetAfterDays: ctx.config.maintenance.orphanForgetAfterDays,
+      policyRevision: readCurrentReadinessPolicy(ctx.db)?.policyRevision ?? 0,
+    },
+  );
+  if (census.entries.length === 0) {
+    return { status: 'noop', itemsProcessed: 0, itemsAffected: 0, detail: 'no orphan in scope' };
+  }
 
   let processed = 0;
   let relinked = 0;
   let forgotten = 0;
-  for (const orphan of orphans) {
+  for (const entry of census.entries) {
     if (ctx.signal.aborted) {
       break;
     }
     processed += 1;
-    const target = targets.get(orphan.id);
-    if (target !== undefined) {
-      await relink(ctx, target);
+    if (entry.decision.action === 'relink' && entry.relinkTarget !== undefined) {
+      await relink(ctx, entry.relinkTarget);
       relinked += 1;
       continue;
     }
-    // No candidate and no age: an orphan the substrate may still connect on its own. A node
-    // with no stamp at all is never forgotten, since its age is unknown rather than large.
-    // The age test is here to skip the write; the write repeats it, and the orphan test with
-    // it, against the graph as it stands now.
-    if (orphan.txFrom !== undefined && orphan.txFrom.getTime() <= forgetBefore.getTime()) {
-      if (await forgetOrphanNode(ctx.driver, { id: orphan.id, forgetBefore, now: ctx.now })) {
-        forgotten += 1;
-      }
+    if (entry.decision.action === 'forget' && (await forget(ctx, entry))) {
+      forgotten += 1;
     }
   }
 
@@ -113,24 +132,23 @@ async function runOrphanCleanup(ctx: OperationContext): Promise<OperationOutcome
     status: affected === 0 ? 'noop' : 'applied',
     itemsProcessed: processed,
     itemsAffected: affected,
-    detail: `${String(relinked)} relinked, ${String(forgotten)} forgotten of ${String(processed)} orphans`,
+    detail:
+      `${String(relinked)} relinked, ${String(forgotten)} forgotten of ${String(processed)} ` +
+      `disconnected (${String(census.unknownSupport)} with uncounted support, ` +
+      `${String(census.unsupportedYoung)} not yet mature)`,
   };
 }
 
 /**
- * The bucket matches the default tick, so a run that is preempting drains a batch every time
- * it is chosen rather than finding its own window already claimed. The preemption itself is
- * not open-ended: once the operation has run its grace out without moving `orphanShare`, the
- * decision engine scores it routinely and the rest of the catalog gets its turns back.
+ * The bucket matches the default tick, so a run drains a batch every time it is chosen. It
+ * preempts nothing: disconnection is a diagnostic rather than a critical condition, so this runs
+ * on its demand score beside the rest of the catalog.
  */
 export function orphanCleanupOperation(): IntrospectionOperation {
   return {
     name: ORPHAN_CLEANUP_OPERATION,
-    answers: 'orphan_share',
     bucket: 'quarter-hour',
     relevance: orphanCleanupRelevance,
-    measure: (health) => health.graph.orphanShare,
-    improves: 'lower',
     run: runOrphanCleanup,
   };
 }

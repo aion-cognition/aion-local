@@ -38,8 +38,8 @@ import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-
  * waiting time and then on name, so moving a line here changes nothing about what runs. The
  * comment above each group says what that group is for.
  *
- * Twelve of the twenty-eight declare a `measure`, a number in the health snapshot their run is
- * scored on moving. The other sixteen are recorded as unmeasured rather than scored. Fourteen
+ * Eleven of the twenty-eight declare a `measure`, a number in the health snapshot their run is
+ * scored on moving. The other seventeen are recorded as unmeasured rather than scored. Fifteen
  * of those are waiting on a gauge the snapshot does not carry yet:
  *
  * - `claim_dedup`: a near-duplicate claim-pair count.
@@ -56,6 +56,9 @@ import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-
  * - `structural_discovery`: entities carrying fewer associations than a degree ceiling.
  * - `intention_upkeep`: intentions past their horizon by a whole horizon.
  * - `curiosity`: current entities the substrate holds no description for.
+ * - `orphan_cleanup`: it used to move the disconnection share, which now describes a
+ *   different population than the one it repairs. A replacement has to be validated
+ *   against the demand it is scored on before it can score the runs.
  *
  * Each is a graph read nothing computes on the tick today. Until one exists, its operation is
  * scored on relevance, waiting time, and cost alone, which is everything known about it.

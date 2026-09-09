@@ -105,6 +105,11 @@ describe('ContextVectorStage', () => {
       status: 'skipped',
       summary: 'no affected memory nodes to recompute',
       retryable: true,
+      settledOnUpstream: {
+        disposition: 'not_applicable',
+        reason: 'proved_empty_input',
+        proof: { affectedNodes: 0 },
+      },
     });
     expect(neighborQueryIssued).toBe(false);
   });

@@ -13,7 +13,6 @@ import {
   type ItemProvenance,
 } from '../../infrastructure/graph/claim-provenance-queries.js';
 import { normalizeCognitiveText } from '../../infrastructure/graph/cognitive-queries.js';
-import { listSessionEpisodeIds } from '../../infrastructure/graph/episodes.js';
 import {
   restatedClaims,
   type RestatedClaimPair,
@@ -30,9 +29,7 @@ import type { Logger } from '../../infrastructure/logging/logger.js';
 import { embedQueryPrefix } from '../../infrastructure/providers/embed-models.js';
 import type { Provider, Vector } from '../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { isLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
-import { orchestratorLedgerKey } from '../../reflection/application/orchestrator.js';
-import { PIPELINE_VERSION } from '../../reflection/domain/version.js';
+import { sessionObligationCensus } from '../../infrastructure/sqlite/source-readiness.js';
 import type { Measurement } from '../domain/admission.js';
 import { scoreArrivals } from '../domain/arrival-scoring.js';
 import type { FusedItem, RankedList } from '../domain/fusion.js';
@@ -304,27 +301,32 @@ export async function restatedClaimPairs(
 }
 
 /**
- * The calling session's own episodes with no orchestrator ledger key: stored and
- * findable by raw text, but not yet reachable by entity resolution, traversal, or context
- * vectors. Best-effort: a failure here costs the pack one honesty field, never the recall
- * itself, so it is caught and logged rather than allowed to fail the call.
+ * How many of the calling session's sources still owe required processing: stored and findable
+ * by raw text, but not yet reachable by entity resolution, traversal, or context vectors.
+ *
+ * Asked of the durable records rather than of the graph, so it counts each source once however
+ * many obligations it holds, counts an evicted source exactly as a resident one, and does not
+ * walk the session's episodes one ledger key at a time.
+ *
+ * A census that cannot be taken answers with its reason and no number. Returning zero for it
+ * would say the session owes nothing, which is the one thing an unreadable census cannot say.
  */
-export async function pendingEnrichment(
+export function sessionObligations(
   deps: StageReadDeps,
   sessionId: string,
-  mode: ReadMode,
-): Promise<number> {
+): { readonly pending?: number; readonly gap?: string } {
   try {
-    const episodeIds = await listSessionEpisodeIds(deps.driver, sessionId, mode);
-    let count = 0;
-    for (const episodeId of episodeIds) {
-      if (!isLedgerApplied(deps.db, orchestratorLedgerKey(PIPELINE_VERSION, episodeId))) {
-        count += 1;
-      }
+    const census = sessionObligationCensus(deps.db, sessionId);
+    if (census.status === 'measured') {
+      return { pending: census.sourcesOwingWork };
     }
-    return count;
+    deps.logger.debug(
+      { sessionId, reason: census.reason, detail: census.detail },
+      'session obligation census unavailable; the pack says so rather than reporting zero',
+    );
+    return { gap: census.reason };
   } catch (err) {
-    deps.logger.warn({ err, sessionId }, 'pending-enrichment count failed; omitted from the pack');
-    return 0;
+    deps.logger.warn({ err, sessionId }, 'session obligation census failed');
+    return { gap: 'census_read_failed' };
   }
 }

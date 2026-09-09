@@ -2,8 +2,9 @@ import type { Driver } from 'neo4j-driver';
 
 import { INTEGRATE_JOB_TYPE } from './intake.js';
 import type { ReflectionRun, ReflectionRunOptions } from './orchestrator.js';
+import { recordStageSettlements } from './stage-settlement.js';
 import { settleAndComplete } from './stated-references.js';
-import { attachContentVectors, findPendingVectorNodes } from './vectors.js';
+import { drainPendingVectors } from './vectors.js';
 import { backoffDelayMs } from '../../infrastructure/backoff.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { errorMessage } from '../../infrastructure/errors.js';
@@ -216,7 +217,7 @@ export class ReflectionWorker {
     this.#stopped = false;
     const reclaimed = reclaimStaleReflectionJobs(this.#deps.db, this.#staleTimeoutMs);
     this.#startReaper();
-    const vectored = await this.#drainPendingVectors();
+    const vectored = await drainPendingVectors(this.#deps, this.#vectorBatchSize);
     const ran = await this.#drainQueue();
 
     this.#deps.logger.info(
@@ -369,7 +370,7 @@ export class ReflectionWorker {
       // ledger open, which is the orchestrator saying the episode is still worth a retry.
       if (run.applied || run.status !== 'completed') {
         // Acked inside the comparison, since a reference accepted while the job ran is unwritten.
-        const ack = this.#succeed.bind(this, job, episodeId, run);
+        const ack = this.#succeed.bind(this, job, episodeId, run, now);
         await settleAndComplete(this.#deps, episodeId, now, ack);
         return;
       }
@@ -379,8 +380,11 @@ export class ReflectionWorker {
     }
   }
 
-  #succeed(job: ReflectionJob, episodeId: string, run: ReflectionRun): void {
+  #succeed(job: ReflectionJob, episodeId: string, run: ReflectionRun, now: Date): void {
     this.#consecutiveFailures = 0;
+    // Inside the completion transaction, beside the queue row and the reference comparison: a
+    // completion that rolls back leaves the obligations exactly as it found them.
+    recordStageSettlements(this.#deps.db, episodeId, run.summary, now);
     this.#claimant.complete(this.#deps.db, job.id);
     // Only a run that actually enriched something is the freshness pin's "intake to
     // enriched": `already_applied` and `episode_unavailable` measured nothing new, and
@@ -460,34 +464,6 @@ export class ReflectionWorker {
       this.#deps.logger.info('reflection worker resumed after cooldown');
       this.#pump();
     }, this.#breakerCooldownMs);
-  }
-
-  /**
-   * What an inference outage left behind, oldest first. A batch that comes back short of what
-   * was asked for, or that writes fewer vectors than it read, is the end of the drain: the
-   * rest is still pending and the next start or the `vector_backfill` operation takes it.
-   */
-  async #drainPendingVectors(): Promise<number> {
-    let attached = 0;
-    try {
-      for (;;) {
-        const batch = await findPendingVectorNodes(this.#deps.driver, this.#vectorBatchSize);
-        if (batch.length === 0) {
-          return attached;
-        }
-        const written = await attachContentVectors(this.#deps.driver, this.#deps.provider, batch);
-        attached += written.length;
-        if (written.length < batch.length || batch.length < this.#vectorBatchSize) {
-          return attached;
-        }
-      }
-    } catch (err) {
-      this.#deps.logger.warn(
-        { err, attached },
-        'pending content vectors deferred; the drain continues',
-      );
-      return attached;
-    }
   }
 
   /** Runs every claimable row, including a legacy one no signal will ever arrive for. */

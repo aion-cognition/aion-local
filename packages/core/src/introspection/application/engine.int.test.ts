@@ -214,15 +214,15 @@ describe('Introspector', () => {
       graph: {
         ...NEUTRAL_GRAPH_HEALTH,
         nodes: CRITICAL_MIN_POPULATION * 5,
-        orphanShare: 0.6,
+        episodesWithoutSession: 12,
       },
     });
     // A pathology nothing in the batch can repair: the operation is selected, runs, changes
-    // nothing, and the share it reports is the same on the next tick.
-    const emergency = fakeOperation('orphan_cleanup', {
-      answers: 'orphan_share',
-      relevance: (health) => health.graph.orphanShare,
-      measure: (health) => health.graph.orphanShare,
+    // nothing, and the count it reports is the same on the next tick.
+    const emergency = fakeOperation('backbone_repair', {
+      answers: 'missing_backbone_links',
+      relevance: () => 0.6,
+      measure: (health) => health.graph.episodesWithoutSession,
       run: (): Promise<OperationOutcome> =>
         Promise.resolve({ status: 'noop', itemsProcessed: 200, itemsAffected: 0 }),
     });
@@ -234,7 +234,7 @@ describe('Introspector', () => {
       last = await engineFor(bed, [routine, emergency], [standing], at).tickOnce();
     }
 
-    expect(operationStats(bed.db, 'orphan_cleanup').unchanged).toBeGreaterThanOrEqual(
+    expect(operationStats(bed.db, 'backbone_repair').unchanged).toBeGreaterThanOrEqual(
       CRITICAL_PREEMPTION_GRACE_RUNS,
     );
     expect(last.decision).toMatchObject({ kind: 'selected', name: 'routine_maintenance', tier: 2 });

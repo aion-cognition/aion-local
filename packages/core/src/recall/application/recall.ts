@@ -28,7 +28,7 @@ import {
   hydrate,
   measureArrivals,
   mmrVectors,
-  pendingEnrichment,
+  sessionObligations,
   relatedClaims,
   restatedClaimPairs,
 } from './stage-reads.js';
@@ -148,10 +148,9 @@ export async function handleRecall(
   // take the caller's holdings with it.
   const resetDelivery = payload.reset_delivery_suppression === true;
 
-  // Fired here rather than awaited here: it depends only on `sessionId` and `mode`, so
-  // starting it now lets it run alongside every stage below instead of adding its own
-  // latency once the pack is ready to assemble (see the `await` beside `assemblePack`).
-  const pendingEnrichmentPromise = pendingEnrichment(deps, sessionId, mode);
+  // One indexed read over the durable records, so it costs a point read rather than a graph
+  // walk and answers the same for an evicted source as for a resident one.
+  const obligations = sessionObligations(deps, sessionId);
 
   // Redacted before the cue model or the embedder sees any of it: both are inference calls
   // over caller-supplied text, and a secret-shaped token in the query is the same leak surface
@@ -279,10 +278,6 @@ export async function handleRecall(
     now,
   });
 
-  // Started as early as the session resolves and awaited only once the pack is ready to
-  // assemble, so this honesty field's own graph read never adds serial latency to the call.
-  const pendingEnrichmentCount = await pendingEnrichmentPromise;
-
   const candidates = new Map<string, FusedItem>();
   for (const item of [...fusion.value.items, ...resonance.value.items, ...intentions.items]) {
     candidates.set(item.id, item);
@@ -366,7 +361,8 @@ export async function handleRecall(
     cues: cues.value.cues,
     timings,
     ...(degradations.length === 0 ? {} : { degraded: degradations }),
-    pendingEnrichment: pendingEnrichmentCount,
+    ...(obligations.pending === undefined ? {} : { pendingEnrichment: obligations.pending }),
+    ...(obligations.gap === undefined ? {} : { obligationCensusGap: obligations.gap }),
     ...(truncated === undefined ? {} : { truncated }),
     restating: queryRestatements(fusion.value.items, {
       floor: deps.config.recall.restatementFloor,

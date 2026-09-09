@@ -21,6 +21,9 @@ const UNMEASURED_OPERATIONS = [
   'narrative_cleanup',
   'narrative_rollup_day',
   'narrative_rollup_week',
+  // The disconnection share it used to move is a different number about a different
+  // population now. Unmeasured until a replacement has been validated against the new demand.
+  'orphan_cleanup',
   'proposal_resolution',
   'recall_probe',
   'retro_judgment_sweep',

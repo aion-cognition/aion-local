@@ -44,6 +44,52 @@ export type StageOutcome = {
    * disposition is what says whether running it again could decide it.
    */
   readonly withheldWork?: readonly WithheldWork[];
+  /**
+   * What this run settles about the stage's obligation to the source, when it settles it.
+   * Absent means the obligation is still owed, whatever the prose above says.
+   */
+  readonly settled?: StageSettlement;
+  /**
+   * A settlement that holds only once every earlier required stage has settled.
+   *
+   * A stage that read its input successfully and found none has proved the input empty only if
+   * the stage that produces that input finished. Until then the same reading is a stage waiting
+   * on a predecessor, which is work owed. Missing vectors and unreadable nodes never qualify:
+   * those are absent evidence rather than proved absence, so a stage in that position declares
+   * nothing and stays owed.
+   */
+  readonly settledOnUpstream?: StageSettlement;
+};
+
+/**
+ * Why a stage that published nothing is nevertheless finished with this source.
+ *
+ * The set is closed and every member names something the stage actually held. A stage that
+ * failed, that could not read what it needed, or that ended a bounded scan owes its work and
+ * says nothing here. Prose in `summary` is not a typed reason, and reading a disposition out of
+ * one is how an unprocessed source passes for a finished one.
+ */
+export type StageSettlementReason =
+  /** The accepted pass ran and its effects were written. This is what an `ok` status means. */
+  | 'accepted_pass_applied'
+  /** The episode carries less readable content than the stage's accepted minimum. */
+  | 'below_minimum_input'
+  /** The recorded policy turned this pass off for this source. */
+  | 'disabled_by_policy'
+  /** A complete upstream read proved there was nothing for this stage to act on. */
+  | 'proved_empty_input'
+  /** The accepted pass ran to its end and had nothing to publish. */
+  | 'pass_produced_nothing'
+  /** An earlier run already created this stage's durable effects. */
+  | 'effects_already_recorded'
+  /** The pass is a dispatch and the receiving side acknowledged it. */
+  | 'dispatch_acknowledged';
+
+export type StageSettlement = {
+  readonly disposition: 'complete' | 'not_applicable';
+  readonly reason: StageSettlementReason;
+  /** What the disposition rests on, recorded beside it so a later reader can check the same thing. */
+  readonly proof?: Readonly<Record<string, string | number | boolean>>;
 };
 
 /**
@@ -128,6 +174,24 @@ export function stageLedgerKey(
   episodeId: string,
 ): string {
   return `reflection:stage:${pipelineVersion}:${stageName}:${episodeId}`;
+}
+
+/**
+ * What one run settles about a stage's obligation, or nothing when it settles nothing.
+ *
+ * An `ok` status is the stage saying it ran its accepted pass and wrote its effects, so it
+ * settles the obligation whether or not it declared a reason of its own. Everything else needs
+ * the stage to have declared one: a failure, a skip for want of input, and a bounded scan that
+ * ended are all work still owed, and the prose in `summary` is not evidence about which.
+ */
+export function stageSettlementOf(outcome: StageOutcome): StageSettlement | undefined {
+  if (outcome.settled !== undefined) {
+    return outcome.settled;
+  }
+  if (outcome.status === 'ok') {
+    return { disposition: 'complete', reason: 'accepted_pass_applied' };
+  }
+  return undefined;
 }
 
 /** The `summary` a skipped-by-ledger stage records, distinct from a stage's own business-logic skip. */

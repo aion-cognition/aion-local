@@ -105,9 +105,7 @@ describe('aion maintain ls', () => {
     expect(listing).toContain(
       'emergency_relationship_repair  quarter-hour window, critical responder for missing_backbone_links',
     );
-    expect(listing).toContain(
-      'orphan_cleanup  quarter-hour window, critical responder for orphan_share',
-    );
+    expect(listing).toContain('orphan_cleanup  quarter-hour window, routine');
     expect(listing).toContain(
       'vector_backfill  quarter-hour window, critical responder for vector_parity',
     );
