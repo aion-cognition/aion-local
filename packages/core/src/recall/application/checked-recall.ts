@@ -1,4 +1,5 @@
 import {
+  isRecallRefusal,
   RecallInputSchema,
   type CoverageRefusal,
   type MemoryPack,
@@ -151,7 +152,7 @@ export function recallResultFor(outcome: CheckedRecallOutcome): RecallResult {
  * only the block would otherwise be told nothing was found.
  */
 export function recallText(result: RecallResult): string {
-  return 'status' in result
+  return isRecallRefusal(result)
     ? refusalLines(result.coverage_refusal).join('\n')
     : result.rendered_text;
 }
