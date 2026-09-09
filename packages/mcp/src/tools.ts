@@ -1,4 +1,9 @@
-import { recallText, ReflectionNotStoredError, type Logger } from '@aion/core';
+import {
+  PublicationUnavailable,
+  recallText,
+  ReflectionNotStoredError,
+  type Logger,
+} from '@aion/core';
 import {
   MemoryPackSchema,
   RecallInputSchema,
@@ -175,6 +180,33 @@ function ackText(output: ReflectionOutput): string {
 const TOOL_NAMES = new Set(TOOL_DEFINITIONS.map((tool) => tool.name));
 
 /**
+ * What a client needs to decide whether to send the same request again.
+ *
+ * `retryable` is the failure class's own answer, read off a class this module recognizes
+ * rather than off any object that happens to carry the field, so an invariant or unrecognized
+ * failure cannot acquire retryability by resembling a transient one.
+ *
+ * It says nothing about whether the experience was stored. A publication the substrate
+ * accepted is durable before the graph half runs and is settled by the next publication
+ * either way, so retryability answers "send it again", not "it is gone". `reason` is the
+ * substrate's own short name for the failure and `operationId` is the delivery identity the
+ * service log records; neither carries the payload.
+ */
+type PublicationErrorData = {
+  readonly retryable: boolean;
+  readonly reason: string;
+  readonly operationId?: string;
+};
+
+function publicationErrorData(err: PublicationUnavailable): PublicationErrorData {
+  return {
+    retryable: err.retryable,
+    reason: err.reason,
+    ...(err.operationId === undefined ? {} : { operationId: err.operationId }),
+  };
+}
+
+/**
  * A payload rejected by the handler's own `parse` is the caller's error and comes back as
  * invalid-params carrying the zod message. Anything else is ours: it is logged with its
  * stack and reported as an internal error naming the failure class, never the payload.
@@ -183,6 +215,9 @@ const TOOL_NAMES = new Set(TOOL_DEFINITIONS.map((tool) => tool.name));
  * One class carries its own message through: `ReflectionNotStoredError` states what
  * happened to the experience the caller just handed over, which no class name can, and an
  * agent that is not told its reflection was dropped will not send it again.
+ *
+ * A publication failure additionally carries its terms as structure. The class name in prose
+ * was all a client had, and deciding to retry by matching that string is not a contract.
  */
 function toMcpError(tool: string, err: unknown, logger: Logger): McpError {
   if (err instanceof z.ZodError) {
@@ -193,10 +228,11 @@ function toMcpError(tool: string, err: unknown, logger: Logger): McpError {
     return new McpError(ErrorCode.InternalError, err.message);
   }
   const name = err instanceof Error ? err.name : typeof err;
-  return new McpError(
-    ErrorCode.InternalError,
-    `${tool} failed (${name}); see the aion service log`,
-  );
+  const message = `${tool} failed (${name}); see the aion service log`;
+  if (err instanceof PublicationUnavailable) {
+    return new McpError(ErrorCode.InternalError, message, publicationErrorData(err));
+  }
+  return new McpError(ErrorCode.InternalError, message);
 }
 
 /**

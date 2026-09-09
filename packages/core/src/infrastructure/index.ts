@@ -17,6 +17,8 @@ export type { SqliteHandle } from './sqlite/database.js';
 
 export { PublicationCoordinator } from './publication/coordinator.js';
 export { PublicationRecoveryLoop } from './publication/recovery.js';
+/** The base of the publication failure family, so a transport can recognize one and report its terms. */
+export { PublicationUnavailable } from './publication/errors.js';
 
 export {
   countExperiencesByVersion,

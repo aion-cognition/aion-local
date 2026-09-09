@@ -6,6 +6,12 @@ import {
   type FusedItem,
   type Logger,
 } from '@aion/core';
+import {
+  PublicationInvariantError,
+  PublicationPendingError,
+  PublicationRetryableError,
+  PublicationUnavailable,
+} from '@aion/core/infrastructure/publication/errors.js';
 import { admittedAll } from '@aion/core/recall/domain/test-support/admission.fixture.js';
 import {
   MemoryPackSchema,
@@ -365,5 +371,114 @@ describe('error mapping', () => {
     );
 
     expect((err as McpError).code).toBe(ErrorCode.MethodNotFound);
+  });
+});
+
+/**
+ * The terms of a publication failure, as structure rather than as a class name inside a
+ * sentence. A client deciding whether to send the same request again was matching that string
+ * before this; nothing about the wording was a contract.
+ *
+ * The backend is a stub throwing the failure classes themselves, so what is exercised here is
+ * the mapping and nothing behind it.
+ */
+describe('publication failure data', () => {
+  const OPERATION = 'intake:0b0f6c1e-7f8a-4a2b-9f77-6d1c4d0f6a51';
+  /** Stands in for the native diagnostic: it names nodes and transactions and must not travel. */
+  const INTERNAL_CAUSE = new Error(
+    'ForsetiClient[transactionId=819] deadlock wait cycle NODE(339)',
+  );
+
+  async function dataFor(err: Error): Promise<unknown> {
+    const caught = await callTool(
+      backendThrowing(err),
+      logger,
+      'reflection',
+      { observations: [SECRET_QUERY] },
+      'session-a',
+    ).catch((raised: unknown) => raised);
+    expect(caught).toBeInstanceOf(McpError);
+    expect((caught as McpError).code).toBe(ErrorCode.InternalError);
+    return (caught as McpError).data;
+  }
+
+  it('carries retryability, the reason and the delivery identity for a recognized transient failure', async () => {
+    const data = await dataFor(
+      new PublicationRetryableError('store_unavailable', OPERATION, { cause: INTERNAL_CAUSE }),
+    );
+
+    expect(data).toEqual({
+      retryable: true,
+      reason: 'store_unavailable',
+      operationId: OPERATION,
+    });
+  });
+
+  it('carries the same terms for a publication left pending after a commit attempt', async () => {
+    const data = await dataFor(new PublicationPendingError(OPERATION, INTERNAL_CAUSE));
+
+    expect(data).toEqual({ retryable: true, reason: 'pending_recovery', operationId: OPERATION });
+  });
+
+  // Retryability is the class's own answer. An invariant failure is a refusal to guess, and a
+  // client that retried it would get the same refusal.
+  it('never reports an invariant or unclassified publication failure as retryable', async () => {
+    const invariant = await dataFor(new PublicationInvariantError('pending_slot_mismatch'));
+    const unclassified = await dataFor(new PublicationUnavailable('publication_failed', OPERATION));
+
+    expect(invariant).toEqual({ retryable: false, reason: 'pending_slot_mismatch' });
+    expect(unclassified).toEqual({
+      retryable: false,
+      reason: 'publication_failed',
+      operationId: OPERATION,
+    });
+  });
+
+  // Recognition is by class, so an unrelated failure carrying the same field name gains nothing.
+  it('attaches nothing to a failure it does not recognize, however it is shaped', async () => {
+    const impostor = Object.assign(new TypeError('driver exploded'), {
+      retryable: true,
+      reason: 'store_unavailable',
+    });
+
+    expect(await dataFor(impostor)).toBeUndefined();
+    expect(await dataFor(new TypeError('driver exploded'))).toBeUndefined();
+  });
+
+  it('leaves a rejected payload as invalid params, with no data and no retry claim', async () => {
+    const parsed = z.object({ query: z.string() }).safeParse({});
+    if (parsed.success) {
+      throw new Error('expected the zod parse to fail');
+    }
+
+    const err = await callTool(
+      backendThrowing(parsed.error),
+      logger,
+      'reflection',
+      { observations: [SECRET_QUERY] },
+      'session-a',
+    ).catch((caught: unknown) => caught);
+
+    expect((err as McpError).code).toBe(ErrorCode.InvalidParams);
+    expect((err as McpError).data).toBeUndefined();
+  });
+
+  it('names the failure class in prose and carries neither the cause nor the payload', async () => {
+    const err = await callTool(
+      backendThrowing(
+        new PublicationRetryableError('store_unavailable', OPERATION, { cause: INTERNAL_CAUSE }),
+      ),
+      logger,
+      'reflection',
+      { observations: [SECRET_QUERY] },
+      'session-a',
+    ).catch((caught: unknown) => caught);
+
+    const raised = err as McpError;
+    const wire = JSON.stringify({ message: raised.message, data: raised.data });
+    expect(raised.message).toContain('PublicationRetryableError');
+    expect(wire).not.toContain(SECRET_QUERY);
+    expect(wire).not.toContain('Forseti');
+    expect(logText()).not.toContain(SECRET_QUERY);
   });
 });
