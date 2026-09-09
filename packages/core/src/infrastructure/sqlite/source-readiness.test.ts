@@ -14,7 +14,6 @@ import {
 } from './processing-generations.js';
 import { publishReadinessPolicy } from './readiness-policies.js';
 import { recordSourceRecord } from './source-identity.js';
-import { recordSourceStateVersion } from './source-lifecycle.js';
 import {
   readGenerationWork,
   readPolicyStages,
@@ -177,15 +176,40 @@ describe('session obligation census', () => {
     expect(sessionObligationCensus(store.db, SESSION)).toMatchObject({ sourcesOwingWork: 1 });
   });
 
+  it('refuses a count for a generation naming a policy revision this store cannot read', () => {
+    archiveRow('source-1');
+    sourceRow('source-1');
+    const generation = allocateProcessingGeneration(store.db, {
+      sourceId: 'source-1',
+      policyRevision: 99,
+      createdAt: NOW,
+    });
+    prepareInventorySkeleton(store.db, {
+      sourceId: 'source-1',
+      processingGeneration: generation,
+      stageNames: STAGES,
+      dueAt: NOW,
+    });
+    activateProcessingGeneration(store.db, 'source-1', generation);
+
+    expect(sessionObligationCensus(store.db, SESSION)).toMatchObject({
+      status: 'unavailable',
+      reason: 'unreadable_policy',
+    });
+  });
+
   it('drops a forgotten source stage work from the count and keeps its other obligations', () => {
     const generation = liveSource('source-1');
-    recordSourceStateVersion(store.db, {
-      sourceId: 'source-1',
-      stateKind: 'forgotten',
-      operationId: 'operation-1',
-      observedAt: NOW,
-      knownFrom: NOW,
-    });
+    // The forget is a disposition on the rows, not a filter over them: the settlement closes each
+    // generative stage with its typed outcome, and the count reads what the rows say.
+    for (const name of STAGES) {
+      completeSourceWork(
+        store.db,
+        stageWorkId('source-1', generation, name),
+        { outcome: 'not_applicable', reason: 'source_forgotten', proof: { stateVersion: 1 } },
+        NOW,
+      );
+    }
 
     expect(sessionObligationCensus(store.db, SESSION)).toMatchObject({ sourcesOwingWork: 0 });
 

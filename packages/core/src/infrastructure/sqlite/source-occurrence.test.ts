@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { SqliteStore } from './database.js';
+import { acknowledgePublicationIntent, preparePublicationIntent } from './publication-intents.js';
 import { recordSourceRecord } from './source-identity.js';
 import {
   acknowledgeSourceStateVersions,
@@ -22,6 +23,26 @@ const KEY = { identityHash: 'identity-hash-1', sessionId: 'session-a' };
 
 let dir: string;
 let store: SqliteStore;
+
+/** The publication a statement about a source travels in, acknowledged. */
+function acknowledgeOperation(operationId: string): void {
+  preparePublicationIntent(store.db, {
+    operationId,
+    kind: 'source_suppression',
+    payloadDigest: `digest:${operationId}`,
+    payloadJson: '{}',
+    affectedScopesJson: '[]',
+    expectedJson: '{}',
+    preparedActionsJson: '[]',
+    createdAt: NOW,
+  });
+  acknowledgePublicationIntent(store.db, {
+    operationId,
+    resultDigest: `result:${operationId}`,
+    resultJson: '{}',
+    observedAckAt: NOW,
+  });
+}
 
 function seedOccurrence(sourceId: string, identityHash = KEY.identityHash): void {
   recordSourceRecord(store.db, {
@@ -92,6 +113,7 @@ describe('occurrence resolution', () => {
       observedAt: NOW,
       knownFrom: NOW,
     });
+    acknowledgeOperation('operation-forget');
 
     expect(resolveSourceOccurrence(store.db, KEY)).toEqual({
       kind: 'forgotten',
@@ -116,6 +138,8 @@ describe('occurrence resolution', () => {
       observedAt: NOW,
       knownFrom: NOW,
     });
+    acknowledgeOperation('operation-forget');
+    acknowledgeOperation('operation-unforget');
 
     expect(isSourceForgotten(store.db, 'source-1')).toBe(false);
     expect(resolveSourceOccurrence(store.db, KEY)).toMatchObject({ kind: 'held' });
@@ -141,6 +165,7 @@ describe('occurrence resolution', () => {
       observedAt: NOW,
       knownFrom: NOW,
     });
+    acknowledgeOperation('operation-forget');
 
     expect(resolveSourceOccurrence(store.db, KEY)).toEqual({
       kind: 'held',
@@ -187,6 +212,7 @@ describe('occurrence resolution', () => {
       observedAt: NOW,
     });
     acknowledgeSourceStateVersions(store.db, 'operation-forget', NOW.toISOString());
+    acknowledgeOperation('operation-forget');
 
     expect(hasPendingSourceState(store.db, 'source-1')).toBe(false);
     expect(resolveSourceOccurrence(store.db, KEY)).toEqual({

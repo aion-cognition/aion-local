@@ -258,17 +258,23 @@ export type CommittedForget = {
 };
 
 /**
- * The newest acknowledged forget statement on a source, when that is what still stands.
+ * The newest committed forget statement on a source, when that is what still stands.
  *
  * One reader for every caller that turns on whether a source is gone, so the predicate cannot
  * drift between the census that counts and the settlement that closes rows against it.
+ *
+ * Committed means the same thing here as everywhere else in the committed view: the statement's
+ * own operation is acknowledged. A `known_from` is a timestamp somebody wrote, and a publication
+ * that was later refused would otherwise have decided the source was gone.
  */
 export function committedForget(db: SqliteHandle, sourceId: string): CommittedForget | undefined {
   const row = db
     .prepare(
-      `SELECT state_kind, version, known_from FROM source_state_versions
-       WHERE source_id = ? AND state_kind IN ('forgotten','unforgotten') AND known_from IS NOT NULL
-       ORDER BY version DESC LIMIT 1`,
+      `SELECT s.state_kind, s.version, s.known_from FROM source_state_versions s
+       JOIN publication_intents i ON i.operation_id = s.operation_id AND i.state = 'acknowledged'
+       WHERE s.source_id = ? AND s.state_kind IN ('forgotten','unforgotten')
+         AND s.known_from IS NOT NULL
+       ORDER BY s.version DESC LIMIT 1`,
     )
     .get(sourceId) as
     { state_kind: SourceStateKind; version: number; known_from: string } | undefined;

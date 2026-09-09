@@ -11,6 +11,10 @@ import {
   prepareInventorySkeleton,
   readGeneration,
 } from '../../infrastructure/sqlite/processing-generations.js';
+import {
+  acknowledgePublicationIntent,
+  preparePublicationIntent,
+} from '../../infrastructure/sqlite/publication-intents.js';
 import { publishReadinessPolicy } from '../../infrastructure/sqlite/readiness-policies.js';
 import { recordSourceStateVersion } from '../../infrastructure/sqlite/source-lifecycle.js';
 import { readGenerationWork } from '../../infrastructure/sqlite/source-readiness.js';
@@ -62,6 +66,33 @@ describe('stage settlement', () => {
     store.close();
     rmSync(dir, { recursive: true, force: true });
   });
+
+  /** One statement about the source, in the acknowledged publication that carried it. */
+  function commitSourceState(stateKind: 'forgotten' | 'unforgotten', operationId: string): void {
+    recordSourceStateVersion(store.db, {
+      sourceId: SOURCE,
+      stateKind,
+      operationId,
+      knownFrom: NOW,
+      observedAt: NOW,
+    });
+    preparePublicationIntent(store.db, {
+      operationId,
+      kind: 'source_suppression',
+      payloadDigest: `digest:${operationId}`,
+      payloadJson: '{}',
+      affectedScopesJson: '[]',
+      expectedJson: '{}',
+      preparedActionsJson: '[]',
+      createdAt: NOW,
+    });
+    acknowledgePublicationIntent(store.db, {
+      operationId,
+      resultDigest: `result:${operationId}`,
+      resultJson: '{}',
+      observedAckAt: NOW,
+    });
+  }
 
   function stateOf(stageName: string): { state: string; reason: string | null; outcome?: string } {
     const row = readGenerationWork(store.db, SOURCE, 1).find(
@@ -206,13 +237,7 @@ describe('stage settlement', () => {
   });
 
   it('closes a forgotten source stage rows as not applicable, naming the statement', () => {
-    recordSourceStateVersion(store.db, {
-      sourceId: SOURCE,
-      stateKind: 'forgotten',
-      operationId: 'forget-1',
-      knownFrom: NOW,
-      observedAt: NOW,
-    });
+    commitSourceState('forgotten', 'forget-1');
 
     recordStageSettlements(store.db, SOURCE, summary([]), NOW);
 
@@ -226,21 +251,9 @@ describe('stage settlement', () => {
   });
 
   it('owes those rows again once the forget they rested on is withdrawn', () => {
-    recordSourceStateVersion(store.db, {
-      sourceId: SOURCE,
-      stateKind: 'forgotten',
-      operationId: 'forget-1',
-      knownFrom: NOW,
-      observedAt: NOW,
-    });
+    commitSourceState('forgotten', 'forget-1');
     recordStageSettlements(store.db, SOURCE, summary([]), NOW);
-    recordSourceStateVersion(store.db, {
-      sourceId: SOURCE,
-      stateKind: 'unforgotten',
-      operationId: 'unforget-1',
-      knownFrom: NOW,
-      observedAt: NOW,
-    });
+    commitSourceState('unforgotten', 'unforget-1');
 
     recordStageSettlements(store.db, SOURCE, summary([]), NOW);
 
@@ -253,13 +266,7 @@ describe('stage settlement', () => {
 
   it('leaves a pass this run closed alone when the source is forgotten', () => {
     recordStageSettlements(store.db, SOURCE, summary([record('entities')]), NOW);
-    recordSourceStateVersion(store.db, {
-      sourceId: SOURCE,
-      stateKind: 'forgotten',
-      operationId: 'forget-1',
-      knownFrom: NOW,
-      observedAt: NOW,
-    });
+    commitSourceState('forgotten', 'forget-1');
 
     recordStageSettlements(store.db, SOURCE, summary([]), NOW);
 

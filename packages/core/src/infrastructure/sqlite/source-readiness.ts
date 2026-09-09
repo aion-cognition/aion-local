@@ -71,6 +71,10 @@ export type SessionCensusGap =
   | 'unbackfilled'
   /** A source in the session has no active generation, so its obligations are unaccounted. */
   | 'missing_generation'
+  /** A generation names a policy revision this store cannot read, so nothing says what it owes. */
+  | 'unreadable_policy'
+  /** A generation has no row for a stage its policy requires, so its inventory is incomplete. */
+  | 'incomplete_inventory'
   /** A source was accepted before any readiness policy existed and owes an inventory. */
   | 'inventory_obligation';
 
@@ -88,16 +92,10 @@ export type SessionObligationCensus =
 
 const OUTSTANDING_STATES = `('pending','retryable','transferred','pinned','dead_letter')`;
 
-/**
- * The latest acknowledged forget statement on a source, as a scalar. Suppression removes the
- * source-dependent generative obligations from the count and leaves settlement and indexing
- * where they are: those are owed whatever became of the content.
- */
-const LATEST_FORGET = `(SELECT sv.state_kind FROM source_state_versions sv
-   WHERE sv.source_id = r.source_id
-     AND sv.state_kind IN ('forgotten','unforgotten')
-     AND sv.known_from IS NOT NULL
-   ORDER BY sv.version DESC LIMIT 1)`;
+/** Stage rows one generation holds, whatever state each is in. */
+const STAGE_ROWS = `(SELECT count(*) FROM source_work sw
+   WHERE sw.source_id = g.source_id AND sw.processing_generation = g.processing_generation
+     AND sw.kind = 'stage')`;
 
 /**
  * What one session's sources still owe, in one indexed read.
@@ -106,9 +104,16 @@ const LATEST_FORGET = `(SELECT sv.state_kind FROM source_state_versions sv
  * rows alias to it. Evicted sources are in the population, because the records outlive the
  * projection and a count that dropped them would report a session getting smaller as it aged.
  *
- * A session holding a source with no active generation, or one that owes an inventory because it
- * was accepted before any policy existed, gets no number at all. That census is missing rather
- * than empty, and returning zero for it is how an unprocessed session reads as a finished one.
+ * A session holding a source with no active generation, one whose policy revision this store
+ * cannot read, one whose inventory has no row for a stage that policy requires, or one that owes
+ * an inventory because it was accepted before any policy existed, gets no number at all. That
+ * census is missing rather than empty, and returning zero for it is how an unprocessed session
+ * reads as a finished one.
+ *
+ * A forgotten source is not filtered out here. Its generative rows carry a typed
+ * `source_forgotten` outcome once the settlement records one, and until they do the work is
+ * genuinely outstanding: hiding it behind a predicate would report the disposition before
+ * anything made it.
  */
 export function sessionObligationCensus(
   db: SqliteHandle,
@@ -137,19 +142,22 @@ export function sessionObligationCensus(
       `SELECT
          count(DISTINCT r.source_id) AS sources,
          count(DISTINCT CASE WHEN g.source_id IS NULL THEN r.source_id END) AS ungenerated,
+         count(DISTINCT CASE WHEN g.source_id IS NOT NULL AND p.policy_revision IS NULL
+                             THEN r.source_id END) AS unreadable,
+         count(DISTINCT CASE WHEN p.policy_revision IS NOT NULL
+                              AND ${STAGE_ROWS} < json_array_length(p.stages_json)
+                             THEN r.source_id END) AS incomplete,
          count(DISTINCT CASE WHEN w.kind = 'inventory'
                               AND w.state IN ${OUTSTANDING_STATES}
                              THEN r.source_id END) AS unaccounted,
-         count(DISTINCT CASE WHEN w.state IN ${OUTSTANDING_STATES}
-                              AND w.kind != 'judgment'
-                              AND (w.kind != 'stage'
-                                   OR COALESCE(${LATEST_FORGET}, '') != 'forgotten')
+         count(DISTINCT CASE WHEN w.state IN ${OUTSTANDING_STATES} AND w.kind != 'judgment'
                              THEN r.source_id END) AS owing,
          count(DISTINCT CASE WHEN w.kind = 'judgment' AND w.state IN ${OUTSTANDING_STATES}
                              THEN w.work_id END) AS judgments
        FROM source_records r
        LEFT JOIN source_processing_generations g
          ON g.source_id = r.source_id AND g.state = 'active'
+       LEFT JOIN readiness_policies p ON p.policy_revision = g.policy_revision
        LEFT JOIN source_work w
          ON w.source_id = g.source_id AND w.processing_generation = g.processing_generation
        WHERE r.session_id = ?`,
@@ -157,6 +165,8 @@ export function sessionObligationCensus(
     .get(sessionId) as {
     sources: number;
     ungenerated: number;
+    unreadable: number;
+    incomplete: number;
     unaccounted: number;
     owing: number;
     judgments: number;
@@ -168,11 +178,31 @@ export function sessionObligationCensus(
       detail: `${String(row.ungenerated)} of ${String(row.sources)} sources have no active processing generation`,
     };
   }
+  // The inventory obligation answers first: a source accepted before any policy existed names no
+  // readable revision on purpose, and its own row says so more precisely than the policy read
+  // below could.
   if (row.unaccounted > 0) {
     return {
       status: 'unavailable',
       reason: 'inventory_obligation',
       detail: `${String(row.unaccounted)} of ${String(row.sources)} sources still owe an inventory`,
+    };
+  }
+  // Then the policy, then the inventory it requires. In that order because with no readable
+  // policy there is no required stage list, and comparing a row count against a NULL length is
+  // the comparison that answers NULL and drops the source out of every CASE around it.
+  if (row.unreadable > 0) {
+    return {
+      status: 'unavailable',
+      reason: 'unreadable_policy',
+      detail: `${String(row.unreadable)} of ${String(row.sources)} sources name a policy revision this store cannot read`,
+    };
+  }
+  if (row.incomplete > 0) {
+    return {
+      status: 'unavailable',
+      reason: 'incomplete_inventory',
+      detail: `${String(row.incomplete)} of ${String(row.sources)} sources have no row for a stage their policy requires`,
     };
   }
   return {
