@@ -1,5 +1,6 @@
 import {
   durableRoleScope,
+  nodeScopeDirection,
   type DurableRole,
   type ScopeDirection,
 } from '../../evidence/domain/scopes.js';
@@ -235,33 +236,6 @@ export function classifyLegacyRelations(input: {
 }
 
 /**
- * The direction each role's scope carries at the NODE end, and therefore the opposite at the
- * source end.
- *
- * The link is always stored source-to-node, because that is what an incidence row is. The scope
- * direction is a separate question and the registry already answers it: a claim's own extraction
- * is `extraction:out` on the claim (`subjects.ts` reads it there, `OWNERSHIP_SCOPES` registers it
- * there), because the claim is the end that asserts it. Deriving the direction from how the link
- * happens to be stored would key a claim's extraction under `extraction:in`, which is a counter
- * nothing else reads and a census nothing else can see.
- */
-const NODE_DIRECTION: Readonly<Record<DurableRole, ScopeDirection>> = {
-  extraction: 'out',
-  mention: 'in',
-  participation: 'in',
-  source_coverage: 'in',
-  session_ownership: 'in',
-  raw_order: 'in',
-  stated_confirmation: 'in',
-  stated_correction: 'in',
-  stated_derivation: 'in',
-};
-
-export function nodeScopeDirection(role: DurableRole): ScopeDirection {
-  return NODE_DIRECTION[role];
-}
-
-/**
  * Every scope one plan moves: both ends of each role it recorded. Both ends, because a reader
  * asking the node what stands behind it and a reader asking the source what it touches are
  * reading two different counters.
@@ -272,7 +246,7 @@ export function planScopes(
 ): readonly ScopeAdvanceKey[] {
   const scopes = new Map<string, ScopeAdvanceKey>();
   for (const entry of links) {
-    const node = NODE_DIRECTION[entry.scopeRole];
+    const node = nodeScopeDirection(entry.scopeRole);
     const source: ScopeDirection = node === 'in' ? 'out' : 'in';
     for (const scope of [
       { endpointId: sourceId, relationClass: durableRoleScope(entry.scopeRole, source) },

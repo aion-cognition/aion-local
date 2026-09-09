@@ -11,8 +11,7 @@ import {
 import { clearGraphNodes } from './test-support/neo4j-harness.fixture.js';
 import { findOrphanNodes } from './topology-queries.js';
 import { certifyNodeSupport } from '../../evidence/application/node-support.js';
-import { durableRoleScope, NARRATIVE_SCOPES } from '../../evidence/domain/scopes.js';
-import { establishScope } from '../../evidence/test-support/evidence.fixture.js';
+import { establishNodeSupportScopes } from '../../evidence/test-support/evidence.fixture.js';
 import { readOrphanCensus } from '../../introspection/application/orphan-census.js';
 import { SqliteStore } from '../sqlite/database.js';
 import { recordOrphanQualification } from '../sqlite/orphan-observations.js';
@@ -60,10 +59,7 @@ it('eventually examines later actionable nodes behind an unchanged unknown first
     'CREATE (:AionNode:Memory:Insight {id:"older",tx_from:datetime($early)}) CREATE (:AionNode:Memory:Insight {id:"later",tx_from:datetime($later)})',
     { early: EARLY.toISOString(), later: '2026-08-02T00:00:00.000Z' },
   );
-  for (const role of ['extraction', 'mention', 'participation', 'source_coverage'] as const) {
-    establishScope(store.db, 'later', durableRoleScope(role, 'in'), EARLY);
-  }
-  establishScope(store.db, 'later', NARRATIVE_SCOPES[0], EARLY);
+  establishNodeSupportScopes(store.db, 'later', EARLY);
   const proof = certifyNodeSupport(store.db, 'later');
   expect(proof.support).toBe('unsupported');
   recordOrphanQualification(store.db, {

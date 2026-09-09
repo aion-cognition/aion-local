@@ -1,9 +1,5 @@
-import {
-  NARRATIVE_SCOPES,
-  durableRoleScope,
-  isRegisteredScope,
-  scopeAuthority,
-} from '../../evidence/domain/scopes.js';
+import { NODE_SUPPORT_SCOPES } from '../../evidence/application/node-support.js';
+import { isRegisteredScope, scopeAuthority } from '../../evidence/domain/scopes.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   acknowledgeStatedLinkVersions,
@@ -16,11 +12,7 @@ import {
 } from '../../infrastructure/sqlite/evidence-scope.js';
 import { countMigrationProgress } from '../../infrastructure/sqlite/migration-cohorts.js';
 import { commitSourceIncidence } from '../../infrastructure/sqlite/source-incidence.js';
-import {
-  nodeScopeDirection,
-  type MaterializedLink,
-  type ScopeAdvanceKey,
-} from '../domain/legacy-materialization.js';
+import type { MaterializedLink, ScopeAdvanceKey } from '../domain/legacy-materialization.js';
 
 /**
  * The durable half of the guarded legacy materialization, and the census seal that follows it.
@@ -31,27 +23,6 @@ import {
  * of many cannot make it. The seal makes it, once every member of the frozen cohort has been
  * walked, which is what "established only when all pages account" means in code.
  */
-
-/**
- * The roles a node's census has to account for.
- *
- * The four support roles, because that is what a repair sweep reads before it suppresses a node.
- * The three stated roles too, because a correction, a confirmation or a derivation arriving at a
- * node is what invalidates a decision made about it, and a scope nobody counted cannot say that
- * none arrived: the judgment pins forever on a claim that has never been corrected.
- *
- * Each is counted at the direction the scope registry puts it under, not at a uniform `in`. A
- * census filed under a direction nothing reads is a census nobody can see.
- */
-const NODE_ROLES = [
-  'extraction',
-  'mention',
-  'participation',
-  'source_coverage',
-  'stated_correction',
-  'stated_confirmation',
-  'stated_derivation',
-] as const;
 
 /**
  * A link as the stored plan carries it. The scope role is decided when the plan is made and read
@@ -235,10 +206,11 @@ export function endpointCensusScopes(db: SqliteHandle, endpointId: string): read
       .filter((scope) => isRegisteredScope(scope) && scopeAuthority(scope) === 'sqlite'),
   );
   if (isNodeEndpoint(db, endpointId)) {
-    for (const role of NODE_ROLES) {
-      scopes.add(durableRoleScope(role, nodeScopeDirection(role)));
+    // Exactly the scopes a repair sweep reads before it suppresses a node, taken from the reader
+    // itself: a census filed under a scope that reader does not ask for is one nobody can see.
+    for (const scope of NODE_SUPPORT_SCOPES) {
+      scopes.add(scope);
     }
-    scopes.add(NARRATIVE_SCOPES[0]);
   }
   return [...scopes].sort();
 }

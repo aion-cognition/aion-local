@@ -72,6 +72,36 @@ export function durableRoleScope(role: DurableRole, direction: ScopeDirection): 
   return `sqlite:${role}:${direction}`;
 }
 
+/**
+ * Which end of a durable role the NODE sits on.
+ *
+ * An incidence link is always stored source-to-node, and the scope direction is a separate
+ * question the registry answers: a claim's own extraction is `extraction:out` on the claim,
+ * because the claim is the end that asserts it, while a mention is `mention:in` on the thing
+ * mentioned. Deriving the direction from how the link happens to be stored would file a claim's
+ * extraction under a counter nothing else reads.
+ */
+const NODE_DIRECTION: Readonly<Record<DurableRole, ScopeDirection>> = {
+  extraction: 'out',
+  mention: 'in',
+  participation: 'in',
+  source_coverage: 'in',
+  session_ownership: 'in',
+  raw_order: 'in',
+  stated_confirmation: 'in',
+  stated_correction: 'in',
+  stated_derivation: 'in',
+};
+
+export function nodeScopeDirection(role: DurableRole): ScopeDirection {
+  return NODE_DIRECTION[role];
+}
+
+/** The scope a node's census for this role is filed under. */
+export function nodeRoleScope(role: DurableRole): string {
+  return durableRoleScope(role, nodeScopeDirection(role));
+}
+
 export function retainedRoleScope(role: string, direction: ScopeDirection): string {
   if (!RETAINED_ROLE_SET.has(role)) {
     throw new Error(`retained role ${role} is not in the relationship catalog`);

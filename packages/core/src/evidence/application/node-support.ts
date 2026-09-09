@@ -5,7 +5,7 @@ import {
   scopeSupportsVerifiedEmpty,
 } from '../../infrastructure/sqlite/evidence-scope.js';
 import { readCitationsOf } from '../../infrastructure/sqlite/narrative-citations.js';
-import { durableRoleScope, NARRATIVE_SCOPES, type DurableRole } from '../domain/scopes.js';
+import { NARRATIVE_SCOPES, nodeRoleScope, type DurableRole } from '../domain/scopes.js';
 
 /**
  * Whether the records still hold something up.
@@ -22,12 +22,34 @@ import { durableRoleScope, NARRATIVE_SCOPES, type DurableRole } from '../domain/
  */
 export type NodeSupport = 'supported' | 'unsupported' | 'unknown';
 
-/** The roles a source can stand behind a retained node in. */
-const SUPPORT_ROLES: readonly DurableRole[] = [
+/**
+ * The roles a source can stand behind a retained node in.
+ *
+ * The four incidence roles, because those are what a source records about a node it produced or
+ * named. The three stated roles too: a correction, a confirmation or a derivation somebody made
+ * about this node is a source standing behind it just as much, and a sweep that read only the
+ * first four could suppress a node an acknowledged confirmation names.
+ */
+export const SUPPORT_ROLES: readonly DurableRole[] = [
   'extraction',
   'mention',
   'participation',
   'source_coverage',
+  'stated_correction',
+  'stated_confirmation',
+  'stated_derivation',
+];
+
+/**
+ * Every scope this reading rests on, at the direction the registry files each one under.
+ *
+ * A census writer takes its node scope set from here rather than listing its own, because a
+ * census established under a scope this reader does not ask for leaves the answer unknown while
+ * looking established.
+ */
+export const NODE_SUPPORT_SCOPES: readonly string[] = [
+  ...SUPPORT_ROLES.map((role) => nodeRoleScope(role)),
+  NARRATIVE_SCOPES[0],
 ];
 
 export type NodeSupportReading = {
@@ -51,14 +73,11 @@ export type NodeSupportReading = {
  */
 export function certifyNodeSupport(db: SqliteHandle, nodeId: string): NodeSupportReading {
   const evidenceRevision: Record<string, string> = {};
-  for (const role of SUPPORT_ROLES) {
-    const scope = durableRoleScope(role, 'in');
+  for (const scope of NODE_SUPPORT_SCOPES) {
     evidenceRevision[scope] =
       publishedScopeToken(db, { endpointId: nodeId, relationClass: scope }) ?? 'absent';
   }
   const citationScope = NARRATIVE_SCOPES[0];
-  evidenceRevision[citationScope] =
-    publishedScopeToken(db, { endpointId: nodeId, relationClass: citationScope }) ?? 'absent';
 
   for (const role of SUPPORT_ROLES) {
     if (countCommittedIncidenceForNode(db, nodeId, role) > 0) {
@@ -71,10 +90,7 @@ export function certifyNodeSupport(db: SqliteHandle, nodeId: string): NodeSuppor
 
   const uncounted = SUPPORT_ROLES.filter(
     (role) =>
-      !scopeSupportsVerifiedEmpty(db, {
-        endpointId: nodeId,
-        relationClass: durableRoleScope(role, 'in'),
-      }),
+      !scopeSupportsVerifiedEmpty(db, { endpointId: nodeId, relationClass: nodeRoleScope(role) }),
   );
   if (uncounted.length > 0) {
     return {

@@ -3,8 +3,7 @@ import {
   publishedScopeToken,
   scopeSupportsVerifiedEmpty,
 } from '../../infrastructure/sqlite/evidence-scope.js';
-import { nodeScopeDirection } from '../../reflection/domain/legacy-materialization.js';
-import { durableRoleScope, type DurableRole } from '../domain/scopes.js';
+import { durableRoleScope, nodeScopeDirection, type DurableRole } from '../domain/scopes.js';
 
 /**
  * The C8 §4 counter populations, read from the incidence records rather than from a stored number.

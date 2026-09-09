@@ -20,6 +20,7 @@ import {
 } from '../../reflection/application/source-manifest.js';
 import type { ReflectionContent } from '../../reflection/domain/content.js';
 import { prepareEpisode } from '../../reflection/domain/content.js';
+import { NODE_SUPPORT_SCOPES } from '../application/node-support.js';
 import { GRAPH_NODE_SCOPE } from '../domain/scopes.js';
 
 /**
@@ -160,6 +161,18 @@ export function establishScope(
     updatedAt: at,
     censusStatus: 'established',
   });
+}
+
+/**
+ * Every scope a support reading asks about this node, established.
+ *
+ * Taken from the reader's own list rather than written out here, so a test cannot certify a node
+ * under a scope set the production predicate has moved past.
+ */
+export function establishNodeSupportScopes(db: SqliteHandle, nodeId: string, at: Date): void {
+  for (const scope of NODE_SUPPORT_SCOPES) {
+    establishScope(db, nodeId, scope, at);
+  }
 }
 
 /**

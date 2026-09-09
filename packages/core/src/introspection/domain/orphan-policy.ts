@@ -53,14 +53,17 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * all, since the census that would have found its support is the census nobody took.
  */
 export function decideOrphan(candidate: OrphanCandidate, policy: OrphanPolicy): OrphanDecision {
+  // Unknown support decides nothing at all, and that includes a relink. A guessed edge onto a
+  // node whose records nobody has counted is a claim made out of the same silence a forget would
+  // have been made out of; it is cheaper to undo and it is still a claim.
+  if (candidate.support === 'unknown') {
+    return { action: 'hold', reason: 'support is uncounted', actionable: false };
+  }
   if (candidate.relinkTarget !== undefined) {
     return { action: 'relink', reason: 'a current retained target is reachable', actionable: true };
   }
   if (candidate.support === 'supported') {
     return { action: 'hold', reason: 'the records still hold it up', actionable: false };
-  }
-  if (candidate.support === 'unknown') {
-    return { action: 'hold', reason: 'support is uncounted', actionable: false };
   }
   if (candidate.protectedByPendingWork) {
     return { action: 'hold', reason: 'a judgment is still pending on it', actionable: false };

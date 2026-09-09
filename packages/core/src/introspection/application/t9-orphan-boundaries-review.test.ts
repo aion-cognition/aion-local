@@ -5,8 +5,10 @@ import { resolvePendingMeasures } from './operation-scoring.js';
 import { orphanCleanupOperation } from './operations/orphan-cleanup.js';
 import { readOrphanCensus } from './orphan-census.js';
 import { certifyNodeSupport } from '../../evidence/application/node-support.js';
-import { durableRoleScope, NARRATIVE_SCOPES } from '../../evidence/domain/scopes.js';
-import { establishScope, commitIncidence } from '../../evidence/test-support/evidence.fixture.js';
+import {
+  commitIncidence,
+  establishNodeSupportScopes,
+} from '../../evidence/test-support/evidence.fixture.js';
 import * as topology from '../../infrastructure/graph/topology-queries.js';
 import { openLogger } from '../../infrastructure/logging/logger.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
@@ -32,10 +34,7 @@ beforeEach(() => {
   nodes = [{ id: 'node', txFrom: NOW }];
   vi.spyOn(topology, 'findOrphanNodes').mockImplementation(async () => nodes);
   vi.spyOn(topology, 'findOrphanRelinkTargets').mockResolvedValue([]);
-  for (const role of ['extraction', 'mention', 'participation', 'source_coverage'] as const) {
-    establishScope(store.db, 'node', durableRoleScope(role, 'in'), NOW);
-  }
-  establishScope(store.db, 'node', NARRATIVE_SCOPES[0], NOW);
+  establishNodeSupportScopes(store.db, 'node', NOW);
 });
 afterEach(() => {
   vi.restoreAllMocks();

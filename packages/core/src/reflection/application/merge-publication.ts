@@ -6,7 +6,11 @@ import {
   prepareMaterialization,
   type PlannedLink,
 } from './legacy-records.js';
-import { durableRoleScope, type DurableRole } from '../../evidence/domain/scopes.js';
+import {
+  durableRoleScope,
+  nodeScopeDirection,
+  type DurableRole,
+} from '../../evidence/domain/scopes.js';
 import { mergeClaimPairInTransaction } from '../../infrastructure/graph/claim-dedup-queries.js';
 import { PublicationOperation } from '../../infrastructure/publication/operation.js';
 import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
@@ -15,7 +19,6 @@ import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverag
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { evidenceLinkId } from '../../infrastructure/sqlite/evidence-links.js';
 import { closeSourceIncidence } from '../../infrastructure/sqlite/source-incidence.js';
-import { nodeScopeDirection } from '../domain/legacy-materialization.js';
 
 /**
  * A claim merge as a publication.
