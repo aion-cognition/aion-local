@@ -37,12 +37,16 @@ it('rejects an explicitly supplied merge evidence revision after its source chan
     // The binding travels in the payload: the guard re-verifies what the judge decided on, and a
     // merge that carries none is refused before any of this.
     const revision = buildEvidenceRevision([sourceStateDependency(store.db, 'source')]);
+    const contract = readCurrentCoverageContract(store.db);
+    if (contract === undefined) {
+      throw new Error('this fixture needs a coverage contract to bind the decision to');
+    }
     const plan = await claimMergePublication.prepare(context, {
       survivorId: 'survivor',
       loserId: 'loser',
       now: now.toISOString(),
       judged: revision,
-      coverageEpoch: readCurrentCoverageContract(store.db)?.epoch,
+      coverageEpoch: contract.epoch,
     });
     expect((await claimMergePublication.check(context, plan)).status).toBe('valid');
     commitSourceState(store.db, {
