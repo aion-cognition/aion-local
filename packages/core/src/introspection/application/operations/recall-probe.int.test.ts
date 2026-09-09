@@ -35,9 +35,12 @@ import { getLastPack } from '../../../infrastructure/sqlite/last-pack.js';
 import { packMethodCounters } from '../../../infrastructure/sqlite/method-counters.js';
 import { getLedgerEntry } from '../../../infrastructure/sqlite/ops-ledger.js';
 import {
-  listOutstandingWork,
   completeSourceWork,
+  listStageWork,
+  readActiveGeneration,
+  stageWorkId,
 } from '../../../infrastructure/sqlite/processing-generations.js';
+import { publishReadinessPolicy } from '../../../infrastructure/sqlite/readiness-policies.js';
 import { recallCadenceCounters } from '../../../infrastructure/sqlite/recall-cadence.js';
 import { recallProbeReadingV2 } from '../../../infrastructure/sqlite/recall-probe-counters.js';
 import { countReinforcementSignals } from '../../../infrastructure/sqlite/reinforcement-queue.js';
@@ -50,6 +53,7 @@ import { waitFor } from '../../../recall/application/test-support/wait-for.fixtu
 import { handleReflection } from '../../../reflection/application/intake.js';
 import { LaneAssigner } from '../../../reflection/application/lanes.js';
 import { foldName } from '../../../reflection/domain/name-fold.js';
+import { PIPELINE_VERSION } from '../../../reflection/domain/version.js';
 import { directIntakePublisher } from '../../../reflection/test-support/direct-intake.fixture.js';
 import { SessionManager } from '../../../session/session-manager.js';
 import type { OperationContext, RecallProbe } from '../../domain/operation.js';
@@ -64,6 +68,8 @@ import { healthFixture } from '../../domain/test-support/health.fixture.js';
  */
 
 const EMBED_DIMENSION = 8;
+/** The stage list this file's sources are accepted under. No pass runs them here. */
+const REQUIRED_STAGES = ['entities', 'associations'];
 const HORIZON = new Date('2026-09-01T00:00:00.000Z');
 const STORED_AT = new Date('2026-09-03T10:00:00.000Z');
 const YESTERDAY_AT = new Date('2026-09-04T18:00:00.000Z');
@@ -76,7 +82,10 @@ const LONG_RUNNING_SESSION = 'probe-int-long-session';
 
 const STORED_OBSERVATION =
   'we moved the ingestion service onto webhooks because polling missed too much';
-/** Recorded today, so the sampler must leave it out: it is not a day old yet. */
+/**
+ * A backdated capture: it carries the same world date as the stored one and the substrate took
+ * it at the probed moment. The sampler must leave it out, because acceptance is what it ages on.
+ */
 const FRESH_OBSERVATION = 'the standup moved to nine thirty on tuesdays';
 const CUE = 'webhooks';
 
@@ -139,7 +148,7 @@ function context(maintenance: Partial<Config['maintenance']> = {}): OperationCon
   };
 }
 
-async function push(observation: string, now: Date): Promise<string> {
+async function push(observation: string, now: Date, acceptedAt: Date = now): Promise<string> {
   const result = await handleReflection(
     {
       driver: harness.driver,
@@ -150,13 +159,37 @@ async function push(observation: string, now: Date): Promise<string> {
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
       lanes: new LaneAssigner(DEFAULTS.lanes),
       workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
-      publications: directIntakePublisher(harness.driver, db),
+      // The sampler ages on acceptance, so acceptance is what this fixture has to state. Left on
+      // the wall clock every source is accepted at the moment the run happens, and the cut a
+      // day behind the probed moment selects nothing at all.
+      publications: directIntakePublisher(harness.driver, db, () => acceptedAt),
       acceptHookCapture: true,
     },
     { observations: [observation] },
     { identity: WRITE_SESSION, now },
   );
   return result.episode_id;
+}
+
+/**
+ * Every stage the source's own accepted policy required, settled with the outcome a finished
+ * pass records. Reading an empty stage list as a finished pass is what lets an unprocessed
+ * source into the sample, so the policy is published before the push and each of its rows is
+ * completed by name.
+ */
+function settlePolicyStages(sourceId: string, at: Date): void {
+  const generation = readActiveGeneration(db, sourceId)?.processingGeneration;
+  if (generation === undefined) {
+    throw new Error(`source ${sourceId} was accepted without an active generation`);
+  }
+  for (const stageName of REQUIRED_STAGES) {
+    completeSourceWork(
+      db,
+      stageWorkId(sourceId, generation, stageName),
+      { outcome: 'complete', reason: 'accepted_pass_applied' },
+      at,
+    );
+  }
 }
 
 beforeAll(async () => {
@@ -170,6 +203,14 @@ beforeAll(async () => {
   // probe reports that as an unavailable trial rather than as a miss.
   prepareCoverageContract(db, 1);
   activateCoverageContract(db, { activatedAt: HORIZON, fieldPolicyVersion: 1 });
+  // Startup publishes the readiness contract before anything is accepted, and intake writes each
+  // source's stage inventory from it. Accepted with none, a source records an inventory
+  // obligation instead, and the sampler reads that as an unfinished pass.
+  publishReadinessPolicy(
+    db,
+    { pipelineVersion: PIPELINE_VERSION, stageNames: REQUIRED_STAGES, transferCapabilities: [] },
+    HORIZON,
+  );
 
   const backbone = await bootstrapBackbone(harness.driver, { memberName: 'Test User' });
   sessions = new SessionManager(harness.driver, {
@@ -191,22 +232,12 @@ beforeAll(async () => {
   probe = probeRecall(recallDeps);
 
   storedEpisodeId = await push(STORED_OBSERVATION, STORED_AT);
-  await push(FRESH_OBSERVATION, PROBED_AT);
+  await push(FRESH_OBSERVATION, STORED_AT, PROBED_AT);
 
-  // The pass this substrate owes the stored source, finished. No readiness policy is published
-  // yet, so an acceptance leaves an inventory obligation behind; the sampler reads that as an
-  // unfinished pass and would score nothing, which is the fail-closed direction it is meant to
-  // take. Finishing the work here is what makes the source one the probe may judge.
-  for (const work of listOutstandingWork(db, PROBED_AT, 100)) {
-    if (work.sourceId === storedEpisodeId) {
-      completeSourceWork(
-        db,
-        work.workId,
-        { outcome: 'complete', reason: 'test fixture' },
-        STORED_AT,
-      );
-    }
-  }
+  // The pass this substrate owes the stored source, finished the way a real one leaves it: every
+  // stage the accepted policy named carries a typed outcome. That is what makes this source one
+  // the probe may judge, and the fresh source keeps its own stages open.
+  settlePolicyStages(storedEpisodeId, STORED_AT);
   // The extraction incidence the reflection worker records, which this file does not run. It is
   // what makes an emitted item one the records say the sampled source stands behind.
   commitIncidence(db, {
@@ -296,11 +327,24 @@ describe('the recall self-probe against a live substrate', () => {
   }, 120_000);
 
   it('asks back what it was told and keeps the two outcomes apart', async () => {
+    // The pass behind the sampled source is accounted for by name: every stage the accepted
+    // policy required carries a typed outcome. An empty stage list would read as the same
+    // thing, and it would mean nobody has ever run one.
+    const generation = readActiveGeneration(db, storedEpisodeId)?.processingGeneration ?? 0;
+    expect(listStageWork(db, storedEpisodeId, generation)).toEqual(
+      // The read comes back in stage-name order, which is not the order the policy lists them in.
+      [...REQUIRED_STAGES].sort().map((stageName) => ({
+        stageName,
+        state: 'completed',
+        outcome: { outcome: 'complete', reason: 'accepted_pass_applied' },
+      })),
+    );
+
     const outcome = await recallProbeOperation().run(context());
 
     expect(outcome.status).toBe('applied');
-    // One source was accepted more than a day ago; the other arrived today. Acceptance is what
-    // decides that, not the world date either of them carries.
+    // Both sources carry the same world date and only one was accepted more than a day ago.
+    // Acceptance is what decides the cut, not the date either of them claims.
     expect(outcome.itemsProcessed).toBe(1);
     expect(outcome.itemsAffected).toBe(1);
 
