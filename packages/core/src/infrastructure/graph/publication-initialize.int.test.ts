@@ -73,22 +73,23 @@ it('rejoins an initialized pair without SQLite or graph writes', async () => {
   calls.mockRestore();
 });
 
-it('refuses receipt skew before any SQLite transaction or graph mutation', async () => {
+it('refuses receipt skew before any SQLite writes or graph mutation', async () => {
   const control = coordinatorControl(store.db);
   await substrate.harness.driver.executeQuery(
     'MATCH (g:PublicationGuard {substrate_id: $id}) SET g.sequence = $sequence',
     { id: control.substrateId, sequence: '5' },
   );
   const before = store.db.prepare('SELECT total_changes() AS changes').get();
-  const transactions = vi.spyOn(store.db, 'transaction');
+  const schemaVersion = store.db.pragma('schema_version', { simple: true });
   const calls = vi.spyOn(substrate.harness.driver, 'executeQuery');
   const guard = await readPublicationGuard(substrate.harness.driver, control.substrateId, 1000);
   try {
     await expect(coordinator.initialize()).rejects.toMatchObject({
       reason: 'publication_pair_out_of_sync',
     });
-    expect(transactions).not.toHaveBeenCalled();
     expect(store.db.prepare('SELECT total_changes() AS changes').get()).toEqual(before);
+    expect(store.db.pragma('schema_version', { simple: true })).toBe(schemaVersion);
+    expect(store.db.inTransaction).toBe(false);
     expect(await readPublicationGuard(substrate.harness.driver, control.substrateId, 1000)).toEqual(
       guard,
     );
@@ -98,7 +99,6 @@ it('refuses receipt skew before any SQLite transaction or graph mutation', async
       ),
     ).toBe(true);
   } finally {
-    transactions.mockRestore();
     calls.mockRestore();
     await substrate.harness.driver.executeQuery(
       'MATCH (g:PublicationGuard {substrate_id: $id}) SET g.sequence = $sequence',

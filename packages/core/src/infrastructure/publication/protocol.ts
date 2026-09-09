@@ -25,11 +25,25 @@ export function matchingReceipt(guard: GuardReceipt, record: PublicationRecord):
   publicationResult(record);
 }
 
-/** The locked read, not an exception or graph absence, establishes the preceding outcome. */
+type VerifiedPublicationState = {
+  control: CoordinatorControl;
+  pending: PublicationRecord | undefined;
+  committed: boolean;
+};
+
+/**
+ * An acknowledgment can finish after releasing the graph lock. Read its control, intent and
+ * receipt from one SQLite snapshot so a valid transition cannot appear to violate the protocol.
+ * The transaction is synchronous and read-only; it holds no SQLite write lock across graph work.
+ */
 export function verifyPublicationState(
   db: SqliteHandle,
   guard: GuardReceipt,
-): { control: CoordinatorControl; pending: PublicationRecord | undefined; committed: boolean } {
+): VerifiedPublicationState {
+  return db.transaction(() => verifySnapshot(db, guard)).deferred();
+}
+
+function verifySnapshot(db: SqliteHandle, guard: GuardReceipt): VerifiedPublicationState {
   const control = coordinatorControl(db);
   if (
     control.bootstrapState !== 'initialized' ||
