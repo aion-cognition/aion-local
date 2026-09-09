@@ -77,6 +77,8 @@ export type SourceSearchHitWire = z.infer<typeof SourceSearchHitSchema>;
 export const SearchCorpusSchema = z.strictObject({
   documents: z.number().int().nonnegative(),
   truncated_documents: z.number().int().nonnegative(),
+  /** Captured parts with no current index document. A zero-hit search still reports these. */
+  unindexed_parts: z.number().int().nonnegative().optional(),
   examined: z.number().int().nonnegative(),
   bounded: z.boolean(),
   withheld: z.number().int().nonnegative(),

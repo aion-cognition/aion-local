@@ -240,6 +240,8 @@ export type SourceSearchHit = {
 export type SearchCorpusDisclosure = {
   readonly documents: number;
   readonly truncatedDocuments: number;
+  /** Recorded parts with no current document at their own address. A corpus-level absence. */
+  readonly unindexedParts: number;
   readonly examined: number;
   /** The examination cap or the evidence allowance stopped the pass before the corpus ended. */
   readonly bounded: boolean;

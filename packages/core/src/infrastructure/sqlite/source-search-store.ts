@@ -1,5 +1,4 @@
 import type { SqliteHandle } from './database.js';
-import { readSourceParts } from './source-identity.js';
 import { INDEX_POLICY_VERSION, SOURCE_SEARCH_FTS_TABLE } from './source-search-schema.js';
 
 /**
@@ -286,21 +285,46 @@ export type CorpusCoverage = {
   readonly documents: number;
   /** Documents holding a prefix of their part, so a phrase past that prefix cannot be found. */
   readonly truncatedDocuments: number;
+  /** Parts the identity records hold, which is what a complete corpus would have to cover. */
+  readonly recordedParts: number;
+  /** Recorded parts with a current document at their exact address. */
+  readonly coveredParts: number;
 };
 
 /**
  * What the corpus can and cannot answer for, disclosed on every search including one that
- * matched nothing: a suffix miss and an empty corpus read identically from the results alone.
+ * matched nothing: a suffix miss, an unindexed source and an empty corpus read identically
+ * from the results alone.
+ *
+ * Coverage is counted by matching recorded parts to documents at their own addresses under the
+ * current policy. Counting documents alone would call a corpus complete while whole sources sit
+ * unindexed, and equal cardinalities prove nothing about which parts are actually there.
  */
 export function corpusCoverage(db: SqliteHandle): CorpusCoverage {
   const row = db
     .prepare(
-      `SELECT count(*) AS documents,
-              COALESCE(sum(truncated), 0) AS truncated
-       FROM source_search_documents`,
+      `SELECT
+         (SELECT count(*) FROM source_search_documents) AS documents,
+         (SELECT count(*) FROM source_search_documents WHERE truncated = 1) AS truncated,
+         (SELECT count(*) FROM source_parts) AS recorded,
+         (SELECT count(*) FROM source_parts p
+            JOIN source_search_documents d
+              ON d.source_id = p.source_id AND d.part_kind = p.part_kind
+             AND d.part_ordinal = p.ordinal AND d.index_policy_version = ?
+             AND d.truncated = 0) AS covered`,
     )
-    .get() as { documents: number; truncated: number };
-  return { documents: row.documents, truncatedDocuments: row.truncated };
+    .get(INDEX_POLICY_VERSION) as {
+    documents: number;
+    truncated: number;
+    recorded: number;
+    covered: number;
+  };
+  return {
+    documents: row.documents,
+    truncatedDocuments: row.truncated,
+    recordedParts: row.recorded,
+    coveredParts: row.covered,
+  };
 }
 
 export type SearchIndexPin =
@@ -313,30 +337,44 @@ export type SearchIndexPin =
 
 /**
  * Whether the projection still owes this source something, which is what holds it against
- * eviction. A truncated document means the index never held the whole part; a recorded part
- * with no document means indexing has not reached it. Either way the raw bytes are the only
- * complete copy, and removing them would make the missing text unreachable.
+ * eviction.
  *
- * A later complete reindex clears the pin by replacing the documents, never by asserting
- * coverage: the pin is read from the rows, so it lifts when the rows say it may.
+ * The test is exact identity, not cardinality: every recorded part must have a document at its
+ * own (kind, ordinal) address, written under the current index policy and holding the whole
+ * part. Equal counts are not coverage — a document under one ordinal cannot answer for the part
+ * at another, and a source whose documents were rewritten under an older policy is one whose
+ * stored text nobody has re-derived.
+ *
+ * A truncated document is reported ahead of a missing one because it is the more specific
+ * fact: the index reached that part and could not hold all of it, and the raw bytes are the
+ * only complete copy either way.
  */
 export function searchIndexPin(db: SqliteHandle, sourceId: string): SearchIndexPin {
-  const truncated = db
+  const row = db
     .prepare(
-      'SELECT count(*) AS n FROM source_search_documents WHERE source_id = ? AND truncated = 1',
+      `SELECT
+         (SELECT count(*) FROM source_parts WHERE source_id = ?) AS recorded,
+         (SELECT count(*) FROM source_parts p
+            JOIN source_search_documents d
+              ON d.source_id = p.source_id AND d.part_kind = p.part_kind
+             AND d.part_ordinal = p.ordinal AND d.index_policy_version = ?
+          WHERE p.source_id = ? AND d.truncated = 0) AS covered,
+         (SELECT count(*) FROM source_parts p
+            JOIN source_search_documents d
+              ON d.source_id = p.source_id AND d.part_kind = p.part_kind
+             AND d.part_ordinal = p.ordinal AND d.index_policy_version = ?
+          WHERE p.source_id = ? AND d.truncated = 1) AS truncated`,
     )
-    .get(sourceId) as { n: number };
-  if (truncated.n > 0) {
-    return { pinned: true, reason: 'truncated_parts', parts: truncated.n };
+    .get(sourceId, INDEX_POLICY_VERSION, sourceId, INDEX_POLICY_VERSION, sourceId) as {
+    recorded: number;
+    covered: number;
+    truncated: number;
+  };
+  if (row.truncated > 0) {
+    return { pinned: true, reason: 'truncated_parts', parts: row.truncated };
   }
-  const recorded = readSourceParts(db, sourceId).length;
-  const indexed = db
-    .prepare(
-      `SELECT count(*) AS n FROM source_search_documents
-       WHERE source_id = ? AND index_policy_version = ?`,
-    )
-    .get(sourceId, INDEX_POLICY_VERSION) as { n: number };
-  return recorded > indexed.n
-    ? { pinned: true, reason: 'unindexed_parts', parts: recorded - indexed.n }
+  const missing = row.recorded - row.covered;
+  return missing > 0
+    ? { pinned: true, reason: 'unindexed_parts', parts: missing }
     : { pinned: false };
 }

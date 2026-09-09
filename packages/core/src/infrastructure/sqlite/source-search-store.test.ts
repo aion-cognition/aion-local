@@ -126,9 +126,62 @@ describe('search projection store', () => {
   });
 
   it('reports truncated documents as corpus coverage even with nothing else stored', () => {
-    expect(corpusCoverage(store.db)).toEqual({ documents: 0, truncatedDocuments: 0 });
+    expect(corpusCoverage(store.db)).toEqual({
+      documents: 0,
+      truncatedDocuments: 0,
+      recordedParts: 0,
+      coveredParts: 0,
+    });
     writeSearchDocument(store.db, document({ truncated: true, indexedBytes: 12 }));
-    expect(corpusCoverage(store.db)).toEqual({ documents: 1, truncatedDocuments: 1 });
+    expect(corpusCoverage(store.db)).toMatchObject({ documents: 1, truncatedDocuments: 1 });
+  });
+
+  it('counts a captured part nobody has indexed as corpus the search cannot answer for', () => {
+    recordSourceRecord(store.db, {
+      sourceId: 'source-2',
+      sessionId: 'session-1',
+      verificationStatus: 'pinned',
+      verificationReason: 'test fixture',
+      occurredAt: OCCURRED_AT,
+      createdAt: new Date(OCCURRED_AT),
+    });
+    recordSourceParts(store.db, 'source-2', [
+      { partKind: 'turn', ordinal: 0, contentHash: 'part-0' },
+    ]);
+
+    // Cardinality would call this covered as soon as any one document exists. Identity does
+    // not: the document below belongs to a different source entirely.
+    writeSearchDocument(store.db, document({ sourceId: 'source-1', partOrdinal: 0 }));
+    const coverage = corpusCoverage(store.db);
+
+    expect(coverage.recordedParts).toBe(1);
+    expect(coverage.coveredParts).toBe(0);
+    expect(coverage.documents).toBe(1);
+  });
+
+  it('does not count a document written under an older index policy as coverage', () => {
+    recordSourceRecord(store.db, {
+      sourceId: 'source-3',
+      sessionId: 'session-1',
+      verificationStatus: 'pinned',
+      verificationReason: 'test fixture',
+      occurredAt: OCCURRED_AT,
+      createdAt: new Date(OCCURRED_AT),
+    });
+    recordSourceParts(store.db, 'source-3', [
+      { partKind: 'turn', ordinal: 0, contentHash: 'part-0' },
+    ]);
+    writeSearchDocument(store.db, document({ sourceId: 'source-3', partOrdinal: 0 }));
+    expect(searchIndexPin(store.db, 'source-3')).toEqual({ pinned: false });
+
+    store.db
+      .prepare('UPDATE source_search_documents SET index_policy_version = 0 WHERE source_id = ?')
+      .run('source-3');
+
+    expect(searchIndexPin(store.db, 'source-3')).toMatchObject({
+      pinned: true,
+      reason: 'unindexed_parts',
+    });
   });
 
   it('keeps each stream cursor apart and leaves the generation alone', () => {

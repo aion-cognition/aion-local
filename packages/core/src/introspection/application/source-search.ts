@@ -393,9 +393,11 @@ export async function runSourceSearch(
 
   const corpusReading = corpusCoverage(deps.db);
   const issues = [...page.issues];
-  // A suffix past the index cap is missing from every search, including one that matched
-  // nothing at all: without this line an empty page would read as a settled absence.
-  if (corpusReading.truncatedDocuments > 0 || page.bounded) {
+  // A suffix past the index cap, a part nothing has indexed yet, and a pass that stopped early
+  // are all incomplete corpus coverage, and every one of them is disclosed on a search that
+  // matched nothing at all: without this an empty page reads as a settled absence.
+  const unindexed = corpusReading.recordedParts - corpusReading.coveredParts;
+  if (corpusReading.truncatedDocuments > 0 || unindexed > 0 || page.bounded) {
     issues.push(boundedIssue(undefined, 'source_search_corpus'));
   }
   const { coverage } = statedCoverage(checked.coverage, issues);
@@ -420,6 +422,7 @@ export async function runSourceSearch(
     corpus: {
       documents: corpusReading.documents,
       truncatedDocuments: corpusReading.truncatedDocuments,
+      unindexedParts: unindexed,
       examined: page.examined,
       bounded: page.bounded,
       withheld: page.withheld + withdrawn,

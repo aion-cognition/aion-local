@@ -74,6 +74,7 @@ export function searchOutputFor(outcome: SourceSearchOutcome): SourceSearchOutpu
         corpus: {
           documents: outcome.corpus.documents,
           truncated_documents: outcome.corpus.truncatedDocuments,
+          unindexed_parts: outcome.corpus.unindexedParts,
           examined: outcome.corpus.examined,
           bounded: outcome.corpus.bounded,
           withheld: outcome.corpus.withheld,
@@ -177,11 +178,15 @@ export function searchText(output: SourceSearchOutput): string {
         corpus !== undefined && corpus.truncated_documents > 0
           ? `; ${String(corpus.truncated_documents)} indexed part(s) hold a prefix only`
           : '';
+      const missing =
+        corpus !== undefined && (corpus.unindexed_parts ?? 0) > 0
+          ? `; ${String(corpus.unindexed_parts)} captured part(s) are not indexed yet`
+          : '';
       const withheld =
         corpus !== undefined && corpus.withheld > 0
           ? `; ${String(corpus.withheld)} withheld in this mode`
           : '';
-      return [`${head}${bound}${cut}${withheld}`, ...lines].join('\n');
+      return [`${head}${bound}${cut}${missing}${withheld}`, ...lines].join('\n');
     }
     case 'restart_required':
       return 'the search index changed under this page; run the search again from the start';
