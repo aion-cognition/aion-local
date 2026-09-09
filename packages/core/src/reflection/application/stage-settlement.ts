@@ -258,11 +258,10 @@ function applyForgetDisposition(
     if (row.kind !== 'stage' || stageName === null || row.state === 'obsolete') {
       continue;
     }
-    // The effect decides, not the container, and it is classified positively. A row the accepted
-    // policy required is a pass about this source. A row that owes consistency work on RETAINED
-    // endpoints, or one no policy accounts for, is not classified as this source's: forgetting
-    // the source does not make another node's neighbourhood correct, and closing it here would
-    // leave those endpoints holding a reading nobody will recompute.
+    // The effect decides, not the container, and it is classified positively from the row's own
+    // declaration or the accepted contract. A row that owes consistency work on RETAINED
+    // endpoints, and a row whose effect nothing classifies, are both left alone: forgetting the
+    // source does not make another node's neighbourhood correct.
     if (!forgetDisposesOf(stageName, work.requiredStages, work.detail.get(stageName))) {
       continue;
     }
@@ -281,40 +280,86 @@ function applyForgetDisposition(
 }
 
 /**
- * Effects a stage row can owe about endpoints other than its own source.
+ * What a stage's remaining work would DO, which is what the forget ruling classifies on.
  *
- * A closed set, declared where it is read. Suppression is classified by what the work would DO,
- * and the only way to know that from a row is what the row says it is carrying.
+ * `source_generation` is generative use of the source's own content, and a forgotten source
+ * leaves it nothing to act on. `retained_endpoint` is consistency work about OTHER nodes, which
+ * is owed whatever became of this source.
  */
-const RETAINED_ENDPOINT_EFFECTS: readonly string[] = ['retained_endpoint_vector'];
+type StageEffect = 'source_generation' | 'retained_endpoint';
 
-/** Whether this row's remaining work is about retained endpoints rather than about its source. */
-function retainedEndpointWork(row: StageWorkDetail | undefined): boolean {
+/**
+ * Effects a row's continuation may declare, and what each one is about.
+ *
+ * A closed set, declared where it is read. An effect this build does not register is
+ * unclassified: the row said what it is carrying and nothing here knows what that is.
+ */
+const DECLARED_EFFECTS: Readonly<Record<string, StageEffect>> = {
+  retained_endpoint_vector: 'retained_endpoint',
+  source_dependent_generation: 'source_generation',
+};
+
+/**
+ * What each stage the contract lists does, from C8 section 2's stage table.
+ *
+ * Extraction, the bounded nomination passes and the relation passes are generative use of the
+ * source. The stages that are absent are absent on purpose: a reinforcement flush and a context
+ * vector recompute act on retained endpoints, the narrative dispatch belongs to a coverage
+ * revision, and none of that stops being owed because this source was forgotten. A stage name
+ * nothing here classifies is unclassified for the same reason a row is: nobody said what its
+ * pass does, and absence of a classification is not proof the work vanished with the source.
+ */
+const CONTRACT_STAGE_EFFECTS: Readonly<Record<string, StageEffect>> = {
+  entities: 'source_generation',
+  cognitive: 'source_generation',
+  'entity-dedup': 'source_generation',
+  associations: 'source_generation',
+  'semantic-relationships': 'source_generation',
+  supersession: 'source_generation',
+};
+
+/**
+ * What the row says its remaining work is, or nothing when it says nothing about its effect.
+ *
+ * A continuation that is a transfer or a withheld remainder declares no effect and answers
+ * nothing here; the accepted contract classifies those rows instead.
+ */
+function declaredEffect(
+  row: StageWorkDetail | undefined,
+): StageEffect | 'unclassified' | undefined {
   if (row?.continuationJson == null) {
-    return false;
+    return undefined;
   }
   const parsed = ContinuationEffectSchema.safeParse(parseJson(row.continuationJson));
-  return parsed.success && RETAINED_ENDPOINT_EFFECTS.includes(parsed.data.effect);
+  if (!parsed.success) {
+    return undefined;
+  }
+  return DECLARED_EFFECTS[parsed.data.effect] ?? 'unclassified';
 }
 
 /**
- * Whether a forget disposes of this row, classified positively from the accepted policy.
+ * Whether a forget disposes of this row, classified positively by effect.
  *
- * A pass the source's own policy required is a pass about that source: forgetting the source
- * leaves it nothing to act on. Anything else is unclassified — a row some other pass added, or
- * one carrying a declared retained-endpoint effect — and unclassified is not a licence to close
- * it. Absence of a classification is not proof that work about other nodes vanished with this
- * source, so the row stays owed and somebody can decide it.
+ * Two places an effect can come from, and both name one: the row's own validated declaration,
+ * or the accepted contract's classification of a stage that contract required. Everything else
+ * is unclassified — a declared effect this build does not register, a row some other pass added,
+ * a stage no table accounts for — and unclassified is not a licence to close it. The row stays
+ * owed, pinned to somebody who can decide it, because closing it here would leave retained
+ * endpoints holding a reading nobody will recompute.
  */
 function forgetDisposesOf(
   stageName: string,
   requiredStages: readonly string[] | undefined,
   row: StageWorkDetail | undefined,
 ): boolean {
-  if (retainedEndpointWork(row)) {
-    return false;
+  const declared = declaredEffect(row);
+  if (declared !== undefined) {
+    return declared === 'source_generation';
   }
-  return requiredStages?.includes(stageName) === true;
+  return (
+    requiredStages?.includes(stageName) === true &&
+    CONTRACT_STAGE_EFFECTS[stageName] === 'source_generation'
+  );
 }
 
 /**
