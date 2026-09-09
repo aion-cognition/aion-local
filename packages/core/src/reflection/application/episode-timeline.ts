@@ -20,6 +20,8 @@ export type TimelineClockClass = 'world' | 'tx';
 
 export type TimelineEventKind =
   | 'occurred'
+  | 'accepted'
+  | 'referenced'
   | 'archived'
   | 'stored'
   | 'enqueued'
@@ -50,9 +52,36 @@ export type TimelineDerivedNodeInput = {
   readonly txFrom: Date | undefined;
 };
 
+/**
+ * What C1's records say about this occurrence, as opposed to the bytes it shares.
+ *
+ * A source pushed again after a forget is a new occurrence over an archive row an earlier one
+ * already wrote. The row's `occurred_at` is the predecessor's world clock; this occurrence has
+ * its own, recorded when the substrate accepted it. Reading the shared row's clock as this
+ * occurrence's capture time dates a September event to September of the year before.
+ */
+export type TimelineOccurrenceInput = {
+  readonly occurredAt: Date;
+  /** When this occurrence was accepted, which is the substrate's own clock for it. */
+  readonly acceptedAt: Date;
+  /** Whether the archive row behind it was written by a different occurrence. */
+  readonly sharedArchive: boolean;
+  readonly verificationStatus: string;
+};
+
+/** One accepted reference batch, which is a statement this occurrence made about other memories. */
+export type TimelineReferenceInput = {
+  readonly version: number;
+  readonly receivedAt: Date;
+  readonly acceptedHash: string;
+};
+
 export type EpisodeTimelineInput = {
   readonly episodeId: string;
   readonly archive: ExperienceArchiveRow | undefined;
+  /** C1's record for this occurrence. Absent for a legacy capture that has none. */
+  readonly occurrence?: TimelineOccurrenceInput;
+  readonly references?: readonly TimelineReferenceInput[];
   /** The episode node's own `occurred_at`, read independently of the archive for the cross-check. */
   readonly episodeOccurredAt: Date | undefined;
   readonly episodeValidFrom: Date | undefined;
@@ -68,6 +97,8 @@ export type EpisodeTimelineInput = {
 /** Render order for events tied on timestamp: the order an undisturbed run produces them in. */
 const KIND_ORDER: readonly TimelineEventKind[] = [
   'occurred',
+  'accepted',
+  'referenced',
   'archived',
   'stored',
   'enqueued',
@@ -86,11 +117,14 @@ function compareEvents(left: TimelineEvent, right: TimelineEvent): number {
 }
 
 function occurredEvent(input: EpisodeTimelineInput): TimelineEvent | undefined {
-  const { archive } = input;
-  if (archive === undefined) {
+  const { archive, occurrence } = input;
+  // The occurrence's own recorded clock first. The archive row answers only for a capture with
+  // no record of its own, and never for one whose bytes an earlier occurrence wrote.
+  const at =
+    occurrence?.occurredAt ?? (archive === undefined ? undefined : new Date(archive.occurredAt));
+  if (at === undefined) {
     return undefined;
   }
-  const at = new Date(archive.occurredAt);
   const cross = input.episodeOccurredAt;
   return {
     kind: 'occurred',
@@ -100,8 +134,41 @@ function occurredEvent(input: EpisodeTimelineInput): TimelineEvent | undefined {
     detail: {
       episode_occurred_at: cross?.toISOString(),
       matches_episode: cross === undefined ? undefined : cross.getTime() === at.getTime(),
+      clock_source: occurrence === undefined ? 'archive_row' : 'source_record',
+      ...(archive === undefined
+        ? {}
+        : { archive_occurred_at: new Date(archive.occurredAt).toISOString() }),
     },
   };
+}
+
+/** The substrate's own clock for taking this occurrence, which no shared archive row carries. */
+function acceptedEvent(input: EpisodeTimelineInput): TimelineEvent | undefined {
+  const { occurrence } = input;
+  if (occurrence === undefined) {
+    return undefined;
+  }
+  return {
+    kind: 'accepted',
+    at: occurrence.acceptedAt,
+    clock: 'tx',
+    summary: `the substrate accepted this occurrence (${occurrence.verificationStatus})`,
+    detail: {
+      verification_status: occurrence.verificationStatus,
+      shared_archive: occurrence.sharedArchive,
+    },
+  };
+}
+
+/** What this occurrence stated about other memories, one event per accepted batch. */
+function referenceEvents(input: EpisodeTimelineInput): readonly TimelineEvent[] {
+  return (input.references ?? []).map((batch) => ({
+    kind: 'referenced' as const,
+    at: batch.receivedAt,
+    clock: 'tx' as const,
+    summary: `stated references accepted as version ${String(batch.version)}`,
+    detail: { reference_version: batch.version, accepted_hash: batch.acceptedHash },
+  }));
 }
 
 function archivedEvent(input: EpisodeTimelineInput): TimelineEvent | undefined {
@@ -109,12 +176,19 @@ function archivedEvent(input: EpisodeTimelineInput): TimelineEvent | undefined {
   if (archive === undefined) {
     return undefined;
   }
+  const shared = input.occurrence?.sharedArchive === true;
   return {
     kind: 'archived',
     at: new Date(archive.archivedAt),
     clock: 'tx',
-    summary: `archived under pipeline ${archive.pipelineVersion}`,
+    // Labelled apart from the occurrence: these bytes may have been written by an earlier push
+    // of the same content, and that event is not this occurrence's capture.
+    summary: shared
+      ? `bytes archived under pipeline ${archive.pipelineVersion} by an earlier occurrence`
+      : `archived under pipeline ${archive.pipelineVersion}`,
     detail: {
+      shared_archive: shared,
+      archive_occurred_at: new Date(archive.occurredAt).toISOString(),
       schema_version: archive.schemaVersion,
       pipeline_version: archive.pipelineVersion,
       content_hash: archive.contentHash,
@@ -283,6 +357,11 @@ export function buildEpisodeTimeline(input: EpisodeTimelineInput): readonly Time
   if (occurred !== undefined) {
     events.push(occurred);
   }
+  const accepted = acceptedEvent(input);
+  if (accepted !== undefined) {
+    events.push(accepted);
+  }
+  events.push(...referenceEvents(input));
   const archived = archivedEvent(input);
   if (archived !== undefined) {
     events.push(archived);

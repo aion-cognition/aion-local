@@ -11,6 +11,7 @@ import {
   listSessionEpisodeIds,
   loadEpisodeContext,
   orchestratorLedgerKey,
+  listReferenceBatches,
   PIPELINE_VERSION,
   readSourceRecord,
   refusalLines,
@@ -110,7 +111,8 @@ async function hydrateTimeline(
 
   // A source the records know is a source this command answers for, whether or not the graph
   // still projects it and whether or not it owns an archive row of its own.
-  const known = readSourceRecord(db, episodeId) !== undefined;
+  const record = readSourceRecord(db, episodeId);
+  const known = record !== undefined;
   if (archive === undefined && episodeContext === undefined && provenance === undefined && !known) {
     return undefined;
   }
@@ -138,9 +140,32 @@ async function hydrateTimeline(
     }),
   );
 
+  // The occurrence's own records, beside the bytes it may share with an earlier push. Without
+  // them the shared archive row's clocks would be read as this occurrence's, which is how a
+  // repush prints its predecessor's capture time.
+  const occurrence =
+    record === undefined
+      ? undefined
+      : {
+          occurredAt: new Date(record.occurredAt),
+          acceptedAt: new Date(record.createdAt),
+          sharedArchive:
+            archive !== undefined && record.canonicalArchiveId !== null
+              ? archive.episodeId !== episodeId
+              : false,
+          verificationStatus: record.verificationStatus,
+        };
+  const references = listReferenceBatches(db, episodeId).map((batch) => ({
+    version: batch.referenceVersion,
+    receivedAt: new Date(batch.receivedAt),
+    acceptedHash: batch.acceptedHash,
+  }));
+
   return buildEpisodeTimeline({
     episodeId,
     archive,
+    ...(occurrence === undefined ? {} : { occurrence }),
+    references,
     episodeOccurredAt: episodeContext?.occurredAt,
     episodeValidFrom: provenance?.validFrom,
     episodeTxFrom: provenance?.txFrom,
