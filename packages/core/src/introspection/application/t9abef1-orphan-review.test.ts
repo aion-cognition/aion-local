@@ -49,8 +49,13 @@ it('eventually nominates beyond the fixed oldest window', async () => {
     id: `node-${String(index)}`,
     txFrom: NOW,
   }));
-  vi.mocked(topology.findOrphanNodes).mockImplementation(async (_driver, limit) =>
-    all.slice(0, limit),
+  // The keyset the production query carries, honoured here in the query's own order: every page
+  // is the same bounded read and the position is what moves it. A stub that ignored the position
+  // could only reach a later node by fetching a longer prefix, which is the read bound this walk
+  // exists to hold.
+  const ordered = [...all].sort((left, right) => (left.id < right.id ? -1 : 1));
+  vi.mocked(topology.findOrphanNodes).mockImplementation(async (_driver, limit, after) =>
+    ordered.filter((node) => after === undefined || node.id > after.id).slice(0, limit),
   );
   vi.mocked(topology.findOrphanRelinkTargets).mockResolvedValue([]);
   const examined = new Set<string>();

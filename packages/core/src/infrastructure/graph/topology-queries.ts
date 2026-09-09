@@ -52,13 +52,30 @@ const ORPHAN_PREDICATE = [
 ].join('\n');
 
 /**
- * Oldest first. A node the reflection worker has not reached yet is an orphan by this
- * definition and is also the newest thing in the graph, so taking the oldest slice spends the
- * batch on fragmentation that has had time to be real.
+ * Oldest first, and resumable. A node the reflection worker has not reached yet is an orphan by
+ * this definition and is also the newest thing in the graph, so taking the oldest slice spends
+ * the batch on fragmentation that has had time to be real.
+ *
+ * The caller's position is a keyset on the same order the query returns, so a later page costs
+ * exactly what an earlier one did. Paging by fetching a longer prefix and discarding its head
+ * reads the whole backlog to reach its tail, which is the bound this exists to hold.
+ *
+ * Dates sort before nulls, which is what the last clause is for: once the cursor is on a dated
+ * row, the undated ones are still ahead.
  */
+const AFTER_POSITION = [
+  `($afterId IS NULL`,
+  `  OR (n.${BITEMPORAL_PROPERTIES.txFrom} IS NOT NULL AND $afterTxFrom IS NOT NULL`,
+  `      AND n.${BITEMPORAL_PROPERTIES.txFrom} > $afterTxFrom)`,
+  `  OR (n.${BITEMPORAL_PROPERTIES.txFrom} = $afterTxFrom AND n.id > $afterId)`,
+  `  OR (n.${BITEMPORAL_PROPERTIES.txFrom} IS NULL AND $afterTxFrom IS NULL AND n.id > $afterId)`,
+  `  OR (n.${BITEMPORAL_PROPERTIES.txFrom} IS NULL AND $afterTxFrom IS NOT NULL))`,
+].join('\n');
+
 const FIND_ORPHAN_NODES = [
   `MATCH (n:${MEMORY_LABEL})`,
   `WHERE ${ORPHAN_PREDICATE}`,
+  `  AND ${AFTER_POSITION}`,
   `RETURN n.id AS id, n.${BITEMPORAL_PROPERTIES.txFrom} AS tx_from`,
   `ORDER BY n.${BITEMPORAL_PROPERTIES.txFrom}, n.id`,
   'LIMIT $limit',
@@ -72,11 +89,30 @@ function mapOrphanNode(row: Row): OrphanNode {
   };
 }
 
-export async function findOrphanNodes(driver: Driver, limit: number): Promise<OrphanNode[]> {
+/** Where a page resumes: the last row the previous page returned, in the query's own order. */
+export type OrphanPosition = {
+  readonly txFrom: Date | undefined;
+  readonly id: string;
+};
+
+export async function findOrphanNodes(
+  driver: Driver,
+  limit: number,
+  after?: OrphanPosition,
+): Promise<OrphanNode[]> {
   if (limit <= 0) {
     return [];
   }
-  return runRead(driver, FIND_ORPHAN_NODES, { limit: toGraphInteger(limit) }, mapOrphanNode);
+  return runRead(
+    driver,
+    FIND_ORPHAN_NODES,
+    {
+      limit: toGraphInteger(limit),
+      afterId: after?.id ?? null,
+      afterTxFrom: after?.txFrom === undefined ? null : toGraphDateTime(after.txFrom),
+    },
+    mapOrphanNode,
+  );
 }
 
 /**

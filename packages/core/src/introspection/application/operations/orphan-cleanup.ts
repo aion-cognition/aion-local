@@ -1,4 +1,3 @@
-import { upsertEdge } from '../../../infrastructure/graph/edges.js';
 import type { OrphanRelinkTarget } from '../../../infrastructure/graph/topology-queries.js';
 import { readOrphanObservation } from '../../../infrastructure/sqlite/orphan-observations.js';
 import { readCurrentReadinessPolicy } from '../../../infrastructure/sqlite/readiness-policies.js';
@@ -11,7 +10,7 @@ import type {
 } from '../../domain/operation.js';
 import { orphanRepairRelevance } from '../../domain/orphan-policy.js';
 import { readOrphanCensus, type OrphanCensusEntry } from '../orphan-census.js';
-import { orphanSuppressionOperationId } from './orphan-suppression.js';
+import { orphanRelinkOperationId, orphanSuppressionOperationId } from './orphan-suppression.js';
 
 /**
  * Orphan repair: relink what can be reconnected cheaply, suppress what the records certify
@@ -31,23 +30,7 @@ import { orphanSuppressionOperationId } from './orphan-suppression.js';
 
 export const ORPHAN_CLEANUP_OPERATION = 'orphan_cleanup';
 
-export const ORPHAN_RELINK_PROVENANCE = 'introspection';
-export const ORPHAN_RELINK_SIGNAL = 'orphan_relink';
-
-/**
- * A repair edge states that two nodes sit under the same wiring, which is weaker than
- * anything reflection infers from content. It is written weak on purpose: it exists to give
- * activation a path, and the real association that arrives later outranks it.
- */
-export const ORPHAN_RELINK_STRENGTH = 0.2;
-export const ORPHAN_RELINK_CONFIDENCE = 0.4;
-
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-const RELINK_RATIONALE: Readonly<Record<OrphanRelinkTarget['kind'], string>> = {
-  shared_entity: 'reconnected through an entity its container mentions',
-  same_container: 'reconnected to a sibling under the same container',
-};
 
 export function orphanCleanupRelevance(health: HealthSnapshot): number {
   if (health.degraded.includes(HEALTH_COLLECTORS.graph)) {
@@ -56,20 +39,36 @@ export function orphanCleanupRelevance(health: HealthSnapshot): number {
   return orphanRepairRelevance(health.graph.orphanActionable, health.graph.orphanCleanupBatch);
 }
 
-async function relink(ctx: OperationContext, target: OrphanRelinkTarget): Promise<void> {
-  await upsertEdge(ctx.driver, {
-    type: 'RELATED_TO',
-    sourceId: target.orphanId,
-    targetId: target.targetId,
-    strength: ORPHAN_RELINK_STRENGTH,
-    confidence: ORPHAN_RELINK_CONFIDENCE,
-    signals: [ORPHAN_RELINK_SIGNAL, target.kind],
-    provenance: [ORPHAN_RELINK_PROVENANCE],
-    // A repair is a claim, not an observation, so a second run adds nothing to the count.
-    count: 0,
-    rationale: RELINK_RATIONALE[target.kind],
-    now: ctx.now,
+/**
+ * The repair edge, published rather than written here.
+ *
+ * The certification is a present-tense claim about a pair, and the edge is a present-tense write.
+ * They belong in one operation: the guard re-derives the proof and writes the edge under the same
+ * receipt, so a source that closed its incidence on either end between the census and the write
+ * refuses the repair instead of being written over. A run with no guard composed declines.
+ */
+async function relink(ctx: OperationContext, target: OrphanRelinkTarget): Promise<boolean> {
+  if (ctx.topology === undefined) {
+    return false;
+  }
+  const outcome = await ctx.topology.publish({
+    kind: 'topology_update',
+    operationId: orphanRelinkOperationId(target.orphanId, target.targetId, ctx.now),
+    payload: {
+      mode: 'relink',
+      orphanId: target.orphanId,
+      targetId: target.targetId,
+      relinkKind: target.kind,
+    },
   });
+  if (outcome.status !== 'acknowledged') {
+    ctx.logger.info(
+      { node: target.orphanId, status: outcome.status, reason: outcome.reason },
+      'orphan relink refused under the guard',
+    );
+    return false;
+  }
+  return (outcome.result as { relinked?: boolean }).relinked === true;
 }
 
 /**
@@ -139,8 +138,9 @@ async function runOrphanCleanup(ctx: OperationContext): Promise<OperationOutcome
     }
     processed += 1;
     if (entry.decision.action === 'relink' && entry.relinkTarget !== undefined) {
-      await relink(ctx, entry.relinkTarget);
-      relinked += 1;
+      if (await relink(ctx, entry.relinkTarget)) {
+        relinked += 1;
+      }
       continue;
     }
     if (entry.decision.action === 'forget' && (await forget(ctx, entry))) {

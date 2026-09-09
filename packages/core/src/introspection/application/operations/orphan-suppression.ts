@@ -1,7 +1,11 @@
 import { z } from 'zod';
 
 import { certifyNodeSupport } from '../../../evidence/application/node-support.js';
-import { forgetOrphanNodeInTransaction } from '../../../infrastructure/graph/topology-queries.js';
+import { upsertEdgeInTransaction } from '../../../infrastructure/graph/edges.js';
+import {
+  forgetOrphanNodeInTransaction,
+  type RelinkKind,
+} from '../../../infrastructure/graph/topology-queries.js';
 import { PublicationOperation } from '../../../infrastructure/publication/operation.js';
 import { buildEvidenceRevision } from '../../../infrastructure/publication/preconditions.js';
 import type {
@@ -14,7 +18,12 @@ import {
   readOrphanObservation,
 } from '../../../infrastructure/sqlite/orphan-observations.js';
 import { readCurrentReadinessPolicy } from '../../../infrastructure/sqlite/readiness-policies.js';
-import { pendingProposals, qualificationEvidence, qualificationHolds } from '../orphan-census.js';
+import {
+  certifiedRelinkTarget,
+  pendingProposals,
+  qualificationEvidence,
+  qualificationHolds,
+} from '../orphan-census.js';
 
 /**
  * Suppressing one disconnected node, under the guard.
@@ -27,8 +36,26 @@ import { pendingProposals, qualificationEvidence, qualificationHolds } from '../
  * rechecking a graph disconnection predicate alone does not fence any of it.
  */
 export const ORPHAN_SUPPRESSION_EFFECT = 'orphan_suppression';
+export const ORPHAN_RELINK_EFFECT = 'orphan_relink_edge';
 
-const Payload = z.strictObject({
+export const ORPHAN_RELINK_PROVENANCE = 'introspection';
+export const ORPHAN_RELINK_SIGNAL = 'orphan_relink';
+
+/**
+ * A repair edge states that two nodes sit under the same wiring, which is weaker than anything
+ * reflection infers from content. It is written weak on purpose: it exists to give activation a
+ * path, and the real association that arrives later outranks it.
+ */
+export const ORPHAN_RELINK_STRENGTH = 0.2;
+export const ORPHAN_RELINK_CONFIDENCE = 0.4;
+
+const RELINK_RATIONALE: Readonly<Record<RelinkKind, string>> = {
+  shared_entity: 'reconnected through an entity its container mentions',
+  same_container: 'reconnected to a sibling under the same container',
+};
+
+const SuppressPayload = z.strictObject({
+  mode: z.literal('suppress').optional(),
   nodeId: z.string().min(1),
   /** The policy the qualification window ran under. A different one is a different rule. */
   policyRevision: z.number().int().nonnegative(),
@@ -36,9 +63,23 @@ const Payload = z.strictObject({
   forgetBefore: z.string().min(1),
 });
 
-const Result = z.strictObject({ suppressed: z.boolean() });
+const RelinkPayload = z.strictObject({
+  mode: z.literal('relink'),
+  orphanId: z.string().min(1),
+  targetId: z.string().min(1),
+  relinkKind: z.enum(['shared_entity', 'same_container']),
+});
 
-type SuppressionData = z.infer<typeof Payload>;
+const Payload = z.union([SuppressPayload, RelinkPayload]);
+
+const Result = z.strictObject({ suppressed: z.boolean(), relinked: z.boolean() });
+
+type SuppressionData = z.infer<typeof SuppressPayload>;
+type RepairData = z.infer<typeof Payload>;
+
+function isRelink(data: RepairData): data is z.infer<typeof RelinkPayload> {
+  return data.mode === 'relink';
+}
 
 /** What a caller needs to publish one suppression. An absent one declines rather than writing. */
 export type TopologyPublisher = {
@@ -52,6 +93,29 @@ export type TopologyPublisher = {
 /** The operation identity one node's suppression takes, so a replay lands on its own receipt. */
 export function orphanSuppressionOperationId(nodeId: string, at: Date): string {
   return `orphan-suppression:${nodeId}:${at.toISOString()}`;
+}
+
+/** The same for one repair edge. The pair is the identity: one edge, one receipt. */
+export function orphanRelinkOperationId(orphanId: string, targetId: string, at: Date): string {
+  return `orphan-relink:${orphanId}:${targetId}:${at.toISOString()}`;
+}
+
+/**
+ * Whether the pair the census certified still certifies, derived again under the guard.
+ *
+ * The certification is a present-tense claim about two nodes, and a repair edge is a
+ * present-tense write. Between the read and the write a source can close its incidence on either
+ * end, and an edge written out of a relationship somebody ended is exactly what the proof is
+ * supposed to prevent.
+ */
+function relinkStands(context: PublicationContext, data: z.infer<typeof RelinkPayload>): boolean {
+  return (
+    certifiedRelinkTarget(context.db, data.orphanId, {
+      orphanId: data.orphanId,
+      targetId: data.targetId,
+      kind: data.relinkKind,
+    }) !== undefined
+  );
 }
 
 /**
@@ -101,14 +165,34 @@ function qualificationStands(
 
 export const orphanSuppressionPublication = new PublicationOperation({
   kind: 'topology_update',
-  effectKinds: [ORPHAN_SUPPRESSION_EFFECT],
+  effectKinds: [ORPHAN_SUPPRESSION_EFFECT, ORPHAN_RELINK_EFFECT],
   payload: Payload,
   data: Payload,
   result: Result,
   prepare(context, payload) {
     const coverage = readCurrentCoverageContract(context.db);
     if (coverage === undefined) {
-      throw new Error('an orphan suppression cannot publish before the coverage registry exists');
+      throw new Error('an orphan repair cannot publish before the coverage registry exists');
+    }
+    if (isRelink(payload)) {
+      // The certification is re-derived in `check` under the guard; what the plan carries is the
+      // pair it is about, so a replay writes the edge the decision named and no other.
+      return Promise.resolve({
+        data: payload,
+        expected: {
+          coverageEpoch: coverage.epoch,
+          evidence: buildEvidenceRevision([]),
+          sources: [],
+          heads: [],
+        },
+        scopes: [],
+        effects: [
+          {
+            kind: ORPHAN_RELINK_EFFECT,
+            detail: { orphanId: payload.orphanId, targetId: payload.targetId },
+          },
+        ],
+      });
     }
     const observation = readOrphanObservation(context.db, payload.nodeId);
     return Promise.resolve({
@@ -137,6 +221,13 @@ export const orphanSuppressionPublication = new PublicationOperation({
     });
   },
   check(context, data) {
+    if (isRelink(data)) {
+      return Promise.resolve(
+        relinkStands(context, data)
+          ? ({ status: 'valid' } as const)
+          : ({ status: 'deferred', reason: 'relink_proof_moved' } as const),
+      );
+    }
     const moved = qualificationStands(context, data);
     return Promise.resolve(
       moved === undefined
@@ -144,7 +235,23 @@ export const orphanSuppressionPublication = new PublicationOperation({
         : ({ status: 'deferred', reason: moved } as const),
     );
   },
-  async applyGraph(context: PublicationContext, data: SuppressionData) {
+  async applyGraph(context: PublicationContext, data: RepairData) {
+    if (isRelink(data)) {
+      await upsertEdgeInTransaction(context.graph, {
+        type: 'RELATED_TO',
+        sourceId: data.orphanId,
+        targetId: data.targetId,
+        strength: ORPHAN_RELINK_STRENGTH,
+        confidence: ORPHAN_RELINK_CONFIDENCE,
+        signals: [ORPHAN_RELINK_SIGNAL, data.relinkKind],
+        provenance: [ORPHAN_RELINK_PROVENANCE],
+        // A repair is a claim, not an observation, so a second run adds nothing to the count.
+        count: 0,
+        rationale: RELINK_RATIONALE[data.relinkKind],
+        now: context.now,
+      });
+      return { suppressed: false, relinked: true };
+    }
     // The graph statement carries the orphan test and the maturity bound with it, so a node that
     // gained an association between the check and this write is not suppressed either.
     const suppressed = await forgetOrphanNodeInTransaction(context.graph, {
@@ -152,12 +259,15 @@ export const orphanSuppressionPublication = new PublicationOperation({
       forgetBefore: new Date(data.forgetBefore),
       now: context.now,
     });
-    return { suppressed };
+    return { suppressed, relinked: false };
   },
   prepareSqlite() {
     return undefined;
   },
   acknowledgeSqlite(context, data, result) {
+    if (isRelink(data)) {
+      return undefined;
+    }
     // The window is spent either way: a node this suppressed has no window left to run, and one
     // the graph refused was not the node the qualification described.
     if (result.suppressed) {

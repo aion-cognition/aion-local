@@ -7,6 +7,7 @@ import {
   findOrphanNodes,
   findOrphanRelinkTargets,
   type OrphanNode,
+  type OrphanPosition,
   type OrphanRelinkTarget,
 } from '../../infrastructure/graph/topology-queries.js';
 import { committedIncidenceForNode } from '../../infrastructure/sqlite/committed-evidence.js';
@@ -66,11 +67,12 @@ export type OrphanCensus = {
   /** Nothing has counted the scopes that would carry their support. */
   readonly unknownSupport: number;
   /**
-   * Whether the graph's enumeration ran out before the window did.
+   * Whether this page reached the end of the graph's enumeration.
    *
-   * It describes the ENUMERATION and nothing else. Every candidate it returned was listed; only
-   * the page inside it was evaluated, so this cannot certify a global zero and a caller must not
-   * read it as one.
+   * It describes the ENUMERATION and nothing else, for one page of a resumable walk. Only the
+   * nodes inside the page were evaluated, and a page that started mid-walk says nothing about
+   * what came before it, so this cannot certify a global zero and a caller must not read it as
+   * one.
    */
   readonly enumerationComplete: boolean;
   readonly entries: readonly OrphanCensusEntry[];
@@ -85,18 +87,33 @@ const EMPTY: OrphanCensus = {
   entries: [],
 };
 
-/** Where the next read starts, so a bounded window advances instead of repeating its front. */
+/** Where the next read resumes, so a bounded page advances instead of repeating its front. */
 const POSITION_KEY = 'orphan-census:position';
 
-const PositionSchema = z.object({ skip: z.number().int().nonnegative() });
+const PositionSchema = z.object({
+  id: z.string().min(1),
+  txFrom: z.string().nullable(),
+});
 
-function readPosition(db: SqliteHandle): number {
+function readPosition(db: SqliteHandle): OrphanPosition | undefined {
   const parsed = PositionSchema.safeParse(getLedgerEntry(db, POSITION_KEY)?.summary);
-  return parsed.success ? parsed.data.skip : 0;
+  if (!parsed.success) {
+    return undefined;
+  }
+  return {
+    id: parsed.data.id,
+    txFrom: parsed.data.txFrom === null ? undefined : new Date(parsed.data.txFrom),
+  };
 }
 
-function writePosition(db: SqliteHandle, skip: number): void {
-  markLedgerApplied(db, POSITION_KEY, { skip });
+function writePosition(db: SqliteHandle, position: OrphanPosition | undefined): void {
+  markLedgerApplied(
+    db,
+    POSITION_KEY,
+    position === undefined
+      ? null
+      : { id: position.id, txFrom: position.txFrom?.toISOString() ?? null },
+  );
 }
 
 /**
@@ -133,23 +150,29 @@ export async function readOrphanCensus(
   options: OrphanCensusOptions,
 ): Promise<OrphanCensus> {
   const window = options.limit * NOMINATION_WINDOW;
-  // The read resumes where the last one stopped. The enumeration is ordered and bounded, so the
-  // position is how far into that order this read starts; without it the same front page comes
-  // back forever and a population larger than one window is never examined.
-  const skip = readPosition(deps.db);
-  const enumerated = await findOrphanNodes(deps.driver, skip + window);
-  const enumerationComplete = enumerated.length < skip + window;
-  const candidates = enumerated.slice(skip);
-  // Back to the front once the enumeration ran out, so the walk cycles rather than running off
-  // the end of a population that is shorter than the position it reached.
-  writePosition(deps.db, enumerationComplete || candidates.length === 0 ? 0 : skip + window);
-  if (enumerationComplete) {
-    // The whole population was read, so a node that carries a qualification and is not in it has
-    // left the population. Its window is void: the node was connected, or supported, or gone for
-    // some part of the interval, and none of that is continuous certification.
+  // The read resumes where the last one stopped, as a keyset the QUERY carries. Every page costs
+  // the same bounded read; fetching a longer prefix and discarding its head would read the whole
+  // backlog to reach its tail, which is the bound this exists to hold.
+  const after = readPosition(deps.db);
+  const candidates = await findOrphanNodes(deps.driver, window, after);
+  const enumerationComplete = candidates.length < window;
+  const last = candidates[candidates.length - 1];
+  // Back to the front once the enumeration ran out, so the walk cycles rather than stalling at
+  // the end of a population shorter than the position it reached.
+  writePosition(
+    deps.db,
+    enumerationComplete || last === undefined ? undefined : { id: last.id, txFrom: last.txFrom },
+  );
+  // Only a page that started at the front AND ended short saw the whole population. Absence from
+  // one page in the middle of a walk is not absence from the population, and clearing on it
+  // would void a window because the read happened to stop before reaching the node.
+  if (after === undefined && enumerationComplete) {
+    // A node that carries a qualification and is not in the population has left it. Its window is
+    // void: the node was connected, or supported, or gone for some part of the interval, and
+    // none of that is continuous certification.
     clearQualificationsOutside(
       deps.db,
-      enumerated.map((orphan) => orphan.id),
+      candidates.map((orphan) => orphan.id),
     );
   }
   if (candidates.length === 0) {
@@ -235,7 +258,7 @@ export async function readOrphanCensus(
  * nothing accounts for is a guess, and a guessed edge made out of the same silence a forget would
  * have been made out of is still a claim: the node is preserved and the edge withheld.
  */
-function certifiedRelinkTarget(
+export function certifiedRelinkTarget(
   db: SqliteHandle,
   orphanId: string,
   target: OrphanRelinkTarget | undefined,
@@ -243,14 +266,26 @@ function certifiedRelinkTarget(
   if (target === undefined) {
     return undefined;
   }
-  const behindOrphan = new Set(committedIncidenceForNode(db, orphanId).map((row) => row.sourceId));
+  const behindOrphan = new Set(currentSourcesBehind(db, orphanId));
   if (behindOrphan.size === 0) {
     return undefined;
   }
-  const shared = committedIncidenceForNode(db, target.targetId).some((row) =>
-    behindOrphan.has(row.sourceId),
-  );
-  return shared ? target : undefined;
+  return currentSourcesBehind(db, target.targetId).some((sourceId) => behindOrphan.has(sourceId))
+    ? target
+    : undefined;
+}
+
+/**
+ * The sources whose incidence on a node is CURRENT.
+ *
+ * A closed row is a record that a source once stood behind this node and no longer does. It is
+ * conservative support for keeping the node, and it is not a present-tense relation: authorizing
+ * a new edge on it would write today's claim out of a relationship somebody ended.
+ */
+function currentSourcesBehind(db: SqliteHandle, nodeId: string): readonly string[] {
+  return committedIncidenceForNode(db, nodeId)
+    .filter((row) => row.currency === 'open')
+    .map((row) => row.sourceId);
 }
 
 /**

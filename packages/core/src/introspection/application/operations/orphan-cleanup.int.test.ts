@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { orphanCleanupOperation, orphanCleanupRelevance } from './orphan-cleanup.js';
-import { orphanSuppressionOperationId } from './orphan-suppression.js';
+import { orphanRelinkOperationId, orphanSuppressionOperationId } from './orphan-suppression.js';
 import { durableRoleScope } from '../../../evidence/domain/scopes.js';
 import {
   commitIncidence,
@@ -39,7 +39,7 @@ import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sql
 import { INSTALLED_PUBLICATION_HANDLERS } from '../../../reflection/application/installed-publications.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
-import { readOrphanCensus } from '../orphan-census.js';
+import { certifiedRelinkTarget, readOrphanCensus } from '../orphan-census.js';
 
 /**
  * Four orphans, one per case the operation distinguishes:
@@ -335,6 +335,41 @@ describe('orphan cleanup', () => {
 
     expect(outcome.itemsAffected).toBe(0);
     expect(await forgottenAt('insight-race')).toBeUndefined();
+  });
+
+  it('refuses a repair edge whose shared source closed after the census certified it', async () => {
+    await seedLooseInsight('insight-relink-race', LONG_AGO);
+    await seedLooseInsight('entity-relink-race', LONG_AGO);
+    certifyEmpty('insight-relink-race', NOW);
+    commitSharedSource('relink-race-source', ['insight-relink-race', 'entity-relink-race'], NOW);
+    // The pair certifies here, which is what the census would nominate on.
+    expect(
+      certifiedRelinkTarget(db, 'insight-relink-race', {
+        orphanId: 'insight-relink-race',
+        targetId: 'entity-relink-race',
+        kind: 'same_container',
+      }),
+    ).toBeDefined();
+    // Then the source ends its incidence, which is what the guard is between.
+    db.prepare("UPDATE source_incidence SET currency='closed' WHERE source_id=?").run(
+      'relink-race-source',
+    );
+
+    const outcome = await coordinator.publish({
+      kind: 'topology_update',
+      operationId: orphanRelinkOperationId('insight-relink-race', 'entity-relink-race', MATURE),
+      payload: {
+        mode: 'relink',
+        orphanId: 'insight-relink-race',
+        targetId: 'entity-relink-race',
+        relinkKind: 'same_container',
+      },
+    });
+
+    expect(outcome).toMatchObject({ status: 'deferred', reason: 'relink_proof_moved' });
+    expect(
+      await relationshipTypesBetween(harness.driver, 'insight-relink-race', 'entity-relink-race'),
+    ).not.toContain('RELATED_TO');
   });
 
   it('refuses a suppression whose evidence moved after the qualification was taken', async () => {
