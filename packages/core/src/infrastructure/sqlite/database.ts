@@ -388,7 +388,12 @@ export function openSqliteHandle(target: SqliteTarget): SqliteHandle {
     const db = new Database(target.filePath);
     try {
       db.pragma(`busy_timeout = ${busyTimeoutMs}`);
-      db.pragma('journal_mode = WAL');
+      const journalMode: unknown = db.pragma('journal_mode = WAL', { simple: true });
+      if (target.filePath !== ':memory:' && journalMode !== 'wal') {
+        throw new Error(
+          `SQLite file target requires WAL journal mode; received ${String(journalMode)}`,
+        );
+      }
       for (const statement of SCHEMA_STATEMENTS) {
         db.exec(statement);
       }
