@@ -384,8 +384,12 @@ export async function applyUnmerge(driver: Driver, input: UnmergeInput): Promise
   }
 
   return inWriteTransaction(driver, async (tx) => {
-    await lockNodeInTransaction(tx, input.canonicalId, input.now);
-    await lockNodeInTransaction(tx, record.mergedId, input.now);
+    // Sorted by id, the order `redirectAndAbsorb` takes this same family in: a merge and an
+    // unmerge naming both ids queue rather than cycle. This transaction holds nothing when it
+    // takes the pair, and reaches everything after it inside the pair, endpoints group-first.
+    for (const id of [input.canonicalId, record.mergedId].sort()) {
+      await lockNodeInTransaction(tx, id, input.now);
+    }
     const canonical = await readCanonicalStateInTransaction(tx, input.canonicalId);
     const occurredAt = await mergedOccurredAt(tx, record.mergedId);
 
