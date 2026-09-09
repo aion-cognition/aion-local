@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { CONFIRMATION_SIGNAL_EFFECT } from './confirmation-signals.js';
 import { handleReflection } from './intake.js';
 import { LaneAssigner } from './lanes.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
@@ -17,6 +18,9 @@ import {
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider, Vector } from '../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { listStatedLinks } from '../../infrastructure/sqlite/evidence-links.js';
+import { recordSourceRecord } from '../../infrastructure/sqlite/source-identity.js';
+import { listEvidenceAcknowledgments } from '../../infrastructure/sqlite/source-lifecycle.js';
 import {
   listUsageEventsAfter,
   type UsageEventKind,
@@ -36,6 +40,8 @@ const EMBED_DIMENSION = 8;
 const SESSION = 'feedback-int-session';
 const STORED_AT = new Date('2026-06-01T10:00:00.000Z');
 const REPORTED_AT = new Date('2026-06-02T10:00:00.000Z');
+const RESTATED_AT = new Date('2026-06-04T10:00:00.000Z');
+const CONFIRMER = 'Ryan Huber';
 
 function vector(): Vector {
   const raw = new Array<number>(EMBED_DIMENSION).fill(0);
@@ -65,7 +71,9 @@ async function push(payload: ReflectionInput, now: Date, identity = SESSION): Pr
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
       lanes: new LaneAssigner(DEFAULTS.lanes),
       workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
-      publications: directIntakePublisher(harness.driver, db),
+      // The acceptance clock is the push's, so a confirmation that stated no moment carries a
+      // time this file can name rather than the moment the run happened.
+      publications: directIntakePublisher(harness.driver, db, () => now),
       acceptHookCapture: true,
     },
     payload,
@@ -75,7 +83,28 @@ async function push(payload: ReflectionInput, now: Date, identity = SESSION): Pr
 }
 
 function rowsOf(kind: UsageEventKind): readonly UsageEventRow[] {
-  return listUsageEventsAfter(db, undefined, 100).filter((event) => event.kind === kind);
+  return listUsageEventsAfter(db, undefined, 200).filter((event) => event.kind === kind);
+}
+
+/** The rows this source's confirmations produced, whichever delivery finally wrote them. */
+function confirmationsOf(sourceId: string): readonly UsageEventRow[] {
+  return rowsOf('memory_confirmed').filter(
+    (event) => (event.payload as { episodeId: string }).episodeId === sourceId,
+  );
+}
+
+/** The confirmation targets this source's accepted batches have brought into the committed view. */
+function committedConfirmationTargets(sourceId: string): readonly string[] {
+  return listStatedLinks(db, sourceId)
+    .filter((link) => link.kind === 'confirms' && link.knownFrom !== null)
+    .map((link) => link.toId);
+}
+
+/** What the records say the confirmation signal for this source still owes. */
+function signalStates(sourceId: string): readonly string[] {
+  return listEvidenceAcknowledgments(db, sourceId)
+    .filter((entry) => entry.effectKind === CONFIRMATION_SIGNAL_EFFECT)
+    .map((entry) => entry.state);
 }
 
 beforeAll(async () => {
@@ -207,22 +236,200 @@ describe('a confirmation stated about a stored memory', () => {
     });
   });
 
-  /** The edge was never written, so there is no signal to record beside it. */
+  /**
+   * A confirmation is a claim about a memory, so the row waits until the substrate can name the
+   * memory it is about. The statement is accepted either way.
+   */
   it('records nothing for a confirmation of something the substrate does not hold', async () => {
     const before = rowsOf('memory_confirmed').length;
 
-    await push(
+    const sourceId = await push(
       {
         observations: ['confirmed something that was never stored'],
         provenance: {
-          confirmations: [
-            { target: 'no-such-node', by: 'Ryan Huber', evidence: 'review thread 42' },
-          ],
+          confirmations: [{ target: 'no-such-node', by: CONFIRMER, evidence: 'review thread 42' }],
         },
       },
       REPORTED_AT,
     );
 
     expect(rowsOf('memory_confirmed')).toHaveLength(before);
+    // Not dropped: the signal is owed, and a reader counting owed work sees it.
+    expect(signalStates(sourceId)).toEqual(['owed']);
+  });
+});
+
+/**
+ * A statement about an identity the substrate has not taken yet. Nothing here is a graph
+ * question: the durable records are what answer whether a confirmation names a memory, so a
+ * source whose raw projection was never written is a resolved target and an id nothing accounts
+ * for is not.
+ */
+describe('a confirmation whose target the substrate cannot name yet', () => {
+  const LATE_TARGET = 'feedback-int-late-target';
+  const LATE_SESSION = 'feedback-int-late-session';
+  const LATE_EVIDENCE = 'review thread 43';
+  const LATE_OBSERVATIONS = ['confirmed a memory this substrate has not taken yet'];
+  let lateSourceId = '';
+
+  it('keeps the statement and owes the signal rather than writing a row', async () => {
+    lateSourceId = await push(
+      {
+        observations: LATE_OBSERVATIONS,
+        provenance: {
+          confirmations: [{ target: LATE_TARGET, by: CONFIRMER, evidence: LATE_EVIDENCE }],
+        },
+      },
+      REPORTED_AT,
+      LATE_SESSION,
+    );
+
+    expect(confirmationsOf(lateSourceId)).toEqual([]);
+    expect(signalStates(lateSourceId)).toEqual(['owed']);
+  });
+
+  it('writes it once the records name the target, under the moment it was stated', async () => {
+    // The occurrence arrives late, which is the ordinary out-of-order case: the caller confirmed
+    // a memory it had been served before this substrate accepted it.
+    recordSourceRecord(db, {
+      sourceId: LATE_TARGET,
+      sessionId: LATE_SESSION,
+      verificationStatus: 'verified',
+      occurredAt: STORED_AT.toISOString(),
+      createdAt: STORED_AT,
+      archive: {
+        canonicalArchiveId: `${LATE_TARGET}-archive`,
+        archiveSchemaVersion: 1,
+        identityHash: `${LATE_TARGET}-identity`,
+        verifiedContentDigest: `${LATE_TARGET}-digest`,
+        verificationPolicyVersion: 1,
+        archivedAt: STORED_AT.toISOString(),
+      },
+    });
+
+    // The caller does not restate the confirmation. Any later statement this source makes
+    // settles what it already owed.
+    await push(
+      {
+        observations: LATE_OBSERVATIONS,
+        provenance: { derived_from: ['feedback-int-unrelated-source'] },
+      },
+      RESTATED_AT,
+      LATE_SESSION,
+    );
+
+    const confirmed = confirmationsOf(lateSourceId);
+    expect(confirmed).toHaveLength(1);
+    expect(confirmed[0]?.payload).toEqual({
+      episodeId: lateSourceId,
+      memories: [LATE_TARGET],
+      confirmedBy: CONFIRMER,
+      evidence: LATE_EVIDENCE,
+    });
+    // The statement's own moment, which is the first acceptance and not the settlement that
+    // finally wrote the row.
+    expect(confirmed[0]?.occurredAt).toBe(REPORTED_AT.toISOString());
+    expect(signalStates(lateSourceId)).toEqual(['completed']);
+  });
+
+  it('adds nothing when the same confirmation is delivered again', async () => {
+    await push(
+      {
+        observations: LATE_OBSERVATIONS,
+        provenance: {
+          confirmations: [{ target: LATE_TARGET, by: CONFIRMER, evidence: LATE_EVIDENCE }],
+        },
+      },
+      new Date('2026-06-05T10:00:00.000Z'),
+      LATE_SESSION,
+    );
+
+    const confirmed = confirmationsOf(lateSourceId);
+    expect(confirmed).toHaveLength(1);
+    expect(confirmed[0]?.occurredAt).toBe(REPORTED_AT.toISOString());
+  });
+
+  it('writes one for an identity the records hold and the graph never projected', async () => {
+    const archiveOnly = 'feedback-int-archive-only-target';
+    const session = 'feedback-int-archive-only-session';
+    recordSourceRecord(db, {
+      sourceId: archiveOnly,
+      sessionId: session,
+      verificationStatus: 'verified',
+      occurredAt: STORED_AT.toISOString(),
+      createdAt: STORED_AT,
+      archive: {
+        canonicalArchiveId: `${archiveOnly}-archive`,
+        archiveSchemaVersion: 1,
+        identityHash: `${archiveOnly}-identity`,
+        verifiedContentDigest: `${archiveOnly}-digest`,
+        verificationPolicyVersion: 1,
+        archivedAt: STORED_AT.toISOString(),
+      },
+    });
+
+    const sourceId = await push(
+      {
+        observations: ['confirmed a memory whose raw projection is gone'],
+        provenance: {
+          confirmations: [{ target: archiveOnly, by: CONFIRMER, evidence: 'review thread 44' }],
+        },
+      },
+      REPORTED_AT,
+      session,
+    );
+
+    expect(confirmationsOf(sourceId)).toHaveLength(1);
+    expect(signalStates(sourceId)).toEqual(['completed']);
+  });
+
+  /**
+   * The append and the acknowledgment stand or fall together. A refusal that was swallowed would
+   * leave the settlement recorded over a row nothing wrote, and no later pass looks for it again.
+   */
+  it('takes the whole acknowledgment with it when the stream refuses the row', async () => {
+    const refusedTarget = 'feedback-int-refused-target';
+    const session = 'feedback-int-refused-session';
+    recordSourceRecord(db, {
+      sourceId: refusedTarget,
+      sessionId: session,
+      verificationStatus: 'verified',
+      occurredAt: STORED_AT.toISOString(),
+      createdAt: STORED_AT,
+      archive: {
+        canonicalArchiveId: `${refusedTarget}-archive`,
+        archiveSchemaVersion: 1,
+        identityHash: `${refusedTarget}-identity`,
+        verifiedContentDigest: `${refusedTarget}-digest`,
+        verificationPolicyVersion: 1,
+        archivedAt: STORED_AT.toISOString(),
+      },
+    });
+    const observations = ['confirmed a memory the stream will not take'];
+    // Stated bare first, so the confirmation below lands on a source this test can name.
+    const sourceId = await push({ observations }, REPORTED_AT, session);
+    const payload: ReflectionInput = {
+      observations,
+      provenance: {
+        confirmations: [{ target: refusedTarget, by: CONFIRMER, evidence: 'review thread 45' }],
+      },
+    };
+
+    db.exec(
+      `CREATE TRIGGER refuse_confirmed BEFORE INSERT ON usage_events
+       WHEN NEW.kind = 'memory_confirmed'
+       BEGIN SELECT RAISE(ABORT, 'refused'); END`,
+    );
+    try {
+      await expect(push(payload, REPORTED_AT, session)).rejects.toThrow(/refused/);
+    } finally {
+      db.exec('DROP TRIGGER refuse_confirmed');
+    }
+
+    expect(confirmationsOf(sourceId)).toEqual([]);
+    // The whole acknowledgment went with the refusal, so nothing says the signal was delivered
+    // and nothing says the batch carrying it settled.
+    expect(signalStates(sourceId)).toEqual([]);
+    expect(committedConfirmationTargets(sourceId)).toEqual([]);
   });
 });

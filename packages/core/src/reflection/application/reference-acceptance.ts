@@ -1,3 +1,4 @@
+import { settleConfirmationSignals } from './confirmation-signals.js';
 import type { ConfirmationStatement, ReferenceStatements } from './reference-statements.js';
 import { durableRoleScope, type DurableRole } from '../../evidence/domain/scopes.js';
 import { writeClaimProvenanceInTransaction } from '../../infrastructure/graph/claim-provenance-queries.js';
@@ -28,7 +29,6 @@ import {
   readReferenceDelivery,
 } from '../../infrastructure/sqlite/source-identity.js';
 import { recordEvidenceAcknowledgment } from '../../infrastructure/sqlite/source-lifecycle.js';
-import { appendMemoryConfirmedEvent } from '../../infrastructure/sqlite/usage-events.js';
 import { hashContent } from '../domain/content.js';
 
 /**
@@ -326,9 +326,10 @@ export type ReferenceSettlement = ReferenceAcceptance & {
  *
  * The link versions join the committed view, the scopes publish the numbers they parked, the
  * source's readiness counter moves because it now owes a settled statement it did not owe
- * before, and every confirmation appends its event. An append that throws takes the whole
- * acknowledgment with it and leaves the work owed, which is the only honest outcome: a
- * settlement recorded over a signal nothing wrote is a signal no later pass looks for.
+ * before, and every confirmation whose target the substrate can name appends its event. An
+ * append that throws takes the whole acknowledgment with it and leaves the work owed, which is
+ * the only honest outcome: a settlement recorded over a signal nothing wrote is a signal no
+ * later pass looks for.
  */
 export function acknowledgeReferenceAcceptance(
   db: SqliteHandle,
@@ -355,7 +356,7 @@ export function acknowledgeReferenceAcceptance(
   if (generation !== undefined) {
     advanceOperationalRevision(db, settlement.sourceId, generation.processingGeneration);
   }
-  appendConfirmationEvents(db, settlement);
+  settleConfirmationSignals(db, settlement);
   if (settlement.targets.length > 0) {
     recordEvidenceAcknowledgment(db, {
       sourceId: settlement.sourceId,
@@ -365,51 +366,6 @@ export function acknowledgeReferenceAcceptance(
       completedAt: new Date(settlement.observedAckAt),
     });
   }
-}
-
-/**
- * One event per confirmation, keyed on the statement rather than the attempt, so a retry or a
- * raw rebuild of the same source adds nothing. The canonical payload is the one the first
- * accepted version recorded: a later delivery restating the same pair does not rewrite who
- * confirmed it or what they cited.
- */
-function appendConfirmationEvents(db: SqliteHandle, settlement: ReferenceSettlement): void {
-  for (const target of settlement.targets) {
-    if (target.confirmation === undefined) {
-      continue;
-    }
-    const linkId = statedLinkId(target.kind, target.targetClass, settlement.sourceId, target.id);
-    const canonical = readStatedLinkValues(db, linkId) ?? target.confirmation;
-    const by = typeof canonical.by === 'string' ? canonical.by : target.confirmation.by;
-    const evidence =
-      typeof canonical.evidence === 'string' ? canonical.evidence : target.confirmation.evidence;
-    const statedAt =
-      typeof canonical.occurredAt === 'string'
-        ? canonical.occurredAt
-        : target.confirmation.occurredAt;
-    appendMemoryConfirmedEvent(db, {
-      key: confirmationEventKey(settlement.sourceId, target.id, by, evidence),
-      episodeId: settlement.sourceId,
-      memories: [target.id],
-      confirmedBy: by,
-      evidence,
-      occurredAt: new Date(statedAt),
-      recordedAt: new Date(settlement.observedAckAt),
-    });
-  }
-}
-
-/**
- * The same digest rule the settle path uses, over what makes one confirmation the same statement
- * as another. Keeping the two in step is what stops a converted writer from doubling the stream.
- */
-export function confirmationEventKey(
-  episodeId: string,
-  target: string,
-  by: string,
-  evidence: string,
-): string {
-  return `feedback:memory_confirmed:${hashContent({ episodeId, target, by, evidence })}`;
 }
 
 /** Releases the scope numbers a rejected attempt parked. The accepted batch and versions stay. */
