@@ -18,7 +18,10 @@ import type { Provider } from '../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { listStatedLinks } from '../../infrastructure/sqlite/evidence-links.js';
 import { getExperienceByEpisode } from '../../infrastructure/sqlite/experience-archive.js';
-import { findPendingReflectionJob } from '../../infrastructure/sqlite/reflection-queue.js';
+import {
+  findPendingReflectionJob,
+  listReflectionJobs,
+} from '../../infrastructure/sqlite/reflection-queue.js';
 import { handleReflection } from '../../reflection/application/intake.js';
 import { LaneAssigner } from '../../reflection/application/lanes.js';
 import type { ReflectionRun } from '../../reflection/application/orchestrator.js';
@@ -185,6 +188,11 @@ describe('references the substrate has to keep hold of', () => {
    * statement is not lost by that: it is durable against the identity the caller named, recorded
    * as unresolved, and it is what a later materialization has to work from.
    */
+  /**
+   * An absent target, which is its own shape: the edge cannot be written because there is no far
+   * end. It is not a transient failure to attach a target the graph does hold; the interrupted
+   * acceptance in the worker battery is where that one lives.
+   */
   it('keeps a statement whose target the graph does not hold, durably and unresolved', async () => {
     const id = await substrate.push('a statement about something absent', 'review-unresolved', {
       derived_from: ['never-projected-target'],
@@ -210,12 +218,17 @@ describe('references the substrate has to keep hold of', () => {
 });
 
 /**
- * Two orderings that can lose a reference the substrate already accepted: a worker woken the
- * instant the job exists, and one already running when the reference arrives. Both end with the
- * job acked, so if the write is not made before the ack nothing is left to make it.
+ * A reference arriving around a job the worker is handling. The first case is a re-push whose
+ * work the worker has already finished, which owes no new job and still owes its statement; the
+ * other two hold one run and let a statement land during it.
  */
 describe('a reference that arrives while its job is being handled', () => {
-  it('keeps duplicate provenance when the enqueue callback wakes the worker immediately', async () => {
+  /**
+   * The worker drains the first job before the duplicate is pushed, so this is the reused
+   * occurrence: no projection, no enqueue and no index, and the statement the push carried
+   * accepted against the original source all the same.
+   */
+  it('queues no new job for a re-push whose work the worker already finished', async () => {
     const text = 'review immediate wake duplicate';
     const identity = 'review-immediate-wake';
     const id = await substrate.push(text, identity);
@@ -244,8 +257,9 @@ describe('a reference that arrives while its job is being handled', () => {
       );
       expect(result.episode_id).toBe(id);
       await worker.whenIdle();
+      // The reused occurrence owes no processing job, and it still owes its statement.
+      expect(listReflectionJobs(db).filter((job) => job.episodeId === id)).toEqual([]);
       expect(committedTargets(id)).toEqual([ROOT_ID]);
-      expect(findPendingReflectionJob(db, 'integrate', 'episode_id', id)).toBeUndefined();
       expect(worker.retrying).toBe(0);
       expect(await rootsOf(id)).toEqual([ROOT_ID]);
     } finally {
@@ -313,11 +327,11 @@ describe('a reference that arrives while its job is being handled', () => {
   });
 
   /**
-   * The narrowest of the three: the reference arrives after the running job's last look at the
-   * source and before that job is acked. The acceptance records and projects it itself, so the
-   * ack that follows has nothing left to do about it.
+   * The same hold, with a source that already carried one statement: a second one lands while the
+   * run is held, and both survive. It is not a different boundary from the case above; what it
+   * adds is that an existing accepted batch is not displaced by the one that arrives.
    */
-  it('keeps a second reference accepted between the run and the ack', async () => {
+  it('keeps a second statement accepted while the same run is held', async () => {
     const text = 'review final ack duplicate';
     const identity = 'review-final-ack';
     const id = await substrate.push(text, identity, { derived_from: [ROOT_ID] });

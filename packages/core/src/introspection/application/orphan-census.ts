@@ -198,20 +198,15 @@ export async function readOrphanCensus(
     // the graph said and when. Without one there is no reading to qualify against: the node may
     // have been superseded, reopened or rewritten inside the window, and a qualification taken
     // over that interval would be a certification of an interval nobody observed.
-    const state = readScopeMirror(deps.db, {
-      endpointId: orphan.id,
-      relationClass: GRAPH_NODE_SCOPE,
-    });
-    const support = state === undefined ? 'unknown' : reading.support;
+    const state = nodeStateToken(deps.db, orphan.id);
+    const support = state === 'absent' ? 'unknown' : reading.support;
     const reason =
-      state === undefined ? 'no mirrored node state to qualify against' : reading.reason;
+      state === 'absent' ? 'no mirrored node state to qualify against' : reading.reason;
     const target = certifiedRelinkTarget(deps.db, orphan.id, targets.get(orphan.id));
     const observation = recordOrphanQualification(deps.db, {
       nodeId: orphan.id,
       evidenceRevision: {
-        ...qualificationEvidence(reading.evidenceRevision, pending),
-        [GRAPH_NODE_SCOPE]:
-          state === undefined ? 'absent' : `${String(state.mirroredRevision)}@${state.mirroredAt}`,
+        ...qualificationEvidence(deps.db, orphan.id, reading.evidenceRevision, pending),
         'graph:disconnected_since': orphan.txFrom?.toISOString() ?? 'unknown',
       },
       policyRevision: options.policyRevision,
@@ -298,10 +293,29 @@ function currentSourcesBehind(db: SqliteHandle, nodeId: string): readonly string
  * before the batch.
  */
 export function qualificationEvidence(
+  db: SqliteHandle,
+  nodeId: string,
   supportRevision: Readonly<Record<string, string>>,
   pendingProposalCount: number,
 ): Readonly<Record<string, string>> {
-  return { ...supportRevision, 'proposals:pending': String(pendingProposalCount) };
+  return {
+    ...supportRevision,
+    'proposals:pending': String(pendingProposalCount),
+    [GRAPH_NODE_SCOPE]: nodeStateToken(db, nodeId),
+  };
+}
+
+/**
+ * What the graph last said about this node's own state, and when it said it.
+ *
+ * One producer, because the reader that qualifies a window and the writer that acts on it have to
+ * compare the same thing: a proof reconstructed without this key is a proof that never checks it.
+ * An absent mirror is a value, not a gap to skip: it says nobody has a reading, and that is a
+ * change from having had one.
+ */
+export function nodeStateToken(db: SqliteHandle, nodeId: string): string {
+  const state = readScopeMirror(db, { endpointId: nodeId, relationClass: GRAPH_NODE_SCOPE });
+  return state === undefined ? 'absent' : `${String(state.mirroredRevision)}@${state.mirroredAt}`;
 }
 
 /** Whether every dependency the record names still reads the way it did. */

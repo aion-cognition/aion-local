@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { certifyNodeSupport } from '../../../evidence/application/node-support.js';
+import { GRAPH_NODE_SCOPE } from '../../../evidence/domain/scopes.js';
 import { upsertEdgeInTransaction } from '../../../infrastructure/graph/edges.js';
 import {
   forgetOrphanNodeInTransaction,
@@ -13,6 +14,10 @@ import type {
   PublicationOutcome,
 } from '../../../infrastructure/publication/types.js';
 import { readCurrentCoverageContract } from '../../../infrastructure/sqlite/coverage-contract.js';
+import {
+  readScopeMirror,
+  recordScopeMirror,
+} from '../../../infrastructure/sqlite/evidence-scope.js';
 import {
   clearOrphanQualification,
   readOrphanObservation,
@@ -152,7 +157,7 @@ function qualificationStands(
   if (
     !qualificationHolds(
       observation.evidenceRevision,
-      qualificationEvidence(reading.evidenceRevision, pending),
+      qualificationEvidence(context.db, data.nodeId, reading.evidenceRevision, pending),
     )
   ) {
     return 'evidence_moved';
@@ -272,6 +277,21 @@ export const orphanSuppressionPublication = new PublicationOperation({
     // the graph refused was not the node the qualification described.
     if (result.suppressed) {
       clearOrphanQualification(context.db, data.nodeId);
+      // A suppression is a change to the node's own semantic state, so the evidence somebody else
+      // is holding about that state stops being current here, in the operation that made the
+      // change. Left alone, a judgment fenced on the reading this operation invalidated would
+      // still verify as current against a node that has been forgotten.
+      const held = readScopeMirror(context.db, {
+        endpointId: data.nodeId,
+        relationClass: GRAPH_NODE_SCOPE,
+      });
+      recordScopeMirror(context.db, {
+        endpointId: data.nodeId,
+        relationClass: GRAPH_NODE_SCOPE,
+        mirroredRevision: (held?.mirroredRevision ?? 0) + 1,
+        operationId: context.operationId,
+        mirroredAt: new Date(context.knownFrom),
+      });
     }
     return undefined;
   },

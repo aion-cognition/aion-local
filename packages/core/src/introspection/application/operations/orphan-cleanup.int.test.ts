@@ -327,16 +327,6 @@ describe('orphan cleanup', () => {
     expect(await forgottenAt('episode-unenriched-alone')).toBeUndefined();
   });
 
-  it('declines the suppression outright when no guard is composed to publish it under', async () => {
-    certifyEmpty('insight-declined', MATURE);
-    const unguarded: OperationContext = { ...context(MATURE), topology: undefined };
-
-    const outcome = await orphanCleanupOperation().run(unguarded);
-
-    expect(outcome.itemsAffected).toBe(0);
-    expect(await forgottenAt('insight-race')).toBeUndefined();
-  });
-
   it('refuses a repair edge whose shared source closed after the census certified it', async () => {
     await seedLooseInsight('insight-relink-race', LONG_AGO);
     await seedLooseInsight('entity-relink-race', LONG_AGO);
@@ -435,5 +425,41 @@ describe('orphan cleanup', () => {
 
     expect(outcome.status).toBe('noop');
     expect(outcome.itemsAffected).toBe(0);
+  });
+
+  it('declines a mature candidate outright when no guard is composed to publish under', async () => {
+    await seedLooseInsight('insight-unguarded', LONG_AGO);
+    certifyEmpty('insight-unguarded', NOW);
+    // The window starts here, so by MATURE the only thing between this node and a stamp is the
+    // guard. A control that qualified its candidate on the same pass it ran would prove nothing:
+    // a node whose window has not matured is held for a reason that has nothing to do with the
+    // publisher.
+    await readOrphanCensus(
+      { driver: harness.driver, db },
+      {
+        limit: 50,
+        now: NOW,
+        forgetAfterDays: config.maintenance.orphanForgetAfterDays,
+        policyRevision: 0,
+      },
+    );
+    const mature = await readOrphanCensus(
+      { driver: harness.driver, db },
+      {
+        limit: 50,
+        now: MATURE,
+        forgetAfterDays: config.maintenance.orphanForgetAfterDays,
+        policyRevision: 0,
+      },
+    );
+    expect(
+      mature.entries.find((entry) => entry.nodeId === 'insight-unguarded')?.decision.action,
+    ).toBe('forget');
+
+    const unguarded: OperationContext = { ...context(MATURE), topology: undefined };
+    const outcome = await orphanCleanupOperation().run(unguarded);
+
+    expect(outcome.itemsAffected).toBe(0);
+    expect(await forgottenAt('insight-unguarded')).toBeUndefined();
   });
 });
