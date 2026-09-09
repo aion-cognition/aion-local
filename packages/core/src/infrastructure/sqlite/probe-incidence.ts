@@ -163,25 +163,36 @@ export type ServedReferenceOutcome =
 /**
  * Whether the conversation came back to a served memory.
  *
- * The credit needs a clock the substrate assigned: `known_from` is stamped at acknowledgment,
- * so a version carrying one was demonstrably known after the moment it names. A legacy row a
- * backfill discovered later carries none, and crediting it would turn "we found this edge
- * afterwards" into "the member used this memory afterwards".
+ * The credit needs an accepted reference, not merely a later row. A version that closes,
+ * retracts or re-materialises an existing link is an acknowledgment about bookkeeping: the
+ * mention it edits happened before the serve, and counting the edit would report a tidy-up as
+ * the member using the memory again.
+ *
+ * The clock is the reference's own recorded observation rather than the moment the substrate
+ * learned of it. `known_from` still has to be there — an unacknowledged version is not in the
+ * committed view at all — but a backfill that discovers an old edge today has discovered an old
+ * edge, and dating it to the discovery is how "we found this afterwards" turns into "the member
+ * used this afterwards".
  */
 export function servedReferenceOutcome(
   db: SqliteHandle,
   itemId: string,
   firstServedAt: string,
 ): ServedReferenceOutcome {
+  const roles = RELATED_ROLES.map(() => '?').join(', ');
   const later = db
     .prepare(
       `SELECT count(*) AS n
        FROM source_incidence s
        JOIN evidence_link_versions v ON v.link_id = s.link_id
        JOIN publication_intents i ON i.operation_id = v.operation_id AND i.state = 'acknowledged'
-       WHERE s.node_id = ? AND v.known_from IS NOT NULL AND v.known_from > ?`,
+       WHERE s.node_id = ? AND s.role IN (${roles})
+         AND v.known_from IS NOT NULL
+         AND v.observed_at > ?
+         AND v.state != 'closed'
+         AND COALESCE(json_extract(v.recorded_values_json, '$.currency'), 'open') != 'closed'`,
     )
-    .get(itemId, firstServedAt) as { n: number };
+    .get(itemId, ...RELATED_ROLES, firstServedAt) as { n: number };
   if (later.n > 0) {
     return 'referenced_after';
   }
