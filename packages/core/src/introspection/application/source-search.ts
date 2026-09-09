@@ -1,5 +1,6 @@
 import type { CoverageRefusal, HistoryCoverage } from '@aion/protocol';
 
+import { coverageMoved, stillDisclosable } from './source-completion.js';
 import { statedCoverage } from '../../evidence/application/reasons.js';
 import type { EvidenceResolver } from '../../evidence/application/resolver.js';
 import type { SourceEvidence, SourcePartEvidence } from '../../evidence/application/sources.js';
@@ -26,8 +27,8 @@ import {
 } from '../../infrastructure/sqlite/source-search-store.js';
 import {
   checkCoverage,
+  coverageRefusal,
   CoverageRequestError,
-  readCoverageFence,
   type CheckedReadContext,
 } from '../../recall/application/coverage-checker.js';
 import {
@@ -349,7 +350,12 @@ export async function runSourceSearch(
     if (cursor.coverageEpoch !== checked.context.coverageEpoch) {
       return {
         status: 'coverage_refused',
-        refusal: coverageChanged(checked.coverage, now, request),
+        refusal: coverageRefusal('coverage_changed', requestedTimes(request, now), {
+          coverageState: checked.context.coverageState,
+          ...(checked.coverage.history_since === undefined
+            ? {}
+            : { historySince: checked.coverage.history_since }),
+        }),
       };
     }
     ({ afterId, upperBound, generation: boundGeneration } = cursor);
@@ -369,12 +375,21 @@ export async function runSourceSearch(
   // The coverage record outranks the index: a contract that moved makes the whole answer one
   // the substrate no longer stands behind, and calling that an index restart would send a
   // caller to retry a page it may not be entitled to at all.
-  if (readCoverageFence(deps.db) !== checked.context.coverageEpoch) {
-    return { status: 'coverage_refused', refusal: coverageChanged(checked.coverage, now, request) };
+  const moved = coverageMoved(deps.db, checked.context, request, now);
+  if (moved !== undefined) {
+    return { status: 'coverage_refused', refusal: moved.refusal };
   }
   if (searchGeneration(deps.db) !== snapshot.generation) {
     return { status: 'restart_required', reason: 'index_generation_changed' };
   }
+
+  // A statement accepted while the page was being assembled withholds its source here, not on
+  // the next request. A hit resolved before that statement is stale text, and disclosing it
+  // would make the answer depend on where in the page the source happened to sit.
+  const disclosable = page.hits.filter((hit) =>
+    stillDisclosable(deps.db, hit.sourceId, checked.context),
+  );
+  const withdrawn = page.hits.length - disclosable.length;
 
   const corpusReading = corpusCoverage(deps.db);
   const issues = [...page.issues];
@@ -387,7 +402,7 @@ export async function runSourceSearch(
   const more = page.bounded && page.lastExamined > 0;
   return {
     status: 'results',
-    results: page.hits,
+    results: disclosable,
     ...(more
       ? {
           continuation: encodeSearchCursor({
@@ -407,27 +422,19 @@ export async function runSourceSearch(
       truncatedDocuments: corpusReading.truncatedDocuments,
       examined: page.examined,
       bounded: page.bounded,
-      withheld: page.withheld,
+      withheld: page.withheld + withdrawn,
     },
   };
 }
 
-/** C10's own outcome for a contract that moved under a read, spelled the way the checker does. */
-function coverageChanged(
-  coverage: HistoryCoverage,
-  now: Date,
+/** The request's own temporal inputs, as the refusal shape names them. */
+function requestedTimes(
   request: SourceSearchRequest,
-): CoverageRefusal {
+  now: Date,
+): { readonly asOf?: Date; readonly knewAt?: Date; readonly now: Date } {
   return {
-    contract_version: coverage.contract_version,
-    reason: 'coverage_changed',
-    requested: {
-      ...(request.asOf === undefined ? {} : { as_of: request.asOf }),
-      ...(request.knewAt === undefined ? {} : { knew_at: request.knewAt }),
-      now: now.toISOString(),
-    },
-    bounds: {
-      ...(coverage.history_since === undefined ? {} : { history_since: coverage.history_since }),
-    },
+    ...(request.asOf === undefined ? {} : { asOf: new Date(request.asOf) }),
+    ...(request.knewAt === undefined ? {} : { knewAt: new Date(request.knewAt) }),
+    now,
   };
 }

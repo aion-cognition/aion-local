@@ -1,5 +1,6 @@
 import type { CoverageRefusal, HistoryCoverage } from '@aion/protocol';
 
+import { coverageMoved, stillDisclosable } from './source-completion.js';
 import type { SourceSearchDeps } from './source-search.js';
 import { statedCoverage } from '../../evidence/application/reasons.js';
 import type { SourceEvidence, SourcePartEvidence } from '../../evidence/application/sources.js';
@@ -274,6 +275,12 @@ export async function runSourceInspection(
   }
 
   const batch = await deps.resolver.resolveSources([address], checked.context, 'raw_inspection');
+  // The contract is asked again at the end. A read that began under one and finished under
+  // another has no statement it can honestly attach to what it found.
+  const moved = coverageMoved(deps.db, checked.context, request, now);
+  if (moved !== undefined) {
+    return { status: 'coverage_refused', refusal: moved.refusal };
+  }
   const result = [...batch.results.values()][0];
   const { coverage } = statedCoverage(checked.coverage, batch.issues);
   if (result === undefined) {
@@ -290,6 +297,16 @@ export async function runSourceInspection(
       status: 'unavailable',
       residency: result.residency,
       evidence: result.evidence.status,
+      reasons: reasonsOf(result),
+      coverage,
+    };
+  }
+  // A statement accepted while the parts were being read withholds them here too.
+  if (!stillDisclosable(deps.db, result.value.sourceId, checked.context)) {
+    return {
+      status: 'unavailable',
+      residency: result.residency,
+      evidence: 'not-found-in-coverage',
       reasons: reasonsOf(result),
       coverage,
     };

@@ -100,19 +100,40 @@ it('checks the coverage epoch again before returning source text', async () => {
 });
 
 it('reports the newly verified bounds when search detects a changed epoch', async () => {
-  seed('source', 'needle');
-  await runSourceIndexJob(deps(), { sourceId: 'source' });
-  const real = resolver.resolveSources.bind(resolver);
-  vi.spyOn(resolver, 'resolveSources').mockImplementation(async (...args) => {
-    const result = await real(...args);
-    prepareCoverageContract(store.db, 1);
-    activateCoverageContract(store.db, { activatedAt: NOW, fieldPolicyVersion: 1 });
-    return result;
-  });
-  const result = await runSourceSearch(deps(), { query: 'needle' });
-  expect(result.status).toBe('coverage_refused');
-  if (result.status === 'coverage_refused') {
-    expect(result.refusal.bounds.history_since).toBe(NOW.toISOString());
+  // The read begins under a preparing contract, which promises no horizon at all, and an
+  // activation lands while it is resolving. Re-activating an already-active contract cannot
+  // serve here: `activateCoverageContract` copies `history_since` forward unchanged
+  // (coverage-contract.ts:187), so the bound would be the same value either way and the case
+  // could not tell a re-read from the statement the read started with. This form can.
+  const preparing = mkdtempSync(join(tmpdir(), 'aion-source-tools-review-preparing-'));
+  const opening = new SqliteStore({ filePath: join(preparing, 'db.sqlite') });
+  try {
+    prepareCoverageContract(opening.db, 1);
+    const scoped = new EvidenceResolver({ db: opening.db, driver, logger });
+    const scopedDeps = { db: opening.db, resolver: scoped, now: () => NOW, logger };
+    seedSource(opening.db, {
+      sourceId: 'source',
+      sessionId: 'session',
+      identity: 'review',
+      content: { turns: [{ role: 'user', text: 'needle' }] },
+      turnIds: ['source-turn'],
+      now: NOW,
+    });
+    await runSourceIndexJob(scopedDeps, { sourceId: 'source' });
+    const real = scoped.resolveSources.bind(scoped);
+    vi.spyOn(scoped, 'resolveSources').mockImplementation(async (...args) => {
+      const result = await real(...args);
+      activateCoverageContract(opening.db, { activatedAt: NOW, fieldPolicyVersion: 1 });
+      return result;
+    });
+    const result = await runSourceSearch(scopedDeps, { query: 'needle' });
+    expect(result.status).toBe('coverage_refused');
+    if (result.status === 'coverage_refused') {
+      expect(result.refusal.bounds.history_since).toBe(NOW.toISOString());
+    }
+  } finally {
+    opening.close();
+    rmSync(preparing, { recursive: true, force: true });
   }
 });
 
