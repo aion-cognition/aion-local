@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
 
 import { claimMergePublication } from './merge-publication.js';
+import { sourceStateDependency } from '../../evidence/application/dependencies.js';
+import { seedSource } from '../../evidence/test-support/evidence.fixture.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
 import {
   startRehearsalSubstrate,
@@ -14,6 +16,7 @@ import { seedRetainedClaim } from '../../infrastructure/graph/test-support/graph
 import { openLogger } from '../../infrastructure/logging/logger.js';
 import { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
 import { PUBLICATION_HANDLERS } from '../../infrastructure/publication/handlers.js';
+import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
 import type { PublicationBoundary } from '../../infrastructure/publication/types.js';
 import { committedIncidenceForNode } from '../../infrastructure/sqlite/committed-evidence.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
@@ -99,6 +102,22 @@ function mention(sourceId: string, nodeId: string, operationId: string): void {
   });
 }
 
+/**
+ * The binding the judge decided on. A merge destroys one of its two claims, so the write is
+ * refused without proof a later reader can re-verify; every case that expects a merge to land
+ * supplies real source-state proof rather than an absent one the guard cannot check.
+ */
+function judged(sourceId: string) {
+  seedSource(store.db, {
+    sourceId,
+    sessionId: sourceId,
+    identity: 'review',
+    content: { observations: [sourceId] },
+    now: NOW,
+  });
+  return buildEvidenceRevision([sourceStateDependency(store.db, sourceId)]);
+}
+
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), 'aion-merge-publication-'));
   substrate = await startRehearsalSubstrate({ sqlitePath: join(dir, 'store.sqlite') });
@@ -142,7 +161,12 @@ it('carries the absorbed claim’s evidence to the survivor and retires its own 
   const outcome = await coordinator.publish({
     kind: 'semantic_write',
     operationId: `merge-${String(serial)}`,
-    payload: { survivorId: survivor, loserId: loser, now: NOW.toISOString() },
+    payload: {
+      survivorId: survivor,
+      loserId: loser,
+      now: NOW.toISOString(),
+      judged: judged('episode-1'),
+    },
   });
 
   expect(outcome.status).toBe('acknowledged');
@@ -169,7 +193,12 @@ it('recovers a merge interrupted between the graph write and the acknowledgment'
     coordinator.publish({
       kind: 'semantic_write',
       operationId: `merge-crash-${String(serial)}`,
-      payload: { survivorId: survivor, loserId: loser, now: NOW.toISOString() },
+      payload: {
+        survivorId: survivor,
+        loserId: loser,
+        now: NOW.toISOString(),
+        judged: judged('episode-2'),
+      },
     }),
   ).rejects.toThrow();
 
