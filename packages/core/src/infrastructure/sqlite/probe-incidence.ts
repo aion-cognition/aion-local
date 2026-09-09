@@ -120,34 +120,37 @@ export type ServedReferenceOutcome =
 const MIGRATION_BASIS = 'legacy_relationship_clocks';
 
 /**
- * When the reference this version records actually happened, read from the proof basis the
- * version itself declares.
+ * When the reference this version records was actually accepted, established by the proof basis
+ * the version itself declares.
  *
  * An ordinary acceptance is its own event: the substrate observed the reference as it arrived,
- * so `observed_at` is the reference's time. A materialization is not: it observed a *record* of
- * something older, preserved that relationship's own clocks beside its declared basis, and
- * stamped `observed_at` with the migration. Reading the migration's stamp as the reference time
- * is how discovering an old edge becomes the member using a memory again.
+ * so its own observation is the acceptance clock. A materialization is not: it observed a
+ * *record* of something older and stamped `observed_at` with the migration, so the acceptance it
+ * preserves has to come from the relationship's own clocks.
  *
- * Nothing here falls back across clocks. A materialization whose preserved clocks say nothing
- * usable leaves the timing unproved, because a knowledge or acknowledgment stamp is an answer
- * to a different question and substituting one for the other is the error itself.
+ * For that legacy proof only the original transaction clock establishes the event. `valid_from`
+ * and `occurred_at` are world time — when the thing was true or said — and a reference dated
+ * years ago may have been accepted this morning or never proved at all. Reading a world date as
+ * an acceptance is the same error as reading the migration stamp as one, in the other direction,
+ * so a legacy record carrying only world clocks leaves the timing unproved.
+ *
+ * The value returned is an instant. A stamp that does not parse is not a late clock and not an
+ * early one; it is a clock nobody can compare, and it earns unversioned history rather than
+ * credit.
  */
-function referenceTimeOf(
-  observedAt: string,
-  temporalProofJson: string,
-): { readonly at: string } | { readonly at: undefined } {
+function acceptanceInstantOf(observedAt: string, temporalProofJson: string): number | undefined {
   let proof: Record<string, unknown>;
   try {
     proof = JSON.parse(temporalProofJson) as Record<string, unknown>;
   } catch {
-    return { at: undefined };
+    return undefined;
   }
-  if (proof.basis !== MIGRATION_BASIS) {
-    return { at: observedAt };
+  const declared = proof.basis === MIGRATION_BASIS ? proof.tx_from : observedAt;
+  if (typeof declared !== 'string') {
+    return undefined;
   }
-  const original = proof.valid_from ?? proof.tx_from ?? proof.occurred_at;
-  return typeof original === 'string' ? { at: original } : { at: undefined };
+  const instant = Date.parse(declared);
+  return Number.isNaN(instant) ? undefined : instant;
 }
 
 type ReferenceVersionRow = {
@@ -167,15 +170,22 @@ type ReferenceVersionRow = {
  * the member using the memory again.
  *
  * `known_from` still has to be there — an unacknowledged version is not in the committed view
- * at all — but it is not the clock the comparison uses. That clock comes from the version's own
- * declared proof basis, so a backfill that discovers an old edge today has discovered an old
- * edge and a genuine later acceptance is still credited for happening later.
+ * at all — but it is not the clock the comparison uses. That clock is the acceptance the
+ * version's own declared proof basis establishes, compared as an instant, so a backfill that
+ * discovers an old edge today has discovered an old edge and a genuine later acceptance is
+ * still credited for happening later.
  */
 export function servedReferenceOutcome(
   db: SqliteHandle,
   itemId: string,
   firstServedAt: string,
 ): ServedReferenceOutcome {
+  const served = Date.parse(firstServedAt);
+  if (Number.isNaN(served)) {
+    // The moment being compared against is itself unreadable, so no comparison it takes part in
+    // can settle anything.
+    return 'unversioned';
+  }
   const roles = RELATED_ROLES.map(() => '?').join(', ');
   const rows = db
     .prepare(
@@ -192,12 +202,12 @@ export function servedReferenceOutcome(
     if (row.state === 'closed' || closedCurrency(row.recorded_values_json)) {
       continue;
     }
-    const reference = referenceTimeOf(row.observed_at, row.temporal_proof_json);
-    if (reference.at === undefined) {
+    const accepted = acceptanceInstantOf(row.observed_at, row.temporal_proof_json);
+    if (accepted === undefined) {
       unproved = true;
       continue;
     }
-    if (reference.at > firstServedAt) {
+    if (accepted > served) {
       return 'referenced_after';
     }
   }
