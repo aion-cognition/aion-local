@@ -60,6 +60,8 @@ export class SourceIndexDrainer {
    */
   readonly #deferredUntil = new Map<string, number>();
   #retry: NodeJS.Timeout | undefined;
+  /** When the standing timer fires, so a nearer deadline can replace it rather than queue behind. */
+  #retryAt: number | undefined;
   /** Documents drained since the last settle, so a caller reports work a pumped drain did. */
   #documents = 0;
 
@@ -107,6 +109,7 @@ export class SourceIndexDrainer {
       if (drain.deferred > 0) {
         this.#hold(drain.deferredJobIds ?? []);
       }
+      this.#wakeForEarliestDeadline();
       return drain.documents;
     } catch (err) {
       this.#deps.logger.warn({ err }, 'source index drain failed; the rows stay owed');
@@ -197,19 +200,55 @@ export class SourceIndexDrainer {
     for (const jobId of jobIds) {
       this.#deferredUntil.set(jobId, until);
     }
+    // A drain that answers with counts alone names no row to stamp, so the pass's own wait is
+    // the only wakeup those rows will get.
     this.#scheduleRetry(delay);
+  }
+
+  /**
+   * A wakeup for the earliest wait still owed, run after every pass.
+   *
+   * One timer serves every held row, so the row whose deadline it was scheduled for spends it.
+   * A row skipped because its own wait had not elapsed defers nothing, stamps nothing and would
+   * otherwise be left with no timer at all — waiting on the next acceptance or on another
+   * mechanism's cadence, neither of which is this drainer's schedule.
+   */
+  #wakeForEarliestDeadline(): void {
+    const at = this.#deps.now().getTime();
+    let earliest: number | undefined;
+    for (const until of this.#deferredUntil.values()) {
+      if (earliest === undefined || until < earliest) {
+        earliest = until;
+      }
+    }
+    if (earliest !== undefined) {
+      this.#scheduleRetry(Math.max(0, earliest - at));
+    }
   }
 
   /**
    * A pass that released a row asks again after a bounded wait. Without it the row waits for the
    * next acceptance or the next restart, which is not a schedule.
+   *
+   * A standing timer is kept only while it fires no later than the wait being asked for: the
+   * nearest deadline is the one worth waking on, and every later one is re-scheduled by the pass
+   * that wakeup runs.
    */
   #scheduleRetry(delay: number): void {
-    if (this.#stopped || this.#retry !== undefined) {
+    if (this.#stopped) {
       return;
     }
+    const fireAt = this.#deps.now().getTime() + delay;
+    if (this.#retry !== undefined) {
+      if (this.#retryAt !== undefined && this.#retryAt <= fireAt) {
+        return;
+      }
+      clearTimeout(this.#retry);
+    }
+    this.#retryAt = fireAt;
     this.#retry = setTimeout(() => {
       this.#retry = undefined;
+      this.#retryAt = undefined;
       this.pump();
     }, delay);
     this.#retry.unref();
@@ -221,6 +260,7 @@ export class SourceIndexDrainer {
     if (this.#retry !== undefined) {
       clearTimeout(this.#retry);
       this.#retry = undefined;
+      this.#retryAt = undefined;
     }
   }
 
