@@ -202,6 +202,9 @@ export function renderTimeline(
   }
   for (const event of events) {
     write(`  ${event.at.toISOString()}  ${event.clock.padEnd(5)}  ${event.summary}`);
+    if (event.note !== undefined) {
+      write(`    ${event.note}`);
+    }
   }
 }
 

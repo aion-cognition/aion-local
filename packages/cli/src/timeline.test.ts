@@ -89,6 +89,36 @@ describe('renderTimeline', () => {
       '  nothing found: no archive row, no graph node, no queue row',
     ]);
   });
+
+  it("prints an event's note under it, and keeps it out of the wire document", () => {
+    const { lines, write } = collector();
+    const note = 'knowledge 2026-01-01T00:09:00.000Z, observed ack 2026-01-01T00:05:00.000Z';
+    const published: TimelineEvent = {
+      kind: 'published',
+      at: new Date('2026-01-01T00:09:00.000Z'),
+      clock: 'tx',
+      summary: 'intake published at sequence 11',
+      note,
+      detail: { sequence: '11' },
+    };
+
+    renderTimeline('episode-1', [published], write);
+
+    expect(lines[1]).toContain('intake published at sequence 11');
+    expect(lines[2]).toBe(`    ${note}`);
+    expect(toJson('episode-1', [published])).toEqual({
+      episode_id: 'episode-1',
+      events: [
+        {
+          kind: 'published',
+          at: '2026-01-01T00:09:00.000Z',
+          clock: 'tx',
+          summary: 'intake published at sequence 11',
+          detail: { sequence: '11' },
+        },
+      ],
+    });
+  });
 });
 
 describe('toJson', () => {

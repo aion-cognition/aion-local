@@ -241,6 +241,53 @@ describe('buildEpisodeTimeline over injected rows', () => {
     expect(prepared?.at.toISOString()).toBe('2026-01-01T00:06:30.000Z');
   });
 
+  it('names both publication clocks for a reader who sees only the summary line', () => {
+    const events = buildEpisodeTimeline({
+      ...baseInput(),
+      publications: [
+        {
+          sequence: '11',
+          operationId: 'clamped',
+          kind: 'intake',
+          state: 'acknowledged',
+          knownFrom: '2026-01-01T00:09:00.000Z',
+          observedAckAt: '2026-01-01T00:05:00.000Z',
+          clockClamped: true,
+          createdAt: '2026-01-01T00:04:00.000Z',
+        },
+        {
+          sequence: '12',
+          operationId: 'ordinary',
+          kind: 'stated_references',
+          state: 'acknowledged',
+          knownFrom: '2026-01-01T00:10:00.000Z',
+          observedAckAt: '2026-01-01T00:10:00.000Z',
+          clockClamped: false,
+          createdAt: '2026-01-01T00:09:30.000Z',
+        },
+        {
+          sequence: '13',
+          operationId: 'not-yet',
+          kind: 'stated_references',
+          state: 'prepared',
+          clockClamped: false,
+          createdAt: '2026-01-01T00:11:00.000Z',
+        },
+      ],
+    });
+    const note = (operationId: string): string | undefined =>
+      events.find((event) => event.detail.operation_id === operationId)?.note;
+
+    expect(note('clamped')).toBe(
+      'knowledge 2026-01-01T00:09:00.000Z, observed ack 2026-01-01T00:05:00.000Z (held back to a predecessor)',
+    );
+    expect(note('ordinary')).toBe(
+      'knowledge 2026-01-01T00:10:00.000Z, observed ack 2026-01-01T00:10:00.000Z',
+    );
+    // Input has neither clock, so there is nothing to label and nothing to invent.
+    expect(note('not-yet')).toBeUndefined();
+  });
+
   it('produces nothing for a source that never existed rather than throwing', () => {
     const input: EpisodeTimelineInput = {
       episodeId: EPISODE_ID,

@@ -38,6 +38,12 @@ export type TimelineEvent = {
   readonly clock: TimelineClockClass;
   /** One line, plain enough to read without the detail bag. */
   readonly summary: string;
+  /**
+   * A second line for what the summary cannot hold and a default reader still needs. The text
+   * output prints it under the event; the wire document already carries the same values as
+   * detail fields and does not repeat it.
+   */
+  readonly note?: string;
   readonly detail: Readonly<Record<string, unknown>>;
 };
 
@@ -191,6 +197,16 @@ function acceptedEvent(input: EpisodeTimelineInput): TimelineEvent | undefined {
 }
 
 /**
+ * Both clock roles under their own labels, because the event itself is placed on one of them
+ * and a reader who sees a single stamp cannot tell which. The two differ exactly when the
+ * knowledge clock was held back, which is the case the disclosure exists for.
+ */
+function clockNote(knownFrom: string, observedAckAt: string, clamped: boolean): string {
+  const held = clamped ? ' (held back to a predecessor)' : '';
+  return `knowledge ${knownFrom}, observed ack ${observedAckAt}${held}`;
+}
+
+/**
  * The publication history, one event each, with acknowledged evidence kept apart from input
  * that has not been acknowledged.
  *
@@ -202,15 +218,21 @@ function acceptedEvent(input: EpisodeTimelineInput): TimelineEvent | undefined {
  */
 function publicationEvents(input: EpisodeTimelineInput): readonly TimelineEvent[] {
   return (input.publications ?? []).map((publication) => {
-    const acknowledged =
-      publication.state === 'acknowledged' && publication.knownFrom !== undefined;
+    const knownFrom = publication.state === 'acknowledged' ? publication.knownFrom : undefined;
+    const { observedAckAt } = publication;
+    const note =
+      knownFrom === undefined || observedAckAt === undefined
+        ? undefined
+        : clockNote(knownFrom, observedAckAt, publication.clockClamped);
     return {
-      kind: acknowledged ? ('published' as const) : ('prepared' as const),
-      at: new Date(acknowledged ? (publication.knownFrom ?? '') : publication.createdAt),
+      kind: knownFrom === undefined ? ('prepared' as const) : ('published' as const),
+      at: new Date(knownFrom ?? publication.createdAt),
       clock: 'tx' as const,
-      summary: acknowledged
-        ? `${publication.kind} published at sequence ${publication.sequence}`
-        : `${publication.kind} ${publication.state}, not published`,
+      summary:
+        knownFrom === undefined
+          ? `${publication.kind} ${publication.state}, not published`
+          : `${publication.kind} published at sequence ${publication.sequence}`,
+      ...(note === undefined ? {} : { note }),
       detail: {
         sequence: publication.sequence,
         operation_id: publication.operationId,
