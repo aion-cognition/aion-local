@@ -68,6 +68,7 @@ export function resolvePendingMeasures(
   health: HealthSnapshot,
 ): readonly ResolvedRun[] {
   const resolved: ResolvedRun[] = [];
+  invalidateRetiredMeasures(deps, operations);
   if (health.degraded.length > 0) {
     return resolved;
   }
@@ -91,6 +92,37 @@ export function resolvePendingMeasures(
     resolved.push({ name: operation.name, resolution });
   }
   return resolved;
+}
+
+/**
+ * Drops a parked reading whose metric the operation no longer declares.
+ *
+ * A pending sample belongs to the metric it was taken from. When an operation stops declaring
+ * one, that sample is a number about a population the operation no longer repairs, and nothing
+ * will ever resolve it: it would sit there and be compared the day a metric returns. It is
+ * dropped here and only here. Recorded runs, their resolutions and their durations stay exactly
+ * as they were, because those were true under the interpretation that made them.
+ *
+ * It runs whatever the snapshot says. A degraded reading is a reason not to SCORE; it is not a
+ * reason to keep a sample nothing can score.
+ */
+function invalidateRetiredMeasures(
+  deps: ScoringDeps,
+  operations: readonly IntrospectionOperation[],
+): void {
+  for (const operation of operations) {
+    if (operation.measure !== undefined) {
+      continue;
+    }
+    if (operationStats(deps.db, operation.name).pendingMeasure === undefined) {
+      continue;
+    }
+    clearPendingMeasure(deps.db, operation.name);
+    deps.logger.info(
+      { operation: operation.name },
+      'dropped a parked measure whose metric the operation no longer declares',
+    );
+  }
 }
 
 /**

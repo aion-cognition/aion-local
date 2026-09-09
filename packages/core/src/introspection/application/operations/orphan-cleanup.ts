@@ -1,3 +1,4 @@
+import { certifyNodeSupport } from '../../../evidence/application/node-support.js';
 import { upsertEdge } from '../../../infrastructure/graph/edges.js';
 import {
   forgetOrphanNode,
@@ -13,7 +14,13 @@ import type {
   OperationOutcome,
 } from '../../domain/operation.js';
 import { orphanRepairRelevance } from '../../domain/orphan-policy.js';
-import { readOrphanCensus, type OrphanCensusEntry } from '../orphan-census.js';
+import {
+  pendingProposals,
+  qualificationEvidence,
+  qualificationHolds,
+  readOrphanCensus,
+  type OrphanCensusEntry,
+} from '../orphan-census.js';
 
 /**
  * Orphan repair: relink what can be reconnected cheaply, suppress what the records certify
@@ -84,6 +91,26 @@ async function relink(ctx: OperationContext, target: OrphanRelinkTarget): Promis
 async function forget(ctx: OperationContext, entry: OrphanCensusEntry): Promise<boolean> {
   const observation = readOrphanObservation(ctx.db, entry.nodeId);
   if (observation?.disposition !== 'unsupported') {
+    return false;
+  }
+  // The qualification is only as good as what it rested on, so the whole predicate is derived
+  // again here rather than the row being read back on its own word: the support reading, the
+  // proposals holding the node up, and the policy the window ran under. Anything that moved
+  // between the census and this write voids the window, and a suppression has no reopen path.
+  if (observation.policyRevision !== (readCurrentReadinessPolicy(ctx.db)?.policyRevision ?? 0)) {
+    return false;
+  }
+  const reading = certifyNodeSupport(ctx.db, entry.nodeId);
+  const pending = pendingProposals(ctx.db, entry.nodeId);
+  if (reading.support !== 'unsupported' || pending > 0) {
+    return false;
+  }
+  if (
+    !qualificationHolds(
+      observation.evidenceRevision,
+      qualificationEvidence(reading.evidenceRevision, pending),
+    )
+  ) {
     return false;
   }
   const forgetBefore = new Date(

@@ -4,11 +4,16 @@ import { certifyNodeSupport } from '../../evidence/application/node-support.js';
 import {
   findOrphanNodes,
   findOrphanRelinkTargets,
+  type OrphanNode,
   type OrphanRelinkTarget,
 } from '../../infrastructure/graph/topology-queries.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { findEntityMergeProposalsForNode } from '../../infrastructure/sqlite/entity-merge-proposals.js';
-import { recordOrphanQualification } from '../../infrastructure/sqlite/orphan-observations.js';
+import {
+  clearQualificationsOutside,
+  lastExaminedAt,
+  recordOrphanQualification,
+} from '../../infrastructure/sqlite/orphan-observations.js';
 import { findSupersessionProposalsForNode } from '../../infrastructure/sqlite/supersession-proposals.js';
 import {
   decideOrphan,
@@ -55,6 +60,11 @@ export type OrphanCensus = {
   readonly unsupportedYoung: number;
   /** Nothing has counted the scopes that would carry their support. */
   readonly unknownSupport: number;
+  /**
+   * Whether the read saw the whole disconnected population. False means the counts describe a
+   * bounded window, and a caller cannot read them as global demand.
+   */
+  readonly pageComplete: boolean;
   readonly entries: readonly OrphanCensusEntry[];
 };
 
@@ -63,17 +73,29 @@ const EMPTY: OrphanCensus = {
   actionable: 0,
   unsupportedYoung: 0,
   unknownSupport: 0,
+  pageComplete: true,
   entries: [],
 };
 
-function protectedByPendingWork(db: SqliteHandle, nodeId: string): boolean {
-  const merges = findEntityMergeProposalsForNode(db, nodeId);
-  if (merges.some((proposal) => proposal.resolvedAt === null)) {
-    return true;
-  }
-  return findSupersessionProposalsForNode(db, nodeId).some(
+/**
+ * How many candidates one read enumerates for every node it will examine.
+ *
+ * The graph orders oldest first, so a bound taken at the limit hands back the same held node
+ * forever and a later actionable one is never reached. Reading a window and choosing within it
+ * on how long ago each node was last examined is what keeps the front of the queue from being a
+ * permanent one.
+ */
+const NOMINATION_WINDOW = 10;
+
+/** How many unresolved proposals hold this node up, which is a dependency of the qualification. */
+export function pendingProposals(db: SqliteHandle, nodeId: string): number {
+  const merges = findEntityMergeProposalsForNode(db, nodeId).filter(
     (proposal) => proposal.resolvedAt === null,
   );
+  const supersessions = findSupersessionProposalsForNode(db, nodeId).filter(
+    (proposal) => proposal.resolvedAt === null,
+  );
+  return merges.length + supersessions.length;
 }
 
 /**
@@ -88,10 +110,22 @@ export async function readOrphanCensus(
   deps: OrphanCensusDeps,
   options: OrphanCensusOptions,
 ): Promise<OrphanCensus> {
-  const disconnected = await findOrphanNodes(deps.driver, options.limit);
-  if (disconnected.length === 0) {
+  const window = options.limit * NOMINATION_WINDOW;
+  const candidates = await findOrphanNodes(deps.driver, window);
+  const pageComplete = candidates.length < window;
+  if (pageComplete) {
+    // The whole population was read, so a node that carries a qualification and is not in it has
+    // left the population. Its window is void: the node was connected, or supported, or gone for
+    // some part of the interval, and none of that is continuous certification.
+    clearQualificationsOutside(
+      deps.db,
+      candidates.map((orphan) => orphan.id),
+    );
+  }
+  if (candidates.length === 0) {
     return EMPTY;
   }
+  const disconnected = leastRecentlyExamined(deps.db, candidates).slice(0, options.limit);
   const targets = new Map(
     (
       await findOrphanRelinkTargets(
@@ -106,9 +140,13 @@ export async function readOrphanCensus(
   let unknownSupport = 0;
   for (const orphan of disconnected) {
     const reading = certifyNodeSupport(deps.db, orphan.id);
+    const pending = pendingProposals(deps.db, orphan.id);
     const observation = recordOrphanQualification(deps.db, {
       nodeId: orphan.id,
-      evidenceRevision: reading.evidenceRevision,
+      evidenceRevision: {
+        ...qualificationEvidence(reading.evidenceRevision, pending),
+        'graph:disconnected_since': orphan.txFrom?.toISOString() ?? 'unknown',
+      },
       policyRevision: options.policyRevision,
       disposition: reading.support,
       reason: reading.reason,
@@ -118,7 +156,7 @@ export async function readOrphanCensus(
       nodeId: orphan.id,
       support: reading.support,
       relinkTarget: targets.get(orphan.id)?.targetId,
-      protectedByPendingWork: protectedByPendingWork(deps.db, orphan.id),
+      protectedByPendingWork: pending > 0,
       qualifiedSince:
         reading.support === 'unsupported' ? new Date(observation.firstVerifiedAt) : undefined,
     };
@@ -136,10 +174,62 @@ export async function readOrphanCensus(
   }
 
   return {
-    disconnected: disconnected.length,
+    disconnected: candidates.length,
     actionable: entries.filter((entry) => entry.decision.actionable).length,
     unsupportedYoung,
     unknownSupport,
+    pageComplete,
     entries,
   };
+}
+
+/**
+ * Every dependency a qualification rests on that the records can re-derive: the support scopes
+ * the reading rested on, and the proposals holding the node up.
+ *
+ * Positive and negative both, so a proposal arriving is as much a reset as a scope moving. The
+ * physical disconnection reading is recorded beside these but is not here: the write re-derives
+ * that one from the graph in its own statement, which is stronger than comparing a value read
+ * before the batch.
+ */
+export function qualificationEvidence(
+  supportRevision: Readonly<Record<string, string>>,
+  pendingProposalCount: number,
+): Readonly<Record<string, string>> {
+  return { ...supportRevision, 'proposals:pending': String(pendingProposalCount) };
+}
+
+/** Whether every dependency the record names still reads the way it did. */
+export function qualificationHolds(
+  recorded: Readonly<Record<string, string>>,
+  current: Readonly<Record<string, string>>,
+): boolean {
+  return Object.entries(current).every(([scope, token]) => recorded[scope] === token);
+}
+
+/**
+ * The window, ordered by how long ago each node was last examined, never-examined first.
+ *
+ * The graph's own order is oldest first and never moves, so a node the records cannot decide
+ * sits at the front of every page. Ordering on the examination itself is what makes a bounded
+ * read reach the rest of the population.
+ */
+function leastRecentlyExamined(
+  db: SqliteHandle,
+  candidates: readonly OrphanNode[],
+): readonly OrphanNode[] {
+  const examined = new Map(
+    lastExaminedAt(
+      db,
+      candidates.map((orphan) => orphan.id),
+    ).map((row) => [row.nodeId, row.updatedAt]),
+  );
+  return [...candidates].sort((left, right) => {
+    const a = examined.get(left.id) ?? '';
+    const b = examined.get(right.id) ?? '';
+    if (a === b) {
+      return 0;
+    }
+    return a < b ? -1 : 1;
+  });
 }

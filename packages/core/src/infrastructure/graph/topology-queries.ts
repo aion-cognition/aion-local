@@ -3,7 +3,7 @@ import type { Driver } from 'neo4j-driver';
 import { BITEMPORAL_PROPERTIES, currentOnly } from './bitemporal.js';
 import { runRead, runWrite } from './connection.js';
 import { ENTITY_MENTION_TYPE } from './entity-queries.js';
-import { BACKBONE_TYPES, BASE_NODE_LABEL, EXTRACTION_TYPE, MEMORY_LABEL } from './labels.js';
+import { BACKBONE_TYPES, BASE_NODE_LABEL, MEMORY_LABEL } from './labels.js';
 import { STRUCTURAL_PROPERTY } from './seed-queries.js';
 import { toGraphDateTime, toGraphInteger, type Row } from './values.js';
 
@@ -35,10 +35,20 @@ export type OrphanNode = {
 const ORPHAN_PREDICATE = [
   currentOnly('n'),
   `  AND coalesce(n.${STRUCTURAL_PROPERTY}, false) = false`,
-  // Same exclusion the health count applies: an episode reflection has not processed is
-  // pending, not fragmented, and a heuristic relink onto it hides the backlog it belongs to.
-  `  AND NOT (n:Episode AND NOT EXISTS { MATCH ()-[:${EXTRACTION_TYPE}]->(n) })`,
-  `  AND NOT EXISTS { MATCH (n)-[r]-() WHERE NOT type(r) IN [${BACKBONE_TYPES}] }`,
+  // Raw containers are never repair subjects. An Episode and a Turn are what a source IS, not an
+  // interpretation drawn from one: they hang off the wiring by construction, a relink onto one
+  // reconnects nothing anybody reads, and forgetting one suppresses the record the durable
+  // evidence points at. The archive and the records are what account for a raw container.
+  `  AND NOT n:Episode AND NOT n:Turn`,
+  // Only an OPEN association counts as reaching this node. A closed edge is a relationship that
+  // was ended, and treating it as connectivity leaves a node permanently out of the population
+  // on the strength of a link nothing traverses.
+  `  AND NOT EXISTS {
+       MATCH (n)-[r]-()
+       WHERE NOT type(r) IN [${BACKBONE_TYPES}]
+         AND r.${BITEMPORAL_PROPERTIES.validUntil} IS NULL
+         AND r.${BITEMPORAL_PROPERTIES.txUntil} IS NULL
+     }`,
 ].join('\n');
 
 /**

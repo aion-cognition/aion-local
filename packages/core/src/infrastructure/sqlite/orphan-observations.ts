@@ -93,8 +93,12 @@ export function recordOrphanQualification(
     .transaction((): OrphanObservation => {
       const held = readOrphanObservation(db, qualification.nodeId);
       const digest = revisionDigest(qualification.evidenceRevision);
+      // The policy is part of what the qualification is a qualification UNDER. A window that ran
+      // under one rule says nothing about the rule that replaced it, so a revision change starts
+      // the clock again rather than aging a node against a threshold it never held under.
       const carried =
         held?.disposition === qualification.disposition &&
+        held.policyRevision === qualification.policyRevision &&
         revisionDigest(held.evidenceRevision) === digest
           ? held.firstVerifiedAt
           : undefined;
@@ -135,4 +139,39 @@ export function recordOrphanQualification(
 /** Drops a node's qualification outright, for a node that has left the population. */
 export function clearOrphanQualification(db: SqliteHandle, nodeId: string): void {
   db.prepare('DELETE FROM orphan_observations WHERE node_id = ?').run(nodeId);
+}
+
+/**
+ * Drops every qualification for a node outside the population just read.
+ *
+ * Only a caller that read the WHOLE population may say this: absence from a bounded page is not
+ * absence from the population. A node that left and came back has an unaccounted interval behind
+ * it, and carrying its old window across that would age it on time it was not certified for.
+ */
+export function clearQualificationsOutside(db: SqliteHandle, nodeIds: readonly string[]): void {
+  if (nodeIds.length === 0) {
+    db.prepare('DELETE FROM orphan_observations').run();
+    return;
+  }
+  const placeholders = new Array(nodeIds.length).fill('?').join(', ');
+  db.prepare(`DELETE FROM orphan_observations WHERE node_id NOT IN (${placeholders})`).run(
+    ...nodeIds,
+  );
+}
+
+/** When each of these nodes was last examined, for the nomination order. */
+export function lastExaminedAt(
+  db: SqliteHandle,
+  nodeIds: readonly string[],
+): readonly { readonly nodeId: string; readonly updatedAt: string }[] {
+  if (nodeIds.length === 0) {
+    return [];
+  }
+  const placeholders = new Array(nodeIds.length).fill('?').join(', ');
+  const rows = db
+    .prepare(
+      `SELECT node_id, updated_at FROM orphan_observations WHERE node_id IN (${placeholders})`,
+    )
+    .all(...nodeIds) as { node_id: string; updated_at: string }[];
+  return rows.map((row) => ({ nodeId: row.node_id, updatedAt: row.updated_at }));
 }
