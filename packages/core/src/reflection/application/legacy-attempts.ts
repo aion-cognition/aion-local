@@ -115,16 +115,20 @@ function receiptOf(record: PublicationRecord): AttemptReceipt {
  * The walk that follows the acknowledgments nothing has superseded.
  *
  * With an association recorded, the row answers for itself. Without one the row predates the
- * association and answers nothing on its own, so exactly one outstanding acknowledgment that
- * reports the verdict the row carries is that row's walk: it is bound to the row first, and the
- * new attempt goes out under an identity of its own. Every other shape leaves at least one
- * acknowledgment nobody has accounted for, and that receipt is recovered rather than published
- * over — a second walk cannot prove what the first one already proved, only spend an identity
- * looking as though it might have.
+ * association and answers nothing on its own, so the walk it came from has to be identified
+ * before any further identity is spent — and it can be identified only when the whole history
+ * offers ONE acknowledgment that answers for the verdict the row holds, and that one is also the
+ * receipt still standing. Anything else leaves an acknowledgment nobody has accounted for, and
+ * that receipt is recovered rather than published over: a second walk cannot prove what the first
+ * one already proved, only spend an identity looking as though it might have.
  */
 function walkAfter(
   input: MemberRow & { readonly payload: unknown },
-  next: { readonly operationId: string; readonly outstanding: readonly PublicationRecord[] },
+  next: {
+    readonly operationId: string;
+    readonly outstanding: readonly PublicationRecord[];
+    readonly origins: number;
+  },
 ): MemberAttempt {
   const latest = next.outstanding.at(-1);
   if (latest === undefined) {
@@ -135,10 +139,33 @@ function walkAfter(
       ? { operationId: next.operationId, payload: input.payload }
       : { operationId: latest.operationId, receipt: receiptOf(latest) };
   }
-  const single = next.outstanding.length === 1 ? latest : undefined;
-  return single !== undefined && reports(receiptOf(single), input)
-    ? { associate: single.operationId, operationId: next.operationId, payload: input.payload }
+  const named =
+    next.origins === 1 && next.outstanding.length === 1 && reports(receiptOf(latest), input);
+  return named
+    ? { associate: latest.operationId, operationId: next.operationId, payload: input.payload }
     : { operationId: latest.operationId, receipt: receiptOf(latest) };
+}
+
+/**
+ * The walk when every identity this member may have is already spent.
+ *
+ * The cap bounds how many NEW attempts one member may cost, and finalizing an attempt already
+ * spent costs none: an acknowledgment the row has not accounted for is the outcome of work that
+ * landed, and discarding it at the limit throws away the only record of it. A row that already
+ * accounts for the last acknowledgment has nothing left to recover, and that is the case the cap
+ * is actually there to refuse.
+ */
+function spentEveryIdentity(
+  input: MemberRow & { readonly cohortId: string; readonly sourceId: string },
+  outstanding: readonly PublicationRecord[],
+): MemberAttempt {
+  const latest = outstanding.at(-1);
+  if (latest !== undefined && input.walkedBy !== latest.operationId) {
+    return { operationId: latest.operationId, receipt: receiptOf(latest) };
+  }
+  return {
+    exhausted: `source ${input.sourceId} exhausted its repair attempts in cohort ${input.cohortId}`,
+  };
 }
 
 export function planMemberAttempt(
@@ -170,19 +197,31 @@ export function planMemberAttempt(
   const base = `legacy-materialization:${input.cohortId}:${input.sourceId}`;
   /** The acknowledged walks, in identity order, that no later verdict has superseded. */
   let outstanding: readonly PublicationRecord[] = [];
+  /**
+   * Every acknowledgment in the WHOLE history that answers for the verdict the row holds.
+   *
+   * Choosing which receipt still stands resets on a terminal verdict, because a rejection is a
+   * later word on the same member. Identifying where an unassociated row came from does not: a
+   * rejection says nothing about which earlier walk wrote the row, and counting only what
+   * survived the reset hides the older acknowledgment that may be the actual origin.
+   */
+  let origins = 0;
   for (let attempt = 1; attempt <= MAX_REPAIR_ATTEMPTS; attempt += 1) {
     const operationId = attempt === 1 ? base : `${base}#${String(attempt)}`;
     const record = publicationRecord(db, operationId);
     if (record === undefined) {
-      return walkAfter(input, { operationId, outstanding });
+      return walkAfter(input, { operationId, outstanding, origins });
     }
     if (record.state === 'prepared') {
       return { operationId, payload: JSON.parse(record.payloadJson) };
     }
+    if (record.state === 'acknowledged') {
+      outstanding = [...outstanding, record];
+      origins += reports(receiptOf(record), input) ? 1 : 0;
+      continue;
+    }
     // A verdict that has already come and gone supersedes anything before it.
-    outstanding = record.state === 'acknowledged' ? [...outstanding, record] : [];
+    outstanding = [];
   }
-  return {
-    exhausted: `source ${input.sourceId} exhausted its repair attempts in cohort ${input.cohortId}`,
-  };
+  return spentEveryIdentity(input, outstanding);
 }
