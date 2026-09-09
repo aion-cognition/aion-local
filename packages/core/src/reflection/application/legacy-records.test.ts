@@ -16,7 +16,10 @@ import {
   type PlannedLink,
 } from './legacy-records.js';
 import { readRelationScope } from '../../evidence/application/dependencies.js';
-import { certifyNodeSupport } from '../../evidence/application/node-support.js';
+import {
+  certifyNodeSupport,
+  NODE_SUPPORT_SCOPES,
+} from '../../evidence/application/node-support.js';
 import { committedIncidenceForNode } from '../../infrastructure/sqlite/committed-evidence.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import { evidenceLinkId } from '../../infrastructure/sqlite/evidence-links.js';
@@ -347,6 +350,25 @@ describe('the census seal', () => {
     // The node this cohort recorded a mention for is supported; it is the counting that changed,
     // not the evidence.
     expect(certifyNodeSupport(store.db, NODE).support).toBe('supported');
+  });
+
+  it('answers unsupported for a node the seal counted and nothing stands behind', () => {
+    // The scope set the seal establishes is the reader's own, so a node whose every support
+    // scope has been counted and holds nothing reads as unsupported rather than as uncounted.
+    // A set filed under scopes the reader does not ask for would leave the answer unknown while
+    // looking established, and a repair would hold that node forever.
+    const endpoints = [{ endpointId: 'entity-empty', scopes: [...NODE_SUPPORT_SCOPES] }];
+    prepareCensusSeal(store.db, { operationId: 'seal-empty', endpoints, observedAt: NOW });
+    acknowledgeCensusSeal(
+      store.db,
+      { operationId: 'seal-empty', endpoints, observedAt: NOW },
+      NOW.toISOString(),
+    );
+
+    expect(certifyNodeSupport(store.db, 'entity-empty')).toMatchObject({
+      support: 'unsupported',
+      reason: 'every support census is established and empty',
+    });
   });
 
   it('leaves every counted scope established and every uncounted one alone', () => {

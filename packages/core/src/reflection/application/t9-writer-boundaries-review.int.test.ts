@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from 'vitest';
 
 import { reflectionCompletionPublication } from './completion-publication.js';
+import { INSTALLED_PUBLICATION_HANDLERS } from './installed-publications.js';
 import { intakePublication } from './intake-publication.js';
 import { handleReflection, type ReflectionIntakeDeps } from './intake.js';
 import { LaneAssigner } from './lanes.js';
@@ -276,11 +277,13 @@ it('lets another intake writer recover every operation its service can leave pen
   const id = await accept();
   failAt = 'before_ack';
   await runWorker(new StubRunner());
+  // The shared production registry, which is what a command composes: a writer meeting a
+  // pending operation of a kind it did not install cannot recover it, and there is one receipt.
   const commandCoordinator = new PublicationCoordinator({
     driver: substrate.harness.driver,
     db: store.db,
     logger: intake.logger,
-    handlers: [...PUBLICATION_HANDLERS, intakePublication],
+    handlers: [...INSTALLED_PUBLICATION_HANDLERS],
   });
   await commandCoordinator.initialize();
   await expect(
