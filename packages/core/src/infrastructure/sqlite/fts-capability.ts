@@ -5,10 +5,11 @@ import { SOURCE_SEARCH_FTS_STATEMENT, SOURCE_SEARCH_FTS_TABLE } from './source-s
  * Whether this binary can actually hold the search projection, asked of the native connection
  * rather than of a version string or a build flag.
  *
- * The probe runs against `temp`, a per-connection schema that exists only for the life of the
- * handle: creating and dropping a table there proves the module loads and reaches no semantic
- * record on the way. A savepoint would leave the same proof but inside the main schema's
- * transaction, which is a worse place to fail.
+ * The proof is an executed create inside a savepoint that is then rolled back. The create is
+ * what makes it a capability answer rather than a build claim, and the rollback is what makes
+ * it reversible: nothing is dropped, nothing is left behind, and a probe that fails halfway
+ * unwinds to exactly the state it started in. `temp` keeps it off the main schema as well, so
+ * the probe reaches no semantic record even before the rollback.
  *
  * Absent and broken are different answers and stay different. Absent means the module is not
  * compiled in and search is a capability this deployment does not have; anything else is a
@@ -16,8 +17,11 @@ import { SOURCE_SEARCH_FTS_STATEMENT, SOURCE_SEARCH_FTS_TABLE } from './source-s
  * operator to rebuild a binary whose real problem is a damaged file.
  */
 
-/** The temp-schema name the probe creates and drops. Nothing else uses it. */
+/** The temp-schema name the probe creates inside its savepoint. Nothing else uses it. */
 const PROBE_TABLE = 'aion_fts5_capability_probe';
+
+/** The savepoint the probe unwinds to. Named so a stray one is recognisable in a trace. */
+const PROBE_SAVEPOINT = 'aion_fts5_capability_probe';
 
 /** The message SQLite raises when the module is not compiled into the binary. */
 const ABSENT_MODULE = /no such module:\s*fts5/i;
@@ -43,28 +47,40 @@ function classify(err: unknown): FtsCapability {
 }
 
 /**
- * The capability itself, proved on a disposable schema. A drop that fails after a successful
- * create still leaves the capability proved: the module loaded, and the leftover table lives
- * only until this connection closes.
+ * The capability itself, proved and then unwound. Every exit path rolls the savepoint back and
+ * releases it, so the connection is left exactly as it was found whether the module loaded or
+ * not. Nothing is deleted to clean up after it, because nothing survives the rollback.
  */
 export function probeFts5Capability(db: SqliteHandle): FtsCapability {
+  db.exec(`SAVEPOINT ${PROBE_SAVEPOINT}`);
+  let capability: FtsCapability = { status: 'available' };
   try {
     db.exec(`CREATE VIRTUAL TABLE temp.${PROBE_TABLE} USING fts5(body)`);
   } catch (err) {
-    return classify(err);
+    capability = classify(err);
+  } finally {
+    db.exec(`ROLLBACK TO ${PROBE_SAVEPOINT}`);
+    db.exec(`RELEASE ${PROBE_SAVEPOINT}`);
   }
-  try {
-    db.exec(`DROP TABLE temp.${PROBE_TABLE}`);
-  } catch {
-    // The create is the proof; a failed drop leaves a temp table this connection will discard.
-  }
-  return { status: 'available' };
+  return capability;
 }
 
 /**
- * The capability plus the projection it needs, which is what a search or an indexing run asks
- * for. Creation is guarded by the probe rather than attempted first, so a binary without the
- * module produces a typed cause instead of an exception from the middle of a request.
+ * What a reader may ask: the capability, and whether the projection it would query is there.
+ *
+ * It creates nothing. A read that repaired the substrate would make every refusal path a write
+ * path, and the first thing C6 says about these tools is that they are read-only. A missing
+ * projection is not reported here at all: to a reader it is a corpus that holds nothing yet,
+ * which the completeness disclosure already says better than an availability failure would.
+ */
+export function readSearchCapability(db: SqliteHandle): FtsCapability {
+  return probeFts5Capability(db);
+}
+
+/**
+ * The capability plus the projection it needs, which is what an indexing run asks for. The
+ * writer is the only caller: creation and repair belong to whatever is allowed to change the
+ * projection, and a search is not.
  */
 export function ensureSearchProjection(db: SqliteHandle): FtsCapability {
   const capability = probeFts5Capability(db);

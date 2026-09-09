@@ -10,6 +10,7 @@ import {
   probeFts5Capability,
   searchProjectionExists,
 } from './fts-capability.js';
+import { getMeta } from './meta.js';
 import { SOURCE_SEARCH_FTS_TABLE } from './source-search-schema.js';
 
 describe('full-text capability', () => {
@@ -38,6 +39,26 @@ describe('full-text capability', () => {
       .prepare("SELECT count(*) AS n FROM temp.sqlite_master WHERE type = 'table'")
       .get() as { n: number };
     expect(temp.n).toBe(0);
+    expect(searchProjectionExists(store.db)).toBe(false);
+  });
+
+  it('unwinds its own savepoint and leaves surrounding work intact', () => {
+    // Reversible by construction: the capability is proved by an executed create and undone by
+    // rolling back to the savepoint, so nothing has to be deleted afterwards and a probe run
+    // inside somebody else's transaction cannot take their work down with it.
+    const written = store.db.transaction((): number => {
+      store.db.prepare("INSERT INTO meta (key, value) VALUES ('probe-witness', '1')").run();
+      expect(probeFts5Capability(store.db)).toEqual({ status: 'available' });
+      const row = store.db
+        .prepare("SELECT count(*) AS n FROM meta WHERE key = 'probe-witness'")
+        .get() as {
+        n: number;
+      };
+      return row.n;
+    })();
+
+    expect(written).toBe(1);
+    expect(getMeta(store.db, 'probe-witness')).toBe('1');
     expect(searchProjectionExists(store.db)).toBe(false);
   });
 

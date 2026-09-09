@@ -12,7 +12,8 @@ import type { RequestBudget } from '../../evidence/domain/budget.js';
 import type { EvidenceIssue, EvidenceResult } from '../../evidence/domain/result.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
-  ensureSearchProjection,
+  readSearchCapability,
+  searchProjectionExists,
   type SearchUnavailableCause,
 } from '../../infrastructure/sqlite/fts-capability.js';
 import { INDEX_POLICY_VERSION } from '../../infrastructure/sqlite/source-search-schema.js';
@@ -101,12 +102,16 @@ function takeSnapshot(
   return db.transaction((): Snapshot => {
     const generation = searchGeneration(db);
     const upperBound = bounds.upperBound ?? documentHighWater(db);
-    const documents = nominateDocuments(db, {
-      matchExpression: query.matchExpression,
-      afterId: bounds.afterId,
-      upperBound,
-      limit: SOURCE_SEARCH_LIMITS.maxExaminedDocuments,
-    });
+    // A substrate nothing has indexed has no projection to query. That is a corpus holding
+    // nothing, which the completeness disclosure states, and not a reason to build one here.
+    const documents = searchProjectionExists(db)
+      ? nominateDocuments(db, {
+          matchExpression: query.matchExpression,
+          afterId: bounds.afterId,
+          upperBound,
+          limit: SOURCE_SEARCH_LIMITS.maxExaminedDocuments,
+        })
+      : [];
     return { generation, upperBound, documents };
   })();
 }
@@ -260,11 +265,6 @@ export async function runSourceSearch(
     throw err;
   }
 
-  const capability = ensureSearchProjection(deps.db);
-  if (capability.status !== 'available') {
-    return { status: 'search_unavailable', cause: capability.cause, detail: capability.detail };
-  }
-
   const now = deps.now();
   let checked;
   try {
@@ -283,6 +283,13 @@ export async function runSourceSearch(
   }
   if (checked.status === 'refused') {
     return { status: 'coverage_refused', refusal: checked.refusal };
+  }
+
+  // Read-only, and after the refusal: a request the substrate will not answer must leave the
+  // substrate exactly as it found it, projection included.
+  const capability = readSearchCapability(deps.db);
+  if (capability.status !== 'available') {
+    return { status: 'search_unavailable', cause: capability.cause, detail: capability.detail };
   }
 
   const digest = queryDigest(query);
