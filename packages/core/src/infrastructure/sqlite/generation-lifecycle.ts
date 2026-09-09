@@ -36,6 +36,13 @@ export const DUPLICATE_ON_REPLACEMENT = 'duplicate_obligation_on_replacement';
  */
 export const CONFLICTING_PROGRESS_ON_REPLACEMENT = 'conflicting_progress_on_replacement';
 
+/**
+ * The key a conflicting obligation takes when it moves onto the replacement. Its own key belongs
+ * to the row the replacement prepared, and both identities have to survive for anybody to
+ * reconcile them.
+ */
+export const CONFLICT_KEY_PREFIX = 'conflict:';
+
 export type GenerationReplacement = {
   readonly sourceId: string;
   /** The generation being made active. It must already be allocated with its inventory written. */
@@ -157,6 +164,11 @@ function carryObligations(
   );
   const move = db.prepare('UPDATE source_work SET processing_generation = ? WHERE work_id = ?');
   const settle = db.prepare('UPDATE source_work SET state = ?, reason = ? WHERE work_id = ?');
+  const conflict = db.prepare(
+    `UPDATE source_work
+       SET processing_generation = ?, work_key = ?, state = 'pinned', reason = ?
+     WHERE work_id = ?`,
+  );
   const retire = db.prepare('DELETE FROM source_work WHERE work_id = ?');
   let carried = 0;
   for (const row of rows) {
@@ -172,7 +184,17 @@ function carryObligations(
         continue;
       }
       if (carriesProgress(existing)) {
-        settle.run('pinned', CONFLICTING_PROGRESS_ON_REPLACEMENT, row.work_id);
+        // The conflict is carried onto the replacement, not left behind with the generation
+        // nobody runs. A pin in a replaced generation is invisible to active readiness, to the
+        // session count and to every nomination, so a source whose obligations nobody can
+        // reconcile reads as a source that owes nothing. It moves under a key of its own,
+        // because the obligation it names is the reconciliation rather than the settlement.
+        conflict.run(
+          replacement.replacementGeneration,
+          `${CONFLICT_KEY_PREFIX}${row.work_key}`,
+          CONFLICTING_PROGRESS_ON_REPLACEMENT,
+          row.work_id,
+        );
         continue;
       }
       // The key is unique per generation, so the preparation has to go before the original can

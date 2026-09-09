@@ -237,6 +237,17 @@ export function stageSettlementOf(outcome: StageOutcome): StageSettlement | unde
 export const STAGE_ALREADY_APPLIED_SUMMARY = 'already applied on an earlier attempt';
 
 /**
+ * The `summary` a stage records when an earlier attempt left a key this reader cannot validate.
+ *
+ * The effects behind that key exist and re-running them is not free, so the stage is not entered.
+ * What the entry does not say is which obligation it settled, and inferring one from its presence
+ * is how a key stands in for a disposition. The row stays owed with this recorded against it,
+ * which is a repair somebody can find.
+ */
+export const STAGE_UNVALIDATED_ENTRY_SUMMARY =
+  'an earlier attempt recorded this stage without a disposition this build can validate';
+
+/**
  * The record the orchestrator produces for a stage it did not enter because its ledger key was
  * already set.
  *

@@ -13,11 +13,18 @@ import {
 } from '../../infrastructure/sqlite/ops-ledger.js';
 import { readActiveGeneration } from '../../infrastructure/sqlite/processing-generations.js';
 import { readGenerationWork } from '../../infrastructure/sqlite/source-readiness.js';
-import { RunLedgerEntrySchema, StageLedgerEntrySchema } from '../domain/stage-schema.js';
 import {
+  RunLedgerEntrySchema,
+  StageLedgerEntrySchema,
+  type StageBinding,
+} from '../domain/stage-schema.js';
+import {
+  hasRemainder,
   shouldMarkApplied,
   stageAlreadyAppliedRecord,
   stageLedgerKey,
+  stageSettlementOf,
+  STAGE_UNVALIDATED_ENTRY_SUMMARY,
   summarizeRun,
   type ReflectionStage,
   type ReflectionSummary,
@@ -75,30 +82,67 @@ function elapsed(started: number): number {
   return roundMs(performance.now() - started);
 }
 
+/** What this run's outcomes are about: the generation it started under, and what that owed. */
+function runBindingOf(db: SqliteHandle, sourceId: string): StageBinding {
+  const generation = readActiveGeneration(db, sourceId);
+  return {
+    processingGeneration: generation?.processingGeneration ?? 0,
+    operationalRevision: generation?.operationalRevision ?? 0,
+  };
+}
+
 /**
- * The stage outcomes a run's ledger entry holds, or nothing when it holds none this reader can
- * validate. An entry written before the typed fields existed, or one whose shape has drifted,
- * says nothing: reading a disposition out of an unvalidated summary is how prose becomes proof.
+ * Whether a recorded entry still describes the obligations this run is settling.
+ *
+ * The generation is the test. An entry recorded under the generation a replacement displaced is
+ * about a pass nobody is waiting for, and reusing it would certify the replacement's stages
+ * against work that was done for something else. An entry with no binding cannot answer the
+ * question at all, which is a different answer from yes.
  */
-function recoveredRunStages(db: SqliteHandle, key: string): readonly StageRecord[] | undefined {
+function bindingApplies(recorded: StageBinding | undefined, current: StageBinding): boolean {
+  return recorded?.processingGeneration === current.processingGeneration;
+}
+
+type RecordedRun = {
+  readonly stages: readonly StageRecord[];
+  readonly binding: StageBinding | undefined;
+};
+
+/**
+ * What a run's ledger entry holds, or nothing when it holds none this reader can validate. An
+ * entry written before the typed fields existed, or one whose shape has drifted, says nothing:
+ * reading a disposition out of an unvalidated summary is how prose becomes proof.
+ */
+function recoveredRun(db: SqliteHandle, key: string): RecordedRun | undefined {
   const entry = getLedgerEntry(db, key);
   if (entry === undefined) {
     return undefined;
   }
   const parsed = RunLedgerEntrySchema.safeParse(entry.summary);
-  return parsed.success
-    ? parsed.data.stages.map((stage) => ({ ...stage, durationMs: 0 }))
-    : undefined;
+  if (!parsed.success) {
+    return undefined;
+  }
+  return {
+    stages: parsed.data.stages.map((stage) => ({ ...stage, durationMs: 0 })),
+    binding: parsed.data.binding,
+  };
 }
 
 /** The same, for one stage's own key. */
-function recoveredStage(db: SqliteHandle, key: string): StageRecord | undefined {
+function recoveredStage(
+  db: SqliteHandle,
+  key: string,
+): { readonly record: StageRecord; readonly binding: StageBinding | undefined } | undefined {
   const entry = getLedgerEntry(db, key);
   if (entry === undefined) {
     return undefined;
   }
   const parsed = StageLedgerEntrySchema.safeParse(entry.summary);
-  return parsed.success ? { name: '', ...parsed.data, durationMs: 0 } : undefined;
+  if (!parsed.success) {
+    return undefined;
+  }
+  const { binding, ...held } = parsed.data;
+  return { record: { name: '', ...held, durationMs: 0 }, binding };
 }
 
 /**
@@ -158,17 +202,23 @@ export class ReflectionOrchestrator {
     // A run whose key landed and whose completion did not is the crash this recovers. The key's
     // own entry holds what the earlier attempt recorded, so its typed outcomes answer for the
     // rows that are still owed rather than being lost with the attempt that took them.
-    const recovered = recoveredRunStages(this.#deps.db, key);
+    //
+    // Only while its binding still applies. A key recorded under a generation a replacement has
+    // since displaced is a statement about work nobody is waiting for; reusing it would hand the
+    // replacement's obligations a pass that was never run for them.
+    const binding = runBindingOf(this.#deps.db, episodeId);
+    const held = recoveredRun(this.#deps.db, key);
     if (
       isLedgerApplied(this.#deps.db, key) &&
-      coversOwedWork(this.#deps.db, episodeId, recovered)
+      bindingApplies(held?.binding, binding) &&
+      coversOwedWork(this.#deps.db, episodeId, held?.stages)
     ) {
       this.#deps.logger.debug({ episodeId }, 'reflection already applied');
       return {
         episodeId,
         status: 'already_applied',
         applied: false,
-        summary: summarizeRun(episodeId, elapsed(started), recovered ?? []),
+        summary: summarizeRun(episodeId, elapsed(started), held?.stages ?? []),
       };
     }
 
@@ -197,13 +247,13 @@ export class ReflectionOrchestrator {
 
     const stages: StageRecord[] = [];
     for (const stage of this.#stages) {
-      stages.push(await this.#runOrSkip(stage, context));
+      stages.push(await this.#runOrSkip(stage, context, binding));
     }
 
     const summary = summarizeRun(episodeId, elapsed(started), stages);
     const applied = shouldMarkApplied(stages);
     if (applied) {
-      markLedgerApplied(this.#deps.db, key, summary);
+      markLedgerApplied(this.#deps.db, key, { ...summary, binding });
     }
 
     this.#deps.logger.info(
@@ -235,25 +285,41 @@ export class ReflectionOrchestrator {
    * A stage that skipped for want of input a failed predecessor owed it keeps its key open,
    * because the retry that re-enters that predecessor owes this stage its run too.
    */
-  async #runOrSkip(stage: ReflectionStage, context: StageContext): Promise<StageRecord> {
+  async #runOrSkip(
+    stage: ReflectionStage,
+    context: StageContext,
+    binding: StageBinding,
+  ): Promise<StageRecord> {
     const key = stageLedgerKey(context.pipelineVersion, stage.name, context.episodeId);
-    if (isLedgerApplied(this.#deps.db, key)) {
-      const held = recoveredStage(this.#deps.db, key);
-      return stageAlreadyAppliedRecord(stage.name, {
-        ...(held?.settled === undefined ? {} : { settled: held.settled }),
-        ...(held?.settledOnUpstream === undefined
-          ? {}
-          : { settledOnUpstream: held.settledOnUpstream }),
-      });
+    const held = isLedgerApplied(this.#deps.db, key)
+      ? recoveredStage(this.#deps.db, key)
+      : undefined;
+    if (held !== undefined && bindingApplies(held.binding, binding)) {
+      return stageAlreadyAppliedRecord(stage.name, held.record);
+    }
+    if (held !== undefined && held.binding === undefined) {
+      // An entry nobody can bind to a generation. Its effects exist, so the stage is not entered
+      // again; what it settled is unknown, so the row keeps its obligation and says why.
+      return {
+        name: stage.name,
+        status: 'skipped',
+        summary: STAGE_UNVALIDATED_ENTRY_SUMMARY,
+        durationMs: 0,
+      };
     }
     const record = await this.#runStage(stage, context);
-    if (record.status !== 'failed' && record.retryable !== true) {
-      // The disposition goes into the entry, not only the prose. A retry that finds this key set
-      // reads back what the pass settled; an entry holding a sentence can only say it happened.
+    // A pass that named a remainder gets no key. The key is what stops a retry re-entering the
+    // stage, and a stage that still owes work is exactly the one a retry has to enter.
+    if (record.status !== 'failed' && !hasRemainder(record)) {
+      // The disposition goes into the entry, normalized, beside the binding it was produced
+      // under. A retry reads back what the pass settled; an entry holding a status can only say
+      // it happened, and an entry with no binding cannot say which obligations it happened for.
+      const settled = stageSettlementOf(record);
       markLedgerApplied(this.#deps.db, key, {
         status: record.status,
         summary: record.summary,
-        ...(record.settled === undefined ? {} : { settled: record.settled }),
+        binding,
+        ...(settled === undefined ? {} : { settled }),
         ...(record.settledOnUpstream === undefined
           ? {}
           : { settledOnUpstream: record.settledOnUpstream }),

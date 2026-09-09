@@ -333,13 +333,18 @@ export class ReflectionWorker {
       // began owing mid-run both have to read as a difference rather than as this run's input.
       const bound = completionBinding(this.#deps.db, episodeId);
       const run = await this.#deps.runner.run(episodeId, { now });
-      // `applied` and not `status` decides: a completed run that enriched nothing left the
-      // ledger open, which is the orchestrator saying the episode is still worth a retry.
-      if (run.applied || run.status !== 'completed') {
-        await this.#settle(job, episodeId, run, bound);
-        return;
+      // `applied` and not `status` decides whether the JOB is done: a completed run that enriched
+      // nothing left the ledger open, which is the orchestrator saying the episode is still worth
+      // a retry.
+      const finished = run.applied || run.status !== 'completed';
+      // Either way the run knows what it settled and what it left owed, and that has to be
+      // durable before the job goes back: a remainder the worker dropped on its way to #fail is
+      // a judgment nobody can ask about again. A progress publication closes no queue row and
+      // discharges no effect; it records the typed outcomes and the work still owed.
+      await this.#settle(job, episodeId, run, bound, finished);
+      if (!finished) {
+        this.#fail(job, describeFailedRun(episodeId, run));
       }
-      this.#fail(job, describeFailedRun(episodeId, run));
     } catch (err) {
       this.#fail(job, errorMessage(err));
     }
@@ -350,23 +355,33 @@ export class ReflectionWorker {
    * semantic-processing acknowledgment and the queue row land in one acknowledgment, so a
    * reference accepted while the run worked moves the version, the check refuses, and the job
    * stays claimable instead of completing over an update nobody made.
+   *
+   * A run that could not finish publishes the same way under the progress disposition: the same
+   * typed outcomes and the same remainder, without the queue row and without the effect. A job
+   * that is going back for a retry must not leave its progress in the process that had it.
    */
   async #settle(
     job: ReflectionJob,
     episodeId: string,
     run: ReflectionRun,
     bound: CompletionBinding,
+    finished: boolean,
   ): Promise<void> {
+    const disposition = finished ? 'settled' : 'progress';
     const outcome = await this.#deps.publications.publish({
       kind: 'reflection_completion',
-      operationId: `reflection-completion:${job.id}:${String(job.attempts)}`,
+      operationId: `reflection-completion:${job.id}:${String(job.attempts)}:${disposition}`,
       payload: {
         sourceId: episodeId,
-        jobId: job.id,
+        jobId: finished ? job.id : '',
+        disposition,
         stages: completionStages(run.summary),
         ...bound,
       },
     });
+    if (!finished) {
+      return;
+    }
     if (outcome.status !== 'acknowledged') {
       this.#fail(job, `completion ${outcome.status}: ${outcome.reason}`);
       return;

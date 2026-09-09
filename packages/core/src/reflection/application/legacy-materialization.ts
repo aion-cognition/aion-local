@@ -25,6 +25,7 @@ import {
   type LegacyStatementPass,
 } from './legacy-statements.js';
 import { applySourceVerification, VerificationSchema } from './legacy-verification.js';
+import { projectAcceptedReferences } from './reference-acceptance.js';
 import { ownershipCensusEstablished } from '../../evidence/application/ownership.js';
 import { PublicationOperation } from '../../infrastructure/publication/operation.js';
 import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
@@ -349,6 +350,20 @@ export const legacyMaterializationPublication = new PublicationOperation({
       if (await projectLegacyOwnership(context, nodeId, rows, established)) {
         projected += 1;
       }
+    }
+    // The statements this pass accepted get the same edges an ordinary acceptance gives them,
+    // inside this guard. The batch and the marker say the archive's provenance was repaired, and
+    // a repair that recorded a link version without the edge it stands for leaves the graph
+    // exactly as unrepaired as it was while every later reader is told otherwise. A target the
+    // graph does not hold stays durably unresolved: the projection writes what both ends can
+    // carry and nothing else.
+    if (data.statements !== undefined) {
+      await projectAcceptedReferences(
+        context.graph,
+        data.sourceId,
+        data.statements.targets,
+        context.now,
+      );
     }
     return {
       ...EMPTY,

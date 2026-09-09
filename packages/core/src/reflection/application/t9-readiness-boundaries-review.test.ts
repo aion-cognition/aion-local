@@ -157,6 +157,7 @@ describe('stage settlement', () => {
       reflectionCompletionPublication.decodePayload({
         sourceId: SOURCE,
         jobId: 'job',
+        disposition: 'settled',
         processingGeneration: 1,
         operationalRevision: 1,
         acceptedReferenceVersion: 0,

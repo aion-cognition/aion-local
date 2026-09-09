@@ -159,7 +159,12 @@ describe('ReflectionOrchestrator', () => {
     expect(orchestratorLedgerKey(PIPELINE_VERSION, EPISODE_ID)).toBe(
       `reflection:orchestrator:${PIPELINE_VERSION}:${EPISODE_ID}`,
     );
-    expect(ledgerSummary()).toEqual(run.summary);
+    // The entry is the run's summary and the binding it was produced under: an outcome recorded
+    // without saying which generation's obligations it settled cannot be reused safely.
+    expect(ledgerSummary()).toEqual({
+      ...run.summary,
+      binding: { processingGeneration: 0, operationalRevision: 0 },
+    });
   });
 
   it('loads the episode once and hands the same context to every stage', async () => {
@@ -209,7 +214,10 @@ describe('ReflectionOrchestrator', () => {
     expect(entered).toEqual(['entities']);
     // The gate costs one SQLite read: the skipped run never reaches the graph.
     expect(episodeReads()).toBe(1);
-    expect(ledgerSummary()).toEqual(first.summary);
+    expect(ledgerSummary()).toEqual({
+      ...first.summary,
+      binding: { processingGeneration: 0, operationalRevision: 0 },
+    });
   });
 
   it('re-enters an episode a later pipeline version has not enriched, stage by stage', async () => {

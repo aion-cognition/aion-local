@@ -54,6 +54,60 @@ export function readGenerationWork(
   return rows.map(toRecordedWork);
 }
 
+/**
+ * The durable detail a stage row carries beside its state: what the work was measured against,
+ * which capability revision it was handed to, and where it got to. Kept apart from `RecordedWork`
+ * because the readiness evaluation judges states and outcomes, and these are what a caller
+ * validating a transfer or classifying an effect has to read.
+ */
+export type StageWorkDetail = {
+  readonly stageName: string;
+  readonly state: SourceWorkState;
+  readonly capabilityRevision: number | null;
+  readonly inputRevisionJson: string | null;
+  readonly continuationJson: string | null;
+};
+
+export function readStageWorkDetail(
+  db: SqliteHandle,
+  sourceId: string,
+  processingGeneration: number,
+): readonly StageWorkDetail[] {
+  const rows = db
+    .prepare(
+      `SELECT stage_name, state, capability_revision, input_revision_json, continuation_json
+       FROM source_work
+       WHERE source_id = ? AND processing_generation = ? AND kind = 'stage'
+         AND stage_name IS NOT NULL
+       ORDER BY stage_name`,
+    )
+    .all(sourceId, processingGeneration) as {
+    stage_name: string;
+    state: SourceWorkState;
+    capability_revision: number | null;
+    input_revision_json: string | null;
+    continuation_json: string | null;
+  }[];
+  return rows.map((row) => ({
+    stageName: row.stage_name,
+    state: row.state,
+    capabilityRevision: row.capability_revision,
+    inputRevisionJson: row.input_revision_json,
+    continuationJson: row.continuation_json,
+  }));
+}
+
+/** The runners a policy revision allows a transferred obligation to name. */
+export function readPolicyTransferCapabilities(
+  db: SqliteHandle,
+  policyRevision: number,
+): readonly string[] | undefined {
+  const row = db
+    .prepare('SELECT transfer_capabilities_json FROM readiness_policies WHERE policy_revision = ?')
+    .get(policyRevision) as { transfer_capabilities_json: string } | undefined;
+  return row === undefined ? undefined : (JSON.parse(row.transfer_capabilities_json) as string[]);
+}
+
 /** The stage set a policy revision required, or nothing when that revision was never published. */
 export function readPolicyStages(
   db: SqliteHandle,
@@ -92,10 +146,18 @@ export type SessionObligationCensus =
 
 const OUTSTANDING_STATES = `('pending','retryable','transferred','pinned','dead_letter')`;
 
-/** Stage rows one generation holds, whatever state each is in. */
-const STAGE_ROWS = `(SELECT count(*) FROM source_work sw
-   WHERE sw.source_id = g.source_id AND sw.processing_generation = g.processing_generation
-     AND sw.kind = 'stage')`;
+/**
+ * How many of the policy's required stages this generation has no row for.
+ *
+ * By NAME, one required identity at a time. A count of stage rows compared with the length of the
+ * policy's list says nothing about whether the rows are the required ones: an extra or obsolete
+ * row fills the missing slot arithmetically and the source reads as accounted while the pass it
+ * owes has no row at all.
+ */
+const MISSING_REQUIRED_STAGES = `(SELECT count(*) FROM json_each(p.stages_json) req
+   WHERE NOT EXISTS (SELECT 1 FROM source_work sw
+     WHERE sw.source_id = g.source_id AND sw.processing_generation = g.processing_generation
+       AND sw.kind = 'stage' AND sw.stage_name = req.value))`;
 
 /**
  * What one session's sources still owe, in one indexed read.
@@ -145,7 +207,7 @@ export function sessionObligationCensus(
          count(DISTINCT CASE WHEN g.source_id IS NOT NULL AND p.policy_revision IS NULL
                              THEN r.source_id END) AS unreadable,
          count(DISTINCT CASE WHEN p.policy_revision IS NOT NULL
-                              AND ${STAGE_ROWS} < json_array_length(p.stages_json)
+                              AND ${MISSING_REQUIRED_STAGES} > 0
                              THEN r.source_id END) AS incomplete,
          count(DISTINCT CASE WHEN w.kind = 'inventory'
                               AND w.state IN ${OUTSTANDING_STATES}

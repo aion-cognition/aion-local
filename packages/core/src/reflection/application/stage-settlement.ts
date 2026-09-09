@@ -5,6 +5,7 @@ import {
   reopenSourceWork,
 } from '../../infrastructure/sqlite/generation-lifecycle.js';
 import {
+  advanceOperationalRevision,
   completeSourceWork,
   readActiveGeneration,
   stageWorkId,
@@ -16,7 +17,14 @@ import {
 import {
   readGenerationWork,
   readPolicyStages,
+  readPolicyTransferCapabilities,
+  readStageWorkDetail,
+  type StageWorkDetail,
 } from '../../infrastructure/sqlite/source-readiness.js';
+import {
+  ContinuationEffectSchema,
+  TransferContinuationSchema,
+} from '../domain/continuation-schema.js';
 import { evaluateProcessingReadiness } from '../domain/readiness.js';
 import {
   stageSettlementOf,
@@ -114,7 +122,14 @@ export function recordStageSettlements(
     // A ledger skip means an earlier run already decided this stage; its row was settled then
     // or is owed for a reason that run recorded, and this run has nothing to add.
     if (record.summary !== STAGE_ALREADY_APPLIED_SUMMARY) {
-      recordOwedReason(db, row.workId, `${record.status}: ${record.summary}`, remainder);
+      recordOwedReason(
+        db,
+        sourceId,
+        generation.processingGeneration,
+        row.workId,
+        `${record.status}: ${record.summary}`,
+        remainder,
+      );
       owed.push(record.name);
     }
   }
@@ -142,12 +157,24 @@ export function recordStageSettlements(
         closed.add(entry.name);
         continue;
       }
-      recordOwedReason(db, row.workId, `waiting on an earlier stage: ${entry.settlement.reason}`);
+      recordOwedReason(
+        db,
+        sourceId,
+        generation.processingGeneration,
+        row.workId,
+        `waiting on an earlier stage: ${entry.settlement.reason}`,
+      );
       owed.push(entry.name);
     }
   }
 
-  applyForgetDisposition(db, sourceId, generation.processingGeneration, now, close);
+  const detail = new Map(
+    readStageWorkDetail(db, sourceId, generation.processingGeneration).map((row) => [
+      row.stageName,
+      row,
+    ]),
+  );
+  applyForgetDisposition(db, sourceId, generation.processingGeneration, now, close, detail);
 
   const readiness = evaluateProcessingReadiness({
     sourceId,
@@ -163,13 +190,19 @@ export function recordStageSettlements(
   const unrecorded = readiness.stages
     .filter((stage) => stage.disposition === 'unrecorded')
     .map((stage) => stage.stageName);
-  // Row presence is not the test. The inventory accounts for its policy when every required
-  // stage carries a TYPED outcome, so a generation whose rows are all still pending is not an
-  // accounted one. Obligations of other kinds may still stand; readiness reports those.
+  // Row presence is not the test, and neither is terminality. The inventory accounts for its
+  // policy when every required stage carries a TYPED outcome OR names owed work somebody can
+  // still run: a supported transfer is accounted for and is not finished, which are two answers
+  // to two questions. A generation whose rows are all still pending answers neither.
+  const capabilities = readPolicyTransferCapabilities(db, generation.policyRevision);
   const accounted =
     readiness.stages.length === requiredStages?.length &&
     readiness.stages.every(
-      (stage) => stage.disposition === 'complete' || stage.disposition === 'not_applicable',
+      (stage) =>
+        stage.disposition === 'complete' ||
+        stage.disposition === 'not_applicable' ||
+        (stage.disposition === 'transferred' &&
+          transferAccounted(detail.get(stage.stageName), capabilities)),
     );
   markInventoryComplete(db, sourceId, generation.processingGeneration, accounted);
   return { settled, owed, unrecorded, inventoryComplete: accounted };
@@ -206,6 +239,7 @@ function applyForgetDisposition(
   processingGeneration: number,
   now: Date,
   close: (stageName: string, settlement: StageSettlement) => void,
+  detail: ReadonlyMap<string, StageWorkDetail>,
 ): void {
   if (hasPendingSourceState(db, sourceId)) {
     return;
@@ -214,6 +248,13 @@ function applyForgetDisposition(
   for (const row of readGenerationWork(db, sourceId, processingGeneration)) {
     const { stageName } = row;
     if (row.kind !== 'stage' || stageName === null || row.state === 'obsolete') {
+      continue;
+    }
+    // The effect decides, not the container. A row that owes consistency work on RETAINED
+    // endpoints is about nodes that outlive this source: forgetting the source does not make
+    // their neighbourhood correct, and closing it here would leave those endpoints holding a
+    // reading nobody will recompute.
+    if (retainedEndpointWork(detail.get(stageName))) {
       continue;
     }
     if (forget !== undefined && row.state !== 'completed') {
@@ -227,6 +268,54 @@ function applyForgetDisposition(
     if (forget === undefined && row.outcome?.reason === 'source_forgotten') {
       reopenSourceWork(db, row.workId, 'the forget this row rested on was withdrawn', now);
     }
+  }
+}
+
+/**
+ * Effects a stage row can owe about endpoints other than its own source.
+ *
+ * A closed set, declared where it is read. Suppression is classified by what the work would DO,
+ * and the only way to know that from a row is what the row says it is carrying.
+ */
+const RETAINED_ENDPOINT_EFFECTS: readonly string[] = ['retained_endpoint_vector'];
+
+/** Whether this row's remaining work is about retained endpoints rather than about its source. */
+function retainedEndpointWork(row: StageWorkDetail | undefined): boolean {
+  if (row?.continuationJson == null) {
+    return false;
+  }
+  const parsed = ContinuationEffectSchema.safeParse(parseJson(row.continuationJson));
+  return parsed.success && RETAINED_ENDPOINT_EFFECTS.includes(parsed.data.effect);
+}
+
+/**
+ * Whether a transferred stage names a transfer this policy admits, with everything a runner needs
+ * to pick it up.
+ *
+ * A state alone is not a transfer. The runner has to be one the accepted policy lists, the
+ * capability revision says which contract it was handed to, the evidence says what it was
+ * measured against, and the addresses and identity are what let somebody run it exactly once.
+ * Anything short of that is a row somebody moved, and the inventory does not account for it.
+ */
+function transferAccounted(
+  row: StageWorkDetail | undefined,
+  capabilities: readonly string[] | undefined,
+): boolean {
+  if (row === undefined || capabilities === undefined || row.continuationJson == null) {
+    return false;
+  }
+  if (row.capabilityRevision === null || row.inputRevisionJson === null) {
+    return false;
+  }
+  const parsed = TransferContinuationSchema.safeParse(parseJson(row.continuationJson));
+  return parsed.success && capabilities.includes(parsed.data.runner);
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
   }
 }
 
@@ -261,6 +350,8 @@ function upstreamSettled(
  */
 function recordOwedReason(
   db: SqliteHandle,
+  sourceId: string,
+  processingGeneration: number,
   workId: string,
   reason: string,
   remainder: readonly WithheldWork[] = [],
@@ -272,8 +363,16 @@ function recordOwedReason(
   if (remainder.length === 0) {
     return;
   }
-  db.prepare(
-    `UPDATE source_work SET continuation_json = ?
-     WHERE work_id = ? AND state IN ('pending','retryable')`,
-  ).run(JSON.stringify({ withheldWork: remainder }), workId);
+  const changed = db
+    .prepare(
+      `UPDATE source_work SET continuation_json = ?
+       WHERE work_id = ? AND state IN ('pending','retryable')`,
+    )
+    .run(JSON.stringify({ withheldWork: remainder }), workId).changes;
+  // A continuation is what the row now owes, which is not what it owed before. A readiness proof
+  // taken against the old reading is stale the moment this lands, so the counter moves with it in
+  // the caller's own transaction rather than the change being invisible to the fence.
+  if (changed > 0) {
+    advanceOperationalRevision(db, sourceId, processingGeneration);
+  }
 }

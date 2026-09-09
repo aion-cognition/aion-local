@@ -53,6 +53,20 @@ export const WithheldWorkSchema = z.strictObject({
   }),
 });
 
+/**
+ * What a recorded outcome was produced under.
+ *
+ * A ledger entry is a statement about obligations, and obligations belong to a generation. An
+ * entry recorded under one generation says nothing about the pass a replacement owes, so the
+ * binding travels with the entry and a reader reuses the outcome only while it still applies.
+ */
+export const StageBindingSchema = z.strictObject({
+  processingGeneration: z.number().int().nonnegative(),
+  operationalRevision: z.number().int().nonnegative(),
+});
+
+export type StageBinding = z.infer<typeof StageBindingSchema>;
+
 const stageReport = {
   name: z.string().min(1),
   status: z.enum(['ok', 'failed', 'skipped']),
@@ -76,12 +90,12 @@ export type StageReport = z.infer<typeof StageReportSchema>;
  * timings and counts the run logged beside the disposition, and a later build may add more.
  * Refusing it over an unknown field would throw away the outcomes a recovery needs.
  */
-const StoredStageSchema = z.object(stageReport);
+const StoredStageSchema = z.object({ ...stageReport, binding: StageBindingSchema.optional() });
 
 /**
  * What one stage's ledger entry holds, so a later attempt reads back the disposition rather than
  * the prose. An entry a build wrote before the typed fields existed parses to status and summary
- * alone, which settles nothing and leaves the row owed.
+ * alone, with no binding: it settles nothing and leaves the row owed with its reason recorded.
  */
 export const StageLedgerEntrySchema = StoredStageSchema.omit({ name: true });
 
@@ -93,4 +107,5 @@ export const StageLedgerEntrySchema = StoredStageSchema.omit({ name: true });
 export const RunLedgerEntrySchema = z.object({
   episodeId: z.string().min(1),
   stages: z.array(StoredStageSchema),
+  binding: StageBindingSchema.optional(),
 });

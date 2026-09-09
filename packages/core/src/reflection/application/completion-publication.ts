@@ -41,6 +41,15 @@ const Payload = z.strictObject({
   sourceId: z.string().min(1),
   /** The queue row this completion closes. Empty where the run had none, which a replay does. */
   jobId: z.string(),
+  /**
+   * Whether the run finished what the job asked for.
+   *
+   * `progress` records the typed outcomes and the remainder of a run that could not: the rows
+   * take what it settled and keep what it owes, the queue row stays claimable, and the source's
+   * semantic-processing effect is not discharged. A run that goes back for a retry with its
+   * progress unpublished loses every judgment it withheld.
+   */
+  disposition: z.enum(['settled', 'progress']),
   stages: z.array(StageReportSchema),
   /**
    * The generation the run's obligations belong to, read before the run started. Zero where the
@@ -186,7 +195,8 @@ export const reflectionCompletionPublication = new PublicationOperation({
       },
       scopes: [{ kind: 'source', id: payload.sourceId, scope: 'source.references' }],
       // The queue effect is declared only where there is a row to complete. A replay carries no
-      // job id, and an effect nothing performs is a claim the receipt cannot support.
+      // job id, a progress publication closes none, and an effect nothing performs is a claim the
+      // receipt cannot support.
       effects: [
         { kind: COMPLETION_EFFECTS.settlement, detail: json({ sourceId: payload.sourceId }) },
         ...(payload.jobId === ''
@@ -252,13 +262,18 @@ export const reflectionCompletionPublication = new PublicationOperation({
     if (data.jobId !== '') {
       completeReflectionJobForSource(context.db, data.jobId, data.sourceId);
     }
-    recordEvidenceAcknowledgment(context.db, {
-      sourceId: data.sourceId,
-      referenceVersion: data.acceptedReferenceVersion,
-      effectKind: SEMANTIC_PROCESSING_EFFECT,
-      state: 'completed',
-      completedAt: new Date(context.knownFrom),
-    });
+    // A progress publication discharges nothing. The run recorded what it did and what it owes;
+    // saying the source's processing effect completed would be a claim about the retry that has
+    // not happened.
+    if (data.disposition === 'settled') {
+      recordEvidenceAcknowledgment(context.db, {
+        sourceId: data.sourceId,
+        referenceVersion: data.acceptedReferenceVersion,
+        effectKind: SEMANTIC_PROCESSING_EFFECT,
+        state: 'completed',
+        completedAt: new Date(context.knownFrom),
+      });
+    }
     return undefined;
   },
   discardSqlite() {

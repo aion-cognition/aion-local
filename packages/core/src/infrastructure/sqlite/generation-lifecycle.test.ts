@@ -168,9 +168,16 @@ describe('generation replacement', () => {
     });
 
     expect(outcome.carried).toBe(0);
+    // The pin travels with the replacement under a key of its own. Left in the replaced
+    // generation it would be invisible to active readiness, and a source nobody can reconcile
+    // would read as a source that owes nothing.
     expect(
-      readGenerationWork(store.db, SOURCE, first).find((row) => row.workId === 'settlement:old'),
-    ).toMatchObject({ state: 'pinned', reason: CONFLICTING_PROGRESS_ON_REPLACEMENT });
+      readGenerationWork(store.db, SOURCE, second).find((row) => row.workId === 'settlement:old'),
+    ).toMatchObject({
+      state: 'pinned',
+      reason: CONFLICTING_PROGRESS_ON_REPLACEMENT,
+      workKey: 'conflict:reference:1',
+    });
     expect(
       readGenerationWork(store.db, SOURCE, second).find((row) => row.workId === 'settlement:new'),
     ).toMatchObject({ state: 'pending' });

@@ -6,6 +6,7 @@ import { projectionRebuildPublication } from './rebuild-publication.js';
 import { statedReferencesPublication } from './reference-publication.js';
 import { PUBLICATION_HANDLERS } from '../../infrastructure/publication/handlers.js';
 import type { PublicationHandler } from '../../infrastructure/publication/types.js';
+import { orphanSuppressionPublication } from '../../introspection/application/operations/orphan-suppression.js';
 
 /**
  * The one installed handler set, shared by every process that publishes.
@@ -27,4 +28,5 @@ export const INSTALLED_PUBLICATION_HANDLERS: readonly PublicationHandler[] = [
   reflectionCompletionPublication,
   legacyMaterializationPublication,
   claimMergePublication,
+  orphanSuppressionPublication,
 ];
