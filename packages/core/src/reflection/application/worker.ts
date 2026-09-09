@@ -1,23 +1,26 @@
-import type { Driver } from 'neo4j-driver';
-
-import { completionStages } from './completion-publication.js';
+import {
+  completionBinding,
+  completionStages,
+  type CompletionBinding,
+} from './completion-publication.js';
 import { SourceIndexDrainer } from './index-drain.js';
 import { INTEGRATE_JOB_TYPE } from './intake.js';
-import type { ReflectionRun, ReflectionRunOptions } from './orchestrator.js';
+import type { ReflectionRun } from './orchestrator.js';
 import { drainPendingVectors } from './vectors.js';
+import {
+  EMPTY_DRAIN,
+  type ReflectionDrain,
+  type ReflectionWorkerDeps,
+  type ReflectionWorkerOptions,
+} from './worker-contract.js';
 import { describeFailedRun, episodeIdOf } from './worker-diagnostics.js';
-import type { EvidenceResolver } from '../../evidence/application/resolver.js';
 import { backoffDelayMs } from '../../infrastructure/backoff.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { errorMessage } from '../../infrastructure/errors.js';
-import type { Logger } from '../../infrastructure/logging/logger.js';
-import type { Provider } from '../../infrastructure/providers/types.js';
-import type { PublicationOutcome } from '../../infrastructure/publication/types.js';
 import {
   ReflectionQueueClaimant,
   reclaimStaleReflectionJobs,
 } from '../../infrastructure/sqlite/claim.js';
-import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { recordEnrichmentLagMs } from '../../infrastructure/sqlite/lag-samples.js';
 import type { ReflectionJob } from '../../infrastructure/sqlite/reflection-queue.js';
 import { halfWindowIntervalMs, SweepTimer } from '../../infrastructure/sweep-timer.js';
@@ -46,65 +49,13 @@ export const DEFAULT_BREAKER_THRESHOLD = DEFAULTS.operational.workerBreakerThres
 export const DEFAULT_BREAKER_COOLDOWN_MS = DEFAULTS.operational.workerBreakerCooldownMs;
 export const DEFAULT_VECTOR_BATCH_SIZE = DEFAULTS.operational.workerVectorBatchSize;
 
-/** `ReflectionOrchestrator` satisfies this; the worker never constructs the pipeline it drives. */
-export type ReflectionRunner = {
-  run(episodeId: string, options?: ReflectionRunOptions): Promise<ReflectionRun>;
-};
-
-export type ReflectionWorkerDeps = {
-  readonly driver: Driver;
-  readonly db: SqliteHandle;
-  readonly provider: Provider;
-  readonly runner: ReflectionRunner;
-  readonly logger: Logger;
-  /** Where a finished run settles what it owed. There is no second way to complete a job. */
-  readonly publications: CompletionPublisher;
-  /**
-   * What the source-index drain reads a source through. Required: a composition without one
-   * would leave the `source_index` rows an acceptance writes unclaimed forever, and every
-   * source behind them eviction-pinned. A worker that cannot index says so at compile time.
-   */
-  readonly resolver: EvidenceResolver;
-};
-
-/** The one thing the worker asks of the coordinator: publish this run's settlement. */
-export type CompletionPublisher = {
-  publish(request: {
-    readonly kind: 'reflection_completion';
-    readonly operationId: string;
-    readonly payload: unknown;
-  }): Promise<PublicationOutcome>;
-};
-
-export type ReflectionWorkerOptions = {
-  readonly workerCount?: number;
-  readonly staleTimeoutMs?: number;
-  readonly retryBaseMs?: number;
-  readonly retryCapMs?: number;
-  readonly maxAttempts?: number;
-  readonly breakerThreshold?: number;
-  readonly breakerCooldownMs?: number;
-  readonly vectorBatchSize?: number;
-  /**
-   * Read once per job and handed to the run as its clock. The wall clock in live operation,
-   * which is what keeps a stage's elapsed-time decision measuring real elapsed time; a test
-   * or a replay supplies its own.
-   */
-  readonly clock?: () => Date;
-};
-
-export type ReflectionDrain = {
-  /** Claims a dead process left behind, returned to the pool. */
-  readonly reclaimed: number;
-  /** `:Memory` nodes an earlier inference outage left without a content vector. */
-  readonly vectored: number;
-  /** Jobs this drain ran, whatever each of them made of its episode. */
-  readonly ran: number;
-  /** Search documents the index drain wrote for the sources whose rows it claimed. */
-  readonly indexed: number;
-};
-
-const EMPTY_DRAIN: ReflectionDrain = { reclaimed: 0, vectored: 0, ran: 0, indexed: 0 };
+export type {
+  CompletionPublisher,
+  ReflectionDrain,
+  ReflectionRunner,
+  ReflectionWorkerDeps,
+  ReflectionWorkerOptions,
+} from './worker-contract.js';
 
 /**
  * A second, well under the minutes-scale floor the idle sweeps use. This one reaps another
@@ -374,11 +325,15 @@ export class ReflectionWorker {
       // this: the orchestrator takes it from the episode, which is what lets a replay run a
       // years-old episode on today's clock without dating its writes to the conversation.
       const now = this.#clock();
+      // Read before the run, not after it. The completion is a statement about the obligations
+      // the run started with, so a generation replaced while it worked and a row the source
+      // began owing mid-run both have to read as a difference rather than as this run's input.
+      const bound = completionBinding(this.#deps.db, episodeId);
       const run = await this.#deps.runner.run(episodeId, { now });
       // `applied` and not `status` decides: a completed run that enriched nothing left the
       // ledger open, which is the orchestrator saying the episode is still worth a retry.
       if (run.applied || run.status !== 'completed') {
-        await this.#settle(job, episodeId, run);
+        await this.#settle(job, episodeId, run, bound);
         return;
       }
       this.#fail(job, describeFailedRun(episodeId, run));
@@ -393,11 +348,21 @@ export class ReflectionWorker {
    * reference accepted while the run worked moves the version, the check refuses, and the job
    * stays claimable instead of completing over an update nobody made.
    */
-  async #settle(job: ReflectionJob, episodeId: string, run: ReflectionRun): Promise<void> {
+  async #settle(
+    job: ReflectionJob,
+    episodeId: string,
+    run: ReflectionRun,
+    bound: CompletionBinding,
+  ): Promise<void> {
     const outcome = await this.#deps.publications.publish({
       kind: 'reflection_completion',
       operationId: `reflection-completion:${job.id}:${String(job.attempts)}`,
-      payload: { sourceId: episodeId, jobId: job.id, stages: completionStages(run.summary) },
+      payload: {
+        sourceId: episodeId,
+        jobId: job.id,
+        stages: completionStages(run.summary),
+        ...bound,
+      },
     });
     if (outcome.status !== 'acknowledged') {
       this.#fail(job, `completion ${outcome.status}: ${outcome.reason}`);

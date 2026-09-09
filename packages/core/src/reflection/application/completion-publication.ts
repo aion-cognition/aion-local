@@ -5,6 +5,7 @@ import { PublicationOperation } from '../../infrastructure/publication/operation
 import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
 import type { JsonValue, PublicationContext } from '../../infrastructure/publication/types.js';
 import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
+import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { getExperienceByEpisode } from '../../infrastructure/sqlite/experience-archive.js';
 import { markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import { readActiveGeneration } from '../../infrastructure/sqlite/processing-generations.js';
@@ -25,9 +26,10 @@ import type { ReflectionSummary, StageRecord } from '../domain/stage.js';
  * anything: a reference accepted while the run was working moves the version, the check refuses,
  * and the job stays claimable rather than completing over an update nobody made.
  *
- * The completion is compared against the ACTIVE generation and its readiness counter. A run whose
- * generation was replaced while it worked settles nothing: those obligations belong to the
- * replacement, and an old worker cannot discharge them.
+ * The comparison is against the generation, readiness counter and accepted references the run
+ * STARTED under, carried in the payload. A run whose generation was replaced while it worked
+ * settles nothing: those obligations belong to the replacement, and an old worker cannot
+ * discharge them. Neither does a run whose source began owing something new while it ran.
  */
 export const COMPLETION_EFFECTS = {
   settlement: 'stage_settlement',
@@ -61,22 +63,26 @@ const Payload = z.strictObject({
   /** The queue row this completion closes. Empty where the run had none, which a replay does. */
   jobId: z.string(),
   stages: z.array(Stage),
-});
-
-const Data = Payload.extend({
   /**
-   * The generation the run's obligations belong to, read while the guard was held. Zero where the
-   * source has none: a legacy row the identity census has not reached still owes its queue row a
+   * The generation the run's obligations belong to, read before the run started. Zero where the
+   * source had none: a legacy row the identity census has not reached still owes its queue row a
    * completion, and it owes no stage outcomes because nothing recorded what it should have run.
    */
   processingGeneration: z.number().int().nonnegative(),
-  /** The readiness counter at prepare. A change means the generation owes something new. */
+  /** The readiness counter the run started under. A change means the generation owes something new. */
   operationalRevision: z.number().int().nonnegative(),
-  /** The newest accepted reference batch, which is what the settlement is measured against. */
+  /** The newest accepted reference batch when the run started. */
   acceptedReferenceVersion: z.number().int().nonnegative(),
-  /** What the archive held for this source when the run finished. */
+  /** What the archive held for this source when the run started. */
   referencesDigest: z.string(),
 });
+
+/**
+ * The binding is the payload. Prepare copies it rather than reading the stores again, because a
+ * fresh read there is a read of the state the run finished into, and comparing that with itself
+ * accepts every replacement and every newly owed row as the run's own input.
+ */
+const Data = Payload;
 
 const Result = z.strictObject({
   settledStages: z.array(z.string()),
@@ -105,6 +111,32 @@ function referencesDigest(db: PublicationContext['db'], sourceId: string): strin
 function latestReferenceVersion(db: PublicationContext['db'], sourceId: string): number {
   const batches = listReferenceBatches(db, sourceId);
   return batches[batches.length - 1]?.referenceVersion ?? 0;
+}
+
+/** What a run's obligations were measured against, read before the run starts. */
+export type CompletionBinding = {
+  readonly processingGeneration: number;
+  readonly operationalRevision: number;
+  readonly acceptedReferenceVersion: number;
+  readonly referencesDigest: string;
+};
+
+/**
+ * Reads the binding a completion is compared under.
+ *
+ * The caller takes this before it starts the run, and the values travel in the payload. A
+ * generation replaced during the run, or a row the generation started owing after it began, then
+ * shows up as a difference under the final guard instead of being read back as the run's own
+ * input.
+ */
+export function completionBinding(db: SqliteHandle, sourceId: string): CompletionBinding {
+  const generation = readActiveGeneration(db, sourceId);
+  return {
+    processingGeneration: generation?.processingGeneration ?? 0,
+    operationalRevision: generation?.operationalRevision ?? 0,
+    acceptedReferenceVersion: latestReferenceVersion(db, sourceId),
+    referencesDigest: referencesDigest(db, sourceId),
+  };
 }
 
 /** The run summary a completion carries, narrowed to what the plan records. */
@@ -136,15 +168,7 @@ export const reflectionCompletionPublication = new PublicationOperation({
     if (coverage === undefined) {
       throw new Error('a completion cannot publish before the coverage registry exists');
     }
-    const generation = readActiveGeneration(context.db, payload.sourceId);
-    const acceptedReferenceVersion = latestReferenceVersion(context.db, payload.sourceId);
-    const data: CompletionData = {
-      ...payload,
-      processingGeneration: generation?.processingGeneration ?? 0,
-      operationalRevision: generation?.operationalRevision ?? 0,
-      acceptedReferenceVersion,
-      referencesDigest: referencesDigest(context.db, payload.sourceId),
-    };
+    const data: CompletionData = payload;
     return Promise.resolve({
       data,
       expected: {
@@ -154,17 +178,17 @@ export const reflectionCompletionPublication = new PublicationOperation({
             kind: 'source',
             id: payload.sourceId,
             scope: 'source.references',
-            version: String(acceptedReferenceVersion),
+            version: String(payload.acceptedReferenceVersion),
           },
         ]),
         sources:
-          generation === undefined
+          payload.processingGeneration === 0
             ? []
             : [
                 {
                   sourceId: payload.sourceId,
-                  generation: String(generation.processingGeneration),
-                  acceptedReferenceVersion: String(acceptedReferenceVersion),
+                  generation: String(payload.processingGeneration),
+                  acceptedReferenceVersion: String(payload.acceptedReferenceVersion),
                 },
               ],
         heads: [],
