@@ -4,6 +4,14 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { claimDedupOperation } from './claim-dedup.js';
+import { CoveredJudgmentEvidence } from '../../../evidence/application/covered-judgment.js';
+import { EvidenceResolver } from '../../../evidence/application/resolver.js';
+import {
+  commitIncidence,
+  establishNodeState,
+  establishScope,
+  seedSource,
+} from '../../../evidence/test-support/evidence.fixture.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
@@ -20,10 +28,13 @@ import {
   type Neo4jHarness,
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { previewSupersession, unsupersedeNode } from '../../../infrastructure/graph/unsupersede.js';
-import { openLogger } from '../../../infrastructure/logging/logger.js';
+import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import type { Provider } from '../../../infrastructure/providers/types.js';
+import { PublicationCoordinator } from '../../../infrastructure/publication/coordinator.js';
+import { PUBLICATION_HANDLERS } from '../../../infrastructure/publication/handlers.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { getLedgerEntry } from '../../../infrastructure/sqlite/ops-ledger.js';
+import { claimMergePublication } from '../../../reflection/application/merge-publication.js';
 import { claimDedupPairKey } from '../../domain/claim-dedup.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
@@ -45,6 +56,9 @@ const minutesAgo = (minutes: number): Date => new Date(NOW.getTime() - minutes *
 let harness: Neo4jHarness;
 let db: SqliteHandle;
 let dataDir: string;
+let logger: Logger;
+let coordinator: PublicationCoordinator;
+let evidence: CoveredJudgmentEvidence;
 
 async function seedEpisode(id: string): Promise<void> {
   await writeStampedNode(harness.driver, {
@@ -62,6 +76,18 @@ async function seedClaim(input: {
   readonly occurredAt: Date;
 }): Promise<string> {
   await seedEpisode(input.episodeId);
+  // The durable half of the same claim. A merge is judged through the composed evidence seam and
+  // published under the coordinator, so the records that seam reads have to exist: a graph node
+  // with no source record behind it is a claim nothing can be certified about.
+  seedSource(db, {
+    sourceId: input.episodeId,
+    sessionId: 'session-1',
+    identity: 'review',
+    content: { observations: [input.text] },
+    now: NOW,
+  });
+  establishScope(db, input.episodeId, 'source.state', NOW);
+  establishScope(db, input.episodeId, 'sqlite:mention:out', NOW);
   const result = await writeCognitiveNode(harness.driver, {
     episodeId: input.episodeId,
     label: 'Concept',
@@ -70,7 +96,18 @@ async function seedClaim(input: {
     occurredAt: input.occurredAt,
     now: NOW,
   });
-  return result.node.id;
+  const nodeId = result.node.id;
+  commitIncidence(db, {
+    sourceId: input.episodeId,
+    nodeId,
+    role: 'extraction',
+    operationId: `extract-${input.episodeId}`,
+    at: NOW,
+  });
+  establishScope(db, nodeId, 'sqlite:extraction:out', NOW);
+  establishScope(db, nodeId, 'sqlite:stated_correction:in', NOW);
+  establishNodeState(db, nodeId, { revision: 1, at: NOW });
+  return nodeId;
 }
 
 /** Sequential canned answers, so a test controls exactly what each judge call decides. */
@@ -91,11 +128,13 @@ function contextFor(provider: Provider, config: Config = DEFAULTS): OperationCon
     driver: harness.driver,
     db,
     config,
-    logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
+    logger,
     provider,
     health: healthFixture(),
     now: NOW,
     signal: new AbortController().signal,
+    publications: coordinator,
+    evidence,
   };
 }
 
@@ -104,6 +143,24 @@ beforeAll(async () => {
   dataDir = mkdtempSync(join(tmpdir(), 'aion-claim-dedup-int-'));
   db = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
   await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
+  logger = openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' });
+  coordinator = new PublicationCoordinator({
+    driver: harness.driver,
+    db,
+    logger,
+    handlers: [...PUBLICATION_HANDLERS, claimMergePublication],
+  });
+  await coordinator.initialize();
+  evidence = new CoveredJudgmentEvidence({
+    db,
+    resolver: new EvidenceResolver({
+      driver: harness.driver,
+      db,
+      logger,
+      publications: coordinator,
+    }),
+    now: () => NOW,
+  });
 }, 300_000);
 
 afterAll(async () => {
