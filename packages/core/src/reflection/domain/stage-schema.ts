@@ -63,6 +63,16 @@ export const WithheldWorkSchema = z.strictObject({
 export const StageBindingSchema = z.strictObject({
   processingGeneration: z.number().int().nonnegative(),
   operationalRevision: z.number().int().nonnegative(),
+  /**
+   * What each stage row owed when the run started, by stage name.
+   *
+   * The generation alone is too coarse and the readiness counter is too fine. The counter moves
+   * for every settlement the run itself makes, so comparing it would re-enter every stage on
+   * every ordinary retry; the generation misses work that landed on a row inside one. What a
+   * recorded pass answers for is the work its own row held when it started, so that is what the
+   * entry carries and what a later attempt compares.
+   */
+  work: z.record(z.string(), z.string()),
 });
 
 export type StageBinding = z.infer<typeof StageBindingSchema>;

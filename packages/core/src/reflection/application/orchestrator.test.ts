@@ -163,7 +163,7 @@ describe('ReflectionOrchestrator', () => {
     // without saying which generation's obligations it settled cannot be reused safely.
     expect(ledgerSummary()).toEqual({
       ...run.summary,
-      binding: { processingGeneration: 0, operationalRevision: 0 },
+      binding: { processingGeneration: 0, operationalRevision: 0, work: {} },
     });
   });
 
@@ -216,7 +216,7 @@ describe('ReflectionOrchestrator', () => {
     expect(episodeReads()).toBe(1);
     expect(ledgerSummary()).toEqual({
       ...first.summary,
-      binding: { processingGeneration: 0, operationalRevision: 0 },
+      binding: { processingGeneration: 0, operationalRevision: 0, work: {} },
     });
   });
 

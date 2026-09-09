@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { SqliteHandle } from './database.js';
 import type {
   RecordedOutcome,
@@ -95,6 +97,27 @@ export function readStageWorkDetail(
     inputRevisionJson: row.input_revision_json,
     continuationJson: row.continuation_json,
   }));
+}
+
+/**
+ * One comparable value per stage row for what it owes and what that rests on.
+ *
+ * The state is deliberately absent. A settlement moves it, and a pass that settled its own row
+ * has not been invalidated by doing so; what invalidates a recorded pass is the row gaining work
+ * or evidence the pass never saw.
+ */
+export function stageWorkDigests(
+  db: SqliteHandle,
+  sourceId: string,
+  processingGeneration: number,
+): Record<string, string> {
+  const digests: Record<string, string> = {};
+  for (const row of readStageWorkDetail(db, sourceId, processingGeneration)) {
+    digests[row.stageName] = createHash('sha256')
+      .update(JSON.stringify([row.continuationJson, row.inputRevisionJson, row.capabilityRevision]))
+      .digest('hex');
+  }
+  return digests;
 }
 
 /** The runners a policy revision allows a transferred obligation to name. */

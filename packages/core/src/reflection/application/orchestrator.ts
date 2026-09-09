@@ -12,7 +12,10 @@ import {
   markLedgerApplied,
 } from '../../infrastructure/sqlite/ops-ledger.js';
 import { readActiveGeneration } from '../../infrastructure/sqlite/processing-generations.js';
-import { readGenerationWork } from '../../infrastructure/sqlite/source-readiness.js';
+import {
+  readGenerationWork,
+  stageWorkDigests,
+} from '../../infrastructure/sqlite/source-readiness.js';
 import {
   RunLedgerEntrySchema,
   StageLedgerEntrySchema,
@@ -88,19 +91,33 @@ function runBindingOf(db: SqliteHandle, sourceId: string): StageBinding {
   return {
     processingGeneration: generation?.processingGeneration ?? 0,
     operationalRevision: generation?.operationalRevision ?? 0,
+    work: stageWorkDigests(db, sourceId, generation?.processingGeneration ?? 0),
   };
 }
 
 /**
- * Whether a recorded entry still describes the obligations this run is settling.
+ * Whether a recorded entry still describes the obligations named here.
  *
- * The generation is the test. An entry recorded under the generation a replacement displaced is
- * about a pass nobody is waiting for, and reusing it would certify the replacement's stages
- * against work that was done for something else. An entry with no binding cannot answer the
- * question at all, which is a different answer from yes.
+ * Two tests. The generation, because an entry recorded under the one a replacement displaced is
+ * about a pass nobody is waiting for. Then the work itself: a row that gained a continuation, an
+ * evidence revision or a capability the recorded pass never saw is not the row that pass
+ * answered for, whatever the generation says. The readiness counter is not the test, because a
+ * run advances it by settling its own rows and comparing it would re-enter every stage on every
+ * ordinary retry.
+ *
+ * `stages` narrows it to the rows the caller is asking about: one stage for its own key, all of
+ * them for the run key. An entry with no binding cannot answer the question at all, which is a
+ * different answer from yes.
  */
-function bindingApplies(recorded: StageBinding | undefined, current: StageBinding): boolean {
-  return recorded?.processingGeneration === current.processingGeneration;
+function bindingApplies(
+  recorded: StageBinding | undefined,
+  current: StageBinding,
+  stages: readonly string[],
+): boolean {
+  if (recorded?.processingGeneration !== current.processingGeneration) {
+    return false;
+  }
+  return stages.every((name) => recorded.work[name] === current.work[name]);
 }
 
 type RecordedRun = {
@@ -210,7 +227,7 @@ export class ReflectionOrchestrator {
     const held = recoveredRun(this.#deps.db, key);
     if (
       isLedgerApplied(this.#deps.db, key) &&
-      bindingApplies(held?.binding, binding) &&
+      bindingApplies(held?.binding, binding, Object.keys(binding.work)) &&
       coversOwedWork(this.#deps.db, episodeId, held?.stages)
     ) {
       this.#deps.logger.debug({ episodeId }, 'reflection already applied');
@@ -291,21 +308,23 @@ export class ReflectionOrchestrator {
     binding: StageBinding,
   ): Promise<StageRecord> {
     const key = stageLedgerKey(context.pipelineVersion, stage.name, context.episodeId);
-    const held = isLedgerApplied(this.#deps.db, key)
-      ? recoveredStage(this.#deps.db, key)
-      : undefined;
-    if (held !== undefined && bindingApplies(held.binding, binding)) {
-      return stageAlreadyAppliedRecord(stage.name, held.record);
-    }
-    if (held !== undefined && held.binding === undefined) {
-      // An entry nobody can bind to a generation. Its effects exist, so the stage is not entered
-      // again; what it settled is unknown, so the row keeps its obligation and says why.
+    // Three states, kept apart. No entry at all is a stage to run. An entry this reader can
+    // decode and bind answers for the row. An entry that is applied and cannot be verified is
+    // neither: its effects exist and must not be re-minted, and what it settled is unknown, so
+    // the row keeps its obligation with a reason somebody can find. An undecodable entry is the
+    // second kind of unverifiable, not the first kind of absent.
+    const applied = isLedgerApplied(this.#deps.db, key);
+    const held = applied ? recoveredStage(this.#deps.db, key) : undefined;
+    if (applied && held?.binding === undefined) {
       return {
         name: stage.name,
         status: 'skipped',
         summary: STAGE_UNVALIDATED_ENTRY_SUMMARY,
         durationMs: 0,
       };
+    }
+    if (held !== undefined && bindingApplies(held.binding, binding, [stage.name])) {
+      return stageAlreadyAppliedRecord(stage.name, held.record);
     }
     const record = await this.#runStage(stage, context);
     // A pass that named a remainder gets no key. The key is what stops a retry re-entering the
