@@ -158,6 +158,28 @@ export function sourceOutputFor(outcome: SourceInspectOutcome): SourceOutput {
 }
 
 /**
+ * Captured control characters, made visible rather than emitted.
+ *
+ * A hit is somebody's captured text, and a terminal that receives it executes what it holds:
+ * an escape sequence in a stored conversation would move the cursor, clear the screen, or set
+ * a title on its way through a rendered block. The structured field keeps the exact bytes the
+ * archive holds, because that is what the API promises; the block a person reads does not.
+ *
+ * Newline and tab are left alone. They are layout in a multi-line part render, and the excerpt
+ * line collapses whitespace before it gets here, so nothing escapes into a single-line hit.
+ */
+function escapeControls(text: string): string {
+  let escaped = '';
+  for (const character of text) {
+    const code = character.codePointAt(0) ?? 0;
+    const control =
+      (code < 0x20 && code !== 0x09 && code !== 0x0a) || (code >= 0x7f && code <= 0x9f);
+    escaped += control ? `\\x${code.toString(16).padStart(2, '0')}` : character;
+  }
+  return escaped;
+}
+
+/**
  * The rendered block beside the structured answer. A refusal reads as a refusal in text too:
  * a client that only renders the block would otherwise be told nothing was found.
  */
@@ -169,7 +191,7 @@ export function searchText(output: SourceSearchOutput): string {
       const lines = results.map(
         (hit) =>
           `${hit.source_id} ${hit.part_kind}:${String(hit.ordinal)}` +
-          `${hit.truncated ? ' (indexed prefix only)' : ''}  ${hit.excerpt.replace(/\s+/g, ' ')}`,
+          `${hit.truncated ? ' (indexed prefix only)' : ''}  ${escapeControls(hit.excerpt.replace(/\s+/g, ' '))}`,
       );
       const head =
         results.length === 0 ? 'no parts matched' : `${String(results.length)} part(s) matched`;
@@ -212,7 +234,7 @@ export function sourceText(output: SourceOutput): string {
         const span = part.part_complete
           ? ''
           : ` [chars ${String(part.text_start)}-${String(part.text_end)}, continues]`;
-        return `  ${part.part_kind}:${String(part.ordinal)}${role}${span}\n    ${part.text}`;
+        return `  ${part.part_kind}:${String(part.ordinal)}${role}${span}\n    ${escapeControls(part.text)}`;
       });
       const more =
         output.continuation === undefined

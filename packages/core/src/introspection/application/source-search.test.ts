@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runSourceIndexJob } from './source-index.js';
 import { runSourceInspection } from './source-inspect.js';
 import { runSourceSearch, type SourceSearchDeps } from './source-search.js';
+import { sourceOutputFor, sourceText } from './source-wire.js';
 import { EvidenceResolver } from '../../evidence/application/resolver.js';
 import { commitSourceState, seedSource } from '../../evidence/test-support/evidence.fixture.js';
 import {
@@ -276,6 +277,29 @@ describe('archive search and inspection', () => {
 
     const job = await runSourceIndexJob(missing, { sourceId: 'episode-1' });
     expect(job).toMatchObject({ status: 'search_unavailable', cause: 'fts5_unavailable' });
+  });
+
+  it('keeps captured controls out of the rendered block and exact in the structured field', async () => {
+    const control = String.fromCharCode(27);
+    seedSource(store.db, {
+      sourceId: 'episode-control',
+      sessionId: 'session-1',
+      identity: 'agent-1',
+      content: { summary: 'control', turns: [{ role: 'user', text: `${control}[2J costs` }] },
+      turnIds: ['turn-control'],
+      now: NOW,
+    });
+    const outcome = await runSourceInspection(deps, { id: 'episode-control' });
+    if (outcome.status !== 'source') {
+      throw new Error('a verified source answers');
+    }
+    const output = sourceOutputFor(outcome);
+
+    // The API promises the raw text, so the structured field carries the byte the archive holds.
+    expect(output.parts?.[0]?.text).toContain(control);
+    // The block a person reads does not: a terminal would act on it.
+    expect(sourceText(output)).not.toContain(control);
+    expect(sourceText(output)).toContain('\\x1b');
   });
 
   describe('inspection', () => {
