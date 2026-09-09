@@ -161,7 +161,7 @@ function closedScope(closedTheClaim: boolean, propagated: number): string {
  * second apply over a family that is already closed comes back with the judged claim alone.
  */
 async function readAppliedClose(row: SupersessionProposal): Promise<AppliedClose> {
-  const lineage = (await fetchNodeEdges(substrate.driver, row.newId)).filter(
+  const lineage = (await fetchNodeEdges(substrate.driver, row.newId)).edges.filter(
     (edge) => edge.type === SUPERSEDES_TYPE && edge.outgoing && edge.reopenedAt === undefined,
   );
   const closedTheClaim = lineage.some((edge) => edge.otherId === row.oldId);

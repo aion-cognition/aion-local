@@ -107,7 +107,7 @@ export type { HorizonIntegrity } from './graph/horizon-integrity.js';
 
 export { countAutoMergedEntities, entityMergePairState } from './graph/merge-shadow-queries.js';
 
-export type { NodeEdge, NodeProvenance } from './graph/node-provenance.js';
+export type { NodeEdge, NodeEdgePage, NodeProvenance } from './graph/node-provenance.js';
 
 export { upsertEdge } from './graph/edges.js';
 

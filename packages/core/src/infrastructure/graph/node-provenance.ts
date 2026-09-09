@@ -7,6 +7,7 @@ import { ENTITY_TYPE_PROPERTY } from './entity-queries.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
 import { BASE_NODE_LABEL } from './labels.js';
 import {
+  edgeModeFragment,
   readCurrencyAnnotation,
   readModeFragment,
   withCurrency,
@@ -15,7 +16,7 @@ import {
 } from './read-modes.js';
 import { ENTITY_NAME_PROPERTY, LAST_ACCESSED_PROPERTY } from './seed-queries.js';
 import { EDGE_REOPENED_AT_PROPERTY } from './unsupersede.js';
-import type { Row } from './values.js';
+import { toGraphInteger, type Row } from './values.js';
 
 /**
  * `aion why`'s two reads: one node's own record and everything it touches. Both are
@@ -135,6 +136,8 @@ export async function fetchNodeProvenance(
 }
 
 export type NodeEdge = {
+  /** The relationship's own stable identity, which is what a page resumes from. */
+  readonly edgeId: string;
   readonly type: string;
   /** `true` when the queried node is the edge's source, so `why` can render a direction arrow. */
   readonly outgoing: boolean;
@@ -158,14 +161,39 @@ export type NodeEdge = {
   readonly reopenedAt?: Date;
 };
 
-function edgesStatement(id: string, mode: ReadMode): GraphStatement {
+/**
+ * Where a page of edges stopped: the relationship type, the other endpoint, and the edge's own
+ * stable identity. Three parts because the first two are what the order is by and neither is
+ * unique on its own, and the third is what makes the position exact.
+ */
+export type NodeEdgeCursor = {
+  readonly type: string;
+  readonly otherId: string;
+  readonly edgeId: string;
+};
+
+function edgesStatement(
+  id: string,
+  mode: ReadMode,
+  page: { readonly limit: number; readonly after?: NodeEdgeCursor },
+): GraphStatement {
   const fragment = readModeFragment(mode, 'm');
+  // The relationship carries its own visibility, not just the node at the other end. An edge
+  // written after the vantage is not one the answer may walk, and an endpoint that was visible
+  // then says nothing about when the edge to it appeared.
+  const edge = edgeModeFragment(mode, 'r');
+  const keyset =
+    page.after === undefined
+      ? ''
+      : ' AND (type(r) > $afterType OR (type(r) = $afterType AND (m.id > $afterOther' +
+        ' OR (m.id = $afterOther AND elementId(r) > $afterEdge))))';
   const cypher = [
     `MATCH (n:${BASE_NODE_LABEL} { id: $id })-[r]-(m:${BASE_NODE_LABEL})`,
-    `WHERE m.id <> $id AND ${fragment.where}`,
+    `WHERE m.id <> $id AND ${fragment.where} AND ${edge.where}${keyset}`,
     'RETURN type(r) AS type,',
     '       startNode(r).id = $id AS outgoing,',
     '       m.id AS other_id,',
+    '       elementId(r) AS edge_id,',
     '       labels(m) AS other_labels,',
     `       coalesce(m.${MEMORY_PROPERTIES.summary}, m.${MEMORY_PROPERTIES.text}, m.${ENTITY_NAME_PROPERTY}, '') AS other_content,`,
     '       coalesce(r.strength, 1.0) AS strength,',
@@ -176,15 +204,32 @@ function edgesStatement(id: string, mode: ReadMode): GraphStatement {
     '       r.rationale AS rationale,',
     '       r.created_at AS created_at,',
     `       r.${EDGE_REOPENED_AT_PROPERTY} AS reopened_at`,
-    'ORDER BY type(r), other_id',
+    'ORDER BY type, other_id, edge_id',
+    'LIMIT $topK',
   ].join('\n');
-  return { cypher, parameters: { ...fragment.parameters, id } };
+  return {
+    cypher,
+    parameters: {
+      ...fragment.parameters,
+      ...edge.parameters,
+      id,
+      topK: toGraphInteger(page.limit),
+      ...(page.after === undefined
+        ? {}
+        : {
+            afterType: page.after.type,
+            afterOther: page.after.otherId,
+            afterEdge: page.after.edgeId,
+          }),
+    },
+  };
 }
 
 function mapEdge(row: Row): NodeEdge {
   const createdAt = row.created_at;
   const reopenedAt = row.reopened_at;
   return {
+    edgeId: row.edge_id as string,
     type: row.type as string,
     outgoing: row.outgoing === true,
     otherId: row.other_id as string,
@@ -203,16 +248,52 @@ function mapEdge(row: Row): NodeEdge {
   };
 }
 
+/** Edges one call may return. A node with more than this pages; nothing returns all of them. */
+export const NODE_EDGE_PAGE_SIZE = 100;
+
+export type NodeEdgePage = {
+  readonly edges: readonly NodeEdge[];
+  /** Where a following page resumes. Present exactly when this one filled its bound. */
+  readonly continuation?: NodeEdgeCursor;
+  /**
+   * Whether this page is the whole neighbourhood. A first page is never an ancestry census:
+   * a reader that needs every parent has to page, and one that stops here has read a sample.
+   */
+  readonly complete: boolean;
+};
+
 /**
- * Every edge touching one node, both directions, undirected types included: what
- * `aion why` groups by type for its edge summary, and where it finds the `EXTRACTED_FROM`
+ * One bounded page of the edges touching a node, both directions, undirected types included:
+ * what `aion why` groups by type for its edge summary, and where it finds the `EXTRACTED_FROM`
  * edge (extraction method lives in its `provenance`, not on the node) and both ends of a
  * `SUPERSEDES` chain.
+ *
+ * The bound is the point. Reading every edge of a well-connected node is unbounded work in a
+ * helper whose whole job is to show a person what is nearby, and a caller that received all of
+ * them anyway could not tell a complete neighbourhood from a large one.
  */
 export async function fetchNodeEdges(
   driver: Driver,
   id: string,
-  mode: ReadMode = withCurrency(),
-): Promise<readonly NodeEdge[]> {
-  return runRead(driver, edgesStatement(id, mode), mapEdge);
+  options: {
+    readonly mode?: ReadMode;
+    readonly limit?: number;
+    readonly after?: NodeEdgeCursor;
+  } = {},
+): Promise<NodeEdgePage> {
+  const limit = options.limit ?? NODE_EDGE_PAGE_SIZE;
+  const statement = edgesStatement(id, options.mode ?? withCurrency(), {
+    limit,
+    ...(options.after === undefined ? {} : { after: options.after }),
+  });
+  const edges = await runRead(driver, statement, mapEdge);
+  const last = edges[edges.length - 1];
+  if (edges.length < limit || last === undefined) {
+    return { edges, complete: true };
+  }
+  return {
+    edges,
+    continuation: { type: last.type, otherId: last.otherId, edgeId: last.edgeId },
+    complete: false,
+  };
 }

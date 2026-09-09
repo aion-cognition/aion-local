@@ -211,7 +211,7 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('proposal_resolution against a live graph',
     }
 
     expect(await isCurrent(priorFactId)).toBe(false);
-    const lineage = (await fetchNodeEdges(harness.driver, priorFactId)).filter(
+    const lineage = (await fetchNodeEdges(harness.driver, priorFactId)).edges.filter(
       (edge) => edge.type === 'SUPERSEDES',
     );
     expect(lineage).toHaveLength(1);

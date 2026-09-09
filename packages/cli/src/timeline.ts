@@ -94,7 +94,9 @@ async function hydrateTimeline(
   }));
   const runEntry = getLedgerEntry(db, orchestratorLedgerKey(pipelineVersion, episodeId));
 
-  const derivedEdges = edges.filter((edge) => edge.type === 'EXTRACTED_FROM' && !edge.outgoing);
+  const derivedEdges = edges.edges.filter(
+    (edge) => edge.type === 'EXTRACTED_FROM' && !edge.outgoing,
+  );
   const derivedNodes = await Promise.all(
     derivedEdges.map(async (edge) => {
       const nodeProvenance = await fetchNodeProvenance(driver, edge.otherId);

@@ -203,7 +203,9 @@ function judgeSide(detail: DedupEntityDetail): EntityMergeSide {
 
 /** What each side touches, which the counted neighbour overlap on its own does not say. */
 async function neighbourhoodFact(driver: Driver, entity: DedupEntityDetail): Promise<string> {
-  const edges = await fetchNodeEdges(driver, entity.id);
+  // A page, not a census: the fact below says what this entity is near, and a bounded page
+  // is enough to say that. Nothing here counts neighbours or claims to have seen them all.
+  const { edges } = await fetchNodeEdges(driver, entity.id);
   if (edges.length === 0) {
     return `${entity.name} is connected to nothing else in the graph.`;
   }

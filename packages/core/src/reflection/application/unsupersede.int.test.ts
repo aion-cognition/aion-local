@@ -158,7 +158,7 @@ describe('reopening a superseded claim', () => {
 
     // What `aion why` renders the reopen from: the edge is still there, and says when it
     // stopped holding.
-    const edges = await fetchNodeEdges(harness.driver, stale);
+    const { edges } = await fetchNodeEdges(harness.driver, stale);
     const lineage = edges.filter((edge) => edge.type === 'SUPERSEDES');
     expect(lineage).toHaveLength(1);
     expect(lineage[0]?.reopenedAt).toEqual(REOPENED_AT);
@@ -262,7 +262,7 @@ describe('reopening a superseded claim', () => {
     expect(repeat.justReopened).toBe(false);
     expect(repeat.reopenedFrom).toEqual([]);
     // The first reopen's stamp stands, the same discipline the close itself follows.
-    const edges = await fetchNodeEdges(harness.driver, stale);
+    const { edges } = await fetchNodeEdges(harness.driver, stale);
     expect(edges.find((edge) => edge.type === 'SUPERSEDES')?.reopenedAt).toEqual(REOPENED_AT);
   }, 120_000);
 

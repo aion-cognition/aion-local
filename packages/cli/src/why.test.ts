@@ -57,6 +57,7 @@ const EXPIRED: NodeProvenance = {
 
 const EDGES: readonly NodeEdge[] = [
   {
+    edgeId: 'edge-1',
     type: 'EXTRACTED_FROM',
     outgoing: true,
     otherId: 'episode-1',
@@ -70,6 +71,7 @@ const EDGES: readonly NodeEdge[] = [
     createdAt: new Date('2026-06-01T11:00:05.000Z'),
   },
   {
+    edgeId: 'edge-2',
     type: 'SUPERSEDES',
     outgoing: false,
     otherId: 'decision-old',
@@ -83,6 +85,7 @@ const EDGES: readonly NodeEdge[] = [
     createdAt: new Date('2026-06-05T00:00:00.000Z'),
   },
   {
+    edgeId: 'edge-3',
     type: 'MENTIONS',
     outgoing: false,
     otherId: 'episode-1',
@@ -100,6 +103,7 @@ const EDGES: readonly NodeEdge[] = [
 /** What a bridge's own edges carry: no episode, and the whole reason it exists. */
 const BRIDGE_EDGES: NodeEdge[] = [
   {
+    edgeId: 'edge-4',
     type: 'RELATED_TO',
     outgoing: true,
     otherId: 'concept-left',
@@ -147,7 +151,7 @@ describe('renderProvenance', () => {
   it('renders the node record, currency, and bitemporal stamps', () => {
     const { lines, write } = collector();
 
-    renderProvenance(CURRENT, [], [], [], write);
+    renderProvenance(CURRENT, { edges: [], complete: true }, [], [], write);
 
     const text = lines.join('\n');
     expect(text).toContain('node     decision-1');
@@ -160,7 +164,7 @@ describe('renderProvenance', () => {
   it('shows a superseded node honestly, with what replaced it and when', () => {
     const { lines, write } = collector();
 
-    renderProvenance(SUPERSEDED, [], [], [], write);
+    renderProvenance(SUPERSEDED, { edges: [], complete: true }, [], [], write);
 
     const text = lines.join('\n');
     expect(text).toContain('currency  superseded');
@@ -175,7 +179,7 @@ describe('renderProvenance', () => {
   it('says an expired reading aged out rather than that something corrected it', () => {
     const { lines, write } = collector();
 
-    renderProvenance(EXPIRED, [], [], [], write);
+    renderProvenance(EXPIRED, { edges: [], complete: true }, [], [], write);
 
     const text = lines.join('\n');
     expect(text).toContain('currency  expired');
@@ -186,7 +190,7 @@ describe('renderProvenance', () => {
   it('renders the extraction provenance chain from the EXTRACTED_FROM edge', () => {
     const { lines, write } = collector();
 
-    renderProvenance(CURRENT, EDGES, [], [], write);
+    renderProvenance(CURRENT, { edges: EDGES, complete: true }, [], [], write);
 
     const text = lines.join('\n');
     expect(text).toContain(
@@ -197,7 +201,7 @@ describe('renderProvenance', () => {
   it('renders supersession lineage in both directions', () => {
     const { lines, write } = collector();
 
-    renderProvenance(CURRENT, EDGES, [], [], write);
+    renderProvenance(CURRENT, { edges: EDGES, complete: true }, [], [], write);
 
     expect(lines.join('\n')).toContain('superseded by  decision-old (Decision, Memory)');
   });
@@ -215,7 +219,7 @@ describe('renderProvenance', () => {
         : edge,
     );
 
-    renderProvenance(CURRENT, reopened, [], [], write);
+    renderProvenance(CURRENT, { edges: reopened, complete: true }, [], [], write);
 
     const text = lines.join('\n');
     expect(text).toContain('superseded by  decision-old (Decision, Memory)');
@@ -225,7 +229,13 @@ describe('renderProvenance', () => {
   it('renders open supersession and entity-merge proposals touching the node', () => {
     const { lines, write } = collector();
 
-    renderProvenance(CURRENT, [], [SUPERSESSION_PROPOSAL], [ENTITY_MERGE_PROPOSAL], write);
+    renderProvenance(
+      CURRENT,
+      { edges: [], complete: true },
+      [SUPERSESSION_PROPOSAL],
+      [ENTITY_MERGE_PROPOSAL],
+      write,
+    );
 
     const text = lines.join('\n');
     expect(text).toContain(
@@ -239,7 +249,7 @@ describe('renderProvenance', () => {
 
     renderProvenance(
       CURRENT,
-      [],
+      { edges: [], complete: true },
       [{ ...SUPERSESSION_PROPOSAL, resolvedAt: '2026-06-06T00:00:00.000Z' }],
       [],
       write,
@@ -253,7 +263,7 @@ describe('renderProvenance', () => {
   it('summarizes edges by type', () => {
     const { lines, write } = collector();
 
-    renderProvenance(CURRENT, EDGES, [], [], write);
+    renderProvenance(CURRENT, { edges: EDGES, complete: true }, [], [], write);
 
     const text = lines.join('\n');
     expect(text).toMatch(/EXTRACTED_FROM\s+1/);
@@ -269,7 +279,7 @@ describe('renderProvenance', () => {
   it('reads the story off the edges of a node no episode produced', () => {
     const { lines, write } = collector();
 
-    renderProvenance(CURRENT, BRIDGE_EDGES, [], [], write);
+    renderProvenance(CURRENT, { edges: BRIDGE_EDGES, complete: true }, [], [], write);
 
     const text = lines.join('\n');
     expect(text).toContain('derived associations');
@@ -281,7 +291,7 @@ describe('renderProvenance', () => {
   it('says plainly when there is nothing on a given axis', () => {
     const { lines, write } = collector();
 
-    renderProvenance(CURRENT, [], [], [], write);
+    renderProvenance(CURRENT, { edges: [], complete: true }, [], [], write);
 
     const text = lines.join('\n');
     expect(text).toContain('no source episode recorded');

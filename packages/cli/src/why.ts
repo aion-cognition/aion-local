@@ -5,6 +5,7 @@ import {
   findSupersessionProposalsForNode,
   type EntityMergeProposal,
   type NodeEdge,
+  type NodeEdgePage,
   type NodeProvenance,
   type SupersessionProposal,
 } from '@aion/core';
@@ -74,11 +75,12 @@ function renderDerivedEdges(edges: readonly NodeEdge[], write: Writer): void {
 
 export function renderProvenance(
   provenance: NodeProvenance,
-  edges: readonly NodeEdge[],
+  page: NodeEdgePage,
   supersessions: readonly SupersessionProposal[],
   merges: readonly EntityMergeProposal[],
   write: Writer,
 ): void {
+  const { edges } = page;
   write(`node     ${provenance.id}`);
   write(`labels   ${provenance.labels.join(', ')}`);
   write(`content  ${provenance.content}`);
@@ -178,11 +180,16 @@ export function renderProvenance(
     byType.set(edge.type, (byType.get(edge.type) ?? 0) + 1);
   }
   if (byType.size === 0) {
-    write('  none');
+    write(page.complete ? '  none' : '  none on this page');
   } else {
     for (const [type, count] of [...byType.entries()].sort(([a], [b]) => a.localeCompare(b))) {
       write(`  ${type.padEnd(20)} ${String(count)}`);
     }
+  }
+  // A page is not a census. Counting what came back as the whole neighbourhood is exactly the
+  // reading this line exists to prevent, and an ancestry reader may not take it as one either.
+  if (!page.complete) {
+    write('  (first page only; this node has more edges than one page holds)');
   }
 }
 
@@ -207,12 +214,17 @@ export function runWhy(
         return 1;
       }
 
-      const edges = await fetchNodeEdges(driver, flags.nodeId);
+      const page = await fetchNodeEdges(driver, flags.nodeId);
       const supersessions = findSupersessionProposalsForNode(substrate.db(), flags.nodeId);
       const merges = findEntityMergeProposalsForNode(substrate.db(), flags.nodeId);
 
-      renderProvenance(provenance, edges, supersessions, merges, write);
-      substrate.logger().info({ nodeId: flags.nodeId, edges: edges.length }, 'why rendered');
+      renderProvenance(provenance, page, supersessions, merges, write);
+      substrate
+        .logger()
+        .info(
+          { nodeId: flags.nodeId, edges: page.edges.length, complete: page.complete },
+          'why rendered',
+        );
       return 0;
     },
   });
