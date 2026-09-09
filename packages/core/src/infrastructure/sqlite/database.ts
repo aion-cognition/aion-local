@@ -327,6 +327,7 @@ const COLUMN_ADDITIONS: readonly ColumnAddition[] = [
     definition: "TEXT NOT NULL DEFAULT 'name_cosine'",
   },
   { table: 'reflection_queue', column: 'episode_id', definition: 'TEXT' },
+  { table: 'migration_progress', column: 'walked_by', definition: 'TEXT' },
   ...NARRATIVE_COLUMN_ADDITIONS,
   ...READINESS_COLUMN_ADDITIONS,
 ];

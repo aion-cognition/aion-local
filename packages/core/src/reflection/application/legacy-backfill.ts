@@ -243,10 +243,14 @@ export async function runLegacyBackfillBatch(
   const outcomes: MemberOutcome[] = [];
   let indexEnqueued = 0;
   for (const sourceId of members) {
+    const progress = readMigrationProgress(deps.db, request.cohortId, sourceId);
     const attempt = planMemberAttempt(deps.db, {
       cohortId: request.cohortId,
       sourceId,
-      status: readMigrationProgress(deps.db, request.cohortId, sourceId)?.status,
+      status: progress?.status,
+      ...(progress?.walkedBy === null || progress?.walkedBy === undefined
+        ? {}
+        : { walkedBy: progress.walkedBy }),
       reverify: request.reverify === true,
       payload: {
         mode: 'source',
@@ -322,7 +326,15 @@ export async function runLegacyBackfillBatch(
         indexEnqueued += 1;
       }
     }
-    recordMigrationProgress(deps.db, { cohortId: request.cohortId, sourceId, status, reason });
+    // The walk that produced this verdict is recorded with it. Without that association the next
+    // pass cannot tell a receipt this row already accounts for from one whose reply was lost.
+    recordMigrationProgress(deps.db, {
+      cohortId: request.cohortId,
+      sourceId,
+      status,
+      reason,
+      walkedBy: attempt.operationId,
+    });
     outcomes.push({ sourceId, status, reason, published });
   }
 

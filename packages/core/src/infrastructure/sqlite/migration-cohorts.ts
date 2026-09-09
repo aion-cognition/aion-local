@@ -181,6 +181,12 @@ export type MigrationProgressUpdate = {
   readonly reason?: string;
   /** The chunk this source sealed into. Written once and never moved afterwards. */
   readonly partitionAssignment?: string;
+  /**
+   * The walk this status came from. Omitted by a caller changing the status without claiming an
+   * attempt — an operator requeueing a member changes what the row says, not which walk last
+   * reported on it — and the recorded association is kept in that case.
+   */
+  readonly walkedBy?: string;
 };
 
 /**
@@ -207,19 +213,22 @@ export function recordMigrationProgress(db: SqliteHandle, update: MigrationProgr
     }
 
     db.prepare(
-      `INSERT INTO migration_progress (cohort_id, source_id, status, reason, partition_assignment)
-       VALUES (?, ?, ?, ?, ?)
+      `INSERT INTO migration_progress
+         (cohort_id, source_id, status, reason, partition_assignment, walked_by)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT (cohort_id, source_id) DO UPDATE SET
          status = excluded.status,
          reason = excluded.reason,
          partition_assignment = COALESCE(migration_progress.partition_assignment,
-                                         excluded.partition_assignment)`,
+                                         excluded.partition_assignment),
+         walked_by = COALESCE(excluded.walked_by, migration_progress.walked_by)`,
     ).run(
       update.cohortId,
       update.sourceId,
       update.status,
       update.reason ?? null,
       update.partitionAssignment ?? null,
+      update.walkedBy ?? null,
     );
   }).immediate();
 }
@@ -229,6 +238,8 @@ export type MigrationProgressRow = {
   readonly status: MigrationStatus;
   readonly reason: string | null;
   readonly partitionAssignment: string | null;
+  /** The walk this status came from, or nothing for a row written before that was recorded. */
+  readonly walkedBy: string | null;
 };
 
 export function readMigrationProgress(
@@ -238,7 +249,7 @@ export function readMigrationProgress(
 ): MigrationProgressRow | undefined {
   const row = db
     .prepare(
-      `SELECT source_id, status, reason, partition_assignment FROM migration_progress
+      `SELECT source_id, status, reason, partition_assignment, walked_by FROM migration_progress
        WHERE cohort_id = ? AND source_id = ?`,
     )
     .get(cohortId, sourceId) as
@@ -247,6 +258,7 @@ export function readMigrationProgress(
         status: MigrationStatus;
         reason: string | null;
         partition_assignment: string | null;
+        walked_by: string | null;
       }
     | undefined;
   if (row === undefined) {
@@ -257,6 +269,7 @@ export function readMigrationProgress(
     status: row.status,
     reason: row.reason,
     partitionAssignment: row.partition_assignment,
+    walkedBy: row.walked_by,
   };
 }
 

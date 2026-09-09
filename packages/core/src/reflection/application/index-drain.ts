@@ -49,6 +49,16 @@ export class SourceIndexDrainer {
   /** A wakeup that arrived while a pass held its claims. The next pass owes it a run. */
   #pending = false;
   #deferrals = 0;
+  /**
+   * When each row this drainer released may be claimed again.
+   *
+   * The delay belongs to the ROW, not to the pass. A released row is claimable the instant it is
+   * released, so a pass that continues because some other row finished — or a wakeup a new
+   * acceptance sent — would otherwise reclaim exactly the row whose backoff just started. Holding
+   * it here lets new and otherwise eligible work proceed at full speed while the released row
+   * waits out the wait it earned.
+   */
+  readonly #deferredUntil = new Map<string, number>();
   #retry: NodeJS.Timeout | undefined;
   /** Documents drained since the last settle, so a caller reports work a pumped drain did. */
   #documents = 0;
@@ -80,25 +90,28 @@ export class SourceIndexDrainer {
     }
     this.#running = true;
     try {
-      const drain = await drainSourceIndexQueue(this.#deps, { maxJobs: this.#maxJobs });
+      const drain = await drainSourceIndexQueue(this.#deps, {
+        maxJobs: this.#maxJobs,
+        skipJobIds: this.#waiting(),
+      });
       this.#documents += drain.documents;
       // A page that filled its bound has more behind it — but only when this one finished
       // something. A full page whose rows all went back to the queue is the SAME work waiting on
       // its backoff, and taking it again straight away is a spin that reclaims its own releases,
-      // delays every job behind it and holds up shutdown. Continuation is for progress; released
-      // work waits for the timer below.
+      // delays every job behind it and holds up shutdown. Continuation is for progress; the rows
+      // this pass released are held out of it by the wait stamped on each of them below.
       if (drain.claimed >= this.#maxJobs && drain.completed > 0) {
         this.#pending = true;
       }
       this.#deferrals = drain.deferred > 0 ? this.#deferrals + 1 : 0;
       if (drain.deferred > 0) {
-        this.#scheduleRetry();
+        this.#hold(drain.deferredJobIds ?? []);
       }
       return drain.documents;
     } catch (err) {
       this.#deps.logger.warn({ err }, 'source index drain failed; the rows stay owed');
       this.#deferrals += 1;
-      this.#scheduleRetry();
+      this.#scheduleRetry(this.#delay());
       return 0;
     } finally {
       this.#running = false;
@@ -161,15 +174,40 @@ export class SourceIndexDrainer {
     return [...this.#inFlight];
   }
 
+  /** How long a row released by this pass waits, and how long until the drainer asks again. */
+  #delay(): number {
+    return backoffDelayMs(this.#deferrals, this.#retryBaseMs, this.#retryCapMs);
+  }
+
+  /** The rows still inside their wait. Expired entries are dropped as they are read. */
+  #waiting(): readonly string[] {
+    const at = this.#deps.now().getTime();
+    for (const [jobId, until] of this.#deferredUntil) {
+      if (until <= at) {
+        this.#deferredUntil.delete(jobId);
+      }
+    }
+    return [...this.#deferredUntil.keys()];
+  }
+
+  /** Stamps each released row with its wait, and asks again when that wait is over. */
+  #hold(jobIds: readonly string[]): void {
+    const delay = this.#delay();
+    const until = this.#deps.now().getTime() + delay;
+    for (const jobId of jobIds) {
+      this.#deferredUntil.set(jobId, until);
+    }
+    this.#scheduleRetry(delay);
+  }
+
   /**
    * A pass that released a row asks again after a bounded wait. Without it the row waits for the
    * next acceptance or the next restart, which is not a schedule.
    */
-  #scheduleRetry(): void {
+  #scheduleRetry(delay: number): void {
     if (this.#stopped || this.#retry !== undefined) {
       return;
     }
-    const delay = backoffDelayMs(this.#deferrals, this.#retryBaseMs, this.#retryCapMs);
     this.#retry = setTimeout(() => {
       this.#retry = undefined;
       this.pump();
@@ -189,5 +227,8 @@ export class SourceIndexDrainer {
   resume(): void {
     this.#stopped = false;
     this.#deferrals = 0;
+    // A resume is an operator saying to try again now, which is the one event that does clear a
+    // wait this drainer imposed on itself.
+    this.#deferredUntil.clear();
   }
 }

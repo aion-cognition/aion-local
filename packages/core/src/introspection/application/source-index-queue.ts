@@ -30,6 +30,8 @@ export type SourceIndexDrainOptions = {
   /** Rows this drain may claim. A drain that claims nothing returns zero of everything. */
   readonly maxJobs?: number;
   readonly maxAttempts?: number;
+  /** Rows the caller released and still owes a wait on. They are not claimed at all. */
+  readonly skipJobIds?: readonly string[];
 };
 
 export type SourceIndexDrain = {
@@ -38,6 +40,11 @@ export type SourceIndexDrain = {
   readonly documents: number;
   /** Jobs returned to the queue with their obligation intact. */
   readonly deferred: number;
+  /**
+   * Which rows those were, so the caller can hold each one's own backoff. Absent from a caller
+   * that reports counts alone.
+   */
+  readonly deferredJobIds?: readonly string[];
 };
 
 function sourceIdOf(job: ReflectionJob): string | undefined {
@@ -64,8 +71,9 @@ export async function drainSourceIndexQueue(
   // claimable again the instant it is released, so claiming inside the run loop would hand a
   // deferred job straight back to the same drain and spin on it.
   const jobs: ReflectionJob[] = [];
+  const skip = options.skipJobIds ?? [];
   while (jobs.length < maxJobs) {
-    const job = claimant.claimNext(deps.db, options.maxAttempts, [SOURCE_INDEX_JOB_TYPE]);
+    const job = claimant.claimNext(deps.db, options.maxAttempts, [SOURCE_INDEX_JOB_TYPE], skip);
     if (job === undefined) {
       break;
     }
@@ -74,12 +82,12 @@ export async function drainSourceIndexQueue(
 
   let completed = 0;
   let documents = 0;
-  let deferred = 0;
+  const deferredJobIds: string[] = [];
   for (const job of jobs) {
     const sourceId = sourceIdOf(job);
     if (sourceId === undefined) {
       claimant.release(deps.db, job.id, 'source index job names no source');
-      deferred += 1;
+      deferredJobIds.push(job.id);
       continue;
     }
     let done = false;
@@ -102,7 +110,13 @@ export async function drainSourceIndexQueue(
       continue;
     }
     claimant.release(deps.db, job.id, reason);
-    deferred += 1;
+    deferredJobIds.push(job.id);
   }
-  return { claimed: jobs.length, completed, documents, deferred };
+  return {
+    claimed: jobs.length,
+    completed,
+    documents,
+    deferred: deferredJobIds.length,
+    deferredJobIds,
+  };
 }

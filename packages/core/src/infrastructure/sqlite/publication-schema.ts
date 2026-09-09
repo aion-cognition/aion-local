@@ -143,6 +143,9 @@ export const PUBLICATION_SCHEMA_STATEMENTS: readonly string[] = [
     status TEXT NOT NULL,
     reason TEXT,
     partition_assignment TEXT,
+    -- Which walk this row's status came from. The association is what tells a retry of a lost
+    -- reply from a new verification: both look identical through the caller's arguments.
+    walked_by TEXT,
     PRIMARY KEY (cohort_id, source_id)
   )`,
 ];

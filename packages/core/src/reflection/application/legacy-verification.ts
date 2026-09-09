@@ -300,8 +300,14 @@ function rawProofGap(
       return `graph turn ${String(ordinal)} does not carry the archived turn's digest`;
     }
     // The bytes, not the digest column. A projection edited in place keeps the hash it was
-    // written with, so the only thing that proves the text is the text.
-    if (projected.text !== undefined && projected.text !== turn.text) {
+    // written with, so the only thing that proves the text is the text — and a projection holding
+    // no text at all has not proved it either. Absent required proof is missing proof, not proof
+    // that happens to be unavailable: skipping the comparison where the bytes are gone verifies
+    // exactly the source whose bytes nobody can check.
+    if (projected.text === undefined) {
+      return `graph turn ${String(ordinal)} carries no text to prove the archived turn against`;
+    }
+    if (projected.text !== turn.text) {
       return `graph turn ${String(ordinal)} does not carry the archived turn's text`;
     }
     if (projected.role !== turn.role) {
@@ -317,23 +323,25 @@ function rawProofGap(
   return undefined;
 }
 
-/** The two families a suppression statement belongs to, closing and reversing. */
-const SUPPRESSION_STATES: readonly string[] = [
-  'forgotten',
-  'unforgotten',
-  'suppressed',
-  'unsuppressed',
-];
+/**
+ * The FORGET family: the closing statement and its reversal, and nothing else.
+ *
+ * Suppression is a separate chain with a separate reversal, and reading the two together is the
+ * conflation the whole cut exists to prevent. An unsuppress is not an unforget: treating one as
+ * history of the other lets an unrelated modern suppression decide whether a legacy forget may be
+ * imported at all, which answers a question about one instruction with another instruction.
+ */
+const FORGET_STATES: readonly string[] = ['forgotten', 'unforgotten'];
 
 /**
- * Whether anybody has already stated something about this source's suppression.
+ * Whether anybody has already stated something about this source being forgotten.
  *
  * Not "is it forgotten now": a chain that says forgotten and then unforgotten is a chain, and a
- * baseline may only be imported where there is none.
+ * baseline may only be imported where that family has none.
  */
-function hasCommittedSuppressionHistory(db: SqliteHandle, sourceId: string): boolean {
+function hasCommittedForgetHistory(db: SqliteHandle, sourceId: string): boolean {
   return committedSourceStates(db, sourceId).some((state) =>
-    SUPPRESSION_STATES.includes(state.stateKind),
+    FORGET_STATES.includes(state.stateKind),
   );
 }
 
@@ -351,15 +359,16 @@ export function applySourceVerification(
   // The suppression travels first and whatever else does: a source whose content could not be
   // proved is still a source somebody forgot, and its statement is not the content's to lose.
   //
-  // It travels ONLY into an uncovered chain. A source that already carries committed forget
+  // It travels ONLY into an uncovered FORGET chain. A source that already carries committed forget
   // statements has a history somebody wrote deliberately, and appending an imported observation to
   // it makes that old observation the newest operative instruction — which is how a modern
   // unforget gets undone by a migration reading a stamp the graph never cleared. Where the two
-  // disagree the durable chain wins and the disagreement stays visible on the record.
+  // disagree the durable chain wins and the disagreement stays visible on the record. What the
+  // other family says is not consulted: it answers a different question about a different chain.
   if (
     binding !== undefined &&
     plan.forgottenAt !== undefined &&
-    !hasCommittedSuppressionHistory(db, plan.sourceId)
+    !hasCommittedForgetHistory(db, plan.sourceId)
   ) {
     recordSourceStateVersion(db, {
       sourceId: plan.sourceId,

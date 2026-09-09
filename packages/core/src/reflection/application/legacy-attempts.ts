@@ -17,11 +17,16 @@ import {
  * the request from today's arguments is exactly that write.
  *
  * A DEFERRED or REJECTED attempt is terminal for its identity. Nothing will ever finish it, so the
- * next walk takes an identity of its own rather than waiting on a verdict that already came.
+ * next walk takes an identity of its own rather than waiting on a verdict that already came — and
+ * it also SUPERSEDES any older acknowledgment: a receipt from before a verdict that has since come
+ * and gone is not the outcome of the work being asked for now.
  *
- * An ACKNOWLEDGED attempt whose progress row never moved is a crash between the publication and
- * the record of it. Its receipt is the outcome, and the walk that follows finalizes from it: the
- * work landed, and publishing again would spend a second identity proving what is already proved.
+ * An ACKNOWLEDGED attempt this member's row has not accounted for is a crash between the
+ * publication and the record of it. Its receipt is the outcome, and the walk that follows finalizes
+ * from it: the work landed, and publishing again would spend a second identity proving what is
+ * already proved. Which attempt the row accounts for is the durable association `walked_by` holds,
+ * and it is the only thing that separates recovering a lost reply from asking for a new
+ * verification — through the caller's arguments the two are identical.
  */
 
 /** A member nobody can repair in this many walks needs a person, not another identity. */
@@ -45,6 +50,22 @@ export type MemberAttempt = {
   readonly exhausted?: string;
 };
 
+/**
+ * Whether this member's row already accounts for that attempt.
+ *
+ * The recorded association answers it outright. A row written before the association existed has
+ * no answer of its own, and then its status stands in: a member still waiting to be walked has
+ * accounted for nothing, and one carrying a verdict has accounted for whatever produced it.
+ */
+function accountedFor(
+  input: { readonly walkedBy?: string | undefined; readonly status: MigrationStatus | undefined },
+  operationId: string,
+): boolean {
+  return input.walkedBy === undefined
+    ? input.status !== undefined && input.status !== 'accounted'
+    : input.walkedBy === operationId;
+}
+
 function receiptOf(record: PublicationRecord): AttemptReceipt {
   const result = JSON.parse(record.resultJson ?? '{}') as {
     pinned?: boolean;
@@ -66,10 +87,13 @@ export function planMemberAttempt(
     readonly payload: unknown;
     /** What the cohort currently records about the member, or nothing where it records none. */
     readonly status: MigrationStatus | undefined;
+    /** The walk that status came from, where the row records one. */
+    readonly walkedBy?: string | undefined;
     /**
-     * Whether this pass is an explicit re-verification. One is a request to prove the member
-     * again on evidence somebody repaired, so an older receipt is never its answer: finalizing
-     * from one would hand back the verdict the repair was meant to overturn.
+     * Whether the caller is asking for an explicit re-verification. It travels in the request and
+     * is deliberately NOT read here: a retry of a lost reply and a genuinely new verification look
+     * identical through this boolean, and inferring the difference from it is what spends a third
+     * identity on work a second one already did. The durable association decides instead.
      */
     readonly reverify: boolean;
   },
@@ -80,7 +104,7 @@ export function planMemberAttempt(
     const operationId = attempt === 1 ? base : `${base}#${String(attempt)}`;
     const record = publicationRecord(db, operationId);
     if (record === undefined) {
-      if (acknowledged !== undefined && input.status === 'accounted' && !input.reverify) {
+      if (acknowledged !== undefined && !accountedFor(input, acknowledged.operationId)) {
         return { operationId: acknowledged.operationId, receipt: receiptOf(acknowledged) };
       }
       return { operationId, payload: input.payload };
@@ -88,9 +112,8 @@ export function planMemberAttempt(
     if (record.state === 'prepared') {
       return { operationId, payload: JSON.parse(record.payloadJson) };
     }
-    if (record.state === 'acknowledged') {
-      acknowledged = record;
-    }
+    // A verdict that has already come and gone supersedes anything before it.
+    acknowledged = record.state === 'acknowledged' ? record : undefined;
   }
   return {
     exhausted: `source ${input.sourceId} exhausted its repair attempts in cohort ${input.cohortId}`,

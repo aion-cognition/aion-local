@@ -40,6 +40,9 @@ function seed(content: ReflectionContent): LegacyRawNodes {
       turnId: `turn-${ordinal}`,
       ordinal,
       role: turn.role,
+      // The bytes the projection holds. A verified result rests on them, so the fixture that
+      // expects one supplies them rather than leaving the proof out of the picture.
+      text: turn.text,
       contentHash: turn.contentHash,
     })),
   };

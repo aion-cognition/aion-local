@@ -61,14 +61,19 @@ function toReflectionJob(row: ReflectionJobRow): ReflectionJob {
  * ROW_NUMBER would renumber every group as rows are claimed, so after the first claim the
  * interleave collapses back into first-in-first-out.
  */
-function claimNextStatement(typeCount: number): string {
+function claimNextStatement(typeCount: number, excludeCount: number): string {
   const typeClause =
     typeCount === 0 ? '' : `AND job_type IN (${new Array(typeCount).fill('?').join(', ')})`;
+  // Excluded inside the same ordered subquery rather than after the claim: a claimant that took
+  // the row and then put it back would spend one of that row's attempts on a decision it had
+  // already made.
+  const excludeClause =
+    excludeCount === 0 ? '' : `AND id NOT IN (${new Array(excludeCount).fill('?').join(', ')})`;
   return `UPDATE reflection_queue
          SET claimed_at = ?, claimed_by = ?
          WHERE id = (
            SELECT id FROM reflection_queue
-           WHERE claimed_at IS NULL AND attempts < ? ${typeClause}
+           WHERE claimed_at IS NULL AND attempts < ? ${typeClause} ${excludeClause}
            ORDER BY CASE lane WHEN 'interactive' THEN 0 ELSE 1 END, lane_seq, rowid
            LIMIT 1
          )
@@ -105,16 +110,22 @@ export class ReflectionQueueClaimant {
    * than one kind of job now, and a claimant that took a row it has no runner for would spend
    * that row's attempts failing it rather than leaving it for the process that owns it.
    * Omitting the list claims any type, which is what an operator draining the queue wants.
+   *
+   * `excludeIds` are rows this caller is deliberately leaving alone — work it released itself and
+   * owes a wait before touching again. The exclusion belongs in the selection because a released
+   * row is claimable the instant it is released: without it, the caller's own next pass reclaims
+   * exactly the row whose backoff it just started.
    */
   claimNext(
     db: SqliteHandle,
     maxAttempts?: number,
     jobTypes: readonly string[] = [],
+    excludeIds: readonly string[] = [],
   ): ReflectionJob | undefined {
     const attemptBound = maxAttempts ?? Number.MAX_SAFE_INTEGER;
     const row = db
-      .prepare(claimNextStatement(jobTypes.length))
-      .get(new Date().toISOString(), this.id, attemptBound, ...jobTypes) as
+      .prepare(claimNextStatement(jobTypes.length, excludeIds.length))
+      .get(new Date().toISOString(), this.id, attemptBound, ...jobTypes, ...excludeIds) as
       ReflectionJobRow | undefined;
     return row === undefined ? undefined : toReflectionJob(row);
   }
