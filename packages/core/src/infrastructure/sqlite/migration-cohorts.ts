@@ -260,6 +260,31 @@ export function readMigrationProgress(
   };
 }
 
+/**
+ * The members the walk has not reached yet, oldest first by source id.
+ *
+ * The frozen membership is its own cursor. A legacy source never went through the live ingest
+ * order, so selecting on that log would skip exactly the population the migration exists for, and
+ * a source whose record has not been written yet cannot be joined to one either. The status
+ * filter is inside the query rather than applied to the page: a member filtered out afterwards
+ * would still consume a row of the limit and move the cursor past itself.
+ */
+export function listAccountedCohortMembers(
+  db: SqliteHandle,
+  cohortId: string,
+  afterSourceId: string,
+  limit: number,
+): readonly string[] {
+  const rows = db
+    .prepare(
+      `SELECT source_id FROM migration_progress
+       WHERE cohort_id = ? AND status = 'accounted' AND source_id > ?
+       ORDER BY source_id LIMIT ?`,
+    )
+    .all(cohortId, afterSourceId, limit) as { source_id: string }[];
+  return rows.map((row) => row.source_id);
+}
+
 /** How many members sit at each status, which is what a batch reports when it finishes. */
 export function countMigrationProgress(
   db: SqliteHandle,

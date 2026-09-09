@@ -8,13 +8,12 @@
 export { handleReflection, INTEGRATE_JOB_TYPE } from './application/intake.js';
 export type { ReflectionIntakeDeps } from './application/intake.js';
 
-export { intakePublication } from './application/intake-publication.js';
-
-export { statedReferencesPublication } from './application/reference-publication.js';
-
-export { reflectionCompletionPublication } from './application/completion-publication.js';
-
-export { projectionRebuildPublication } from './application/rebuild-publication.js';
+/**
+ * The one installed handler set. The legacy materialization producer joins it here; its migration
+ * DRIVER is a separate owner's, so the freeze/walk/seal entry points stay inside core until that
+ * driver exists to import them.
+ */
+export { INSTALLED_PUBLICATION_HANDLERS } from './application/installed-publications.js';
 
 export { LaneAssigner } from './application/lanes.js';
 

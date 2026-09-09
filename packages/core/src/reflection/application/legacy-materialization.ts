@@ -1,0 +1,438 @@
+import { z } from 'zod';
+
+import {
+  acknowledgeCensusSeal,
+  acknowledgeMaterialization,
+  discardCensusSeal,
+  discardMaterialization,
+  endpointCensusScopes,
+  isNodeEndpoint,
+  pageUncountedEndpoints,
+  prepareCensusSeal,
+  prepareMaterialization,
+  unaccountedCohortMembers,
+} from './legacy-records.js';
+import {
+  ownershipCensusEstablished,
+  ownershipIncidence,
+  ownershipSummaryFor,
+} from '../../evidence/application/ownership.js';
+import { ownershipEvidenceVersion } from '../../evidence/domain/ownership.js';
+import type { GraphTransaction } from '../../infrastructure/graph/connection.js';
+import {
+  readLegacyIncidentRelations,
+  readLegacyRawNodes,
+} from '../../infrastructure/graph/legacy-evidence-queries.js';
+import { projectOwnershipSummary } from '../../infrastructure/graph/ownership-summary-queries.js';
+import { PublicationOperation } from '../../infrastructure/publication/operation.js';
+import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
+import type { PublicationContext } from '../../infrastructure/publication/types.js';
+import type { CommittedIncidence } from '../../infrastructure/sqlite/committed-evidence.js';
+import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
+import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { readSubstratePairing } from '../../infrastructure/sqlite/publication-control.js';
+import { readSourceRecord } from '../../infrastructure/sqlite/source-identity.js';
+import { checkPresentCoverage } from '../../recall/application/coverage-checker.js';
+import {
+  classifyLegacyRelations,
+  planNodes,
+  planScopes,
+  type MaterializedLink,
+} from '../domain/legacy-materialization.js';
+
+/**
+ * The guarded legacy evidence producer.
+ *
+ * A source that predates the durable records has one witness for every mention, extraction and
+ * correction it ever made: the edge in the graph. This operation is what turns those edges into
+ * records — under the coordinator's guard, in one publication, with the graph enumeration taken
+ * inside the same transaction that writes.
+ *
+ * It refuses to guess. A source whose archive proof was never established, a walk that ran out of
+ * room, a relationship this vocabulary cannot classify: each of those PINS the source and
+ * materializes nothing for it. A pin is a durable statement that the proof could not be made, and
+ * a pinned source stays resident forever, which is the fail-closed direction: the alternative is a
+ * record that says a source stood behind a node when nobody ever checked.
+ *
+ * Counting is a separate mode. One source is not a population, so a source pass moves the scope
+ * counters and never establishes a census; the seal does that once the whole frozen cohort has
+ * been walked.
+ */
+export const LEGACY_EFFECTS = {
+  records: 'legacy_evidence_records',
+  census: 'legacy_scope_census',
+} as const;
+
+const SourcePayload = z.strictObject({
+  mode: z.literal('source'),
+  cohortId: z.string().min(1),
+  sourceId: z.string().min(1),
+  /** Charged before the walk. A page that fills it cannot certify anything. */
+  relationLimit: z.number().int().positive(),
+});
+const CensusPayload = z.strictObject({
+  mode: z.literal('census'),
+  cohortId: z.string().min(1),
+  endpointLimit: z.number().int().positive(),
+  /** The keyset cursor: the last endpoint the previous seal page counted. */
+  after: z.string(),
+});
+const Payload = z.discriminatedUnion('mode', [SourcePayload, CensusPayload]);
+
+const Link = z.strictObject({
+  linkId: z.string().min(1),
+  kind: z.string().min(1),
+  qualifier: z.string().min(1),
+  fromId: z.string().min(1),
+  toId: z.string().min(1),
+  relationId: z.string().min(1),
+  relationType: z.string().min(1),
+  scopeRole: z.string().min(1),
+  incident: z.boolean(),
+  closed: z.boolean(),
+  clocks: z.record(z.string(), z.string()),
+});
+const Scope = z.strictObject({
+  endpointId: z.string().min(1),
+  relationClass: z.string().min(1),
+});
+const SourceData = SourcePayload.extend({
+  gate: z.enum(['admitted', 'pinned']),
+  reason: z.string(),
+  links: z.array(Link),
+  scopes: z.array(Scope),
+  nodes: z.array(z.string()),
+  observedAt: z.string().min(1),
+});
+const CensusData = CensusPayload.extend({
+  endpoints: z.array(
+    z.strictObject({
+      endpointId: z.string().min(1),
+      scopes: z.array(z.string().min(1)),
+      node: z.boolean(),
+    }),
+  ),
+  observedAt: z.string().min(1),
+});
+const Data = z.discriminatedUnion('mode', [SourceData, CensusData]);
+const Result = z.strictObject({
+  mode: z.enum(['source', 'census']),
+  materialized: z.number().int().nonnegative(),
+  /** Links a newer acknowledged version already covers. A baseline never overwrites one. */
+  preserved: z.number().int().nonnegative(),
+  projected: z.number().int().nonnegative(),
+  established: z.number().int().nonnegative(),
+  /** The last endpoint a seal page counted, so the next page starts past it and always moves. */
+  cursor: z.string(),
+  pinned: z.boolean(),
+  reason: z.string(),
+});
+
+type SourcePlanData = z.infer<typeof SourceData>;
+type CensusPlanData = z.infer<typeof CensusData>;
+type LegacyData = z.infer<typeof Data>;
+type LegacyResult = z.infer<typeof Result>;
+
+const EMPTY: Omit<LegacyResult, 'mode' | 'reason'> = {
+  materialized: 0,
+  preserved: 0,
+  projected: 0,
+  established: 0,
+  cursor: '',
+  pinned: false,
+};
+
+/** The plan's own rows, in the shape ownership judges. They are durable and not yet committed. */
+function plannedIncidence(data: SourcePlanData): readonly CommittedIncidence[] {
+  return data.links
+    .filter((entry) => entry.incident)
+    .map((entry) => ({
+      sourceId: entry.fromId,
+      nodeId: entry.toId,
+      role: entry.kind,
+      currency: entry.closed ? ('closed' as const) : ('open' as const),
+      linkId: entry.linkId,
+      linkVersion: 1,
+    }));
+}
+
+/**
+ * Writes one node's ownership summary as it will stand once this operation lands.
+ *
+ * The committed view cannot see a row this operation prepared, so the summary is derived from
+ * both. `censusEstablished` is what the scopes will say after the acknowledgment: a source pass
+ * establishes nothing and reports what the seal has already counted, and the seal reports the
+ * count it is about to make.
+ */
+async function project(
+  context: PublicationContext,
+  nodeId: string,
+  rows: readonly CommittedIncidence[],
+  censusEstablished: boolean,
+): Promise<boolean> {
+  const pairing = readSubstratePairing(context.db);
+  if (pairing === undefined || context.sequence === null) {
+    throw new Error('the ownership projection needs a paired substrate and a sequence');
+  }
+  const check = checkPresentCoverage(context.db, context.now);
+  if (check.status !== 'checked') {
+    throw new Error(`the ownership projection cannot read under ${check.refusal.reason}`);
+  }
+  const committed = ownershipIncidence(context.db, [nodeId], check.context);
+  const merged = [...committed];
+  for (const row of rows) {
+    if (row.nodeId !== nodeId) {
+      continue;
+    }
+    if (!merged.some((held) => held.sourceId === row.sourceId && held.role === row.role)) {
+      merged.push(row);
+    }
+  }
+  const summary = ownershipSummaryFor(context.db, nodeId, merged, check.context, {
+    censusEstablished,
+  });
+  return projectOwnershipSummary(context.graph, {
+    nodeId,
+    sessions: summary.sessions,
+    unknownAttribution: summary.unknownAttribution,
+    censusEstablished: summary.censusEstablished,
+    evidenceVersion: ownershipEvidenceVersion(summary),
+    sequence: context.sequence,
+    substrateId: pairing.substrateId,
+  });
+}
+
+type Admission = {
+  readonly admitted: boolean;
+  readonly reason: string;
+  readonly links: readonly MaterializedLink[];
+};
+
+/** What the enumeration and the records together admit. Anything short of all of it pins. */
+async function admit(
+  graph: GraphTransaction,
+  db: SqliteHandle,
+  payload: z.infer<typeof SourcePayload>,
+): Promise<Admission> {
+  const pinned = (reason: string): Admission => ({ admitted: false, reason, links: [] });
+  const record = readSourceRecord(db, payload.sourceId);
+  if (record === undefined) {
+    return pinned('no source record accounts for this source');
+  }
+  if (record.verificationStatus !== 'verified') {
+    return pinned(`source verification is ${record.verificationStatus}`);
+  }
+  const raw = await readLegacyRawNodes(graph, payload.sourceId);
+  if (raw === undefined) {
+    return pinned('the graph holds no projection of this source');
+  }
+  const rawIds = [payload.sourceId, ...raw.turns.map((turn) => turn.turnId)];
+  const page = await readLegacyIncidentRelations(graph, rawIds, payload.relationLimit);
+  if (!page.complete) {
+    return pinned('the incident enumeration exceeded its bound');
+  }
+  const plan = classifyLegacyRelations({
+    sourceId: payload.sourceId,
+    rawIds,
+    relations: page.relations,
+  });
+  const pin = plan.pins[0];
+  if (pin !== undefined) {
+    return pinned(pin.reason);
+  }
+  return {
+    admitted: true,
+    reason: 'every incident relationship is classified',
+    links: plan.links,
+  };
+}
+
+export const legacyMaterializationPublication = new PublicationOperation({
+  kind: 'legacy_materialization',
+  effectKinds: [LEGACY_EFFECTS.records, LEGACY_EFFECTS.census],
+  payload: Payload,
+  data: Data,
+  result: Result,
+  async prepare(context, payload) {
+    const coverage = readCurrentCoverageContract(context.db);
+    if (coverage === undefined) {
+      throw new Error('legacy materialization cannot publish before the coverage registry exists');
+    }
+    const observedAt = context.now.toISOString();
+    const expected = {
+      coverageEpoch: coverage.epoch,
+      evidence: buildEvidenceRevision([]),
+      sources: [],
+      heads: [],
+    };
+    if (payload.mode === 'census') {
+      const endpoints = pageUncountedEndpoints(
+        context.db,
+        payload.after,
+        payload.endpointLimit,
+      ).map((endpointId) => ({
+        endpointId,
+        scopes: [...endpointCensusScopes(context.db, endpointId)],
+        node: isNodeEndpoint(context.db, endpointId),
+      }));
+      const data: CensusPlanData = { ...payload, endpoints, observedAt };
+      return {
+        data,
+        expected,
+        scopes: endpoints.flatMap((endpoint) =>
+          endpoint.scopes.map((scope) => ({
+            kind: 'relation_scope' as const,
+            id: endpoint.endpointId,
+            scope,
+          })),
+        ),
+        effects: [{ kind: LEGACY_EFFECTS.census, detail: { endpoints: endpoints.length } }],
+      };
+    }
+    const admission = await admit(context.graph, context.db, payload);
+    const links = [...admission.links];
+    const data: SourcePlanData = {
+      ...payload,
+      gate: admission.admitted ? 'admitted' : 'pinned',
+      reason: admission.reason,
+      links,
+      scopes: [...planScopes(payload.sourceId, links)],
+      nodes: [...planNodes(links)],
+      observedAt,
+    };
+    return {
+      data,
+      expected,
+      scopes: data.scopes.map((scope) => ({
+        kind: 'relation_scope' as const,
+        id: scope.endpointId,
+        scope: scope.relationClass,
+      })),
+      effects: [{ kind: LEGACY_EFFECTS.records, detail: { links: links.length } }],
+    };
+  },
+  check(context, data) {
+    if (data.mode === 'census') {
+      // The seal's whole meaning is that nothing is left to count. A member the walk has not
+      // reached is a page that has not accounted, so the census waits rather than claiming one.
+      const outstanding = unaccountedCohortMembers(context.db, data.cohortId);
+      return Promise.resolve(
+        outstanding === 0
+          ? ({ status: 'valid' } as const)
+          : ({ status: 'deferred', reason: 'cohort_not_fully_accounted' } as const),
+      );
+    }
+    if (readSourceRecord(context.db, data.sourceId) === undefined) {
+      return Promise.resolve({ status: 'rejected', reason: 'source_unknown' } as const);
+    }
+    return Promise.resolve({ status: 'valid' } as const);
+  },
+  async applyGraph(context: PublicationContext, data: LegacyData): Promise<LegacyResult> {
+    if (data.mode === 'census') {
+      let projected = 0;
+      for (const endpoint of data.endpoints) {
+        if (endpoint.node && (await project(context, endpoint.endpointId, [], true))) {
+          projected += 1;
+        }
+      }
+      const last = data.endpoints[data.endpoints.length - 1];
+      return {
+        ...EMPTY,
+        mode: 'census',
+        projected,
+        established: data.endpoints.length,
+        cursor: last?.endpointId ?? data.after,
+        reason: 'every page of the cohort has accounted',
+      };
+    }
+    if (data.gate === 'pinned') {
+      return { ...EMPTY, mode: 'source', pinned: true, reason: data.reason };
+    }
+    const rows = plannedIncidence(data);
+    let projected = 0;
+    for (const nodeId of data.nodes) {
+      const established = ownershipCensusEstablished(context.db, nodeId);
+      if (await project(context, nodeId, rows, established)) {
+        projected += 1;
+      }
+    }
+    return {
+      ...EMPTY,
+      mode: 'source',
+      materialized: data.links.length,
+      projected,
+      reason: data.reason,
+    };
+  },
+  prepareSqlite(context, data) {
+    if (data.mode === 'census') {
+      prepareCensusSeal(context.db, {
+        operationId: context.operationId,
+        endpoints: data.endpoints,
+        observedAt: new Date(data.observedAt),
+      });
+      return undefined;
+    }
+    // A pinned source prepares nothing. The pin itself is recorded by the caller that asked for
+    // the pass, against the cohort's own progress row, so the reason survives the refusal.
+    if (data.gate === 'pinned') {
+      return undefined;
+    }
+    prepareMaterialization(context.db, {
+      sourceId: data.sourceId,
+      operationId: context.operationId,
+      links: data.links,
+      scopes: data.scopes,
+      observedAt: new Date(data.observedAt),
+    });
+    return undefined;
+  },
+  acknowledgeSqlite(context, data) {
+    if (data.mode === 'census') {
+      acknowledgeCensusSeal(
+        context.db,
+        {
+          operationId: context.operationId,
+          endpoints: data.endpoints,
+          observedAt: new Date(data.observedAt),
+        },
+        context.knownFrom,
+      );
+      return undefined;
+    }
+    if (data.gate === 'pinned') {
+      return undefined;
+    }
+    acknowledgeMaterialization(
+      context.db,
+      {
+        sourceId: data.sourceId,
+        operationId: context.operationId,
+        scopes: data.scopes,
+        observedAt: new Date(data.observedAt),
+      },
+      context.knownFrom,
+      context.observedAckAt,
+    );
+    return undefined;
+  },
+  discardSqlite(context, data) {
+    if (data.mode === 'census') {
+      discardCensusSeal(context.db, {
+        operationId: context.operationId,
+        endpoints: data.endpoints,
+        observedAt: new Date(data.observedAt),
+      });
+      return undefined;
+    }
+    // The prepared links stay. They are durable, invisible and keyed on this operation, and a
+    // later attempt writes its own version rather than inheriting this one.
+    discardMaterialization(context.db, {
+      sourceId: data.sourceId,
+      operationId: context.operationId,
+      scopes: data.scopes,
+      observedAt: new Date(data.observedAt),
+    });
+    return undefined;
+  },
+});

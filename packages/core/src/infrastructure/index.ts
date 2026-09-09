@@ -17,7 +17,6 @@ export type { SqliteHandle } from './sqlite/database.js';
 
 export { PublicationCoordinator } from './publication/coordinator.js';
 export { PublicationRecoveryLoop } from './publication/recovery.js';
-export { PUBLICATION_HANDLERS } from './publication/handlers.js';
 
 export {
   countExperiencesByVersion,

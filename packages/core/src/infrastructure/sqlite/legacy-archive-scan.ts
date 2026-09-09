@@ -91,6 +91,30 @@ export function pageArchiveRows(
   return rows.map(toScanRow);
 }
 
+/**
+ * Every archive row inside the frozen bounds that backs one episode.
+ *
+ * The bounds are part of the question. A row written after the freeze belongs to the tail cohort
+ * and answering with it here would let the walk verify a member against bytes its own census
+ * never counted.
+ */
+export function pageArchiveRowsForEpisode(
+  db: SqliteHandle,
+  episodeId: string,
+  bounds: { readonly low: number; readonly high: number },
+): readonly ArchiveScanRow[] {
+  const rows = db
+    .prepare(
+      `SELECT rowid, id, session_id, episode_id, content_hash, idempotency_key, schema_version,
+              occurred_at, archived_at
+       FROM experience_archive
+       WHERE episode_id = ? AND rowid >= ? AND rowid <= ?
+       ORDER BY rowid`,
+    )
+    .all(episodeId, bounds.low, bounds.high) as ArchiveRowData[];
+  return rows.map(toScanRow);
+}
+
 export type ArchiveSourceGroup = {
   readonly sourceId: string;
   readonly sessionId: string;
@@ -170,6 +194,38 @@ export function deriveSourceRecordInput(
       : 'content not yet checked against the graph',
     occurredAt: group.occurredAt,
     createdAt,
+    captureOrderValue: group.archivedAt,
+    captureOrderBasis: 'archive_acceptance',
+  };
+}
+
+/**
+ * The same group once the graph has agreed with it: the complete archive proof, including the
+ * alias rows that back the same occurrence.
+ *
+ * Only a caller that has compared the stored digest against the graph's own may build this. The
+ * table's CHECK is what makes `verified` mean something, and every field of the proof is present
+ * here or the row is refused rather than half-claimed.
+ */
+export function verifiedSourceRecordInput(
+  group: ArchiveSourceGroup,
+  input: { readonly verificationPolicyVersion: number; readonly createdAt: Date },
+): SourceRecordInput {
+  return {
+    sourceId: group.sourceId,
+    sessionId: group.sessionId,
+    verificationStatus: 'verified',
+    occurredAt: group.occurredAt,
+    createdAt: input.createdAt,
+    archive: {
+      canonicalArchiveId: group.canonicalArchiveId,
+      archiveSchemaVersion: group.schemaVersion,
+      identityHash: group.identityHash,
+      verifiedContentDigest: group.contentHash,
+      verificationPolicyVersion: input.verificationPolicyVersion,
+      archivedAt: group.archivedAt,
+      aliasArchiveIds: group.aliasArchiveIds,
+    },
     captureOrderValue: group.archivedAt,
     captureOrderBasis: 'archive_acceptance',
   };

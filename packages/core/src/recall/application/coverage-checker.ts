@@ -292,3 +292,17 @@ export function checkCoverage(db: SqliteHandle, request: CoverageRequest): Cover
     coverage: statement(contract, times, isTimeTravel(mode)),
   };
 }
+
+/**
+ * The present-vantage checked read, for an entry point that asks no temporal question.
+ *
+ * Maintenance, the reflection pipeline and the migration all read the durable records the same
+ * way a recall does, and they must read them under the same contract: a resolver handed a bare
+ * read mode has no epoch to fence on and no coverage statement to attach, so it would answer
+ * about a substrate whose contract could have moved underneath it. They ask nothing about the
+ * past, so nothing here is a temporal request; the refusal branch is a control record nobody can
+ * read, which is a reason for a sweep to stop rather than to guess.
+ */
+export function checkPresentCoverage(db: SqliteHandle, now: Date): CoverageCheck {
+  return checkCoverage(db, { now, expiryAnnotation: false });
+}

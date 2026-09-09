@@ -40,13 +40,27 @@ export type StatedLinkVersion = {
   readonly referenceVersion: number;
 };
 
+/**
+ * A link's identity: its classification, its qualifier and its two endpoints. Everything that
+ * records a link derives its id the same way, so a legacy edge materialized from the graph and a
+ * statement made about the same pair land on one row rather than on two that look alike.
+ */
+export function evidenceLinkId(
+  kind: string,
+  qualifier: string,
+  fromId: string,
+  toId: string,
+): string {
+  return createHash('sha256').update([kind, qualifier, fromId, toId].join('\n')).digest('hex');
+}
+
 export function statedLinkId(
   kind: StatedLinkKind,
   qualifier: StatedLinkQualifier,
   fromId: string,
   toId: string,
 ): string {
-  return createHash('sha256').update([kind, qualifier, fromId, toId].join('\n')).digest('hex');
+  return evidenceLinkId(kind, qualifier, fromId, toId);
 }
 
 /**
@@ -130,6 +144,104 @@ export function acknowledgeStatedLinkVersions(
        WHERE operation_id = ? AND known_from IS NULL`,
     )
     .run(knownFrom, observedAckAt, operationId).changes;
+}
+
+export type MaterializedLinkVersion = {
+  readonly linkId: string;
+  /** The classification the record carries. An incidence row's role must equal it. */
+  readonly kind: string;
+  readonly qualifier: string;
+  readonly fromId: string;
+  readonly toId: string;
+  /** The relationship identity the graph minted, preserved so a rebuild produces this link. */
+  readonly originalRelId: string;
+  readonly operationId: string;
+  readonly operationKey: string;
+  readonly recordedValues: Record<string, unknown>;
+  readonly temporalProof: Record<string, unknown>;
+  readonly observedAt: Date;
+};
+
+export type MaterializedLinkOutcome = {
+  readonly version: number;
+  /**
+   * False when a committed version of this link already stands. A baseline never writes over a
+   * newer acknowledged statement: the backfill is the oldest thing anybody has to say about the
+   * pair, and appending it would make it the newest.
+   */
+  readonly recorded: boolean;
+};
+
+/**
+ * Records one legacy relationship as a prepared version of its link.
+ *
+ * The link row is upserted on its identity, so the same edge enumerated by a restarted pass
+ * lands on the same row; the version is keyed on the operation, so a replayed publication
+ * writes one. A link that already carries a committed version is left exactly as it is and
+ * reported as such, which is how the pass preserves what a later writer acknowledged.
+ */
+export function prepareMaterializedLinkVersion(
+  db: SqliteHandle,
+  input: MaterializedLinkVersion,
+): MaterializedLinkOutcome {
+  return db
+    .transaction((): MaterializedLinkOutcome => {
+      db.prepare(
+        `INSERT INTO evidence_links
+           (link_id, kind, qualifier, from_id, to_id, original_rel_id, record_source, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'legacy_materialization', ?)
+         ON CONFLICT (link_id) DO UPDATE SET
+           original_rel_id = COALESCE(evidence_links.original_rel_id, excluded.original_rel_id)`,
+      ).run(
+        input.linkId,
+        input.kind,
+        input.qualifier,
+        input.fromId,
+        input.toId,
+        input.originalRelId,
+        input.observedAt.toISOString(),
+      );
+      const held = db
+        .prepare(
+          'SELECT version FROM evidence_link_versions WHERE link_id = ? AND operation_key = ?',
+        )
+        .get(input.linkId, input.operationKey) as { version: number } | undefined;
+      if (held !== undefined) {
+        return { version: held.version, recorded: true };
+      }
+      const committed = db
+        .prepare(
+          `SELECT MAX(version) AS n FROM evidence_link_versions
+           WHERE link_id = ? AND known_from IS NOT NULL`,
+        )
+        .get(input.linkId) as { n: number | null };
+      if (committed.n !== null) {
+        return { version: committed.n, recorded: false };
+      }
+      const high = db
+        .prepare(
+          'SELECT COALESCE(MAX(version), 0) AS n FROM evidence_link_versions WHERE link_id = ?',
+        )
+        .get(input.linkId) as { n: number };
+      const version = high.n + 1;
+      db.prepare(
+        `INSERT INTO evidence_link_versions
+           (link_id, version, prev_version, state, recorded_values_json, temporal_proof_json,
+            observed_at, operation_key, operation_id)
+         VALUES (?, ?, ?, 'materialized', ?, ?, ?, ?, ?)`,
+      ).run(
+        input.linkId,
+        version,
+        version === 1 ? null : version - 1,
+        JSON.stringify(input.recordedValues),
+        JSON.stringify(input.temporalProof),
+        input.observedAt.toISOString(),
+        input.operationKey,
+        input.operationId,
+      );
+      return { version, recorded: true };
+    })
+    .immediate();
 }
 
 export type StatedLinkRow = {

@@ -1,10 +1,9 @@
 import {
   ApiUsageRecorder,
-  intakePublication,
+  INSTALLED_PUBLICATION_HANDLERS,
   LaneAssigner,
   ProviderRouter,
   PublicationCoordinator,
-  PUBLICATION_HANDLERS,
   SessionManager,
   type Config,
   type GraphConnection,
@@ -45,7 +44,9 @@ export async function lifecycleIntakeDeps(target: LifecycleTarget): Promise<Refl
     driver,
     db: target.db,
     logger: target.logger,
-    handlers: [...PUBLICATION_HANDLERS, intakePublication],
+    // The whole installed set, not intake alone: a command meeting a pending operation of a
+    // kind it did not install cannot recover it, and a single receipt means it must.
+    handlers: [...INSTALLED_PUBLICATION_HANDLERS],
   });
   await publications.initialize();
   return {
