@@ -1,4 +1,6 @@
 import type { SqliteHandle } from './database.js';
+import { readCitationsOf } from './narrative-citations.js';
+import { OWNERSHIP_SCOPES } from '../../evidence/domain/ownership.js';
 
 /**
  * The reads behind the recall self-probe, all of them over the durable records rather than the
@@ -100,31 +102,54 @@ export function readSourceReadiness(db: SqliteHandle, sourceId: string): SourceR
 }
 
 /**
- * Which of the pack's items the records say this source stands behind: extraction, mention,
- * participation, whichever role the writers recorded. It is a relationship the substrate can
- * prove, and it is not evidence that the prose answered anything.
+ * The roles that make a source stand behind a node.
+ *
+ * Membership is not one of them. `source_coverage` says a chunk's window included this source,
+ * which is a fact about the chunk's boundaries and no evidence at all that the source produced
+ * what the pack emitted. Crediting it would make every source in a hundred-source window a hit
+ * for anything that window ever summarised.
+ */
+const RELATED_ROLES: readonly string[] = OWNERSHIP_SCOPES.map((scope) => scope.role);
+
+/**
+ * Which of the pack's items the records say this source stands behind: extraction, mention or
+ * participation, whichever the writers recorded, plus any published revision that actually
+ * cites the source. It is a relationship the substrate can prove, and it is not evidence that
+ * the prose answered anything.
+ *
+ * The two halves are independent on purpose. A published overview citing this source earns the
+ * credit whether or not the source is inside its coverage window, and being inside the window
+ * earns nothing on its own.
  */
 export function relatedIncidenceNodes(
   db: SqliteHandle,
   sourceId: string,
   candidateIds: readonly string[],
+  at?: Date,
 ): readonly string[] {
   const unique = [...new Set(candidateIds)];
   if (unique.length === 0) {
     return [];
   }
   const placeholders = unique.map(() => '?').join(', ');
+  const roles = RELATED_ROLES.map(() => '?').join(', ');
   const rows = db
     .prepare(
       `SELECT DISTINCT s.node_id
        FROM source_incidence s
        JOIN evidence_link_versions v ON v.link_id = s.link_id AND v.version = s.link_version
        JOIN publication_intents i ON i.operation_id = v.operation_id AND i.state = 'acknowledged'
-       WHERE s.source_id = ? AND s.node_id IN (${placeholders})
-       ORDER BY s.node_id`,
+       WHERE s.source_id = ? AND s.role IN (${roles}) AND s.node_id IN (${placeholders})`,
     )
-    .all(sourceId, ...unique) as { node_id: string }[];
-  return rows.map((row) => row.node_id);
+    .all(sourceId, ...RELATED_ROLES, ...unique) as { node_id: string }[];
+  const related = new Set(rows.map((row) => row.node_id));
+  const candidates = new Set(unique);
+  for (const cited of readCitationsOf(db, sourceId, at)) {
+    if (candidates.has(cited.narrativeNodeId)) {
+      related.add(cited.narrativeNodeId);
+    }
+  }
+  return [...related].sort((left, right) => left.localeCompare(right));
 }
 
 export type ServedReferenceOutcome =
