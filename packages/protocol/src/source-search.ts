@@ -114,12 +114,20 @@ export const SourceSearchOutputSchema = z.strictObject({
 
 export type SourceSearchOutput = z.infer<typeof SourceSearchOutputSchema>;
 
+/**
+ * `text_start` and `text_end` are UTF-16 offsets into the part. A part larger than one response
+ * arrives over several pages, and these are what join them back together; `part_complete` says
+ * whether this page carried the end of it.
+ */
 export const InspectedPartSchema = z.strictObject({
   part_kind: SourcePartKindSchema,
   ordinal: z.number().int().nonnegative(),
   turn_id: z.string().optional(),
   role: z.string().optional(),
   text: z.string(),
+  text_start: z.number().int().nonnegative(),
+  text_end: z.number().int().nonnegative(),
+  part_complete: z.boolean(),
   occurred_at: z.string().optional(),
   part_clock: z.enum(['recorded', 'not_recorded']),
 });

@@ -43,7 +43,12 @@ export type InspectedPart = {
   readonly ordinal: number;
   readonly turnId?: string;
   readonly role?: string;
+  /** This page's slice of the part, which is the whole part when `partComplete` says so. */
   readonly text: string;
+  /** UTF-16 offsets into the part, so a caller can join two pages back together exactly. */
+  readonly textStart: number;
+  readonly textEnd: number;
+  readonly partComplete: boolean;
   readonly occurredAt?: string;
   readonly partClock: 'recorded' | 'not_recorded';
 };
@@ -95,57 +100,132 @@ function addressOf(request: SourceInspectRequest): EvidenceAddress {
   return idAddress(request.id);
 }
 
-function inspected(part: SourcePartEvidence): InspectedPart {
+function inspected(part: SourcePartEvidence, slice: PartSlice): InspectedPart {
   return {
     partKind: part.partKind,
     ordinal: part.ordinal,
     ...(part.turnId === undefined ? {} : { turnId: part.turnId }),
     ...(part.role === undefined ? {} : { role: part.role }),
-    text: part.text,
+    text: slice.text,
+    textStart: slice.start,
+    textEnd: slice.end,
+    /** False while the part continues past this page, so no caller reads a slice as the whole. */
+    partComplete: slice.end >= part.text.length,
     ...(part.occurredAt === undefined ? {} : { occurredAt: part.occurredAt }),
     partClock: part.occurredAt === undefined ? 'not_recorded' : 'recorded',
   };
 }
 
-/** Where the previous page stopped, as the index into the source's own ordered part list. */
-function cursorOffset(cursor: string | undefined): number {
-  if (cursor === undefined) {
-    return 0;
-  }
-  const parsed = Number(cursor);
-  if (!Number.isInteger(parsed) || parsed < 0) {
-    throw new SourceQueryError('cursor', 'the continuation is not one this substrate issued');
-  }
-  return parsed;
-}
+/** Where a page stopped: which part, and how far into that part's own text. */
+type InspectCursor = {
+  readonly index: number;
+  readonly offset: number;
+};
 
 /**
- * The page this offset reaches, cut on whichever bound arrives first: the caller's part count
- * or the response budget. A single part larger than the whole budget is still returned, because
- * a page that dropped it would report the source as ending before it does.
+ * The position a continuation names. A bare number is the part index a page ended before; the
+ * dotted form adds the UTF-16 offset inside that part, which is what makes a part larger than
+ * one response resumable rather than truncated.
+ */
+function cursorPosition(cursor: string | undefined): InspectCursor {
+  if (cursor === undefined) {
+    return { index: 0, offset: 0 };
+  }
+  const [head, tail] = cursor.split('.');
+  const index = Number(head);
+  const offset = tail === undefined ? 0 : Number(tail);
+  if (!Number.isInteger(index) || index < 0 || !Number.isInteger(offset) || offset < 0) {
+    throw new SourceQueryError('cursor', 'the continuation is not one this substrate issued');
+  }
+  return { index, offset };
+}
+
+function encodeCursor(position: InspectCursor): string {
+  return `${String(position.index)}.${String(position.offset)}`;
+}
+
+type PartSlice = {
+  readonly text: string;
+  /** UTF-16 offsets into the part, so successive pages join back exactly where they split. */
+  readonly start: number;
+  readonly end: number;
+  readonly bytes: number;
+};
+
+/**
+ * The longest run of one part's text from `from` that fits in `maxBytes` of UTF-8, cut between
+ * code points. A surrogate pair split across two pages would hand each of them half a character
+ * and make the two pages fail to reassemble into the part.
+ */
+function sliceWithinBytes(text: string, from: number, maxBytes: number): PartSlice {
+  const rest = text.length - from;
+  if (rest <= 0 || maxBytes <= 0) {
+    return { text: '', start: from, end: from, bytes: 0 };
+  }
+  let low = 0;
+  let high = rest;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (Buffer.byteLength(text.slice(from, from + mid), 'utf8') <= maxBytes) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+  let take = low;
+  const last = text.charCodeAt(from + take - 1);
+  if (take > 0 && take < rest && last >= 0xd800 && last <= 0xdbff) {
+    take -= 1;
+  }
+  const slice = text.slice(from, from + take);
+  return { text: slice, start: from, end: from + take, bytes: Buffer.byteLength(slice, 'utf8') };
+}
+
+type InspectPage = {
+  readonly page: readonly InspectedPart[];
+  readonly next: InspectCursor | undefined;
+};
+
+/**
+ * The page this position reaches, cut on whichever bound arrives first: the caller's part count
+ * or the response budget.
+ *
+ * No part is exempt from the budget. A part larger than one response is served in slices and
+ * the continuation says where the next one starts, because the alternative — handing back a
+ * part that overran the bound, or clipping it silently — is a page that either breaks its own
+ * contract or reports the part as shorter than it is.
  */
 function pageFrom(
   parts: readonly SourcePartEvidence[],
-  offset: number,
+  from: InspectCursor,
   limit: number,
-): { readonly page: readonly SourcePartEvidence[]; readonly next: number | undefined } {
-  const page: SourcePartEvidence[] = [];
+): InspectPage {
+  const page: InspectedPart[] = [];
   let bytes = 0;
-  let index = offset;
+  let { index, offset } = from;
   while (index < parts.length && page.length < limit) {
     const part = parts[index];
     if (part === undefined) {
       break;
     }
-    const size = Buffer.byteLength(part.text, 'utf8');
-    if (page.length > 0 && bytes + size > SOURCE_SEARCH_LIMITS.maxResponseTextBytes) {
+    const remaining = SOURCE_SEARCH_LIMITS.maxResponseTextBytes - bytes;
+    const slice = sliceWithinBytes(part.text, offset, remaining);
+    // An empty part is a real part and ends here; an empty slice of a non-empty part means the
+    // budget is spent, and the page stops rather than emitting a zero-length reading of it.
+    if (slice.text.length === 0 && part.text.length > offset) {
       break;
     }
-    page.push(part);
-    bytes += size;
+    page.push(inspected(part, slice));
+    bytes += slice.bytes;
+    if (slice.end < part.text.length) {
+      offset = slice.end;
+      break;
+    }
     index += 1;
+    offset = 0;
   }
-  return { page, next: index < parts.length ? index : undefined };
+  const done = index >= parts.length;
+  return { page, next: done ? undefined : { index, offset } };
 }
 
 function reasonsOf(result: EvidenceResult<SourceEvidence>): readonly EvidenceIssue[] {
@@ -157,11 +237,11 @@ export async function runSourceInspection(
   request: SourceInspectRequest,
 ): Promise<SourceInspectOutcome> {
   let address: EvidenceAddress;
-  let offset: number;
+  let position: InspectCursor;
   let limit: number;
   try {
     address = addressOf(request);
-    offset = cursorOffset(request.cursor);
+    position = cursorPosition(request.cursor);
     limit = requestedLimit(request.limit);
   } catch (err) {
     if (err instanceof SourceQueryError) {
@@ -214,7 +294,7 @@ export async function runSourceInspection(
       coverage,
     };
   }
-  const { page, next } = pageFrom(result.value.parts, offset, limit);
+  const { page, next } = pageFrom(result.value.parts, position, limit);
   return {
     status: 'source',
     sourceId: result.value.sourceId,
@@ -222,8 +302,8 @@ export async function runSourceInspection(
     occurredAt: result.value.occurredAt,
     residency: result.residency,
     evidence: result.evidence.status,
-    parts: page.map(inspected),
-    ...(next === undefined ? {} : { continuation: String(next) }),
+    parts: page,
+    ...(next === undefined ? {} : { continuation: encodeCursor(next) }),
     coverage,
   };
 }

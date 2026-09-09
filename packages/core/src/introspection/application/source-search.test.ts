@@ -306,6 +306,54 @@ describe('archive search and inspection', () => {
       expect(second.continuation).toBeUndefined();
     });
 
+    it('pages a part larger than one response and rejoins it exactly', async () => {
+      // Four characters per repeat, so the part is well past the 64 KiB response budget and the
+      // multi-byte characters make a naive byte cut land mid-sequence.
+      const long = 'aé😀b'.repeat(20_000);
+      seedSource(store.db, {
+        sourceId: 'episode-long',
+        sessionId: 'session-1',
+        identity: 'agent-1',
+        content: { summary: 'long', turns: [{ role: 'user', text: long }] },
+        turnIds: ['turn-long'],
+        now: NOW,
+      });
+
+      // `user: ` is the captured role prefix the reconstruction puts in front of a turn.
+      const captured = `user: ${long}`;
+      let cursor: string | undefined;
+      let rejoined = '';
+      let pages = 0;
+      for (; pages < 20; pages += 1) {
+        const outcome = await runSourceInspection(deps, {
+          id: 'episode-long',
+          ...(cursor === undefined ? {} : { cursor }),
+        });
+        if (outcome.status !== 'source') {
+          throw new Error('every page of a verified source answers');
+        }
+        const bytes = outcome.parts.reduce(
+          (total, part) => total + Buffer.byteLength(part.text, 'utf8'),
+          0,
+        );
+        expect(bytes).toBeLessThanOrEqual(SOURCE_SEARCH_LIMITS.maxResponseTextBytes);
+        for (const part of outcome.parts) {
+          // The offsets are the part's own, so the slice they name is the text that came back.
+          expect(part.text).toBe(captured.slice(part.textStart, part.textEnd));
+          expect(part.textStart).toBe(rejoined.length);
+          rejoined += part.text;
+        }
+        cursor = outcome.continuation;
+        if (cursor === undefined) {
+          break;
+        }
+      }
+
+      expect(pages).toBeGreaterThan(0);
+      expect(cursor).toBeUndefined();
+      expect(rejoined).toBe(captured);
+    });
+
     it('resolves an original turn id to the part that holds it', async () => {
       const outcome = await runSourceInspection(deps, { id: 'turn-b' });
       if (outcome.status !== 'source') {

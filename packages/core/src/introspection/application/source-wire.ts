@@ -122,6 +122,9 @@ export function sourceOutputFor(outcome: SourceInspectOutcome): SourceOutput {
           ...(part.turnId === undefined ? {} : { turn_id: part.turnId }),
           ...(part.role === undefined ? {} : { role: part.role }),
           text: part.text,
+          text_start: part.textStart,
+          text_end: part.textEnd,
+          part_complete: part.partComplete,
           ...(part.occurredAt === undefined ? {} : { occurred_at: part.occurredAt }),
           part_clock: part.partClock,
         })),
@@ -197,11 +200,15 @@ export function sourceText(output: SourceOutput): string {
       const head =
         `${output.source_id ?? ''} (${output.residency ?? ''}, ${output.evidence ?? ''})` +
         ` ${output.occurred_at ?? ''}`;
-      const parts = (output.parts ?? []).map(
-        (part) =>
-          `  ${part.part_kind}:${String(part.ordinal)}` +
-          `${part.role === undefined ? '' : ` [${part.role}]`}\n    ${part.text}`,
-      );
+      const parts = (output.parts ?? []).map((part) => {
+        const role = part.role === undefined ? '' : ` [${part.role}]`;
+        // A slice says so in the rendered block too. Without it a paged part reads as the
+        // whole of what the source holds, which is exactly what the offsets exist to prevent.
+        const span = part.part_complete
+          ? ''
+          : ` [chars ${String(part.text_start)}-${String(part.text_end)}, continues]`;
+        return `  ${part.part_kind}:${String(part.ordinal)}${role}${span}\n    ${part.text}`;
+      });
       const more =
         output.continuation === undefined
           ? ''
