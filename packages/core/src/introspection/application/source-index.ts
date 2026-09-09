@@ -23,6 +23,7 @@ import {
   LIVE_INDEX_STREAM,
   readIndexProgress,
   recordIndexProgress,
+  searchIndexPin,
   writeSearchDocument,
 } from '../../infrastructure/sqlite/source-search-store.js';
 import { checkCoverage } from '../../recall/application/coverage-checker.js';
@@ -100,16 +101,29 @@ function bodyDigest(body: string): string {
   return createHash('sha256').update(body).digest('hex');
 }
 
-/** The part this stream stopped after, as an index into the source's own ordered part list. */
-function resumeAt(cursor: string | undefined, sourceId: string): number {
-  if (!cursor?.startsWith(`${sourceId}:`)) {
-    return 0;
-  }
-  const parsed = Number(cursor.slice(sourceId.length + 1));
+/**
+ * Where this source's own resume position lives.
+ *
+ * Per source, not per stream. One shared cursor is a cursor every job overwrites: indexing a
+ * long source, running a short one, and coming back to the first would restart the first from
+ * wherever the second happened to stop. The stream name stays in the key so the live pass and
+ * the cohort migration keep their own positions for the same source.
+ */
+function sourceStream(stream: string, sourceId: string): string {
+  return `${stream}:${sourceId}`;
+}
+
+/** The part this source's stream stopped after, as an index into its own ordered part list. */
+function resumeAt(cursor: string | undefined): number {
+  const parsed = Number(cursor ?? '');
   return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
 }
 
-/** Every owed acknowledgment for this source, discharged once the whole source is indexed. */
+/**
+ * Every owed acknowledgment for this source, discharged once the projection itself says the
+ * source is covered. The pin is the proof, read back from the documents that were written: an
+ * effect marked complete on anything less is a substrate claiming work it has not done.
+ */
 function settleObligation(deps: SourceIndexDeps, sourceId: string, at: Date): void {
   for (const acknowledgment of listEvidenceAcknowledgments(deps.db, sourceId)) {
     if (acknowledgment.effectKind !== SOURCE_INDEX_EFFECT || acknowledgment.state === 'completed') {
@@ -206,19 +220,27 @@ export async function runSourceIndexJob(
     'search_indexing',
   );
   const result = [...batch.results.values()][0];
-  if (result?.value === undefined) {
+  // A value is not proof. A reading that could not establish what this request required is a
+  // reading nothing may be indexed from and no obligation may be settled on, however much
+  // text came back with it.
+  if (result?.value === undefined || result.evidence.status !== 'complete-for-use') {
     return { status: 'unresolved', reasons: batch.issues };
   }
 
   const parts = [...result.value.parts].sort(
     (left, right) => left.partKind.localeCompare(right.partKind) || left.ordinal - right.ordinal,
   );
-  const from = resumeAt(readIndexProgress(deps.db, stream)?.cursor, request.sourceId);
+  const cursorStream = sourceStream(stream, request.sourceId);
+  const from = resumeAt(readIndexProgress(deps.db, cursorStream)?.cursor);
   const { tally, stoppedAt } = indexBatch(deps, request.sourceId, parts, from);
-  const complete = stoppedAt >= parts.length;
+  const walked = stoppedAt >= parts.length;
+  // Walking every part is not the same as covering every part. The pin reads the documents
+  // back and says whether each recorded part now has a current one, which is what a settled
+  // obligation has to rest on.
+  const complete = walked && !searchIndexPin(deps.db, request.sourceId).pinned;
   recordIndexProgress(deps.db, {
-    stream,
-    cursor: complete ? '' : `${request.sourceId}:${String(stoppedAt)}`,
+    stream: cursorStream,
+    cursor: walked ? '' : String(stoppedAt),
     state: complete ? 'idle' : 'running',
   });
   if (complete) {
