@@ -365,6 +365,42 @@ export function recordEvidenceAcknowledgment(db: SqliteHandle, input: Acknowledg
   );
 }
 
+/**
+ * The oldest still-owed acknowledgments of one effect kind, across every source, bounded.
+ *
+ * An obligation nobody reads is an obligation nobody discharges. This is the read a completion
+ * owner takes to find the work it exists to finish, ordered so a run always starts at the oldest
+ * and a backlog drains rather than starving its own tail.
+ */
+export function listOwedEvidenceAcknowledgments(
+  db: SqliteHandle,
+  effectKind: string,
+  limit: number,
+): readonly EvidenceAcknowledgment[] {
+  const rows = db
+    .prepare(
+      `SELECT source_id, reference_version, effect_kind, state, completed_at
+       FROM evidence_acknowledgments
+       WHERE effect_kind = ? AND state = 'owed'
+       ORDER BY source_id, reference_version
+       LIMIT ?`,
+    )
+    .all(effectKind, limit) as {
+    source_id: string;
+    reference_version: number;
+    effect_kind: string;
+    state: string;
+    completed_at: string | null;
+  }[];
+  return rows.map((row) => ({
+    sourceId: row.source_id,
+    referenceVersion: row.reference_version,
+    effectKind: row.effect_kind,
+    state: row.state,
+    completedAt: row.completed_at,
+  }));
+}
+
 export function listEvidenceAcknowledgments(
   db: SqliteHandle,
   sourceId: string,

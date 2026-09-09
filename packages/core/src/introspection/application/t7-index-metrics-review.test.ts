@@ -33,9 +33,12 @@ import {
 } from '../../infrastructure/sqlite/probe-incidence.js';
 import {
   activateProcessingGeneration,
-  listOutstandingWork,
+  allocateProcessingGeneration,
   completeSourceWork,
+  prepareInventorySkeleton,
+  stageWorkId,
 } from '../../infrastructure/sqlite/processing-generations.js';
+import { publishReadinessPolicy } from '../../infrastructure/sqlite/readiness-policies.js';
 import { recallProbeReadingV2 } from '../../infrastructure/sqlite/recall-probe-counters.js';
 import {
   listEvidenceAcknowledgments,
@@ -211,15 +214,33 @@ it('does not settle indexing from a resolver result that lacks required proof', 
 });
 
 it('counts an archive-read failure as unavailable rather than a source with no words', async () => {
-  activateProcessingGeneration(store.db, 'source', 1);
-  for (const work of listOutstandingWork(store.db, NOW, 100)) {
-    completeSourceWork(
-      store.db,
-      work.workId,
-      { outcome: 'complete', reason: 'fixture readiness' },
-      NOW,
-    );
-  }
+  // A finished pass under a published contract, which is what makes this source one the probe
+  // may judge at all. Stage rows that exist are not the test: an inventory nobody wrote reads as
+  // a pass nobody ran, and the source would be skipped before the archive is ever opened.
+  const policy = publishReadinessPolicy(
+    store.db,
+    { pipelineVersion: 'fixture', stageNames: ['entities'], transferCapabilities: [] },
+    START,
+  );
+  const generation = allocateProcessingGeneration(store.db, {
+    sourceId: 'source',
+    policyRevision: policy,
+    inputDigest: 'fixture-input',
+    createdAt: START,
+  });
+  prepareInventorySkeleton(store.db, {
+    sourceId: 'source',
+    processingGeneration: generation,
+    stageNames: ['entities'],
+    dueAt: START,
+  });
+  activateProcessingGeneration(store.db, 'source', generation);
+  completeSourceWork(
+    store.db,
+    stageWorkId('source', generation, 'entities'),
+    { outcome: 'complete', reason: 'fixture readiness' },
+    NOW,
+  );
   const recallProbe = vi.fn(async () => {
     throw new Error('an unavailable source cannot be queried');
   });

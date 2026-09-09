@@ -407,10 +407,11 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
         // from the same deps the tool call takes and stripped to a read that writes nothing;
         // `recall-probe.ts` states what it leaves out and why.
         recallProbe: probeRecall(recall),
-        // One coordinator under two names: the position an uncertain apply reconciles against,
-        // and the guard a suppression is decided and written under or declined.
+        // One coordinator under three names: an uncertain apply reconciles against it, and a
+        // suppression and an owed confirmation signal are each settled under it.
         publications,
         topology: publications,
+        references: publications,
         // The same seam the pipeline judges through: one reading of the records, not two.
         evidence: judgmentEvidence,
         operations: maintenanceOperations,

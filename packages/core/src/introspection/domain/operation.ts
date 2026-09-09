@@ -10,6 +10,7 @@ import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import type { ReflectionIntakeDeps } from '../../reflection/application/intake.js';
+import type { ReferencePublisher } from '../application/operations/confirmation-signal-completion.js';
 import type { TopologyPublisher } from '../application/operations/orphan-suppression.js';
 
 /**
@@ -88,6 +89,12 @@ export type OperationContext = {
    * one declines rather than writing a permanent decision outside the guard that fences it.
    */
   readonly topology?: TopologyPublisher;
+  /**
+   * Where a repair that finishes an owed confirmation signal publishes. Absent wherever the loop
+   * was constructed without it, which the operation reads as no guard to settle under and
+   * declines the run over.
+   */
+  readonly references?: ReferencePublisher;
   /** The same reading the decision was made from. An operation must not observe again. */
   readonly health: HealthSnapshot;
   readonly now: Date;

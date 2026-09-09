@@ -3,6 +3,7 @@ import { backboneRepairOperation } from './operations/backbone-repair.js';
 import { claimConsolidationOperation } from './operations/claim-consolidation.js';
 import { claimDedupOperation } from './operations/claim-dedup.js';
 import { communityRefreshOperation } from './operations/community-refresh.js';
+import { confirmationSignalCompletionOperation } from './operations/confirmation-signal-completion.js';
 import { curiosityOperation } from './operations/curiosity.js';
 import { deadLetterOperation } from './operations/dead-letter.js';
 import { descriptionFreshnessOperation } from './operations/description-freshness-operation.js';
@@ -145,5 +146,11 @@ export function introspectionOperations(): readonly IntrospectionOperation[] {
     // are ledgered and both are reversed with `aion proposals reopen`.
     proposalResolutionOperation(),
     proposalHygieneOperation(),
+
+    // The confirmation signal's own two-store seam: a caller confirmed a memory the substrate
+    // had not taken, the statement was accepted against the identity it named, and the event it
+    // owes waits on that id becoming something the substrate can name. The acceptance is long
+    // acknowledged and its acknowledgment may not ask the graph, so this is what asks.
+    confirmationSignalCompletionOperation(),
   ];
 }

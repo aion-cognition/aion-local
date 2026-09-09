@@ -288,7 +288,14 @@ describe('a confirmation whose target the substrate cannot name yet', () => {
     expect(signalStates(lateSourceId)).toEqual(['owed']);
   });
 
-  it('writes it once the records name the target, under the moment it was stated', async () => {
+  /**
+   * One of the two ways an owed signal is discharged, and the narrower one: this source states
+   * something else and the settlement that acknowledgment runs sweeps what it already owed. It
+   * proves the sweep is over the source's whole confirmation set rather than the batch being
+   * acknowledged. It does not prove passive completion, because the caller had to come back; the
+   * repair that finishes an owed signal with no further traffic is its own battery.
+   */
+  it('settles an earlier owed signal when the same source states something else later', async () => {
     // The occurrence arrives late, which is the ordinary out-of-order case: the caller confirmed
     // a memory it had been served before this substrate accepted it.
     recordSourceRecord(db, {

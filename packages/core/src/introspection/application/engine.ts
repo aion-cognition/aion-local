@@ -7,6 +7,7 @@ import {
   resolvePendingMeasures,
   type ResolvedRun,
 } from './operation-scoring.js';
+import type { ReferencePublisher } from './operations/confirmation-signal-completion.js';
 import type { TopologyPublisher } from './operations/orphan-suppression.js';
 import { consultTier3 } from './tier3-consult.js';
 import type { JudgmentEvidence } from '../../evidence/application/judgment.js';
@@ -83,6 +84,7 @@ export type IntrospectorDeps = {
   readonly publications?: MergePublisher;
   /** The coordinator a suppression publishes under. Absent, the operation declines the write. */
   readonly topology?: TopologyPublisher;
+  readonly references?: ReferencePublisher;
   /**
    * The registered catalog, in order. Order decides nothing on its own: selection is by tier
    * and urgency, and ties break on waiting time and then on name.
@@ -415,6 +417,7 @@ export class Introspector {
         ...(this.#deps.evidence === undefined ? {} : { evidence: this.#deps.evidence }),
         ...(this.#deps.publications === undefined ? {} : { publications: this.#deps.publications }),
         ...(this.#deps.topology === undefined ? {} : { topology: this.#deps.topology }),
+        ...(this.#deps.references === undefined ? {} : { references: this.#deps.references }),
         health,
         now,
         signal: this.#abort.signal,

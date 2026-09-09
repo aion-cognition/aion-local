@@ -13,6 +13,9 @@ const UNMEASURED_OPERATIONS = [
   'claim_consolidation',
   'claim_dedup',
   'community_refresh',
+  // No snapshot counts an owed confirmation signal, and counting them would cost the same read
+  // the repair itself takes.
+  'confirmation_signal_completion',
   'curiosity',
   'description_freshness',
   'intention_upkeep',

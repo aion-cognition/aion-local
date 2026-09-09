@@ -5,7 +5,10 @@ import {
   type StatedLinkRow,
 } from '../../infrastructure/sqlite/evidence-links.js';
 import { classifyReferenceTarget } from '../../infrastructure/sqlite/reference-targets.js';
-import { recordEvidenceAcknowledgment } from '../../infrastructure/sqlite/source-lifecycle.js';
+import {
+  listOwedEvidenceAcknowledgments,
+  recordEvidenceAcknowledgment,
+} from '../../infrastructure/sqlite/source-lifecycle.js';
 import { appendMemoryConfirmedEvent } from '../../infrastructure/sqlite/usage-events.js';
 import { hashContent } from '../domain/content.js';
 
@@ -46,6 +49,8 @@ type StatedConfirmation = {
   readonly evidence: string;
   /** The clock the first accepted version recorded, which is the statement's own moment. */
   readonly occurredAt: string;
+  /** Present only where the caller stated a moment of its own. */
+  readonly statedOccurredAt?: string;
   /** The batch that first accepted it, which is what the signal obligation hangs on. */
   readonly referenceVersion: number;
   /** Whether anything accounts for the target's identity. */
@@ -82,7 +87,8 @@ function statedConfirmations(db: SqliteHandle, sourceId: string): readonly State
   }
   const confirmations: StatedConfirmation[] = [];
   for (const [targetId, entry] of byTarget) {
-    const { by, evidence, occurredAt } = readStatedLinkValues(db, entry.first.linkId) ?? {};
+    const values = readStatedLinkValues(db, entry.first.linkId) ?? {};
+    const { by, evidence, occurredAt, statedOccurredAt } = values;
     if (typeof by !== 'string' || typeof evidence !== 'string' || typeof occurredAt !== 'string') {
       continue;
     }
@@ -91,6 +97,7 @@ function statedConfirmations(db: SqliteHandle, sourceId: string): readonly State
       by,
       evidence,
       occurredAt,
+      ...(typeof statedOccurredAt === 'string' ? { statedOccurredAt } : {}),
       referenceVersion: entry.first.referenceVersion ?? 0,
       resolved:
         entry.classified ||
@@ -160,6 +167,52 @@ export function settleConfirmationSignals(
         : { state: 'owed' as const }),
     });
   }
+}
+
+/** One owed key and the statements it is still waiting on, for the owner that finishes them. */
+export type OwedConfirmationSignal = {
+  readonly sourceId: string;
+  readonly referenceVersion: number;
+  readonly pending: readonly {
+    readonly targetId: string;
+    readonly by: string;
+    readonly evidence: string;
+    /** Present only where the caller stated a moment, so a repair never invents a claim. */
+    readonly statedOccurredAt?: string;
+  }[];
+};
+
+/**
+ * The confirmation signals the records still owe, oldest first and bounded.
+ *
+ * This is what makes the obligation more than a row nobody reads: a completion owner takes this,
+ * asks the graph about the ids under its own guard, and publishes the answer. A key whose
+ * statements have all resolved is returned with an empty `pending` list, because the settle it
+ * never received is the only thing left between it and completion.
+ */
+export function owedConfirmationSignals(
+  db: SqliteHandle,
+  limit: number,
+): readonly OwedConfirmationSignal[] {
+  const owed: OwedConfirmationSignal[] = [];
+  for (const row of listOwedEvidenceAcknowledgments(db, CONFIRMATION_SIGNAL_EFFECT, limit)) {
+    const covered = coveredByKey(db, row.sourceId).get(row.referenceVersion) ?? [];
+    owed.push({
+      sourceId: row.sourceId,
+      referenceVersion: row.referenceVersion,
+      pending: covered
+        .filter((confirmation) => !confirmation.resolved)
+        .map((confirmation) => ({
+          targetId: confirmation.targetId,
+          by: confirmation.by,
+          evidence: confirmation.evidence,
+          ...(confirmation.statedOccurredAt === undefined
+            ? {}
+            : { statedOccurredAt: confirmation.statedOccurredAt }),
+        })),
+    });
+  }
+  return owed;
 }
 
 /**
