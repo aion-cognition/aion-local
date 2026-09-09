@@ -164,7 +164,14 @@ function ensureLiveStream(db: SqliteHandle): void {
   ).run(LIVE_INDEX_STREAM, INDEX_POLICY_VERSION);
 }
 
-export type DocumentWrite = 'appended' | 'replaced' | 'unchanged';
+export type DocumentWrite = 'appended' | 'replaced' | 'repaired' | 'unchanged';
+
+/** The searchable text stored for one document, or nothing when its row is gone. */
+function searchableBody(db: SqliteHandle, id: number): string | undefined {
+  const row = db.prepare(`SELECT body FROM ${SOURCE_SEARCH_FTS_TABLE} WHERE rowid = ?`).get(id) as
+    { body: string } | undefined;
+  return row?.body;
+}
 
 /** Whether the stored document still says what this reading of the part says, in every field. */
 function describesPart(stored: SearchDocument, input: SearchDocumentInput): boolean {
@@ -179,11 +186,23 @@ function describesPart(stored: SearchDocument, input: SearchDocumentInput): bool
 /**
  * One document written, with its body and its metadata in one transaction.
  *
- * A document that already exists and whose digest and policy still describe the part is left
- * exactly as it is, which is what makes a retry idempotent. A document that has to change is
- * replaced and the projection's generation is incremented in the same transaction, because a
- * reader paginating over the old body would otherwise assemble one page out of two corpora.
- * An appended document never bumps it: it sits above every outstanding reader's watermark.
+ * Unchanged means unchanged in both halves. Matching metadata is not coverage: the searchable
+ * row is what a query actually reads, so a document whose metadata still describes the part but
+ * whose row is missing or holds different text is repaired here, from the verified text this
+ * caller brought with it. That is the only place a repair may happen — a search or an inspection
+ * read reports what it finds and changes nothing.
+ *
+ * A document that has to change is replaced and the projection's generation is incremented in
+ * the same transaction, because a reader paginating over the old body would otherwise assemble
+ * one page out of two corpora. A repair moves the same number for the same reason: what a query
+ * can find just changed. A document already correct in both halves moves nothing, which is what
+ * makes rerunning a finished job free rather than a way to invalidate every open cursor. An
+ * appended document never bumps it either: it sits above every outstanding reader's watermark.
+ *
+ * The trust boundary is C1's recorded part hash plus this writer's own verified text. The store
+ * compares what it can prove from those two and nothing wider: it does not re-hash the corpus on
+ * a read, and it does not defend against metadata forged to look like its own. Repair restores
+ * what this caller verified; it does not adjudicate between two competing claims about a part.
  *
  * A part longer than the index cap arrives here already cut; the caller owns the cut because
  * only the caller knows the whole part it came from.
@@ -193,7 +212,19 @@ export function writeSearchDocument(db: SqliteHandle, input: SearchDocumentInput
     .transaction((): DocumentWrite => {
       const existing = readSearchDocument(db, input.sourceId, input.partKind, input.partOrdinal);
       if (existing !== undefined && describesPart(existing, input)) {
-        return 'unchanged';
+        if (searchableBody(db, existing.id) === input.body) {
+          return 'unchanged';
+        }
+        ensureLiveStream(db);
+        db.prepare(`DELETE FROM ${SOURCE_SEARCH_FTS_TABLE} WHERE rowid = ?`).run(existing.id);
+        db.prepare(`INSERT INTO ${SOURCE_SEARCH_FTS_TABLE} (rowid, body) VALUES (?, ?)`).run(
+          existing.id,
+          input.body,
+        );
+        db.prepare(
+          'UPDATE source_search_progress SET generation = generation + 1 WHERE stream = ?',
+        ).run(LIVE_INDEX_STREAM);
+        return 'repaired';
       }
       ensureLiveStream(db);
       if (existing !== undefined) {

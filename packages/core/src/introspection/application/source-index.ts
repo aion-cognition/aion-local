@@ -60,6 +60,11 @@ export type SourceIndexOutcome =
       readonly status: 'indexed';
       readonly documents: number;
       readonly replaced: number;
+      /**
+       * Searchable rows restored from this run's own verified text. Optional on the outcome so
+       * a caller that only reports counts keeps compiling; this handler always sets it.
+       */
+      readonly repaired?: number;
       readonly truncated: number;
       readonly indexedBytes: number;
       /** Whether every recorded part now has a current document. */
@@ -165,6 +170,8 @@ function settleObligation(deps: SourceIndexDeps, sourceId: string, at: Date): vo
 type BatchTally = {
   documents: number;
   replaced: number;
+  /** Documents whose metadata stood while their searchable row had to be written again. */
+  repaired: number;
   truncated: number;
   indexedBytes: number;
 };
@@ -183,7 +190,13 @@ function indexBatch(
   parts: readonly SourcePartEvidence[],
   from: number,
 ): { readonly tally: BatchTally; readonly stoppedAt: number } {
-  const tally: BatchTally = { documents: 0, replaced: 0, truncated: 0, indexedBytes: 0 };
+  const tally: BatchTally = {
+    documents: 0,
+    replaced: 0,
+    repaired: 0,
+    truncated: 0,
+    indexedBytes: 0,
+  };
   const hashes = recordedHashes(deps.db, sourceId);
   let index = from;
   while (index < parts.length && tally.documents < INDEX_BATCH_PARTS) {
@@ -215,6 +228,9 @@ function indexBatch(
     tally.indexedBytes += prefix.bytes;
     if (write === 'replaced') {
       tally.replaced += 1;
+    }
+    if (write === 'repaired') {
+      tally.repaired += 1;
     }
     if (prefix.truncated) {
       tally.truncated += 1;

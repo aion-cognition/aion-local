@@ -105,6 +105,48 @@ describe('search projection store', () => {
     expect(current.map((row) => row.partOrdinal)).toEqual([0]);
   });
 
+  it('repairs a searchable row the metadata still describes, once', () => {
+    expect(writeSearchDocument(store.db, document())).toBe('appended');
+    expect(searchGeneration(store.db)).toBe(1);
+    store.db.prepare('DELETE FROM source_search_fts WHERE rowid = 1').run();
+
+    // Matching metadata is not coverage. The row a query reads is gone, so the writer puts back
+    // the text it verified and invalidates the cursors that could have been reading the old one.
+    expect(writeSearchDocument(store.db, document())).toBe('repaired');
+    expect(searchGeneration(store.db)).toBe(2);
+    const restored = nominateDocuments(store.db, {
+      matchExpression: '"qualifier"',
+      afterId: 0,
+      upperBound: documentHighWater(store.db),
+      limit: 10,
+    });
+    expect(restored.map((row) => row.id)).toEqual([1]);
+
+    // The control the recovery has to satisfy: a rerun over a projection that is already
+    // correct changes nothing and moves no generation, so recovering is not a way to invalidate
+    // every open cursor on every pass.
+    expect(writeSearchDocument(store.db, document())).toBe('unchanged');
+    expect(writeSearchDocument(store.db, document())).toBe('unchanged');
+    expect(searchGeneration(store.db)).toBe(2);
+  });
+
+  it('repairs a searchable row whose text no longer matches the verified body', () => {
+    writeSearchDocument(store.db, document());
+    store.db.prepare('DELETE FROM source_search_fts WHERE rowid = 1').run();
+    store.db
+      .prepare('INSERT INTO source_search_fts (rowid, body) VALUES (1, ?)')
+      .run('something else entirely');
+
+    expect(writeSearchDocument(store.db, document())).toBe('repaired');
+    const found = nominateDocuments(store.db, {
+      matchExpression: '"qualifier"',
+      afterId: 0,
+      upperBound: documentHighWater(store.db),
+      limit: 10,
+    });
+    expect(found.map((row) => row.id)).toEqual([1]);
+  });
+
   it('nominates in document order, bounded above and below', () => {
     writeSearchDocument(store.db, document({ partOrdinal: 0, body: 'alpha shared' }));
     writeSearchDocument(store.db, document({ partOrdinal: 1, body: 'beta shared' }));
