@@ -1,0 +1,241 @@
+import { z } from 'zod';
+
+import { recordStageSettlements } from './stage-settlement.js';
+import { PublicationOperation } from '../../infrastructure/publication/operation.js';
+import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
+import type { JsonValue, PublicationContext } from '../../infrastructure/publication/types.js';
+import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
+import { getExperienceByEpisode } from '../../infrastructure/sqlite/experience-archive.js';
+import { markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
+import { readActiveGeneration } from '../../infrastructure/sqlite/processing-generations.js';
+import { listReferenceBatches } from '../../infrastructure/sqlite/source-identity.js';
+import {
+  recordEvidenceAcknowledgment,
+  SEMANTIC_PROCESSING_EFFECT,
+} from '../../infrastructure/sqlite/source-lifecycle.js';
+import { hashContent } from '../domain/content.js';
+import type { ReflectionSummary, StageRecord } from '../domain/stage.js';
+
+/**
+ * A finished reflection run, as a publication.
+ *
+ * What it settles is what the run owed: the stage obligations take their typed outcomes, the
+ * source's semantic-processing effect is discharged against the reference version it was measured
+ * on, and the queue row goes. All of it commits together, which is what makes the comparison mean
+ * anything: a reference accepted while the run was working moves the version, the check refuses,
+ * and the job stays claimable rather than completing over an update nobody made.
+ *
+ * The completion is compared against the ACTIVE generation and its readiness counter. A run whose
+ * generation was replaced while it worked settles nothing: those obligations belong to the
+ * replacement, and an old worker cannot discharge them.
+ */
+export const COMPLETION_EFFECTS = {
+  settlement: 'stage_settlement',
+  queue: 'reflection_queue_completion',
+} as const;
+
+const Settlement = z.strictObject({
+  disposition: z.enum(['complete', 'not_applicable']),
+  reason: z.enum([
+    'accepted_pass_applied',
+    'below_minimum_input',
+    'disabled_by_policy',
+    'proved_empty_input',
+    'pass_produced_nothing',
+    'effects_already_recorded',
+    'dispatch_acknowledged',
+  ]),
+  proof: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+});
+
+const Stage = z.strictObject({
+  name: z.string().min(1),
+  status: z.enum(['ok', 'failed', 'skipped']),
+  summary: z.string(),
+  settled: Settlement.optional(),
+  settledOnUpstream: Settlement.optional(),
+});
+
+const Payload = z.strictObject({
+  sourceId: z.string().min(1),
+  /** The queue row this completion closes. Empty where the run had none, which a replay does. */
+  jobId: z.string(),
+  stages: z.array(Stage),
+});
+
+const Data = Payload.extend({
+  /**
+   * The generation the run's obligations belong to, read while the guard was held. Zero where the
+   * source has none: a legacy row the identity census has not reached still owes its queue row a
+   * completion, and it owes no stage outcomes because nothing recorded what it should have run.
+   */
+  processingGeneration: z.number().int().nonnegative(),
+  /** The readiness counter at prepare. A change means the generation owes something new. */
+  operationalRevision: z.number().int().nonnegative(),
+  /** The newest accepted reference batch, which is what the settlement is measured against. */
+  acceptedReferenceVersion: z.number().int().nonnegative(),
+  /** What the archive held for this source when the run finished. */
+  referencesDigest: z.string(),
+});
+
+const Result = z.strictObject({
+  settledStages: z.array(z.string()),
+});
+
+type CompletionData = z.infer<typeof Data>;
+
+function json(value: JsonValue): JsonValue {
+  return value;
+}
+
+/**
+ * One comparable value for the statements the archive holds for this source, or an empty one
+ * where it holds none.
+ *
+ * A source accepted through the acceptance operation records its statements as their own batch
+ * and leaves none in the archive payload, so this is empty for everything accepted since. It is
+ * still read and still compared, because a legacy row written before that split does carry them
+ * and a completion must not settle over one that moved.
+ */
+function referencesDigest(db: PublicationContext['db'], sourceId: string): string {
+  const references = getExperienceByEpisode(db, sourceId)?.payload.provenance;
+  return references === undefined ? '' : hashContent(references);
+}
+
+function latestReferenceVersion(db: PublicationContext['db'], sourceId: string): number {
+  const batches = listReferenceBatches(db, sourceId);
+  return batches[batches.length - 1]?.referenceVersion ?? 0;
+}
+
+/** The run summary a completion carries, narrowed to what the plan records. */
+export function completionStages(summary: ReflectionSummary): readonly z.infer<typeof Stage>[] {
+  return summary.stages.map((stage: StageRecord) => ({
+    name: stage.name,
+    status: stage.status,
+    summary: stage.summary,
+    ...(stage.settled === undefined ? {} : { settled: stage.settled }),
+    ...(stage.settledOnUpstream === undefined
+      ? {}
+      : { settledOnUpstream: stage.settledOnUpstream }),
+  }));
+}
+
+/** Where a source's attached reference version is recorded, so a later pass can tell it moved. */
+export function completionLedgerKey(sourceId: string): string {
+  return `stated-references:${sourceId}`;
+}
+
+export const reflectionCompletionPublication = new PublicationOperation({
+  kind: 'reflection_completion',
+  effectKinds: [COMPLETION_EFFECTS.settlement, COMPLETION_EFFECTS.queue],
+  payload: Payload,
+  data: Data,
+  result: Result,
+  prepare(context, payload) {
+    const coverage = readCurrentCoverageContract(context.db);
+    if (coverage === undefined) {
+      throw new Error('a completion cannot publish before the coverage registry exists');
+    }
+    const generation = readActiveGeneration(context.db, payload.sourceId);
+    const acceptedReferenceVersion = latestReferenceVersion(context.db, payload.sourceId);
+    const data: CompletionData = {
+      ...payload,
+      processingGeneration: generation?.processingGeneration ?? 0,
+      operationalRevision: generation?.operationalRevision ?? 0,
+      acceptedReferenceVersion,
+      referencesDigest: referencesDigest(context.db, payload.sourceId),
+    };
+    return Promise.resolve({
+      data,
+      expected: {
+        coverageEpoch: coverage.epoch,
+        evidence: buildEvidenceRevision([
+          {
+            kind: 'source',
+            id: payload.sourceId,
+            scope: 'source.references',
+            version: String(acceptedReferenceVersion),
+          },
+        ]),
+        sources:
+          generation === undefined
+            ? []
+            : [
+                {
+                  sourceId: payload.sourceId,
+                  generation: String(generation.processingGeneration),
+                  acceptedReferenceVersion: String(acceptedReferenceVersion),
+                },
+              ],
+        heads: [],
+      },
+      scopes: [{ kind: 'source', id: payload.sourceId, scope: 'source.references' }],
+      effects: [
+        { kind: COMPLETION_EFFECTS.settlement, detail: json({ sourceId: payload.sourceId }) },
+        { kind: COMPLETION_EFFECTS.queue, detail: json({ jobId: payload.jobId }) },
+      ],
+    });
+  },
+  check(context, data) {
+    const generation = readActiveGeneration(context.db, data.sourceId);
+    if (
+      (generation?.processingGeneration ?? 0) !== data.processingGeneration ||
+      (generation?.operationalRevision ?? 0) !== data.operationalRevision
+    ) {
+      // The generation was replaced, or it owes something it did not owe when the run finished.
+      // Either way this completion is about a different set of obligations.
+      return Promise.resolve({ status: 'deferred', reason: 'readiness_moved' } as const);
+    }
+    if (latestReferenceVersion(context.db, data.sourceId) !== data.acceptedReferenceVersion) {
+      return Promise.resolve({ status: 'deferred', reason: 'reference_accepted' } as const);
+    }
+    if (referencesDigest(context.db, data.sourceId) !== data.referencesDigest) {
+      return Promise.resolve({ status: 'deferred', reason: 'references_changed' } as const);
+    }
+    return Promise.resolve({ status: 'valid' } as const);
+  },
+  applyGraph(_context: PublicationContext, _data: CompletionData) {
+    // A completion writes no graph. It takes the guard so the comparison below is fenced: a
+    // reference accepted while this attempt is held cannot land between the check and the
+    // acknowledgment, which is exactly the window a completion outside the protocol left open.
+    return Promise.resolve({ settledStages: [] });
+  },
+  prepareSqlite() {
+    return undefined;
+  },
+  acknowledgeSqlite(context, data) {
+    // Inside the acknowledgment, beside the queue row: a completion that rolls back leaves the
+    // obligations exactly as it found them, and a stage that settled nothing keeps its row.
+    recordStageSettlements(
+      context.db,
+      data.sourceId,
+      {
+        episodeId: data.sourceId,
+        durationMs: 0,
+        // A settlement carries dispositions, not timings: the run's own log holds those.
+        stages: data.stages.map((stage) => ({ ...stage, durationMs: 0 })),
+        counts: {},
+        skippedStages: [],
+      },
+      new Date(context.knownFrom),
+    );
+    if (data.referencesDigest !== '') {
+      markLedgerApplied(context.db, completionLedgerKey(data.sourceId), {
+        version: data.referencesDigest,
+      });
+    }
+    recordEvidenceAcknowledgment(context.db, {
+      sourceId: data.sourceId,
+      referenceVersion: data.acceptedReferenceVersion,
+      effectKind: SEMANTIC_PROCESSING_EFFECT,
+      state: 'completed',
+      completedAt: new Date(context.knownFrom),
+    });
+    return undefined;
+  },
+  discardSqlite() {
+    // Nothing durable was prepared: a refused completion leaves the queue row claimable and
+    // every obligation exactly where the run found it.
+    return undefined;
+  },
+});

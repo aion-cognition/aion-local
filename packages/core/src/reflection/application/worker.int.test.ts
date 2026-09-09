@@ -33,7 +33,10 @@ import {
 import { SessionManager } from '../../session/session-manager.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../domain/stage.js';
 import { PIPELINE_VERSION } from '../domain/version.js';
-import { directIntakePublisher } from '../test-support/direct-intake.fixture.js';
+import {
+  directCompletionPublisher,
+  directIntakePublisher,
+} from '../test-support/direct-intake.fixture.js';
 
 /**
  * The worker against the real substrate: a signal starts a job with nothing polling for it,
@@ -196,7 +199,14 @@ function buildWorker(
     [stage],
   );
   worker = new ReflectionWorker(
-    { driver: harness.driver, db, provider: live.provider, runner, logger },
+    {
+      driver: harness.driver,
+      db,
+      provider: live.provider,
+      runner,
+      logger,
+      publications: directCompletionPublisher(harness.driver, db),
+    },
     options,
   );
   return worker;

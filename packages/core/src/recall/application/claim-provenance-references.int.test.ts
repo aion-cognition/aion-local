@@ -24,7 +24,10 @@ import { LaneAssigner } from '../../reflection/application/lanes.js';
 import type { ReflectionRun } from '../../reflection/application/orchestrator.js';
 import { settleStatedReferences } from '../../reflection/application/stated-references.js';
 import { ReflectionWorker } from '../../reflection/application/worker.js';
-import { directIntakePublisher } from '../../reflection/test-support/direct-intake.fixture.js';
+import {
+  directCompletionPublisher,
+  directIntakePublisher,
+} from '../../reflection/test-support/direct-intake.fixture.js';
 
 /**
  * A reference the substrate accepted has to survive the graph refusing it, the archive already
@@ -187,7 +190,14 @@ describe('a reference that arrives while its job is being handled', () => {
       })),
     };
     const worker = new ReflectionWorker(
-      { driver: substrate.driver, db, provider, logger, runner },
+      {
+        driver: substrate.driver,
+        db,
+        provider,
+        logger,
+        runner,
+        publications: directCompletionPublisher(substrate.driver, db),
+      },
       {
         clock: () => SEEDED_AT,
       },
@@ -268,7 +278,14 @@ describe('a reference that arrives while its job is being handled', () => {
       }),
     };
     const worker = new ReflectionWorker(
-      { driver: substrate.driver, db, provider, logger, runner },
+      {
+        driver: substrate.driver,
+        db,
+        provider,
+        logger,
+        runner,
+        publications: directCompletionPublisher(substrate.driver, db),
+      },
       {
         clock: () => SEEDED_AT,
       },
@@ -364,7 +381,14 @@ describe('a reference that arrives while its job is being handled', () => {
       }),
     };
     const worker = new ReflectionWorker(
-      { driver: substrate.driver, db, provider, logger, runner },
+      {
+        driver: substrate.driver,
+        db,
+        provider,
+        logger,
+        runner,
+        publications: directCompletionPublisher(substrate.driver, db),
+      },
       {
         clock: () => SEEDED_AT,
       },

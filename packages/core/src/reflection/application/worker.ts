@@ -1,15 +1,15 @@
 import type { Driver } from 'neo4j-driver';
 
+import { completionStages } from './completion-publication.js';
 import { INTEGRATE_JOB_TYPE } from './intake.js';
 import type { ReflectionRun, ReflectionRunOptions } from './orchestrator.js';
-import { recordStageSettlements } from './stage-settlement.js';
-import { settleAndComplete } from './stated-references.js';
 import { drainPendingVectors } from './vectors.js';
 import { backoffDelayMs } from '../../infrastructure/backoff.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { errorMessage } from '../../infrastructure/errors.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
+import type { PublicationOutcome } from '../../infrastructure/publication/types.js';
 import {
   ReflectionQueueClaimant,
   reclaimStaleReflectionJobs,
@@ -54,6 +54,17 @@ export type ReflectionWorkerDeps = {
   readonly provider: Provider;
   readonly runner: ReflectionRunner;
   readonly logger: Logger;
+  /** Where a finished run settles what it owed. There is no second way to complete a job. */
+  readonly publications: CompletionPublisher;
+};
+
+/** The one thing the worker asks of the coordinator: publish this run's settlement. */
+export type CompletionPublisher = {
+  publish(request: {
+    readonly kind: 'reflection_completion';
+    readonly operationId: string;
+    readonly payload: unknown;
+  }): Promise<PublicationOutcome>;
 };
 
 export type ReflectionWorkerOptions = {
@@ -369,9 +380,7 @@ export class ReflectionWorker {
       // `applied` and not `status` decides: a completed run that enriched nothing left the
       // ledger open, which is the orchestrator saying the episode is still worth a retry.
       if (run.applied || run.status !== 'completed') {
-        // Acked inside the comparison, since a reference accepted while the job ran is unwritten.
-        const ack = this.#succeed.bind(this, job, episodeId, run, now);
-        await settleAndComplete(this.#deps, episodeId, now, ack);
+        await this.#settle(job, episodeId, run);
         return;
       }
       this.#fail(job, describeFailedRun(episodeId, run));
@@ -380,11 +389,27 @@ export class ReflectionWorker {
     }
   }
 
-  #succeed(job: ReflectionJob, episodeId: string, run: ReflectionRun, now: Date): void {
+  /**
+   * The run's settlement, published rather than committed here. The stage outcomes, the
+   * semantic-processing acknowledgment and the queue row land in one acknowledgment, so a
+   * reference accepted while the run worked moves the version, the check refuses, and the job
+   * stays claimable instead of completing over an update nobody made.
+   */
+  async #settle(job: ReflectionJob, episodeId: string, run: ReflectionRun): Promise<void> {
+    const outcome = await this.#deps.publications.publish({
+      kind: 'reflection_completion',
+      operationId: `reflection-completion:${job.id}:${String(job.attempts)}`,
+      payload: { sourceId: episodeId, jobId: job.id, stages: completionStages(run.summary) },
+    });
+    if (outcome.status !== 'acknowledged') {
+      this.#fail(job, `completion ${outcome.status}: ${outcome.reason}`);
+      return;
+    }
+    this.#succeed(job, episodeId, run);
+  }
+
+  #succeed(job: ReflectionJob, episodeId: string, run: ReflectionRun): void {
     this.#consecutiveFailures = 0;
-    // Inside the completion transaction, beside the queue row and the reference comparison: a
-    // completion that rolls back leaves the obligations exactly as it found them.
-    recordStageSettlements(this.#deps.db, episodeId, run.summary, now);
     this.#claimant.complete(this.#deps.db, job.id);
     // Only a run that actually enriched something is the freshness pin's "intake to
     // enriched": `already_applied` and `episode_unavailable` measured nothing new, and
@@ -393,8 +418,7 @@ export class ReflectionWorker {
       recordEnrichmentLagMs(this.#deps.db, Date.now() - Date.parse(job.enqueuedAt));
     }
     // Debug, not info: the orchestrator's own 'reflection enriched' line lands a millisecond
-    // earlier with the same episode, status, and counts, plus the session and the per-stage
-    // record. The queue's job id is all this line adds, so at info level it was a duplicate.
+    // earlier with the same episode, status and counts. The job id is all this adds.
     this.#deps.logger.debug(
       {
         jobId: job.id,

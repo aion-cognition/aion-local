@@ -20,6 +20,7 @@ import {
   enqueueReflectionJob,
   getReflectionJob,
 } from '../../infrastructure/sqlite/reflection-queue.js';
+import { directCompletionPublisher } from '../test-support/direct-intake.fixture.js';
 import { FakeGraph } from '../test-support/fake-graph.fixture.js';
 
 const EPISODE_ID = 'episode-under-reflection';
@@ -97,7 +98,14 @@ let worker: ReflectionWorker | undefined;
 
 function build(runner: StubRunner, options: ReflectionWorkerOptions = {}): ReflectionWorker {
   worker = new ReflectionWorker(
-    { driver: graph.driver, db: store.db, provider, runner, logger },
+    {
+      driver: graph.driver,
+      db: store.db,
+      provider,
+      runner,
+      logger,
+      publications: directCompletionPublisher(graph.driver, store.db),
+    },
     options,
   );
   return worker;
@@ -518,9 +526,9 @@ describe('stale-claim reaper', () => {
 });
 
 /**
- * References intake accepted and could not write live in the archive, and nothing outside the
- * substrate is asked to notice. Every integrate job re-states whatever the archive holds, which
- * is the same shape the pending-vector backfill uses.
+ * What a caller stated about other memories is accepted and projected by the acceptance that took
+ * it, under the guard, and recorded as its own batch. A finished run settles obligations; it does
+ * not re-state assertions, so nothing here writes a lineage edge.
  */
 describe('the stated references an episode arrived with', () => {
   function archiveWithSource(episodeId: string, sourceId: string): void {
@@ -537,12 +545,7 @@ describe('the stated references an episode arrived with', () => {
     });
   }
 
-  /**
-   * The fake models no reference read, so the settle fails on it. That is the point: the job
-   * asked without anyone telling it to, and the failure returned the job to the queue instead
-   * of acking over references the archive still holds and nothing has written.
-   */
-  it('are settled before the job is acked, and refuse to ack when the graph refuses', async () => {
+  it('are left to the acceptance that took them rather than re-stated by the run', async () => {
     archiveWithSource(EPISODE_ID, 'some-source-episode');
     const runner = new StubRunner();
     const started = build(runner, { retryBaseMs: 60_000 });
@@ -551,12 +554,15 @@ describe('the stated references an episode arrived with', () => {
     await started.start();
     await started.whenIdle();
 
-    expect(
-      graph.statements.some((statement) => statement.cypher.includes('MATCH (n:AionNode { id:')),
-    ).toBe(true);
+    // The run enriched the episode and settled what it owed. It resolved no reference target and
+    // wrote no lineage edge: an assertion about other memories is projected under the guard that
+    // accepted it, and a worker re-stating it from the archive would be a second, unfenced writer.
     expect(runner.episodeIds).toEqual([EPISODE_ID]);
-    expect(getReflectionJob(store.db, jobId)?.claimedBy).toBe(started.claimantId);
-    expect(started.retrying).toBe(1);
+    expect(
+      graph.statements.filter((statement) => statement.cypher.includes('DERIVES_FROM')),
+    ).toEqual([]);
+    expect(getReflectionJob(store.db, jobId)).toBeUndefined();
+    expect(started.retrying).toBe(0);
   });
 
   it('leave an episode that stated none paying nothing but the archive read', async () => {

@@ -2,10 +2,15 @@ import type { Driver } from 'neo4j-driver';
 import { randomUUID } from 'node:crypto';
 
 import { GraphTransaction } from '../../infrastructure/graph/connection.js';
-import type { PublicationOutcome } from '../../infrastructure/publication/types.js';
+import type {
+  PublicationOutcome,
+  PublicationHandler,
+} from '../../infrastructure/publication/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { reflectionCompletionPublication } from '../application/completion-publication.js';
 import { intakePublication } from '../application/intake-publication.js';
 import type { IntakePublisher } from '../application/intake-transport.js';
+import type { CompletionPublisher } from '../application/worker.js';
 
 /**
  * The intake operation driven straight through its own phases, for a test that needs an accepted
@@ -26,6 +31,24 @@ export function directIntakePublisher(
   db: SqliteHandle,
   clock: () => Date = () => new Date(),
 ): IntakePublisher {
+  return directPublisher(intakePublication, driver, db, clock);
+}
+
+/** The same, for the settlement a finished reflection run publishes. */
+export function directCompletionPublisher(
+  driver: Driver,
+  db: SqliteHandle,
+  clock: () => Date = () => new Date(),
+): CompletionPublisher {
+  return directPublisher(reflectionCompletionPublication, driver, db, clock);
+}
+
+function directPublisher(
+  operation: PublicationHandler,
+  driver: Driver,
+  db: SqliteHandle,
+  clock: () => Date,
+): IntakePublisher & CompletionPublisher {
   // The coverage registry is what an acceptance checks its epoch against, and coordinator
   // initialization is what mints it on a real substrate. A test substrate takes the preparing
   // record, which is the state a real one is in before coverage is activated.
@@ -39,14 +62,11 @@ export function directIntakePublisher(
         return await session.executeWrite(async (tx) => {
           const graph = new GraphTransaction(tx);
           const context = { operationId: request.operationId, sequence, graph, db, now };
-          const plan = await intakePublication.prepare(
-            context,
-            intakePublication.decodePayload(request.payload),
-          );
-          const check = await intakePublication.check(context, plan);
+          const plan = await operation.prepare(context, operation.decodePayload(request.payload));
+          const check = await operation.check(context, plan);
           if (check.status !== 'valid') {
             db.transaction(() => {
-              intakePublication.discardSqlite(
+              operation.discardSqlite(
                 { operationId: request.operationId, sequence, db },
                 plan,
                 check.reason,
@@ -60,14 +80,11 @@ export function directIntakePublisher(
             };
           }
           db.transaction(() => {
-            intakePublication.prepareSqlite(
-              { operationId: request.operationId, sequence, db },
-              plan,
-            );
+            operation.prepareSqlite({ operationId: request.operationId, sequence, db }, plan);
           }).immediate();
-          const result = await intakePublication.applyGraph(context, plan);
+          const result = await operation.applyGraph(context, plan);
           db.transaction(() => {
-            intakePublication.acknowledgeSqlite(
+            operation.acknowledgeSqlite(
               {
                 operationId: request.operationId,
                 sequence,

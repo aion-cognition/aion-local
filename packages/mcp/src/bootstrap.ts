@@ -30,6 +30,7 @@ import {
   purgeServedItemsIdleSince,
   queueLagSnapshot,
   recallResultFor,
+  reflectionCompletionPublication,
   readMemberName,
   RecallSideEffects,
   reconcileResidentModels,
@@ -234,6 +235,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
         intakePublication,
         statedReferencesPublication,
         projectionRebuildPublication,
+        reflectionCompletionPublication,
       ],
       observe: (publication) => {
         logger.info({ publication }, 'publication transaction');
@@ -318,6 +320,8 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
           stages,
         ),
         logger,
+        // Where a finished run settles what it owed. There is no second way to complete a job.
+        publications,
       },
       workerOptions(config),
     );

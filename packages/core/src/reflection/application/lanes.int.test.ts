@@ -22,7 +22,10 @@ import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite
 import { listReflectionJobs } from '../../infrastructure/sqlite/reflection-queue.js';
 import { SessionManager } from '../../session/session-manager.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../domain/stage.js';
-import { directIntakePublisher } from '../test-support/direct-intake.fixture.js';
+import {
+  directCompletionPublisher,
+  directIntakePublisher,
+} from '../test-support/direct-intake.fixture.js';
 
 /**
  * The live incident, reproduced small: a bulk load queued ahead of a live turn, and the
@@ -66,6 +69,7 @@ function buildWorker(stage: ReflectionStage): ReflectionWorker {
     provider: intake.provider,
     runner,
     logger,
+    publications: directCompletionPublisher(harness.driver, db),
   });
   return worker;
 }

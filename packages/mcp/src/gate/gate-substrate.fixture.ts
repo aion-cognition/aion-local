@@ -29,7 +29,10 @@ import {
   type Neo4jHarness,
 } from '@aion/core/infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { testGenerationProvider } from '@aion/core/infrastructure/providers/test-support/generation-provider.js';
-import { directIntakePublisher } from '@aion/core/reflection/test-support/direct-intake.fixture.js';
+import {
+  directCompletionPublisher,
+  directIntakePublisher,
+} from '@aion/core/reflection/test-support/direct-intake.fixture.js';
 import type { MemoryPack, MemoryPackItem, ReflectionOutput } from '@aion/protocol';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -218,6 +221,7 @@ export class GateSubstrate {
         provider: this.provider,
         runner: this.orchestrator(),
         logger: this.logger,
+        publications: directCompletionPublisher(this.driver, this.db),
       },
       workerOptions(this.config),
     );

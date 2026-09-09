@@ -38,7 +38,10 @@ import {
   type Neo4jHarness,
 } from '@aion/core/infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { testGenerationProvider } from '@aion/core/infrastructure/providers/test-support/generation-provider.js';
-import { directIntakePublisher } from '@aion/core/reflection/test-support/direct-intake.fixture.js';
+import {
+  directCompletionPublisher,
+  directIntakePublisher,
+} from '@aion/core/reflection/test-support/direct-intake.fixture.js';
 import type { MemoryPack } from '@aion/protocol';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -195,7 +198,14 @@ beforeAll(async () => {
   });
 
   worker = new ReflectionWorker(
-    { driver: harness.driver, db, provider, runner: orchestrator(), logger },
+    {
+      driver: harness.driver,
+      db,
+      provider,
+      runner: orchestrator(),
+      logger,
+      publications: directCompletionPublisher(harness.driver, db),
+    },
     workerOptions(config),
   );
   await worker.start();
@@ -369,6 +379,7 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)(
           provider,
           runner: orchestrator(),
           logger,
+          publications: directCompletionPublisher(harness.driver, db),
         },
         workerOptions(config),
       );
