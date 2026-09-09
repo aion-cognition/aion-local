@@ -459,6 +459,26 @@ describe('a publication the boundary will not commit behind', () => {
     expect(notified).toBe(outcome.status === 'pack' ? outcome.pack : undefined);
   });
 
+  /** R4's other half: a decline at the end carries its own word into the statement too. */
+  it('names a store the boundary could not read as a store failure', async () => {
+    activate();
+    declineWith = 'store_unavailable';
+
+    const outcome = await recall();
+
+    expect(outcome).toMatchObject({
+      status: 'pack',
+      effects: 'withheld',
+      pack: {
+        metadata: {
+          history_coverage: {
+            gaps: [{ field: 'interpretation_text', reason: 'store_unavailable' }],
+          },
+        },
+      },
+    });
+  });
+
   it('refuses rather than degrading when the registry moved too', async () => {
     activate();
     declineWith = 'publication_changed';

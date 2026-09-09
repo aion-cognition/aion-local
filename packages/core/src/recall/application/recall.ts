@@ -403,10 +403,15 @@ export async function handleRecall(
   // admits it: what was withheld on that evidence comes back, and the statement says why. No
   // stage above is re-run, so nothing is re-ranked and no provider is called twice.
   let answer = stated;
-  if (disposition === 'degraded' && checked !== undefined) {
+  if (disposition.kind === 'declined' && checked !== undefined) {
     evidence = uncertifiedThroughout(view, ids);
     serving = answerFrom(evidence);
-    answer = withCoverage(serving.pack, checked.coverage, evidence, boundaryIssues(resetDelivery));
+    answer = withCoverage(
+      serving.pack,
+      checked.coverage,
+      evidence,
+      boundaryIssues(disposition.reason, resetDelivery),
+    );
   }
   const emitted = emittedPackIds(serving.pack);
 
@@ -445,7 +450,7 @@ export async function handleRecall(
       tokenEstimate: serving.pack.metadata.token_estimate,
       timings,
     },
-    disposition === 'withheld' ? 'recall withheld' : 'recall served',
+    disposition.kind === 'withheld' ? 'recall withheld' : 'recall served',
   );
 
   const retrieved = [...candidates.keys()];
@@ -468,7 +473,7 @@ export async function handleRecall(
   });
 
   // A refused completion means the caller received nothing, so nothing is stamped or reinforced.
-  if (disposition !== 'withheld') {
+  if (disposition.kind !== 'withheld') {
     notifyRecalled(deps.onRecalled, deps.logger, {
       sessionId,
       seeds,

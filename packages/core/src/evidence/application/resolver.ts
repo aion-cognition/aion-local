@@ -32,6 +32,7 @@ import type { CheckedReadContext } from '../../recall/application/coverage-check
 import { evidenceRequestKey, type EvidenceAddress } from '../domain/address.js';
 import { EVIDENCE_LIMITS, RequestBudget, type EvidenceLimits } from '../domain/budget.js';
 import {
+  declinedPositionReason,
   evidenceResult,
   type EvidenceIssue,
   type EvidenceResult,
@@ -74,6 +75,9 @@ export type EvidenceBatch<T> = {
   readonly revision: EvidenceRevision;
 };
 
+/** What a reading names when it could not be certified: the decline's own word, or the bound. */
+type UncertifiedReason = 'pending_publication' | 'store_unavailable' | 'budget_limit';
+
 type Certification =
   /** A position was taken, or none was asked for because no coordinator was supplied. */
   | { readonly status: 'certified'; readonly checkpoint?: PublicationCheckpoint }
@@ -81,12 +85,12 @@ type Certification =
   | {
       readonly status: 'uncertified';
       readonly reason: string;
-      readonly issue: 'pending_publication' | 'budget_limit';
+      readonly issue: UncertifiedReason;
     };
 
 function uncertifiedIssue(
   address: EvidenceAddress,
-  reason: 'pending_publication' | 'budget_limit',
+  reason: UncertifiedReason,
   required: boolean,
 ): EvidenceIssue {
   return { address, field: 'interpretation_text', reason, required };
@@ -120,13 +124,10 @@ export class EvidenceResolver {
   }
 
   /**
-   * The same resolver, judged against a position its caller already took.
-   *
-   * An entry point that holds a position and hands the resolver none leaves every reading
-   * looking certified, and the serving layer then subtracts and folds on evidence nothing
-   * stood behind. Binding the position taken for the request is what puts that state where the
-   * consumers read it, and it takes no second position: the reader answers with the result the
-   * caller already has.
+   * The same resolver, judged against a position its caller already took. An entry point that
+   * holds one and hands the resolver none leaves every reading looking certified, and the
+   * serving layer then subtracts and folds on evidence nothing stood behind. No second position
+   * is taken: the reader answers with the result the caller already has.
    */
   certifiedAgainst(publications: EvidenceCheckpointReader): EvidenceResolver {
     return new EvidenceResolver({ ...this.#options, publications });
@@ -431,16 +432,22 @@ export class EvidenceResolver {
       };
     }
     const result = await publications.checkpoint();
+    // The decline's own word decides the issue: a store that could not answer is not a pending
+    // publication, and reporting one where nothing established it states what nothing proved.
     return result.status === 'ready'
       ? { status: 'certified', checkpoint: result.checkpoint }
-      : { status: 'uncertified', reason: result.reason, issue: 'pending_publication' };
+      : {
+          status: 'uncertified',
+          reason: result.reason,
+          issue: declinedPositionReason(result.reason),
+        };
   }
 
   /** What stopped the view being coherent, or nothing when the position held. */
   async #recheck(
     budget: RequestBudget,
     before: Certification,
-  ): Promise<'pending_publication' | 'budget_limit' | undefined> {
+  ): Promise<UncertifiedReason | undefined> {
     if (before.status === 'uncertified') {
       return before.issue;
     }

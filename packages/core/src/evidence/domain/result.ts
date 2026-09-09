@@ -126,6 +126,28 @@ export function isUncertifiedIssue(issue: EvidenceIssue): boolean {
   return UNCERTIFIED_REASONS.has(issue.reason);
 }
 
+/** Declines that say a publication is in flight rather than that a store could not answer. */
+const PUBLICATION_DECLINES = new Set([
+  'pending_publication',
+  'pending_recovery',
+  'publication_changed',
+]);
+
+/**
+ * What a position the coordinator would not give says about the reading taken without it.
+ *
+ * A decline is a word from the publication layer and a gap is a word to a caller, and only three
+ * of those words are about a publication at all: one in flight, one awaiting recovery, and one
+ * that landed under the read. Everything else — a store that could not be read, a control record
+ * in the wrong state, a reason this reader has never seen — is a store failure, because inferring
+ * a pending intent from a decline nobody explained would report a fact nothing established.
+ */
+export function declinedPositionReason(
+  decline: string,
+): 'pending_publication' | 'store_unavailable' {
+  return PUBLICATION_DECLINES.has(decline) ? 'pending_publication' : 'store_unavailable';
+}
+
 /**
  * Whether a consumer may treat this result's value as the substrate's current answer.
  *

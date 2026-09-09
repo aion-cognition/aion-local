@@ -117,11 +117,16 @@ export async function runCheckedRecall(
           )
         : withoutPosition<unknown>(deps.db, read, position.reason);
     if (settled.status === 'refused') {
-      return 'withheld';
+      return { kind: 'withheld' };
+    }
+    if (settled.status === 'completed') {
+      return { kind: 'recorded' };
     }
     // The pipeline attaches the disclosure, because it holds the one statement the answer
-    // carries and this boundary has no second place to put it.
-    return settled.status === 'completed' ? 'served' : 'degraded';
+    // carries and this boundary has no second place to put it. The word travels with it: the
+    // coordinator said why it would not take the writes, and a caller is owed that reason and
+    // not a publication state nobody observed.
+    return { kind: 'declined', reason: settled.reason };
   };
 
   const pack = await handleRecall({ ...deps, resolver }, payload, {

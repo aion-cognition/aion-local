@@ -4,6 +4,7 @@ import { idAddress } from './address.js';
 import {
   classifyCoverage,
   classifyEvidence,
+  declinedPositionReason,
   evidenceResult,
   isDestructiveUse,
   isSelectableUse,
@@ -93,5 +94,27 @@ describe('evidence result dimensions', () => {
     expect(SELECTABLE_EVIDENCE_USES).not.toContain('search_indexing');
     expect(isDestructiveUse('claim_judgment')).toBe(true);
     expect(isDestructiveUse('serving_metadata')).toBe(false);
+  });
+});
+
+/**
+ * A decline is the publication layer's word and a gap is a caller's. Only the three that are
+ * actually about a publication may be reported as one; anything else, named or not, is a store
+ * that could not answer.
+ */
+describe('what a position the coordinator would not give says', () => {
+  it('keeps the publication declines as publication declines', () => {
+    expect(declinedPositionReason('pending_publication')).toBe('pending_publication');
+    expect(declinedPositionReason('pending_recovery')).toBe('pending_publication');
+    expect(declinedPositionReason('publication_changed')).toBe('pending_publication');
+  });
+
+  it('reports a store that could not answer as one, and never as a pending intent', () => {
+    expect(declinedPositionReason('store_unavailable')).toBe('store_unavailable');
+    expect(declinedPositionReason('store_busy')).toBe('store_unavailable');
+    expect(declinedPositionReason('coordinator_not_initialized')).toBe('store_unavailable');
+    expect(declinedPositionReason('enclosing_sqlite_transaction')).toBe('store_unavailable');
+    // A word this reader has never seen proves nothing about a publication either.
+    expect(declinedPositionReason('a reason from a later version')).toBe('store_unavailable');
   });
 });

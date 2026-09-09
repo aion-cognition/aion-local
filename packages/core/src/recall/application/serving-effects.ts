@@ -4,6 +4,7 @@ import { applyEvidence, type EvidenceIssue as CoverageEvidenceIssue } from './co
 import { coverageLines } from './coverage-text.js';
 import { recordTypedAdmissions } from './typed-admission-ledger.js';
 import { statedCoverage } from '../../evidence/application/reasons.js';
+import { declinedPositionReason } from '../../evidence/domain/result.js';
 import type { ReadMode } from '../../infrastructure/graph/read-modes.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { saveLastPack } from '../../infrastructure/sqlite/last-pack.js';
@@ -60,10 +61,14 @@ export type ServingEffects = {
  * What the completion boundary did with the writes, and what the caller gets.
  *
  * `withheld` is a refused read: the caller receives nothing, so nothing is stamped, reinforced
- * or counted as exposure. `degraded` is an answer the boundary would not record: the caller
- * receives it, and it says so.
+ * or counted as exposure. `declined` is an answer the boundary would not record: the caller
+ * receives it, it says so, and it says so in the word the coordinator used rather than in a
+ * publication state nobody established.
  */
-export type CommitDisposition = 'served' | 'degraded' | 'withheld';
+export type CommitDisposition =
+  | { readonly kind: 'recorded' }
+  | { readonly kind: 'withheld' }
+  | { readonly kind: 'declined'; readonly reason: string };
 
 /**
  * Where a checked read's writes go: the completion boundary the entry point holds, which commits
@@ -89,7 +94,7 @@ export async function commitServingEffects(
     effects.resetDelivery?.(db);
     effects.persist(db);
   })();
-  return 'served';
+  return { kind: 'recorded' };
 }
 
 export function servingEffects(input: ServingEffectsInput): ServingEffects {
@@ -188,15 +193,19 @@ export function withCoverage(
  *
  * The interpretation gap is required whatever the request asked for: a read that finished under a
  * position the substrate would not honour did not establish the evidence its answer rests on, and
- * that is a fact about the evidence rather than about the caller's flags. An unfulfilled reset is
- * a second, separate statement — the eligibility record this session is served against is the one
- * the caller asked to clear and still holds — and it decides nothing about the first.
+ * that is a fact about the evidence rather than about the caller's flags. Its reason is the one
+ * the decline carried, so a store that could not answer is never reported as a publication
+ * waiting to be acknowledged. An unfulfilled reset is a second, separate statement — the
+ * eligibility record this session is served against is the one the caller asked to clear and
+ * still holds — and it decides nothing about the first.
  */
-export function boundaryIssues(resetRequested: boolean): readonly CoverageEvidenceIssue[] {
+export function boundaryIssues(
+  decline: string,
+  resetRequested: boolean,
+): readonly CoverageEvidenceIssue[] {
+  const reason = declinedPositionReason(decline);
   return [
-    { reason: 'pending_publication', field: 'interpretation_text', required: true },
-    ...(resetRequested
-      ? [{ reason: 'pending_publication', field: 'eligibility', required: false } as const]
-      : []),
+    { reason, field: 'interpretation_text', required: true },
+    ...(resetRequested ? [{ reason, field: 'eligibility', required: false } as const] : []),
   ];
 }
