@@ -184,14 +184,19 @@ export function withCoverage(
 }
 
 /**
- * What a read whose effects nobody would take says about itself. The field follows the
- * resolver's own word for an uncertified reading; a caller that asked to forget its holdings
- * gets a required gap, because the instruction it sent did not happen.
+ * What a read whose effects nobody would take says about itself.
+ *
+ * The interpretation gap is required whatever the request asked for: a read that finished under a
+ * position the substrate would not honour did not establish the evidence its answer rests on, and
+ * that is a fact about the evidence rather than about the caller's flags. An unfulfilled reset is
+ * a second, separate statement — the eligibility record this session is served against is the one
+ * the caller asked to clear and still holds — and it decides nothing about the first.
  */
-export function pendingPublicationIssue(resetRequested: boolean): CoverageEvidenceIssue {
-  return {
-    reason: 'pending_publication',
-    field: 'interpretation_text',
-    required: resetRequested,
-  };
+export function boundaryIssues(resetRequested: boolean): readonly CoverageEvidenceIssue[] {
+  return [
+    { reason: 'pending_publication', field: 'interpretation_text', required: true },
+    ...(resetRequested
+      ? [{ reason: 'pending_publication', field: 'eligibility', required: false } as const]
+      : []),
+  ];
 }

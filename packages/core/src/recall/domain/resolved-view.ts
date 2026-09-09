@@ -52,3 +52,18 @@ export function ownershipOf(view: ResolvedEvidenceView, id: string): OwnershipVe
 export function certifiedIn(view: ResolvedEvidenceView, id: string): boolean {
   return !view.degraded.has(id);
 }
+
+/**
+ * The same reading with nothing in it certified.
+ *
+ * A read that finishes under a position the substrate will not honour has readings nobody stands
+ * behind, whatever the reading itself said while the position looked good. The values are kept —
+ * they are what the attempt saw, and the answer still renders from them — but no stage may
+ * withhold, fold or fingerprint on them, which is what the degraded set says.
+ */
+export function uncertifiedThroughout(
+  view: ResolvedEvidenceView,
+  ids: Iterable<string>,
+): ResolvedEvidenceView {
+  return { ...view, degraded: new Set([...view.degraded, ...ids]) };
+}

@@ -94,8 +94,12 @@ export async function runCheckedRecall(
   const read: CheckedRead = { context: check.context, coverage: check.coverage };
 
   // Taken before the work starts and held through it, so the boundary can tell a substrate that
-  // moved under this read from one that did not.
+  // moved under this read from one that did not. The resolver is judged against this same
+  // position rather than taking one of its own: a position nobody could take is what makes every
+  // reading of this attempt uncertified, and the serving layer has to see that before it decides
+  // to subtract anything.
   const position = await deps.coordinator.checkpoint();
+  const resolver = deps.resolver.certifiedAgainst({ checkpoint: () => Promise.resolve(position) });
   let settled: CheckedReadOutcome<unknown> | undefined;
   const commit = async (effects: ServingEffects): Promise<CommitDisposition> => {
     settled =
@@ -120,7 +124,7 @@ export async function runCheckedRecall(
     return settled.status === 'completed' ? 'served' : 'degraded';
   };
 
-  const pack = await handleRecall(deps, payload, {
+  const pack = await handleRecall({ ...deps, resolver }, payload, {
     identity: options.identity,
     now,
     checked: read,

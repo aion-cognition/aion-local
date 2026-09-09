@@ -1,3 +1,4 @@
+import type { MemoryPack } from '@aion/protocol';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -71,6 +72,8 @@ let graph: EmptySubstrateGraph;
 let generateCalls = 0;
 let embedCalls = 0;
 let recalled = 0;
+/** The pack the delivered-answer listener was handed, which must be the one the caller got. */
+let notified: MemoryPack | undefined;
 /** What the stubbed coordinator answers, and what it does the moment a read reaches it. */
 let position: CheckpointResult;
 let declineWith: string | undefined;
@@ -112,8 +115,9 @@ function deps(): CheckedRecallDeps {
     logger,
     resolver: new EvidenceResolver({ driver: graph.driver, db: store.db, logger }),
     coordinator,
-    onRecalled: () => {
+    onRecalled: (completion) => {
       recalled += 1;
+      notified = completion.pack;
     },
   };
 }
@@ -158,6 +162,7 @@ beforeEach(() => {
   generateCalls = 0;
   embedCalls = 0;
   recalled = 0;
+  notified = undefined;
   position = { status: 'ready', checkpoint: CHECKPOINT };
   declineWith = undefined;
   atBoundary = undefined;
@@ -387,13 +392,15 @@ describe('a publication the boundary will not commit behind', () => {
 
     const outcome = await recall();
 
+    // Partial because the evidence behind the answer was never certified, which is a fact about
+    // the evidence and not about what the request asked for.
     expect(outcome).toMatchObject({
       status: 'pack',
       effects: 'withheld',
       pack: {
         metadata: {
           history_coverage: {
-            status: 'supported',
+            status: 'partial',
             gaps: [{ field: 'interpretation_text', reason: 'pending_publication' }],
           },
         },
@@ -403,7 +410,7 @@ describe('a publication the boundary will not commit behind', () => {
     expect(holdings()).toEqual(['held']);
   });
 
-  it('calls the unhonoured reset a required gap, which makes the answer partial', async () => {
+  it('discloses an unfulfilled reset beside the answer, as its own statement', async () => {
     activate();
     position = { status: 'unavailable', reason: 'pending_publication' };
 
@@ -412,7 +419,17 @@ describe('a publication the boundary will not commit behind', () => {
     expect(outcome).toMatchObject({
       status: 'pack',
       effects: 'withheld',
-      pack: { metadata: { history_coverage: { status: 'partial' } } },
+      pack: {
+        metadata: {
+          history_coverage: {
+            status: 'partial',
+            gaps: [
+              { field: 'interpretation_text', reason: 'pending_publication' },
+              { field: 'eligibility', reason: 'pending_publication' },
+            ],
+          },
+        },
+      },
     });
     expect(holdings()).toEqual(['held']);
   });
@@ -426,6 +443,20 @@ describe('a publication the boundary will not commit behind', () => {
     expect(outcome).toMatchObject({ status: 'pack', effects: 'withheld' });
     expect(getLastPack(store.db, IDENTITY)).toBeUndefined();
     expect(holdings()).toEqual(['held']);
+  });
+
+  /**
+   * The rebuilt answer is the delivered one, so nothing downstream describes the artifact the
+   * boundary withdrew: exposure and reinforcement are charged against what the caller received.
+   */
+  it('hands the listener the answer it rebuilt', async () => {
+    activate();
+    declineWith = 'publication_changed';
+
+    const outcome = await recall();
+
+    expect(outcome.status).toBe('pack');
+    expect(notified).toBe(outcome.status === 'pack' ? outcome.pack : undefined);
   });
 
   it('refuses rather than degrading when the registry moved too', async () => {

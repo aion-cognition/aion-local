@@ -119,6 +119,19 @@ export class EvidenceResolver {
     this.#limits = options.limits ?? EVIDENCE_LIMITS;
   }
 
+  /**
+   * The same resolver, judged against a position its caller already took.
+   *
+   * An entry point that holds a position and hands the resolver none leaves every reading
+   * looking certified, and the serving layer then subtracts and folds on evidence nothing
+   * stood behind. Binding the position taken for the request is what puts that state where the
+   * consumers read it, and it takes no second position: the reader answers with the result the
+   * caller already has.
+   */
+  certifiedAgainst(publications: EvidenceCheckpointReader): EvidenceResolver {
+    return new EvidenceResolver({ ...this.#options, publications });
+  }
+
   /** One allowance per request, spent by every subread that request makes. */
   newBudget(): RequestBudget {
     return new RequestBudget(this.#limits);

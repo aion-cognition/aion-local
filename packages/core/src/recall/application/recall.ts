@@ -16,9 +16,10 @@ import { activationBudget, admissionFor, capsFor, truncationFor } from './recall
 import { readEvidence, resolvedView } from './resolved-view.js';
 import { resonate, type ResonanceResult } from './resonance.js';
 import { selectSeeds } from './seeds.js';
+import { serveFrom, type ServedAnswer, type ServingAssembly } from './serving-assembly.js';
 import {
+  boundaryIssues,
   commitServingEffects,
-  pendingPublicationIssue,
   servingEffects,
   withCoverage,
   type RecallCommit,
@@ -48,11 +49,9 @@ import { spreadActivation, type ActivationRun } from '../domain/activation.js';
 import { labelBoosts, queryCueTexts, queryRestatements } from '../domain/facts.js';
 import { fuse, type FusedItem, type FusionResult } from '../domain/fusion.js';
 import type { PackDecision } from '../domain/pack-decisions.js';
-import { foldableClaims } from '../domain/pack-duplicates.js';
-import { assemblePack } from '../domain/pack.js';
 import type { RecallTraceObserver } from '../domain/recall-trace.js';
-import { emittedPackIds, suppressedRepeats } from '../domain/session-dedup.js';
-import { suppressedOwnSession } from '../domain/session-origin.js';
+import { uncertifiedThroughout, type ResolvedEvidenceView } from '../domain/resolved-view.js';
+import { emittedPackIds } from '../domain/session-dedup.js';
 
 /**
  * The recall pipeline, in the order its stages run. Cue extraction spends the one generation
@@ -317,73 +316,61 @@ export async function handleRecall(
     resonance: resonance.ms,
   };
 
-  // The two serving-layer subtractions, applied once the candidate set is final so that nothing
-  // above them measures a smaller set: ranking, the admission report and the method counters all
-  // still see everything fusion admitted. What they cut is cut from exposure too, since exposure
-  // is read off the assembled pack below.
-  //
-  // Origin decides first, and what it withholds leaves no served row: the session never read
-  // those items, so a later recall must be free to offer them the moment they stop being its own
-  // record. Dedup then judges what is left.
-  const suppressedOwn = suppressedOwnSession({ items: ranked, view });
-  // A staged reset computes against an empty served set: the durable rows are still there, and
-  // this call has to answer as though the session had been served nothing.
-  const served =
-    dedup && !resetDelivery ? readServedItems(deps.db, sessionId) : new Map<string, string>();
-  const suppressed = dedup
-    ? suppressedRepeats(
-        ranked.filter((item) => !suppressedOwn.has(item.id)),
-        served,
-        view,
-      )
-    : new Set<string>();
-  // The third subtraction is only made eligible here. Assembly decides it, because an item the
-  // other two already cut, or one the budget turns away, is not a copy anybody read and so
-  // cannot stand in for another.
-  const foldable = foldableClaims({ items: ranked, pairs: restated, view });
-
+  // The serving subtractions and the assembly that reads them, applied once the candidate set is
+  // final so that nothing above them measures a smaller set: ranking, the admission report and
+  // the method counters all still see everything fusion admitted. What they cut is cut from
+  // exposure too, since exposure is read off the assembled pack below.
   const truncated = truncationFor(activation.value.termination);
+  const assembly: ServingAssembly = {
+    ranked,
+    // A staged reset computes against an empty served set: the durable rows are still there, and
+    // this call has to answer as though the session had been served nothing.
+    served:
+      dedup && !resetDelivery ? readServedItems(deps.db, sessionId) : new Map<string, string>(),
+    dedup,
+    restated,
+    assembly: {
+      items: fusion.value.items,
+      admission: fusion.value.admission,
+      caps: capsFor(deps.config),
+      tokenBudget: payload.budget?.max_tokens ?? deps.config.recall.tokenBudget,
+      cues: cues.value.cues,
+      timings,
+      ...(degradations.length === 0 ? {} : { degraded: degradations }),
+      ...(obligations.pending === undefined ? {} : { pendingEnrichment: obligations.pending }),
+      ...(obligations.gap === undefined ? {} : { obligationCensusGap: obligations.gap }),
+      ...(truncated === undefined ? {} : { truncated }),
+      restating: queryRestatements(fusion.value.items, {
+        floor: deps.config.recall.restatementFloor,
+        queryCues: queryCueTexts(cues.value.cues),
+      }),
+      entityGlossCap: deps.config.recall.entityGlossCap,
+      resonant: resonance.value.items,
+      intentions: intentions.items,
+      historical: isTimeTravel(mode),
+    },
+  };
   // Recorded where assembly decides, and only when somebody is watching: a fold, a bucket cap
   // and the token budget are three different answers, and only this call site knows which.
   const assemblyDecisions: PackDecision[] = [];
-  const pack = assemblePack({
-    ...(deps.onTrace === undefined
-      ? {}
-      : {
-          onDecision: (decision: PackDecision) => {
-            assemblyDecisions.push(decision);
-          },
-        }),
-    items: fusion.value.items,
-    admission: fusion.value.admission,
-    caps: capsFor(deps.config),
-    tokenBudget: payload.budget?.max_tokens ?? deps.config.recall.tokenBudget,
-    cues: cues.value.cues,
-    timings,
-    ...(degradations.length === 0 ? {} : { degraded: degradations }),
-    ...(obligations.pending === undefined ? {} : { pendingEnrichment: obligations.pending }),
-    ...(obligations.gap === undefined ? {} : { obligationCensusGap: obligations.gap }),
-    ...(truncated === undefined ? {} : { truncated }),
-    restating: queryRestatements(fusion.value.items, {
-      floor: deps.config.recall.restatementFloor,
-      queryCues: queryCueTexts(cues.value.cues),
-    }),
-    entityGlossCap: deps.config.recall.entityGlossCap,
-    resonant: resonance.value.items,
-    intentions: intentions.items,
-    ...(view.relatedClaims.size === 0 ? {} : { relatedClaims: view.relatedClaims }),
-    ...(view.provenance.size === 0 ? {} : { provenance: view.provenance }),
-    historical: isTimeTravel(mode),
-    suppressed,
-    suppressedOwn,
-    foldable,
-  });
+  const answerFrom = (seen: ResolvedEvidenceView): ServedAnswer => {
+    assemblyDecisions.length = 0;
+    return serveFrom(
+      assembly,
+      seen,
+      deps.onTrace === undefined
+        ? undefined
+        : (decision: PackDecision) => assemblyDecisions.push(decision),
+    );
+  };
+  let evidence = view;
+  let serving = answerFrom(evidence);
 
   // What the answer covers, attached to the pack the caller receives rather than to the one
   // assembly measured: coverage moves no bucket and costs no token budget.
   const { checked } = options;
-  const stated = checked === undefined ? pack : withCoverage(pack, checked.coverage, view);
-  const emitted = emittedPackIds(pack);
+  const stated =
+    checked === undefined ? serving.pack : withCoverage(serving.pack, checked.coverage, view);
 
   // Every successful-read write in one place, reset first, shaped for the boundary that checks
   // the coverage contract in the same transaction it commits them.
@@ -399,7 +386,7 @@ export async function handleRecall(
     admission: { policy: admissionPolicy, items: fusion.value.items },
     candidates,
     view,
-    suppressed,
+    suppressed: serving.suppressed,
     dedup,
     cueDegraded: cues.value.degradation !== undefined,
     methodStats: fusion.value.methodStats,
@@ -411,12 +398,17 @@ export async function handleRecall(
     resetDelivery,
   });
   const disposition = await commitServingEffects(deps.db, effects, options.commit);
-  // An answer the boundary would not record says so in the statement it carries: nothing was
-  // written, so the pack is the only place left to say it.
-  const answer =
-    disposition === 'degraded' && checked !== undefined
-      ? withCoverage(pack, checked.coverage, view, [pendingPublicationIssue(resetDelivery)])
-      : stated;
+  // A position the substrate would not honour leaves every subtraction resting on a reading
+  // nobody stood behind, so the answer is rebuilt from the same candidates under a reading that
+  // admits it: what was withheld on that evidence comes back, and the statement says why. No
+  // stage above is re-run, so nothing is re-ranked and no provider is called twice.
+  let answer = stated;
+  if (disposition === 'degraded' && checked !== undefined) {
+    evidence = uncertifiedThroughout(view, ids);
+    serving = answerFrom(evidence);
+    answer = withCoverage(serving.pack, checked.coverage, evidence, boundaryIssues(resetDelivery));
+  }
+  const emitted = emittedPackIds(serving.pack);
 
   deps.logger.info(
     {
@@ -434,13 +426,13 @@ export async function handleRecall(
       intentionsSkipped: intentions.skipped,
       // What the wire dropped that cognition still counted, so a pack that shrank mid-session
       // reads as the subtraction rather than as retrieval going quiet.
-      suppressedRepeats: suppressed.size,
+      suppressedRepeats: serving.suppressed.size,
       // The other half of the same reading: how much of the answer was this session quoting
       // itself, which is a number worth watching as the conversation gets long.
-      suppressedOwn: suppressedOwn.size,
+      suppressedOwn: serving.suppressedOwn.size,
       // And the third: one assertion the substrate holds twice, printed once. Read off the
       // pack, because eligibility is decided here and the withholding is decided by assembly.
-      suppressedDuplicates: pack.metadata.suppressed_duplicates ?? 0,
+      suppressedDuplicates: serving.pack.metadata.suppressed_duplicates ?? 0,
       // What the caller was handed, which is the number every exposure write is charged
       // against. Beside the candidate count it reads as how much of retrieval reached the wire.
       emitted: emitted.size,
@@ -450,7 +442,7 @@ export async function handleRecall(
       // What the floor rejected and the floor it used, so a thin pack is readable from the
       // log without re-running the query.
       admission: fusion.value.admission,
-      tokenEstimate: pack.metadata.token_estimate,
+      tokenEstimate: serving.pack.metadata.token_estimate,
       timings,
     },
     disposition === 'withheld' ? 'recall withheld' : 'recall served',
@@ -467,10 +459,10 @@ export async function handleRecall(
     fused: fusion.value.items,
     admission: fusion.value.admission,
     preAssembly: retrieved,
-    withheldOwn: suppressedOwn,
-    withheldRepeat: suppressed,
-    foldEligible: foldable,
-    foldedCount: pack.metadata.suppressed_duplicates ?? 0,
+    withheldOwn: serving.suppressedOwn,
+    withheldRepeat: serving.suppressed,
+    foldEligible: serving.foldable,
+    foldedCount: serving.pack.metadata.suppressed_duplicates ?? 0,
     assemblyDecisions,
     emitted,
   });
