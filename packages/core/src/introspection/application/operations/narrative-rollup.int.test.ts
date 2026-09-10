@@ -293,6 +293,9 @@ describe('narrative rollups against a live substrate', () => {
     // Unchanged, it blocks again on the same measurement rather than generating over it.
     await dayNarrativeRollupOperation().run(context(tiny));
     expect(generated).toHaveLength(before);
+
+    // The wakeup needs nothing cleared: a refusal is a measurement rather than a decision that
+    // stands, so the next case publishes these same two windows at the ordinary allowance.
   });
 
   /**

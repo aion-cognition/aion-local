@@ -312,9 +312,16 @@ export async function rollUpNarratives(
   let absorbed = 0;
   let examined = 0;
 
-  // `windowLimit` bounds the rollups a tick writes, not the windows it looks at. A settled
-  // window answers `skip` and writes nothing, so spending the budget on it would leave the run
-  // re-examining the same oldest days forever and never reaching the ones that need a rollup.
+  // `windowLimit` bounds the EXPENSIVE ATTEMPTS a tick makes, not the windows it looks at, and
+  // the two budgets are deliberately different things. A settled window answers `skip` and a
+  // refused one answers `blocked`; neither asks a provider and neither writes, so charging either
+  // against the budget would leave the run re-examining the same oldest days forever and never
+  // reaching the ones that need a rollup — an unchanged blocked prefix would hide every fitting
+  // window behind it for as long as it stood. What bounds the scan is the member read above.
+  //
+  // Nothing is remembered about a refusal, which is what makes the wakeup free: a window whose
+  // input or allowance changed is measured again on the next pass and publishes if it now fits.
+  // The recorded block is a diagnostic and authorizes nothing.
   for (const window of closed) {
     if (settings.signal?.aborted === true) {
       break;
@@ -352,7 +359,7 @@ export async function rollUpNarratives(
     } else {
       failed += 1;
     }
-    if (created + vetoed + failed + blocked >= settings.windowLimit) {
+    if (created + vetoed + failed >= settings.windowLimit) {
       break;
     }
   }
