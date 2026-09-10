@@ -276,6 +276,7 @@ function readNarrativeSeal(db: SqliteHandle, config: Config, now: Date): SealDem
     batch: config.maintenance.narrativeSealBatch,
     maxSpanMs: config.maintenance.chunkMaxSpanMs,
     maxMembers: CHUNK_MAX_MEMBERS,
+    renderedInputAllowance: config.maintenance.chunkRenderedInputAllowance,
   });
 }
 

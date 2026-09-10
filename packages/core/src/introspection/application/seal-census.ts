@@ -1,8 +1,10 @@
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import {
   blockedChunkSources,
   dueChunkGroups,
   dueRemainderGroups,
   heldRemainderMembership,
+  inputFullRemainderGroups,
 } from '../../infrastructure/sqlite/chunk-nomination.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { coordinatorControl } from '../../infrastructure/sqlite/publication-coordinator-store.js';
@@ -38,6 +40,12 @@ export type SealCensusInput = {
   readonly maxSpanMs: number;
   /** Members one chunk may hold, which is the other trigger durable state can see. */
   readonly maxMembers: number;
+  /**
+   * The rendered input one synthesis may spend, which is the third trigger. Optional so a caller
+   * reading a census of the shipped policy need not restate it; `observe.ts` threads the live
+   * value, so a retuned allowance moves the discovery and the run together.
+   */
+  readonly renderedInputAllowance?: number;
 };
 
 function ageMs(now: Date, at: string | undefined): number | undefined {
@@ -88,6 +96,16 @@ export function readSealDemand(db: SqliteHandle, input: SealCensusInput): SealDe
       maxMembers: input.maxMembers,
       limit: ceiling,
     });
+    // The input trigger, discovered rather than measured: a tail already carrying more than a
+    // render may spend is demand even while it is young and small. A session counted here and by
+    // the count or age triggers is one group, not two.
+    const inputFull = inputFullRemainderGroups(db, {
+      allowance: input.renderedInputAllowance ?? DEFAULTS.maintenance.chunkRenderedInputAllowance,
+      maxMembers: input.maxMembers,
+      limit: ceiling,
+    });
+    const remainderKeys = new Set(remainders.map((group) => group.sessionId));
+    const extraInput = inputFull.filter((group) => !remainderKeys.has(group.sessionId));
     const blocked = blockedChunkSources(db);
     const held = heldRemainderMembership(db);
     const blockedSourcesByReason: Record<string, number> = {};
@@ -106,10 +124,11 @@ export function readSealDemand(db: SqliteHandle, input: SealCensusInput): SealDe
     const eligibleAt = [
       ...chunks.map((chunk) => chunk.sealedAt),
       ...remainders.map((group) => group.oldestArrivalAt),
+      ...extraInput.map((group) => group.oldestArrivalAt),
     ].reduce<string | undefined>((soonest, at) => oldest(soonest, at), undefined);
     return {
-      eligibleGroups: chunks.length + remainders.length,
-      dueRemainders: remainders.length,
+      eligibleGroups: chunks.length + remainders.length + extraInput.length,
+      dueRemainders: remainders.length + extraInput.length,
       dueChunks: chunks.length,
       oldestEligibleAgeMs: ageMs(input.now, eligibleAt),
       blockedSourcesByReason,

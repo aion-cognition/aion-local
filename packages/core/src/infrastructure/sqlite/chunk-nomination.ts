@@ -364,3 +364,55 @@ export function reconsiderableBlockedAttempts(
     reason: row.blocked_reason,
   }));
 }
+
+/**
+ * Sessions whose governing seal trigger is the INPUT rather than the count or the age.
+ *
+ * The third trigger is the rendered input, and the render is an evidence read the decision
+ * performs. A census cannot perform one — the observation tick has no resolver — so what it has is
+ * the only durable measure of how much a member carries: the archived payload it was accepted
+ * with. What that measure can answer is which bound a tail will reach FIRST. A member carrying
+ * more than an equal share of the allowance means the tail runs out of render before it runs out
+ * of member slots, so its trigger is the input one and the count and age tests will never speak
+ * for it however long it stands.
+ *
+ * This NOMINATES; the admission decision remains the authority, and its error is in the direction
+ * of asking earlier rather than later. A tail it nominates that turns out to fit answers `waiting`
+ * and costs one evidence read. Without it an input-full tail produced no demand at all: the
+ * operation sealed it the moment anything forced a run, and the scheduler never asked for one.
+ */
+export function inputFullRemainderGroups(
+  db: SqliteHandle,
+  input: { readonly allowance: number; readonly maxMembers: number; readonly limit: number },
+): readonly DueRemainderGroup[] {
+  if (input.limit <= 0 || input.allowance <= 0 || input.maxMembers <= 0) {
+    return [];
+  }
+  const rows = db
+    .prepare(
+      `SELECT r.session_id, COUNT(*) AS unsealed,
+              MIN(r.capture_order_value) AS capture_key,
+              MIN(r.created_at) AS oldest_arrival_at
+         FROM source_records r
+         JOIN session_remainders s ON s.session_id = r.session_id
+         JOIN experience_archive a ON a.episode_id = r.source_id
+        WHERE ${REMAINDER_PREDICATE}
+          AND r.verification_status = '${VERIFIED}'
+        GROUP BY r.session_id
+       HAVING MAX(LENGTH(a.payload_json)) * ? >= ?
+        ORDER BY capture_key, r.session_id
+        LIMIT ?`,
+    )
+    .all(input.maxMembers, input.allowance, input.limit) as {
+    session_id: string;
+    unsealed: number;
+    capture_key: string;
+    oldest_arrival_at: string;
+  }[];
+  return rows.map((row) => ({
+    sessionId: row.session_id,
+    unsealed: row.unsealed,
+    oldestArrivalAt: row.oldest_arrival_at,
+    captureKey: row.capture_key,
+  }));
+}
