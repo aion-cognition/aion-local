@@ -1,7 +1,8 @@
-import { defineConfig } from 'vitest/config';
+import original from './vitest.config.ts';
 
 /** The negative control: a deliberate backend construction, which the guard must catch. */
-export default defineConfig({
+export default {
+  resolve: original.resolve,
   test: {
     include: [
       'packages/core/src/infrastructure/providers/review-only-guard/t10bf1-no-model-control.test.ts',
@@ -12,4 +13,4 @@ export default defineConfig({
     maxWorkers: 1,
     fileParallelism: false,
   },
-});
+};

@@ -37,16 +37,18 @@ afterEach(() => {
   expect(audit.attempts, 'caught model attempts still invalidate this run').toEqual([]);
 });
 
+// Where the audit lands. A copied absolute path writes one reviewer's round into every later run
+// and cannot be read on another machine at all, so the destination is named by the environment and
+// falls back to a path inside this repository.
+const AUDIT_PATH = process.env.AION_NO_MODEL_AUDIT ?? 'no-model-audit.jsonl';
+
 afterAll(() => {
   const record = {
     event: 'no_model_audit',
     root: expect.getState().testPath,
     attempts: audit.attempts,
   };
-  appendFileSync(
-    '/Users/rhuber/Documents/not-solace-code/aion_code/campaign-artifacts/impl-2026-09-07/t10bf1-astra-cli-audit.jsonl',
-    `${JSON.stringify(record)}\n`,
-  );
+  appendFileSync(AUDIT_PATH, `${JSON.stringify(record)}\n`);
   console.log(JSON.stringify(record));
   expect(audit.attempts).toEqual([]);
 });
