@@ -6,6 +6,7 @@ import {
   type UnprovedScope,
 } from './chunk-evidence.js';
 import type { EvidenceResolver } from '../../evidence/application/resolver.js';
+import type { DurableRole } from '../../evidence/domain/scopes.js';
 import type { EvidenceDependency } from '../../infrastructure/publication/preconditions.js';
 import {
   committedIncidenceForNode,
@@ -15,6 +16,7 @@ import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { listStatedLinksTo } from '../../infrastructure/sqlite/evidence-links.js';
 import type { CheckedReadContext } from '../../recall/application/coverage-checker.js';
 import { transitionEndpoints } from '../domain/chunk-revision.js';
+import { hashContent } from '../domain/content.js';
 
 /**
  * The evidence a revision is required to submit beside its members, and where it comes from.
@@ -53,6 +55,15 @@ const STATEMENT_KINDS = new Set(['corrects', 'confirms']);
  */
 const STANDING_AND_DERIVATION = new Set(['corrects', 'confirms', 'derived_from']);
 
+/**
+ * The population `sourcesBehind` consults beyond the two statement roles.
+ *
+ * It is bound where a census has counted it and left unblocked where none has. This read is a
+ * positive lookup, so an uncounted absence is not what it rests on; what it does rest on is the
+ * selected link itself, which the selection below carries to the content boundary.
+ */
+const DERIVATION_ROLES: readonly DurableRole[] = ['stated_derivation'];
+
 export type TransitionDeps = {
   readonly db: SqliteHandle;
   readonly resolver: EvidenceResolver;
@@ -66,41 +77,80 @@ export type TransitionDeps = {
  * source made a statement about it, and the statement's own source is the one the regrounding has
  * to read.
  */
+/** One standing statement, named by the link version that makes it stand. */
+type StatementFact = {
+  readonly linkId: string;
+  readonly fromId: string;
+  readonly version: number;
+};
+
 /**
- * The sources whose statement about this endpoint currently stands.
+ * The statements about this endpoint that currently stand.
  *
  * Composed from the two committed-view readers rather than a third spelling of their predicate:
  * the link chain names who stated what, and the newest committed version of each link decides
  * whether it still holds. A retired statement drops out here, which is what keeps the required
  * set from accumulating every correction that was ever made.
  */
-function currentStatementSources(
+function currentStatementFacts(
   db: SqliteHandle,
   endpointId: string,
-  kinds: ReadonlySet<string> = STATEMENT_KINDS,
-): readonly string[] {
+  kinds: ReadonlySet<string>,
+): readonly StatementFact[] {
   const byLink = new Map<string, string>();
   for (const link of listStatedLinksTo(db, endpointId)) {
     if (kinds.has(link.kind) && link.fromId !== undefined) {
       byLink.set(link.linkId, link.fromId);
     }
   }
-  const sources: string[] = [];
+  const facts: StatementFact[] = [];
   for (const [linkId, fromId] of byLink) {
     const latest = committedLinkVersions(db, linkId).at(-1);
     if (latest !== undefined && latest.state !== 'retired') {
-      sources.push(fromId);
+      facts.push({ linkId, fromId, version: latest.version });
     }
   }
-  return sources;
+  return facts;
 }
 
-function sourcesBehind(db: SqliteHandle, endpointId: string): readonly string[] {
-  const carrying = committedIncidenceForNode(db, endpointId).map((row) => row.sourceId);
+function currentStatementSources(
+  db: SqliteHandle,
+  endpointId: string,
+  kinds: ReadonlySet<string> = STATEMENT_KINDS,
+): readonly string[] {
+  return currentStatementFacts(db, endpointId, kinds).map((fact) => fact.fromId);
+}
+
+/**
+ * One endpoint's answer, with the records it was taken from.
+ *
+ * The source list alone is not the reading. A link retired between the selection and the content
+ * read leaves its source in the required set with nothing standing behind it, and the source's own
+ * later reference token cannot certify the earlier selection any more than a later token could
+ * certify a negative lookup. So the selected link versions and incidence rows travel with the
+ * answer, and the boundary that follows asks the records whether they still say this.
+ */
+type EndpointSelection = {
+  readonly sources: readonly string[];
+  readonly facts: string;
+};
+
+function sourcesBehind(db: SqliteHandle, endpointId: string): EndpointSelection {
+  const carrying = committedIncidenceForNode(db, endpointId);
   // The same committed reading the standing set uses, so one statement is not evidence here and
   // absent there. A statement whose operation nobody acknowledged is durable and invisible.
-  const stating = currentStatementSources(db, endpointId, STANDING_AND_DERIVATION);
-  return [...new Set([...carrying, ...stating])];
+  const stating = currentStatementFacts(db, endpointId, STANDING_AND_DERIVATION);
+  const incidence = carrying.map((row) => [row.sourceId, row.role, row.linkId, row.linkVersion]);
+  const statements = stating.map((fact) => [fact.linkId, fact.fromId, fact.version]);
+  return {
+    sources: [
+      ...new Set([...carrying.map((row) => row.sourceId), ...stating.map((fact) => fact.fromId)]),
+    ],
+    facts: hashContent([
+      [...incidence].sort((left, right) => String(left).localeCompare(String(right))),
+      [...statements].sort((left, right) => String(left).localeCompare(String(right))),
+    ]),
+  };
 }
 
 export type TransitionEvidence = ResolvedMembers & {
@@ -224,6 +274,8 @@ export async function chunkTransitionEvidence(
   // replace the one the requirement was derived under.
   bound.addAll(standing.dependencies);
   const unresolved: string[] = [];
+  /** Each endpoint's selection, by the records it was taken from, kept for the boundary below. */
+  const selected = new Map<string, string>();
   for (const endpointId of endpoints) {
     // A member's own changed scope is not an endpoint to walk: the member is already being read
     // as a member, and what currently stands about it is the standing set's answer. Walking it
@@ -231,20 +283,22 @@ export async function chunkTransitionEvidence(
     if (members.has(endpointId)) {
       continue;
     }
-    // The statement populations, on the same terms the walk binds its own. The derivation half of
-    // `sourcesBehind` is not counted here: `stated_derivation:in` is a real scope the acceptance
-    // writer advances, and no producer establishes its census, so requiring it would hold every
-    // regrounding on a count nobody takes. It is a positive lookup rather than a completeness
-    // reading — an endpoint it cannot answer for is already named `unresolved` and refuses — and
-    // the count it needs is named in the report as owed.
+    // The statement populations, on the same terms the walk binds its own.
     const census = incomingStatementScopes(deps.db, endpointId);
     bound.addAll(census.dependencies);
     unprovedScopes.push(...census.unproved);
-    const behind = sourcesBehind(deps.db, endpointId).filter((sourceId) => !members.has(sourceId));
+    // The derivation half of `sourcesBehind` is bound too, before the selection reads it. An
+    // uncounted census does not hold the regrounding, since this is a positive lookup rather than
+    // a completeness reading. Where one has been counted, the token makes a retirement visible to
+    // the publication's own equality check as well as to the boundary below.
+    bound.addAll(incomingStatementScopes(deps.db, endpointId, DERIVATION_ROLES).dependencies);
+    const selection = sourcesBehind(deps.db, endpointId);
+    const behind = selection.sources.filter((sourceId) => !members.has(sourceId));
     if (behind.length === 0) {
       unresolved.push(endpointId);
       continue;
     }
+    selected.set(endpointId, selection.facts);
     for (const sourceId of behind) {
       required.add(sourceId);
     }
@@ -257,12 +311,18 @@ export async function chunkTransitionEvidence(
   const resolved = await resolveChunkMembers(deps.resolver, deps.db, bounded, context);
   bound.addAll(resolved.dependencies);
   unprovedScopes.push(...resolved.unprovedScopes);
+  // The content read happens after the selection, so the selection is re-asked of the records once
+  // that read is done. A statement retired or an incidence moved in between makes the requirement
+  // one nobody now stands behind, and this revision publishes on the records or not at all.
+  const moved = [...selected]
+    .filter(([endpointId, facts]) => sourcesBehind(deps.db, endpointId).facts !== facts)
+    .map(([endpointId]) => endpointId);
   return {
     readings: [
       ...resolved.readings,
       // An endpoint nobody can resolve reaches the plan as a requirement that read unreadable,
       // which is the refusal it is, rather than as a requirement that quietly went away.
-      ...[...unresolved, ...overflow].map((sourceId) => ({
+      ...[...unresolved, ...overflow, ...moved].map((sourceId) => ({
         sourceId,
         reading: 'unreadable' as const,
       })),
