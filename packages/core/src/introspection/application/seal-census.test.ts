@@ -78,6 +78,7 @@ describe('the fresh census', () => {
       dueRemainders: 0,
       dueChunks: 0,
       oldestEligibleAgeMs: undefined,
+      invalidatedHeads: 0,
       blockedSourcesByReason: {},
       blockedOldestAgeMs: undefined,
       pendingPublishedRepair: false,

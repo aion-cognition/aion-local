@@ -41,7 +41,16 @@ export default defineConfig({
         test: {
           name: 'unit',
           include: ['packages/*/src/**/*.test.ts'],
-          exclude: ['**/*.int.test.ts', '**/node_modules/**', '**/dist/**'],
+          exclude: [
+            '**/*.int.test.ts',
+            '**/node_modules/**',
+            '**/dist/**',
+            // Verification support, not product code: the no-model guard's negative control
+            // constructs a backend on purpose and passes only when the guard setup file is
+            // installed, which is the reviewed cold-barrel qualification's own config and not
+            // this project. Run here it would report a designed refusal as a broken suite.
+            '**/review-only-guard/**',
+          ],
           environment: 'node',
         },
       },
