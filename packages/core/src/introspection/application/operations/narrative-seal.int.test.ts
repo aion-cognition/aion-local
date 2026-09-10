@@ -31,6 +31,10 @@ import {
   readNarrativeRevision,
   readPublishedHead,
 } from '../../../infrastructure/sqlite/narrative-revisions.js';
+import {
+  sealSessionChunk,
+  type ChunkNarrativeDeps,
+} from '../../../reflection/application/chunk-narrative.js';
 import { INSTALLED_PUBLICATION_HANDLERS } from '../../../reflection/application/installed-publications.js';
 import {
   handleReflection,
@@ -151,6 +155,18 @@ function context(now = NOW, config: Config = DEFAULTS): OperationContext {
 
 async function runSeal(now = NOW, scales: SealScales = ONE_MEMBER): Promise<OperationOutcome> {
   return narrativeSealOperation(scales).run(context(now));
+}
+
+/** The same deps the operation composes, for a case that needs a seal outside a run. */
+function chunkDeps(): ChunkNarrativeDeps {
+  return {
+    driver: substrate.harness.driver,
+    db: store.db,
+    provider: scripted,
+    resolver,
+    publications: coordinator,
+    logger,
+  };
 }
 
 /**
@@ -384,4 +400,38 @@ it('races two runs through one fence without publishing a chunk twice', async ()
   expect(readPublishedHead(store.db, CHUNK_REVISION_FAMILY, chunkId)).toBe(1);
   expect(listChunkMembers(store.db, chunkId)).toEqual([source]);
   expect(coordinator.hasPending()).toBe(false);
+});
+
+/**
+ * Arrival must not outrank age. A tail this run seals joins the same capture-ordered enumeration
+ * as everything else that is due, so a substrate taking sources faster than it publishes them
+ * cannot spend every slot on its newest tail while the oldest chunk waits.
+ */
+it('publishes the older due chunk before the tail it sealed in the same run', async () => {
+  const later = new Date(NOW.getTime() + 2 * DAY_MS);
+  await drain(later);
+  const older = await accept('session-fair-older', 'older');
+  const olderSeal = await sealSessionChunk(chunkDeps(), 'session-fair-older', {
+    now: later,
+    sessionClosing: true,
+    policy: { ...ONE_MEMBER, maxMembers: 24 },
+  });
+  if (olderSeal.status !== 'sealed') {
+    throw new Error(`the fixture needs a sealed older chunk, got ${olderSeal.status}`);
+  }
+  const newer = await accept('session-fair-newer', 'newer');
+
+  const outcome = await runSeal(later, { ...ONE_MEMBER, batch: 1 });
+
+  expect(outcome.itemsProcessed).toBe(1);
+  expect(readPublishedHead(store.db, CHUNK_REVISION_FAMILY, olderSeal.chunkId)).toBe(1);
+  // The newer tail is sealed durable work and it waits its turn rather than taking the slot.
+  const newerChunk = chunkOfSource(store.db, newer) ?? '';
+  expect(newerChunk).not.toBe('');
+  expect(readPublishedHead(store.db, CHUNK_REVISION_FAMILY, newerChunk)).toBeUndefined();
+  expect(listChunkMembers(store.db, olderSeal.chunkId)).toEqual([older]);
+
+  // And the next run reaches it, so nothing was discharged by being passed over.
+  await runSeal(later, { ...ONE_MEMBER, batch: 1 });
+  expect(readPublishedHead(store.db, CHUNK_REVISION_FAMILY, newerChunk)).toBe(1);
 });

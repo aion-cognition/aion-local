@@ -328,11 +328,18 @@ function heldPending(ctx: OperationContext, deps: NarrativeMaintenanceDeps): str
   }
 }
 
-/** The chunks this run may attempt: what it just sealed, then what durable state says is due. */
-function publicationQueue(ctx: OperationContext, seal: SealPass, batch: number): readonly string[] {
-  const sealed = new Set(seal.chunkIds);
-  const due = dueChunkGroups(ctx.db, ctx.now, batch).map((group) => group.chunkId);
-  return [...seal.chunkIds, ...due.filter((chunkId) => !sealed.has(chunkId))];
+/**
+ * The chunks this run may attempt, in one order over one population.
+ *
+ * Taken AFTER the seal and read from the manifest, so a membership this run froze is in the same
+ * enumeration as everything else that is due and takes its place in it by capture position. The
+ * queue used to put the freshly sealed chunks in front, which made arrival outrank age: a
+ * substrate taking new sources faster than it publishes them would spend every slot on the newest
+ * tail while the oldest chunk waited forever, and the remainder cursor protects only the seal
+ * side. Blocked and future-due attempts stay excluded, and nothing here discharges anything.
+ */
+function publicationQueue(ctx: OperationContext, batch: number): readonly string[] {
+  return dueChunkGroups(ctx.db, ctx.now, batch).map((group) => group.chunkId);
 }
 
 async function runSeal(ctx: OperationContext, scales: SealScales): Promise<OperationOutcome> {
@@ -368,7 +375,7 @@ async function runSeal(ctx: OperationContext, scales: SealScales): Promise<Opera
     standing: 0,
     held: 0,
   };
-  for (const chunkId of publicationQueue(ctx, seal, scales.batch)) {
+  for (const chunkId of publicationQueue(ctx, scales.batch)) {
     if (ctx.signal.aborted || tally.attempted >= scales.batch) {
       break;
     }
