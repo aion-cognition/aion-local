@@ -1,7 +1,9 @@
 import {
+  blockedAttempts,
   dueChunkGroups,
   dueRemainderGroups,
   reconsiderableBlockedAttempts,
+  type BlockedAttempt,
   type RemainderCursor,
 } from '../../../infrastructure/sqlite/chunk-nomination.js';
 import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
@@ -12,6 +14,7 @@ import {
   CHUNK_REVISION_FAMILY,
 } from '../../../infrastructure/sqlite/narrative-revisions.js';
 import { getLedgerEntry, markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
+import { memberScopesCounted } from '../../../reflection/application/chunk-evidence.js';
 import {
   publishChunkNarrative,
   sealSessionChunk,
@@ -19,6 +22,7 @@ import {
 } from '../../../reflection/application/chunk-narrative.js';
 import { CHUNK_MAX_MEMBERS } from '../../../reflection/domain/chunk-boundary.js';
 import {
+  CENSUS_BLOCK_REASON,
   STANDING_HEAD_REASON,
   SUPPRESSION_BLOCK_REASONS,
   SYNTHESIS_ATTEMPTED_REASONS,
@@ -328,15 +332,25 @@ function detailOf(
 /**
  * Clears the blocks whose recorded prerequisite no longer holds.
  *
+ * Each reason is rechecked against the record its own prerequisite lives in. A suppression block
+ * clears on a member that was proved forgotten and is not now; a census block clears when the
+ * scopes it could not count are counted. Sharing one test between them would have done both
+ * wrongs at once — leaving a censused chunk blocked forever, and offering a budget refusal that
+ * merely shares a reason word with a suppression as though a forget had cleared.
+ *
  * Clearing is not attempting: the revision goes back into the ordinary enumeration and takes its
  * turn there by capture position, so a reconsidered attempt cannot jump the older backlog either.
  */
 function reconsiderBlockedAttempts(ctx: OperationContext, limit: number): number {
-  let cleared = 0;
-  for (const attempt of reconsiderableBlockedAttempts(ctx.db, {
+  const suppression = reconsiderableBlockedAttempts(ctx.db, {
     reasons: SUPPRESSION_BLOCK_REASONS,
     limit,
-  })) {
+  });
+  const census = blockedAttempts(ctx.db, { reasons: [CENSUS_BLOCK_REASON], limit }).filter(
+    (attempt: BlockedAttempt) => memberScopesCounted(ctx.db, attempt.members),
+  );
+  let cleared = 0;
+  for (const attempt of [...suppression, ...census]) {
     if (clearRevisionBlock(ctx.db, CHUNK_REVISION_FAMILY, attempt.chunkId, attempt.revisionNo)) {
       cleared += 1;
       ctx.logger.info(

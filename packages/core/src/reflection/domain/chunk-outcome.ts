@@ -1,4 +1,4 @@
-import type { ChunkRevisionDecision } from './chunk-revision.js';
+import type { ChunkBlockReason, ChunkRevisionDecision } from './chunk-revision.js';
 
 /**
  * What a publication attempt's REASON says about what it cost and what it established.
@@ -43,11 +43,26 @@ export const SYNTHESIS_ATTEMPTED_REASONS: readonly string[] = [
  * so unforgetting it is exactly the change that makes the attempt runnable again.
  *
  * The other block reasons record other prerequisites: a member over the resolver's budget or a
- * render over the allowance clears on a recorded rendering-policy change, and an unreadable scope
- * clears when the scope becomes readable. Neither is derivable from the source states, and the
- * attempt record carries no note of the policy it ran under, so neither is reconsidered here.
+ * render over the allowance clears on a recorded rendering-policy change, which is not derivable
+ * from the source states, and the attempt record carries no note of the policy it ran under.
+ *
+ * `no_admissible_input` is in this set and is NOT evidence of a suppression. A chunk answers it
+ * when every member is suppressed and equally when no member fits the allowance, so the reason
+ * names a class and the records have to name the cause. Membership here only puts the attempt in
+ * front of the prerequisite test.
  */
 export const SUPPRESSION_BLOCK_REASONS: readonly string[] = [
   'no_admissible_input',
   'required_transition_evidence_suppressed',
 ];
+
+/**
+ * The block whose prerequisite is a COUNT rather than a state.
+ *
+ * A revision refuses when a member's incoming-statement scope is uncounted, because an uncounted
+ * scope is not a proved-empty one and coverage cannot be certified over it. What clears it is the
+ * census being established for those scopes — a different question from suppression, asked of a
+ * different record, so it gets its own test rather than sharing the suppression one. Typed against
+ * the lifecycle's own union: renaming the reason there is a compile error here.
+ */
+export const CENSUS_BLOCK_REASON: ChunkBlockReason = 'member_scope_census_missing';

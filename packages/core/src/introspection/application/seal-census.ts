@@ -1,10 +1,13 @@
+import { verifyEvidenceRevision } from '../../evidence/application/dependencies.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import type { EvidenceRevision } from '../../infrastructure/publication/preconditions.js';
 import {
   blockedChunkSources,
   dueChunkGroups,
   dueRemainderGroups,
   heldRemainderMembership,
   inputFullRemainderGroups,
+  publishedChunkHeads,
 } from '../../infrastructure/sqlite/chunk-nomination.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { coordinatorControl } from '../../infrastructure/sqlite/publication-coordinator-store.js';
@@ -85,6 +88,33 @@ function readPending(db: SqliteHandle): { pending: boolean | undefined; reason?:
   }
 }
 
+/**
+ * Published heads that no longer rest on what stands, counted to the same ceiling as the rest.
+ *
+ * Invalidation is a property of the head's own stored dependency set, so the count is taken through
+ * the verifier the publication itself uses rather than from a marker a write had to remember to
+ * stamp. A head whose set will not parse is left out of the count: unreadable is not stale, and the
+ * pass that would rewrite it declines it on the same reading.
+ */
+function invalidatedHeadCount(db: SqliteHandle, ceiling: number): number {
+  let stale = 0;
+  for (const head of publishedChunkHeads(db, ceiling)) {
+    if (head.evidenceRevisionJson === null) {
+      continue;
+    }
+    let stored: EvidenceRevision;
+    try {
+      stored = JSON.parse(head.evidenceRevisionJson) as EvidenceRevision;
+    } catch {
+      continue;
+    }
+    if (verifyEvidenceRevision(db, stored).status === 'stale') {
+      stale += 1;
+    }
+  }
+  return stale;
+}
+
 export function readSealDemand(db: SqliteHandle, input: SealCensusInput): SealDemand {
   const { pending, reason } = readPending(db);
   const ceiling = Math.max(1, input.batch * SEAL_CENSUS_CEILING_FACTOR);
@@ -131,6 +161,7 @@ export function readSealDemand(db: SqliteHandle, input: SealCensusInput): SealDe
       dueRemainders: remainders.length + extraInput.length,
       dueChunks: chunks.length,
       oldestEligibleAgeMs: ageMs(input.now, eligibleAt),
+      invalidatedHeads: invalidatedHeadCount(db, ceiling),
       blockedSourcesByReason,
       blockedOldestAgeMs: ageMs(input.now, blockedAt),
       pendingPublishedRepair: pending,

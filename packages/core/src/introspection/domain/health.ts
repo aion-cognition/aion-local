@@ -143,6 +143,14 @@ export type SealDemand = {
   readonly dueChunks: number | undefined;
   /** Elapsed arrival age of the oldest eligible group. Blocked groups never set it. */
   readonly oldestEligibleAgeMs: number | undefined;
+  /**
+   * Published chunk heads whose own stored dependency set no longer verifies, counted to the same
+   * ceiling as the groups above and reported as the floor it is. It is the regrounding half of the
+   * lifecycle's demand, and it lives here rather than beside the graph counts because it is a
+   * question the manifest answers: the legacy grounding marker on a node says nothing about a chunk
+   * family, so a substrate with no stale marker at all can still owe a rewrite.
+   */
+  readonly invalidatedHeads: number | undefined;
   /** Sources a recorded block holds out of publication, by the reason recorded against it. */
   readonly blockedSourcesByReason: Readonly<Record<string, number>>;
   readonly blockedOldestAgeMs: number | undefined;
@@ -278,6 +286,7 @@ export const NEUTRAL_SEAL_DEMAND: SealDemand = {
   dueRemainders: undefined,
   dueChunks: undefined,
   oldestEligibleAgeMs: undefined,
+  invalidatedHeads: undefined,
   blockedSourcesByReason: {},
   blockedOldestAgeMs: undefined,
   pendingPublishedRepair: undefined,

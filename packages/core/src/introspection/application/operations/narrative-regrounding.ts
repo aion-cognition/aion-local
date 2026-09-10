@@ -1,7 +1,12 @@
 import type { NarrativeMaintenanceDeps } from './narrative-seal.js';
 import { verifyEvidenceRevision } from '../../../evidence/application/dependencies.js';
 import type { EvidenceRevision } from '../../../infrastructure/publication/preconditions.js';
-import { publishedChunkHeads } from '../../../infrastructure/sqlite/chunk-nomination.js';
+import {
+  publishedChunkHeads,
+  type HeadCursor,
+} from '../../../infrastructure/sqlite/chunk-nomination.js';
+import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import { getLedgerEntry, markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
 import { publishChunkNarrative } from '../../../reflection/application/chunk-narrative.js';
 import { cleanupNarratives } from '../../../reflection/application/narrative-cleanup.js';
 import { HEALTH_COLLECTORS, type HealthSnapshot } from '../../domain/health.js';
@@ -44,10 +49,22 @@ export const NARRATIVE_REGROUNDING_OPERATION = 'narrative_regrounding';
  * backlog took and changed nothing about how urgently the loop asked for it.
  */
 export function narrativeRegroundingRelevance(health: HealthSnapshot, batch: number): number {
-  if (health.degraded.includes(HEALTH_COLLECTORS.graph) || batch <= 0) {
+  if (batch <= 0) {
     return 0;
   }
-  return Math.min(1, health.graph.staleNarratives / batch);
+  // Two families, two readings, and either one alone is demand. The legacy count comes off the
+  // graph and the invalidated-head count off the manifest, so a degraded collector suppresses its
+  // own term and not the other's: a substrate whose graph reading failed still owes the rewrites
+  // its own stored dependency sets prove.
+  const legacy = health.degraded.includes(HEALTH_COLLECTORS.graph)
+    ? 0
+    : health.graph.staleNarratives;
+  const seal = health.narrativeSeal;
+  const invalidated =
+    health.degraded.includes(HEALTH_COLLECTORS.narrativeSeal) || seal.availability !== 'measured'
+      ? 0
+      : (seal.invalidatedHeads ?? 0);
+  return Math.min(1, (legacy + invalidated) / batch);
 }
 
 function storedRevision(json: string | null): EvidenceRevision | undefined {
@@ -67,6 +84,52 @@ type ChunkRegrounding = {
   readonly republished: number;
 };
 
+/** Where the last pass stopped reading published heads. */
+const HEAD_CURSOR_KEY = 'narrative-regrounding:head-cursor';
+
+function readHeadCursor(db: SqliteHandle): HeadCursor | undefined {
+  const summary = getLedgerEntry(db, HEAD_CURSOR_KEY)?.summary;
+  if (typeof summary !== 'object' || summary === null) {
+    return undefined;
+  }
+  const { captureKey, chunkId } = summary as { captureKey?: unknown; chunkId?: unknown };
+  return typeof captureKey === 'string' && typeof chunkId === 'string' && chunkId !== ''
+    ? { captureKey, chunkId }
+    : undefined;
+}
+
+function writeHeadCursor(db: SqliteHandle, cursor: HeadCursor | undefined): void {
+  markLedgerApplied(db, HEAD_CURSOR_KEY, cursor === undefined ? {} : { ...cursor });
+}
+
+/**
+ * One bounded page of heads, resumed where the last run stopped, wrapping once at the end.
+ *
+ * A fixed front page is not continuation. Reading the first `batch` heads every run means a stale
+ * head standing behind a page of current ones is never reached, however many times the pass runs —
+ * twenty runs at a batch of one examine the same head twenty times. The cursor is the whole fix,
+ * and it wraps inside the same run so a page that lands past the end still does the run's work
+ * rather than spending it on an empty read.
+ */
+function headPage(
+  db: SqliteHandle,
+  batch: number,
+): { heads: ReturnType<typeof publishedChunkHeads>; next: HeadCursor | undefined } {
+  const resume = readHeadCursor(db);
+  let heads = publishedChunkHeads(db, batch, resume);
+  if (heads.length === 0 && resume !== undefined) {
+    heads = publishedChunkHeads(db, batch);
+  }
+  const last = heads.at(-1);
+  // A short page is the end of the walk: clearing the position sends the next run to the front
+  // rather than leaving it parked past the last head forever.
+  const next =
+    heads.length < batch || last?.captureKey == null
+      ? undefined
+      : { captureKey: last.captureKey, chunkId: last.chunkId };
+  return { heads, next };
+}
+
 /**
  * The chunk families whose published head no longer rests on what currently stands.
  *
@@ -80,7 +143,8 @@ async function regroundChunkFamilies(
   deps: NarrativeMaintenanceDeps,
   batch: number,
 ): Promise<ChunkRegrounding> {
-  const heads = publishedChunkHeads(ctx.db, batch);
+  const { heads, next } = headPage(ctx.db, batch);
+  writeHeadCursor(ctx.db, next);
   let stale = 0;
   let republished = 0;
   for (const head of heads) {

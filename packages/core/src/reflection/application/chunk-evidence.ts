@@ -128,6 +128,19 @@ function incomingStatementScopes(db: SqliteHandle, sourceId: string): ScopeReadi
 }
 
 /**
+ * Whether the census now covers every scope a blocked revision could not count.
+ *
+ * The same read the refusal was taken from, asked again. A scheduler cannot re-derive this from the
+ * block reason: `member_scope_census_missing` says a required scope was uncounted at the time, and
+ * only the scope records say whether it is counted now. Absence is still not proof — a scope that
+ * reads anything other than `verified` leaves the block standing, which is the uncounted case and
+ * the unreadable one alike.
+ */
+export function memberScopesCounted(db: SqliteHandle, sourceIds: readonly string[]): boolean {
+  return sourceIds.every((sourceId) => incomingStatementScopes(db, sourceId).unproved.length === 0);
+}
+
+/**
  * One batched read for a set of sources, classified per source.
  *
  * The dependency set travels with it: what a revision fences on is what its own read observed, and
