@@ -25,6 +25,11 @@ import { randomUUID } from 'node:crypto';
  * `observerFailures` counts the faults, and `countsComplete` goes false when a fault could have
  * kept a count from being established. A count that is not complete is never published as a
  * measured value.
+ *
+ * A gap is also remembered rather than recovered from. A call that ran with no accumulation is
+ * counted against its driver, so the next accumulation opened for that driver starts incomplete
+ * and carries the misses as faults. Observation that resumes after a gap would otherwise report
+ * a clean zero over an interval in which writes ran and nothing watched them.
  */
 
 /**
@@ -79,7 +84,11 @@ export type ManagedWriteObservations = {
   readonly replaysByClass: Readonly<Record<ManagedWriteReplayClass, number>>;
   /** Bodies that raised. A raised body is not by itself a replay or an exhausted operation. */
   readonly callbackFailures: number;
-  /** Native codes only: no query text, no parameters, no ids. Sums to `callbackFailures`. */
+  /**
+   * Native codes only: no query text, no parameters, no ids. Sums to `callbackFailures` while
+   * `failureCodesTruncated` is false; past the cap the failures still count and the codes past
+   * it are not named.
+   */
   readonly failuresByCode: Readonly<Record<string, number>>;
   readonly failureCodesTruncated: boolean;
   readonly callerFulfilments: number;
@@ -110,12 +119,37 @@ type Accumulation = {
 const ACCUMULATIONS = new WeakMap<Driver, Accumulation>();
 
 /**
+ * Calls that ran with no accumulation to count them, kept against the driver they ran on. A
+ * later accumulation for that driver starts incomplete and carries these as faults, because an
+ * interval that begins after a missed call has no honest zero to report: the writes happened
+ * and nothing counted them.
+ */
+const MISSED_CALLS = new WeakMap<Driver, number>();
+
+/**
+ * Set when a missed call could not even be recorded against its driver, which leaves no
+ * per-driver evidence to start an accumulation from. Every accumulation opened afterwards is
+ * incomplete: it is the conservative reading, and the alternative is a clean zero over an
+ * interval nobody watched.
+ */
+let observationUnattributable = false;
+
+/** Never throws. Losing the marker costs precision, and the process-wide flag takes over. */
+function recordMissedCall(driver: Driver): void {
+  try {
+    MISSED_CALLS.set(driver, (MISSED_CALLS.get(driver) ?? 0) + 1);
+  } catch {
+    observationUnattributable = true;
+  }
+}
+
+/**
  * A fresh accumulation, which is built even when it cannot be given an identity. An epoch that
  * could not be allocated leaves the counts unable to say which population they belong to, so
  * the accumulation is marked incomplete for its whole life rather than reporting numbers a
  * delta could subtract across two different drivers.
  */
-function newAccumulation(): Accumulation {
+function newAccumulation(missed: number): Accumulation {
   const zero: Accumulation = {
     epoch: UNIDENTIFIED_EPOCH,
     countsComplete: false,
@@ -128,26 +162,32 @@ function newAccumulation(): Accumulation {
     failureCodesTruncated: false,
     callerFulfilments: 0,
     callerRejections: 0,
-    observerFailures: 0,
+    observerFailures: missed,
   };
+  const whole = missed === 0 && !observationUnattributable;
   try {
-    return { ...zero, epoch: randomUUID(), countsComplete: true };
+    return { ...zero, epoch: randomUUID(), countsComplete: whole };
   } catch {
-    return { ...zero, observerFailures: 1 };
+    return { ...zero, observerFailures: missed + 1 };
   }
 }
 
-/** Undefined when starting one failed, which leaves the caller unobserved rather than broken. */
+/**
+ * Undefined when starting one failed, which leaves the caller unobserved rather than broken.
+ * The miss is recorded against the driver first, so the next accumulation opened for it cannot
+ * present the interval it never saw as a complete zero.
+ */
 function accumulationFor(driver: Driver): Accumulation | undefined {
   try {
     const held = ACCUMULATIONS.get(driver);
     if (held !== undefined) {
       return held;
     }
-    const fresh = newAccumulation();
+    const fresh = newAccumulation(MISSED_CALLS.get(driver) ?? 0);
     ACCUMULATIONS.set(driver, fresh);
     return fresh;
   } catch {
+    recordMissedCall(driver);
     return undefined;
   }
 }

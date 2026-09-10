@@ -312,4 +312,29 @@ describe('managed write observations', () => {
     expect(observed.failureCodesTruncated).toBe(true);
     expect(observed.callbackFailures).toBe(20);
   });
+
+  /**
+   * A miss that cannot even be marked against its driver falls back to a process-wide marker,
+   * which stays set for the rest of this module. Every case after it would read incomplete, so
+   * it is the last one here.
+   */
+  it('keeps every later reading incomplete when a miss cannot be marked against its driver', async () => {
+    const missed = retryingDriver({ retries: 0 });
+    const later = retryingDriver({ retries: 0 });
+    const installing = vi.spyOn(WeakMap.prototype, 'set').mockImplementation((): never => {
+      throw new Error('no marker can be installed');
+    });
+    // Nothing that runs under this spy may build its own weak state, assertions included, so
+    // the write is taken as a value and every check happens after the method is restored.
+    let written: string;
+    try {
+      written = await inWriteTransaction(missed, () => Promise.resolve('written'));
+    } finally {
+      installing.mockRestore();
+    }
+
+    expect(written).toBe('written');
+    expect(readManagedWriteObservations(missed).countsComplete).toBe(false);
+    expect(readManagedWriteObservations(later).countsComplete).toBe(false);
+  });
 });
