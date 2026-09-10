@@ -112,15 +112,25 @@ async function closeDuplicates(
  * against what one batch reached, and reports active fan-out beside it. The two numbers are
  * separate on purpose: physical edge count says nothing about how much of the graph a
  * traversal can actually walk, and only the active half is the fan-out recall pays for.
+ *
+ * `examined` is the population this pass actually read, which is not the backlog. The bounded
+ * statement matches at most `batch` rows and writes every row it matched, so what it examined
+ * and what it changed are the same set by construction. The backlog is a gauge that belongs
+ * beside them and never inside them.
  */
 async function repairSummarizationEdges(
   driver: Driver,
   batch: number,
   now: Date,
-): Promise<{ stale: number; active: number; closed: number }> {
+): Promise<{ backlog: number; active: number; examined: number; closed: number }> {
   const before = await countNarrativeEdges(driver);
   const closed = await closeStaleNarrativeEdges(driver, { batchSize: batch, now });
-  return { stale: before.stale, active: before.active, closed: closed.length };
+  return {
+    backlog: before.stale,
+    active: before.active,
+    examined: closed.length,
+    closed: closed.length,
+  };
 }
 
 export function narrativeCleanupOperation(): IntrospectionOperation {
@@ -147,17 +157,24 @@ export function narrativeCleanupOperation(): IntrospectionOperation {
         ctx.now,
       );
 
-      const processed = duplicates.sessions + orphans.length + edges.stale;
+      // One declared unit across the three repairs: a record this run READ and could have
+      // changed. The stale-edge BACKLOG used to stand in for the edge term, which made a run
+      // that closed five hundred of forty thousand report forty thousand examined and a
+      // vanishing effect ratio. The backlog is a gauge in the detail; the subtallies are what
+      // a reader adds up.
+      const processed = duplicates.sessions + orphans.length + edges.examined;
       const affected = duplicates.closed + forgotten + edges.closed;
       return {
         status: affected === 0 ? 'noop' : 'applied',
         itemsProcessed: processed,
         itemsAffected: affected,
         detail:
-          `${String(duplicates.closed)} duplicate narrative(s) superseded across ` +
-          `${String(duplicates.sessions)} session(s), ${String(forgotten)} orphan(s) forgotten, ` +
-          `${String(edges.closed)} stale summarization edge(s) closed of ${String(edges.stale)}; ` +
-          `${String(edges.active)} active`,
+          `examined ${String(duplicates.sessions)} duplicate group(s), ` +
+          `${String(orphans.length)} orphan candidate(s), ${String(edges.examined)} stale edge(s); ` +
+          `${String(duplicates.closed)} duplicate narrative(s) superseded, ` +
+          `${String(forgotten)} orphan(s) forgotten, ` +
+          `${String(edges.closed)} stale summarization edge(s) closed; ` +
+          `backlog ${String(edges.backlog)} stale, ${String(edges.active)} active`,
       };
     },
   };

@@ -15,6 +15,11 @@ import { upsertEdge } from '../../../infrastructure/graph/edges.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../../../infrastructure/graph/episodes.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import {
+  findDuplicateNarrativeSessions,
+  findOrphanedNarratives,
+} from '../../../infrastructure/graph/narrative-cleanup-queries.js';
+import { countNarrativeEdges } from '../../../infrastructure/graph/narrative-edge-queries.js';
+import {
   DERIVES_FROM_TYPE,
   NARRATIVE_PROPERTIES,
   SUMMARIZED_BY_TYPE,
@@ -270,5 +275,53 @@ describe('the summarization-edge backlog', () => {
         'edge-session',
       ),
     ).toBeUndefined();
+  }, 120_000);
+});
+
+/**
+ * Debt A7. What a bounded pass reports is what the pass actually read.
+ *
+ * The stale-edge term used to be the whole backlog, so a run that closed its batch of a large
+ * residue reported the residue as examined and its own effect as a rounding error. The backlog
+ * is still reported, as the gauge it is, beside the population one run reached.
+ */
+describe('what a bounded run says it examined', () => {
+  const A7_EPISODES = ['a7-e1', 'a7-e2', 'a7-e3', 'a7-e4'];
+
+  beforeAll(async () => {
+    await seedSession('a7-session');
+    for (const id of A7_EPISODES) {
+      await seedEpisode(id, 'a7-session');
+    }
+    await seedNarrative('a7-narrative-standing', 'a7-session', 2, 4);
+    await seedNarrative('a7-narrative-closed', 'a7-session', 1, 4);
+    for (const id of A7_EPISODES) {
+      await summarize(id, 'a7-narrative-closed');
+    }
+    await supersede(harness.driver, {
+      oldId: 'a7-narrative-closed',
+      newId: 'a7-narrative-standing',
+      now: NOW,
+    });
+  }, 120_000);
+
+  it('counts the bounded scan rather than the backlog behind it', async () => {
+    const groups = await findDuplicateNarrativeSessions(harness.driver, 50);
+    const orphans = await findOrphanedNarratives(harness.driver, 50);
+    const before = await countNarrativeEdges(harness.driver);
+    expect(before.stale).toBeGreaterThanOrEqual(4);
+
+    const outcome = await narrativeCleanupOperation().run(contextFor(2));
+
+    // The two independent edge classes agree with the closure receipts: exactly the batch moved
+    // from stale, and the active fan-out the traversal pays for did not.
+    const after = await countNarrativeEdges(harness.driver);
+    expect(before.stale - after.stale).toBe(2);
+    expect(after.active).toBe(before.active);
+
+    expect(outcome.itemsProcessed).toBe(groups.length + orphans.length + 2);
+    expect(outcome.itemsProcessed).toBeLessThan(before.stale);
+    expect(outcome.detail).toContain('2 stale edge(s)');
+    expect(outcome.detail).toContain(`backlog ${String(before.stale)} stale`);
   }, 120_000);
 });
