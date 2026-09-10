@@ -4,6 +4,7 @@ import {
   fetchNodeProvenance,
   findEntityMergeProposalsForNode,
   findSupersessionProposalsForNode,
+  recordedPosition,
   refusalLines,
   runSourceInspection,
   sourceOutputFor,
@@ -18,6 +19,7 @@ import {
 import { MAX_DERIVATION_ROOTS } from '@aion/protocol';
 
 import { CliUsageError, parseArgs, type ArgSpec } from './args.js';
+import { completionRefusal } from './coverage.js';
 import { short } from './format.js';
 import { stderrWriter, stdoutWriter, type Writer } from './output.js';
 import { withSubstrate, type Substrate } from './substrate.js';
@@ -330,16 +332,36 @@ export function runWhy(
       const page = await fetchNodeEdges(driver, flags.nodeId);
       const supersessions = findSupersessionProposalsForNode(substrate.db(), flags.nodeId);
       const merges = findEntityMergeProposalsForNode(substrate.db(), flags.nodeId);
-      // Read under the context the coverage decision above produced, like every other checked
-      // read: a resolver handed a bare mode has no epoch to answer under.
+      // Read under the context the coverage decision above produced, and judged against the
+      // position the store records: a resolver handed a bare mode has no epoch to answer under,
+      // and one handed no position reports a reading nobody stood behind as complete for use.
+      // The position is read, never taken, so an inspection recovers nothing and bootstraps
+      // nothing; a publication in flight degrades this answer rather than blocking it.
       const reads = sourceReadDeps({
         driver,
         db: substrate.db(),
         logger: substrate.logger(),
       });
-      const batch = await reads.resolver.resolveMetadata([flags.nodeId], checked.context, {
+      const certified = reads.resolver.certifiedAgainst({
+        checkpoint: () => Promise.resolve(recordedPosition(substrate.db())),
+      });
+      const batch = await certified.resolveMetadata([flags.nodeId], checked.context, {
         maxRoots: MAX_DERIVATION_ROOTS,
       });
+
+      // Nothing is printed until the contract this was read under is still the one in force.
+      // The graph block goes with it: both halves describe one moment, and emitting either
+      // under a statement that has moved is the answer the completion check exists to withhold.
+      const refusal = completionRefusal(substrate.db(), {
+        context: checked.context,
+        coverage: checked.coverage,
+      });
+      if (refusal !== undefined) {
+        for (const line of refusalLines(refusal)) {
+          stderrWriter(line);
+        }
+        return 1;
+      }
 
       renderProvenance(provenance, page, supersessions, merges, write);
       // Keyed by request rather than by id, so the reading is found by the address it answers

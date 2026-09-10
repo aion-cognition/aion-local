@@ -20,6 +20,8 @@ export { PublicationCoordinator } from './publication/coordinator.js';
 /** The publication history one source's own records name, for the timeline hydration. */
 export { listSourcePublications } from './sqlite/publication-intents.js';
 export { PublicationRecoveryLoop } from './publication/recovery.js';
+/** The position an inspection certifies against: read from the store's own record, never taken. */
+export { recordedPosition } from './publication/recorded-position.js';
 /** The base of the publication failure family, so a transport can recognize one and report its terms. */
 export { PublicationUnavailable } from './publication/errors.js';
 

@@ -7,13 +7,24 @@ import {
   seedSource,
 } from '@aion/core/evidence/test-support/evidence.fixture.js';
 import * as provenanceQueries from '@aion/core/infrastructure/graph/claim-provenance-queries.js';
+import { buildEvidenceRevision } from '@aion/core/infrastructure/publication/preconditions.js';
 import {
   activateCoverageContract,
   prepareCoverageContract,
+  readCurrentCoverageContract,
 } from '@aion/core/infrastructure/sqlite/coverage-contract.js';
 import { SqliteStore } from '@aion/core/infrastructure/sqlite/database.js';
+import {
+  beginSubstratePairing,
+  completeSubstratePairing,
+} from '@aion/core/infrastructure/sqlite/publication-control.js';
+import {
+  prepareCoordinatorRecord,
+  publicationInFlight,
+} from '@aion/core/infrastructure/sqlite/publication-coordinator-store.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import * as output from './output.js';
 import { Substrate } from './substrate.js';
 import { runWhy } from './why.js';
 
@@ -118,4 +129,76 @@ describe('why for a retained node with no resident origin edge', () => {
 
     expect(lines.join('\n')).toContain('the citation records could not answer');
   });
+});
+
+describe('retained why completion under the checked coverage contract', () => {
+  it('refuses an activation that lands inside the durable metadata read', async () => {
+    const lines: string[] = [];
+    const errors: string[] = [];
+    vi.spyOn(output, 'stderrWriter').mockImplementation((line) => errors.push(line));
+    vi.mocked(provenanceQueries.fetchClaimProvenance).mockImplementationOnce(async () => {
+      activateCoverageContract(store.db, {
+        activatedAt: new Date('2026-09-02T00:00:00.000Z'),
+        fieldPolicyVersion: 1,
+      });
+      return new Map([[NODE, { roots: [SOURCE], lineage: [SOURCE], complete: true }]]);
+    });
+
+    const code = await runWhy([NODE], (line) => lines.push(line));
+
+    expect.soft(code).toBe(1);
+    expect.soft(lines.join('\n')).not.toContain('durable evidence');
+    expect.soft(errors.join('\n')).toContain('coverage_changed');
+  });
+
+  it('refuses a registry that disappears inside the durable metadata read', async () => {
+    const lines: string[] = [];
+    const errors: string[] = [];
+    vi.spyOn(output, 'stderrWriter').mockImplementation((line) => errors.push(line));
+    vi.mocked(provenanceQueries.fetchClaimProvenance).mockImplementationOnce(async () => {
+      store.db.prepare('ALTER TABLE coverage_contract RENAME TO coverage_contract_hidden').run();
+      return new Map([[NODE, { roots: [SOURCE], lineage: [SOURCE], complete: true }]]);
+    });
+    try {
+      const code = await runWhy([NODE], (line) => lines.push(line));
+      expect.soft(code).toBe(1);
+      expect.soft(lines.join('\n')).not.toContain('durable evidence');
+      expect.soft(errors.join('\n')).toContain('coverage_store_unavailable');
+    } finally {
+      store.db.prepare('ALTER TABLE coverage_contract_hidden RENAME TO coverage_contract').run();
+    }
+  });
+});
+
+it('names pending publication uncertainty on retained-node durable evidence', async () => {
+  const pairing = beginSubstratePairing(store.db, 1);
+  completeSubstratePairing(store.db, pairing.substrateId);
+  prepareCoordinatorRecord(
+    store.db,
+    {
+      operationId: 'pending-semantic-write',
+      kind: 'semantic_write',
+      payloadJson: '{}',
+      digest: 'pending-digest',
+      plan: {
+        expected: {
+          coverageEpoch: readCurrentCoverageContract(store.db)!.epoch,
+          evidence: buildEvidenceRevision([]),
+          sources: [],
+          heads: [],
+        },
+        scopes: [],
+        data: {},
+        effects: [],
+      },
+      now: AT,
+    },
+    true,
+  );
+  expect(publicationInFlight(store.db)).toBe(true);
+  const lines: string[] = [];
+  const code = await runWhy([NODE], (line) => lines.push(line));
+  expect(code).toBe(0);
+  expect.soft(lines.join('\n')).toContain('pending_publication');
+  expect.soft(lines.join('\n')).not.toContain('proof            complete-for-use');
 });

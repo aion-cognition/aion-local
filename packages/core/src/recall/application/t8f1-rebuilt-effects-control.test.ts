@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { runCheckedRecall, type CheckedRecallDeps } from './checked-recall.js';
 import { CueCache } from './cues.js';
 import type { ReadCoordinator } from './read-completion.js';
+import type { RecallCompletion } from './recall-observers.js';
 import * as stageReads from './stage-reads.js';
 import { EvidenceResolver } from '../../evidence/application/resolver.js';
 import { OWNERSHIP_SCOPES } from '../../evidence/domain/ownership.js';
@@ -28,10 +29,12 @@ import {
   prepareCoverageContract,
 } from '../../infrastructure/sqlite/coverage-contract.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
+import { getLastPack } from '../../infrastructure/sqlite/last-pack.js';
 import { readServedItems, recordServedItems } from '../../infrastructure/sqlite/served-items.js';
 import { FakeGraph } from '../../reflection/test-support/fake-graph.fixture.js';
 import { SessionManager } from '../../session/session-manager.js';
 import * as fusionModule from '../domain/fusion.js';
+import type { RecallTrace } from '../domain/recall-trace.js';
 import { emittedPackIds } from '../domain/session-dedup.js';
 import { item, report } from '../domain/test-support/pack.fixture.js';
 
@@ -80,6 +83,8 @@ let logger: Logger;
 let graph: EmptySubstrateGraph;
 let embedCalls = 0;
 let recalled = 0;
+let completions: RecallCompletion[] = [];
+let traces: RecallTrace[] = [];
 /** What the stubbed coordinator answers, and what it does the moment a read reaches it. */
 let position: CheckpointResult;
 let declineWith: string | undefined;
@@ -120,7 +125,11 @@ function deps(): CheckedRecallDeps {
     logger,
     resolver: new EvidenceResolver({ driver: graph.driver, db: store.db, logger }),
     coordinator,
-    onRecalled: () => {
+    onTrace: (trace) => {
+      traces.push(trace);
+    },
+    onRecalled: (completion) => {
+      completions.push(completion);
       recalled += 1;
     },
   };
@@ -156,6 +165,8 @@ beforeEach(() => {
   recordServedItems(store.db, IDENTITY, [{ itemId: 'held', fingerprint: 'f' }], NOW.toISOString());
   embedCalls = 0;
   recalled = 0;
+  completions = [];
+  traces = [];
   position = { status: 'ready', checkpoint: CHECKPOINT };
   declineWith = undefined;
   atBoundary = undefined;
@@ -298,4 +309,51 @@ it('does not label a store-unavailable checkpoint as a pending publication', asy
       ),
     ).toBe(false);
   }
+});
+
+it('reports the rebuilt emitted set to both observers while preserving stored holdings', async () => {
+  activate();
+  installCandidates('other-session');
+  await recall();
+  const previous = getLastPack(store.db, IDENTITY);
+  const held = readServedItems(store.db, IDENTITY);
+  const beforeEmbeds = embedCalls;
+  declineWith = 'publication_changed';
+  const result = await recall();
+  expect(result.status).toBe('pack');
+  if (result.status !== 'pack') {
+    throw new Error('expected qualified answer');
+  }
+  expect([...emittedPackIds(result.pack)]).toEqual(['candidate-0']);
+  expect(traces.at(-1)?.emitted.ids).toEqual(['candidate-0']);
+  expect(traces.at(-1)?.withheldRepeat.ids).toEqual([]);
+  expect([...completions.at(-1)!.emitted]).toEqual(['candidate-0']);
+  expect(completions.at(-1)?.pack).toEqual(result.pack);
+  expect(getLastPack(store.db, IDENTITY)).toEqual(previous);
+  expect(readServedItems(store.db, IDENTITY)).toEqual(held);
+  expect(embedCalls - beforeEmbeds).toBe(1);
+});
+
+it('preserves a requested reset during outage and suppresses the unchanged item on recovery', async () => {
+  activate();
+  installCandidates('other-session');
+  await recall();
+  const held = readServedItems(store.db, IDENTITY);
+  position = { status: 'unavailable', reason: 'store_unavailable' };
+  const partial = await recall({ reset_delivery_suppression: true });
+  expect(readServedItems(store.db, IDENTITY)).toEqual(held);
+  if (partial.status !== 'pack') {
+    throw new Error('expected qualified answer');
+  }
+  expect([...emittedPackIds(partial.pack)]).toEqual(['candidate-0']);
+  expect(partial.pack.metadata.history_coverage?.status).toBe('partial');
+  expect(partial.pack.metadata.history_coverage?.gaps).toContainEqual(
+    expect.objectContaining({ field: 'eligibility', reason: 'store_unavailable' }),
+  );
+  position = { status: 'ready', checkpoint: CHECKPOINT };
+  const recovered = await recall();
+  if (recovered.status !== 'pack') {
+    throw new Error('expected recovered answer');
+  }
+  expect([...emittedPackIds(recovered.pack)]).toEqual([]);
 });

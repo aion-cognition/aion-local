@@ -4,9 +4,7 @@ import {
   CoverageRequestError,
   embedQueryPrefix,
   OllamaProvider,
-  readCoverageFence,
   refusalLines,
-  refuseCheckedRead,
   selectSeeds,
   type CheckedRead,
   type Seed,
@@ -16,6 +14,7 @@ import {
 import { IsoTimestampSchema, type CoverageEnvelope, type CoverageRefusal } from '@aion/protocol';
 
 import { CliUsageError, parseArgs, type ArgSpec } from './args.js';
+import { completionRefusal } from './coverage.js';
 import { preview } from './format.js';
 import { stderrWriter, stdoutWriter, type Writer } from './output.js';
 import { withSubstrate } from './substrate.js';
@@ -125,26 +124,12 @@ export function searchCoverage(
 }
 
 /**
- * The same completion policy a checked recall commits under, for a read with nothing to commit.
- *
- * A search writes nothing, so it has no effects to hold back; what it owes is the same refusal:
- * an epoch that moved is `coverage_changed` against the bounds now verified, and a registry that
- * stopped being readable is `coverage_store_unavailable` with no bounds at all. The refusal is
- * built by the shared helper rather than assembled here, so both surfaces refuse in one voice.
+ * The shared completion policy, in this command's own answer shape. A search writes nothing, so
+ * it has no effects to hold back; what it owes is the refusal every checked read owes.
  */
 export function searchCompletion(db: SqliteHandle, read: CheckedRead): SearchCoverage {
-  const fence = readCoverageFence(db);
-  if (fence === read.context.coverageEpoch) {
-    return { status: 'checked', read };
-  }
-  const refused = refuseCheckedRead(
-    db,
-    read,
-    fence === undefined ? 'coverage_store_unavailable' : 'coverage_changed',
-  );
-  return refused.status === 'refused'
-    ? { status: 'refused', refusal: refused.refusal }
-    : { status: 'checked', read };
+  const refusal = completionRefusal(db, read);
+  return refusal === undefined ? { status: 'checked', read } : { status: 'refused', refusal };
 }
 
 /** The best of a seed's own strategies: what a reader reads as "how this was found." */
