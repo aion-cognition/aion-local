@@ -10,7 +10,9 @@ export default defineConfig({
       'packages/cli/src/t10bf1-lifecycle-composition-review.test.ts',
       'packages/cli/src/maintain.test.ts',
     ],
-    setupFiles: ['packages/core/src/infrastructure/providers/review-only-guard/t10bf1-no-model.fixture.ts'],
+    setupFiles: [
+      'packages/core/src/infrastructure/providers/review-only-guard/t10bf1-no-model.fixture.ts',
+    ],
     maxWorkers: 1,
     fileParallelism: false,
   },
