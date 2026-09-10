@@ -312,6 +312,22 @@ function noop(detail: string): OperationOutcome {
   return { status: 'noop', itemsProcessed: 0, itemsAffected: 0, detail };
 }
 
+/**
+ * Whether a prior publication is still unsettled, and why the run cannot say otherwise.
+ *
+ * `undefined` is the only answer that lets a run continue, and it means the records said so. A
+ * control record that cannot be read is not an absent pending operation: it is the question
+ * unanswered, which is the state a run must not act through.
+ */
+function heldPending(ctx: OperationContext, deps: NarrativeMaintenanceDeps): string | undefined {
+  try {
+    return deps.publications.hasPending() ? 'the coordinator still holds it' : undefined;
+  } catch (err) {
+    ctx.logger.warn({ err }, 'narrative seal could not read the publication control record');
+    return 'the publication control record could not be read';
+  }
+}
+
 /** The chunks this run may attempt: what it just sealed, then what durable state says is due. */
 function publicationQueue(ctx: OperationContext, seal: SealPass, batch: number): readonly string[] {
   const sealed = new Set(seal.chunkIds);
@@ -331,6 +347,16 @@ async function runSeal(ctx: OperationContext, scales: SealScales): Promise<Opera
     }
   } catch (err) {
     ctx.logger.warn({ err }, 'narrative seal could not complete a pending publication');
+  }
+  // Recovery before new work is not a preference about ordering; it is what the ≤1-pending
+  // invariant means. While a prior operation is unsettled the guard admits no other, so sealing a
+  // membership or starting another expensive attempt here spends the run on work that cannot
+  // land and freezes a partition around a publication that may still be discarded. A recovery
+  // that threw proves nothing either way, so the question asked is the records': is the prior
+  // operation settled or absent. Anything else, including an unreadable control record, holds.
+  const held = heldPending(ctx, deps);
+  if (held !== undefined) {
+    return noop(`a prior publication is unsettled (${held}); no seal or attempt was started`);
   }
 
   const seal = await sealDueTails(ctx, deps, scales);
