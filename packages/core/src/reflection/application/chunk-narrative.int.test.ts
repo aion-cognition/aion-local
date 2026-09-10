@@ -49,8 +49,8 @@ import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverag
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import {
   acknowledgeStatedLinkVersions,
-  prepareStatedLinkVersion,
-  statedLinkId,
+  listStatedLinksTo,
+  prepareRetirementVersion,
 } from '../../infrastructure/sqlite/evidence-links.js';
 import { readCitationsFrom } from '../../infrastructure/sqlite/narrative-citations.js';
 import {
@@ -60,6 +60,10 @@ import {
   readPublishedHead,
   readPublishedRevision,
 } from '../../infrastructure/sqlite/narrative-revisions.js';
+import {
+  acknowledgePublicationIntent,
+  preparePublicationIntent,
+} from '../../infrastructure/sqlite/publication-intents.js';
 import { readSourceRecord } from '../../infrastructure/sqlite/source-identity.js';
 import { transitionSourceResidency } from '../../infrastructure/sqlite/source-lifecycle.js';
 import { SessionManager } from '../../session/session-manager.js';
@@ -139,25 +143,59 @@ function sessionNodeOf(sourceId: string): string {
   return record.sessionId;
 }
 
-/** A statement made about a source, recorded and counted the way an acceptance records one. */
-function stateCorrection(fromSource: string, toSource: string, operationId: string): void {
-  prepareStatedLinkVersion(store.db, {
-    linkId: statedLinkId('corrects', 'source', fromSource, toSource),
-    kind: 'corrects',
-    qualifier: 'source',
-    fromId: fromSource,
-    toId: toSource,
+/**
+ * A correction, accepted the way a caller states one: an ordinary push carrying provenance, so
+ * the link and its version are committed through the real acceptance publication rather than
+ * written beside it.
+ */
+async function acceptCorrection(session: string, marker: string, target: string): Promise<string> {
+  const result = await handleReflection(
+    intake,
+    { observations: [body(marker)], provenance: { supersedes: [target] } },
+    { identity: session, now: NOW },
+  );
+  establishStatementCensus(result.episode_id);
+  // Counting the corrected source's scope again is what moves its published token, which is how a
+  // revision that rested on "nothing corrects this" finds out that something now does.
+  establishStatementCensus(target);
+  return result.episode_id;
+}
+
+/** Retires a standing statement the way a withdrawal would, under an acknowledged operation. */
+function retireCorrection(fromSource: string, toSource: string, operationId: string): void {
+  // Found by its record rather than recomputed: the acceptance chose the target class, and a
+  // retirement that guessed it would close a link nobody ever wrote.
+  const link = listStatedLinksTo(store.db, toSource).find(
+    (row) => row.kind === 'corrects' && row.fromId === fromSource,
+  );
+  if (link === undefined) {
+    throw new Error(`no committed correction from ${fromSource} to ${toSource}`);
+  }
+  prepareRetirementVersion(store.db, {
+    linkId: link.linkId,
     operationId,
-    operationKey: `${operationId}:corrects`,
+    operationKey: `${operationId}:retire`,
     recordedValues: {},
     temporalProof: {},
     observedAt: NOW,
-    referenceSourceId: fromSource,
-    referenceVersion: 1,
+  });
+  preparePublicationIntent(store.db, {
+    operationId,
+    kind: 'stated_references',
+    payloadDigest: operationId,
+    payloadJson: '{}',
+    affectedScopesJson: '[]',
+    expectedJson: '{}',
+    preparedActionsJson: '[]',
+    createdAt: NOW,
+  });
+  acknowledgePublicationIntent(store.db, {
+    operationId,
+    resultDigest: `result:${operationId}`,
+    resultJson: '{}',
+    observedAckAt: NOW,
   });
   acknowledgeStatedLinkVersions(store.db, operationId, NOW.toISOString(), NOW.toISOString());
-  // Counting the scope again is what moves its published token, which is how a revision that
-  // rested on "nothing corrects this" finds out that something now does.
   establishStatementCensus(toSource);
 }
 
@@ -373,11 +411,10 @@ it('publishes nothing for a chunk whose every member is forgotten', async () => 
 
 it('blocks the whole revision when the correction it must reground on is suppressed', async () => {
   const member = await accept('session-correction', 'eta');
-  const corrector = await accept('session-corrector', 'theta');
   const chunkId = await sealAndPublish('session-correction');
   expect((await publishChunkNarrative(chunks, chunkId, { now: NOW })).status).toBe('published');
+  const corrector = await acceptCorrection('session-corrector', 'theta', member);
 
-  stateCorrection(corrector, member, 'correction-1');
   forget(corrector, 'forget-theta');
   prompts = [];
   const blocked = await publishChunkNarrative(chunks, chunkId, { now: NOW });
@@ -678,4 +715,35 @@ it('blocks only its own chunk when a frozen member stops being readable', async 
   store.db
     .prepare('UPDATE source_records SET verified_content_digest = ? WHERE source_id = ?')
     .run(digest.d, broken);
+});
+
+/**
+ * The required set is the standing requirement, so it has to shrink as well as grow. A retired
+ * statement stops being required; a change to something this chunk never rested on requires
+ * nothing at all.
+ */
+it('drops a retired correction from the required input and adds nothing for an unrelated change', async () => {
+  const member = await accept('session-standing', 'psi');
+  const chunkId = await sealAndPublish('session-standing');
+  expect((await publishChunkNarrative(chunks, chunkId, { now: NOW })).status).toBe('published');
+
+  const corrector = await acceptCorrection('session-standing-corrector', 'omega', member);
+  const corrected = await publishChunkNarrative(chunks, chunkId, { now: NOW });
+  expect(corrected.status).toBe('published');
+  expect(prompts.at(-1)).toContain(body('omega'));
+
+  // Withdrawn: the statement no longer stands, so the next revision does not submit it.
+  retireCorrection(corrector, member, 'retire-omega');
+  const withdrawn = await publishChunkNarrative(chunks, chunkId, { now: NOW });
+  expect(withdrawn.status).toBe('published');
+  expect(prompts.at(-1)).toContain(body('psi'));
+  expect(prompts.at(-1)).not.toContain(body('omega'));
+
+  // A correction of a source this chunk never held changes neither its head nor its input.
+  const stranger = await accept('session-stranger', 'alpha2');
+  await acceptCorrection('session-stranger-corrector', 'beta2', stranger);
+  const asked = prompts.length;
+  const unrelated = await publishChunkNarrative(chunks, chunkId, { now: NOW });
+  expect(unrelated).toMatchObject({ status: 'skipped', reason: 'head_current' });
+  expect(prompts).toHaveLength(asked);
 });
