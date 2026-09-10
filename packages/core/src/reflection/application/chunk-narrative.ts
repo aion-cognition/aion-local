@@ -20,8 +20,9 @@ import type {
 } from '../../infrastructure/publication/preconditions.js';
 import { listChunkMembers, readChunk } from '../../infrastructure/sqlite/chunk-manifest.js';
 import {
-  abandonStaleAllocations,
-  listAllocatedRevisions,
+  claimNarrativeRevision,
+  recordAttemptPolicy,
+  releaseNarrativeClaim,
 } from '../../infrastructure/sqlite/narrative-allocations.js';
 import {
   abandonNarrativeRevision,
@@ -31,7 +32,6 @@ import {
   readPublishedRevision,
   recordRevisionAttemptFailure,
 } from '../../infrastructure/sqlite/narrative-revisions.js';
-import { publicationRecord } from '../../infrastructure/sqlite/publication-coordinator-store.js';
 import { readSourceResidency } from '../../infrastructure/sqlite/source-lifecycle.js';
 import {
   checkPresentCoverage,
@@ -83,39 +83,44 @@ export type ChunkPublishReport =
   | { readonly status: 'skipped'; readonly chunkId: string; readonly reason: string };
 
 /**
- * The operation identity a chunk revision publishes under.
+ * The operation identity a chunk revision publishes under, without its number.
  *
- * Derived from the pair rather than minted, so whether an allocation has a durable intent is a
- * question the records answer exactly: the id is the same one any earlier attempt on that number
- * would have used.
+ * Derived from the chunk rather than minted, so whether an allocation carries a durable intent is
+ * a question the records answer exactly: the id is the same one any earlier attempt on that
+ * number would have used, and one number is one identity.
  */
+function operationPrefix(chunkId: string): string {
+  return `narrative-publish:${chunkId}:`;
+}
+
 function publicationOperationId(chunkId: string, revisionNo: number): string {
-  return `narrative-publish:${chunkId}:${String(revisionNo)}`;
+  return `${operationPrefix(chunkId)}${String(revisionNo)}`;
 }
 
 /**
- * The revision number this attempt works under: an unpublished allocation nobody bound to a
- * durable intent, or a fresh one.
+ * How long a claim holds its number without publishing.
  *
- * Allocating unconditionally left the previous attempt's number `allocated` and runnable while a
- * second number published beside it. Taking one up again is safe exactly while no intent exists
- * for it: an operation with a record is an attempt the coordinator is still resolving, and a
- * blocked row waits for a prerequisite rather than for another try.
+ * The model call is the long part and it is already bounded, so the lease is that bound plus room
+ * for the reads and the guard around it. Too short and a live attempt loses its number; too long
+ * and a dead one strands it until the lease expires. Neither is a correctness question — the
+ * durable-intent test decides that — so the number is a scheduling choice, stated here.
  */
-function claimRevisionAllocation(
-  deps: ChunkNarrativeDeps,
-  chunkId: string,
-  now: Date,
-): { readonly revisionNo: number; readonly nodeId: string } {
-  const held = listAllocatedRevisions(deps.db, CHUNK_REVISION_FAMILY, chunkId).find(
-    (row) =>
-      row.blockedReason === null &&
-      row.operationId === null &&
-      publicationRecord(deps.db, publicationOperationId(chunkId, row.revisionNo)) === undefined,
-  );
-  return held === undefined
-    ? allocateNarrativeRevision(deps.db, CHUNK_REVISION_FAMILY, chunkId, now)
-    : { revisionNo: held.revisionNo, nodeId: held.nodeId };
+const CLAIM_MARGIN_MS = 60_000;
+const DEFAULT_SYNTHESIS_TIMEOUT_MS = 120_000;
+
+/**
+ * Gives a claimed number back after an attempt that opened no intent.
+ *
+ * The failure is already counted on the row; what the release adds is that the NEXT attempt takes
+ * this number up rather than spending another beside it. A number an operation is holding is not
+ * released here — the coordinator's own recovery settles that one.
+ */
+function releaseClaim(deps: ChunkNarrativeDeps, chunkId: string, revisionNo: number): void {
+  releaseNarrativeClaim(deps.db, CHUNK_REVISION_FAMILY, {
+    familyKey: chunkId,
+    revisionNo,
+    operationId: publicationOperationId(chunkId, revisionNo),
+  });
 }
 
 function storedRevision(json: string | null): EvidenceRevision | undefined {
@@ -179,7 +184,17 @@ export async function publishChunkNarrative(
       reason: `coverage ${coverage.refusal.reason}`,
     };
   }
-  const allocation = claimRevisionAllocation(deps, chunkId, options.now);
+  // Ownership before any asynchronous work, written rather than inferred: two callers reading
+  // the same absence of a publication record both proceeded under one number, and their two valid
+  // outputs then collided on one operation identity.
+  const allocation = claimNarrativeRevision(deps.db, CHUNK_REVISION_FAMILY, {
+    familyKey: chunkId,
+    operationPrefix: operationPrefix(chunkId),
+    now: options.now,
+    leaseUntil: new Date(
+      options.now.getTime() + (options.timeoutMs ?? DEFAULT_SYNTHESIS_TIMEOUT_MS) + CLAIM_MARGIN_MS,
+    ),
+  });
   const frozen = listChunkMembers(deps.db, chunkId);
   const residency = frozen.map((sourceId) => {
     const row = readSourceResidency(deps.db, sourceId);
@@ -226,6 +241,10 @@ export async function publishChunkNarrative(
       allocation.revisionNo,
       plan.reason,
     );
+    recordAttemptPolicy(deps.db, CHUNK_REVISION_FAMILY, chunkId, allocation.revisionNo, {
+      renderedInputAllowance: policy.renderedInputAllowance,
+      maxMembers: policy.maxMembers,
+    });
     deps.logger.warn(
       { chunkId, reason: plan.reason, detail: plan.detail },
       'chunk revision blocked',
@@ -263,6 +282,10 @@ export async function publishChunkNarrative(
         allocation.revisionNo,
         err.reason,
       );
+      recordAttemptPolicy(deps.db, CHUNK_REVISION_FAMILY, chunkId, allocation.revisionNo, {
+        renderedInputAllowance: policy.renderedInputAllowance,
+        maxMembers: policy.maxMembers,
+      });
       deps.logger.warn({ chunkId, reason: err.reason }, 'chunk revision input refused');
       return { status: 'blocked', chunkId, revisionNo: allocation.revisionNo, reason: err.reason };
     }
@@ -271,6 +294,7 @@ export async function publishChunkNarrative(
       revisionNo: allocation.revisionNo,
       reason: 'synthesis_failed',
     });
+    releaseClaim(deps, chunkId, allocation.revisionNo);
     deps.logger.warn({ err, chunkId }, 'chunk narrative synthesis failed');
     return {
       status: 'failed',
@@ -285,6 +309,7 @@ export async function publishChunkNarrative(
       revisionNo: allocation.revisionNo,
       reason: 'no_grounded_sentence',
     });
+    releaseClaim(deps, chunkId, allocation.revisionNo);
     return {
       status: 'failed',
       chunkId,
@@ -341,17 +366,6 @@ export async function publishChunkNarrative(
     });
     return { status: 'deferred', chunkId, revisionNo: next.revisionNo, reason: outcome.reason };
   }
-
-  // A number allocated against a head that has now moved describes an attempt nobody can finish.
-  // Leaving it `allocated` leaves it runnable, and durable state would report owed work that is
-  // already answered.
-  abandonStaleAllocations(
-    deps.db,
-    CHUNK_REVISION_FAMILY,
-    chunkId,
-    allocation.revisionNo,
-    options.now,
-  );
 
   deps.logger.info(
     {

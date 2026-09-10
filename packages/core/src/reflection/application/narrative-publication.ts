@@ -32,6 +32,7 @@ import {
   prepareScopeAdvance,
   rejectScopeAdvance,
 } from '../../infrastructure/sqlite/evidence-scope.js';
+import { abandonStaleAllocations } from '../../infrastructure/sqlite/narrative-allocations.js';
 import {
   readCitationsFrom,
   recordRevisionCitations,
@@ -40,6 +41,7 @@ import {
 import {
   CHUNK_REVISION_FAMILY,
   prepareNarrativeRevision,
+  readNarrativeRevision,
   publishNarrativeRevision,
   readPublishedHead,
   releaseNarrativeRevision,
@@ -68,6 +70,9 @@ export const CHUNK_NARRATIVE_FAMILY = 'chunk';
 export const NARRATIVE_PUBLISH_EFFECT = 'narrative_revision_published';
 
 const CITATION_SCOPE = NARRATIVE_SCOPES[0];
+
+/** States a claimed number may still publish from. Anything else is an attempt that was overtaken. */
+const HOLDABLE_STATES = new Set(['allocated', 'prepared']);
 
 const NARRATIVE_SIGNALS = ['compression'];
 const NARRATIVE_PROVENANCE = [NARRATIVE_EXTRACTION_METHOD];
@@ -318,6 +323,18 @@ export const narrativePublication = new PublicationOperation({
         return { status: 'deferred', reason: 'residency_moved' } as const;
       }
     }
+    // Defence in depth, not the fix for anything: an attempt whose row is no longer the allocated
+    // or prepared one this operation holds has been overtaken, and the graph write is refused
+    // before it happens rather than after.
+    const row = readNarrativeRevision(
+      context.db,
+      CHUNK_REVISION_FAMILY,
+      data.chunkId,
+      data.revisionNo,
+    );
+    if (row === undefined || !HOLDABLE_STATES.has(row.state)) {
+      return { status: 'rejected', reason: 'allocation_no_longer_held' } as const;
+    }
     // A member the records call resident with no node behind it is an inconsistency, and it is
     // named here so the attempt releases the guard rather than holding it while a repair that
     // nobody has started is waited for. The write still refuses if the projection goes between
@@ -433,6 +450,17 @@ export const narrativePublication = new PublicationOperation({
       // empty array says the input was verified complete, and this operation always knows which.
       coverageGapsJson: JSON.stringify(data.coverageGaps),
     });
+    // The transition this head makes is what invalidates the allocations handed out before it,
+    // so the cleanup happens HERE, in the transaction that makes it, and names only those. Run
+    // from an application caller after the publication returns, it acted at a moment that had
+    // nothing to do with the transition — and took a newer live attempt down with it.
+    abandonStaleAllocations(
+      context.db,
+      CHUNK_REVISION_FAMILY,
+      data.chunkId,
+      data.revisionNo,
+      new Date(context.knownFrom),
+    );
     recordRevisionDependencies(context.db, data.nodeId, evidence);
     recordRevisionCitations(context.db, data.nodeId, data.citations);
     markChunkPublished(context.db, data.chunkId);

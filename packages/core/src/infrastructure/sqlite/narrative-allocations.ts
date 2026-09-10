@@ -1,5 +1,5 @@
 import type { SqliteHandle } from './database.js';
-import type { RevisionFamily } from './narrative-revisions.js';
+import { allocateNarrativeRevision, type RevisionFamily } from './narrative-revisions.js';
 
 /**
  * What a family's unpublished allocations are, and what a landed publication does to them.
@@ -56,15 +56,24 @@ export function listAllocatedRevisions(
 }
 
 /**
- * Closes every OTHER unpublished allocation of this family once one of them published.
+ * Closes the allocations this head transition actually invalidated.
  *
- * A number allocated against a head that has since moved describes an attempt nobody can finish:
- * its output was prepared against a predecessor, and the guard would refuse it. Leaving it
+ * A number handed out BEFORE the one that just published was handed out while the old head stood:
+ * whatever it was preparing rested on a predecessor, and the guard would refuse it. Leaving it
  * `allocated` leaves it runnable, and a scheduler reading durable state cannot tell it from work
  * that is genuinely owed.
  *
+ * A LATER number is not this transition's business. It was handed out after this one, so it is
+ * either targeting the head this publication just wrote or it will be refused on its own head
+ * fence — and closing it is how a slow caller returning from an already-acknowledged publication
+ * takes a live attempt down with it, wedging the shared slot. Revision numbers are monotone per
+ * family, so `<` is exactly "handed out earlier".
+ *
  * Only `allocated` rows are closed. A `prepared` row is bound to an operation the coordinator is
  * still resolving, and abandoning that would take a number out from under an attempt in flight.
+ *
+ * Call it inside the acknowledgment's own transaction. Run from an application caller after the
+ * publication returns, it acts at a moment that has nothing to do with the transition it names.
  */
 export function abandonStaleAllocations(
   db: SqliteHandle,
@@ -76,7 +85,166 @@ export function abandonStaleAllocations(
   return db
     .prepare(
       `UPDATE ${family.revisionTable} SET state = 'abandoned', closed_at = ?
-        WHERE ${family.keyColumn} = ? AND revision_no <> ? AND state = 'allocated'`,
+        WHERE ${family.keyColumn} = ? AND revision_no < ? AND state = 'allocated'`,
     )
     .run(closedAt.toISOString(), familyKey, publishedRevisionNo).changes;
+}
+
+export type RevisionClaim = {
+  readonly revisionNo: number;
+  readonly nodeId: string;
+  /** False when the claim took up a number an earlier attempt had already been handed. */
+  readonly allocated: boolean;
+};
+
+export type ClaimRequest = {
+  readonly familyKey: string;
+  /**
+   * The operation identity a revision of this family publishes under, without its number: the
+   * claim appends the revision number. One identity per (family key, number) is what makes
+   * "does a durable intent exist for this attempt" an exact question rather than a guess.
+   */
+  readonly operationPrefix: string;
+  readonly now: Date;
+  /**
+   * How long this claim holds the number without publishing.
+   *
+   * A claim that never returns must not strand its number for good, and a claim that IS running
+   * must not be taken from underneath. Both are the same statement: the row is not due again
+   * until this moment, and `next_attempt_at` already means exactly that.
+   */
+  readonly leaseUntil: Date;
+};
+
+/**
+ * Takes ownership of a revision number for one attempt, atomically, before any asynchronous work.
+ *
+ * Reusing a number because no publication record exists yet is not ownership: two callers read
+ * the same absence and both proceed, and their two valid outputs then collide on one operation
+ * identity. The claim is a write, in one immediate transaction, and what it writes is the binding
+ * and the lease together.
+ *
+ * A row is claimable when it is DUE — which excludes a live claim and an attempt a scheduler has
+ * dated forward — unblocked, and carries no durable intent for the identity its number implies.
+ * That last test is what lets a dead claim be taken up again at lease expiry while an attempt the
+ * coordinator is still resolving is left alone, and it is why an abandoned number is never reused:
+ * abandoned rows are not `allocated`.
+ */
+export function claimNarrativeRevision(
+  db: SqliteHandle,
+  family: RevisionFamily,
+  request: ClaimRequest,
+): RevisionClaim {
+  return db
+    .transaction((): RevisionClaim => {
+      const due = db
+        .prepare(
+          `SELECT revision_no, node_id FROM ${family.revisionTable}
+            WHERE ${family.keyColumn} = ? AND state = 'allocated' AND blocked_reason IS NULL
+              AND COALESCE(next_attempt_at, allocated_at) <= ?
+              AND NOT EXISTS (
+                SELECT 1 FROM publication_intents i
+                 WHERE i.operation_id = ? || CAST(revision_no AS TEXT))
+            ORDER BY COALESCE(next_attempt_at, allocated_at), revision_no
+            LIMIT 1`,
+        )
+        .get(request.familyKey, request.now.toISOString(), request.operationPrefix) as
+        { revision_no: number; node_id: string } | undefined;
+      const claimed =
+        due ??
+        (() => {
+          const fresh = allocateNarrativeRevision(db, family, request.familyKey, request.now);
+          return { revision_no: fresh.revisionNo, node_id: fresh.nodeId };
+        })();
+      db.prepare(
+        `UPDATE ${family.revisionTable}
+            SET operation_id = ? || CAST(revision_no AS TEXT), next_attempt_at = ?
+          WHERE ${family.keyColumn} = ? AND revision_no = ? AND state = 'allocated'`,
+      ).run(
+        request.operationPrefix,
+        request.leaseUntil.toISOString(),
+        request.familyKey,
+        claimed.revision_no,
+      );
+      return {
+        revisionNo: claimed.revision_no,
+        nodeId: claimed.node_id,
+        allocated: due === undefined,
+      };
+    })
+    .immediate();
+}
+
+/**
+ * Gives a claimed number back, so the next attempt takes it up rather than spending another.
+ *
+ * Only from `allocated`, and only when no durable intent was ever opened for it: a number an
+ * operation is holding is not the caller's to release, and the coordinator's own recovery is what
+ * settles that one.
+ */
+export function releaseNarrativeClaim(
+  db: SqliteHandle,
+  family: RevisionFamily,
+  request: {
+    readonly familyKey: string;
+    readonly revisionNo: number;
+    readonly operationId: string;
+  },
+): boolean {
+  const held = db
+    .prepare('SELECT 1 AS found FROM publication_intents WHERE operation_id = ?')
+    .get(request.operationId);
+  if (held !== undefined) {
+    return false;
+  }
+  return (
+    db
+      .prepare(
+        `UPDATE ${family.revisionTable} SET operation_id = NULL, next_attempt_at = NULL
+          WHERE ${family.keyColumn} = ? AND revision_no = ? AND state = 'allocated'`,
+      )
+      .run(request.familyKey, request.revisionNo).changes === 1
+  );
+}
+
+/**
+ * The bounds an attempt ran under, recorded with the outcome that refused it.
+ *
+ * A block on a bound clears when the bound changes and on nothing else, so a detector comparing
+ * the policy in force against the one that refused needs the second number as well as the first.
+ * Without it the refusal is a dead end: nobody can tell a block that a new allowance would clear
+ * from one it would not.
+ */
+export function recordAttemptPolicy(
+  db: SqliteHandle,
+  family: RevisionFamily,
+  familyKey: string,
+  revisionNo: number,
+  policy: Record<string, number>,
+): boolean {
+  return (
+    db
+      .prepare(
+        `UPDATE ${family.revisionTable} SET attempt_policy_json = ?
+          WHERE ${family.keyColumn} = ? AND revision_no = ?`,
+      )
+      .run(JSON.stringify(policy), familyKey, revisionNo).changes === 1
+  );
+}
+
+export function readAttemptPolicy(
+  db: SqliteHandle,
+  family: RevisionFamily,
+  familyKey: string,
+  revisionNo: number,
+): Record<string, number> | undefined {
+  const row = db
+    .prepare(
+      `SELECT attempt_policy_json FROM ${family.revisionTable}
+        WHERE ${family.keyColumn} = ? AND revision_no = ?`,
+    )
+    .get(familyKey, revisionNo) as { attempt_policy_json: string | null } | undefined;
+  return row?.attempt_policy_json == null
+    ? undefined
+    : (JSON.parse(row.attempt_policy_json) as Record<string, number>);
 }

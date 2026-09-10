@@ -53,7 +53,12 @@ export const NARRATIVE_SCHEMA_STATEMENTS: readonly string[] = [
    *
    * The four attempt columns schedule a retry of this revision rather than of the source
    * behind it. `blocked_reason` takes the row out of nomination until a prerequisite changes;
-   * `next_attempt_at` moves it later without taking it out.
+   * `next_attempt_at` moves it later without taking it out, and it is also what a live attempt
+   * holds its claim with: a row nobody may take up again until its lease expires.
+   *
+   * `attempt_policy_json` records the bounds the attempt actually ran under. A block on a bound
+   * clears when the bound changes, and a detector comparing the current policy to the one that
+   * refused needs the second number as much as the first.
    */
   `CREATE TABLE IF NOT EXISTS chunk_revisions (
     chunk_id TEXT NOT NULL,
@@ -72,6 +77,7 @@ export const NARRATIVE_SCHEMA_STATEMENTS: readonly string[] = [
     next_attempt_at TEXT,
     blocked_reason TEXT,
     last_failure_reason TEXT,
+    attempt_policy_json TEXT,
     PRIMARY KEY (chunk_id, revision_no)
   )`,
   /**
@@ -108,6 +114,7 @@ export const NARRATIVE_SCHEMA_STATEMENTS: readonly string[] = [
     next_attempt_at TEXT,
     blocked_reason TEXT,
     last_failure_reason TEXT,
+    attempt_policy_json TEXT,
     PRIMARY KEY (family_key, revision_no)
   )`,
   /**
@@ -200,6 +207,7 @@ export const NARRATIVE_COLUMN_ADDITIONS: readonly ColumnAddition[] = [
   { table: 'chunk_revisions', column: 'next_attempt_at', definition: 'TEXT' },
   { table: 'chunk_revisions', column: 'blocked_reason', definition: 'TEXT' },
   { table: 'chunk_revisions', column: 'last_failure_reason', definition: 'TEXT' },
+  { table: 'chunk_revisions', column: 'attempt_policy_json', definition: 'TEXT' },
   {
     table: 'overview_revisions',
     column: 'attempts',
@@ -208,6 +216,7 @@ export const NARRATIVE_COLUMN_ADDITIONS: readonly ColumnAddition[] = [
   { table: 'overview_revisions', column: 'next_attempt_at', definition: 'TEXT' },
   { table: 'overview_revisions', column: 'blocked_reason', definition: 'TEXT' },
   { table: 'overview_revisions', column: 'last_failure_reason', definition: 'TEXT' },
+  { table: 'overview_revisions', column: 'attempt_policy_json', definition: 'TEXT' },
 ];
 
 export const NARRATIVE_INDEX_STATEMENTS: readonly string[] = [
