@@ -15,10 +15,7 @@ import {
   prepareScopeAdvance,
   rejectScopeAdvance,
 } from '../../infrastructure/sqlite/evidence-scope.js';
-import {
-  countMigrationProgress,
-  readMigrationCohort,
-} from '../../infrastructure/sqlite/migration-cohorts.js';
+import { countMigrationProgress } from '../../infrastructure/sqlite/migration-cohorts.js';
 import { commitSourceIncidence } from '../../infrastructure/sqlite/source-incidence.js';
 import {
   roleOfLinkKind,
@@ -222,6 +219,16 @@ export function unaccountedCohortMembers(db: SqliteHandle, cohortId: string): nu
  * ends of each. A sweep over the whole scope table would count endpoints this cohort never
  * looked at, including ones some other writer advanced and nobody enumerated — registering a
  * scope name is not a census of it.
+ *
+ * An endpoint owes a census in two ways and only one of them is a row. A counter somebody moved
+ * and nobody counted is what the status test finds. A scope the seal is now REQUIRED to count and
+ * that has no row at all is invisible to it: a source sealed under an earlier selector carries
+ * every scope it had, all established, and nothing says these two were never among them. Asking
+ * only what the rows say reads that source as finished and no later seal looks at it again.
+ *
+ * So a source missing any required scope row is outstanding work too, asked at the same cursor and
+ * under the same page limit. Nothing is reset, no established bit is cleared, and nothing is
+ * written here; whether a nominated scope can be counted is still the seal's own proof.
  */
 export function pageUncountedEndpoints(
   db: SqliteHandle,
@@ -229,6 +236,7 @@ export function pageUncountedEndpoints(
   after: string,
   limit: number,
 ): readonly string[] {
+  const placeholders = INCOMING_STATEMENT_SCOPES.map(() => '?').join(', ');
   const rows = db
     .prepare(
       `SELECT e.endpoint_id AS endpoint_id FROM (
@@ -241,13 +249,21 @@ export function pageUncountedEndpoints(
          WHERE l.record_source = 'legacy_materialization'
        ) e
        WHERE e.endpoint_id > ?
-         AND EXISTS (
-           SELECT 1 FROM evidence_scope_versions v
-           WHERE v.endpoint_id = e.endpoint_id AND v.census_status <> 'established'
+         AND (
+           EXISTS (
+             SELECT 1 FROM evidence_scope_versions v
+             WHERE v.endpoint_id = e.endpoint_id AND v.census_status <> 'established'
+           )
+           OR (EXISTS (SELECT 1 FROM source_records s WHERE s.source_id = e.endpoint_id)
+             AND (SELECT count(*) FROM evidence_scope_versions r
+                  WHERE r.endpoint_id = e.endpoint_id
+                    AND r.relation_class IN (${placeholders})) < ${String(INCOMING_STATEMENT_SCOPES.length)})
          )
        ORDER BY e.endpoint_id LIMIT ?`,
     )
-    .all(cohortId, cohortId, after, limit) as { endpoint_id: string }[];
+    .all(cohortId, cohortId, after, ...INCOMING_STATEMENT_SCOPES, limit) as {
+    endpoint_id: string;
+  }[];
   return rows.map((row) => row.endpoint_id);
 }
 
@@ -339,69 +355,6 @@ export function endpointCensusScopes(db: SqliteHandle, endpointId: string): read
     }
   }
   return [...scopes].sort();
-}
-
-/**
- * Which of these links the committed records actually hold.
- *
- * A census is a statement about the RECORDS, and what makes it true of the graph is every current
- * relationship having a record. Membership does not establish that: a source proved months ago is
- * still verified today, and the mention it acquired since was never materialized by anybody. So
- * the proof is per relationship, and it joins through the operation's own acknowledgment — a
- * prepared version is durable and invisible, and counting it would certify a write nobody
- * committed.
- */
-export function materializedLinks(
-  db: SqliteHandle,
-  linkIds: readonly string[],
-): ReadonlySet<string> {
-  if (linkIds.length === 0) {
-    return new Set();
-  }
-  const placeholders = linkIds.map(() => '?').join(', ');
-  const rows = db
-    .prepare(
-      `SELECT DISTINCT v.link_id AS link_id FROM evidence_link_versions v
-       JOIN publication_intents i ON i.operation_id = v.operation_id AND i.state = 'acknowledged'
-       WHERE v.link_id IN (${placeholders}) AND v.known_from IS NOT NULL`,
-    )
-    .all(...linkIds) as { link_id: string }[];
-  return new Set(rows.map((row) => row.link_id));
-}
-
-export type CensusCoverage = {
-  readonly cohortId: string;
-  readonly cohortDigest: string;
-  readonly graphCensusDigest: string;
-  readonly intakeWatermark: number;
-  readonly archiveRowidLow: number;
-  readonly archiveRowidHigh: number;
-  readonly members: number;
-  readonly verified: number;
-};
-
-/**
- * What a seal over this cohort rests on: the frozen record itself, and how much of it was proved.
- *
- * Nothing for a cohort nobody froze: a count with no enumeration behind it has no bounds to
- * record and no membership to have accounted for, and the seal defers on the absence.
- */
-export function censusCoverage(db: SqliteHandle, cohortId: string): CensusCoverage | undefined {
-  const cohort = readMigrationCohort(db, cohortId);
-  if (cohort === undefined) {
-    return undefined;
-  }
-  const counts = countMigrationProgress(db, cohortId);
-  return {
-    cohortId: cohort.cohortId,
-    cohortDigest: cohort.cohortDigest,
-    graphCensusDigest: cohort.graphCensusDigest,
-    intakeWatermark: cohort.intakeWatermark,
-    archiveRowidLow: cohort.archiveRowidLow,
-    archiveRowidHigh: cohort.archiveRowidHigh,
-    members: counts.accounted + counts.verified + counts.pinned,
-    verified: counts.verified,
-  };
 }
 
 /** What proved ONE scope's population: the sources behind it, or the source it belongs to. */

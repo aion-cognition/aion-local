@@ -1,16 +1,17 @@
 import {
-  censusCoverage,
   endpointCensusScopes,
   isNodeEndpoint,
-  materializedLinks,
   pageUncountedEndpoints,
-  type CensusCoverage,
   type ScopeProof,
 } from './legacy-records.js';
 import type { GraphTransaction } from '../../infrastructure/graph/connection.js';
 import { readEndpointContributions } from '../../infrastructure/graph/legacy-evidence-queries.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { readMigrationProgress } from '../../infrastructure/sqlite/migration-cohorts.js';
+import {
+  countMigrationProgress,
+  readMigrationCohort,
+  readMigrationProgress,
+} from '../../infrastructure/sqlite/migration-cohorts.js';
 import { endpointPopulation } from '../domain/legacy-materialization.js';
 
 /**
@@ -32,6 +33,69 @@ import { endpointPopulation } from '../domain/legacy-materialization.js';
  * carrying such a pair is the same unrepresentable set the materializer pins, and it is left
  * uncounted rather than sealed on an older tuple.
  */
+
+/**
+ * Which of these links the committed records actually hold.
+ *
+ * A census is a statement about the RECORDS, and what makes it true of the graph is every current
+ * relationship having a record. Membership does not establish that: a source proved months ago is
+ * still verified today, and the mention it acquired since was never materialized by anybody. So
+ * the proof is per relationship, and it joins through the operation's own acknowledgment — a
+ * prepared version is durable and invisible, and counting it would certify a write nobody
+ * committed.
+ */
+export function materializedLinks(
+  db: SqliteHandle,
+  linkIds: readonly string[],
+): ReadonlySet<string> {
+  if (linkIds.length === 0) {
+    return new Set();
+  }
+  const placeholders = linkIds.map(() => '?').join(', ');
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT v.link_id AS link_id FROM evidence_link_versions v
+       JOIN publication_intents i ON i.operation_id = v.operation_id AND i.state = 'acknowledged'
+       WHERE v.link_id IN (${placeholders}) AND v.known_from IS NOT NULL`,
+    )
+    .all(...linkIds) as { link_id: string }[];
+  return new Set(rows.map((row) => row.link_id));
+}
+
+export type CensusCoverage = {
+  readonly cohortId: string;
+  readonly cohortDigest: string;
+  readonly graphCensusDigest: string;
+  readonly intakeWatermark: number;
+  readonly archiveRowidLow: number;
+  readonly archiveRowidHigh: number;
+  readonly members: number;
+  readonly verified: number;
+};
+
+/**
+ * What a seal over this cohort rests on: the frozen record itself, and how much of it was proved.
+ *
+ * Nothing for a cohort nobody froze: a count with no enumeration behind it has no bounds to
+ * record and no membership to have accounted for, and the seal defers on the absence.
+ */
+export function censusCoverage(db: SqliteHandle, cohortId: string): CensusCoverage | undefined {
+  const cohort = readMigrationCohort(db, cohortId);
+  if (cohort === undefined) {
+    return undefined;
+  }
+  const counts = countMigrationProgress(db, cohortId);
+  return {
+    cohortId: cohort.cohortId,
+    cohortDigest: cohort.cohortDigest,
+    graphCensusDigest: cohort.graphCensusDigest,
+    intakeWatermark: cohort.intakeWatermark,
+    archiveRowidLow: cohort.archiveRowidLow,
+    archiveRowidHigh: cohort.archiveRowidHigh,
+    members: counts.accounted + counts.verified + counts.pinned,
+    verified: counts.verified,
+  };
+}
 
 export type CensusEndpoint = {
   readonly endpointId: string;
