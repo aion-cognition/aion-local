@@ -138,6 +138,7 @@ export async function sealSessionChunk(
       sourceId: row.sourceId,
       captureOrderValue: row.captureOrderValue,
       occurredAt: new Date(row.occurredAt),
+      arrivalAt: new Date(row.createdAt),
       admission,
       ...(text === undefined ? {} : { text }),
     });

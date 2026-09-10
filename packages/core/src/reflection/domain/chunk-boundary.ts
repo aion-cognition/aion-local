@@ -66,8 +66,18 @@ export type ChunkCandidate = {
   readonly sourceId: string;
   /** The live ingest order this member sits at, which is what freezes the member ordinals. */
   readonly captureOrderValue: string;
-  /** World time, which is what the span trigger is measured against. */
+  /** World time: what the member says happened, which is not the same as when it arrived. */
   readonly occurredAt: Date;
+  /**
+   * When the substrate accepted it.
+   *
+   * Carried and not yet decided on. The span trigger below still ages on world time, and the
+   * signed C3 §2 nomination ages on ARRIVAL — so a captured source dated to next year is due to a
+   * scheduler that will never see this decision fire. Reconciling the two axes is a T10b
+   * integration finding with C2 uptake; the clock it needs is here so that uptake is one line in
+   * `sealAge` rather than a change to every caller.
+   */
+  readonly arrivalAt?: Date;
   readonly admission: ChunkCandidateAdmission;
   /** The member as the chunk renderer would place it. Absent for a member with no readable text. */
   readonly text?: ChunkMemberText;
@@ -131,6 +141,16 @@ function seal(
     members,
     ...(isolated === undefined ? {} : { isolated }),
   };
+}
+
+/**
+ * The clock the span trigger ages a tail on.
+ *
+ * One place, deliberately: this is the axis the C3 seam disagrees with, and the reconciliation
+ * lands here rather than being spread across the decision.
+ */
+function sealAge(candidate: ChunkCandidate): Date {
+  return candidate.occurredAt;
 }
 
 /** Which bound closed the chunk, said in the terms the manifest records against the seal. */
@@ -212,7 +232,7 @@ export function decideChunkSeal(input: ChunkBoundaryInput): ChunkSealDecision {
     );
   }
 
-  const elapsed = input.now.getTime() - first.occurredAt.getTime();
+  const elapsed = input.now.getTime() - sealAge(first).getTime();
   if (elapsed >= policy.maxSpanMs) {
     return seal('max_span', `the oldest unsealed member is ${String(elapsed)}ms old`, admitted);
   }
