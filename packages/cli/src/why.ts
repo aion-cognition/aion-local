@@ -341,6 +341,12 @@ export function runWhy(
         return 1;
       }
       const { driver } = substrate.connection();
+      const position: PairedPositionDeps = {
+        driver,
+        db: substrate.db(),
+        timeoutMs: PAIRED_POSITION_TIMEOUT_MS,
+      };
+      const held = await readPairedPosition(position);
       const provenance = await fetchNodeProvenance(driver, flags.nodeId);
       if (provenance === undefined) {
         return await renderAbsentNode(substrate, flags.nodeId, write);
@@ -360,12 +366,6 @@ export function runWhy(
         db: substrate.db(),
         logger: substrate.logger(),
       });
-      const position: PairedPositionDeps = {
-        driver,
-        db: substrate.db(),
-        timeoutMs: PAIRED_POSITION_TIMEOUT_MS,
-      };
-      const held = await readPairedPosition(position);
       const certified = reads.resolver.certifiedAgainst({
         checkpoint: () => Promise.resolve(held),
       });

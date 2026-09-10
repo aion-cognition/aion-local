@@ -10,7 +10,10 @@ import {
 import * as provenanceQueries from '@aion/core/infrastructure/graph/claim-provenance-queries.js';
 import type { GuardReceipt } from '@aion/core/infrastructure/graph/publication-receipt.js';
 import * as guardReads from '@aion/core/infrastructure/graph/publication-receipt.js';
+import { PublicationOperation } from '@aion/core/infrastructure/publication/operation.js';
 import { buildEvidenceRevision } from '@aion/core/infrastructure/publication/preconditions.js';
+import { verifyPublicationState } from '@aion/core/infrastructure/publication/protocol.js';
+import type { PublicationPlan } from '@aion/core/infrastructure/publication/types.js';
 import {
   activateCoverageContract,
   prepareCoverageContract,
@@ -18,14 +21,24 @@ import {
 } from '@aion/core/infrastructure/sqlite/coverage-contract.js';
 import { SqliteStore } from '@aion/core/infrastructure/sqlite/database.js';
 import {
+  prepareScopeAdvance,
+  acknowledgeScopeAdvance,
+} from '@aion/core/infrastructure/sqlite/evidence-scope.js';
+import { publicationWrite } from '@aion/core/infrastructure/sqlite/publication-bounded.js';
+import {
   beginSubstratePairing,
   completeSubstratePairing,
 } from '@aion/core/infrastructure/sqlite/publication-control.js';
 import {
+  acknowledgeCoordinatorRecord,
+  publicationBindingDigest,
+  savePublicationResult,
+  publicationRecord,
   prepareCoordinatorRecord,
   publicationInFlight,
 } from '@aion/core/infrastructure/sqlite/publication-coordinator-store.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 
 import * as output from './output.js';
 import { Substrate } from './substrate.js';
@@ -307,4 +320,94 @@ it('discloses a publication landing after metadata resolution before either bloc
   expect(publicationInFlight(store.db)).toBe(true);
   expect.soft(lines.join('\n')).not.toContain('proof            complete-for-use');
   expect.soft(lines.join('\n')).toContain('pending_publication');
+});
+
+it('does not certify old graph content when a publication completes before the metadata checkpoint', async () => {
+  const initial = pairedReceipt();
+  const at = new Date('2026-09-02T00:00:00.000Z');
+  const plan: PublicationPlan = {
+    expected: {
+      coverageEpoch: readCurrentCoverageContract(store.db)!.epoch,
+      evidence: buildEvidenceRevision([]),
+      sources: [],
+      heads: [],
+    },
+    scopes: [{ kind: 'node', id: NODE, scope: GRAPH_NODE_SCOPE }],
+    data: { content: 'Atlas now stores jobs in Postgres' },
+    effects: [],
+  };
+  const handler = new PublicationOperation({
+    kind: 'semantic_write',
+    effectKinds: [],
+    payload: z.object({}),
+    data: z.object({ content: z.string() }),
+    result: z.object({}),
+    prepare: async () => plan,
+    check: async () => ({ status: 'valid' }),
+    applyGraph: async () => ({}),
+    prepareSqlite: () => undefined,
+    acknowledgeSqlite: ({ db, operationId }) => {
+      acknowledgeScopeAdvance(db, {
+        endpointId: NODE,
+        relationClass: GRAPH_NODE_SCOPE,
+        operationId,
+        updatedAt: at,
+        censusStatus: 'established',
+      });
+    },
+    discardSqlite: () => undefined,
+  });
+  let completed = false;
+  vi.mocked(core.fetchNodeEdges).mockImplementationOnce(async () => {
+    const record = publicationWrite(store.db, () => {
+      const prepared = prepareCoordinatorRecord(
+        store.db,
+        {
+          operationId: 'between-graph-reads',
+          kind: 'semantic_write',
+          payloadJson: '{}',
+          digest: publicationBindingDigest('semantic_write', '{}', plan),
+          plan,
+          now: at,
+        },
+        true,
+      );
+      prepareScopeAdvance(store.db, {
+        endpointId: NODE,
+        relationClass: GRAPH_NODE_SCOPE,
+        operationId: prepared.operationId,
+        updatedAt: at,
+      });
+      savePublicationResult(store.db, prepared, {});
+      return acknowledgeCoordinatorRecord(store.db, prepared, plan, handler, at);
+    });
+    const saved = publicationRecord(store.db, record.operationId)!;
+    const after: GuardReceipt = {
+      ...initial,
+      sequence: saved.sequence,
+      operationId: saved.operationId,
+      intentDigest: saved.payloadDigest,
+      resultDigest: saved.resultDigest,
+    };
+    vi.mocked(guardReads.readPublicationGuard).mockResolvedValue(after);
+    vi.mocked(core.fetchNodeProvenance).mockResolvedValue({
+      id: NODE,
+      labels: ['Insight', 'Memory', 'AionNode'],
+      content: 'Atlas now stores jobs in Postgres',
+      currency: 'current',
+      occurredAt: AT,
+    });
+    expect(verifyPublicationState(store.db, after).pending).toBeUndefined();
+    completed = true;
+    return { edges: [], complete: true };
+  });
+  const lines: string[] = [];
+  expect(await runWhy([NODE], (line) => lines.push(line))).toBe(0);
+  expect(completed).toBe(true);
+  const text = lines.join('\n');
+  // Reconstructing the changed graph reading or qualifying the old one are both safe.
+  expect(
+    text.includes('content  Atlas stores jobs in Valkey') &&
+      text.includes('proof            complete-for-use'),
+  ).toBe(false);
 });
