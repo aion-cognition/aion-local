@@ -330,6 +330,10 @@ const COLUMN_ADDITIONS: readonly ColumnAddition[] = [
   },
   { table: 'reflection_queue', column: 'episode_id', definition: 'TEXT' },
   { table: 'migration_progress', column: 'walked_by', definition: 'TEXT' },
+  { table: 'migration_cohorts', column: 'partition_policy_json', definition: 'TEXT' },
+  { table: 'migration_progress', column: 'capture_order_value', definition: 'TEXT' },
+  { table: 'migration_progress', column: 'capture_order_basis', definition: 'TEXT' },
+  { table: 'migration_progress', column: 'partition_gap', definition: 'TEXT' },
   // A row that predates the counter reads as zero and takes its first number on its next
   // transition. That number is a change from what a window recorded, which is the honest answer:
   // nobody can say what the row's lifecycle did before anything counted it.

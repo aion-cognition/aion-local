@@ -125,6 +125,7 @@ export const PUBLICATION_SCHEMA_STATEMENTS: readonly string[] = [
     graph_census_digest TEXT NOT NULL,
     scan_cursor INTEGER,
     ordering_policy_version INTEGER NOT NULL,
+    partition_policy_json TEXT,
     created_at TEXT NOT NULL
   )`,
   /**
@@ -143,6 +144,9 @@ export const PUBLICATION_SCHEMA_STATEMENTS: readonly string[] = [
     status TEXT NOT NULL,
     reason TEXT,
     partition_assignment TEXT,
+    capture_order_value TEXT,
+    capture_order_basis TEXT,
+    partition_gap TEXT,
     -- Which walk this row's status came from. The association is what tells a retry of a lost
     -- reply from a new verification: both look identical through the caller's arguments.
     walked_by TEXT,
