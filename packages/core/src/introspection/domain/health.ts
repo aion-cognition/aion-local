@@ -122,6 +122,41 @@ export type GenerationHealth = {
   readonly failureRate: number | undefined;
 };
 
+/**
+ * What the chunk lifecycle owes, read from the manifest rather than from the graph.
+ *
+ * Every count here distinguishes zero from unknown, because the two authorize opposite things: a
+ * measured zero says the substrate is caught up, and an unreadable manifest says nothing at all.
+ * The fresh census and the pending publication are read independently, so a known interrupted
+ * publication still calls for a run on a tick whose census could not be taken.
+ */
+export type SealDemand = {
+  /**
+   * Groups a run could act on now: sessions whose tail has reached a trigger, plus sealed chunks
+   * whose next attempt is due. Both spend one bounded unit of the same run, which is what makes
+   * the sum a denominator rather than a mixture. `undefined` when the census could not be taken.
+   */
+  readonly eligibleGroups: number | undefined;
+  /** The seal half of the sum above, reported apart so nothing divides a mixed total. */
+  readonly dueRemainders: number | undefined;
+  /** The publication half. */
+  readonly dueChunks: number | undefined;
+  /** Elapsed arrival age of the oldest eligible group. Blocked groups never set it. */
+  readonly oldestEligibleAgeMs: number | undefined;
+  /** Sources a recorded block holds out of publication, by the reason recorded against it. */
+  readonly blockedSourcesByReason: Readonly<Record<string, number>>;
+  readonly blockedOldestAgeMs: number | undefined;
+  /**
+   * A durable publication the coordinator prepared and has not settled. `undefined` where the
+   * control record itself could not be read, which is not the same as none pending.
+   */
+  readonly pendingPublishedRepair: boolean | undefined;
+  /** Whether the fresh census above was taken at all. */
+  readonly availability: 'measured' | 'unavailable';
+  /** Why, where either half is unavailable. */
+  readonly diagnostic?: string;
+};
+
 export type PlasticityHealth = {
   readonly reinforcementQueueDepth: number;
   readonly reinforcementLastRunAt: string | undefined;
@@ -159,6 +194,7 @@ export type HealthSnapshot = {
   readonly redaction: RedactionHealth;
   readonly proposals: ProposalHealth;
   readonly entities: EntityHealth;
+  readonly narrativeSeal: SealDemand;
   readonly plasticity: PlasticityHealth;
   readonly generation: GenerationHealth;
   readonly effectiveness: readonly OperationEffectiveness[];
@@ -177,6 +213,7 @@ export const HEALTH_COLLECTORS = {
   redaction: 'redaction',
   proposals: 'proposals',
   entities: 'entities',
+  narrativeSeal: 'narrative_seal',
   plasticity: 'plasticity',
   generation: 'generation',
   effectiveness: 'effectiveness',
@@ -231,6 +268,23 @@ export const NEUTRAL_PROPOSAL_HEALTH: ProposalHealth = {
 
 export const NEUTRAL_ENTITY_HEALTH: EntityHealth = { tier0Eligible: 0, identifierShaped: 0 };
 
+/**
+ * A reading nothing could be taken from. Unlike the counts above it, the neutral value here is
+ * not zero: a manifest nobody could read has to say so, or a seal run would be scored against a
+ * backlog of nothing while the backlog stood.
+ */
+export const NEUTRAL_SEAL_DEMAND: SealDemand = {
+  eligibleGroups: undefined,
+  dueRemainders: undefined,
+  dueChunks: undefined,
+  oldestEligibleAgeMs: undefined,
+  blockedSourcesByReason: {},
+  blockedOldestAgeMs: undefined,
+  pendingPublishedRepair: undefined,
+  availability: 'unavailable',
+  diagnostic: 'the narrative manifest was not read on this tick',
+};
+
 export const NEUTRAL_GENERATION_HEALTH: GenerationHealth = {
   calls: 0,
   failed: 0,
@@ -258,6 +312,7 @@ export function neutralSnapshot(cycle: number, observedAt: string): HealthSnapsh
     redaction: NEUTRAL_REDACTION_HEALTH,
     proposals: NEUTRAL_PROPOSAL_HEALTH,
     entities: NEUTRAL_ENTITY_HEALTH,
+    narrativeSeal: NEUTRAL_SEAL_DEMAND,
     plasticity: NEUTRAL_PLASTICITY_HEALTH,
     generation: NEUTRAL_GENERATION_HEALTH,
     effectiveness: [],

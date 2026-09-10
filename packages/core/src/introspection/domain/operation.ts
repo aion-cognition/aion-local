@@ -11,6 +11,7 @@ import type { Provider } from '../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import type { ReflectionIntakeDeps } from '../../reflection/application/intake.js';
 import type { ReferencePublisher } from '../application/operations/confirmation-signal-completion.js';
+import type { NarrativeMaintenanceDeps } from '../application/operations/narrative-seal.js';
 import type { TopologyPublisher } from '../application/operations/orphan-suppression.js';
 
 /**
@@ -95,6 +96,13 @@ export type OperationContext = {
    * declines the run over.
    */
   readonly references?: ReferencePublisher;
+  /**
+   * The resolver and the coordinator a chunk's own lifecycle needs: one reads a member's evidence
+   * and the other is the single path its narrative reaches either store by. Both are the
+   * service's instances, handed on whole for the reason `intake` is, and an operation composed
+   * without them declines rather than assembling a second resolver or a second coordinator.
+   */
+  readonly narratives?: NarrativeMaintenanceDeps;
   /** The same reading the decision was made from. An operation must not observe again. */
   readonly health: HealthSnapshot;
   readonly now: Date;

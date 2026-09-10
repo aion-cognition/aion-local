@@ -1,0 +1,239 @@
+import type { SqliteHandle } from './database.js';
+
+/**
+ * What durable state says a seal run has to do, and what it is not allowed to count.
+ *
+ * Every read here is over the manifest and the source records alone. None of them asks the
+ * resolver, the graph or a provider, because the observation tick that scores the operation has
+ * none of those and a demand number a tick cannot take is a demand number nobody acts on. What
+ * that costs is stated rather than hidden: the rendered-input trigger is invisible here (it needs
+ * the evidence read the run itself performs), so a session whose tail is only over the allowance
+ * reaches this as no demand and is sealed by the run that visits it for another reason.
+ *
+ * Two groups exist and they are counted apart. A GROUP TO SEAL is a session whose unsealed tail
+ * has reached the count or span trigger; a GROUP TO PUBLISH is a sealed chunk whose head is
+ * unpublished and whose next attempt is due. Both consume one bounded unit of a run, which is why
+ * a caller may add them, and both are reported separately so nothing divides a mixed total.
+ */
+
+/** A source is admitted to a chunk only on a verified identity, so the two states are named. */
+const VERIFIED = 'verified';
+
+/**
+ * The unsealed tail of a session, as the seal itself reads it: acknowledged up to the watermark,
+ * carrying a capture position, and not already sealed into a chunk. The verification test is a
+ * literal string comparison on a NOT NULL column, so no row disappears into a NULL comparison.
+ */
+const REMAINDER_PREDICATE = `r.capture_order_value IS NOT NULL
+       AND r.capture_order_value <= s.watermark
+       AND NOT EXISTS (SELECT 1 FROM chunk_members m WHERE m.source_id = r.source_id)`;
+
+export type DueChunkGroup = {
+  readonly chunkId: string;
+  readonly sessionId: string;
+  /** The arrival clock the group's age is measured from: when its membership froze. */
+  readonly sealedAt: string;
+  /** The lowest capture position in the frozen membership, which is the nomination order. */
+  readonly captureKey: string | null;
+};
+
+/**
+ * Sealed chunks with no published head whose next attempt is due, oldest capture first.
+ *
+ * A chunk holding a blocked attempt is not here at all: a block clears on a changed prerequisite
+ * and never on the clock, so nominating it would spend the run's allowance on work that cannot
+ * move. A chunk is due when it holds no unblocked attempt at all, which is a chunk nobody has
+ * tried yet, or when one of the attempts it holds has reached its retry time; a chunk whose every
+ * attempt is dated later waits. Both exclusions stay visible through `blockedChunkSources` and
+ * the revision rows themselves.
+ *
+ * A chunk that HAS published is out of this population on purpose. Its next revision is an
+ * invalidation the regrounding operation nominates from stored dependencies; a seal run that
+ * retried it would be a second scheduler for the same family.
+ */
+export function dueChunkGroups(
+  db: SqliteHandle,
+  now: Date,
+  limit: number,
+): readonly DueChunkGroup[] {
+  if (limit <= 0) {
+    return [];
+  }
+  const rows = db
+    .prepare(
+      `SELECT c.chunk_id, c.session_id, c.sealed_at,
+              (SELECT MIN(r.capture_order_value)
+                 FROM chunk_members m
+                 JOIN source_records r ON r.source_id = m.source_id
+                WHERE m.chunk_id = c.chunk_id) AS capture_key
+         FROM chunks c
+        WHERE c.published_revision_no IS NULL
+          AND NOT EXISTS (SELECT 1 FROM chunk_revisions b
+                           WHERE b.chunk_id = c.chunk_id
+                             AND b.state = 'allocated' AND b.blocked_reason IS NOT NULL)
+          AND (NOT EXISTS (SELECT 1 FROM chunk_revisions a
+                            WHERE a.chunk_id = c.chunk_id
+                              AND a.state = 'allocated' AND a.blocked_reason IS NULL)
+               OR EXISTS (SELECT 1 FROM chunk_revisions a
+                           WHERE a.chunk_id = c.chunk_id
+                             AND a.state = 'allocated' AND a.blocked_reason IS NULL
+                             AND COALESCE(a.next_attempt_at, a.allocated_at) <= ?))
+        ORDER BY capture_key, c.chunk_id
+        LIMIT ?`,
+    )
+    .all(now.toISOString(), limit) as {
+    chunk_id: string;
+    session_id: string;
+    sealed_at: string;
+    capture_key: string | null;
+  }[];
+  return rows.map((row) => ({
+    chunkId: row.chunk_id,
+    sessionId: row.session_id,
+    sealedAt: row.sealed_at,
+    captureKey: row.capture_key,
+  }));
+}
+
+/**
+ * Where a nomination page stopped: the group's capture position and the session that broke the
+ * tie. A cursor says only that a run looked at a group; it settles nothing and discharges nothing,
+ * and the group it moved past is nominated again on the pass after the cursor wraps.
+ */
+export type RemainderCursor = {
+  readonly captureKey: string;
+  readonly sessionId: string;
+};
+
+export type DueRemainderGroup = {
+  readonly sessionId: string;
+  readonly unsealed: number;
+  /** Arrival, not `occurredAt`: a backdated conversation does not date its own tail. */
+  readonly oldestArrivalAt: string;
+  readonly captureKey: string;
+};
+
+/**
+ * Sessions whose unsealed tail has reached a trigger durable state can see: the member count, or
+ * the elapsed arrival age of its oldest unsealed source.
+ *
+ * `created_at` is the substrate's own clock for the acceptance, which is what the span trigger
+ * measures. `occurred_at` is the world time the caller stated, and a source backdated to last
+ * year would otherwise make every tail it lands in permanently overdue.
+ */
+export function dueRemainderGroups(
+  db: SqliteHandle,
+  input: {
+    readonly now: Date;
+    readonly maxSpanMs: number;
+    readonly maxMembers: number;
+    readonly limit: number;
+    /** Resume strictly past this group, so a session a run cannot seal stops holding the front. */
+    readonly after?: RemainderCursor;
+  },
+): readonly DueRemainderGroup[] {
+  if (input.limit <= 0) {
+    return [];
+  }
+  const cutoff = new Date(input.now.getTime() - input.maxSpanMs).toISOString();
+  const after = input.after ?? { captureKey: '', sessionId: '' };
+  const rows = db
+    .prepare(
+      `SELECT r.session_id, COUNT(*) AS unsealed,
+              MIN(r.capture_order_value) AS capture_key,
+              MIN(r.created_at) AS oldest_arrival_at
+         FROM source_records r
+         JOIN session_remainders s ON s.session_id = r.session_id
+        WHERE ${REMAINDER_PREDICATE}
+          AND r.verification_status = '${VERIFIED}'
+        GROUP BY r.session_id
+       HAVING (COUNT(*) >= ? OR MIN(r.created_at) <= ?)
+          AND (? = ''
+               OR MIN(r.capture_order_value) > ?
+               OR (MIN(r.capture_order_value) = ? AND r.session_id > ?))
+        ORDER BY capture_key, r.session_id
+        LIMIT ?`,
+    )
+    .all(
+      input.maxMembers,
+      cutoff,
+      after.captureKey,
+      after.captureKey,
+      after.captureKey,
+      after.sessionId,
+      input.limit,
+    ) as {
+    session_id: string;
+    unsealed: number;
+    capture_key: string;
+    oldest_arrival_at: string;
+  }[];
+  return rows.map((row) => ({
+    sessionId: row.session_id,
+    unsealed: row.unsealed,
+    oldestArrivalAt: row.oldest_arrival_at,
+    captureKey: row.capture_key,
+  }));
+}
+
+export type BlockedSourceTally = {
+  readonly reason: string;
+  /** Sources inside the blocked chunks, which is the population a person has to unblock. */
+  readonly sources: number;
+  readonly oldestAt: string;
+};
+
+/**
+ * Sources held out of publication, by the reason recorded against the attempt that stopped.
+ *
+ * These never reach a numerator and never set the oldest eligible age. They are counted so a
+ * substrate whose seal demand reads zero can still be told from one whose whole backlog is
+ * blocked, which is the difference between nothing to do and nothing that can be done.
+ */
+export function blockedChunkSources(db: SqliteHandle): readonly BlockedSourceTally[] {
+  const rows = db
+    .prepare(
+      `SELECT b.blocked_reason AS reason, COUNT(m.source_id) AS sources,
+              MIN(b.allocated_at) AS oldest_at
+         FROM chunk_revisions b
+         JOIN chunk_members m ON m.chunk_id = b.chunk_id
+        WHERE b.state = 'allocated' AND b.blocked_reason IS NOT NULL
+        GROUP BY b.blocked_reason
+        ORDER BY b.blocked_reason`,
+    )
+    .all() as { reason: string; sources: number; oldest_at: string }[];
+  return rows.map((row) => ({
+    reason: row.reason,
+    sources: row.sources,
+    oldestAt: row.oldest_at,
+  }));
+}
+
+export type HeldMembership = {
+  readonly sources: number;
+  readonly oldestAt: string | undefined;
+};
+
+/**
+ * Unsealed sources a chunk may not take yet because their identity is not proved.
+ *
+ * F13 D9 makes a verified source identity a precondition of membership, so an unresolved or
+ * pinned source waits outside every chunk rather than freezing into one. Waiting silently is the
+ * loss this read exists to prevent: the count travels with the demand so the source is visible by
+ * reason and age instead of simply never being narrated.
+ */
+export function heldRemainderMembership(db: SqliteHandle): HeldMembership {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS sources, MIN(r.created_at) AS oldest_at
+         FROM source_records r
+         JOIN session_remainders s ON s.session_id = r.session_id
+        WHERE ${REMAINDER_PREDICATE}
+          AND r.verification_status <> '${VERIFIED}'`,
+    )
+    .get() as { sources: number; oldest_at: string | null };
+  return {
+    sources: row.sources,
+    oldestAt: row.oldest_at ?? undefined,
+  };
+}

@@ -173,7 +173,7 @@ describe('a merge whose decision record never reached SQLite', () => {
   });
 
   it('is a maintenance operation the loop can select', () => {
-    expect(introspectionOperations().map((operation) => operation.name)).toContain(
+    expect(introspectionOperations(DEFAULTS).map((operation) => operation.name)).toContain(
       mergeDecisionReconcileOperation().name,
     );
   });

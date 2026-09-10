@@ -1,6 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 
 import { readOrphanCensus } from './orphan-census.js';
+import { readSealDemand } from './seal-census.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { countEdgesByFloorBand } from '../../infrastructure/graph/edge-prune-queries.js';
 import { countDecayableEdges } from '../../infrastructure/graph/edge-weights.js';
@@ -28,6 +29,7 @@ import { plasticityCounters } from '../../plasticity/application/metrics.js';
 import { scanRedactionResidue } from '../../redaction/residue.js';
 import { queueLagSnapshot } from '../../reflection/application/lag.js';
 import { reconcileEnrichment } from '../../reflection/application/reconcile.js';
+import { CHUNK_MAX_MEMBERS } from '../../reflection/domain/chunk-boundary.js';
 import { NARRATIVE_GROUNDING } from '../../reflection/domain/narrative.js';
 import {
   HEALTH_COLLECTORS,
@@ -39,6 +41,7 @@ import {
   NEUTRAL_PROPOSAL_HEALTH,
   NEUTRAL_QUEUE_HEALTH,
   NEUTRAL_REDACTION_HEALTH,
+  NEUTRAL_SEAL_DEMAND,
   parityRatio,
   share,
   type EnrichmentHealth,
@@ -51,6 +54,7 @@ import {
   type ProposalHealth,
   type QueueHealth,
   type RedactionHealth,
+  type SealDemand,
 } from '../domain/health.js';
 import { identifierShape } from '../domain/identifier-shape.js';
 import type { OperationMeasurement } from '../domain/operation.js';
@@ -261,6 +265,20 @@ async function readEntities(driver: Driver, scanLimit: number): Promise<EntityHe
   return { tier0Eligible, identifierShaped };
 }
 
+/**
+ * What the chunk lifecycle owes. SQLite only, and it never throws: the pending publication is
+ * read apart from the fresh census inside, and losing that half to a manifest error would hide
+ * an interrupted publication behind a collector name in `degraded`.
+ */
+function readNarrativeSeal(db: SqliteHandle, config: Config, now: Date): SealDemand {
+  return readSealDemand(db, {
+    now,
+    batch: config.maintenance.narrativeSealBatch,
+    maxSpanMs: config.maintenance.chunkMaxSpanMs,
+    maxMembers: CHUNK_MAX_MEMBERS,
+  });
+}
+
 function readPlasticity(db: SqliteHandle): PlasticityHealth {
   const counters = plasticityCounters(db);
   return {
@@ -325,6 +343,7 @@ export async function observeHealth(
     redaction,
     proposals,
     entities,
+    narrativeSeal,
     plasticity,
     generation,
     effectiveness,
@@ -346,6 +365,9 @@ export async function observeHealth(
     ),
     collect(HEALTH_COLLECTORS.entities, deps.logger, degraded, NEUTRAL_ENTITY_HEALTH, () =>
       readEntities(deps.driver, scanLimit),
+    ),
+    collect(HEALTH_COLLECTORS.narrativeSeal, deps.logger, degraded, NEUTRAL_SEAL_DEMAND, () =>
+      Promise.resolve(readNarrativeSeal(deps.db, deps.config, now)),
     ),
     collect(HEALTH_COLLECTORS.plasticity, deps.logger, degraded, NEUTRAL_PLASTICITY_HEALTH, () =>
       Promise.resolve(readPlasticity(deps.db)),
@@ -371,6 +393,7 @@ export async function observeHealth(
     redaction,
     proposals,
     entities,
+    narrativeSeal,
     plasticity,
     generation,
     effectiveness,

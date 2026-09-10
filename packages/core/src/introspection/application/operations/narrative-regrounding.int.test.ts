@@ -68,6 +68,9 @@ const config: Config = {
   maintenance: { ...DEFAULTS.maintenance, narrativeCleanupBatch: 50 },
 };
 
+/** The scale relevance divides by, bound where the operation is constructed rather than read. */
+const BATCH = DEFAULTS.maintenance.narrativeCleanupBatch;
+
 const stubProvider: Provider = {
   embed: (texts: readonly string[]): Promise<Vector[]> =>
     Promise.resolve(texts.map(() => new Array<number>(EMBED_DIMENSION).fill(0.1))),
@@ -161,18 +164,18 @@ afterAll(async () => {
 
 describe('narrative regrounding', () => {
   it('scores on the stale count and stays quiet when the graph collector fell back', () => {
-    expect(narrativeRegroundingRelevance(healthFixture())).toBe(0);
+    expect(narrativeRegroundingRelevance(healthFixture(), BATCH)).toBe(0);
 
     const stale = healthFixture({
       graph: { ...NEUTRAL_GRAPH_HEALTH, staleNarratives: 5 },
     });
-    expect(narrativeRegroundingRelevance(stale)).toBeCloseTo(0.5, 6);
+    expect(narrativeRegroundingRelevance(stale, BATCH)).toBeCloseTo(0.5, 6);
 
     const degraded = healthFixture({
       graph: { ...NEUTRAL_GRAPH_HEALTH, staleNarratives: 5 },
       degraded: ['graph'],
     });
-    expect(narrativeRegroundingRelevance(degraded)).toBe(0);
+    expect(narrativeRegroundingRelevance(degraded, BATCH)).toBe(0);
   });
 
   it('marks the session narrative when a correction closes a claim it compressed', async () => {
@@ -220,7 +223,7 @@ describe('narrative regrounding', () => {
   }, 120_000);
 
   it('rewrites the marked narrative from the claims that are open now', async () => {
-    const outcome = await narrativeRegroundingOperation().run(context());
+    const outcome = await narrativeRegroundingOperation(BATCH).run(context());
 
     expect(outcome.status).toBe('applied');
     expect(outcome.itemsAffected).toBeGreaterThanOrEqual(1);
@@ -230,7 +233,7 @@ describe('narrative regrounding', () => {
   }, 120_000);
 
   it('converges: a second pass finds nothing left to reground', async () => {
-    const outcome = await narrativeRegroundingOperation().run(context());
+    const outcome = await narrativeRegroundingOperation(BATCH).run(context());
 
     expect(outcome.status).toBe('noop');
     expect(outcome.itemsAffected).toBe(0);

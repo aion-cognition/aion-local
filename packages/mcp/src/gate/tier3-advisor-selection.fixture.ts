@@ -14,6 +14,7 @@ import {
   NEUTRAL_PROPOSAL_HEALTH,
   NEUTRAL_QUEUE_HEALTH,
   NEUTRAL_REDACTION_HEALTH,
+  NEUTRAL_SEAL_DEMAND,
   type EnrichmentHealth,
   type EntityHealth,
   type GraphStructureHealth,
@@ -185,6 +186,10 @@ function snapshot(reading: Reading): HealthSnapshot {
     redaction: reading.redaction ?? redaction(),
     proposals: reading.proposals ?? proposals(),
     entities: reading.entities ?? NEUTRAL_ENTITY_HEALTH,
+    // No chunk census was taken for these readings, which is what the neutral value SAYS: not a
+    // manifest that came back empty. An absent census certifies nothing here either, and the
+    // seal's relevance is zero on it, so no threshold in this corpus moves to accommodate it.
+    narrativeSeal: NEUTRAL_SEAL_DEMAND,
     plasticity: reading.plasticity ?? plasticity(),
     generation: NEUTRAL_GENERATION_HEALTH,
     effectiveness: reading.effectiveness,
@@ -204,7 +209,7 @@ export function candidatesFor(
   health: HealthSnapshot,
   config: Config,
 ): readonly OperationCandidate[] {
-  return introspectionOperations()
+  return introspectionOperations(config)
     .filter(
       (operation) =>
         operation.name !== STRUCTURAL_DISCOVERY_OPERATION || config.maintenance.structuralDiscovery,

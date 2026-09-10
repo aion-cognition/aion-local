@@ -385,11 +385,9 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
     idleNarratives.start();
     const sessionNarratives = narratives;
 
-    // The introspection loop. The catalog is a plain ordered list rather than a lookup the
-    // engine owns, so an operation joins maintenance by being registered in that one function
-    // and nowhere else. The loop starts here and stops in `close` below, ahead of the driver,
-    // because a tick that has begun can still hold a graph write.
-    const maintenanceOperations = introspectionOperations();
+    // The introspection loop. It stops in `close` below ahead of the driver, because a tick
+    // that has begun can still hold a graph write. The catalog owns what may join it.
+    const maintenanceOperations = introspectionOperations(config);
     introspector = new Introspector(
       {
         driver,
@@ -407,11 +405,13 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
         // from the same deps the tool call takes and stripped to a read that writes nothing;
         // `recall-probe.ts` states what it leaves out and why.
         recallProbe: probeRecall(recall),
-        // One coordinator under three names: an uncertain apply reconciles against it, and a
-        // suppression and an owed confirmation signal are each settled under it.
+        // One coordinator under four names: an uncertain apply reconciles against it, a
+        // suppression and an owed confirmation signal are each settled under it, and the chunk
+        // lifecycle seals and publishes through it beside the resolver recall already shares.
         publications,
         topology: publications,
         references: publications,
+        narratives: { resolver, publications },
         // The same seam the pipeline judges through: one reading of the records, not two.
         evidence: judgmentEvidence,
         operations: maintenanceOperations,

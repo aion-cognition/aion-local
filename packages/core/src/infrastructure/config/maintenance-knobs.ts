@@ -208,6 +208,30 @@ export const MAINTENANCE_KNOBS = {
     positiveInt,
     200,
   ],
+  // The rendered input one chunk or overview synthesis is allowed, in UTF-16 code units of the
+  // actual rendered source envelope: headers, roles, separators and the required transition
+  // evidence included, the fixed prompt and answer reserve excluded. UTF-16 code units and the
+  // resolver's UTF-8 byte budget are separate bounds and no constant factor converts one into
+  // the other. MEASUREMENT STATUS: unmeasured. The default is the value `chunk-boundary.ts`
+  // ships and every C2 boundary case is proved against; the C3 package proposes 32768 and
+  // neither number has been measured against the narrative surface's own provider allowance.
+  // C0 owns that measurement, and retuning this knob is what a measured answer moves.
+  chunkRenderedInputAllowance: [
+    'AION_MAINTENANCE_CHUNK_RENDERED_INPUT_ALLOWANCE',
+    positiveInt,
+    16_384,
+  ],
+  // How long a session's unsealed tail may stand before the span trigger seals it, and the age
+  // scale `narrative_seal`'s demand is divided by. Elapsed capture and arrival age, never a
+  // backdated `occurredAt`: a conversation about last year is not a day-old tail.
+  // MEASUREMENT STATUS: unmeasured; a cadence choice rather than a provider limit.
+  chunkMaxSpanMs: ['AION_MAINTENANCE_CHUNK_MAX_SPAN_MS', positiveInt, 86_400_000],
+  // `narrative_seal`'s bound: publication attempts one invocation makes. An attempt is one chunk
+  // revision, not one source and not one model call, and a run that seals a group and publishes
+  // it spends one. Two an hour is the steady-state cadence; the resumable migration job that
+  // drains a historical partition carries a budget of its own and does not spend this one.
+  // MEASUREMENT STATUS: unmeasured, on C0's list beside the allowance above.
+  narrativeSealBatch: ['AION_MAINTENANCE_NARRATIVE_SEAL_BATCH', positiveInt, 2],
   // The kill switch both narrative rollup scopes read. On by default, which is what acting from
   // day one means for an operation whose whole risk is reversible: every rollup is a
   // supersession, and `aion unsupersede` reopens any member it closed. Off leaves a day and a

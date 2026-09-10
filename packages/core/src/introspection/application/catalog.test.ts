@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { introspectionOperations } from './catalog.js';
+import { NARRATIVE_SEAL_OPERATION } from './operations/narrative-seal.js';
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { TIER3_ACTABLE_OPERATIONS } from '../domain/tier3.js';
+
+/** The shipped configuration, named at the call rather than reached for inside a relevance. */
+const catalog = () => introspectionOperations(DEFAULTS);
 
 /**
  * The operations whose runs no snapshot number can contradict yet, each named in the catalog's
@@ -24,6 +29,10 @@ const UNMEASURED_OPERATIONS = [
   'narrative_cleanup',
   'narrative_rollup_day',
   'narrative_rollup_week',
+  // Deliberate, not owed. The snapshot counts what the chunk lifecycle owes, and an operation
+  // scored on lowering its own backlog is credited alike for a chunk it published and one it
+  // blocked; what the runs are worth is a cost and coverage comparison, not a queue depth.
+  'narrative_seal',
   // The disconnection share it used to move is a different number about a different
   // population now. Unmeasured until a replacement has been validated against the new demand.
   'orphan_cleanup',
@@ -36,12 +45,12 @@ const UNMEASURED_OPERATIONS = [
 
 describe('introspectionOperations', () => {
   it('registers every operation under a name of its own', () => {
-    const names = introspectionOperations().map((operation) => operation.name);
+    const names = catalog().map((operation) => operation.name);
     expect(new Set(names).size).toBe(names.length);
   });
 
   it('leaves exactly the surveyed operations without a declared metric', () => {
-    const withoutMeasure = introspectionOperations()
+    const withoutMeasure = catalog()
       .filter((operation) => operation.measure === undefined)
       .map((operation) => operation.name)
       .sort();
@@ -51,8 +60,19 @@ describe('introspectionOperations', () => {
   it('registers every operation tier 3 is allowed to run', () => {
     // The allowlist holds bare strings. A rename that missed one would drop that operation out
     // of tier 3 silently, as a permanent `downgraded` verdict nobody asked for.
-    const names = new Set(introspectionOperations().map((operation) => operation.name));
+    const names = new Set(catalog().map((operation) => operation.name));
     const unregistered = TIER3_ACTABLE_OPERATIONS.filter((name) => !names.has(name));
     expect(unregistered).toEqual([]);
+  });
+
+  /**
+   * A model may recommend a seal run and the loop will log it, and it may not authorize one. The
+   * seal freezes a membership that never moves again and the publication it leads to writes a
+   * narrative through the guard; neither is a decision a recommendation should reach, and the
+   * ordinary tiers already select the operation on a demand reading taken from durable state.
+   */
+  it('keeps the chunk lifecycle out of what a model may run', () => {
+    expect(catalog().map((operation) => operation.name)).toContain(NARRATIVE_SEAL_OPERATION);
+    expect(TIER3_ACTABLE_OPERATIONS).not.toContain(NARRATIVE_SEAL_OPERATION);
   });
 });

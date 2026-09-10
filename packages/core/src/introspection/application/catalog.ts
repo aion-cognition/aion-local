@@ -1,3 +1,4 @@
+import type { Config } from '../../infrastructure/config/schema.js';
 import type { IntrospectionOperation } from '../domain/operation.js';
 import { backboneRepairOperation } from './operations/backbone-repair.js';
 import { claimConsolidationOperation } from './operations/claim-consolidation.js';
@@ -18,6 +19,7 @@ import {
   dayNarrativeRollupOperation,
   weekNarrativeRollupOperation,
 } from './operations/narrative-rollup.js';
+import { narrativeSealOperation } from './operations/narrative-seal.js';
 import { orphanCleanupOperation } from './operations/orphan-cleanup.js';
 import { proposalHygieneOperation } from './operations/proposal-hygiene.js';
 import { proposalResolutionOperation } from './operations/proposal-resolution.js';
@@ -39,8 +41,14 @@ import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-
  * waiting time and then on name, so moving a line here changes nothing about what runs. The
  * comment above each group says what that group is for.
  *
- * Eleven of the twenty-eight declare a `measure`, a number in the health snapshot their run is
- * scored on moving. The other seventeen are recorded as unmeasured rather than scored. Fifteen
+ * The config is a construction argument rather than something an operation reads at run time for
+ * one reason: an operation's demand score is handed nothing but the health snapshot, so a bound
+ * an operator retuned would otherwise be visible to the run and invisible to the score that
+ * chose it. What one run does and what the loop thinks the backlog is worth are then two
+ * readings of one number instead of a shipped default and a live one.
+ *
+ * Eleven of the twenty-nine declare a `measure`, a number in the health snapshot their run is
+ * scored on moving. The other eighteen are recorded as unmeasured rather than scored. Fifteen
  * of those are waiting on a gauge the snapshot does not carry yet:
  *
  * - `claim_dedup`: a near-duplicate claim-pair count.
@@ -64,14 +72,16 @@ import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-
  * Each is a graph read nothing computes on the tick today. Until one exists, its operation is
  * scored on relevance, waiting time, and cost alone, which is everything known about it.
  *
- * The last two declare none on purpose rather than for want of a gauge. `proposal_resolution`
+ * The last three declare none on purpose rather than for want of a gauge. `proposal_resolution`
  * moves the open-proposal count, and scoring it on lowering that would reward an applied
  * correction and a dismissed one alike, which rewards emptying the queue rather than deciding
  * it. `recall_probe` produces the numbers instead of moving them: it measures retrieval and
  * changes nothing, so a run that scored a miss did its job exactly as well as one that scored
- * a hit.
+ * a hit. `narrative_seal` has a demand reading and deliberately no metric: the snapshot counts
+ * what the lifecycle owes, and an operation scored on lowering its own backlog is credited the
+ * same for a chunk it blocked as for one it published.
  */
-export function introspectionOperations(): readonly IntrospectionOperation[] {
+export function introspectionOperations(config: Config): readonly IntrospectionOperation[] {
   return [
     // Substrate hygiene. Each of these answers a gap `aion doctor` could already name and
     // nothing could close: a node with no vector is invisible to search, an episode with no
@@ -90,11 +100,19 @@ export function introspectionOperations(): readonly IntrospectionOperation[] {
     edgePruneOperation(),
     identifierDecayOperation(),
 
+    // The chunk lifecycle's operator: seal a session's tail, publish what sealed, and finish a
+    // publication a crash left prepared. Nothing else calls either half in production.
+    narrativeSealOperation({
+      batch: config.maintenance.narrativeSealBatch,
+      maxSpanMs: config.maintenance.chunkMaxSpanMs,
+      renderedInputAllowance: config.maintenance.chunkRenderedInputAllowance,
+    }),
+
     // Content maintenance: duplicate narratives, narratives whose claims a correction has since
     // closed, the contradiction backlog older than the supersession stage, and entity glosses
     // that stopped describing what the entity became.
     narrativeCleanupOperation(),
-    narrativeRegroundingOperation(),
+    narrativeRegroundingOperation(config.maintenance.narrativeCleanupBatch),
     retroJudgmentSweepOperation(),
     descriptionFreshnessOperation(),
     // The other half of an intention's life. Extraction and the keyed close say what the

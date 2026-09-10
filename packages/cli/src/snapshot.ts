@@ -138,8 +138,8 @@ function readLedgerSummary(summary: unknown): LedgerSummary {
  * `introspectionOperations` shows up here with no second place to remember to add it. One that
  * has never run reports zeroes, which is the honest reading and not an omission.
  */
-export function collectMaintenance(db: SqliteHandle): MaintenanceSnapshot {
-  const names = introspectionOperations().map((operation) => operation.name);
+export function collectMaintenance(db: SqliteHandle, config: Config): MaintenanceSnapshot {
+  const names = introspectionOperations(config).map((operation) => operation.name);
   const operations = listOperationStats(db, names).map((stats) => {
     const entry = latestLedgerEntry(db, `${OPERATION_LEDGER_PREFIX}${stats.name}:`);
     const summary = readLedgerSummary(entry?.summary);
@@ -232,7 +232,7 @@ export async function collectSnapshot(
       methodLegStats: packMethodLegStats(db),
       generation: generationCounters(db),
       recallProbe: recallProbeCounters(db),
-      maintenance: collectMaintenance(db),
+      maintenance: collectMaintenance(db, config),
       mergeShadow,
     },
   };

@@ -183,7 +183,7 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('the tier-3 advisor selection battery', () 
    * turning the corpus into readings the advisor would never see.
    */
   it('holds twenty-four readings the deterministic tiers all leave to tier 3', () => {
-    const catalog = new Set(introspectionOperations().map((operation) => operation.name));
+    const catalog = new Set(introspectionOperations(config).map((operation) => operation.name));
     expect(TIER3_SELECTION_BATTERY.length).toBeGreaterThanOrEqual(20);
 
     for (const entry of TIER3_SELECTION_BATTERY) {

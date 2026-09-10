@@ -1,4 +1,3 @@
-import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { cleanupNarratives } from '../../../reflection/application/narrative-cleanup.js';
 import { HEALTH_COLLECTORS, type HealthSnapshot } from '../../domain/health.js';
 import type { IntrospectionOperation, OperationOutcome } from '../../domain/operation.js';
@@ -21,22 +20,23 @@ import type { IntrospectionOperation, OperationOutcome } from '../../domain/oper
 export const NARRATIVE_REGROUNDING_OPERATION = 'narrative_regrounding';
 
 /**
- * Relevance reads the shipped default rather than the live config: the contract hands it only
- * the health snapshot, so a knob an operator retuned changes what a run rewrites and not how
- * urgently the loop wants one.
+ * Relevance divides the backlog by the batch a run actually rewrites, bound where the operation
+ * is constructed. It used to divide by the shipped default because the contract hands relevance
+ * only the health snapshot: an operator who halved the batch then doubled how long the same
+ * backlog took and changed nothing about how urgently the loop asked for it.
  */
-export function narrativeRegroundingRelevance(health: HealthSnapshot): number {
-  if (health.degraded.includes(HEALTH_COLLECTORS.graph)) {
+export function narrativeRegroundingRelevance(health: HealthSnapshot, batch: number): number {
+  if (health.degraded.includes(HEALTH_COLLECTORS.graph) || batch <= 0) {
     return 0;
   }
-  return Math.min(1, health.graph.staleNarratives / DEFAULTS.maintenance.narrativeCleanupBatch);
+  return Math.min(1, health.graph.staleNarratives / batch);
 }
 
-export function narrativeRegroundingOperation(): IntrospectionOperation {
+export function narrativeRegroundingOperation(batch: number): IntrospectionOperation {
   return {
     name: NARRATIVE_REGROUNDING_OPERATION,
     bucket: 'hour',
-    relevance: narrativeRegroundingRelevance,
+    relevance: (health) => narrativeRegroundingRelevance(health, batch),
     measure: (health) => health.graph.staleNarratives,
     improves: 'lower',
     run: async (ctx): Promise<OperationOutcome> => {

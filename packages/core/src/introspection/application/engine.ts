@@ -8,6 +8,7 @@ import {
   type ResolvedRun,
 } from './operation-scoring.js';
 import type { ReferencePublisher } from './operations/confirmation-signal-completion.js';
+import type { NarrativeMaintenanceDeps } from './operations/narrative-seal.js';
 import type { TopologyPublisher } from './operations/orphan-suppression.js';
 import { consultTier3 } from './tier3-consult.js';
 import type { JudgmentEvidence } from '../../evidence/application/judgment.js';
@@ -85,6 +86,12 @@ export type IntrospectorDeps = {
   /** The coordinator a suppression publishes under. Absent, the operation declines the write. */
   readonly topology?: TopologyPublisher;
   readonly references?: ReferencePublisher;
+  /**
+   * The resolver and coordinator the chunk lifecycle runs on, handed on whole like `intake`. The
+   * loop assembles neither, so it cannot hand an operation a resolver whose reads nobody covered
+   * or a second coordinator the guard knows nothing about.
+   */
+  readonly narratives?: NarrativeMaintenanceDeps;
   /**
    * The registered catalog, in order. Order decides nothing on its own: selection is by tier
    * and urgency, and ties break on waiting time and then on name.
@@ -418,6 +425,7 @@ export class Introspector {
         ...(this.#deps.publications === undefined ? {} : { publications: this.#deps.publications }),
         ...(this.#deps.topology === undefined ? {} : { topology: this.#deps.topology }),
         ...(this.#deps.references === undefined ? {} : { references: this.#deps.references }),
+        ...(this.#deps.narratives === undefined ? {} : { narratives: this.#deps.narratives }),
         health,
         now,
         signal: this.#abort.signal,

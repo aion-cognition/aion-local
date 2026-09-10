@@ -10,7 +10,7 @@ const seam = vi.hoisted(() => ({
 
 vi.mock('@aion/core', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
-  const realOperations = actual.introspectionOperations as () => readonly unknown[];
+  const realOperations = actual.introspectionOperations as (config: unknown) => readonly unknown[];
   const fakeOperation = {
     name: 'test_forced_op',
     bucket: 'day',
@@ -24,7 +24,7 @@ vi.mock('@aion/core', async (importOriginal) => {
     ...actual,
     // The real catalog, plus one fake operation the abort test drives, so `ls` still lists
     // every registered operation the way it does in production.
-    introspectionOperations: () => [...realOperations(), fakeOperation],
+    introspectionOperations: (config: unknown) => [...realOperations(config), fakeOperation],
     observeHealth: async () => ({ degraded: [] }),
     markLedgerApplied: () => undefined,
     operationBucketKey: () => 'test-key',

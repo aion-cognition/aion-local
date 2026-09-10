@@ -424,6 +424,31 @@ export function recordRevisionAttemptFailure(
 }
 
 /**
+ * Pushes an already-counted attempt's next try out without counting a second one.
+ *
+ * The failure and the backoff are two decisions and they belong to two owners. Whoever ran the
+ * attempt records what went wrong and how many attempts the revision has now had; the scheduler
+ * decides when the next one may run, because how long to wait is a property of the cadence rather
+ * than of the failure. Returns false where the revision has left `allocated`, which is a
+ * publication that landed between the two.
+ */
+export function deferRevisionAttempt(
+  db: SqliteHandle,
+  family: RevisionFamily,
+  familyKey: string,
+  revisionNo: number,
+  nextAttemptAt: Date,
+): boolean {
+  const result = db
+    .prepare(
+      `UPDATE ${family.revisionTable} SET next_attempt_at = ?
+       WHERE ${family.keyColumn} = ? AND revision_no = ? AND state = 'allocated'`,
+    )
+    .run(nextAttemptAt.toISOString(), familyKey, revisionNo);
+  return result.changes === 1;
+}
+
+/**
  * Takes a revision out of nomination until a prerequisite changes. A block is not a delay:
  * clearing it takes a changed prerequisite or a recorded reassessment of the policy the
  * attempt ran under, never the passage of time.

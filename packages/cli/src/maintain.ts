@@ -5,6 +5,7 @@ import {
   observeHealth,
   operationBucketKey,
   ProviderRouter,
+  type Config,
   type IntrospectionOperation,
 } from '@aion/core';
 
@@ -61,8 +62,8 @@ function describeOperation(operation: IntrospectionOperation): string {
   return `  ${operation.name}  ${operation.bucket} window, ${answers}`;
 }
 
-function runLs(write: Writer): number {
-  const operations = introspectionOperations();
+function runLs(write: Writer, config: Config): number {
+  const operations = introspectionOperations(config);
   write(`registered maintenance operations (${String(operations.length)})`);
   for (const operation of operations) {
     write(describeOperation(operation));
@@ -73,7 +74,7 @@ function runLs(write: Writer): number {
 }
 
 async function runOne(substrate: Substrate, name: string): Promise<number> {
-  const operations = introspectionOperations();
+  const operations = introspectionOperations(substrate.config);
   const operation = operations.find((entry) => entry.name === name);
   if (operation === undefined) {
     throw new CliUsageError(
@@ -156,7 +157,7 @@ export function runMaintain(
       // The catalog is a compiled-in list, so `ls` answers without a log file, a database, or
       // a graph driver, on a machine where none of the three exists yet.
       if (flags.subcommand === 'ls') {
-        return runLs(write);
+        return runLs(write, substrate.config);
       }
       const connection = await substrate.requireGraph('maintain');
       if (connection === undefined) {
