@@ -1,6 +1,5 @@
 import type { Driver } from 'neo4j-driver';
 
-import { loadSessionSourceNodes } from '../../infrastructure/graph/narrative-queries.js';
 import { deadlineFor } from '../../infrastructure/providers/deadline-signal.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import {
@@ -31,13 +30,23 @@ import {
 const CHUNK_TEMPERATURE = 0;
 
 export type ChunkSynthesisDeps = {
-  readonly driver: Driver;
   readonly provider: Provider;
+  /**
+   * Accepted and unread. Synthesis used to go to the graph for optional context of its own; the
+   * caller resolves and fences that now, so the only thing this step needs is the provider. The
+   * field stays because every caller holds a driver and passing one is not an error.
+   */
+  readonly driver?: Driver;
 };
 
 export type ChunkSynthesisInput = {
   readonly sessionId: string;
   readonly plan: Extract<ChunkInputPlan, { status: 'render' }>;
+  /**
+   * Extracted nodes the caller resolved and fenced. Absent, this render carries none: synthesis
+   * does not go looking for optional context it has no dependency for.
+   */
+  readonly enrichment?: readonly ChunkEnrichmentNode[];
   readonly allowance: number;
   readonly now: Date;
   readonly model?: string;
@@ -61,24 +70,6 @@ export type ChunkSynthesis = {
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MODEL = 'qwen3:8b';
-
-/**
- * Extracted nodes the remaining allowance can carry.
- *
- * Read for the whole session and filtered to the members this revision submits: a node produced by
- * a member this render omits is that member's content arriving by another door, and the renderer
- * drops it for the same reason.
- */
-async function enrichmentFor(
-  deps: ChunkSynthesisDeps,
-  input: ChunkSynthesisInput,
-): Promise<readonly ChunkEnrichmentNode[]> {
-  const submitted = new Set(input.plan.members.map((member) => member.sourceId));
-  const nodes = await loadSessionSourceNodes(deps.driver, input.sessionId, input.now);
-  return nodes
-    .filter((node) => submitted.has(node.episodeId))
-    .map((node) => ({ id: node.id, kind: node.kind, text: node.text, sourceId: node.episodeId }));
-}
 
 /** The gap the render's own selection proves, rather than the one the plan guessed at. */
 function gapsWithRanges(
@@ -112,7 +103,7 @@ export async function synthesizeChunk(
   const members = [...input.plan.members, ...input.plan.transition];
   const render = renderSealedChunk({
     members,
-    enrichment: await enrichmentFor(deps, input),
+    enrichment: input.enrichment ?? [],
     allowance: input.allowance,
     ...(input.maxSentences === undefined ? {} : { maxSentences: input.maxSentences }),
     ...(input.plan.boundedPartialOf === undefined

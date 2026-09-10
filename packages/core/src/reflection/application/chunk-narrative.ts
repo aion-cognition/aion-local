@@ -1,3 +1,4 @@
+import { resolveChunkEnrichment } from './chunk-enrichment.js';
 import {
   ChunkDependencySet,
   resolveChunkMemberAlone,
@@ -160,7 +161,15 @@ export async function publishChunkNarrative(
     frozen,
     coverage.context,
   );
-  const dependencies: EvidenceDependency[] = [...members.dependencies, ...transition.dependencies];
+  // Optional context, resolved over the submitted membership and fenced before the bound is
+  // applied. What cannot be certified is omitted rather than submitted, which is the one licence
+  // being optional actually buys.
+  const enrichment = await resolveChunkEnrichment(deps, frozen, options.now);
+  const dependencies: EvidenceDependency[] = [
+    ...members.dependencies,
+    ...transition.dependencies,
+    ...enrichment.dependencies,
+  ];
 
   const policy = options.policy ?? CHUNK_BOUNDARY_POLICY;
   const oversized = oversizedMemberOf(members, policy);
@@ -198,6 +207,7 @@ export async function publishChunkNarrative(
     synthesis = await synthesizeChunk(deps, {
       sessionId: chunk.sessionId,
       plan,
+      enrichment: enrichment.nodes,
       allowance: policy.renderedInputAllowance,
       now: options.now,
       ...(options.model === undefined ? {} : { model: options.model }),
@@ -299,6 +309,8 @@ export async function publishChunkNarrative(
       nodeId: allocation.nodeId,
       sentences: synthesis.output.kept,
       gaps: synthesis.gaps.length,
+      enrichment: enrichment.nodes.length,
+      uncertifiedEnrichment: enrichment.uncertified.length,
     },
     'chunk narrative published',
   );

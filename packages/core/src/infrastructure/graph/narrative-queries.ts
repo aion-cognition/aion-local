@@ -268,6 +268,64 @@ function sessionSourceNodesStatement(sessionId: string, reference?: Date): Graph
 }
 
 /**
+ * The claim-bearing nodes a NAMED set of episodes produced, bounded over that set.
+ *
+ * The session-wide read beside this one applies its limit across every episode a session ever
+ * held, so a chunk of the session's tail can have its own nodes cut off by a hundred older ones
+ * before anything filters to the members that are actually being narrated. Nominating from the
+ * submitted membership first is the difference between a bound and a blindfold.
+ */
+function memberSourceNodesStatement(
+  episodeIds: readonly string[],
+  limit: number,
+  reference?: Date,
+): GraphStatement {
+  const node = readModeFragment(withCurrency(reference), 'n', 'rmn');
+  const episode = readModeFragment(withCurrency(reference), 'e', 'rme');
+  const cypher = [
+    'MATCH (n)-[:EXTRACTED_FROM]->(e:Episode)',
+    'WHERE e.id IN $episodeIds',
+    `  AND ${node.where} AND ${episode.where}`,
+    '  AND any(label IN labels(n) WHERE label IN $labels)',
+    'RETURN',
+    '  n.id AS id,',
+    '  head([label IN labels(n) WHERE label IN $labels]) AS kind,',
+    `  n.${MEMORY_PROPERTIES.text} AS text,`,
+    '  e.id AS episode_id',
+    `ORDER BY e.${BITEMPORAL_PROPERTIES.occurredAt}, e.${BITEMPORAL_PROPERTIES.txFrom}, e.id, n.id`,
+    'LIMIT $limit',
+  ].join('\n');
+
+  return {
+    cypher,
+    parameters: {
+      episodeIds: [...episodeIds],
+      labels: [...NARRATIVE_SOURCE_LABELS],
+      limit: toGraphInteger(limit),
+      ...node.parameters,
+      ...episode.parameters,
+    },
+  };
+}
+
+export async function loadMemberSourceNodes(
+  driver: Driver,
+  episodeIds: readonly string[],
+  limit: number,
+  reference?: Date,
+): Promise<SessionSourceNode[]> {
+  if (episodeIds.length === 0) {
+    return [];
+  }
+  return runRead(driver, memberSourceNodesStatement(episodeIds, limit, reference), (row) => ({
+    id: row.id as string,
+    kind: typeof row.kind === 'string' ? row.kind.toLowerCase() : 'note',
+    text: typeof row.text === 'string' ? row.text : '',
+    episodeId: row.episode_id as string,
+  }));
+}
+
+/**
  * Which of these ids the graph currently holds, read inside the caller's own transaction.
  *
  * A narrative writes a structural edge from every member whose projection is still there, and a
