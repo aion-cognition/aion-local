@@ -127,3 +127,27 @@ export function groupRollupWindows(
     }))
     .sort((left, right) => left.start.getTime() - right.start.getTime());
 }
+
+/**
+ * Which of a page's windows this page proved WHOLE, and which one it may have cut in half.
+ *
+ * A member read is capped across every window at once, so a page that came back full may have
+ * stopped in the middle of its newest window. That window is not one this page can assert it saw
+ * the whole of, and a rollup asserts exactly that about what it covers.
+ *
+ * A page that came back SHORT reached the end of the enumeration: every window on it is whole.
+ *
+ * The cut window is the last one on a full page, whether or not it has closed. Taking the last
+ * CLOSED window instead reads the wrong window as cut whenever an open one follows it, and — worse
+ * — lets the members of a still-open window sit behind a cursor, so the run that comes back after
+ * it closes sees only its suffix and calls that a complete window.
+ */
+export function pagedWindows<W extends { readonly key: string }>(
+  windows: readonly W[],
+  pageWasFull: boolean,
+): { readonly whole: readonly W[]; readonly cut: W | undefined } {
+  if (!pageWasFull || windows.length === 0) {
+    return { whole: windows, cut: undefined };
+  }
+  return { whole: windows.slice(0, -1), cut: windows[windows.length - 1] };
+}

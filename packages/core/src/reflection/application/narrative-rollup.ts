@@ -22,7 +22,9 @@ import { decideSessionNarrative, narrativeSpan } from '../domain/narrative.js';
 import {
   groupRollupWindows,
   isWindowClosed,
+  pagedWindows,
   rollupMemberScope,
+  type RollupMember,
   type RollupScope,
   type RollupWindow,
 } from '../domain/rollup.js';
@@ -313,6 +315,44 @@ function writeMemberCursor(
 }
 
 /**
+ * Where the next page starts, which is only ever a WINDOW boundary.
+ *
+ * Three positions, and the reason for each. A short page reached the end of the enumeration and
+ * clears the position. A full page that proved at least one window whole stops at the last member
+ * of the last whole one, so the cut window is read again from its own beginning with a fresh page
+ * to itself. A full page that proved NONE whole holds a single window larger than the page: it can
+ * never be enumerated at this bound, so the position steps past the window's calendar end, and the
+ * window stays blocked instead of publishing the part of it that fit.
+ *
+ * A cursor that stopped at the last MEMBER read is the defect this replaces. It leaves a position
+ * inside a window, and the run that comes back to it sees a suffix and calls it a complete window.
+ */
+function nextMemberCursor(
+  members: readonly RollupMember[],
+  memberLimit: number,
+  paged: { readonly whole: readonly RollupWindow[]; readonly cut: RollupWindow | undefined },
+): RollupMemberCursor | undefined {
+  if (members.length < memberLimit) {
+    return undefined;
+  }
+  const lastWhole = paged.whole[paged.whole.length - 1];
+  if (lastWhole !== undefined) {
+    const stopAt = lastWhole.members[lastWhole.members.length - 1];
+    return stopAt?.occurredAt === undefined
+      ? undefined
+      : { occurredAt: stopAt.occurredAt, id: stopAt.id };
+  }
+  if (paged.cut !== undefined) {
+    // The window's own exclusive end. Nothing inside it sorts at or after this, and a member
+    // occurring exactly at it belongs to the next window and is reached by the id half of the key.
+    return { occurredAt: paged.cut.end, id: '' };
+  }
+  // A full page of members none of which could be placed in a window at all.
+  const last = members[members.length - 1];
+  return last?.occurredAt === undefined ? undefined : { occurredAt: last.occurredAt, id: last.id };
+}
+
+/**
  * One scope's rollup pass. Finding nothing is the ordinary answer on a young substrate: a day
  * rollup needs a day that has ended with session narratives inside it, and a week rollup needs
  * the days. Neither is a gate on shipping the operation, and both start working the moment the
@@ -341,31 +381,23 @@ export async function rollUpNarratives(
     });
   }
 
-  const closed = groupRollupWindows(members, settings.scope).filter((window) =>
-    isWindowClosed(window, settings.now),
+  // Windows over EVERY member on the page, open ones included: which window a full page cut in
+  // half is a question about the page, and a window that is still open is as capable of being cut
+  // as a closed one.
+  const paged = pagedWindows(
+    groupRollupWindows(members, settings.scope),
+    members.length >= settings.memberLimit,
   );
-  // The member read is capped across every window at once, so a read that came back full may
-  // have cut its newest window short. That window's membership is not something this run can
-  // enumerate completely, and an overview asserts it saw the whole of what it covers, so it is
-  // BLOCKED with its reason rather than quietly dropped from the list.
-  const truncated =
-    members.length < settings.memberLimit ? undefined : closed[closed.length - 1]?.key;
-  // Where the next page starts: past the last window this page could enumerate WHOLE. Advancing
-  // by the last member read instead would split a window across two pages and let the second
-  // half look complete; advancing by the last whole window means a window bigger than the page
-  // is refused for capacity and stepped over rather than read forever.
-  const settledWindows = closed.filter((window) => window.key !== truncated);
-  const lastWhole = settledWindows[settledWindows.length - 1];
-  const stopAt =
-    lastWhole === undefined
-      ? members[members.length - 1]
-      : lastWhole.members[lastWhole.members.length - 1];
+  // The cut window is not one this run can enumerate completely, so it is BLOCKED with its reason
+  // rather than quietly dropped from the list — and never published from the part of it that fits.
+  const truncated = paged.cut?.key;
+  const closed = paged.whole
+    .concat(paged.cut === undefined ? [] : [paged.cut])
+    .filter((window) => isWindowClosed(window, settings.now));
   writeMemberCursor(
     deps.db,
     settings.scope,
-    members.length < settings.memberLimit || stopAt?.occurredAt === undefined
-      ? undefined
-      : { occurredAt: stopAt.occurredAt, id: stopAt.id },
+    nextMemberCursor(members, settings.memberLimit, paged),
   );
 
   let created = 0;

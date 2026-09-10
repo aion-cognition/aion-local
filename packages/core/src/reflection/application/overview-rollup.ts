@@ -34,7 +34,7 @@ import {
   type OverviewMember,
 } from '../../infrastructure/sqlite/overview-membership.js';
 import { renderConsolidationSource, type ConsolidationMember } from '../domain/consolidation.js';
-import { isWindowClosed, rollupWindow, type RollupScope } from '../domain/rollup.js';
+import { isWindowClosed, pagedWindows, rollupWindow, type RollupScope } from '../domain/rollup.js';
 
 /**
  * The calendar overview pass, over the manifest rather than over the graph.
@@ -185,8 +185,7 @@ function closedWindows(
     }
     entry.rows.push(member);
   }
-  const windows = [...grouped.values()]
-    .filter((entry) => isWindowClosed(entry.bounds, now))
+  const all = [...grouped.values()]
     .map((entry) => ({
       key: entry.bounds.key,
       start: entry.bounds.start,
@@ -194,14 +193,40 @@ function closedWindows(
       members: [...entry.rows].sort((left, right) => left.spanEnd.localeCompare(right.spanEnd)),
     }))
     .sort((left, right) => left.key.localeCompare(right.key));
-  // Past the last member this page read, so the next page reaches the windows behind it. A page
-  // that came back short is the end of the walk and clears the position.
-  const last = members[members.length - 1];
-  const next =
-    members.length < OVERVIEW_MEMBER_SCAN_LIMIT || last === undefined
+  // A full page may have stopped in the middle of its newest window, and an overview asserts it
+  // saw the whole of what it covers. That window is not offered for publication at all, and the
+  // position never rests inside it: the next page either reads it whole from its own beginning, or
+  // — when one window filled the page by itself and never can be read whole at this bound — steps
+  // past its calendar end so the windows behind it are reached.
+  const paged = pagedWindows(all, members.length >= OVERVIEW_MEMBER_SCAN_LIMIT);
+  const windows = paged.whole.filter((window) => isWindowClosed(window, now));
+  return {
+    windows,
+    unplaceable: scope === 'day' ? unplaceableChunks(db) : 0,
+    next: nextMemberCursor(members, paged),
+  };
+}
+
+/** Where the next page starts, which is only ever a window boundary. */
+function nextMemberCursor(
+  members: readonly OverviewMember[],
+  paged: { readonly whole: readonly Window[]; readonly cut: Window | undefined },
+): MemberCursor | undefined {
+  if (members.length < OVERVIEW_MEMBER_SCAN_LIMIT) {
+    return undefined;
+  }
+  const lastWhole = paged.whole[paged.whole.length - 1];
+  if (lastWhole !== undefined) {
+    const stopAt = lastWhole.members[lastWhole.members.length - 1];
+    return stopAt === undefined
       ? undefined
-      : { spanEnd: last.spanEnd, familyKey: last.familyKey };
-  return { windows, unplaceable: scope === 'day' ? unplaceableChunks(db) : 0, next };
+      : { spanEnd: stopAt.spanEnd, familyKey: stopAt.familyKey };
+  }
+  if (paged.cut !== undefined) {
+    return { spanEnd: paged.cut.end.toISOString(), familyKey: '' };
+  }
+  const last = members[members.length - 1];
+  return last === undefined ? undefined : { spanEnd: last.spanEnd, familyKey: last.familyKey };
 }
 
 /** Where the last pass of one scope stopped reading members. */
