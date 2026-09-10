@@ -1,4 +1,10 @@
-import { measuredGauge, type Gauge, type GaugeBasis, type GaugeStamp } from './campaign-gauges.js';
+import {
+  measuredGauge,
+  unavailableGauge,
+  type Gauge,
+  type GaugeBasis,
+  type GaugeStamp,
+} from './campaign-gauges.js';
 import type { ManagedWriteObservations } from '../../infrastructure/graph/managed-write-observations.js';
 
 /**
@@ -23,9 +29,9 @@ export const MANAGED_WRITE_METRIC_VERSION = 1;
  */
 const MANAGED_WRITE_DENOMINATOR =
   'write transaction callbacks one driver ran through inWriteTransaction in this process. ' +
-  'A begin or commit failure is counted as a replay with its cause unknown, the executeQuery ' +
-  'write helpers retry with no callback to count, and the explicit publication transaction ' +
-  'takes no managed retry.';
+  'A begin or commit failure is seen only when a later invocation follows it and never on ' +
+  'its own, the executeQuery write helpers retry with no callback to count, and the explicit ' +
+  'publication transaction takes no managed retry.';
 
 /**
  * Every observation this reading owes, in the order the gauges come back. Declared here and
@@ -39,6 +45,7 @@ export const MANAGED_WRITE_OBSERVATIONS = [
   'managed_write_callback_replays_deadlock',
   'managed_write_callback_replays_other_transient',
   'managed_write_callback_replays_outside_callback',
+  'managed_write_callback_replays_unknown',
   'managed_write_callback_failures',
   'managed_write_caller_fulfilments',
   'managed_write_caller_rejections',
@@ -60,9 +67,15 @@ function managedWriteBasis(observations: ManagedWriteObservations): GaugeBasis {
 }
 
 /**
- * The counts as gauges. Every one is measured, zero included: a driver that ran writes and
- * replayed none of them is a different fact from a driver nobody watched, and the group table
- * reports the second as unavailable.
+ * The counts as gauges. A zero is measured, not absent: a driver that ran writes and replayed
+ * none of them is a different fact from a driver nobody watched, and the group table reports
+ * the second as unavailable.
+ *
+ * A reading whose counts are not complete is not published at all. An observer fault can leave
+ * a count unestablished, and a number nobody can vouch for is worse than a stated gap: it
+ * would read as exact, and `intervalDelta` would subtract it. The whole reading becomes
+ * `collector_failed`, which is the envelope's own word for a collector that ran and did not
+ * finish.
  */
 export function managedWriteGauges(
   observations: ManagedWriteObservations,
@@ -73,6 +86,11 @@ export function managedWriteGauges(
     basis: managedWriteBasis(observations),
     metricVersion: MANAGED_WRITE_METRIC_VERSION,
   };
+  if (!observations.countsComplete) {
+    return new Map<string, Gauge>(
+      MANAGED_WRITE_OBSERVATIONS.map((name) => [name, unavailableGauge('collector_failed', stamp)]),
+    );
+  }
   const calls = (value: number): Gauge => measuredGauge(value, 'calls', stamp);
   const invocations = (value: number): Gauge => measuredGauge(value, 'invocations', stamp);
   return new Map<string, Gauge>([
@@ -88,6 +106,7 @@ export function managedWriteGauges(
       'managed_write_callback_replays_outside_callback',
       invocations(observations.replaysByClass.outside_callback),
     ],
+    ['managed_write_callback_replays_unknown', invocations(observations.replaysByClass.unknown)],
     ['managed_write_callback_failures', invocations(observations.callbackFailures)],
     ['managed_write_caller_fulfilments', calls(observations.callerFulfilments)],
     ['managed_write_caller_rejections', calls(observations.callerRejections)],

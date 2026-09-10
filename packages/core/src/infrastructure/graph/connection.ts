@@ -1,4 +1,4 @@
-import neo4j, { type Driver, type ManagedTransaction } from 'neo4j-driver';
+import neo4j, { type Driver, type ManagedTransaction, type Session } from 'neo4j-driver';
 
 import { ManagedWriteCall } from './managed-write-observations.js';
 import { NEO4J_DEFAULT_USER, type Neo4jEndpoint } from './provision.js';
@@ -176,6 +176,26 @@ export class GraphTransaction {
   }
 }
 
+/** What the managed transaction produced, held as a value so cleanup runs before it is raised. */
+type AttemptedWrite<T> =
+  | { readonly raised: false; readonly value: T }
+  | { readonly raised: true; readonly error: unknown };
+
+async function attemptWrite<T>(
+  session: Session,
+  call: ManagedWriteCall,
+  work: (tx: GraphTransaction) => Promise<T>,
+): Promise<AttemptedWrite<T>> {
+  try {
+    const value = await session.executeWrite((tx) =>
+      call.attempt(() => work(new GraphTransaction(tx))),
+    );
+    return { raised: false, value };
+  } catch (error) {
+    return { raised: true, error };
+  }
+}
+
 /**
  * Multi-statement atomicity: `supersede` closes a node and writes its lineage edge here so
  * a crash between the two cannot leave a closed node with no replacement pointing at it.
@@ -187,6 +207,11 @@ export class GraphTransaction {
  * it, so each invocation is counted on the way through
  * (`managed-write-observations.ts`). The counting changes no outcome: the body's result and
  * its error both pass back untouched, and the retry budget is the driver's as before.
+ *
+ * The transaction's outcome is held rather than raised so the session is closed exactly once
+ * either way, and the outcome the caller is told about is the one it actually receives. A
+ * close that fails still replaces what the work produced, which is what this wrapper has
+ * always done, and the counter records that as the rejection the caller got.
  */
 export async function inWriteTransaction<T>(
   driver: Driver,
@@ -194,18 +219,19 @@ export async function inWriteTransaction<T>(
 ): Promise<T> {
   const session = driver.session();
   const call = new ManagedWriteCall(driver);
+  const attempted = await attemptWrite(session, call, work);
   try {
-    const result = await session.executeWrite((tx) =>
-      call.attempt(() => work(new GraphTransaction(tx))),
-    );
-    call.settled('fulfilled');
-    return result;
-  } catch (err) {
-    call.settled('rejected');
-    throw err;
-  } finally {
     await session.close();
+  } catch (closeError) {
+    call.settled('rejected');
+    throw closeError;
   }
+  if (attempted.raised) {
+    call.settled('rejected');
+    throw attempted.error;
+  }
+  call.settled('fulfilled');
+  return attempted.value;
 }
 
 /**

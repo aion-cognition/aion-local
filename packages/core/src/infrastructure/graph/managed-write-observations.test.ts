@@ -1,8 +1,28 @@
 import type { Driver } from 'neo4j-driver';
-import { describe, expect, it } from 'vitest';
+import type * as NodeCrypto from 'node:crypto';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { inWriteTransaction } from './connection.js';
 import { readManagedWriteObservations } from './managed-write-observations.js';
+
+const faults = vi.hoisted(() => ({ epoch: false }));
+
+vi.mock('node:crypto', async (original) => {
+  const actual = await original<typeof NodeCrypto>();
+  return {
+    ...actual,
+    randomUUID: (...args: Parameters<typeof actual.randomUUID>) => {
+      if (faults.epoch) {
+        throw new Error('observer epoch unavailable');
+      }
+      return actual.randomUUID(...args);
+    },
+  };
+});
+
+afterEach(() => {
+  faults.epoch = false;
+});
 
 /**
  * The managed driver replays a write callback and hands the caller the eventual outcome, so
@@ -104,12 +124,14 @@ describe('managed write observations', () => {
       deadlock: 1,
       other_transient: 0,
       outside_callback: 0,
+      unknown: 0,
     });
     expect(observed.callbackFailures).toBe(1);
     expect(observed.failuresByCode).toEqual({ [DEADLOCK]: 1 });
     expect(observed.callerFulfilments).toBe(1);
     expect(observed.callerRejections).toBe(0);
     expect(observed.observerFailures).toBe(0);
+    expect(observed.countsComplete).toBe(true);
   });
 
   it('counts no replay when the callback ran once', async () => {
@@ -126,6 +148,7 @@ describe('managed write observations', () => {
       deadlock: 0,
       other_transient: 0,
       outside_callback: 0,
+      unknown: 0,
     });
     expect(observed.callbackFailures).toBe(0);
     expect(observed.failuresByCode).toEqual({});
@@ -219,9 +242,46 @@ describe('managed write observations', () => {
     expect(observed.observerFailures).toBe(1);
     expect(observed.callerFulfilments).toBe(1);
     expect(observed.callbackAttempts).toBe(2);
-    // The class the replay continued was never established, so the replay count is a floor and
-    // the observer failure above is what says so.
-    expect(observed.callbackReplays).toBe(0);
+    expect(observed.callbackReplays).toBe(1);
+    expect(observed.replaysByClass.unknown).toBe(1);
+    expect(observed.failuresByCode).toEqual({ unreadable: 1 });
+    expect(observed.countsComplete).toBe(true);
+  });
+
+  it('does not attribute an unreadable cause to the failure before it', async () => {
+    const driver = retryingDriver({ retries: 2, retryable: () => true });
+    const raised = unreadable();
+    let attempt = 0;
+    const body = (): Promise<string> => {
+      attempt += 1;
+      if (attempt === 1) {
+        return Promise.reject(coded(DEADLOCK));
+      }
+      return attempt === 2 ? Promise.reject(raised) : Promise.resolve('written');
+    };
+
+    await expect(inWriteTransaction(driver, body)).resolves.toBe('written');
+
+    const observed = readManagedWriteObservations(driver);
+    expect(observed.callbackReplays).toBe(2);
+    expect(observed.replaysByClass.deadlock).toBe(1);
+    expect(observed.replaysByClass.unknown).toBe(1);
+    expect(observed.failuresByCode).toEqual({ [DEADLOCK]: 1, unreadable: 1 });
+    expect(observed.callbackFailures).toBe(2);
+  });
+
+  it('reports an accumulation that never got an identity as incomplete, not as a clean zero', async () => {
+    const driver = retryingDriver({ retries: 0 });
+    faults.epoch = true;
+
+    await expect(inWriteTransaction(driver, () => Promise.resolve('written'))).resolves.toBe(
+      'written',
+    );
+
+    const observed = readManagedWriteObservations(driver);
+    expect(observed.countsComplete).toBe(false);
+    expect(observed.epoch).toBe('unidentified');
+    expect(observed.observerFailures).toBe(1);
   });
 
   it('counts each driver on its own', async () => {

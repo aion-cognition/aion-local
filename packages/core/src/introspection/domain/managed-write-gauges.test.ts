@@ -13,10 +13,11 @@ const SAMPLED_AT = '2026-09-09T00:00:00.000Z';
 
 const ZERO: ManagedWriteObservations = {
   epoch: 'epoch-one',
+  countsComplete: true,
   logicalOperations: 0,
   callbackAttempts: 0,
   callbackReplays: 0,
-  replaysByClass: { deadlock: 0, other_transient: 0, outside_callback: 0 },
+  replaysByClass: { deadlock: 0, other_transient: 0, outside_callback: 0, unknown: 0 },
   callbackFailures: 0,
   failuresByCode: {},
   failureCodesTruncated: false,
@@ -44,7 +45,7 @@ describe('managed write gauges', () => {
         logicalOperations: 16,
         callbackAttempts: 20,
         callbackReplays: 4,
-        replaysByClass: { deadlock: 3, other_transient: 1, outside_callback: 0 },
+        replaysByClass: { deadlock: 3, other_transient: 1, outside_callback: 0, unknown: 0 },
         callbackFailures: 4,
         callerFulfilments: 16,
       }),
@@ -125,6 +126,24 @@ describe('managed write gauges', () => {
         { sampleId: 'third', gauge: gaugeAt(restarted, 'managed_write_callback_replays') },
       ),
     ).toMatchObject({ status: 'unavailable', reason: 'basis_changed' });
+  });
+
+  it('publishes no count at all when the counts are not complete', () => {
+    const gauges = managedWriteGauges(
+      replayed({ countsComplete: false, callbackAttempts: 4, observerFailures: 1 }),
+      SAMPLED_AT,
+    );
+
+    expect([...gauges.keys()]).toEqual([...MANAGED_WRITE_OBSERVATIONS]);
+    for (const [, gauge] of gauges) {
+      expect(gauge).toMatchObject({ status: 'unavailable', reason: 'collector_failed' });
+    }
+    expect(
+      intervalDelta(
+        { sampleId: 'first', gauge: gaugeAt(gauges, 'managed_write_callback_attempts') },
+        { sampleId: 'second', gauge: gaugeAt(gauges, 'managed_write_callback_attempts') },
+      ),
+    ).toMatchObject({ status: 'unavailable', reason: 'sample_unavailable' });
   });
 
   it('leaves a collector that cannot see the counter reporting uncollected', () => {
