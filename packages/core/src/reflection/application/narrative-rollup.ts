@@ -1,11 +1,5 @@
 import { synthesizeGrounded } from './consolidation-synthesis.js';
-import {
-  attachVector,
-  closeInto,
-  recordBlockedWindow,
-  writeRollup,
-  type RollupWriteDeps,
-} from './rollup-write.js';
+import { attachVector, closeInto, writeRollup, type RollupWriteDeps } from './rollup-write.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import {
@@ -329,13 +323,6 @@ export async function rollUpNarratives(
     examined += 1;
     if (window.key === truncated) {
       blocked += 1;
-      recordBlockedWindow(deps, {
-        scope: settings.scope,
-        window,
-        reason: 'window_enumeration_incomplete',
-        allowance: settings.renderedInputAllowance,
-        now: settings.now,
-      });
       continue;
     }
     const existing = await findWindowRollups(deps.driver, settings.scope, window.key);
@@ -349,13 +336,6 @@ export async function rollUpNarratives(
       vetoed += 1;
     } else if (result.outcome === 'blocked') {
       blocked += 1;
-      recordBlockedWindow(deps, {
-        scope: settings.scope,
-        window,
-        reason: result.blockedReason ?? 'blocked',
-        allowance: settings.renderedInputAllowance,
-        now: settings.now,
-      });
     } else {
       failed += 1;
     }

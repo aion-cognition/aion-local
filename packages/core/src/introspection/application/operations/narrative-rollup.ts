@@ -1,4 +1,5 @@
 import { rollUpNarratives } from '../../../reflection/application/narrative-rollup.js';
+import { rollUpOverviews } from '../../../reflection/application/overview-rollup.js';
 import type { RollupScope } from '../../../reflection/domain/rollup.js';
 import { HEALTH_COLLECTORS, type HealthSnapshot } from '../../domain/health.js';
 import type { IntrospectionOperation, OperationOutcome } from '../../domain/operation.js';
@@ -55,6 +56,30 @@ function narrativeRollupOperation(
         };
       }
 
+      // The signed family first: windows the manifest names, published through the coordinator.
+      // The legacy pass below still serves the whole-session family until its cutover retires it.
+      const overviews =
+        ctx.narratives === undefined
+          ? undefined
+          : await rollUpOverviews(
+              {
+                driver: ctx.driver,
+                db: ctx.db,
+                provider: ctx.provider,
+                publications: ctx.narratives.publications,
+                logger: ctx.logger,
+              },
+              {
+                scope,
+                now: ctx.now,
+                windowLimit: ctx.config.maintenance.narrativeRollupWindows,
+                renderedInputAllowance: ctx.config.maintenance.chunkRenderedInputAllowance,
+                model: ctx.config.models.reflect,
+                timeoutMs: ctx.config.reflection.stageTimeoutMs,
+                signal: ctx.signal,
+              },
+            );
+
       const report = await rollUpNarratives(
         { driver: ctx.driver, db: ctx.db, provider: ctx.provider, logger: ctx.logger },
         {
@@ -69,11 +94,21 @@ function narrativeRollupOperation(
         },
       );
 
+      const overviewDetail =
+        overviews === undefined
+          ? 'no publisher composed for the overview family'
+          : `${String(overviews.published)} of ${String(overviews.windows)} closed ${scope} ` +
+            `window(s) published, ${String(overviews.settled)} already settled, ` +
+            `${String(overviews.blocked)} refused, ${String(overviews.reconsidered)} ` +
+            `reconsidered, ${String(overviews.failed)} failed, ` +
+            `${String(overviews.unplaceable)} chunk(s) no window could be derived for`;
+      const published = overviews?.published ?? 0;
       return {
-        status: report.created === 0 ? 'noop' : 'applied',
-        itemsProcessed: report.windows,
-        itemsAffected: report.created,
+        status: report.created + published === 0 ? 'noop' : 'applied',
+        itemsProcessed: report.windows + (overviews?.windows ?? 0),
+        itemsAffected: report.created + published,
         detail:
+          `${overviewDetail}; legacy: ` +
           `${String(report.windows)} closed ${scope} window(s): ${String(report.created)} rolled up ` +
           `over ${String(report.absorbed)} member narrative(s), ${String(report.skipped)} already covered, ` +
           `${String(report.blocked)} blocked for capacity or incomplete membership, ` +

@@ -18,9 +18,8 @@ import type { GraphProperties } from '../../infrastructure/graph/values.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import { NARRATIVE_GROUNDING } from '../domain/narrative.js';
-import type { RollupScope, RollupWindow } from '../domain/rollup.js';
+import type { RollupScope } from '../domain/rollup.js';
 
 /**
  * Everything a rollup pass writes, and the one thing it records instead of writing.
@@ -39,16 +38,11 @@ export type RollupWriteDeps = {
   readonly driver: Driver;
   readonly provider: Provider;
   readonly logger: Logger;
-  /** Where a blocked window is recorded. Absent, the block still holds and is logged only. */
+  /**
+   * Carried for the callers that hold one. The refused-window record moved onto the overview
+   * family's own attempt row when that family got a publication, so nothing here writes it.
+   */
   readonly db?: SqliteHandle;
-};
-
-export type BlockedWindowInput = {
-  readonly scope: RollupScope;
-  readonly window: RollupWindow;
-  readonly reason: string;
-  readonly allowance: number;
-  readonly now: Date;
 };
 
 export type RollupWrite = {
@@ -181,24 +175,4 @@ export async function attachVector(
   } catch (err) {
     deps.logger.warn({ err, rollupId }, 'rollup vector deferred; the rollup is stored');
   }
-}
-
-/**
- * A refused window, recorded so a person can see what is not being compressed and why.
- *
- * Recording it changes nothing about the refusal: the block happens before any provider call on
- * every pass, so a window that stays the same costs one measurement and no generation whether or
- * not this record exists. What the record adds is disclosure, and the measured size a later
- * allowance or policy decision is made against.
- */
-export function recordBlockedWindow(deps: RollupWriteDeps, input: BlockedWindowInput): void {
-  if (deps.db === undefined) {
-    return;
-  }
-  markLedgerApplied(deps.db, `narrative-rollup:blocked:${input.scope}:${input.window.key}`, {
-    reason: input.reason,
-    members: input.window.members.map((member) => member.id),
-    allowance: input.allowance,
-    at: input.now.toISOString(),
-  });
 }

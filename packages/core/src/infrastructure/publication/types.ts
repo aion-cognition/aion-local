@@ -26,6 +26,10 @@ export const PUBLICATION_KINDS = [
   // Its own kind rather than a variant of `narrative_publish`, because it allocates no
   // revision and writes no output: it makes the graph agree with a decision already taken.
   'narrative_family_repair',
+  // A calendar overview's own revision: a `scope:window` family with the same revision columns
+  // the chunk family has, publishing through the same coordinator. Its own kind because it is
+  // its own writer with its own membership fence, not a variant of the chunk publication.
+  'overview_publish',
 ] as const;
 export type PublicationKind = (typeof PUBLICATION_KINDS)[number];
 

@@ -127,3 +127,50 @@ export async function findWindowRollups(
     open: row.open === true,
   }));
 }
+
+export type NarrativeBody = {
+  readonly id: string;
+  readonly text: string;
+  readonly summary?: string;
+  readonly occurredAt?: Date;
+};
+
+/**
+ * The prose of named revisions, for a render whose MEMBERSHIP came from the manifest.
+ *
+ * Two stores, two questions. Which revisions a window is made of is a question about the records
+ * and is answered there; what those revisions SAY is held on the node, and this is the only thing
+ * the graph is asked. A member the graph cannot produce is absent from the answer rather than
+ * rendered empty, so a caller can refuse the window instead of publishing a hole in it.
+ */
+const FIND_NARRATIVE_BODIES = [
+  'UNWIND $ids AS id',
+  'MATCH (n:Narrative { id: id })',
+  `WHERE n.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  'RETURN',
+  '  n.id AS id,',
+  `  n.${MEMORY_PROPERTIES.text} AS text,`,
+  `  n.${MEMORY_PROPERTIES.summary} AS summary,`,
+  `  n.${BITEMPORAL_PROPERTIES.occurredAt} AS occurred_at`,
+].join('\n');
+
+export async function findNarrativeBodies(
+  driver: Driver,
+  ids: readonly string[],
+): Promise<Map<string, NarrativeBody>> {
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) {
+    return new Map();
+  }
+  const rows = await runRead(driver, FIND_NARRATIVE_BODIES, { ids: unique }, (row: Row) => {
+    const summary = asOptionalText(row.summary);
+    const occurredAt = row.occurred_at instanceof Date ? row.occurred_at : undefined;
+    return {
+      id: row.id as string,
+      text: typeof row.text === 'string' ? row.text : '',
+      ...(summary === undefined ? {} : { summary }),
+      ...(occurredAt === undefined ? {} : { occurredAt }),
+    };
+  });
+  return new Map(rows.map((row) => [row.id, row] as const));
+}
