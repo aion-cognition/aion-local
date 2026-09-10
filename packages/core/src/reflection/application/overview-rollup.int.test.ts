@@ -316,7 +316,7 @@ it('re-versions a window over the same member twice and closes only its own head
   if (sealed.status !== 'sealed') {
     throw new Error('the fixture needs a sealed chunk');
   }
-  const {chunkId} = sealed;
+  const { chunkId } = sealed;
   expect((await publishChunkNarrative(chunkDeps(), chunkId, { now: NOW })).status).toBe(
     'published',
   );

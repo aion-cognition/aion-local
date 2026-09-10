@@ -11,6 +11,7 @@ import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverag
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   claimNarrativeRevision,
+  listAllocatedRevisions,
   readAttemptPolicy,
   recordAttemptPolicy,
   releaseNarrativeClaim,
@@ -91,6 +92,34 @@ export const OVERVIEW_MEMBER_SCAN_LIMIT = 500;
 
 /** How long a claim holds its number without publishing. */
 export const OVERVIEW_CLAIM_LEASE_MS = 10 * 60 * 1000;
+
+/**
+ * Gives back a number THIS attempt still owns, and nothing else.
+ *
+ * Ownership is proven by an unexpired claim under this actor's own identity. A number whose row
+ * now carries a different binding was reclaimed after this actor's lease expired, and the reclaim
+ * mints a new ownership: releasing it here would hand a live attempt's number away. The shared
+ * helper matches on the family and the number alone, so the identity check lives on this side of
+ * the call rather than being assumed of it.
+ */
+function releaseOwnClaim(
+  db: SqliteHandle,
+  familyKey: string,
+  revisionNo: number,
+  operationId: string,
+): boolean {
+  const held = listAllocatedRevisions(db, OVERVIEW_REVISION_FAMILY, familyKey).find(
+    (row) => row.revisionNo === revisionNo,
+  );
+  if (held?.operationId !== operationId) {
+    return false;
+  }
+  return releaseNarrativeClaim(db, OVERVIEW_REVISION_FAMILY, {
+    familyKey,
+    revisionNo,
+    operationId,
+  });
+}
 
 /** What the whole window would render to with nothing clipped. */
 const UNCLIPPED = Number.MAX_SAFE_INTEGER;
@@ -261,20 +290,12 @@ async function rollUpWindow(
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
   } catch (err) {
-    releaseNarrativeClaim(deps.db, OVERVIEW_REVISION_FAMILY, {
-      familyKey,
-      revisionNo: claim.revisionNo,
-      operationId,
-    });
+    releaseOwnClaim(deps.db, familyKey, claim.revisionNo, operationId);
     deps.logger.warn({ err, familyKey }, 'overview synthesis failed');
     return 'failed';
   }
   if (synthesis.status !== 'grounded') {
-    releaseNarrativeClaim(deps.db, OVERVIEW_REVISION_FAMILY, {
-      familyKey,
-      revisionNo: claim.revisionNo,
-      operationId,
-    });
+    releaseOwnClaim(deps.db, familyKey, claim.revisionNo, operationId);
     deps.logger.info({ familyKey, status: synthesis.status }, 'overview not written');
     return 'failed';
   }
@@ -309,11 +330,7 @@ async function rollUpWindow(
     // A claim an operation is holding is not the caller's to release, and the helper refuses to
     // take one back once a durable intent exists — so an interrupted publication keeps its number
     // and the coordinator's own recovery is what settles it.
-    releaseNarrativeClaim(deps.db, OVERVIEW_REVISION_FAMILY, {
-      familyKey,
-      revisionNo: claim.revisionNo,
-      operationId,
-    });
+    releaseOwnClaim(deps.db, familyKey, claim.revisionNo, operationId);
     deps.logger.info(
       { familyKey, status: outcome?.status ?? 'threw', reason: outcome?.reason },
       'overview publication did not land',
