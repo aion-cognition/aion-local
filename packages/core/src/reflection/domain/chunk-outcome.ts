@@ -34,3 +34,20 @@ export const SYNTHESIS_ATTEMPTED_REASONS: readonly string[] = [
   'synthesis_failed',
   'no_grounded_sentence',
 ];
+
+/**
+ * The block reasons a member's own suppression state can clear.
+ *
+ * A block is not a delay: what clears it is the prerequisite it recorded, re-derived. These two
+ * recorded that a member, or the correction a revision had to reground on, was proved forgotten —
+ * so unforgetting it is exactly the change that makes the attempt runnable again.
+ *
+ * The other block reasons record other prerequisites: a member over the resolver's budget or a
+ * render over the allowance clears on a recorded rendering-policy change, and an unreadable scope
+ * clears when the scope becomes readable. Neither is derivable from the source states, and the
+ * attempt record carries no note of the policy it ran under, so neither is reconsidered here.
+ */
+export const SUPPRESSION_BLOCK_REASONS: readonly string[] = [
+  'no_admissible_input',
+  'required_transition_evidence_suppressed',
+];

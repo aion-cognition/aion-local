@@ -256,3 +256,111 @@ export function heldRemainderMembership(db: SqliteHandle): HeldMembership {
     oldestAt: row.oldest_at ?? undefined,
   };
 }
+
+export type PublishedChunkHead = {
+  readonly chunkId: string;
+  readonly nodeId: string;
+  readonly revisionNo: number;
+  /** What the head was published on, which is what invalidation is judged against. */
+  readonly evidenceRevisionJson: string | null;
+};
+
+/**
+ * Published chunk heads, oldest capture first.
+ *
+ * The population a regrounding pass reads from. Which of them is INVALIDATED is a question about
+ * the stored dependency set, and the verifier that answers it is the same one the publication
+ * uses — so this offers the heads and does not guess at their currency.
+ */
+export function publishedChunkHeads(
+  db: SqliteHandle,
+  limit: number,
+): readonly PublishedChunkHead[] {
+  if (limit <= 0) {
+    return [];
+  }
+  const rows = db
+    .prepare(
+      `SELECT r.chunk_id, r.node_id, r.revision_no, r.evidence_revision_json,
+              (SELECT MIN(s.capture_order_value)
+                 FROM chunk_members m
+                 JOIN source_records s ON s.source_id = m.source_id
+                WHERE m.chunk_id = r.chunk_id) AS capture_key
+         FROM chunk_revisions r
+        WHERE r.state = 'published'
+        ORDER BY capture_key, r.chunk_id
+        LIMIT ?`,
+    )
+    .all(limit) as {
+    chunk_id: string;
+    node_id: string;
+    revision_no: number;
+    evidence_revision_json: string | null;
+  }[];
+  return rows.map((row) => ({
+    chunkId: row.chunk_id,
+    nodeId: row.node_id,
+    revisionNo: row.revision_no,
+    evidenceRevisionJson: row.evidence_revision_json,
+  }));
+}
+
+export type BlockedAttempt = {
+  readonly chunkId: string;
+  readonly revisionNo: number;
+  readonly reason: string;
+};
+
+/**
+ * Blocked attempts whose recorded EVIDENCE prerequisite no longer holds.
+ *
+ * A block clears on a changed prerequisite and never on the clock, so this re-derives the
+ * prerequisite rather than ageing the row: an attempt refused because its members were suppressed
+ * is reconsidered exactly when no member of its chunk is suppressed any more. While one still is,
+ * the row stays out of nomination and costs nothing.
+ *
+ * `reasons` is what keeps that honest. Only blocks whose recorded prerequisite IS a suppression
+ * are asked this question; a block that recorded a different prerequisite would otherwise be
+ * cleared by an answer that has nothing to do with it, every run, forever.
+ *
+ * The suppression state is read as the newest COMMITTED one — a version whose operation the
+ * coordinator acknowledged — so a forget that is prepared and unsettled reconsiders nothing.
+ */
+export function reconsiderableBlockedAttempts(
+  db: SqliteHandle,
+  input: { readonly reasons: readonly string[]; readonly limit: number },
+): readonly BlockedAttempt[] {
+  if (input.limit <= 0 || input.reasons.length === 0) {
+    return [];
+  }
+  const placeholders = input.reasons.map(() => '?').join(', ');
+  const rows = db
+    .prepare(
+      `SELECT b.chunk_id, b.revision_no, b.blocked_reason
+         FROM chunk_revisions b
+        WHERE b.state = 'allocated' AND b.blocked_reason IN (${placeholders})
+          AND NOT EXISTS (
+            SELECT 1 FROM chunk_members m
+             WHERE m.chunk_id = b.chunk_id
+               AND (
+                 SELECT v.state_kind FROM source_state_versions v
+                 JOIN publication_intents i
+                   ON i.operation_id = v.operation_id AND i.state = 'acknowledged'
+                WHERE v.source_id = m.source_id AND v.known_from IS NOT NULL
+                ORDER BY v.version DESC LIMIT 1
+               ) = 'forgotten'
+          )
+        ORDER BY b.chunk_id, b.revision_no
+        LIMIT ?`,
+    )
+    .all(...input.reasons, input.limit) as {
+    chunk_id: string;
+    revision_no: number;
+    blocked_reason: string;
+  }[];
+  return rows.map((row) => ({
+    chunkId: row.chunk_id,
+    revisionNo: row.revision_no,
+    reason: row.blocked_reason,
+  }));
+}

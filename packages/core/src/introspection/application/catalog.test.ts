@@ -27,6 +27,10 @@ const UNMEASURED_OPERATIONS = [
   'memory_decay',
   'merge_decision_reconcile',
   'narrative_cleanup',
+  // The metric it declared counted the legacy graph marker, which describes the family it is
+  // leaving rather than the chunk population it now regrounds. Unmeasured until a baseline over
+  // that population exists; the old count is not one.
+  'narrative_regrounding',
   'narrative_rollup_day',
   'narrative_rollup_week',
   // Deliberate, not owed. The snapshot counts what the chunk lifecycle owes, and an operation

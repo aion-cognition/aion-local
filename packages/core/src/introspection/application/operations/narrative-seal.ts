@@ -1,10 +1,12 @@
 import {
   dueChunkGroups,
   dueRemainderGroups,
+  reconsiderableBlockedAttempts,
   type RemainderCursor,
 } from '../../../infrastructure/sqlite/chunk-nomination.js';
 import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import {
+  clearRevisionBlock,
   deferRevisionAttempt,
   readNarrativeRevision,
   CHUNK_REVISION_FAMILY,
@@ -18,6 +20,7 @@ import {
 import { CHUNK_MAX_MEMBERS } from '../../../reflection/domain/chunk-boundary.js';
 import {
   STANDING_HEAD_REASON,
+  SUPPRESSION_BLOCK_REASONS,
   SYNTHESIS_ATTEMPTED_REASONS,
 } from '../../../reflection/domain/chunk-outcome.js';
 import { narrativeSealRelevance } from '../../domain/narrative-seal.js';
@@ -307,6 +310,7 @@ function detailOf(
   tally: RunTally,
   recovered: number,
   blockedSources: number,
+  reconsidered: number,
 ): string {
   return (
     `${String(tally.published)} of ${String(tally.attempted)} chunk publication attempt(s) ` +
@@ -316,8 +320,32 @@ function detailOf(
     `${String(tally.standing)} standing head(s), ${String(tally.held)} held head(s), ` +
     `${String(tally.blocked)} blocked attempt(s) ` +
     `over ${String(blockedSources)} held source(s), ${String(seal.refused)} refused tail(s), ` +
-    `${String(recovered)} pending publication(s) recovered`
+    `${String(recovered)} pending publication(s) recovered, ` +
+    `${String(reconsidered)} block(s) reconsidered`
   );
+}
+
+/**
+ * Clears the blocks whose recorded prerequisite no longer holds.
+ *
+ * Clearing is not attempting: the revision goes back into the ordinary enumeration and takes its
+ * turn there by capture position, so a reconsidered attempt cannot jump the older backlog either.
+ */
+function reconsiderBlockedAttempts(ctx: OperationContext, limit: number): number {
+  let cleared = 0;
+  for (const attempt of reconsiderableBlockedAttempts(ctx.db, {
+    reasons: SUPPRESSION_BLOCK_REASONS,
+    limit,
+  })) {
+    if (clearRevisionBlock(ctx.db, CHUNK_REVISION_FAMILY, attempt.chunkId, attempt.revisionNo)) {
+      cleared += 1;
+      ctx.logger.info(
+        { chunkId: attempt.chunkId, revisionNo: attempt.revisionNo, reason: attempt.reason },
+        'narrative seal reconsidered a blocked attempt whose prerequisite moved',
+      );
+    }
+  }
+  return cleared;
 }
 
 function noop(detail: string): OperationOutcome {
@@ -378,6 +406,11 @@ async function runSeal(ctx: OperationContext, scales: SealScales): Promise<Opera
     return noop(`a prior publication is unsettled (${held}); no seal or attempt was started`);
   }
 
+  // A block clears on its recorded prerequisite, re-derived, and never on the clock. Done before
+  // nomination so an attempt whose members are readable again is in the same enumeration as
+  // everything else that is due, rather than waiting a run for the cursor to come round.
+  const reconsidered = reconsiderBlockedAttempts(ctx, scales.batch);
+
   const seal = await sealDueTails(ctx, deps, scales);
   let tally: RunTally = {
     attempted: 0,
@@ -406,8 +439,8 @@ async function runSeal(ctx: OperationContext, scales: SealScales): Promise<Opera
     (total, count) => total + count,
     0,
   );
-  const detail = detailOf(seal, tally, recovered, blockedSources);
-  if (tally.attempted === 0 && seal.sealed === 0 && recovered === 0) {
+  const detail = detailOf(seal, tally, recovered, blockedSources, reconsidered);
+  if (tally.attempted === 0 && seal.sealed === 0 && recovered === 0 && reconsidered === 0) {
     return noop(`nothing due; ${detail}`);
   }
   return {

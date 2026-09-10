@@ -130,6 +130,13 @@ async function accept(session: string, marker: string, now = NOW): Promise<strin
   for (const role of ['stated_correction', 'stated_confirmation'] as const) {
     establishScope(store.db, result.episode_id, durableRoleScope(role, 'in'), now);
   }
+  // The acceptance clock is the substrate's own, deliberately: a caller cannot date its own
+  // arrival. Every case here ages against the fixture's fixed clock, so the arrival is moved onto
+  // it — a statement about when this source ARRIVED, which stays separable from what it says
+  // happened.
+  store.db
+    .prepare('UPDATE source_records SET created_at = ? WHERE source_id = ?')
+    .run(now.toISOString(), result.episode_id);
   return result.episode_id;
 }
 
