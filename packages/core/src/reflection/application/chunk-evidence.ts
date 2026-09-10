@@ -4,7 +4,7 @@ import type { SourceEvidence } from '../../evidence/application/sources.js';
 import { idAddress, evidenceRequestKey } from '../../evidence/domain/address.js';
 import type { RequestBudget } from '../../evidence/domain/budget.js';
 import type { EvidenceIssue, EvidenceResult } from '../../evidence/domain/result.js';
-import { durableRoleScope } from '../../evidence/domain/scopes.js';
+import { durableRoleScope, type DurableRole } from '../../evidence/domain/scopes.js';
 import type { EvidenceDependency } from '../../infrastructure/publication/preconditions.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { sourcePartAddress } from '../../infrastructure/sqlite/source-identity.js';
@@ -95,22 +95,36 @@ export type ResolvedMembers = {
  * correction to invalidate — the answer would stand for good. A reader may not mint a census, so
  * the uncertainty travels to the plan and holds the publication instead.
  */
-const INCOMING_STATEMENT_ROLES = ['stated_correction', 'stated_confirmation'] as const;
+const INCOMING_STATEMENT_ROLES: readonly DurableRole[] = [
+  'stated_correction',
+  'stated_confirmation',
+];
 
 export type UnprovedScope = {
   readonly sourceId: string;
   readonly scope: string;
 };
 
-type ScopeReading = {
+export type IncomingScopeReading = {
   readonly dependencies: readonly EvidenceDependency[];
   readonly unproved: readonly UnprovedScope[];
 };
 
-function incomingStatementScopes(db: SqliteHandle, sourceId: string): ScopeReading {
+/**
+ * One source's incoming-statement populations, bound where a census has counted them.
+ *
+ * Exported because the transitive requirement walk consults the same populations and has to bind
+ * them under the same rule. A second spelling of this read would be a second answer to whether an
+ * absence is proved.
+ */
+export function incomingStatementScopes(
+  db: SqliteHandle,
+  sourceId: string,
+  roles: readonly DurableRole[] = INCOMING_STATEMENT_ROLES,
+): IncomingScopeReading {
   const dependencies: EvidenceDependency[] = [];
   const unproved: UnprovedScope[] = [];
-  for (const role of INCOMING_STATEMENT_ROLES) {
+  for (const role of roles) {
     const scope = durableRoleScope(role, 'in');
     const reading = readRelationScope(db, {
       kind: 'relation_scope',

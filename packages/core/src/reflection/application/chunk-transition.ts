@@ -1,4 +1,10 @@
-import { resolveChunkMembers, type ResolvedMembers } from './chunk-evidence.js';
+import {
+  ChunkDependencySet,
+  incomingStatementScopes,
+  resolveChunkMembers,
+  type ResolvedMembers,
+  type UnprovedScope,
+} from './chunk-evidence.js';
 import type { EvidenceResolver } from '../../evidence/application/resolver.js';
 import type { EvidenceDependency } from '../../infrastructure/publication/preconditions.js';
 import {
@@ -124,6 +130,15 @@ export type RequirementProof = {
  */
 export const TRANSITION_DEPTH_LIMIT = 4;
 
+export type StandingWalk = {
+  readonly proofs: readonly RequirementProof[];
+  readonly truncated: boolean;
+  /** The tokens the consulted populations were read under, taken BEFORE they were read. */
+  readonly dependencies: readonly EvidenceDependency[];
+  /** Consulted populations no census has counted. Unknown completeness holds the publication. */
+  readonly unproved: readonly UnprovedScope[];
+};
+
 /**
  * Every source whose statement the revision currently depends on, breadth-first from its members.
  *
@@ -131,18 +146,30 @@ export const TRANSITION_DEPTH_LIMIT = 4;
  * a frozen member. Nothing is accumulated between runs — the whole set is re-derived — so a
  * requirement disappears exactly when the statement that made it required stops standing, and a
  * refinement of a withdrawn correction goes with the correction it refined.
+ *
+ * Each endpoint's incoming-statement populations are bound BEFORE they are read, and that ordering
+ * is the point. "Nothing else corrects this correction" is a negative reading the whole requirement
+ * rests on, and a token acquired afterwards dates a different moment: a refinement accepted between
+ * the walk and the resolver's read would be certified by a token that already knew about it. Bound
+ * first, the token is the one the derivation actually stood on, and the publication's own check
+ * refuses it once the population moves.
  */
 function standingRequirement(
   db: SqliteHandle,
   members: ReadonlySet<string>,
   seeds: readonly string[],
-): { readonly proofs: readonly RequirementProof[]; readonly truncated: boolean } {
+): StandingWalk {
   const proofs: RequirementProof[] = [];
+  const dependencies: EvidenceDependency[] = [];
+  const unproved: UnprovedScope[] = [];
   const seen = new Set<string>(seeds);
   let frontier = [...seeds];
   for (let depth = 1; depth <= TRANSITION_DEPTH_LIMIT && frontier.length > 0; depth += 1) {
     const next: string[] = [];
     for (const about of frontier) {
+      const census = incomingStatementScopes(db, about);
+      dependencies.push(...census.dependencies);
+      unproved.push(...census.unproved);
       for (const sourceId of currentStatementSources(db, about)) {
         // A member is read as a member, and an endpoint already walked is a cycle rather than a
         // second requirement.
@@ -155,11 +182,16 @@ function standingRequirement(
       }
     }
     if (proofs.length > TRANSITION_EVIDENCE_LIMIT) {
-      return { proofs: proofs.slice(0, TRANSITION_EVIDENCE_LIMIT), truncated: true };
+      return {
+        proofs: proofs.slice(0, TRANSITION_EVIDENCE_LIMIT),
+        truncated: true,
+        dependencies,
+        unproved,
+      };
     }
     frontier = next;
   }
-  return { proofs, truncated: frontier.length > 0 };
+  return { proofs, truncated: frontier.length > 0, dependencies, unproved };
 }
 
 /**
@@ -185,6 +217,12 @@ export async function chunkTransitionEvidence(
   // corrects or confirms a member, and whoever currently corrects or confirms THEM, bounded.
   const standing = standingRequirement(deps.db, members, frozenMembers);
   const required = new Set(standing.proofs.map((proof) => proof.sourceId));
+  const bound = new ChunkDependencySet();
+  const unprovedScopes: UnprovedScope[] = [...standing.unproved];
+  // The discovery tokens go in FIRST and stay: the set keeps the earliest reading of a scope and
+  // marks a later disagreeing one as a conflict, so the resolver's newer token cannot quietly
+  // replace the one the requirement was derived under.
+  bound.addAll(standing.dependencies);
   const unresolved: string[] = [];
   for (const endpointId of endpoints) {
     // A member's own changed scope is not an endpoint to walk: the member is already being read
@@ -193,6 +231,15 @@ export async function chunkTransitionEvidence(
     if (members.has(endpointId)) {
       continue;
     }
+    // The statement populations, on the same terms the walk binds its own. The derivation half of
+    // `sourcesBehind` is not counted here: `stated_derivation:in` is a real scope the acceptance
+    // writer advances, and no producer establishes its census, so requiring it would hold every
+    // regrounding on a count nobody takes. It is a positive lookup rather than a completeness
+    // reading — an endpoint it cannot answer for is already named `unresolved` and refuses — and
+    // the count it needs is named in the report as owed.
+    const census = incomingStatementScopes(deps.db, endpointId);
+    bound.addAll(census.dependencies);
+    unprovedScopes.push(...census.unproved);
     const behind = sourcesBehind(deps.db, endpointId).filter((sourceId) => !members.has(sourceId));
     if (behind.length === 0) {
       unresolved.push(endpointId);
@@ -208,7 +255,8 @@ export async function chunkTransitionEvidence(
   // Dropping the overflow would publish a regrounding that omitted a correction without saying so.
   const overflow = standing.truncated ? ordered : ordered.slice(TRANSITION_EVIDENCE_LIMIT);
   const resolved = await resolveChunkMembers(deps.resolver, deps.db, bounded, context);
-  const dependencies: EvidenceDependency[] = [...resolved.dependencies];
+  bound.addAll(resolved.dependencies);
+  unprovedScopes.push(...resolved.unprovedScopes);
   return {
     readings: [
       ...resolved.readings,
@@ -219,12 +267,14 @@ export async function chunkTransitionEvidence(
         reading: 'unreadable' as const,
       })),
     ],
-    dependencies,
+    dependencies: bound.list(),
     unresolved,
     requirement: standing.proofs,
     truncated: standing.truncated,
-    // The transition sources' own incoming-statement scopes are not what this revision rests on:
-    // what it needs from them is their content. An unproved scope on a correction holds nothing.
-    unprovedScopes: [],
+    // The transition sources' incoming-statement scopes ARE what this revision rests on, since the
+    // walk asked those populations whether anything further corrects a requirement. An uncounted
+    // one leaves that question unanswered, and an unanswered completeness holds the publication
+    // rather than passing for a proved empty.
+    unprovedScopes,
   };
 }

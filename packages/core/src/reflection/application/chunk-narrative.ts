@@ -232,8 +232,10 @@ export async function publishChunkNarrative(
     members: members.readings,
     transition: transition.readings,
     // Sealing never consults these: what may still be said about a member is not a membership
-    // question. Publishing does, because the revision is what would rest on the reading.
-    unprovedScopes: members.unprovedScopes,
+    // question. Publishing does, because the revision is what would rest on the reading. The
+    // transitive walk's are here for the same reason: it asked whether anything further corrects a
+    // requirement, and an uncounted population never answered.
+    unprovedScopes: [...members.unprovedScopes, ...transition.unprovedScopes],
     allowance: policy.renderedInputAllowance,
     ...(oversized === undefined ? {} : { oversizedMember: oversized }),
   });
