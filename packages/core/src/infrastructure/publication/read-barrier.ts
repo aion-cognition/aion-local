@@ -1,10 +1,10 @@
 import type { Driver } from 'neo4j-driver';
 
 import { PublicationInvariantError, PublicationUnavailable } from './errors.js';
+import { readPairedPosition } from './paired-position.js';
 import { checkpointFrom, sameCheckpoint, verifyPublicationState } from './protocol.js';
 import type { PublicationTransactions } from './transaction.js';
 import type { CheckpointResult, PublicationCheckpoint, PublicationContext } from './types.js';
-import { readPublicationGuard } from '../graph/publication-receipt.js';
 import type { SqliteHandle } from '../sqlite/database.js';
 import { publicationWrite } from '../sqlite/publication-bounded.js';
 import { coordinatorControl } from '../sqlite/publication-coordinator-store.js';
@@ -28,32 +28,14 @@ export class PublicationReadBarrier {
     this.#options = options;
   }
 
+  /**
+   * The same paired reading an inspection may take, which is why it lives beside both callers
+   * rather than inside this class. Nothing about it changed in the move: no lock, no recovery
+   * ownership, no initialization, no repair.
+   */
   async checkpoint(): Promise<CheckpointResult> {
     const { db, driver, timeoutMs } = this.#options;
-    try {
-      if (db.inTransaction) {
-        throw new PublicationInvariantError('enclosing_sqlite_transaction');
-      }
-      const before = coordinatorControl(db);
-      if (before.pendingOperationId !== null) {
-        return { status: 'unavailable', reason: 'pending_publication' };
-      }
-      const guard = await readPublicationGuard(driver, before.substrateId, timeoutMs);
-      const state = verifyPublicationState(db, guard);
-      if (
-        state.pending !== undefined ||
-        state.control.lastAckSequence !== before.lastAckSequence ||
-        state.control.substrateId !== before.substrateId
-      ) {
-        return { status: 'unavailable', reason: 'publication_changed' };
-      }
-      return { status: 'ready', checkpoint: checkpointFrom(guard) };
-    } catch (err) {
-      return {
-        status: 'unavailable',
-        reason: err instanceof PublicationUnavailable ? err.reason : 'store_unavailable',
-      };
-    }
+    return readPairedPosition({ db, driver, timeoutMs });
   }
 
   /**

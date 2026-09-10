@@ -4,7 +4,9 @@ import {
   fetchNodeProvenance,
   findEntityMergeProposalsForNode,
   findSupersessionProposalsForNode,
-  recordedPosition,
+  PAIRED_POSITION_TIMEOUT_MS,
+  positionDrift,
+  readPairedPosition,
   refusalLines,
   runSourceInspection,
   sourceOutputFor,
@@ -14,6 +16,7 @@ import {
   type NodeEdge,
   type NodeEdgePage,
   type NodeProvenance,
+  type PairedPositionDeps,
   type SupersessionProposal,
 } from '@aion/core';
 import { MAX_DERIVATION_ROOTS } from '@aion/protocol';
@@ -235,14 +238,28 @@ function citationLine(binding: DurableMetadata['narrativeBinding']): string {
  * roots its ancestry ends at, which sessions it belongs to, which published revisions cite it —
  * and they say how well each of those is proved, which the graph never does.
  */
-function renderDurableEvidence(result: DurableReading, write: Writer): void {
+function renderDurableEvidence(
+  result: DurableReading,
+  drift: string | undefined,
+  write: Writer,
+): void {
   write('durable evidence');
   const { evidence } = result;
   const why =
     evidence.status === 'complete-for-use'
       ? ''
       : `: ${evidence.reasons.map((issue) => `${issue.field} ${issue.reason}`).join(', ')}`;
-  write(`  proof            ${evidence.status}${why}`);
+  // A position that did not hold across the whole answer is what the reader is told first, in
+  // the coordinator's own words, and the reading's own state stays beside it: the records were
+  // read, and what moved under them is a fact about the interval rather than a correction to
+  // what they said.
+  if (drift === undefined) {
+    write(`  proof            ${evidence.status}${why}`);
+  } else {
+    write('  proof            not certified across this answer');
+    write(`  publication      ${drift} while it was assembled`);
+    write(`  read state       ${evidence.status}${why}`);
+  }
   write(`  residency        ${result.residency}`);
   const metadata = result.value;
   if (metadata === undefined) {
@@ -333,25 +350,38 @@ export function runWhy(
       const supersessions = findSupersessionProposalsForNode(substrate.db(), flags.nodeId);
       const merges = findEntityMergeProposalsForNode(substrate.db(), flags.nodeId);
       // Read under the context the coverage decision above produced, and judged against the
-      // position the store records: a resolver handed a bare mode has no epoch to answer under,
-      // and one handed no position reports a reading nobody stood behind as complete for use.
-      // The position is read, never taken, so an inspection recovers nothing and bootstraps
-      // nothing; a publication in flight degrades this answer rather than blocking it.
+      // matched pair the publication layer certifies on: a resolver handed a bare mode has no
+      // epoch to answer under, and one handed no position reports a reading nobody stood behind
+      // as complete for use. The position is read, never taken, so an inspection acquires no
+      // lock, recovers nothing and bootstraps nothing; a publication in flight degrades this
+      // answer rather than blocking it.
       const reads = sourceReadDeps({
         driver,
         db: substrate.db(),
         logger: substrate.logger(),
       });
+      const position: PairedPositionDeps = {
+        driver,
+        db: substrate.db(),
+        timeoutMs: PAIRED_POSITION_TIMEOUT_MS,
+      };
+      const held = await readPairedPosition(position);
       const certified = reads.resolver.certifiedAgainst({
-        checkpoint: () => Promise.resolve(recordedPosition(substrate.db())),
+        checkpoint: () => Promise.resolve(held),
       });
       const batch = await certified.resolveMetadata([flags.nodeId], checked.context, {
         maxRoots: MAX_DERIVATION_ROOTS,
       });
+      // The interval this answer was assembled over ends here, not at the resolver's own return:
+      // a publication that landed while the command was still putting the answer together is one
+      // this reading cannot claim to have been settled across.
+      const drift = positionDrift(held, await readPairedPosition(position));
 
       // Nothing is printed until the contract this was read under is still the one in force.
       // The graph block goes with it: both halves describe one moment, and emitting either
       // under a statement that has moved is the answer the completion check exists to withhold.
+      // A publication is a different matter: coverage is unchanged and valid, so the answer is
+      // served with its uncertainty named rather than refused.
       const refusal = completionRefusal(substrate.db(), {
         context: checked.context,
         coverage: checked.coverage,
@@ -370,7 +400,7 @@ export function runWhy(
         (result) => result.address.kind === 'id' && result.address.id === flags.nodeId,
       );
       if (durable !== undefined) {
-        renderDurableEvidence(durable, write);
+        renderDurableEvidence(durable, drift, write);
       }
       substrate
         .logger()

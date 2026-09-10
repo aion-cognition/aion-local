@@ -1,4 +1,5 @@
 import * as core from '@aion/core';
+import { EvidenceResolver } from '@aion/core/evidence/application/resolver.js';
 import { OWNERSHIP_SCOPES } from '@aion/core/evidence/domain/ownership.js';
 import { durableRoleScope, GRAPH_NODE_SCOPE } from '@aion/core/evidence/domain/scopes.js';
 import {
@@ -7,6 +8,8 @@ import {
   seedSource,
 } from '@aion/core/evidence/test-support/evidence.fixture.js';
 import * as provenanceQueries from '@aion/core/infrastructure/graph/claim-provenance-queries.js';
+import type { GuardReceipt } from '@aion/core/infrastructure/graph/publication-receipt.js';
+import * as guardReads from '@aion/core/infrastructure/graph/publication-receipt.js';
 import { buildEvidenceRevision } from '@aion/core/infrastructure/publication/preconditions.js';
 import {
   activateCoverageContract,
@@ -201,4 +204,107 @@ it('names pending publication uncertainty on retained-node durable evidence', as
   expect(code).toBe(0);
   expect.soft(lines.join('\n')).toContain('pending_publication');
   expect.soft(lines.join('\n')).not.toContain('proof            complete-for-use');
+});
+
+function pairedReceipt(): GuardReceipt {
+  const pairing = beginSubstratePairing(store.db, 1);
+  completeSubstratePairing(store.db, pairing.substrateId);
+  const guard: GuardReceipt = {
+    substrateId: pairing.substrateId,
+    protocolVersion: 1,
+    sequence: '0',
+    operationId: null,
+    intentDigest: null,
+    resultDigest: null,
+  };
+  vi.spyOn(guardReads, 'readPublicationGuard').mockResolvedValue(guard);
+  return guard;
+}
+
+function pending(): void {
+  prepareCoordinatorRecord(
+    store.db,
+    {
+      operationId: 'late-publication',
+      kind: 'semantic_write',
+      payloadJson: '{}',
+      digest: 'late',
+      plan: {
+        expected: {
+          coverageEpoch: readCurrentCoverageContract(store.db)!.epoch,
+          evidence: buildEvidenceRevision([]),
+          sources: [],
+          heads: [],
+        },
+        scopes: [],
+        data: {},
+        effects: [],
+      },
+      now: AT,
+    },
+    true,
+  );
+}
+
+it('control: never-paired inspection preserves the node with explicit uncertainty', async () => {
+  const lines: string[] = [];
+  expect(await runWhy([NODE], (line) => lines.push(line))).toBe(0);
+  expect(lines.join('\n')).toContain('content  Atlas stores jobs in Valkey');
+  expect(lines.join('\n')).toContain('store_unavailable');
+  expect(lines.join('\n')).not.toContain('proof            complete-for-use');
+});
+
+it('control: matching complete pairing can certify the durable reading', async () => {
+  pairedReceipt();
+  const lines: string[] = [];
+  expect(await runWhy([NODE], (line) => lines.push(line))).toBe(0);
+  expect(lines.join('\n')).toContain('proof            complete-for-use');
+});
+
+it('does not certify an unfinished pairing as settled publication state', async () => {
+  beginSubstratePairing(store.db, 1);
+  const lines: string[] = [];
+  expect(await runWhy([NODE], (line) => lines.push(line))).toBe(0);
+  expect.soft(lines.join('\n')).not.toContain('proof            complete-for-use');
+  expect.soft(lines.join('\n')).toContain('store_unavailable');
+});
+
+it('does not certify a graph receipt from a different substrate', async () => {
+  const guard = pairedReceipt();
+  vi.mocked(guardReads.readPublicationGuard).mockResolvedValue({
+    ...guard,
+    substrateId: 'different-substrate',
+  });
+  const lines: string[] = [];
+  expect(await runWhy([NODE], (line) => lines.push(line))).toBe(0);
+  expect.soft(lines.join('\n')).not.toContain('proof            complete-for-use');
+  expect.soft(lines.join('\n')).toContain('store_unavailable');
+});
+
+it('does not certify an acknowledged sequence with no acknowledged record', async () => {
+  const guard = pairedReceipt();
+  store.db.prepare('UPDATE publication_control SET last_ack_sequence = 99').run();
+  vi.mocked(guardReads.readPublicationGuard).mockResolvedValue({ ...guard, sequence: '99' });
+  const lines: string[] = [];
+  expect(await runWhy([NODE], (line) => lines.push(line))).toBe(0);
+  expect.soft(lines.join('\n')).not.toContain('proof            complete-for-use');
+  expect.soft(lines.join('\n')).toContain('store_unavailable');
+});
+
+it('discloses a publication landing after metadata resolution before either block is emitted', async () => {
+  pairedReceipt();
+  const original = EvidenceResolver.prototype.resolveMetadata;
+  vi.spyOn(EvidenceResolver.prototype, 'resolveMetadata').mockImplementationOnce(async function (
+    this: EvidenceResolver,
+    ...args: Parameters<typeof original>
+  ) {
+    const batch = await original.apply(this, args);
+    pending();
+    return batch;
+  });
+  const lines: string[] = [];
+  expect(await runWhy([NODE], (line) => lines.push(line))).toBe(0);
+  expect(publicationInFlight(store.db)).toBe(true);
+  expect.soft(lines.join('\n')).not.toContain('proof            complete-for-use');
+  expect.soft(lines.join('\n')).toContain('pending_publication');
 });
