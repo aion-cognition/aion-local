@@ -100,7 +100,67 @@ function sourcesBehind(db: SqliteHandle, endpointId: string): readonly string[] 
 export type TransitionEvidence = ResolvedMembers & {
   /** Endpoints whose changed evidence resolved to no source at all, named rather than dropped. */
   readonly unresolved: readonly string[];
+  /** Why each external input is required: what it speaks about, and how far from a member. */
+  readonly requirement: readonly RequirementProof[];
+  /** True when the walk hit a bound before it finished. The overflow refuses rather than drops. */
+  readonly truncated: boolean;
 };
+
+export type RequirementProof = {
+  readonly sourceId: string;
+  /** The interpretation it currently speaks about, which is what makes it required. */
+  readonly about: string;
+  /** Hops from a frozen member. One is a direct statement about a member. */
+  readonly depth: number;
+};
+
+/**
+ * How far a requirement chain is followed.
+ *
+ * A correction of a correction is still evidence about the member's interpretation, and stopping
+ * at one hop lost it the moment anything else changed. Following it forever is the other failure:
+ * the walk is bounded in depth and in count, it never revisits an endpoint, and what it could not
+ * reach refuses rather than disappearing.
+ */
+export const TRANSITION_DEPTH_LIMIT = 4;
+
+/**
+ * Every source whose statement the revision currently depends on, breadth-first from its members.
+ *
+ * The proof travels with each one: which interpretation it speaks about and how far that is from
+ * a frozen member. Nothing is accumulated between runs — the whole set is re-derived — so a
+ * requirement disappears exactly when the statement that made it required stops standing, and a
+ * refinement of a withdrawn correction goes with the correction it refined.
+ */
+function standingRequirement(
+  db: SqliteHandle,
+  members: ReadonlySet<string>,
+  seeds: readonly string[],
+): { readonly proofs: readonly RequirementProof[]; readonly truncated: boolean } {
+  const proofs: RequirementProof[] = [];
+  const seen = new Set<string>(seeds);
+  let frontier = [...seeds];
+  for (let depth = 1; depth <= TRANSITION_DEPTH_LIMIT && frontier.length > 0; depth += 1) {
+    const next: string[] = [];
+    for (const about of frontier) {
+      for (const sourceId of currentStatementSources(db, about)) {
+        // A member is read as a member, and an endpoint already walked is a cycle rather than a
+        // second requirement.
+        if (members.has(sourceId) || seen.has(sourceId)) {
+          continue;
+        }
+        seen.add(sourceId);
+        proofs.push({ sourceId, about, depth });
+        next.push(sourceId);
+      }
+    }
+    if (proofs.length > TRANSITION_EVIDENCE_LIMIT) {
+      return { proofs: proofs.slice(0, TRANSITION_EVIDENCE_LIMIT), truncated: true };
+    }
+    frontier = next;
+  }
+  return { proofs, truncated: frontier.length > 0 };
+}
 
 /**
  * Resolves the AD-1 required set for one regrounding.
@@ -121,16 +181,10 @@ export async function chunkTransitionEvidence(
   // whose own records moved is either a member, read as one, or an outsider whose statements
   // about this chunk the standing set below decides on. Requiring it because its token moved is
   // what kept a withdrawn correction in the input for good.
-  const required = new Set<string>();
-  // The standing requirement, read every time rather than accumulated: whoever corrects or
-  // confirms a member of this chunk right now.
-  for (const member of frozenMembers) {
-    for (const sourceId of currentStatementSources(deps.db, member)) {
-      if (!members.has(sourceId)) {
-        required.add(sourceId);
-      }
-    }
-  }
+  // The standing requirement, re-derived every time rather than accumulated: whoever currently
+  // corrects or confirms a member, and whoever currently corrects or confirms THEM, bounded.
+  const standing = standingRequirement(deps.db, members, frozenMembers);
+  const required = new Set(standing.proofs.map((proof) => proof.sourceId));
   const unresolved: string[] = [];
   for (const endpointId of endpoints) {
     // A member's own changed scope is not an endpoint to walk: the member is already being read
@@ -149,10 +203,10 @@ export async function chunkTransitionEvidence(
     }
   }
   const ordered = [...required].sort();
-  const bounded = ordered.slice(0, TRANSITION_EVIDENCE_LIMIT);
+  const bounded = standing.truncated ? [] : ordered.slice(0, TRANSITION_EVIDENCE_LIMIT);
   // A requirement past the bound is not read, and an unread requirement is an unavailable one.
   // Dropping the overflow would publish a regrounding that omitted a correction without saying so.
-  const overflow = ordered.slice(TRANSITION_EVIDENCE_LIMIT);
+  const overflow = standing.truncated ? ordered : ordered.slice(TRANSITION_EVIDENCE_LIMIT);
   const resolved = await resolveChunkMembers(deps.resolver, deps.db, bounded, context);
   const dependencies: EvidenceDependency[] = [...resolved.dependencies];
   return {
@@ -167,6 +221,8 @@ export async function chunkTransitionEvidence(
     ],
     dependencies,
     unresolved,
+    requirement: standing.proofs,
+    truncated: standing.truncated,
     // The transition sources' own incoming-statement scopes are not what this revision rests on:
     // what it needs from them is their content. An unproved scope on a correction holds nothing.
     unprovedScopes: [],
