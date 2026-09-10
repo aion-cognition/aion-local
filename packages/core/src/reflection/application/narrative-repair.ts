@@ -4,7 +4,7 @@ import { GRAPH_NODE_SCOPE } from '../../evidence/domain/scopes.js';
 import { supersedeInTransaction } from '../../infrastructure/graph/bitemporal.js';
 import type { GraphTransaction } from '../../infrastructure/graph/connection.js';
 import {
-  standingFamilyRevisionsInTransaction,
+  standingFamilyNodesInTransaction,
   standsInFamilyInTransaction,
 } from '../../infrastructure/graph/narrative-cleanup-queries.js';
 import { closeNarrativeEdgesInTransaction } from '../../infrastructure/graph/narrative-edge-queries.js';
@@ -16,6 +16,7 @@ import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { readScopeMirror, recordScopeMirror } from '../../infrastructure/sqlite/evidence-scope.js';
 import {
   CHUNK_REVISION_FAMILY,
+  listAcknowledgedRevisions,
   readPublishedRevision,
 } from '../../infrastructure/sqlite/narrative-revisions.js';
 
@@ -54,8 +55,14 @@ const ACKNOWLEDGED_STATES = new Set(['published', 'closed']);
 export const REPAIR_TARGET_LIMIT = 32;
 
 /**
- * Standing nodes one attempt looks at while finding those targets. Protected and unbound ids cost
- * a look and no write, and the search steps past them; this is what stops it stepping forever.
+ * Acknowledged revisions of the family one page of the candidate walk reads.
+ *
+ * The bound is over the RECORDS now, not over the graph. A scan that enumerated the family's
+ * standing nodes spent this budget on whatever ids the graph happened to sort first, so a family
+ * carrying more unbound nodes than one scan could look at restarted the same protected prefix
+ * every run and never reached the legitimate target behind it. The candidates come from the
+ * manifest instead, which names a population the family itself created, and the walk continues
+ * over that population within the run until it has its targets or the family is exhausted.
  */
 export const REPAIR_SCAN_LIMIT = 128;
 
@@ -97,17 +104,22 @@ function repairable(db: SqliteHandle, chunkId: string, nodeId: string): boolean 
 }
 
 /**
- * Standing nodes this repair may close, found by continuing past the ones it may not.
+ * Standing nodes this repair may close, selected from the records rather than found in the graph.
  *
- * Both endpoints of every close are checked against the manifest family: a node carrying this
- * chunk's property that the records bind to another family, or to no revision at all, is not this
- * family's to close, and is stepped OVER rather than stopping the search. A page of ids the
- * manifest binds to nothing used to end the discovery, so a family whose legitimate target sorted
- * behind thirty-three unbound ids was never repaired however many runs it got: the cursor over
- * families cannot step inside one.
+ * The candidates are the family's own acknowledged revisions, walked in revision order, and the
+ * graph is asked only which of those still stand. That is the direction the two stores can each
+ * answer: the manifest is the authority on which nodes are revisions of this family, and the graph
+ * is the authority on which nodes are current. Asking the graph first spent a fixed scan on
+ * whatever ids sorted first, so a family carrying a page of ids the manifest binds to nothing
+ * hid its legitimate target behind them on every run — a cursor over FAMILIES cannot step inside
+ * one, and raising the bound only moves where the prefix ends.
  *
- * Two bounds, both on the read. At most `REPAIR_TARGET_LIMIT` targets are collected, and at most
- * `REPAIR_SCAN_LIMIT` standing nodes are looked at to find them.
+ * Both endpoints of every close are still checked against the manifest family, so an id the
+ * records have stopped binding between the two reads is not this family's to close.
+ *
+ * Two bounds. At most `REPAIR_TARGET_LIMIT` targets are collected, and the candidate walk reads
+ * `REPAIR_SCAN_LIMIT` acknowledged revisions per page — a population one chunk family created by
+ * publishing, which the walk finishes rather than restarting.
  */
 async function repairableTargets(
   context: { readonly graph: GraphTransaction; readonly db: SqliteHandle },
@@ -116,26 +128,40 @@ async function repairableTargets(
 ): Promise<{ targets: string[]; examined: number }> {
   const targets: string[] = [];
   let examined = 0;
-  let after: string | undefined;
-  while (targets.length < REPAIR_TARGET_LIMIT && examined < REPAIR_SCAN_LIMIT) {
-    const page = await standingFamilyRevisionsInTransaction(
-      context.graph,
+  let after: number | undefined;
+  while (targets.length < REPAIR_TARGET_LIMIT) {
+    const page = listAcknowledgedRevisions(
+      context.db,
+      CHUNK_REVISION_FAMILY,
       chunkId,
-      Math.min(REPAIR_TARGET_LIMIT, REPAIR_SCAN_LIMIT - examined),
+      REPAIR_SCAN_LIMIT,
       after,
     );
-    if (page.length === 0) {
+    const last = page[page.length - 1];
+    if (last === undefined) {
       break;
     }
-    examined += page.length;
-    after = page[page.length - 1];
-    for (const nodeId of page) {
+    after = last.revisionNo;
+    const standing = await standingFamilyNodesInTransaction(
+      context.graph,
+      chunkId,
+      page.map((row) => row.nodeId),
+    );
+    examined += standing.size;
+    for (const row of page) {
       if (targets.length >= REPAIR_TARGET_LIMIT) {
         break;
       }
-      if (nodeId !== keeperNodeId && repairable(context.db, chunkId, nodeId)) {
-        targets.push(nodeId);
+      if (
+        standing.has(row.nodeId) &&
+        row.nodeId !== keeperNodeId &&
+        repairable(context.db, chunkId, row.nodeId)
+      ) {
+        targets.push(row.nodeId);
       }
+    }
+    if (page.length < REPAIR_SCAN_LIMIT) {
+      break;
     }
   }
   return { targets, examined };

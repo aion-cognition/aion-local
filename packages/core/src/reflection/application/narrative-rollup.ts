@@ -291,8 +291,12 @@ function readMemberCursor(
   if (typeof summary !== 'object' || summary === null) {
     return undefined;
   }
+  // The empty member half is the whole-window boundary this file's own writer emits, not a
+  // malformed key: past a calendar window there is no member to name. Refusing it started every
+  // later run at the front of the enumeration, so a window larger than one page hid the fitting
+  // windows behind it for ever.
   const { occurredAt, id } = summary as { occurredAt?: unknown; id?: unknown };
-  if (typeof occurredAt !== 'string' || typeof id !== 'string' || id === '') {
+  if (typeof occurredAt !== 'string' || typeof id !== 'string') {
     return undefined;
   }
   const at = new Date(occurredAt);

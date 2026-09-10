@@ -40,22 +40,41 @@ export type BlockedAttempt = {
  */
 export function blockedAttempts(
   db: SqliteHandle,
-  input: { readonly reasons: readonly string[]; readonly limit: number },
+  input: {
+    readonly reasons: readonly string[];
+    readonly limit: number;
+    /**
+     * Where a previous page stopped, in this read's own order. Which blocks a caller may CLEAR is
+     * decided from the records after they are read, so a caller bounded to one output that always
+     * starts at the front sees the same still-blocked row every run and never reaches the one
+     * whose prerequisite moved.
+     */
+    readonly after?: { readonly chunkId: string; readonly revisionNo: number };
+  },
 ): readonly BlockedAttempt[] {
   if (input.limit <= 0 || input.reasons.length === 0) {
     return [];
   }
   const placeholders = input.reasons.map(() => '?').join(', ');
+  const resume = input.after ?? { chunkId: '', revisionNo: 0 };
   const rows = db
     .prepare(
       `SELECT b.chunk_id, b.revision_no, b.blocked_reason, b.allocated_at,
               b.blocked_context_json, b.attempt_policy_json
          FROM chunk_revisions b
         WHERE b.state = 'allocated' AND b.blocked_reason IN (${placeholders})
+          AND (? = '' OR b.chunk_id > ? OR (b.chunk_id = ? AND b.revision_no > ?))
         ORDER BY b.chunk_id, b.revision_no
         LIMIT ?`,
     )
-    .all(...input.reasons, input.limit) as {
+    .all(
+      ...input.reasons,
+      resume.chunkId,
+      resume.chunkId,
+      resume.chunkId,
+      resume.revisionNo,
+      input.limit,
+    ) as {
     chunk_id: string;
     revision_no: number;
     blocked_reason: string;

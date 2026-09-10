@@ -174,37 +174,33 @@ export async function findDuplicateChunkFamilies(
   );
 }
 
-const READ_STANDING_FAMILY_REVISIONS = [
+const READ_STANDING_FAMILY_NODES = [
   `MATCH (n:Narrative { ${NARRATIVE_PROPERTIES.chunkId}: $chunkId })`,
-  `WHERE ${currentOnly('n')}`,
-  `  AND ($after = '' OR n.id > $after)`,
+  `WHERE ${currentOnly('n')} AND n.id IN $nodeIds`,
   'RETURN n.id AS id',
-  'ORDER BY n.id',
-  'LIMIT $limit',
 ].join('\n');
 
 /**
- * One page of the family's standing revision nodes, read inside a caller's transaction.
+ * Which of the NAMED nodes are standing revisions of this family, read inside a caller's lock.
  *
- * The scan that nominated the family ran outside every lock, so what it saw is a claim about a
- * moment that has passed. This is the reading a guarded repair acts on, and the bound is on the
- * read rather than on what the caller does with it.
- *
- * It resumes, because a family's standing nodes are ordered by id and nothing says the ones a
- * repair can act on sort first. A fixed front page of ids the manifest binds to nothing hides
- * every legitimate target behind it, in a family a cursor over FAMILIES can never step inside.
+ * The question a repair asks, in the direction the records answer it. Enumerating the family's
+ * standing nodes and testing each against the manifest makes the answer depend on how the family's
+ * other ids happen to sort: a page of ids the manifest binds to nothing hides every legitimate
+ * target behind it, and a cursor over families cannot step inside one. Naming the candidates makes
+ * the graph decide only what it is the authority on — which of these still stands.
  */
-export async function standingFamilyRevisionsInTransaction(
+export async function standingFamilyNodesInTransaction(
   tx: GraphTransaction,
   chunkId: string,
-  limit: number,
-  after?: string,
-): Promise<string[]> {
-  return tx.run(
-    READ_STANDING_FAMILY_REVISIONS,
-    { chunkId, limit: toGraphInteger(limit), after: after ?? '' },
-    (row) => String(row.id),
+  nodeIds: readonly string[],
+): Promise<ReadonlySet<string>> {
+  if (nodeIds.length === 0) {
+    return new Set();
+  }
+  const rows = await tx.run(READ_STANDING_FAMILY_NODES, { chunkId, nodeIds: [...nodeIds] }, (row) =>
+    String(row.id),
   );
+  return new Set(rows);
 }
 
 const READ_STANDING_FAMILY_NODE = [

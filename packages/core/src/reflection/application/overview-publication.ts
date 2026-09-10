@@ -34,6 +34,7 @@ import {
   listAllocatedRevisions,
 } from '../../infrastructure/sqlite/narrative-allocations.js';
 import {
+  readCitationsFrom,
   recordRevisionCitations,
   recordRevisionDependencies,
 } from '../../infrastructure/sqlite/narrative-citations.js';
@@ -108,6 +109,12 @@ const Payload = z.strictObject({
 const Data = Payload.extend({
   /** The prior head this publication closes, resolved under the guard. Empty for the first. */
   supersedes: z.string(),
+  /**
+   * What that prior head cited, read under the guard beside it. A target this revision drops loses
+   * an incoming citation the moment the old head closes, so its population moved and its token has
+   * to move with it — the new citations alone name only the targets that GAINED one.
+   */
+  priorCitations: z.array(z.string().min(1)),
 });
 
 const Result = z.strictObject({
@@ -179,7 +186,7 @@ const NODE_OWN_SCOPES = [CITATION_SCOPE, durableRoleScope('extraction', 'out')];
  * A member whose own set cannot be read contributes nothing here and is refused by the check; a
  * publication is never built on a reading nobody took.
  */
-function memberEvidence(
+export function memberEvidence(
   db: SqliteHandle,
   members: readonly { readonly familyKey: string; readonly nodeId: string }[],
 ): EvidenceRevision {
@@ -194,7 +201,7 @@ function memberEvidence(
   return buildEvidenceRevision(dependencies);
 }
 
-function parseEvidence(json: string | null): EvidenceRevision | undefined {
+export function parseEvidence(json: string | null): EvidenceRevision | undefined {
   if (json === null) {
     return undefined;
   }
@@ -211,9 +218,16 @@ function parseEvidence(json: string | null): EvidenceRevision | undefined {
  * The targets it cites move, and the node's own outbound populations move — a durable lineage walk
  * asks about the second before it will cross this overview to what it rests on, and an author that
  * declared none left the walk stopping here with no roots and `complete: false`.
+ *
+ * The targets the CLOSED head cited move too, and for the same reason: closing that head withdraws
+ * its citations, so a target this revision no longer names goes from cited to uncited and any
+ * judgment fenced on that reading is out of date. Declaring only the new targets left a removed
+ * one carrying an unchanged token over a population that had emptied. The census distinction is
+ * unaffected: a cited or uncited target's population MOVED, and whether anyone has counted it
+ * stays that target's own question — only this node's own scopes are established here.
  */
 function citationScopes(data: OverviewData): readonly { endpointId: string; scope: string }[] {
-  const targets = new Set(data.citations);
+  const targets = new Set([...data.citations, ...data.priorCitations]);
   targets.delete(data.nodeId);
   return [
     ...[...targets].sort().map((endpointId) => ({ endpointId, scope: CITATION_SCOPE })),
@@ -278,9 +292,14 @@ export const overviewPublication = new PublicationOperation({
     // Resolved under the guard rather than carried from the caller's read: the head this closes is
     // the one standing when it lands, and closing a node the caller happened to see is how two
     // revisions of one window end up both open.
+    const supersedes = headNodeId(context.db, payload.familyKey);
     const data: OverviewData = {
       ...payload,
-      supersedes: headNodeId(context.db, payload.familyKey),
+      supersedes,
+      priorCitations:
+        supersedes === ''
+          ? []
+          : readCitationsFrom(context.db, supersedes).map((citation) => citation.targetId),
     };
     return Promise.resolve({
       data,

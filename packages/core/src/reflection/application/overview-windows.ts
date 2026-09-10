@@ -51,6 +51,8 @@ export function closedWindows(
   readonly windows: readonly Window[];
   readonly unplaceable: number;
   readonly next: MemberCursor | undefined;
+  /** A closed window this page could not enumerate whole, for the caller to report blocked. */
+  readonly cut: Window | undefined;
 } {
   const cursor = readMemberCursor(db, scope);
   let members = readMembers(db, scope, cursor);
@@ -88,18 +90,23 @@ export function closedWindows(
   // saw the whole of what it covers. That window is not offered for publication at all, and the
   // position never rests inside it: the next page either reads it whole from its own beginning, or
   // — when one window filled the page by itself and never can be read whole at this bound — steps
-  // past its calendar end so the windows behind it are reached.
+  // past its calendar end so the windows behind it are reached. It is returned beside the offered
+  // ones rather than dropped, because a window this page could not enumerate is an incomplete
+  // reading the report has to say it took, not a window the calendar does not hold.
   const paged = pagedWindows(all, members.length >= OVERVIEW_MEMBER_SCAN_LIMIT);
   const windows = paged.whole.filter((window) => isWindowClosed(window, now));
+  const cut = paged.cut !== undefined && isWindowClosed(paged.cut, now) ? paged.cut : undefined;
   return {
     windows,
     unplaceable: scope === 'day' ? unplaceableChunks(db) : 0,
-    next: nextMemberCursor(members, paged),
+    next: nextMemberCursor(scope, members, paged),
+    cut,
   };
 }
 
 /** Where the next page starts, which is only ever a window boundary. */
 function nextMemberCursor(
+  scope: RollupScope,
   members: readonly OverviewMember[],
   paged: { readonly whole: readonly Window[]; readonly cut: Window | undefined },
 ): MemberCursor | undefined {
@@ -114,7 +121,7 @@ function nextMemberCursor(
       : { spanEnd: stopAt.spanEnd, familyKey: stopAt.familyKey };
   }
   if (paged.cut !== undefined) {
-    return { spanEnd: paged.cut.end.toISOString(), familyKey: '' };
+    return pastWindow(scope, paged.cut.end);
   }
   const last = members[members.length - 1];
   return last === undefined ? undefined : { spanEnd: last.spanEnd, familyKey: last.familyKey };
@@ -125,15 +132,26 @@ function memberCursorKey(scope: RollupScope): string {
   return `narrative-overview:member-cursor:${scope}`;
 }
 
+/**
+ * The position the last pass wrote, INCLUDING a whole-window boundary.
+ *
+ * A boundary cursor carries one half of the key empty on purpose: past a calendar window there is
+ * no member to name, so the day scope carries the window's exclusive end with an empty member key
+ * and the week scope carries the last day key before the next window with no span. Refusing either
+ * half being empty rejected the producer's own output and started the next run at the front, which
+ * is how a window nothing can enumerate whole hides every window behind it for ever. Only a cursor
+ * with NEITHER half is a cleared position.
+ */
 function readMemberCursor(db: SqliteHandle, scope: RollupScope): MemberCursor | undefined {
   const summary = getLedgerEntry(db, memberCursorKey(scope))?.summary;
   if (typeof summary !== 'object' || summary === null) {
     return undefined;
   }
   const { spanEnd, familyKey } = summary as { spanEnd?: unknown; familyKey?: unknown };
-  return typeof spanEnd === 'string' && typeof familyKey === 'string' && familyKey !== ''
-    ? { spanEnd, familyKey }
-    : undefined;
+  if (typeof spanEnd !== 'string' || typeof familyKey !== 'string') {
+    return undefined;
+  }
+  return spanEnd === '' && familyKey === '' ? undefined : { spanEnd, familyKey };
 }
 
 export function writeMemberCursor(
@@ -162,7 +180,7 @@ export function windowMembers(
   window: { readonly key: string; readonly start: Date },
 ): readonly OverviewMember[] | undefined {
   const held: OverviewMember[] = [];
-  let cursor: MemberCursor | undefined = seedCursor(scope, window.start);
+  let cursor: MemberCursor | undefined = pastWindow(scope, window.start);
   for (let page = 0; page < WINDOW_PAGE_LIMIT; page += 1) {
     const rows = readMembers(db, scope, cursor);
     for (const member of rows) {
@@ -191,17 +209,21 @@ export function windowMembers(
 }
 
 /**
- * Where to start reading for one window, so a late window costs a page rather than the archive.
+ * The position immediately past a calendar boundary, in the order each scope's members are read.
  *
- * A day's members are chunks ordered by span end, so the window's own start is the position. A
- * week's members are day overviews ordered by family key, so the position is the key of the day
- * before it — the read resumes strictly after the cursor, and the first day of the week must not
- * be the one it skips.
+ * Two callers, one meaning. Seeding a window's own re-read starts past the boundary the window
+ * begins at, so a late window costs a page rather than the archive; stepping over a window nothing
+ * can read whole starts past the boundary it ends at, so the windows behind it are reached.
+ *
+ * A day's members are chunks ordered by span end, so the boundary is that instant and the member
+ * half is empty. A week's members are day overviews ordered by family key, so the boundary is the
+ * key of the day before it and the span half is empty — the read resumes strictly after the
+ * cursor, and the first day of the window must not be the one it skips.
  */
-function seedCursor(scope: RollupScope, start: Date): MemberCursor {
+function pastWindow(scope: RollupScope, at: Date): MemberCursor {
   if (scope === 'day') {
-    return { spanEnd: start.toISOString(), familyKey: '' };
+    return { spanEnd: at.toISOString(), familyKey: '' };
   }
-  const before = new Date(start.getTime() - DAY_MS).toISOString().slice(0, 10);
+  const before = new Date(at.getTime() - DAY_MS).toISOString().slice(0, 10);
   return { spanEnd: '', familyKey: `day:${before}` };
 }

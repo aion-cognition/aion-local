@@ -1,13 +1,19 @@
 import type { Driver } from 'neo4j-driver';
 
 import { synthesizeGrounded } from './consolidation-synthesis.js';
-import { overviewOperationPrefix, OVERVIEW_NARRATIVE_FAMILY } from './overview-publication.js';
+import {
+  memberEvidence,
+  overviewOperationPrefix,
+  parseEvidence,
+  OVERVIEW_NARRATIVE_FAMILY,
+} from './overview-publication.js';
 import {
   closedWindows,
   writeMemberCursor,
   OVERVIEW_MEMBER_SCAN_LIMIT,
   type Window,
 } from './overview-windows.js';
+import { verifyEvidenceRevision } from '../../evidence/application/dependencies.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { findNarrativeBodies } from '../../infrastructure/graph/narrative-rollup-queries.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
@@ -51,8 +57,9 @@ import type { RollupScope } from '../domain/rollup.js';
  *   cannot be read at all. The refusal is recorded on the attempt with the bounds it ran under, no
  *   provider is called, no overview is published, and the constituent revisions are untouched. It
  *   costs no expensive-attempt budget, so a refused prefix cannot hide the windows behind it.
- * - **Reconsidered.** A refusal recorded under a different allowance than the one in force is not
- *   a standing decision: the block clears and the window is measured again.
+ * - **Reconsidered.** A refusal is a standing decision only while what it refused about still
+ *   holds: a bound it did not run under, or a member body it could not read that has come back,
+ *   clears the block and the window is measured again.
  * - **Published.** One revision of the `scope:window` family, through the coordinator, citing its
  *   members and closing nothing but its own prior head.
  */
@@ -83,6 +90,7 @@ export type OverviewRollupReport = {
   readonly windows: number;
   readonly published: number;
   readonly settled: number;
+  /** Refused windows, and the one a full member page could not enumerate whole. */
   readonly blocked: number;
   readonly reconsidered: number;
   readonly failed: number;
@@ -132,41 +140,77 @@ const UNCLIPPED = Number.MAX_SAFE_INTEGER;
 const CAPACITY_BLOCK = 'blocked_window_capacity';
 const UNREADABLE_BLOCK = 'blocked_window_member_unreadable';
 
-/** Whether the standing head already cites exactly this membership. */
+/**
+ * Whether the standing head still answers for this window exactly as the records hold it now.
+ *
+ * Three questions, because the citation set answers none of them alone. What a head CITES is the
+ * support its prose rests on, and grounded output that stood on one of two members cites one: an
+ * equality against the window's membership called that unchanged window changed and paid for the
+ * same synthesis every run. What a head COVERS is the dependency set it published against, which
+ * is durable on the revision and moves when a member arrives, leaves or republishes. And a covered
+ * set whose ids have not moved can still be out of date — a correction under a member is a new
+ * reading of the same member — so the stored evidence is verified rather than assumed current.
+ *
+ * The citation check that remains is a containment, not an equality: a head citing something the
+ * window no longer holds is resting on prose about a member that has gone.
+ */
 function settled(db: SqliteHandle, familyKey: string, members: readonly OverviewMember[]): boolean {
   const head = readPublishedRevision(db, OVERVIEW_REVISION_FAMILY, familyKey);
-  if (head === undefined) {
+  const stored = parseEvidence(head?.evidenceRevisionJson ?? null);
+  if (head === undefined || stored === undefined) {
     return false;
   }
-  const cited = readCitationsFrom(db, head.nodeId)
-    .map((citation) => citation.targetId)
-    .sort();
-  const current = members.map((member) => member.nodeId).sort();
-  return cited.join(' ') === current.join(' ');
+  if (memberEvidence(db, members).digest !== stored.digest) {
+    return false;
+  }
+  const covered = new Set(members.map((member) => member.nodeId));
+  if (readCitationsFrom(db, head.nodeId).some((citation) => !covered.has(citation.targetId))) {
+    return false;
+  }
+  return verifyEvidenceRevision(db, stored).status === 'current';
 }
 
 /**
- * Clears a refusal the policy in force would no longer produce.
+ * Clears a refusal whose recorded prerequisite no longer holds.
  *
  * A block is not a delay and it is not permanent either: what it recorded was a refusal UNDER A
- * BOUND, so the question a later run asks is whether that bound still stands. An allowance that
- * moved makes the recorded refusal a statement about a policy nobody is running any more.
+ * BOUND and ABOUT A STATE, so a later run asks both questions. An allowance that moved makes the
+ * refusal a statement about a policy nobody is running any more. An unreadable member is the other
+ * prerequisite, and it moves on its own: a body missing from the graph while the window was
+ * measured can come back with the same policy and the same member identity, and testing only the
+ * allowance left that window refused for ever with nothing left to change.
+ *
+ * The bodies are read once per family and only where a standing refusal actually named an
+ * unreadable member, so a family blocked on its allowance costs no graph read at all.
  */
-function reconsiderBlocked(db: SqliteHandle, familyKey: string, allowance: number): boolean {
+async function reconsiderBlocked(
+  deps: OverviewRollupDeps,
+  options: OverviewRollupOptions,
+  window: Window,
+  familyKey: string,
+): Promise<boolean> {
   let cleared = false;
+  let read: Promise<boolean> | undefined;
+  const membersReadable = (): Promise<boolean> => {
+    read ??= findNarrativeBodies(
+      deps.driver,
+      window.members.map((member) => member.nodeId),
+    ).then((bodies) => toConsolidationMembers(window.members, bodies, options.scope) !== undefined);
+    return read;
+  };
   for (let revisionNo = 1; ; revisionNo += 1) {
-    const row = readNarrativeRevision(db, OVERVIEW_REVISION_FAMILY, familyKey, revisionNo);
+    const row = readNarrativeRevision(deps.db, OVERVIEW_REVISION_FAMILY, familyKey, revisionNo);
     if (row === undefined) {
       break;
     }
     if (row.blockedReason === null) {
       continue;
     }
-    const policy = readAttemptPolicy(db, OVERVIEW_REVISION_FAMILY, familyKey, revisionNo);
-    if (policy?.renderedInputAllowance === allowance) {
-      continue;
-    }
-    if (clearRevisionBlock(db, OVERVIEW_REVISION_FAMILY, familyKey, revisionNo)) {
+    const policy = readAttemptPolicy(deps.db, OVERVIEW_REVISION_FAMILY, familyKey, revisionNo);
+    const moved =
+      policy?.renderedInputAllowance !== options.renderedInputAllowance ||
+      (row.blockedReason === UNREADABLE_BLOCK && (await membersReadable()));
+    if (moved && clearRevisionBlock(deps.db, OVERVIEW_REVISION_FAMILY, familyKey, revisionNo)) {
       cleared = true;
     }
   }
@@ -367,7 +411,7 @@ export async function rollUpOverviews(
   if (epoch === undefined) {
     return empty;
   }
-  const { windows, unplaceable, next } = closedWindows(deps.db, options.scope, options.now);
+  const { windows, unplaceable, next, cut } = closedWindows(deps.db, options.scope, options.now);
   writeMemberCursor(deps.db, options.scope, next);
   let published = 0;
   let settledWindows = 0;
@@ -376,13 +420,30 @@ export async function rollUpOverviews(
   let failed = 0;
   let examined = 0;
 
+  if (cut !== undefined) {
+    // A closed window this page could not enumerate whole. Leaving it out of the report offers an
+    // incomplete reading as a calendar that holds nothing there, and the part of it that fit is
+    // never published: an overview whose coverage says 1 has to have read all of what it covers.
+    examined += 1;
+    blocked += 1;
+    deps.logger.warn(
+      {
+        scope: options.scope,
+        window: cut.key,
+        read: cut.members.length,
+        bound: OVERVIEW_MEMBER_SCAN_LIMIT,
+      },
+      'overview window could not be enumerated whole at the member scan bound',
+    );
+  }
+
   for (const window of windows) {
     if (options.signal?.aborted === true || published + failed >= options.windowLimit) {
       break;
     }
     examined += 1;
     const familyKey = overviewFamilyKey(options.scope, window.key);
-    if (reconsiderBlocked(deps.db, familyKey, options.renderedInputAllowance)) {
+    if (await reconsiderBlocked(deps, options, window, familyKey)) {
       reconsidered += 1;
     }
     if (standingBlock(deps.db, familyKey)) {
